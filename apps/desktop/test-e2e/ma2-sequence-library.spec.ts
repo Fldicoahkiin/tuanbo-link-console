@@ -211,7 +211,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     // Reopen the actual saved project through the normal project loader.
     await page.getByRole('navigation',{name:'主要工作区'}).getByRole('button',{name:'节目单',exact:true}).click();
     await page.getByLabel('工程菜单',{exact:true}).click();
-    await page.getByRole('button',{name:'打开工程',exact:true}).click();
+    await page.getByRole('menuitem',{name:'打开工程',exact:true}).click();
     await page.getByRole('navigation',{name:'主要工作区'}).getByRole('button',{name:'灯光工作台',exact:true}).click();
     await navigation.getByRole('button',{name:/控台/}).click();
     await expect(pool).toHaveAttribute('data-total-cues','4499');

@@ -79,9 +79,12 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await page.setViewportSize({width: 1060, height: 720});
     await expect(composer.getByRole('button', {name: '保存 Cue', exact: true})).toBeVisible();
     expect(await composer.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-    const status = (await page.locator('.topbar-connection-overview').boundingBox())!;
-    const actions = (await page.locator('.lighting-topbar-actions').boundingBox())!;
-    expect(status.x + status.width).toBeLessThanOrEqual(actions.x);
+    const status = (await page.getByRole('group', {name: '连接状态概览'}).boundingBox())!;
+    const connect = (await page.getByRole('button', {name: '顶部一键连接'}).boundingBox())!;
+    expect(status.x + status.width).toBeLessThanOrEqual(connect.x);
+    const sync = (await page.getByRole('region', {name: '灯光同步操作'}).boundingBox())!;
+    const sidebar = (await page.locator('.app-sidebar').boundingBox())!;
+    expect(sync.x + sync.width).toBeLessThanOrEqual(sidebar.x + sidebar.width);
     await page.screenshot({path: info.outputPath('cue-composer-compact.png')});
     await page.reload(); await page.getByRole('button', {name: '灯光工作台', exact: true}).click();
     await page.locator('.waveform-cue-point').first().click();

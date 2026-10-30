@@ -290,19 +290,4 @@
 .ma2-advanced-settings > summary { color: var(--text-secondary); font-size: 13px; cursor: pointer; }
 .ma2-advanced-settings[open] > summary { margin-bottom: 20px; }
 @media (max-width: 800px) { .ma2-material-toolbar { flex-wrap: wrap; } .ma2-material-toolbar .effect-search { flex-basis: 100%; } }
-
-.ma2-sync-controls { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; padding: 10px 0; margin: 6px 0; border-block: 1px solid var(--separator); }
-.lighting-workbench-nav .ma2-sync-controls > button { min-width: 0; width: 100%; padding: 8px 4px; gap: 4px; white-space: nowrap; justify-content: center; font-size: 12px; }
-.ma2-sync-controls > button:nth-child(-n+2) { grid-column: span 3; }
-.ma2-sync-controls > button:nth-child(n+5) { grid-column: span 2; }
-.ma2-sync-controls > button[aria-pressed="true"] { color: var(--apple-blue); background: var(--surface-raised); }
-.ma2-sync-controls > button[data-state="blocked"] { color: var(--apple-red); }
-.ma2-sync-popover { grid-column: 1 / -1; min-width: 0; max-height: 350px; overflow: auto; padding: 8px; background: var(--surface-raised); border-radius: 8px; font-size: 12px; overflow-wrap: anywhere; }
-.ma2-sync-popover header { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.lighting-workbench-nav .ma2-sync-popover button { width: auto; min-height: 28px; padding: 4px 6px; font-size: 12px; }
-.ma2-sync-popover header strong { white-space: nowrap; }
-.ma2-sync-popover p { margin: 8px 0; color: var(--text-secondary); }
-.ma2-sync-popover [role="alert"] { color: var(--apple-red); }
-.ma2-sync-popover ul { list-style: none; margin: 8px 0 0; padding: 0; }
-.ma2-sync-popover li { padding: 8px 0; border-top: 1px solid var(--separator); }
 }

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Download, FilePlus2, FileSearch, FolderOpen, History, SaveAll } from 'lucide-react';
 import { addRundownItemCommand, playlistItems, programPlaylists, setReferenceAudioCommand } from '@tb/core/link';
 import type { RundownItem } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
@@ -11,7 +10,8 @@ import { linkDesktopViewModel, linkFileViewModel } from '../view-models/link-des
 import { importProgramFiles } from './import-program-files';
 import { usePlayProgram } from './usePlayProgram';
 import { ProjectPlaybackMonitor } from './ProjectPlaybackMonitor';
-import { DocumentActions, downloadUnsavedProject, type DocumentActionProps, type DocumentFileCommands } from './DocumentActions';
+import type { DocumentActionProps, DocumentFileCommands } from './DocumentActions';
+import { ProjectTitlebar } from './ProjectTitlebar';
 
 import { ProjectWelcome } from './ProjectWelcome';
 import { type ProjectPlayer } from './ProjectPlayerControls';
@@ -133,15 +133,8 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
   return (
     <div className="home-page">
       <MissingAssetsDialog request={missingAssetsRequest} locked={locked} notify={notify} />
-      {toolbarHost ? createPortal(<header className="p1-project-ribbon" title={projectPath ?? undefined}>
-        <details className="project-file-menu"><summary aria-label="工程菜单" title="工程 · 打开或新建"><FolderOpen /></summary><div className="project-file-menu-items"><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onOpen(); }}><FolderOpen />打开工程</button><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onCreate(); }}><FilePlus2 />新建独立工程</button><button disabled={fileCommands.replaceDisabled} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); fileCommands.onSaveAs(); }}><SaveAll />另存为…</button><button disabled={fileCommands.replaceDisabled || !projectPath || !dirty} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); fileCommands.onRevert(); }}><History />恢复到上次保存</button><button disabled={!dirty} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); downloadUnsavedProject(); }}><Download />备份未保存工程</button><button disabled={locked || !projectPath} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); setMissingAssetsRequest((request) => request + 1); }}><FileSearch />找回缺失素材</button></div></details>
-        <strong className="topbar-project-title" aria-label="当前工程">{project.name}</strong>
-        <div className="toolbar-drag-space" />
-        {/* Saving stays available while playing; undo and redo wait like other edits here. */}
-        <fieldset className="p1-project-actions">
-          <DocumentActions {...documentActions} historyDisabled={Boolean(documentActions.historyDisabled) || locked} />
-        </fieldset>
-      </header>, toolbarHost) : null}
+      {toolbarHost ? createPortal(<ProjectTitlebar name={project.name} path={projectPath} dirty={dirty} locked={locked} documentActions={documentActions} fileCommands={fileCommands}
+        onOpen={onOpen} onCreate={onCreate} onFindMissing={() => setMissingAssetsRequest((request) => request + 1)} />, toolbarHost) : null}
 
       <input ref={fileInput} hidden type="file" accept="audio/*,video/mp4,.wav,.mp3,.flac,.m4a,.aac,.ogg,.mp4" onChange={(event) => {
         const file = event.currentTarget.files?.[0];

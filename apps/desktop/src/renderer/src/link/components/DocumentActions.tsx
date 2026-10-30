@@ -1,4 +1,4 @@
-import { Button } from '../ui/Button';
+import { IconButton } from '../ui';
 import { Redo2, Save, TriangleAlert, Undo2 } from 'lucide-react';
 import { useDocumentStore } from '../stores/document-store';
 import { useRecoveryCopyStore } from '../recovery-copy-writer';
@@ -26,15 +26,16 @@ export function downloadUnsavedProject(): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** Undo, redo and save on the title bar. 未保存 keeps its place while hidden, so the bar does not jump. */
 export function DocumentActions({ canUndo, canRedo, disabled, historyDisabled = disabled, onUndo, onRedo, onSave }: DocumentActionProps): JSX.Element {
   const path = useDocumentStore((state) => state.path);
   const dirty = useDocumentStore((state) => state.dirty);
   const recoveryError = useRecoveryCopyStore((state) => state.error);
-  return <div className="document-actions" aria-label="工程编辑操作">
-    <Button className="icon-button" disabled={!canUndo || historyDisabled} onClick={onUndo} title="撤销" aria-label="撤销"><Undo2 /></Button>
-    <Button className="icon-button" disabled={!canRedo || historyDisabled} onClick={onRedo} title="重做" aria-label="重做"><Redo2 /></Button>
-    <span className="project-save-status" role="status" style={{ visibility: dirty ? 'visible' : 'hidden' }} aria-hidden={!dirty}>未保存</span>
-    {recoveryError ? <span className="project-recovery-error" role="alert" title={recoveryError} aria-label={recoveryError}><TriangleAlert aria-hidden="true" /></span> : null}
-    <Button className="icon-button document-save-button" data-dirty={dirty} disabled={disabled} onClick={onSave} title={path ? '保存工程（Ctrl+S）' : '选择位置并保存工程（Ctrl+S）'} aria-label="保存工程"><Save /></Button>
+  return <div className="titlebar-actions" role="group" aria-label="工程编辑操作">
+    <IconButton label="撤销" icon={Undo2} disabled={!canUndo || historyDisabled} onClick={onUndo} />
+    <IconButton label="重做" icon={Redo2} disabled={!canRedo || historyDisabled} onClick={onRedo} />
+    <span className="titlebar-save-state" role="status" data-dirty={dirty} aria-hidden={!dirty}>未保存</span>
+    {recoveryError ? <span className="titlebar-recovery-error" role="alert" title={recoveryError} aria-label={recoveryError}><TriangleAlert aria-hidden="true" /></span> : null}
+    <IconButton label="保存工程" title={path ? '保存工程（Ctrl+S）' : '选择位置并保存工程（Ctrl+S）'} icon={Save} className="titlebar-save" data-dirty={dirty} disabled={disabled} onClick={onSave} />
   </div>;
 }

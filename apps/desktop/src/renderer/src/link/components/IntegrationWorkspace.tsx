@@ -1,6 +1,6 @@
 import { useSettingsDirty } from '../useSettingsDirty';
 import { useSettingsSessionStore } from '../stores/settings-session-store';
-import { Notice } from '../ui';
+import { Button, Notice } from '../ui';
 import { ProgramSettingsCards } from './ProgramMaintenanceSettings';
 import { ObsDeviceSettings } from './ObsDeviceSettings';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
@@ -159,7 +159,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
     }
   };
   return (<div className="settings-content">
-      {quickConnectHost ? createPortal(<button aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '按顺序连接已启用的设备，某一步没通过就会停下，后面的步骤不再执行'} disabled={busy || runtimeActive} onClick={localIntegration.connect}><ScanSearch />{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</button>, quickConnectHost) : null}
+      {quickConnectHost ? createPortal(<Button variant="primary" icon={ScanSearch} aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '按顺序连接已启用的设备，某一步没通过就会停下，后面的步骤不再执行'} disabled={busy || runtimeActive} onClick={localIntegration.connect}>{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</Button>, quickConnectHost) : null}
       {settingsOpen ? <IntegrationSettingsDialog
         key={revision} category={category} onNavigate={onCategoryChange} onCreate={onCreate} onOpen={onOpen} onBusy={setBusy} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable} nestedDialogOpen={false}
         notify={notify}

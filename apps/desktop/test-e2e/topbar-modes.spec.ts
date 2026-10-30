@@ -17,16 +17,16 @@ test('编辑灯光随网络连接显示已连接，断开后更新且不依赖�
     await page.evaluate(() => localStorage.setItem('tblink.ma2-connection-method.v1', 'network'));
     await page.reload();
     const overview = page.getByRole('group', { name: '连接状态概览' });
-    await expect(overview.getByRole('button', { name: '编辑灯光：已连接，前往设置', exact: true })).toHaveClass(/state-ready/);
+    await expect(overview.getByRole('button', { name: '编辑灯光：已连接，前往设置', exact: true })).toHaveAttribute('data-state', 'ready');
     await app.evaluate(() => { process.env.TBLINK_TOPBAR_NETWORK_STATE = 'disconnected'; });
-    await expect(overview.getByRole('button', { name: '编辑灯光：未连接，前往设置', exact: true })).toHaveClass(/state-idle/);
+    await expect(overview.getByRole('button', { name: '编辑灯光：未连接，前往设置', exact: true })).toHaveAttribute('data-state', 'idle');
     await app.evaluate(() => { process.env.TBLINK_TOPBAR_NETWORK_STATE = 'connected'; });
-    await expect(overview.getByRole('button', { name: '编辑灯光：已连接，前往设置', exact: true })).toHaveClass(/state-ready/);
+    await expect(overview.getByRole('button', { name: '编辑灯光：已连接，前往设置', exact: true })).toHaveAttribute('data-state', 'ready');
     await page.screenshot({ path: info.outputPath('editing-connected.png') });
   } finally { await closeDiscarding(app); }
 });
 
-test('顶部保留四项连接状态，详细切回完整连接列表且不切工作区', async ({}, info) => {
+test('顶部保留四项连接状态，详细在下方展开按设备分组的完整列表且不切工作区', async ({}, info) => {
   const executablePath = process.env.TBLINK_PACKAGED_APP_EXE;
   const app = await electron.launch({ ...(executablePath ? { executablePath } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...(executablePath ? [] : [join(process.cwd(), 'out/main/index.cjs')])] });
   try {
@@ -34,28 +34,32 @@ test('顶部保留四项连接状态，详细切回完整连接列表且不切�
     await page.getByRole('button', { name: '新建工程', exact: true }).waitFor();
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1180, 720));
     const overview = page.getByRole('group', { name: '连接状态概览' });
-    await expect(overview.locator('.connection-overview-item')).toHaveCount(4);
-    // The status host stretches across the titlebar. Its unused area must not
-    // cancel native dragging while each actual control stays clickable.
-    await expect(page.locator('.topbar-connection-status')).toHaveCSS('-webkit-app-region', 'drag');
-    await expect(overview.locator('.connection-overview-item').first()).toHaveCSS('-webkit-app-region', 'no-drag');
+    await expect(overview.getByRole('button')).toHaveCount(4);
+    // The whole title bar drags the window; each actual control stays clickable.
+    await expect(page.locator('.titlebar')).toHaveCSS('-webkit-app-region', 'drag');
+    await expect(overview.getByRole('button').first()).toHaveCSS('-webkit-app-region', 'no-drag');
     for (const name of ['音频', '视频', '灯光', '编辑灯光']) await expect(overview.getByText(name, { exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('connection-overview.png') });
     await expect(page.locator('.app-shell')).toHaveAttribute('data-workspace', 'project');
     const details = page.getByRole('button', { name: '详细', exact: true });
     await details.click();
-    await expect(details).toHaveAttribute('aria-pressed', 'true');
-    await expect(overview).toHaveCount(0);
-    await expect(page.locator('.topbar-connection-status .toolbar-connections')).toBeVisible();
-    await expect(page.locator('.topbar-connection-status')).toHaveCSS('-webkit-app-region', 'drag');
-    await expect(page.getByRole('button', { name: /OBS 控制/ })).toBeVisible();
+    await expect(details).toHaveAttribute('aria-expanded', 'true');
+    // The overview stays; the full list opens under the title bar, grouped by device.
+    await expect(overview).toBeVisible();
+    const panel = page.getByRole('dialog', { name: '全部连接状态' });
+    await expect(panel).toBeVisible();
+    expect((await panel.boundingBox())!.y).toBeGreaterThanOrEqual((await details.boundingBox())!.y + (await details.boundingBox())!.height);
+    await expect(panel.getByRole('heading', { level: 3 })).toHaveText(['音频与 MIDI', '画面（OBS）', '灯光（MA2）', '其他']);
+    await expect(panel.getByRole('button', { name: /OBS 控制/ })).toBeVisible();
     await page.screenshot({ path: info.outputPath('connection-details.png') });
     await expect(page.locator('.app-shell')).toHaveAttribute('data-workspace', 'project');
     await details.click();
-    await expect(details).toHaveAttribute('aria-pressed', 'false');
+    await expect(details).toHaveAttribute('aria-expanded', 'false');
+    await expect(panel).toHaveCount(0);
     await expect(overview).toBeVisible();
   } finally { await closeDiscarding(app); }
 });
+
 
 test('点击四项状态定位并短暂强调，重复点击重新滚动', async ({}, info) => {
   const project = createEmptyLinkProject('连接定位验收'); project.schemaVersion = 2; project.playbackSource = 'internal';

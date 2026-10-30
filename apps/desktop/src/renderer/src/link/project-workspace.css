@@ -1,16 +1,10 @@
 @layer legacy {
-.p1-project-ribbon { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 58px; padding: 4px 142px 8px 4px; }
 .p1-project-title { display: flex; align-items: center; gap: 12px; min-width: 120px; flex: 1; }
 .p1-project-title > svg { flex: none; width: 24px; height: 24px; color: var(--accent); }
 .p1-project-title > div { min-width: 0; }
 .p1-project-title strong, .p1-project-title span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .p1-project-title strong { font-size: 20px; font-weight: 650; letter-spacing: -.4px; }
 .p1-project-title span { margin-top: 4px; color: var(--text-secondary); font-size: var(--text-caption); }
-.p1-project-actions { display: flex; align-items: center; gap: 10px; margin: 0; padding: 0; border: 0; }
-.p1-project-actions select { height: 30px; max-width: 145px; padding: 3px 6px; color: var(--text-primary); border: 1px solid var(--separator); border-radius: 6px; background: var(--surface-raised); font-size: var(--text-caption); }
-.p1-project-actions .primary-button { background: var(--surface-raised); color: var(--text-primary); border: 1px solid var(--separator); }
-.p1-project-actions .document-actions { gap: 4px; }
-.p1-project-actions .document-save-button { background: var(--surface-raised); }
 .player-error { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--surface-raised); color: #ffc0c5; font-size: var(--text-caption); line-height: 1.5; overflow-wrap: anywhere; }
 .player-notice { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--surface-raised); color: var(--text-primary); font-size: var(--text-caption); line-height: 1.5; overflow-wrap: anywhere; }
 .p1-playlist-pane { min-width: 0; min-height: 0; overflow: hidden; border: 0; border-radius: 0; background: transparent; }
@@ -32,9 +26,6 @@
 .p1-playlist-pane > button small { color: #93a4bd; font-size: var(--text-caption); }
 @media (max-width: 1380px) {
  .p1-project-title strong { font-size: 17px; }
- .p1-project-ribbon { gap: 10px; }
- .p1-project-actions { gap: 6px; }
- .p1-project-actions .document-actions .icon-button { width: 27px; }
 }
 
 /* Neutral macOS-inspired chrome; content carries the emphasis. */
@@ -44,8 +35,6 @@
 .main-nav button.active { background: rgb(var(--theme-ink-rgb) / 0.047); border: 0; box-shadow: none; }
 .main-nav button.active::before { display: none; }
 .content-scroll { padding: 10px 24px 20px; }
-.p1-project-actions .primary-button, .p1-project-actions .document-save-button { border: 0; background: rgb(var(--theme-ink-rgb) / 0.039); }
-.p1-project-actions select { border: 0; background: rgb(var(--theme-ink-rgb) / 0.035); }
 .p1-project-title > svg { display: none; }
 .p1-project-title strong { font-weight: 600; letter-spacing: -.5px; }
 .p1-pane-title { padding: 8px 10px; border: 0; }

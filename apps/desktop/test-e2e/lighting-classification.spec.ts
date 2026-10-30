@@ -59,8 +59,10 @@ for(const scaled of [false,true]) test(`${scaled ? '规定高负载' : '千条�
     await expect(page.getByLabel('音乐网格间隔')).toHaveCount(0);
     await expect(page.locator('.music-grid-line')).toHaveCount(0);
     await expect(page.getByLabel('音乐分析', {exact:true})).toBeVisible();
-    const toolbar=await page.locator('.lighting-topbar-actions').boundingBox();expect(toolbar!.y).toBeLessThan(54);expect(toolbar!.height).toBeLessThanOrEqual(54);
-    await expect(page.locator('.lighting-topbar-actions').getByRole('button',{name:'保存',exact:true})).toBeVisible();
+    // The console sync controls belong to the workbench: at the foot of its sidebar, not on the title bar.
+    const sync=page.getByRole('region',{name:'灯光同步操作'});const syncBox=(await sync.boundingBox())!;const sidebar=(await page.locator('.app-sidebar').boundingBox())!;
+    expect(syncBox.x+syncBox.width).toBeLessThanOrEqual(sidebar.x+sidebar.width);expect(syncBox.y+syncBox.height).toBeLessThanOrEqual(sidebar.y+sidebar.height);
+    await expect(sync.getByRole('button',{name:'保存',exact:true})).toBeVisible();await expect(page.locator('.titlebar').getByRole('button',{name:'保存',exact:true})).toHaveCount(0);
     const library=page.getByRole('region',{name:'我的灯光分类'});const pool=library.locator('[aria-label="分类 Cue"]');
     await expect(pool).toHaveAttribute('data-total-cues','1000');
     const painted = await pool.locator('[data-cue-cell]').evaluateAll(elements => {

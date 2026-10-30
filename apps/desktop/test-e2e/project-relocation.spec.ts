@@ -34,7 +34,7 @@ test('只挪动 .tblink 后打开：列出缺失素材，选择原工程文件�
       document.querySelector('.home-grid')!.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
     });
     await expect(page.locator('.home-card')).toHaveCount(3);
-    await page.keyboard.press('Control+S'); await expect(page.locator('.project-save-status')).toBeHidden();
+    await page.keyboard.press('Control+S'); await expect(page.locator('.titlebar-save-state')).toBeHidden();
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).mediaAssets.length).toBe(1);
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown.filter(item => item.referenceAudio).length).toBe(2);
     await expect(page.getByRole('dialog', { name: '找回缺失素材' })).toHaveCount(0);
@@ -55,7 +55,7 @@ test('只挪动 .tblink 后打开：列出缺失素材，选择原工程文件�
     await expect(page.getByLabel('当前工程', { exact: true })).toHaveText('挪动验收');
     await pickPath(app, movedPath);
     await page.getByLabel('工程菜单', { exact: true }).click();
-    await page.getByRole('button', { name: '打开工程', exact: true }).click();
+    await page.getByRole('menuitem', { name: '打开工程', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '找回缺失素材' });
     await expect(dialog.getByRole('heading', { name: '找不到 3 个素材' })).toBeVisible();
     await expect(dialog.getByRole('list', { name: '缺失的素材' }).getByRole('listitem')).toHaveText([/歌曲音频 · music\.wav/, /歌曲音频 · video\.mp4/, /视频素材 · video\.mp4/]);
@@ -78,7 +78,7 @@ test('只挪动 .tblink 后打开：列出缺失素材，选择原工程文件�
     await expect(page.locator('.media-table-row.asset-row .media-status')).toHaveText('就绪');
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
     await page.getByLabel('工程菜单', { exact: true }).click();
-    await page.getByRole('button', { name: '找回缺失素材', exact: true }).click();
+    await page.getByRole('menuitem', { name: '找回缺失素材', exact: true }).click();
     await expect(page.getByText('工程用到的素材都在工程文件夹内', { exact: true })).toBeVisible();
     await expect(dialog).toHaveCount(0);
   } finally {

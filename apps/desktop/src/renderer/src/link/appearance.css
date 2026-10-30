@@ -23,8 +23,6 @@
 .main-nav button small, .sidebar-section-label { color: var(--text-secondary); }
 .p1-project-title strong { font-size: 20px; color: var(--text-primary); }
 .p1-project-title span { color: var(--text-secondary); font-size: var(--text-caption); }
-.p1-project-actions select { background: var(--surface-raised); color: var(--text-primary); }
-.p1-project-actions .primary-button, .p1-project-actions .document-save-button { background: var(--surface-raised); color: var(--text-primary); }
 .p1-playlist-pane > button { color: var(--text-secondary); font-size: var(--text-caption); }
 .p1-playlist-pane > button.active { background: var(--accent-soft); color: var(--accent); }
 .p1-playlist-pane > button small { color: inherit; }
@@ -37,7 +35,6 @@
 .integration-workspace { --integration-card: var(--surface); --integration-group: var(--surface-raised); --integration-hairline: var(--separator); --integration-surface: var(--surface); --integration-surface-raised: var(--surface-raised); --integration-stroke: var(--separator); --integration-unified-surface: var(--surface); --integration-divider: var(--separator); --integration-primary-text: var(--text-primary); --integration-label-text: var(--text-secondary); --integration-secondary-text: var(--text-secondary); }
 .modal-card { background: var(--surface); color: var(--text-primary); }
 :root[data-theme='light'] .primary-button { color: var(--on-accent); }
-:root[data-theme='light'] .p1-project-actions .primary-button { color: var(--text-primary); }
 :root[data-theme='light'] .toast.info { background: var(--surface); color: var(--text-primary); }
 :root[data-theme='light'] .toast.error { background: #ffe3e6; color: #7d2230; }
 :root[data-theme='light'] .media-preview-label { background: rgba(12,18,28,.88); }
@@ -49,7 +46,6 @@
 .stage-frame .empty-panel h3, .stage-frame .empty-panel p { color: #d9e0ec; }
 :root[data-theme='light'] .integration-workspace .status-pill.ok { color: #14794d; }
 :root[data-theme='light'] .integration-workspace .status-pill.error { color: #ae2737; }
-:root[data-theme='light'] .unified-toolbar .window-controls { background: rgba(255,255,255,.8); }
 
 :root[data-theme='light'] .timeline-waveform-canvas { filter: brightness(.52) saturate(1.15); }
 }

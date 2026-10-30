@@ -68,7 +68,7 @@ for (const playbackSource of ['internal', 'p1'] as const) test(`埋步 ${playbac
     await page.screenshot({ path: info.outputPath('preparation-editor.png') });
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
     await page.getByLabel('工程菜单', { exact: true }).click();
-    await page.getByRole('button', { name: '打开工程', exact: true }).click();
+    await page.getByRole('menuitem', { name: '打开工程', exact: true }).click();
     await openWorkbench();
     if (!await page.locator('.cue-preparation').getAttribute('open').then(value => value !== null)) await page.locator('.cue-preparation summary').click();
     await expect(page.getByLabel('素材 1 准备 Cue', { exact: true })).toHaveValue('1');

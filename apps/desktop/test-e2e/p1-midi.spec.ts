@@ -103,6 +103,9 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     await page.getByRole('button', { name: '详细', exact: true }).click();
     await expect(page.getByLabel('全部连接状态').getByRole('button', { name: 'MA2 网络：未启用', exact: true })).toBeVisible();
     await expect(page.getByLabel('全部连接状态').getByRole('button', { name: 'MA2 工程通信：未启用', exact: true })).toBeVisible();
+    // The panel lies over the page; Escape closes it before working on the settings underneath.
+    await page.keyboard.press('Escape');
+    await expect(page.getByLabel('全部连接状态')).toHaveCount(0);
     await page.getByLabel('MA2 连接方式').selectOption('local');
     await pick(info.outputDir);
     await page.getByText('控台插件与安装说明', { exact: true }).click();

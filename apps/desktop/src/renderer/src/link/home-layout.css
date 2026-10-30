@@ -1,6 +1,4 @@
 @layer legacy {
-/* Shared workspace geometry. Programme layout is owned by the block at the end. */
-.p1-project-ribbon { min-height: 42px; }
 .p1-project-title strong { font-size: 17px; }
 .p1-project-title span { font-size: var(--text-caption); }
 .audio-spectrum-display { height: 100%; position: relative; }
@@ -17,9 +15,6 @@
 .sidebar-playlists { flex: 1; min-height: 95px; overflow: auto; margin-top: 12px; border-top: 1px solid var(--separator); }
 .sidebar-playlists .p1-playlist-pane { border: 0; padding: 0; background: transparent; }
 .sidebar-playlists .p1-playlist-pane > .p1-pane-title { padding: 8px 10px; }
-.p1-project-ribbon { justify-content: flex-start; align-items: center; gap: 8px; min-height: 54px; padding: 0 125px 8px 0; border-bottom: 1px solid var(--separator); }
-.p1-project-actions { margin-left: 0; gap: 6px; }
-.p1-project-actions .primary-button { font-size: var(--text-caption); white-space: nowrap; }
 .player-diagnostics { position: relative; flex: 0 0 28px; margin-left: auto; }
 .player-diagnostics > summary { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border-radius: 5px; list-style: none; color: var(--text-secondary); cursor: pointer; }
 .player-diagnostics > summary::-webkit-details-marker { display: none; }
@@ -43,19 +38,9 @@
 .connections-content { overflow: auto; padding: 0; }
 .connections-content .settings-section { border: 0; border-radius: 0; padding: 0 0 20px; border-bottom: 1px solid var(--separator); background: transparent; }
 .connections-content .field input, .connections-content .field select { min-width: 0; max-width: 100%; }
-.persistent-project-toolbar { flex: 0 0 54px; min-width: 0; background: var(--surface); border-bottom: 1px solid var(--separator); }
-.persistent-project-toolbar .p1-project-ribbon { height: 54px; min-height: 54px; margin: 0; padding: 0 144px 0 12px; border: 0; }
 .content-scroll { padding: 12px; }
 .connections-content .integration-workspace { width: 100%; max-width: none; margin: 0; padding: 0; }
 .app-main { flex: 1 1 0; }
-.app-topbar > .unified-toolbar { top: 0; right: 0; width: 132px; height: 54px; min-height: 54px; padding: 0; z-index: 50; }
-.app-topbar .unified-toolbar .window-controls { display: flex; gap: 0; width: 132px; height: 54px; border: 0; border-radius: 0; background: transparent; backdrop-filter: none; }
-.app-topbar .unified-toolbar .window-controls button { width: 44px; height: 54px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text-secondary); }
-.app-topbar .unified-toolbar .window-controls svg { width: 14px; height: 14px; }
-@media (hover: hover) and (pointer: fine) {
-.app-topbar .unified-toolbar .window-controls button:hover { background: var(--surface-raised); color: var(--text-primary); } }
-@media (hover: hover) and (pointer: fine) {
-.app-topbar .unified-toolbar .window-controls .window-close:hover { background: #c42b1c; color: white; } }
 
 /* Settings content navigation is subordinate to the workspace navigation. */
 .settings-page { box-sizing: border-box; min-width: 0; max-width: 920px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
@@ -72,57 +57,6 @@
 .player-mode-note { display: flex; gap: 12px; align-items: center; font-size: var(--text-caption); }
 .player-mode-note button { border: 0; background: transparent; color: var(--apple-blue, #0a84ff); cursor: pointer; }
 .integration-workspace .settings-page .program-card-title { min-height: 40px; padding: 0; margin-bottom: 16px; grid-template-columns: 32px minmax(0, 1fr); }
-.project-save-status { font-size: var(--text-caption); color: var(--text-secondary); white-space: nowrap; }
-
-/* Keep window dragging in blank space, outside all interactive controls. */
-.app-topbar > .unified-toolbar,
-.app-topbar > .unified-toolbar *,
-.persistent-project-toolbar .p1-project-ribbon > :not(.toolbar-drag-space),
-.persistent-project-toolbar .p1-project-ribbon button,
-.persistent-project-toolbar .p1-project-ribbon details,
-.persistent-project-toolbar .p1-project-ribbon summary {
-  -webkit-app-region: no-drag;
-}
-.persistent-project-toolbar { width: calc(100% - 132px); -webkit-app-region: drag; }
-.persistent-project-toolbar .p1-project-ribbon { padding: 0 12px; -webkit-app-region: no-drag; }
-.toolbar-drag-space { flex: 1 1 40px; align-self: stretch; min-width: 24px; -webkit-app-region: drag; }
-
-/* One file menu on the left; editing status stays quiet on the right. */
-.project-file-menu { position: relative; flex: none; font-size: var(--text-caption); }
-.project-file-menu > summary { display: flex; align-items: center; gap: 7px; height: 34px; padding: 0 10px; border-radius: 7px; cursor: pointer; color: var(--text-secondary); list-style: none; }
-@media (hover: hover) and (pointer: fine) {
-.project-file-menu > summary:hover { background: var(--surface-raised); color: var(--text-primary); } }
-.project-file-menu svg { width: 15px; height: 15px; }
-.project-file-menu-items { position: absolute; top: calc(100% + 8px); left: 0; z-index: 60; display: grid; gap: 3px; width: 176px; padding: 6px; background: var(--surface-raised); border: 1px solid var(--separator); border-radius: 9px; box-shadow: 0 8px 24px #0004; }
-.project-file-menu-items button { display: flex; align-items: center; gap: 8px; padding: 10px; border: 0; border-radius: 5px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
-@media (hover: hover) and (pointer: fine) {
-.project-file-menu-items button:hover { background: var(--surface); } }
-.persistent-project-toolbar .document-actions { gap: 4px; }
-.persistent-project-toolbar .document-actions .icon-button { width: 30px; height: 30px; border: 0; background: transparent; }
-.persistent-project-toolbar .project-save-status { margin-left: 10px; padding-left: 12px; border-left: 1px solid var(--separator); color: var(--text-secondary); font-size: var(--text-caption); }
-
-.toolbar-drag-space { display: flex; align-items: center; justify-content: center; }
-.toolbar-connections { display: flex; align-items: center; justify-content: center; gap: 16px; min-width: 0; height: 54px; -webkit-app-region: drag; }
-.toolbar-connection { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: var(--text-caption); color: var(--text-secondary); }
-.toolbar-connection strong { font-weight: 500; color: var(--text-primary); }
-.toolbar-connection i { width: 5px; height: 5px; border-radius: 50%; background: #92949b; }
-.toolbar-connection.connected i { background: #4bbf8d; }
-@media (max-width: 1250px) {
-  .toolbar-connections { gap: 8px; }
-  .toolbar-connection { gap: 4px; font-size: var(--text-caption); }
-  .persistent-project-toolbar .project-save-status { margin-left: 4px; padding-left: 6px; }
-}
-
-/* A single full-width title bar, with window controls in the same flex row. */
-.app-topbar { grid-column: 1 / -1; display: flex; align-items: stretch; min-width: 0; height: 54px; position: relative; z-index: 40; background: var(--surface-glass-strong); backdrop-filter: blur(40px) saturate(1.4); border-bottom: 1px solid var(--border-subtle); }
-.app-topbar > .persistent-project-toolbar { flex: 1 1 0; width: auto; min-width: 0; border: 0; background: transparent; }
-.app-topbar > .unified-toolbar { position: static; flex: 0 0 132px; width: 132px; height: 54px; min-height: 54px; margin: 0; gap: 0; border: 0; background: transparent; box-shadow: none; backdrop-filter: none; }
-.app-topbar .unified-toolbar .window-controls { margin: 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
-.app-topbar .unified-toolbar .window-controls button { background: transparent; }
-@media (hover: hover) and (pointer: fine) {
-.app-topbar .unified-toolbar .window-controls button:hover { background: var(--surface-raised); } }
-@media (hover: hover) and (pointer: fine) {
-.app-topbar .unified-toolbar .window-controls .window-close:hover { background: #c42b1c; color: #fff; } }
 
 /* Primary destinations sit above an indented, independently scrollable submenu. */
 .app-sidebar .sidebar-context { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--separator); }
@@ -150,15 +84,6 @@
 .app-sidebar .main-nav > button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .cue-studio { grid-template-rows: minmax(0, 1fr); gap: 0; }
-.editor-program-name { display: flex; align-items: center; gap: 8px; width: 240px; min-width: 120px; flex-shrink: 1; }
-.editor-program-name > span { color: var(--text-secondary); font-size: var(--text-caption); white-space: nowrap; }
-.editor-program-name > button { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px; border: 0; background: transparent; color: var(--text-primary); cursor: text; }
-.editor-program-name strong { font-size: var(--text-body); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.editor-program-name svg { width: 13px; height: 13px; flex: none; color: var(--text-secondary); }
-.editor-program-name input { min-width: 0; width: 100%; padding: 6px 8px; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--separator); border-radius: 6px; }
-.editor-toolbar-actions { display: flex; gap: 10px; align-items: center; flex: none; }
-.editor-toolbar-actions > button { font-size: var(--text-caption); white-space: nowrap; }
-.persistent-project-toolbar .editor-toolbar input { -webkit-app-region: no-drag; }
 .obs-source-dialog { box-sizing: border-box; width: min(540px, calc(100vw - 40px)); max-height: calc(100vh - 40px); overflow: auto; background: var(--page-background); color: var(--text-primary); border: 0; border-radius: 2px; padding: 16px; box-shadow: 0 16px 48px #0006; }
 .obs-source-dialog h3 { margin: 0 0 12px; font-size: 15px; font-weight: 500; }
 .obs-source-dialog fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 6px; }
@@ -181,11 +106,6 @@
 .obs-source-dialog input[type=checkbox] { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
 .obs-source-error { color: #ff9595; font-size: var(--text-control); overflow-wrap: anywhere; }
 .obs-source-menu-grid { display: grid; grid-template-columns: 1fr 1fr; }
-
-/* One compact visual language for settings, playlists and editor resources. */
-.toolbar-project-summary { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; height: 54px; gap: 2px; -webkit-app-region: drag; }
-.toolbar-project-summary .toolbar-connections { height: 20px; gap: 10px; }
-.toolbar-project-summary .toolbar-connection { font-size: var(--text-caption); gap: 3px; }
 .app-sidebar .sidebar-playlists { margin: 0; border: 0; }
 .app-sidebar .sidebar-playlists .p1-playlist-pane { height: 100%; gap: 3px; }
 .app-sidebar .sidebar-playlists .p1-pane-title { padding: 0 8px 6px; margin: 0; min-height: 32px; }
@@ -282,10 +202,6 @@
 .timeline-navigation-menu > div { position: absolute; left: 0; top: calc(100% + 8px); z-index: 80; width: 180px; padding: 8px; border: 1px solid var(--separator); border-radius: 8px; background: var(--surface-raised); box-shadow: 0 8px 24px #0004; }
 .timeline-navigation-menu > div > button { display: block; width: 100%; padding: 8px; text-align: left; height: auto; }
 .timeline-navigation-menu p { margin: 8px 0 0; padding: 8px; border-top: 1px solid var(--separator); font-size: var(--text-caption); line-height: 1.9; color: var(--text-secondary); }
-.topbar-connect { display: flex; align-items: center; flex: 0 0 auto; -webkit-app-region: no-drag; }
-.topbar-connect button { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 9px; border: 0; border-radius: 4px; background: var(--surface-hover); color: var(--text-primary); font-size: var(--text-caption); white-space: nowrap; -webkit-app-region: no-drag; }
-.topbar-connect button:disabled { opacity: .5; cursor: not-allowed; }
-.topbar-connect svg { width: 14px; height: 14px; }
 .connections-dialog[hidden] { display: none; }
 
 /* Navigation and contextual rail share a stable frame across all workspaces. */

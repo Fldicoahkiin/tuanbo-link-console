@@ -23,9 +23,6 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 .app-sidebar .main-nav button.active > svg { stroke-width: 2; }
 .update-dot { flex: 0 0 7px; width: 7px; height: 7px; margin-inline-start: auto; border-radius: 50%; background: var(--accent); }
 .content-scroll { padding: 16px; overscroll-behavior: contain; }
-.toolbar-connections .toolbar-mtc-button { -webkit-app-region: no-drag; cursor: pointer; border: 0; padding: 1px 4px; border-radius: 4px; background: transparent; font-family: inherit; line-height: inherit; }
-.toolbar-connections .toolbar-mtc-button:hover { background: var(--surface-hover); }
-.toolbar-connections .toolbar-mtc-button:focus-visible { outline: 2px solid var(--accent); }
 .mtc-port-detail { white-space: pre-line; overflow-wrap: anywhere; }
 .skip-link { position: fixed; z-index: 2000; inset: 8px auto auto 12px; transform: translateY(-200%); padding: 10px 16px; border-radius: 6px; background: var(--surface); color: var(--text-primary); }
 .skip-link:focus { transform: none; }
@@ -99,7 +96,7 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 .toast-stack .toast.info { color: var(--text-primary); background: var(--surface-glass-strong); backdrop-filter: blur(20px) saturate(1.5); }
 .toast-stack .toast.error { color: var(--danger); background: var(--danger-soft); border-color: rgba(var(--danger-rgb), .22); }
 .toast button { flex: 0 0 28px; width: 28px; height: 28px; border-radius: 6px; color: inherit; }
-.resource-context-menu, .timeline-icon-menu-content, .project-file-menu-items, .timeline-edit-menu { background: var(--surface-glass); backdrop-filter: blur(24px); border: 1px solid var(--border-subtle); border-radius: var(--r-md); box-shadow: var(--shadow-2); }
+.resource-context-menu, .timeline-icon-menu-content, .timeline-edit-menu { background: var(--surface-glass); backdrop-filter: blur(24px); border: 1px solid var(--border-subtle); border-radius: var(--r-md); box-shadow: var(--shadow-2); }
 .media-thumbnail img, .media-thumbnail video { outline: 1px solid var(--image-outline); outline-offset: -1px; }
 .stage-frame, .stage-obs-layer { background: #101114; }
 .stage-frame .stage-placeholder, .stage-frame .empty-panel { color: #d9e0ec; background: #101114; }
@@ -125,7 +122,7 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .app-topbar, .app-sidebar, .modal-card, .modal-surface, .resource-context-menu, .timeline-icon-menu-content, .toast-stack .toast.info { backdrop-filter: none; }
+  .app-sidebar, .modal-card, .modal-surface, .resource-context-menu, .timeline-icon-menu-content, .toast-stack .toast.info { backdrop-filter: none; }
 }
 @media (forced-colors: active) {
   :root :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible { outline: 2px solid Highlight; }
@@ -133,11 +130,6 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 }
 @media (max-width: 1250px) {
   .content-scroll { padding: 12px; }
-}
-/* At large UI zoom settings reflow; the time axis keeps its necessary own scrolling. */
-@media (max-width: 980px) {
-  .persistent-project-toolbar .document-actions { margin-left: auto; }
-  .editor-program-name { width: auto; }
 }
 
 /* Shared subtle scrolling and field states, following the reference primitives. */
@@ -150,38 +142,8 @@ input:disabled, textarea:disabled, select:disabled { opacity: .5; cursor: not-al
 
 /* One titlebar row: project, mode navigation, connection details, connect action, window controls. */
 .app-shell { grid-template-rows: auto minmax(0, 1fr); }
-.app-topbar { display: grid; grid-template-columns: auto minmax(0, 1fr) 80px auto 132px; grid-template-rows: 54px; height: 54px; -webkit-app-region: drag; user-select: none; }
-.app-topbar > .persistent-project-toolbar { grid-column: 1; grid-row: 1; min-width: max-content; }
-.app-topbar > .topbar-drag-region { grid-column: 3; grid-row: 1; min-width: 80px; -webkit-app-region: drag; }
-.app-topbar > .topbar-connect { grid-column: 4; grid-row: 1; align-items: center; }
-.app-topbar > .unified-toolbar { grid-column: 5; grid-row: 1; }
 .topbar-project-title { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-primary); }
-.persistent-project-toolbar .p1-project-ribbon > .topbar-project-title { -webkit-app-region: drag; }
-.persistent-project-toolbar .p1-project-ribbon { gap: 8px; }
-.persistent-project-toolbar .toolbar-drag-space { min-width: 8px; }
-.persistent-project-toolbar .project-file-menu > summary { width: 32px; height: 36px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 6px; }
-.persistent-project-toolbar .project-file-menu > summary:hover { background: var(--surface-hover); }
-.persistent-project-toolbar .project-file-menu > summary svg { width: 18px; height: 18px; }
-.topbar-connect { padding: 0 10px; }
-.topbar-connect button { height: 34px; padding: 0 15px; gap: 7px; border-radius: 6px; background: var(--accent-fill); color: var(--on-accent); font-size: 13px; font-weight: 650; cursor: pointer; }
-.topbar-connect button:hover:not(:disabled) { filter: brightness(1.12); }
-.topbar-connect button:focus-visible, .project-file-menu > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.topbar-connect svg { width: 16px; height: 16px; }
-.connection-inline-detail { position: absolute; z-index: 50; top: 50px; left: 8px; right: 8px; display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--border-default); background: var(--surface); box-shadow: 0 8px 24px #0004; border-radius: 7px; font-size: 12px; -webkit-app-region: no-drag; }
-.connection-inline-detail > strong { flex-shrink: 0; }
-.connection-inline-detail > span { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: text; }
-.connection-inline-detail > button { flex-shrink: 0; padding: 5px 8px; border: 1px solid var(--border-default); border-radius: 4px; background: var(--surface-hover); color: var(--text-primary); cursor: pointer; }
 @media (max-width: 1400px) { .topbar-project-title { max-width: 100px; } }
-.app-topbar { grid-template-columns: auto minmax(0, 1fr) 60px auto auto 132px; overflow: visible; }
-.app-topbar > .topbar-connection-status { grid-column: 2; grid-row: 1; display: flex; align-items: center; position: relative; min-width: 0; padding: 0 12px; container: topbar-status / inline-size; -webkit-app-region: drag; }
-.topbar-connection-status :is(button, summary, .connection-inline-detail) { pointer-events: auto; }
-.topbar-connection-overview { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.connection-overview-item { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 0 8px; border-radius: 6px; background: var(--surface-hover); color: var(--text-secondary); white-space: nowrap; font-size: 12px; }
-.connection-overview-item strong { font-weight: 650; color: var(--text-primary); }
-.connection-overview-item small { font-size: 11px; color: inherit; }
-.connection-overview-item { border: 1px solid transparent; cursor: pointer; -webkit-app-region: no-drag; }
-.connection-overview-item:hover { border-color: currentColor; background: var(--surface-active, var(--surface-hover)); }
-.connection-overview-item:focus-visible { outline: 2px solid var(--accent, #459bff); outline-offset: 2px; }
 .settings-location-highlight { outline: 2px solid transparent; outline-offset: 5px; border-radius: 6px; scroll-margin-block: 24px; animation: settings-location-flash 700ms ease-in-out 2; }
 @keyframes settings-location-flash {
   0%, 100% { outline-color: transparent; background-color: transparent; }
@@ -189,53 +151,5 @@ input:disabled, textarea:disabled, select:disabled { opacity: .5; cursor: not-al
 }
 @media (prefers-reduced-motion: reduce) {
   .settings-location-highlight { animation: none; outline-color: var(--accent, #459bff); }
-}
-.connection-overview-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: currentColor; }
-:is(.connection-overview-item, .connection-status-badge).state-ready { color: #6bdaa3; }
-:is(.connection-overview-item, .connection-status-badge).state-error { color: #ff7777; }
-:is(.connection-overview-item, .connection-status-badge):is(.state-checking, .state-warning) { color: #e8bd79; }
-:is(.connection-overview-item, .connection-status-badge).state-skipped { color: var(--text-tertiary); }
-.topbar-details-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.app-topbar > .topbar-drag-region { grid-column: 3; min-width: 30px; }
-.app-topbar > .topbar-details { grid-column: 4; grid-row: 1; display: flex; align-items: center; position: relative; -webkit-app-region: no-drag; }
-.app-topbar > .topbar-connect { grid-column: 5; }
-.app-topbar > .unified-toolbar { grid-column: 6; }
-.topbar-details .toolbar-project-summary { height: auto; padding: 0; -webkit-app-region: no-drag; }
-.topbar-details-trigger { height: 34px; padding: 0 13px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--surface-hover); color: var(--text-primary); font: inherit; font-size: 13px; cursor: pointer; }
-.topbar-details-trigger[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
-.topbar-connection-status > .toolbar-connections { display: flex; align-items: center; justify-content: flex-start; width: 100%; height: 42px; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
-.topbar-connection-status .toolbar-connection { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-height: 30px; padding: 4px 8px; border: 0; border-radius: 4px; background: transparent; color: #e8bd79; font-size: 12px; font-weight: 550; white-space: nowrap; cursor: pointer; -webkit-app-region: no-drag; }
-.topbar-connection-status .toolbar-connection.state-ready { color: #6bdaa3; }
-.topbar-connection-status .toolbar-connection.state-error { color: #ff7777; }
-.topbar-connection-status .toolbar-connection.state-skipped { color: var(--text-tertiary); }
-.topbar-connection-status .toolbar-connection:hover { background: var(--surface-hover); }
-.topbar-connection-status .connection-inline-detail { top: 50px; }
-@media (max-width: 900px) { .app-topbar > .topbar-connection-status { padding-inline: 4px; } }
-
-.app-topbar:has(>.lighting-topbar-actions:not(:empty)) { grid-template-columns:auto minmax(0,1fr) minmax(30px,60px) auto auto auto 132px; }
-.app-topbar>.lighting-topbar-actions { grid-column:4; grid-row:1; display:flex; align-items:center; padding-inline-end:10px; }
-.app-topbar:has(>.lighting-topbar-actions:not(:empty))>.topbar-details { grid-column:5; }
-.app-topbar:has(>.lighting-topbar-actions:not(:empty))>.topbar-connect { grid-column:6; }
-.app-topbar:has(>.lighting-topbar-actions:not(:empty))>.unified-toolbar { grid-column:7; }
-.app-topbar:has(>.lighting-topbar-actions:not(:empty)) .project-save-status { font-size:0; margin:0; padding:0; border:0; }
-.app-topbar:has(>.lighting-topbar-actions:not(:empty)) .project-save-status::after { content:'•'; font-size:16px; color:var(--text-secondary); }
-/* The four status chips never scroll (2026-10-28, picture 10): a narrow bar drops the value, then the
-   spacing, then the name; what each dot is and says stays in its tooltip. */
-.topbar-connection-overview { max-width: 100%; overflow: hidden; }
-.topbar-connection-overview > .connection-overview-item { flex-shrink: 0; }
-@container topbar-status (max-width: 470px) { .connection-overview-item small { display: none; } }
-@container topbar-status (max-width: 300px) { .topbar-connection-overview { gap: 3px; } .connection-overview-item { padding-inline: 5px; } }
-@container topbar-status (max-width: 250px) { .connection-overview-item { padding-inline: 7px; } .connection-overview-item strong { display: none; } }
-@media (max-width: 900px) {
-  .app-topbar, .app-topbar:has(>.lighting-topbar-actions:not(:empty)) { height:auto; grid-template-columns:minmax(0,1fr) auto auto 132px; grid-template-rows:44px 40px; }
-  .app-topbar>.persistent-project-toolbar { grid-column:1 / 4; grid-row:1; min-width:0; }
-  .persistent-project-toolbar .p1-project-ribbon { height:44px; min-height:44px; }
-  .app-topbar>.topbar-drag-region { display:none; }
-  .app-topbar>.topbar-connection-status { grid-column:1; grid-row:2; height:40px; }
-  .app-topbar>.topbar-details, .app-topbar:has(>.lighting-topbar-actions:not(:empty))>.topbar-details { grid-column:2; grid-row:2; }
-  .app-topbar>.topbar-connect, .app-topbar:has(>.lighting-topbar-actions:not(:empty))>.topbar-connect { grid-column:3 / 5; grid-row:2; justify-content:flex-end; }
-  .app-topbar>.unified-toolbar, .app-topbar:has(>.lighting-topbar-actions:not(:empty))>.unified-toolbar { grid-column:4; grid-row:1; }
-  .app-topbar>.lighting-topbar-actions:not(:empty) { grid-column:1 / -1; grid-row:3; min-height:40px; padding-inline:12px; }
-  .app-topbar>.lighting-topbar-actions:empty { display:none; }
 }
 }

@@ -35,8 +35,8 @@ test('时间线更换工程后音源缺失，不沿用上一首音频或空跑',
     await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, files[1]!);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
     await page.getByLabel('工程菜单', { exact: true }).click();
-    await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', files[1]!);
+    await page.getByRole('menuitem', { name: '打开工程', exact: true }).click();
+    await expect(page.locator('.titlebar-document')).toHaveAttribute('title', files[1]!);
     const missingAssets = page.getByRole('dialog', { name: '找回缺失素材' });
     await expect(missingAssets.getByRole('list', { name: '缺失的素材' }).getByRole('listitem')).toHaveText(['歌曲音频 · 音源缺失']);
     await missingAssets.getByRole('button', { name: '稍后处理', exact: true }).click();

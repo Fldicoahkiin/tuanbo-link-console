@@ -10,7 +10,7 @@ async function openProject(app: ElectronApplication, file: string, first: boolea
   const page = await app.firstWindow();
   await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
   if (!first) { await page.getByRole('button', { name: '节目单', exact: true }).click(); await page.getByLabel('工程菜单', { exact: true }).click(); }
-  await page.getByRole('button', { name: '打开工程', exact: true }).click();
+  await page.getByRole(first ? 'button' : 'menuitem', { name: '打开工程', exact: true }).click();
   await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
   // The workbench timeline appears once the project has loaded; a Ctrl+S before that has no document to save.
   await expect(page.getByRole('button', { name: '音乐分析', exact: true })).toBeVisible();

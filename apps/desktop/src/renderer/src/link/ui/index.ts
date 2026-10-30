@@ -12,3 +12,4 @@ export { Dialog } from './Dialog';
 export { Progress } from './Progress';
 export { ModalSurface } from './ModalSurface';
 export { FloatingMenu } from './FloatingMenu';
+export { Popover, type PopoverPlacement } from './Popover';

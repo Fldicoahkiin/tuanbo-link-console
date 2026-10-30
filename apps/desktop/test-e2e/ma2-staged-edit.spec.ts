@@ -65,12 +65,15 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
     const badge = page.getByRole('button', { name: '同步状态详情', exact: true });
     await expect(badge).toContainText('待同步 1');
     await badge.click();
-    const pending = page.getByRole('region', { name: '同步状态详情' });
+    const pending = page.getByRole('dialog', { name: '同步状态详情' });
     await expect(pending).toContainText('1 处修改');
     await expect(pending).toContainText('播放时先暂存在本地');
     await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect(badge).not.toContainText('待同步');
+    // A click elsewhere closes the details; opened again they no longer list the change.
+    await expect(pending).toHaveCount(0);
+    await badge.click();
     await expect(pending).not.toContainText('1 处修改');
     await expect(realtime).toHaveAttribute('aria-checked', 'true');
     await page.getByRole('button', { name: '重做', exact: true }).click(); await expect(badge).toContainText('待同步 1');

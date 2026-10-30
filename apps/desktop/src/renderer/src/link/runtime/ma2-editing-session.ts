@@ -56,5 +56,5 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   const note = state.catalog.incomplete || state.catalog.sourceUnverified ? '。控台还没读完整，读到的 Cue 可以查看，没读到的部分不会写回'
     : edited ? `。有 ${edited} 条时间线带着连接前做的本地修改：同步时先读控台比对，两边改了同一处以联动台为准，控台上的旧版本写入前备份在控台上`
     : !bindings.length ? '。还没有已关联的时间线' : '';
-  return `${summary}${note}。顶部“实时同步”开着时，停止播放后每次改完都会自动写入控台并回读确认`;
+  return `${summary}${note}。灯光工作台左下角的“实时同步”开着时，停止播放后每次改完都会自动写入控台并回读确认`;
 }

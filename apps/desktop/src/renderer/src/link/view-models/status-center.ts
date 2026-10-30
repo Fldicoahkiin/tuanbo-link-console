@@ -30,6 +30,8 @@ export type StatusCenterInput = {
   follow: ConsoleFollow;
 };
 export type StatusCenter = { rows: StatusRow[]; overview: StatusOverview[]; midiTargets: ReturnType<typeof midiConnectionTargets> };
+/** The details panel lists the rows by device, in the order of the top bar (音频, 视频, 灯光). */
+export type StatusGroup = { id: 'audio' | 'obs' | 'ma2' | 'other'; name: string; rows: StatusRow[] };
 
 const checkLabel = { checking: '连接中', ready: '已就绪', error: '待处理', skipped: '未启用' };
 /** A one-click connection result stands for the row until the live state says otherwise. */
@@ -97,4 +99,21 @@ export function statusCenter(input: StatusCenterInput): StatusCenter {
     { name: '编辑灯光', status: ma2EditingConnectionStatus({ method, network, networkError, local, bridge: checks.bridge }), destination: { category: 'ma2', focus: 'ma2-connection' } }
   ];
   return { rows, overview, midiTargets };
+}
+
+function statusGroupOf(row: StatusRow): StatusGroup['id'] {
+  switch (row.destination.category) {
+    case 'audio': case 'virtual': return 'audio';
+    case 'obs': return 'obs';
+    case 'ma2': return 'ma2';
+    case 'source': case 'maintenance': return 'other';
+  }
+}
+
+/** The rows grouped by the device they belong to, which is where their settings live; empty groups are left out. */
+export function statusGroups(rows: readonly StatusRow[]): StatusGroup[] {
+  const names: Record<StatusGroup['id'], string> = { audio: '音频与 MIDI', obs: '画面（OBS）', ma2: '灯光（MA2）', other: '其他' };
+  return (['audio', 'obs', 'ma2', 'other'] as const)
+    .map(id => ({ id, name: names[id], rows: rows.filter(row => statusGroupOf(row) === id) }))
+    .filter(group => group.rows.length > 0);
 }

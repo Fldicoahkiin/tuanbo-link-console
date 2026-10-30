@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { createEmptyLinkProject } from '@tb/schema';
-import { statusCenter, type StatusCenterInput } from './status-center';
+import { statusCenter, statusGroups, type StatusCenterInput } from './status-center';
 
 function input(patch: Partial<StatusCenterInput> = {}): StatusCenterInput {
   const project = createEmptyLinkProject('状态中心'); project.playbackSource = 'internal';
@@ -42,4 +42,16 @@ it('一键连接的结果在详细里显示；等待和没执行的步骤不冒�
   const center = statusCenter(input({ checks: { audio: { state: 'waiting', detail: '等前面的步骤完成', checkedAt: 1 }, midi: { state: 'error', detail: 'MIDI 服务不可用', checkedAt: 1 } } }));
   expect(center.rows.find(row => row.id === 'audio')).toMatchObject({ state: 'idle', value: '等待中' });
   expect(center.rows.find(row => row.id === 'midi')).toMatchObject({ state: 'error', value: '待处理', detail: 'MIDI 服务不可用' });
+});
+
+it('详细按设备分组：音频与 MIDI、画面、灯光、其他；每一行都在且只在一组里', () => {
+  const center = statusCenter(input({ checks: { discovery: { state: 'error', detail: '找不到 OBS', checkedAt: 1 } } }));
+  const groups = statusGroups(center.rows);
+  expect(groups.map(group => group.name)).toEqual(['音频与 MIDI', '画面（OBS）', '灯光（MA2）', '其他']);
+  expect(groups.find(group => group.id === 'audio')!.rows.map(row => row.id)).toEqual(expect.arrayContaining(['audio', 'midi', 'loop']));
+  expect(groups.find(group => group.id === 'obs')!.rows.map(row => row.id)).toEqual(['obs', 'preview']);
+  expect(groups.find(group => group.id === 'ma2')!.rows.map(row => row.id)).toEqual(['ma2-app', 'ma3d', 'ma2', 'bridge']);
+  expect(groups.find(group => group.id === 'other')!.rows.map(row => row.id)).toEqual(['discovery', 'p1']);
+  expect(groups.flatMap(group => group.rows).length).toBe(center.rows.length);
+  expect(statusGroups(center.rows.filter(row => row.destination.category !== 'obs')).map(group => group.id)).toEqual(['audio', 'ma2', 'other']);
 });

@@ -69,7 +69,8 @@ type Props = {
   player: ProjectPlayer;
   sidebarHost: HTMLDivElement | null;
   toolbarHost: HTMLDivElement | null;
-  actionsHost: HTMLDivElement | null;
+  /** The sidebar place for the lighting workbench's console sync controls. */
+  syncHost: HTMLDivElement | null;
   coordinator: LinkRuntimeCoordinator | null;
   notify: (message: string, tone?: 'info' | 'error') => void;
   documentActions: DocumentActionProps;
@@ -81,7 +82,7 @@ function useTimelineReferenceAudio(audio: LinkProject['rundown'][number]['refere
     : null, [audio, projectPath, url]);
 }
 
-export function CueWorkspace({ workspace = 'visual', actionsHost, player, sidebarHost, toolbarHost, coordinator, notify, documentActions }: Props): JSX.Element {
+export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHost, toolbarHost, coordinator, notify, documentActions }: Props): JSX.Element {
   const lightingWorkspace = workspace === 'lighting';
   const librarySplit = useLightingLibrarySplit();
   // Low power only unloads the video editor's preview; the lighting workbench keeps its full timeline layout.
@@ -139,7 +140,7 @@ export function CueWorkspace({ workspace = 'visual', actionsHost, player, sideba
   return <div className={`cue-studio${lightingWorkspace ? ' lighting-workbench' : ''}${lowPower ? ' low-power-workspace' : ''}`} data-inspector={true}>
     {!lightingWorkspace && item && lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools key={item.id} tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null}
     {toolbarHost ? createPortal(<CueRundownHeader item={item} notify={notify} documentActions={documentActions} />, toolbarHost) : null}
-    {lightingWorkspace && actionsHost ? createPortal(<Ma2PendingChanges playing={playing || runtimeState !== 'idle'} notify={notify} />, actionsHost) : null}
+    {lightingWorkspace && syncHost ? createPortal(<Ma2PendingChanges playing={playing || runtimeState !== 'idle'} notify={notify} />, syncHost) : null}
     <div className={`cue-studio-grid${lightingSelection ? ' has-lighting-editor' : ''}`} style={workspaceLayout.style}>
       {sidebarHost && !lightingWorkspace ? createPortal(<ResourceLibrary
         folders={project.mediaFolders} assets={project.mediaAssets}
