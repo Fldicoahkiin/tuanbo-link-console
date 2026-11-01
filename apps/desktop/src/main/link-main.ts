@@ -1011,7 +1011,6 @@ function registerIpc(
       },
       network: {
         getMa2NetworkStatus: async () => { await ma2NetworkReady; return ma2Network.status(); },
-        cancelMa2Playback: sessionId => { ma2Network.cancelPlayback(sessionId); return Promise.resolve(); },
         playMa2Cue: async value => { await authorizeOutput(); return sendMa2Cue(value); }
       }
     });

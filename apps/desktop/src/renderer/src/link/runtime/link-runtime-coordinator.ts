@@ -5,7 +5,6 @@ import {
 } from '@tb/core/link';
 import type { LinkAction, LinkCue, LinkProject } from '@tb/schema';
 import { LinkMidiAdapter } from '../../registry/link-midi-adapter';
-import { P1LightingOutput } from './p1-lighting-output';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
@@ -38,7 +37,6 @@ export class LinkRuntimeCoordinator {
   private disposed = false;
   private readonly editorPreview = new EditorScenePreview();
   private internalStopHandler: (() => void) | null = null;
-  private readonly p1Lighting = new P1LightingOutput();
 
   /** Internal playback runs in the main-process program host; stopping here stops it too. */
   onInternalStop(handler: (() => void) | null): void { this.internalStopHandler = handler; }
@@ -70,7 +68,7 @@ export class LinkRuntimeCoordinator {
         await this.armFromStart();
       },
       ingest: (sample) => this.ingestSample(sample, true),
-      interrupt: () => { this.executionGeneration += 1; this.p1Lighting.stop(); },
+      interrupt: () => { this.executionGeneration += 1; },
       fail: (error) => this.reportRuntimeError(error)
     });
     await this.initializeMidi();
@@ -141,7 +139,6 @@ export class LinkRuntimeCoordinator {
     this.managedOutput.resetExecution();
     useRuntimeStore.getState().setState({ reports: [], mediaReports: [], currentCueId: null });
     if (this.project.obsOutputMode !== 'scenes') await linkDesktopViewModel.activateManagedObsOutput();
-    await this.p1Lighting.prepare(this.project.playbackSource === 'internal' ? undefined : this.currentItem(), useIntegrationStore.getState().profile, Boolean(this.autoFollow), currentSample);
     this.applyRequiredUpdate(this.runtime.arm(performance.now(), currentSample));
     const skippedMedia = this.managedOutput.collectThrough(currentSample.totalFrames);
     await this.enqueueSkippedMedia(skippedMedia, '从当前 MTC 位置待命时，这个素材的切换点已经过了，没有自动补播');
@@ -179,7 +176,6 @@ export class LinkRuntimeCoordinator {
     this.decoder.reset(); this.mtcStability.reset();
     this.lastSample = null;
     this.managedOutput.resetExecution();
-    this.p1Lighting.restart();
     resetRuntimeExecutionView();
     this.applyRequiredUpdate(this.runtime.rearmFromStart(performance.now()));
     this.recordOperatorAction('从头重新待命');
@@ -221,7 +217,6 @@ export class LinkRuntimeCoordinator {
   stop(suspendAuto = true, reason?: string): void {
     this.editorPreview.reset();
     ++this.executionGeneration;
-    this.p1Lighting.stop();
     if (suspendAuto) { this.internalStopHandler?.(); this.autoFollow?.suspend(); }
     if (this.runtime.getState() === 'stopping') return;
     this.applyUpdate(this.runtime.stop(reason)); if (this.runtime.getState() === 'idle') return;
@@ -235,7 +230,6 @@ export class LinkRuntimeCoordinator {
   }
 
   dispose(): void {
-    this.p1Lighting.stop();
     this.disposed = true; this.autoFollow?.dispose();
     this.executionGeneration += 1;
     this.midiSession.dispose();
@@ -264,7 +258,6 @@ export class LinkRuntimeCoordinator {
     const resumingP1 = followP1 && previousState === 'timecodeLost';
     const update = resumingP1 ? this.runtime.resumeP1(sample) : this.runtime.ingest(sample);
     this.applyUpdate(update);
-    if (update.state === 'running') this.p1Lighting.tick(sample);
     if (resumingP1 && update.state === 'running') await this.syncMediaTransport('start');
     const managedMedia = (previousState === 'armed' || previousState === 'running' || resumingP1) && update.state === 'running'
       ? this.managedOutput.collectCrossed(previousFrame, sample.totalFrames)
@@ -312,15 +305,14 @@ export class LinkRuntimeCoordinator {
   private async prepareArmFromStart(assertCurrent: () => void = () => undefined): Promise<void> {
     this.decoder.reset(); this.mtcStability.reset(); this.lastSample = null;
     this.managedOutput.resetExecution(); resetRuntimeExecutionView();
-    this.applyRequiredUpdate(await prepareRuntimeArm(this.project, this.currentItem(), {
-      profile: useIntegrationStore.getState().profile, autoFollow: Boolean(this.autoFollow), lighting: this.p1Lighting, runtime: this.runtime, assertCurrent
+    this.applyRequiredUpdate(await prepareRuntimeArm(this.project, {
+      runtime: this.runtime, assertCurrent
     }));
   }
 
   private applyUpdate(update: RuntimeUpdate): void {
     if (useRuntimeStore.getState().state !== update.state && ['paused', 'timecodeLost', 'error', 'stopping'].includes(update.state)) {
       this.executionGeneration += 1;
-      try { this.p1Lighting.suspend(this.lastSample); } catch (error) { this.reportRuntimeError(error); return; }
       if (this.autoFollow && (update.state === 'timecodeLost' || update.state === 'error')) void this.syncMediaTransport('pause').catch((error: unknown) => this.reportRuntimeError(error));
     }
     applyRuntimeState({ project: this.project, item: this.currentItem(), update, nextCueId: this.nextCueId() });

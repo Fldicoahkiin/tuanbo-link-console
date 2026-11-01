@@ -272,7 +272,7 @@ it('时间码短暂中断：每次记录一次并累计本首次数，不当作 
   } finally { await f.service.close(); }
 });
 
-function claiming(owners: () => ('时间码' | '动作 MIDI' | '灯光 MIDI' | '接口检查')[] = () => []) {
+function claiming(owners: () => ('时间码' | '动作 MIDI' | '接口检查')[] = () => []) {
   const claims: { name: string; released: boolean }[] = [];
   const claimMidiOutput = (name: string) => {
     const claim = { name, released: false }; claims.push(claim);

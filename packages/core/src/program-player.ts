@@ -1,4 +1,4 @@
-import type { IntegrationProfile, NativeObsStatus, LightingDocument } from '@tb/schema';
+import type { NativeObsStatus, LightingDocument } from '@tb/schema';
 
 export type InternalPlayerState = import('@tb/schema').ProgramPlayerState;
 export const emptyInternalPlayerState: InternalPlayerState = {
@@ -41,13 +41,14 @@ export type AudioAnalysis = {
   readPeaks: () => readonly [number, number];
 };
 
+/** A playing song's lighting is the console's Timecode show following the song's timecode (2026-11-01: the
+ * MIDI and network playback modes were removed). The player itself only switches the song's executors off
+ * when it stops. */
 export type ProgramLightingOutput = {
-  prepare(document: LightingDocument, profile: IntegrationProfile | null, positionMs: number): Promise<void>;
-  tick(positionMs: number): void;
-  finish(positionMs: number): Promise<void> | void;
-  stop(): void;
-  release?(): Promise<void>;
-  close?(): Promise<void>;
-  /** The latest live lighting fault since the previous call; the channel keeps running. */
-  takeFault?(): string | null;
+  /** Notes where the Off goes when the song stops; sends nothing. */
+  prepare(document: LightingDocument): Promise<void>;
+  /** Drops a preparation still under way; one that finished is kept for the stop. */
+  cancelPreparation(): void;
+  /** The song stopped: its executors are switched off. */
+  release(): Promise<void>;
 };

@@ -101,7 +101,8 @@ describe('LinkRuntimeCoordinator', () => {
       expect(mocks.executeObsAction).toHaveBeenCalledTimes(2);
     } finally { coordinator.dispose(); }
   });
-  it('P1 跟随驱动准备和正式 Cue，暂停跳过旧点、断流冻结并取消发送', async () => {
+  // 2026-11-01: under P1 follow the console runs the lighting from P1's timecode; the timeline's Cues are never sent.
+  it('P1 跟随只走时间码：旧工程存成网络输出的灯光时间线也不发 Cue，暂停和断流照常冻结', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
     const playMa2Cue = vi.fn<(_request: Ma2PlaybackRequest) => Promise<void>>().mockResolvedValue();
     const cancelMa2Playback = vi.fn(() => Promise.resolve());
@@ -118,18 +119,15 @@ describe('LinkRuntimeCoordinator', () => {
       coordinator.selectItem('song', false); await coordinator.initializeMidi(); coordinator.beginPreflight('live');
       await coordinator.applyPreflight({ checkedAt: new Date().toISOString(), mode: 'live', passed: true, checks: [] }); await coordinator.armFromStart();
       sendTimecode(0); await vi.advanceTimersByTimeAsync(133); sendTimecode(4); await vi.advanceTimersByTimeAsync(1);
-      expect(playMa2Cue.mock.calls.map(([request]) => request.action.cue)).toEqual(['1']);
       await vi.advanceTimersByTimeAsync(133); sendTimecode(8); await vi.advanceTimersByTimeAsync(133); sendTimecode(12); await vi.advanceTimersByTimeAsync(1);
-      expect(playMa2Cue.mock.calls.map(([request]) => request.action.cue)).toEqual(['1', '2']);
       coordinator.pause();
       for (const frame of [16, 20, 24]) { await vi.advanceTimersByTimeAsync(133); sendTimecode(frame); }
       coordinator.resume(); await vi.advanceTimersByTimeAsync(133); sendTimecode(28); await vi.advanceTimersByTimeAsync(1);
-      expect(playMa2Cue.mock.calls.map(([request]) => request.action.cue)).toEqual(['1', '2']);
       await vi.advanceTimersByTimeAsync(700);
       expect(useRuntimeStore.getState().state).toBe('timecodeLost');
       sendTimecode(40); await vi.advanceTimersByTimeAsync(1);
-      expect(playMa2Cue).toHaveBeenCalledTimes(2); expect(cancelMa2Playback).toHaveBeenCalled();
       await coordinator.stopAndWait();
+      expect(playMa2Cue).not.toHaveBeenCalled(); expect(cancelMa2Playback).not.toHaveBeenCalled();
       expect(useRuntimeStore.getState().state).toBe('idle');
     } finally { coordinator.dispose(); }
   });
@@ -194,9 +192,9 @@ describe('LinkRuntimeCoordinator', () => {
         await vi.waitFor(() => expect(order).toHaveLength(turn * 2 + 1), { interval: 1 });
         expect(useRuntimeStore.getState().currentItemId).toBe(`song-${index}`);
         expect(active).toEqual(new Set([`clip-${index}`]));
-        await vi.waitFor(() => expect(playMa2Cue).toHaveBeenCalledTimes(turn + 1), { interval: 1 });
-        expect(playMa2Cue.mock.calls.at(-1)?.[0].action).toEqual({ target: 'sequence', sequence: index + 1, cue: '1', action: 'goto' });
       }
+      // The console follows P1's timecode for each song's lighting; nothing is sent from the timeline (2026-11-01).
+      expect(playMa2Cue).not.toHaveBeenCalled();
       coordinator.stop();
       await vi.waitFor(() => expect(useRuntimeStore.getState().state).toBe('idle'), { interval: 1 });
       expect(active.size).toBe(0);

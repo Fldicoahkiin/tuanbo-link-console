@@ -6,7 +6,7 @@ function project(show: string | undefined, events: 'ma2' | 'none'): LinkProject 
   const track = lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false,
     channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 5000, timeLock: 'time', muted: false,
       events: events === 'ma2' ? [{ id: 'cue', at: 1000, kind: 'ma2', sequence: 7, cue: '6.000', executor: '', label: '副歌', action: 'goto' }] : [] }] });
-  const lighting = { ...createLightingDocument(), outputMode: 'network' as const, tracks: [track],
+  const lighting = { ...createLightingDocument(), tracks: [track],
     ...(show ? { ma2Library: { show, readAt: '2026-10-13T00:00:00.000Z', sequences: [] } } : {}) };
   return parseLinkProject({ ...createEmptyLinkProject('灯光工程'), schemaVersion: 2, rundown: [{ id: 'song', title: '第一首', lighting }] });
 }

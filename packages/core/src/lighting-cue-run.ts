@@ -2,10 +2,10 @@ import type { LightingDocument, LightingEvent, LightingTrack } from '@tb/schema'
 import { LightingTempoMap, lightingEventTime } from './lighting-edit';
 
 type Cue = Extract<LightingEvent, { kind: 'ma2' }>;
-type Entry = { atMs: number; event: Cue; track: LightingTrack; releaseOnlyIfStarted?: boolean; releasePrevious?: boolean };
+type Entry = { atMs: number; event: Cue; track: LightingTrack };
 
-export function lightingCueTarget(event: Cue, track: LightingTrack, mode: LightingDocument['outputMode']): string {
-  return `${mode === 'direct' ? track.portProfileId || 'lighting-events-output' : ''}/${event.executor ? `executor:${event.executor}` : `sequence:${event.sequence}`}`;
+function lightingCueTarget(event: Cue): string {
+  return event.executor ? `executor:${event.executor}` : `sequence:${event.sequence}`;
 }
 
 /** Each logical Cue switches once, including all of its delayed/prepared ingredients.
@@ -36,23 +36,18 @@ export function planLightingCueRuns(document: LightingDocument): Entry[] {
   const boundaries = new Set([...groups.values()].filter(group => group.mode === 'independent').map(group => group.start));
   const active = new Map<string, Entry>();
   const result: Entry[] = [];
-  let cutoff = -Infinity; let pendingRelease = false;
+  let cutoff = -Infinity;
   for (const entry of entries.sort((a, b) => a.atMs - b.atMs)) {
-    const releasePrevious = boundaries.delete(entry.atMs);
-    if (releasePrevious) {
+    if (boundaries.delete(entry.atMs)) {
       // All cues starting at the same time form one batch; never switch siblings off.
       for (const previous of active.values()) result.push({ atMs: entry.atMs, track: previous.track,
-        event: { ...previous.event, action: 'off', cue: undefined, preparation: undefined }, releaseOnlyIfStarted: true });
-      active.clear(); cutoff = entry.atMs; pendingRelease = true;
+        event: { ...previous.event, action: 'off', cue: undefined, preparation: undefined } });
+      active.clear(); cutoff = entry.atMs;
     }
     if (groups.get(entry.group)!.start < cutoff) continue;
-    const target = lightingCueTarget(entry.event, entry.track, document.outputMode);
+    const target = lightingCueTarget(entry.event);
     if (entry.event.action === 'off') active.delete(target); else active.set(target, entry);
-    result.push(pendingRelease ? { ...entry, releasePrevious: true } : entry); pendingRelease = false;
+    result.push(entry);
   }
   return result;
-}
-
-export function hasIndependentLightingCues(document: LightingDocument): boolean {
-  return document.tracks.some(track => !track.muted && track.clips.some(clip => !clip.muted && clip.events.some(event => event.kind === 'ma2' && event.runMode === 'independent')));
 }

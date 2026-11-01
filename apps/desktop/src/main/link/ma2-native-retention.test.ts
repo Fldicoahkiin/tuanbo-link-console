@@ -25,8 +25,7 @@ it('截图重建的24个混合事件保留全部原文，11个已知Cue进入歌
   expect(lighting.templates).toHaveLength(11);
   expect(lighting.ma2Bindings![0]!.sourceXml).toBe(meiNanXml);
   expect(lighting.ma2Bindings![0]!.nativeEvents).toHaveLength(13);
-  expect(compileLightingPackets(lighting)).toEqual([]);
-  expect(() => compileLightingPackets({ ...lighting, outputMode: 'direct' })).toThrow('控台原样');
+  expect(() => compileLightingPackets(lighting)).toThrow('控台原样');
   lighting.tracks[1]!.clips[0]!.events[0]!.at = 200;
   let console = withSequence(meiNanXml);
   const bridge = { request: vi.fn(() => Promise.resolve(console)), exchange: vi.fn((_operation: string, _target: number, _expected: string, desired: string) => { console = withSequence(desired); return Promise.resolve({ response: desired, requestId: 'b'.repeat(32) }); }) };

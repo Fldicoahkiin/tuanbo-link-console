@@ -47,7 +47,6 @@ export * from './obs-program-session';
 export * from './obs-program-snapshot';
 export * from './program-player';
 export * from './midi-program';
-export * from './lighting-network-output';
 export * from './lighting-output-release';
 export * from './native-program-player';
 export * from './native-audio-analysis';

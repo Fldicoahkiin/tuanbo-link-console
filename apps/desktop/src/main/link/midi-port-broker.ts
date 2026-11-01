@@ -9,7 +9,7 @@ type Direction = 'input' | 'output';
 type Channel = { direction: Direction; name: string; handles: Set<number>; ready: Promise<void>; output: Output | null; input: Input | null; closed: boolean; reason: string | null };
 
 /** What in formal playback, or an explicit check, takes an output from the window. */
-export type MidiClaimOwner = '时间码' | '动作 MIDI' | '灯光 MIDI' | '接口检查';
+export type MidiClaimOwner = '时间码' | '动作 MIDI' | '接口检查';
 /** An output held for formal use. `others`: who else in formal use holds the same output now. */
 export type MidiClaim = { readonly owner: MidiClaimOwner; release(): void; others(): MidiClaimOwner[] };
 

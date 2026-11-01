@@ -2906,59 +2906,6 @@ test('独立素材场景同步、场景长度拖动与低功率切换', async ({
   expect(mediaClip.sourceOffsetMs).toBe(0);
 });
 
-test('音乐自然结束补齐最后轮询间隔的 Cue，手动跳到结尾只释放音符', async ({}, testInfo) => {
-  const audioPath = testInfo.outputPath('assets/reference-audio/tail.wav');
-  const projectPath = testInfo.outputPath('tail.tblink');
-  await mkdir(dirname(audioPath), { recursive: true });
-  await createAudioFixture(audioPath);
-  const lighting = createLightingDocument(); lighting.outputMode = 'direct';
-  lighting.tracks = [{ id: 'lighting', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: 'lighting-output', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 4200, muted: false, timeLock: 'time', events: [
-    { id: 'held', kind: 'note', at: 1000, duration: 3200, note: 60, velocity: 100 },
-    { id: 'tail', kind: 'ma2', at: 3999, cue: '1.25', sequence: 1, executor: '1.5', action: 'goto', label: '结尾 Cue' },
-    { id: 'outside', kind: 'cc', at: 4000, controller: 7, value: 99 }
-  ] }] }];
-  const project = createEmptyLinkProject('结束边界'); project.schemaVersion = 2;
-  project.rundown.push({ id: 'song', title: '结尾验收', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting,
-    referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/tail.wav', sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex'), durationMs: 4000 } });
-  await writeFile(projectPath, JSON.stringify(project));
-  const profile = createDefaultIntegrationProfile();
-  profile.midiPortProfiles.find((port) => port.id === 'lighting-output')!.portName = 'Tail Test';
-  await page.evaluate((value) => window.tbLink.saveIntegrationProfile({ profile: value }), profile);
-  await page.reload();
-  await application.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, projectPath);
-  await page.getByRole('button', { name: '打开工程', exact: true }).click();
-  await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
-  const tailMidi = await stubMidiPorts(application, { outputs: ['Tail Test'] });
-  await page.evaluate(() => {
-    const audio = document.querySelector<HTMLAudioElement>('.timeline-toolbar > audio');
-    const lifecycle: Array<{ event: string; time: number; ended: boolean; seeking: boolean }> = [];
-    Reflect.set(window, '__tailLifecycle', lifecycle);
-    for (const event of ['playing', 'pause', 'seeking', 'seeked', 'ended']) audio?.addEventListener(event, () => lifecycle.push({ event, time: audio.currentTime, ended: audio.ended, seeking: audio.seeking }));
-    // Deterministically leave a final polling interval for the ended cleanup to flush.
-    const interval = window.setInterval.bind(window);
-    Object.defineProperty(window, 'setInterval', { configurable: true, value: (handler: TimerHandler, delay?: number, ...args: unknown[]): number => interval(delay === 5 && typeof handler === 'function' ? () => {
-      const audio = document.querySelector<HTMLAudioElement>('.timeline-toolbar > audio');
-      if (!audio || audio.currentTime < 3.98) (handler as (...values: unknown[]) => void)(...args);
-    } : handler, delay, ...args) });
-  });
-  await expect.poll(() => page.locator('.timeline-toolbar > audio').evaluate((audio) => (audio as HTMLAudioElement).readyState)).toBeGreaterThanOrEqual(2);
-  await page.locator('.lighting-track-name').click();
-  await page.getByLabel('灯光播放方式').selectOption('linked');
-  await page.getByRole('button', { name: '播放时间线', exact: true }).click();
-  await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '播放时间线', exact: true })).toBeVisible({ timeout: 12000 });
-  await expect.poll(async () => (await tailMidi.sent('Tail Test')).map((bytes) => bytes[0])).toEqual([0x90, 0xf0, 0x80]).catch(async (error: unknown) => {
-    await writeFile(testInfo.outputPath('audio-lifecycle.json'), JSON.stringify(await page.evaluate((): unknown => Reflect.get(window, '__tailLifecycle')), null, 2));
-    throw error;
-  });
-  await page.getByRole('button', { name: '回到时间线开头', exact: true }).click();
-  await page.getByRole('button', { name: '播放时间线', exact: true }).click();
-  await expect.poll(async () => (await tailMidi.sent('Tail Test')).length).toBe(4);
-  await page.locator('.timeline-toolbar > audio').evaluate((audio) => { (audio as HTMLAudioElement).currentTime = 4; });
-  await expect(page.getByRole('button', { name: '播放时间线', exact: true })).toBeVisible();
-  await expect.poll(async () => (await tailMidi.sent('Tail Test')).map((bytes) => bytes[0])).toEqual([0x90, 0xf0, 0x80, 0x90, 0x80]);
-});
-
 test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo) => {
   const audioPath = testInfo.outputPath('p1-audio.wav');
   const p1Path = testInfo.outputPath('p1-show.hia');

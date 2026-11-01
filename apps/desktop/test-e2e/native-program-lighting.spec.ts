@@ -42,7 +42,7 @@ test('播放只发时间码：网络直控编排的歌在播放、界面阻塞�
       sequence: 168, cue: `${index + 1}.000`, executor: '', label: `灯光 ${index + 1}` })) }] });
   const project = parseLinkProject({ ...createEmptyLinkProject('原生后台灯光验收'), schemaVersion: 2, playbackSource: 'internal', obsOutputMode: 'scenes',
     rundown: [{ id: 'song', title: '后台灯光', referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/silence.wav', durationMs: 10000,
-      sha256: createHash('sha256').update(wav).digest('hex') }, lighting: { ...createLightingDocument(), outputMode: 'network', tracks: [track] } }] });
+      sha256: createHash('sha256').update(wav).digest('hex') }, lighting: { ...createLightingDocument(), tracks: [track] } }] });
   const file = info.outputPath('project.tblink'); await writeFile(file, JSON.stringify(project));
   const profile = createDefaultIntegrationProfile(); profile.obs.autoConnectOnLaunch = false;
   profile.internalPlayer = { audioEngine: 'native', nativeAudioOutputDeviceId: 'default', audioOutputDeviceId: 'default', mtcOutputPortProfileId: null, audioSampleRate: 48000 };

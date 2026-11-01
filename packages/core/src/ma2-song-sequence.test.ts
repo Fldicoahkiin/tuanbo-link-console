@@ -4,7 +4,6 @@ import { applyMa2SongReadback, ma2SongPoints } from './ma2-song-sequence';
 
 function sample() {
   const document = createLightingDocument();
-  document.outputMode = 'network';
   document.tracks = [{ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {}, clips: [{
     id: 'clip', name: '编排', start: 0, duration: 10000, timeLock: 'time', muted: false, events: [
       { id: 'first', kind: 'ma2', at: 0, label: '软件名称', action: 'goto', executor: '', sequence: 2, cue: '1', runMode: 'independent' },

@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { createLightingDocument, lightingDocumentSchema, lightingEventSchema } from '@tb/schema';
 import { placeEmptyLightingCue } from './lighting-empty-cue';
-import { collectLightingOutputProfileIds, compileLightingPackets, compileLightingNetworkActions, compileLightingReleasePackets } from './lighting-playback';
+import { compileLightingPackets, compileLightingNetworkActions } from './lighting-playback';
 import { moveLightingEffect } from './lighting-effect-group';
 
 it('空 Cue 保存重开和移动保持为空，不继承控台绑定或要求 MIDI 输出', () => {
@@ -10,13 +10,8 @@ it('空 Cue 保存重开和移动保持为空，不继承控台绑定或要求 M
   expect(reopened.tracks[0]?.clips[0]?.events).toEqual([{ id: 'empty', kind: 'empty-cue', at: 1000, label: '' }]);
   expect(reopened.tracks[0]?.cueStamp).toBeUndefined();
   expect(moveLightingEffect(reopened, 'empty', 2500, 10000).tracks[0]?.clips[0]?.events[0]?.at).toBe(2500);
-  for (const outputMode of ['network', 'direct', 'timecode'] as const) {
-    const document = { ...reopened, outputMode };
-    expect(collectLightingOutputProfileIds(document)).toEqual([]);
-    expect(compileLightingPackets(document)).toEqual([]);
-    expect(compileLightingNetworkActions(document)).toEqual([]);
-    expect(compileLightingReleasePackets(document)).toEqual([]);
-  }
+  expect(compileLightingPackets(reopened)).toEqual([]);
+  expect(compileLightingNetworkActions(reopened)).toEqual([]);
   expect(lightingEventSchema.safeParse({ id: 'empty', kind: 'empty-cue', at: 1000, label: '', sequence: 9907 }).success).toBe(false);
 });
 

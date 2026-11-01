@@ -43,7 +43,7 @@ windowsTest('正式后台宿主使用真实 WASAPI 换歌、暂停恢复；空�
       stopNativeObs: () => Promise.resolve(), onNativeObsStatus: () => () => undefined,
       preloadNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')), cancelNativeObsPreload: () => Promise.resolve() },
     network: { getMa2NetworkStatus: () => Promise.reject(new Error('空灯光不应访问控台')),
-      playMa2Cue: () => Promise.reject(new Error('隔离测试禁止网络灯光输出')), cancelMa2Playback: () => Promise.resolve() }
+      playMa2Cue: () => Promise.reject(new Error('隔离测试禁止网络灯光输出')) }
   });
   host.controller.toggleMtc();
   try {
@@ -88,7 +88,7 @@ windowsTest('44.1kHz 真实引擎曲尾不在整采样上时，灯光按引擎�
       stopNativeObs: () => Promise.resolve(), onNativeObsStatus: () => () => undefined,
       preloadNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')), cancelNativeObsPreload: () => Promise.resolve() },
     network: { getMa2NetworkStatus: () => Promise.reject(new Error('空灯光不应访问控台')),
-      playMa2Cue: () => Promise.reject(new Error('隔离测试禁止网络灯光输出')), cancelMa2Playback: () => Promise.resolve() }
+      playMa2Cue: () => Promise.reject(new Error('隔离测试禁止网络灯光输出')) }
   });
   host.controller.toggleMtc();
   try {

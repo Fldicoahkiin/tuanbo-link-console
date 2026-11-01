@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, createLightingDocument, linkCueSchema, parseLinkProject, type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, lightingDocumentSchema, linkCueSchema, parseLinkProject, type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus } from '@tb/schema';
 import { NativeProgramPlayer, type ProgramLightingOutput } from '@tb/core/link';
 import { emptyInternalPlayerState } from '@tb/core/link';
 import { nativeProgramSnapshot } from '@tb/core/link';
@@ -48,7 +48,7 @@ function fixture() {
     stop: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()), resolveAudio: vi.fn(() => Promise.resolve('unused')),
     configuration: () => ({ outputDeviceId: 'default', mtcPortName: 'TEST', audioSampleRate: 48000 as const }),
     changed: (next: typeof state) => { state = next; }, notice: vi.fn() };
-  const lighting = { prepare: vi.fn<ProgramLightingOutput['prepare']>(() => Promise.resolve()), tick: vi.fn(), finish: vi.fn(), stop: vi.fn() };
+  const lighting = { prepare: vi.fn<ProgramLightingOutput['prepare']>(() => Promise.resolve()), cancelPreparation: vi.fn<ProgramLightingOutput['cancelPreparation']>(), release: vi.fn<ProgramLightingOutput['release']>(() => Promise.resolve()) };
   const player = new NativeProgramPlayer(project, 'C:/test/project.tblink', 7, deps, api, lighting);
   return { player, project, deps, api, lighting, emit, state: () => state };
 }
@@ -120,16 +120,16 @@ it('随时可播放：开播检查不过的歌照发本曲起始码的时间码�
   await f.player.dispose();
 });
 
-it('播放只发时间码：网络或直接输出的歌照发时间码，本地时间线不交给灯光输出，停止时释放本曲执行器', async () => {
-  const f = fixture(), release = vi.fn(() => Promise.resolve()), lighting = { ...createLightingDocument(), outputMode: 'network' as const };
+it('播放只发时间码：旧工程存成网络输出的歌也照发时间码，灯光只准备停止时的关闭，停止时释放本曲执行器', async () => {
+  const f = fixture(), lighting = lightingDocumentSchema.parse({ ...createLightingDocument(), outputMode: 'network' });
   lighting.tracks = [{ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {},
     clips: [{ id: 'clip', name: '编排', start: 0, duration: 5000, timeLock: 'time', muted: false, events: [{ id: 'cue', kind: 'ma2', at: 1000, sequence: 1, executor: '1.101', cue: '1', action: 'goto', label: '开场', runMode: 'independent' }] }] }];
-  f.project.rundown[0]!.lighting = lighting; Object.assign(f.lighting, { release });
+  f.project.rundown[0]!.lighting = lighting;
   await f.player.play('song-0');
   expect(f.api.prepareNativePlayback.mock.calls[0]?.[0].midiPortName).toBe('TEST');
-  expect(f.lighting.prepare.mock.calls[0]?.[0]).toMatchObject({ outputMode: 'timecode', tracks: [] });
+  expect(f.lighting.prepare.mock.calls[0]?.[0]).toMatchObject({ outputMode: 'timecode' });
   expect(f.state().fault).toBeNull();
-  await f.player.stop(); expect(release).toHaveBeenCalledOnce();
+  await f.player.stop(); expect(f.lighting.release).toHaveBeenCalledOnce();
   await f.player.dispose();
 });
 
@@ -282,11 +282,10 @@ describe('原生正式播放器的操作与会话', () => {
     await f.player.stop();
     expect(f.api.controlNativePlayback.mock.calls.at(-1)?.[0].kind).toBe('stop');
   });
-  it.each(['pause', 'next'] as const)('曲尾灯光发送失败不阻止原定的 %s 播放动作', async endAction => {
+  it.each(['pause', 'next'] as const)('曲尾不发灯光指令，原定的 %s 照常进行，停止时才关执行器', async endAction => {
     const f = fixture();
-    f.project.rundown[0]!.lighting = { ...createLightingDocument(), outputMode: 'network' };
+    f.project.rundown[0]!.lighting = createLightingDocument();
     f.project.rundown[0]!.playback!.endAction = endAction;
-    f.lighting.finish.mockImplementation(() => { throw new Error('曲尾灯光网络断开'); });
     await f.player.play('song-0');
     expect(f.lighting.prepare).toHaveBeenCalledOnce();
     f.emit({ status: 'ended', positionMs: 9500 });
@@ -294,24 +293,10 @@ describe('原生正式播放器的操作与会话', () => {
       status: endAction === 'pause' ? 'paused' : 'playing',
       itemId: endAction === 'pause' ? 'song-0' : 'song-1', error: null
     }));
-    expect(f.lighting.finish).toHaveBeenCalledOnce();
     expect(f.state().playedItemIds).toContain('song-0');
-    expect(f.deps.notice).toHaveBeenCalledWith(expect.stringContaining('曲尾灯光网络断开'), 'song-0');
-    if (endAction === 'pause') expect(f.state().notice).toContain('曲尾灯光网络断开');
+    expect(f.lighting.release).not.toHaveBeenCalled();
     await f.player.stop();
-  });
-  it('44.1kHz 曲尾位置按整采样取整，灯光收尾使用引擎实际结束位置，不用名义结束时间', async () => {
-    const f = fixture();
-    f.project.rundown[0]!.lighting = { ...createLightingDocument(), outputMode: 'network' };
-    f.project.rundown[0]!.playback!.endMs = 9499.99;
-    await f.player.play('song-0');
-    // The engine ends on a whole sample: llround(9499.99 × 44.1) = 418950 samples = 9500 ms.
-    const endedAt = Math.round(9499.99 * 44.1) / 44.1;
-    expect(endedAt).not.toBe(9499.99);
-    f.emit({ status: 'ended', positionMs: endedAt });
-    await vi.waitFor(() => expect(f.lighting.finish).toHaveBeenCalledOnce());
-    expect(f.lighting.finish).toHaveBeenCalledWith(endedAt);
-    await f.player.stop();
+    expect(f.lighting.release).toHaveBeenCalledOnce();
   });
   it('界面伴随 Cue 启动失败不停止已开始的后台音频与 OBS', async () => {
     const f = fixture(); f.deps.started.mockImplementation(() => { throw new Error('本地 MIDI 起点已错过'); });
@@ -445,15 +430,15 @@ describe('原生正式播放器的操作与会话', () => {
 
 it('29.97 丢帧工程照常发时间码，引擎按丢帧计算；不修改歌曲偏移', () => {
   const f = fixture(); f.project.timebase.frameRate = '29.97df';
-  f.project.rundown[0]!.lighting = { ...createLightingDocument(), outputMode: 'network' };
+  f.project.rundown[0]!.lighting = createLightingDocument();
   const result = nativeProgramSnapshot(f.project, 'song-0', 7, 1000, 48000);
   expect(result).toMatchObject({ allowMtc: true, notice: null, snapshot: { frameRate: 29.97, offsetMs: 480000 } });
   expect(f.project.rundown[0]!.playback!.mtcOffsetMs).toBe(480000);
 });
 
-for (const mode of ['network', 'direct', 'timecode'] as const) it(`原生播放：控台上两个节目起点和 ${mode} 输出歌曲相同时照发时间码，只提示（2026-10-26）`, async () => {
+for (const mode of ['network', 'direct', 'timecode']) it(`原生播放：控台上两个节目起点和存成 ${mode} 的歌曲相同时照发时间码，只提示（2026-10-26）`, async () => {
   const f = fixture();
-  f.project.rundown[0]!.lighting = { ...createLightingDocument(), outputMode: mode };
+  f.project.rundown[0]!.lighting = lightingDocumentSchema.parse({ ...createLightingDocument(), outputMode: mode });
   const entry = (target: number) => ({ target, name: `节目 ${target}`, eventCount: 1, frameFormat: '30 FPS', offset: '14400', slot: 'TC Slot 2', events: [{ path: '1', time: '30', action: 'Goto', executor: '1.1', cue: '1', name: null }], error: null, warnings: [] });
   f.project.ma2ReadState = { source: 'console', catalog: { directory: { show: 'test', generation: 'session', version: '3.7.0.5', entries: [] }, readAt: '2026-10-08T00:00:00.000Z', entries: [entry(2), entry(3)] },
     pairs: {}, failures: [], selectedTarget: null, query: '', filter: 'all', message: '' };

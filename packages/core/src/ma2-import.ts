@@ -18,7 +18,6 @@ export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePrevi
     const preview = withMa2TimeOrigin(input, originMs);
     if (originMs > 0) item.playback ??= { volume: item.p1Media?.volume ?? 100, startMs: 0, endMs: 0, mtcOffsetMs: originMs, shortcut: item.p1Media?.shortcut ?? '' };
     const current = item.lighting ?? structuredClone(initial ?? createLightingDocument());
-    if (input.unconverted.length && current.outputMode !== 'timecode' && current.tracks.length) throw new Error('有保持控台原样事件的时间线需要输出时间码；请先检查这首歌的直接输出编排');
     if (current.ma2Bindings?.some((binding) => binding.timecode === preview.target)) throw new Error('这个节目已经关联了这个 Timecode，不用重复导入');
     const tracks = structuredClone(preview.document.tracks);
     const templates = [...current.templates];
@@ -28,7 +27,7 @@ export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePrevi
       const name = event.label || `Cue ${event.cue}`;
       templates.push({ id: crypto.randomUUID(), name, categories: [], track: { ...track, id: crypto.randomUUID(), name, muted: false, solo: false, locked: false, clips: [], cueStamp: { mode: 'fixed', sequence: event.sequence, cue: event.cue, executor: event.executor } } });
     }
-    item.lighting = { ...current, ...(input.unconverted.length ? { outputMode: 'timecode' as const } : {}), templates, tracks: [...current.tracks, ...tracks], ma2Bindings: [...current.ma2Bindings ?? [], {
+    item.lighting = { ...current, templates, tracks: [...current.tracks, ...tracks], ma2Bindings: [...current.ma2Bindings ?? [], {
       nativeEvents: structuredClone(preview.unconverted), playback: preview.unconverted.length ? 'native-timecode' : 'editable',
       id: bindingId, timecode: preview.target, name: preview.name, readAt: preview.readAt, timeOriginMs: preview.timeOriginMs,
       sourceXml: preview.sourceXml, baselineTracks: structuredClone(tracks), mappings: structuredClone(preview.mappings), trackMappings: preview.trackMappings?.length === tracks.length ? structuredClone(preview.trackMappings) : undefined, cueCatalog: structuredClone(preview.cueCatalog)

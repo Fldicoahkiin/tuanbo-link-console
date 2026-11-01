@@ -63,7 +63,7 @@ test('顶部保留四项连接状态，详细在下方展开按设备分组的�
 
 test('点击四项状态定位并短暂强调，重复点击重新滚动', async ({}, info) => {
   const project = createEmptyLinkProject('连接定位验收'); project.schemaVersion = 2; project.playbackSource = 'internal';
-  const lighting = createLightingDocument(); lighting.outputMode = 'timecode';
+  const lighting = createLightingDocument();
   project.rundown.push({ id: 'song', title: '定位歌曲', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting });
   const file = info.outputPath('settings.tblink'); await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });

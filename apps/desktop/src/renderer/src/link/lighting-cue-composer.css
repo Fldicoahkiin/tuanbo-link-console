@@ -50,9 +50,6 @@
 .lighting-workbench .cue-composer .cue-ingredients>.cue-ingredient { display:block; padding:8px 10px; border:1px solid var(--separator); }
 .cue-composer .cue-ingredient-title { width:100%; }
 
-.cue-run-settings { display: flex; flex-direction: column; gap: 4px; padding-block: 6px; }
-.cue-run-mode { display: flex; gap: 4px; }
-.cue-run-mode button { flex: 1; font-size: 12px; min-height: 30px; }
-.cue-run-mode button[aria-pressed=true] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, var(--surface)); }
+.cue-run-settings { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-block: 6px; }
 .cue-run-settings small { color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
 }

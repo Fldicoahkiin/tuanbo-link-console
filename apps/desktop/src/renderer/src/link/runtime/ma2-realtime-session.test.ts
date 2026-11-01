@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, createLightingDocument, type Ma2SongBinding, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, lightingDocumentSchema, type Ma2SongBinding, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
 import { legacyMa2Renames, ma2SongPoints, pendingMa2Renames, renameConsoleCueCommand, setLightingCommand } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
@@ -23,7 +23,7 @@ function project() {
   value.schemaVersion = 2;
   value.ma2MaterialLibrary = { version: 1, source: '192.0.2.1:30000', library: { directory: { ...source, entries: [] }, readAt: new Date().toISOString(), sequences: [], fixtureUsage: [], errors: [] } };
   value.rundown = ['first', 'second'].map(id => {
-    const lighting = createLightingDocument(); lighting.outputMode = 'network';
+    const lighting = createLightingDocument();
     lighting.tracks = [{ id: `track-${id}`, name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {}, clips: [{ id: `clip-${id}`, name: '编排', start: 0, duration: 10000, timeLock: 'time', muted: false, events: [{ id: `point-${id}`, kind: 'empty-cue', at: 0, label: '开场', runMode: 'independent' }] }] }];
     return { id, title: id, enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting };
   });
@@ -55,9 +55,10 @@ it('默认开启后整曲进入歌曲序列同步，不再调用隐式 Timecode 
   expect(metadata).toHaveBeenCalledExactlyOnceWith({ dataDirectory: '', network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, targets: [] });
   expect(pendingSongSummary(useDocumentStore.getState().project)).toHaveLength(2);
 });
-it('灯光输出方式不再决定能否同步：默认的时间码跟随和 MIDI 直控的歌同样进入同步并写到控台', async () => {
+it('旧工程存着 MIDI 直控或网络发命令的歌，打开后按时间码进入同步并写到控台（2026-11-01）', async () => {
   const value = project();
-  value.rundown[0]!.lighting!.outputMode = 'timecode'; value.rundown[1]!.lighting!.outputMode = 'direct';
+  value.rundown[0]!.lighting = lightingDocumentSchema.parse({ ...value.rundown[0]!.lighting, outputMode: 'network' });
+  value.rundown[1]!.lighting = lightingDocumentSchema.parse({ ...value.rundown[1]!.lighting, outputMode: 'direct' });
   useDocumentStore.getState().setProject(value, 'song.tblink');
   sync.mockRejectedValue(new Error('MA2 响应超时，操作没有确认，不会自动重试'));
   await prepareMa2RealtimeSession();

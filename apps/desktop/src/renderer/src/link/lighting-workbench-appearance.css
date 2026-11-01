@@ -120,27 +120,8 @@
 .lighting-cue-splitter span { display: block; width: 2px; height: 36px; border-radius: 1px; background: var(--separator); }
 .lighting-cue-splitter:hover span, .lighting-cue-splitter:focus-visible span { background: var(--accent); }
 .cue-composer { padding: 8px; gap: 6px; border-left: 0; }
-.cue-composer .cue-preparation { flex-shrink: 0; border-block: 1px solid var(--separator); }
-.cue-preparation summary { padding: 9px 4px; cursor: pointer; font-size: 14px; }
-.cue-preparation summary small { margin-left: 12px; color: var(--text-secondary); font-size: 12px; }
-.cue-preparation-body { display: grid; gap: 10px; padding: 0 4px 10px; }
-.cue-preparation-body > p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
-.cue-preparation-row { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr) 100px; gap: 10px; align-items: center; }
-.cue-preparation-row > label { display: grid; gap: 5px; min-width: 0; font-size: 12px; color: var(--text-secondary); }
-.cue-preparation-row .cue-preparation-toggle { display: flex; align-items: center; gap: 8px; color: var(--text-primary); }
-.cue-preparation-toggle > span { display: grid; gap: 4px; overflow-wrap: anywhere; }
-.cue-preparation-toggle small { color: var(--text-secondary); font-size: 11px; }
-.cue-preparation-row input:not([type=checkbox]) { width: 100%; min-width: 0; min-height: 30px; padding: 5px 7px; border: 1px solid var(--control-border); border-radius: var(--radius-control); background: var(--surface-raised); }
-.cue-preparation-row input[type=checkbox] { width: 15px; height: 15px; flex-shrink: 0; accent-color: var(--accent); }
-.cue-preparation-body output { font-size: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }
-.cue-preparation-body > small { color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
-.cue-preparation-body .cue-preparation-invalid { color: var(--danger, #e57373); }
 .waveform-cue-preparation { position: absolute; height: 6px; border-bottom: 2px solid #c59145; border-left: 2px solid #c59145; background: #c5914526; pointer-events: none; }
 .waveform-cue-preparation > span { position: absolute; left: 3px; top: -16px; font-size: 10px; color: #c59145; white-space: nowrap; }
-@media (max-width: 1000px) {
-  .cue-preparation-row { grid-template-columns: minmax(90px, 1fr) 85px; }
-  .cue-preparation-row .cue-preparation-toggle { grid-column: 1 / -1; }
-}
 .cue-composer header strong { font-size: 17px; }
 .cue-composer > small { font-size: 13px; }
 

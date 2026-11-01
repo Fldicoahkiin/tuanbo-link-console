@@ -3,7 +3,7 @@ import { createLightingDocument, createEmptyLinkProject, lightingDocumentSchema,
 import { LightingTempoMap, lightingClipInTime, copyLightingEventsAt, lightingClipSpan, lightingCurveValue, lightingEventTime, offsetLightingEvents, quantizeLightingClip, setLightingCommand, splitLightingClip, trimLightingClip, mergeLightingClips } from './lighting-edit';
 import { exportLightingMidi } from './lighting-midi-file';
 import { copyLightingEvents, pasteLightingEvents } from './lighting-clipboard';
-import { compileLightingPackets, LightingScheduler, type LightingPacket } from './lighting-playback';
+import { compileLightingPackets } from './lighting-playback';
 
 const clip: LightingClip = { id: 'clip', name: '灯光', start: 0, duration: 10000, timeLock: 'time', muted: false, events: [{ id: 'note', kind: 'note', at: 100, note: 60, velocity: 100, duration: 4000 }] };
 it('584 个未绑定执行器的实机 Cue 可一次加入工程并保存回读', () => {
@@ -20,7 +20,7 @@ it('584 个未绑定执行器的实机 Cue 可一次加入工程并保存回读'
   expect(saved.rundown[0]?.lighting?.templates).toHaveLength(584);
   expect(saved.rundown[0]?.lighting?.templates[0]?.track.cueStamp).toMatchObject({ executor: '', sequence: 1 });
 });
-function document() { const value = createLightingDocument(); value.outputMode = 'direct'; value.tracks.push({ id: 'track', name: '测试', kind: 'midi', color: '#abcdef', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: 'light', noteNames: {}, clips: [structuredClone(clip)] }); return value; }
+function document() { const value = createLightingDocument(); value.tracks.push({ id: 'track', name: '测试', kind: 'midi', color: '#abcdef', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: 'light', noteNames: {}, clips: [structuredClone(clip)] }); return value; }
 
 describe('灯光编排编辑与时间基准', () => {
   it('控台 MSC 设备号只作用于生成的 MA2 指令，原始 MIDI 保持原地址', () => {
@@ -278,90 +278,6 @@ describe('灯光输出调度', () => {
     value.tracks[0]!.clips[0]!.events = [{ ...event, action: 'goto', cue: '1.0001' }];
     expect(() => compileLightingPackets(value)).toThrow('三位小数');
   });
-  it('长音符不受旧两秒触发限制，停止释放音符', () => {
-    const sent: LightingPacket[] = []; const scheduler = new LightingScheduler(compileLightingPackets(document()), (packet) => sent.push(packet));
-    scheduler.locate(0); scheduler.tick(100); expect(sent[0]?.bytes).toEqual([0x90, 60, 100]);
-    scheduler.tick(3000); expect(sent).toHaveLength(1); scheduler.stop(); expect(sent[1]?.bytes).toEqual([0x80, 60, 0]);
-  });
-  it('本机播放按当前位置重建：继续播放补发仍按住的长音符，推杆值未变不重发，中间事件不重放', () => {
-    const value = document();
-    value.tracks[0]!.clips[0]!.events.push({ id: 'low', kind: 'cc', at: 500, controller: 7, value: 10 }, { id: 'short', kind: 'note', at: 600, note: 62, velocity: 90, duration: 100 },
-      { id: 'high', kind: 'cc', at: 1500, controller: 7, value: 80 });
-    const sent: LightingPacket[] = [];
-    const first = new LightingScheduler(compileLightingPackets(value), (packet) => sent.push(packet));
-    expect(first.restore(0)).toBe(0); first.tick(2000);
-    const onAir = first.onAir(); first.stop(); sent.length = 0;
-    const resumed = new LightingScheduler(compileLightingPackets(value), (packet) => sent.push(packet), onAir);
-    expect(resumed.restore(2000)).toBe(1); expect(sent.map((packet) => packet.bytes)).toEqual([[0x90, 60, 100]]);
-    resumed.tick(4200); expect(sent.at(-1)?.bytes).toEqual([0x80, 60, 0]);
-    sent.length = 0;
-    const seeked = new LightingScheduler(compileLightingPackets(value), (packet) => sent.push(packet));
-    expect(seeked.restore(1000)).toBe(2); expect(sent.map((packet) => packet.bytes)).toEqual([[0x90, 60, 100], [0xb0, 7, 10]]);
-  });
-  it('中途定位不补发历史音符或无主释放', () => {
-    const sent: LightingPacket[] = []; const scheduler = new LightingScheduler(compileLightingPackets(document()), (packet) => sent.push(packet));
-    scheduler.locate(2000); scheduler.tick(5000); expect(sent).toEqual([]);
-  });
-  it('循环回起点可再次触发，同位置重复 tick 不重复', () => {
-    const sent: LightingPacket[] = []; const scheduler = new LightingScheduler(compileLightingPackets(document()), (packet) => sent.push(packet));
-    scheduler.locate(0); scheduler.tick(100); scheduler.tick(100); expect(sent).toHaveLength(1);
-    scheduler.tick(0); scheduler.tick(100); expect(sent.map((packet) => packet.phase)).toEqual(['on', 'off', 'on']);
-  });
-  it('跨过循环终点时补齐最后轮询区间，排除终点并释放长音符', () => {
-    const value = document();
-    value.tracks[0]!.clips[0]!.events = [
-      { id: 'start', kind: 'cc', at: 1000, controller: 7, value: 10 },
-      { id: 'held', kind: 'note', at: 4996, duration: 100, note: 60, velocity: 100 },
-      { id: 'last', kind: 'ma2', at: 4999, cue: '1.250', label: '', sequence: 1, executor: '1.5', action: 'goto' },
-      { id: 'end', kind: 'cc', at: 5000, controller: 7, value: 99 }
-    ];
-    const sent: LightingPacket[] = [];
-    const scheduler = new LightingScheduler(compileLightingPackets(value), (packet) => sent.push(packet));
-    scheduler.locate(1000); scheduler.tick(4995); scheduler.loop(1000, 5000);
-    expect(sent.map((packet) => packet.phase)).toEqual(['control', 'on', 'control', 'off']);
-    expect(sent[2]?.bytes[0]).toBe(0xf0);
-    // 循环终点不触发编排事件，但必须在终点释放仍按下的音符。
-    const boundaryPackets = sent.filter((packet) => packet.atMs === 5000);
-    expect(boundaryPackets).toHaveLength(1);
-    expect(boundaryPackets[0]).toMatchObject({ phase: 'off', bytes: [0x80, 60, 0] });
-    expect(sent.some((packet) => packet.bytes[0] === 0xb0 && packet.bytes[2] === 99)).toBe(false);
-    scheduler.tick(1000); scheduler.tick(1000);
-    expect(sent.filter((packet) => packet.atMs === 1000)).toHaveLength(2);
-    scheduler.loop(1000, 5000);
-    expect(sent.filter((packet) => packet.bytes[0] === 0xf0)).toHaveLength(2);
-    const count = sent.length; scheduler.stop(); expect(sent).toHaveLength(count);
-  });
-  it('无效定位与循环不释放当前音符或改变播放队列', () => {
-    const sent: LightingPacket[] = [];
-    const scheduler = new LightingScheduler(compileLightingPackets(document()), (packet) => sent.push(packet));
-    scheduler.locate(0); scheduler.tick(100);
-    expect(() => scheduler.locate(NaN)).toThrow('定位');
-    expect(() => scheduler.loop(1000, 1000)).toThrow('循环');
-    expect(() => scheduler.loop(-1, 5000)).toThrow('循环');
-    expect(() => scheduler.finish(Number.NaN)).toThrow('结束');
-    expect(sent).toHaveLength(1);
-    scheduler.stop(); expect(sent.at(-1)?.phase).toBe('off');
-  });
-  it('自然结束补齐尾段并释放，重复结束和未开始结束不会重放历史', () => {
-    const value = document();
-    value.tracks[0]!.clips[0]!.events = [
-      { id: 'tail', kind: 'note', at: 4999, duration: 100, note: 60, velocity: 100 },
-      { id: 'boundary', kind: 'cc', at: 5000, controller: 7, value: 99 }
-    ];
-    const sent: LightingPacket[] = [];
-    const scheduler = new LightingScheduler(compileLightingPackets(value), (packet) => sent.push(packet));
-    scheduler.finish(5000); expect(sent).toEqual([]);
-    scheduler.locate(0); scheduler.tick(4995); scheduler.finish(5000);
-    expect(sent.map((packet) => packet.bytes)).toEqual([[0x90, 60, 100], [0x80, 60, 0]]);
-    scheduler.finish(5000); scheduler.stop(); expect(sent).toHaveLength(2);
-  });
-  it('相同音高重叠时最后一个音符结束才释放', () => {
-    const value = document(); value.tracks[0]!.clips[0]!.events.push({ id: 'second', kind: 'note', at: 200, note: 60, velocity: 90, duration: 6000 });
-    const sent: LightingPacket[] = []; const scheduler = new LightingScheduler(compileLightingPackets(value), (packet) => sent.push(packet));
-    scheduler.locate(0); scheduler.tick(5000); expect(sent.map((packet) => packet.phase)).toEqual(['on', 'on']);
-    scheduler.tick(6200); expect(sent.at(-1)?.phase).toBe('off');
-  });
-  it('时间码模式不重复发送触发事件', () => { const value = document(); value.outputMode = 'timecode'; expect(compileLightingPackets(value)).toEqual([]); });
   it('静音轨道不输出', () => { const value = document(); value.tracks[0]!.muted = true; expect(compileLightingPackets(value)).toEqual([]); });
   it('线性曲线按固定密度生成并保留终点', () => {
     const value = document(); value.tracks[0]!.clips[0]!.events = [{ id: 'a', kind: 'point', at: 0, value: 0, shape: 'linear' }, { id: 'b', kind: 'point', at: 1000, value: 127, shape: 'hold' }];
@@ -373,7 +289,7 @@ describe('灯光输出调度', () => {
 describe('MA2 原生推杆节目数据', () => {
   const master = { id: 'master', kind: 'ma2-fader' as const, at: 500, executor: '99.219', fader: 'Master' as const, level: 0.755, label: '主推杆' };
   it('编辑命令、序列化重开和撤销保留精确值及输出目标', () => {
-    const value = document(); value.outputMode = 'timecode'; value.tracks[0]!.clips[0]!.events = [master];
+    const value = document(); value.tracks[0]!.clips[0]!.events = [master];
     const original = createEmptyLinkProject('推杆保存');
     original.rundown.push({ id: 'song', title: '测试', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [] });
     const command = setLightingCommand('song', value);
@@ -381,8 +297,7 @@ describe('MA2 原生推杆节目数据', () => {
     expect(saved.schemaVersion).toBe(2);
     expect(saved.rundown[0]?.lighting?.tracks[0]?.clips[0]?.events).toEqual([master]);
     expect(command.undo(original)).toEqual(original);
-    expect(compileLightingPackets(value)).toEqual([]);
-    expect(() => compileLightingPackets({ ...value, outputMode: 'direct' })).toThrow('控台原有的推杆');
+    expect(() => compileLightingPackets(value)).toThrow('控台原有的推杆');
     expect(() => exportLightingMidi(value)).toThrow('控台原有的推杆');
   });
   it('复制和拆分不量化推杆值，也不改变目标', () => {

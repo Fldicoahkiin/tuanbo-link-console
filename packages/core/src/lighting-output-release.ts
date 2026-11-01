@@ -1,26 +1,20 @@
 import { ma2NetworkStatusSchema, type LightingDocument, type Ma2NetworkTarget, type Ma2PlaybackAction } from '@tb/schema';
 import type { LinkDesktopApi } from './link-desktop-contract';
+import type { ProgramLightingOutput } from './program-player';
 
-/** Scope Stop to the selected song. No global Off, Master or blackout command. */
+/** Scope Stop to the selected song: the executors its console timeline runs. No global Off, Master or
+ * blackout command. This is the only lighting command a playing song sends besides timecode. */
 export function lightingReleaseActions(document: LightingDocument): Ma2PlaybackAction[] {
-  if (document.outputMode === 'direct') return [];
   const actions: Ma2PlaybackAction[] = [];
-  if (document.outputMode === 'timecode') {
-    for (const binding of document.ma2Bindings ?? []) {
-      for (const mapping of [...binding.mappings, ...binding.trackMappings ?? []]) actions.push({ target: 'executor', executor: mapping.executor, action: 'off' });
-    }
-    // The song's own console sequence keeps its last Cue on after the timecode stops.
-    if (document.consoleSong?.executor) actions.push({ target: 'executor', executor: document.consoleSong.executor, action: 'off' });
+  for (const binding of document.ma2Bindings ?? []) {
+    for (const mapping of [...binding.mappings, ...binding.trackMappings ?? []]) actions.push({ target: 'executor', executor: mapping.executor, action: 'off' });
   }
-  else for (const track of document.tracks) for (const clip of track.clips) for (const event of clip.events) {
-    if (track.muted || document.tracks.some(value => value.solo && !value.muted) && !track.solo || clip.muted || event.kind !== 'ma2') continue;
-    if (event.executor) actions.push({ target: 'executor', executor: event.executor, action: 'off' });
-    else if (event.sequence) actions.push({ target: 'sequence', sequence: event.sequence, action: 'off' });
-  }
+  // The song's own console sequence keeps its last Cue on after the timecode stops.
+  if (document.consoleSong?.executor) actions.push({ target: 'executor', executor: document.consoleSong.executor, action: 'off' });
   return [...new Map(actions.map(action => [JSON.stringify(action), action])).values()];
 }
 
-export class LightingOutputRelease {
+export class LightingOutputRelease implements ProgramLightingOutput {
   private plan: { network: Ma2NetworkTarget; actions: Ma2PlaybackAction[] } | null = null;
   private generation = 0;
   private unavailable: string | null = null;

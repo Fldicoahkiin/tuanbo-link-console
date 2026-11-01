@@ -9,7 +9,7 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
   const wav = Buffer.alloc(44 + 24000 * 10 * 2);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(24000, 24); wav.writeUInt32LE(48000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   await mkdir(info.outputPath('assets/reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets/reference-audio/reference.wav'), wav);
-  const lighting = createLightingDocument(); lighting.outputMode = 'network';
+  const lighting = createLightingDocument();
   const library = createLightingUserLibrary();
   library.entries = [1,2,3].map(sequence => ({ id: `material-${sequence}`, name: `灯光素材 ${sequence}`, originalName: `灯光素材 ${sequence}`, revision: 1, kind: 'single', categoryIds: ['front:bright:3:front'], favorite: false, source: { endpoint: 'test', show: 'test', verified: true }, track: { id: `track-${sequence}`, name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {}, clips: [], cueStamp: { mode: 'fixed', sequence, cue: '1.000', executor: '' } } }));
   lighting.tracks = [{ ...library.entries[0]!.track, clips: [{ id: 'clip', name: '原编排', start: 0, duration: 10000, timeLock: 'time', muted: false, events: [{ id: 'original', kind: 'ma2', at: 2000, sequence: 1, executor: '', cue: '1.000', action: 'goto', label: '开场' }] }] }];

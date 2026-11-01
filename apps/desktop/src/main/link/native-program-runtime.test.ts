@@ -62,9 +62,8 @@ async function fixture(gateNext = false) {
     stopNativeObs: () => Promise.resolve(), onNativeObsStatus: () => () => undefined,
     preloadNativeObs: () => Promise.reject(new Error('隔离验收未连接 OBS')), cancelNativeObsPreload: () => Promise.resolve()
   }, {
-    prepare: () => Promise.reject(new Error('隔离验收未提供灯光适配器')),
-    tick: () => { throw new Error('隔离验收不允许灯光输出'); },
-    finish: () => { throw new Error('隔离验收不允许灯光输出'); }, stop: () => undefined
+    prepare: () => Promise.reject(new Error('隔离验收未提供灯光适配器')), cancelPreparation: () => undefined,
+    release: () => Promise.resolve()
   });
   runtime.toggleMtc();
   return { runtime, service, failures, notices, states, state: () => state, nextPreparing: () => nextPreparing,
