@@ -46,12 +46,4 @@
 /* Icon triggers; the Cue location one also names the page and slot once it knows them. */
 .ma2-material-menubar > .ma2-material-menu-trigger { display:inline-flex; align-items:center; justify-content:center; gap:4px; flex-shrink:0; min-width:30px; padding:4px 7px; white-space:nowrap; }
 .ma2-material-menu-trigger { max-width:220px; overflow:hidden; text-overflow:ellipsis; }
-.ma2-material-menu { z-index:10000; width:220px; max-width:calc(100vw - 16px); max-height:calc(100vh - 16px); box-sizing:border-box; overflow:auto; padding:6px; display:flex; flex-direction:column; gap:4px; background:var(--surface-raised); color:var(--text-primary); border:1px solid var(--separator); border-radius:8px; box-shadow:0 8px 24px #0006; }
-.ma2-material-menu button { display:flex; align-items:center; gap:6px; min-height:30px; padding:5px 8px; background:transparent; color:inherit; border:1px solid transparent; border-radius:5px; font:inherit; font-size:12px; text-align:left; cursor:pointer; }
-.ma2-material-menu button svg { width:14px; height:14px; flex:none; }
-.ma2-material-menu button:hover, .ma2-material-menu button:focus-visible { background:var(--surface-hover); border-color:var(--accent); outline:none; }
-.ma2-material-menu button[aria-pressed=true] { border-color:var(--accent); background:color-mix(in srgb,var(--accent) 12%,var(--surface-raised)); }
-.ma2-material-menu p, .ma2-material-menu small { margin:5px; font-size:12px; }
-.ma2-material-menu .ma2-classification-selection { flex-wrap:wrap; gap:4px; border-bottom:1px solid var(--separator); padding-bottom:6px; }
-.ma2-material-menu .ma2-classification-selection span { width:100%; }
 }

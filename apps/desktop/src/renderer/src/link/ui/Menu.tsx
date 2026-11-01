@@ -1,5 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
-import { Check, type LucideIcon } from 'lucide-react';
+import { Check, ChevronRight, type LucideIcon } from 'lucide-react';
 import { FloatingMenu } from './FloatingMenu';
 
 /**
@@ -56,13 +56,15 @@ export function Menu({ x, y, label, title, anchor, onClose, children }: {
 
 /**
  * One command in a menu. `danger` marks one that removes something. `checked` makes it a choice that
- * shows a tick when it is the current one (a sort order, a folder).
+ * shows a tick when it is the current one (a sort order, a folder). `opens` marks one that shows more
+ * choices in the same menu (设置分类), with an arrow at the end.
  */
-export function MenuItem({ icon: Icon, danger = false, disabled = false, checked, shortcut, title, onSelect, children }: {
+export function MenuItem({ icon: Icon, danger = false, disabled = false, checked, opens = false, shortcut, title, onSelect, children }: {
   icon?: LucideIcon;
   danger?: boolean;
   disabled?: boolean;
   checked?: boolean;
+  opens?: boolean;
   shortcut?: string;
   title?: string;
   onSelect: () => void;
@@ -73,7 +75,7 @@ export function MenuItem({ icon: Icon, danger = false, disabled = false, checked
     data-danger={danger || undefined} disabled={disabled} title={title} onClick={onSelect}>
     <span className="ui-menu-icon" aria-hidden="true">{Mark ? <Mark /> : null}</span>
     <span className="ui-menu-label">{children}</span>
-    {shortcut ? <kbd>{shortcut}</kbd> : null}
+    {shortcut ? <kbd>{shortcut}</kbd> : opens ? <ChevronRight aria-hidden="true" className="ui-menu-opens" /> : null}
   </button>;
 }
 

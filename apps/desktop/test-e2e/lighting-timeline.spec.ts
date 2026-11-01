@@ -45,17 +45,17 @@ for (const dense of [false, true]) test(`底部时间线：${dense ? '密集' : 
     for (const close of await page.getByRole('button', { name: '关闭通知', exact: true }).all()) await close.click();
     await timeline.screenshot({ path: info.outputPath('timeline.png') });
     await page.screenshot({ path: info.outputPath('workspace.png') });
-    await timeline.locator('.timeline-display-options summary').click();
-    await expect(page.getByRole('checkbox', { name: '原有参考网格' })).toHaveCount(0);
-    await expect(page.getByRole('checkbox', { name: '歌曲段落' })).toBeVisible();
+    await timeline.getByRole('button', { name: '时间线显示', exact: true }).click();
+    await expect(page.getByRole('switch', { name: '原有参考网格' })).toHaveCount(0);
+    await expect(page.getByRole('switch', { name: '歌曲段落' })).toBeVisible();
     await timeline.getByRole('button', { name: '音乐分析', exact: true }).click();
-    await expect(timeline.locator('.timeline-display-options')).not.toHaveAttribute('open');
+    await expect(page.getByRole('dialog', { name: '时间线显示', exact: true })).toHaveCount(0);
     await expect(page.getByRole('region', { name: '音乐节拍分段', exact: true })).toBeVisible();
     await timeline.screenshot({ path: info.outputPath('timeline-analysis.png') });
     await page.getByRole('button', { name: '关闭节拍分段', exact: true }).click();
     await expect(page.getByRole('region', { name: '音乐节拍分段', exact: true })).toHaveCount(0);
     await page.locator('.lighting-playback-settings > summary').click();
-    await page.getByRole('checkbox', { name: '选中 Cue 实时播放', exact: true }).uncheck();
+    await page.getByRole('switch', { name: '选中 Cue 实时播放', exact: true }).uncheck();
     await page.locator('.lighting-playback-settings > summary').click();
     const lane = page.getByLabel('Cue 框选画布');
     if (dense) {

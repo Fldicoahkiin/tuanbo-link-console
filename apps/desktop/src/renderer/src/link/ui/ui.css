@@ -228,10 +228,11 @@
   .ui-menu-icon svg { width: 15px; height: 15px; stroke-width: 1.8; }
   .ui-menu-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ui-menu-item kbd { color: var(--color-text-tertiary); font: 400 var(--type-caption)/1 var(--font-numeric); }
+  .ui-menu-item > .ui-menu-opens { width: 14px; height: 14px; color: var(--color-text-tertiary); }
   .ui-menu-item[data-danger] { color: var(--color-danger); }
   .ui-menu-item[data-danger] .ui-menu-icon { color: inherit; }
   .ui-menu-item:is(:hover, :focus-visible):not(:disabled) { color: var(--color-on-accent); background: var(--color-accent-fill); outline: none; }
-  .ui-menu-item:is(:hover, :focus-visible):not(:disabled) .ui-menu-icon, .ui-menu-item:is(:hover, :focus-visible):not(:disabled) kbd { color: inherit; }
+  .ui-menu-item:is(:hover, :focus-visible):not(:disabled) :is(.ui-menu-icon, kbd, .ui-menu-opens) { color: inherit; }
   .ui-menu-item:disabled { opacity: 0.45; cursor: not-allowed; }
   .ui-menu-separator { height: 1px; margin: var(--space-half) 0; background: var(--color-separator); }
   .ui-menu-note { margin: var(--space-half) 0 0; padding: var(--space-1) var(--space-1) var(--space-half); border-top: 1px solid var(--color-separator); color: var(--color-text-secondary); font: 400 var(--type-caption)/1.8 var(--font-ui); }

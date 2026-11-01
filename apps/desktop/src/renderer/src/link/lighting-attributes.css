@@ -19,7 +19,6 @@
 
 .attribute-read-actions { padding: 6px 8px; flex-wrap: wrap; font-size: 12px; }
 .attribute-read-actions small { min-width: 0; overflow-wrap: anywhere; }
-.cue-menu-destinations[aria-label] { flex-wrap: wrap; }
 .lighting-more-categories > summary { padding: 8px 12px; color: var(--text-secondary); font-size: 13px; cursor: pointer; }
 .lighting-category-manager { width: min(680px, 90vw); }
 .lighting-category-manager-list { max-height: 48vh; overflow-y: auto; }

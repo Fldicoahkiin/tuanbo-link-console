@@ -5,8 +5,11 @@ import { createPortal } from 'react-dom';
 const MARGIN = 8;
 const GAP = 6;
 
-/** `below-end`: under the button, right edges lined up. `right-end`: beside it, bottom edges lined up. */
-export type PopoverPlacement = 'below-end' | 'right-end';
+/**
+ * `below-end`: under the button, right edges lined up. `below-start`: under it, left edges lined up.
+ * `right-end`: beside it, bottom edges lined up.
+ */
+export type PopoverPlacement = 'below-end' | 'below-start' | 'right-end';
 type Box = { left: number; top: number; right: number; bottom: number };
 export type PopoverPlace = { left: number; top: number; maxHeight: number };
 
@@ -18,6 +21,10 @@ export function popoverPlace(anchor: Box, size: { width: number; height: number 
     case 'below-end': {
       const top = anchor.bottom + GAP;
       return { left: clamp(anchor.right - size.width, MARGIN, screen.width - size.width - MARGIN), top, maxHeight: Math.max(0, screen.height - top - MARGIN) };
+    }
+    case 'below-start': {
+      const top = anchor.bottom + GAP;
+      return { left: clamp(anchor.left, MARGIN, screen.width - size.width - MARGIN), top, maxHeight: Math.max(0, screen.height - top - MARGIN) };
     }
     case 'right-end': {
       const maxHeight = Math.max(0, screen.height - 2 * MARGIN);
@@ -54,7 +61,8 @@ export function Popover({ anchor, label, placement = 'below-end', className, onC
     const observer = new ResizeObserver(measure);
     if (panel.current) observer.observe(panel.current);
     window.addEventListener('resize', measure);
-    return () => { observer.disconnect(); window.removeEventListener('resize', measure); };
+    window.addEventListener('scroll', measure, true);
+    return () => { observer.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure, true); };
   }, [anchor, placement]);
   useEffect(() => {
     const away = (event: PointerEvent): void => {

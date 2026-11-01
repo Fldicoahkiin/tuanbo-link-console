@@ -88,7 +88,7 @@ test('32 轨十万事件只渲染可见灯光点，滚动后可选中远处 Cue'
   await openLightingTools('导入与导出');
   const document = createLightingDocument();
   document.tracks = Array.from({ length: 32 }, (_, index): LightingTrack => ({ id: `track-${index}`, name: `轨道 ${index}`, kind: 'ma2', color: '#abcdef', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: `clip-${index}`, name: '密集编排', start: 0, duration: 3125000, timeLock: 'time', muted: false, events: Array.from({ length: 3125 }, (_, point) => ({ id: `event-${index}-${point}`, kind: 'ma2', at: point * 1000, label: `点 ${index}-${point}`, cue: String(point + 1), sequence: 1, executor: '1.1', action: 'goto' })) }] }));
-  await page.locator('.settings-lighting input[type="file"]').setInputFiles({ name: 'scale.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(document)) });
+  await page.locator('.lighting-tool-body input[type="file"]').setInputFiles({ name: 'scale.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(document)) });
   await page.getByRole('button', { name: '确认导入', exact: true }).click();
   await closeLightingTools(); await main.getByRole('button', { name: '编辑器', exact: true }).click();
   await expect(page.locator('.lighting-lane')).toHaveCount(1);
@@ -593,7 +593,7 @@ for (const nativeFixture of ['reaper-native-6.05', 'reaper-native-ramp-6.05', 'r
   const main = page.getByRole('navigation', { name: '主要工作区' });
   await closeLightingTools(); await main.getByRole('button', { name: '设置', exact: true }).click();
   await openLightingTools('导入与导出');
-  await page.locator('.settings-lighting input[type="file"]').setInputFiles(join(process.cwd(), `../../packages/core/src/fixtures/${nativeFixture}.rpp`));
+  await page.locator('.lighting-tool-body input[type="file"]').setInputFiles(join(process.cwd(), `../../packages/core/src/fixtures/${nativeFixture}.rpp`));
   await expect(page.getByRole('region', { name: '灯光导入预览' })).toBeVisible();
   await page.getByRole('button', { name: '确认导入', exact: true }).click();
   const readTrack = async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]?.lighting?.tracks.find((track) => track.name === 'TBLINK muted solo sample');
@@ -667,7 +667,7 @@ test('灯光导入保留变速曲线与音符时间，读取失败清除旧预�
   ] }] }], tempos: [{ beat: 0, bpm: 120, numerator: 4, denominator: 4 }, { beat: 4, bpm: 60, numerator: 4, denominator: 4 }] };
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
   await openLightingTools('导入与导出');
-  const file = page.locator('.settings-lighting input[type="file"]');
+  const file = page.locator('.lighting-tool-body input[type="file"]');
   await file.setInputFiles({ name: 'lighting.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(source)) });
   await expect(page.getByRole('region', { name: '灯光导入预览' })).toBeVisible();
   await file.setInputFiles({ name: 'broken.json', mimeType: 'application/json', buffer: Buffer.from('{ broken') });
@@ -3215,7 +3215,7 @@ test('原生 Master 推杆可编辑百分比、撤销并保存重开', async ({}
   await openLightingTools('导入与导出');
   const lighting = createLightingDocument();
   lighting.tracks = [{ id: 'master-track', name: 'MA2 主推杆', kind: 'ma2', color: '#abcdef', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'master-clip', name: '主推杆', start: 0, duration: 2000, timeLock: 'time', muted: false, events: [{ id: 'master-event', kind: 'ma2-fader', at: 500, executor: '99.219', fader: 'Master', level: 0.755, label: '主推杆' }] }] }];
-  await page.locator('.settings-lighting input[type="file"]').setInputFiles({ name: 'master.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(lighting)) });
+  await page.locator('.lighting-tool-body input[type="file"]').setInputFiles({ name: 'master.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(lighting)) });
   await page.getByRole('button', { name: '确认导入', exact: true }).click();
   await closeLightingTools(); await main.getByRole('button', { name: '编辑器', exact: true }).click();
   await page.locator('.lighting-timeline-point').filter({ hasText: 'Master 75.5%' }).click();

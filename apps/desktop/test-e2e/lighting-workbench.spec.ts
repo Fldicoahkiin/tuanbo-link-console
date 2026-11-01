@@ -62,7 +62,7 @@ test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, a
     await expect(page.getByRole('button', { name: '自动打 Cue', exact: true })).toHaveCount(0);
     await expect(page.getByLabel('音乐网格间隔')).toHaveCount(0);
     await page.locator('.lighting-playback-settings > summary').click();
-    await page.getByRole('checkbox', { name: '选中 Cue 实时播放', exact: true }).uncheck();
+    await page.getByRole('switch', { name: '选中 Cue 实时播放', exact: true }).uncheck();
     await page.locator('.lighting-playback-settings > summary').click();
     const source = page.getByRole('button', { name: '试听序列 168 灯光步 1.250', exact: true });
     const events = async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting?.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)) ?? [];

@@ -1,6 +1,7 @@
 import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Layers } from 'lucide-react';
+import { Layers, LayoutGrid } from 'lucide-react';
+import { Button, Disclosure } from '../ui';
 import type { LightingDocument } from '@tb/schema';
 import { LightingUserLibrary, type LibraryDraft } from './LightingUserLibrary';
 import { Ma2SequencePreview } from './Ma2SequencePreview';
@@ -75,7 +76,7 @@ export function LightingEffectDock({ itemId, onCreated, document, disabled, onCh
     <button data-section="console" aria-pressed={section === 'console' && !externalPanel} onClick={() => { setSection('console'); setCustomCategory(null); if (externalPanel) onLibrary(); }}><Layers/><span>控台素材</span></button>
     <LightingCustomCategories selected={customCategory} selectedSection={!customCategory && !externalPanel && section !== 'console' ? section : null} onSection={value=>{setSection(value);setCustomCategory(null);if(externalPanel)onLibrary();}} onSelect={id=>{setCustomCategory(id);setSection(id?'effect':'console');if(externalPanel)onLibrary();}}/>
   </nav>;
-  const sidebar = <div className="lighting-workbench-nav effect-library-actions">{navigation}<details className="lighting-playback-settings"><summary>更多</summary><button aria-pressed={layoutOpen} onClick={()=>setLayoutOpen(!layoutOpen)}>控台布局 / 新建 Cue</button>{headerActions}{playbackSettings}</details></div>;
+  const sidebar = <div className="lighting-workbench-nav effect-library-actions">{navigation}<Disclosure className="lighting-playback-settings" title="更多"><Button variant="ghost" size="sm" icon={LayoutGrid} aria-pressed={layoutOpen} onClick={()=>setLayoutOpen(!layoutOpen)}>控台布局 / 新建 Cue</Button>{headerActions}{playbackSettings}</Disclosure></div>;
   return <section className="lighting-effect-dock lighting-material-layout" style={split.style} aria-label="灯光效果库" data-editor={editorOpen || layoutOpen} data-sidebar={Boolean(sidebarHost)} data-panel={Boolean(externalPanel || browserOpen)}>
     {sidebarHost ? createPortal(sidebar, sidebarHost) : sidebar}
     {browserOpen ? <Ma2CachedBrowser disabled={disabled} notify={setError} onClose={() => useMa2ReadStore.setState({ browserOpen: false })} /> : externalPanel || <>

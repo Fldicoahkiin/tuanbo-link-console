@@ -103,7 +103,7 @@ test('现场 584 个 Cue 在原工作区内可查看、关闭恢复并一次入�
     await page.getByRole('button', { name: '素材筛选', exact: true }).click();
     await first.click({ button: 'right' });
     const menu = page.getByRole('dialog', { name: 'Cue 右键菜单' });
-    await menu.getByRole('button', { name: '设置分类', exact: true }).click();
+    await menu.getByRole('menuitem', { name: '设置分类', exact: true }).click();
     await menu.getByText('面光、轮廓和效果用途', { exact: true }).click();
     await menu.getByRole('button', { name: '效果', exact: true }).click();
     await menu.getByRole('button', { name: '归入 效果 重击', exact: true }).click();

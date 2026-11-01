@@ -9,7 +9,6 @@
 .lighting-workbench-nav .lighting-material-navigation { padding:0; border:0; background:transparent; gap:4px; }
 .lighting-workbench-nav .lighting-material-navigation button { justify-content:flex-start; min-height:36px; padding:8px 12px; border:0; background:transparent; color:var(--text-secondary); }
 .lighting-workbench-nav .lighting-material-navigation button[aria-pressed=true] { color:var(--section-color); background:color-mix(in srgb,var(--section-color) 12%,var(--surface)); box-shadow:inset 2px 0 var(--section-color); }
-.lighting-workbench-nav .lighting-playback-settings { margin-block-start:14px; }
 .lighting-material-layout .cue-composer { padding:14px; gap:12px; border-inline-start:1px solid var(--separator); overflow:auto; }
 .lighting-material-layout .cue-composer .cue-composer-heading { gap:8px; }
 .cue-composer .cue-composer-heading>strong { font-size:14px; }

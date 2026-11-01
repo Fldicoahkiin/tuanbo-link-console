@@ -16,5 +16,33 @@
 
   .ma2-executor-status { flex: none; margin: 0; padding: var(--space-half) 2px 0; color: var(--color-text-secondary); font-size: var(--type-caption); line-height: 1.5; overflow-wrap: anywhere; }
   .ma2-executor-status[role='alert'] { color: var(--color-danger); }
-  .ma2-material-menu .ma2-page-index-done { color: var(--color-text-secondary); }
+
+  /* The small panels under the material toolbar's buttons (filters, page options, Cue locations). */
+  .ma2-material-menu { display: grid; gap: 2px; width: 232px; padding: var(--space-half); }
+  .ma2-material-menu > .ui-button[data-variant='ghost'] { justify-content: flex-start; width: 100%; height: 30px; color: var(--color-text); font-size: var(--type-control); }
+  .ma2-material-menu > .ui-button[data-variant='ghost'][aria-pressed='true'] { color: var(--color-accent); }
+  .ma2-material-menu > p { margin: 0; padding: var(--space-half) var(--space-1); color: var(--color-text-secondary); font: 400 var(--type-caption)/1.5 var(--font-ui); overflow-wrap: anywhere; }
+  .ma2-material-menu > p[role='alert'] { color: var(--color-danger); }
+  .ma2-material-menu > .ma2-material-menu-label { padding-bottom: 2px; color: var(--color-text-tertiary); }
+  .ma2-material-menu > .ma2-page-live-option { margin-top: var(--space-half); padding: var(--space-1) var(--space-1) var(--space-half); border-top: 1px solid var(--color-separator); }
+  .ma2-material-menu > .ma2-layout-zoom { display: flex; gap: var(--space-half); padding: var(--space-half) var(--space-1); }
+  .ma2-material-menu > .ma2-layout-zoom > .ui-button { flex: 1; justify-content: center; }
+  .ma2-material-menu > .ma2-classification-selection { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-half); padding: var(--space-half) var(--space-1) var(--space-1); border-bottom: 1px solid var(--color-separator); }
+  .ma2-material-menu > .ma2-classification-selection > span { flex-basis: 100%; color: var(--color-text-secondary); font-size: var(--type-caption); }
+
+  /* 更多 at the bottom of the workbench's left menu: the console layout, import and export, Cue audition. */
+  .lighting-workbench-nav > .lighting-playback-settings { margin-top: var(--space-1); border-top-color: var(--color-separator); }
+  .lighting-workbench-nav > .lighting-playback-settings > summary { min-height: 36px; padding: 0 var(--space-1); color: var(--color-text-secondary); font: 400 var(--type-control)/1.4 var(--font-ui); }
+  .lighting-playback-settings > .ui-disclosure-body { gap: 2px; padding: 0 0 var(--space-1); }
+  .lighting-playback-settings > .ui-disclosure-body > .ui-button[data-variant='ghost'] { justify-content: flex-start; width: 100%; height: 34px; padding-inline: var(--space-1); color: var(--color-text); font-size: var(--type-control); }
+  .lighting-playback-settings > .ui-disclosure-body > .ui-button[data-variant='ghost'][aria-pressed='true'] { color: var(--color-accent); }
+  .lighting-playback-settings .lighting-audition-switch { gap: var(--space-2); padding: var(--space-1); }
+  .lighting-playback-settings .lighting-audition-switch small { overflow-wrap: anywhere; }
+
+  /* Renaming, moving or clearing an executor. */
+  .ma2-executor-edit { display: grid; gap: var(--space-2); }
+  .ma2-executor-edit > p { margin: 0; color: var(--color-text-secondary); font: 400 var(--type-body)/1.6 var(--font-ui); overflow-wrap: anywhere; }
+  .ma2-executor-edit > .ma2-executor-edit-error { color: var(--color-danger); font-size: var(--type-caption); }
+  .ma2-executor-edit .ma2-executor-destination { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .ma2-executor-edit > .ma2-console-name { margin-top: calc(-1 * var(--space-1)); color: var(--color-text-secondary); font-size: var(--type-caption); }
 }

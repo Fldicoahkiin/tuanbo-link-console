@@ -27,10 +27,6 @@
 .ma2-layout-pager input { width: 55px; min-height: 28px; padding: 3px; font-size: 11px; font-variant-numeric: tabular-nums; }
 .ma2-layout-pager input::-webkit-inner-spin-button { appearance: none; }
 .ma2-layout-page-picker { position: absolute; z-index: 30; background: var(--surface); border: 1px solid var(--separator); border-radius: 8px; box-shadow: 0 8px 24px #0006; padding: 8px; }
-.ma2-page-live-option { display: flex; align-items: center; gap: 6px; font-size: 12px; min-height: 30px; padding: 4px 8px; }
-.ma2-page-live-option input { margin: 0; accent-color: var(--accent); }
-.ma2-layout-zoom { display: flex; gap: 4px; }
-.ma2-layout-zoom button { flex: 1; }
 .ma2-layout-page-picker { inset-inline-end: 4px; top: 0; width: min(260px, calc(100% - 8px)); }
 .ma2-layout-page-picker header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 6px; }
 .ma2-layout-page-picker select { width: 100%; min-width: 0; border: 0; font-size: 12px; }

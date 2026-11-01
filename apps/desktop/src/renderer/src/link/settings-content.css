@@ -116,7 +116,6 @@
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-settings fieldset > label { display: grid; grid-template-columns: 120px minmax(0, 320px); align-items: center; gap: 12px; min-height: 42px; padding: 4px 0; margin: 0; font-size: var(--text-body); }
 .settings-inline.integration-workspace .settings-detail .settings-lighting :where(input:not([type="checkbox"]):not([type="color"]), select) { max-width: 320px; min-height: 34px; height: 34px; font-size: var(--text-body); padding: 5px 10px; }
 .settings-inline.integration-workspace .settings-detail .settings-lighting input[type="number"] { max-width: 88px; }
-.settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0 0; margin: 0; }
 .settings-inline.integration-workspace .settings-detail .settings-lighting button { font-size: var(--text-body); min-height: 34px; padding: 5px 12px; }
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-settings-content h3,
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-settings legend { font-size: 16px; color: var(--text-primary); font-weight: 600; padding: 0; margin: 0 0 12px; }
@@ -124,7 +123,6 @@
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-settings fieldset { padding: 0 0 24px; margin-bottom: 24px; border: 0; border-bottom: 1px solid var(--separator); }
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-settings fieldset:last-child { border-bottom: 0; margin-bottom: 0; }
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-tempo-signature :is(input, select) { padding-inline: 5px; }
-.settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-import-preview { flex-basis: 100%; padding: 16px 0; margin: 12px 0 0; border: 0; border-top: 1px solid var(--separator); background: transparent; }
 .settings-inline.integration-workspace .settings-detail .ma2-sync-section .sync-destination { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; margin: 0 0 16px; font-size: var(--text-body); }
 .sync-destination > span { color: var(--text-secondary); }
 .settings-inline.integration-workspace .settings-detail .ma2-sync-section .ma2-connection-actions { margin: 0 0 12px; gap: 12px; }
