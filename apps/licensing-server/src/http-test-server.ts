@@ -3,7 +3,9 @@ import type { Server } from 'node:http';
 
 /** Test-only listener. Windows may allocate port 0 from a locally configured
  * range containing Fetch-blocked service ports (observed: "bad port"). Bind a
- * free dynamic/private port explicitly; never retry an HTTP request. */
+ * free dynamic/private port explicitly; never retry an HTTP request. A port in
+ * use, or one inside a range Windows reserves for Hyper-V and NAT (EACCES, seen
+ * on the GitHub Windows runner on 2026-11-01), is skipped for another one. */
 export async function listenHttpTestServer(server: Server): Promise<void> {
   for (let attempt = 0; attempt < 16; attempt++) {
     try {
@@ -15,7 +17,7 @@ export async function listenHttpTestServer(server: Server): Promise<void> {
       });
       return;
     } catch (error) {
-      if (!(error instanceof Error) || !('code' in error) || error.code !== 'EADDRINUSE') throw error;
+      if (!(error instanceof Error) || !('code' in error) || (error.code !== 'EADDRINUSE' && error.code !== 'EACCES')) throw error;
     }
   }
   throw new Error('未能分配隔离 HTTP 测试端口');

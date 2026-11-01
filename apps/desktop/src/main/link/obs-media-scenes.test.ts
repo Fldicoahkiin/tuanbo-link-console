@@ -545,15 +545,20 @@ describe('素材独立场景播放', () => {
       expect(calls.at(-1)?.requestData).toMatchObject({ mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' });
     } finally { vi.useRealTimers(); }
   });
+  // The music clock is performance.now() and this fixture's cursor does not run, so on real time a busy
+  // runner aged the music past the frame between PLAY and the check (Windows CI, 2026-11-01: 2606 against 2500).
   it('暂停完成精确定位后再继续，首次入场及机位返回每次只定位一次', async () => {
-    const { scenes, calls } = fixture(false, true);
-    await scenes.prepare('project', asset, 'C:/dance.mp4');
-    await scenes.execute(event, 'C:/dance.mp4');
-    await scenes.switchScene('机位');
-    await scenes.execute({ ...event, sourceOffsetMs: 6534 }, 'C:/dance.mp4');
-    expect(seekTargets(calls)).toHaveLength(2);
-    seekTargets(calls).forEach((target, index) => expect(target - [2300, 6534][index]!).toBeGreaterThanOrEqual(200));
-    seekTargets(calls).forEach((target, index) => expect(target - [2300, 6534][index]!).toBeLessThan(400));
+    vi.useFakeTimers();
+    try {
+      const { scenes, calls } = fixture(false, true);
+      await scenes.prepare('project', asset, 'C:/dance.mp4');
+      await held(scenes.execute(event, 'C:/dance.mp4'));
+      await scenes.switchScene('机位');
+      await held(scenes.execute({ ...event, sourceOffsetMs: 6534 }, 'C:/dance.mp4'));
+      expect(seekTargets(calls)).toHaveLength(2);
+      seekTargets(calls).forEach((target, index) => expect(target - [2300, 6534][index]!).toBeGreaterThanOrEqual(200));
+      seekTargets(calls).forEach((target, index) => expect(target - [2300, 6534][index]!).toBeLessThan(400));
+    } finally { vi.useRealTimers(); }
   });
   it('预检不重播未激活的来源，避免重播与暂停争用解码器', async () => {
     const { scenes, calls } = fixture();
