@@ -11,12 +11,12 @@
   .cue-inspector .visual-toggle { min-width: 0; font-size: var(--type-caption); }
 
   .cue-inspector .cue-detail-header { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
-  .cue-inspector .cue-detail-header > .title-input { flex: 1; min-width: 0; max-width: none; font-weight: 600; }
+  .cue-inspector .cue-detail-header > .title-input { flex: 1; min-width: 0; max-width: none; font-weight: 500; }
   .cue-inspector .cue-enabled { flex: none; gap: var(--space-1); margin-right: auto; }
   .cue-inspector .timecode-editor { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-1); max-width: 420px; }
   .cue-inspector .timecode-editor label { display: grid; gap: var(--space-half); min-width: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
   .cue-inspector .timecode-editor .ui-input { max-width: none; }
-  .cue-inspector .cue-notes { height: 32px; min-height: 32px; padding-block: 6px; }
+  .cue-inspector .cue-notes { height: 32px; min-height: 32px; padding-block: 8px; }
 
   .cue-inspector .audio-inspector fieldset { display: grid; gap: var(--space-1); min-width: 0; margin: 0; padding: 0; border: 0; }
   .cue-inspector .audio-inspector fieldset > .ui-button { justify-self: start; }
@@ -48,14 +48,14 @@
   .cue-inspector .lighting-inspector-header { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-2); min-width: 0; }
   .cue-inspector .lighting-inspector-header > div { display: grid; flex: 1; gap: var(--space-half); min-width: 0; }
   .cue-inspector .lighting-inspector-eyebrow { color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
-  .cue-inspector .lighting-inspector-header strong { overflow: hidden; color: var(--color-text-strong); font: 600 var(--type-body)/1.4 var(--font-ui); white-space: nowrap; text-overflow: ellipsis; }
-  .cue-inspector .lighting-inspector-name { max-width: none; font-weight: 600; }
+  .cue-inspector .lighting-inspector-header strong { overflow: hidden; color: var(--color-text-strong); font: 500 var(--type-body)/1.4 var(--font-ui); white-space: nowrap; text-overflow: ellipsis; }
+  .cue-inspector .lighting-inspector-name { max-width: none; font-weight: 500; }
   .cue-inspector .lighting-inspector-header > :is(output, .lighting-inspector-count) { flex: none; padding-bottom: 8px; color: var(--color-text-secondary); font: 400 var(--type-control)/1 var(--font-numeric); }
   .cue-inspector .lighting-inspector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--space-2); min-width: 0; }
   .cue-inspector .lighting-inspector-grid .ui-input[type='number'] { max-width: none; }
   .cue-inspector .lighting-inspector-value { display: grid; align-content: start; gap: var(--space-half); min-width: 0; }
   .cue-inspector .lighting-inspector-value > span { color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
-  .cue-inspector .lighting-inspector-value > strong { padding-block: 7px; color: var(--color-text); font: 400 var(--type-control)/1.4 var(--font-ui); overflow-wrap: anywhere; }
+  .cue-inspector .lighting-inspector-value > strong { padding-block: 8px; color: var(--color-text); font: 400 var(--type-control)/1.4 var(--font-ui); overflow-wrap: anywhere; }
   .cue-inspector :is(.lighting-inspector-hint, .lighting-inspector-empty) { grid-column: 1 / -1; margin: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.6 var(--font-ui); }
   .cue-inspector .lighting-inspector-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); padding-top: var(--space-2); border-top: 1px solid var(--color-separator); }
   .cue-inspector .lighting-inspector-actions > .ui-button[data-variant='danger'] { margin-left: auto; }

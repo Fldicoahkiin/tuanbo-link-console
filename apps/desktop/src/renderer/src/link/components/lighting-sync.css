@@ -14,7 +14,7 @@
   .lighting-sync-status.ui-button { display: grid; grid-template-columns: 16px minmax(0, 1fr) 14px; justify-content: stretch; gap: var(--space-1); width: 100%; padding: 0 var(--space-1); border-color: var(--color-border); color: var(--color-text); background: var(--color-input); font-weight: 400; text-align: left; --tone: var(--color-text-secondary); }
   .lighting-sync-status > span { overflow: hidden; text-overflow: ellipsis; }
   .lighting-sync-status > svg:first-child { color: var(--tone); }
-  .lighting-sync-status > svg:last-child { width: 14px; height: 14px; color: var(--color-text-tertiary); }
+  .lighting-sync-status > svg:last-child { width: 16px; height: 16px; color: var(--color-text-tertiary); }
   .lighting-sync-status[data-state='verified'] { --tone: var(--color-success); }
   .lighting-sync-status[data-state='staged'] { --tone: var(--color-warning); }
   .lighting-sync-status[data-state='writing'] { --tone: var(--color-accent); }
@@ -25,7 +25,7 @@
   .lighting-sync-actions .ui-button { gap: var(--space-half); width: 100%; min-width: 0; padding: 0 var(--space-half); }
 
   .lighting-sync-details { display: grid; gap: var(--space-1); width: 320px; padding: var(--space-2); }
-  .lighting-sync-details h3 { margin: 0; color: var(--color-text-strong); font: 600 var(--type-body)/1.4 var(--font-ui); }
+  .lighting-sync-details h3 { margin: 0; color: var(--color-text-strong); font: 500 var(--type-body)/1.4 var(--font-ui); }
   .lighting-sync-details p { margin: 0; color: var(--color-text-secondary); font-size: var(--type-caption); line-height: 1.5; overflow-wrap: anywhere; user-select: text; }
   .lighting-sync-details p[role='alert'] { color: var(--color-danger); }
   .lighting-sync-details .ui-button { justify-self: start; }

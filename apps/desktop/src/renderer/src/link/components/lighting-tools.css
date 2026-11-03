@@ -16,7 +16,7 @@
 
   .lighting-file-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-1); }
   .lighting-file-actions > .lighting-file-operation { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: var(--space-2); min-width: 0; padding: var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-md); color: var(--color-text); background: var(--color-surface-raised); cursor: pointer; }
-  .lighting-file-actions > .lighting-file-operation > svg:first-child { flex: none; width: 22px; height: 22px; color: var(--color-accent); stroke-width: 1.6; }
+  .lighting-file-actions > .lighting-file-operation > svg:first-child { flex: none; width: 24px; height: 24px; color: var(--color-accent); stroke-width: 1.5; }
   .lighting-file-actions > .lighting-file-operation > svg:last-child { flex: none; width: 16px; height: 16px; color: var(--color-text-tertiary); }
   .lighting-file-actions > .lighting-file-operation > span { display: grid; flex: 1; gap: 2px; min-width: 0; }
   .lighting-file-actions > .lighting-file-operation strong { font: 500 var(--type-body)/1.4 var(--font-ui); }
@@ -30,7 +30,7 @@
   .lighting-import-actions { display: flex; justify-content: flex-end; gap: var(--space-1); }
 
   .lighting-arrangement-list { display: grid; gap: var(--space-1); min-width: 0; margin: 0; padding: var(--space-2) 0 0; border: 0; border-top: 1px solid var(--color-separator); }
-  .lighting-arrangement-list > legend { float: left; width: 100%; margin-bottom: var(--space-1); padding: 0; color: var(--color-text-strong); font: 600 var(--type-control)/1.4 var(--font-ui); }
+  .lighting-arrangement-list > legend { float: left; width: 100%; margin-bottom: var(--space-1); padding: 0; color: var(--color-text-strong); font: 500 var(--type-control)/1.4 var(--font-ui); }
   .lighting-arrangement-list .lighting-marker-settings { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr)) 32px; align-items: end; gap: var(--space-1); }
   .lighting-arrangement-list .lighting-marker-settings > label { display: grid; gap: var(--space-half); min-width: 0; }
   .lighting-arrangement-list .lighting-marker-settings > label > span { color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }

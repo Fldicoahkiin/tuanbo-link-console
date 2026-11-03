@@ -11,7 +11,6 @@
  background: var(--surface-glass-strong);
  color: var(--text-primary);
  border-right: 1px solid var(--border-subtle);
- backdrop-filter: blur(20px);
  box-shadow: none;
 }
 .app-sidebar::after {
@@ -29,19 +28,17 @@
 .p1-pane-title strong small, .p1-pane-title > span { color: var(--text-secondary); font-size: var(--text-caption); }
 .p1-pane-title label { background: var(--surface-raised); }
 .p1-pane-title input { color: var(--text-primary); font-size: var(--text-caption); }
-.player-error { color: #ffb8bd; background: #46232a; }
-:root[data-theme='light'] .player-error { color: #942b37; background: #fff0f1; }
+.player-error { color: var(--color-danger); background: var(--color-danger-soft); }
 .modal-card { background: var(--surface); color: var(--text-primary); }
 :root[data-theme='light'] .primary-button { color: var(--on-accent); }
 :root[data-theme='light'] .toast.info { background: var(--surface); color: var(--text-primary); }
-:root[data-theme='light'] .toast.error { background: #ffe3e6; color: #7d2230; }
-:root[data-theme='light'] .media-preview-label { background: rgba(12,18,28,.88); }
-:root[data-theme='light'] .media-preview-label span, :root[data-theme='light'] .media-preview-label small { color: #f4f7fc; }
+:root[data-theme='light'] .media-preview-label { background: var(--color-canvas-overlay); }
+:root[data-theme='light'] .media-preview-label span, :root[data-theme='light'] .media-preview-label small { color: var(--color-canvas-text); }
 :root[data-theme='light'] .timeline-cue { color: white; }
 
-.stage-frame, .stage-obs-layer { background: #090909; }
-.stage-frame .stage-placeholder, .stage-frame .empty-panel { color: #d9e0ec; background: #101114; }
-.stage-frame .empty-panel h3, .stage-frame .empty-panel p { color: #d9e0ec; }
+.stage-frame, .stage-obs-layer { background: var(--color-canvas); }
+.stage-frame .stage-placeholder, .stage-frame .empty-panel { color: var(--color-canvas-text); background: var(--color-canvas); }
+.stage-frame .empty-panel h3, .stage-frame .empty-panel p { color: var(--color-canvas-text); }
 
 :root[data-theme='light'] .timeline-waveform-canvas { filter: brightness(.52) saturate(1.15); }
 }

@@ -50,9 +50,9 @@ export function BeautyEngine({ source, connected, onReady, onStatus }: {
   const running = state && ['starting', 'waiting', 'tracking'].includes(state.phase);
   return <div className="beauty-engine">
     <div className="beauty-output-actions">
-      <button className="secondary-button" disabled={busy || !!running} onClick={() => { void perform('install'); }}><Download size={15} />安装组件</button>
-      <button className="primary-button" disabled={busy || !connected || !source || !!running} onClick={() => { void perform('start'); }}><Play size={15} />启动美颜</button>
-      <button className="secondary-button" disabled={busy || !state || state.phase === 'idle'} onClick={() => { void perform('stop'); }}><Square size={14} />停止</button>
+      <button className="secondary-button" disabled={busy || !!running} onClick={() => { void perform('install'); }}><Download size={16} />安装组件</button>
+      <button className="primary-button" disabled={busy || !connected || !source || !!running} onClick={() => { void perform('start'); }}><Play size={16} />启动美颜</button>
+      <button className="secondary-button" disabled={busy || !state || state.phase === 'idle'} onClick={() => { void perform('stop'); }}><Square size={16} />停止</button>
     </div>
     <p role="status">{busy ? '正在处理…' : message || state?.message || '正在读取美颜状态…'}</p>
     {state?.phase === 'error' || error ? <p className="beauty-output-error" role="alert">{error || state?.message}</p> : null}

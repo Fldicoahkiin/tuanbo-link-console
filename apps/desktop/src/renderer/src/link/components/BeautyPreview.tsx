@@ -58,11 +58,11 @@ export function BeautyPreview({ onAspectChange, target, onComparingChange }: { o
     onDoubleClick={event => { if (event.target instanceof HTMLCanvasElement) { drag.current = null; setView(view.zoom === 1 ? { zoom: 2, x: 0, y: 0 } : fit); } }}>
     {comparing && target ? <BeautyCompareCanvas target={target} onAspectChange={onAspectChange} /> : <ObsLiveCanvas editable={false} onAspectChange={onAspectChange} />}
     <div className="beauty-preview-tools" aria-label="预览缩放">
-      <button aria-label="缩小预览" disabled={view.zoom === 1} onClick={() => changeZoom(-1)}><Minus size={15} /></button>
+      <button aria-label="缩小预览" disabled={view.zoom === 1} onClick={() => changeZoom(-1)}><Minus size={16} /></button>
       <span aria-live="polite">{view.zoom}×</span>
-      <button aria-label="放大预览" disabled={view.zoom === 4} onClick={() => changeZoom(1)}><Plus size={15} /></button>
-      <button aria-label="适应画面" title="适应画面（0）" onClick={() => { drag.current = null; setView(fit); }}><Maximize size={14} /></button>
-      <button aria-label="前后对比" aria-pressed={comparing && !!target} disabled={!target} title="对比选中来源的美颜前后画面" onClick={() => { setComparing(value => !value); drag.current = null; setView(fit); }}><Columns2 size={15} /></button>
+      <button aria-label="放大预览" disabled={view.zoom === 4} onClick={() => changeZoom(1)}><Plus size={16} /></button>
+      <button aria-label="适应画面" title="适应画面（0）" onClick={() => { drag.current = null; setView(fit); }}><Maximize size={16} /></button>
+      <button aria-label="前后对比" aria-pressed={comparing && !!target} disabled={!target} title="对比选中来源的美颜前后画面" onClick={() => { setComparing(value => !value); drag.current = null; setView(fit); }}><Columns2 size={16} /></button>
     </div>
     {view.zoom > 1 ? <span className="beauty-preview-pan-hint">拖动画面查看 · 仅放大预览</span> : null}
   </div>;

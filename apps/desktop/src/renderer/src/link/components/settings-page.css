@@ -23,9 +23,9 @@
   .settings-page[hidden] { display: none; }
   .settings-page[data-settings-section='logs'] { max-width: none; }
   .settings-page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); margin: 0 0 var(--space-3); }
-  .settings-page-heading h1 { margin: 0; color: var(--color-text-strong); font: 600 var(--type-display)/1.3 var(--font-ui); letter-spacing: -0.01em; }
+  .settings-page-heading h1 { margin: 0; color: var(--color-text-strong); font: 600 var(--type-display)/1.3 var(--font-ui); letter-spacing: 0; }
   .settings-page-heading p { margin: var(--space-half) 0 0; color: var(--color-text-secondary); font: 400 var(--type-body)/1.6 var(--font-ui); }
-  .settings-scope-tag { flex: none; margin-top: 6px; padding: 2px var(--space-1); border: 1px solid var(--color-border); border-radius: var(--radius-pill); color: var(--color-text-secondary); font: 500 var(--type-caption)/1.5 var(--font-ui); white-space: nowrap; cursor: help; }
+  .settings-scope-tag { flex: none; margin-top: 8px; padding: 2px var(--space-1); border: 1px solid var(--color-border); border-radius: var(--radius-pill); color: var(--color-text-secondary); font: 500 var(--type-caption)/1.5 var(--font-ui); white-space: nowrap; cursor: help; }
   .settings-scope-tag[data-scope='project'] { border-color: var(--color-accent-border); color: var(--color-accent); }
   .settings-page-notices { display: grid; gap: var(--space-1); margin: 0 0 var(--space-2); }
   .settings-stack[hidden] { display: none; }
@@ -40,16 +40,16 @@
   /* A titled part inside a card or a disclosure, where another card would be one box too many. */
   .settings-subsection { display: grid; gap: var(--space-2); min-width: 0; padding-top: var(--space-2); border-top: 1px solid var(--color-separator); }
   .settings-subsection-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1); }
-  .settings-subsection-header h3 { margin: 0; color: var(--color-text-strong); font: 600 var(--type-body)/1.4 var(--font-ui); }
+  .settings-subsection-header h3 { margin: 0; color: var(--color-text-strong); font: 500 var(--type-body)/1.4 var(--font-ui); }
   .settings-subsection-header > span { color: var(--color-text-secondary); font: 400 var(--type-caption)/1.5 var(--font-ui); }
   .settings-subsection > p { margin: 0; color: var(--color-text-secondary); }
   .release-notes .ui-card-body { gap: 0; }
   .release-notes-link { display: inline-flex; align-items: center; gap: 4px; width: fit-content; color: var(--color-accent); font: 400 var(--type-caption)/1.5 var(--font-ui); text-decoration: none; }
   .release-notes-link:hover { text-decoration: underline; }
-  .release-notes-link svg { width: 14px; height: 14px; }
+  .release-notes-link svg { width: 16px; height: 16px; }
   .release-notes details { padding: var(--space-1) 0; border-top: 1px solid var(--color-separator); }
   .release-notes details:first-of-type { border-top: 0; }
-  .release-notes summary { display: flex; align-items: center; gap: var(--space-1); min-height: 32px; color: var(--color-text-strong); font: 600 var(--type-body)/1.4 var(--font-ui); cursor: pointer; }
+  .release-notes summary { display: flex; align-items: center; gap: var(--space-1); min-height: 32px; color: var(--color-text-strong); font: 500 var(--type-body)/1.4 var(--font-ui); cursor: pointer; }
   .release-notes summary::before { content: ''; width: 6px; height: 6px; border-right: 1.5px solid var(--color-text-secondary); border-bottom: 1.5px solid var(--color-text-secondary); transform: rotate(-45deg); transition: transform var(--dur-fast) var(--ease-out); }
   .release-notes details[open] > summary::before { transform: rotate(45deg); }
   .release-notes summary::-webkit-details-marker { display: none; }
@@ -57,8 +57,8 @@
   .release-notes-current { padding: 1px 8px; border-radius: var(--radius-pill); color: var(--color-success); background: var(--color-success-soft); font: 500 var(--type-caption)/1.5 var(--font-ui); }
   .release-notes :is(p, li) { margin: var(--space-half) 0 0; color: var(--color-text); font: 400 var(--type-body)/1.6 var(--font-ui); }
   .release-notes ul { margin: 0; padding-left: 1.2em; }
-  .release-notes h4 { margin: var(--space-1) 0 0; color: var(--color-text-strong); font: 600 var(--type-body)/1.5 var(--font-ui); }
-  .release-notes strong { color: var(--color-text-strong); font-weight: 600; }
+  .release-notes h4 { margin: var(--space-1) 0 0; color: var(--color-text-strong); font: 500 var(--type-body)/1.5 var(--font-ui); }
+  .release-notes strong { color: var(--color-text-strong); font-weight: 500; }
   .settings-page :is(.settings-stack, .settings-fieldset, form) > p { margin: 0; }
   .settings-table tr[data-selected='true'] td { background: var(--color-accent-soft); }
   .settings-table td:last-child:has(> .ui-button) { width: 1%; white-space: nowrap; text-align: right; }
@@ -69,7 +69,7 @@
   .settings-same-name p { margin: 0; }
   .settings-fieldset { display: grid; gap: var(--space-2); min-width: 0; margin: 0; padding: 0; border: 0; }
   .settings-check { display: flex; align-items: flex-start; gap: var(--space-1); color: var(--color-text); cursor: pointer; }
-  .settings-check > input { flex: none; width: 16px; height: 16px; margin: 3px 0 0; accent-color: var(--color-accent-fill); }
+  .settings-check > input { flex: none; width: 16px; height: 16px; margin: 4px 0 0; accent-color: var(--color-accent-fill); }
   .settings-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-half) var(--space-2); margin: 0; }
   .settings-facts dt { color: var(--color-text-secondary); }
   .settings-facts dd { margin: 0; color: var(--color-text-strong); overflow-wrap: anywhere; }
@@ -85,7 +85,7 @@
   /* Tables in settings: loopMIDI channels, each song's start timecode. */
   .settings-table { width: 100%; border-collapse: collapse; font: 400 var(--type-body)/1.4 var(--font-ui); }
   .settings-table th { padding: 0 var(--space-1) var(--space-1) 0; color: var(--color-text-secondary); font: 500 var(--type-caption)/1.4 var(--font-ui); text-align: left; }
-  .settings-table td { padding: 6px var(--space-1) 6px 0; border-top: 1px solid var(--color-separator); vertical-align: middle; overflow-wrap: anywhere; }
+  .settings-table td { padding: 8px var(--space-1) 8px 0; border-top: 1px solid var(--color-separator); vertical-align: middle; overflow-wrap: anywhere; }
   .settings-song-starts td:first-child { width: 2.5em; color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; }
   .settings-song-starts .settings-song-title { max-width: 0; width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-strong); }
   .settings-song-starts .ui-input { width: 132px; font-family: var(--font-numeric); }
@@ -102,9 +102,9 @@
   /* 运行日志: the filters wrap into as many columns as fit, then one card per record. */
   .settings-log-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--space-1) var(--space-2); }
   .settings-log-list { display: grid; border-top: 1px solid var(--color-separator); }
-  .settings-log-row { display: grid; gap: var(--space-half); min-width: 0; padding: 10px 0; border-bottom: 1px solid var(--color-separator); user-select: text; }
+  .settings-log-row { display: grid; gap: var(--space-half); min-width: 0; padding: 12px 0; border-bottom: 1px solid var(--color-separator); user-select: text; }
   .settings-log-row header { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-half) var(--space-2); color: var(--color-text-secondary); font: 400 var(--type-caption)/1.5 var(--font-ui); }
-  .settings-log-row header strong { font-weight: 600; }
+  .settings-log-row header strong { font-weight: 500; }
   .settings-log-row[data-level='error'] header strong { color: var(--color-danger); }
   .settings-log-row[data-level='warning'] header strong { color: var(--color-warning); }
   .settings-log-row time { font-variant-numeric: tabular-nums; }
@@ -125,7 +125,7 @@
 
   /* A small picture of each appearance on 界面外观. */
   .settings-theme-sample { display: flex; gap: 4px; width: 72px; height: 40px; padding: 4px; box-sizing: border-box; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
-  .settings-theme-sample i { border-radius: 2px; }
+  .settings-theme-sample i { border-radius: 4px; }
   .settings-theme-sample i:first-child { width: 20%; }
   .settings-theme-sample i:last-child { flex: 1; }
   .settings-theme-sample[data-sample='dark'] { background: #15151a; }

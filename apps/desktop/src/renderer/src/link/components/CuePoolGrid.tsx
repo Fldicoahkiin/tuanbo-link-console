@@ -43,5 +43,5 @@ export function CuePoolGrid({ keys, label, render, cellWidth = 132, rowHeight = 
       if (top < element.scrollTop) element.scrollTop = top;
       else if (top + rowHeight > element.scrollTop + element.clientHeight) element.scrollTop = top + rowHeight - element.clientHeight;
       setSize(current => ({ ...current, top: element.scrollTop })); setRequested(target);
-    }}><div style={{ position: 'relative', height }}>{[...indices].sort((a, b) => a - b).map(index => <div key={keys[index]} data-cue-cell={index} style={{ position: 'absolute', top: Math.floor(index / columns) * rowHeight, left: `${index % columns * 100 / columns}%`, width: `${100 / columns}%`, height: rowHeight, padding: 3 }}>{render(index)}</div>)}</div></div>;
+    }}><div style={{ position: 'relative', height }}>{[...indices].sort((a, b) => a - b).map(index => <div key={keys[index]} data-cue-cell={index} style={{ position: 'absolute', top: Math.floor(index / columns) * rowHeight, left: `${index % columns * 100 / columns}%`, width: `${100 / columns}%`, height: rowHeight, padding: 4 }}>{render(index)}</div>)}</div></div>;
 }
