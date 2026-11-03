@@ -83,13 +83,11 @@
 .lighting-workbench .row-actions svg { width: 14px; height: 14px; }
 .lighting-workbench .preference-empty { font-size: var(--text-caption); color: var(--wb-secondary); margin: 2px 0; line-height: 1.6; }
 .lighting-workbench .preference-empty { padding: 16px; }
-.lighting-workbench .effect-inline-panel .settings-detail > header { margin: 0 0 24px; padding: 0 0 16px; border-bottom: 1px solid var(--wb-line); }
 .lighting-workbench .effect-inline-panel :is(fieldset,.settings-lighting,.lighting-settings) { border: 0; padding: 0; margin: 0; min-width: 0; max-width: none; }
 .lighting-workbench .effect-import-dialog { gap: 16px; }
 .lighting-workbench .effect-import-dialog > header { padding-bottom: 16px; border-bottom: 1px solid var(--wb-line); }
 .lighting-workbench .effect-inline-panel details { margin: 12px 0; padding: 12px 0; border: 0; border-top: 1px solid var(--wb-line); background: transparent; }
 .lighting-workbench .effect-inline-panel summary { font-size: var(--text-control); font-weight: 500; cursor: pointer; }
-
 
 .lighting-workbench .lighting-effect-dock[data-panel=true] { grid-template-rows: minmax(0, 1fr); }
 .cue-ingredients { min-height: 64px; }
@@ -189,7 +187,6 @@
 .lighting-effect-dock .ma2-sync-section .ma2-create-action { margin: 6px 0; }
 .lighting-effect-dock .ma2-sync-section > :is(.ma2-read-preview, .ma2-diff, details, [role=alert]) { flex-basis: 100%; }
 .lighting-effect-dock .ma2-sync-section .ma2-read-preview { margin-top: 8px; padding: 8px; }
-
 
 .material-manager-nav { display: flex; flex-direction: column; gap: 4px; padding: 0 10px 0 0; border-right: 1px solid var(--separator); }
 .lighting-effect-dock .material-manager-nav button { justify-content: flex-start; gap: 8px; min-height: 34px; border: 0; padding: 6px 8px; background: transparent; color: var(--text-secondary); }

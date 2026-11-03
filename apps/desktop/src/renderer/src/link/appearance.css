@@ -31,8 +31,6 @@
 .p1-pane-title input { color: var(--text-primary); font-size: var(--text-caption); }
 .player-error { color: #ffb8bd; background: #46232a; }
 :root[data-theme='light'] .player-error { color: #942b37; background: #fff0f1; }
-/* Shared settings and editors use the same semantic surface palette. */
-.integration-workspace { --integration-card: var(--surface); --integration-group: var(--surface-raised); --integration-hairline: var(--separator); --integration-surface: var(--surface); --integration-surface-raised: var(--surface-raised); --integration-stroke: var(--separator); --integration-unified-surface: var(--surface); --integration-divider: var(--separator); --integration-primary-text: var(--text-primary); --integration-label-text: var(--text-secondary); --integration-secondary-text: var(--text-secondary); }
 .modal-card { background: var(--surface); color: var(--text-primary); }
 :root[data-theme='light'] .primary-button { color: var(--on-accent); }
 :root[data-theme='light'] .toast.info { background: var(--surface); color: var(--text-primary); }
@@ -44,8 +42,6 @@
 .stage-frame, .stage-obs-layer { background: #090909; }
 .stage-frame .stage-placeholder, .stage-frame .empty-panel { color: #d9e0ec; background: #101114; }
 .stage-frame .empty-panel h3, .stage-frame .empty-panel p { color: #d9e0ec; }
-:root[data-theme='light'] .integration-workspace .status-pill.ok { color: #14794d; }
-:root[data-theme='light'] .integration-workspace .status-pill.error { color: #ae2737; }
 
 :root[data-theme='light'] .timeline-waveform-canvas { filter: brightness(.52) saturate(1.15); }
 }

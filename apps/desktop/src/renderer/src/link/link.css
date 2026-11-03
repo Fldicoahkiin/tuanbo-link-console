@@ -37,13 +37,6 @@ svg { width: 17px; height: 17px; stroke-width: 1.8; }
 .primary-button:hover:not(:disabled), .secondary-button:hover:not(:disabled) { filter: brightness(1.12); }
 }
 button:disabled { opacity: .42; cursor: not-allowed; }
-.icon-button { display: inline-grid; place-items: center; width: 29px; height: 29px; padding: 0; border: 1px solid var(--separator); border-radius: 3px; background: var(--surface-raised); cursor: pointer; }
-@media (hover: hover) and (pointer: fine) {
-.icon-button:hover:not(:disabled) { color: #ffb31a; border-color: #72551a; }
-}
-@media (hover: hover) and (pointer: fine) {
-.icon-button.danger:hover:not(:disabled) { color: #ff7f91; border-color: #71313c; }
-}
 .secondary-button.small { min-height: 27px; padding: 0 9px; font-size: var(--text-caption); }
 .panel { border: 1px solid var(--separator); border-radius: 2px; background: var(--surface-raised); box-shadow: none; }
 .panel-title { display: flex; justify-content: space-between; align-items: center; min-height: 34px; padding: 0 9px; border-bottom: 1px solid var(--separator); color: var(--text-primary); background: var(--surface-raised); font-size: var(--text-caption); font-weight: 600; }
@@ -65,7 +58,6 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .field input, .field select { width: 100%; min-height: 34px; padding: 0 9px; color: var(--text-primary); border: 1px solid var(--separator); border-radius: 6px; outline: 0; background: var(--surface); font-size: var(--text-caption); }
 .action-tools { display: flex; gap: 4px; }
 .field { display: grid; gap: 5px; color: var(--text-secondary); font-size: var(--text-caption); }
-.check-field { display: inline-flex; gap: 7px; align-items: center; color: var(--text-secondary); font-size: var(--text-caption); }
 .program-card-title { display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px; }
 .program-card-title h3 { margin: 0 0 6px; font-size: var(--text-body); }
 .status-pill { display: inline-flex; padding: 3px 7px; border-radius: 99px; font: 9px Consolas, monospace; }
@@ -220,7 +212,6 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .clip-inspector dl div { display: grid; grid-template-columns: 92px 1fr; min-height: 34px; align-items: center; padding: 0 9px; background: var(--surface); }
 .clip-inspector dt { color: var(--text-secondary); font-size: var(--text-caption); }
 .clip-inspector dd { margin: 0; color: var(--text-primary); font: 10px Consolas, monospace; }
-.danger-text { color: #ff8fa0; }
 .studio-empty { min-height: 300px; }
 
 @media (max-width: 1280px) {
@@ -323,18 +314,15 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 }
 .main-nav button.active { color: var(--text-primary); border: 0; background: rgb(var(--theme-ink-rgb) / .14); box-shadow: inset 0 1px rgba(255,255,255,.09), 0 1px 4px rgba(0,0,0,.18); }
 .main-nav button.active > svg { color: var(--apple-blue); }
-.primary-button, .secondary-button, .icon-button {
+.primary-button, .secondary-button {
   border: 0;
   border-radius: 8px;
   box-shadow: inset 0 1px rgba(255,255,255,.06);
 }
 .primary-button { background: var(--apple-blue); }
-.secondary-button, .icon-button { color: var(--text-primary); background: rgb(var(--theme-ink-rgb) / 0.22); }
+.secondary-button { color: var(--text-primary); background: rgb(var(--theme-ink-rgb) / 0.22); }
 @media (hover: hover) and (pointer: fine) {
 .primary-button:hover:not(:disabled), .secondary-button:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
-}
-@media (hover: hover) and (pointer: fine) {
-.icon-button:hover:not(:disabled) { color: var(--text-primary); border: 0; background: rgb(var(--theme-ink-rgb) / 0.34); }
 }
 
 .app-main { background: transparent; }
@@ -425,7 +413,6 @@ select option:disabled { color: var(--text-secondary); }
 .field { color: var(--label-secondary); font-size: var(--text-caption); }
 .field input, .field select { font-size: var(--text-caption); }
 .track-labels span, .track-labels em, .status-pill { font-size: var(--text-caption); }
-.check-field { color: var(--text-primary); font-size: var(--text-caption); }
 .empty-panel, .resource-empty, .inspector-empty { color: var(--label-secondary); }
 .empty-panel p, .resource-empty, .inspector-empty p { font-size: var(--text-caption); }
 
@@ -708,186 +695,23 @@ select option:disabled { color: var(--text-secondary); }
 .visual-source-summary span { color: var(--text-primary); font-size: var(--text-caption); }
 .visual-source-summary small { color: var(--text-secondary); font: 9.5px ui-monospace, Consolas, monospace; }
 .visual-source-summary em { color: #ffb340; font-size: var(--text-caption); font-style: normal; }
-
-/* P1-inspired project browser: familiar playlist, media cards, monitor and clock structure. */
-/* Integration Center: calm workstation setup with Apple-like grouping and disclosure. */
-.integration-workspace {
-  --integration-card: rgba(36, 36, 39, .92);
-  --integration-group: rgba(118, 118, 128, .11);
-  --integration-hairline: rgba(255, 255, 255, .075);
-  gap: 12px;
-  padding-bottom: 4px;
-}
-.integration-workspace .p1-sync-note { grid-column: 1 / -1; }
-.integration-workspace .p1-sync-note { padding-top: 9px; border-top: 1px solid var(--integration-hairline); color: var(--text-secondary); }
-
-.integration-workspace .program-card-title { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 11px; align-items: center; min-height: 78px; margin: 0; padding: 16px 15px 12px; }
-.integration-workspace .program-icon { display: grid; width: 42px; height: 42px; color: var(--text-primary); border-radius: 12px; background: linear-gradient(145deg, #2997ff, #006ee6); box-shadow: inset 0 1px rgba(255, 255, 255, .22), 0 7px 17px rgba(0, 110, 230, .22); place-items: center; }
-.integration-workspace .program-icon.p1 { background: linear-gradient(145deg, #a45df1, #5e5ce6); box-shadow: inset 0 1px rgba(255, 255, 255, .22), 0 7px 17px rgba(94, 92, 230, .24); }
-.integration-workspace .program-icon.live { background: linear-gradient(145deg, #ff5c7b, #e43848); box-shadow: inset 0 1px rgba(255, 255, 255, .22), 0 7px 17px rgba(228, 56, 72, .23); }
-.integration-workspace .program-icon svg { width: 20px; height: 20px; }
-.integration-workspace .program-card-title h3 { overflow: hidden; margin: 0; color: var(--text-primary); font-size: var(--text-body); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.integration-workspace .program-card-title .action-tools { gap: 5px; }
-.integration-workspace .program-card-title .icon-button { width: 31px; height: 31px; border-radius: 9px; }
-.integration-workspace .program-card-title .icon-button svg { width: 14px; height: 14px; }
-.integration-workspace .program-card-title .icon-button.danger:not(:disabled) { color: #ff8179; background: rgba(255, 69, 58, .12); }
-
-.integration-workspace .status-pill { align-items: center; min-height: 20px; padding: 0 7px; border-radius: 999px; font: 550 9.5px/1 inherit; white-space: nowrap; }
-.integration-workspace .status-pill.ok { color: #70dc8a; background: rgba(48, 209, 88, .13); }
-.integration-workspace .status-pill.error { color: #ff827a; background: rgba(255, 69, 58, .13); }
-.integration-workspace .status-pill.pending { color: var(--text-primary); background: rgb(var(--theme-ink-rgb) / 0.14); }
-.integration-workspace .panel-title svg { width: 15px; color: var(--text-secondary); }
-
-.integration-workspace button:focus-visible,
-.integration-workspace summary:focus-visible { outline: 2px solid rgba(64, 156, 255, .92); outline-offset: 2px; }
-
-@media (max-width: 900px) {
-  .integration-workspace .p1-sync-note { grid-column: auto; }
-}
-
-/* Integration Center compact pass: operational controls first, no decorative copy. */
-.integration-workspace { gap: 8px; padding-bottom: 0; }
 .integration-toolbar-title { display: flex; gap: 9px; align-items: center; min-width: 0; }
 .integration-toolbar-title h2 { margin: 0 5px 0 0; color: var(--text-primary); font-size: 17px; font-weight: 650; letter-spacing: -.015em; }
-.integration-workspace .program-card-title {
-  grid-row: 1 / span 2;
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 9px;
-  align-content: start;
-  align-items: center;
-  min-height: 100%;
-  margin: 0;
-  padding: 12px;
-  border-right: 1px solid var(--integration-hairline);
-  background: rgb(var(--theme-ink-rgb) / .018);
-}
-.integration-workspace .program-icon { width: 34px; height: 34px; border-radius: 9px; box-shadow: none; }
-.integration-workspace .program-icon svg { width: 17px; height: 17px; }
-.integration-workspace .program-card-title h3 { font-size: 12.5px; }
-.integration-workspace .program-card-title .action-tools { grid-column: 1 / -1; gap: 5px; margin-top: 10px; }
-.integration-workspace .program-card-title .icon-button { width: 29px; height: 29px; border-radius: 7px; }
 
 @media (max-width: 900px) {
   .integration-toolbar-title { flex-wrap: wrap; }
-  .integration-workspace .program-card-title { grid-row: auto; grid-template-columns: 34px minmax(0,1fr) auto; border-right: 0; border-bottom: 1px solid var(--integration-hairline); }
-  .integration-workspace .program-card-title .action-tools { grid-column: 3; grid-row: 1; margin: 0; }
-}
-
-/* Integration Center spatial pass: calm, bounded surfaces with progressive detail. */
-.integration-workspace {
-  --integration-surface: rgba(36, 36, 39, .92);
-  --integration-surface-raised: rgba(43, 43, 47, .9);
-  --integration-stroke: rgba(255, 255, 255, .075);
-  --integration-shadow: 0 16px 42px rgba(0, 0, 0, .22), inset 0 1px rgba(255, 255, 255, .035);
-  width: min(100%, 1480px);
-  margin-inline: auto;
-  gap: 14px;
-  padding: 12px 18px 24px;
 }
 
 .integration-toolbar-title { gap: 10px; }
 .integration-toolbar-title h2 { margin-right: 8px; font-size: 19px; font-weight: 660; letter-spacing: -.025em; }
 
-.integration-workspace .program-card-title {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) auto;
-  gap: 11px;
-  align-content: center;
-  min-height: 76px;
-  padding: 15px;
-  border: 0;
-  border-bottom: 1px solid var(--integration-stroke);
-  background: rgb(var(--theme-ink-rgb) / .018);
-}
-.integration-workspace .program-icon { width: 40px; height: 40px; border-radius: 12px; }
-.integration-workspace .program-icon svg { width: 19px; height: 19px; }
-.integration-workspace .program-card-title h3 { font-size: 13.5px; letter-spacing: -.015em; }
-.integration-workspace .program-card-title .action-tools { grid-column: 3; grid-row: 1; gap: 6px; margin: 0; }
-.integration-workspace .program-card-title .icon-button { width: 32px; height: 32px; border-radius: 9px; }
-
-@media (max-width: 1240px) {
-  .integration-workspace { padding-inline: 14px; }
-}
-
-@media (max-width: 820px) {
-  .integration-workspace { gap: 10px; padding: 8px 10px 18px; }
-}
-
 @media (max-width: 540px) {
   .integration-toolbar-title { align-items: flex-start; }
   .integration-toolbar-title h2 { width: 100%; }
 }
-
-/* Integration Center reduction pass: one surface per task, separators instead of nested cards. */
-.integration-workspace {
-  --integration-unified-surface: rgba(37, 37, 40, .78);
-  --integration-divider: rgba(255, 255, 255, .075);
-  gap: 10px;
-}
 .integration-toolbar-title h2 { font-size: 18px; }
 
-.integration-workspace .status-pill {
-  display: inline-flex;
-  gap: 5px;
-  min-height: auto;
-  padding: 0;
-  border-radius: 0;
-  background: transparent;
-}
-.integration-workspace .status-pill::before { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--surface-hover); content: ""; }
-.integration-workspace .status-pill.ok,
-.integration-workspace .status-pill.error,
-.integration-workspace .status-pill.pending { background: transparent; }
-.integration-workspace .status-pill.ok::before { background: #30d158; box-shadow: 0 0 7px rgba(48,209,88,.45); }
-.integration-workspace .status-pill.error::before { background: #ff453a; }
-.integration-workspace .status-pill.pending::before { background: var(--surface-hover); }
-.integration-workspace .program-card-title {
-  min-height: 70px;
-  padding: 13px 14px;
-  border-bottom: 1px solid var(--integration-divider);
-  background: transparent;
-}
-.integration-workspace .program-icon { width: 36px; height: 36px; border-radius: 10px; box-shadow: none; }
-.integration-workspace .program-card-title .icon-button, .integration-workspace .program-card-title .icon-button.danger:not(:disabled) {
-  color: var(--text-primary);
-  background: transparent;
-  box-shadow: none;
-}
-@media (hover: hover) and (pointer: fine) {
-.integration-workspace .program-card-title .icon-button:hover:not(:disabled) { color: var(--text-primary); background: rgb(var(--theme-ink-rgb) / 0.14); }
-}
-@media (hover: hover) and (pointer: fine) {
-.integration-workspace .program-card-title .icon-button.danger:hover:not(:disabled) { color: #ff6961; background: rgba(255,69,58,.1); }
-}
-
-/* Integration Center hierarchy pass: operational summary first, setup and diagnostics on demand. */
-.integration-workspace { gap: 12px; }
-
-.integration-workspace .program-card-title { border-bottom: 0; }
-.integration-workspace .status-pill { font-size: var(--text-caption); }
-.integration-workspace .program-card-title h3 { font-size: var(--text-body); }
-
-/* Integration Center readability pass: larger type and clearer value hierarchy. */
-.integration-workspace {
-  --integration-primary-text: #f5f5f7;
-  --integration-label-text: #c7c7ce;
-  --integration-secondary-text: #a5a5ad;
-  --integration-divider: rgba(255,255,255,.105);
-}
-
 .integration-toolbar-title h2 { color: var(--integration-primary-text); font-size: 22px; font-weight: 700; }
-
-.integration-workspace .program-card-title { min-height: 78px; padding: 15px; }
-.integration-workspace .program-icon { width: 40px; height: 40px; }
-.integration-workspace .program-icon svg { width: 19px; height: 19px; }
-.integration-workspace .program-card-title h3 { color: var(--integration-primary-text); font-size: 16px; font-weight: 680; }
-.integration-workspace .status-pill { font-size: var(--text-caption); font-weight: 600; }
-.integration-workspace .status-pill::before { width: 7px; height: 7px; flex-basis: 7px; }
-.integration-workspace .program-card-title .icon-button { width: 35px; height: 35px; }
-.integration-workspace .program-card-title .icon-button svg { width: 16px; height: 16px; }
-
-.integration-workspace .program-card-title { grid-template-columns: 40px minmax(0, 1fr); }
 
 .device-maintenance-backdrop {
   position: fixed;

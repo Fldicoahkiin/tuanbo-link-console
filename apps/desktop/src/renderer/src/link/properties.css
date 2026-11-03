@@ -63,26 +63,14 @@
 .editor-preview-row .cue-inspector summary::marker { font-size: var(--text-caption); }
 .editor-preview-row .cue-inspector small { color: var(--text-secondary); font-size: var(--text-caption); font-weight: 400; }
 .editor-preview-row .cue-inspector :is(.action-card, .visual-layout-editor, .property-section, .lighting-track-fields) { min-width: 0; padding: 12px; border: 1px solid var(--property-border); border-radius: 7px; background: var(--property-section); box-shadow: none; }
-.editor-preview-row .cue-inspector :is(.property-section h3, .property-section h4) { margin: 0 0 10px; font-size: var(--text-control); font-weight: 600; }
-.editor-preview-row .cue-inspector :is(.property-row, .property-fields > label, .lighting-event-fields > label, .lighting-track-fields > label) { display: grid; grid-template-columns: var(--property-label-width) minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; min-height: 32px; font-size: var(--text-control); color: var(--property-label); }
-.editor-preview-row .cue-inspector :is(.property-row, .property-fields > label) > span { font-size: var(--text-control); color: var(--property-label); overflow-wrap: anywhere; }
-.editor-preview-row .cue-inspector :is(.property-fields, .lighting-event-fields, .lighting-track-fields) { display: grid; gap: 10px; }
 .editor-preview-row .cue-inspector .lighting-inspector { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; }
 .editor-preview-row .cue-inspector .lighting-inspector > button { justify-self: start; }
-.editor-preview-row .cue-inspector .lighting-inspector > .property-row { grid-template-columns: var(--property-label-width) minmax(0, 300px); }
-.editor-preview-row .cue-inspector .property-target { margin-top: 10px; }
-.editor-preview-row .cue-inspector .lighting-inspector-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px 14px; }
-.property-identity, .editor-preview-row .cue-inspector .inspector-hero { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0; min-width: 0; background: transparent; border: 0; }
-.property-identity > div, .editor-preview-row .cue-inspector .inspector-hero > span { min-width: 0; flex: 1; }
-.property-eyebrow { display: block; color: var(--text-secondary); font-size: var(--text-caption); margin-bottom: 3px; }
-.property-count, .property-metadata { color: var(--text-secondary); font-size: var(--text-caption); }
+.editor-preview-row .cue-inspector .inspector-hero { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0; min-width: 0; background: transparent; border: 0; }
+.editor-preview-row .cue-inspector .inspector-hero > span { min-width: 0; flex: 1; }
+.property-metadata { color: var(--text-secondary); font-size: var(--text-caption); }
 .property-metadata { display: flex; flex-wrap: wrap; gap: 6px 14px; line-height: 1.5; font-variant-numeric: tabular-nums; }
-.editor-preview-row .cue-inspector .property-name { font-weight: 600; }
-.property-footer { display: flex; justify-content: flex-end; gap: 8px; grid-column: 1 / -1; }
-.editor-preview-row .cue-inspector .property-footer button { color: var(--text-secondary); background: transparent; }
 .editor-preview-row .cue-inspector .inspector-hero strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-body); font-weight: 600; }
 .editor-preview-row .cue-inspector .inspector-hero small { display: block; margin-top: 4px; }
-.editor-preview-row .cue-inspector .icon-button { width: 30px; height: 30px; min-width: 30px; padding: 6px; background: transparent; color: var(--text-secondary); }
 @media (hover: hover) and (pointer: fine) {
 .editor-preview-row .cue-inspector :is(.danger, .danger-text):hover { color: var(--danger, #ef8c8c); } }
 .editor-preview-row .cue-inspector .clip-inspector { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; }
@@ -141,13 +129,6 @@
 .editor-preview-row .cue-inspector .property-number-unit > small { flex-shrink: 0; padding-right: 8px; font-size: var(--text-caption); color: var(--text-secondary); }
 .loop-range-unit { display: none; }
 .cue-inspector .common-properties .loop-range-unit { display: block; }
-.lighting-settings .tempo-primary-fields, .lighting-settings .tempo-point-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.lighting-settings .tempo-signature-field { display: grid; gap: 6px; min-width: 0; }
-.lighting-settings .tempo-point { padding: 8px 0; }
-.lighting-settings .tempo-point-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.lighting-settings .tempo-point-heading button svg, .lighting-settings legend svg, .lighting-settings .property-add-button svg { width: 14px; height: 14px; margin-right: 6px; vertical-align: middle; }
-.lighting-settings .tempo-points summary { padding: 10px 0; cursor: pointer; }
-.lighting-settings .tempo-points summary > span { margin-left: 12px; color: var(--text-secondary); }
 @container (max-width: 740px) {
   .cue-inspector .common-properties .common-properties-fields { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .cue-inspector .common-properties .song-properties { border-left: 0; border-top: 1px solid var(--property-border); padding: 18px 0 0; }
@@ -164,29 +145,8 @@
 @container (max-width: 380px) {
   .editor-preview-row .cue-inspector :is(.inspector-body, .lighting-inspector, .common-properties) { padding-inline: 10px; }
 }
-.settings-lighting { border: 0; padding: 0; margin: 0; min-width: 0; }
-.settings-lighting > legend { padding: 0 0 12px; color: var(--text-secondary); font-size: var(--text-caption); }
-.settings-lighting > .lighting-editor { height: auto; min-height: 340px; overflow: visible; background: transparent; }
-.settings-lighting .lighting-settings-layout { display: block; }
-.settings-lighting .lighting-settings-content { padding: 8px 0; }
-.settings-lighting .lighting-editor > header { padding: 0 0 14px; min-height: 32px; }
-.settings-lighting .lighting-editor > header nav { flex: 1; justify-content: flex-start; gap: 5px; flex-wrap: wrap; }
-.settings-lighting .lighting-editor > header nav button { padding: 6px 10px; min-height: 32px; font-size: var(--text-caption); border: 0; border-radius: 2px; }
-.settings-lighting .lighting-settings { max-width: 560px; gap: 8px; }
-.settings-lighting .lighting-settings label { grid-template-columns: 110px minmax(0, 1fr); min-height: 32px; }
-.settings-lighting .lighting-settings input[type='color'] { width: 44px; height: 30px; min-height: 30px; padding: 3px; justify-self: start; cursor: pointer; }
-.settings-lighting .lighting-settings input:not([type='checkbox']), .settings-lighting .lighting-settings select { min-height: 32px; font-size: var(--text-caption); }
-.settings-lighting .lighting-settings-content h3 { margin: 6px 0 10px; font-size: var(--text-caption); font-weight: 500; }
-.settings-lighting .lighting-tempo-signature { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 3px; align-items: center; min-width: 0; }
-.settings-lighting .lighting-tempo-signature :is(input, select) { width: 100%; min-width: 0; padding-inline: 4px; }
-.settings-lighting .lighting-settings .lighting-loop-toggle { display: flex; gap: 8px; justify-content: flex-start; }
-.settings-lighting .lighting-settings fieldset { padding-bottom: 8px; }
 
 .editor-preview-row .cue-inspector dl > div { display: flex; min-height: 24px; justify-content: space-between; gap: 8px; padding: 0; border: 0; background: transparent; }
-
-.settings-lighting .lighting-marker-settings { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) 40px; align-items: end; gap: 8px; padding: 4px 0; }
-.settings-lighting .lighting-marker-settings label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
-.settings-lighting .lighting-marker-settings button { min-height: 32px; padding: 4px; }
 
 .wavesurfer-surface { position: relative; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
 .wavesurfer-wave, .wavesurfer-spectrum { position: absolute; inset: 0; }

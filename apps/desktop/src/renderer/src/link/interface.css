@@ -27,17 +27,16 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 .skip-link { position: fixed; z-index: 2000; inset: 8px auto auto 12px; transform: translateY(-200%); padding: 10px 16px; border-radius: 6px; background: var(--surface); color: var(--text-primary); }
 .skip-link:focus { transform: none; }
 
-.ui-button, .primary-button, .secondary-button, .icon-button { display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2); border: 1px solid transparent; border-radius: var(--r-md); font: 600 var(--fs-md)/1.4 var(--font-ui); cursor: pointer; box-shadow: none; }
+.ui-button, .primary-button, .secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2); border: 1px solid transparent; border-radius: var(--r-md); font: 600 var(--fs-md)/1.4 var(--font-ui); cursor: pointer; box-shadow: none; }
 .primary-button, .secondary-button { min-height: 32px; padding: 0 var(--sp-4); }
 .primary-button { color: var(--on-accent); background: var(--accent-fill); border-color: transparent; }
 .secondary-button { color: var(--text-1); background: var(--surface-3); border-color: var(--border-default); }
 .secondary-button.small { min-height: 28px; padding-inline: var(--sp-3); font-size: var(--fs-sm); }
-.icon-button { width: 32px; height: 32px; padding: 0; color: var(--text-2); background: transparent; }
 .ui-button:disabled { opacity: .5; cursor: not-allowed; }
 .ui-button[aria-busy=true] { cursor: progress; }
 .field { gap: 8px; font-size: var(--text-control); }
 .field :is(input, select) { min-height: 32px; border: 1px solid var(--border-default); border-radius: var(--radius-control); font-size: var(--text-control); background: var(--input-bg); color: var(--text-primary); }
-.check-field, .inline-error { font-size: var(--text-control); line-height: 1.6; }
+.inline-error { font-size: var(--text-control); line-height: 1.6; }
 .inline-error { color: var(--danger); }
 .panel { background: var(--surface); border-color: var(--separator); border-radius: var(--radius-panel); }
 .panel-title { min-height: 40px; padding-inline: 12px; background: transparent; font-size: var(--text-control); }
@@ -106,13 +105,13 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 :root :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 :root .primary-button:focus-visible { outline-color: var(--on-accent); outline-offset: -4px; }
 @media (hover: hover) and (pointer: fine) {
-  .secondary-button:hover:not(:disabled), .icon-button:hover:not(:disabled) { color: var(--text-primary); background: var(--surface-hover); border-color: var(--control-border); filter: none; }
+  .secondary-button:hover:not(:disabled) { color: var(--text-primary); background: var(--surface-hover); border-color: var(--control-border); filter: none; }
   .primary-button:hover:not(:disabled) { background: var(--accent-fill); color: var(--on-accent); filter: brightness(.95); }
   .app-sidebar .main-nav button:hover:not(:disabled):not(.active) { background: var(--surface-3); }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .ui-button, .primary-button, .secondary-button, .icon-button { transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out); }
-  .primary-button:active:not(:disabled), .secondary-button:active:not(:disabled), .icon-button:active:not(:disabled) { transform: scale(.96); }
+  .ui-button, .primary-button, .secondary-button { transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out); }
+  .primary-button:active:not(:disabled), .secondary-button:active:not(:disabled) { transform: scale(.96); }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }

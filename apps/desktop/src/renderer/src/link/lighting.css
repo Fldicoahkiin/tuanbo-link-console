@@ -16,99 +16,18 @@
 .lighting-clip.selected { outline: 1px solid var(--text-primary); }
 .lighting-clip span { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lighting-clip small { font-size: var(--text-caption); white-space: nowrap; }
-.lighting-editor { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: var(--page-background); padding: 12px; box-sizing: border-box; }
-.lighting-editor header { display: flex; align-items: center; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--separator); }
-.lighting-editor header strong { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.lighting-editor button, .lighting-editor select, .lighting-editor input { color: var(--text-primary); background: var(--surface); border: 1px solid var(--separator); border-radius: 4px; font: inherit; font-size: var(--text-caption); min-width: 0; padding: 5px 7px; }
-.lighting-editor button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; cursor: pointer; }
-.lighting-editor button svg { width: 14px; height: 14px; }
-.lighting-editor button[aria-pressed="true"] { color: var(--accent); }
-.lighting-editor :disabled { opacity: .45; cursor: not-allowed; }
-.lighting-editor nav, .lighting-event-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.lighting-event-fields label { display: inline-flex; gap: 4px; align-items: center; font-size: var(--text-caption); }
-.lighting-canvas { display: block; width: 100%; flex: 1; min-height: 100px; max-height: 300px; background: var(--surface); cursor: crosshair; }
-.lighting-canvas .grid { stroke: var(--separator); stroke-width: .5; }
-.lighting-canvas { touch-action: none; }
-.lighting-canvas .grid { pointer-events: none; }
-.lighting-event-list { overflow: auto; flex: 1; min-height: 90px; }
-.lighting-event-list table { width: 100%; border-collapse: collapse; font-size: var(--text-caption); }
-.lighting-event-list th { position: sticky; top: 0; text-align: left; background: var(--page-background); }
-.lighting-event-list td, .lighting-event-list th { padding: 5px; border-bottom: 1px solid var(--separator); }
-.lighting-event-list td > input[type="number"] { width: 85px; }
-.lighting-event-fields input { width: 72px; }
-.lighting-event-list tr.selected { background: var(--surface-hover); }
-.lighting-settings { overflow: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 16px 0; }
-.lighting-settings label { display: grid; grid-template-columns: 100px minmax(0, 1fr); align-items: center; font-size: var(--text-caption); gap: 8px; }
-.lighting-settings fieldset { grid-column: 1 / -1; border: 0; padding: 12px 0; margin: 0; min-width: 0; }
-.lighting-settings legend { color: var(--text-secondary); padding: 0 0 8px; font-size: var(--text-caption); }
-.lighting-settings fieldset > label { margin: 8px 0; }
-.lighting-empty { padding: 32px 12px; color: var(--text-tertiary); }
-
-/* Lighting shares the editor shell; controls are grouped by the user's task. */
-.lighting-editor { container-type: inline-size; padding: 0; background: var(--page-background); font-size: var(--text-caption); }
-.lighting-editor > header { flex-shrink: 0; padding: 10px 14px; gap: 10px; border: 0; }
-.lighting-editor header strong { font-size: var(--text-control); }
-.lighting-editor button { border: 0; background: transparent; min-height: 28px; }
-@media (hover: hover) and (pointer: fine) {
-.lighting-editor button:hover:not(:disabled) { background: var(--surface-hover); } }
-.lighting-editor button:focus-visible, .lighting-editor summary:focus-visible, .lighting-section-label select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.lighting-editor nav button[aria-pressed="true"] { background: var(--surface-hover); color: var(--text-primary); }
-.lighting-editor nav button { color: var(--text-secondary); white-space: nowrap; }
-.lighting-editor input, .lighting-editor select { background: var(--surface); border: 0; min-height: 28px; box-sizing: border-box; }
-.lighting-editor input[type="checkbox"] { min-height: auto; width: 14px; accent-color: var(--accent); }
-.lighting-editor h3 { margin: 8px 0 14px; font-size: var(--text-caption); font-weight: 600; }
+.lighting-section-label select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .lighting-heading .lighting-add-track { display: flex; align-items: center; gap: 7px; padding: 4px 8px; font-size: var(--text-caption); }
 .lighting-section-label { gap: 8px; }
 .lighting-section-label label { display: flex; align-items: center; gap: 10px; }
 .lighting-section-label select { color: var(--text-primary); background: var(--surface); border: 0; padding: 5px 8px; font: inherit; }
-.lighting-workbar { display: flex; flex-shrink: 0; align-items: center; gap: 12px; padding: 0 14px 8px; color: var(--text-secondary); }
-.lighting-workbar > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lighting-workbar time { font-variant-numeric: tabular-nums; font-family: monospace; }
-.lighting-editor .lighting-primary { background: var(--accent); color: var(--page-background); font-weight: 600; }
-@media (hover: hover) and (pointer: fine) {
-.lighting-editor .lighting-primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); } }
-.lighting-list-heading { display: flex; justify-content: space-between; align-items: center; padding: 6px 14px; color: var(--text-secondary); flex-shrink: 0; font-size: var(--text-caption); }
-.lighting-event-list { padding: 0 14px; min-height: 75px; }
-.lighting-event-list th { color: var(--text-secondary); font-weight: 400; height: 28px; z-index: 1; }
-.lighting-event-list td { height: 32px; border: 0; }
-.lighting-event-list th:first-child { width: 22px; }
-.lighting-event-list td > input[type="number"] { width: 95px; background: transparent; font-variant-numeric: tabular-nums; }
-.lighting-event-list td > input:focus { background: var(--surface); }
-@media (hover: hover) and (pointer: fine) {
-.lighting-event-list tr:hover { background: var(--surface-hover); } }
-.lighting-event-list .lighting-event-summary { display: block; width: 100%; text-align: left; overflow: hidden; text-overflow: ellipsis; max-width: 350px; white-space: nowrap; }
-.lighting-event-fields { gap: 8px; }
-.lighting-event-fields input[aria-label="Cue 名称"] { width: 110px; }
 .lighting-recording { flex-shrink: 0; padding: 8px 14px; color: var(--text-secondary); }
 .lighting-recording summary { cursor: pointer; font-size: var(--text-caption); padding: 4px 0; }
 .lighting-recording[open] summary { margin-bottom: 8px; }
-.lighting-panel-scroll { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
-.lighting-settings-layout { flex: 1; min-height: 0; display: flex; }
-.lighting-settings-content { flex: 1; min-width: 0; overflow: auto; padding: 14px 18px; }
-.lighting-settings { overflow: visible; padding: 0 0 14px; grid-template-columns: minmax(0, 1fr); gap: 14px; }
-.lighting-settings label { grid-template-columns: 110px minmax(0, 1fr); }
-.lighting-settings-content .lighting-settings fieldset { padding: 4px 0 16px; }
-.lighting-muted { color: var(--text-secondary); line-height: 1.7; font-size: var(--text-caption); }
-.lighting-empty { text-align: center; padding: 24px 12px; }
-.lighting-empty strong { display: block; color: var(--text-secondary); font-size: var(--text-control); font-weight: 500; }
-.lighting-empty p { margin: 10px 0 8px; }
-.lighting-empty small { font-size: var(--text-caption); }
-.lighting-empty button { margin-top: 14px; }
-.lighting-notice { display: flex; justify-content: space-between; align-items: center; padding: 4px 14px; color: var(--accent); background: var(--surface); }
-@container (max-width: 480px) {
-  .lighting-editor > header { flex-wrap: wrap; }
-  .lighting-editor header nav { order: 3; width: 100%; }
-  .lighting-settings-content { padding: 12px; }
-  .lighting-settings label { grid-template-columns: 1fr; gap: 5px; }
-  .lighting-event-list .lighting-event-summary { max-width: 160px; }
-}
 
 .lighting-inspector-host { flex: 1; min-height: 0; overflow: auto; }
 .lighting-inspector { padding: 16px; height: auto; overflow: visible; }
-.lighting-inspector-fields, .lighting-inspector .lighting-event-fields { display: flex; flex-direction: column; align-items: stretch; gap: 14px; }
-.lighting-inspector-fields > label, .lighting-inspector .lighting-event-fields label { display: flex; flex-direction: column; align-items: stretch; gap: 7px; color: var(--text-secondary); font-size: var(--text-caption); }
-.lighting-inspector input, .lighting-inspector select, .lighting-inspector .lighting-event-fields input[aria-label="Cue 名称"] { width: 100%; }
-.lighting-inspector-fields h3 { margin-top: 18px; }
+.lighting-inspector input, .lighting-inspector select { width: 100%; }
 
 .lighting-lane .lighting-clip { display: block; padding: 0; cursor: crosshair; overflow: hidden; }
 .lighting-clip-caption { position: absolute; top: 2px; left: 5px; pointer-events: none; font-size: var(--text-caption); opacity: .6; }
@@ -118,9 +37,6 @@
 .lighting-timeline-point.selected i { background: var(--text-primary); }
 
 .editor-preview-row .lighting-inspector { padding: 10px 14px; }
-.editor-preview-row .lighting-inspector-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
-.editor-preview-row .lighting-inspector .lighting-event-fields { display: contents; }
-.editor-preview-row .lighting-inspector-fields > label, .editor-preview-row .lighting-inspector .lighting-event-fields label { gap: 4px; }
 .timeline-content .lighting-lane, .timeline-track-headings .lighting-heading { background-color: color-mix(in srgb, var(--surface) 88%, var(--text-secondary)); }
 .lighting-lane .lighting-clip { border: 0; border-radius: 0; background: transparent; }
 .lighting-lane .lighting-clip.selected { outline: 0; background: transparent; }
@@ -177,18 +93,6 @@
 .timeline-region-edge:focus-visible { outline: 1px solid var(--text-primary); outline-offset: 1px; }
 @media (hover: hover) and (pointer: fine) {
 .timeline-region-edge:hover, .timeline-region-edge:focus-visible { outline: 1px solid var(--text-primary); outline-offset: 1px; } }
-
-/* Track editing stays beside the shared timeline. */
-.lighting-track-properties { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; }
-.lighting-track-properties .property-footer { justify-content: flex-start; padding-left: 112px; }
-.lighting-track-fields { display: grid; gap: 8px; }
-.lighting-track-fields > label { display: grid; grid-template-columns: 100px minmax(0, 1fr); align-items: center; gap: 12px; font-size: var(--text-body); color: var(--text-secondary); }
-.lighting-track-fields input, .lighting-track-fields select { min-width: 0; width: 100%; max-width: 320px; box-sizing: border-box; font-size: var(--text-body); }
-.lighting-track-fields input[type='number'] { max-width: 100px; }
-.lighting-track-fields input[type='color'] { width: 48px; }
-.lighting-binding-value { color: var(--text-primary); overflow-wrap: anywhere; font-size: var(--text-control); }
 .lighting-track-more { margin-top: 10px; }
 .lighting-track-more summary { cursor: pointer; color: var(--text-secondary); font-size: var(--text-control); padding: 6px 0; }
-.lighting-track-more[open] .lighting-track-fields { margin: 8px 0 12px; }
-@media (max-width: 760px) { .lighting-track-fields > label { grid-template-columns: 85px minmax(0, 1fr); gap: 8px; } }
 }

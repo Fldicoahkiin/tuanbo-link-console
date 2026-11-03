@@ -39,7 +39,6 @@
 .connections-content .settings-section { border: 0; border-radius: 0; padding: 0 0 20px; border-bottom: 1px solid var(--separator); background: transparent; }
 .connections-content .field input, .connections-content .field select { min-width: 0; max-width: 100%; }
 .content-scroll { padding: 12px; }
-.connections-content .integration-workspace { width: 100%; max-width: none; margin: 0; padding: 0; }
 .app-main { flex: 1 1 0; }
 
 /* Settings content navigation is subordinate to the workspace navigation. */
@@ -56,7 +55,6 @@
 .settings-page input:not([type="checkbox"]):not([type="range"]), .settings-page select { min-height: 36px; border-radius: 7px; }
 .player-mode-note { display: flex; gap: 12px; align-items: center; font-size: var(--text-caption); }
 .player-mode-note button { border: 0; background: transparent; color: var(--apple-blue, #0a84ff); cursor: pointer; }
-.integration-workspace .settings-page .program-card-title { min-height: 40px; padding: 0; margin-bottom: 16px; grid-template-columns: 32px minmax(0, 1fr); }
 
 /* Primary destinations sit above an indented, independently scrollable submenu. */
 .app-sidebar .sidebar-context { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--separator); }
