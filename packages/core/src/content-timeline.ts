@@ -117,8 +117,13 @@ function claimTrack(item: RundownItem, frameRate: MtcFrameRate, span: Omit<Span,
   const layer = target === 'top' ? item.visualLayers[0] : requireTrack(item, target.track);
   if (!layer) return insertTrack(item, span.ref, 0);
   if (layer.locked) throw new Error(`轨道“${layer.name}”已锁定，先解锁再放`);
-  const taken = !instant && spansOf(item, frameRate).some(other => other.layerId === layer.id && other.key !== `${span.ref.kind === 'clip' ? 'media' : 'cue'}:${span.ref.id}` && overlaps(other, span));
-  return taken ? insertTrack(item, span.ref, item.visualLayers.indexOf(layer), layer) : layer.id;
+  return !instant && takenOn(item, frameRate, layer.id, span) ? insertTrack(item, span.ref, item.visualLayers.indexOf(layer), layer) : layer.id;
+}
+
+/** Whether another part on `layerId` overlaps `span`. */
+function takenOn(item: RundownItem, frameRate: MtcFrameRate, layerId: string, span: Pick<Span, 'ref' | 'start' | 'end'>): boolean {
+  const key = `${span.ref.kind === 'clip' ? 'media' : 'cue'}:${span.ref.id}`;
+  return spansOf(item, frameRate).some(other => other.layerId === layerId && other.key !== key && overlaps(other, span));
 }
 
 function pruneEmptyTracks(item: RundownItem): void {
@@ -182,6 +187,18 @@ export function moveContentCommand(itemId: string, ref: ContentRef, startMs: num
     }
     pruneEmptyTracks(item);
   }, now);
+}
+
+/** Whether moving `ref` to start at `startMs` on track `layerId` lands on another
+ * part there, so the move puts it on a new track directly above (claimTrack).
+ * An instant cue never does. The editor shows this while a part is dragged. */
+export function contentPlaceTaken(project: LinkProject, itemId: string, ref: ContentRef, startMs: number, layerId: string): boolean {
+  const item = project.rundown.find(candidate => candidate.id === itemId);
+  if (!item) throw new Error('节目已经不在了');
+  const frameRate = project.timebase.frameRate;
+  const timecode = frameNumberToTimecode(millisecondsToFrameNumber(Math.max(0, startMs), frameRate), frameRate);
+  const span = ref.kind === 'clip' ? clipSpan({ ...requireClip(item, ref.id), startTimecode: timecode }, frameRate) : cueSpan({ ...requireCue(item, ref.id), timecode }, frameRate);
+  return span !== null && takenOn(item, frameRate, layerId, span);
 }
 
 /** The range a clip or camera cue can be trimmed to: up to its neighbours on

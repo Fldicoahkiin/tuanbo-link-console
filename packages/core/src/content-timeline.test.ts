@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_REFERENCE_CANVAS_TRANSFORM, createEmptyLinkProject, parseLinkProject, type LinkCue, type LinkProject, type ReferenceMediaClip, type RundownItem, type VisualLayer } from '@tb/schema';
 import {
-  contentTrimBounds, impliedSceneEnds, moveContentCommand, normalizeContentTimeline, placeContentCommand,
+  contentPlaceTaken, contentTrimBounds, impliedSceneEnds, moveContentCommand, normalizeContentTimeline, placeContentCommand,
   removeContentCommand, splitContentCommand, trimContentCommand, withContentTimeline
 } from './content-timeline';
 import { SceneOutputTimeline } from './scene-output-timeline';
@@ -93,6 +93,19 @@ describe('移动、修剪、切割、删除', () => {
     expect(song(value).cues.find(cue => cue.id === 'a')?.timecode).toEqual(at(30));
     value = moveContentCommand('song', { kind: 'cue', id: 'a' }, 4_000, { track: 'lower' }).execute(value);
     expect(tracks(value)).toEqual(['lower']);
+  });
+
+  it('拖动时就知道松手后会不会新建轨道，和移动的结果一致', () => {
+    const value = project({ visualLayers: [track('upper'), track('lower')],
+      cues: [camera('a', 0, 60, 'upper'), camera('b', 0, 90, 'lower'), instant('m', 0, 'upper')] });
+    expect(contentPlaceTaken(value, 'song', { kind: 'cue', id: 'a' }, 1_000, 'lower')).toBe(true);
+    expect(contentPlaceTaken(value, 'song', { kind: 'cue', id: 'a' }, 3_000, 'lower')).toBe(false);
+    expect(contentPlaceTaken(value, 'song', { kind: 'cue', id: 'a' }, 500, 'upper')).toBe(false);
+    expect(contentPlaceTaken(value, 'song', { kind: 'cue', id: 'm' }, 0, 'lower')).toBe(false);
+    for (const startMs of [1_000, 3_000]) {
+      const moved = moveContentCommand('song', { kind: 'cue', id: 'a' }, startMs, { track: 'lower' }).execute(value);
+      expect(layerOf(moved, 'a') !== 'lower').toBe(contentPlaceTaken(value, 'song', { kind: 'cue', id: 'a' }, startMs, 'lower'));
+    }
   });
 
   it('修剪停在同轨邻居和素材两端', () => {

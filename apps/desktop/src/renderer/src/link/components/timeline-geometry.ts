@@ -80,32 +80,6 @@ export function editableTimelineDuration(input: {
   return Math.max(input.referenceAudioDurationMs ?? 0, mediaEnd, cueEnd) || 60_000;
 }
 
-export function resizeTimelineSpan(input: {
-  edge: 'start' | 'end';
-  originStartMs: number;
-  originDurationMs: number;
-  originSourceOffsetMs: number;
-  sourceDurationMs: number | null;
-  timelineDurationMs: number;
-  pointerMs: number;
-  minimumDurationMs: number;
-}): { startMs: number; durationMs: number } {
-  const endMs = input.originStartMs + input.originDurationMs;
-  if (input.edge === 'start') {
-    const earliestStartMs = Math.max(0, input.originStartMs - input.originSourceOffsetMs);
-    const startMs = Math.max(earliestStartMs, Math.min(endMs - input.minimumDurationMs, input.pointerMs));
-    return { startMs, durationMs: endMs - startMs };
-  }
-  const sourceRemainingMs = input.sourceDurationMs === null
-    ? input.timelineDurationMs - input.originStartMs
-    : input.sourceDurationMs - input.originSourceOffsetMs;
-  const maximumDurationMs = Math.min(input.timelineDurationMs - input.originStartMs, sourceRemainingMs);
-  return {
-    startMs: input.originStartMs,
-    durationMs: Math.max(input.minimumDurationMs, Math.min(maximumDurationMs, input.pointerMs - input.originStartMs))
-  };
-}
-
 export function timelineContentWidth(durationMs: number, pixelsPerSecond: number, viewportWidth: number): number {
   return Math.max(viewportWidth, durationMs / 1_000 * pixelsPerSecond);
 }

@@ -6,7 +6,6 @@ import {
   editableTimelineDuration,
   fitTimelinePixelsPerSecond,
   formatTimelineTimecode,
-  resizeTimelineSpan,
   snapTimelineTime,
   timelineInteractionTime,
   timelineMoveSnapPoints,
@@ -94,28 +93,6 @@ describe('timeline geometry', () => {
       media: [{ startMs: 58_000, durationMs: 2_000, sourceOffsetMs: 0 }],
       cues: []
     })).toBe(60_000);
-  });
-
-  it('视频左右修剪可以反复恢复且不会超过源时长', () => {
-    expect(resizeTimelineSpan({
-      edge: 'end', originStartMs: 0, originDurationMs: 2_000, originSourceOffsetMs: 0,
-      sourceDurationMs: 10_000, timelineDurationMs: 60_000, pointerMs: 8_000, minimumDurationMs: 33
-    })).toEqual({ startMs: 0, durationMs: 8_000 });
-    expect(resizeTimelineSpan({
-      edge: 'end', originStartMs: 0, originDurationMs: 8_000, originSourceOffsetMs: 0,
-      sourceDurationMs: 10_000, timelineDurationMs: 60_000, pointerMs: 12_000, minimumDurationMs: 33
-    })).toEqual({ startMs: 0, durationMs: 10_000 });
-    expect(resizeTimelineSpan({
-      edge: 'start', originStartMs: 3_000, originDurationMs: 5_000, originSourceOffsetMs: 3_000,
-      sourceDurationMs: 10_000, timelineDurationMs: 60_000, pointerMs: 0, minimumDurationMs: 33
-    })).toEqual({ startMs: 0, durationMs: 8_000 });
-  });
-
-  it('图片和 OBS 没有源时长限制时可延长到合理时间线范围', () => {
-    expect(resizeTimelineSpan({
-      edge: 'end', originStartMs: 10_000, originDurationMs: 5_000, originSourceOffsetMs: 0,
-      sourceDurationMs: null, timelineDurationMs: 60_000, pointerMs: 55_000, minimumDurationMs: 33
-    })).toEqual({ startMs: 10_000, durationMs: 45_000 });
   });
 
   it('根据缩放选择可读刻度并只生成可见范围刻度', () => {

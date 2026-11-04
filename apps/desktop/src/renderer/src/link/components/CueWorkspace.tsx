@@ -60,6 +60,8 @@ import { useAssetAvailability } from './useAssetAvailability';
 import { useWorkspaceLayout } from './useWorkspaceLayout';
 import { ReferenceStage } from './ReferenceStage';
 import { SceneOutputTimeline } from '@tb/core/link';
+import { contentEditRules } from './ContentTracks';
+import type { Airtime } from './timeline-air';
 import { useDisplayPreferences } from '../stores/display-preferences-store';
 import { useReferenceAudioUrl, useLightingDocument } from './useCueWorkspaceSetup';
 import { editableTimelineDuration } from './timeline-geometry';
@@ -135,9 +137,10 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHo
   const timelineReferenceAudio = useTimelineReferenceAudio(item?.referenceAudio, projectPath, audioUrl);
   const timelineIndex = useMemo(() => project && item ? new TimelineStateIndex(project, item) : null, [item, project]);
   const timelineState = useMemo(() => timelineIndex?.at(playheadMs) ?? null, [timelineIndex, playheadMs]);
-  const scenePreviewOutput = useScenePreviewOutput(project, item?.id ?? null, playheadMs, obs.status === 'connected');
+  const sceneOutput = useSceneOutput(project, lightingWorkspace ? null : item?.id ?? null, playheadMs, obs.status === 'connected');
+  const scenePreviewOutput = sceneOutput.preview;
   if (!project) return <div className="empty-panel full"><Clock3 /><h3>还没打开工程</h3><p>新建或打开工程后，就可以添加素材和 OBS 场景、来源。</p></div>;
-  const { importMedia, addAssetClip, addObsResource, moveClip, moveClipToTop, trimClip, trimCue, splitClip, duplicateClip, duplicateCue, transformClip, moveCue, removeClip, removeCue, setClipEmbeddedAudioEnabled, refreshObs, testAction } = createWorkspaceActions({ project, projectPath, documentId, item, cue, playheadMs, coordinator, execute, notify, setSelectedCueId, setSelectedClipId, setSelectedAssetId, setSelectedObsResource });
+  const { importMedia, addAssetClip, addObsResource, moveClip, moveClipToTop, trim, splitClip, duplicateClip, duplicateCue, transformClip, moveCue, removeClip, removeCue, setClipEmbeddedAudioEnabled, refreshObs, testAction } = createWorkspaceActions({ project, projectPath, documentId, item, cue, playheadMs, coordinator, execute, notify, setSelectedCueId, setSelectedClipId, setSelectedAssetId, setSelectedObsResource });
 
   return <div className={`cue-studio${lightingWorkspace ? ' lighting-workbench' : ''}${lowPower ? ' low-power-workspace' : ''}`} data-inspector={true}>
     {!lightingWorkspace && item && lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools key={item.id} tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null}
@@ -211,6 +214,8 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHo
           cues={item.cues}
           layers={item.visualLayers}
           timelineState={timelineState}
+          airtime={sceneOutput.airtime}
+          editRules={contentEditRules(project, item.id)}
           frameRate={project.timebase.frameRate}
           durationMs={durationMs}
           playheadMs={playheadMs}
@@ -229,8 +234,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHo
           onDropAsset={addAssetClip}
           onDropObsResource={addObsResource}
           onMoveClip={moveClip}
-          onTrimClip={trimClip}
-          onTrimCue={trimCue}
+          onTrim={trim}
           onSetClipEmbeddedAudioEnabled={setClipEmbeddedAudioEnabled}
           onSplitClip={splitClip}
           onDuplicateClip={duplicateClip} onDuplicateCue={duplicateCue}
@@ -254,11 +258,17 @@ function toMessage(error: unknown): string {
 }
 
 
-function useScenePreviewOutput(project: LinkProject | null, itemId: string | null, playheadMs: number, connected: boolean) {
-  const timeline = useMemo(() => !connected && project && itemId
-    ? new SceneOutputTimeline(project, itemId) : null, [connected, project, itemId]);
+const NO_AIRTIME: Airtime = new Map();
+
+/** One reading of what the output shows, by the output's own rule: which part
+ * of each clip and camera plays (timeline), and the picture at the playhead
+ * for the preview drawn without OBS. */
+function useSceneOutput(project: LinkProject | null, itemId: string | null, playheadMs: number, connected: boolean) {
+  const timeline = useMemo(() => project && itemId ? new SceneOutputTimeline(project, itemId) : null, [project, itemId]);
+  const airtime = useMemo<Airtime>(() => timeline?.airtime() ?? NO_AIRTIME, [timeline]);
   const frame = millisecondsToFrameNumber(playheadMs, project?.timebase.frameRate ?? '30');
-  return useMemo(() => timeline ? resolveScenePreviewOutput(timeline, frame) : null, [timeline, frame]);
+  const preview = useMemo(() => timeline && !connected ? resolveScenePreviewOutput(timeline, frame) : null, [timeline, connected, frame]);
+  return { airtime, preview };
 }
 
 /** What the output would show without OBS: every clip in the picture, with the

@@ -13,7 +13,6 @@ type Options = {
   onSelectCue: (cueId: string) => void;
   onMoveClip: (clipId: string, startMs: number, layerId?: string | null) => void;
   onMoveCue: (cueId: string, startMs: number, layerId?: string | null) => void;
-  onMoveLayer: (layerId: string, targetIndex: number) => void;
 };
 
 export function useTimelineItemDrag(options: Options): {

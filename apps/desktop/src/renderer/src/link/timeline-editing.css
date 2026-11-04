@@ -27,6 +27,14 @@
 .reference-timeline .timeline-cue.cue-kind-empty { --type-fill: var(--type-empty); }
 .reference-timeline :is(.timeline-clip, .timeline-cue)[class] { background: var(--type-fill, var(--type-empty)); border-color: var(--type-edge); color: var(--type-ink); }
 .reference-timeline :is(.timeline-clip, .timeline-cue)[class] > :is(span, small) { color: var(--type-ink); }
+/* A drop onto a taken spot goes on a new track above: mark the top edge, not the whole track. */
+.reference-timeline .cue-lane.is-drop-target.is-drop-above .visual-layer-drop-state { border: 0; border-top: 2px solid var(--color-accent); background: none; }
+.reference-timeline .visual-layer-drop-state > em { position: absolute; top: 4px; padding: 0 4px; border-radius: 4px; background: var(--color-accent); color: var(--color-on-accent); font: 500 var(--text-caption)/18px 'Segoe UI', 'Microsoft YaHei UI', sans-serif; font-style: normal; white-space: nowrap; }
+/* Parts the output does not show (a camera on an upper track covers them) are dimmed; the label stays readable. */
+.reference-timeline { --timeline-off-air: rgb(12 14 18 / .62); }
+:root[data-theme='light'] .reference-timeline { --timeline-off-air: rgb(255 255 255 / .66); }
+.reference-timeline .timeline-off-air { position: absolute; top: 0; bottom: 0; background: var(--timeline-off-air); pointer-events: none; }
+.reference-timeline :is(.timeline-clip, .timeline-cue) > :is(span, small) { position: relative; }
 .reference-timeline .timeline-trim-handle { top: 0; bottom: 0; width: 8px; border: 0; border-radius: 0; background: transparent; opacity: 0; transition: opacity var(--dur-fast) var(--ease-out); }
 .reference-timeline :is(.timeline-clip, .timeline-cue):focus-visible .timeline-trim-handle { background: transparent; opacity: 1; }
 @media (hover: hover) and (pointer: fine) {

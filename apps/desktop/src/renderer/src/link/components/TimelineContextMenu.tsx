@@ -11,8 +11,7 @@ type Actions = {
   onDuplicateClip: (id: string, at: number) => void;
   onDuplicateCue: (id: string, at: number) => void;
   onSplitClip: (id: string, at: number) => void;
-  onTrimClip: (id: string, start: number, duration: number) => void;
-  onTrimCue: (id: string, start: number, duration: number) => void;
+  onTrim: (target: TimelineTarget, start: number, duration: number) => void;
   onSetClipEmbeddedAudioEnabled: (id: string, enabled: boolean) => void;
 };
 
@@ -33,7 +32,7 @@ export function TimelineContextMenu({ context, clipboard, clips, cues, layers, f
   const inside = span !== null && playheadMs > span.startMs && playheadMs < span.endMs;
   const run = (action: () => void): void => { onClose(); action(); };
   const duplicate = (item: TimelineTarget, at: number): void => { if (item.kind === 'clip') actions.onDuplicateClip(item.id, at); else actions.onDuplicateCue(item.id, at); };
-  const trim = (start: number, duration: number): void => { if (clip) actions.onTrimClip(clip.id, start, duration); else if (cue) actions.onTrimCue(cue.id, start, duration); };
+  const trim = (start: number, duration: number): void => { if (target) actions.onTrim(target, start, duration); };
   const name = clip?.label ?? cue?.actions.find((action) => action.kind === 'obs.setProgramScene')?.sceneName ?? cue?.name ?? '时间线';
   return <Menu x={context.x} y={context.y} label="时间线右键菜单" title={locked ? `${name} · 已锁定` : name} onClose={onClose}>
     {target && source ? <>

@@ -12,7 +12,7 @@ import {
   timelineTimeFromClientX
 } from './timeline-geometry';
 
-type TimelineViewport = {
+export type TimelineViewport = {
   viewportRef: RefObject<HTMLDivElement>;
   headingViewportRef: RefObject<HTMLDivElement>;
   onHeadingsWheel: (event: ReactWheelEvent) => void;

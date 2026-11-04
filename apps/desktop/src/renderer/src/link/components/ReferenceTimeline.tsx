@@ -18,32 +18,29 @@ import { useFrameValue } from './useFrameValue';
 import { AudioTimelineSegments } from './AudioTimelineSegments';
 import { AudioTrackLane } from './AudioTrackLane';
 import type { AudioEditor } from './useAudioEditor';
-import { lightingSnapPoints, timelineItemDuration, timelineSnapPoints, timelineSnapGuide } from './timeline-snap-points';
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent } from 'react';
+import { lightingSnapPoints, timelineSnapPoints } from './timeline-snap-points';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import { useTimelineAudio, type PlaybackClock } from './useTimelineAudio';
 import {
   playbackFramesPerSecond,
   resolveTimelineClipSpan,
   timecodeToMilliseconds,
-  type ResolvedTimelineState,
-  type TimelineSpan
+  type ContentRef,
+  type ResolvedTimelineState
 } from '@tb/core/link';
 import type { LinkCue, LinkMediaAsset, MtcFrameRate, ReferenceMediaClip, VisualLayer } from '@tb/schema';
 import { Music2, Trash2, MousePointer2, SquareDashedMousePointer, AudioLines, ArrowLeftRight, FolderInput, Gauge, type LucideIcon } from 'lucide-react';
 import type { LightingTool } from './LightingTimelineTools';
-import { MEDIA_DRAG_TYPE, OBS_DRAG_TYPE, type ObsResource } from './ResourceLibrary';
-import { parseObsResource } from './resource-library-model';
+import type { ObsResource } from './ResourceLibrary';
 import { TimelineWaveformCanvas, useReferenceWaveformPeaks, type ReferenceWaveformSource } from './ReferenceWaveform';
-import { formatTimelineTimecode, timelineInteractionTime, timelineMoveSnapPoints } from './timeline-geometry';
+import { formatTimelineTimecode, timelineInteractionTime } from './timeline-geometry';
 import { TimelineContextMenu, type TimelineContext, type TimelineTarget } from './TimelineContextMenu';
 import { TimelineToolbar } from './TimelineToolbar';
 import { TimelineLightingRecording } from './LightingRecordingControls';
 import { TimelineLayerHeading } from './TimelineLayerHeading';
-import { TimelineNewLayerDrop } from './TimelineNewLayerDrop';
-import { TimelineVisualLayers } from './TimelineVisualLayers';
+import { ContentTracks, type ContentEditRules } from './ContentTracks';
+import type { Airtime } from './timeline-air';
 import { useLayerReorder } from './useLayerReorder';
-import { useTimelineItemDrag } from './useTimelineItemDrag';
-import { useClipResize, useCueResize } from './useTimelineResize';
 import { useTimelineViewport } from './useTimelineViewport';
 import { timelineLayout, timelineMusicLayout, timelineRulerHeight } from './timeline-layout';
 import { LightingHeadings, LightingLanes, type LightingTimelineProps } from './LightingTimeline';
@@ -79,6 +76,9 @@ type Props = {
   cues: LinkCue[];
   layers: VisualLayer[];
   timelineState: ResolvedTimelineState;
+  /** What the output shows of each clip and camera (SceneOutputTimeline.airtime). */
+  airtime: Airtime;
+  editRules: ContentEditRules;
   frameRate: MtcFrameRate;
   durationMs: number;
   playheadMs: number;
@@ -95,8 +95,7 @@ type Props = {
   onDropAsset: (assetId: string, startMs: number, layerId?: string | null) => void;
   onDropObsResource: (resource: ObsResource, startMs: number, layerId?: string | null) => void;
   onMoveClip: (clipId: string, startMs: number, layerId?: string | null) => void;
-  onTrimClip: (clipId: string, startMs: number, durationMs: number) => void;
-  onTrimCue: (cueId: string, startMs: number, durationMs: number) => void;
+  onTrim: (ref: ContentRef, startMs: number, durationMs: number) => void;
   onSetClipEmbeddedAudioEnabled: (clipId: string, enabled: boolean) => void;
   onSplitClip: (clipId: string, timeMs: number) => void;
   onDuplicateClip: (clipId: string, startMs: number) => void;
@@ -122,25 +121,6 @@ function deleteTimelineSelection(props: Props): void {
   else if (props.selectedCueId) props.onDeleteCue(props.selectedCueId);
 }
 
-function useResolvedPresentation(state: ResolvedTimelineState): {
-  activeClipIds: Set<string>;
-  activeCueIds: Set<string>;
-  clipSpans: Map<string, TimelineSpan>;
-  visualCueSpans: Map<string, ResolvedTimelineState['visualObsCues'][number]>;
-} {
-  return useMemo(() => ({
-    activeClipIds: new Set(state.activeClipIds),
-    activeCueIds: new Set(state.activeObsCueIds),
-    clipSpans: new Map(state.clips.map((entry) => [entry.clip.id, entry])),
-    visualCueSpans: new Map(state.visualObsCues.map((entry) => [entry.cue.id, entry]))
-  }), [state]);
-}
-
-function occupiedVisualLayers(input: Pick<Props, 'layers' | 'clips' | 'cues'>): VisualLayer[] {
-  const occupied = new Set([...input.clips.map((clip) => clip.layerId), ...input.cues.map((cue) => cue.layerId)]);
-  return input.layers.filter((layer) => occupied.has(layer.id));
-}
-
 export function ReferenceTimeline(input: Props): JSX.Element {
   const { timelineRef, cueMouseMode, setCueMouseMode, props, layers, audioHeight, setAudioHeight, waveformGain, waveformMode, setWaveformMode } = useTimelineDisplay(input);
   const analysis = useAutomaticMusicAnalysis(props.lightingWorkspace ? props.projectPath : null, props.lightingWorkspace ? props.analysisSource : undefined);
@@ -164,31 +144,9 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   const layerReorder = useLayerReorder(layers.length, (id, index) => { const target = layers[index]; if (target) input.onMoveLayer(id, input.layers.findIndex((layer) => layer.id === target.id)); });
   const seekSnapPointsMs = useMemo(() => props.lightingWorkspace ? lightingSnapPoints(props.lighting?.document, beatSegments.snapPoints, props.referenceAudio?.durationMs ?? props.durationMs) : [...timelineSnapPoints(props.timelineState, props.cues, props.frameRate), ...(props.audioEditor?.points ?? [])], [beatSegments.snapPoints, props.lightingWorkspace, props.lighting?.document, props.referenceAudio?.durationMs, props.durationMs, props.cues, props.frameRate, props.timelineState, props.audioEditor?.points]);
   const snapThresholdMs = snapDistance / viewport.pixelsPerSecond * 1_000;
-  const itemDrag = useTimelineItemDrag({
-    clips: props.clips,
-    cues: props.cues,
-    layers: props.layers,
-    focusTimeline: () => timelineRef.current?.focus(),
-    timeAtClientX: viewport.editTimeAtClientX,
-    snapTime: (milliseconds, target) => {
-      const duration = timelineItemDuration(props, target);
-      const points = timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playheadMs, target);
-      return snap({ ...props, durationMs: Math.max(props.durationMs, milliseconds) }, milliseconds, snapEnabled,
-        timelineMoveSnapPoints([0, props.durationMs, ...points, ...(props.audioEditor?.points ?? [])], duration), snapThresholdMs);
-    },
-    onSelectClip: props.onSelectClip,
-    onSelectCue: props.onSelectCue,
-    onMoveClip: props.onMoveClip,
-    onMoveCue: props.onMoveCue,
-    onMoveLayer: props.onMoveLayer
-  });
-  const clipResize = useClipResize({ durationMs: 86_399_000, frameRate: props.frameRate, onTrimClip: props.onTrimClip, onSelectClip: props.onSelectClip, timeAtClientX: viewport.editTimeAtClientX, focusTimeline: () => timelineRef.current?.focus(), snapEnabled, getSnapPointsMs: (clipId) => timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playheadMs, { kind: 'clip', id: clipId }), snapThresholdMs });
-  const cueResize = useCueResize({ durationMs: 86_399_000, frameRate: props.frameRate, onTrimCue: props.onTrimCue, onSelectCue: props.onSelectCue, timeAtClientX: viewport.editTimeAtClientX, focusTimeline: () => timelineRef.current?.focus(), snapEnabled, getSnapPointsMs: (cueId) => timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playheadMs, { kind: 'cue', id: cueId }), snapThresholdMs });
-  const snapGuide = timelineSnapGuide(props, snapEnabled, itemDrag.drag);
   const musicRow = musicDisplay.sections && beatSegments.points.length > 0;
   const { sectionRow, rulerHeight } = timelineMusicLayout({ ...props, musicRow }, musicDisplay);
   const { playheadLeft, contentStyle, headingStyle, waveformContentWidth, visualTracks } = timelineLayout({ ...props, sectionRow, musicRow }, viewport.contentWidth, viewport.pixelsPerSecond, viewport.gridSize);
-  const { activeClipIds, activeCueIds, clipSpans, visualCueSpans } = useResolvedPresentation(props.timelineState);
   useEffect(() => {
     if (props.playing) revealTimelineTime(props.playheadMs);
   }, [props.playheadMs, props.playing, revealTimelineTime]);
@@ -226,18 +184,6 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   const cancelPlayhead = (event: PointerEvent<HTMLElement>): void => {
     if (playheadPointerId.current === event.pointerId) { playheadFrame.cancel(); playheadPointerId.current = null; }
   };
-  const dropVisual = (event: DragEvent<HTMLElement>, layer?: VisualLayer): void => {
-    event.preventDefault();
-    event.stopPropagation();
-    const startMs = snap(props, viewport.timeAtClientX(event.clientX), snapEnabled, timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playheadMs), snapThresholdMs);
-    const assetId = event.dataTransfer.getData(MEDIA_DRAG_TYPE);
-    if (assetId) {
-      props.onDropAsset(assetId, startMs, layer?.id ?? null);
-      return;
-    }
-    const value = event.dataTransfer.getData(OBS_DRAG_TYPE);
-    if (value) props.onDropObsResource(parseObsResource(value), startMs, layer?.id ?? null);
-  };
   const lanePointer = { onPointerDown: beginPlayhead, onPointerMove: movePlayhead, onPointerUp: endPlayhead, onPointerCancel: cancelPlayhead };
 
   const stamping = useTimelineStamp({ lighting: props.lightingWorkspace ? props.lighting : undefined, playheadMs: props.playheadMs, durationMs: props.referenceAudio?.durationMs ?? props.durationMs, playing: props.playing, frameRate: props.frameRate, clock, onPlayingChange: props.onPlayingChange, onSeek: ms => seekTo(ms, true) });
@@ -274,7 +220,6 @@ export function ReferenceTimeline(input: Props): JSX.Element {
         <div className="timeline-content" style={contentStyle} {...lightingMaterialDropHandlers({ onEffectDrop: props.onEffectDrop, onConsoleCueDrop: props.onConsoleCueDrop, onError: props.onPlaybackError, timeAtClientX: x => snap(props, viewport.editTimeAtClientX(x), snapEnabled, seekSnapPointsMs, snapThresholdMs) })}>
           {props.lightingWorkspace && props.lighting ? <WaveformCuePoints frameRate={props.frameRate} mode={cueMouseMode} height={audioHeight} lighting={{ ...props.lighting, snapTime: (ms, excludedId) => snap(props, ms, snapEnabled, lightingSnapPoints(props.lighting?.document, beatSegments.snapPoints, props.referenceAudio?.durationMs ?? props.durationMs, excludedId), snapThresholdMs) }} pixelsPerSecond={viewport.pixelsPerSecond} top={rulerHeight} scrollLeft={viewport.scrollLeft} viewportWidth={viewport.viewportWidth} durationMs={props.referenceAudio?.durationMs ?? props.durationMs} disabled={false} /> : null}
           {props.lightingWorkspace ? <AudioRowResizeHandle height={audioHeight} rulerHeight={rulerHeight} onChange={setAudioHeight} /> : null}
-          {snapGuide !== undefined ? <div className="timeline-snap-guide" style={{ left: snapGuide / 1000 * viewport.pixelsPerSecond }}><span>已吸附</span></div> : null}
           <div className="timeline-ruler" data-sections={sectionRow} data-music={musicRow} {...lanePointer}>
             {sectionRow && props.lighting ? <LightingMusicSectionRow onChange={props.lighting.onChange} candidates={undefined} document={props.lighting.document} left={viewport.scrollLeft} width={viewport.viewportWidth} pixelsPerSecond={viewport.pixelsPerSecond} onSeek={ms => { if (!props.playing) seekTo(ms, true, false); }} /> : null}
             {viewport.ticks.filter(() => props.lightingWorkspace || props.lighting?.document.music?.ruler !== 'beats').filter(tick => !props.lightingWorkspace || Math.round(tick.left / viewport.gridSize) % Math.ceil(104 / viewport.gridSize) === 0).map((tick) => <span key={tick.milliseconds} style={{ left: tick.left }}>{props.lightingWorkspace ? formatTimelineTimecode(tick.milliseconds, props.frameRate) : tick.label}</span>)}
@@ -291,9 +236,15 @@ export function ReferenceTimeline(input: Props): JSX.Element {
             /> : waveform.peaks.length ? null : <span className={waveform.error ? 'timeline-lane-error' : 'timeline-lane-empty'}>{waveform.error ?? (props.referenceAudio ? '正在生成歌曲音频波形…' : '当前节目还没添加音频')}</span>}
             {props.audioEditor ? <AudioTimelineSegments readOnly={props.lightingWorkspace === true} playheadMs={props.playheadMs} editor={props.audioEditor} peaks={waveform.peaks} scrollLeft={viewport.scrollLeft} viewportWidth={viewport.viewportWidth} pixelsPerSecond={viewport.pixelsPerSecond} onSelect={(id) => props.onSelectAudio?.(id)} onSeek={(ms) => seekTo(ms, true)} /> : null}
           </div>}
-          <TimelineVisualLayers verticalViewport={{ top: viewport.scrollTop, height: viewport.viewportHeight, ...visualTracks }} viewport={{ left: viewport.scrollLeft, width: viewport.viewportWidth }} layers={props.layers} clips={props.clips} cues={props.cues} assets={assets} clipSpans={clipSpans} frameRate={props.frameRate} pixelsPerSecond={viewport.pixelsPerSecond} selectedClipId={props.selectedClipId} selectedCueId={props.selectedCueId} activeClipIds={activeClipIds} activeCueIds={activeCueIds} visualCueSpans={visualCueSpans} drag={itemDrag.drag} resizeDrag={clipResize.drag} cueResizeDrag={cueResize.drag} lanePointer={lanePointer} onDrop={dropVisual} onBeginDrag={itemDrag.begin} onMoveDrag={itemDrag.move} onEndDrag={itemDrag.end} onCancelDrag={itemDrag.cancel} onTrimBegin={clipResize.begin} onTrimMove={clipResize.move} onTrimEnd={clipResize.end} onTrimCancel={clipResize.cancel} onCueTrimBegin={cueResize.begin} onCueTrimMove={cueResize.move} onCueTrimEnd={cueResize.end} onCueTrimCancel={cueResize.cancel} onSelectClip={props.onSelectClip} onSelectCue={props.onSelectCue} onOpenCueMenu={(event, target) => setClipContext({ target: { kind: 'cue', id: target.id }, x: event.clientX, y: event.clientY })} onOpenClipMenu={(event, target) => setClipContext({ target: { kind: 'clip', id: target.id }, x: event.clientX, y: event.clientY })} />
+          {props.lightingWorkspace ? null : <ContentTracks layers={props.layers} clips={props.clips} cues={props.cues} assets={assets} frameRate={props.frameRate}
+            durationMs={props.durationMs} playheadMs={props.playheadMs} timelineState={props.timelineState} airtime={props.airtime}
+            selectedClipId={props.selectedClipId} selectedCueId={props.selectedCueId} audioSnapPoints={props.audioEditor?.points ?? []}
+            rules={props.editRules} viewport={viewport} tracks={visualTracks} snap={{ enabled: snapEnabled, thresholdMs: snapThresholdMs }}
+            lanePointer={lanePointer} focusTimeline={() => timelineRef.current?.focus()}
+            onOpenMenu={(target, x, y) => setClipContext({ target, x, y })} onSelectClip={props.onSelectClip} onSelectCue={props.onSelectCue}
+            onMoveClip={props.onMoveClip} onMoveCue={props.onMoveCue} onTrim={props.onTrim} onDropAsset={props.onDropAsset} onDropObsResource={props.onDropObsResource} />}
           {props.lighting ? <LightingLanes {...props.lighting} snapTime={(ms) => snap({ ...props, durationMs: 86_399_000 }, ms, snapEnabled, props.lightingWorkspace ? [] : props.audioEditor?.points ?? [], snapThresholdMs)} getPlaybackPosition={() => props.playing && clock.read().ready ? clock.read().positionMs : props.playheadMs} scrollLeft={viewport.scrollLeft} viewportWidth={viewport.viewportWidth} playheadMs={props.playheadMs} timeAtClientX={viewport.editTimeAtClientX} onSeek={(ms) => { props.onPlayheadChange(ms); if (!props.externalTransport && audioRef.current) audioRef.current.currentTime = ms / 1000; }} pixelsPerSecond={viewport.pixelsPerSecond} /> : null}
-          {!props.lightingWorkspace ? <TimelineNewLayerDrop active={itemDrag.drag?.targetLayerId === null} onDrop={(event) => dropVisual(event)} /> : <div className="timeline-new-layer-drop" />}
+          {props.lightingWorkspace ? <div className="timeline-new-layer-drop" /> : null}
           {!props.lightingWorkspace && props.referenceAudio ? <div className="timeline-audio-end" style={{ left: props.referenceAudio.durationMs / 1000 * viewport.pixelsPerSecond }}><span>音频结束{props.durationMs > props.referenceAudio.durationMs ? ` · 内容超出 ${((props.durationMs - props.referenceAudio.durationMs) / 1000).toFixed(2)} 秒` : ''}</span></div> : null}
           {props.referenceAudio && props.durationMs > props.referenceAudio.durationMs ? <div className="timeline-audio-overrun" aria-label="内容超出音频范围" style={{ left: props.referenceAudio.durationMs / 1000 * viewport.pixelsPerSecond, width: (props.durationMs - props.referenceAudio.durationMs) / 1000 * viewport.pixelsPerSecond }} /> : null}
           {!props.lightingWorkspace && props.audioEditor?.points.filter((ms) => ms / 1000 * viewport.pixelsPerSecond >= viewport.scrollLeft && ms / 1000 * viewport.pixelsPerSecond <= viewport.scrollLeft + viewport.viewportWidth).map((ms) => <span key={ms} className="timeline-beat-guide" style={{ left: ms / 1000 * viewport.pixelsPerSecond }} />)}
@@ -402,7 +353,8 @@ function useTimelineDisplay(input: Props) {
   const waveformGain = 1;
   const [cueMouseMode, setCueMouseMode] = useState<'seek' | 'select'>('seek');
   const [waveformMode, setWaveformMode] = useState('rhythm');
-  const layers = useMemo(() => input.lightingWorkspace ? [] : occupiedVisualLayers({ layers: input.layers, clips: input.clips, cues: input.cues }), [input.layers, input.clips, input.cues, input.lightingWorkspace]);
+  // Empty tracks are removed with every edit (core content timeline), so every track has content.
+  const layers = input.lightingWorkspace ? [] : input.layers;
   const props = { ...input, layers, audioRowHeight: input.lightingWorkspace ? audioHeight : 76 };
   return { timelineRef, cueMouseMode, setCueMouseMode, props, layers, audioHeight, setAudioHeight, waveformGain, waveformMode, setWaveformMode };
 }

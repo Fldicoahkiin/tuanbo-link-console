@@ -1,7 +1,8 @@
-import type { DragEvent, HTMLAttributes, MouseEvent, PointerEvent, ReactNode } from 'react';
-import { resolveTimelineCueSpan, timecodeToMilliseconds, type TimelineSpan } from '@tb/core/link';
+import type { MouseEvent, PointerEvent } from 'react';
+import { cueTakesTime, resolveTimelineCueSpan, timecodeToMilliseconds, type TimelineSpan } from '@tb/core/link';
 import type { LinkCue, LinkMediaAsset, MtcFrameRate, ReferenceMediaClip } from '@tb/schema';
 import { formatTimelineTimecode, timelineSpanWidth } from './timeline-geometry';
+import { offAirTitle, type OffAirPart } from './timeline-air';
 
 export type TimelineDrag = {
   kind: 'clip' | 'cue';
@@ -19,121 +20,104 @@ export type TimelineDrag = {
   moved: boolean;
 };
 
-export function TimelineClip(props: {
-  clip: ReferenceMediaClip;
-  asset: LinkMediaAsset | undefined;
-  resolvedStartMs: number;
-  resolvedDurationMs: number;
+type PointerHandlers<E extends HTMLElement> = {
+  onPointerMove: (event: PointerEvent<E>) => void;
+  onPointerUp: (event: PointerEvent<E>) => void;
+  onPointerCancel: (event: PointerEvent<E>) => void;
+};
+
+/** What an item shows while it is dragged or trimmed: its preview place and
+ * length. Covered parts are not drawn then; they belong to the old place. */
+export type TimelineItemPreview = { startMs: number | null; durationMs: number | null; offsetY: number | null };
+
+type ItemProps = {
   frameRate: MtcFrameRate;
   pixelsPerSecond: number;
   selected: boolean;
   active: boolean;
   locked: boolean;
-  previewMs: number | null;
-  previewDurationMs: number | null;
-  previewOffsetY: number | null;
-  onPointerDown: (event: PointerEvent<HTMLButtonElement>, kind: 'clip', id: string, originMs: number) => void;
-  onPointerMove: (event: PointerEvent<HTMLButtonElement>) => void;
-  onPointerUp: (event: PointerEvent<HTMLButtonElement>) => void;
-  onPointerCancel: (event: PointerEvent<HTMLButtonElement>) => void;
-  onTrimPointerDown: (event: PointerEvent<HTMLElement>, clip: ReferenceMediaClip, edge: 'start' | 'end', sourceDurationMs?: number) => void;
-  onTrimPointerMove: (event: PointerEvent<HTMLElement>) => void;
-  onTrimPointerUp: (event: PointerEvent<HTMLElement>) => void;
-  onTrimPointerCancel: (event: PointerEvent<HTMLElement>) => void;
+  offAir: readonly OffAirPart[];
+  preview: TimelineItemPreview;
+  drag: PointerHandlers<HTMLButtonElement> & { onPointerDown: (event: PointerEvent<HTMLButtonElement>, originMs: number) => void };
+  trim: PointerHandlers<HTMLElement> & { onPointerDown: (event: PointerEvent<HTMLElement>, edge: 'start' | 'end') => void };
   onSelect: () => void;
-  onContextMenu: (event: MouseEvent<HTMLButtonElement>, clip: ReferenceMediaClip) => void;
-}): JSX.Element {
-  const originMs = props.resolvedStartMs;
-  const startMs = props.previewMs ?? originMs;
+  onContextMenu: (event: MouseEvent<HTMLButtonElement>) => void;
+};
+
+export function TimelineClip(props: ItemProps & { clip: ReferenceMediaClip; asset: LinkMediaAsset | undefined; span: TimelineSpan }): JSX.Element {
+  const startMs = props.preview.startMs ?? props.span.startMs;
+  const offAir = props.preview.startMs === null && props.preview.durationMs === null ? props.offAir : [];
   return <button
     aria-pressed={props.selected}
     onClick={props.onSelect}
-    className={`timeline-clip ${props.selected ? 'is-selected' : ''} ${props.active ? 'is-active' : ''} ${props.locked ? 'is-locked' : ''} ${props.asset?.kind ?? 'missing'} ${props.previewMs !== null ? 'is-dragging' : ''}`}
+    className={`timeline-clip ${props.selected ? 'is-selected' : ''} ${props.active ? 'is-active' : ''} ${props.locked ? 'is-locked' : ''} ${props.asset?.kind ?? 'missing'} ${props.preview.startMs !== null ? 'is-dragging' : ''}`}
+    data-off-air={offAirState(offAir)}
     style={{
       left: startMs / 1_000 * props.pixelsPerSecond,
-      width: timelineSpanWidth(props.previewDurationMs ?? props.resolvedDurationMs, props.pixelsPerSecond),
-      translate: props.previewOffsetY === null ? undefined : `0 ${props.previewOffsetY}px`
+      width: timelineSpanWidth(props.preview.durationMs ?? props.span.durationMs, props.pixelsPerSecond),
+      translate: props.preview.offsetY === null ? undefined : `0 ${props.preview.offsetY}px`
     }}
-    title={`${props.clip.label} · 左右拖动时间，上下拖动图层层级 · ${formatTimelineTimecode(startMs, props.frameRate)}`}
+    title={[props.clip.label, '左右拖动时间，上下拖动图层层级', formatTimelineTimecode(startMs, props.frameRate), offAirTitle(offAir)].filter(Boolean).join(' · ')}
     onPointerDown={(event) => {
-      if (!props.locked) props.onPointerDown(event, 'clip', props.clip.id, originMs);
+      if (!props.locked) props.drag.onPointerDown(event, props.span.startMs);
       else { event.stopPropagation(); props.onSelect(); }
     }}
-    onPointerMove={props.onPointerMove}
-    onPointerUp={props.onPointerUp}
-    onPointerCancel={props.onPointerCancel}
-    onContextMenu={(event) => props.onContextMenu(event, props.clip)}
-  ><i className="timeline-trim-handle start" title={props.locked ? '图层已锁定' : '拖动修剪片段入点'} onPointerDown={(event) => { if (props.locked) event.stopPropagation(); else props.onTrimPointerDown(event, props.clip, 'start', props.asset?.durationMs); }} onPointerMove={props.onTrimPointerMove} onPointerUp={props.onTrimPointerUp} onPointerCancel={props.onTrimPointerCancel} /><span>{props.clip.label}</span><small>{props.asset?.kind ?? '缺失'} · {formatTimelineTimecode(startMs, props.frameRate)}</small><i className="timeline-trim-handle end" title={props.locked ? '图层已锁定' : '拖动修剪片段出点'} onPointerDown={(event) => { if (props.locked) event.stopPropagation(); else props.onTrimPointerDown(event, props.clip, 'end', props.asset?.durationMs); }} onPointerMove={props.onTrimPointerMove} onPointerUp={props.onTrimPointerUp} onPointerCancel={props.onTrimPointerCancel} /></button>;
+    onPointerMove={props.drag.onPointerMove}
+    onPointerUp={props.drag.onPointerUp}
+    onPointerCancel={props.drag.onPointerCancel}
+    onContextMenu={props.onContextMenu}
+  >
+    <OffAirParts parts={offAir} />
+    <TrimHandle edge="start" title={props.locked ? '图层已锁定' : '拖动修剪片段入点'} locked={props.locked} handlers={props.trim} />
+    <span>{props.clip.label}</span><small>{props.asset?.kind ?? '缺失'} · {formatTimelineTimecode(startMs, props.frameRate)}</small>
+    <TrimHandle edge="end" title={props.locked ? '图层已锁定' : '拖动修剪片段出点'} locked={props.locked} handlers={props.trim} />
+  </button>;
 }
 
-export function CueLane(props: {
-  viewport: { left: number; width: number };
-  order?: number;
-  cues: LinkCue[];
-  frameRate: MtcFrameRate;
-  selectedCueId: string | null;
-  device: 'all' | 'obs' | 'midi' | 'lighting';
-  pixelsPerSecond: number;
-  drag: TimelineDrag | null;
-  lanePointer: Pick<HTMLAttributes<HTMLElement>, 'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel'>;
-  onDrop?: (event: DragEvent<HTMLElement>) => void;
-  onBeginDrag: (event: PointerEvent<HTMLButtonElement>, kind: 'cue', id: string, originMs: number) => void;
-  onMoveDrag: (event: PointerEvent<HTMLButtonElement>) => void;
-  onEndDrag: (event: PointerEvent<HTMLButtonElement>) => void;
-  onCancelDrag: (event: PointerEvent<HTMLButtonElement>) => void;
-  onSelectCue?: (cueId: string) => void;
-  onContextMenu?: (event: MouseEvent<HTMLButtonElement>, cue: LinkCue) => void;
-  children?: ReactNode;
-  layerId?: string;
-  locked?: boolean;
-  visible?: boolean;
-  dropTarget?: boolean;
-  draggingItem?: boolean;
-  visualClipMode?: boolean;
-  activeCueIds?: ReadonlySet<string>;
-  visualCueSpans?: ReadonlyMap<string, TimelineSpan>;
-  resizeDrag?: { id: string; previewStartMs: number; previewDurationMs: number } | null;
-  onTrimPointerDown?: (event: PointerEvent<HTMLElement>, cue: LinkCue, durationMs: number, edge: 'start' | 'end') => void;
-  onTrimPointerMove?: (event: PointerEvent<HTMLElement>) => void;
-  onTrimPointerUp?: (event: PointerEvent<HTMLElement>) => void;
-  onTrimPointerCancel?: (event: PointerEvent<HTMLElement>) => void;
-}): JSX.Element {
-  return <div className={`timeline-lane cue-lane ${props.device}-lane ${props.locked ? 'is-locked' : ''} ${props.visible === false ? 'is-hidden' : ''} ${props.dropTarget ? 'is-drop-target' : ''} ${props.draggingItem ? 'has-item-drag' : ''}`} style={{ order: props.order }} data-visual-layer-id={props.layerId} data-layer-locked={props.locked === undefined ? undefined : String(props.locked)} {...props.lanePointer} onDragOver={props.onDrop ? (event) => event.preventDefault() : undefined} onDrop={props.onDrop}>{props.children}{props.cues.flatMap((cue) => {
-    const actionCount = cue.actions.filter((action) => actionMatchesDevice(action, props.device)).length;
-    const emptyCue = cue.actions.length === 0;
-    if (actionCount === 0 && !(props.device === 'all' && emptyCue) && !(props.device === 'obs' && emptyCue)) return [];
-    const sceneName = cue.actions.find((action) => action.kind === 'obs.setProgramScene')?.sceneName;
-    const visualSpan = props.visualCueSpans?.get(cue.id) ?? (cue.durationMs !== undefined && cue.actions.some((action) => action.kind === 'obs.setProgramScene') ? resolveTimelineCueSpan(cue, props.frameRate) : undefined);
-    const originMs = visualSpan?.startMs ?? timecodeToMilliseconds(cue.timecode, props.frameRate);
-    const visualShow = props.visualClipMode && (visualSpan !== undefined || sceneName !== undefined);
-    const visualDurationMs = visualSpan?.durationMs ?? 0;
-    const resizing = props.resizeDrag?.id === cue.id ? props.resizeDrag : null;
-    const startMs = resizing?.previewStartMs
-      ?? (props.drag?.kind === 'cue' && props.drag.id === cue.id ? props.drag.previewMs : originMs);
-    const renderedDurationMs = resizing?.previewDurationMs ?? visualDurationMs;
-    const itemDrag = props.drag?.kind === 'cue' && props.drag.id === cue.id ? props.drag : null;
-    const left = startMs / 1000 * props.pixelsPerSecond;
-    const width = visualShow ? timelineSpanWidth(renderedDurationMs, props.pixelsPerSecond) : 112;
-    if (!itemDrag && !resizing && props.selectedCueId !== cue.id && (left + width < props.viewport.left - 112 || left > props.viewport.left + props.viewport.width + 112)) return [];
-    const cueKind = cueActionKind(cue);
-    return [<button aria-pressed={props.selectedCueId === cue.id} onClick={() => props.onSelectCue?.(cue.id)} onContextMenu={(event) => props.onContextMenu?.(event, cue)} className={`timeline-cue cue-kind-${cueKind} ${visualShow ? 'visual-obs-clip' : ''} ${props.selectedCueId === cue.id ? 'is-selected' : ''} ${props.activeCueIds?.has(cue.id) ? 'is-active' : ''} ${props.locked ? 'is-locked' : ''} ${itemDrag?.moved ? 'is-dragging' : ''}`} key={`${props.device}:${cue.id}`} style={{ left, top: 2, translate: itemDrag?.moved ? `0 ${itemDrag.previewOffsetY}px` : undefined, ...(visualShow ? { width: timelineSpanWidth(renderedDurationMs, props.pixelsPerSecond) } : {}) }} title={props.locked ? '图层已锁定' : `${emptyCue ? `${cue.name} · 待配置动作` : `${cue.name} · ${actionCount} 个动作`} · ${formatTimelineTimecode(startMs, props.frameRate)} · 左右拖动时间，上下拖动图层层级`} onPointerDown={(event) => { if (!props.locked) props.onBeginDrag(event, 'cue', cue.id, originMs); else { event.stopPropagation(); props.onSelectCue?.(cue.id); } }} onPointerMove={props.onMoveDrag} onPointerUp={props.onEndDrag} onPointerCancel={props.onCancelDrag}>
-      {visualShow && props.onTrimPointerDown && !props.locked ? <i className="timeline-trim-handle start" title="拖动修改开始时间" onPointerDown={(event) => props.onTrimPointerDown?.(event, cue, visualDurationMs, 'start')} onPointerMove={props.onTrimPointerMove} onPointerUp={props.onTrimPointerUp} onPointerCancel={props.onTrimPointerCancel} /> : null}
-      <span>{sceneName ?? cue.name}</span>{sceneName === undefined ? <small>{visualShow ? `时长 ${formatDuration(renderedDurationMs)}` : `${actionCount} · ${formatTimelineTimecode(startMs, props.frameRate)}`}</small> : null}
-      {visualShow && props.onTrimPointerDown && !props.locked ? <i className="timeline-trim-handle end" title="拖动修改结束时间" onPointerDown={(event) => props.onTrimPointerDown?.(event, cue, visualDurationMs, 'end')} onPointerMove={props.onTrimPointerMove} onPointerUp={props.onTrimPointerUp} onPointerCancel={props.onTrimPointerCancel} /> : null}
-    </button>];
-  })}</div>;
+/** The span a cue takes on its track: a camera, or a shown source in older
+ * projects. Every other cue is an instant and has none. */
+export function timelineCueSpan(cue: LinkCue, frameRate: MtcFrameRate): TimelineSpan | undefined {
+  return cueTakesTime(cue) && cue.durationMs !== undefined ? resolveTimelineCueSpan(cue, frameRate) : undefined;
 }
 
-function formatDuration(durationMs: number): string {
-  return `${(durationMs / 1_000).toFixed(2)}s`;
+export function TimelineCue(props: ItemProps & { cue: LinkCue; span: TimelineSpan | undefined; dragging: boolean }): JSX.Element {
+  const { cue, span } = props;
+  const sceneName = cue.actions.find((action) => action.kind === 'obs.setProgramScene')?.sceneName;
+  const originMs = span?.startMs ?? timecodeToMilliseconds(cue.timecode, props.frameRate);
+  const startMs = props.preview.startMs ?? originMs;
+  const durationMs = props.preview.durationMs ?? span?.durationMs ?? 0;
+  const offAir = props.preview.startMs === null && props.preview.durationMs === null ? props.offAir : [];
+  const summary = cue.actions.length === 0 ? `${cue.name} · 待配置动作` : `${cue.name} · ${cue.actions.length} 个动作`;
+  const trimmable = span !== undefined && !props.locked;
+  return <button aria-pressed={props.selected} onClick={props.onSelect} onContextMenu={props.onContextMenu}
+    className={`timeline-cue cue-kind-${cueActionKind(cue)} ${span ? 'visual-obs-clip' : ''} ${props.selected ? 'is-selected' : ''} ${props.active ? 'is-active' : ''} ${props.locked ? 'is-locked' : ''} ${props.dragging ? 'is-dragging' : ''}`}
+    data-off-air={offAirState(offAir)}
+    style={{ left: startMs / 1000 * props.pixelsPerSecond, top: 2, translate: props.preview.offsetY === null ? undefined : `0 ${props.preview.offsetY}px`,
+      ...(span ? { width: timelineSpanWidth(durationMs, props.pixelsPerSecond) } : {}) }}
+    title={props.locked ? '图层已锁定' : [summary, formatTimelineTimecode(startMs, props.frameRate), '左右拖动时间，上下拖动图层层级', offAirTitle(offAir)].filter(Boolean).join(' · ')}
+    onPointerDown={(event) => { if (!props.locked) props.drag.onPointerDown(event, originMs); else { event.stopPropagation(); props.onSelect(); } }}
+    onPointerMove={props.drag.onPointerMove} onPointerUp={props.drag.onPointerUp} onPointerCancel={props.drag.onPointerCancel}>
+    <OffAirParts parts={offAir} />
+    {trimmable ? <TrimHandle edge="start" title="拖动修改开始时间" locked={false} handlers={props.trim} /> : null}
+    <span>{sceneName ?? cue.name}</span>{sceneName === undefined ? <small>{span ? `时长 ${(durationMs / 1_000).toFixed(2)}s` : `${cue.actions.length} · ${formatTimelineTimecode(startMs, props.frameRate)}`}</small> : null}
+    {trimmable ? <TrimHandle edge="end" title="拖动修改结束时间" locked={false} handlers={props.trim} /> : null}
+  </button>;
 }
 
-function actionMatchesDevice(action: LinkCue['actions'][number], device: 'all' | 'obs' | 'midi' | 'lighting'): boolean {
-  if (device === 'all') return true;
-  if (device === 'obs') return action.kind.startsWith('obs.');
-  if (!('portProfileId' in action)) return false;
-  const isLighting = action.portProfileId === 'lighting-output';
-  return device === 'lighting' ? isLighting : !isLighting;
+function TrimHandle({ edge, title, locked, handlers }: { edge: 'start' | 'end'; title: string; locked: boolean; handlers: ItemProps['trim'] }): JSX.Element {
+  return <i className={`timeline-trim-handle ${edge}`} title={title}
+    onPointerDown={(event) => { if (locked) event.stopPropagation(); else handlers.onPointerDown(event, edge); }}
+    onPointerMove={handlers.onPointerMove} onPointerUp={handlers.onPointerUp} onPointerCancel={handlers.onPointerCancel} />;
+}
+
+function OffAirParts({ parts }: { parts: readonly OffAirPart[] }): JSX.Element | null {
+  return parts.length ? <>{parts.map((part) => <i key={part.from} className="timeline-off-air" aria-hidden
+    style={{ left: `${part.from * 100}%`, width: `${(part.to - part.from) * 100}%` }} />)}</> : null;
+}
+
+function offAirState(parts: readonly OffAirPart[]): 'all' | 'part' | undefined {
+  if (!parts.length) return undefined;
+  return parts.length === 1 && parts[0]!.from === 0 && parts[0]!.to === 1 ? 'all' : 'part';
 }
 
 function cueActionKind(cue: LinkCue): 'empty' | 'obs' | 'midi' | 'lighting' | 'mixed' {

@@ -130,10 +130,11 @@ function createClipActions(input: WorkspaceActionsInput) {
     runMutation(input, () => input.execute(moveContentCommand(item.id, { kind: 'clip', id: clipId },
       timecodeToMilliseconds(requireClip(item, clipId).startTimecode, input.project.timebase.frameRate), 'top')));
   };
-  const trimClip = (clipId: string, startMs: number, durationMs: number): void => {
+  /** Trim a clip or camera; it stops at its neighbours and the ends of its source. */
+  const trim = (ref: ContentRef, startMs: number, durationMs: number): void => {
     if (!input.item) return;
     const item = input.item;
-    runMutation(input, () => input.execute(trimContentCommand(item.id, { kind: 'clip', id: clipId }, startMs, startMs + durationMs)));
+    runMutation(input, () => input.execute(trimContentCommand(item.id, ref, startMs, startMs + durationMs)));
   };
   const splitClip = (clipId: string, milliseconds: number): void => split({ kind: 'clip', id: clipId }, milliseconds);
   const split = (ref: ContentRef, milliseconds: number): void => {
@@ -180,7 +181,7 @@ function createClipActions(input: WorkspaceActionsInput) {
     const item = input.item;
     if (runMutation(input, () => input.execute(removeContentCommand(item.id, [{ kind: 'clip', id: clipId }])))) input.setSelectedClipId(null);
   };
-  return { moveClip, moveClipToTop, trimClip, splitClip, splitCue: (cueId: string, milliseconds: number) => split({ kind: 'cue', id: cueId }, milliseconds), duplicateClip, transformClip, setClipEmbeddedAudioEnabled, removeClip };
+  return { moveClip, moveClipToTop, trim, splitClip, splitCue: (cueId: string, milliseconds: number) => split({ kind: 'cue', id: cueId }, milliseconds), duplicateClip, transformClip, setClipEmbeddedAudioEnabled, removeClip };
 }
 
 function createCueActions(input: WorkspaceActionsInput, addAssetClip: (assetId: string, startMs: number, layerId?: string | null) => boolean) {
@@ -212,11 +213,6 @@ function createCueActions(input: WorkspaceActionsInput, addAssetClip: (assetId: 
       input.notify(`已在 ${formatMilliseconds(milliseconds)} 创建：${actions[0]?.label ?? resource.name}`);
     });
   };
-  const trimCue = (cueId: string, startMs: number, durationMs: number): void => {
-    if (!input.item) return;
-    const item = input.item;
-    runMutation(input, () => input.execute(trimContentCommand(item.id, { kind: 'cue', id: cueId }, startMs, startMs + durationMs)));
-  };
   const moveCue = (cueId: string, milliseconds: number, layerId?: string | null): void => {
     if (!input.item) return;
     const item = input.item;
@@ -241,7 +237,7 @@ function createCueActions(input: WorkspaceActionsInput, addAssetClip: (assetId: 
       input.setSelectedClipId(null);
     });
   };
-  return { addCue, addObsResource, trimCue, moveCue, removeCue, duplicateCue };
+  return { addCue, addObsResource, moveCue, removeCue, duplicateCue };
 }
 
 function createIntegrationActions(input: WorkspaceActionsInput) {

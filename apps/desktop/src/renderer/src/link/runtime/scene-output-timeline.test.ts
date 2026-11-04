@@ -206,3 +206,27 @@ describe('完整场景定位', () => {
     expect(result.cues[0]?.cue.actions).toEqual([{ id: 'scene-3', label: '场景', kind: 'obs.setProgramScene', sceneName: 'Scene 3' }]);
   });
 });
+
+describe('每段画面实际播出的帧', () => {
+  it('上层机位盖住的那段视频不算播出，机位只算自己的长度，隐藏轨道整段不播', () => {
+    const project = projectFixture();
+    const airtime = new SceneOutputTimeline(project, 'song').airtime();
+    expect(airtime.get('media:clip')).toEqual([{ start: 180, end: 300 }, { start: 450, end: 900 }]);
+    expect(airtime.get('cue:camera')).toEqual([{ start: 300, end: 450 }]);
+    project.rundown[0]!.visualLayers[0]!.visible = false;
+    const hidden = new SceneOutputTimeline(project, 'song').airtime();
+    expect(hidden.get('media:clip')).toEqual([{ start: 180, end: 900 }]);
+    expect(hidden.has('cue:camera')).toBe(false);
+  });
+  it('整段被上层机位盖住的机位记为空，声音不被盖住', () => {
+    const project = projectFixture(), item = project.rundown[0]!;
+    const camera = item.cues[0]!;
+    item.visualLayers.push({ id: 'under', name: '底层机位', visible: true, locked: false });
+    item.cues.push({ ...camera, id: 'under-camera', layerId: 'under', timecode: { hours: 0, minutes: 0, seconds: 11, frames: 0 }, durationMs: 2000 });
+    project.mediaAssets.push({ id: 'sound', name: '掌声.wav', kind: 'audio', folderId: null, relativePath: 'assets/clap.wav', sha256: 'c'.repeat(64), byteLength: 10, durationMs: 3000 });
+    item.referenceMediaClips.push({ ...item.referenceMediaClips[0]!, id: 'clap', assetId: 'sound', label: '掌声', layerId: 'under', startTimecode: { hours: 0, minutes: 0, seconds: 9, frames: 0 }, durationMs: 2000, sourceOffsetMs: 0 });
+    const airtime = new SceneOutputTimeline(project, 'song').airtime();
+    expect(airtime.get('cue:under-camera')).toEqual([]);
+    expect(airtime.get('media:clap')).toEqual([{ start: 270, end: 330 }]);
+  });
+});

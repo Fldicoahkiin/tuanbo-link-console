@@ -9,6 +9,7 @@ type SceneWork = { media: ManagedMediaEvent[]; cues: RuntimeUpdate['dueCues'] };
 /** The camera scene and clips the output shows at `frame`, top first, for a
  * preview drawn without OBS. Same rule as the output itself. */
 export type ScenePicture = { camera: LinkCue | null; clipIds: string[] };
+export type FrameRange = { start: number; end: number };
 type SceneIndex = {
   projectId: string; itemId: string; layers: ReadonlyMap<string, number>;
   scenes: { cue: LinkCue; start: number; end: number }[];
@@ -74,6 +75,30 @@ export class SceneOutputTimeline {
     const camera = stack.find(entry => 'cue' in entry);
     return { camera: camera && 'cue' in camera ? camera.cue : stack.some(entry => !isSound(entry)) ? null : fallback?.cue ?? null,
       clipIds: stack.flatMap(entry => 'media' in entry ? [entry.media.clipId] : []) };
+  }
+  /** The frames each clip and camera is on air, by the same rule as the output:
+   * keyed `media:<clip id>` / `cue:<cue id>`, ranges in order and merged. Every
+   * part the output plays has an entry; an empty one is covered all along. A
+   * part with no entry is not in the picture (hidden track, disabled cue, a
+   * clip the song audio already plays). The camera held on program after its
+   * end is not counted: that is not its span. */
+  airtime(): Map<string, FrameRange[]> {
+    const { media, scenes } = this.index;
+    const result = new Map<string, FrameRange[]>([...media.map(entry => `media:${entry.event.clipId}`),
+      ...scenes.map(entry => `cue:${entry.cue.id}`)].map(key => [key, []]));
+    const boundaries = [...new Set([...media.flatMap(entry => [entry.event.frameNumber, entry.end]),
+      ...scenes.flatMap(entry => [entry.start, entry.end])])].sort((a, b) => a - b);
+    for (const [order, start] of boundaries.entries()) {
+      const end = boundaries[order + 1];
+      if (end === undefined) break;
+      for (const entry of stackAt(this.index, start).stack) {
+        const ranges = result.get(entry.key)!;
+        const last = ranges.at(-1);
+        if (last?.end === start) last.end = end;
+        else ranges.push({ start, end });
+      }
+    }
+    return result;
   }
   /** Visible entries, including a camera's end revealing a clip midway. Built
    * once per playback snapshot; no hidden clip starts merely to be preloaded. */
