@@ -21,6 +21,7 @@
 | --- | --- | --- |
 | 1、3 | 配对只看 MTC 起始码 | `packages/core/src/ma2-pairing-state.ts`：配对凭据只有时间码节目编号和起始码，不含 Cue 时间、版本号；控台上改 Cue 时间不会让配对失效。 |
 | 1、3 | P1 的起始码原样带进来、不被改掉 | 导入 P1 时每首歌的 `MidiStartTime` 写进歌曲的 MTC 起始码，导入后逐首列出；和 P1 歌同名、起始码不同的本地歌单独列出，由操作员确认后改（`p1-import-report.ts`）。“生成点击播放联动工程”沿用每首歌已有的起始码，只给没有起始码的歌分配（`p1-auto-follow.ts`）。 |
+| 1、3 | 改了起始码，灯光跟着换到同起点的时间线（2026-11-04） | 歌曲的 MTC 起始码改成控台上另一条时间码节目的起点时，配对那一步（`ma2-pairing-state.ts` 的 `switchMa2Timelines`）自动让这首歌改用那一条：原来那条的 Cue 和没写到控台的本地改动归档，放进新那条的 Cue；起始码改回来时恢复归档。和起始码的修改是同一步，撤销一起撤销。不猜：控台还没读完整、新那条还没读、原来那条还在这个起点、新起点有两条时间线时都不换，原因写在控台时间线页面上；换的时候出错，起始码照改，原因记在那条时间线上。控台时间线页面每条都有「给哪首歌用」，选了就把歌曲起始码改成这条的起点（`pairSongWithMa2ShowCommand`）；另一首歌已经从这个起点开始、或这条的 Cue 已经在别的歌里时不改，说明原因。 |
 | 4、10 | 不连网线也能用 MIDI 时间码 | 播放永远从这首歌的 MTC 起始码发送时间码（`native-program-snapshot.ts` 用 `programTimeOrigin`），只要选了时间码输出端口就发。网线只用于编辑和同步，不是播放的前提。 |
 | 5 | 同一条时间线双向同步 | 方式 1 的绑定（`ma2Bindings`）由 `ma2-bound-song-sync.ts` 三方比较后写回原来的 Timecode 节目，不新建；和方式 2 的歌走同一个逐首同步（`ma2-song-sync.ts`）。控台上录的、带联动台不转换动作的时间线也能改：这些动作原样保留，按键松开跟着按下一起移动（`ma2-event-write.ts` 的 `ma2ReleaseFollowers`）。 |
 | 5 | 两边同时改同一个点 | 以联动台为准写入，控台上的旧版本在写入前备份到控台，同步不停下来等人选（`ma2-bound-song-sync.ts`）。 |
@@ -39,6 +40,7 @@
 | --- | --- |
 | 1 | `packages/core/src/lighting-workflow-rules.test.ts` 第 1 条 |
 | 3 | 同上第 3 条：换 Show 名、会话、版本、歌名、顺序、音频，配对都不变；工程里存的旧配对不参与；差一帧以上不配；两首同起点不猜 |
+| 1、3 | `packages/core/src/ma2-timeline-switch.test.ts`（自动换、改回来恢复本地改动、不猜的几种情况、出错不挡编辑、「给哪首歌用」）；`apps/desktop/test-e2e/ma2-timeline-switch.spec.ts` |
 | 4、10 | 同上第 4、10 条：时间码从歌曲起始码开始，和有没有读过控台无关 |
 | 5 | 同上第 5 条；`apps/desktop/src/main/link/ma2-song-console-edits.test.ts`（控台上改的读回联动台） |
 | 7 | `apps/desktop/src/main/link/ma2-song-executor.test.ts`（1000 页放满放 1001 页）；`ma2-layout-service.test.ts`（序列与时间码节目同号） |

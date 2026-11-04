@@ -1,6 +1,6 @@
 import type { LinkProject, Ma2Catalog } from '@tb/schema';
 import { formatMtcOffset } from './mtc-timecode';
-import { programTimeOrigin } from './ma2-time-origin';
+import { MA2_FRAME_MS, programTimeOrigin } from './ma2-time-origin';
 
 type Ma2CatalogEntry = Ma2Catalog['entries'][number];
 
@@ -38,16 +38,27 @@ export type Ma2StartMatch = {
   duplicateStarts: Record<string, number[]>;
   /** Paired shows with something to know that does not stop the pairing. */
   notes: { target: number; text: string }[];
+  /**
+   * Songs whose MTC start moved off the console shows they hold Cues from and onto exactly one other
+   * show (2026-11-04): that show replaces them, the Cues of the old ones are archived. Applied by the
+   * pairing step of every edit, so a switch is never left waiting.
+   */
+  switches: Ma2TimelineSwitch[];
 };
+
+export type Ma2TimelineSwitch = { itemId: string; from: number[]; to: number };
 
 /**
  * Which console Timecode show runs with which song, by the MTC start alone (2026-10-26). The show's
  * number counts only for a song that already took that show's Cues (a binding): the show must still
  * start where the song starts. Names, the console Show, the audio and the Cue times play no part.
  * A song's own show (made by this software for a new song) belongs to that song and is not matched.
+ * `failed` holds why a switch to a show could not be made; that show is not proposed again until the
+ * operator asks for it in the console timeline view.
  */
-export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog): Ma2StartMatch {
+export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog, failed: ReadonlyMap<number, string> = new Map()): Ma2StartMatch {
   const unresolved: Ma2StartMatch['unresolved'] = [];
+  const switches: Ma2TimelineSwitch[] = [];
   const notes: Ma2StartMatch['notes'] = [];
   const frameRate = project.timebase.frameRate;
   const songs = project.rundown.flatMap(item => {
@@ -95,9 +106,13 @@ export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog): Ma2
     // is not taken over silently, or the song would hold two shows with different starts.
     const lost = [...bound].filter(([target, owner]) => owner === itemId && !found.has(target)).map(([target]) => target);
     if (lost.length) {
-      const title = project.rundown.find(item => item.id === itemId)?.title ?? itemId;
-      for (const target of targets.filter(value => !bound.has(value))) unresolved.push({ target, reason: `Timecode ${target} 和「${title}」起点一样，但这首歌已经放进了 Timecode ${lost.join('、')} 的 Cue，没有自动换过去。要换用 Timecode ${target}，请先在控台时间线里解除 Timecode ${lost.join('、')} 的关联` });
-      targets.splice(0, targets.length, ...targets.filter(value => bound.has(value)));
+      const song = songs.find(value => value.item.id === itemId)!;
+      const fresh = targets.filter(value => !bound.has(value));
+      const held = targets.filter(value => bound.has(value));
+      const blocker = fresh.length === 1 && !held.length ? switchBlocker(song, lost, fresh[0]!, catalog, failed, frameRate) : null;
+      if (fresh.length === 1 && !held.length && blocker === null) { switches.push({ itemId, from: lost, to: fresh[0]! }); continue; }
+      for (const target of fresh) unresolved.push({ target, reason: blocker ?? `Timecode ${target} 和「${song.item.title}」起点一样，但控台上还有别的时间线也从这个起点开始，没有自动换过去` });
+      targets.splice(0, targets.length, ...held);
       if (!targets.length) continue;
     }
     const sorted = targets.sort((a, b) => a - b);
@@ -114,5 +129,30 @@ export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog): Ma2
     const after = ma2EventsAfterSong(entry, song.start, song.item.referenceAudio!.durationMs);
     if (after.length) notes.push({ target, text: `控台 Timecode ${target} 有 ${after.length} 个事件在歌曲结束之后，播放到歌曲结束就不会触发` });
   }
-  return { pairs, unresolved: unresolved.sort((a, b) => a.target - b.target), duplicateStarts, notes };
+  return { pairs, unresolved: unresolved.sort((a, b) => a.target - b.target), duplicateStarts, notes, switches };
+}
+
+/**
+ * Why a song that moved its MTC start cannot take over the one show now starting there, or null when
+ * it can: every show it holds Cues from has left that start (or the console no longer has it), the
+ * read is complete, and the new show's Cues can go on the song as they are.
+ */
+function switchBlocker(song: { item: LinkProject['rundown'][number]; start: number }, from: readonly number[], to: number, catalog: Ma2Catalog, failed: ReadonlyMap<number, string>, frameRate: LinkProject['timebase']['frameRate']): string | null {
+  const title = song.item.title;
+  const failure = failed.get(to);
+  if (failure !== undefined) return `Timecode ${to} 和「${title}」起点一样，但没能换过去：${failure}`;
+  if (catalog.incomplete || catalog.sourceUnverified) return `Timecode ${to} 和「${title}」起点一样，控台读完整后自动换过去`;
+  for (const target of from) {
+    const entry = catalog.entries.find(value => value.target === target);
+    if (!entry) continue;
+    const start = entry.error ? null : ma2ShowStartTicks(entry);
+    if (start === null) return `Timecode ${to} 和「${title}」起点一样，但原来的 Timecode ${target} 没读清楚，没有自动换过去`;
+    if (sameMtcStart(song.start, start)) return `Timecode ${to} 和「${title}」起点一样，但原来的 Timecode ${target} 也还从这个起点开始，分不清用哪一个`;
+  }
+  const entry = catalog.entries.find(value => value.target === to);
+  if (!entry?.preview || entry.error || entry.conversionError) return `Timecode ${to} 和「${title}」起点一样，但这一条还没读取完整，读完后自动换过去`;
+  if (entry.preview.timing?.absoluteEventTimesMs.some(time => time < song.start - MA2_FRAME_MS)) {
+    return `Timecode ${to} 里有比「${title}」起始码 ${formatMtcOffset(song.start, frameRate)} 还早的事件，没有自动换过去`;
+  }
+  return null;
 }

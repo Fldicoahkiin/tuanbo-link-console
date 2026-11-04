@@ -61,7 +61,7 @@ it('没有起始码、缺文件、空节目和读取出错的条目不参与；�
   expect(match.unresolved).toEqual([{ target: 3, reason: '读取超时' }]);
 });
 
-it('已放进 Cue 的节目：起点仍和歌曲、放 Cue 时的起点一致才对上；对不上时 Cue 保留并说明，不自动换到另一个同起点的节目', () => {
+it('已放进 Cue 的节目：起点仍和歌曲、放 Cue 时的起点一致才对上；对不上时 Cue 保留并说明；另一个同起点的节目没读完整时先不换（2026-11-04 起读完整就自动换）', () => {
   const { project, catalog } = setup([{ id: 'A', startMs: 60000 }], [{ target: 1, offset: '1800' }, { target: 2, offset: '2100' }]);
   project.rundown[0]!.lighting = { ...createLightingDocument(), ma2Bindings: [{ id: 'binding', name: '灯光 1', timecode: 1, readAt: catalog.readAt, sourceXml: '<MA/>', baselineTracks: [], mappings: [], playback: 'editable', timeOriginMs: 60000 }] };
   expect(matchMa2Programs(project, catalog).pairs).toEqual({ 1: 'A' });
@@ -72,7 +72,8 @@ it('已放进 Cue 的节目：起点仍和歌曲、放 Cue 时的起点一致才
   const moved = matchMa2Programs(project, catalog);
   expect(moved.pairs).toEqual({});
   expect(moved.unresolved.map(value => value.target)).toEqual([1, 2]);
-  expect(moved.unresolved[1]?.reason).toContain('解除 Timecode 1 的关联');
+  expect(moved.unresolved[1]?.reason).toContain('读完后自动换过去');
+  expect(moved.switches).toEqual([]);
   const missing = matchMa2Programs(project, { ...catalog, entries: [] });
   expect(missing.unresolved).toEqual([{ target: 1, reason: expect.stringContaining('新读取的控台里没有 Timecode 1') as string }]);
 });

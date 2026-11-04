@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { refreshMa2BindingCommand, detachMa2BindingCommand, restoreMa2BindingCommand, formatMtcOffset, ma2ShowStartTicks, ma2SongPairs, programTimeOrigin } from '@tb/core/link';
+import { refreshMa2BindingCommand, detachMa2BindingCommand, pairSongWithMa2ShowCommand, restoreMa2BindingCommand, formatMtcOffset, ma2ShowStartTicks, ma2SongPairs, programTimeOrigin, readSongMtcStart } from '@tb/core/link';
 import type { LinkProject, Ma2ReadState } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { importCachedMa2, updateMa2ReadState } from '../stores/ma2-read-store';
@@ -24,6 +24,45 @@ function rowsOf(project: LinkProject, cache: Ma2ReadState): Row[] {
     if (pairedId && song) return { entry, song, bound, state: 'matched', text: `对上「${song.title}」${bound ? ' · Cue 已放进歌曲' : ''}`, reason: null };
     return { entry, song, bound, state: 'unmatched', text: reason ? '没对上' : entry.eventCount === 0 ? '空节目' : '没有歌曲从这个起点开始', reason };
   });
+}
+
+/** The show's start as an MTC code, or what the console wrote when it is not a start. */
+function showStartText(entry: Entry, frameRate: LinkProject['timebase']['frameRate']): string {
+  const ticks = ma2ShowStartTicks(entry);
+  return ticks === null ? entry.offset ?? '没有起点' : formatMtcOffset(ticks * 1000 / 30, frameRate);
+}
+
+/**
+ * Which song runs with this console show, picked by hand (2026-11-04). Pairing stays by the MTC start:
+ * picking a song gives it the show's start, and the song changes over to this show.
+ */
+function ShowSongPicker({ project, row, disabled, notify }: { project: LinkProject; row: Row; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element | null {
+  const target = row.entry.target;
+  const [choice, setChoice] = useState(row.song?.id ?? '');
+  const frameRate = project.timebase.frameRate;
+  const songs = project.rundown.filter(item => item.referenceAudio && !item.lighting?.consoleSong && !item.p1UnavailableSourceKey);
+  if (row.state === 'error' || ma2ShowStartTicks(row.entry) === null || !songs.length) return null;
+  const start = showStartText(row.entry, frameRate);
+  const using = row.state === 'matched' && row.bound && row.song?.id === choice;
+  const pair = (): void => {
+    const item = songs.find(value => value.id === choice);
+    if (!item) return;
+    try {
+      useDocumentStore.getState().execute(pairSongWithMa2ShowCommand(item.id, target));
+      const after = useDocumentStore.getState().project;
+      const placed = after?.rundown.find(value => value.id === item.id)?.lighting?.ma2Bindings?.some(binding => binding.timecode === target);
+      const reason = after ? ma2SongPairs(after).unresolved.find(value => value.target === target)?.reason : undefined;
+      notify(placed ? `「${item.title}」的起始码改成了 MTC ${start}，现在用 Timecode ${target} 跑灯` : `「${item.title}」的起始码改成了 MTC ${start}，但 Cue 没有换过来：${reason ?? '原因见这条时间线'}`, placed ? 'info' : 'error');
+    } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
+  };
+  return <div className="ma2-browser-pick">
+    <label><span>给哪首歌用</span><select aria-label={`Timecode ${target} 给哪首歌用`} value={choice} onChange={event => setChoice(event.target.value)}>
+      <option value="">选一首歌</option>
+      {songs.map(item => { const reading = readSongMtcStart(item); return <option key={item.id} value={item.id}>{item.title} · {reading.state === 'set' ? `MTC ${formatMtcOffset(reading.startMs, frameRate)}` : '还没有起始码'}</option>; })}
+    </select></label>
+    <button disabled={disabled || !choice || using} title={using ? '这首歌已经在用这条时间线' : undefined} onClick={pair}>用这条时间线</button>
+    {using ? null : <small>选好后，这首歌的 MTC 起始码改成 {start}，灯光换成这条时间线的 Cue。它原来用的时间线的 Cue 先归档，起始码改回去时恢复。</small>}
+  </div>;
 }
 
 export function Ma2CachedBrowser({ disabled, onClose, notify }: { disabled: boolean; onClose: () => void; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element {
@@ -67,13 +106,19 @@ export function Ma2CachedBrowser({ disabled, onClose, notify }: { disabled: bool
       <select aria-label="时间线状态筛选" value={cache.filter} onChange={event => { const filter = event.target.value; if (filter === 'all' || filter === 'pending' || filter === 'native' || filter === 'error') updateMa2ReadState({ filter }); }}><option value="all">全部</option><option value="pending">没对上</option><option value="native">含控台原样动作</option><option value="error">读取出错</option></select>
       <button disabled={disabled || busy} title="把对上的控台节目的 Cue 放进歌曲的时间线；连接控台时会自动做" onClick={() => void apply()}>把 Cue 放进对上的歌曲</button><span role="status">{cache.message}</span></div>
     <div className="ma2-browser-body"><nav aria-label="已读取时间线">{rows.map(value => <button key={value.entry.target} data-state={value.state} aria-pressed={value.entry.target === entry?.target} onClick={() => { updateMa2ReadState({ selectedTarget: value.entry.target }); if (value.song) selectSong(value.song.id); }}>
-      <strong>{value.entry.target} · {value.entry.name}</strong><span>{value.text} · {value.entry.eventCount ?? '未知'} 个事件</span></button>)}</nav>
+      <strong>{value.entry.target} · {value.entry.name}</strong><span>{value.text} · MTC {showStartText(value.entry, frameRate)} · {value.entry.eventCount ?? '未知'} 个事件</span></button>)}</nav>
       {row && entry ? <article><h4>Timecode {entry.target} · {entry.name}</h4><p>{entry.frameFormat} · 节目起点 <strong className="ma2-browser-mtc">MTC {showStart === null ? entry.offset : formatMtcOffset(showStart * 1000 / 30, frameRate)}</strong> · {entry.slot}</p>
         <p className="ma2-browser-match" data-state={row.state}>{row.state === 'matched' && row.song ? `和「${row.song.title}」的 MTC 起始码一样，播放这首歌时控台跑这条时间线` : row.reason ?? row.text}</p>
+        {row.song && origin !== undefined && row.state !== 'matched' ? <p>「{row.song.title}」的起始码是 <strong className="ma2-browser-mtc">MTC {formatMtcOffset(origin, frameRate)}</strong></p> : null}
+        <ShowSongPicker key={`${entry.target}:${row.song?.id ?? ''}`} project={project} row={row} disabled={disabled || busy} notify={notify} />
         {entry.conversionError || originError ? <p role="alert">{entry.conversionError ?? originError}</p> : null}
         {row.bound && row.song ? <div className="ma2-browser-tools"><button onClick={() => { selectSong(row.song!.id); onClose(); }}>查看歌曲 Cue 与音频</button><button disabled={disabled || busy} onClick={() => refresh(row.song!.id, entry.target)}>用已读取的内容刷新</button><button disabled={disabled || busy} onClick={() => archive(false, row.song!.id, entry.target)}>解除关联并归档编排</button></div> : null}
         {row.bound && row.song && conflict === entry.target ? <p role="alert">本地编排和控台上的版本不一致。<button onClick={() => setConflict(null)}>保留本地</button><button disabled={disabled || busy} onClick={() => refresh(row.song!.id, entry.target, true)}>归档本地，采用控台版本</button></p> : null}
-        {!row.bound ? cache.detachedBindings?.filter(value => value.binding.timecode === entry.target).map(value => <p key={value.detachedAt}>已归档 {project.rundown.find(item => item.id === value.itemId)?.title ?? value.itemId} 的本地编排和完整控台数据。<button disabled={disabled || busy} onClick={() => archive(true, value.itemId, entry.target)}>恢复归档关联</button></p>) : null}
+        {!row.bound ? cache.detachedBindings?.filter(value => value.binding.timecode === entry.target).map(value => {
+          const owner = project.rundown.find(item => item.id === value.itemId);
+          const now = owner?.lighting?.ma2Bindings?.map(binding => `Timecode ${binding.timecode}`).join('、');
+          return <p key={value.detachedAt}>已归档「{owner?.title ?? value.itemId}」在这条时间线上的 Cue 和本地改动{now ? `，这首歌现在用 ${now}` : ''}。<button disabled={disabled || busy || Boolean(now)} title={now ? '这首歌正在用别的时间线：把它的起始码改回这条的起点，会自动恢复' : undefined} onClick={() => archive(true, value.itemId, entry.target)}>恢复归档关联</button></p>;
+        }) : null}
         {entry.preview?.unconverted.length ? <p className="ma2-native-note">{entry.preview.unconverted.length} 个控台动作联动台不转换，写回时保持控台原样（按键松开跟着按下一起移动）。其余 Cue 可以在联动台里改时间、增删，并写回这条时间线。</p> : null}
         {cache.failures.filter(value => value.target === entry.target).map(value => <p role="alert" key={value.target}>{value.message}</p>)}
         <div className="ma2-browser-events"><table><thead><tr><th>歌曲位置 / 秒</th><th>控台时间</th><th>执行器</th><th>序列 / Cue</th><th>动作</th><th>名称</th><th>编辑</th></tr></thead><tbody>{entry.events.map(event => {
