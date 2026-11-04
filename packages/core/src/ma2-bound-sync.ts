@@ -1,9 +1,14 @@
-import { lightingDocumentSchema, ma2SyncSnapshotSchema, ma2TimecodePreviewSchema, type LightingDocument, type Ma2SyncObject, type Ma2TimecodePreview } from '@tb/schema';
+import { lightingDocumentSchema, ma2SyncSnapshotSchema, ma2TimecodePreviewSchema, type LightingDocument, type Ma2ConsoleChanges, type Ma2SyncObject, type Ma2TimecodePreview } from '@tb/schema';
 import { resolveMa2Readback, resolveMa2ReadbackTracks } from './ma2-readback';
 import { ma2EventSnapshotProperties, snapshotMa2LightingBinding } from './ma2-lighting-snapshot';
 import { previewMa2Sync, type Ma2SyncPreview } from './ma2-sync';
 
-export function previewMa2BoundSync(documentInput: LightingDocument, bindingId: string, readbackInput: Ma2TimecodePreview, choices: ReadonlyMap<string, string | null>, metadata: { baselineVersion: string; remoteVersion: string; baselineRevision: string; localRevision: string; remoteRevision: string }): Ma2SyncPreview {
+/**
+ * `consoleChanges` 'software' (2026-11-04, the operator's choice): the console's events are taken as
+ * the base, so every event moved, deleted or added there since the last sync is written back to what
+ * the timeline holds instead of coming into it. Tracks and the show itself still merge both ways.
+ */
+export function previewMa2BoundSync(documentInput: LightingDocument, bindingId: string, readbackInput: Ma2TimecodePreview, choices: ReadonlyMap<string, string | null>, metadata: { baselineVersion: string; remoteVersion: string; baselineRevision: string; localRevision: string; remoteRevision: string }, consoleChanges: Ma2ConsoleChanges = 'read-back'): Ma2SyncPreview {
   const document = lightingDocumentSchema.parse(documentInput);
   const readback = ma2TimecodePreviewSchema.parse(readbackInput);
   const binding = document.ma2Bindings?.find((entry) => entry.id === bindingId);
@@ -25,5 +30,6 @@ export function previewMa2BoundSync(documentInput: LightingDocument, bindingId: 
     }
   }
   const remote = ma2SyncSnapshotSchema.parse({ bindingId, consoleVersion: metadata.remoteVersion, revision: metadata.remoteRevision, objects });
-  return previewMa2Sync(snapshots.base, snapshots.local, remote);
+  const base = consoleChanges === 'software' ? { ...snapshots.base, objects: [...snapshots.base.objects.filter(object => object.kind !== 'event'), ...remote.objects.filter(object => object.kind === 'event')] } : snapshots.base;
+  return previewMa2Sync(base, snapshots.local, remote);
 }

@@ -1,5 +1,5 @@
 import { alignMa2SnapshotToFrames, resolveMa2Readback, resolveMa2ReadbackTracks, resolveMa2Sync, type Ma2SyncChoice } from '@tb/core/link';
-import { lightingDocumentSchema, ma2TimecodePreviewSchema, type LightingDocument, type Ma2SyncSnapshot, type Ma2TimecodePreview } from '@tb/schema';
+import { lightingDocumentSchema, ma2TimecodePreviewSchema, type LightingDocument, type Ma2ConsoleChanges, type Ma2SyncSnapshot, type Ma2TimecodePreview } from '@tb/schema';
 import { z } from 'zod';
 import { compareMa2LightingReadback, recoverMa2TrackMappings } from './ma2-comparison';
 import { editMa2TrackStates, extendMa2TimecodeLength, inspectMa2SequenceXml, inspectMa2TimecodeXml, prepareMa2TimecodeEvents, resolveMa2CueNumber, sameMa2XmlObjects, type Ma2EventEdit } from './ma2-timecode-xml';
@@ -27,14 +27,14 @@ export type Ma2PreparedEventWrite = {
 
 /** Compile a reviewed merge. No I/O occurs until every change has been represented. */
 export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingId: string, readbackInput: Ma2TimecodePreview,
-  identityChoices: ReadonlyMap<string, string | null>, conflictChoices: ReadonlyMap<string, Ma2SyncChoice>, sequenceXml: readonly string[], timeAlignment: 'exact' | 'nearest-frame' = 'exact'): Ma2PreparedEventWrite {
+  identityChoices: ReadonlyMap<string, string | null>, conflictChoices: ReadonlyMap<string, Ma2SyncChoice>, sequenceXml: readonly string[], timeAlignment: 'exact' | 'nearest-frame' = 'exact', consoleChanges: Ma2ConsoleChanges = 'read-back'): Ma2PreparedEventWrite {
   const document = lightingDocumentSchema.parse(documentInput);
   const readback = ma2TimecodePreviewSchema.parse(readbackInput);
   const binding = document.ma2Bindings?.find((entry) => entry.id === bindingId);
   if (!binding) throw new Error('节目没有这个 MA2 对象绑定');
   binding.trackMappings ??= recoverMa2TrackMappings(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings);
   readback.trackMappings ??= recoverMa2TrackMappings(readback.sourceXml, readback.target, readback.document.tracks, readback.mappings);
-  const comparison = compareMa2LightingReadback(document, bindingId, readback, identityChoices);
+  const comparison = compareMa2LightingReadback(document, bindingId, readback, identityChoices, consoleChanges);
   const merged = resolveMa2Sync(comparison, conflictChoices);
   const desired = timeAlignment === 'nearest-frame' ? alignMa2SnapshotToFrames(merged, 30, readback.timeOriginMs ?? 0).snapshot : merged;
   const remoteObjects = new Map(comparison.remote.objects.map((object) => [object.id, object]));

@@ -6,8 +6,8 @@ import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { startMa2SongSync, stopMa2SongSync, tickMa2SongSync, ma2SongSyncSettings, markPendingMa2Songs } from './ma2-song-sync';
 import { useProgramSelectionStore } from '../stores/program-selection-store';
 import { useMtcStartAllocationStore } from '../stores/mtc-start-allocation-store';
-import { useMa2RealtimePreference } from './ma2-realtime-preference';
-import { prepareMa2RealtimeSession, pauseMa2RealtimeSession, refreshMa2RealtimeSession, retryMa2RealtimeSession, pendingSongSummary, songsWithoutConsoleShow, writeMissingConsoleShows } from './ma2-realtime-session';
+import { setMa2ConsoleChanges, setMa2WriteMode, useMa2RealtimePreference } from './ma2-realtime-preference';
+import { prepareMa2RealtimeSession, pauseMa2RealtimeSession, recheckMa2Songs, refreshMa2RealtimeSession, retryMa2RealtimeSession, pendingSongSummary, songsWithoutConsoleShow, syncMa2Once, writeMissingConsoleShows } from './ma2-realtime-session';
 import { convertMa2LegacyNames, legacyMa2ConsoleNames } from './ma2-legacy-names';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
@@ -40,7 +40,7 @@ beforeEach(() => {
   archive.mockResolvedValue('C:/archive.tblink');
   useMa2SyncStore.setState({ songs: {} });
   useMa2SyncStore.setState({ names: { state: 'idle', message: '' }, session: { status: 'waiting', message: '' }, timelinePlaying: false, previewPlaying: false });
-  useMa2RealtimePreference.setState({ enabled: true });
+  useMa2RealtimePreference.setState({ enabled: true, once: null, writeMode: 'merge', consoleChanges: 'read-back' });
   useMtcStartAllocationStore.setState({ error: null, context: '', retryAt: 0 });
   useDocumentStore.getState().setProject(project(), 'song.tblink');
 });
@@ -610,4 +610,52 @@ it('存档过程中开始播放时暂不写控台，停止后保留原队列', a
   await tickMa2SongSync(false);
   expect(sync).not.toHaveBeenCalled();
   expect(useMa2SyncStore.getState().songs.first).toMatchObject({ state: 'pending' });
+});
+
+it('只手动同步：关掉实时同步后点“同步一次”，按选的同步方式每首歌同步一次，之后实时同步还是关着（2026-11-04）', async () => {
+  useDocumentStore.getState().setProject(bothBound(), 'song.tblink');
+  sync.mockImplementation(answerOwn); check.mockResolvedValue(false);
+  pauseMa2RealtimeSession();
+  expect(await prepareMa2RealtimeSession()).toBe(false);
+  setMa2WriteMode('direct'); setMa2ConsoleChanges('software');
+  expect(storage.get('tblink.ma2-write-mode.v1')).toBe('direct');
+  syncMa2Once();
+  await vi.waitFor(() => expect(Object.keys(useMa2SyncStore.getState().songs)).toEqual(['first', 'second']));
+  await tickMa2SongSync(false);
+  expect(sync).toHaveBeenCalledTimes(2);
+  expect(sync.mock.calls.map(call => call[0] as Ma2SongSyncRequest)).toEqual([expect.objectContaining({ writeMode: 'direct', consoleChanges: 'software' }), expect.objectContaining({ writeMode: 'direct', consoleChanges: 'software' })]);
+  expect(useMa2RealtimePreference.getState()).toMatchObject({ enabled: false, once: null });
+  expect(Object.values(useMa2SyncStore.getState().songs).map(song => song.state)).toEqual(['verified', 'verified']);
+  // An edit afterwards waits for the next 同步一次.
+  const lighting = structuredClone(useDocumentStore.getState().project!.rundown[0]!.lighting!);
+  const event = lighting.tracks[0]!.clips[0]!.events[0]!;
+  if (event.kind !== 'empty-cue' && event.kind !== 'ma2') throw new Error('fixture 应为 Cue 点');
+  event.label = '改过';
+  useDocumentStore.getState().execute(setLightingCommand('first', lighting)); markPendingMa2Songs();
+  expect(await prepareMa2RealtimeSession()).toBe(false);
+  await tickMa2SongSync(false);
+  expect(sync).toHaveBeenCalledTimes(2);
+  expect(useMa2SyncStore.getState().songs.first?.state).toBe('pending');
+});
+it('同步一次时控台没连上：一直等到连上再同步，不算结束；暂停可以取消（2026-11-04）', async () => {
+  pauseMa2RealtimeSession();
+  status.mockResolvedValue({ state: 'disconnected' });
+  syncMa2Once();
+  await vi.waitFor(() => expect(useMa2SyncStore.getState().session.message).toContain('等待控台连接'));
+  expect(useMa2RealtimePreference.getState().once).not.toBeNull();
+  pauseMa2RealtimeSession();
+  expect(useMa2RealtimePreference.getState()).toMatchObject({ enabled: false, once: null });
+});
+it('改了同步方式：每首歌下次同步时完整读一遍控台，按新的方式检查（2026-11-04）', async () => {
+  useDocumentStore.getState().setProject(boundFirst(), 'song.tblink');
+  sync.mockImplementation(answerOwn); check.mockResolvedValue(false);
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  await tickMa2SongSync(false);
+  expect(useMa2SyncStore.getState().songs.first).toMatchObject({ state: 'verified' });
+  setMa2WriteMode('overwrite'); recheckMa2Songs();
+  expect(useMa2SyncStore.getState().songs.first).toMatchObject({ state: 'pending', remoteRevision: undefined });
+  await tickMa2SongSync(false);
+  expect(check).not.toHaveBeenCalled();
+  expect(sync).toHaveBeenCalledTimes(2);
+  expect(sync.mock.calls[1]?.[0]).toMatchObject({ writeMode: 'overwrite', consoleChanges: 'read-back' });
 });

@@ -17,12 +17,13 @@ import { LightingCustomCategories } from './LightingCustomCategories';
 import { Ma2LayoutPanel } from './Ma2LayoutPanel';
 
 export const EFFECT_DRAG = 'application/x-tblink-lighting-effect';
-export function LightingEffectDock({ itemId, onCreated, document, disabled, onChange, eventId, ms, durationMs, onNew, headerActions, externalPanel, onLibrary, pointDetails, cueSelectionVersion, sidebarHost, playbackSettings, onAuditionTemplate, onStamp }: {
+export function LightingEffectDock({ itemId, onCreated, document, disabled, onChange, eventId, ms, durationMs, onNew, headerActions, externalPanel, onLibrary, pointDetails, cueSelectionVersion, sidebarHost, playbackSettings, onAuditionTemplate, onStamp, notify }: {
   itemId: string;
   onCreated: (document: LightingDocument, id: string) => void;
   sidebarHost: HTMLDivElement | null; playbackSettings: ReactNode; onAuditionTemplate: (id: string) => void; auditionStatus: string;
   pointDetails: boolean; cueSelectionVersion: number; externalPanel?: ReactNode; onLibrary: () => void; headerActions?: ReactNode; document: LightingDocument; disabled: boolean; eventId?: string | undefined; ms: number; durationMs: number; onNew: () => void;
   onStamp: (id: string) => void; onChange: (document: LightingDocument, label: string) => boolean | void;
+  notify: (message: string, tone?: 'info' | 'error') => void;
 }): JSX.Element {
   const split = useLightingCueSplit();
   const [section, setSection] = useState<'console' | 'front' | 'rim' | 'effect'>('console');
@@ -79,7 +80,7 @@ export function LightingEffectDock({ itemId, onCreated, document, disabled, onCh
   const sidebar = <div className="lighting-workbench-nav effect-library-actions">{navigation}<Disclosure className="lighting-playback-settings" title="更多"><Button variant="ghost" size="sm" icon={LayoutGrid} aria-pressed={layoutOpen} onClick={()=>setLayoutOpen(!layoutOpen)}>控台布局 / 新建 Cue</Button>{headerActions}{playbackSettings}</Disclosure></div>;
   return <section className="lighting-effect-dock lighting-material-layout" style={split.style} aria-label="灯光效果库" data-editor={editorOpen || layoutOpen} data-sidebar={Boolean(sidebarHost)} data-panel={Boolean(externalPanel || browserOpen)}>
     {sidebarHost ? createPortal(sidebar, sidebarHost) : sidebar}
-    {browserOpen ? <Ma2CachedBrowser disabled={disabled} notify={setError} onClose={() => useMa2ReadStore.setState({ browserOpen: false })} /> : externalPanel || <>
+    {browserOpen ? <Ma2CachedBrowser disabled={disabled} notify={notify} onClose={() => useMa2ReadStore.setState({ browserOpen: false })} /> : externalPanel || <>
       <div className="cue-material-browser">{section === 'console' ? <Ma2SequencePreview document={document} onBrowseLayout={browseLayout} onLayoutSettings={()=>setLayoutOpen(true)} onClose={() => setSection('front')} onUse={addConsoleCue} onClassify={value => { setDraft(value); setSection('front'); }} composing={editorOpen || layoutOpen} /> : <LightingUserLibrary key={customCategory ?? section} customCategoryId={customCategory ?? undefined} section={section} document={document} draft={draft} onDraftClose={() => setDraft(null)} onBrowse={() => setSection('console')} onAudition={onAuditionTemplate} onCueUse={addConsoleCue} composing={editorOpen || layoutOpen} onStamp={id => editorOpen || layoutOpen ? addIngredient(id) : onStamp(id)} onCompose={id => { onNew(); setTemplateId(id); setDraftOpen(true); const entry = document.templates.find(value => value.id === id); const binding = entry?.track.cueStamp; setIngredients(entry?.members?.map(value => ({ ...value })) ?? (entry && binding?.mode === 'fixed' ? [{ name: entry.name, sequence: binding.sequence, cue: binding.cue, executor: binding.executor, delayMs: 0 }] : [])); }} />}</div>
       {layoutOpen ? <>{split.separator}<Ma2LayoutPanel itemId={itemId} key={project?.projectId} document={document} ingredients={newCueIngredients} onIngredients={setNewCueIngredients} onClose={()=>setLayoutOpen(false)}/></> : editorOpen ? <>{split.separator}<LightingCueComposer key={eventId ?? templateId ?? 'draft'} details={pointDetails} templateId={templateId} document={document} eventId={eventId} ms={ms} durationMs={durationMs} ingredients={ingredients} onIngredients={commitIngredients} onChange={onChange} onNew={close} disabled={disabled} onDropMaterial={transfer => {
         try {

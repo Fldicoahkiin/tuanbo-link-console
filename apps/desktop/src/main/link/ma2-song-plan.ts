@@ -1,6 +1,6 @@
 import type { Ma2SongSyncRequest } from '@tb/schema';
 import { consoleLabelText, toConsoleLabel } from '@tb/core/link';
-import { inspectMa2SequenceXml } from './ma2-timecode-xml';
+import { inspectMa2SequenceXml, ma2SequenceCueFingerprints } from './ma2-timecode-xml';
 
 type Refs = Ma2SongSyncRequest['points'][number]['cues'];
 export type Ma2SongPlan = {
@@ -15,6 +15,7 @@ export type Ma2SongPlan = {
 const milli = (cue: string): number => Math.round(Number(cue) * 1000);
 const cueText = (value: number): string => `${Math.floor(value / 1000)}.${String(value % 1000).padStart(3, '0')}`;
 const MAX_CUE = 9999 * 1000 + 999;
+const byNumber = (fingerprints: Map<string, string>): Map<number, string> => new Map([...fingerprints].map(([number, hash]) => [milli(number), hash]));
 
 /**
  * A number between two Cues so the Sequence reads, and steps with Go, in song order: the next
@@ -43,9 +44,13 @@ function cueBetween(low: number, high: number | undefined, taken: (value: number
  * - a Cue renamed or stored again on the console keeps that, unless the software changed the
  *   same point's name or material since the last sync;
  * - a Cue added on the console stays until a point takes it. A console Cue's time is never guessed.
+ * The operator's write mode (2026-11-04) changes two of these: overwrite also deletes Cues no point
+ * uses and writes the timeline's names and content over a Cue renamed or stored again on the console;
+ * direct deletes nothing, so a deleted point's Cue stays in the Sequence and its number is not reused.
  */
 export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string | null, restoredCues: readonly string[] = []): Ma2SongPlan {
   const binding = request.binding;
+  const mode = request.writeMode ?? 'merge';
   const remote = remoteXml ? inspectMa2SequenceXml(remoteXml).sequences[0]! : null;
   const base = binding ? inspectMa2SequenceXml(binding.baselineXml).sequences[0]! : null;
   if (binding && (base?.number !== binding.sequence || remote && remote.number !== binding.sequence)) throw new Error(`这首歌的控台序列 ${binding.sequence} 和上次的内容编号对不上，没有写入；请从控台刷新后检查`);
@@ -55,7 +60,7 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
   const sameName = (local: string, console: string | null | undefined): boolean => (console ?? '') === consoleLabelText(local) || !request.rewriteLegacyNames && (console ?? '') === local;
   const written = (local: string): string => local ? toConsoleLabel(local) : '';
   const renamedHere = !base || !sameName(request.name, base.name);
-  const chosenName = renamedHere || !remote?.name ? request.name : remote.name;
+  const chosenName = renamedHere || !remote?.name || mode === 'overwrite' ? request.name : remote.name;
   const name = remote?.name && sameName(chosenName, remote.name) ? remote.name : toConsoleLabel(chosenName);
   const onConsole = new Set(remote?.cues.map(cue => milli(cue.number)));
   const bound = new Set(binding?.points.map(point => milli(point.cue)));
@@ -74,7 +79,8 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
     if (old) { previous.set(point.id, old); continued.add(old.id); }
   }
   // Numbers whose point left the timeline: deleted on the console, free for a point added now.
-  const freed = new Set((binding?.points ?? []).filter(old => !continued.has(old.id) && !request.points.some(point => point.id === old.id)).map(old => milli(old.cue)));
+  // Writing directly deletes nothing, so those Cues stay where they are and keep their numbers.
+  const freed = new Set(mode === 'direct' ? [] : (binding?.points ?? []).filter(old => !continued.has(old.id) && !request.points.some(point => point.id === old.id)).map(old => milli(old.cue)));
   const numbers = new Map<string, number>();
   const changes: Ma2SongPlan['changes'] = []; const restored: string[] = [];
   const adopted = new Set<string>();
@@ -99,6 +105,8 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
     numbers.set(point.id, value);
   }
   const points = request.points.map(point => ({ id: point.id, cue: cueText(numbers.get(point.id)!) }));
+  // Overwriting compares each Cue's content with the last confirmed snapshot: one stored again on the console is written again.
+  const stored = mode === 'overwrite' && remoteXml && binding ? { remote: byNumber(ma2SequenceCueFingerprints(remoteXml, false)), base: byNumber(ma2SequenceCueFingerprints(binding.baselineXml, false)) } : null;
   for (const point of request.points) {
     if (adopted.has(point.id)) continue;
     const number = cueText(numbers.get(point.id)!);
@@ -107,9 +115,11 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
     if (!old) { changes.push({ cue: number, name: written(point.name) || fallback, refs: point.cues }); continue; }
     const baseCue = base?.cues.find(value => Number(value.number) === Number(old.cue));
     const remoteCue = remote?.cues.find(value => Number(value.number) === Number(old.cue));
-    const restore = restoredCues.includes(old.cue);
-    const contentChanged = restore || selfCue(point) !== milli(old.cue);
-    const renamed = !sameName(point.name, baseCue?.name);
+    const storedAgain = stored !== null && remoteCue !== undefined && stored.remote.get(milli(old.cue)) !== stored.base.get(milli(old.cue));
+    // A point that names its own Cue has no other source: its content comes back from the snapshot.
+    const restore = restoredCues.includes(old.cue) || storedAgain && selfCue(point) === milli(old.cue);
+    const contentChanged = restore || storedAgain || selfCue(point) !== milli(old.cue);
+    const renamed = !sameName(point.name, baseCue?.name) || mode === 'overwrite' && point.name !== '' && !sameName(point.name, remoteCue?.name);
     if (!remoteCue) {
       changes.push({ cue: number, name: written(point.name) || baseCue?.name || fallback, refs: point.cues, ...(!contentChanged || restore ? { restore: true } : {}) });
       restored.push(number);
@@ -118,6 +128,8 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
     if (contentChanged || renamed) changes.push({ cue: number, name: renamed ? written(point.name) || fallback : remoteCue.name || written(point.name) || fallback, ...(contentChanged ? { refs: point.cues, ...(restore ? { restore: true } : {}) } : {}) });
   }
   // A freed number a new point took is deleted too: the write replaces that Cue instead of editing it.
-  const deletions = [...freed].filter(value => onConsole.has(value)).sort((a, b) => a - b).map(cueText);
+  // Overwriting also deletes the Cues on the console that no point uses.
+  const taken = new Set(numbers.values());
+  const deletions = [...onConsole].filter(value => freed.has(value) || mode === 'overwrite' && !taken.has(value)).sort((a, b) => a - b).map(cueText);
   return { sequence: target, name, points, changes, deletions, restored };
 }

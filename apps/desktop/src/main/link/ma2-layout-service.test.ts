@@ -351,6 +351,25 @@ it('控台上挪了、删了本曲时间码节目里的触发：同步读回联�
   expect(added.binding.points.map(point => [point.cue, point.atMs])).toContainEqual([first.binding.points[2]!.cue, 2000]);
   expect(fake.ops.slice(ops)).not.toContain('APPLY 9000');
 }, 20000);
+it('选了以联动台为准：控台上挪的触发、删的 Cue 不读回，按联动台写回去（2026-11-04）', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups);
+  const plain = await service.syncSong(fake.connection, fake.bridge, song);
+  const timed = (binding: Ma2SongSyncResult['binding']): Ma2SongSyncRequest => ({ ...song, requestId: randomUUID(), binding, timecodeStartMs: 480000, consoleChanges: 'software',
+    points: song.points.map(point => ({ ...point, cues: [{ sequence: 9000, cue: binding.points.find(value => value.id === point.id)!.cue, delayMs: 0 }] })) });
+  const first = await service.syncSong(fake.connection, fake.bridge, timed(plain.binding));
+  const written = fake.timecodes.get(9000)!;
+  fake.timecodes.set(9000, written.replace(/(<Event\b[^>]*\btime=")30(")/, '$145$2'));
+  sequences.set(9000, editMa2SongSequence(sequences.get(9000)!, inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.name ?? '', [], [first.binding.points[2]!.cue]));
+  const ops = fake.ops.length;
+  const back = await service.syncSong(fake.connection, fake.bridge, timed(first.binding));
+  expect(back.consoleEdits).toBeUndefined();
+  expect(back.binding.points.map(point => [point.id, point.atMs])).toEqual(first.binding.points.map(point => [point.id, point.atMs]));
+  expect(inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.cues.map(cue => cue.number)).toContain(first.binding.points[2]!.cue);
+  expect(fake.ops.slice(ops)).toContain('APPLY 9000');
+  expect(inspectMa2TimecodeXml(fake.timecodes.get(9000)!).timecodes[0]!.tracks[0]!.subtracks[0]!.events.map(event => event.attributes.time)).toEqual(inspectMa2TimecodeXml(written).timecodes[0]!.tracks[0]!.subtracks[0]!.events.map(event => event.attributes.time));
+}, 20000);
 it('新建本曲节目后写入失败：编号已记进同步记录，重试读回同一编号重写，不另建；导入了一半的节目也在同一编号重写', async () => {
   for (const imported of [false, true]) {
     const { song, sequences } = boundSong();

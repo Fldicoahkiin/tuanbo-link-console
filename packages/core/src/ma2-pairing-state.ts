@@ -1,12 +1,17 @@
 import { parseLinkProject, type LinkProject, type Ma2Catalog, type Ma2ReadState } from '@tb/schema';
 import type { LinkCommand } from './link-command';
-import { ma2ShowStartTicks, matchMa2Programs, sameMtcStart, type Ma2StartMatch } from './ma2-program-matching';
+import { ma2ShowStartTicks, matchMa2Programs, sameMtcStart, type Ma2StartMatch, type Ma2TimelineSwitch } from './ma2-program-matching';
 import { importMa2TimecodeCommand } from './ma2-import';
 import { formatMtcOffset } from './mtc-timecode';
-import { programTimeOrigin } from './ma2-time-origin';
+import { MA2_FRAME_MS, programTimeOrigin } from './ma2-time-origin';
 
-const noMatch: Ma2StartMatch = { pairs: {}, unresolved: [], duplicateStarts: {}, notes: [] };
+const noMatch: Ma2StartMatch = { pairs: {}, unresolved: [], duplicateStarts: {}, notes: [], switches: [] };
 const matches = new WeakMap<LinkProject, Ma2StartMatch>();
+
+/** Why the switch to a show failed, as the read state keeps it until the console is read again. */
+function failedSwitches(state: Ma2ReadState): Map<number, string> {
+  return new Map(state.failures.map(failure => [failure.target, failure.message]));
+}
 
 /**
  * Which console Timecode show runs with which song: worked out from the last console read the project
@@ -18,7 +23,7 @@ export function ma2SongPairs(project: LinkProject): Ma2StartMatch {
   const catalog = project.ma2ReadState?.catalog;
   if (!catalog) return noMatch;
   let match = matches.get(project);
-  if (!match) { match = matchMa2Programs(project, catalog); matches.set(project, match); }
+  if (!match) { match = matchMa2Programs(project, catalog, failedSwitches(project.ma2ReadState!)); matches.set(project, match); }
   return match;
 }
 
@@ -56,17 +61,82 @@ function storedPairs(match: Ma2StartMatch, catalog: Ma2Catalog): Pick<Ma2ReadSta
   return { pairs, pairings };
 }
 
-/** The project with its stored pairs brought up to date; the same object when they already are. */
+/**
+ * The project with its songs on the console shows their MTC starts name and its stored pairs brought up
+ * to date; the same object when they already are. A song whose start moved onto another show changes
+ * over to it here, inside the edit that moved the start, so undo takes both back (2026-11-04).
+ */
 function withStoredPairs(project: LinkProject): LinkProject {
-  const state = project.ma2ReadState;
-  if (!state) return project;
-  const match = matchMa2Programs(project, state.catalog);
+  if (!project.ma2ReadState) return project;
+  let current = project;
+  let match = matchMa2Programs(current, current.ma2ReadState!.catalog, failedSwitches(current.ma2ReadState!));
+  if (match.switches.length) {
+    current = switchMa2Timelines(current, match.switches);
+    match = matchMa2Programs(current, current.ma2ReadState!.catalog, failedSwitches(current.ma2ReadState!));
+  }
+  const state = current.ma2ReadState!;
   const stored = storedPairs(match, state.catalog);
   if (JSON.stringify(stored.pairs) === JSON.stringify(state.pairs) && JSON.stringify(stored.pairings) === JSON.stringify(state.pairings ?? {})) {
-    matches.set(project, match);
-    return project;
+    matches.set(current, match);
+    return current;
   }
-  return parseLinkProject({ ...project, ma2ReadState: { ...state, ...stored } });
+  return parseLinkProject({ ...current, ma2ReadState: { ...state, ...stored } });
+}
+
+/**
+ * Moves each song onto the console show its MTC start now names. The Cues of the shows it leaves are
+ * archived with their local edits, as 解除关联并归档编排 does. The new show's Cues are the archived ones
+ * when the song held that show before from the same start (switching back), otherwise the last read.
+ * A switch that fails leaves the song as it was and keeps why with that show, where the console
+ * timeline view shows it; the edit that moved the start still goes through.
+ */
+function switchMa2Timelines(project: LinkProject, switches: readonly Ma2TimelineSwitch[]): LinkProject {
+  let current = project;
+  for (const change of switches) {
+    try {
+      const next = structuredClone(current);
+      for (const target of change.from) archiveBinding(next, change.itemId, target);
+      const restored = restoreArchivedBinding(next, change.itemId, change.to);
+      const entry = next.ma2ReadState?.catalog.entries.find(value => value.target === change.to);
+      if (!restored && !entry?.preview) throw new Error(`控台 Timecode ${change.to} 还没读取完整`);
+      const switched = restored ? next : importMa2TimecodeCommand(change.itemId, entry!.preview!).execute(next);
+      const state = switched.ma2ReadState!;
+      current = parseLinkProject({ ...switched, updatedAt: new Date().toISOString(), ma2ReadState: { ...state, failures: state.failures.filter(failure => failure.target !== change.to) } });
+    } catch (error) {
+      const state = current.ma2ReadState!;
+      const message = error instanceof Error ? error.message : String(error);
+      current = parseLinkProject({ ...current, ma2ReadState: { ...state, failures: [...state.failures.filter(failure => failure.target !== change.to), { target: change.to, message }] } });
+    }
+  }
+  return current;
+}
+
+/** Moves a song's Cues of one console show out of its timeline into the read state's archive. `next` is a working copy. */
+function archiveBinding(next: LinkProject, itemId: string, target: number): void {
+  const state = next.ma2ReadState;
+  const lighting = next.rundown.find(item => item.id === itemId)?.lighting;
+  const binding = lighting?.ma2Bindings?.find(value => value.timecode === target);
+  if (!state || !lighting || !binding) throw new Error('关联已不存在');
+  const ids = new Set([...binding.baselineTracks.map(track => track.id), ...(binding.pendingTracks ?? []).map(track => track.trackId)]);
+  state.detachedBindings = [...state.detachedBindings ?? [], { itemId, detachedAt: new Date().toISOString(), binding, tracks: lighting.tracks.filter(track => ids.has(track.id)) }];
+  state.formatVersion = 2;
+  lighting.tracks = lighting.tracks.filter(track => !ids.has(track.id));
+  lighting.ma2Bindings = lighting.ma2Bindings?.filter(value => value.id !== binding.id);
+}
+
+/**
+ * Puts the song's latest archived Cues of a show back on its timeline, when they were placed from the
+ * song's present MTC start. False when there are none. `next` is a working copy.
+ */
+function restoreArchivedBinding(next: LinkProject, itemId: string, target: number): boolean {
+  const state = next.ma2ReadState;
+  const item = next.rundown.find(value => value.id === itemId);
+  const archived = state?.detachedBindings?.slice().reverse().find(value => value.itemId === itemId && value.binding.timecode === target);
+  if (!state || !item?.lighting || !archived || Math.abs((archived.binding.timeOriginMs ?? 0) - programTimeOrigin(item)) >= MA2_FRAME_MS) return false;
+  item.lighting.tracks.push(...archived.tracks);
+  item.lighting.ma2Bindings = [...item.lighting.ma2Bindings ?? [], archived.binding];
+  state.detachedBindings = state.detachedBindings?.filter(value => value !== archived);
+  return true;
 }
 
 /** A new console read: the pairs come from the MTC starts; read failures are kept only for the same Show and session. */
@@ -86,19 +156,51 @@ export function withMa2Pairings(command: LinkCommand): LinkCommand {
   return { ...command, execute(project) { return withStoredPairs(command.execute(project)); } };
 }
 
+/**
+ * The operator picks the song a console Timecode show runs with (2026-11-04). Pairing stays by the MTC
+ * start alone (lighting workflow rule 3): the song's start becomes the show's start. A song holding
+ * Cues of another show then changes over to this one in the pairing step, as any moved start does; a
+ * song holding none takes this show's Cues in the same step. A switch to this show that failed before
+ * is tried again.
+ */
+export function pairSongWithMa2ShowCommand(itemId: string, target: number): LinkCommand {
+  return { id: crypto.randomUUID(), label: '让歌曲用这条控台时间线', execute(project) {
+    const state = project.ma2ReadState;
+    const entry = state?.catalog.entries.find(value => value.target === target);
+    const item = project.rundown.find(value => value.id === itemId);
+    if (!state || !entry) throw new Error(`控台读取结果里没有 Timecode ${target}`);
+    if (!item) throw new Error('这首歌已不存在');
+    if (!item.referenceAudio) throw new Error(`「${item.title}」没有音频，配不上控台时间线`);
+    if (item.lighting?.consoleSong) throw new Error(`「${item.title}」用的是联动台给它建的控台序列，不换用控台上的其他时间线`);
+    const ticks = entry.error ? null : ma2ShowStartTicks(entry);
+    if (ticks === null) throw new Error(`控台 Timecode ${target} 的起点读不懂，没法对上歌曲`);
+    const frameRate = project.timebase.frameRate;
+    const owner = project.rundown.find(value => value.id !== itemId && value.lighting?.ma2Bindings?.some(binding => binding.timecode === target));
+    if (owner) throw new Error(`Timecode ${target} 的 Cue 已经放在「${owner.title}」里，请先在那首歌上解除关联`);
+    const startMs = Math.ceil(ticks * 1000 / 30);
+    const sharing = project.rundown.find(value => {
+      if (value.id === itemId || !value.playback && !value.p1Media) return false;
+      try { return sameMtcStart(programTimeOrigin(value), ticks); }
+      catch { return false; }
+    });
+    if (sharing) throw new Error(`「${sharing.title}」的起始码也是 ${formatMtcOffset(startMs, frameRate)}，两首歌同一个起点分不清；请先改开它的起始码`);
+    const next = structuredClone(project);
+    const song = next.rundown.find(value => value.id === itemId)!;
+    song.playback = { ...song.playback ?? { volume: song.p1Media?.volume ?? 100, startMs: 0, endMs: 0, shortcut: song.p1Media?.shortcut ?? '' }, mtcOffsetMs: startMs };
+    next.ma2ReadState = { ...state, failures: state.failures.filter(failure => failure.target !== target) };
+    if (!song.lighting?.ma2Bindings?.length && !restoreArchivedBinding(next, itemId, target)) {
+      if (!entry.preview || entry.conversionError) throw new Error(entry.conversionError ?? `Timecode ${target} 还没读取完整，请先“只补读未完成项”`);
+      return importMa2TimecodeCommand(itemId, entry.preview).execute(parseLinkProject({ ...next, updatedAt: new Date().toISOString() }));
+    }
+    return parseLinkProject({ ...next, updatedAt: new Date().toISOString() });
+  }, undo: before => parseLinkProject(before) };
+}
+
 /** Preserve the complete native baseline and local edits outside the active playback document. */
 export function detachMa2BindingCommand(itemId: string, target: number): LinkCommand {
   return { id: crypto.randomUUID(), label: '解除控台关联并归档本地编排', execute(project) {
     const next = structuredClone(project);
-    const state = next.ma2ReadState;
-    const lighting = next.rundown.find(item => item.id === itemId)?.lighting;
-    const binding = lighting?.ma2Bindings?.find(value => value.timecode === target);
-    if (!state || !lighting || !binding) throw new Error('关联已不存在');
-    const ids = new Set([...binding.baselineTracks.map(track => track.id), ...(binding.pendingTracks ?? []).map(track => track.trackId)]);
-    state.detachedBindings = [...state.detachedBindings ?? [], { itemId, detachedAt: new Date().toISOString(), binding, tracks: lighting.tracks.filter(track => ids.has(track.id)) }];
-    state.formatVersion = 2;
-    lighting.tracks = lighting.tracks.filter(track => !ids.has(track.id));
-    lighting.ma2Bindings = lighting.ma2Bindings?.filter(value => value.id !== binding.id);
+    archiveBinding(next, itemId, target);
     return withStoredPairs(parseLinkProject({ ...next, updatedAt: new Date().toISOString() }));
   }, undo: before => parseLinkProject(before) };
 }

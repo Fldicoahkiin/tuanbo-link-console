@@ -4,7 +4,7 @@ import { useDocumentStore } from '../stores/document-store';
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 import { ma2SongSyncSettings, startMa2SongSync, stopMa2SongSync } from './ma2-song-sync';
-import { setMa2RealtimeEnabled, useMa2RealtimePreference } from './ma2-realtime-preference';
+import { ma2SyncActive, setMa2RealtimeEnabled, useMa2RealtimePreference } from './ma2-realtime-preference';
 import { ma2SyncPlaying, useMa2SyncStore, type Ma2SessionCheck } from '../stores/ma2-sync-store';
 import { useMtcStartAllocationStore } from '../stores/mtc-start-allocation-store';
 import { reportCoordinatorError } from './runtime-action-log';
@@ -41,16 +41,14 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     useMa2SyncStore.setState({ names: { state: 'idle', message: '' } });
     setSession('waiting', '实时同步已开启，等待连接控台和打开工程');
   }
-  if (!useMa2RealtimePreference.getState().enabled) {
-    pauseMa2RealtimeSession();
-    return false;
-  }
+  // Off, each song keeps what its last pass found; turning sync off already stopped what was running.
+  if (!ma2SyncActive()) return false;
   if (ma2SyncPlaying()) return false;
   if (!state.project || !state.path || useMa2MaterialReadStore.getState().busy) return false;
   const material = state.project.ma2MaterialLibrary;
   if (!material?.library || material.library.sourceUnverified) return false;
   const current = (): boolean => useDocumentStore.getState().documentId === state.documentId
-    && useMa2RealtimePreference.getState().enabled && readMa2Method() === 'network' && !useMa2MaterialReadStore.getState().busy;
+    && ma2SyncActive() && readMa2Method() === 'network' && !useMa2MaterialReadStore.getState().busy;
   preparing = true;
   let context = '';
   try {
@@ -193,6 +191,31 @@ export function retryMa2RealtimeSession(): void {
  */
 export function refreshMa2RealtimeSession(itemId?: string): void {
   setMa2RealtimeEnabled(true);
+  checkEverySong(itemId);
+}
+
+/**
+ * 同步一次 (2026-11-04, sync by hand): with real-time sync off, every song is read in full and written
+ * where it differs, once; real-time sync stays off and nothing runs again until the next 同步一次.
+ */
+export function syncMa2Once(): void {
+  if (useMa2RealtimePreference.getState().enabled) { refreshMa2RealtimeSession(); return; }
+  useMa2RealtimePreference.setState({ once: Date.now() });
+  checkEverySong();
+}
+
+/**
+ * A different write mode or console-edit choice applies to what is on the console now, not only to
+ * the next edit: every song is read in full again on its next pass, which only runs while syncing.
+ */
+export function recheckMa2Songs(): void {
+  for (const song of Object.values(useMa2SyncStore.getState().songs)) {
+    if (song.requestId || song.state === 'paused') continue;
+    useMa2SyncStore.setState(value => ({ songs: { ...value.songs, [song.itemId]: { ...song, state: 'pending', nextCheckAt: 0, consecutiveFailures: 0, remoteRevision: undefined, blockedRevision: undefined, message: '同步方式改了，下次同步按新的方式重新检查' } } }));
+  }
+}
+
+function checkEverySong(itemId?: string): void {
   setSession('waiting', '正在重新检查控台'); if (itemId === undefined) retryNames();
   const project = useDocumentStore.getState().project;
   for (const song of Object.values(useMa2SyncStore.getState().songs)) {
@@ -207,7 +230,7 @@ export function refreshMa2RealtimeSession(itemId?: string): void {
 }
 
 export function pauseMa2RealtimeSession(): void {
-  if (useMa2RealtimePreference.getState().enabled) setMa2RealtimeEnabled(false);
+  if (ma2SyncActive()) setMa2RealtimeEnabled(false);
   for (const song of Object.values(useMa2SyncStore.getState().songs)) stopMa2SongSync(song.itemId);
 }
 

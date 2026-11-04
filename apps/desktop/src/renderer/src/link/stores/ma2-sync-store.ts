@@ -15,6 +15,8 @@ export type SongSync = {
   acknowledged?: string; remoteRevision?: string | undefined; blockedRevision?: number | undefined; recheckRevision?: number | undefined;
   nextCheckAt?: number; checkedAt?: number; waitingForConnection?: boolean;
   consecutiveFailures?: number; consecutiveCollisions?: number; archivedSignature?: string; rewriteLegacyNames?: boolean;
+  /** When a pass last took this song up; a one-time sync ends once every song was taken up after it began. */
+  attemptedAt?: number;
 };
 
 /** Console objects renamed in the project; sent by the same pass as the songs, under the same failure policy. */

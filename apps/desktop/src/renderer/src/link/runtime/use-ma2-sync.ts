@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { markPendingMa2Songs, tickMa2SongSync } from './ma2-song-sync';
 import { prepareMa2RealtimeSession } from './ma2-realtime-session';
-import { useMa2RealtimePreference } from './ma2-realtime-preference';
+import { ma2SyncActive, useMa2RealtimePreference } from './ma2-realtime-preference';
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
 import { useDocumentStore } from '../stores/document-store';
 import { ma2SyncPlaying, useMa2SyncStore } from '../stores/ma2-sync-store';
@@ -36,7 +36,7 @@ export function useMa2Sync(playing: boolean, notify: Notify): void {
       busy = true;
       try {
         const ready = await prepareMa2RealtimeSession();
-        if (ready && active && useMa2ModeStore.getState().method === 'network' && useMa2RealtimePreference.getState().enabled) await tickMa2SongSync(playingRef.current || ma2SyncPlaying());
+        if (ready && active && useMa2ModeStore.getState().method === 'network' && ma2SyncActive()) await tickMa2SongSync(playingRef.current || ma2SyncPlaying());
       } finally { busy = false; }
     };
     const documents = useDocumentStore.subscribe((state, previous) => { if (state.project !== previous.project) { changedAt = performance.now(); markPendingMa2Songs(); } });

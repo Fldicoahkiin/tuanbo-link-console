@@ -249,6 +249,16 @@ describe('三方合并到 MA2 原生写入', () => {
     expect(converted.document.tracks[0]?.clips[0]?.events.map((event) => event.at)).toEqual([500, 2000]);
     expect(result.eventPaths.get(first.id)).toBe('Timecode:9901/Track:0/SubTrack:0/Event:0');
   });
+  it('选了以联动台为准：控台上挪的点挪回联动台的时间，两边都改也不再算冲突（2026-11-04）', () => {
+    const { document } = fixture();
+    const remote = convertMa2Timecode(xml.replace('time="45"', 'time="60"'), [sequence], 9902);
+    const times = (value: string) => inspectMa2TimecodeXml(value).timecodes[0]?.tracks[0]?.subtracks[0]?.events.map((event) => event.attributes.time);
+    expect(times(prepareMa2MergedEvents(document, 'binding', remote, new Map(), new Map(), [sequence]).desiredXml)).toEqual(times(remote.sourceXml));
+    expect(times(prepareMa2MergedEvents(document, 'binding', remote, new Map(), new Map(), [sequence], 'exact', 'software').desiredXml)).toEqual(times(xml));
+    document.tracks[0]!.clips[0]!.events[1]!.at = 3000;
+    document.tracks[0]!.clips[0]!.duration = 4000;
+    expect(times(prepareMa2MergedEvents(document, 'binding', remote, new Map(), new Map(), [sequence], 'exact', 'software').desiredXml)?.[1]).toBe('90');
+  });
   it('删除和重复新增同 Cue 后仍能准确更新每个点的映射', () => {
     const { document, preview } = fixture();
     const clip = document.tracks[0]!.clips[0]!;

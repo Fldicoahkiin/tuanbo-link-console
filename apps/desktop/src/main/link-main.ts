@@ -1229,7 +1229,7 @@ function registerIpc(
   });
   handle('link:ma2-compare', (_event, value: unknown) => {
     const request = ma2CompareRequestSchema.parse(value);
-    return compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map(request.choices));
+    return compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map(request.choices), request.consoleChanges);
   });
   handle('link:ma2-apply', async (_event, value: unknown) => {
     const request = ma2ApplyRequestSchema.parse(value);

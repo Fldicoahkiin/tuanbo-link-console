@@ -7,7 +7,7 @@ import { locateMa2Executor, ma2ExecutorLocationLabel, loadMa2ExecutorPage } from
 import { reportCoordinatorError } from './runtime-action-log';
 import { ma2SyncPlaying, useMa2SyncStore, type NameSync, type SongSync } from '../stores/ma2-sync-store';
 import { readMa2Method } from '../stores/ma2-mode-store';
-import { useMa2RealtimePreference } from './ma2-realtime-preference';
+import { ma2SyncActive, useMa2RealtimePreference } from './ma2-realtime-preference';
 import { useProgramSelectionStore } from '../stores/program-selection-store';
 import { syncBoundSong } from './ma2-bound-song-sync';
 import { runMa2NameSync } from './ma2-name-sync';
@@ -109,7 +109,7 @@ function canContinue(entry: SongSync): boolean {
   const session = useMa2SyncStore.getState().songs[entry.itemId];
   const lighting = document.project?.rundown.find(item => item.id === entry.itemId)?.lighting;
   return document.documentId === entry.documentId && session?.sessionId === entry.sessionId
-    && session.state !== 'paused' && useMa2RealtimePreference.getState().enabled
+    && session.state !== 'paused' && ma2SyncActive()
     && readMa2Method() === 'network'
     && lighting !== undefined;
 }
@@ -150,7 +150,7 @@ async function syncImportedSong(entry: SongSync): Promise<void> {
   update(entry, entry.state === 'verified' ? { checking: true } : { checking: true, state: 'syncing', message: '正在读取这首歌的控台时间码…' });
   const project = () => { const state = useDocumentStore.getState(); return state.documentId === entry.documentId ? state.project : null; };
   const outcome = await syncBoundSong({
-    itemId: entry.itemId, connection: { dataDirectory: '', network: place.network }, project,
+    itemId: entry.itemId, connection: { dataDirectory: '', network: place.network }, project, consoleChanges: useMa2RealtimePreference.getState().consoleChanges,
     current: () => canContinue(entry) && !ma2SyncPlaying(),
     read: request => window.tbLink.previewMa2(request),
     compare: request => window.tbLink.compareMa2(request),
@@ -188,12 +188,12 @@ async function syncNames(playing: boolean): Promise<void> {
   if (status.state !== 'connected' || !status.settings) { setNames({ state: 'pending', nextCheckAt: Date.now() + 1000, message: '等待控台连接，连上后同步改名' }); return; }
   const { host, port, monitorPort, username } = status.settings;
   await runMa2NameSync({ dataDirectory: '', network: { host, port, monitorPort, username } }, document.documentId,
-    () => readMa2Method() === 'network' && useMa2RealtimePreference.getState().enabled);
+    () => readMa2Method() === 'network' && ma2SyncActive());
 }
 
 /** Serialize console reconciliation; local editing and saving remain independent. */
 export async function tickMa2SongSync(playing: boolean): Promise<void> {
-  if (running || readMa2Method() !== 'network' || !useMa2RealtimePreference.getState().enabled) return;
+  if (running || readMa2Method() !== 'network' || !ma2SyncActive()) return;
   running = true;
   try {
     await syncNames(playing);
@@ -213,6 +213,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
       if (due && Date.now() < due && (!entry.consecutiveFailures || entry.blockedRevision === useDocumentStore.getState().revision)) continue;
       // A confirmed song's check waits for the stop too; it has nothing to send, so it stays confirmed.
       if (playing) { if (entry.state !== 'verified') update(entry, { state: 'pending', message: '播放中，修改会在停止后同步' }); continue; }
+      update(entry, { attemptedAt: Date.now() });
       const imported = Boolean(useDocumentStore.getState().project?.rundown.find(value => value.id === entry.itemId)?.lighting?.ma2Bindings?.length);
       try {
         const before = useDocumentStore.getState(); const item = before.project?.rundown.find(value => value.id === entry.itemId);
@@ -277,6 +278,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         const synced = await window.tbLink.syncMa2Song({ network, expectedSource: { show, generation, version }, projectId: before.project.projectId, itemId: item.id,
           requestId, progressId: requestId, settings, name: requestedName, points,
           ...(item.lighting.consoleSong ? { binding: item.lighting.consoleSong } : {}), ...(entry.rewriteLegacyNames ? { rewriteLegacyNames: true } : {}),
+          writeMode: useMa2RealtimePreference.getState().writeMode, consoleChanges: useMa2RealtimePreference.getState().consoleChanges,
           ...(start === undefined ? {} : { timecodeStartMs: start, ...(item.referenceAudio ? { timecodeLengthMs: Math.ceil(item.referenceAudio.durationMs) } : {}) }) },
           progress => update(entry, { progress }));
         update(entry, { requestId: null, progress: null });
@@ -354,5 +356,21 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         reportCoordinatorError(message, reason => { update(entry, { message: reason }); });
       }
     }
+    finishMa2SyncOnce();
   } finally { running = false; }
+}
+
+/**
+ * A one-time sync (real-time sync off) ends when every song of the open project was taken up since it
+ * began, or waits on the operator: stopped after failing on this revision, or paused. Each song keeps
+ * what that pass found; nothing runs again until the next edit is synced by hand.
+ */
+function finishMa2SyncOnce(): void {
+  const { once, enabled } = useMa2RealtimePreference.getState();
+  if (once === null || enabled) return;
+  const { documentId, revision } = useDocumentStore.getState();
+  const state = useMa2SyncStore.getState();
+  const songs = Object.values(state.songs).filter(song => song.documentId === documentId);
+  if (state.names.state === 'syncing' || songs.some(song => song.requestId)) return;
+  if (songs.every(song => song.state === 'paused' || (song.attemptedAt ?? 0) >= once || song.state === 'blocked' && song.blockedRevision === revision)) useMa2RealtimePreference.setState({ once: null });
 }
