@@ -133,11 +133,11 @@ test('构造数据：移除属性分类后保留紧凑菜单、属性值、空 C
     await expect(materialMenu.getByRole('button',{name:'面光备用',exact:true})).toBeVisible();
     await expect(materialMenu.getByRole('button',{name:'面光',exact:true})).toHaveCount(0);
     await expect(materialMenu.getByRole('button',{name:'视频 / 媒体',exact:true})).toHaveCount(0);
-    await expect(materialMenu.getByRole('button').nth(1)).toHaveText('面光备用');
+    await expect(materialMenu.getByRole('button').nth(2)).toHaveText('面光备用');
     await page.getByRole('button',{name:'保存',exact:true}).click();
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.categories.some(value=>value.name==='面光备用'))).toBe(true);
     await page.reload();await nav.getByRole('button',{name:'灯光工作台',exact:true}).click();
-    await expect(materialMenu.getByRole('button').nth(1)).toHaveText('面光备用');
+    await expect(materialMenu.getByRole('button').nth(2)).toHaveText('面光备用');
     await expect(materialMenu.getByRole('button',{name:'面光备用',exact:true})).toBeVisible();
     await materialMenu.getByRole('button',{name:'分类管理',exact:true}).click();
     await manager.getByRole('button',{name:'删除分类 面光备用',exact:true}).click();

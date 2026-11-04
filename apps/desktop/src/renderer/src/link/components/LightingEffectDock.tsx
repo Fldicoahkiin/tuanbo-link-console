@@ -1,6 +1,6 @@
 import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Layers, LayoutGrid } from 'lucide-react';
+import { Layers, LayoutGrid, ListTree } from 'lucide-react';
 import { Button, Disclosure } from '../ui';
 import type { LightingDocument } from '@tb/schema';
 import { LightingUserLibrary, type LibraryDraft } from './LightingUserLibrary';
@@ -73,9 +73,14 @@ export function LightingEffectDock({ itemId, onCreated, document, disabled, onCh
     append(entry.members?.map(value => ({ ...value })) ?? [{ name: entry.name, sequence: binding.sequence, cue: binding.cue, executor: binding.executor, delayMs: 0 }]);
   };
   const close = (): void => { onNew(); setTemplateId(undefined); setDraftOpen(false); setIngredients([]); setError(''); };
+  // Every menu entry but 控台时间线 shows the library, so it also closes the console timeline page.
+  const showLibrary = (): void => { if (browserOpen) useMa2ReadStore.setState({ browserOpen: false }); if (externalPanel) onLibrary(); };
+  const showingLibrary = !externalPanel && !browserOpen;
   const navigation = <nav className="lighting-material-navigation" aria-label="灯光素材主菜单">
-    <button data-section="console" aria-pressed={section === 'console' && !externalPanel} onClick={() => { setSection('console'); setCustomCategory(null); if (externalPanel) onLibrary(); }}><Layers/><span>控台素材</span></button>
-    <LightingCustomCategories selected={customCategory} selectedSection={!customCategory && !externalPanel && section !== 'console' ? section : null} onSection={value=>{setSection(value);setCustomCategory(null);if(externalPanel)onLibrary();}} onSelect={id=>{setCustomCategory(id);setSection(id?'effect':'console');if(externalPanel)onLibrary();}}/>
+    <button data-section="console" aria-pressed={section === 'console' && showingLibrary} onClick={() => { setSection('console'); setCustomCategory(null); showLibrary(); }}><Layers/><span>控台素材</span></button>
+    {/* The console's Timecode shows and the song each runs with (2026-11-04: operators could not find this page in the workbench). */}
+    <button data-section="timelines" aria-pressed={browserOpen} onClick={() => useMa2ReadStore.setState({ browserOpen: true })}><ListTree/><span>控台时间线</span></button>
+    <LightingCustomCategories selected={showingLibrary ? customCategory : null} selectedSection={!customCategory && showingLibrary && section !== 'console' ? section : null} onSection={value=>{setSection(value);setCustomCategory(null);showLibrary();}} onSelect={id=>{setCustomCategory(id);setSection(id?'effect':'console');showLibrary();}}/>
   </nav>;
   const sidebar = <div className="lighting-workbench-nav effect-library-actions">{navigation}<Disclosure className="lighting-playback-settings" title="更多"><Button variant="ghost" size="sm" icon={LayoutGrid} aria-pressed={layoutOpen} onClick={()=>setLayoutOpen(!layoutOpen)}>控台布局 / 新建 Cue</Button>{headerActions}{playbackSettings}</Disclosure></div>;
   return <section className="lighting-effect-dock lighting-material-layout" style={split.style} aria-label="灯光效果库" data-editor={editorOpen || layoutOpen} data-sidebar={Boolean(sidebarHost)} data-panel={Boolean(externalPanel || browserOpen)}>

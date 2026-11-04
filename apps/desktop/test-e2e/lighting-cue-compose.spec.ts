@@ -27,7 +27,7 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await page.getByRole('switch', {name: '选中 Cue 实时播放', exact: true}).uncheck();
     await page.locator('.lighting-playback-settings > summary').click();
     const navigation = page.getByRole('navigation', {name: '灯光素材主菜单'});
-    await expect(navigation.getByRole('button')).toHaveText(['控台素材', '面光', '轮廓', '效果', '分类管理', '新建分类']);
+    await expect(navigation.getByRole('button')).toHaveText(['控台素材', '控台时间线', '面光', '轮廓', '效果', '分类管理', '新建分类']);
     await expect(page.getByRole('button', {name: '读取控台', exact: true})).toHaveCount(0);
     await expect(page.getByRole('button', {name: 'MA2 同步', exact: true})).toHaveCount(0);
     await page.locator('.waveform-cue-point').first().click();

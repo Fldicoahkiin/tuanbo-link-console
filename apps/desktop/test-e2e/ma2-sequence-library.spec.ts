@@ -62,7 +62,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await expect(realtime).toBeChecked();
     await realtime.click();
     await expect(realtime).not.toBeChecked();
-    await page.getByRole('navigation',{name:'灯光素材主菜单'}).getByRole('button',{name:/控台/}).click();
+    await page.getByRole('navigation',{name:'灯光素材主菜单'}).getByRole('button',{name:'控台素材',exact:true}).click();
     const preview = page.getByRole('region', { name: 'MA2 序列预览' });
     const pool = preview.locator('[aria-label="素材序列"]');
     await expect(pool).toHaveAttribute('data-total-cues','4500');
@@ -194,7 +194,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await expect(classified.locator('.classification-cell')).toHaveCount(0);
     // Removing a category membership leaves the console catalog and other memberships intact.
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries?.[0]?.categoryIds)).toEqual(['rim:7:back']);
-    await navigation.getByRole('button',{name:/控台/}).click();
+    await navigation.getByRole('button',{name:'控台素材',exact:true}).click();
     await expect(pool).toHaveAttribute('data-total-cues','4500');
     await pool.getByRole('button',{name:'试听序列 1 灯光步 1.000',exact:true}).click();
     await pool.getByRole('button',{name:'试听序列 2 灯光步 1.000',exact:true}).click({modifiers:['Control']});
@@ -213,7 +213,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await page.getByLabel('工程菜单',{exact:true}).click();
     await page.getByRole('menuitem',{name:'打开工程',exact:true}).click();
     await page.getByRole('navigation',{name:'主要工作区'}).getByRole('button',{name:'灯光工作台',exact:true}).click();
-    await navigation.getByRole('button',{name:/控台/}).click();
+    await navigation.getByRole('button',{name:'控台素材',exact:true}).click();
     await expect(pool).toHaveAttribute('data-total-cues','4499');
     await preview.getByRole('textbox',{name:'搜索序列或 Cue'}).fill('分类暖白');
     await expect(pool).toHaveAttribute('data-total-cues','1');

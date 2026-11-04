@@ -71,6 +71,14 @@ test('改了 MTC 起始码，灯光自动换到同起点的控台时间线；控
     await expect(badge).toHaveAttribute('aria-pressed', 'false');
     await badge.click();
     await expect(browser).toBeVisible();
+    // So does 控台时间线 in the workbench menu; 控台素材 goes back to the library.
+    const menu = page.getByRole('navigation', { name: '灯光素材主菜单' });
+    await expect(menu.getByRole('button', { name: '控台时间线', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await menu.getByRole('button', { name: '控台素材', exact: true }).click();
+    await expect(browser).toHaveCount(0);
+    await expect(menu.getByRole('button', { name: '控台素材', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await menu.getByRole('button', { name: '控台时间线', exact: true }).click();
+    await expect(browser).toBeVisible();
     expect(errors).toEqual([]);
   } finally { await closeDiscarding(app); }
 });
