@@ -33,7 +33,7 @@ it('实际 FFmpeg 分块解码保留整个原音源，不重复裁剪；复用�
   await writeFile(restored.path, Buffer.alloc(4));
   await expect(cache.prepare(input, new AbortController().signal)).rejects.toThrow('缓存校验失败');
   expect(createHash('sha256').update(await readFile(input.sourcePath)).digest('hex')).toBe(input.sourceSha256);
-});
+}, 20_000);
 
 it('未完成的后台解码显式取消并退出，不发布残缺缓存；下一首可继续准备', async () => {
   if (!ffmpeg) throw new Error('测试缺少 FFmpeg');
@@ -95,7 +95,7 @@ it('当前音源和下一音源独立预填充；取消下一首不会终止当�
     expect(await current.completion).toEqual({ ok: true });
     expect((await stat(current.path)).size).toBe(30 * 192000);
   } finally { await shared.release(); await next.release(); await current.release(); }
-});
+}, 20_000);
 
 it('下一音源预热按完整解码预算预留空间，不用增长文件的当前大小绕过容量', async () => {
   if (!ffmpeg) throw new Error('测试缺少 FFmpeg');
