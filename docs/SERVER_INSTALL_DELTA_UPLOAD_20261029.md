@@ -1,4 +1,4 @@
-# 服务器安装：搬运只传变化的部分（待用户确认）
+# 服务器安装：搬运只传变化的部分（2026-11-04，服务器已安装）
 
 ## 为什么要装
 
@@ -133,3 +133,14 @@ sudo ls -A /var/lib/tblink-release/staging
 在本文末尾补一节「安装结果」，记下实际安装的提交号、`$stamp`、新旧两个版本的摘要、第 3 步的输出，以及第 4 步更新了哪几台机器。
 
 下一次发布（0.5.6）时核对搬运日志：应该有「只下载、上传变化的部分：… 字节」和「已上传到 staging：…，服务器用 Tuanbo-Link-Console-0.5.5-x64.exe 拼出了完整安装包」，之后照常上线。如果日志写「服务器没能用变化的部分拼出新包，改传完整安装包」，这次发布照样会完成，把那一行的原因记下来再查。
+
+<a id="安装结果"></a>
+## 安装结果
+
+2026-11-04 由主会话经用户 Mac 上的会话执行（用户确认同上一份 [blockmap 安装](SERVER_INSTALL_BLOCKMAPS_20261029.md#安装结果)）。
+
+- 安装的字节：`receive-update.py` 来自提交 efc7342（字节与 b372ddb 相同），sha256 `f44c0c5974b08986cecb31574faa03985f968f0aa3a1bc6e20f364fa8fee5efc`。
+- `$stamp`：`20261104T011334Z`；旧版（`c78f6df74e96bb46420c4039afd86e676fa91352eaa16c2f0ffd0f6981f6a70b`）备份在 `/var/backups/tblink/install-20261104T011334Z/`。
+- 第 1 步：`receive-update.py: OK`，grep 输出 `1`；现装摘要与文档一致；`status` 为 `{"staged": [], "uploading": false}`；最后一行输出 `ve`。
+- 第 3 步：`status` 输出 `{"staged": [], "uploading": false, "delta": "tblink-installer-delta-1"}`；拼包输出 `{"base": "Tuanbo-Link-Console-0.5.5-x64.exe", "bytes": 2097155, "same": true}`；staging 只有 `.upload.lock`。
+- 第 4 步：工位电脑 SSH 超时（不在线），没有换脚本；它上线后按第 4 步补做，在那之前工位照旧传完整安装包，不影响发版。Mac 检出在 master 推上去之后 `git pull --ff-only`。

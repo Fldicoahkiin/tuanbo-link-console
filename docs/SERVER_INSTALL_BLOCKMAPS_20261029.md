@@ -1,4 +1,4 @@
-# 服务器安装：更新源保留每个版本的 blockmap（待用户确认）
+# 服务器安装：更新源保留每个版本的 blockmap（2026-11-04，已安装）
 
 ## 为什么要装
 
@@ -126,3 +126,14 @@ sudo cat /var/lib/tblink-update-publish/update-status.json
 在本文末尾补一节「安装结果」，记下实际安装的提交号、`$stamp`、新旧两个版本的摘要、第 3 步放回的文件，以及第 4 步的输出。
 
 下一次发布（0.5.6）后核对：后台结果写「已移出更新源：0.5.4」，回执的 `archived/` 里只有 0.5.4 的安装包；更新目录里 0.5.0、0.5.2～0.5.6 的 blockmap 都在。
+
+<a id="安装结果"></a>
+## 安装结果
+
+2026-11-04 由主会话经用户 Mac 上的会话执行（用户对「确认安装 blockmaps 和 delta upload（含工位电脑）」回复「推，确认啊 都确认」）。
+
+- 安装的字节：`publish-update.py` 来自提交 efc7342（分支 `claude/project-thread-bgi1y0`，已合并当时 master 683321c；字节与 bb7d127 相同），sha256 `78f26cb42df51c0d73dcd81b3cfab8ad7140aec1915198350fb697870209507e`。
+- `$stamp`：`20261104T011002Z`；旧版（`e694b246e6a7f9e2f37b6900ab080e8b4d9e8f63ff6bf45be299d60c75e16446`）备份在 `/var/backups/tblink/install-20261104T011002Z/`。
+- 第 1 步：`publish-update.py: OK`，grep 输出 `1`；现装摘要与文档一致；staging 只有 `.upload.lock`，两个发布单元 active；更新目录只有 0.5.4、0.5.5 的安装包和 blockmap 加 `latest.yml`；回执里 0.5.0、0.5.2、0.5.3 的 blockmap 大小和摘要与上表一致（文档里带 `*/archived/*.blockmap` 通配的那条在普通用户 shell 里展开不了，改用 `sudo sh -c` 计算）。
+- 第 3 步：`--restore-blockmaps` 放回 0.5.0、0.5.2、0.5.3 三个 blockmap，root、`-rw-r--r--`；服务器上和经 CDN 从外网下载的摘要都与上表一致；再运行一次输出 `{"restored": []}`。
+- 第 4 步：`Result=success`、`ExecMainStatus=0`，日志没有 Python 报错；状态是更新源 0.5.5（已签名）、可回滚到 0.5.4、staging 为空。
