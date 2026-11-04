@@ -301,8 +301,9 @@ export class Ma2LayoutService {
       const remoteXml = remote?.response ?? null;
       // Edits made on the console since the last confirmed sync come into this sync first (2026-10-26):
       // moved and deleted points, and triggers added for the song's Cues, so the write never undoes them.
+      // When the operator chose the timeline over the console (2026-11-04) they are written over instead.
       let consoleEdits: Ma2SongSyncResult['consoleEdits'];
-      if (request.binding && remoteXml) {
+      if (request.binding && remoteXml && request.consoleChanges !== 'software') {
         let showXml: string | null = null;
         const show = request.timecodeStartMs === undefined ? undefined : request.binding.timecode;
         if (show && ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1))).entries.some(entry => entry.target === show.number)) {

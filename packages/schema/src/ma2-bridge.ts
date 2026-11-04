@@ -64,8 +64,20 @@ export const ma2TimecodePreviewSchema = z.object({
   unconverted: z.array(z.object({ path: z.string(), reason: z.string() }).strict()), warnings: z.array(z.string())
 }).strict();
 export type Ma2TimecodePreview = z.infer<typeof ma2TimecodePreviewSchema>;
+/**
+ * How a sync treats the console (2026-11-04, the operator picks):
+ * - write: merge keeps Cues the console has beyond the timeline; overwrite leaves the song's own
+ *   Sequence holding only the timeline's Cues, with its names and content; direct never deletes a Cue.
+ * - consoleChanges: read-back takes what was changed on the console into the timeline; software writes
+ *   the timeline over it.
+ */
+export const ma2WriteModeSchema = z.enum(['merge', 'overwrite', 'direct']);
+export type Ma2WriteMode = z.infer<typeof ma2WriteModeSchema>;
+export const ma2ConsoleChangesSchema = z.enum(['read-back', 'software']);
+export type Ma2ConsoleChanges = z.infer<typeof ma2ConsoleChangesSchema>;
 export const ma2CompareRequestSchema = z.object({
   document: lightingDocumentSchema, bindingId: z.string().min(1), readback: ma2TimecodePreviewSchema,
+  consoleChanges: ma2ConsoleChangesSchema.optional(),
   choices: z.array(z.tuple([z.string().min(1), z.string().min(1).nullable()])).refine((entries) => new Set(entries.map(([id]) => id)).size === entries.length, '重复的事件对应选择')
 }).strict();
 export type Ma2CompareRequest = z.infer<typeof ma2CompareRequestSchema>;

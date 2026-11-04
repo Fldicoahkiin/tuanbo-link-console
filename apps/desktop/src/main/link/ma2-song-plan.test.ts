@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { ma2SongSyncRequestSchema, type Ma2SongSyncRequest } from '@tb/schema';
@@ -120,4 +120,48 @@ it('已绑定歌曲清空时删除全部 Cue，保留空序列；未绑定空曲
   const empty = editMa2SongSequence(xml, input.name, [], cleared.deletions);
   expect(inspectMa2SequenceXml(empty).sequences[0]).toMatchObject({ number: 9000, name: '歌曲', cues: [] });
   expect(ma2SongSyncRequestSchema.safeParse({ ...input, binding: undefined }).success).toBe(false);
+});
+
+describe('写入方式（2026-11-04 用户可选）', () => {
+  it('合并：控台上加的 Cue、改的名字和重新存的灯都保留', () => {
+    const { input, xml } = linked();
+    const source = readFileSync(new URL('./fixtures/ma2-cue-attributes-3.7.xml', import.meta.url), 'utf8');
+    const remote = editMa2SongSequence(xml, '控台歌名', [{ cue: '41.000', name: '控台新建', sources: [] }, { cue: '2.000', name: '控台改名' }, { cue: '3.000', name: 'DuanLuo 3', sources: [{ xml: source, cue: '1.000' }] }], []);
+    expect(planMa2SongSync({ ...input, writeMode: 'merge' }, remote)).toMatchObject({ name: '控台歌名', changes: [], deletions: [] });
+  });
+
+  it('覆盖：控台序列只留时间线上的 Cue，名字和内容按联动台写回', () => {
+    const { input, xml } = linked();
+    const source = readFileSync(new URL('./fixtures/ma2-cue-attributes-3.7.xml', import.meta.url), 'utf8');
+    const remote = editMa2SongSequence(xml, '控台歌名', [{ cue: '41.000', name: '控台新建', sources: [] }, { cue: '2.000', name: '控台改名' }, { cue: '3.000', name: 'DuanLuo 3', sources: [{ xml: source, cue: '1.000' }] }], []);
+    const plan = planMa2SongSync({ ...input, writeMode: 'overwrite' }, remote);
+    expect(plan.name).toBe('GeQu');
+    expect(plan.deletions).toEqual(['41.000']);
+    expect(plan.changes).toEqual([
+      { cue: '2.000', name: 'DuanLuo 2' },
+      // The point names its own Cue, so its content comes back from the last confirmed snapshot.
+      { cue: '3.000', name: 'DuanLuo 3', refs: input.points[2]!.cues, restore: true }
+    ]);
+    // Written back, the next sync has nothing left to do.
+    const written = editMa2SongSequence(xml, plan.name, [], []);
+    expect(planMa2SongSync({ ...input, writeMode: 'overwrite', binding: { ...input.binding!, baselineXml: written } }, written)).toMatchObject({ changes: [], deletions: [] });
+  });
+
+  it('直接写入：联动台删掉的点，控台上的 Cue 不删，编号也不给新点用', () => {
+    const { input, xml } = linked();
+    input.points.shift();
+    input.points.push({ id: 'new', name: '新加', atMs: 50_000, cues: [{ sequence: 2, cue: '5', delayMs: 0 }] });
+    const merged = planMa2SongSync({ ...input, writeMode: 'merge' }, xml);
+    expect(merged.deletions).toEqual(['1.000']);
+    const direct = planMa2SongSync({ ...input, writeMode: 'direct' }, xml);
+    expect(direct.deletions).toEqual([]);
+    expect(direct.points.at(-1)).toEqual({ id: 'new', cue: '41.000' });
+    expect(direct.changes).toEqual([{ cue: '41.000', name: 'XinJia', refs: [{ sequence: 2, cue: '5', delayMs: 0 }] }]);
+    // The Cue left behind stays on the next sync too.
+    const result = editMa2SongSequence(xml, direct.name, direct.changes.map(change => ({ ...change, sources: [] })), []);
+    const next = { ...input, writeMode: 'direct' as const, binding: { ...input.binding!, baselineXml: result, points: direct.points },
+      points: input.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: direct.points[index]!.cue, delayMs: 0 }] })) };
+    expect(planMa2SongSync(next, result)).toMatchObject({ changes: [], deletions: [] });
+    expect(planMa2SongSync({ ...next, writeMode: 'overwrite' }, result).deletions).toEqual(['1.000']);
+  });
 });

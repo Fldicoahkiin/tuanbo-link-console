@@ -1,10 +1,12 @@
-import { applyMa2ReadbackCommand, ma2BindingHold, ma2PendingChanges, matchMa2Readback, type LinkCommand, type Ma2PendingChange, type Ma2SyncPreview } from '@tb/core/link';
-import { ma2ApplyResultSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2ApplyRequest, type Ma2ApplyResult, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
+import { applyMa2ReadbackCommand, ma2BindingHold, ma2PendingChanges, matchMa2Readback, sameMa2Content, type LinkCommand, type Ma2PendingChange, type Ma2SyncPreview } from '@tb/core/link';
+import { ma2ApplyResultSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2ApplyRequest, type Ma2ConsoleChanges, type Ma2ApplyResult, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
 
 /** What one pass over a way-1 song (its `ma2Bindings`, the console's own Timecode shows) needs. */
 export type BoundSongPass = {
   itemId: string;
   connection: Ma2CatalogRequest;
+  /** The operator's choice: console edits come into the song, or the song is written over them. */
+  consoleChanges: Ma2ConsoleChanges;
   /** The project of the song's document, or null once another document is open. */
   project: () => LinkProject | null;
   /** False once the song's sync was paused, the document changed or playback started. */
@@ -30,8 +32,9 @@ export type BoundSongOutcome =
  * Reads each of the song's Timecode shows, compares console, software and the last confirmed
  * baseline, writes only what differs, and takes the console's read-back as the new baseline
  * (lighting workflow rules 5 and 8). The same item changed on both sides: the software's version is
- * written and the console's stays in the backup the write makes (2026-10-26). A failure throws; the
- * caller's policy decides whether it is tried again.
+ * written and the console's stays in the backup the write makes (2026-10-26). With the timeline chosen
+ * over the console (2026-11-04) every console edit is written back instead of taken in. A failure
+ * throws; the caller's policy decides whether it is tried again.
  */
 export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutcome> {
   const project = pass.project();
@@ -43,7 +46,7 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
   const duplicate = sharedTimecode(project, item.id, writable.map(binding => binding.timecode));
   if (duplicate) throw new Error(duplicate);
   const lighting = () => pass.project()?.rundown.find(entry => entry.id === pass.itemId)?.lighting;
-  const same = (left: Ma2SyncPreview['base'], right: Ma2SyncPreview['base']): boolean => JSON.stringify(left.objects) === JSON.stringify(right.objects);
+  const same = (left: Ma2SyncPreview['base'], right: Ma2SyncPreview['base']): boolean => sameMa2Content(left, right);
   const interrupted = (message: string): BoundSongOutcome => ({ kind: 'interrupted', message });
   const stopped = '播放或同步状态有变化，停止播放并编辑完后会重新同步';
   let archived = false;
@@ -57,7 +60,7 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
     if (!pass.current()) return interrupted(stopped);
     if (lighting() !== source) return interrupted('还在编辑，稍后再同步');
     if (matchMa2Readback(binding, readback).ambiguous.length) throw new Error(`Timecode ${binding.timecode} 里有对不上的事件，请在手动同步中确认`);
-    const comparison = await pass.compare({ document: source, bindingId: binding.id, readback, choices: [] });
+    const comparison = await pass.compare({ document: source, bindingId: binding.id, readback, choices: [], consoleChanges: pass.consoleChanges });
     if (!pass.current()) return interrupted(stopped);
     if (same(comparison.base, comparison.local) && same(comparison.base, comparison.remote)) continue;
     if (lighting() !== source) return interrupted('还在编辑，稍后再同步');
@@ -66,7 +69,7 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
     if (lighting() !== source) return interrupted('存档期间本地又有修改，稍后再同步');
     const conflicts = comparison.conflicts.map(conflict => [conflict.id, 'local'] as [string, 'local']);
     pass.writing(conflicts.length ? `Timecode ${binding.timecode} 有 ${conflicts.length} 处两边都改过，以联动台为准写入并回读确认` : `正在同步 Timecode ${binding.timecode}…`);
-    const result = ma2ApplyResultSchema.parse(await pass.apply({ ...pass.connection, document: source, bindingId: binding.id, readback, choices: [], conflicts, timeAlignment: 'nearest-frame' }));
+    const result = ma2ApplyResultSchema.parse(await pass.apply({ ...pass.connection, document: source, bindingId: binding.id, readback, choices: [], conflicts, timeAlignment: 'nearest-frame', consoleChanges: pass.consoleChanges }));
     if (result.status === 'incomplete') throw new Error(`${result.message}${result.mayHaveWritten ? '；控台可能已经写入' : ''}${result.backupFile ? `；备份：${result.backupFile}` : ''}`);
     wrote = true;
     // The console confirmed the write: its read-back belongs to this song even when the sync was

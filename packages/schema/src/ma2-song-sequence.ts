@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ma2SongBindingSchema } from './ma2-song-binding';
-import { ma2NetworkTargetSchema } from './ma2-bridge';
+import { ma2ConsoleChangesSchema, ma2NetworkTargetSchema, ma2WriteModeSchema } from './ma2-bridge';
 import { ma2LayoutSettingsSchema, ma2LayoutSnapshotSchema } from './ma2-layout';
 import { ma2EffectLibrarySchema } from './ma2-effect-library';
 import { ma2LabelSchema } from './ma2-rename';
@@ -18,7 +18,10 @@ export const ma2SongSyncRequestSchema = z.object({ network: ma2NetworkTargetSche
   /** The song's MTC start; with it the sync also writes the song's own Timecode show. */
   timecodeStartMs: z.number().int().min(0).max(86399999).optional(),
   /** The song's length: the show runs, and reads as taken, for the whole song rather than up to its last point. */
-  timecodeLengthMs: z.number().int().positive().max(86400000).optional()
+  timecodeLengthMs: z.number().int().positive().max(86400000).optional(),
+  /** What the operator chose; without it the sync merges and reads console edits back. */
+  writeMode: ma2WriteModeSchema.optional(),
+  consoleChanges: ma2ConsoleChangesSchema.optional()
 }).strict().superRefine((value, ctx) => {
   if (!value.points.length && !value.binding) ctx.addIssue({ code: 'custom', message: '新歌要先添加 Cue；已关联的歌确认后可以清空' });
   if (new Set(value.points.map(point => point.id)).size !== value.points.length) ctx.addIssue({ code: 'custom', message: '歌曲 Cue 身份重复' });

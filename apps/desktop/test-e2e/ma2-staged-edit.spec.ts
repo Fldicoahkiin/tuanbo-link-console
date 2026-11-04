@@ -88,7 +88,9 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
     await realtime.click();
     await expect(realtime).toHaveAttribute('aria-checked', 'false');
     await page.getByRole('button', { name: '暂停时间线', exact: true }).click();
-    await expect(badge).toContainText('已暂停同步');
+    // Real-time sync off: the change waits for 同步一次 (2026-11-04).
+    await expect(badge).toContainText('待同步 1');
+    await expect(page.getByRole('region', { name: '灯光同步操作' }).getByRole('button', { name: '同步一次', exact: true })).toBeVisible();
     await expect(realtime).toHaveAttribute('aria-checked', 'false');
     // The clicks on the switch and the transport closed the details; opened again they still list the change.
     await badge.click();
@@ -97,7 +99,7 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
     await page.getByRole('button', { name: '停止时间线', exact: true }).click();
     await page.reload();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
-    await expect(badge).toContainText('已暂停同步');
+    await expect(badge).toContainText('待同步 1');
     await expect(realtime).toHaveAttribute('aria-checked', 'false');
     await badge.click();
     await expect(pending).toContainText('1 处修改');

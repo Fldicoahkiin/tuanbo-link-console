@@ -53,10 +53,10 @@ beforeEach(() => {
   vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, previewMa2, compareMa2, applyMa2, syncMa2Song, cancelMa2Read: () => Promise.resolve() } });
   status.mockResolvedValue({ state: 'connected', settings: { ...network, autoConnect: false } });
   previewMa2.mockResolvedValue(preview);
-  compareMa2.mockImplementation(request => Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map(request.choices))));
+  compareMa2.mockImplementation(request => Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map(request.choices), request.consoleChanges)));
   applyMa2.mockResolvedValue({ status: 'incomplete', stage: 'write', message: '写入结果未知', mayHaveWritten: true, backupFile: 'backup.xml' });
   archive.mockResolvedValue('C:/archive.tblink');
-  useMa2RealtimePreference.setState({ enabled: true });
+  useMa2RealtimePreference.setState({ enabled: true, once: null, writeMode: 'merge', consoleChanges: 'read-back' });
   useMa2SyncStore.setState({ songs: {}, names: { state: 'idle', message: '' }, timelinePlaying: false, previewPlaying: false });
   useDocumentStore.getState().setProject(project(), 'song.tblink');
   unsubscribe = useDocumentStore.subscribe((state, previous) => { if (state.project !== previous.project) markPendingMa2Songs(); });
@@ -153,6 +153,24 @@ it('同一项两边都改过时以软件为准写入，同步不停下来等人�
   expect(request?.conflicts.length).toBeGreaterThan(0); expect(request?.conflicts.every(([, side]) => side === 'local')).toBe(true);
   expect(messages.some(message => message.includes('以联动台为准'))).toBe(true);
 });
+it('控台上挪了点、联动台没改：默认读回联动台；选了以联动台为准就按联动台写回控台（2026-11-04）', async () => {
+  previewMa2.mockResolvedValue(convertMa2Timecode(xml.replace('<Event index="0"', '<Event time="15" index="0"'), [sequence], 9902));
+  const previews: Ma2SyncPreview[] = [];
+  compareMa2.mockImplementation(request => { const value = compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map(request.choices), request.consoleChanges); previews.push(value); return Promise.resolve(value); });
+  start(); await tick();
+  expect(applyMa2.mock.calls[0]?.[0]).toMatchObject({ consoleChanges: 'read-back', conflicts: [] });
+  const preview = previews[0]!;
+  useMa2SyncStore.setState({ songs: {} }); applyMa2.mockClear();
+  useMa2RealtimePreference.setState({ consoleChanges: 'software' });
+  start(); await tick();
+  expect(applyMa2.mock.calls[0]?.[0]).toMatchObject({ consoleChanges: 'software', conflicts: [] });
+  const written = previews[1]!;
+  // Read back, the merge takes the console's time; written over, it keeps the timeline's.
+  const events = (objects: Ma2SyncPreview['merged']) => objects.filter(object => object.kind === 'event').sort((a, b) => a.id.localeCompare(b.id));
+  expect(events(preview.merged)).toEqual(events(preview.remote.objects));
+  expect(events(written.merged)).toEqual(events(written.local.objects));
+  expect(events(written.merged)).not.toEqual(events(preview.merged));
+});
 it('同一条控台时间线绑定在两首歌上：两首都不自动写，写明是哪两首', async () => {
   const value = project();
   value.rundown.push({ ...structuredClone(value.rundown[0]!), id: 'copy', title: '翻唱' });
@@ -192,7 +210,7 @@ it.skipIf(!process.env.MA2_ONPC_AUTO_SYNC_ACCEPTANCE)('真实 onPC 自动写回�
   let value = createEmptyLinkProject('自动同步真实验收');
   value.rundown = [{ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [] }];
   value = importMa2TimecodeCommand('song', convertMa2Snapshot(await bridge.request('SNAPSHOT', target), target)).execute(value);
-  const pass = () => syncBoundSong({ itemId: 'song', connection, project: () => value, current: () => true,
+  const pass = () => syncBoundSong({ itemId: 'song', connection, consoleChanges: 'read-back', project: () => value, current: () => true,
     read: async request => convertMa2Snapshot(await bridge.request('SNAPSHOT', request.target), request.target, [], request.timeOriginMs),
     compare: request => Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map())), apply: request => service.apply(request),
     archive: () => Promise.resolve(), confirm: command => { value = command.execute(value); }, writing: () => undefined });
