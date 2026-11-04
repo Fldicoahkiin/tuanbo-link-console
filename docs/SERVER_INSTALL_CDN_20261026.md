@@ -1,4 +1,4 @@
-# 服务器安装：更新下载走腾讯云 CDN（待用户确认）
+# 服务器安装：更新下载走腾讯云 CDN（2026-11-04，已安装）
 
 用户 2026-10-26 在调研后选择「腾讯云 CDN + 用量封顶」。现在官网下载和软件内更新都直连腾讯云上海服务器，固定 4Mbps（实测约 470 KB/s，988 MB 完整包约 35 分钟）；Cloudflare 只做 DNS。
 
@@ -128,6 +128,10 @@ python3 --version
 ```
 
 这个密钥只能上传证书、把证书部署到云资源，不能改 CDN 其他配置、不能动服务器和账单。如果第 5 步报权限不足，报错会写缺哪一项，只补那一项。
+
+建好后在子用户详情的「权限」页确认这条策略已关联（2026-11-03 安装时创建流程没有关联上，第 5 步报 `AuthFailure.UnauthorizedOperation`，补关联后才通过）。
+
+账号里第一次用「把 SSL 证书部署到云资源」时，还要由主账号给 SSL 证书服务授权一次服务角色：在 [角色授权页](https://console.cloud.tencent.com/cam/role/grant?roleName=SSL_QCSLinkedRoleInReplaceLoadCertificate) 点「同意授权」，创建 `SSL_QCSLinkedRoleInReplaceLoadCertificate`，关联预设策略 `QcloudAccessForSSLLinkedRoleInReplaceLoadCertificate`。没授权时第 5 步上传能成功，部署报 `FailedOperation.RoleNotFoundAuthorization`。以后自动续期部署也靠这个角色，不要删。
 
 然后用户本人在服务器上填写密钥（编辑器里写成 `{"secretId": "…", "secretKey": "…"}`，保存退出）：
 
@@ -338,3 +342,26 @@ sudo certbot renew --cert-name tuanbo-link.jinhefilm.com --dry-run --no-random-s
 ## 10. 记录
 
 在本文末尾补一节「安装结果」：实际安装的提交号、`$stamp`、各文件摘要、`<CNAME>`、用量封顶的实际阈值、第 6 步每项的输出（特别是 d 和 f）、第 8 步两次 certbot 演练的结果。装完同步更新 [软件更新](SOFTWARE_UPDATES.md#当前链路)、[部署交接](COMMERCIAL_DEPLOYMENT.md) 和 [完整链路核查](RELEASE_CHAIN.md) 里关于下载出口的描述。
+
+<a id="安装结果"></a>
+## 安装结果
+
+2026-10-27 至 2026-11-04 由主会话经用户 Mac 上的会话执行。用户 10-27 回复「确认安装」，11-01「cdn那个帮我处理」，11-04 对切 DNS 和后续步骤回复「确认啊，都确认，后面都确认」。腾讯云开通、建子用户、关联策略、服务角色授权、填写密钥由用户本人点击和输入；Cloudflare 记录经用户授权的 Cloudflare API 连接器修改。
+
+- 安装的字节：提交 3c890d9（分支 `claude/project-thread-bgi1y0`）。`push-cdn-certificate.py` `c11c1b838a2b49a30a3130f527a9c6ba017542b5d32bb3c974623e702de78789`；`console-health.py` `1e5a6d4f51e1dae139c9ac7c435b9c32390b81f86654482b7e9cb3c5f12601e1`（旧版 `f12cdbd9…` 在备份目录）；`tblink-cdn-certificate.service` `32ddfac337fbb9269007cb591d29ce04d3ccd538751843e8ac1c5d30c82dfe2a`；`tblink-cdn-certificate.timer` `7be6a49d1639e9095c89ab0b65614f255303ae78a8581228e9b54cccc309a602`。
+- `$stamp`：`20261027T051254Z`，备份在 `/var/backups/tblink/install-20261027T051254Z/`。
+- 第 1 步：中国境内、下载大文件、自有源 `123.206.229.200`、回源协议跟随、回源 Host 为加速域名。域名归属用 `_cdnauth` TXT 验证（API 添加，仅 DNS），验证通过后已删掉。`<CNAME>` 是 `updates.tuanbo-link.jinhefilm.com.cdn.dnsv1.com`。
+- 第 2 步：缓存规则四条按表设置（`/.well-known` 文件夹在控制台里不能以 `/` 结尾），控制台自带的 `php;jsp;asp;aspx` 不缓存规则保留；缓存键 `exe;blockmap` 忽略全部参数；删掉默认的 404 缓存 10 秒，状态码缓存为空；分片回源开（原为关）；回源跟随 301/302 关；IP 访问限频单 IP 每秒 10 次。用量封顶总开关开，超出都返回 404、告警 50%：带宽 1 Gbps（每 5 分钟统计，60 分钟后解封）、流量 50 GB/天（24 小时后解封）、流量 200 GB/自然月（不自动解封）、HTTPS 请求 300 万次/自然月（不自动解封）。
+- 第 3 步：子用户 `tblink-cdn-certificate` 11-03 建好；创建流程没有关联上策略，第 5 步报 `AuthFailure.UnauthorizedOperation`（`ssl:UploadCertificate`），用户补关联后通过。部署时又报 `FailedOperation.RoleNotFoundAuthorization`，用户用主账号授权服务角色 `SSL_QCSLinkedRoleInReplaceLoadCertificate`（预设策略 `QcloudAccessForSSLLinkedRoleInReplaceLoadCertificate`，11-03 16:47:26 北京时间）。两项都已补进第 3 步。密钥文件只核对了键名 `['secretId', 'secretKey']` 和权限 `root 700`、`root 600`。子用户的访问方式目前多开了「控制台访问」，建议用户在用户详情里关掉，不影响证书同步。
+- 第 4 步：专用证书只含 `updates.tuanbo-link.jinhefilm.com`；摘要一致，`systemd-analyze verify` 无输出；`--check` 认出 DNS 未切，`exit=1`；健康采集 `Result=success`。
+- 第 5 步：`exit=0`，状态文件 `success`；腾讯云证书 `c4zrK1IN`（部署任务 273558）。服务器和 CDN 两边指纹都是 `60:F2:1F:CF:1C:A6:2A:7C:D1:10:CE:E3:99:5E:07:76:35:B2:A8:D1:9A:94:A0:A2:37:61:A7:8D:8D:C8:80:96`，到期 2027-01-25 04:14:00 GMT。HTTP2 开，强制跳转关，HSTS 关。
+- 第 6 步（在服务器上执行，Mac 本机的代理会干扰 DNS 和出口）：
+  - a：`latest-same`；`cache-control: no-store`；`x-cache-lookup: Cache Miss`。
+  - b：`Tuanbo-Link-Console-0.5.5-x64.exe`，`HTTP/2 200`，`content-length: 981519178`（与 `latest.yml` 一致），`accept-ranges: bytes`。
+  - c：`206 1048576`，`range-same`。
+  - d：`HTTP/2 206`，`content-type: multipart/byteranges; boundary=00000000000000000001nws_multipart_boundary`，计数 `3`。
+  - e：`404`。
+  - f：第一次 483,332 B/s（434 秒，回源），第二次 12,399,417 B/s（约 11.8 MB/s，16.9 秒）。
+  - ACME 路径：打印 `tblink-cdn-20261027T051254Z`，测试文件已移进备份目录。
+- 第 7 步（2026-11-04 01:01:45 UTC，切 DNS 前再次核对域名「已启动」、限频和四条封顶）：同一条记录（id `3689d0f7…`）从 A `123.206.229.200`、仅 DNS、TTL Auto、注释「团播联动台：Windows x64 更新清单与正式安装包出口；源站 jinhe-cloud（腾讯云上海）；仅 DNS，源站 Nginx 提供 HTTPS。」改为 CNAME `updates.tuanbo-link.jinhefilm.com.cdn.dnsv1.com`、`proxied=false`、TTL Auto、注释按第 7 步；读回核对一致，其他记录没动。服务器默认解析、`119.29.29.29`、`1.1.1.1` 都先返回 CNAME，再到 `826ag3fd.sched.vodtylego.tdnsvod1.cn.`，最后是 CDN 节点（国内 `43.171.80.33/34/38`、`43.141.156.172`；`1.1.1.1` 给 `123.139.193.50`、`221.204.73.91`）。`latest.yml` 经节点 `43.171.80.38` 返回 `HTTP/2 200`、`x-cache-lookup: Cache Miss`。
+- 第 8 步：服务 `Result=success`、`ExecMainStatus=0`，日志「CDN 证书与服务器一致，到期 2027-01-25（剩 82 天）；服务器共用证书到期 2026-12-27（剩 52 天）」；定时器已启用，下次 2026-11-05 00:20:44 北京时间；后台 `cdn-certificate` 一行 `success`。两次 `certbot renew --dry-run` 都失败：服务器连 Let's Encrypt 演练服务器 `acme-staging-v02.api.letsencrypt.org:443` 约 20 秒后被重置（连了 4 次都一样），还没走到 HTTP 验证；正式服务器 `acme-v02` 返回 200（0.9 秒）。改为两项验证：经切换后的真实 DNS 访问 `/.well-known/acme-challenge/` 测试文件，国内节点 `43.171.80.38` 和境外解析到的 `123.139.193.50` 都返回 200、内容正确；强制续期专用证书来端到端验证的命令被 Mac 会话的权限审查拦下，没有执行，证书没变。共用证书剩 30 天时（约 2026-11-27）会经 CDN 自动续期，到时核对一次；续不上时后台 `cdn-certificate` 一行在剩 14 天时报失败，也可以先按第 9 步把 DNS 切回服务器再续。
