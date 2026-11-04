@@ -1,4 +1,4 @@
-# 服务器安装：搬运只传变化的部分（2026-11-04，服务器已安装）
+# 服务器安装：搬运只传变化的部分（2026-11-04，已安装）
 
 ## 为什么要装
 
@@ -143,4 +143,4 @@ sudo ls -A /var/lib/tblink-release/staging
 - `$stamp`：`20261104T011334Z`；旧版（`c78f6df74e96bb46420c4039afd86e676fa91352eaa16c2f0ffd0f6981f6a70b`）备份在 `/var/backups/tblink/install-20261104T011334Z/`。
 - 第 1 步：`receive-update.py: OK`，grep 输出 `1`；现装摘要与文档一致；`status` 为 `{"staged": [], "uploading": false}`；最后一行输出 `ve`。
 - 第 3 步：`status` 输出 `{"staged": [], "uploading": false, "delta": "tblink-installer-delta-1"}`；拼包输出 `{"base": "Tuanbo-Link-Console-0.5.5-x64.exe", "bytes": 2097155, "same": true}`；staging 只有 `.upload.lock`。
-- 第 4 步：工位电脑 SSH 超时（不在线），没有换脚本；它上线后按第 4 步补做，在那之前工位照旧传完整安装包，不影响发版。Mac 检出在 master 推上去之后 `git pull --ff-only`。
+- 第 4 步：Mac 检出在 master 推上去后 `git pull --ff-only` 到 4c55efa。工位电脑 01:1x UTC 时 SSH 超时：它开着机、搬运日志每 10 分钟照常，原因是 Mac 和工位之间的 Tailscale 建不了直连，只能走 DERP 中转（`tailscale ping` 约 470–580 ms），当时中转没通。07:43 UTC 中转恢复后补做：脚本来自 master c4ee2ef（与 efc7342 相同），旧版（`relay-release.mjs` 078ABF03…DB1F、`github-releases.mjs` B985EA10…FF01）备份在 `D:\tblink-relay\backup-20261104T074346Z\`；`D:\tblink-relay\` 和 `D:\tblink-builder-setup\` 里四个文件的 Get-FileHash 与 `SHA256SUMS` 一致；换完后计划任务 07:50 UTC 运行一次，`LastTaskResult=0`，日志没有报错。
