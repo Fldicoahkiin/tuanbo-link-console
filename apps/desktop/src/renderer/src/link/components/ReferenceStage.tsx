@@ -14,7 +14,8 @@ import { usePreviewMediaLifecycle } from './usePreviewMediaLifecycle';
 
 type Props = {
   sceneMode?: boolean;
-  activeMediaClipId?: string | null;
+  /** Scene mode: the clips the output shows; the camera, if any, lies beneath them. */
+  activeMediaClipIds?: ReadonlySet<string> | null;
   scenePreview?: { cueId: string; sceneName: string } | null;
   mutePreviewAudio?: boolean;
   itemTitle: string | null;
@@ -51,7 +52,8 @@ export function ReferenceStage(props: Props): JSX.Element {
   const stageRef = useRef<HTMLDivElement>(null);
   const visibleClips = props.timelineState?.clips.filter((entry) => entry.visual || (entry.layer?.visible !== false && entry.asset.kind !== 'audio' && entry.startMs > props.playheadMs && entry.startMs <= props.playheadMs + 2000)) ?? [];
   const activeClipCount = props.timelineState?.activeClipIds.length ?? 0;
-  const audibleClipIds = new Set(props.mutePreviewAudio || props.scenePreview ? [] : props.timelineState?.activeAudioClipIds.filter((id) => !props.sceneMode || id === props.activeMediaClipId) ?? []);
+  const onAir = (clipId: string): boolean => !props.sceneMode || props.activeMediaClipIds?.has(clipId) === true;
+  const audibleClipIds = new Set(props.mutePreviewAudio ? [] : props.timelineState?.activeAudioClipIds.filter(onAir) ?? []);
   const standaloneAudio = props.timelineState?.clips.filter((entry) => audibleClipIds.has(entry.clip.id) && entry.asset.kind === 'audio') ?? [];
   const canvas = props.outputCanvas;
   const obsCanvasMatches = props.obsInventory?.videoSettings?.baseWidth === canvas.width
@@ -79,7 +81,7 @@ export function ReferenceStage(props: Props): JSX.Element {
     >
       <div className="stage-frame" style={{ aspectRatio: `${canvas.width} / ${canvas.height}` }}>
         {props.scenePreview ? <ObsPreviewLayer key={props.scenePreview.sceneName}
-          sourceName={props.scenePreview.sceneName} status={props.obsStatus} zIndex={2}
+          sourceName={props.scenePreview.sceneName} status={props.obsStatus} zIndex={1}
           selected={props.selectedCueId === props.scenePreview.cueId} locked
           transform={null} sourceSize={{ width: canvas.width, height: canvas.height }}
           canvasWidth={canvas.width} canvasHeight={canvas.height} onSnapGuides={setSnapGuides}
@@ -101,7 +103,7 @@ export function ReferenceStage(props: Props): JSX.Element {
                 clip={entry.clip}
                 startMs={entry.startMs}
                 locked={layer.locked}
-                hidden={!entry.visual || Boolean(props.scenePreview) || Boolean(props.sceneMode && entry.clip.id !== props.activeMediaClipId)}
+                hidden={!entry.visual || !onAir(entry.clip.id)}
                 muted={!audibleClipIds.has(entry.clip.id)}
                 playheadMs={props.playheadMs}
                 playing={props.playing}

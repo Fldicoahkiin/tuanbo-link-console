@@ -5,6 +5,9 @@ import type { RuntimeUpdate } from './cue-runtime';
 import type { LinkCue, LinkProject } from '@tb/schema';
 
 type SceneWork = { media: ManagedMediaEvent[]; cues: RuntimeUpdate['dueCues'] };
+/** The camera scene and clips the output shows at `frame`, top first, for a
+ * preview drawn without OBS. Same rule as the output itself. */
+export type ScenePicture = { camera: LinkCue | null; clipIds: string[] };
 type SceneIndex = {
   projectId: string; itemId: string; layers: ReadonlyMap<string, number>;
   scenes: { cue: LinkCue; start: number; end: number | null }[];
@@ -62,6 +65,12 @@ export class SceneOutputTimeline {
       activeMedia: new IntervalIndex(media.map(entry => ({ start: entry.event.frameNumber, end: entry.end, value: entry.event }))) };
   }
   at(frame: number): SceneWork { return outputAt(this.index, frame); }
+  picture(frame: number): ScenePicture {
+    const { stack, fallback } = stackAt(this.index, frame);
+    const camera = stack.find(entry => 'cue' in entry);
+    return { camera: camera && 'cue' in camera ? camera.cue : stack.some(entry => !isSound(entry)) ? null : fallback?.cue ?? null,
+      clipIds: stack.flatMap(entry => 'media' in entry ? [entry.media.clipId] : []) };
+  }
   /** Visible entries, including a camera's end revealing a clip midway. Built
    * once per playback snapshot; no hidden clip starts merely to be preloaded. */
   preloadEntries(): ManagedMediaEvent[] {
@@ -115,8 +124,14 @@ function shownAt(due: RuntimeUpdate['dueCues'], frame: number): RuntimeUpdate['d
 export function sceneOutputAt(project: LinkProject, itemId: string, frame: number): SceneWork {
   return new SceneOutputTimeline(project, itemId).at(frame);
 }
-function outputAt(index: SceneIndex, frame: number): SceneWork {
-  const { itemId } = index;
+type StackEntry = { key: string; layer: number; start: number } & ({ cue: LinkCue } | { media: ManagedMediaEvent });
+const isSound = (entry: StackEntry): boolean => 'media' in entry && entry.media.assetKind === 'audio';
+
+/** On air at `frame`, top track first: picture layers down to the first camera
+ * (a camera is a complete frame), plus every playing sound clip on any track,
+ * since sound has no picture to cover or be covered. `fallback` is the last
+ * scene, kept on program when no track has a picture. */
+function stackAt(index: SceneIndex, frame: number): { stack: StackEntry[]; fallback: StackEntry & { cue: LinkCue } | undefined } {
   const layerOrder = (id?: string): number => id ? index.layers.get(id) ?? -1 : -1;
   const lastScene = firstAfter(index.sceneStarts, frame) - 1;
   const latestSceneStart = index.sceneStarts[lastScene] ?? -1;
@@ -129,15 +144,25 @@ function outputAt(index: SceneIndex, frame: number): SceneWork {
     if (entry.end === null && latestMediaStart <= entry.start) activeScenes.push(entry);
   }
   const activeMedia = index.activeMedia.at(frame);
-  const candidates = [
+  const candidates: StackEntry[] = [
     ...activeScenes.map(({ cue, start }) => ({ key: `cue:${cue.id}`, layer: layerOrder(cue.layerId), start, cue })),
     ...activeMedia.map((media) => ({ key: `media:${media.clipId}`, layer: layerOrder(media.layerId), start: media.frameNumber, media }))
   ].sort((a, b) => a.layer - b.layer || b.start - a.start || a.key.localeCompare(b.key));
-  const target = candidates[0];
   // Camera scenes are complete frames. Keep their appearance and place every
   // active media layer above the first camera in an application-owned scene.
   const cameraIndex = candidates.findIndex(candidate => 'cue' in candidate);
-  const stack = cameraIndex < 0 ? candidates : candidates.slice(0, cameraIndex + 1);
+  const stack = candidates.filter((candidate, order) => cameraIndex < 0 || order <= cameraIndex || isSound(candidate));
+  const last = index.scenes[firstLatestScene];
+  return { stack, fallback: last && { key: `cue:${last.cue.id}`, layer: layerOrder(last.cue.layerId), start: last.start, cue: last.cue } };
+}
+
+function outputAt(index: SceneIndex, frame: number): SceneWork {
+  const { itemId } = index;
+  const { stack: playing, fallback } = stackAt(index, frame);
+  // With no picture on any track the last scene stays on program; sound joins it.
+  const stack = playing.some(entry => !isSound(entry)) || !fallback ? playing
+    : [...playing, fallback].sort((a, b) => a.layer - b.layer || b.start - a.start || a.key.localeCompare(b.key));
+  const target = stack[0];
   const layers = stack.flatMap(candidate => 'media' in candidate
     ? candidate.media.sceneName ? [candidate.media.sceneName] : []
     : candidate.cue.actions.flatMap(action => action.kind === 'obs.setProgramScene' ? [action.sceneName] : []));
@@ -154,7 +179,7 @@ function outputAt(index: SceneIndex, frame: number): SceneWork {
   }
   if (target && 'media' in target) return { media: [target.media], cues: [] };
   // With no underlying clip, retain the last scene, without replaying its nonvisual actions.
-  const cue = target && 'cue' in target ? target.cue : index.scenes[firstLatestScene]?.cue;
+  const cue = target && 'cue' in target ? target.cue : fallback?.cue;
   return { media: [], cues: cue ? [{ cue: { ...cue, actions: cue.actions.filter((action) => action.kind === 'obs.setProgramScene') }, scheduledFrame: frame, executionId: crypto.randomUUID() }] : [] };
 }
 

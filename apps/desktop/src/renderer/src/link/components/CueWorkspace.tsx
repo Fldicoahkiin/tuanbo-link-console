@@ -177,7 +177,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHo
         <div className="editor-preview-row">
           {!lowPower && !lightingWorkspace ? <><ReferenceStage
             scenePreview={scenePreviewOutput?.scene ?? null}
-            sceneMode={project.obsOutputMode === 'scenes'} activeMediaClipId={scenePreviewOutput?.mediaClipId ?? null}
+            sceneMode={project.obsOutputMode === 'scenes'} activeMediaClipIds={scenePreviewOutput?.mediaClipIds ?? null}
             itemTitle={item?.title ?? null} timelineState={timelineState} outputCanvas={project.obsOutputMode === 'scenes' && inventory?.videoSettings
               ? { width: inventory.videoSettings.baseWidth, height: inventory.videoSettings.baseHeight } : project.outputCanvas}
             selectedAsset={selectedAsset} selectedClipId={selectedClipId} selectedCueId={selectedCueId}
@@ -263,12 +263,13 @@ function useScenePreviewOutput(project: LinkProject | null, itemId: string | nul
   return useMemo(() => timeline ? resolveScenePreviewOutput(timeline, frame) : null, [timeline, frame]);
 }
 
+/** What the output would show without OBS: every clip in the picture, with the
+ * camera beneath them, never just the topmost one. */
 function resolveScenePreviewOutput(timeline: SceneOutputTimeline, frame: number) {
-  const output = timeline.at(frame);
-  const cue = output.cues[0]?.cue;
-  const action = cue?.actions.find((entry) => entry.kind === 'obs.setProgramScene');
-  return { scene: cue && action?.kind === 'obs.setProgramScene' ? { cueId: cue.id, sceneName: action.sceneName } : null,
-    mediaClipId: output.media[0]?.clipId ?? null };
+  const { camera, clipIds } = timeline.picture(frame);
+  const action = camera?.actions.find((entry) => entry.kind === 'obs.setProgramScene');
+  return { scene: camera && action?.kind === 'obs.setProgramScene' ? { cueId: camera.id, sceneName: action.sceneName } : null,
+    mediaClipIds: new Set(clipIds) };
 }
 
 function createCommandRunner(

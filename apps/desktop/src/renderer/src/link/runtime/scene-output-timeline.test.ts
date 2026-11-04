@@ -155,3 +155,40 @@ describe('无时长场景与后续素材交接', () => {
     expect(sceneOutputAt(project, 'song', 210).media[0]?.clipId).toBe('clip');
   });
 });
+
+describe('上层盖住下层，音效不算画面', () => {
+  function withSound(layerId: string) {
+    const project = projectFixture(), item = project.rundown[0]!;
+    project.mediaAssets.push({ id: 'sound', name: '掌声.wav', kind: 'audio', folderId: null, relativePath: 'assets/applause.wav', sha256: 'c'.repeat(64), byteLength: 10, durationMs: 40000 });
+    item.referenceMediaClips = [{ ...item.referenceMediaClips[0]!, id: 'applause', assetId: 'sound', label: '掌声', layerId, startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 30000, sourceOffsetMs: 0 }];
+    return project;
+  }
+  it('机位下面轨道的音效照常出声，不被机位盖掉', () => {
+    const project = withSound('media');
+    const sound = compileManagedMediaTimeline(project, 'song').events.find(event => event.clipId === 'applause')!;
+    const work = sceneOutputAt(project, 'song', 330);
+    expect(work.media.map(event => event.clipId)).toEqual(['applause']);
+    expect(work.cues[0]?.cue.actions[0]).toMatchObject({ kind: 'obs.setProgramScene', sceneLayers: ['拉腿机位', sound.sceneName] });
+    expect(new SceneOutputTimeline(project, 'song').picture(330)).toMatchObject({ camera: { id: 'camera' }, clipIds: ['applause'] });
+  });
+  it('机位结束后只剩音效时保留机位画面，结束那一帧不发多余动作', () => {
+    const project = withSound('media');
+    const sound = compileManagedMediaTimeline(project, 'song').events.find(event => event.clipId === 'applause')!;
+    expect(sceneOutputAt(project, 'song', 500).cues[0]?.cue.actions[0]).toMatchObject({ sceneLayers: ['拉腿机位', sound.sceneName] });
+    expect(sceneBoundaryWork(project, 'song', 449, 450, [], [])).toEqual({ cues: [], media: [] });
+    expect(new SceneOutputTimeline(project, 'song').picture(500)).toMatchObject({ camera: { id: 'camera' }, clipIds: ['applause'] });
+  });
+  it('没连 OBS 的预览和输出一致：两段视频重叠时都显示，视频在机位上方时机位垫在下面', () => {
+    const project = projectFixture(), item = project.rundown[0]!;
+    item.cues = [];
+    item.referenceMediaClips.push({ ...item.referenceMediaClips[0]!, id: 'overlay', layerId: 'camera-layer', startTimecode: { hours: 0, minutes: 0, seconds: 8, frames: 0 }, durationMs: 4000 });
+    const timeline = new SceneOutputTimeline(project, 'song');
+    expect(timeline.at(300).media.map(event => event.clipId)).toEqual(['overlay', 'clip']);
+    expect(timeline.picture(300)).toEqual({ camera: null, clipIds: ['overlay', 'clip'] });
+    expect(timeline.picture(400)).toEqual({ camera: null, clipIds: ['clip'] });
+    const covered = projectFixture();
+    covered.rundown[0]!.visualLayers.reverse();
+    expect(new SceneOutputTimeline(covered, 'song').picture(330)).toMatchObject({ camera: { id: 'camera' }, clipIds: ['clip'] });
+    expect(new SceneOutputTimeline(projectFixture(), 'song').picture(330)).toMatchObject({ camera: { id: 'camera' }, clipIds: [] });
+  });
+});
