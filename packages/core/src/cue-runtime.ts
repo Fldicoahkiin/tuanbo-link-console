@@ -439,8 +439,8 @@ export class CueRuntime {
       if (cue.id.endsWith(':duration-end')) { if (this.executedCueIds.has(cue.id.slice(0, -':duration-end'.length))) now(cue); continue; }
       const end = this.scheduledCues.find(entry => entry.cue.id === `${cue.id}:duration-end`)?.scheduledFrame;
       if (end !== undefined && end > frame) { now(cue); continue; }
-      // In full-scene mode the scene timeline rebuilds camera switches itself.
-      if (this.project.obsOutputMode === 'scenes' && cue.actions.length && cue.actions.every(action => action.kind === 'obs.setProgramScene')) { this.executedCueIds.add(cue.id); continue; }
+      // The scene timeline rebuilds camera switches itself.
+      if (cue.actions.length && cue.actions.every(action => action.kind === 'obs.setProgramScene')) { this.executedCueIds.add(cue.id); continue; }
       this.missedCueIds.add(cue.id); missed += 1;
     }
     this.previousFrame = frame; this.lastSample = sample; this.armedAtMs = null; this.state = 'running';

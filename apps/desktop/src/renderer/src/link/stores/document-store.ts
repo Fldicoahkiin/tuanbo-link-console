@@ -4,7 +4,7 @@ import { shareProjectStructure } from './share-project-structure';
 import { isWorkerValidatedProject } from './project-codec';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { parseLinkProject, type LinkProject } from '@tb/schema';
-import { normalizeContentTimeline, setObsOutputModeCommand, withContentTimeline, withMa2Pairings, type LinkCommand } from '@tb/core/link';
+import { normalizeContentTimeline, obsSceneOutputCommand, withContentTimeline, withMa2Pairings, type LinkCommand } from '@tb/core/link';
 
 type HistoryFrame = {
   command: LinkCommand;
@@ -77,8 +77,8 @@ const documentState: StateCreator<DocumentStoreState> = (set, get) => {
         const parsed = project ? isWorkerValidatedProject(project) ? project : parseLinkProject(project) : null;
         // Older projects open under the content timeline rules, playing what they played.
         let prepared = parsed && normalizeContentTimeline(parsed);
-        // The single scene workflow is the document's opening baseline, before user edits.
-        if (prepared && prepared.obsOutputMode !== 'scenes') prepared = withMa2Pairings(withContentTimeline(setObsOutputModeCommand('scenes'))).execute(prepared);
+        // Projects from before the single scene workflow open in it, before user edits.
+        if (prepared && prepared.obsOutputMode !== 'scenes') prepared = withMa2Pairings(obsSceneOutputCommand()).execute(prepared);
         // Only a file can be upgraded; a new unnamed document has nothing on disk to differ from.
         const upgraded = path !== null && (opening.upgraded === true || prepared !== parsed);
         const stateId = crypto.randomUUID();

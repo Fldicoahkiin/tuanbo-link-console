@@ -1,16 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { parseLinkProject } from '@tb/schema';
-import { collectCrossedManagedMediaEvents, compileManagedMediaTimeline, managedMediaSourceName, materialSceneTargets } from './managed-media-timeline';
+import { collectCrossedManagedMediaEvents, compileManagedMediaTimeline, materialSceneNames, materialSceneTargets } from './managed-media-timeline';
 import { SceneOutputTimeline } from './scene-output-timeline';
 import { editReferenceAudioCommand, setReferenceAudioCommand } from './link-command';
 import { audioTracks, audioSegments } from './audio-edit';
-import { allocateMediaTimecodeRanges } from './mtc-output';
 import { resolveTimelineState } from './timeline-state';
 
 describe('managed media timeline', () => {
   it('同一素材跨轨叠加使用独立来源和播放位置，同轨分割继续复用自己的解码器', () => {
     const project = projectWithClips([clip('one', 'video', 'layer-top', 0, 1000)]);
-    project.obsOutputMode = 'scenes';
     const item = project.rundown[0]!;
     item.visualLayers.push({ id: 'layer-second', name: '轨道 2', visible: true, locked: false });
     item.referenceMediaClips.push({ ...item.referenceMediaClips[0]!, id: 'two', layerId: 'layer-second', sourceOffsetMs: 300 });
@@ -45,7 +43,7 @@ describe('managed media timeline', () => {
     project.rundown[0]!.referenceAudio = short;
     const command = setReferenceAudioCommand('item', { ...short, assetId: 'full', durationMs: 37883, sourceMediaAssetId: 'asset-one' });
     const updated = command.execute(project);
-    expect(allocateMediaTimecodeRanges(updated)[0]?.durationMs).toBe(37883);
+    expect(updated.rundown[0]?.referenceAudio?.durationMs).toBe(37883);
     expect(compileManagedMediaTimeline(updated, 'item').events.every((event) => !event.embeddedAudioEnabled)).toBe(true);
     expect(resolveTimelineState(updated, updated.rundown[0]!, 0).activeAudioClipIds).toEqual([]);
     expect(command.undo(project).rundown[0]?.referenceAudio).toEqual(short);
@@ -64,14 +62,14 @@ describe('managed media timeline', () => {
       { id: 'managed-media:clip-video:start', phase: 'start', frameNumber: 0, embeddedAudioEnabled: true, assetKind: 'video' },
       { id: 'managed-media:clip-video:stop', phase: 'stop', frameNumber: 30, embeddedAudioEnabled: true, assetKind: 'video' }
     ]);
-    expect(timeline.events[0]?.sourceName).toBe(managedMediaSourceName('project', 'layer-top', 'video'));
+    expect(timeline.events[0]).toMatchObject(materialSceneNames('project', { id: 'asset-clip-video', name: 'clip-video' }));
   });
 
-  it('does not publish standalone reference audio to OBS', () => {
-    const timeline = compileManagedMediaTimeline(projectWithClips([
-      clip('clip-audio', 'audio', 'layer-top', 0, 1_000)
-    ]), 'item');
-    expect(timeline.events).toEqual([]);
+  it('音效片段走自己的素材场景，已经并进歌曲音频的不再单独放', () => {
+    const value = projectWithClips([clip('clip-audio', 'audio', 'layer-top', 0, 1_000)]);
+    expect(compileManagedMediaTimeline(value, 'item').events.map(event => `${event.phase}:${event.assetKind}`)).toEqual(['start:audio', 'stop:audio']);
+    value.rundown[0]!.referenceAudio = { assetId: 'song', relativePath: 'assets/song.wav', sha256: 'a'.repeat(64), durationMs: 1_000, sourceMediaAssetId: 'asset-clip-audio' };
+    expect(compileManagedMediaTimeline(value, 'item').events).toEqual([]);
   });
 
   it('does not publish media from a hidden visual layer to OBS', () => {
@@ -93,7 +91,7 @@ describe('managed media timeline', () => {
     ]);
   });
 
-  it('同一图层的图片与视频使用不同 OBS 输入，避免来源类型冲突', () => {
+  it('同一图层的图片与视频各用自己的素材场景，避免来源类型冲突', () => {
     const timeline = compileManagedMediaTimeline(projectWithClips([
       clip('first', 'image', 'layer-top', 0, 1_000),
       clip('second', 'video', 'layer-top', 30, 1_000)
@@ -101,15 +99,9 @@ describe('managed media timeline', () => {
     const starts = timeline.events.filter((event) => event.phase === 'start');
 
     expect(starts.map((event) => event.sourceName)).toEqual([
-      managedMediaSourceName('project', 'layer-top', 'image'),
-      managedMediaSourceName('project', 'layer-top', 'video')
+      materialSceneNames('project', { id: 'asset-first', name: 'first' }).sourceName,
+      materialSceneNames('project', { id: 'asset-second', name: 'second' }).sourceName
     ]);
-  });
-
-  it('清洗或截断后可读名称相同的图层仍生成不同 OBS 来源名', () => {
-    const commonPrefix = 'layer-with-the-same-very-long-prefix-';
-    expect(managedMediaSourceName('project', `${commonPrefix}a/b`, 'video'))
-      .not.toBe(managedMediaSourceName('project', `${commonPrefix}a?b`, 'video'));
   });
 
   it('rejects overlapping visual clips on the same layer', () => {

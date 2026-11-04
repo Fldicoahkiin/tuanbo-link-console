@@ -25,7 +25,7 @@ describe('runtime report store', () => {
 
   it('长节目素材执行报告同样有界，失败结果保持可见', () => {
     const event = { id: 'event', itemId: 'song', clipId: 'clip', layerId: 'layer', assetId: 'asset', assetName: '素材', assetKind: 'video' as const,
-      sourceName: 'source', relativePath: 'media.mp4', frameNumber: 0, phase: 'start' as const, sourceOffsetMs: 0,
+      sourceName: 'source', sceneName: 'scene', relativePath: 'media.mp4', frameNumber: 0, phase: 'start' as const, sourceOffsetMs: 0,
       layerIndex: 0, layerCount: 1, embeddedAudioEnabled: false, transform: { x: 0.5, y: 0.5, scale: 1, scaleX: 1, scaleY: 1, rotation: 0 } };
     for (let index = 0; index < 1000; index++) appendMediaReport({ executionId: String(index), event, status: 'failed', startedAt: index, finishedAt: index + 1, durationMs: 1, error: '输出失败' });
     expect(useRuntimeStore.getState().mediaReports).toHaveLength(256);

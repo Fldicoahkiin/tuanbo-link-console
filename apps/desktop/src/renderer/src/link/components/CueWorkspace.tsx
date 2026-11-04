@@ -137,7 +137,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHo
   const timelineState = useMemo(() => timelineIndex?.at(playheadMs) ?? null, [timelineIndex, playheadMs]);
   const scenePreviewOutput = useScenePreviewOutput(project, item?.id ?? null, playheadMs, obs.status === 'connected');
   if (!project) return <div className="empty-panel full"><Clock3 /><h3>还没打开工程</h3><p>新建或打开工程后，就可以添加素材和 OBS 场景、来源。</p></div>;
-  const { importMedia, addAssetClip, addObsResource, moveClip, moveClipToTop, moveCueToTop, trimClip, trimCue, splitClip, duplicateClip, duplicateCue, transformClip, transformObs, moveCue, removeClip, removeCue, setClipEmbeddedAudioEnabled, refreshObs, testAction } = createWorkspaceActions({ project, projectPath, documentId, item, cue, playheadMs, coordinator, execute, notify, setSelectedCueId, setSelectedClipId, setSelectedAssetId, setSelectedObsResource });
+  const { importMedia, addAssetClip, addObsResource, moveClip, moveClipToTop, trimClip, trimCue, splitClip, duplicateClip, duplicateCue, transformClip, moveCue, removeClip, removeCue, setClipEmbeddedAudioEnabled, refreshObs, testAction } = createWorkspaceActions({ project, projectPath, documentId, item, cue, playheadMs, coordinator, execute, notify, setSelectedCueId, setSelectedClipId, setSelectedAssetId, setSelectedObsResource });
 
   return <div className={`cue-studio${lightingWorkspace ? ' lighting-workbench' : ''}${lowPower ? ' low-power-workspace' : ''}`} data-inspector={true}>
     {!lightingWorkspace && item && lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools key={item.id} tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null}
@@ -177,8 +177,8 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHo
         <div className="editor-preview-row">
           {!lowPower && !lightingWorkspace ? <><ReferenceStage
             scenePreview={scenePreviewOutput?.scene ?? null}
-            sceneMode={project.obsOutputMode === 'scenes'} activeMediaClipIds={scenePreviewOutput?.mediaClipIds ?? null}
-            itemTitle={item?.title ?? null} timelineState={timelineState} outputCanvas={project.obsOutputMode === 'scenes' && inventory?.videoSettings
+            activeMediaClipIds={scenePreviewOutput?.mediaClipIds ?? null}
+            itemTitle={item?.title ?? null} timelineState={timelineState} outputCanvas={inventory?.videoSettings
               ? { width: inventory.videoSettings.baseWidth, height: inventory.videoSettings.baseHeight } : project.outputCanvas}
             selectedAsset={selectedAsset} selectedClipId={selectedClipId} selectedCueId={selectedCueId}
             projectPath={projectPath} obsStatus={obs.status} obsSceneCount={inventory?.scenes.length ?? 0}
@@ -188,9 +188,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHo
             onSelectCue={(id) => { setSelectedCueId(id); setSelectedClipId(null); }}
             onSelectObsResource={setSelectedObsResource} onTransformClip={transformClip}
             onMoveClipToTop={moveClipToTop}
-            onRemoveClip={removeClip} onTransformObs={transformObs}
-            onMoveObsToTop={moveCueToTop}
-            onRemoveObs={removeCue} onDropObsResource={addObsResource} />{<button className="workspace-splitter vertical" aria-label="调整属性面板宽度" onPointerDown={(event) => workspaceLayout.beginResize('inspector', event)} onKeyDown={event => workspaceLayout.resizeWithKeyboard('inspector', event)} />}</> : null}
+            onRemoveClip={removeClip} onDropObsResource={addObsResource} />{<button className="workspace-splitter vertical" aria-label="调整属性面板宽度" onPointerDown={(event) => workspaceLayout.beginResize('inspector', event)} onKeyDown={event => workspaceLayout.resizeWithKeyboard('inspector', event)} />}</> : null}
 
       {lightingSelection && !lightingWorkspace ? <aside className="cue-inspector panel"><div className="panel-title"><span>灯光属性</span><Button variant="ghost" size="sm" onClick={showCommonProperties}>常用设置</Button></div><div className="lighting-inspector-host"><Switch className="lighting-audition-switch" label="选中 Cue 实时播放" aria-label="选中 Cue 实时播放" help={audition.enabled ? audition.status : '已关闭选中即播放'} checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />{lightingSelection ? <LightingTimelineInspector onOpenTools={openLightingTool} onError={(message) => notify(message, 'error')} preview={lightingPreview} onPreviewChange={setLightingPreview} document={lightingDocument} trackId={lightingSelection.trackId} selectedClipId={lightingSelection.clipId} selectedEventId={lightingSelection.eventId ?? null} selectedEventIds={lightingSelection.eventIds ?? []} onSelect={(trackId, clipId) => setLightingSelection({ trackId, clipId })} onChange={changeLighting} /> : null}</div></aside> : lightingWorkspace ? null : <aside className="cue-inspector panel" key={`${cue?.id ?? clip?.id ?? 'empty'}:${cue || clip ? revision : currentItemId}`}>
         <div className="panel-title"><span>{cue ? '画面与动作' : clip ? '媒体属性' : audioEditor.selected ? '音频属性' : '属性'}</span>{cue || clip || audioEditor.selected ? <Button variant="ghost" size="sm" onClick={showCommonProperties}>常用设置</Button> : null}</div>
@@ -257,7 +255,7 @@ function toMessage(error: unknown): string {
 
 
 function useScenePreviewOutput(project: LinkProject | null, itemId: string | null, playheadMs: number, connected: boolean) {
-  const timeline = useMemo(() => !connected && project && itemId && project.obsOutputMode === 'scenes'
+  const timeline = useMemo(() => !connected && project && itemId
     ? new SceneOutputTimeline(project, itemId) : null, [connected, project, itemId]);
   const frame = millisecondsToFrameNumber(playheadMs, project?.timebase.frameRate ?? '30');
   return useMemo(() => timeline ? resolveScenePreviewOutput(timeline, frame) : null, [timeline, frame]);

@@ -32,7 +32,7 @@ export async function synchronizeTimelineTransport(project: LinkProject, itemId:
   const failures = await managed.executeTransport(runner, action, frame, mode);
   for (const result of failures.actions) appendRetryActionReport(result, mode);
   for (const report of failures.media) appendMediaReport(report);
-  if (action !== 'start' || project.obsOutputMode !== 'scenes' || !itemId) return;
+  if (action !== 'start' || !itemId) return;
   const work = sceneOutputAt(project, itemId, frame);
   // Internal audio resumes the paused decoder; don't seek/restart it a second time.
   await execute(work.cues, project.playbackSource === 'internal' ? [] : work.media);

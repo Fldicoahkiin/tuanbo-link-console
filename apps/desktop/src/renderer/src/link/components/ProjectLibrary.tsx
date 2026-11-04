@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp, Check, Copy, FileAudio, Film, LayoutGrid, List, Plus, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import {
-  allocateMediaTimecodeRanges,
   duplicateRundownItemCommand,
   editProgramPlaylistCommand,
   moveRundownItemCommand,
@@ -210,6 +209,6 @@ function formatMilliseconds(milliseconds: number): string {
 }
 
 function internalStart(project: LinkProject, itemId: string): string {
-  try { const item = project.rundown.find((entry) => entry.id === itemId); if (item?.playback || item?.p1Media) return formatMilliseconds(programTimeOrigin(item)); if (project.obsOutputMode === 'scenes') return formatMilliseconds(0); const range = allocateMediaTimecodeRanges(project).find((entry) => entry.itemId === itemId); return range ? formatMilliseconds(range.startSeconds * 1000) : '请添加音频'; }
+  try { const item = project.rundown.find((entry) => entry.id === itemId); return formatMilliseconds(item?.playback || item?.p1Media ? programTimeOrigin(item) : 0); }
   catch (error) { return error instanceof Error ? error.message : String(error); }
 }

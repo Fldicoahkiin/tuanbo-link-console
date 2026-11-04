@@ -2061,7 +2061,6 @@ function registerIpc(
     const request = z.object({ sourceName: z.string().min(1), enabled: z.boolean() }).strict().parse(value);
     return obs.setSourceEnabledInProgramScene(request.sourceName, request.enabled);
   });
-  handle('link:obs-activate-managed-output', () => obs.activateManagedOutput());
   handle('link:obs-execute-managed-media', async (_event, payloadValue: unknown) => {
     const payload = linkManagedMediaExecutionPayloadSchema.parse(payloadValue);
     await projectAccess.assetFiles(payload.projectPath, [payload.event.relativePath]);

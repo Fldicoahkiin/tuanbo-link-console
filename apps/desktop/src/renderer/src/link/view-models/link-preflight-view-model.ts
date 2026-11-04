@@ -32,7 +32,7 @@ export async function runDesktopPreflight(
   const rundown = mtcRequirement === 'internal' ? document.project.rundown.filter((item) => item.id === selectedId) : document.project.rundown;
   const mediaIds = new Set(rundown.flatMap((item) => item.referenceMediaClips.map((clip) => clip.assetId)));
   const inspectedProject = mtcRequirement === 'internal' ? { ...document.project, rundown, mediaAssets: document.project.mediaAssets.filter((asset) => mediaIds.has(asset.id)) } : document.project;
-  if (integration.obs.status === 'connected' && inspectedProject.obsOutputMode === 'scenes' && inspectedProject.mediaAssets.length) {
+  if (integration.obs.status === 'connected' && inspectedProject.mediaAssets.length) {
     await linkDesktopViewModel.prepareObsMediaScenes(document.path, inspectedProject, useDisplayPreferences.getState().preciseSeeking);
     assertCurrent();
   }

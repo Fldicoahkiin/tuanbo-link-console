@@ -1,16 +1,5 @@
-import type { LinkProject, MtcFrameRate } from '@tb/schema';
+import type { MtcFrameRate } from '@tb/schema';
 import { frameNumberToTimecode, playbackFramesPerSecond } from './mtc-timecode';
-
-export function allocateMediaTimecodeRanges(project: LinkProject): Array<{ itemId: string; startSeconds: number; durationMs: number }> {
-  let startSeconds = 60;
-  return project.rundown.flatMap((item) => {
-    if (!item.referenceAudio) return [];
-    const range = { itemId: item.id, startSeconds, durationMs: item.referenceAudio.durationMs };
-    startSeconds += Math.ceil(range.durationMs / 1000) + 10;
-    if (startSeconds >= 86_400) throw new Error('节目单加上间隔的总时长必须小于 24 小时，请拆分工程');
-    return [range];
-  });
-}
 
 export function mediaTimecodeAt(positionMs: number, rate: MtcFrameRate) {
   if (!Number.isFinite(positionMs) || positionMs < 0) throw new Error('音频位置无效');

@@ -69,7 +69,7 @@ export function ResourceLibrary(props: Props): JSX.Element {
   const [newFolderParentId, setNewFolderParentId] = useState<string | null | undefined>(undefined);
   const [context, setContext] = useState<ContextState>(null);
   const [fileDropActive, setFileDropActive] = useState(false);
-  const obsVisuals = useMemo(() => buildObsVisualResources(props.inventory, true), [props.inventory]);
+  const obsVisuals = useMemo(() => buildObsVisualResources(props.inventory), [props.inventory]);
   const visibleObsVisuals = props.obsStatus === 'connected' && section === 'obs'
     ? obsVisuals.filter((resource) => resource.name.toLocaleLowerCase('zh-CN').includes(query.trim().toLocaleLowerCase('zh-CN')))
     : [];

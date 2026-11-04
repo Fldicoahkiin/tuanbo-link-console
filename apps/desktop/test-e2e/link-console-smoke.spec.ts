@@ -1635,7 +1635,6 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
     'exportP1Project',
     'readObsInventory',
     'getObsSourceScreenshot',
-    'activateManagedObsOutput',
     'executeManagedMediaEvent',
     'getUpdateStatus',
     'checkForUpdates',

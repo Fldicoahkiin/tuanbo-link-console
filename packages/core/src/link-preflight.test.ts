@@ -132,14 +132,14 @@ describe('团播联动台预检', () => {
     expect(runLinkPreflight(value).checks.find((check) => check.id === 'quality.outputScale')).toMatchObject({ status: 'passed' });
   });
 
-  it('OBS 输出画布必须与工程横竖屏和尺寸完全一致', () => {
+  it('OBS 画布沿用 OBS 现有设置，读不到时拦住', () => {
     const value = context();
-    expect(runLinkPreflight(value).checks.find((check) => check.id === 'obs.outputCanvas'))
-      .toMatchObject({ status: 'passed', detail: '1080×1920' });
-
     value.obs.videoSettings = { baseWidth: 1920, baseHeight: 1080 };
     expect(runLinkPreflight(value).checks.find((check) => check.id === 'obs.outputCanvas'))
-      .toMatchObject({ status: 'blocking', detail: '工程需要 1080×1920，OBS 现在是 1920×1080' });
+      .toMatchObject({ status: 'passed', detail: '使用 OBS 现有的画布 1920×1080' });
+    delete value.obs.videoSettings;
+    expect(runLinkPreflight(value).checks.find((check) => check.id === 'obs.outputCanvas'))
+      .toMatchObject({ status: 'blocking' });
   });
 
   it('P1 一键启动允许播放前没有 MTC，但必须配置当前节目的明确触发', () => {

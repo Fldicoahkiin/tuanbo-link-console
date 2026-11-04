@@ -2,22 +2,22 @@ import { LightingTempoMap, lightingEventTime, timecodeToMilliseconds, type Resol
 import type { LightingDocument, LinkCue, MtcFrameRate, ReferenceMediaClip } from '@tb/schema';
 import type { TimelineDrag } from './TimelineItems';
 
-export function timelineSnapGuide(props: { clips: ReferenceMediaClip[]; cues: LinkCue[]; timelineState: ResolvedTimelineState; frameRate: MtcFrameRate; playheadMs: number; durationMs: number }, pixelsPerSecond: number, enabled: boolean, moving: TimelineDrag | null): number | undefined {
+export function timelineSnapGuide(props: { clips: ReferenceMediaClip[]; cues: LinkCue[]; timelineState: ResolvedTimelineState; frameRate: MtcFrameRate; playheadMs: number; durationMs: number }, enabled: boolean, moving: TimelineDrag | null): number | undefined {
   if (!enabled || !moving?.moved) return undefined;
-  const duration = moving.kind === 'clip' ? props.clips.find(clip => clip.id === moving.id)?.durationMs ?? 0 : displayedSceneDuration(props.cues.find(cue => cue.id === moving.id), pixelsPerSecond);
-  return [0, props.durationMs, ...timelineSnapPoints(props.timelineState, props.cues, props.frameRate, pixelsPerSecond, props.playheadMs, moving)]
+  const duration = timelineItemDuration(props, moving);
+  return [0, props.durationMs, ...timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playheadMs, moving)]
     .find(point => Math.abs(point - moving.previewMs) < 1 || Math.abs(point - moving.previewMs - duration) < 1);
 }
 
-export function displayedSceneDuration(cue: LinkCue | undefined, pixelsPerSecond: number): number {
-  return cue?.durationMs ?? (cue?.actions.some((action) => action.kind === 'obs.setProgramScene') ? 112 / pixelsPerSecond * 1000 : 0);
+/** How long a clip or cue lasts on the timeline; an instant cue lasts 0. */
+export function timelineItemDuration(props: { clips: readonly ReferenceMediaClip[]; cues: readonly LinkCue[] }, target: { kind: 'clip' | 'cue'; id: string }): number {
+  return (target.kind === 'clip' ? props.clips.find(clip => clip.id === target.id)?.durationMs : props.cues.find(cue => cue.id === target.id)?.durationMs) ?? 0;
 }
 
 export function timelineSnapPoints(
   state: ResolvedTimelineState,
   cues: readonly LinkCue[],
   frameRate: MtcFrameRate,
-  pixelsPerSecond: number,
   playheadMs?: number,
   excluded?: { kind: 'clip' | 'cue'; id: string }
 ): number[] {
@@ -28,7 +28,7 @@ export function timelineSnapPoints(
     ...cues.filter((cue) => !visualIds.has(cue.id)
       && (excluded?.kind !== 'cue' || cue.id !== excluded.id)).flatMap((cue) => {
       const start = timecodeToMilliseconds(cue.timecode, frameRate);
-      return [start, start + displayedSceneDuration(cue, pixelsPerSecond)];
+      return cue.durationMs === undefined ? [start] : [start, start + cue.durationMs];
     })
   ];
 }

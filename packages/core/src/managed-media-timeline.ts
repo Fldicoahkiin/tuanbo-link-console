@@ -22,7 +22,7 @@ export type ManagedMediaEvent = {
   layerIndex: number;
   layerCount: number;
   sourceName: string;
-  sceneName?: string | undefined;
+  sceneName: string;
   deferSceneSwitch?: boolean | undefined;
   assetId: string;
   assetName: string;
@@ -44,12 +44,10 @@ export function compileManagedMediaTimeline(project: LinkProject, itemId: string
   const assets = new Map(project.mediaAssets.map((asset) => [asset.id, asset]));
   const scenes = materialSceneTargets(project, itemId);
   const sceneByLayer = new Map(scenes.filter(target => target.layerId).map(target => [`${target.asset.id}:${target.layerId}`, target]));
-  assertLayerIntervalsDoNotOverlap(item, assets, project.timebase.frameRate);
   const events = item.referenceMediaClips.flatMap((clip): ManagedMediaEvent[] => {
     const asset = requireAsset(assets, clip.assetId);
-    if (asset.kind === 'audio' && project.obsOutputMode !== 'scenes') return [];
     if (asset.kind === 'audio' && audioContainsMediaSource(item.referenceAudio, asset.id)) return [];
-    const scene = project.obsOutputMode === 'scenes' ? sceneByLayer.get(`${asset.id}:${clip.layerId}`) ?? materialSceneNames(project.projectId, asset) : null;
+    const scene = sceneByLayer.get(`${asset.id}:${clip.layerId}`) ?? materialSceneNames(project.projectId, asset);
     if (!clip.layerId) throw new Error(`素材片段“${clip.label}”还没分配视觉图层`);
     const layerIndex = item.visualLayers.findIndex((layer) => layer.id === clip.layerId);
     if (layerIndex < 0) throw new Error(`素材片段“${clip.label}”引用不存在的视觉图层`);
@@ -61,8 +59,8 @@ export function compileManagedMediaTimeline(project: LinkProject, itemId: string
       layerId: clip.layerId,
       layerIndex,
       layerCount: item.visualLayers.length,
-      sourceName: scene?.sourceName ?? managedMediaSourceName(project.projectId, clip.layerId, asset.kind),
-      ...(scene ? { sceneName: scene.sceneName } : {}),
+      sourceName: scene.sourceName,
+      sceneName: scene.sceneName,
       assetId: asset.id,
       assetName: asset.name,
       assetKind: asset.kind,
@@ -80,10 +78,6 @@ export function compileManagedMediaTimeline(project: LinkProject, itemId: string
   });
   events.sort(compareManagedMediaEvents);
   return { itemId, frameRate: project.timebase.frameRate, events };
-}
-
-export function managedMediaSourceName(projectId: string, layerId: string, kind: 'video' | 'image' | 'audio'): string {
-  return `${MANAGED_OBS_SOURCE_PREFIX}${stableNamePart(projectId)}·${stableNamePart(layerId)}·${kind}`;
 }
 
 export function materialSceneNames(projectId: string, asset: Pick<LinkMediaAsset, 'id' | 'name'>): { sceneName: string; sourceName: string } {
@@ -140,34 +134,6 @@ function compareManagedMediaEvents(left: ManagedMediaEvent, right: ManagedMediaE
   return left.id.localeCompare(right.id);
 }
 
-function assertLayerIntervalsDoNotOverlap(
-  item: RundownItem,
-  assets: Map<string, LinkMediaAsset>,
-  frameRate: MtcFrameRate
-): void {
-  const intervalsByLayer = new Map<string, Array<{ clipId: string; label: string; start: number; end: number }>>();
-  for (const clip of item.referenceMediaClips) {
-    const asset = requireAsset(assets, clip.assetId);
-    if (asset.kind === 'audio') continue;
-    if (!clip.layerId) throw new Error(`素材片段“${clip.label}”还没分配视觉图层`);
-    const span = resolveTimelineClipSpan(clip, frameRate);
-    const start = span.startFrame;
-    const end = span.endFrame;
-    const intervals = intervalsByLayer.get(clip.layerId) ?? [];
-    intervals.push({ clipId: clip.id, label: clip.label, start, end });
-    intervalsByLayer.set(clip.layerId, intervals);
-  }
-  for (const intervals of intervalsByLayer.values()) {
-    intervals.sort((a, b) => a.start - b.start || a.end - b.end);
-    for (let index = 1; index < intervals.length; index++) {
-      const previous = intervals[index - 1]!, current = intervals[index]!;
-      if (current.start < previous.end && previous.start < current.end) {
-        throw new Error(`视觉图层存在重叠片段：“${previous.label}”与“${current.label}”`);
-      }
-    }
-  }
-}
-
 function requireItem(project: LinkProject, itemId: string): RundownItem {
   const item = project.rundown.find((candidate) => candidate.id === itemId);
   if (!item) throw new Error(`节目不存在：${itemId}`);
@@ -178,11 +144,6 @@ function requireAsset(assets: Map<string, LinkMediaAsset>, assetId: string): Lin
   const asset = assets.get(assetId);
   if (!asset) throw new Error(`媒体素材不存在：${assetId}`);
   return asset;
-}
-
-function stableNamePart(value: string): string {
-  const readable = value.replace(/[^\p{L}\p{N}._-]+/gu, '-').slice(0, 27) || 'unknown';
-  return `${readable}-${stableHash(value)}`;
 }
 
 function stableHash(value: string): string {

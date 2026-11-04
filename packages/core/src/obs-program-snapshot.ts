@@ -4,7 +4,7 @@ import { resolveTimelineClipSpan } from './timeline-state';
 /** Runtime data only: original console XML and unrelated programs stay in the
  * document. This snapshot is never used to replace or save the user's project. */
 export function createObsProgramSnapshot(project: LinkProject, itemId: string, revision: number): ObsProgramSnapshot {
-  if (project.playbackSource !== 'internal' || project.obsOutputMode !== 'scenes') throw new Error('后台画面只支持“联动台播放”的场景工程');
+  if (project.playbackSource !== 'internal') throw new Error('后台画面只支持“联动台播放”的工程');
   const item = project.rundown.find(entry => entry.id === itemId);
   if (!item) throw new Error('画面节目不存在');
   const ids = new Set(item.referenceMediaClips.map(clip => clip.assetId));
@@ -30,7 +30,7 @@ export function itemNeedsObs(project: LinkProject, itemId: string): boolean {
 
 export function projectFromObsSnapshot(snapshot: ObsProgramSnapshot): LinkProject {
   return parseLinkProject({ ...createEmptyLinkProject(snapshot.item.title), projectId: snapshot.projectId,
-    playbackSource: 'internal', obsOutputMode: 'scenes', internalVideoAudio: snapshot.internalVideoAudio,
+    playbackSource: 'internal', internalVideoAudio: snapshot.internalVideoAudio,
     outputCanvas: snapshot.outputCanvas, timebase: { frameRate: snapshot.frameRate, mode: 'per-item-reset' },
     rundown: [snapshot.item], mediaAssets: snapshot.assets });
 }

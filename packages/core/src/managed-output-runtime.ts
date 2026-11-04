@@ -41,7 +41,7 @@ export class ManagedOutputRuntime {
   selectItem(itemId: string): void {
     this.selectedItem = this.project.rundown.find((item) => item.id === itemId) ?? null;
     this.mediaEvents = compileManagedMediaTimeline(this.project, itemId).events;
-    this.preparedScenes = this.project.obsOutputMode === 'scenes' ? new SceneOutputTimeline(this.project, itemId, this.mediaEvents) : null;
+    this.preparedScenes = new SceneOutputTimeline(this.project, itemId, this.mediaEvents);
     this.resetExecution();
   }
 
@@ -77,14 +77,6 @@ export class ManagedOutputRuntime {
   /** Rehearsal throws on the first failure. Live returns the failures to be shown and continues. */
   async executeTransport(runner: CueActionRunner, action: 'pause' | 'start', currentFrame: number, mode: LinkRunMode = 'rehearsal'): Promise<{ actions: ActionExecutionResult[]; media: ManagedMediaExecutionReport[] }> {
     const failures: { actions: ActionExecutionResult[]; media: ManagedMediaExecutionReport[] } = { actions: [], media: [] };
-    if (action === 'start' && this.project.obsOutputMode !== 'scenes') {
-      const events = [...this.activeMediaByLayer.values()].flatMap((entries) => [...entries.values()]);
-      for (const event of events.filter((entry) => entry.assetKind !== 'image')) {
-        const report = await this.executeMedia(this.alignEvent(event, currentFrame), mode);
-        if (report.status === 'failed') failures.media.push(report);
-      }
-      return failures;
-    }
     for (const command of this.transportActions(action)) {
       const result = await runner.retry('p1-transport', command);
       if (result.status !== 'failed') continue;
@@ -122,27 +114,18 @@ export class ManagedOutputRuntime {
     return reports;
   }
 
+  /** An older show-source cue first hides what its track showed before. */
   compileVisualCue(cue: LinkCue): LinkCue {
-    if (!cue.layerId || !this.selectedItem) return cue;
+    if (!cue.layerId) return cue;
     const show = findManagedShowAction(cue);
     if (!show) return cue;
-    const layerIndex = this.selectedItem.visualLayers.findIndex((layer) => layer.id === cue.layerId);
-    if (layerIndex < 0) return cue;
-    const generated: LinkAction[] = [];
-    const previousSources = [...(this.activeObsSourcesByLayer.get(cue.layerId) ?? [])]
-      .filter((sourceName) => sourceName !== show.sourceName);
-    for (const [index, previousSource] of previousSources.entries()) {
-      generated.push({
-        id: `${cue.id}:hide-previous:${index}`, label: `隐藏上一来源 · ${previousSource}`,
-        kind: 'obs.setSceneItemEnabled', sceneName: MANAGED_OBS_SCENE_NAME, sourceName: previousSource, enabled: false
-      });
-    }
-    generated.push({
-      id: `${cue.id}:layer-index`, label: `应用图层层序 · ${show.sourceName}`,
-      kind: 'obs.setSceneItemIndex', sceneName: MANAGED_OBS_SCENE_NAME, sourceName: show.sourceName,
-      sceneItemIndex: Math.max(0, this.selectedItem.visualLayers.length - layerIndex - 1)
-    });
-    return { ...cue, actions: [...generated, ...cue.actions] };
+    const hides = [...(this.activeObsSourcesByLayer.get(cue.layerId) ?? [])]
+      .filter((sourceName) => sourceName !== show.sourceName)
+      .map((sourceName, index): LinkAction => ({
+        id: `${cue.id}:hide-previous:${index}`, label: `隐藏上一来源 · ${sourceName}`,
+        kind: 'obs.setSceneItemEnabled', sceneName: MANAGED_OBS_SCENE_NAME, sourceName, enabled: false
+      }));
+    return hides.length ? { ...cue, actions: [...hides, ...cue.actions] } : cue;
   }
 
   applyVisualCueResult(

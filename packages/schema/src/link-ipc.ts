@@ -42,7 +42,7 @@ export const linkManagedMediaEventSchema = z.object({
   layerIndex: z.number().int().nonnegative(),
   layerCount: z.number().int().positive(),
   sourceName: z.string().min(1),
-  sceneName: z.string().min(1).optional(),
+  sceneName: z.string().min(1),
   deferSceneSwitch: z.boolean().optional(),
   assetId: z.string().min(1),
   assetName: z.string().min(1),

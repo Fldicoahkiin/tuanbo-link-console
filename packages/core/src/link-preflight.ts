@@ -96,15 +96,13 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
       checks.push(mismatch ? warning(`ma2.show.${item.id}`, `MA2 控台 Show：${item.title}`, mismatch)
         : passed(`ma2.show.${item.id}`, `MA2 控台 Show：${item.title}`, context.ma2Show));
     }
-    if (project.obsOutputMode === 'scenes') {
-      const incompatible = item.cues.filter((cue) => cue.enabled).flatMap((cue) => cue.actions).find((action) =>
-        action.kind.startsWith('obs.') && action.kind !== 'obs.setProgramScene' && action.kind !== 'obs.setTransition' && action.kind !== 'obs.saveSourceScreenshot'
-        // Show/hide source acts on the scene on program (operator decision 2026-10-19).
-        && action.kind !== 'obs.setSceneItemEnabled');
-      checks.push(incompatible
-        ? blocking(`obs.sceneMode.${item.id}`, `完整场景模式：${item.title}`, `动作“${incompatible.label}”和完整场景模式冲突。请在这个节目的 Cue 编排里删掉这个动作，或停用它所在的 Cue；需要切换画面时，改用“切换完整场景”动作。`)
-        : passed(`obs.sceneMode.${item.id}`, `完整场景模式：${item.title}`, '沿用 OBS 场景里的位置、裁剪和滤镜；本地画面素材只用来预览'));
-    }
+    const incompatible = item.cues.filter((cue) => cue.enabled).flatMap((cue) => cue.actions).find((action) =>
+      action.kind.startsWith('obs.') && action.kind !== 'obs.setProgramScene' && action.kind !== 'obs.setTransition' && action.kind !== 'obs.saveSourceScreenshot'
+      // Show/hide source acts on the scene on program (operator decision 2026-10-19).
+      && action.kind !== 'obs.setSceneItemEnabled');
+    checks.push(incompatible
+      ? blocking(`obs.sceneMode.${item.id}`, `完整场景模式：${item.title}`, `动作“${incompatible.label}”和完整场景模式冲突。请在这个节目的 Cue 编排里删掉这个动作，或停用它所在的 Cue；需要切换画面时，改用“切换完整场景”动作。`)
+      : passed(`obs.sceneMode.${item.id}`, `完整场景模式：${item.title}`, '沿用 OBS 场景里的位置、裁剪和滤镜；本地画面素材只用来预览'));
     try {
       const timeline = compileManagedMediaTimeline(project, item.id);
       checks.push(passed(`media.timeline.${item.id}`, `媒体时间线：${item.title}`, `${timeline.events.length / 2} 个 OBS 媒体片段`));
@@ -153,7 +151,7 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
   checks.push(context.obs.authenticated
     ? passed('obs.authentication', 'OBS WebSocket', '已连接并登录')
     : blocking('obs.authentication', 'OBS WebSocket', '没连上或登录失败'));
-  checks.push(outputCanvasCheck(project, context.obs));
+  checks.push(outputCanvasCheck(context.obs));
   const video = context.obs.videoSettings;
   if (video?.outputWidth !== undefined && video.outputHeight !== undefined) {
     checks.push(video.outputWidth === video.baseWidth && video.outputHeight === video.baseHeight
@@ -246,20 +244,11 @@ function p1AudioCheck(profile: IntegrationProfile, obs: PreflightContext['obs'])
     : passed('obs.p1AudioInput', 'P1 音乐进入 OBS', `${inputName} 存在且未静音`);
 }
 
-function outputCanvasCheck(project: LinkProject, obs: PreflightContext['obs']): PreflightCheck {
-  const expected = project.outputCanvas;
+function outputCanvasCheck(obs: PreflightContext['obs']): PreflightCheck {
   const actual = obs.videoSettings;
-  if (project.obsOutputMode === 'scenes' && actual) return passed('obs.outputCanvas', 'OBS 输出画布', `使用 OBS 现有的画布 ${actual.baseWidth}×${actual.baseHeight}`);
-  if (!actual) {
-    return blocking('obs.outputCanvas', 'OBS 输出画布', `读不到 OBS 画布；工程需要 ${expected.width}×${expected.height}`);
-  }
-  return actual.baseWidth === expected.width && actual.baseHeight === expected.height
-    ? passed('obs.outputCanvas', 'OBS 输出画布', `${expected.width}×${expected.height}`)
-    : blocking(
-      'obs.outputCanvas',
-      'OBS 输出画布',
-      `工程需要 ${expected.width}×${expected.height}，OBS 现在是 ${actual.baseWidth}×${actual.baseHeight}`
-    );
+  return actual
+    ? passed('obs.outputCanvas', 'OBS 输出画布', `使用 OBS 现有的画布 ${actual.baseWidth}×${actual.baseHeight}`)
+    : blocking('obs.outputCanvas', 'OBS 输出画布', '读不到 OBS 的画布设置，重新连接 OBS 后再检查');
 }
 
 function validateP1StartTrigger(

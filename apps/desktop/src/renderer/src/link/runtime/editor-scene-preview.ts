@@ -1,6 +1,6 @@
-import { playbackFramesPerSecond, type LinkDesktopApi } from '@tb/core/link';
+import { playbackFramesPerSecond, sceneOutputAt, type LinkDesktopApi } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
-import { internalSample, internalSeekState } from './internal-timeline';
+import { internalSample } from './internal-timeline';
 import { useIntegrationStore } from '../stores/integration-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { reportCoordinatorError } from './runtime-action-log';
@@ -34,10 +34,9 @@ export class EditorScenePreview {
 /** Explicit stopped-cursor preview: OBS renders the frame; no audio clock or Cue session is armed. */
 export async function previewEditorScene(project: LinkProject, projectPath: string, itemId: string,
   positionMs: number, preciseSeeking: boolean, desktop: PreviewDesktop, current: () => boolean): Promise<void> {
-  if (project.obsOutputMode !== 'scenes') throw new Error('时间线画面定位需要 OBS 场景模式');
   if (!Number.isFinite(positionMs) || positionMs < 0) throw new Error('画面定位时间无效');
   const frame = internalSample(project, positionMs).totalFrames;
-  const work = internalSeekState(project, itemId, positionMs);
+  const work = sceneOutputAt(project, itemId, frame);
   const media = work.media.map(event => ({ ...event, embeddedAudioEnabled: false,
     sourceOffsetMs: event.sourceOffsetMs + (event.assetKind === 'image' ? 0
       : Math.round(Math.max(0, frame - event.frameNumber) * 1000 / playbackFramesPerSecond(project.timebase.frameRate))) }));
@@ -51,7 +50,7 @@ export async function previewEditorScene(project: LinkProject, projectPath: stri
   }
   for (const entry of work.cues) for (const action of entry.cue.actions) {
     if (!current()) return;
-    await executeObsCueAction(desktop, project, action);
+    await executeObsCueAction(desktop, action);
   }
   for (const event of media) {
     if (!current()) return;

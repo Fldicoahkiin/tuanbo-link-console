@@ -77,8 +77,9 @@ export function renameProjectCommand(name: string, now?: TimestampProvider): Lin
   }, now);
 }
 
-export function setObsOutputModeCommand(mode: 'managed' | 'scenes'): LinkCommand {
-  return createCommand('修改 OBS 输出方式', (project) => { project.obsOutputMode = mode; });
+/** Every project plays through OBS scenes. The saved field keeps older versions opening the file the same way. */
+export function obsSceneOutputCommand(): LinkCommand {
+  return createCommand('改用 OBS 场景播放', (project) => { project.obsOutputMode = 'scenes'; });
 }
 
 export function setItemPlaybackCommand(itemId: string, playback: NonNullable<RundownItem['playback']>): LinkCommand {

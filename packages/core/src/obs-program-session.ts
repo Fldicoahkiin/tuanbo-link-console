@@ -77,7 +77,7 @@ export class ObsProgramSession {
 
   constructor(private readonly project: LinkProject, projectPath: string, private readonly itemId: string,
     private readonly dependencies: ObsProgramSessionDependencies) {
-    if (project.playbackSource !== 'internal' || project.obsOutputMode !== 'scenes') throw new Error('后台画面只支持“联动台播放”的场景工程');
+    if (project.playbackSource !== 'internal') throw new Error('后台画面只支持“联动台播放”的工程');
     const item = project.rundown.find(entry => entry.id === itemId);
     if (!item) throw new Error('后台画面节目不存在');
     // Other outputs belong to independent channels, never pretend that an OBS
@@ -250,7 +250,7 @@ export class ObsProgramSession {
       while (group.length < 9) {
         const next = entries[index + group.length];
         if (!next || !('event' in next) || next.frame !== entry.frame || next.event.phase !== 'start'
-          || !next.event.deferSceneSwitch || !next.event.sceneName || !action.sceneLayers.includes(next.event.sceneName)
+          || !next.event.deferSceneSwitch || !action.sceneLayers.includes(next.event.sceneName)
           || sources.has(next.event.sourceName) || this.managed.isActiveMedia(next.event)) break;
         group.push(next); sources.add(next.event.sourceName);
       }
@@ -277,7 +277,7 @@ export class ObsProgramSession {
     // A camera only covers these decoders; composition restores their
     // visibility. Repositioning them here interrupts a live media clock.
     if (event.phase === 'start' && this.managed.isActiveMedia(event)) {
-      if (!event.deferSceneSwitch && event.sceneName) await this.cue({
+      if (!event.deferSceneSwitch) await this.cue({
         id: `restore:${event.id}`, name: '恢复持续播放的素材', enabled: true, notes: '',
         timecode: frameNumberToTimecode(entry.frame, this.project.timebase.frameRate),
         actions: [{ id: `restore:${event.id}:scene`, label: '恢复底层画面', kind: 'obs.setProgramScene', sceneName: event.sceneName }]

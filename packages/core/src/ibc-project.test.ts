@@ -10,7 +10,7 @@ describe('IBC 工程导入', () => {
     const before = createEmptyLinkProject('接收');
     const command = importIbcCommand(source(), audio, before.timebase.frameRate);
     const result = command.execute(before);
-    expect(result.obsOutputMode).toBe('scenes'); expect(result.rundown[0]?.playback).toMatchObject({ startMs: 1000, endMs: 18000, mtcOffsetMs: 60000, shortcut: 'Ctrl+F2' });
+    expect(result.rundown[0]?.playback).toMatchObject({ startMs: 1000, endMs: 18000, mtcOffsetMs: 60000, shortcut: 'Ctrl+F2' });
     expect(result.rundown[0]?.cues[0]?.actions[0]).toMatchObject({ kind: 'obs.setProgramScene', sceneName: '拉腿全景' });
     expect(result.playlists?.[0]?.id).toBe(result.rundown[0]?.playlistId); expect(command.undo(before)).toEqual(before); expect(before.rundown).toHaveLength(0);
   });

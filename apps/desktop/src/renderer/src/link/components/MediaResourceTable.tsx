@@ -6,7 +6,6 @@ import type { LinkMediaAsset, LinkMediaFolder } from '@tb/schema';
 import {
   ChevronDown,
   ChevronRight,
-  Camera,
   FileAudio,
   FileImage,
   Film,
@@ -102,23 +101,22 @@ export function MediaResourceTable(props: Props): JSX.Element {
 
 function ObsVisualRow(props: { resource: ObsResource; selected: boolean; onSelect: (resource: ObsResource) => void; onAdd: (resource: ObsResource) => void }): JSX.Element {
   const resource = props.resource;
-  const Icon = resource.group === '摄像头' ? Camera : Monitor;
   return <div
     className={`media-table-row obs-camera-row ${props.selected ? 'is-selected' : ''}`}
     draggable
     tabIndex={0}
     onClick={() => props.onSelect(resource)}
-    onDoubleClick={() => { props.onSelect(resource); if ((resource.kind === 'sceneItem' || resource.kind === 'scene')) props.onAdd(resource); }}
-    onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === 'Enter') { props.onSelect(resource); if ((resource.kind === 'sceneItem' || resource.kind === 'scene')) props.onAdd(resource); } }}
+    onDoubleClick={() => { props.onSelect(resource); props.onAdd(resource); }}
+    onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === 'Enter') { props.onSelect(resource); props.onAdd(resource); } }}
     onDragStart={(event) => {
       event.dataTransfer.effectAllowed = 'copy';
       event.dataTransfer.setData(OBS_DRAG_TYPE, JSON.stringify(resource));
     }}
   >
-    <span className="media-thumbnail icon"><Icon /></span>
+    <span className="media-thumbnail icon"><Monitor /></span>
     <span className="media-row-copy">
-      <span className="media-name-cell"><Icon className="media-kind-icon camera" /><strong title={resource.name}>{resource.name}</strong></span>
-      <small title={resource.sceneName ?? 'OBS'}>{resource.kind === 'scene' ? 'OBS 场景' : `${resource.group} · ${resource.sceneName ?? 'OBS'}`}</small>
+      <span className="media-name-cell"><Monitor className="media-kind-icon camera" /><strong title={resource.name}>{resource.name}</strong></span>
+      <small>OBS 场景</small>
     </span>
     <span className="media-status ready">在线</span>
     <button className="media-quick-add" aria-label={`添加场景 ${resource.name} 到时间线`} onClick={(event) => { event.stopPropagation(); props.onAdd(resource); }} onDoubleClick={(event) => event.stopPropagation()}><Plus /></button>

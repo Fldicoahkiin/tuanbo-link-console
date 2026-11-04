@@ -1,20 +1,18 @@
 import { ObsLiveCanvas } from './ObsLiveCanvas';
 import { Fragment, useEffect, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent, type PointerEvent } from 'react';
-import type { LinkObsInventory, LinkObsSceneItemTransform, ResolvedTimelineClip, ResolvedTimelineObsCue, ResolvedTimelineState } from '@tb/core/link';
-import type { LinkMediaAsset, OutputCanvas, ReferenceCanvasTransform, ReferenceMediaClip, SceneItemTransform } from '@tb/schema';
+import type { LinkObsInventory, ResolvedTimelineClip, ResolvedTimelineState } from '@tb/core/link';
+import type { LinkMediaAsset, OutputCanvas, ReferenceCanvasTransform, ReferenceMediaClip } from '@tb/schema';
 import { Boxes, MonitorPlay, RadioTower, Volume2 } from 'lucide-react';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
-import { OBS_DRAG_TYPE, obsPreviewSourceName, parseObsResource, type ObsResource } from './resource-library-model';
+import { OBS_DRAG_TYPE, parseObsResource, type ObsResource } from './resource-library-model';
 import { snapCanvasAxis } from './canvas-snap';
 import { resizeMediaCanvas } from './media-canvas-geometry';
 import { ObsPreviewLayer } from './ObsPreviewLayer';
-import { resolveObsSceneItemGeometry, resolveObsSourceSize, type ObsSourceSize } from './obs-source-geometry';
-import { StageMediaContextMenu, StageObsContextMenu } from './StageMediaContextMenu';
+import { StageMediaContextMenu } from './StageMediaContextMenu';
 import { usePreviewMediaLifecycle } from './usePreviewMediaLifecycle';
 
 type Props = {
-  sceneMode?: boolean;
-  /** Scene mode: the clips the output shows; the camera, if any, lies beneath them. */
+  /** The clips the output shows; the camera, if any, lies beneath them. */
   activeMediaClipIds?: ReadonlySet<string> | null;
   scenePreview?: { cueId: string; sceneName: string } | null;
   mutePreviewAudio?: boolean;
@@ -37,9 +35,6 @@ type Props = {
   onTransformClip: (clipId: string, transform: ReferenceCanvasTransform) => void;
   onMoveClipToTop: (clipId: string) => void;
   onRemoveClip: (clipId: string) => void;
-  onTransformObs: (cueId: string, transform: SceneItemTransform) => void;
-  onMoveObsToTop: (cueId: string) => void;
-  onRemoveObs: (cueId: string) => void;
   onDropObsResource: (resource: ObsResource, startMs?: number, layerId?: string) => void;
 };
 
@@ -48,17 +43,15 @@ export function ReferenceStage(props: Props): JSX.Element {
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [snapGuides, setSnapGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
   const [mediaContext, setMediaContext] = useState<{ clip: ReferenceMediaClip; asset: LinkMediaAsset; x: number; y: number } | null>(null);
-  const [obsContext, setObsContext] = useState<(ActiveObsResource & { layerId: string; x: number; y: number }) | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const visibleClips = props.timelineState?.clips.filter((entry) => entry.visual || (entry.layer?.visible !== false && entry.asset.kind !== 'audio' && entry.startMs > props.playheadMs && entry.startMs <= props.playheadMs + 2000)) ?? [];
   const activeClipCount = props.timelineState?.activeClipIds.length ?? 0;
-  const onAir = (clipId: string): boolean => !props.sceneMode || props.activeMediaClipIds?.has(clipId) === true;
+  const onAir = (clipId: string): boolean => props.activeMediaClipIds?.has(clipId) === true;
   const audibleClipIds = new Set(props.mutePreviewAudio ? [] : props.timelineState?.activeAudioClipIds.filter(onAir) ?? []);
   const standaloneAudio = props.timelineState?.clips.filter((entry) => audibleClipIds.has(entry.clip.id) && entry.asset.kind === 'audio') ?? [];
   const canvas = props.outputCanvas;
   const obsCanvasMatches = props.obsInventory?.videoSettings?.baseWidth === canvas.width
     && props.obsInventory.videoSettings.baseHeight === canvas.height;
-  const activeObsCount = props.scenePreview ? 1 : props.timelineState?.activeObsCueIds.length ?? 0;
   const dropObs = (event: DragEvent<HTMLDivElement>): void => {
     const value = event.dataTransfer.getData(OBS_DRAG_TYPE);
     if (!value) return;
@@ -93,9 +86,7 @@ export function ReferenceStage(props: Props): JSX.Element {
           const layer = layerState.layer;
           if (!layer.visible) return null;
           const zIndex = reverseIndex + 2;
-          const obsEntries = props.sceneMode ? [] : layerState.activeObsCues.map((entry) => resolveActiveObsResource(entry, props.obsInventory, canvas)).filter((entry) => !entry.resource.inputKind?.includes('wasapi'));
           return <Fragment key={layer.id}>
-            {obsEntries.map((obsEntry) => <ObsPreviewLayer key={obsEntry.cueId} sourceName={obsPreviewSourceName(obsEntry.resource) ?? obsEntry.resource.name} status={props.obsStatus} zIndex={zIndex} selected={props.selectedCueId === obsEntry.cueId} locked={layer.locked} transform={obsEntry.transform} sourceSize={obsEntry.sourceSize} canvasWidth={obsEntry.canvasWidth} canvasHeight={obsEntry.canvasHeight} onSnapGuides={setSnapGuides} onSelect={() => { props.onSelectObsResource(obsEntry.resource); props.onSelectCue(obsEntry.cueId); }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); props.onSelectObsResource(obsEntry.resource); props.onSelectCue(obsEntry.cueId); setMediaContext(null); setObsContext({ ...obsEntry, layerId: layer.id, x: event.clientX, y: event.clientY }); }} onTransform={(transform) => props.onTransformObs(obsEntry.cueId, transform)} />)}
             {props.projectPath ? visibleClips.filter((entry) => entry.layer?.id === layer.id).map((entry) => {
               return <MediaCanvasLayer
                 key={entry.clip.id}
@@ -128,7 +119,7 @@ export function ReferenceStage(props: Props): JSX.Element {
         })}
         {snapGuides.x !== null ? <i className="stage-snap-guide vertical" style={{ left: `${snapGuides.x * 100}%` }} /> : null}
         {snapGuides.y !== null ? <i className="stage-snap-guide horizontal" style={{ top: `${snapGuides.y * 100}%` }} /> : null}
-        {activeClipCount === 0 && activeObsCount === 0 ? <StagePlaceholder itemTitle={props.itemTitle} selectedAsset={props.selectedAsset} /> : null}
+        {activeClipCount === 0 && !props.scenePreview ? <StagePlaceholder itemTitle={props.itemTitle} selectedAsset={props.selectedAsset} /> : null}
         {playbackError ? <div className="stage-error">{playbackError}</div> : null}
       </div>
     </div>
@@ -146,14 +137,6 @@ export function ReferenceStage(props: Props): JSX.Element {
       onTransform={(transform) => props.onTransformClip(mediaContext.clip.id, transform)}
       onMoveToTop={() => props.onMoveClipToTop(mediaContext.clip.id)}
       onRemove={() => props.onRemoveClip(mediaContext.clip.id)}
-    /> : null}
-    {obsContext ? <StageObsContextMenu
-      context={obsContext}
-      topLayerId={props.timelineState?.layers[0]?.layer.id ?? null}
-      onClose={() => setObsContext(null)}
-      onTransform={(transform) => props.onTransformObs(obsContext.cueId, transform)}
-      onMoveToTop={() => props.onMoveObsToTop(obsContext.cueId)}
-      onRemove={() => props.onRemoveObs(obsContext.cueId)}
     /> : null}
   </section>;
 }
@@ -339,24 +322,6 @@ type CanvasHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 type ResizeDirection = { x: -1 | 0 | 1; y: -1 | 0 | 1 };
 type CanvasGesture = { mode: 'move' | 'resize'; pointerId: number; startX: number; startY: number; origin: ReferenceCanvasTransform; latest: ReferenceCanvasTransform; direction: ResizeDirection };
 
-type ActiveObsResource = { cueId: string; resource: ObsResource; transform: SceneItemTransform | null; sourceSize: ObsSourceSize | null; canvasWidth: number; canvasHeight: number };
-
-function resolveActiveObsResource(entry: ResolvedTimelineObsCue, inventory: LinkObsInventory | null, canvas: { width: number; height: number }): ActiveObsResource {
-  const action = entry.showAction;
-  const geometry = resolveObsSceneItemGeometry(inventory, action.sceneName, action.sourceName);
-  const sourceSize = resolveObsSourceSize(inventory, action.sceneName, action.sourceName);
-  const resource: ObsResource = { id: `scene-item:${action.sceneName}:${action.sourceName}`, kind: 'sceneItem', group: '摄像头', name: action.sourceName, sceneName: action.sceneName, sourceName: action.sourceName, ...(inventory?.inputKinds[action.sourceName] ? { inputKind: inventory.inputKinds[action.sourceName] } : {}), ...(geometry ? { transform: geometry } : {}) };
-  const transformAction = entry.cue.actions.find((candidate) => (
-    candidate.kind === 'obs.setSceneItemTransform'
-    && candidate.sceneName === action.sceneName
-    && candidate.sourceName === action.sourceName
-  ));
-  const inventoryTransform = geometry ? sceneItemTransformFromInventory(geometry) : null;
-  const defaultTransform = sourceSize ? originalObsTransform(canvas.width, canvas.height) : null;
-  const transform = transformAction?.kind === 'obs.setSceneItemTransform' ? transformAction.transform : null;
-  return { cueId: entry.cue.id, resource, transform: transform ?? inventoryTransform ?? defaultTransform, sourceSize, canvasWidth: canvas.width, canvasHeight: canvas.height };
-}
-
 const CANVAS_HANDLES: CanvasHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
 function resizeDirection(handle: CanvasHandle): ResizeDirection {
@@ -364,25 +329,6 @@ function resizeDirection(handle: CanvasHandle): ResizeDirection {
     x: handle.includes('w') ? -1 : handle.includes('e') ? 1 : 0,
     y: handle.includes('n') ? -1 : handle.includes('s') ? 1 : 0
   };
-}
-
-function sceneItemTransformFromInventory(transform: LinkObsSceneItemTransform): SceneItemTransform {
-  return {
-    positionX: transform.positionX,
-    positionY: transform.positionY,
-    scaleX: transform.scaleX,
-    scaleY: transform.scaleY,
-    rotation: transform.rotation,
-    cropTop: transform.cropTop,
-    cropRight: transform.cropRight,
-    cropBottom: transform.cropBottom,
-    cropLeft: transform.cropLeft,
-    alignment: transform.alignment
-  };
-}
-
-function originalObsTransform(canvasWidth: number, canvasHeight: number): SceneItemTransform {
-  return { positionX: canvasWidth / 2, positionY: canvasHeight / 2, scaleX: 1, scaleY: 1, rotation: 0, cropTop: 0, cropRight: 0, cropBottom: 0, cropLeft: 0, alignment: 0 };
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

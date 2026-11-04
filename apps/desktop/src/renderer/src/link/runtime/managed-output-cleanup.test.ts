@@ -50,7 +50,7 @@ function mediaEvent() {
   return {
     id: 'managed-media:clip:stop', phase: 'stop' as const, frameNumber: 30,
     itemId: 'item', clipId: 'clip', layerId: 'layer', layerIndex: 0, layerCount: 1,
-    sourceName: 'managed', assetId: 'asset', assetName: 'clip.mp4', assetKind: 'video' as const,
+    sourceName: 'material', sceneName: 'material-scene', assetId: 'asset', assetName: 'clip.mp4', assetKind: 'video' as const,
     relativePath: 'assets/reference-media/clip.mp4', sourceOffsetMs: 0, embeddedAudioEnabled: true,
     transform: { x: 0.5, y: 0.5, scale: 1, scaleX: 1, scaleY: 1, rotation: 0 }
   };

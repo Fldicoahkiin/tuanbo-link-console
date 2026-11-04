@@ -17,7 +17,6 @@ import { RuntimeMidiSession } from './runtime-midi-session';
 import { appendMediaReport } from './runtime-report-store';
 import { applyRuntimeState, resetRuntimeExecutionView } from './runtime-state-application';
 import { P1AutoFollowController } from './p1-auto-follow-controller';
-import { prepareRuntimeArm } from './runtime-arm-preparation';
 import { EditorScenePreview } from './editor-scene-preview';
 import { executeTimelineMedia, executeTimelineWork, executeDueCues, synchronizeTimelineTransport, reportSkippedTimelineMedia, executeSkippedTimelineCue, retryReportedAction } from './timeline-work';
 
@@ -88,7 +87,7 @@ export class LinkRuntimeCoordinator {
     this.midiSession = new RuntimeMidiSession(this.midi, project.projectId, message => {
       void this.ingestQuarterFrame((message.messageType << 4) | message.value, message.receivedAt).catch(error => this.reportRuntimeError(error));
     }, error => this.reportRuntimeError(error));
-    this.runner = new CueActionRunner([new ObsIpcExecutor(() => this.project), this.midi], {
+    this.runner = new CueActionRunner([new ObsIpcExecutor(), this.midi], {
       onStatus: (event) => recordRuntimeAction(this.project.projectId, this.currentItem(), event)
     });
   }
@@ -138,7 +137,6 @@ export class LinkRuntimeCoordinator {
     if (!useRuntimeStore.getState().mtcStable) throw new Error('MTC 时间码还不稳定（需要连续稳定 500 ms），请稍等后重新做开播前检查');
     this.managedOutput.resetExecution();
     useRuntimeStore.getState().setState({ reports: [], mediaReports: [], currentCueId: null });
-    if (this.project.obsOutputMode !== 'scenes') await linkDesktopViewModel.activateManagedObsOutput();
     this.applyRequiredUpdate(this.runtime.arm(performance.now(), currentSample));
     const skippedMedia = this.managedOutput.collectThrough(currentSample.totalFrames);
     await this.enqueueSkippedMedia(skippedMedia, '从当前 MTC 位置待命时，这个素材的切换点已经过了，没有自动补播');
@@ -148,7 +146,7 @@ export class LinkRuntimeCoordinator {
   async armFromStart(assertCurrent: () => void = () => undefined): Promise<void> {
     const report = useRuntimeStore.getState().preflight;
     if (!report?.passed) throw new Error('开播前检查有未通过的项目，不能待命');
-    await this.prepareArmFromStart(assertCurrent); assertCurrent();
+    this.prepareArmFromStart(assertCurrent);
     await this.recordOperatorActionAsync('从头待命');
   }
 
@@ -302,12 +300,12 @@ export class LinkRuntimeCoordinator {
       () => this.nextCueId());
   }
 
-  private async prepareArmFromStart(assertCurrent: () => void = () => undefined): Promise<void> {
+  private prepareArmFromStart(assertCurrent: () => void): void {
     this.decoder.reset(); this.mtcStability.reset(); this.lastSample = null;
     this.managedOutput.resetExecution(); resetRuntimeExecutionView();
-    this.applyRequiredUpdate(await prepareRuntimeArm(this.project, {
-      runtime: this.runtime, assertCurrent
-    }));
+    assertCurrent();
+    // P1 follow mode: the timeline starts when the external timecode starts.
+    this.applyRequiredUpdate(this.runtime.arm(performance.now(), null, 'awaiting-external-start'));
   }
 
   private applyUpdate(update: RuntimeUpdate): void {

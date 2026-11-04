@@ -1,4 +1,3 @@
-import { displayedSceneDuration } from './timeline-snap-points';
 import type { DragEvent, HTMLAttributes, MouseEvent, PointerEvent, ReactNode } from 'react';
 import { resolveTimelineCueSpan, timecodeToMilliseconds, type TimelineSpan } from '@tb/core/link';
 import type { LinkCue, LinkMediaAsset, MtcFrameRate, ReferenceMediaClip } from '@tb/schema';
@@ -99,7 +98,6 @@ export function CueLane(props: {
   onTrimPointerUp?: (event: PointerEvent<HTMLElement>) => void;
   onTrimPointerCancel?: (event: PointerEvent<HTMLElement>) => void;
 }): JSX.Element {
-  const collisionCounts = new Map<string, number>();
   return <div className={`timeline-lane cue-lane ${props.device}-lane ${props.locked ? 'is-locked' : ''} ${props.visible === false ? 'is-hidden' : ''} ${props.dropTarget ? 'is-drop-target' : ''} ${props.draggingItem ? 'has-item-drag' : ''}`} style={{ order: props.order }} data-visual-layer-id={props.layerId} data-layer-locked={props.locked === undefined ? undefined : String(props.locked)} {...props.lanePointer} onDragOver={props.onDrop ? (event) => event.preventDefault() : undefined} onDrop={props.onDrop}>{props.children}{props.cues.flatMap((cue) => {
     const actionCount = cue.actions.filter((action) => actionMatchesDevice(action, props.device)).length;
     const emptyCue = cue.actions.length === 0;
@@ -108,21 +106,17 @@ export function CueLane(props: {
     const visualSpan = props.visualCueSpans?.get(cue.id) ?? (cue.durationMs !== undefined && cue.actions.some((action) => action.kind === 'obs.setProgramScene') ? resolveTimelineCueSpan(cue, props.frameRate) : undefined);
     const originMs = visualSpan?.startMs ?? timecodeToMilliseconds(cue.timecode, props.frameRate);
     const visualShow = props.visualClipMode && (visualSpan !== undefined || sceneName !== undefined);
-    // An untimed scene keeps its existing 112px display width until the user drags an edge.
-    const visualDurationMs = visualSpan?.durationMs ?? (visualShow ? displayedSceneDuration(cue, props.pixelsPerSecond) : 0);
+    const visualDurationMs = visualSpan?.durationMs ?? 0;
     const resizing = props.resizeDrag?.id === cue.id ? props.resizeDrag : null;
     const startMs = resizing?.previewStartMs
       ?? (props.drag?.kind === 'cue' && props.drag.id === cue.id ? props.drag.previewMs : originMs);
     const renderedDurationMs = resizing?.previewDurationMs ?? visualDurationMs;
     const itemDrag = props.drag?.kind === 'cue' && props.drag.id === cue.id ? props.drag : null;
-    const collisionKey = String(startMs);
-    const collisionIndex = collisionCounts.get(collisionKey) ?? 0;
-    collisionCounts.set(collisionKey, collisionIndex + 1);
-    const left = startMs / 1000 * props.pixelsPerSecond + (visualShow ? 0 : collisionIndex * 10);
+    const left = startMs / 1000 * props.pixelsPerSecond;
     const width = visualShow ? timelineSpanWidth(renderedDurationMs, props.pixelsPerSecond) : 112;
     if (!itemDrag && !resizing && props.selectedCueId !== cue.id && (left + width < props.viewport.left - 112 || left > props.viewport.left + props.viewport.width + 112)) return [];
     const cueKind = cueActionKind(cue);
-    return [<button aria-pressed={props.selectedCueId === cue.id} onClick={() => props.onSelectCue?.(cue.id)} onContextMenu={(event) => props.onContextMenu?.(event, cue)} className={`timeline-cue cue-kind-${cueKind} ${visualShow ? 'visual-obs-clip' : ''} ${props.selectedCueId === cue.id ? 'is-selected' : ''} ${props.activeCueIds?.has(cue.id) ? 'is-active' : ''} ${props.locked ? 'is-locked' : ''} ${itemDrag?.moved ? 'is-dragging' : ''}`} key={`${props.device}:${cue.id}`} style={{ left: startMs / 1_000 * props.pixelsPerSecond + (visualShow ? 0 : collisionIndex * 10), top: 2, translate: itemDrag?.moved ? `0 ${itemDrag.previewOffsetY}px` : undefined, ...(visualShow ? { width: timelineSpanWidth(renderedDurationMs, props.pixelsPerSecond) } : {}) }} title={props.locked ? '图层已锁定' : `${emptyCue ? `${cue.name} · 待配置动作` : `${cue.name} · ${actionCount} 个动作`} · ${formatTimelineTimecode(startMs, props.frameRate)} · 左右拖动时间，上下拖动图层层级`} onPointerDown={(event) => { if (!props.locked) props.onBeginDrag(event, 'cue', cue.id, originMs); else { event.stopPropagation(); props.onSelectCue?.(cue.id); } }} onPointerMove={props.onMoveDrag} onPointerUp={props.onEndDrag} onPointerCancel={props.onCancelDrag}>
+    return [<button aria-pressed={props.selectedCueId === cue.id} onClick={() => props.onSelectCue?.(cue.id)} onContextMenu={(event) => props.onContextMenu?.(event, cue)} className={`timeline-cue cue-kind-${cueKind} ${visualShow ? 'visual-obs-clip' : ''} ${props.selectedCueId === cue.id ? 'is-selected' : ''} ${props.activeCueIds?.has(cue.id) ? 'is-active' : ''} ${props.locked ? 'is-locked' : ''} ${itemDrag?.moved ? 'is-dragging' : ''}`} key={`${props.device}:${cue.id}`} style={{ left, top: 2, translate: itemDrag?.moved ? `0 ${itemDrag.previewOffsetY}px` : undefined, ...(visualShow ? { width: timelineSpanWidth(renderedDurationMs, props.pixelsPerSecond) } : {}) }} title={props.locked ? '图层已锁定' : `${emptyCue ? `${cue.name} · 待配置动作` : `${cue.name} · ${actionCount} 个动作`} · ${formatTimelineTimecode(startMs, props.frameRate)} · 左右拖动时间，上下拖动图层层级`} onPointerDown={(event) => { if (!props.locked) props.onBeginDrag(event, 'cue', cue.id, originMs); else { event.stopPropagation(); props.onSelectCue?.(cue.id); } }} onPointerMove={props.onMoveDrag} onPointerUp={props.onEndDrag} onPointerCancel={props.onCancelDrag}>
       {visualShow && props.onTrimPointerDown && !props.locked ? <i className="timeline-trim-handle start" title="拖动修改开始时间" onPointerDown={(event) => props.onTrimPointerDown?.(event, cue, visualDurationMs, 'start')} onPointerMove={props.onTrimPointerMove} onPointerUp={props.onTrimPointerUp} onPointerCancel={props.onTrimPointerCancel} /> : null}
       <span>{sceneName ?? cue.name}</span>{sceneName === undefined ? <small>{visualShow ? `时长 ${formatDuration(renderedDurationMs)}` : `${actionCount} · ${formatTimelineTimecode(startMs, props.frameRate)}`}</small> : null}
       {visualShow && props.onTrimPointerDown && !props.locked ? <i className="timeline-trim-handle end" title="拖动修改结束时间" onPointerDown={(event) => props.onTrimPointerDown?.(event, cue, visualDurationMs, 'end')} onPointerMove={props.onTrimPointerMove} onPointerUp={props.onTrimPointerUp} onPointerCancel={props.onTrimPointerCancel} /> : null}

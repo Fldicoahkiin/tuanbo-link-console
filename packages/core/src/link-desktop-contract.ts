@@ -403,7 +403,6 @@ export type LinkDesktopApi = {
   executeObsAction(action: LinkAction): Promise<void>;
   /** Full-scene mode: show or hide a source in the scene currently on program. */
   setObsProgramSourceEnabled(sourceName: string, enabled: boolean): Promise<void>;
-  activateManagedObsOutput(): Promise<void>;
   executeManagedMediaEvent(payload: { projectPath: string; event: import('./managed-media-timeline').ManagedMediaEvent }): Promise<void>;
   seekManagedMedia(payload: { projectPath: string; event: import('./managed-media-timeline').ManagedMediaEvent }): Promise<void>;
   startExternalApplication(id: LinkProcessSnapshot['id']): Promise<LinkProcessSnapshot>;

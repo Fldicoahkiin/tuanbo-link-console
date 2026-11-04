@@ -361,6 +361,7 @@ export const linkProjectSchema = z.object({
   }),
   outputCanvas: outputCanvasSchema.default({ width: 1080, height: 1920 }),
   playbackSource: z.enum(['p1', 'internal']).optional(),
+  /** Only scenes play. 'managed' marks a file from before the scene-only workflow and opens as scenes. */
   obsOutputMode: z.enum(['managed', 'scenes']).optional(),
   internalVideoAudio: z.boolean().optional(),
   playlists: z.array(z.object({ id: z.string().min(1), name: z.string().trim().min(1) })).optional(),

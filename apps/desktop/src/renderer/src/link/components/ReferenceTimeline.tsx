@@ -18,7 +18,7 @@ import { useFrameValue } from './useFrameValue';
 import { AudioTimelineSegments } from './AudioTimelineSegments';
 import { AudioTrackLane } from './AudioTrackLane';
 import type { AudioEditor } from './useAudioEditor';
-import { lightingSnapPoints, timelineSnapPoints, timelineSnapGuide, displayedSceneDuration } from './timeline-snap-points';
+import { lightingSnapPoints, timelineItemDuration, timelineSnapPoints, timelineSnapGuide } from './timeline-snap-points';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent } from 'react';
 import { useTimelineAudio, type PlaybackClock } from './useTimelineAudio';
 import {
@@ -162,7 +162,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   const [snapDistance, setSnapDistance] = useState(14);
   const [clipContext, setClipContext] = useState<TimelineContext | null>(null);
   const layerReorder = useLayerReorder(layers.length, (id, index) => { const target = layers[index]; if (target) input.onMoveLayer(id, input.layers.findIndex((layer) => layer.id === target.id)); });
-  const seekSnapPointsMs = useMemo(() => props.lightingWorkspace ? lightingSnapPoints(props.lighting?.document, beatSegments.snapPoints, props.referenceAudio?.durationMs ?? props.durationMs) : [...timelineSnapPoints(props.timelineState, props.cues, props.frameRate, viewport.pixelsPerSecond), ...(props.audioEditor?.points ?? [])], [beatSegments.snapPoints, props.lightingWorkspace, props.lighting?.document, props.referenceAudio?.durationMs, props.durationMs, props.cues, props.frameRate, props.timelineState, viewport.pixelsPerSecond, props.audioEditor?.points]);
+  const seekSnapPointsMs = useMemo(() => props.lightingWorkspace ? lightingSnapPoints(props.lighting?.document, beatSegments.snapPoints, props.referenceAudio?.durationMs ?? props.durationMs) : [...timelineSnapPoints(props.timelineState, props.cues, props.frameRate), ...(props.audioEditor?.points ?? [])], [beatSegments.snapPoints, props.lightingWorkspace, props.lighting?.document, props.referenceAudio?.durationMs, props.durationMs, props.cues, props.frameRate, props.timelineState, props.audioEditor?.points]);
   const snapThresholdMs = snapDistance / viewport.pixelsPerSecond * 1_000;
   const itemDrag = useTimelineItemDrag({
     clips: props.clips,
@@ -171,9 +171,8 @@ export function ReferenceTimeline(input: Props): JSX.Element {
     focusTimeline: () => timelineRef.current?.focus(),
     timeAtClientX: viewport.editTimeAtClientX,
     snapTime: (milliseconds, target) => {
-      const duration = target.kind === 'clip' ? props.clips.find((clip) => clip.id === target.id)?.durationMs ?? 0
-        : displayedSceneDuration(props.cues.find((cue) => cue.id === target.id), viewport.pixelsPerSecond);
-      const points = timelineSnapPoints(props.timelineState, props.cues, props.frameRate, viewport.pixelsPerSecond, props.playheadMs, target);
+      const duration = timelineItemDuration(props, target);
+      const points = timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playheadMs, target);
       return snap({ ...props, durationMs: Math.max(props.durationMs, milliseconds) }, milliseconds, snapEnabled,
         timelineMoveSnapPoints([0, props.durationMs, ...points, ...(props.audioEditor?.points ?? [])], duration), snapThresholdMs);
     },
@@ -183,9 +182,9 @@ export function ReferenceTimeline(input: Props): JSX.Element {
     onMoveCue: props.onMoveCue,
     onMoveLayer: props.onMoveLayer
   });
-  const clipResize = useClipResize({ durationMs: 86_399_000, frameRate: props.frameRate, onTrimClip: props.onTrimClip, onSelectClip: props.onSelectClip, timeAtClientX: viewport.editTimeAtClientX, focusTimeline: () => timelineRef.current?.focus(), snapEnabled, getSnapPointsMs: (clipId) => timelineSnapPoints(props.timelineState, props.cues, props.frameRate, viewport.pixelsPerSecond, props.playheadMs, { kind: 'clip', id: clipId }), snapThresholdMs });
-  const cueResize = useCueResize({ durationMs: 86_399_000, frameRate: props.frameRate, onTrimCue: props.onTrimCue, onSelectCue: props.onSelectCue, timeAtClientX: viewport.editTimeAtClientX, focusTimeline: () => timelineRef.current?.focus(), snapEnabled, getSnapPointsMs: (cueId) => timelineSnapPoints(props.timelineState, props.cues, props.frameRate, viewport.pixelsPerSecond, props.playheadMs, { kind: 'cue', id: cueId }), snapThresholdMs });
-  const snapGuide = timelineSnapGuide(props, viewport.pixelsPerSecond, snapEnabled, itemDrag.drag);
+  const clipResize = useClipResize({ durationMs: 86_399_000, frameRate: props.frameRate, onTrimClip: props.onTrimClip, onSelectClip: props.onSelectClip, timeAtClientX: viewport.editTimeAtClientX, focusTimeline: () => timelineRef.current?.focus(), snapEnabled, getSnapPointsMs: (clipId) => timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playheadMs, { kind: 'clip', id: clipId }), snapThresholdMs });
+  const cueResize = useCueResize({ durationMs: 86_399_000, frameRate: props.frameRate, onTrimCue: props.onTrimCue, onSelectCue: props.onSelectCue, timeAtClientX: viewport.editTimeAtClientX, focusTimeline: () => timelineRef.current?.focus(), snapEnabled, getSnapPointsMs: (cueId) => timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playheadMs, { kind: 'cue', id: cueId }), snapThresholdMs });
+  const snapGuide = timelineSnapGuide(props, snapEnabled, itemDrag.drag);
   const musicRow = musicDisplay.sections && beatSegments.points.length > 0;
   const { sectionRow, rulerHeight } = timelineMusicLayout({ ...props, musicRow }, musicDisplay);
   const { playheadLeft, contentStyle, headingStyle, waveformContentWidth, visualTracks } = timelineLayout({ ...props, sectionRow, musicRow }, viewport.contentWidth, viewport.pixelsPerSecond, viewport.gridSize);
@@ -230,7 +229,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   const dropVisual = (event: DragEvent<HTMLElement>, layer?: VisualLayer): void => {
     event.preventDefault();
     event.stopPropagation();
-    const startMs = snap(props, viewport.timeAtClientX(event.clientX), snapEnabled, timelineSnapPoints(props.timelineState, props.cues, props.frameRate, viewport.pixelsPerSecond, props.playheadMs), snapThresholdMs);
+    const startMs = snap(props, viewport.timeAtClientX(event.clientX), snapEnabled, timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playheadMs), snapThresholdMs);
     const assetId = event.dataTransfer.getData(MEDIA_DRAG_TYPE);
     if (assetId) {
       props.onDropAsset(assetId, startMs, layer?.id ?? null);

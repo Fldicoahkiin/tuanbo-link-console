@@ -157,7 +157,7 @@ function outputAt(index: SceneIndex, frame: number): SceneWork {
     : [...playing, fallback].sort((a, b) => a.layer - b.layer || b.start - a.start || a.key.localeCompare(b.key));
   const target = stack[0];
   const layers = stack.flatMap(candidate => 'media' in candidate
-    ? candidate.media.sceneName ? [candidate.media.sceneName] : []
+    ? [candidate.media.sceneName]
     : candidate.cue.actions.flatMap(action => action.kind === 'obs.setProgramScene' ? [action.sceneName] : []));
   if (layers.length > 1) {
     const sceneName = `团播联动台·叠加·${index.projectId}`;
@@ -177,7 +177,6 @@ function outputAt(index: SceneIndex, frame: number): SceneWork {
 }
 
 export function sceneBoundaryWork(project: LinkProject, itemId: string, previous: number, frame: number, due: RuntimeUpdate['dueCues'], media: ManagedMediaEvent[]): SceneWork {
-  if (project.obsOutputMode !== 'scenes') return { cues: due, media };
   return new SceneOutputTimeline(project, itemId).cross(previous, frame, due, media);
 }
 function boundaryWork(itemId: string, frame: number, due: RuntimeUpdate['dueCues'], media: ManagedMediaEvent[], before: SceneWork, after: SceneWork): SceneWork {
@@ -199,7 +198,7 @@ function boundaryWork(itemId: string, frame: number, due: RuntimeUpdate['dueCues
     start.sourceName === stop.sourceName && start.layerId === stop.layerId
     && start.frameNumber === stop.frameNumber));
   const single = after.media.length === 1 ? after.media[0] : undefined;
-  const selection = single?.sceneName && !single.deferSceneSwitch && retained.has(single.clipId)
+  const selection = single && !single.deferSceneSwitch && retained.has(single.clipId)
     ? [{ scheduledFrame: frame, executionId: crypto.randomUUID(), cue: {
       id: `timeline-selection:${itemId}`, name: '显示持续播放的素材', enabled: true, notes: '',
       timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 },

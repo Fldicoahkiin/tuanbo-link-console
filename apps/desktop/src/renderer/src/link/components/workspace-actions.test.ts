@@ -127,7 +127,7 @@ describe('拖入 OBS 场景', () => {
   });
   it('当前工程素材场景创建媒体片段，保留时长和入点并支持撤销', async () => {
     const { actions, sceneName } = fixture(false, true);
-    expect(actions.addObsResource({ id: sceneName, kind: 'scene', group: '场景', name: sceneName, sceneName }, 3000, 'layer')).toBe(true);
+    expect(actions.addObsResource({ id: sceneName, kind: 'scene', name: sceneName }, 3000, 'layer')).toBe(true);
     await vi.waitFor(() => expect(useDocumentStore.getState().project!.rundown[0]!.referenceAudio).toBeDefined());
     const item = useDocumentStore.getState().project!.rundown[0]!;
     expect(item.cues).toHaveLength(1);
@@ -138,14 +138,14 @@ describe('拖入 OBS 场景', () => {
   });
   it('普通机位仍创建场景切换片段，默认 5 秒', () => {
     const { actions } = fixture(false, true);
-    expect(actions.addObsResource({ id: 'camera', kind: 'scene', group: '场景', name: '机位一', sceneName: '机位一' }, 3000, 'layer')).toBe(true);
+    expect(actions.addObsResource({ id: 'camera', kind: 'scene', name: '机位一' }, 3000, 'layer')).toBe(true);
     const item = useDocumentStore.getState().project!.rundown[0]!;
     expect(item.referenceMediaClips).toHaveLength(0);
     expect(item.cues[1]).toMatchObject({ durationMs: 5000, layerId: 'layer', actions: [{ kind: 'obs.setProgramScene', sceneName: '机位一' }] });
   });
   it('素材场景不能绕过轨道锁定', () => {
     const { actions, sceneName, notify } = fixture(true, true);
-    expect(actions.addObsResource({ id: sceneName, kind: 'scene', group: '场景', name: sceneName, sceneName }, 3000, 'layer')).toBe(false);
+    expect(actions.addObsResource({ id: sceneName, kind: 'scene', name: sceneName }, 3000, 'layer')).toBe(false);
     expect(notify).toHaveBeenCalledWith('轨道“画面”已锁定，先解锁再放', 'error');
     expect(useDocumentStore.getState().project!.rundown[0]!.referenceMediaClips).toHaveLength(0);
   });

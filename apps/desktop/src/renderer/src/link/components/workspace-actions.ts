@@ -7,7 +7,6 @@ import {
   placeContentCommand,
   quantizeTimelineRange,
   removeContentCommand,
-  replaceCueCommand,
   replaceReferenceMediaClipCommand,
   splitContentCommand,
   timecodeToMilliseconds,
@@ -19,8 +18,7 @@ import {
   DEFAULT_REFERENCE_CANVAS_TRANSFORM,
   type LinkAction, type LinkCue, type LinkProject,
   type ReferenceCanvasTransform,
-  type ReferenceMediaClip,
-  type SceneItemTransform
+  type ReferenceMediaClip
 } from '@tb/schema';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useDocumentStore } from '../stores/document-store';
@@ -125,7 +123,13 @@ function createClipActions(input: WorkspaceActionsInput) {
       input.execute(moveContentCommand(item.id, { kind: 'clip', id: clipId }, milliseconds, trackTarget(layerId, { track: clip.layerId })));
     });
   };
-  const moveClipToTop = (clipId: string): void => moveToTop(input, { kind: 'clip', id: clipId });
+  /** 置顶: on the top track where it is free there, else on a new top track. */
+  const moveClipToTop = (clipId: string): void => {
+    if (!input.item) return;
+    const item = input.item;
+    runMutation(input, () => input.execute(moveContentCommand(item.id, { kind: 'clip', id: clipId },
+      timecodeToMilliseconds(requireClip(item, clipId).startTimecode, input.project.timebase.frameRate), 'top')));
+  };
   const trimClip = (clipId: string, startMs: number, durationMs: number): void => {
     if (!input.item) return;
     const item = input.item;
@@ -195,9 +199,7 @@ function createCueActions(input: WorkspaceActionsInput, addAssetClip: (assetId: 
       input.notify('请先选择当前节目。', 'error');
       return false;
     }
-    const material = resource.kind === 'scene'
-      ? input.project.mediaAssets.find((asset) => materialSceneNames(input.project.projectId, asset).sceneName === resource.sceneName)
-      : undefined;
+    const material = input.project.mediaAssets.find((asset) => materialSceneNames(input.project.projectId, asset).sceneName === resource.name);
     if (material) return addAssetClip(material.id, milliseconds, layerId);
     const item = input.item;
     return runMutation(input, () => {
@@ -223,14 +225,6 @@ function createCueActions(input: WorkspaceActionsInput, addAssetClip: (assetId: 
       input.execute(moveContentCommand(item.id, { kind: 'cue', id: cueId }, milliseconds, trackTarget(layerId, { track: target.layerId })));
     });
   };
-  const transformObs = (cueId: string, transform: SceneItemTransform): void => {
-    runMutation(input, () => {
-      const target = input.item ? requireCue(input.item, cueId) : null;
-      if (!target) throw new Error(`Cue 不存在：${cueId}`);
-      assertLayerUnlocked(input, target.layerId);
-      applyObsTransform(input, target, transform);
-    });
-  };
   const removeCue = (cueId: string): void => {
     if (!input.item) return;
     const item = input.item;
@@ -247,7 +241,7 @@ function createCueActions(input: WorkspaceActionsInput, addAssetClip: (assetId: 
       input.setSelectedClipId(null);
     });
   };
-  return { addCue, addObsResource, trimCue, moveCue, moveCueToTop: (cueId: string) => moveToTop(input, { kind: 'cue', id: cueId }), transformObs, removeCue, duplicateCue };
+  return { addCue, addObsResource, trimCue, moveCue, removeCue, duplicateCue };
 }
 
 function createIntegrationActions(input: WorkspaceActionsInput) {
@@ -270,16 +264,6 @@ function createIntegrationActions(input: WorkspaceActionsInput) {
     }
   };
   return { refreshObs, testAction };
-}
-
-/** 置顶: on the top track where it is free there, else on a new top track. */
-function moveToTop(input: WorkspaceActionsInput, ref: ContentRef): void {
-  if (!input.item) return;
-  const item = input.item;
-  runMutation(input, () => {
-    const timecode = ref.kind === 'clip' ? requireClip(item, ref.id).startTimecode : requireCue(item, ref.id).timecode;
-    input.execute(moveContentCommand(item.id, ref, timecodeToMilliseconds(timecode, input.project.timebase.frameRate), 'top'));
-  });
 }
 
 function timecodeAt(input: WorkspaceActionsInput, milliseconds: number): LinkCue['timecode'] {
@@ -345,29 +329,6 @@ function requireCue(item: LinkProject['rundown'][number], cueId: string): LinkCu
   const cue = item.cues.find((candidate) => candidate.id === cueId);
   if (!cue) throw new Error(`Cue 不存在：${cueId}`);
   return cue;
-}
-
-function applyObsTransform(input: WorkspaceActionsInput, target: LinkCue, transform: SceneItemTransform): void {
-  if (!input.item) return;
-  const sceneItem = target.actions.find((action) => action.kind === 'obs.setSceneItemEnabled');
-  if (!sceneItem) throw new Error('这个 OBS 片段不是可以调整位置和大小的场景来源');
-  const matchesSource = (action: LinkAction): action is Extract<LinkAction, { kind: 'obs.setSceneItemTransform' }> => (
-    action.kind === 'obs.setSceneItemTransform'
-    && action.sceneName === sceneItem.sceneName
-    && action.sourceName === sceneItem.sourceName
-  );
-  const hasTransform = target.actions.some(matchesSource);
-  const actions = hasTransform
-    ? target.actions.map((action) => matchesSource(action) ? { ...action, transform } : action)
-    : [...target.actions, {
-      id: crypto.randomUUID(),
-      label: `画布变换 · ${sceneItem.sourceName}`,
-      kind: 'obs.setSceneItemTransform' as const,
-      sceneName: sceneItem.sceneName,
-      sourceName: sceneItem.sourceName,
-      transform
-    }];
-  input.execute(replaceCueCommand(input.item.id, { ...target, actions }));
 }
 
 function toMessage(error: unknown): string {

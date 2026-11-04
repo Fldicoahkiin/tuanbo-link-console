@@ -317,113 +317,10 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   }
 
   executeManagedMediaEvent(event: ManagedMediaEvent, absolutePath: string): Promise<void> {
-    return this.requests.run(event.phase === 'stop' ? 'urgent' : 'control', () => this.executeMedia(event, absolutePath));
-  }
-
-  private async executeMedia(event: ManagedMediaEvent, absolutePath: string): Promise<void> {
-    this.assertConnected();
-    if (event.sceneName) return this.mediaScenes.execute(event, absolutePath);
-    if (event.phase === 'stop') {
-      const errors: unknown[] = [];
-      if (event.assetKind === 'video') {
-        try {
-          await this.request(() => this.client.call('TriggerMediaInputAction', {
-            inputName: event.sourceName,
-            mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP'
-          }), 'TriggerMediaInputAction');
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      try {
-        const sceneItemId = await this.getSceneItemId(MANAGED_OBS_SCENE_NAME, event.sourceName);
-        await this.request(() => this.client.call('SetSceneItemEnabled', {
-          sceneName: MANAGED_OBS_SCENE_NAME,
-          sceneItemId,
-          sceneItemEnabled: false
-        }), 'SetSceneItemEnabled');
-      } catch (error) {
-        errors.push(error);
-      }
-      if (errors.length > 0) {
-        throw new Error(`联动台在 OBS 里创建的素材没有全部停止：${errors.map(toErrorMessage).join('；')}`, {
-          cause: new AggregateError(errors)
-        });
-      }
-      return;
-    }
-
-    await this.ensureManagedScene();
-    const sceneItemId = await this.ensureManagedInput(event, absolutePath);
-    try {
-      const video = await this.request(() => this.client.call('GetVideoSettings'), 'GetVideoSettings');
-      await this.request(() => this.client.call('SetSceneItemTransform', {
-        sceneName: MANAGED_OBS_SCENE_NAME,
-        sceneItemId,
-        sceneItemTransform: {
-          positionX: event.transform.x * video.baseWidth,
-          positionY: event.transform.y * video.baseHeight,
-          scaleX: event.transform.scale * event.transform.scaleX,
-          scaleY: event.transform.scale * event.transform.scaleY,
-          rotation: event.transform.rotation,
-          alignment: 0
-        }
-      }), 'SetSceneItemTransform');
-      await this.request(() => this.client.call('SetSceneItemIndex', {
-        sceneName: MANAGED_OBS_SCENE_NAME,
-        sceneItemId,
-        sceneItemIndex: Math.max(0, event.layerCount - event.layerIndex - 1)
-      }), 'SetSceneItemIndex');
-      if (event.assetKind === 'video') {
-        await this.request(() => this.client.call('SetInputMute', {
-          inputName: event.sourceName,
-          inputMuted: !event.embeddedAudioEnabled
-        }), 'SetInputMute');
-      }
-      if (event.assetKind === 'video') {
-        await this.request(() => this.client.call('SetSceneItemEnabled', {
-          sceneName: MANAGED_OBS_SCENE_NAME, sceneItemId, sceneItemEnabled: true
-        }), 'SetSceneItemEnabled');
-        await this.request(() => this.client.call('TriggerMediaInputAction', {
-          inputName: event.sourceName,
-          mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART'
-        }), 'TriggerMediaInputAction');
-        if (event.sourceOffsetMs > 0) {
-          await this.waitForMediaPlayback(event.sourceName);
-          await this.request(() => this.client.call('SetMediaInputCursor', {
-            inputName: event.sourceName,
-            mediaCursor: event.sourceOffsetMs
-          }), 'SetMediaInputCursor');
-        }
-      }
-      await this.request(() => this.client.call('SetSceneItemEnabled', {
-        sceneName: MANAGED_OBS_SCENE_NAME,
-        sceneItemId,
-        sceneItemEnabled: true
-      }), 'SetSceneItemEnabled');
-    } catch (error) {
-      const cleanupErrors = await this.rollbackManagedMediaStart(event, sceneItemId);
-      if (cleanupErrors.length > 0) {
-        throw new Error(`联动台在 OBS 里创建的素材启动失败，也没能完全撤回：${toErrorMessage(error)}；撤回失败：${cleanupErrors.map(toErrorMessage).join('；')}`, {
-          cause: new AggregateError([error, ...cleanupErrors])
-        });
-      }
-      throw error;
-    }
-  }
-
-  activateManagedOutput(): Promise<void> {
-    return this.requests.run('control', () => this.activateOutput());
-  }
-
-  private async activateOutput(): Promise<void> {
-    this.assertConnected();
-    await this.ensureManagedScene();
-    await this.request(() => this.client.call('SetCurrentProgramScene', { sceneName: MANAGED_OBS_SCENE_NAME }), 'SetCurrentProgramScene');
-    const current = await this.request(() => this.client.call('GetCurrentProgramScene'), 'GetCurrentProgramScene');
-    if (current.currentProgramSceneName !== MANAGED_OBS_SCENE_NAME) {
-      throw new Error(`OBS 没有切换到联动台的场景，当前是 ${current.currentProgramSceneName ?? '未知场景'}`);
-    }
+    return this.requests.run(event.phase === 'stop' ? 'urgent' : 'control', () => {
+      this.assertConnected();
+      return this.mediaScenes.execute(event, absolutePath);
+    });
   }
 
   setInternalAudioCapture(enabled: boolean, executable: string, title: string, audioDeviceId = 'default', sceneNames?: string[], windowClass?: string): Promise<void> {
@@ -505,17 +402,6 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     }
     if (matched > 1) throw new Error('OBS 有两路桌面音频在同时采集默认设备，请只保留一路，避免声音被收两次');
     return matched === 1;
-  }
-
-  private async waitForMediaPlayback(inputName: string): Promise<void> {
-    const deadline = Date.now() + this.requestTimeoutMs;
-    do {
-      const status = await this.request(() => this.client.call('GetMediaInputStatus', { inputName }), 'GetMediaInputStatus');
-      if (status.mediaState === 'OBS_MEDIA_STATE_PLAYING' || status.mediaState === 'OBS_MEDIA_STATE_PAUSED') return;
-      if (status.mediaState === 'OBS_MEDIA_STATE_ERROR') throw new Error(`OBS 无法解码媒体：${inputName}`);
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
-    } while (Date.now() < deadline);
-    throw new Error(`OBS 媒体在 ${this.requestTimeoutMs} ms 内没有准备好：${inputName}`);
   }
 
   readInventory(details?: { scenes: ReadonlySet<string> | null; inputs: ReadonlySet<string> }): Promise<ObsInventory> {
@@ -693,52 +579,6 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     await this.request(() => this.client.call('CreateScene', { sceneName: MANAGED_OBS_SCENE_NAME }), 'CreateScene');
   }
 
-  private async ensureManagedInput(event: ManagedMediaEvent, absolutePath: string): Promise<number> {
-    const expectedKind = event.assetKind === 'video' ? 'ffmpeg_source' : 'image_source';
-    const settings = event.assetKind === 'video'
-      ? {
-          is_local_file: true,
-          local_file: absolutePath,
-          looping: false,
-          restart_on_activate: false,
-          close_when_inactive: true,
-          clear_on_media_end: true
-        }
-      : { file: absolutePath, unload: false };
-    const response = await this.request(() => this.client.call('GetInputList'), 'GetInputList');
-    const kinds = collectNameValueMap(response.inputs, 'inputName', 'inputKind');
-    const existingKind = kinds[event.sourceName];
-    if (existingKind !== undefined && existingKind !== expectedKind) {
-      throw new Error(`OBS 来源名称冲突：${event.sourceName} 已经是 ${existingKind}，联动台需要的是 ${expectedKind}`);
-    }
-    if (existingKind === undefined) {
-      const created = await this.request(() => this.client.call('CreateInput', {
-        sceneName: MANAGED_OBS_SCENE_NAME,
-        inputName: event.sourceName,
-        inputKind: expectedKind,
-        inputSettings: settings,
-        sceneItemEnabled: false
-      }), 'CreateInput');
-      return created.sceneItemId;
-    }
-    await this.request(() => this.client.call('SetInputSettings', {
-      inputName: event.sourceName,
-      inputSettings: settings,
-      overlay: false
-    }), 'SetInputSettings');
-    try {
-      return await this.getSceneItemId(MANAGED_OBS_SCENE_NAME, event.sourceName);
-    } catch (error) {
-      const created = await this.request(() => this.client.call('CreateSceneItem', {
-        sceneName: MANAGED_OBS_SCENE_NAME,
-        sourceName: event.sourceName,
-        sceneItemEnabled: false
-      }), 'CreateSceneItem');
-      if (!(error instanceof Error)) throw error;
-      return created.sceneItemId;
-    }
-  }
-
   private async ensureManagedSceneItem(sourceName: string): Promise<number> {
     await this.ensureManagedScene();
     const response = await this.request(() => this.client.call('GetSceneItemList', { sceneName: MANAGED_OBS_SCENE_NAME }), 'GetSceneItemList');
@@ -751,30 +591,6 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       sceneItemEnabled: false
     }), 'CreateSceneItem');
     return created.sceneItemId;
-  }
-
-  private async rollbackManagedMediaStart(event: ManagedMediaEvent, sceneItemId: number): Promise<unknown[]> {
-    const errors: unknown[] = [];
-    if (event.assetKind === 'video') {
-      try {
-        await this.request(() => this.client.call('TriggerMediaInputAction', {
-          inputName: event.sourceName,
-          mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP'
-        }), 'TriggerMediaInputAction');
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    try {
-      await this.request(() => this.client.call('SetSceneItemEnabled', {
-        sceneName: MANAGED_OBS_SCENE_NAME,
-        sceneItemId,
-        sceneItemEnabled: false
-      }), 'SetSceneItemEnabled');
-    } catch (error) {
-      errors.push(error);
-    }
-    return errors;
   }
 
   private async saveScreenshot(sourceName: string, fileName: string): Promise<void> {

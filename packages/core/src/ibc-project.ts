@@ -48,7 +48,6 @@ export function importIbcCommand(source: IbcProject, audio: ReferenceAudio[], fr
   return { id: crypto.randomUUID(), label: '导入 IBC 工程', execute(project) {
     if (project.timebase.frameRate !== frameRate) throw new Error('导入期间帧率已改变，请重新导入');
     return parseLinkProject({ ...project, updatedAt: new Date().toISOString(), playbackSource: 'internal',
-      obsOutputMode: project.rundown.length ? project.obsOutputMode : 'scenes',
       playlists: [...project.playlists ?? [], ...lists], rundown: [...project.rundown, ...items] });
   }, undo: (before) => structuredClone(before) };
 }

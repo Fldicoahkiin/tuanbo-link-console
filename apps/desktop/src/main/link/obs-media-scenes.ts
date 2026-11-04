@@ -437,7 +437,7 @@ export class ObsMediaScenes {
     const status = await this.request(() => this.client.call('GetMediaInputStatus', { inputName: event.sourceName }), '读取定位前素材状态');
     const hasFrame = async (): Promise<boolean> => {
       if (event.assetKind === 'audio') return true;
-      const frame = await this.request(() => this.client.call('GetSceneItemTransform', { sceneName: event.sceneName!, sceneItemId }), '检查素材解码画面');
+      const frame = await this.request(() => this.client.call('GetSceneItemTransform', { sceneName: event.sceneName, sceneItemId }), '检查素材解码画面');
       return Number(frame.sceneItemTransform.sourceWidth) > 0 && Number(frame.sceneItemTransform.sourceHeight) > 0;
     };
     const ended = status.mediaDuration > 0 && status.mediaCursor >= status.mediaDuration - 1;
@@ -464,7 +464,7 @@ export class ObsMediaScenes {
     do {
       const [status, frame] = await Promise.all([
         this.request(() => this.client.call('GetMediaInputStatus', { inputName: event.sourceName }), '确认素材定位位置'),
-        this.request(() => this.client.call('GetSceneItemTransform', { sceneName: event.sceneName!, sceneItemId }), '确认素材定位画面')
+        this.request(() => this.client.call('GetSceneItemTransform', { sceneName: event.sceneName, sceneItemId }), '确认素材定位画面')
       ]);
       const width = frame.sceneItemTransform.sourceWidth, height = frame.sceneItemTransform.sourceHeight;
       observed = `${status.mediaState}，位置 ${status.mediaCursor}ms / ${status.mediaDuration}ms，画面 ${typeof width === 'number' ? width : '未知'}×${typeof height === 'number' ? height : '未知'}`;

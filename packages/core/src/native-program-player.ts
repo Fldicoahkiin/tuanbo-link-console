@@ -64,7 +64,7 @@ export class NativeProgramPlayer {
   }
 
   preloadSelected(itemId: string): void {
-    if (this.disposed || !this.projectPath || this.project.obsOutputMode !== 'scenes' || ['preparing', 'playing', 'paused'].includes(this.state.status)
+    if (this.disposed || !this.projectPath || ['preparing', 'playing', 'paused'].includes(this.state.status)
       || this.dependencies.configuration().preload === false || this.selectedPreload?.itemId === itemId) return;
     try {
       const prepared = nativeProgramSnapshot(this.project, itemId, this.revision, undefined, this.dependencies.configuration().audioSampleRate ?? 48000);

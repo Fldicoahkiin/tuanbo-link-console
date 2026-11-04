@@ -1,5 +1,5 @@
 import type { LinkAction } from '@tb/schema';
-import { MANAGED_OBS_SCENE_NAME, type LinkCommand } from '@tb/core/link';
+import type { LinkCommand } from '@tb/core/link';
 import { assertDocumentSession } from '../stores/document-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useRuntimeStore } from '../stores/runtime-store';
@@ -57,34 +57,9 @@ export async function importWorkspaceMedia(input: {
   }
 }
 
+/** A library scene becomes a camera: one scene switch. */
 export function actionsFromObsResource(resource: ObsResource): LinkAction[] {
-  const id = crypto.randomUUID();
-  if (resource.kind === 'scene') return [{ id, label: `切换场景 · ${resource.name}`, kind: 'obs.setProgramScene', sceneName: resource.name }];
-  if (resource.kind === 'sceneItem') {
-    if (!resource.sceneName || !resource.sourceName) throw new Error('OBS 场景来源缺少场景名或来源名');
-    const showAction: LinkAction = { id, label: `显示来源 · ${resource.name}`, kind: 'obs.setSceneItemEnabled', sceneName: MANAGED_OBS_SCENE_NAME, sourceName: resource.sourceName, enabled: true };
-    if (!resource.transform) return [showAction];
-    const transform = {
-      positionX: (resource.canvasWidth ?? 1080) / 2,
-      positionY: (resource.canvasHeight ?? 1920) / 2,
-      scaleX: 1,
-      scaleY: 1,
-      rotation: 0,
-      cropTop: 0,
-      cropRight: 0,
-      cropBottom: 0,
-      cropLeft: 0,
-      alignment: 0
-    };
-    return [showAction, { id: crypto.randomUUID(), label: `画布变换 · ${resource.name}`, kind: 'obs.setSceneItemTransform', sceneName: MANAGED_OBS_SCENE_NAME, sourceName: resource.sourceName, transform }];
-  }
-  if (resource.kind === 'filter') {
-    if (!resource.sourceName) throw new Error('OBS 滤镜缺少来源名称');
-    return [{ id, label: `启用滤镜 · ${resource.name}`, kind: 'obs.setSourceFilterEnabled', sourceName: resource.sourceName, filterName: resource.name, enabled: true }];
-  }
-  if (resource.kind === 'transition') return [{ id, label: `设置转场 · ${resource.name}`, kind: 'obs.setTransition', transitionName: resource.name, durationMs: 300 }];
-  if (resource.group === 'OBS 媒体') return [{ id, label: `重播媒体 · ${resource.name}`, kind: 'obs.mediaAction', inputName: resource.name, action: 'restart' }];
-  return [{ id, label: `取消静音 · ${resource.name}`, kind: 'obs.setInputMute', inputName: resource.name, muted: false }];
+  return [{ id: crypto.randomUUID(), label: `切换场景 · ${resource.name}`, kind: 'obs.setProgramScene', sceneName: resource.name }];
 }
 
 function toMessage(error: unknown): string {
