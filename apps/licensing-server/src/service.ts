@@ -1,9 +1,10 @@
-import { createCipheriv, createDecipheriv, createHmac, createPrivateKey, randomBytes, randomUUID, sign, timingSafeEqual, type KeyObject } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, createPrivateKey, createPublicKey, randomBytes, randomUUID, sign, timingSafeEqual, verify, type KeyObject } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import { licenseActivationSchema, licenseClaimsSchema } from '../../../packages/schema/src/license';
 import { purchaseOfferSchema, purchaseRequestSchema, wechatCodeUrlSchema, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
 import { ConsoleService } from './console-service';
+import { FeedbackStore, migrateFeedback, type FeedbackOptions } from './feedback';
 
 const orderSchema = z.object({
   reference: z.string().trim().min(1).max(100), customer: z.string().trim().min(1).max(160),
@@ -69,9 +70,31 @@ export class LicensingService {
       CREATE TABLE IF NOT EXISTS refund_reviews (id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(id), refund_fen INTEGER NOT NULL, decision TEXT NOT NULL, reason TEXT NOT NULL, actor TEXT NOT NULL, at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS refund_reviews_order ON refund_reviews(order_id);
       CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, at TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL);`);
+    migrateFeedback(this.db);
   }
   close(): void { this.db.close(); }
   console(key: Buffer): ConsoleService { return new ConsoleService(this.db, this, key, this.now); }
+  /** In-app problem reports, with packages kept in `directory`. Senders are hashed with a key derived from the data key. */
+  feedback(directory: string, options?: FeedbackOptions): FeedbackStore {
+    return new FeedbackStore(this.db, directory, createHmac('sha256', this.dataKey).update('tblink:feedback-source:v1').digest(),
+      (token, machineCode) => this.feedbackLicense(token, machineCode), this.now, options);
+  }
+  /**
+   * The license a problem report carries, when it is one this server signed for that machine and has not revoked;
+   * null otherwise. It only decides how large a diagnostic package the report may attach.
+   */
+  feedbackLicense(token: string, machineCode: string): string | null {
+    const [header, body, signature, ...rest] = token.split('.');
+    if (!header || !body || !signature || rest.length) return null;
+    const signatureBytes = Buffer.from(signature, 'base64url');
+    if (signatureBytes.length !== 64 || !verify(null, Buffer.from(`${header}.${body}`), createPublicKey(this.signingKey), signatureBytes)) return null;
+    let payload: unknown;
+    try { payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')); }
+    catch (error) { if (error instanceof SyntaxError) return null; throw error; }
+    const claims = licenseClaimsSchema.safeParse(payload);
+    if (!claims.success || claims.data.machineCode !== machineCode) return null;
+    return this.db.prepare('SELECT id FROM licenses WHERE id=? AND machine=? AND revoked=0').get(claims.data.licenseId, machineCode) ? claims.data.licenseId : null;
+  }
   consoleTransaction<T>(work: () => T): T { return this.transaction(work); }
   private transaction<T>(work: () => T): T {
     const nested = this.transactionDepth > 0;

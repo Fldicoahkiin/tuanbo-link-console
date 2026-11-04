@@ -112,8 +112,14 @@ def next_proxy_config(current, previous, candidate):
     routes = dict(re.findall(r"    location (.*?) \{\n(.*?)\n    }", api, re.S))
     expected = {"= /health": "GET", "= /v1/activate": "POST", "= /v1/catalog": "GET", "= /v1/orders": "POST",
                 '~ "^/v1/orders/[a-f0-9-]{36}$"': "GET", '~ "^/v1/orders/[a-f0-9-]{36}/reconcile$"': "POST", '= /v1/payments/alipay/notify': "POST", '= /v1/payments/wechat/notify': "POST"}
+    # In-app problem reports: both routes or neither, each behind the feedback rate limit.
+    feedback = {"= /v1/feedback": "POST", '~ "^/v1/feedback/[a-f0-9-]{36}/diagnostic$"': "PUT"}
+    if set(feedback) & set(routes):
+        expected = {**expected, **feedback}
     if set(routes) != set(expected) or api.count("proxy_pass ") != len(expected):
         raise RuntimeError("Unexpected public routes")
+    if any("limit_req zone=tblink_feedback " not in routes[route] for route in feedback if route in expected):
+        raise RuntimeError("Feedback routes must keep their rate limit")
     for route, method in expected.items():
         block = routes[route]
         if (block.count("proxy_set_header X-Tblink-Client-IP $remote_addr;") != 1

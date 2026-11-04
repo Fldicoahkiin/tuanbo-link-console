@@ -2,8 +2,8 @@
 export type Filter = { q: string; state: string; channel: string; from: string; to: string };
 export const emptyFilter: Filter = { q: '', state: '', channel: '', from: '', to: '' };
 export type ConsoleLocation = { route: string; id: string | null; filter: Filter; page: number };
-const routes = new Set(['overview', 'orders', 'licenses', 'exceptions', 'tickets', 'finance', 'audit', 'users', 'updates', 'security']);
-export const detailRoutes = new Set(['orders', 'licenses', 'tickets']);
+const routes = new Set(['overview', 'orders', 'licenses', 'exceptions', 'tickets', 'feedback', 'finance', 'audit', 'users', 'updates', 'security']);
+export const detailRoutes = new Set(['orders', 'licenses', 'tickets', 'feedback']);
 /** 授权页默认打开「生效中」。 */
 export const defaultFilter = (route: string): Filter => route === 'licenses' ? { ...emptyFilter, state: 'active' } : emptyFilter;
 

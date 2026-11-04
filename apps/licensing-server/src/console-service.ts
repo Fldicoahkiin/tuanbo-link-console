@@ -3,8 +3,9 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { z } from 'zod';
 import { ConsoleAuth, redactConsoleText, type ConsoleSession } from './console-auth';
 import { migrateConsole } from './console-database';
-import { commandSchema, detailSchema, pageSchema, permissions, resultSchema, rowSchema, sensitiveActions, type ConsoleAction, type ConsoleResult, type ConsoleRow, type PageQuery, type UpdateOutcome, type UpdateRequest, type UpdateStatus } from './console-contract';
+import { commandSchema, detailSchema, feedbackRoles, pageSchema, permissions, resultSchema, rowSchema, sensitiveActions, type ConsoleAction, type ConsoleResult, type ConsoleRow, type PageQuery, type UpdateOutcome, type UpdateRequest, type UpdateStatus } from './console-contract';
 import { ServiceError, type LicensingService } from './service';
+import { feedbackEnvironmentSchema } from '../../../packages/schema/src/feedback';
 
 const orderProjection = `SELECT o.id,o.reference,json_extract(o.body,'$.customer') AS customer,
   json_extract(o.body,'$.customerType') AS customerType,json_extract(o.body,'$.quantity') AS quantity,
@@ -33,6 +34,11 @@ const licenseRows = `SELECT l.id,l.rowid AS position,l.machine AS machine,json_e
   CASE WHEN l.revoked=1 THEN 'revoked' WHEN ${licenseUseUntil}<=? THEN 'expired' WHEN ${licenseUseUntil}<=? THEN 'expiring' WHEN l.machine IS NOT NULL THEN 'active' ELSE 'unbound' END AS status
   FROM licenses l JOIN orders o ON o.id=l.order_id LEFT JOIN console_order_meta m ON m.order_id=o.id`;
 const licenseStatuses = ['active', 'unbound', 'expiring', 'expired', 'revoked'] as const;
+// 问题反馈的诊断包状态；参数为当前时间。等待上传的期限已过但尚未清理时算「未收到」。
+const feedbackAttachment = `CASE WHEN f.attachment_removed IS NOT NULL THEN 'removed' WHEN f.attachment_at IS NOT NULL THEN 'received' WHEN f.declared_bytes IS NULL THEN 'none'
+  WHEN f.upload_hash IS NOT NULL AND f.upload_until>? THEN 'waiting' ELSE 'missing' END`;
+const feedbackRows = `SELECT f.id,f.number,f.category,f.state,${feedbackAttachment} AS attachment,
+  CASE WHEN length(f.description)>60 THEN substr(f.description,1,60)||'…' ELSE f.description END AS summary,f.version,f.machine_code AS machineCode,f.created FROM feedback f`;
 /** 解析失败返回 undefined，由调用方标注「记录无法解析」。 */
 function readJson(text: string): unknown { try { return JSON.parse(text) as unknown; } catch { return undefined; } }
 const beijingMinute = (iso: string) => new Date(Date.parse(iso) + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ');
@@ -78,6 +84,15 @@ export class ConsoleService {
   }
   private financialRole(session: ConsoleSession): boolean { return session.user.role === 'owner' || session.user.role === 'finance'; }
   private financial(session: ConsoleSession): void { if (!this.financialRole(session)) throw new ServiceError(403, 'FORBIDDEN', '需要财务或管理员权限'); }
+  private supportRole(session: ConsoleSession): boolean { return feedbackRoles.includes(session.user.role); }
+  private support(session: ConsoleSession): void { if (!this.supportRole(session)) throw new ServiceError(403, 'FORBIDDEN', '问题反馈只对管理员和运营开放'); }
+  /** A report whose diagnostic package was received and is still kept; the HTTP layer serves the file. */
+  feedbackAttachment(id: string, session: ConsoleSession): { number: string } {
+    this.support(session);
+    const row = this.db.prepare('SELECT number FROM feedback WHERE id=? AND attachment_at IS NOT NULL AND attachment_removed IS NULL').get(id);
+    if (!row) throw new ServiceError(404, 'ATTACHMENT_MISSING', '这条反馈没有可下载的诊断包');
+    return { number: z.string().parse(row.number) };
+  }
   list(resource: string, query: PageQuery, session: ConsoleSession) {
     const term = `%${query.q.replace(/[\\%_]/g, '\\$&')}%`;
     if (resource === 'orders' || resource === 'exceptions') {
@@ -95,6 +110,11 @@ export class ConsoleService {
       const selected = this.page(`SELECT id,source,orderReference,status FROM (${licenseRows}) WHERE ${search} AND (?='' OR status=?) ORDER BY position DESC`, [...this.statusWindow(), term, term, term, query.state, query.state], query);
       return pageSchema.parse({ ...selected, items: selected.items.map(row => this.licenseRow(row)), summary });
     }
+    if (resource === 'feedback') {
+      this.support(session);
+      return this.page(`${feedbackRows} WHERE (f.number LIKE ? ESCAPE '\\' OR f.description LIKE ? ESCAPE '\\' OR f.contact LIKE ? ESCAPE '\\' OR COALESCE(f.machine_code,'') LIKE ? ESCAPE '\\') AND (?='' OR f.state=? OR ?='active' AND f.state!='closed') ORDER BY f.created DESC,f.id`,
+        [new Date(this.now()).toISOString(), term, term, term, term, query.state, query.state, query.state], query);
+    }
     if (resource === 'tickets') return this.page(`SELECT t.*,o.reference AS orderReference FROM console_tickets t JOIN orders o ON o.id=t.order_id WHERE (t.id LIKE ? ESCAPE '\\' OR o.reference LIKE ? ESCAPE '\\' OR t.note LIKE ? ESCAPE '\\') AND (?='' OR t.state=? OR ?='active' AND t.state!='closed') ORDER BY t.created DESC,t.id`, [term, term, term, query.state, query.state, query.state], query);
     if (resource === 'finance') {
       this.financial(session);
@@ -106,12 +126,12 @@ export class ConsoleService {
     }
     if (resource === 'audit') {
       if (session.user.role !== 'owner') throw new ServiceError(403, 'FORBIDDEN', '只有管理员可以查看全局日志');
-      // 对象显示为订单编号、授权所属客户、工单所属订单或用户名；订单、授权、工单可跳转详情。
+      // 对象显示为订单编号、授权所属客户、工单所属订单、反馈编号或用户名；订单、授权、工单和反馈可跳转详情。
       return this.page(`SELECT * FROM (SELECT a.*,COALESCE(u.username,a.actor) AS operator,
-        CASE WHEN o.id IS NOT NULL THEN 'orders' WHEN l.id IS NOT NULL THEN 'licenses' WHEN t.id IS NOT NULL THEN 'tickets' END AS targetType,
-        COALESCE(o.reference,json_extract(lo.body,'$.customer')||' 的授权',tor.reference||' 的工单',tu.username,NULLIF(a.target,'')) AS targetLabel
+        CASE WHEN o.id IS NOT NULL THEN 'orders' WHEN l.id IS NOT NULL THEN 'licenses' WHEN t.id IS NOT NULL THEN 'tickets' WHEN f.id IS NOT NULL THEN 'feedback' END AS targetType,
+        COALESCE(o.reference,json_extract(lo.body,'$.customer')||' 的授权',tor.reference||' 的工单',f.number||' 反馈',tu.username,NULLIF(a.target,'')) AS targetLabel
         FROM console_audit a LEFT JOIN console_users u ON u.id=a.actor LEFT JOIN orders o ON o.id=a.target LEFT JOIN licenses l ON l.id=a.target LEFT JOIN orders lo ON lo.id=l.order_id
-        LEFT JOIN console_tickets t ON t.id=a.target LEFT JOIN orders tor ON tor.id=t.order_id LEFT JOIN console_users tu ON tu.id=a.target)
+        LEFT JOIN console_tickets t ON t.id=a.target LEFT JOIN orders tor ON tor.id=t.order_id LEFT JOIN feedback f ON f.id=a.target LEFT JOIN console_users tu ON tu.id=a.target)
         WHERE (target LIKE ? ESCAPE '\\' OR targetLabel LIKE ? ESCAPE '\\' OR operator LIKE ? ESCAPE '\\' OR reason LIKE ? ESCAPE '\\') AND (?='' OR action=?) ORDER BY at DESC,id`, [term, term, term, term, query.state, query.state], query);
     }
     if (resource === 'users') {
@@ -136,10 +156,32 @@ export class ConsoleService {
       const row = this.db.prepare('SELECT t.id,o.reference AS orderReference,t.order_id,t.license_id,t.category,t.note,t.state,t.conclusion,t.created,t.updated,COALESCE(u.username,t.actor) AS operator FROM console_tickets t JOIN orders o ON o.id=t.order_id LEFT JOIN console_users u ON u.id=t.actor WHERE t.id=?').get(id);
       if (!row) throw new ServiceError(404, 'NOT_FOUND', '工单不存在');
       item = rowSchema.parse(row); orderId = z.string().parse(item.order_id); related = [this.order(orderId)];
+    } else if (resource === 'feedback') {
+      this.support(session);
+      ({ item, related } = this.feedbackDetail(id)); orderId = id;
     } else throw new ServiceError(404, 'NOT_FOUND', '详情不存在');
-    const allowedHistory = session.user.role === 'owner' || session.user.role === 'operations' && Boolean(this.db.prepare("SELECT id FROM console_audit WHERE actor=? AND result='success' AND target IN (?,?) LIMIT 1").get(session.user.id, id, orderId));
+    const allowedHistory = session.user.role === 'owner' || session.user.role === 'operations' && (resource === 'feedback' || Boolean(this.db.prepare("SELECT id FROM console_audit WHERE actor=? AND result='success' AND target IN (?,?) LIMIT 1").get(session.user.id, id, orderId)));
     const history = allowedHistory ? this.db.prepare('SELECT a.at,a.action,a.reason,a.result,COALESCE(u.username,a.actor) AS operator FROM console_audit a LEFT JOIN console_users u ON u.id=a.actor WHERE target IN (?,?) ORDER BY a.at DESC LIMIT 100').all(id, orderId).map(row => rowSchema.parse(row)) : [];
     return detailSchema.parse({ item, related, history, ...(resource === 'licenses' ? { timeline: this.timeline(item, orderId, allowedHistory) } : {}) });
+  }
+  /** 反馈详情：环境摘要拆成单独字段；关联记录为同一台电脑（无机器码时为同一来源）的其他反馈。 */
+  private feedbackDetail(id: string): { item: ConsoleRow; related: ConsoleRow[] } {
+    const found = this.db.prepare(`SELECT f.*,${feedbackAttachment} AS attachment FROM feedback f WHERE f.id=?`).get(new Date(this.now()).toISOString(), id);
+    if (!found) throw new ServiceError(404, 'NOT_FOUND', '反馈不存在');
+    const row = z.object({ id: z.string(), number: z.string(), category: z.string(), state: z.string(), created: z.string(), occurred_at: z.string(), version: z.string(),
+      machine_code: z.string().nullable(), license_id: z.string().nullable(), contact: z.string(), description: z.string(), environment: z.string(), source: z.string(),
+      attachment: z.string(), attachment_bytes: z.number().nullable(), attachment_at: z.string().nullable(), attachment_issue: z.string().nullable(),
+      conclusion: z.string(), updated: z.string() }).parse(found);
+    // 一条格式不对的旧记录只标注环境摘要，不让整条反馈打不开。
+    const environment = feedbackEnvironmentSchema.safeParse(readJson(row.environment));
+    const env = environment.success ? environment.data : { os: '记录无法解析', obs: null, ma2: null, playback: null, license: null };
+    const item: ConsoleRow = { number: row.number, category: row.category, state: row.state, occurredAt: row.occurred_at, created: row.created, version: row.version,
+      description: row.description, contact: row.contact, envLicense: env.license, envOs: env.os, envObs: env.obs, envMa2: env.ma2, envPlayback: env.playback,
+      reporterMachine: row.machine_code, licenseId: row.license_id, attachment: row.attachment, attachmentBytes: row.attachment_bytes, attachmentAt: row.attachment_at,
+      attachmentIssue: row.attachment_issue, resolution: row.conclusion, updated: row.updated, id: row.id };
+    const related = (row.machine_code === null ? this.db.prepare(`${feedbackRows} WHERE f.source=? AND f.machine_code IS NULL AND f.id!=? ORDER BY f.created DESC LIMIT 20`).all(new Date(this.now()).toISOString(), row.source, id)
+      : this.db.prepare(`${feedbackRows} WHERE f.machine_code=? AND f.id!=? ORDER BY f.created DESC LIMIT 20`).all(new Date(this.now()).toISOString(), row.machine_code, id)).map(value => rowSchema.parse(value));
+    return { item, related };
   }
   /** 授权生命周期：业务审计是事件来源（含客户端激活和退款自动撤销），后台审计只用来补操作人。 */
   private timeline(license: ConsoleRow, orderId: string, showOperator: boolean): ConsoleRow[] {
@@ -177,13 +219,15 @@ export class ConsoleService {
   overview(session: ConsoleSession) {
     const counts = this.db.prepare(`SELECT SUM(CASE WHEN paymentStatus='pending' AND state='pending' THEN 1 ELSE 0 END) AS pendingOrders,SUM(CASE WHEN paymentStatus='confirmed' AND state IN ('pending','paid') THEN 1 ELSE 0 END) AS deliveryPending,SUM(CASE WHEN channelRefundFen>reviewedRefundFen THEN 1 ELSE 0 END) AS refundReview FROM (${orderProjection})`).get();
     const tickets = this.db.prepare("SELECT COUNT(*) AS openTickets FROM console_tickets WHERE state!='closed'").get();
+    // 反馈数只给能查看反馈的角色。
+    const feedback = this.supportRole(session) ? this.db.prepare("SELECT COUNT(*) AS openFeedback FROM feedback WHERE state!='closed'").get() : {};
     const expiring = this.db.prepare(`SELECT COUNT(*) AS expiring FROM (${licenseRows}) WHERE status='expiring'`).get(...this.statusWindow());
     const health = this.db.prepare('SELECT name,state,checked_at AS checkedAt,detail FROM console_health ORDER BY name').all().map(row => rowSchema.parse(row));
     const customers = this.db.prepare("SELECT COUNT(*) AS customerCount FROM (SELECT DISTINCT json_extract(body,'$.customer') COLLATE NOCASE,json_extract(body,'$.customerType') FROM orders WHERE state='fulfilled')").get();
     const bindings = this.db.prepare('SELECT COUNT(*) AS boundLicenseCount FROM licenses WHERE machine IS NOT NULL AND revoked=0').get();
     // 金额与收款趋势只返回给管理员和财务；其他角色只看订单状态类数字。
     const money = this.financialRole(session) ? this.cashflow() : { item: {}, trend: [] };
-    return detailSchema.parse({ item: { ...counts, ...money.item, ...tickets, ...expiring, ...customers, ...bindings, service: '正常', backup: health.find(row => row.name === 'backup-last-success')?.checkedAt ?? '暂无回执', recovery: health.find(row => row.name === 'delivery-recovery')?.checkedAt ?? '暂无回执' }, related: [...health, ...money.trend], history: [] });
+    return detailSchema.parse({ item: { ...counts, ...money.item, ...tickets, ...feedback, ...expiring, ...customers, ...bindings, service: '正常', backup: health.find(row => row.name === 'backup-last-success')?.checkedAt ?? '暂无回执', recovery: health.find(row => row.name === 'delivery-recovery')?.checkedAt ?? '暂无回执' }, related: [...health, ...money.trend], history: [] });
   }
   private cashflow() {
     const receipts = this.db.prepare("SELECT COALESCE(SUM(CASE WHEN source='manual' THEN amount_fen ELSE 0 END),0) AS manualFen,COALESCE(SUM(CASE WHEN source!='manual' THEN amount_fen ELSE 0 END),0) AS onlineFen FROM payment_receipts").get();
@@ -307,6 +351,11 @@ export class ConsoleService {
         if (prior.state === 'closed') throw new ServiceError(409, 'TICKET_CLOSED', '已关闭工单不能改写，请另建工单');
         if (input.state === 'closed' && !input.conclusion) throw new ServiceError(400, 'CONCLUSION_REQUIRED', '关闭前必须记录授权处理结论');
         this.db.prepare('UPDATE console_tickets SET state=?,conclusion=?,updated=? WHERE id=?').run(input.state, input.conclusion, at, input.id); return success(input.id, '工单已更新');
+      }
+      case 'update-feedback': {
+        if (!this.db.prepare('SELECT id FROM feedback WHERE id=?').get(input.id)) throw new ServiceError(404, 'NOT_FOUND', '反馈不存在');
+        if (input.state === 'closed' && !input.conclusion) throw new ServiceError(400, 'CONCLUSION_REQUIRED', '关闭前请写明处理结论');
+        this.db.prepare('UPDATE feedback SET state=?,conclusion=?,updated=? WHERE id=?').run(input.state, input.conclusion, at, input.id); return success(input.id, '反馈已更新');
       }
       case 'refund': {
         const order = this.order(input.id); const receipt = this.db.prepare('SELECT amount_fen FROM payment_receipts WHERE order_id=?').get(input.id);

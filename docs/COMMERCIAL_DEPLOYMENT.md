@@ -51,7 +51,7 @@ Cloudflare 全区接入下，普通 Universal SSL 通常仅覆盖根域和一级
 /srv/tblink-updates/windows/x64/    仅已验收的正式公开文件
 ```
 
-本服务器使用 [Nginx 配置](../apps/licensing-server/deploy/nginx.conf)、[systemd unit](../apps/licensing-server/deploy/tblink-licensing.service)、[环境示例](../apps/licensing-server/deploy/service.env.example)。将本项目配置作为独立站点启用，不覆盖其他站点。[Caddyfile](../apps/licensing-server/deploy/Caddyfile) 仅供以后全新环境使用，不在本机与 Nginx 同时绑定 80/443。线上反向代理已开放健康、激活、指定 UUID 的客户领取与支付宝通知精确路径；服务未完整配置支付宝时通知仍返回 404。不得放开全部 `/v1/*` 或 `/admin/*`。
+本服务器使用 [Nginx 配置](../apps/licensing-server/deploy/nginx.conf)、[systemd unit](../apps/licensing-server/deploy/tblink-licensing.service)、[环境示例](../apps/licensing-server/deploy/service.env.example)。将本项目配置作为独立站点启用，不覆盖其他站点。[Caddyfile](../apps/licensing-server/deploy/Caddyfile) 仅供以后全新环境使用，不在本机与 Nginx 同时绑定 80/443。线上反向代理已开放健康、激活、指定 UUID 的客户领取与支付宝通知精确路径；服务未完整配置支付宝时通知仍返回 404。问题反馈的 `POST /v1/feedback` 和 `PUT /v1/feedback/<UUID>/diagnostic` 两个路由按[安装说明](SERVER_INSTALL_FEEDBACK_20261025.md)单独放行，部署工具要求两者同时出现并带反馈限流。不得放开全部 `/v1/*` 或 `/admin/*`。
 
 腾讯云防火墙与系统防火墙允许公网 TCP 80/443，用于 HTTPS 和证书校验；8787、数据库和管理员 API 不开放公网。SSH 用户名已确认为 `ubuntu`，本轮公网 SSH 可用，Tailscale SSH 连接超时，尚未验收该运维通道。域名仅 DNS 的 HTTPS 请求来自用户公网网络，普通客户不需要加入 Tailscale。
 

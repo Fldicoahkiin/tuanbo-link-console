@@ -8,6 +8,7 @@ import type { WechatPay } from './wechat';
 import { clientAddress, rateBucket } from './client-address';
 import { SourceRates } from './source-rates';
 import { dispatchConsole, type ConsoleHttp } from './console-http';
+import type { FeedbackStore } from './feedback';
 
 async function readBytes(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = []; let size = 0;
@@ -26,7 +27,7 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
   catch { throw new ServiceError(400, 'INVALID_JSON', 'JSON 格式无效'); }
 }
 
-export function createLicensingServer(service: LicensingService, adminToken: string, alipay?: AlipayNotifications, checkout?: AlipayCheckout, purchaseCatalog?: PurchaseCatalog, trustLoopbackProxy = false, wechat?: WechatPay, wechatCheckoutEnabled = false, consoleOptions?: ConsoleHttp) {
+export function createLicensingServer(service: LicensingService, adminToken: string, alipay?: AlipayNotifications, checkout?: AlipayCheckout, purchaseCatalog?: PurchaseCatalog, trustLoopbackProxy = false, wechat?: WechatPay, wechatCheckoutEnabled = false, consoleOptions?: ConsoleHttp, feedback?: FeedbackStore) {
   if (adminToken.length < 32) throw new Error('后台访问令牌至少 32 位');
   if (checkout && !alipay) throw new Error('启用支付宝付款入口必须同时配置通知验签');
   if (wechatCheckoutEnabled && !wechat) throw new Error('启用微信付款必须同时配置签名、验签和解密凭据');
@@ -83,10 +84,14 @@ export function createLicensingServer(service: LicensingService, adminToken: str
     const dispatch = async (): Promise<unknown> => {
       const now = Date.now();
       const customerQuery = /^\/v1\/orders\/([a-f0-9-]{36})\/reconcile$/.exec(request.url ?? '');
-      const group = request.url?.startsWith('/v1/payments/') ? 'payment-notify' : customerQuery ? 'payment-query' : request.url === '/v1/orders' ? 'purchase' : request.url?.startsWith('/v1/orders/') ? 'delivery' : 'product';
-      const address = `${rateBucket(clientAddress(request.socket.remoteAddress, request.headers['x-tblink-client-ip'], trustLoopbackProxy))}:${group}`;
+      const feedbackUpload = /^\/v1\/feedback\/([a-f0-9-]{36})\/diagnostic$/.exec(request.url ?? '');
+      const group = request.url?.startsWith('/v1/payments/') ? 'payment-notify' : customerQuery ? 'payment-query' : request.url === '/v1/orders' ? 'purchase' : request.url?.startsWith('/v1/orders/') ? 'delivery'
+        : request.url === '/v1/feedback' || feedbackUpload ? 'feedback' : 'product';
+      const bucket = rateBucket(clientAddress(request.socket.remoteAddress, request.headers['x-tblink-client-ip'], trustLoopbackProxy));
+      const address = `${bucket}:${group}`;
       // 渠道通知只靠验签把关：共享出口或计数表写满都不能拒收到账通知。
-      if (group !== 'payment-notify' && rates.exceeded(address, group === 'purchase' || group === 'payment-query' ? 10 : 120, now)) throw new ServiceError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
+      if (group !== 'payment-notify' && rates.exceeded(address, group === 'purchase' || group === 'payment-query' || group === 'feedback' ? 10 : 120, now))
+        throw new ServiceError(429, 'RATE_LIMITED', group === 'feedback' ? '反馈提交太频繁' : '请求过于频繁，请稍后再试');
       if (request.url?.startsWith('/console-api/')) {
         if (!consoleOptions) throw new ServiceError(404, 'NOT_FOUND', '接口不存在');
         return dispatchConsole(consoleOptions, request, response, requestId, address, () => readBody(request), {
@@ -105,6 +110,12 @@ export function createLicensingServer(service: LicensingService, adminToken: str
         });
       }
       if (request.method === 'GET' && request.url === '/health') return { status: 'ok' };
+      if (group === 'feedback') {
+        if (!feedback) throw new ServiceError(404, 'FEEDBACK_DISABLED', '反馈服务尚未开通');
+        if (request.method === 'POST' && !feedbackUpload) return feedback.submit(await readBody(request), bucket);
+        if (request.method === 'PUT' && feedbackUpload) return feedback.upload(feedbackUpload[1]!, request.headers.authorization, request);
+        throw new ServiceError(405, 'METHOD_NOT_ALLOWED', '不支持此请求方法');
+      }
       if (request.method === 'POST' && request.url === '/v1/activate') return service.activate(await readBody(request));
       if (request.method === 'GET' && request.url === '/v1/catalog') {
         const channel = z.enum(['alipay', 'wechat']).parse(request.headers['x-tblink-payment-channel'] ?? 'alipay');

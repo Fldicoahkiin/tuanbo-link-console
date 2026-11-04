@@ -5,7 +5,8 @@ import { beijingTime, display, labels } from './forms';
 
 const chipFields = new Set(['state', 'paymentStatus', 'status']);
 // 详情页不显示未发生的事项（无退款、无工单、无错误、未绑定），编号放最后。
-const optionalFields = new Set(['deliveryError', 'openTickets', 'refundedFen', 'channelRefundFen', 'reviewedRefundFen', 'paymentReference', 'receivedAt', 'machineCode', 'leaseUntil', 'lastIssuedAt', 'license_id', 'conclusion']);
+const optionalFields = new Set(['deliveryError', 'openTickets', 'refundedFen', 'channelRefundFen', 'reviewedRefundFen', 'paymentReference', 'receivedAt', 'machineCode', 'leaseUntil', 'lastIssuedAt', 'license_id', 'conclusion',
+  'contact', 'reporterMachine', 'licenseId', 'attachmentBytes', 'attachmentAt', 'attachmentIssue', 'resolution', 'envObs', 'envMa2', 'envPlayback']);
 // 原订单编号与「业务订单号」重复，详情页不再单列。
 const hiddenFields = new Set(['orderId']);
 export function detailRow(row: ConsoleRow): ConsoleRow {
@@ -39,7 +40,7 @@ export function DataTable({ rows, fields, select, canSelect }: { rows: ConsoleRo
 }
 export function Fields({ row }: { row: ConsoleRow }) {
   const [copied, setCopied] = useState(false);
-  return <dl className="details">{Object.entries(row).map(([key, value]) => <div key={key}><dt>{labels[key] ?? key}</dt><dd>{key === 'id' && typeof value === 'string'
+  return <dl className="details">{Object.entries(row).map(([key, value]) => <div key={key} data-field={key}><dt>{labels[key] ?? key}</dt><dd>{key === 'id' && typeof value === 'string'
     ? <span className="identifier-copy"><code>{value}</code><button aria-label="复制编号" title={copied ? '已复制' : '复制编号'} onClick={() => { void navigator.clipboard.writeText(value).then(() => setCopied(true), () => setCopied(false)); }}><Copy size={14} /></button></span>
     : chipFields.has(key) ? <span className={`status-badge status-${String(value)}`}>{display(key, value)}</span> : display(key, value)}</dd></div>)}</dl>;
 }

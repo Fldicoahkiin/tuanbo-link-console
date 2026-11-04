@@ -36,6 +36,8 @@ export const actionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('reset-user'), id, reason: reasonSchema }),
   z.object({ action: z.literal('create-ticket'), id, licenseId: id.nullable(), category: z.enum(['migration', 'refund', 'invoice', 'recovery', 'other']), note: reasonSchema, reason: noteSchema }),
   z.object({ action: z.literal('update-ticket'), id, state: z.enum(['open', 'processing', 'closed']), conclusion: z.string().trim().max(500), reason: noteSchema }),
+  // 问题反馈：可重新打开；关闭时必须写处理结论。
+  z.object({ action: z.literal('update-feedback'), id, state: z.enum(['open', 'processing', 'closed']), conclusion: z.string().trim().max(500), reason: noteSchema }),
   z.object({ action: z.literal('refund'), id, amountFen: z.number().int().positive(), reference: text, handledAt: date, reason: noteSchema }),
   // 支付宝 refund_reason 会展示在买卖双方退款账单中，上限 256 字符，超长直接拒绝而不截断。
   z.object({ action: z.literal('alipay-refund'), id, amountFen: z.number().int().positive(), reason: z.string().trim().min(1).max(256) }),
@@ -67,9 +69,13 @@ export const permissions: Record<ConsoleAction['action'], readonly ConsoleRole[]
   'set-expiry': ['owner'], reveal: ['owner', 'operations'], revoke: ['owner', 'operations'], migrate: ['owner', 'operations'], grant: ['owner'],
   'create-user': ['owner'], 'update-user': ['owner'], 'reset-user': ['owner'],
   'create-ticket': ['owner', 'operations', 'finance'], 'update-ticket': ['owner', 'operations', 'finance'], refund: ['owner', 'finance'], invoice: ['owner', 'finance'],
+  // 反馈带联系方式和诊断包，只给管理员和运营（与 feedbackRoles 一致）。
+  'update-feedback': ['owner', 'operations'],
   'alipay-refund': ['owner', 'finance'], 'refund-review': ['owner', 'operations'],
   'publish-update': ['owner'], 'rollback-update': ['owner'], 'discard-update': ['owner']
 };
+/** Who reads problem reports, their contact details and diagnostic packages. */
+export const feedbackRoles: readonly ConsoleRole[] = ['owner', 'operations'];
 export const sensitiveActions = new Set<ConsoleAction['action']>(['set-expiry', 'fulfill', 'reveal', 'revoke', 'migrate', 'grant', 'create-user', 'update-user', 'reset-user', 'delivery-access', 'alipay-refund', 'refund-review', 'publish-update', 'rollback-update', 'discard-update']);
 
 /** update-status.json, written by the root publish-update.py; the console only reads it. */
