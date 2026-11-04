@@ -15,6 +15,8 @@ export type UpdateClientHandlers = {
   progress: (info: ProgressInfo) => void;
   downloaded: (info: UpdateInfo) => void;
   error: (error: Error) => void;
+  /** How the updater fetched the installer: only the changed blocks, or the whole installer after that failed. */
+  log: (level: 'info' | 'warning', message: string) => void;
 };
 
 export type UpdateClient = {
@@ -105,12 +107,16 @@ export class LinkUpdateManager {
         }),
         progress: (info) => {
           if (this.activeDownload && this.rules.playbackActive()) { this.activeDownload.abort(); return; }
+          const percent = clampPercent(info.percent).toFixed(1);
+          // Downloading only the changed blocks reports their total, which is below the installer's signed size.
+          const fullSize = this.offer?.signed?.size ?? null;
           this.update({
             phase: 'downloading',
             progressPercent: clampPercent(info.percent),
             transferredBytes: info.transferred,
             totalBytes: info.total,
-            message: `正在下载 ${clampPercent(info.percent).toFixed(1)}%`
+            message: fullSize === null ? `正在下载 ${percent}%`
+              : info.total < fullSize ? `正在下载有变化的部分 ${percent}%` : `正在下载完整安装包 ${percent}%`
           });
         },
         downloaded: (info) => this.update({
@@ -119,7 +125,8 @@ export class LinkUpdateManager {
           progressPercent: 100,
           message: `版本 ${info.version} 已下载，确认后会重启并安装`
         }),
-        error: (error) => { if (!this.backgroundCheck) this.update({ phase: 'error', message: normalizeUpdateError(error) }); }
+        error: (error) => { if (!this.backgroundCheck) this.update({ phase: 'error', message: normalizeUpdateError(error) }); },
+        log: (level, message) => this.rules.log(level, message)
       });
       this.update({
         phase: 'checking',
@@ -277,9 +284,13 @@ export class LinkUpdateManager {
 
 function createElectronUpdateClient(feedUrl: string, handlers: UpdateClientHandlers): UpdateClient {
   const { NsisUpdater, CancellationToken } = electronUpdater;
+  // One request per run of changed blocks instead of one multi-range request: the download then reports
+  // progress (a multi-range download reports none until it ends), and it works through a CDN that answers
+  // only single ranges.
   const updater = new NsisUpdater({
     provider: 'generic',
-    url: feedUrl
+    url: feedUrl,
+    useMultipleRangeRequest: false
   });
   // NSIS 的 /D 参数用于覆盖默认目录。显式沿用当前可执行文件目录，
   // 防止自动更新把用户选择的安装位置迁移到默认目录。
@@ -292,11 +303,16 @@ function createElectronUpdateClient(feedUrl: string, handlers: UpdateClientHandl
   updater.disableWebInstaller = true;
   // Differential download: the installer copies itself to the updater cache on every install, so only changed
   // blocks are fetched (about 2 MB when the beauty and music assets are unchanged). The old blockmap comes from the
-  // cache when this version was itself installed by an update, otherwise from the feed, which keeps only the
-  // previous version's. Without one, or when the result's sha512 differs from latest.yml, the updater falls back to
-  // the full installer; either way the file must then match the release signature before it is installed.
+  // cache when this version was itself installed by an update, otherwise from the feed (see "差分更新" in
+  // docs/SOFTWARE_UPDATES.md for which versions it keeps). Without one, or when the result's sha512 differs from
+  // latest.yml, the updater falls back to the full installer; either way the file must then match the release
+  // signature before it is installed.
   updater.disableDifferentialDownload = false;
-  updater.logger = null;
+  updater.logger = {
+    info: (message?: unknown) => forwardUpdaterLine('info', message, handlers.log),
+    warn: (message?: unknown) => forwardUpdaterLine('warn', message, handlers.log),
+    error: (message?: unknown) => forwardUpdaterLine('error', message, handlers.log)
+  };
 
   updater.on('checking-for-update', handlers.checking);
   updater.on('update-available', handlers.available);
@@ -338,6 +354,27 @@ function createElectronUpdateClient(feedUrl: string, handlers: UpdateClientHandl
       updater.removeListener('error', handlers.error);
     }
   };
+}
+
+function forwardUpdaterLine(level: 'info' | 'warn' | 'error', message: unknown, log: UpdateClientHandlers['log']): void {
+  const line = updaterLogLine(level, String(message));
+  if (line) log(line.level, line.message);
+}
+
+/** The run-log line for an electron-updater log line, or null for the lines the update manager already logs.
+ * Only how the installer is fetched is kept: the planned size of the changed blocks, and the fall back to the
+ * whole installer with its reason. */
+export function updaterLogLine(level: 'info' | 'warn' | 'error', message: string): { level: 'info' | 'warning'; message: string } | null {
+  const plan = /^Full: (.+), To download: (.+) \((\d+)%\)$/.exec(message);
+  if (level === 'info' && plan) {
+    return { level: 'info', message: `更新只下载有变化的部分：${plan[2]}，完整安装包 ${plan[1]}（${plan[3]}%）` };
+  }
+  const fallback = 'Cannot download differentially, fallback to full download: ';
+  if (message.startsWith(fallback)) {
+    const reason = message.slice(fallback.length).split('\n')[0]?.trim() || '没有给出原因';
+    return { level: 'warning', message: `只下载有变化的部分没成功，改为下载完整安装包。原因：${reason}` };
+  }
+  return null;
 }
 
 function initialStatus(currentVersion: string, packaged: boolean, feedUrl: string): LinkUpdateStatus {

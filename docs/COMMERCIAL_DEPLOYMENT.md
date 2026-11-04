@@ -19,7 +19,7 @@
 | 名称 | Comment |
 | --- | --- |
 | `api.tuanbo-link` | 团播联动台：机器授权激活、商品订单与支付宝通知 API；源站 jinhe-cloud（腾讯云上海）；仅 DNS，源站 Nginx 提供 HTTPS；管理员接口仅回环或运维隧道访问。 |
-| `updates.tuanbo-link` | 团播联动台：Windows x64 更新清单与正式安装包出口；源站 jinhe-cloud（腾讯云上海）；仅 DNS，源站 Nginx 提供 HTTPS。 |
+| `updates.tuanbo-link` | 团播联动台：Windows x64 更新清单与正式安装包出口；腾讯云 CDN（中国境内）回源 jinhe-cloud（腾讯云上海）；仅 DNS。 |
 | `tuanbo-link` | 团播联动台：产品官网、演示视频与付费购买入口；源站 jinhe-cloud（腾讯云上海）；仅 DNS，源站 Nginx 提供 HTTPS；可售套餐由授权服务控制。 |
 
 2026-09-29 已在已登录 Cloudflare 页面更新官网与 API 注释，并从保存后的记录重新读取确认；三条 A 记录仍为 `123.206.229.200`、仅 DNS、自动 TTL。更新出口的原注释保留。备注描述用途，是否实际可购买或下载仍以对应服务的部署记录为准。
@@ -29,6 +29,8 @@
 Cloudflare 全区接入下，普通 Universal SSL 通常仅覆盖根域和一级子域，`api.tuanbo-link.jinhefilm.com`、`updates.tuanbo-link.jinhefilm.com` 不在该范围内。初期使用仅 DNS，使用现有 Nginx + Certbot 申请和续期覆盖实际主机名的公网证书。以后启用代理，需要先配置确实覆盖这些主机名的边缘证书（例如适用的 Advanced Certificate / Total TLS 或自定义证书），并使用 Full (strict) 校验源站证书。不能把 Flexible 当作替代。
 
 仅 DNS 不经过 Cloudflare HTTP 代理，因此没有 Cloudflare WAF/CDN 的访问保护与带宽卸载，下载流量全部由腾讯云承担。4Mbps 理论上限约 0.5MB/s，200MB 完整包单用户约需 7 分钟，多人会共享带宽，实际更慢。先保持同服务器出口；流量增长时可在保留域名的前提下迁移对象存储/CDN，仍需校验更新包。
+
+2026-11-04 起 `updates.tuanbo-link` 改为 CNAME `updates.tuanbo-link.jinhefilm.com.cdn.dnsv1.com`（仅 DNS），经腾讯云 CDN 下载，源站仍是这台服务器的 Nginx；`api.` 和官网仍是 A 记录直连。CDN 用 `updates.` 单独签发的证书；共用证书里 `updates.` 的 HTTP 验证经 CDN 回源到服务器 80 端口。安装记录、用量封顶和回退见 [CDN 安装](SERVER_INSTALL_CDN_20261026.md)。
 
 依据：[DNS 记录操作](https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/)、[Universal SSL 覆盖限制](https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/)、[Full (strict)](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/full-strict/)。
 

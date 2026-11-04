@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the update CDN certificate once a day
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+Unit=tblink-cdn-certificate.service
+
+[Install]
+WantedBy=timers.target

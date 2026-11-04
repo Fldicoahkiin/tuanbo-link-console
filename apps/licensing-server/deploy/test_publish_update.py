@@ -206,8 +206,9 @@ class PublishUpdateTest(unittest.TestCase):
         result = self.request(action='rollback', version='0.5.0')
         self.assertEqual((result['ok'], result['message']), (True, '更新源已回到 0.5.0，已移出更新源：0.5.1'))
         self.assertIn(b'version: 0.5.0', (self.feed / 'latest.yml').read_bytes())
-        # The withdrawn version leaves the feed; it is kept in the rollback's receipt.
+        # The withdrawn version leaves the feed, blockmap too; it is kept in the rollback's receipt.
         self.assertEqual(self.feed_versions(), ['0.5.0'])
+        self.assertEqual(self.feed_blockmaps(), ['0.5.0'])
         self.assertEqual(self.archived('rollback', '0.5.0'), ['Tuanbo-Link-Console-0.5.1-x64.exe', 'Tuanbo-Link-Console-0.5.1-x64.exe.blockmap'])
         # 0.5.0 was the first publish here: nothing earlier to return to.
         self.assertEqual(self.status()['rollback'], {'version': None, 'issue': '没有可以回滚到的上一版'})
@@ -215,7 +216,11 @@ class PublishUpdateTest(unittest.TestCase):
         self.assertEqual((again['ok'], again['message']), (False, '没有可以回滚到的上一版'))
 
     def feed_versions(self):
-        return sorted({path.name.split('-')[3] for path in self.feed.iterdir() if path.name.startswith('Tuanbo-Link-Console-')})
+        """The versions whose installers the feed serves."""
+        return sorted(path.name.split('-')[3] for path in self.feed.iterdir() if path.name.startswith('Tuanbo-Link-Console-') and path.name.endswith('.exe'))
+
+    def feed_blockmaps(self):
+        return sorted(path.name.split('-')[3] for path in self.feed.iterdir() if path.name.startswith('Tuanbo-Link-Console-') and path.name.endswith('.blockmap'))
 
     def archived(self, kind, version):
         receipts = [path for path in self.receipts.iterdir() if path.name.endswith(f'-{kind}-{version}')]
@@ -234,11 +239,14 @@ class PublishUpdateTest(unittest.TestCase):
         result = self.request(action='publish', staged='0.5.1-aaaaaaaaaaaa', manifestSha256=module.digest(staged / 'release-manifest.json').hexdigest())
         self.assertEqual((result['ok'], result['message']), (True, '已发布 0.5.1，已移出更新源：0.4.29'))
         self.assertEqual(self.feed_versions(), ['0.5.0', '0.5.1'])
-        # Moved, not deleted: the bytes are in the publish receipt, out of public reach.
+        # Moved, not deleted: the installer is in the publish receipt, out of public reach.
         archived = sorted(path for path in self.receipts.glob('*-update-0.5.1/archived/*'))
-        self.assertEqual([path.name for path in archived], ['Tuanbo-Link-Console-0.4.29-x64.exe', 'Tuanbo-Link-Console-0.4.29-x64.exe.blockmap'])
+        self.assertEqual([path.name for path in archived], ['Tuanbo-Link-Console-0.4.29-x64.exe'])
         self.assertEqual(archived[0].read_bytes(), (oldest / 'Tuanbo-Link-Console-0.4.29-x64.exe').read_bytes())
-        self.assertEqual(archived[1].read_bytes(), b'old blockmap')
+        # Every blockmap stays: a computer still on 0.4.29 that was installed from the website downloads only
+        # the changed blocks.
+        self.assertEqual(self.feed_blockmaps(), ['0.4.29', '0.5.0', '0.5.1'])
+        self.assertEqual((self.feed / 'Tuanbo-Link-Console-0.4.29-x64.exe.blockmap').read_bytes(), b'old blockmap')
         self.assertEqual(self.status()['rollback'], {'version': '0.5.0', 'issue': None})
 
     def test_only_the_newest_archives_keep_their_installers(self):
@@ -254,6 +262,26 @@ class PublishUpdateTest(unittest.TestCase):
         self.assertEqual(json.loads(next(self.receipts.glob('*-update-0.5.4/receipt.json')).read_text())['prunedArchives'], [])
         # The pruned receipt keeps its record, so 0.5.2 still counts as published once.
         self.assertIsNotNone(module.publish_receipt(self.root, '0.5.2'))
+
+    def test_blockmaps_an_earlier_publish_moved_off_the_feed_come_back_once(self):
+        for patch in range(0, 4):
+            self.publish(release(self.root / f'p{patch}', f'0.5.{patch}'), f'0.5.{patch}')
+        self.assertTrue(self.request(action='rollback', version='0.5.2')['ok'])
+        self.assertEqual(self.feed_blockmaps(), ['0.5.0', '0.5.1', '0.5.2'])
+        # Before blockmaps stayed, a publish moved them into its receipt with the installer.
+        receipt = next(self.receipts.glob('*-update-0.5.2'))
+        (receipt / 'archived').mkdir(exist_ok=True)
+        for version in ['0.5.0', '0.5.1']:
+            name = f'Tuanbo-Link-Console-{version}-x64.exe.blockmap'
+            shutil.move(self.feed / name, receipt / 'archived' / name)
+        # A copy that does not match its manifest stays where it is.
+        (receipt / 'archived' / 'Tuanbo-Link-Console-0.5.1-x64.exe.blockmap').write_bytes(b'changed')
+        self.assertEqual(module.restore_blockmaps(self.root, self.accounts), ['Tuanbo-Link-Console-0.5.0-x64.exe.blockmap'])
+        self.assertEqual((self.feed / 'Tuanbo-Link-Console-0.5.0-x64.exe.blockmap').read_bytes(), b'blockmap 0.5.0')
+        self.assertEqual(oct((self.feed / 'Tuanbo-Link-Console-0.5.0-x64.exe.blockmap').stat().st_mode & 0o777), '0o644')
+        # 0.5.3 was withdrawn by the rollback and stays off, so it can be published again.
+        self.assertEqual(self.feed_blockmaps(), ['0.5.0', '0.5.2'])
+        self.assertEqual(module.restore_blockmaps(self.root, self.accounts), [])
 
     def test_publishing_is_refused_when_the_disk_is_nearly_full(self):
         self.publish(release(self.root / 'one', '0.5.0'), '0.5.0')

@@ -5,7 +5,7 @@
 搬运脚本每次运行都先查状态，再做下一步，所以随时可以再跑：
 - 更新源已经是这个版本：把草稿转为正式，结束；
 - 服务器 staging 里已经有这个版本，或另一台机器正在上传：等，不重复上传；
-- 都不是：下载草稿，按构建清单和标签提交核对，上传，再等最多 10 分钟，服务器发布了就顺手把草稿转为正式。
+- 都不是：下载草稿，按构建清单和标签提交核对，上传，再等最多 10 分钟，服务器发布了就顺手把草稿转为正式。服务器能拼安装包时（[安装说明](SERVER_INSTALL_DELTA_UPLOAD_20261029.md)），安装包只下载、上传更新源当前版没有的块，约占 1%；拼不出来就改为下载、上传完整安装包。
 
 哪一步失败都只记日志，下次运行接着做；工位电脑和 Mac 同时跑也不会出错，服务器同一时间只接受一份上传。链路图和排查表见 [README](../README.md#发布与部署链路)，信任边界见[自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)。搬运需要服务器上的状态查询，安装见 [SERVER_INSTALL_RELAY_20261024.md](SERVER_INSTALL_RELAY_20261024.md)。
 
@@ -20,7 +20,7 @@
 powershell -ExecutionPolicy Bypass -File D:\tblink-builder-setup\setup-relay.ps1
 ```
 
-[`scripts/setup-relay.ps1`](../scripts/setup-relay.ps1) 和它要复制的 `relay-release.mjs`、`github-releases.mjs` 放在 `D:\tblink-builder-setup\`，由会话同步。脚本做这些事，重复运行安全：
+[`scripts/setup-relay.ps1`](../scripts/setup-relay.ps1) 和它要复制的 `relay-release.mjs`、`github-releases.mjs` 放在 `D:\tblink-builder-setup\`，由会话同步。这两个脚本改了之后，要把新版本同时放进 `D:\tblink-builder-setup\` 和 `D:\tblink-relay\`，否则计划任务还跑旧的。脚本做这些事，重复运行安全：
 
 1. 检查：以 WYZB 运行，Node.js、Git for Windows 的 `ssh.exe`、gh、上传身份文件和本机代理 `127.0.0.1:7890` 都在。
 2. gh 没登录 Fldicoahkiin 时，走浏览器登录。**这是唯一要你动手的地方**：浏览器里用 Fldicoahkiin 登录，输入屏幕上的验证码；问「Authenticate Git with your GitHub credentials?」回答 n。

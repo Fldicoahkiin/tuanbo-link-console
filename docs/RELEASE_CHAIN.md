@@ -12,8 +12,8 @@
    - 打了 tag 但没发布出去的版本（打包失败，GitHub 上没有它的 release 或草稿，更新源也没有它），修好后在修复提交上再触发一次，标签挪过去，版本号不变（用户 2026-10-26 要求不跳号）。已有草稿或已发布的版本，tag 作业拒绝挪动。
    - 推 master 后 Verify Desktop 在几分钟内检查类型、lint，以及正式模式构建不带本机开发测试通道（这类问题以前要到打包时才发现，0.5.3 第一次就是这样失败的）。
 3. 之后全部自动（2026-10-24 用户定下：在 GitHub 云端打包，工位电脑只负责把包搬到服务器；不用 Cloudflare）：
-   - Release Windows 的 verify 和 build 作业在 GitHub 云端 Windows 上跑：检查版本、类型、单测、lint；下载美颜和音乐分析的固定资产，打包、签名，把四个文件放进这个标签的草稿 GitHub Release。
-   - 搬运：工位电脑的计划任务每 10 分钟（以及登录、联网时）跑一次 `scripts/relay-release.mjs`，Mac 也可以手动 `pnpm release:relay`，二选一，重复运行安全。它下载草稿、按构建清单核对，上传到服务器 staging；服务器上已有或正在上传就不重复传。
+   - Release Windows 的 verify 和 build 作业在 GitHub 云端 Windows 上同时跑（2026-10-29 起，以前 build 要等 verify 结束，多约 15 分钟）：verify 检查版本、类型、单测、lint；build 下载美颜和音乐分析的固定资产，打包、签名，等 verify 通过（`scripts/wait-for-job.mjs`）后才把四个文件放进这个标签的草稿 GitHub Release。verify 没通过就没有草稿，tag 仍能挪到修复提交，版本号不跳。
+   - 搬运：工位电脑的计划任务每 10 分钟（以及登录、联网时）跑一次 `scripts/relay-release.mjs`，Mac 也可以手动 `pnpm release:relay`，二选一，重复运行安全。它下载草稿、按构建清单核对，上传到服务器 staging；服务器上已有或正在上传就不重复传。[服务器安装](SERVER_INSTALL_DELTA_UPLOAD_20261029.md)之后只下载、上传更新源当前版没有的块（0.5.4 到 0.5.5 上传 8.4 MB，原来 982 MB），服务器拼出完整安装包再核对；拼不出来就改传完整安装包。
    - 服务器：发布脚本重新做全部校验（签名、manifest、sha256、版本高于更新源、这个版本没发布过），通过就上线。
    - 搬运脚本看到更新源换成这个版本后，把草稿转为正式 Release，标为 Latest。
    - 官网：Release 转正式会触发 Website Release，它从线上更新源写 `release.json`，提交到 master，再启动 Verify Licensing Server 部署官网（2026-10-27 起，之前要手动运行 `write-website-release.mjs` 并推送）。服务器回滚后，在 Actions 里手动运行一次 Website Release，官网就跟着回到更新源上的版本。
@@ -24,7 +24,8 @@
 
 保留规则：
 - 官网下载页和 `release.json` 只放最新版。
-- 更新源只放最新版和它替换掉的上一版：上一版的安装包供一步回滚，上一版的 blockmap 供从它升级的电脑做差分。
+- 更新源只放最新版和它替换掉的上一版的安装包，上一版的安装包供一步回滚。
+- blockmap 每个版本都留在更新源（约 1 MB 一个），官网装的电脑跳过几个版本也能只下载变化的部分；回滚撤下的版本连 blockmap 一起移出。2026-11-04 起生效（[服务器安装](SERVER_INSTALL_BLOCKMAPS_20261029.md)），0.5.0、0.5.2、0.5.3 的 blockmap 已放回。
 - 再往前的版本，发布成功时由服务器发布脚本移进 root 的备份目录，不删除，也不对外提供。
 - 回滚到上一版时，撤下的版本同样移出更新源；回滚后更新源只剩回到的那个版本。
 - GitHub Releases 保留所有版本。
@@ -193,7 +194,7 @@ flowchart TB
 | 源码管理 | GitHub origin、本地提交、锁文件；2026-09-29 已核对身份、远端 master 和仓库权限 | 源码已推送；分支保护规则尚未核对 |
 | 候选构建 | Windows 标签工作流、手动指定提交的候选构建、版本一致性检查、草稿 Release | Windows verify:release 及正式安装器生命周期已通过；真实付费激活与设备验收待完成 |
 | 正式发行 | 0.4.29 正式 Release、NSIS、摘要与 manifest | Authenticode 签名、发布者校验、当前 unsigned-only 门槛改造 |
-| 公司更新出口 | CF DNS、TLS、静态目录、续期验收 | 0.4.29 安装包及 feed 已发布；产物自动同步和两版本实机更新待完成 |
+| 公司更新出口 | CF DNS、TLS、静态目录、续期验收；2026-11-04 起经腾讯云 CDN 下载（[CDN 安装](SERVER_INSTALL_CDN_20261026.md)，用量封顶，源站不变） | 0.4.29 安装包及 feed 已发布；产物自动同步和两版本实机更新待完成 |
 | 付费与激活 | 人工核款发码、绑定机器、签名凭证、每次启动联网校验；数据库备份副本恢复已验收 | 异地密钥备份与整机恢复、正式 Windows 激活验收 |
 | 自动销售 | 支付通知/领取、运营付款链接、主动查单补交付 API 已部署；公司支付宝及电脑网站支付已开通；商品计价与自助下单已启用；桌面购买/恢复/领码随 0.4.29 发布 | 经营材料补件；Windows 桌面验收、发票 API、退款对账及真实支付验收 |
 | 现场运行 | 本机编排、OBS/MIDI/MA2 适配 | 现场设备与长时间运行验收不能被构建成功替代 |

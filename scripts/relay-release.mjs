@@ -6,16 +6,20 @@
 //   2. Feed already serves it, byte for byte: publish the draft, marked Latest.
 //   3. Otherwise ask the server (tblink-release `status`): already staged, or another upload running: wait.
 //   4. Otherwise download the draft, check it against its manifest and the tag's commit, upload it, and wait up to
-//      ten minutes for the server to publish it so a run by hand finishes the whole job.
+//      ten minutes for the server to publish it so a run by hand finishes the whole job. When the server can rebuild
+//      the installer (its `status` names DELTA_FORMAT), only the blocks the feed's installer lacks are downloaded and
+//      sent, about 1% of it; the server checks the rebuilt file against the manifest as it checks a full upload. If
+//      that fails, the same run downloads and sends the full installer.
 // node --use-env-proxy scripts/relay-release.mjs [--log <directory>]   (GitHub through HTTPS_PROXY; the server direct)
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, closeSync, createReadStream, existsSync, mkdirSync, openSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { open, readFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { REPOSITORY, downloadAsset, github } from './github-releases.mjs';
+import { gunzipSync } from 'node:zlib';
+import { REPOSITORY, downloadAsset, downloadAssetRange, github } from './github-releases.mjs';
 
 // Must equal apps/desktop/package.json build.publish.url (checked by relay-release.test.mjs); the office PC runs this
 // file outside a checkout.
@@ -40,6 +44,64 @@ export function compareVersions(left, right) {
 }
 const installerOf = version => `Tuanbo-Link-Console-${version}-x64.exe`;
 const filesOf = version => ['release-manifest.json', 'latest.yml', installerOf(version), `${installerOf(version)}.blockmap`];
+const deltaFilesOf = version => ['release-manifest.json', 'latest.yml', `${installerOf(version)}.blockmap`, `${installerOf(version)}.delta`];
+
+// Must equal DELTA_FORMAT in apps/licensing-server/deploy/receive-update.py. A delta is one JSON line, then the bytes
+// the base lacks: {"format", "base": {"file", "size"}, "size", "ops"}, where [0, start, length] copies from the base
+// installer on the feed and [1, length] takes the next bytes after the line.
+export const DELTA_FORMAT = 'tblink-installer-delta-1';
+
+/** The blocks of an electron-builder blockmap: gzipped JSON with one file that starts at offset 0. */
+export function readBlockmap(bytes) {
+  const files = JSON.parse(gunzipSync(bytes).toString('utf8')).files;
+  const blocks = files?.length === 1 ? files[0] : null;
+  if (!blocks || blocks.offset !== 0 || !Array.isArray(blocks.checksums) || !Array.isArray(blocks.sizes) || blocks.checksums.length !== blocks.sizes.length
+    || !blocks.sizes.every(size => Number.isSafeInteger(size) && size > 0)) throw new Error('blockmap 的格式不是一个从头开始的文件');
+  return { checksums: blocks.checksums, sizes: blocks.sizes, size: blocks.sizes.reduce((sum, size) => sum + size, 0) };
+}
+
+/** How to build the new installer from the old one, matching electron-updater's own plan (downloadPlanBuilder.js):
+ * a block whose checksum and size are in the old map is copied from its first place there, any other block is sent.
+ * Neighbouring copies and sends are merged. */
+export function deltaPlan(oldMap, newMap) {
+  const old = new Map();
+  for (let index = 0, offset = 0; index < oldMap.checksums.length; offset += oldMap.sizes[index], index += 1) {
+    if (!old.has(oldMap.checksums[index])) old.set(oldMap.checksums[index], { offset, size: oldMap.sizes[index] });
+  }
+  const ops = []; const sent = [];
+  for (let index = 0, offset = 0; index < newMap.checksums.length; offset += newMap.sizes[index], index += 1) {
+    const size = newMap.sizes[index]; const match = old.get(newMap.checksums[index]); const last = ops.at(-1);
+    if (match?.size === size) {
+      if (last?.[0] === 0 && last[1] + last[2] === match.offset) last[2] += size;
+      else ops.push([0, match.offset, size]);
+    } else if (last?.[0] === 1) {
+      last[1] += size; sent.at(-1).length += size;
+    } else {
+      ops.push([1, size]); sent.push({ start: offset, length: size });
+    }
+  }
+  return { ops, sent, bytes: sent.reduce((sum, range) => sum + range.length, 0) };
+}
+
+/** Writes the delta: the JSON line, then the sent ranges of the new installer, which `read(start, length)` returns
+ * (at most 8 MiB at a time). */
+export async function writeDelta({ plan, base, size, read, output }) {
+  const target = await open(output, 'w');
+  try {
+    await target.write(`${JSON.stringify({ format: DELTA_FORMAT, base, size, ops: plan.ops })}\n`);
+    for (const { start, length } of plan.sent) {
+      for (let done = 0; done < length;) {
+        const piece = Math.min(8 * 1024 * 1024, length - done);
+        const bytes = await read(start + done, piece);
+        if (bytes.length !== piece) throw new Error(`安装包第 ${start + done} 字节起只读到 ${bytes.length} 字节，应为 ${piece}`);
+        await target.write(bytes);
+        done += piece;
+      }
+    }
+  } finally {
+    await target.close();
+  }
+}
 
 const uploadedFiles = release => filesOf(release.tag_name.slice(1)).filter(name => release.assets.some(asset => asset.name === name && asset.state === 'uploaded')).length;
 const versionDrafts = releases => releases.filter(release => release.draft && stableVersion.test(release.tag_name));
@@ -118,8 +180,9 @@ async function publishDraft(draft) {
   return `${draft.tag_name} 已上线，GitHub release 已转为正式`;
 }
 
-/** Downloads (or reuses) the draft's files into the cache and checks them against the manifest and the tag's commit. */
-async function fetchDraft(draft, version, commit, directory) {
+/** Downloads (or reuses) the draft's files into the cache and checks them against the manifest and the tag's commit.
+ * Without the installer, only the manifest, latest.yml and the blockmap. */
+async function fetchDraft(draft, version, commit, directory, { installer = true } = {}) {
   mkdirSync(config.cache, { recursive: true });
   // Only this release's files are kept: a run after a failed upload reuses them, older releases' are dropped.
   for (const entry of readdirSync(config.cache)) if (join(config.cache, entry) !== directory) rmSync(join(config.cache, entry), { recursive: true, force: true });
@@ -130,7 +193,7 @@ async function fetchDraft(draft, version, commit, directory) {
   if (manifest.version !== version || manifest.gitSha !== commit || manifest.gitWorkingTreeDirty !== false || manifest.summary?.checksFailed !== 0 || !manifest.releaseSignature) {
     throw new Error(`${draft.tag_name} 的构建清单与标签提交 ${commit} 或检查结果不符`);
   }
-  for (const name of filesOf(version).slice(1)) {
+  for (const name of filesOf(version).slice(1).filter(name => installer || name !== installerOf(version))) {
     const records = manifest.artifacts.filter(item => item.path === `apps/desktop/dist/${name}`);
     if (records.length !== 1) throw new Error(`构建清单里没有唯一的 ${name}`);
     const path = join(directory, name);
@@ -142,12 +205,13 @@ async function fetchDraft(draft, version, commit, directory) {
   return readFile(join(directory, 'release-manifest.json'));
 }
 
-async function upload(version, directory, manifestBytes) {
+/** Sends the files as one tar on ssh's stdin. Returns the receiver's reply: its result, or its error line. */
+async function send(directory, files) {
   const archive = join(directory, 'upload.tar');
   // macOS tar adds a "._name" entry for every file with extended attributes (downloads carry com.apple.provenance),
   // and the server accepts exactly the four release files. COPYFILE_DISABLE=1 leaves those entries out; other tars
   // ignore it.
-  const tar = spawnSync('tar', ['-cf', archive, '-C', directory, ...filesOf(version)], { encoding: 'utf8', windowsHide: true, timeout: 10 * 60_000, env: { ...process.env, COPYFILE_DISABLE: '1' } });
+  const tar = spawnSync('tar', ['-cf', archive, '-C', directory, ...files], { encoding: 'utf8', windowsHide: true, timeout: 10 * 60_000, env: { ...process.env, COPYFILE_DISABLE: '1' } });
   if (tar.status !== 0) throw new Error(`打包上传内容失败（tar 退出码 ${tar.status}）：${(tar.stderr || String(tar.error)).slice(-500)}`);
   const input = openSync(archive, 'r');
   const started = Date.now();
@@ -161,14 +225,58 @@ async function upload(version, directory, manifestBytes) {
     const timer = setTimeout(() => child.kill(), 65 * 60_000);
     const code = await new Promise(resolve => child.once('close', resolve));
     clearTimeout(timer);
-    if (code !== 0) throw new Error(`服务器拒绝或上传中断（ssh 退出码 ${code}）：${output.stderr.trim().slice(-500)}`);
-    const result = JSON.parse(output.stdout);
-    if (result.manifestSha256 !== createHash('sha256').update(manifestBytes).digest('hex')) throw new Error('服务器收到的 manifest 与草稿不一致');
-    const seconds = (Date.now() - started) / 1000;
-    log(`已上传到 staging：${result.staged}，${result.bytes} 字节，${seconds.toFixed(0)} 秒（${(result.bytes / 1024 / seconds).toFixed(0)} KB/s）`);
+    if (code === 0) return { result: JSON.parse(output.stdout), seconds: (Date.now() - started) / 1000 };
+    const reply = output.stderr.trim().split('\n').at(-1) ?? '';
+    return { failure: `服务器拒绝或上传中断（ssh 退出码 ${code}）：${output.stderr.trim().slice(-500)}`, retryFull: reply.startsWith('{') && JSON.parse(reply).retryFull === true };
   } finally {
     closeSync(input);
   }
+}
+
+/** Writes the delta against the feed's installer into the release's directory, downloading only the blocks the feed's
+ * installer lacks from the draft, or says why it cannot. */
+async function prepareDelta(draft, version, directory, manifestBytes, feed) {
+  const base = installerOf(feed.version);
+  const size = Number(/^ {4}size: (\d+)$/m.exec(feed.bytes.toString('utf8'))?.[1]);
+  const response = await fetch(new URL(`${base}.blockmap`, FEED_URL), { cache: 'no-store', signal: AbortSignal.timeout(5 * 60_000) });
+  if (!response.ok) throw new Error(`读取更新源上 ${base}.blockmap 失败：HTTP ${response.status}`);
+  const oldMap = readBlockmap(Buffer.from(await response.arrayBuffer()));
+  if (oldMap.size !== size) throw new Error(`更新源上 ${feed.version} 的 blockmap 与 latest.yml 记的大小不一致`);
+  const installer = installerOf(version);
+  const record = JSON.parse(manifestBytes.toString('utf8')).artifacts.find(item => item.path === `apps/desktop/dist/${installer}`);
+  const asset = draft.assets.find(item => item.name === installer);
+  const newMap = readBlockmap(await readFile(join(directory, `${installer}.blockmap`)));
+  if (newMap.size !== record?.bytes || newMap.size !== asset?.size) throw new Error(`${installer} 与它的 blockmap、构建清单大小不一致`);
+  const plan = deltaPlan(oldMap, newMap);
+  const started = Date.now();
+  await writeDelta({ plan, base: { file: base, size }, size: newMap.size, read: (start, length) => downloadAssetRange(asset, start, length), output: join(directory, `${installer}.delta`) });
+  log(`只下载、上传变化的部分：${plan.bytes} 字节，完整安装包 ${newMap.size} 字节（${(plan.bytes / newMap.size * 100).toFixed(2)}%），${plan.sent.length} 段，下载用了 ${((Date.now() - started) / 1000).toFixed(0)} 秒；服务器以更新源上的 ${feed.version} 为底拼出新包`);
+}
+
+/** Uploads the release: only the changed blocks when the server can rebuild the installer, otherwise (or when that
+ * fails) the full installer, downloaded first. */
+async function upload(draft, version, commit, directory, { server, feed }) {
+  let manifestBytes = await fetchDraft(draft, version, commit, directory, { installer: server.delta !== DELTA_FORMAT });
+  let reply = null;
+  if (server.delta === DELTA_FORMAT) {
+    const ready = await prepareDelta(draft, version, directory, manifestBytes, feed).then(() => true, error => {
+      log(`不能只传变化的部分，改传完整安装包：${error.message}`);
+      return false;
+    });
+    if (ready) {
+      reply = await send(directory, deltaFilesOf(version));
+      if (reply.failure && reply.retryFull) {
+        log(`服务器没能用变化的部分拼出新包，改传完整安装包：${reply.failure}`);
+        reply = null;
+      }
+    }
+    if (!reply) manifestBytes = await fetchDraft(draft, version, commit, directory);
+  }
+  reply ??= await send(directory, filesOf(version));
+  if (reply.failure) throw new Error(reply.failure);
+  const { result, seconds } = reply;
+  if (result.manifestSha256 !== createHash('sha256').update(manifestBytes).digest('hex')) throw new Error('服务器收到的 manifest 与草稿不一致');
+  log(`已上传到 staging：${result.staged}，${result.bytes} 字节，${seconds.toFixed(0)} 秒（${(result.bytes / 1024 / seconds).toFixed(0)} KB/s）${result.rebuiltFrom ? `，服务器用 ${result.rebuiltFrom} 拼出了完整安装包` : ''}`);
 }
 
 async function relay() {
@@ -203,8 +311,7 @@ async function relay() {
       return '另一台机器正在上传';
     }
     log(`开始搬运 ${draft.tag_name}（提交 ${commit}，更新源当前 ${feed.version}）`);
-    const manifestBytes = await fetchDraft(draft, version, commit, directory);
-    await upload(version, directory, manifestBytes);
+    await upload(draft, version, commit, directory, { server, feed });
     const expected = await draftFeed(draft, directory);
     const deadline = Date.now() + 10 * 60_000;
     while (Date.now() < deadline) {
