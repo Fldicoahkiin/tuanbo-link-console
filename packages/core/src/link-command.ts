@@ -30,10 +30,6 @@ import {
   type VisualLayer,
   type RundownItem
 } from '@tb/schema';
-import type { SmpteTimecode } from '@tb/schema';
-import { timecodeToFrameNumber, timecodeToMilliseconds } from './mtc-timecode';
-import { MANAGED_OBS_SCENE_NAME } from './managed-media-timeline';
-import { resolveTimelineClipSpan } from './timeline-state';
 import { parseP1TimeOrigin } from './ma2-time-origin';
 
 export type LinkCommand = {
@@ -49,49 +45,6 @@ export type LinkCommand = {
   execute(project: LinkProject): LinkProject;
   undo(before: LinkProject): LinkProject;
 };
-
-/** Prepare missing legacy layers before the editable history begins. */
-export function needsProjectVisualLayers(project: LinkProject): boolean {
-  return project.rundown.some((item) => !item.visualLayers.length || needsTimelineLayerAssignment(item));
-}
-
-export function initializeProjectVisualLayersCommand(): LinkCommand {
-  const layers = new Map<string, VisualLayer[]>();
-  return createCommand('初始化工程图层', (project) => {
-    for (const item of project.rundown) {
-      initializeDefaultItemLayers(item, layers);
-      assignMissingTimelineLayers(item);
-    }
-  });
-}
-
-/** Newly added programmes and their defaults form one undoable operation. */
-export function withInitialVisualLayers(command: LinkCommand): LinkCommand {
-  const layers = new Map<string, VisualLayer[]>();
-  return { ...command, execute(project) {
-    const existing = new Set(project.rundown.map((item) => item.id));
-    const executed = command.execute(project);
-    const next = needsProjectVisualLayers(executed) ? structuredClone(executed) : executed;
-    let initialized = false;
-    for (const item of next.rundown) {
-      if ((!existing.has(item.id) || needsTimelineLayerAssignment(item)) && !item.visualLayers.length) { initializeDefaultItemLayers(item, layers); initialized = true; }
-      if (needsTimelineLayerAssignment(item)) { assignMissingTimelineLayers(item); initialized = true; }
-    }
-    return initialized ? parseLinkProject(next) : next;
-  } };
-}
-
-function initializeDefaultItemLayers(item: RundownItem, cache: Map<string, VisualLayer[]>): void {
-  if (item.visualLayers.length) return;
-  let layers = cache.get(item.id);
-  if (!layers) {
-    layers = [{ id: crypto.randomUUID(), name: '图层 2', visible: true, locked: false }, { id: crypto.randomUUID(), name: '图层 1', visible: true, locked: false }];
-    cache.set(item.id, layers);
-  }
-  item.visualLayers = structuredClone(layers);
-  for (const clip of item.referenceMediaClips) clip.layerId = layers[1]!.id;
-  for (const cue of item.cues) cue.layerId = cue.actions.some((action) => action.kind.startsWith('obs.')) ? layers[0]!.id : layers[1]!.id;
-}
 
 type TimestampProvider = () => string;
 
@@ -345,6 +298,9 @@ export function duplicateRundownItemCommand(
     if (copy.p1StartTrigger) copy.p1StartTrigger.id = createId();
     delete copy.p1Media;
     for (const clip of copy.referenceMediaClips) clip.id = createId();
+    const layerIds = new Map(copy.visualLayers.map((layer) => [layer.id, createId()]));
+    for (const layer of copy.visualLayers) layer.id = layerIds.get(layer.id)!;
+    for (const entry of [...copy.cues, ...copy.referenceMediaClips]) if (entry.layerId) entry.layerId = layerIds.get(entry.layerId);
     project.rundown.splice(sourceIndex + 1, 0, copy);
   }, now);
 }
@@ -465,85 +421,6 @@ export function editReferenceAudioCommand(itemId: string, audio: ReferenceAudio,
   });
 }
 
-export function initializeVisualLayersCommand(
-  itemId: string,
-  obsLayer: VisualLayer,
-  mediaLayer: VisualLayer,
-  now?: TimestampProvider
-): LinkCommand {
-  const parsedObsLayer = visualLayerSchema.parse(obsLayer);
-  const parsedMediaLayer = visualLayerSchema.parse(mediaLayer);
-  if (parsedObsLayer.id === parsedMediaLayer.id) throw new Error('默认视觉图层 ID 不能重复');
-  return createCommand('初始化视觉图层', (project) => {
-    const item = requireItem(project, itemId);
-    if (item.visualLayers.length > 0) return;
-    item.visualLayers = [structuredClone(parsedObsLayer), structuredClone(parsedMediaLayer)];
-    for (const clip of item.referenceMediaClips) {
-      clip.layerId = parsedMediaLayer.id;
-    }
-    for (const cue of item.cues) {
-      cue.layerId = cue.actions.some((action) => action.kind.startsWith('obs.')) ? parsedObsLayer.id : parsedMediaLayer.id;
-    }
-  }, now);
-}
-
-export function normalizeTimelineLayersCommand(itemId: string, now?: TimestampProvider): LinkCommand {
-  return createCommand('整理时间线图层', (project) => {
-    assignMissingTimelineLayers(requireItem(project, itemId));
-  }, now);
-}
-
-function needsTimelineLayerAssignment(item: RundownItem): boolean {
-  return item.referenceMediaClips.some((clip) => !clip.layerId) || item.cues.some((cue) => !cue.layerId);
-}
-
-function assignMissingTimelineLayers(item: RundownItem): void {
-  if (!item.visualLayers.length || !needsTimelineLayerAssignment(item)) return;
-  const ids = new Set(item.visualLayers.map((layer) => layer.id));
-  const addLayer = (entryId: string, name: string): string => {
-    const base = `timeline-layer-${entryId}`;
-    let id = base; let suffix = 2;
-    while (ids.has(id)) { id = `${base}-${suffix}`; suffix += 1; }
-    ids.add(id);
-    item.visualLayers.unshift({ id, name, visible: true, locked: false });
-    return id;
-  };
-  for (const clip of item.referenceMediaClips) if (!clip.layerId) clip.layerId = addLayer(clip.id, clip.label);
-  for (const cue of item.cues) if (!cue.layerId) cue.layerId = addLayer(cue.id, cue.name);
-}
-
-export function routeVisualObsCuesToManagedSceneCommand(
-  itemId: string,
-  now?: TimestampProvider
-): LinkCommand {
-  return createCommand('接入联动台的 OBS 画面', (project) => {
-    const item = requireItem(project, itemId);
-    for (const cue of item.cues) {
-      if (!cue.layerId) continue;
-      cue.actions = cue.actions.map((action) => {
-        if (action.kind !== 'obs.setSceneItemEnabled' && action.kind !== 'obs.setSceneItemTransform' && action.kind !== 'obs.setSceneItemIndex') return action;
-        return linkActionSchema.parse({ ...action, sceneName: MANAGED_OBS_SCENE_NAME });
-      });
-    }
-  }, now);
-}
-
-export function addVisualLayerCommand(itemId: string, layer: VisualLayer, index = 0, now?: TimestampProvider): LinkCommand {
-  const parsed = visualLayerSchema.parse(layer);
-  return createCommand('添加视觉图层', (project) => {
-    const item = requireItem(project, itemId);
-    if (item.visualLayers.some((candidate) => candidate.id === parsed.id)) throw new Error(`视觉图层 ID 重复：${parsed.id}`);
-    assertInsertIndex(index, item.visualLayers.length, '视觉图层');
-    item.visualLayers.splice(index, 0, structuredClone(parsed));
-  }, now);
-}
-
-/** Create a content lane and place its content in the same history entry. */
-export function withContentVisualLayer(command: LinkCommand, itemId: string, layer: VisualLayer, index: number): LinkCommand {
-  const addLayer = addVisualLayerCommand(itemId, layer, index);
-  return { ...command, execute: (project) => command.execute(addLayer.execute(project)) };
-}
-
 export function moveVisualLayerCommand(itemId: string, layerId: string, targetIndex: number, now?: TimestampProvider): LinkCommand {
   return createCommand('调整视觉图层层序', (project) => {
     const item = requireItem(project, itemId);
@@ -578,22 +455,6 @@ export function removeVisualLayerCommand(itemId: string, layerId: string, now?: 
   }, now);
 }
 
-export function addReferenceMediaClipCommand(
-  itemId: string,
-  clip: ReferenceMediaClip,
-  index?: number,
-  now?: TimestampProvider
-): LinkCommand {
-  const parsed = referenceMediaClipSchema.parse(clip);
-  return createCommand('添加参考素材片段', (project) => {
-    const item = requireItem(project, itemId);
-    requireMediaAsset(project, parsed.assetId);
-    const target = index ?? item.referenceMediaClips.length;
-    assertInsertIndex(target, item.referenceMediaClips.length, '参考素材片段');
-    item.referenceMediaClips.splice(target, 0, structuredClone(parsed));
-  }, now);
-}
-
 export function replaceReferenceMediaClipCommand(
   itemId: string,
   clip: ReferenceMediaClip,
@@ -608,62 +469,6 @@ export function replaceReferenceMediaClipCommand(
   }, now);
 }
 
-export function splitReferenceMediaClipCommand(
-  itemId: string,
-  clipId: string,
-  splitTimecode: SmpteTimecode,
-  rightClipId: string,
-  now?: TimestampProvider
-): LinkCommand {
-  if (rightClipId === clipId) throw new Error('切割后的片段 ID 不能重复');
-  return createCommand('切割参考素材片段', (project) => {
-    const item = requireItem(project, itemId);
-    const index = item.referenceMediaClips.findIndex((clip) => clip.id === clipId);
-    if (index < 0) throw new Error(`参考素材片段不存在：${clipId}`);
-    if (item.referenceMediaClips.some((clip) => clip.id === rightClipId)) throw new Error(`参考素材片段 ID 重复：${rightClipId}`);
-    const source = item.referenceMediaClips[index];
-    if (!source) throw new Error(`参考素材片段不存在：${clipId}`);
-    const sourceSpan = resolveTimelineClipSpan(source, project.timebase.frameRate);
-    const splitMs = timecodeToMilliseconds(splitTimecode, project.timebase.frameRate);
-    const splitFrame = timecodeToFrameNumber(splitTimecode, project.timebase.frameRate);
-    if (splitFrame <= sourceSpan.startFrame || splitFrame >= sourceSpan.endFrame) throw new Error('切割点必须位于素材片段内部');
-    const leftDurationMs = Math.max(1, Math.min(source.durationMs - 1, Math.round(splitMs - sourceSpan.startMs)));
-    const rightDurationMs = source.durationMs - leftDurationMs;
-    const left = referenceMediaClipSchema.parse({ ...source, durationMs: leftDurationMs });
-    const right = referenceMediaClipSchema.parse({
-      ...source,
-      id: rightClipId,
-      startTimecode: splitTimecode,
-      sourceOffsetMs: (source.sourceOffsetMs ?? 0) + leftDurationMs,
-      durationMs: rightDurationMs
-    });
-    item.referenceMediaClips.splice(index, 1, left, right);
-  }, now);
-}
-
-export function removeReferenceMediaClipCommand(
-  itemId: string,
-  clipId: string,
-  now?: TimestampProvider
-): LinkCommand {
-  return createCommand('删除参考素材片段', (project) => {
-    const item = requireItem(project, itemId);
-    const index = item.referenceMediaClips.findIndex((clip) => clip.id === clipId);
-    if (index < 0) throw new Error(`参考素材片段不存在：${clipId}`);
-    item.referenceMediaClips.splice(index, 1);
-  }, now);
-}
-
-export function addCueCommand(itemId: string, cue: LinkCue, index?: number, now?: TimestampProvider): LinkCommand {
-  const parsed = linkCueSchema.parse(cue);
-  return createCommand('添加 Cue', (project) => {
-    const item = requireItem(project, itemId);
-    const target = index ?? item.cues.length;
-    assertInsertIndex(target, item.cues.length, 'Cue');
-    item.cues.splice(target, 0, structuredClone(parsed));
-  }, now);
-}
-
 export function replaceCueCommand(itemId: string, cue: LinkCue, now?: TimestampProvider): LinkCommand {
   const parsed = linkCueSchema.parse(cue);
   return createItemCommand('修改 Cue', itemId, (item) => {
@@ -673,7 +478,8 @@ export function replaceCueCommand(itemId: string, cue: LinkCue, now?: TimestampP
   }, now);
 }
 
-function createItemCommand(label: string, itemId: string, mutate: (item: RundownItem, project: LinkProject) => void,
+/** One programme's edit, validating only that programme and the project's links. */
+export function createItemCommand(label: string, itemId: string, mutate: (item: RundownItem, project: LinkProject) => void,
   now: TimestampProvider = () => new Date().toISOString()): LinkCommand {
   return {
     id: crypto.randomUUID(), label,
@@ -690,27 +496,6 @@ function createItemCommand(label: string, itemId: string, mutate: (item: Rundown
     },
     undo: before => before
   };
-}
-
-export function removeCueCommand(itemId: string, cueId: string, now?: TimestampProvider): LinkCommand {
-  return createCommand('删除 Cue', (project) => {
-    const item = requireItem(project, itemId);
-    const index = item.cues.findIndex((cue) => cue.id === cueId);
-    if (index < 0) throw new Error(`Cue 不存在：${cueId}`);
-    item.cues.splice(index, 1);
-  }, now);
-}
-
-export function moveCueCommand(itemId: string, cueId: string, targetIndex: number, now?: TimestampProvider): LinkCommand {
-  return createCommand('移动 Cue', (project) => {
-    const item = requireItem(project, itemId);
-    const sourceIndex = item.cues.findIndex((cue) => cue.id === cueId);
-    if (sourceIndex < 0) throw new Error(`Cue 不存在：${cueId}`);
-    assertExistingIndex(targetIndex, item.cues.length, 'Cue');
-    const removed = item.cues.splice(sourceIndex, 1)[0];
-    if (!removed) throw new Error(`Cue 不存在：${cueId}`);
-    item.cues.splice(targetIndex, 0, removed);
-  }, now);
 }
 
 export function addActionCommand(

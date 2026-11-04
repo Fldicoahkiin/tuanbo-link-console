@@ -4,7 +4,7 @@ import { shareProjectStructure } from './share-project-structure';
 import { isWorkerValidatedProject } from './project-codec';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { parseLinkProject, type LinkProject } from '@tb/schema';
-import { initializeProjectVisualLayersCommand, needsProjectVisualLayers, setObsOutputModeCommand, withInitialVisualLayers, withMa2Pairings, type LinkCommand } from '@tb/core/link';
+import { normalizeContentTimeline, setObsOutputModeCommand, withContentTimeline, withMa2Pairings, type LinkCommand } from '@tb/core/link';
 
 type HistoryFrame = {
   command: LinkCommand;
@@ -75,10 +75,10 @@ const documentState: StateCreator<DocumentStoreState> = (set, get) => {
     setProject: (project, path, opening = {}) => {
       set((state) => {
         const parsed = project ? isWorkerValidatedProject(project) ? project : parseLinkProject(project) : null;
-        let prepared = parsed;
-        if (prepared && needsProjectVisualLayers(prepared)) prepared = initializeProjectVisualLayersCommand().execute(prepared);
+        // Older projects open under the content timeline rules, playing what they played.
+        let prepared = parsed && normalizeContentTimeline(parsed);
         // The single scene workflow is the document's opening baseline, before user edits.
-        if (prepared && prepared.obsOutputMode !== 'scenes') prepared = withMa2Pairings(withInitialVisualLayers(setObsOutputModeCommand('scenes'))).execute(prepared);
+        if (prepared && prepared.obsOutputMode !== 'scenes') prepared = withMa2Pairings(withContentTimeline(setObsOutputModeCommand('scenes'))).execute(prepared);
         // Only a file can be upgraded; a new unnamed document has nothing on disk to differ from.
         const upgraded = path !== null && (opening.upgraded === true || prepared !== parsed);
         const stateId = crypto.randomUUID();
@@ -111,7 +111,7 @@ const documentState: StateCreator<DocumentStoreState> = (set, get) => {
       const state = get();
       if (!state.project) throw new Error('还没打开工程');
       try {
-        const prepared = withMa2Pairings(withInitialVisualLayers(command));
+        const prepared = withMa2Pairings(withContentTimeline(command));
         const next = shareProjectStructure(state.project, prepared.execute(state.project));
         const rebase = prepared.rebaseHistory;
         const stateId = crypto.randomUUID();

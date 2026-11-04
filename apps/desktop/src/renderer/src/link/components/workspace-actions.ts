@@ -1,16 +1,19 @@
 import {
-  addCueCommand, addMediaAssetCommand, addReferenceMediaClipCommand,
-  withContentVisualLayer, type LinkCommand,
+  addMediaAssetCommand,
   frameNumberToTimecode,
   millisecondsToFrameNumber,
   materialSceneNames,
+  moveContentCommand,
+  placeContentCommand,
   quantizeTimelineRange,
-  removeCueCommand,
-  removeReferenceMediaClipCommand,
+  removeContentCommand,
   replaceCueCommand,
   replaceReferenceMediaClipCommand,
-  splitReferenceMediaClipCommand,
-  timecodeToMilliseconds
+  splitContentCommand,
+  timecodeToMilliseconds,
+  trimContentCommand,
+  type ContentRef,
+  type ContentTrackTarget
 } from '@tb/core/link';
 import {
   DEFAULT_REFERENCE_CANVAS_TRANSFORM,
@@ -25,8 +28,8 @@ import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { formatMilliseconds } from './media-utils';
 import type { ObsResource } from './ResourceLibrary';
-import { actionsFromObsResource, importWorkspaceMedia, resolveVisualLayer } from './workspace-action-helpers';
-import { addVideoWithAudio } from './video-audio-import';
+import { actionsFromObsResource, importWorkspaceMedia } from './workspace-action-helpers';
+import { importVideoAudio } from './video-audio-import';
 
 export type WorkspaceActionsInput = {
   project: LinkProject;
@@ -82,10 +85,6 @@ function createMediaActions(input: WorkspaceActionsInput) {
     const item = input.item;
     return runMutation(input, () => {
       const asset = requireAsset(input, assetId);
-      const targetLayer = layerId
-        ? resolveVisualLayer(item.visualLayers, layerId, 'bottom')
-        : createContentLayer(item);
-      if (layerId) assertLayerUnlocked(input, targetLayer.id);
       const requestedDurationMs = asset.durationMs ?? 5_000;
       const quantizedStartMs = timecodeToMilliseconds(timecodeAt(input, startMs), input.project.timebase.frameRate);
       const maximumEndMs = asset.durationMs === undefined ? undefined : quantizedStartMs + asset.durationMs;
@@ -97,11 +96,18 @@ function createMediaActions(input: WorkspaceActionsInput) {
         startTimecode: range.startTimecode,
         sourceOffsetMs: 0,
         durationMs: range.durationMs,
-        layerId: targetLayer.id,
         canvasTransform: DEFAULT_REFERENCE_CANVAS_TRANSFORM
       };
-      if (asset.kind === 'video') { addVideoWithAudio(input, asset, next, range.startMs, targetLayer, layerId === null); return; }
-      executeContent(input, addReferenceMediaClipCommand(item.id, next), targetLayer, layerId === null);
+      const target = trackTarget(layerId, 'top');
+      if (asset.kind === 'video') {
+        const video = { ...next, embeddedAudioEnabled: false };
+        const command = placeContentCommand(item.id, { clip: video }, target, '添加视频');
+        // A locked or missing track is reported now, not after the sound is extracted.
+        command.execute(input.project);
+        void importVideoAudio(input, asset, video, range.startMs, command);
+        return;
+      }
+      input.execute(placeContentCommand(item.id, { clip: next }, target, '添加素材'));
       input.setSelectedClipId(next.id);
       input.setSelectedAssetId(asset.id);
       input.setSelectedCueId(null);
@@ -116,42 +122,24 @@ function createClipActions(input: WorkspaceActionsInput) {
     const item = input.item;
     runMutation(input, () => {
       const clip = requireClip(item, clipId);
-      assertClipUnlocked(input, clip);
-      const next = { ...clip, startTimecode: timecodeAt(input, milliseconds) };
-      const targetLayer = layerId === null ? createContentLayer(item) : resolveVisualLayer(item.visualLayers, layerId ?? clip.layerId, 'bottom');
-      if (layerId !== null) assertLayerUnlocked(input, targetLayer.id);
-      next.layerId = targetLayer.id;
-      executeContent(input, replaceReferenceMediaClipCommand(item.id, next), targetLayer, layerId === null);
+      input.execute(moveContentCommand(item.id, { kind: 'clip', id: clipId }, milliseconds, trackTarget(layerId, { track: clip.layerId })));
     });
   };
+  const moveClipToTop = (clipId: string): void => moveToTop(input, { kind: 'clip', id: clipId });
   const trimClip = (clipId: string, startMs: number, durationMs: number): void => {
     if (!input.item) return;
     const item = input.item;
-    runMutation(input, () => {
-      const clip = requireClip(item, clipId);
-      const currentStartMs = timecodeToMilliseconds(clip.startTimecode, input.project.timebase.frameRate);
-      const asset = assertClipUnlocked(input, clip);
-      const maximumEndMs = asset.durationMs === undefined ? undefined : currentStartMs + asset.durationMs - (clip.sourceOffsetMs ?? 0);
-      const range = quantizeTimelineRange(startMs, durationMs, input.project.timebase.frameRate, maximumEndMs);
-      const sourceOffsetMs = Math.max(0, (clip.sourceOffsetMs ?? 0) + range.startMs - currentStartMs);
-      input.execute(replaceReferenceMediaClipCommand(item.id, {
-        ...clip,
-        startTimecode: range.startTimecode,
-        sourceOffsetMs: Math.round(sourceOffsetMs),
-        durationMs: range.durationMs
-      }));
-    });
+    runMutation(input, () => input.execute(trimContentCommand(item.id, { kind: 'clip', id: clipId }, startMs, startMs + durationMs)));
   };
-  const splitClip = (clipId: string, milliseconds: number): void => {
+  const splitClip = (clipId: string, milliseconds: number): void => split({ kind: 'clip', id: clipId }, milliseconds);
+  const split = (ref: ContentRef, milliseconds: number): void => {
     if (!input.item) return;
     const item = input.item;
     runMutation(input, () => {
-      const target = requireClip(item, clipId);
-      assertClipUnlocked(input, target);
-      const rightClipId = crypto.randomUUID();
-      input.execute(splitReferenceMediaClipCommand(item.id, clipId, timecodeAt(input, milliseconds), rightClipId));
-      input.setSelectedClipId(rightClipId);
-      input.setSelectedCueId(null);
+      const rightId = crypto.randomUUID();
+      input.execute(splitContentCommand(item.id, ref, milliseconds, rightId));
+      input.setSelectedClipId(ref.kind === 'clip' ? rightId : null);
+      input.setSelectedCueId(ref.kind === 'cue' ? rightId : null);
     });
   };
   const duplicateClip = (clipId: string, startMs: number): void => {
@@ -159,9 +147,8 @@ function createClipActions(input: WorkspaceActionsInput) {
     const item = input.item;
     runMutation(input, () => {
       const clip = requireClip(item, clipId);
-      assertClipUnlocked(input, clip);
       const copy = { ...structuredClone(clip), id: crypto.randomUUID(), startTimecode: timecodeAt(input, startMs) };
-      input.execute(addReferenceMediaClipCommand(item.id, copy));
+      input.execute(placeContentCommand(item.id, { clip: copy }, trackTarget(undefined, { track: clip.layerId }), '复制素材片段'));
       input.setSelectedClipId(copy.id);
       input.setSelectedCueId(null);
     });
@@ -187,13 +174,9 @@ function createClipActions(input: WorkspaceActionsInput) {
   const removeClip = (clipId: string): void => {
     if (!input.item) return;
     const item = input.item;
-    if (runMutation(input, () => {
-      const clip = requireClip(item, clipId);
-      assertClipUnlocked(input, clip);
-      input.execute(removeReferenceMediaClipCommand(item.id, clipId));
-    })) input.setSelectedClipId(null);
+    if (runMutation(input, () => input.execute(removeContentCommand(item.id, [{ kind: 'clip', id: clipId }])))) input.setSelectedClipId(null);
   };
-  return { moveClip, trimClip, splitClip, duplicateClip, transformClip, setClipEmbeddedAudioEnabled, removeClip };
+  return { moveClip, moveClipToTop, trimClip, splitClip, splitCue: (cueId: string, milliseconds: number) => split({ kind: 'cue', id: cueId }, milliseconds), duplicateClip, transformClip, setClipEmbeddedAudioEnabled, removeClip };
 }
 
 function createCueActions(input: WorkspaceActionsInput, addAssetClip: (assetId: string, startMs: number, layerId?: string | null) => boolean) {
@@ -201,10 +184,8 @@ function createCueActions(input: WorkspaceActionsInput, addAssetClip: (assetId: 
     if (!input.item) return;
     const item = input.item;
     runMutation(input, () => {
-      const cueName = `Cue ${item.cues.length + 1}`;
-      const layer = createContentLayer(item);
-      const next = { ...createCue(input, input.playheadMs, [], layer.id), name: cueName };
-      executeContent(input, addCueCommand(item.id, next), layer);
+      const next = { ...createCue(input, input.playheadMs, []), name: `Cue ${item.cues.length + 1}` };
+      input.execute(placeContentCommand(item.id, { cue: next }, 'top', '添加 Cue'));
       input.setSelectedCueId(next.id);
       input.setSelectedClipId(null);
     });
@@ -220,17 +201,9 @@ function createCueActions(input: WorkspaceActionsInput, addAssetClip: (assetId: 
     if (material) return addAssetClip(material.id, milliseconds, layerId);
     const item = input.item;
     return runMutation(input, () => {
-      const targetLayer = layerId
-        ? resolveVisualLayer(item.visualLayers, layerId, 'top')
-        : createContentLayer(item);
-      if (layerId) assertLayerUnlocked(input, targetLayer.id);
       const actions = actionsFromObsResource(resource);
-      const hasVisualSource = actions.some((action) => action.kind === 'obs.setProgramScene' || action.kind === 'obs.setSceneItemEnabled' && action.enabled);
-      const next = {
-        ...createCue(input, milliseconds, actions, targetLayer.id),
-        ...(hasVisualSource ? { durationMs: 5_000 } : {})
-      };
-      executeContent(input, addCueCommand(item.id, next), targetLayer, layerId === null);
+      const next = createCue(input, milliseconds, actions);
+      input.execute(placeContentCommand(item.id, { cue: next }, trackTarget(layerId, 'top'), '添加机位'));
       input.setSelectedCueId(next.id);
       input.setSelectedClipId(null);
       input.setSelectedObsResource(resource);
@@ -240,26 +213,14 @@ function createCueActions(input: WorkspaceActionsInput, addAssetClip: (assetId: 
   const trimCue = (cueId: string, startMs: number, durationMs: number): void => {
     if (!input.item) return;
     const item = input.item;
-    runMutation(input, () => {
-      const target = requireCue(item, cueId);
-      assertLayerUnlocked(input, target.layerId);
-      const range = quantizeTimelineRange(startMs, durationMs, input.project.timebase.frameRate);
-      input.execute(replaceCueCommand(item.id, { ...target, timecode: range.startTimecode, durationMs: range.durationMs }));
-    });
+    runMutation(input, () => input.execute(trimContentCommand(item.id, { kind: 'cue', id: cueId }, startMs, startMs + durationMs)));
   };
   const moveCue = (cueId: string, milliseconds: number, layerId?: string | null): void => {
     if (!input.item) return;
     const item = input.item;
     runMutation(input, () => {
       const target = requireCue(item, cueId);
-      assertLayerUnlocked(input, target.layerId);
-      const targetLayer = layerId === null ? createContentLayer(item) : resolveVisualLayer(item.visualLayers, layerId ?? target.layerId, 'top');
-      if (layerId !== null) assertLayerUnlocked(input, targetLayer.id);
-      executeContent(input, replaceCueCommand(item.id, {
-        ...target,
-        layerId: targetLayer.id,
-        timecode: timecodeAt(input, milliseconds)
-      }), targetLayer, layerId === null);
+      input.execute(moveContentCommand(item.id, { kind: 'cue', id: cueId }, milliseconds, trackTarget(layerId, { track: target.layerId })));
     });
   };
   const transformObs = (cueId: string, transform: SceneItemTransform): void => {
@@ -273,25 +234,20 @@ function createCueActions(input: WorkspaceActionsInput, addAssetClip: (assetId: 
   const removeCue = (cueId: string): void => {
     if (!input.item) return;
     const item = input.item;
-    if (runMutation(input, () => {
-      const target = requireCue(item, cueId);
-      assertLayerUnlocked(input, target.layerId);
-      input.execute(removeCueCommand(item.id, cueId));
-    })) input.setSelectedCueId(null);
+    if (runMutation(input, () => input.execute(removeContentCommand(item.id, [{ kind: 'cue', id: cueId }])))) input.setSelectedCueId(null);
   };
   const duplicateCue = (cueId: string, milliseconds: number): void => {
     if (!input.item) return;
     const item = input.item;
     runMutation(input, () => {
       const source = requireCue(item, cueId);
-      assertLayerUnlocked(input, source.layerId);
       const next: LinkCue = { ...structuredClone(source), id: crypto.randomUUID(), timecode: timecodeAt(input, milliseconds), actions: source.actions.map((action) => ({ ...structuredClone(action), id: crypto.randomUUID() })) };
-      input.execute(addCueCommand(item.id, next));
+      input.execute(placeContentCommand(item.id, { cue: next }, trackTarget(undefined, { track: source.layerId }), '复制 Cue'));
       input.setSelectedCueId(next.id);
       input.setSelectedClipId(null);
     });
   };
-  return { addCue, addObsResource, trimCue, moveCue, transformObs, removeCue, duplicateCue };
+  return { addCue, addObsResource, trimCue, moveCue, moveCueToTop: (cueId: string) => moveToTop(input, { kind: 'cue', id: cueId }), transformObs, removeCue, duplicateCue };
 }
 
 function createIntegrationActions(input: WorkspaceActionsInput) {
@@ -316,20 +272,37 @@ function createIntegrationActions(input: WorkspaceActionsInput) {
   return { refreshObs, testAction };
 }
 
+/** 置顶: on the top track where it is free there, else on a new top track. */
+function moveToTop(input: WorkspaceActionsInput, ref: ContentRef): void {
+  if (!input.item) return;
+  const item = input.item;
+  runMutation(input, () => {
+    const timecode = ref.kind === 'clip' ? requireClip(item, ref.id).startTimecode : requireCue(item, ref.id).timecode;
+    input.execute(moveContentCommand(item.id, ref, timecodeToMilliseconds(timecode, input.project.timebase.frameRate), 'top'));
+  });
+}
+
 function timecodeAt(input: WorkspaceActionsInput, milliseconds: number): LinkCue['timecode'] {
   return frameNumberToTimecode(millisecondsToFrameNumber(milliseconds, input.project.timebase.frameRate), input.project.timebase.frameRate);
 }
 
-function createCue(input: WorkspaceActionsInput, milliseconds: number, actions: LinkAction[] = [], layerId?: string | null): LinkCue {
+function createCue(input: WorkspaceActionsInput, milliseconds: number, actions: LinkAction[] = []): LinkCue {
   return {
     id: crypto.randomUUID(),
     name: actions[0]?.label ?? `Cue ${(input.item?.cues.length ?? 0) + 1}`,
     timecode: timecodeAt(input, milliseconds),
     enabled: true,
     notes: '',
-    actions,
-    ...(layerId ? { layerId } : {})
+    actions
   };
+}
+
+/** Timeline drops pass a track id, null for the new-track zone below the
+ * tracks, or nothing to keep `fallback` (a track id, or the top track). */
+function trackTarget(layerId: string | null | undefined, fallback: { track: string | undefined } | 'top'): ContentTrackTarget {
+  if (layerId === null) return { newTrack: 'bottom' };
+  const track = layerId ?? (fallback === 'top' ? undefined : fallback.track);
+  return track === undefined ? 'top' : { track };
 }
 
 function runMutation(input: WorkspaceActionsInput, operation: () => void): boolean {
@@ -348,17 +321,6 @@ function assertLayerUnlocked(input: WorkspaceActionsInput, layerId: string | und
   const layer = input.item.visualLayers.find((candidate) => candidate.id === layerId);
   if (!layer) throw new Error(`图层不存在：${layerId}`);
   if (layer.locked) throw new Error(`图层“${layer.name}”已锁定。`);
-}
-
-function createContentLayer(item: LinkProject['rundown'][number]): LinkProject['rundown'][number]['visualLayers'][number] {
-  return { id: crypto.randomUUID(), name: `时间线 ${item.visualLayers.length + 1}`, visible: true, locked: false };
-}
-
-function executeContent(input: WorkspaceActionsInput, command: LinkCommand, layer: LinkProject['rundown'][number]['visualLayers'][number], bottom = false): void {
-  const item = input.item;
-  if (!item) throw new Error('请先选择当前节目。');
-  input.execute(item.visualLayers.some((entry) => entry.id === layer.id) ? command
-    : withContentVisualLayer(command, item.id, layer, bottom ? item.visualLayers.length : 0));
 }
 
 function requireAsset(input: WorkspaceActionsInput, assetId: string): LinkProject['mediaAssets'][number] {

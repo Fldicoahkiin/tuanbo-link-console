@@ -1,17 +1,11 @@
-import { addReferenceMediaClipCommand, withContentVisualLayer, audioTracks, editReferenceAudioCommand, type LinkCommand } from '@tb/core/link';
-import { referenceAudioSourceSchema, type LinkMediaAsset, type ReferenceMediaClip, type VisualLayer } from '@tb/schema';
+import { audioTracks, editReferenceAudioCommand, type LinkCommand } from '@tb/core/link';
+import { referenceAudioSourceSchema, type LinkMediaAsset, type ReferenceMediaClip } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import type { WorkspaceActionsInput } from './workspace-actions';
 
 const pending = new Set<number>();
-
-export function addVideoWithAudio(input: WorkspaceActionsInput, asset: LinkMediaAsset, clip: ReferenceMediaClip, startMs: number, layer: VisualLayer, bottom: boolean): void {
-  if (!input.item) return;
-  const command = addReferenceMediaClipCommand(input.item.id, { ...clip, embeddedAudioEnabled: false });
-  void importVideoAudio(input, asset, clip, startMs, input.item.visualLayers.some(entry => entry.id === layer.id) ? command : withContentVisualLayer(command, input.item.id, layer, bottom ? input.item.visualLayers.length : 0));
-}
 
 /** Video and its independent sound enter history together, after extraction succeeds. */
 export async function importVideoAudio(input: WorkspaceActionsInput, asset: LinkMediaAsset, clip: ReferenceMediaClip, startMs: number, command: LinkCommand): Promise<void> {

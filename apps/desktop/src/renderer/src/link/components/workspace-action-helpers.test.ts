@@ -9,7 +9,7 @@ vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel:
   importMediaAsset: vi.fn(), importReferenceAudio: vi.fn(), prepareObsMediaScenes: vi.fn(), readObsInventory: vi.fn()
 }, linkFileViewModel: { getPathForFile: (file: File) => file.name } }));
 
-import { actionsFromObsResource, importWorkspaceMedia, resolveVisualLayer } from './workspace-action-helpers';
+import { actionsFromObsResource, importWorkspaceMedia } from './workspace-action-helpers';
 
 describe('workspace action helpers', () => {
   beforeEach(() => { vi.clearAllMocks(); });
@@ -61,15 +61,5 @@ describe('workspace action helpers', () => {
     const actions = actionsFromObsResource({ id: 'camera', kind: 'sceneItem', group: '摄像头', name: '机位一', sceneName: '场景', sourceName: '机位一' });
 
     expect(actions.map((action) => action.kind)).toEqual(['obs.setSceneItemEnabled']);
-  });
-
-  it('本地素材默认落在底层，OBS 默认落在顶层', () => {
-    const layers = [
-      { id: 'top', name: '图层 2', visible: true, locked: false },
-      { id: 'bottom', name: '图层 1', visible: true, locked: false }
-    ];
-
-    expect(resolveVisualLayer(layers, undefined, 'top').id).toBe('top');
-    expect(resolveVisualLayer(layers, undefined, 'bottom').id).toBe('bottom');
   });
 });

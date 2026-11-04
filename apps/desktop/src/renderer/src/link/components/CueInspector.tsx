@@ -1,7 +1,7 @@
 import { Button, IconButton, Switch, TextArea, TextInput } from '../ui';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import { LayoutNumber } from './LayoutNumber';
-import { addActionCommand, nominalFramesPerSecond, removeCueCommand, replaceActionCommand, replaceCueCommand, type LinkObsInventory } from '@tb/core/link';
+import { addActionCommand, moveContentCommand, nominalFramesPerSecond, removeContentCommand, replaceActionCommand, replaceCueCommand, timecodeToMilliseconds, type LinkObsInventory } from '@tb/core/link';
 import type { LinkAction, LinkCue, LinkProject } from '@tb/schema';
 import { Crosshair, Maximize, Play, RotateCcw, Trash2 } from 'lucide-react';
 import { useDocumentStore } from '../stores/document-store';
@@ -25,9 +25,9 @@ export function CueInspector(props: {
     <div className="cue-detail-header">
       <TextInput className="title-input" aria-label="Cue 名称" defaultValue={cue.name} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitCueText(event.currentTarget, cue.name, (name) => execute(replaceCueCommand(itemId, { ...cue, name })), true)} />
       <Switch className="cue-enabled" label="启用" checked={cue.enabled} onChange={(event) => execute(replaceCueCommand(itemId, { ...cue, enabled: event.currentTarget.checked }))} />
-      <IconButton variant="danger" label="删除 Cue" icon={Trash2} onClick={() => execute(removeCueCommand(itemId, cue.id))} />
+      <IconButton variant="danger" label="删除 Cue" icon={Trash2} onClick={() => execute(removeContentCommand(itemId, [{ kind: 'cue', id: cue.id }]))} />
     </div>
-    <TimecodeEditor cue={cue} frameRate={frameRate} onChange={(next) => execute(replaceCueCommand(itemId, next))} />
+    <TimecodeEditor cue={cue} frameRate={frameRate} onChange={(next) => execute(moveContentCommand(itemId, { kind: 'cue', id: cue.id }, timecodeToMilliseconds(next.timecode, frameRate), cue.layerId ? { track: cue.layerId } : 'top'))} />
     <TextArea key={`${cue.id}:${cue.notes}`} aria-label="备注" rows={1} className="cue-notes" placeholder="备注（选填）" defaultValue={cue.notes} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitCueText(event.currentTarget, cue.notes, (notes) => execute(replaceCueCommand(itemId, { ...cue, notes })))} />
     {visual ? <VisualCueLayoutEditor itemId={itemId} cueId={cue.id} visual={visual} testAction={testAction} /> : null}
     <div className="action-list">{visibleActions.map(({ action, index }) => <ActionEditor key={action.id} itemId={itemId} cueId={cue.id} action={action} index={index} actionCount={cue.actions.length} onTest={testAction} />)}</div>

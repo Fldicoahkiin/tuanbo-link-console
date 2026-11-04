@@ -1,4 +1,4 @@
-import type { LinkAction, VisualLayer } from '@tb/schema';
+import type { LinkAction } from '@tb/schema';
 import { MANAGED_OBS_SCENE_NAME, type LinkCommand } from '@tb/core/link';
 import { assertDocumentSession } from '../stores/document-store';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -55,13 +55,6 @@ export async function importWorkspaceMedia(input: {
       input.notify(`${file.name}：${toMessage(error)}`, 'error');
     }
   }
-}
-
-export function resolveVisualLayer(layers: VisualLayer[], requestedId: string | undefined, fallback: 'top' | 'bottom'): VisualLayer {
-  const requested = requestedId ? layers.find((layer) => layer.id === requestedId) : undefined;
-  const layer = requested ?? (fallback === 'top' ? layers[0] : layers.at(-1));
-  if (!layer) throw new Error('当前节目没有可用的视觉图层');
-  return layer;
 }
 
 export function actionsFromObsResource(resource: ObsResource): LinkAction[] {

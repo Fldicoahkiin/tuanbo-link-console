@@ -23,6 +23,8 @@ describe('机位片段结束恢复素材', () => {
       { ...camera, id: 'long', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 }, durationMs: 30000 },
       { ...camera, id: 'same-time-point', layerId: 'media', durationMs: undefined }
     ];
+    // The song runs past the long camera, so the switch with no length holds after it.
+    item.referenceAudio = { assetId: 'song-audio', relativePath: 'assets/song.wav', sha256: 'b'.repeat(64), durationMs: 40_000 };
     const timeline = new SceneOutputTimeline(project, 'song');
     expect(timeline.at(330).cues[0]?.cue.id).toBe('long');
     expect(timeline.at(300).cues[0]?.cue.id).toBe('short');

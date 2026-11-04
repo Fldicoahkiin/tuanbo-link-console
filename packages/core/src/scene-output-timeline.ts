@@ -1,5 +1,6 @@
 import { compileManagedMediaTimeline, type ManagedMediaEvent } from './managed-media-timeline';
 import { resolveTimelineCueSpan } from './timeline-state';
+import { impliedSceneEnds, isCameraCue } from './content-timeline';
 import { playbackFramesPerSecond, timecodeToFrameNumber } from './mtc-timecode';
 import type { RuntimeUpdate } from './cue-runtime';
 import type { LinkCue, LinkProject } from '@tb/schema';
@@ -10,11 +11,11 @@ type SceneWork = { media: ManagedMediaEvent[]; cues: RuntimeUpdate['dueCues'] };
 export type ScenePicture = { camera: LinkCue | null; clipIds: string[] };
 type SceneIndex = {
   projectId: string; itemId: string; layers: ReadonlyMap<string, number>;
-  scenes: { cue: LinkCue; start: number; end: number | null }[];
+  scenes: { cue: LinkCue; start: number; end: number }[];
   media: { event: ManagedMediaEvent; end: number }[];
+  /** Scenes by end, for the one kept on program when no track has a picture. */
+  byEnd: SceneIndex['scenes'];
   ends: number[];
-  sceneStarts: number[];
-  visualStarts: number[];
   activeScenes: IntervalIndex<SceneIndex['scenes'][number]>;
   activeMedia: IntervalIndex<ManagedMediaEvent>;
 };
@@ -52,16 +53,19 @@ export class SceneOutputTimeline {
     if (!item) throw new Error('定位节目不存在');
     const layers = new Map(item.visualLayers.map((layer, order) => [layer.id, order]));
     const visible = new Set(item.visualLayers.filter(layer => layer.visible).map(layer => layer.id));
-    const scenes = item.cues.filter(cue => cue.enabled && (!cue.layerId || visible.has(cue.layerId)) && cue.actions.some(action => action.kind === 'obs.setProgramScene'))
-      .map(cue => ({ cue, start: timecodeToFrameNumber(cue.timecode, project.timebase.frameRate), end: cue.durationMs === undefined ? null : resolveTimelineCueSpan(cue, project.timebase.frameRate).endFrame }))
+    // A camera saved without a length (older projects) plays the frames it did before.
+    const implied = impliedSceneEnds(project, item);
+    const scenes = item.cues.filter(cue => cue.enabled && (!cue.layerId || visible.has(cue.layerId)) && isCameraCue(cue))
+      .map(cue => ({ cue, start: timecodeToFrameNumber(cue.timecode, project.timebase.frameRate),
+        end: implied.get(cue.id) ?? resolveTimelineCueSpan(cue, project.timebase.frameRate).endFrame }))
       .sort((a, b) => a.start - b.start);
     const stops = new Map(events.filter(event => event.phase === 'stop').map(event => [event.clipId, event.frameNumber]));
     const media = events.filter(event => event.phase === 'start').map(event => ({ event, end: stops.get(event.clipId) ?? -1 }));
+    const order = (cue: LinkCue): number => cue.layerId ? layers.get(cue.layerId) ?? -1 : -1;
     this.index = { projectId: project.projectId, itemId, layers, scenes, media,
-      ends: scenes.flatMap(scene => scene.end === null ? [] : [scene.end]).sort((a, b) => a - b),
-      sceneStarts: scenes.map(scene => scene.start),
-      visualStarts: media.filter(entry => entry.event.assetKind !== 'audio').map(entry => entry.event.frameNumber).sort((a, b) => a - b),
-      activeScenes: new IntervalIndex(scenes.flatMap(scene => scene.end === null ? [] : [{ start: scene.start, end: scene.end, value: scene }])),
+      byEnd: [...scenes].sort((a, b) => a.end - b.end || order(b.cue) - order(a.cue) || a.start - b.start),
+      ends: scenes.map(scene => scene.end).sort((a, b) => a - b),
+      activeScenes: new IntervalIndex(scenes.map(scene => ({ start: scene.start, end: scene.end, value: scene }))),
       activeMedia: new IntervalIndex(media.map(entry => ({ start: entry.event.frameNumber, end: entry.end, value: entry.event }))) };
   }
   at(frame: number): SceneWork { return outputAt(this.index, frame); }
@@ -75,7 +79,7 @@ export class SceneOutputTimeline {
    * once per playback snapshot; no hidden clip starts merely to be preloaded. */
   preloadEntries(): ManagedMediaEvent[] {
     const boundaries = [...new Set([0, ...this.index.media.flatMap(entry => [entry.event.frameNumber, entry.end]),
-      ...this.index.scenes.flatMap(entry => entry.end === null ? [entry.start] : [entry.start, entry.end])])].filter(frame => frame >= 0).sort((a, b) => a - b);
+      ...this.index.scenes.flatMap(entry => [entry.start, entry.end])])].filter(frame => frame >= 0).sort((a, b) => a - b);
     const entries: ManagedMediaEvent[] = []; let previous = new Set<string>();
     for (const frame of boundaries) {
       const visible = this.at(frame).media;
@@ -129,30 +133,19 @@ const isSound = (entry: StackEntry): boolean => 'media' in entry && entry.media.
 
 /** On air at `frame`, top track first: picture layers down to the first camera
  * (a camera is a complete frame), plus every playing sound clip on any track,
- * since sound has no picture to cover or be covered. `fallback` is the last
- * scene, kept on program when no track has a picture. */
+ * since sound has no picture to cover or be covered. `fallback` is the scene
+ * kept on program when no track has a picture: the last one that ended. */
 function stackAt(index: SceneIndex, frame: number): { stack: StackEntry[]; fallback: StackEntry & { cue: LinkCue } | undefined } {
   const layerOrder = (id?: string): number => id ? index.layers.get(id) ?? -1 : -1;
-  const lastScene = firstAfter(index.sceneStarts, frame) - 1;
-  const latestSceneStart = index.sceneStarts[lastScene] ?? -1;
-  const latestMediaStart = index.visualStarts[firstAfter(index.visualStarts, frame) - 1] ?? -1;
-  const activeScenes = index.activeScenes.at(frame);
-  let firstLatestScene = lastScene;
-  for (let cursor = lastScene; cursor >= 0 && index.scenes[cursor]!.start === latestSceneStart; cursor--) {
-    const entry = index.scenes[cursor]!; firstLatestScene = cursor;
-    // A point switch holds until the next visual start, not forever over media.
-    if (entry.end === null && latestMediaStart <= entry.start) activeScenes.push(entry);
-  }
-  const activeMedia = index.activeMedia.at(frame);
   const candidates: StackEntry[] = [
-    ...activeScenes.map(({ cue, start }) => ({ key: `cue:${cue.id}`, layer: layerOrder(cue.layerId), start, cue })),
-    ...activeMedia.map((media) => ({ key: `media:${media.clipId}`, layer: layerOrder(media.layerId), start: media.frameNumber, media }))
+    ...index.activeScenes.at(frame).map(({ cue, start }) => ({ key: `cue:${cue.id}`, layer: layerOrder(cue.layerId), start, cue })),
+    ...index.activeMedia.at(frame).map((media) => ({ key: `media:${media.clipId}`, layer: layerOrder(media.layerId), start: media.frameNumber, media }))
   ].sort((a, b) => a.layer - b.layer || b.start - a.start || a.key.localeCompare(b.key));
   // Camera scenes are complete frames. Keep their appearance and place every
   // active media layer above the first camera in an application-owned scene.
   const cameraIndex = candidates.findIndex(candidate => 'cue' in candidate);
   const stack = candidates.filter((candidate, order) => cameraIndex < 0 || order <= cameraIndex || isSound(candidate));
-  const last = index.scenes[firstLatestScene];
+  const last = index.byEnd[firstAfter(index.ends, frame) - 1];
   return { stack, fallback: last && { key: `cue:${last.cue.id}`, layer: layerOrder(last.cue.layerId), start: last.start, cue: last.cue } };
 }
 
