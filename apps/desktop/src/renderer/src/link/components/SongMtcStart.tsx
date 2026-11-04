@@ -74,11 +74,12 @@ export function songMtcView(project: LinkProject, item: RundownItem, allocationE
   }
 }
 
-/** The MTC badge; with `detail` the explanation follows it as text instead of only as a tooltip. */
-export function SongMtcStart({ project, item, detail = false }: { project: LinkProject; item: RundownItem; detail?: boolean }): JSX.Element {
+/** The MTC badge; with `detail` the explanation follows it as text instead of only as a tooltip.
+ * `tooltip={false}` inside a control that gives its own tooltip and name. */
+export function SongMtcStart({ project, item, detail = false, tooltip = true }: { project: LinkProject; item: RundownItem; detail?: boolean; tooltip?: boolean }): JSX.Element {
   const allocationError = useMtcStartAllocationStore(state => state.error);
   const view = songMtcView(project, item, allocationError);
-  const badge = <span className="song-mtc-start" data-state={view.state} title={view.detail} aria-label={`${view.text}。${view.detail}`}>
+  const badge = <span className="song-mtc-start" data-state={view.state} title={tooltip ? view.detail : undefined} aria-label={tooltip ? `${view.text}。${view.detail}` : undefined}>
     {view.state === 'warning' || view.state === 'invalid' ? <TriangleAlert aria-hidden /> : null}<span className="song-mtc-text">{view.text}</span>{view.pending ? <RefreshCw className="song-mtc-pending" aria-hidden /> : null}
   </span>;
   return detail ? <span className="song-mtc-detail">{badge}<small>{view.detail}</small></span> : badge;

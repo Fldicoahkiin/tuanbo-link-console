@@ -61,7 +61,16 @@ test('改了 MTC 起始码，灯光自动换到同起点的控台时间线；控
     await expect(page.getByText('「trip」的起始码改成了 MTC 00:01:00:00，现在用 Timecode 112 跑灯')).toBeVisible();
     await expect(timelines.getByRole('button', { name: /112 · 灯光 112/ })).toContainText('对上「trip」 · Cue 已放进歌曲');
     await expect(browser.getByRole('button', { name: '用这条时间线', exact: true })).toBeDisabled();
-    expect(errors).toEqual([]);
     await page.screenshot({ path: info.outputPath('timeline-switch.png') });
+
+    // The song's MTC start on the timeline toolbar opens and closes this page from the lighting workbench.
+    const badge = page.getByRole('button', { name: /，查看控台时间线$/ });
+    await expect(badge).toHaveAttribute('aria-pressed', 'true');
+    await badge.click();
+    await expect(browser).toHaveCount(0);
+    await expect(badge).toHaveAttribute('aria-pressed', 'false');
+    await badge.click();
+    await expect(browser).toBeVisible();
+    expect(errors).toEqual([]);
   } finally { await closeDiscarding(app); }
 });

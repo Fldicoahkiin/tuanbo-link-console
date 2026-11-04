@@ -1,4 +1,11 @@
 @layer legacy {
 .timeline-transport .lighting-output-route { margin: 0; display: inline-flex; align-items: center; flex: 0 0 auto; gap: 8px; white-space: nowrap; }
+/* The MTC badge opens the console timeline page; the list icon says it is a way in, not only a reading. */
+.timeline-transport .lighting-output-timelines { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px 0 2px; border-radius: var(--radius-md); color: var(--color-text-secondary); cursor: pointer; -webkit-app-region: no-drag; transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.timeline-transport .lighting-output-timelines > .song-mtc-start { align-self: center; }
+.timeline-transport .lighting-output-timelines > svg { flex: none; width: 16px; height: 16px; stroke-width: 1.5; }
+@media (hover: hover) and (pointer: fine) { .timeline-transport .lighting-output-timelines:hover { color: var(--color-text-strong); background: var(--color-input-hover); } }
+.timeline-transport .lighting-output-timelines[aria-pressed=true] { color: var(--color-accent); background: var(--color-accent-soft-strong); }
+.timeline-transport .lighting-output-timelines:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .timeline-transport .lighting-output-notice { margin: 0; display: inline-flex; color: var(--warning); font-size: 12px; }
 }
