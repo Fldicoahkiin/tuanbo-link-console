@@ -548,3 +548,27 @@ it('显式要求时把控台上软件写过的中文名改为拼音，用回读�
     points: song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: first.binding.points[index]!.cue, delayMs: 0 }] })) });
   expect(again.changed).toBe(false);
 });
+it('控台上 Show 另存了新名字、换了 IP：已绑定的歌按序列编号接着同步；同一编号上的序列换了名字才不写（2026-10-30）', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const renamed = { ...source, show: 'test 10.28' };
+  let sequenceName = song.binding!.name;
+  // The console reports the Show under its new name everywhere; Sequence 9000 carries `sequenceName`.
+  const exchange = vi.fn<Ma2OnpcBridge['exchange']>(async (...args) => {
+    const result = await fake.bridge.exchange(...args);
+    if (args[0] === 'LISTSEQ') {
+      const value = JSON.parse(result.response) as { entries: Array<{ target: number; name: string }> };
+      return { ...result, response: JSON.stringify({ ...value, show: renamed.show, entries: value.entries.map(entry => entry.target === 9000 ? { ...entry, name: sequenceName } : entry) }) };
+    }
+    if (args[0] === 'PAGES') return { ...result, response: JSON.stringify({ ...JSON.parse(result.response) as object, show: renamed.show }) };
+    if (args[0] === 'PAGE') return { ...result, response: result.response.replace('tblink_show="test"', `tblink_show="${renamed.show}"`) };
+    return result;
+  });
+  const bridge = { exchange, request: async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await exchange(...args)).response };
+  const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups);
+  const moved = { ...song, expectedSource: renamed, network: { ...song.network, host: '192.0.2.9' } };
+  const result = await service.syncSong(fake.connection, bridge, moved);
+  expect(result.binding).toMatchObject({ endpoint: '192.0.2.9:30000', show: 'test 10.28', sequence: 9000 });
+  sequenceName = '别的歌';
+  await expect(service.syncSong(fake.connection, bridge, { ...moved, requestId: randomUUID() })).rejects.toThrow('控台上序列 9000 现在叫“别的歌”，不是这首歌写过的“歌曲”');
+});

@@ -1,6 +1,6 @@
 import { requestMidiAccess, type MidiAccess, type MidiOutput } from './midi-access';
 import { requireOutputLicense } from './license-output';
-import { encodeMediaTimecode, playbackFramesPerSecond } from '@tb/core/link';
+import { encodeMediaTimecode, playbackFramesPerSecond, type MtcSendMode } from '@tb/core/link';
 import type { MtcFrameRate } from '@tb/schema';
 
 export class MediaMtcOutput {
@@ -16,13 +16,16 @@ export class MediaMtcOutput {
   private connectionAttempt: AbortController | null = null;
   private schedulingNotice: string | null = null;
   private interruptions = 0;
+  private sendMode: MtcSendMode = 'standard';
 
   takeSchedulingNotice(): string | null {
     const notice = this.schedulingNotice; this.schedulingNotice = null; return notice;
   }
 
-  async connect(portName: string | null, autoDetect = false): Promise<string | null> {
+  /** `sendMode` as the formal player sends it (mtcOutputSettings): quarter frames only skip the Full Frame. */
+  async connect(portName: string | null, autoDetect = false, sendMode: MtcSendMode = 'standard'): Promise<string | null> {
     this.stop();
+    this.sendMode = sendMode;
     const previous = this.output; this.output = null;
     if (!portName && !autoDetect) { this.release(previous); return null; }
     const attempt = new AbortController();
@@ -92,8 +95,9 @@ export class MediaMtcOutput {
       this.schedulingNotice = `时间码第 ${++this.interruptions} 次中断（${interruption}）：迟到的部分没有补发，已按音频位置重新对齐，控台会直接跳到当前位置`;
     }
     if (this.locate) {
-      this.output.send(encodeMediaTimecode(positionMs, rate).fullFrame);
-      sent = true;
+      // Quarter frames alone relocate the receiver too, two frames later, once it has all eight
+      // (the native engine does the same, tools/playback-engine/midi.c).
+      if (this.sendMode === 'standard') { this.output.send(encodeMediaTimecode(positionMs, rate).fullFrame); sent = true; }
       this.locate = false;
       // Locate immediately, but begin quarter frames on an actual media frame boundary.
       this.nextQuarterFrame = Math.ceil(positionMs / 1000 * fps) * 4;

@@ -1,0 +1,40 @@
+/*
+ * The lighting tools (2026-11-01 interface rework), in the pages layer: 导入与导出, 节目同步 and 节拍与循环,
+ * as a window over the editor or in place of the library in the lighting workbench. Controls are the
+ * shared ones of link/ui; this file places them.
+ */
+@layer pages {
+  .lighting-tool-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--space-3); box-sizing: border-box; height: 100%; min-height: 0; padding: var(--space-3) var(--space-4); overflow: hidden; color: var(--color-text); }
+  .lighting-tool-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); min-width: 0; }
+  .lighting-tool-panel > header h2 { margin: 0; color: var(--color-text-strong); font: 600 var(--type-heading)/1.3 var(--font-ui); }
+  .lighting-tool-panel > header p { margin: 2px 0 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.5 var(--font-ui); }
+  .lighting-tool-panel > .lighting-tool-body { min-height: 0; overflow-y: auto; }
+
+  .lighting-tool-body { display: grid; align-content: start; gap: var(--space-2); min-width: 0; }
+  .lighting-tool-fields { display: grid; gap: var(--space-2); min-width: 0; margin: 0; padding: 0; border: 0; }
+  .lighting-tool-note { margin: 0; color: var(--color-text-secondary); font: 400 var(--type-body)/1.6 var(--font-ui); }
+
+  .lighting-file-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-1); }
+  .lighting-file-actions > .lighting-file-operation { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: var(--space-2); min-width: 0; padding: var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-md); color: var(--color-text); background: var(--color-surface-raised); cursor: pointer; }
+  .lighting-file-actions > .lighting-file-operation > svg:first-child { flex: none; width: 24px; height: 24px; color: var(--color-accent); stroke-width: 1.5; }
+  .lighting-file-actions > .lighting-file-operation > svg:last-child { flex: none; width: 16px; height: 16px; color: var(--color-text-tertiary); }
+  .lighting-file-actions > .lighting-file-operation > span { display: grid; flex: 1; gap: 2px; min-width: 0; }
+  .lighting-file-actions > .lighting-file-operation strong { font: 500 var(--type-body)/1.4 var(--font-ui); }
+  .lighting-file-actions > .lighting-file-operation small { color: var(--color-text-secondary); font: 400 var(--type-caption)/1.5 var(--font-ui); }
+  .lighting-file-actions > .lighting-file-operation:hover:not(:disabled) { border-color: var(--color-border-strong); background: var(--color-surface-hover); }
+  .lighting-file-actions > .lighting-file-operation:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .lighting-file-actions > .lighting-file-operation:disabled { opacity: 0.5; cursor: progress; }
+  .lighting-import-preview { display: grid; gap: var(--space-1); grid-column: 1 / -1; padding: var(--space-2); border: 1px solid var(--color-accent-border); border-radius: var(--radius-md); background: var(--color-accent-soft); }
+  .lighting-import-preview > strong { font: 500 var(--type-body)/1.5 var(--font-ui); }
+  .lighting-import-preview > p { margin: 0; color: var(--color-warning); font: 400 var(--type-caption)/1.5 var(--font-ui); }
+  .lighting-import-actions { display: flex; justify-content: flex-end; gap: var(--space-1); }
+
+  .lighting-arrangement-list { display: grid; gap: var(--space-1); min-width: 0; margin: 0; padding: var(--space-2) 0 0; border: 0; border-top: 1px solid var(--color-separator); }
+  .lighting-arrangement-list > legend { float: left; width: 100%; margin-bottom: var(--space-1); padding: 0; color: var(--color-text-strong); font: 500 var(--type-control)/1.4 var(--font-ui); }
+  .lighting-arrangement-list .lighting-marker-settings { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr)) 32px; align-items: end; gap: var(--space-1); }
+  .lighting-arrangement-list .lighting-marker-settings > label { display: grid; gap: var(--space-half); min-width: 0; }
+  .lighting-arrangement-list .lighting-marker-settings > label > span { color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
+  .lighting-arrangement-list .lighting-marker-settings .ui-input { max-width: none; }
+  .lighting-arrangement-list .lighting-template-row { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
+  .lighting-arrangement-list .lighting-template-row > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}

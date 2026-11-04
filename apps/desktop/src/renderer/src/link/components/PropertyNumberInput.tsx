@@ -8,9 +8,13 @@ export function PropertyNumberInput(props: {
   step?: number;
   precision?: number;
   disabled?: boolean;
+  /** Set when the input sits in a labelled Field. */
+  id?: string;
+  className?: string;
+  'aria-describedby'?: string;
 }): JSX.Element {
   const displayed = props.precision === undefined ? String(props.value) : String(Number(props.value.toFixed(props.precision)));
-  return <input key={props.value} aria-label={props.label} type="number" min={props.min} max={props.max} step={props.step ?? 1} defaultValue={displayed} disabled={props.disabled}
+  return <input key={props.value} id={props.id} className={props.className} aria-describedby={props['aria-describedby']} aria-label={props.label} type="number" min={props.min} max={props.max} step={props.step ?? 1} defaultValue={displayed} disabled={props.disabled}
     onInput={(event) => event.currentTarget.setCustomValidity('')}
     onKeyDown={(event) => {
       if (event.key !== 'Enter' && event.key !== 'Escape') return;

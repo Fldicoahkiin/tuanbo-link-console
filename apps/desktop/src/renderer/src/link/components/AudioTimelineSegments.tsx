@@ -4,7 +4,7 @@ import { dragAudioSegment } from '@tb/core/link';
 import type { AudioEditor } from './useAudioEditor';
 import { AudioSegmentWaveform } from './AudioSegmentWaveform';
 import { AudioSegmentMenu } from './AudioSegmentMenu';
-import { ModalSurface } from './ModalSurface';
+import { ModalSurface } from '../ui/ModalSurface';
 
 type Drag = { id: string; edge: 'seek' | 'move' | 'start' | 'end'; clientX: number; segment: AudioSegment; deltaMs: number };
 export function AudioTimelineSegments({ samples, editor, pixelsPerSecond, onSelect, onSeek, peaks, scrollLeft, viewportWidth, sourceWaveform = false, snapTime, playheadMs, readOnly = false }: { samples?: AudioBuffer | null; editor: Pick<AudioEditor, 'audio' | 'title' | 'segments' | 'selectedId' | 'disabled' | 'busy' | 'points' | 'select' | 'update' | 'remove' | 'split'>; sourceWaveform?: boolean; snapTime?: (ms: number) => number; pixelsPerSecond: number; onSelect: (id: string) => void; onSeek: (ms: number) => void; peaks: readonly number[]; scrollLeft: number; viewportWidth: number;playheadMs:number; readOnly?:boolean }): JSX.Element {

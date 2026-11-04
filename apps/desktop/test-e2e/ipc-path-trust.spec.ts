@@ -57,7 +57,7 @@ test('窗口不能自行指定路径：工程、工程内文件、导入来源�
     // The project the open dialog returned, once the window shows it.
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, shown);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', shown);
+    await expect(page.locator('.titlebar-document')).toHaveAttribute('title', shown);
     await expect.poll(() => attempt(page, v => window.tbLink.findMissingAssetFiles({ projectPath: v.shown, files: [{ relativePath: 'assets/reference-audio/a.wav', sha256: 'a'.repeat(64) }] }), values))
       .toBe('UNEXPECTED_SUCCESS ["assets/reference-audio/a.wav"]');
 
@@ -119,7 +119,7 @@ test('窗口不能自行指定路径：工程、工程内文件、导入来源�
     const page = await app.firstWindow();
     // The reopened project counts as edited; switching asks to save it first.
     await answerSaveQuestions(app);
-    await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', shown);
+    await expect(page.locator('.titlebar-document')).toHaveAttribute('title', shown);
 
     // A link to the shown project's file stops working once another project replaces it.
     const load = (url: string): Promise<string> => page.evaluate(link => fetch(link).then(response => response.ok ? response.text() : `HTTP ${response.status}`), url);
@@ -127,8 +127,8 @@ test('窗口不能自行指定路径：工程、工程内文件、导入来源�
     expect(await load(songUrl)).toBe('RIFF shown song');
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, never);
     await page.getByLabel('工程菜单', { exact: true }).click();
-    await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', never);
+    await page.getByRole('menuitem', { name: '打开工程', exact: true }).click();
+    await expect(page.locator('.titlebar-document')).toHaveAttribute('title', never);
     expect.soft(await load(songUrl)).toBe('HTTP 404');
   } finally { await closeDiscarding(app); }
 });

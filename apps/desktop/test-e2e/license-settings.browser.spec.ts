@@ -9,13 +9,13 @@ test.beforeAll(async () => {
   const result = await build({
     stdin: { contents: `import React from 'react'; import { createRoot } from 'react-dom/client'; import { LicenseSettings } from './src/renderer/src/link/components/LicenseSettings'; import { LicenseGate } from './src/renderer/src/link/components/LicenseGate';
       const root = createRoot(document.getElementById('root'));
-      window.renderLicense = active => root.render(React.createElement('main', { className: 'device-console settings-content-page' }, React.createElement('div', { className: 'device-detail' }, React.createElement('div', { className: 'device-panel' }, React.createElement(LicenseSettings, { runtimeActive: active }))))); window.renderLicense(false);
+      window.renderLicense = active => root.render(React.createElement('main', { className: 'settings-page', 'data-density': 'comfortable' }, React.createElement(LicenseSettings, { runtimeActive: active }))); window.renderLicense(false);
       window.renderGate = () => root.render(React.createElement(LicenseGate, null, React.createElement('div', { 'data-testid': 'workspace' }, '付费工作区')));`, resolveDir: process.cwd(), loader: 'jsx' },
     bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic', loader: { '.webp': 'dataurl' },
     alias: { '@tb/schema': resolve('../../packages/schema/src/index.ts') }
   });
   script = result.outputFiles[0]!.text;
-  styles = (await Promise.all(['link.css', 'project-workspace.css', 'appearance.css', 'home-layout.css', 'settings-content.css', 'lighting.css', 'properties.css', 'device-connections.css', 'timeline-editing.css', 'interface.css'].map(file => readFile(resolve('src/renderer/src/link', file), 'utf8')))).join('\n');
+  styles = (await Promise.all(['styles/layers.css', 'styles/tokens.css', 'link/ui/ui.css', 'link/components/settings-page.css', ...['link.css', 'project-workspace.css', 'appearance.css', 'home-layout.css', 'settings-content.css', 'lighting.css', 'properties.css', 'timeline-editing.css', 'interface.css'].map(file => `link/${file}`)].map(file => readFile(resolve('src/renderer/src', file), 'utf8')))).join('\n');
 });
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });

@@ -32,12 +32,13 @@ test('三层执行器保留原格位和独立页码，翻页不播放，紧凑�
     await expect(fader.getByRole('button', { name: '执行器 100.16 · 轮廓', exact: true })).toBeVisible();
     await page.getByLabel('中层执行器范围', { exact: true }).selectOption('1');
     await upper.getByRole('button', { name: '执行器 4.103 · 定点', exact: true }).click({ button: 'right' });
-    await page.getByRole('dialog', { name: '执行器右键菜单', exact: true }).getByRole('button', { name: '编辑步骤', exact: true }).click();
+    await page.getByRole('menu', { name: '执行器右键菜单', exact: true }).getByRole('menuitem', { name: '编辑步骤', exact: true }).click();
     await expect(pool.getByLabel('序列中的单步灯光')).toHaveAttribute('data-total-cues', '4');
     await pool.getByRole('button', { name: 'Cue 控台位置', exact: true }).click();
     const locations = page.getByRole('dialog', { name: 'Cue 控台位置列表', exact: true });
     await expect(locations.getByRole('button', { name: '按钮第 4 页 · 103 格', exact: true })).toBeVisible();
-    await locations.getByRole('button', { name: '关闭', exact: true }).click();
+    await page.keyboard.press('Escape');
+    await expect(locations).toHaveCount(0);
     await pool.getByRole('button', { name: '返回页面', exact: true }).click();
     await expect(upper.getByRole('button', { name: '执行器 4.103 · 定点', exact: true })).toBeVisible();
 
@@ -110,10 +111,10 @@ test('执行器重命名、拖到空格和删除均按回读结果刷新，底�
     await expect(original).toBeVisible();
     const position = await original.boundingBox();
     await original.click({ button: 'right' });
-    const menu = page.getByRole('dialog', { name: '执行器右键菜单', exact: true });
-    await expect(menu.getByRole('button', { name: '编辑步骤', exact: true })).toBeVisible();
+    const menu = page.getByRole('menu', { name: '执行器右键菜单', exact: true });
+    await expect(menu.getByRole('menuitem', { name: '编辑步骤', exact: true })).toBeVisible();
     expect(await original.boundingBox()).toEqual(position);
-    await menu.getByRole('button', { name: '重命名', exact: true }).click();
+    await menu.getByRole('menuitem', { name: '重命名', exact: true }).click();
     await page.getByLabel('执行器名称', { exact: true }).fill('电脑改名');
     await app.evaluate(() => { process.env.TBLINK_EXECUTOR_HOLD_UPDATE = 'true'; });
     await page.getByRole('button', { name: '保存名称', exact: true }).click();
@@ -129,7 +130,7 @@ test('执行器重命名、拖到空格和删除均按回读结果刷新，底�
     await expect(upper.locator('[data-executor-slot="101"]')).toHaveAttribute('data-empty', 'true');
     const moved = upper.getByRole('button', { name: '执行器 4.105 · 电脑改名', exact: true });
     await moved.click({ button: 'right' });
-    await menu.getByRole('button', { name: '删除执行器', exact: true }).click();
+    await menu.getByRole('menuitem', { name: '删除执行器', exact: true }).click();
     const confirmation = page.getByRole('dialog', { name: '删除执行器', exact: true });
     await expect(confirmation).toContainText('4 页 · 105 格');
     await expect(confirmation).toContainText('电脑改名');

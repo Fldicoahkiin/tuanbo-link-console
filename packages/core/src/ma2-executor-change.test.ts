@@ -5,7 +5,6 @@ import { applyMa2ExecutorChangeCommand, ma2ExecutorDeletionUses } from './ma2-ex
 function sample() {
   const project = createEmptyLinkProject('执行器位置');
   const light = createLightingDocument();
-  light.outputMode = 'network';
   light.consoleSong = { endpoint: '192.0.2.1:30000', show: 'Show', layout: null, executor: '1000.101', sequence: 9000, name: '本曲', baselineXml: '<MA/>', points: [{ id: 'a', cue: '1' }] };
   light.tracks = [{ id: 't', kind: 'ma2', name: '灯光', color: '#aabbcc', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {}, clips: [
     { id: 'c', name: '灯光', start: 0, duration: 1000, timeLock: 'time', muted: false, events: [

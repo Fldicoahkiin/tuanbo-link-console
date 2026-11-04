@@ -96,7 +96,10 @@ export const lightingDocumentSchema = z.object({
   version: z.union([z.literal(1), z.literal(2)]), music: lightingMusicSchema.optional(), tracks: z.array(lightingTrackSchema), tempos: z.array(lightingTempoSchema).min(1),
   markers: z.array(z.object({ id, name: z.string(), startMs: time, endMs: time.nullable(), kind: z.enum(musicMarkerKinds).optional(), color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(), notes: z.string().optional() }).strict()),
   loop: z.object({ enabled: z.boolean(), startMs: time, endMs: time.positive() }).strict(),
-  outputMode: z.enum(['timecode', 'direct', 'network']),
+  // 2026-11-01 the user removed the 'direct' (MIDI) and 'network' playback modes: lighting only follows the
+  // song's timecode on the console. Older projects that stored either open as timecode; the field stays in
+  // the file so earlier versions still read it.
+  outputMode: z.enum(['timecode', 'direct', 'network']).transform(() => 'timecode' as const),
   templates: z.array(z.object({ id, name: z.string().min(1), track: lightingTemplateTrackSchema,
     libraryRevision: z.number().int().positive().optional(), nativeSequence: z.boolean().optional(),
     categories: z.array(z.string().min(1).max(64)).max(16).optional(),

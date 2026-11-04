@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui';
 import { useState } from 'react';
 import { setReferenceAudioCommand } from '@tb/core/link';
 import type { LinkMediaAsset } from '@tb/schema';
@@ -24,7 +24,7 @@ export function VideoAudioSource(props: { itemId: string; asset: LinkMediaAsset;
   };
   return <section className="video-audio-property">
     <span title={selected ? `正在使用此视频原声 · ${formatMilliseconds(reference.durationMs)}` : `当前歌曲时长 ${formatMilliseconds(reference?.durationMs ?? 0)}`}>歌曲音轨</span>
-    <Button className="secondary-button" title="提取完整视频原声作为歌曲音轨，节目时长随之更新" disabled={busy || selected} onClick={() => void bindVideoAudio()}>{busy ? '正在提取原声…' : selected ? '已使用视频原声' : '使用视频原声'}</Button>
+    <Button variant="secondary" size="sm" loading={busy} title="提取完整视频原声作为歌曲音轨，节目时长随之更新" disabled={selected} onClick={() => void bindVideoAudio()}>{busy ? '正在提取原声…' : selected ? '已使用视频原声' : '使用视频原声'}</Button>
   </section>;
 }
 

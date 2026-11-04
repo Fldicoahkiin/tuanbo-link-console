@@ -13,7 +13,7 @@ test('时间码关联待核对：不弹窗直接播放，只显示一条准确�
   await mkdir(info.outputPath('assets/reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets/reference-audio/song.wav'), wav);
   const track = lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: 'effect-canvas', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 30000, timeLock: 'time', muted: false, events: [{ id: 'cue', kind: 'ma2', at: 1000, sequence: 168, cue: '1.000', executor: '', action: 'goto', label: '1' }] }] });
   const project = parseLinkProject({ ...createEmptyLinkProject('时间码提示回归'), schemaVersion: 2, playbackSource: 'internal', obsOutputMode: 'scenes',
-    rundown: [{ id: 'song', title: '歌曲', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/song.wav', durationMs: 30000, sha256: createHash('sha256').update(wav).digest('hex') }, lighting: { ...createLightingDocument(), outputMode: 'network', tracks: [track] } }],
+    rundown: [{ id: 'song', title: '歌曲', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/song.wav', durationMs: 30000, sha256: createHash('sha256').update(wav).digest('hex') }, lighting: { ...createLightingDocument(), tracks: [track] } }],
     ma2ReadState: { source: 'console', catalog: { directory: { show: 'test', generation: 'test', version: '3.9.60.74', entries: [] }, readAt: new Date().toISOString(), entries: [] }, pairs: {}, pairings: { '2': { itemId: 'song', status: 'stale', evidence: '', reason: '音频已替换' } }, failures: [], selectedTarget: null, query: '', filter: 'all', message: '' } });
   const file = info.outputPath('project.tblink'); await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
@@ -26,9 +26,8 @@ test('时间码关联待核对：不弹窗直接播放，只显示一条准确�
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     // The output mode selector is gone (1d7d5bd); the notice follows the song's lighting state alone.
     await expect(page.getByRole('combobox', { name: '灯光输出方式' })).toHaveCount(0);
-    await page.getByLabel('灯光输出提示', { exact: true }).click();
-    const menu = page.locator('.lighting-output-notice .timeline-icon-menu-content');
-    await expect(menu.getByText('需处理', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '灯光提示', exact: true }).click();
+    const menu = page.getByRole('dialog', { name: '灯光提示', exact: true });
     await expect(menu.getByText(/控台 Timecode 2：音频已替换/)).toBeVisible();
     await expect(page.locator('.lighting-output-route .song-lighting-state')).toHaveText('需处理');
     await page.keyboard.press('Escape');
@@ -43,8 +42,8 @@ test('时间码关联待核对：不弹窗直接播放，只显示一条准确�
       await expect(page.getByRole('button', { name: '播放时间线', exact: true })).toBeVisible();
     }
     expect(await startChecks()).toEqual([]);
-    await page.getByLabel('灯光输出提示', { exact: true }).click();
-    await page.getByRole('button', { name: '核对控台时间线', exact: true }).click();
+    await page.getByRole('button', { name: '灯光提示', exact: true }).click();
+    await page.getByRole('button', { name: '查看控台时间线', exact: true }).click();
     await expect(page.getByRole('heading', { name: '控台时间线', exact: true })).toBeVisible();
     expect(errors).toEqual([]);
     await page.screenshot({ path: info.outputPath('timecode-pairing-review.png') });

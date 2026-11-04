@@ -54,17 +54,6 @@ it('同一 Show 同一会话保留读取异常；换 Show 不继承另一份读�
   expect(reconcileMa2ReadState(project, 'console', changed).failures).toEqual([]);
 });
 
-it('切换灯光输出模式不改变配对', () => {
-  const { project, catalog } = fixture();
-  project.rundown[0]!.lighting = createLightingDocument();
-  project.ma2ReadState = reconcileMa2ReadState(project, 'console', catalog);
-  let current = project;
-  for (const mode of ['network', 'timecode', 'direct', 'timecode'] as const) {
-    current = edit(next => { next.rundown[0]!.lighting!.outputMode = mode; }).execute(current);
-    expect(current.ma2ReadState?.pairings).toEqual(project.ma2ReadState.pairings);
-  }
-});
-
 it('解除与恢复完整保留未知原生数据，起点没变就一直对上', () => {
   const { project, catalog } = fixture();
   project.ma2ReadState = reconcileMa2ReadState(project, 'console', catalog);

@@ -1,3 +1,4 @@
+@layer legacy {
 .ma2-executor-surface {
   display: flex;
   flex-direction: column;
@@ -14,7 +15,7 @@
   display: flex;
   flex-direction: column;
   flex: 0 0 76px;
-  min-width: 900px;
+  min-width: 0;
   min-height: 0;
 }
 .ma2-executor-band[data-executor-band=upper] { flex: 1 0 310px; }
@@ -22,10 +23,10 @@
 .ma2-executor-band-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex: 0 0 24px;
   min-width: 0;
-  padding-inline: 3px;
+  padding-inline: 4px;
   color: var(--text-secondary);
   font-size: 11px;
   line-height: 14px;
@@ -41,16 +42,16 @@
   font-size: 11px;
   font-weight: 500;
 }
-.ma2-executor-band-header > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
-.ma2-executor-band-caption { flex: none; font-size: 10px; }
-.ma2-executor-band-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
-.ma2-executor-band-header form, .ma2-executor-band-header label { display: flex; align-items: center; gap: 3px; }
+.ma2-executor-band-header > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.ma2-executor-band-caption { flex: none; font-size: 11px; }
+.ma2-executor-band-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.ma2-executor-band-header form, .ma2-executor-band-header label { display: flex; align-items: center; gap: 4px; }
 .ma2-sequence-preview .ma2-executor-band-header button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 23px;
-  width: 23px;
+  width: 24px;
   height: 20px;
   min-width: 0;
   min-height: 0;
@@ -60,9 +61,9 @@
   background: transparent;
   color: var(--text-secondary);
 }
-.ma2-executor-band-header svg { width: 12px; height: 12px; }
+.ma2-executor-band-header svg { width: 16px; height: 16px; }
 .ma2-sequence-preview .ma2-executor-band-header button:hover:not(:disabled) { color: var(--text-primary); background: var(--surface); }
-.ma2-sequence-preview .ma2-executor-band-header .ma2-executor-read-state { flex-basis: auto; width: auto; padding-inline: 4px; color: var(--danger); font-size: 10px; }
+.ma2-sequence-preview .ma2-executor-band-header .ma2-executor-read-state { flex-basis: auto; width: auto; padding-inline: 4px; color: var(--danger); font-size: 11px; }
 .ma2-executor-band-header input {
   width: 48px;
   min-width: 0;
@@ -70,7 +71,7 @@
   min-height: 0;
   padding: 1px 4px;
   border: 1px solid color-mix(in srgb, var(--separator) 70%, transparent);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text-primary);
   font: inherit;
@@ -81,13 +82,13 @@
   width: 74px;
   height: 20px;
   min-height: 0;
-  padding: 1px 3px;
+  padding: 1px 4px;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
-  font-size: 10px;
+  font-size: 11px;
 }
 .ma2-executor-band-range:hover, .ma2-executor-band-range:focus-visible { background: var(--surface); color: var(--text-primary); }
 .ma2-executor-surface .ma2-executor-grid {
@@ -96,7 +97,7 @@
   grid-template-columns: repeat(15, minmax(0, 1fr));
   grid-template-rows: minmax(0, 1fr);
   grid-auto-rows: minmax(0, 1fr);
-  gap: 3px;
+  gap: 4px;
   width: 100%;
   min-width: 0;
   min-height: 0;
@@ -129,10 +130,10 @@
   right: 3px;
   display: flex;
   justify-content: space-between;
-  gap: 3px;
+  gap: 4px;
   overflow: hidden;
   color: color-mix(in srgb, var(--text-secondary) 74%, transparent);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 10px;
   white-space: nowrap;
 }
@@ -149,7 +150,7 @@
   min-width: 0;
   min-height: 0;
   margin: 0;
-  padding: 10px 3px 1px;
+  padding: 12px 4px 1px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -166,8 +167,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ma2-executor-surface .ma2-executor-key > strong { font-size: 12px; font-weight: 550; line-height: 13px; }
-.ma2-executor-surface .ma2-executor-key > small { color: var(--text-secondary); font-size: 10px; line-height: 11px; }
+.ma2-executor-surface .ma2-executor-key > strong { font-size: 12px; font-weight: 500; line-height: 13px; }
+.ma2-executor-surface .ma2-executor-key > small { color: var(--text-secondary); font-size: 11px; line-height: 11px; }
 .ma2-executor-surface .ma2-executor-key:active,
 .ma2-executor-surface .ma2-executor-key[aria-pressed=true] { background: color-mix(in srgb, var(--executor-color, var(--accent)) 28%, var(--surface)); }
 .ma2-executor-functions {
@@ -179,7 +180,7 @@
   padding: 0;
   border-top: 1px solid color-mix(in srgb, var(--separator) 75%, transparent);
 }
-.ma2-executor-functions > span { flex: none; padding-inline: 2px; color: var(--text-secondary); font-size: 9px; line-height: 11px; }
+.ma2-executor-functions > span { flex: none; padding-inline: 2px; color: var(--text-secondary); font-size: 11px; line-height: 11px; }
 .ma2-executor-band[data-executor-band=fader] .ma2-executor-functions {
   display: grid;
   grid-template-columns: minmax(18px, .7fr) minmax(0, 1fr);
@@ -211,7 +212,7 @@
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -235,110 +236,13 @@
 .ma2-executor-band [role=alert] {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex: none;
   min-width: 0;
   padding: 2px 4px;
   color: var(--danger);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 14px;
 }
-.ma2-executor-context-menu {
-  position: fixed;
-  z-index: 10000;
-  display: flex;
-  flex-direction: column;
-  width: 220px;
-  max-width: calc(100vw - 16px);
-  max-height: calc(100vh - 16px);
-  overflow: auto;
-  padding: 5px;
-  border: 1px solid var(--separator);
-  border-radius: 8px;
-  background: var(--surface-raised);
-  color: var(--text-primary);
-  box-shadow: 0 12px 32px #0006;
-  font-size: 12px;
-}
-.ma2-executor-context-menu > strong { padding: 5px 7px 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
-.ma2-executor-context-menu > small { padding: 0 7px 6px; color: var(--text-secondary); font-size: 10px; }
-.ma2-executor-context-menu > button {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-height: 29px;
-  padding: 5px 7px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: start;
-  cursor: pointer;
-}
-.ma2-executor-context-menu svg { flex: none; width: 13px; height: 13px; stroke-width: 1.5; }
-.ma2-executor-context-menu > button:hover:not(:disabled),
-.ma2-executor-context-menu > button:focus-visible { outline: none; background: color-mix(in srgb, var(--accent) 15%, transparent); }
-.ma2-executor-context-menu .danger { color: var(--danger); }
-.ma2-executor-context-menu > button:disabled { color: var(--text-tertiary, var(--text-secondary)); opacity: .5; cursor: default; }
-.ma2-executor-dialog-backdrop {
-  position: fixed;
-  z-index: 10010;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-  background: #0006;
-}
-.ma2-executor-dialog {
-  width: 360px;
-  max-width: 100%;
-  max-height: calc(100vh - 32px);
-  overflow: auto;
-  padding: 16px;
-  border: 1px solid var(--separator);
-  border-radius: 10px;
-  background: var(--surface-raised);
-  color: var(--text-primary);
-  box-shadow: 0 16px 48px #0007;
-  font-size: 12px;
-  line-height: 1.5;
-}
-.ma2-executor-dialog h2, .ma2-executor-dialog h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
-.ma2-executor-dialog p { margin: 6px 0 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
-.ma2-executor-dialog label { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.ma2-executor-dialog input {
-  width: 100%;
-  min-width: 0;
-  min-height: 30px;
-  padding: 5px 8px;
-  border: 1px solid var(--separator);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--text-primary);
-  font: inherit;
-}
-.ma2-executor-dialog input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.ma2-executor-destination { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.ma2-executor-dialog footer { display: flex; justify-content: flex-end; gap: 7px; margin-top: 16px; }
-.ma2-executor-dialog footer button {
-  min-height: 30px;
-  padding: 5px 12px;
-  border: 1px solid var(--separator);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--text-primary);
-  font: inherit;
-  cursor: pointer;
-}
-.ma2-executor-dialog footer button[type=submit] { border-color: var(--accent); background: var(--accent); color: #fff; }
-.ma2-executor-dialog footer button:last-child:not([type=button]) { border-color: var(--accent); background: var(--accent); color: #fff; }
-.ma2-executor-dialog footer button.danger { border-color: color-mix(in srgb, var(--danger) 50%, var(--separator)); color: var(--danger); background: var(--surface); }
-.ma2-executor-dialog footer button:disabled { opacity: .5; cursor: default; }
-.ma2-executor-dialog [role=alert] { margin: 8px 0 0; color: var(--danger); overflow-wrap: anywhere; }
 
-@container (min-width: 1100px) {
-  .ma2-executor-band { min-width: 0; }
-  .ma2-executor-surface .ma2-executor-key > strong { font-size: 12px; }
 }

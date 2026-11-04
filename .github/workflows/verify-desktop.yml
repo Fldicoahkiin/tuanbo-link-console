@@ -1,8 +1,9 @@
 name: Verify Desktop
 
 # Desktop changes on master were otherwise only built when a release was packaged, half an hour into Release Windows.
-# This catches type and lint errors, and a release bundle that packaging would refuse, minutes after the push.
-# The full test suite needs Windows and runs in Release Windows.
+# This catches type and lint errors, a release bundle that packaging would refuse, and a failing unit test (on
+# Windows, which the file, process and PowerShell tests need) minutes after the push. Until 2026-10-30 the tests
+# ran only when a release was packaged, so a broken lighting rule (docs/LIGHTING_WORKFLOW.md) reached master unseen.
 
 on:
   push:
@@ -55,3 +56,22 @@ jobs:
         run: |
           pnpm --filter @tb/desktop exec electron-vite build --mode release
           node scripts/verify-release-bundle.mjs
+
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (v7.0.1)
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6 (v6.0.10)
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7 (v7.1.0)
+        with:
+          node-version: 25.8.2
+          cache: pnpm
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Unit tests
+        run: pnpm test

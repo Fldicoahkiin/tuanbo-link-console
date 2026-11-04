@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { ma2SongPoints, projectLightingLibrary, setLightingCommand, setLightingLibraryCommand } from '@tb/core/link';
 import { ma2LayoutSettingsSchema, type Ma2LayoutSettings } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
-import { startMa2SongSync, useMa2SongSyncStore } from '../runtime/ma2-song-sync';
-import { pauseMa2RealtimeSession, retryMa2RealtimeSession } from '../runtime/ma2-realtime-session';
+import { startMa2SongSync } from '../runtime/ma2-song-sync';
+import { useMa2SyncStore } from '../stores/ma2-sync-store';
+import { pauseMa2RealtimeSession, refreshMa2RealtimeSession, retryMa2RealtimeSession } from '../runtime/ma2-realtime-session';
 import { locateMa2Executor, ma2ExecutorLocationLabel } from '../stores/ma2-executor-page-store';
 import { Ma2ConsoleName } from './Ma2ConsoleName';
 import { SongMtcStart } from './SongMtcStart';
@@ -11,7 +12,7 @@ import { SongMtcStart } from './SongMtcStart';
 export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; settings: Ma2LayoutSettings }): JSX.Element {
   const project = useDocumentStore(state => state.project);
   const item = project?.rundown.find(value => value.id === itemId);
-  const status = useMa2SongSyncStore(state => state.songs[itemId]);
+  const status = useMa2SyncStore(state => state.songs[itemId]);
   const binding = item?.lighting?.consoleSong;
   const [name, setName] = useState(binding?.name ?? item?.title ?? '歌曲序列');
   const [editingName, setEditingName] = useState(false);
@@ -44,6 +45,15 @@ export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; set
       retryMa2RealtimeSession(); setError('');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
+  // Way 1: the song plays a Timecode show that already exists on the console; edits go back to that show.
+  const imported = item?.lighting?.ma2Bindings ?? [];
+  if (imported.length) return <section className="ma2-song-panel" aria-label="本曲控台时间线">
+    <strong>本曲控台时间线</strong>
+    {project && item ? <SongMtcStart project={project} item={item} detail /> : null}
+    <p>这首歌跟着控台上已有的 {imported.map(binding => `Timecode ${binding.timecode}`).join('、')}。时间线上改的 Cue 写回同一条时间线，控台上改的也会读回来。</p>
+    <div><button disabled={status?.state === 'syncing'} onClick={() => refreshMa2RealtimeSession(itemId)}>刷新同步本曲</button>{status ? <button onClick={pauseMa2RealtimeSession}>暂停同步</button> : null}</div>
+    {status ? <p role={status.state === 'blocked' ? 'alert' : 'status'}>{status.message}</p> : null}
+  </section>;
   return <section className="ma2-song-panel" aria-label="本曲控台序列">
     <strong>本曲控台序列</strong>
     {project && item ? <SongMtcStart project={project} item={item} detail /> : null}

@@ -8,6 +8,8 @@ import { convertMa2Timecode } from '../src/main/link/ma2-timecode-conversion';
 import { readMa2Catalog } from '../src/main/link/ma2-catalog';
 import { inspectMa2SequenceXml } from '../src/main/link/ma2-timecode-xml';
 import { savedValue } from './save-questions';
+import { stubMidiPorts } from './midi-ports';
+import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
 
 test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提交列表', async ({}, info) => {
   const xml = await readFile(join(process.cwd(), 'src/main/link/fixtures/ma2-timecode-fractional-3.3.xml'), 'utf8');
@@ -24,8 +26,6 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
   const project = parseLinkProject({ ...createEmptyLinkProject('安全暂存桌面验收'), schemaVersion: 2, playbackSource: 'p1', ma2MaterialLibrary: { version: 1, source: '192.0.2.1:30000', library }, rundown: [{ id: 'song', title: '暂存歌曲', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/song.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 60000 } }] });
   const file = info.outputPath('staged.tblink');
   const imported = importMa2TimecodeCommand('song', convertMa2Timecode(xml, [sequence], 9902)).execute(project);
-  // The workbench preview still follows the stored mode; there is no selector to switch it any more.
-  imported.rundown[0]!.lighting!.outputMode = 'network';
   await writeFile(file, JSON.stringify(imported));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
   try {
@@ -39,7 +39,7 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
       ipcMain.removeHandler('link:ma2-preview'); ipcMain.handle('link:ma2-preview', () => data.catalog.entries[0]!.preview);
       ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => data.library);
       process.env.TBLINK_STAGED_WRITE_CALLS = '0';
-      for (const channel of ['link:ma2-apply', 'link:ma2-auto-bind', 'link:ma2-song-sync']) {
+      for (const channel of ['link:ma2-apply', 'link:ma2-song-sync']) {
         ipcMain.removeHandler(channel); ipcMain.handle(channel, () => {
           process.env.TBLINK_STAGED_WRITE_CALLS = String(Number(process.env.TBLINK_STAGED_WRITE_CALLS) + 1);
           throw new Error('播放或主动暂停期间不得提交控台修改');
@@ -49,6 +49,12 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
       ipcMain.removeHandler('link:ma2-play-cancel'); ipcMain.handle('link:ma2-play-cancel', () => undefined);
     }, { file, catalog, library });
     await page.evaluate(() => localStorage.setItem('tblink.ma2-connection-method.v1', 'network'));
+    // Playing the workbench sends the song's timecode, the only way lighting runs (2026-11-01).
+    await stubMidiPorts(app, { outputs: ['Preview MTC'] });
+    const profile = createDefaultIntegrationProfile();
+    profile.midiPortProfiles.push({ id: 'preview-mtc', direction: 'output', portName: 'Preview MTC' });
+    profile.internalPlayer = { mtcOutputPortProfileId: 'preview-mtc', audioOutputDeviceId: 'default' };
+    await page.evaluate(value => window.tbLink.saveIntegrationProfile({ profile: value }), profile);
     await page.reload();
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
@@ -65,12 +71,15 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
     const badge = page.getByRole('button', { name: '同步状态详情', exact: true });
     await expect(badge).toContainText('待同步 1');
     await badge.click();
-    const pending = page.getByRole('region', { name: '同步状态详情' });
+    const pending = page.getByRole('dialog', { name: '同步状态详情' });
     await expect(pending).toContainText('1 处修改');
     await expect(pending).toContainText('播放时先暂存在本地');
     await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect(badge).not.toContainText('待同步');
+    // A click elsewhere closes the details; opened again they no longer list the change.
+    await expect(pending).toHaveCount(0);
+    await badge.click();
     await expect(pending).not.toContainText('1 处修改');
     await expect(realtime).toHaveAttribute('aria-checked', 'true');
     await page.getByRole('button', { name: '重做', exact: true }).click(); await expect(badge).toContainText('待同步 1');
@@ -81,6 +90,8 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
     await page.getByRole('button', { name: '暂停时间线', exact: true }).click();
     await expect(badge).toContainText('已暂停同步');
     await expect(realtime).toHaveAttribute('aria-checked', 'false');
+    // The clicks on the switch and the transport closed the details; opened again they still list the change.
+    await badge.click();
     await expect(pending).toContainText('1 处修改');
     await page.screenshot({ path: info.outputPath('pending.png') });
     await page.getByRole('button', { name: '停止时间线', exact: true }).click();

@@ -5,11 +5,11 @@ import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, pa
 import { saveProject, closeDiscarding } from './save-questions';
 import { stubMidiPorts } from './midi-ports';
 
-// The output mode selector is gone (1d7d5bd); projects still store one of the three modes, written by older
-// versions or by MIDI and REAPER imports. Each must open, save and reopen intact on a computer without MIDI.
-for (const native of [false, true]) test(`无 MIDI 设备时打开三种已存灯光模式的工程，保存并重启后原样保留，原生绑定=${native}`, async ({}, info) => {
+// 2026-11-01 only timecode remains: projects written by older versions store one of three modes. Each must open
+// on a computer without MIDI, keep its lighting, and save back as timecode.
+for (const native of [false, true]) test(`无 MIDI 设备时打开存着旧灯光模式的工程，灯光原样保留，保存后都是时间码，原生绑定=${native}`, async ({}, info) => {
   test.setTimeout(180_000);
-  const lighting = { ...createLightingDocument(), outputMode: 'network' as 'timecode' | 'direct' | 'network' };
+  const lighting = createLightingDocument();
   lighting.tracks = [lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: 'effect-canvas', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 6000, timeLock: 'time', muted: false, events: [{ id: 'cue', kind: 'ma2', at: 1000, sequence: 168, cue: '1.000', executor: '', action: 'goto', label: '1' }] }] })];
   if (native) lighting.ma2Bindings = [{ id: 'native', name: '保留控台时间线', timecode: 2, readAt: new Date().toISOString(), sourceXml: '<MA><unknown/></MA>', baselineTracks: [], mappings: [], nativeEvents: [{ path: 'unknown', reason: '不可转换参数' }], playback: 'native-timecode', timeOriginMs: 0 }];
   const project = parseLinkProject({ ...createEmptyLinkProject('模式切换回归'), schemaVersion: 2, playbackSource: 'internal', rundown: [{ id: 'song', title: '模式切换歌曲', cues: [], lighting }] });
@@ -25,7 +25,7 @@ for (const native of [false, true]) test(`无 MIDI 设备时打开三种已存�
     await stubMidiPorts(app);
     return { app, page };
   };
-  const stored = (mode: 'timecode' | 'direct' | 'network') => JSON.stringify({ ...project, rundown: [{ ...project.rundown[0]!, lighting: { ...lighting, outputMode: mode } }] });
+  const stored = (mode: string) => JSON.stringify({ ...project, rundown: [{ ...project.rundown[0]!, lighting: { ...lighting, outputMode: mode } }] });
   await writeFile(path, stored('timecode'));
   let current = await launch();
   try {
@@ -48,8 +48,9 @@ for (const native of [false, true]) test(`无 MIDI 设备时打开三种已存�
       current = await launch();
       await current.page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
       await expect(current.page.locator('.lighting-output-route')).toBeVisible();
-      const saved = parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]!.lighting!;
-      expect(saved.outputMode).toBe(mode);
+      const file = JSON.parse(await readFile(path, 'utf8')) as { rundown: Array<{ lighting: { outputMode: string } }> };
+      expect(file.rundown[0]!.lighting.outputMode).toBe('timecode');
+      const saved = parseLinkProject(file).rundown[0]!.lighting!;
       expect(saved.ma2Bindings).toEqual(project.rundown[0]!.lighting!.ma2Bindings);
       expect(saved.tracks).toEqual(project.rundown[0]!.lighting!.tracks);
       await expect(current.page.getByText('界面暂时无法显示', { exact: true })).toHaveCount(0);

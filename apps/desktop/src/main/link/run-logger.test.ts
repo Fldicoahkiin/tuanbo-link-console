@@ -16,6 +16,7 @@ afterEach(async () => {
 });
 
 describe('LinkRunLogger', () => {
+  // Writes and reads 150 000 lines on purpose; a shared Windows CI disk needs more than the default 5 s.
   it('十五万条日志可完整查询并筛选，返回对象不会污染后续读取', async () => {
     const directory = await createTestDirectory();
     const logger = new LinkRunLogger(directory);
@@ -29,7 +30,7 @@ describe('LinkRunLogger', () => {
     expect(selected.map(value => value.message)).toEqual(['最后一条']);
     selected[0]!.message = '调用方修改';
     expect((await logger.query({ itemId: 'selected' }))[0]!.message).toBe('最后一条');
-  });
+  }, 30000);
 
   it('损坏日志报告物理行号，包括空行和分块 UTF-8 内容', async () => {
     const directory = await createTestDirectory();

@@ -33,33 +33,17 @@ try {
     obs: { ...external, connectionMethod: 'manual', autoConnectOnLaunch: false, webSocketUrl: 'ws://192.0.2.1:4455', credentialId: 'test' },
     p1: { ...external, mtcInputPortProfileId: 'in', controlOutputPortProfileId: 'out', expectedFrameRate: '30' },
     midiPortProfiles: [{ id: 'in', direction: 'input', portName: '' }, { id: 'out', direction: 'output', portName: '' }], acceptedVersions: { obs: 'test', p1: 'test' },
-    internalPlayer: { audioEngine: 'browser', audioOutputDeviceId: 'default', mtcOutputPortProfileId: null, audioSampleRate: 48000 } };
+    internalPlayer: { audioEngine: 'native', audioOutputDeviceId: 'default', nativeAudioOutputDeviceId: 'default', mtcOutputPortProfileId: null, audioSampleRate: 48000 } };
   await page.evaluate(async ({ profile, file }) => { await globalThis.window.tbLink.saveIntegrationProfile({ profile }); globalThis.localStorage.setItem('tblink.last-project-path.v1', file); globalThis.localStorage.setItem('tblink.ma2-connection-method.v1', 'midi'); }, { profile, file });
-  // Only Web MIDI enumeration is substituted, to reproduce a missing entry
-  // without a hardware event. Native enumeration/open/playback stay real.
-  await page.addInitScript(() => {
-    Object.defineProperty(globalThis.navigator, 'requestMIDIAccess', { configurable: true, value: async () => {
-      const access = new EventTarget(); access.inputs = new Map();
-      const names = ['Babyface Midi Port 1', ...(globalThis.localStorage.getItem('midi-test-expand') ? ['USB MIDI Interface'] : [])];
-      access.outputs = new Map(names.map(name => [name, { id: name, name, manufacturer: 'fixture', type: 'output', state: 'connected', connection: 'closed', open: async () => undefined }]));
-      return access;
-    } });
-  });
   await page.reload();
   const navigation = page.getByRole('navigation', { name: '主要工作区' });
   await navigation.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: /^音频与 MIDI/ }).click();
   const select = page.getByLabel('灯光 MIDI 输出', { exact: true });
-  await expect(select.locator('option[value="Babyface Midi Port 1"]')).toHaveCount(1);
-  await expect(select.locator('option[value="USB MIDI Interface"]')).toHaveCount(0);
-  await page.evaluate(() => globalThis.localStorage.setItem('midi-test-expand', '1'));
-  await page.getByRole('button', { name: '刷新端口', exact: true }).click();
-  await expect(select.locator('option[value="USB MIDI Interface"]')).toBeEnabled();
-  await select.selectOption('USB MIDI Interface');
-  await expect.poll(async () => (await page.evaluate(() => globalThis.window.tbLink.loadIntegrationProfile()))?.midiPortProfiles.find(port => port.id === 'internal-mtc-output')?.portName).toBe('USB MIDI Interface');
-  await expect(select).toBeEnabled();
+  // The list is what Windows reports; timecode leaves through the native player.
+  await expect(select.locator(`option[value="${target}"]`)).toBeEnabled();
   await select.selectOption(target);
-  await expect(page.getByLabel('正式播放引擎', { exact: true })).toHaveValue('native');
+  await expect.poll(async () => (await page.evaluate(() => globalThis.window.tbLink.loadIntegrationProfile()))?.midiPortProfiles.find(port => port.id === 'internal-mtc-output')?.portName).toBe(target);
   const connect = page.getByRole('button', { name: '顶部一键连接', exact: true });
   await expect(connect).toBeEnabled(); await connect.click();
   await expect(connect).toBeEnabled({ timeout: 45000 });
@@ -82,8 +66,7 @@ try {
   assert.equal(status.mtcPortName, target); assert.equal(status.offsetMs, 480500); assert.equal(status.mtcError, null);
   await page.getByRole('button', { name: '停止播放', exact: true }).click();
   await expect(page.locator('.player-transport.status-stopped')).toBeVisible();
-  result = { browserRefreshRegression: true, selectedUsbSaved: true, nativeFallbackExplicitSelection: true,
-    lightingStatusIndependentOfMa2Network: true, lightingStatusNavigatesToTimecode: true,
+  result = { selectedPortSaved: true, lightingStatusIndependentOfMa2Network: true, lightingStatusNavigatesToTimecode: true,
     oneClickActuallyOpened: true, realWindowsMidiPort: target, nativeStatus: status, hardwareUsbAndMa2Verified: false, errors };
   assert.deepEqual(errors, []);
   await writeFile(join(directory, 'logs.json'), JSON.stringify(await page.evaluate(() => globalThis.window.tbLink.queryLogs()), null, 2));
@@ -102,4 +85,4 @@ try {
   result.restartSelectionRetained = true;
 } finally { await restarted.close(); }
 await writeFile(join(directory, 'acceptance.json'), JSON.stringify({ executable, ...result }, null, 2));
-console.log('端口刷新、Windows 原生接口选择、一键实际打开、原生 MTC 发送及重启保留通过；非实体 USB/MA2 验收。');
+console.log('Windows 接口选择、一键实际打开、原生 MTC 发送及重启保留通过；非实体 USB/MA2 验收。');

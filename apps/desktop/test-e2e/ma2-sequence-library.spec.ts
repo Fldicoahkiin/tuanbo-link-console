@@ -121,7 +121,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await preview.getByRole('button',{name:'试听灯光步 1.000',exact:true}).click({button:'right'});
     const menu=page.getByRole('dialog',{name:'Cue 右键菜单'});
     await expect(menu).toBeVisible();await page.screenshot({path:info.outputPath('cue-context-menu.png')});
-    await menu.getByRole('button',{name:'设置分类',exact:true}).click();
+    await menu.getByRole('menuitem',{name:'设置分类',exact:true}).click();
     await expect(menu.locator('[aria-pressed=true]')).toHaveCount(0);await expect(menu.getByRole('button',{name:'确定',exact:true})).toBeDisabled();
     await menu.getByText('面光、轮廓和效果用途',{exact:true}).click();
     await menu.getByRole('button',{name:'面光',exact:true}).click();await menu.getByRole('button',{name:'亮调',exact:true}).click();await menu.getByRole('button',{name:'前区',exact:true}).click();
@@ -129,7 +129,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await expect(menu).toHaveCount(0);await expect(page.locator('.classification-editor')).toHaveCount(0);
     expect((JSON.parse(await application.evaluate(()=>process.env.TBLINK_LIBRARY_CALLS??'[]')) as unknown[]).length).toBe(beforeClassify);
     const consoleStep=preview.getByRole('button',{name:'试听灯光步 1.000',exact:true});
-    await consoleStep.click({button:'right'});await menu.getByRole('button',{name:'重命名',exact:true}).click();
+    await consoleStep.click({button:'right'});await menu.getByRole('menuitem',{name:'重命名',exact:true}).click();
     await expect(menu.getByRole('textbox',{name:'Cue 名称',exact:true})).toHaveValue('控台原名－前区面光暖白完整名称');
     await menu.getByRole('textbox',{name:'Cue 名称',exact:true}).fill('   ');await expect(menu.getByRole('button',{name:'确定',exact:true})).toBeDisabled();
     await menu.getByRole('textbox',{name:'Cue 名称',exact:true}).fill('前区暖白');
@@ -145,7 +145,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await waitRename('前区暖白');
     await page.keyboard.press('Control+z');await expect(consoleStep.locator('strong')).toHaveText('控台原名－前区面光暖白完整名称');await waitRename('控台原名－前区面光暖白完整名称');
     await page.keyboard.press('Control+y');await expect(consoleStep.locator('strong')).toHaveText('前区暖白');await waitRename('前区暖白');
-    await consoleStep.click({button:'right'});await menu.getByRole('button',{name:'重命名',exact:true}).click();
+    await consoleStep.click({button:'right'});await menu.getByRole('menuitem',{name:'重命名',exact:true}).click();
     await expect(menu.getByRole('textbox',{name:'Cue 名称',exact:true})).toHaveValue('前区暖白');
     await menu.getByRole('textbox',{name:'Cue 名称',exact:true}).fill('不会保存');await page.keyboard.press('Escape');
     await expect(consoleStep.locator('strong')).toHaveText('前区暖白');
@@ -156,7 +156,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await expect(classified).toHaveAttribute('data-total-cues','1');
     await expect(classified.locator('.classification-cell>button').first()).toContainText('前区暖白');
     await classified.locator('.classification-cell>button').first().click({button:'right'});
-    await menu.getByRole('button',{name:'重命名',exact:true}).click();await menu.getByRole('textbox',{name:'Cue 名称',exact:true}).fill('分类暖白');await menu.getByRole('button',{name:'确定',exact:true}).click();
+    await menu.getByRole('menuitem',{name:'重命名',exact:true}).click();await menu.getByRole('textbox',{name:'Cue 名称',exact:true}).fill('分类暖白');await menu.getByRole('button',{name:'确定',exact:true}).click();
     await expect(classified.locator('.classification-cell>button').first()).toContainText('分类暖白');
     const syncBadge = page.getByRole('button', { name: '同步状态详情', exact: true });
     await waitRename('分类暖白');
@@ -184,13 +184,13 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await expect.poll(async()=>(JSON.parse(await application.evaluate(()=>process.env.TBLINK_LIBRARY_CALLS??'[]')) as unknown[]).length).toBe(beforeClassify+1);
     await expect(menu).toHaveCount(0);await expect(page.locator('.classification-detail')).toHaveCount(0);
     await classified.locator('.classification-cell>button').first().click({button:'right'});
-    await menu.getByRole('button',{name:'设置分类',exact:true}).click();await menu.getByText('面光、轮廓和效果用途',{exact:true}).click();
+    await menu.getByRole('menuitem',{name:'设置分类',exact:true}).click();await menu.getByText('面光、轮廓和效果用途',{exact:true}).click();
     await expect(menu.getByRole('button',{name:'归入 面光 亮调 · 3人 · 前区',exact:true})).toHaveAttribute('aria-pressed','true');
     await menu.getByRole('button',{name:'轮廓',exact:true}).click();await menu.getByRole('button',{name:'后区',exact:true}).click();
     await menu.getByRole('button',{name:'归入 轮廓 7人 · 后区',exact:true}).click();await menu.getByRole('button',{name:'确定',exact:true}).click();
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries?.[0]?.categoryIds)).toEqual(['front:bright:3:front','rim:7:back']);
     await classified.locator('.classification-cell>button').first().click({button:'right'});
-    await menu.getByRole('button',{name:'移除素材',exact:true}).click();
+    await menu.getByRole('menuitem',{name:'移除素材',exact:true}).click();
     await expect(classified.locator('.classification-cell')).toHaveCount(0);
     // Removing a category membership leaves the console catalog and other memberships intact.
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries?.[0]?.categoryIds)).toEqual(['rim:7:back']);
@@ -199,11 +199,11 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await pool.getByRole('button',{name:'试听序列 1 灯光步 1.000',exact:true}).click();
     await pool.getByRole('button',{name:'试听序列 2 灯光步 1.000',exact:true}).click({modifiers:['Control']});
     await pool.getByRole('button',{name:'试听序列 2 灯光步 1.000',exact:true}).click({button:'right'});
-    await expect(menu).toContainText('已选 2 个 Cue');await menu.getByRole('button',{name:'设置分类',exact:true}).click();await menu.getByText('面光、轮廓和效果用途',{exact:true}).click();await menu.getByRole('button',{name:'效果',exact:true}).click();
+    await expect(menu).toContainText('已选 2 个 Cue');await menu.getByRole('menuitem',{name:'设置分类',exact:true}).click();await menu.getByText('面光、轮廓和效果用途',{exact:true}).click();await menu.getByRole('button',{name:'效果',exact:true}).click();
     await menu.getByRole('button',{name:'归入 效果 重击',exact:true}).click();await menu.getByRole('button',{name:'确定',exact:true}).click();
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries?.filter((entry:{categoryIds:string[]})=>entry.categoryIds.includes('effect:music:0')).length)).toBe(2);
     await pool.getByRole('button',{name:'试听序列 1 灯光步 1.000',exact:true}).click({button:'right'});
-    await menu.getByRole('button',{name:'移除素材',exact:true}).click();
+    await menu.getByRole('menuitem',{name:'移除素材',exact:true}).click();
     await expect(pool).toHaveAttribute('data-total-cues','4499');
     await page.keyboard.press('Control+z');await expect(pool).toHaveAttribute('data-total-cues','4500');await page.keyboard.press('Control+y');await expect(pool).toHaveAttribute('data-total-cues','4499');
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.hiddenConsoleCues?.length)).toBe(1);
@@ -211,7 +211,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     // Reopen the actual saved project through the normal project loader.
     await page.getByRole('navigation',{name:'主要工作区'}).getByRole('button',{name:'节目单',exact:true}).click();
     await page.getByLabel('工程菜单',{exact:true}).click();
-    await page.getByRole('button',{name:'打开工程',exact:true}).click();
+    await page.getByRole('menuitem',{name:'打开工程',exact:true}).click();
     await page.getByRole('navigation',{name:'主要工作区'}).getByRole('button',{name:'灯光工作台',exact:true}).click();
     await navigation.getByRole('button',{name:/控台/}).click();
     await expect(pool).toHaveAttribute('data-total-cues','4499');
@@ -222,7 +222,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await preview.getByRole('button', { name: '素材筛选', exact: true }).click();
     await page.getByRole('dialog', { name: '素材筛选', exact: true }).getByRole('button',{name:'已移除',exact:true}).click();await expect(pool).toHaveAttribute('data-total-cues','1');
     await preview.getByRole('button', { name: '素材筛选', exact: true }).click();
-    await pool.getByRole('button').first().click({button:'right'});await menu.getByRole('button',{name:'恢复素材',exact:true}).click();
+    await pool.getByRole('button').first().click({button:'right'});await menu.getByRole('menuitem',{name:'恢复素材',exact:true}).click();
     await expect(pool).toHaveAttribute('data-total-cues','4500');
     await preview.getByRole('button',{name:'单步',exact:true}).click();
     await page.screenshot({path:info.outputPath('manual-classification.png')});
@@ -242,15 +242,15 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
       });
       BrowserWindow.getAllWindows()[0]?.webContents.send('link:ma2-audition-state',state);
     });
-    await preview.getByText('原连接待核对 · 1 项',{exact:true}).click();
+    await preview.getByText('原来的控台连接需要确认 · 1 项',{exact:true}).click();
     await expect(preview.getByRole('alert')).toContainText('序列 8999');
-    await preview.getByRole('button',{name:'核对原控台',exact:true}).click();
-    await expect(preview.getByText('原连接待核对 · 1 项',{exact:true})).toBeVisible();
+    await preview.getByRole('button',{name:'确认原控台',exact:true}).click();
+    await expect(preview.getByText('原来的控台连接需要确认 · 1 项',{exact:true})).toBeVisible();
     await expect.poll(()=>application.evaluate(()=>process.env.TBLINK_REVIEWED_TARGET)).toBe('previous-console-8999');
     await page.screenshot({path:info.outputPath('previous-connection-review.png')});
     await application.evaluate(()=>{process.env.TBLINK_REVIEW_CONFIRM='1';});
-    await preview.getByRole('button',{name:'核对原控台',exact:true}).click();
-    await expect(preview.getByText('原连接待核对 · 1 项',{exact:true})).toHaveCount(0);
+    await preview.getByRole('button',{name:'确认原控台',exact:true}).click();
+    await expect(preview.getByText('原来的控台连接需要确认 · 1 项',{exact:true})).toHaveCount(0);
     expect(await application.evaluate(()=>process.env.TBLINK_LIBRARY_CALLS)).toBe(callsBeforeReview);
 
   } finally {

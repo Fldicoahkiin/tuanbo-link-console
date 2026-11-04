@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { ArrowUpRight, AudioLines, Clapperboard, KeyRound, Maximize2, MessageSquareWarning, Minus, PanelsTopLeft, X } from 'lucide-react';
-import { Button } from './Button';
+import { Button, Dialog } from '../ui';
 import { FeedbackForm } from './FeedbackSettings';
-import { ModalSurface } from './ModalSurface';
 import { LicenseSettings } from './LicenseSettings';
 import { UpdateCenter } from './UpdateCenter';
 import timelinePreview from '../../assets/activation-timeline.webp';
@@ -69,15 +68,14 @@ export function LicenseGate({ children }: { children: ReactNode }): JSX.Element 
               <div><strong>激活或更新遇到问题？</strong><span>写下看到的现象，连同诊断信息发给售后。没有网络时可以另存为文件。</span></div>
               <Button className="secondary-button" onClick={() => setFeedbackOpen(true)}><MessageSquareWarning />问题反馈</Button>
             </section>
-            <section className="license-gate-update" aria-label="软件更新"><UpdateCenter inline notify={updateNotice} /></section>
+            <section className="license-gate-update" aria-label="软件更新"><UpdateCenter notify={updateNotice} /></section>
           </>}
         </div>
       </div>
     </main>
-    {feedbackOpen ? <ModalSurface label="问题反馈" className="device-console feedback-dialog" onClose={() => setFeedbackOpen(false)}>
-      <header className="feedback-dialog-header"><h2>问题反馈</h2><Button aria-label="关闭问题反馈" title="关闭" onClick={() => setFeedbackOpen(false)}><X /></Button></header>
+    {feedbackOpen ? <Dialog title="问题反馈" closeLabel="关闭问题反馈" onClose={() => setFeedbackOpen(false)}>
       <FeedbackForm compact initialCategory="license" context={gateContext} ma2Available={false} />
-    </ModalSurface> : null}
+    </Dialog> : null}
     <footer className="license-footer"><span>团播联动台 / TUANBO LINK CONSOLE</span><div className="license-footer-links">
       <button type="button" onClick={() => setFeedbackOpen(true)}><MessageSquareWarning aria-hidden="true" />提交问题反馈</button>
       <a href="https://tuanbo-link.jinhefilm.com/#contact" target="_blank" rel="noreferrer">购买咨询与售后<ArrowUpRight aria-hidden="true" /></a>

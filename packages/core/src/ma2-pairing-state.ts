@@ -113,7 +113,6 @@ export function restoreMa2BindingCommand(itemId: string, target: number): LinkCo
     if (next.rundown.some(song => song.lighting?.ma2Bindings?.some(value => value.timecode === target))) throw new Error('此时间线已关联歌曲，请先解除当前关联');
     item.lighting.tracks.push(...archived.tracks);
     item.lighting.ma2Bindings = [...item.lighting.ma2Bindings ?? [], archived.binding];
-    if (archived.binding.nativeEvents?.length) item.lighting.outputMode = 'timecode';
     state.detachedBindings = state.detachedBindings?.filter(value => value !== archived);
     next.ma2ReadState = reconcileMa2ReadState(next, state.source, state.catalog);
     return parseLinkProject({ ...next, updatedAt: new Date().toISOString() });

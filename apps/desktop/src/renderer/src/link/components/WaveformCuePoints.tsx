@@ -1,7 +1,7 @@
-import { ModalSurface } from './ModalSurface';
+import { ModalSurface } from '../ui/ModalSurface';
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { createPortal } from 'react-dom';
 import { Trash2 } from 'lucide-react';
+import { Menu, MenuItem } from '../ui';
 import { moveLightingEffect, removeLightingEffects } from '@tb/core/link';
 import type { MtcFrameRate } from '@tb/schema';
 import { cueEventEntries } from './cue-event-view';
@@ -26,7 +26,7 @@ export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPer
   const clearSelection = lighting.onClearSelection;
   useEffect(() => {
     const hideOutside = (event: PointerEvent): void => {
-      if (event.target instanceof Element && event.target.closest('.lighting-effect-dock[data-editor=true],.lighting-material-navigation,.waveform-cue-point,.cue-point-context,.cue-point-dialog,.cue-composer,.cue-inspector,[role="dialog"],.lighting-music-toolbar,.timeline-toolbar')) return;
+      if (event.target instanceof Element && event.target.closest('.lighting-effect-dock[data-editor=true],.lighting-material-navigation,.waveform-cue-point,.ui-menu,.cue-point-dialog,.cue-composer,.cue-inspector,[role="dialog"],.lighting-music-toolbar,.timeline-toolbar')) return;
       if (event.ctrlKey || event.metaKey || event.shiftKey) return;
       setTimeVisible(false); setSelection([]); clearSelection?.();
     };
@@ -34,12 +34,6 @@ export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPer
     return () => window.removeEventListener('pointerdown', hideOutside, true);
   }, [clearSelection]);
   const [context, setContext] = useState<{ x: number; y: number } | null>(null);
-  useEffect(() => {
-    if (!context) return;
-    const close = (): void => setContext(null);
-    window.addEventListener('pointerdown', close); window.addEventListener('blur', close); window.addEventListener('resize', close);
-    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('blur', close); window.removeEventListener('resize', close); };
-  }, [context]);
   const [range, setRange] = useState<{ start: number; end: number; additive: boolean } | null>(null);
   useEffect(() => { setSelection([]); setRange(null); }, [mode]);
   const [editing, setEditing] = useState<Entry | null>(null);
@@ -67,14 +61,14 @@ export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPer
     onPointerUp={event => { if (!range) return; event.stopPropagation(); const end = (event.clientX - event.currentTarget.getBoundingClientRect().left) / pixelsPerSecond * 1000; const ids = entries.filter(entry => entry.ms >= Math.min(range.start, end) && entry.ms <= Math.max(range.start, end)).map(entry => entry.id); setSelection([...new Set([...(range.additive ? selection : []), ...ids])]); setRange(null); event.currentTarget.releasePointerCapture(event.pointerId); }}
     onPointerCancel={() => setRange(null)} onKeyDownCapture={event => { if (event.target instanceof Element && event.target.closest('input,textarea,select')) return; if ((event.key === 'Delete' || event.key === 'Backspace') && selection.length) { event.preventDefault(); event.stopPropagation(); removeSelected(); } if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setRange(null); setSelection([]); setContext(null); } }}>
     {range ? <span className="cue-selection-box" style={{ left: Math.min(range.start, range.end) / 1000 * pixelsPerSecond, width: Math.abs(range.end - range.start) / 1000 * pixelsPerSecond }} /> : null}
-    {context ? createPortal(<div className="cue-point-context" role="menu" aria-label="Cue 菜单" style={{ left: context.x, top: context.y }} onPointerDown={event => event.stopPropagation()} onContextMenu={event => event.preventDefault()}><button role="menuitem" disabled={disabled} onClick={removeSelected}><Trash2 />删除{selection.length > 1 ? ` ${selection.length} 个 Cue` : ' Cue'}<kbd>Backspace</kbd></button></div>, document.body) : null}
+    {context ? <Menu x={context.x} y={context.y} label="Cue 菜单" onClose={() => setContext(null)}><MenuItem icon={Trash2} danger shortcut="Backspace" disabled={disabled} onSelect={removeSelected}>{selection.length > 1 ? `删除 ${selection.length} 个 Cue` : '删除 Cue'}</MenuItem></Menu> : null}
     {entries.filter(entry => rows.has(entry.id)).map((entry) => {
       const ms = drag?.id === entry.id ? drag.target : entry.ms;
       if (ms * pixelsPerSecond / 1000 < scrollLeft - 50 || (ms - entry.preparationLeadMs) * pixelsPerSecond / 1000 > scrollLeft + viewportWidth + 50) return null;
       const width = cueMarkerWidth(entry.cue);
       const markerTop = 6 + (rows.get(entry.id) ?? 0) * 28;
       return <Fragment key={entry.id}>{entry.preparationLeadMs > 0 ? <span className="waveform-cue-preparation" aria-label={`Cue ${entry.cue} 埋步提前 ${entry.preparationLeadMs / 1000} 秒`} style={{ left: Math.max(0, ms - entry.preparationLeadMs) * pixelsPerSecond / 1000, top: markerTop + 23, width: Math.min(ms, entry.preparationLeadMs) * pixelsPerSecond / 1000 }}><span>埋步</span></span> : null}<button className="waveform-cue-point" data-cue-id={entry.id} aria-label={`音频 Cue ${displayCueNumber(entry.cue)}`} aria-pressed={selection.includes(entry.id) || lighting.selectedEventId === entry.id} title={`Cue ${displayCueNumber(entry.cue)} · ${formatTimelineTimecode(ms, frameRate)} · 拖动定位，双击修改`} style={{ left: ms * pixelsPerSecond / 1000, top: markerTop, width, '--cue-guide-height': `${Math.max(0, contentHeight - markerTop - 32)}px` } as CSSProperties}
-        onContextMenu={event => { event.preventDefault(); event.stopPropagation(); event.currentTarget.focus(); if (!selection.includes(entry.id)) setSelection([entry.id]); setContext({ x: Math.max(8, Math.min(event.clientX, window.innerWidth - 240)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 50)) }); }}
+        onContextMenu={event => { event.preventDefault(); event.stopPropagation(); event.currentTarget.focus(); if (!selection.includes(entry.id)) setSelection([entry.id]); setContext({ x: event.clientX, y: event.clientY }); }}
         onPointerDown={event => { if (event.button !== 0) return; setTimeVisible(true); event.stopPropagation(); event.preventDefault(); event.currentTarget.focus(); setSelection(event.ctrlKey || event.metaKey || event.shiftKey ? selection.includes(entry.id) ? selection.filter(id => id !== entry.id) : [...selection, entry.id] : [entry.id]); lighting.onSelectEvent?.(entry.track.id, entry.clip.id, entry.id); if (!event.ctrlKey && !event.metaKey && !event.shiftKey) lighting.onAuditionEvent?.(entry.id); if (disabled || entry.track.locked || event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); setDrag({ id: entry.id, x: event.clientX, ms: entry.ms, target: entry.ms, snapped: false }); }}
         onPointerMove={event => { const current = dragRef.current; if (current?.id !== entry.id) return; const raw = current.ms + (event.clientX - current.x) / pixelsPerSecond * 1000; const target = Math.max(0, Math.min(durationMs - 1, lighting.snapTime?.(raw, entry.id) ?? raw)); setDrag({ ...current, target, snapped: Math.abs(target - raw) > .1 }); }}
         onPointerUp={event => { const current = dragRef.current; if (current?.id !== entry.id) return; event.currentTarget.releasePointerCapture(event.pointerId); if (current.target !== current.ms) change(entry, current.target); setDrag(null); }} onPointerCancel={() => setDrag(null)} onLostPointerCapture={() => setDrag(null)}

@@ -31,6 +31,35 @@ export function parseMa2LivePlayback(value: unknown, page: number, start: number
   return ma2LiveSnapshotSchema.parse({ page, start, readAt: Date.now(), items });
 }
 
+const observedItem = z.object({ iExec: z.number().int().min(0).max(239), combinedItems: z.number().int().min(1).max(15).optional(), isRun: z.number().int(),
+  tt: text.optional(), cues: z.object({ items: z.array(text).optional() }).optional() });
+const observedResponse = z.object({
+  responseType: z.literal('playbacks'), iPage: z.number().int(), accessDenied: z.boolean().optional(),
+  itemGroups: z.array(z.object({ items: z.array(z.array(observedItem)) }))
+});
+/** The first slot of the 15 read with `slot`: fader executors 1–90 in rows of 15 from 1, button executors 101–190 from 101. */
+export function ma2ObservedRange(slot: number): { start: number; buttons: boolean } {
+  const buttons = slot > 100;
+  const first = buttons ? 101 : 1;
+  return { start: first + Math.floor((slot - first) / 15) * 15, buttons };
+}
+/**
+ * One executor's running state and current Cue (the web remote's second cue line, as the fader view
+ * reads it). Only fader executors were verified on onPC 3.7.0.5; the button executor answer is read
+ * the same way and refused when its slots are not the ones asked for, so an unexpected answer reads
+ * as "cannot check", never as "not running".
+ */
+export function parseMa2ExecutorObservation(value: unknown, page: number, slot: number): { running: boolean; cue: string; name: string } | null {
+  const response = observedResponse.parse(value);
+  if (response.accessDenied) throw new Error('控台用户没有推杆播放权限');
+  if (response.iPage !== page) throw new Error('控台返回了其他页面的数据');
+  const { start } = ma2ObservedRange(slot);
+  const items = response.itemGroups.flatMap(group => group.items.flat());
+  if (items.some(item => item.iExec + 1 < start || item.iExec + 1 >= start + 15)) throw new Error(`控台返回的执行器格号和请求的不一致（请求 ${page}.${start}–${start + 14}）`);
+  const item = items.find(item => item.iExec + 1 <= slot && slot < item.iExec + 1 + (item.combinedItems ?? 1));
+  return item ? { running: item.isRun !== 0, cue: item.cues?.items?.[1]?.t?.trim() ?? '', name: item.tt?.t ?? '' } : null;
+}
+
 /** One socket per selected console; failures stop the session and never replay controls. */
 export class Ma2LivePlayback {
   private socket: WebSocket | null = null;
@@ -95,6 +124,15 @@ export class Ma2LivePlayback {
     if (!this.connected) throw new Error(this.failure ?? '实时推杆未连接');
     const response = await this.wait('playbacks', () => this.send({ requestType: 'playbacks', startIndex: [start - 1], itemsCount: [15], pageIndex: page - 1, itemsType: [2], view: 2, execButtonViewMode: 2, buttonsViewMode: 2 }));
     try { return parseMa2LivePlayback(response, page, start); }
+    catch (cause) { this.fail(cause instanceof Error ? cause.message : String(cause)); throw cause; }
+  }
+  /** Read-only: one executor's state. Any failure closes this session; the caller decides what follows. */
+  async observe(page: number, slot: number): Promise<{ running: boolean; cue: string; name: string } | null> {
+    if (!this.connected) throw new Error(this.failure ?? '控台网页遥控未连接');
+    const { start, buttons } = ma2ObservedRange(slot);
+    const response = await this.wait('playbacks', () => this.send({ requestType: 'playbacks', startIndex: [start - 1], itemsCount: [15], pageIndex: page - 1,
+      itemsType: [buttons ? 3 : 2], view: buttons ? 3 : 2, execButtonViewMode: 2, buttonsViewMode: 2 }));
+    try { return parseMa2ExecutorObservation(response, page, slot); }
     catch (cause) { this.fail(cause instanceof Error ? cause.message : String(cause)); throw cause; }
   }
   input(page: number, slot: number, action: { kind: 'fader'; value: number } | { kind: 'button'; id: number; pressed: boolean }): void {

@@ -1,0 +1,9 @@
+/*
+ * Cascade order for every stylesheet (2026-10-30 interface rework). A later layer wins whatever
+ * its selectors weigh, so the order of imports no longer decides the look.
+ * - base: reset and design tokens (tokens.css).
+ * - legacy: the stylesheets written before the rework, kept in their old order and deleted page by page.
+ * - components: the shared controls in link/ui; pages cannot restyle their insides.
+ * - pages: the layout of each redone page.
+ */
+@layer base, legacy, components, pages;

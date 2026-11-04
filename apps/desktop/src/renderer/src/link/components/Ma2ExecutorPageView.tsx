@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, RefreshCw, List, ArrowLeft, Plus, MoreHorizontal, Pencil, Move, Trash2 } from 'lucide-react';
 import { ma2ExecutorPageItemSchema, type Ma2ExecutorPage, type Ma2ExecutorUpdateRequest } from '@tb/schema';
@@ -7,6 +7,7 @@ import { useMa2ExecutorPageStore, prepareMa2ExecutorPages, loadMa2ExecutorDirect
 import { useMa2ExecutorPages } from '../runtime/use-ma2-executor-pages';
 import { Ma2MaterialMenu } from './Ma2MaterialMenu';
 import { Ma2ConsoleName } from './Ma2ConsoleName';
+import { Button, Dialog, Field, Menu, MenuItem, MenuSeparator, Switch, TextInput } from '../ui';
 import '../ma2-executor.css';
 
 const bands = [
@@ -29,19 +30,17 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
   const [live, setLive] = useState(true);
   const [notice, setNotice] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
-  const [progressHost, setProgressHost] = useState<HTMLElement | null>(null);
   const [menu, setMenu] = useState<Selection | null>(null);
   const [editing, setEditing] = useState<{ selection: Selection; kind: 'rename' | 'move' | 'delete' } | null>(null);
   const [name, setName] = useState('');
   const [targetPage, setTargetPage] = useState('');
   const [targetSlot, setTargetSlot] = useState('');
-  const menuRef = useRef<HTMLDivElement>(null);
+  const formId = useId();
   const [dropTarget, setDropTarget] = useState('');
   const [ranges, setRanges] = useState({ upper: 101, fader: 1 });
   const directoryNextRead = useRef(0);
   const pageKey = JSON.stringify(state.bandPages);
   const report = (cause: unknown): void => setNotice(cause instanceof Error ? cause.message : String(cause));
-  useEffect(() => { setProgressHost(window.document.getElementById('ma2-sidebar-read-actions')); }, []);
   useEffect(() => {
     if (!state.slot) return;
     setRanges(current => state.activeBand === 'fader'
@@ -53,14 +52,6 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
     directoryNextRead.current = 0;
   }, [scope]);
   useMa2ExecutorPages(scope, pageKey, live, selected, setNotice, directoryNextRead);
-  useEffect(() => {
-    if (!menu) return;
-    const close = (event: PointerEvent): void => { if (event.target instanceof Node && !menuRef.current?.contains(event.target)) setMenu(null); };
-    const escape = (event: KeyboardEvent): void => { if (event.key === 'Escape') setMenu(null); };
-    window.addEventListener('pointerdown', close); window.addEventListener('keydown', escape);
-    menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
-    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', escape); };
-  }, [menu]);
   const navigate = (band: Ma2ExecutorBand, page: number): void => {
     try { selectMa2ExecutorBandPage(band, page); setNotice(''); setPicker(null); onNavigate(); }
     catch (cause) { report(cause); }
@@ -87,8 +78,11 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
     {toolbarHost ? createPortal(<div className="ma2-layout-titlebar">
       {typeControl}
       <Ma2MaterialMenu label="页面选项" trigger={<MoreHorizontal/>} open={optionsOpen} onOpenChange={setOptionsOpen}>
-        <button onClick={() => { setOptionsOpen(false); refresh(); }}><RefreshCw/>刷新控台页面</button>
-        <label className="ma2-page-live-option"><input aria-label="实时同步执行器页面" type="checkbox" checked={live} onChange={event => setLive(event.target.checked)}/>实时同步页面</label>
+        <Button variant="ghost" size="sm" icon={RefreshCw} onClick={() => { setOptionsOpen(false); refresh(); }}>刷新控台页面</Button>
+        {/* The scan's progress shows in the sidebar's task list while it runs. */}
+        <Button variant="ghost" size="sm" icon={List} disabled={state.scanning} onClick={() => { setOptionsOpen(false); setNotice(''); void scanMa2ExecutorLocations().catch(report); }}>{state.scanning ? `正在读取 Cue 位置 ${state.completed}/${state.total || '…'} 页` : '读取全部 Cue 位置'}</Button>
+        {state.complete ? <p className="ma2-page-index-done">全部 {state.completed} 页的位置已读取</p> : null}
+        <Switch className="ma2-page-live-option" label="实时同步页面" aria-label="实时同步执行器页面" checked={live} onChange={event => setLive(event.currentTarget.checked)}/>
       </Ma2MaterialMenu>
       {selected ? <button aria-label="返回页面" title="返回页面" onClick={onBack}><ArrowLeft/></button> : null}
       {onSettings ? <button aria-label="新建 Cue" title="新建 Cue" onClick={onSettings}><Plus/></button> : null}
@@ -145,7 +139,7 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
                 onContextMenuCapture={event => {
                   if (!item || page === null) return;
                   event.preventDefault(); event.stopPropagation();
-                  setMenu({ item, page, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 232)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 232)) });
+                  setMenu({ item, page, x: event.clientX, y: event.clientY });
                 }}>
                 <span className="ma2-executor-number" title={`执行器 ${address}`}>{slot}{item?.sequence ? <span> L{item.sequence}</span> : null}</span>
                 {item && page !== null ? renderItem(item, page, band.id) : <span className="ma2-executor-empty" aria-label={`${slot} 格为空`}/>}
@@ -156,24 +150,26 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
       })}
     </div>}
     {picker ? <div className="ma2-layout-page-picker" role="dialog" aria-label="选择控台页面"><header><strong>{bands.find(band => band.id === picker)?.input}</strong><button onClick={() => setPicker(null)}>关闭</button></header><select aria-label="控台所有页面" size={8} value={state.bandPages[picker] ?? 1} onChange={event => navigate(picker, Number(event.target.value))}>{state.directory?.pages.map(page => <option key={page.page} value={page.page}>{page.page}{page.name ? ` · ${page.name}` : ''}</option>)}</select></div> : null}
-    {menu ? createPortal(<div ref={menuRef} className="ma2-executor-context-menu" role="dialog" aria-label="执行器右键菜单" style={{ left: menu.x, top: menu.y }}>
-      <strong title={menu.item.name}>{menu.item.name || '未命名'}</strong><small>{menu.page} 页 · {menu.item.slot} 格{menu.item.sequence ? ` · Sequence ${menu.item.sequence}` : ''}</small>
-      <button disabled={!menu.item.sequence} onClick={() => { onEditItem(menu.item, menu.page); setMenu(null); }}><List/>编辑步骤</button>
-      <button disabled={state.mutating} onClick={() => edit('rename')}><Pencil/>重命名</button>
-      <button disabled={state.mutating} onClick={() => edit('move')}><Move/>移动到…</button>
-      <button disabled={state.mutating} onClick={() => edit('delete')}><Trash2/>删除执行器</button>
-    </div>, window.document.body) : null}
-    {editing ? createPortal(<div className="ma2-executor-dialog-backdrop"><form className="ma2-executor-dialog" role="dialog" aria-modal="true" aria-label={editing.kind === 'rename' ? '重命名执行器' : editing.kind === 'move' ? '移动执行器' : '删除执行器'} onSubmit={event => {
-      event.preventDefault();
-      void change(editing.selection, editing.kind === 'rename' ? { kind: 'rename', name: name.trim() } : editing.kind === 'move' ? { kind: 'move', page: Number(targetPage), slot: Number(targetSlot) } : { kind: 'delete' });
-    }}>
-      <strong>{editing.kind === 'rename' ? '重命名' : editing.kind === 'move' ? '移动到' : '删除执行器'}</strong>
-      <p>{editing.selection.page} 页 · {editing.selection.item.slot} 格 · {editing.selection.item.name}</p>
-      {editing.kind === 'rename' ? <label>执行器名称<input aria-label="执行器名称" autoFocus maxLength={512} value={name} onChange={event => setName(event.target.value)}/><Ma2ConsoleName name={name}/></label> : editing.kind === 'move' ? <div className="ma2-executor-destination"><label>目标页码<input aria-label="目标页码" type="number" min={1} max={9999} value={targetPage} onChange={event => setTargetPage(event.target.value)}/></label><label>目标格子<input aria-label="目标格子" type="number" min={1} max={240} value={targetSlot} onChange={event => setTargetSlot(event.target.value)}/></label></div> : <p>删除这个格子的执行器分配，保留 Sequence {editing.selection.item.sequence ?? ''} 及其全部 Cue。</p>}
-      {notice ? <p role="alert">{notice}</p> : null}
-      <footer><button type="button" onClick={() => setEditing(null)}>取消</button><button disabled={state.mutating || editing.kind === 'rename' && !name.trim()}>{state.mutating ? '正在确认…' : editing.kind === 'rename' ? '保存名称' : editing.kind === 'move' ? '确认移动' : '删除执行器'}</button></footer>
-    </form></div>, window.document.body) : null}
-    {progressHost ? createPortal(<div className="ma2-page-index-progress"><button disabled={state.scanning} onClick={() => { setNotice(''); void scanMa2ExecutorLocations().catch(report); }}>{state.scanning ? `读取 Cue 位置 ${state.completed}/${state.total || '…'} 页` : '读取全部 Cue 位置'}</button>{state.scanning && state.total ? <progress aria-label="控台页面读取进度" max={state.total} value={state.completed}/> : null}{state.complete ? <small>全部 {state.completed} 页位置已读取</small> : null}{state.mutating ? <small role="status">已写入，正在向控台确认…</small> : notice ? <small role="status">{notice}</small> : null}</div>, progressHost) : null}
+    {menu ? <Menu x={menu.x} y={menu.y} label="执行器右键菜单" title={`${menu.item.name || '未命名'} · ${menu.page} 页 ${menu.item.slot} 格`} onClose={() => setMenu(null)}>
+      <MenuItem icon={List} disabled={!menu.item.sequence} onSelect={() => { onEditItem(menu.item, menu.page); setMenu(null); }}>编辑步骤</MenuItem>
+      <MenuItem icon={Pencil} disabled={state.mutating} onSelect={() => edit('rename')}>重命名</MenuItem>
+      <MenuItem icon={Move} disabled={state.mutating} onSelect={() => edit('move')}>移动到…</MenuItem>
+      <MenuSeparator/>
+      <MenuItem icon={Trash2} danger disabled={state.mutating} onSelect={() => edit('delete')}>删除执行器</MenuItem>
+    </Menu> : null}
+    {editing ? <Dialog size="sm" title={editing.kind === 'rename' ? '重命名执行器' : editing.kind === 'move' ? '移动执行器' : '删除执行器'} description={`${editing.selection.page} 页 · ${editing.selection.item.slot} 格 · ${editing.selection.item.name || '未命名'}`} onClose={() => setEditing(null)}
+      actions={<><Button variant="secondary" onClick={() => setEditing(null)}>取消</Button><Button type="submit" form={formId} variant={editing.kind === 'delete' ? 'danger' : 'primary'} loading={state.mutating} disabled={editing.kind === 'rename' && !name.trim()}>{state.mutating ? '正在确认…' : editing.kind === 'rename' ? '保存名称' : editing.kind === 'move' ? '确认移动' : '删除执行器'}</Button></>}>
+      <form id={formId} className="ma2-executor-edit" onSubmit={event => {
+        event.preventDefault();
+        void change(editing.selection, editing.kind === 'rename' ? { kind: 'rename', name: name.trim() } : editing.kind === 'move' ? { kind: 'move', page: Number(targetPage), slot: Number(targetSlot) } : { kind: 'delete' });
+      }}>
+        {editing.kind === 'rename' ? <><Field stacked label="执行器名称">{field => <TextInput {...field} aria-label="执行器名称" autoFocus maxLength={512} value={name} onChange={event => setName(event.target.value)}/>}</Field><Ma2ConsoleName name={name}/></>
+          : editing.kind === 'move' ? <div className="ma2-executor-destination"><Field stacked label="目标页码">{field => <TextInput {...field} aria-label="目标页码" type="number" min={1} max={9999} value={targetPage} onChange={event => setTargetPage(event.target.value)}/>}</Field><Field stacked label="目标格子">{field => <TextInput {...field} aria-label="目标格子" type="number" min={1} max={240} value={targetSlot} onChange={event => setTargetSlot(event.target.value)}/>}</Field></div>
+          : <p>只清空这个格子的执行器，Sequence {editing.selection.item.sequence ?? ''} 和里面的 Cue 都保留。</p>}
+        {notice ? <p className="ma2-executor-edit-error" role="alert">{notice}</p> : null}
+      </form>
+    </Dialog> : null}
+    {state.mutating ? <p className="ma2-executor-status" role="status">已写入，正在向控台确认…</p> : notice && !editing ? <p className="ma2-executor-status" role="alert">{notice}</p> : null}
   </section>;
 }
 

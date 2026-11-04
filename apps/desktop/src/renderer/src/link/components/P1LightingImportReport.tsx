@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { matchMa2Programs } from '@tb/core/link';
 import type { LinkProject, Ma2Catalog } from '@tb/schema';
+import { Notice } from '../ui';
 
 export function P1LightingImportReport({ project, catalog }: { project: LinkProject; catalog: Ma2Catalog }): JSX.Element {
   const report = useMemo(() => {
@@ -12,9 +13,11 @@ export function P1LightingImportReport({ project, catalog }: { project: LinkProj
     return { songs, unresolved: matchMa2Programs(project, catalog).unresolved };
   }, [project, catalog]);
   const missing = report.songs.filter(song => !song.bindings);
-  return <div aria-label="音乐与灯光导入结果">
-    <h4>{missing.length || report.unresolved.length ? '音乐与灯光有待处理项' : '歌曲灯光已导入，可在编辑器切换歌曲查看'}</h4>
-    <p>已关联 {report.songs.length - missing.length} / {report.songs.length} 首歌曲。下面统计的是本次读取后工程里已绑定的灯光事件，不代表已在控台上验证过播放。</p>
-    <p>{catalog.entries.filter(entry => entry.preview?.unconverted.length).length} 条含控台原样动作 · {report.unresolved.length} 条没按起始码对上 · {catalog.entries.filter(entry => entry.error).length} 条读取异常。详情可在“控台时间线”里查看。播放时时间码照常发送。</p>
-  </div>;
+  const pendingItems = missing.length > 0 || report.unresolved.length > 0;
+  return <section aria-label="音乐与灯光导入结果">
+    <Notice tone={pendingItems ? 'warning' : 'success'} title={pendingItems ? '音乐与灯光有待处理项' : '歌曲灯光已导入，可以在编辑器切换歌曲查看'}>
+      <p>已关联 {report.songs.length - missing.length} / {report.songs.length} 首歌曲。下面统计的是这次读取后工程里已绑定的灯光事件，不代表已经在控台上验证过播放。</p>
+      <p>{catalog.entries.filter(entry => entry.preview?.unconverted.length).length} 条含控台原样动作 · {report.unresolved.length} 条没按起始码对上 · {catalog.entries.filter(entry => entry.error).length} 条读取异常。详情在“控台时间线”里查看。播放时时间码照常发送。</p>
+    </Notice>
+  </section>;
 }

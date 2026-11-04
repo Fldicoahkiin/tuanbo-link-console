@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { CircleAlert, Info, X } from 'lucide-react';
-import type { InternalPlayerState } from '../runtime/internal-playback-controller';
+import type { InternalPlayerState } from '@tb/core/link';
 
 export function PlayerStatusDetails({ error, errorTitle, notice, fault, engine }: Pick<InternalPlayerState, 'error' | 'errorTitle' | 'notice'> & { fault: string | null; engine: string }): JSX.Element {
   const details = useRef<HTMLDetailsElement>(null);

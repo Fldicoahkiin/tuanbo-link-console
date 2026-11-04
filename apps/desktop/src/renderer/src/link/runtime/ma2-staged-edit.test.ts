@@ -1,27 +1,51 @@
 import { readFile } from 'node:fs/promises';
-import { beforeEach, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, type Ma2Catalog } from '@tb/schema';
-import { importMa2TimecodeCommand, setLightingCommand } from '@tb/core/link';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { createEmptyLinkProject, type Ma2ApplyRequest, type Ma2CompareRequest } from '@tb/schema';
+import { importMa2TimecodeCommand, ma2PendingChanges, setLightingCommand } from '@tb/core/link';
 import { convertMa2Snapshot, convertMa2Timecode } from '../../../../main/link/ma2-timecode-conversion';
 import { compareMa2LightingReadback } from '../../../../main/link/ma2-comparison';
 import { Ma2ApplyService } from '../../../../main/link/ma2-apply-service';
-import { Ma2AutoSync, type Ma2AutoSyncDependencies } from './ma2-auto-sync';
-import { ma2PendingChanges, ma2UnboundTracks } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
+import { ma2SyncPlaying, useMa2SyncStore } from '../stores/ma2-sync-store';
 import { lightingEditHandler } from '../components/lighting-edit-handler';
+import { useMa2RealtimePreference } from './ma2-realtime-preference';
+import { markPendingMa2Songs, ma2SongSyncSettings, startMa2SongSync, stopMa2SongSync, tickMa2SongSync } from './ma2-song-sync';
+
+vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
+const { archive } = vi.hoisted(() => ({ archive: vi.fn() }));
+vi.mock('./ma2-project-archive', () => ({ archiveMa2Project: archive }));
+vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { recordLog: () => Promise.resolve() } }));
 
 const xml = await readFile(new URL('../../../../main/link/fixtures/ma2-timecode-fractional-3.3.xml', import.meta.url), 'utf8');
 const sequence = await readFile(new URL('../../../../main/link/fixtures/ma2-sequence-fractional-3.3.xml', import.meta.url), 'utf8');
 const sequenceObject = sequence.match(/<Sequ\s[\s\S]*<\/Sequ>/)![0];
 const snapshot = (value: string): string => value.replace('</MA>', `${sequenceObject}</MA>`);
-beforeEach(() => {
-  const project = createEmptyLinkProject('安全暂存');
-  project.rundown = [{ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [] }];
-  useDocumentStore.getState().setProject(importMa2TimecodeCommand('song', convertMa2Timecode(xml, [sequence], 9902)).execute(project), null);
-});
+const network = { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' };
 
+/** A way-1 song: its lighting was read from the console's Timecode 9902, and the console's materials were read from the same console. */
+function load(timecode = xml): void {
+  const project = createEmptyLinkProject('安全暂存');
+  project.schemaVersion = 2;
+  project.rundown = [{ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [] }];
+  const bound = importMa2TimecodeCommand('song', convertMa2Timecode(timecode, [sequence], 9902)).execute(project);
+  bound.ma2MaterialLibrary = { version: 1, source: '192.0.2.1:30000', library: { directory: { show: 'Test', generation: 'session', version: '3.3.4', entries: [] }, readAt: new Date().toISOString(), sequences: [], fixtureUsage: [], errors: [] } };
+  useDocumentStore.getState().setProject(bound, 'song.tblink');
+}
+let unsubscribe = (): void => undefined;
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.stubGlobal('localStorage', { getItem: (key: string) => key === 'tblink.ma2-connection-method.v1' ? 'network' : null, setItem: () => undefined });
+  archive.mockResolvedValue('C:/archive.tblink');
+  useMa2RealtimePreference.setState({ enabled: true });
+  useMa2SyncStore.setState({ songs: {}, names: { state: 'idle', message: '' }, timelinePlaying: false, previewPlaying: false });
+  load();
+  // As the app does: an edit marks a confirmed song as waiting for its sync.
+  unsubscribe = useDocumentStore.subscribe((state, previous) => { if (state.project !== previous.project) markPendingMa2Songs(); });
+});
+afterEach(() => { unsubscribe(); vi.unstubAllGlobals(); });
+
+/** The console at Timecode 9902 is `native`; the real apply service writes it, checks it before writing and reads it back. */
 function setup(initial = xml) {
-  let playing = true;
   let native = initial;
   const bridge = {
     request: vi.fn(() => Promise.resolve(snapshot(native))),
@@ -30,22 +54,16 @@ function setup(initial = xml) {
       return Promise.resolve({ response: native, requestId: 'a'.repeat(32) });
     })
   };
-  const service = new Ma2ApplyService(bridge, () => playing);
-  const catalog: Ma2Catalog = { directory: { show: 'Test', generation: 'session', version: '3.3.4', entries: [] }, readAt: new Date().toISOString(), entries: [] };
-  const dependencies: Ma2AutoSyncDependencies = {
-    rename: () => Promise.reject(new Error('此测试不应改名')),
-    prepare: vi.fn(() => Promise.reject(new Error('此测试不应创建关联'))),
-    archive: vi.fn(() => Promise.resolve('saved.tblink')),
-    state: () => ({ ...useDocumentStore.getState(), playing }),
-    catalog: vi.fn(() => Promise.resolve(catalog)),
-    read: vi.fn(() => Promise.resolve(convertMa2Snapshot(snapshot(native), 9902))),
-    compare: vi.fn<Ma2AutoSyncDependencies['compare']>(request => Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map()))),
-    apply: vi.fn<Ma2AutoSyncDependencies['apply']>(request => service.apply(request)),
-    execute: vi.fn<Ma2AutoSyncDependencies['execute']>((id, command) => useDocumentStore.getState().executeForDocument(id, command)),
-    changed: vi.fn()
+  const service = new Ma2ApplyService(bridge, () => ma2SyncPlaying());
+  const api = {
+    getMa2NetworkStatus: vi.fn(() => Promise.resolve({ state: 'connected', settings: { ...network, autoConnect: false } })),
+    previewMa2: vi.fn(() => Promise.resolve(convertMa2Snapshot(snapshot(native), 9902))),
+    compareMa2: vi.fn((request: Ma2CompareRequest) => Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map()))),
+    applyMa2: vi.fn((request: Ma2ApplyRequest) => service.apply(request))
   };
-  const runner = new Ma2AutoSync(dependencies);
-  playing = false; runner.start({ dataDirectory: 'test' }, catalog); playing = true;
+  vi.stubGlobal('window', { tbLink: api });
+  startMa2SongSync('song', '歌曲', ma2SongSyncSettings(useDocumentStore.getState().project!, 'song'));
+  useMa2SyncStore.setState({ timelinePlaying: true });
   const edit = (at: number) => {
     const project = useDocumentStore.getState().project!;
     const document = structuredClone(project.rundown[0]!.lighting!);
@@ -54,7 +72,9 @@ function setup(initial = xml) {
     lightingEditHandler({ itemId: 'song', project, notify })(document, '修改灯光位置');
     expect(notify).not.toHaveBeenCalled();
   };
-  return { runner, dependencies, bridge, edit, stop: () => { playing = false; }, play: () => { playing = true; }, remote: (value: string) => { native = value; }, console: () => native };
+  return { api, bridge, edit, tick: () => tickMa2SongSync(ma2SyncPlaying()), song: () => useMa2SyncStore.getState().songs.song!,
+    stop: () => { useMa2SyncStore.setState({ timelinePlaying: false }); }, play: () => { useMa2SyncStore.setState({ timelinePlaying: true }); },
+    remote: (value: string) => { native = value; }, console: () => native };
 }
 const pending = () => ma2PendingChanges(useDocumentStore.getState().project);
 const position = () => useDocumentStore.getState().project!.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[0]!.at;
@@ -68,28 +88,37 @@ it('播放中每次 Cue 编辑走命令，撤销重做即时更新待提交列�
   useDocumentStore.getState().undo(); expect(position()).toBe(1000);
   useDocumentStore.getState().undo(); expect(pending()).toEqual([]);
   useDocumentStore.getState().redo(); expect(pending()[0]?.changes[0]?.after?.properties.time).toBe('1000');
-  await test.runner.tick(); await test.runner.tick();
-  expect(test.dependencies.catalog).not.toHaveBeenCalled(); expect(test.dependencies.read).not.toHaveBeenCalled();
-  expect(test.dependencies.apply).not.toHaveBeenCalled(); expect(test.bridge.exchange).not.toHaveBeenCalled();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('staged', expect.any(String));
+  await test.tick(); await test.tick();
+  expect(test.api.getMa2NetworkStatus).not.toHaveBeenCalled(); expect(test.api.previewMa2).not.toHaveBeenCalled();
+  expect(test.api.applyMa2).not.toHaveBeenCalled(); expect(test.bridge.exchange).not.toHaveBeenCalled();
+  expect(test.song().state).toBe('pending'); expect(test.song().message).toContain('播放中');
+});
+
+it('播放中到了定期核对的时间，已确认的歌不读控台，也不变成待同步', async () => {
+  const test = setup(); test.stop(); await test.tick();
+  expect(test.song().state).toBe('verified');
+  const reads = test.api.previewMa2.mock.calls.length;
+  useMa2SyncStore.setState(state => ({ songs: { ...state.songs, song: { ...state.songs.song!, nextCheckAt: 0 } } }));
+  test.play(); await test.tick();
+  expect(test.song().state).toBe('verified'); expect(test.api.previewMa2).toHaveBeenCalledTimes(reads);
 });
 
 it('停止后经过比较、写前快照与回读才清空待提交，回读更新基线但不增加撤销步骤', async () => {
-  const test = setup(); test.edit(1000); await test.runner.tick(); test.stop();
-  await test.runner.tick();
-  expect(test.dependencies.compare).toHaveBeenCalledOnce();
+  const test = setup(); test.edit(1000); await test.tick(); test.stop();
+  await test.tick();
+  expect(test.api.compareMa2).toHaveBeenCalledOnce();
   expect(test.bridge.request).toHaveBeenCalledTimes(2); expect(test.bridge.exchange).toHaveBeenCalledOnce();
-  expect(test.dependencies.execute).toHaveBeenCalledOnce(); expect(pending()).toEqual([]);
+  expect(pending()).toEqual([]);
   expect(useDocumentStore.getState().past).toHaveLength(1);
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('verified', expect.any(String));
+  expect(test.song()).toMatchObject({ state: 'verified', writing: false, message: 'Timecode 9902 已写入控台并回读确认' });
 });
 
 it('同一项两边都改过：以软件为准写入并回读，同步不停止，控台旧版本留在控台备份（2026-10-26）', async () => {
   const test = setup(); test.edit(1000); test.remote(xml.replace('<Event index="0"', '<Event time="15" index="0"')); test.stop();
-  await test.runner.tick(); await test.runner.tick();
+  await test.tick(); await test.tick();
   expect(test.bridge.exchange).toHaveBeenCalledOnce(); expect(position()).toBe(1000); expect(pending()).toEqual([]);
   expect(consoleEvents(test.console())).toEqual(['time="30" command="Goto" pressed="true" step="1"', 'time="45" command="Goto" pressed="true" step="2"']);
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('verified', expect.any(String));
+  expect(test.song().state).toBe('verified');
 });
 
 // A console-recorded show: the first press has its button release, and another action the software does not convert.
@@ -101,14 +130,12 @@ const consoleEvents = (value: string) => [...value.matchAll(/<Event\s([^>]*)>/g)
 
 it('控台录的时间线：软件改 Cue 时间写回同一条时间线，按键松开跟着按下走，不认识的动作原样保留（2026-10-26）', async () => {
   expect(consoleEvents(recorded)).toHaveLength(4);
-  const project = createEmptyLinkProject('控台录的时间线');
-  project.rundown = [{ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [] }];
-  useDocumentStore.getState().setProject(importMa2TimecodeCommand('song', convertMa2Timecode(recorded, [sequence], 9902)).execute(project), null);
+  load(recorded);
   expect(useDocumentStore.getState().project!.rundown[0]!.lighting!.ma2Bindings![0]!.nativeEvents).toHaveLength(2);
   const test = setup(recorded); test.edit(1000); test.stop();
-  await test.runner.tick();
+  await test.tick();
   expect(test.bridge.exchange).toHaveBeenCalledOnce(); expect(pending()).toEqual([]);
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('verified', expect.any(String));
+  expect(test.song().state).toBe('verified');
   expect(consoleEvents(test.console())).toEqual([
     'command="Goto" pressed="true" step="1" time="30"', 'time="40" command="Goto" pressed="false" step="1"',
     'time="45" command="Goto" pressed="true" step="2"', 'time="60" command="Learn" pressed="true"']);
@@ -119,26 +146,28 @@ it('控台录的时间线：软件改 Cue 时间写回同一条时间线，按�
   const document = structuredClone(current.rundown[0]!.lighting!);
   document.tracks[0]!.clips[0]!.events.splice(0, 1);
   lightingEditHandler({ itemId: 'song', project: current, notify: vi.fn() })(document, '删除灯光点');
-  await test.runner.tick();
+  await test.tick();
   expect(test.bridge.exchange).toHaveBeenCalledTimes(2); expect(pending()).toEqual([]);
   expect(consoleEvents(test.console())).toEqual(['time="45" command="Goto" pressed="true" step="2"', 'time="60" command="Learn" pressed="true"']);
 });
 
-it('写前核对发现控台变动则拒绝写入并保留暂存', async () => {
+it('写前核对发现控台变动则拒绝写入并保留暂存；没有新的修改就不再自己重试', async () => {
   const test = setup(); test.edit(1000); test.stop();
   test.bridge.request.mockResolvedValue(snapshot(xml.replace('<Event index="0"', '<Event time="15" index="0"')));
-  await test.runner.tick(); await test.runner.tick();
+  await test.tick(); await test.tick();
   expect(test.bridge.exchange).not.toHaveBeenCalled(); expect(pending()).toHaveLength(1);
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('预览之后控台的'));
+  expect(test.api.applyMa2).toHaveBeenCalledOnce();
+  expect(test.song().state).toBe('blocked'); expect(test.song().message).toContain('预览之后控台的');
+  expect(test.song().message).toContain('刷新同步');
 });
 
 it('回读失败或内容不一致不会清空暂存或重复写入', async () => {
   const test = setup(); test.edit(1000); test.stop();
   test.bridge.request.mockResolvedValue(snapshot(xml));
-  await test.runner.tick(); await test.runner.tick();
-  expect(test.bridge.exchange).toHaveBeenCalledOnce(); expect(test.dependencies.execute).not.toHaveBeenCalled();
+  await test.tick(); await test.tick();
+  expect(test.bridge.exchange).toHaveBeenCalledOnce(); expect(useDocumentStore.getState().past).toHaveLength(1);
   expect(pending()).toHaveLength(1); expect(position()).toBe(1000);
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('可能已经写入'));
+  expect(test.song().state).toBe('blocked'); expect(test.song().message).toContain('可能已经写入');
 });
 
 it.each(['读取', '写入', '回读'] as const)('%s异常保留暂存，后续停止不自动重试', async stage => {
@@ -146,37 +175,35 @@ it.each(['读取', '写入', '回读'] as const)('%s异常保留暂存，后续�
   if (stage === '读取') test.bridge.request.mockRejectedValueOnce(new Error('读取超时'));
   else if (stage === '写入') test.bridge.exchange.mockRejectedValueOnce(new Error('写入超时'));
   else test.bridge.request.mockResolvedValueOnce(snapshot(xml)).mockRejectedValueOnce(new Error('回读超时'));
-  await test.runner.tick(); await test.runner.tick();
-  expect(test.dependencies.apply).toHaveBeenCalledOnce(); expect(test.dependencies.execute).not.toHaveBeenCalled();
+  await test.tick(); await test.tick();
+  expect(test.api.applyMa2).toHaveBeenCalledOnce(); expect(useDocumentStore.getState().past).toHaveLength(1);
   expect(pending()).toHaveLength(1); expect(position()).toBe(1000);
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining(`${stage}超时`));
+  expect(test.song().state).toBe('blocked'); expect(test.song().message).toContain(`${stage}超时`);
 });
 
-it('已确认回读应用后关闭同步不会停留在写入中或误报全部成功', async () => {
+it('已确认的写入在回读应用前暂停同步：回读照样进工程，不停在写入中、不冒充仍在同步', async () => {
   const test = setup(); test.edit(1000); test.stop();
-  const execute = test.dependencies.execute;
-  test.dependencies.execute = async (id, command) => { await execute(id, command); test.runner.stop(); };
-  await test.runner.tick();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('off', expect.any(String));
+  test.api.applyMa2.mockImplementationOnce(async request => { const result = await new Ma2ApplyService(test.bridge, () => false).apply(request); stopMa2SongSync('song'); return result; });
+  await test.tick();
   expect(pending()).toEqual([]);
+  expect(test.song()).toMatchObject({ state: 'paused', writing: false });
 });
 
-it('比较期间关闭同步，中断后不发写入且保留暂存', async () => {
+it('比较期间暂停同步，中断后不发写入且保留暂存', async () => {
   const test = setup(); test.edit(1000); test.stop();
-  const compare = test.dependencies.compare;
-  test.dependencies.compare = async request => { test.runner.stop(); return compare(request); };
-  await test.runner.tick(); await test.runner.tick();
-  expect(test.dependencies.apply).not.toHaveBeenCalled(); expect(pending()).toHaveLength(1);
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('off', expect.any(String));
+  test.api.compareMa2.mockImplementationOnce(request => { stopMa2SongSync('song'); return Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map())); });
+  await test.tick(); await test.tick();
+  expect(test.api.applyMa2).not.toHaveBeenCalled(); expect(pending()).toHaveLength(1);
+  expect(test.song().state).toBe('paused');
 });
 
 it('读取中恢复播放取消本轮写入，再次停止必须重新读取', async () => {
   const test = setup(); test.edit(1000); test.stop();
-  const read = test.dependencies.read;
-  test.dependencies.read = async request => { const result = await read(request); test.play(); return result; };
-  await test.runner.tick(); expect(test.dependencies.apply).not.toHaveBeenCalled();
-  test.dependencies.read = read; test.stop(); await test.runner.tick();
-  expect(read).toHaveBeenCalledTimes(2); expect(test.bridge.exchange).toHaveBeenCalledOnce();
+  test.api.previewMa2.mockImplementationOnce(() => { test.play(); return Promise.resolve(convertMa2Snapshot(snapshot(test.console()), 9902)); });
+  await test.tick(); expect(test.api.applyMa2).not.toHaveBeenCalled();
+  expect(test.song().state).toBe('pending'); expect(test.song().consecutiveFailures ?? 0).toBe(0);
+  test.stop(); await test.tick();
+  expect(test.api.previewMa2).toHaveBeenCalledTimes(2); expect(test.bridge.exchange).toHaveBeenCalledOnce();
 });
 
 it('写入期间继续编辑保留最新位置，下一轮继续写入；撤销仍形成反向修改', async () => {
@@ -185,26 +212,26 @@ it('写入期间继续编辑保留最新位置，下一轮继续写入；撤销�
   test.bridge.exchange.mockImplementationOnce(async (...args) => {
     const result = await exchange(...args); test.edit(1400); return result;
   });
-  await test.runner.tick();
+  await test.tick();
   expect(position()).toBe(1400); expect(pending()).toHaveLength(1);
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('staged', expect.any(String));
-  await test.runner.tick();
+  expect(test.song().state).toBe('pending');
+  await test.tick();
   expect(position()).toBe(1400); expect(pending()).toEqual([]);
   expect(test.bridge.exchange).toHaveBeenCalledTimes(2);
   useDocumentStore.getState().undo(); expect(position()).toBe(1000);
-  await test.runner.tick(); expect(pending()).toEqual([]);
+  await test.tick(); expect(pending()).toEqual([]);
 });
 
-it('写入中关闭开关仍核对已发出的修改，不再发送下一笔', async () => {
+it('写入中暂停同步仍核对已发出的修改，不再发送下一笔', async () => {
   const test = setup(); test.edit(1000); test.stop();
   const exchange = test.bridge.exchange.getMockImplementation()!;
   test.bridge.exchange.mockImplementationOnce(async (...args) => {
-    const result = await exchange(...args); test.runner.stop(); test.edit(1400); return result;
+    const result = await exchange(...args); stopMa2SongSync('song'); test.edit(1400); return result;
   });
-  await test.runner.tick(); await test.runner.tick();
+  await test.tick(); await test.tick();
   expect(position()).toBe(1400); expect(pending()).toHaveLength(1);
   expect(test.bridge.exchange).toHaveBeenCalledOnce();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('off', expect.any(String));
+  expect(test.song().state).toBe('paused');
 });
 
 it('写入中切换工程不把旧回读应用到新工程', async () => {
@@ -214,9 +241,9 @@ it('写入中切换工程不把旧回读应用到新工程', async () => {
     const result = await exchange(...args);
     useDocumentStore.getState().setProject(createEmptyLinkProject('其他工程'), null); return result;
   });
-  await test.runner.tick();
-  expect(test.dependencies.execute).not.toHaveBeenCalled();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('请手动读取控台确认'));
+  await test.tick();
+  expect(useDocumentStore.getState().project?.rundown).toEqual([]);
+  expect(test.song().state).toBe('blocked'); expect(test.song().message).toContain('回到原来的工程');
 });
 
 it('保存重开仍可从基线恢复暂存；新增、删除均显示', () => {
@@ -242,31 +269,18 @@ it('本地 Cue 备注与未绑定轨道不伪装成控台待写入内容', () =>
   expect(pending()).toEqual([]);
 });
 
-it('控台确认后一次撤销就反向同步，重做仍使用最新基线', async () => {
+it('控台确认后一次撤销就反向同步，重做仍使用最新基线；一分钟内的连续写入只存一次同步前存档', async () => {
   const test = setup(); const original = position(); test.edit(1000); test.stop();
-  await test.runner.tick(); expect(pending()).toEqual([]);
+  await test.tick(); expect(pending()).toEqual([]);
   useDocumentStore.getState().undo(); expect(position()).toBe(original); expect(pending()).toHaveLength(1);
-  await test.runner.tick(); expect(pending()).toEqual([]);
+  await test.tick(); expect(pending()).toEqual([]);
   expect(useDocumentStore.getState().future).toHaveLength(1);
   useDocumentStore.getState().redo(); expect(position()).toBe(1000);
-  await test.runner.tick(); expect(pending()).toEqual([]);
+  await test.tick(); expect(pending()).toEqual([]);
   useDocumentStore.getState().undo(); expect(position()).toBe(original);
-  await test.runner.tick(); expect(pending()).toEqual([]);
+  await test.tick(); expect(pending()).toEqual([]);
   expect(test.bridge.exchange).toHaveBeenCalledTimes(4);
-  expect(test.dependencies.archive).toHaveBeenCalledTimes(4);
-});
-it('未关联的序列池 Cue 单独列出，空点位不伪装成控台动作', () => {
-  const project = structuredClone(useDocumentStore.getState().project!);
-  const document = project.rundown[0]!.lighting!;
-  const track = structuredClone(document.tracks[0]!); track.id = 'unbound';
-  track.clips = track.clips.map(clip => ({ ...clip, id: `unbound-${clip.id}`, events: clip.events.map(event => event.kind === 'ma2' ? { ...event, executor: '' } : event) }));
-  document.tracks.push(track);
-  const unbound = ma2UnboundTracks(project);
-  expect(unbound).toHaveLength(1);
-  expect(unbound[0]).toMatchObject({ trackId: 'unbound', count: 2 });
-  expect(unbound[0]?.reason).toContain('自动准备控台执行位置');
-  track.clips[0]!.events = [{ id: 'empty', kind: 'empty-cue', label: '空点位', at: 0 }];
-  expect(ma2UnboundTracks(project)).toEqual([]);
+  expect(archive).toHaveBeenCalledOnce();
 });
 
 it('写入中撤销不会被旧回读覆盖，下一笔写回撤销后的内容', async () => {
@@ -275,15 +289,16 @@ it('写入中撤销不会被旧回读覆盖，下一笔写回撤销后的内容'
   test.bridge.exchange.mockImplementationOnce(async (...args) => {
     const result = await exchange(...args); useDocumentStore.getState().undo(); return result;
   });
-  await test.runner.tick(); expect(position()).toBe(original); expect(pending()).toHaveLength(1);
-  await test.runner.tick(); expect(position()).toBe(original); expect(pending()).toEqual([]);
+  await test.tick(); expect(position()).toBe(original); expect(pending()).toHaveLength(1);
+  await test.tick(); expect(position()).toBe(original); expect(pending()).toEqual([]);
   expect(useDocumentStore.getState().future).toHaveLength(1);
-  await test.runner.tick(); expect(test.dependencies.changed).toHaveBeenLastCalledWith('verified', expect.stringContaining('已同步到控台'));
+  await test.tick(); expect(test.song().state).toBe('verified'); expect(test.song().message).toContain('回读确认');
 });
+
 it('存档失败阻止写入，并保留本地修改且不重试', async () => {
   const test = setup(); test.edit(1000); test.stop();
-  test.dependencies.archive = vi.fn(() => Promise.reject(new Error('磁盘无法保存存档')));
-  await test.runner.tick(); await test.runner.tick();
+  archive.mockRejectedValue(new Error('磁盘无法保存存档'));
+  await test.tick(); await test.tick();
   expect(test.bridge.exchange).not.toHaveBeenCalled(); expect(pending()).toHaveLength(1);
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('存档'));
+  expect(test.song().state).toBe('blocked'); expect(test.song().message).toContain('存档');
 });

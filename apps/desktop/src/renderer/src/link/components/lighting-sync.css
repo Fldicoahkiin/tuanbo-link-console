@@ -1,0 +1,39 @@
+/*
+ * The lighting workbench's console sync controls (2026-10-30 rework), at the foot of its sidebar: the
+ * realtime switch, the sync state (it opens the details beside the sidebar), then 刷新同步, 保存 and
+ * 存档. In the pages layer.
+ */
+@layer pages {
+  .app-sidebar .sidebar-sync { flex: none; margin-top: var(--space-1); padding-top: var(--space-1); border-top: 1px solid var(--color-separator); }
+  .lighting-sync { display: grid; gap: var(--space-1); padding: 0 var(--space-half) var(--space-1); color: var(--color-text); font: 400 var(--type-control)/1.4 var(--font-ui); }
+  .lighting-sync-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-1); min-height: 28px; }
+  .lighting-sync-heading h2 { margin: 0; color: var(--color-text-secondary); font: 600 var(--type-caption)/1.4 var(--font-ui); }
+  .lighting-sync-switch.ui-switch { gap: var(--space-1); min-height: 28px; }
+  .lighting-sync-switch .ui-switch-label { font-size: var(--type-control); }
+
+  .lighting-sync-status.ui-button { display: grid; grid-template-columns: 16px minmax(0, 1fr) 14px; justify-content: stretch; gap: var(--space-1); width: 100%; padding: 0 var(--space-1); border-color: var(--color-border); color: var(--color-text); background: var(--color-input); font-weight: 400; text-align: left; --tone: var(--color-text-secondary); }
+  .lighting-sync-status > span { overflow: hidden; text-overflow: ellipsis; }
+  .lighting-sync-status > svg:first-child { color: var(--tone); }
+  .lighting-sync-status > svg:last-child { width: 16px; height: 16px; color: var(--color-text-tertiary); }
+  .lighting-sync-status[data-state='verified'] { --tone: var(--color-success); }
+  .lighting-sync-status[data-state='staged'] { --tone: var(--color-warning); }
+  .lighting-sync-status[data-state='writing'] { --tone: var(--color-accent); }
+  .lighting-sync-status[data-state='blocked'] { --tone: var(--color-danger); color: var(--color-danger); border-color: rgba(var(--color-danger-rgb), 0.4); background: var(--color-danger-soft); }
+  .lighting-sync-status[aria-expanded='true'] { border-color: var(--color-accent-border); }
+
+  .lighting-sync-actions { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-half); }
+  .lighting-sync-actions .ui-button { gap: var(--space-half); width: 100%; min-width: 0; padding: 0 var(--space-half); }
+
+  .lighting-sync-details { display: grid; gap: var(--space-1); width: 320px; padding: var(--space-2); }
+  .lighting-sync-details h3 { margin: 0; color: var(--color-text-strong); font: 500 var(--type-body)/1.4 var(--font-ui); }
+  .lighting-sync-details p { margin: 0; color: var(--color-text-secondary); font-size: var(--type-caption); line-height: 1.5; overflow-wrap: anywhere; user-select: text; }
+  .lighting-sync-details p[role='alert'] { color: var(--color-danger); }
+  .lighting-sync-details .ui-button { justify-self: start; }
+
+  .lighting-sync-archives { display: grid; gap: 2px; max-height: 50vh; margin: 0; padding: 0; overflow: auto; list-style: none; }
+  .lighting-sync-archives li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-1); min-height: 36px; padding: 0 var(--space-1); border-radius: var(--radius-sm); }
+  .lighting-sync-archives li > span { overflow: hidden; color: var(--color-text); text-overflow: ellipsis; white-space: nowrap; }
+  @media (hover: hover) and (pointer: fine) {
+    .lighting-sync-archives li:hover { background: var(--color-input); }
+  }
+}

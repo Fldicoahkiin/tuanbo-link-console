@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseMidi, writeMidi } from 'midi-file';
 import { createLightingDocument, lightingDocumentSchema, lightingEventSchema } from '@tb/schema';
 import { exportLightingMidi, importLightingMidi } from './lighting-midi-file';
-import { compileLightingPackets, LightingScheduler } from './lighting-playback';
+import { compileLightingPackets } from './lighting-playback';
 import { LightingTempoMap } from './lighting-edit';
 import { writeLightingMidi } from './lighting-midi-writer';
 
@@ -162,7 +162,7 @@ describe('灯光 MIDI 文件交换', () => {
     expect(roundTrip.warnings).toEqual([]);
     expect(roundTrip.document.tracks[0]?.clips[0]?.events).toHaveLength(3);
   });
-  it('非零释放力度经导入、保存重开、实际调度和导出保持一致', () => {
+  it('非零释放力度经导入、保存重开、MIDI 编码和导出保持一致', () => {
     const bytes = new Uint8Array(writeMidi({ header: { format: 0, numTracks: 1, ticksPerBeat: 480 }, tracks: [[
       { deltaTime: 0, type: 'noteOn', channel: 2, noteNumber: 60, velocity: 95 },
       { deltaTime: 480, type: 'noteOff', channel: 2, noteNumber: 60, velocity: 87 },
@@ -173,10 +173,7 @@ describe('灯光 MIDI 文件交换', () => {
     const document = lightingDocumentSchema.parse(JSON.parse(JSON.stringify(imported.document)));
     expect(document.tracks[0]?.clips[0]?.events[0]).toMatchObject({ kind: 'note', velocity: 95, releaseVelocity: 87, duration: 1 });
     document.tracks[0]!.portProfileId = 'test-output';
-    const sent: number[][] = [];
-    const scheduler = new LightingScheduler(compileLightingPackets(document), (packet) => sent.push(packet.bytes));
-    scheduler.locate(0); scheduler.tick(0); scheduler.tick(500);
-    expect(sent).toEqual([[0x92, 60, 95], [0x82, 60, 87]]);
+    expect(compileLightingPackets(document).map((packet) => packet.bytes)).toEqual([[0x92, 60, 95], [0x82, 60, 87]]);
     const output = parseMidi(exportLightingMidi(document));
     expect(output.tracks.flat().find((event) => event.type === 'noteOff')).toMatchObject({ channel: 2, noteNumber: 60, velocity: 87 });
     expect(importLightingMidi(exportLightingMidi(document)).document.tracks[0]?.clips[0]?.events[0]).toMatchObject({ releaseVelocity: 87 });

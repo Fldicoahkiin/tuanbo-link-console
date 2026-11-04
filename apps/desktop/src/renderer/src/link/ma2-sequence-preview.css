@@ -1,17 +1,17 @@
-.ma2-sequence-preview { grid-column: 1 / -1; grid-row: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; height: 100%; padding: 10px 12px; gap: 8px; background: var(--surface-base); }
-.ma2-sequence-preview header, .ma2-pool-navigation, .ma2-pool-categories { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }
+@layer legacy {
+.ma2-sequence-preview { grid-column: 1 / -1; grid-row: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; height: 100%; padding: 12px 12px; gap: 8px; background: var(--surface-base); }
+.ma2-sequence-preview header, .ma2-pool-navigation { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }
 .ma2-sequence-preview header > strong { font-size: 13px; margin-right: auto; }
 .ma2-sequence-preview small { color: var(--text-secondary); font-size: 12px; font-weight: 400; }
-.ma2-sequence-preview button, .ma2-sequence-preview select, .ma2-sequence-preview input { background: var(--surface-raised); color: var(--text-primary); border: 1px solid var(--separator); border-radius: var(--radius-control); padding: 4px 8px; font: inherit; font-size: 12px; min-height: 30px; }
-.ma2-sequence-preview button { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.ma2-sequence-preview button, .ma2-sequence-preview select, .ma2-sequence-preview input { background: var(--surface-raised); color: var(--text-primary); border: 1px solid var(--separator); border-radius: var(--radius-control); padding: 4px 8px; font: inherit; font-size: 12px; min-height: 32px; }
+.ma2-sequence-preview button { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 .ma2-sequence-preview button:disabled { opacity: .45; cursor: default; }
 .ma2-sequence-preview button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.ma2-sequence-preview button svg { width: 15px; height: 15px; flex-shrink: 0; }
+.ma2-sequence-preview button svg { width: 16px; height: 16px; flex-shrink: 0; }
 .ma2-sequence-preview button:hover:not(:disabled) { border-color: var(--accent); }
 .ma2-sequence-preview button[aria-pressed=true] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface-raised)); }
-.ma2-pool-search { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+.ma2-pool-search { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); }
 .ma2-pool-search input { width: 160px; }
-.ma2-pool-categories small { margin-left: auto; }
 .ma2-pool-navigation > strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 30%; }
 .ma2-pool-navigation > span { font-size: 12px; color: var(--text-secondary); margin-right: auto; }
 .cue-pool-grid { flex: 1; min-height: 84px; min-width: 0; overflow: auto; overscroll-behavior: contain; }
@@ -22,37 +22,28 @@
 .ma2-sequence-step-count { flex-shrink: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .cue-pool-grid button > .ma2-cue-card-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; color: var(--text-primary); text-align: left; }
 .ma2-cue-card-label > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; }
-.ma2-cue-card-label > small { display: flex; align-items: center; gap: 5px; font-size: 11px; line-height: 14px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.ma2-cue-card-label > small > span + span::before { content: '·'; margin-right: 5px; }
+.ma2-cue-card-label > small { display: flex; align-items: center; gap: 4px; font-size: 11px; line-height: 14px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ma2-cue-card-label > small > span + span::before { content: '·'; margin-right: 4px; }
 .ma2-pool-empty { color: var(--text-secondary); font-size: 12px; }
-.ma2-material-message { margin: 4px 0; font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; color: var(--text-secondary); }
-.ma2-material-message[role=alert] { color: var(--danger, #ff7777); }
 
 .ma2-material-menubar { flex-wrap:nowrap; min-height:32px; }
-.ma2-material-menubar>[role=group] { display:flex; align-items:center; gap:5px; }
-.ma2-material-menubar>[role=group]>button { padding-inline:6px; }
+.ma2-material-menubar>[role=group] { display:flex; align-items:center; gap:4px; }
+.ma2-material-menubar>[role=group]>button { padding-inline:8px; }
 .ma2-material-menubar .ma2-pool-search { margin-inline-start:auto; }
 
-.ma2-sequence-preview .ma2-material-menubar { display:flex; flex-wrap:nowrap; gap:6px; overflow-x:auto; flex-shrink:0; scrollbar-width:thin; }
+.ma2-sequence-preview .ma2-material-menubar { display:flex; flex-wrap:nowrap; gap:8px; overflow-x:auto; flex-shrink:0; scrollbar-width:thin; }
 .ma2-material-menubar>[role=group] { flex-shrink:0; }
-.ma2-material-menubar .ma2-pool-navigation { flex-wrap:nowrap; gap:4px; flex-shrink:0; padding-inline-start:10px; border-inline-start:1px solid var(--separator); }
-.ma2-material-menubar .ma2-pool-navigation>strong { max-width:140px; width:auto; margin-inline-end:6px; font-size:12px; font-weight:500; }
+.ma2-material-menubar .ma2-pool-navigation { flex-wrap:nowrap; gap:4px; flex-shrink:0; padding-inline-start:12px; border-inline-start:1px solid var(--separator); }
+.ma2-material-menubar .ma2-pool-navigation>strong { max-width:140px; width:auto; margin-inline-end:8px; font-size:12px; font-weight:500; }
 .ma2-material-menubar .ma2-pool-navigation>select { max-width:110px; min-width:72px; }
-.ma2-material-menubar .ma2-pool-navigation>button { width:30px; min-height:30px; justify-content:center; padding:5px; }
+.ma2-material-menubar .ma2-pool-navigation>button { width:32px; min-height:32px; justify-content:center; padding:4px; }
 .ma2-material-menubar .ma2-pool-search { min-width:100px; flex:1; max-width:200px; }
 .ma2-material-menubar .ma2-pool-search>input { width:100%; min-width:80px; }
-.ma2-material-menubar .ma2-pool-search>svg { flex:none; width:14px; }
+.ma2-material-menubar .ma2-pool-search>svg { flex:none; width: 16px; }
 
 .ma2-material-menubar .ma2-pool-navigation>strong { max-width:160px; flex-shrink:1; overflow:hidden; text-overflow:ellipsis; }
 .ma2-material-menubar > button { flex-shrink:0; white-space:nowrap; }
 /* Icon triggers; the Cue location one also names the page and slot once it knows them. */
-.ma2-material-menubar > .ma2-material-menu-trigger { display:inline-flex; align-items:center; justify-content:center; gap:4px; flex-shrink:0; min-width:30px; padding:4px 7px; white-space:nowrap; }
+.ma2-material-menubar > .ma2-material-menu-trigger { display:inline-flex; align-items:center; justify-content:center; gap:4px; flex-shrink:0; min-width:32px; padding:4px 8px; white-space:nowrap; }
 .ma2-material-menu-trigger { max-width:220px; overflow:hidden; text-overflow:ellipsis; }
-.ma2-material-menu { z-index:10000; width:220px; max-width:calc(100vw - 16px); max-height:calc(100vh - 16px); box-sizing:border-box; overflow:auto; padding:6px; display:flex; flex-direction:column; gap:4px; background:var(--surface-raised); color:var(--text-primary); border:1px solid var(--separator); border-radius:8px; box-shadow:0 8px 24px #0006; }
-.ma2-material-menu button { display:flex; align-items:center; gap:6px; min-height:30px; padding:5px 8px; background:transparent; color:inherit; border:1px solid transparent; border-radius:5px; font:inherit; font-size:12px; text-align:left; cursor:pointer; }
-.ma2-material-menu button svg { width:14px; height:14px; flex:none; }
-.ma2-material-menu button:hover, .ma2-material-menu button:focus-visible { background:var(--surface-hover); border-color:var(--accent); outline:none; }
-.ma2-material-menu button[aria-pressed=true] { border-color:var(--accent); background:color-mix(in srgb,var(--accent) 12%,var(--surface-raised)); }
-.ma2-material-menu p, .ma2-material-menu small { margin:5px; font-size:12px; }
-.ma2-material-menu .ma2-classification-selection { flex-wrap:wrap; gap:4px; border-bottom:1px solid var(--separator); padding-bottom:6px; }
-.ma2-material-menu .ma2-classification-selection span { width:100%; }
+}

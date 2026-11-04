@@ -17,7 +17,7 @@ export function useSettingsLocation(location: SettingsLocation | null, open: boo
     const section = ref.current?.querySelector<HTMLElement>(`[data-settings-section="${category}"]`);
     if (!section) return;
     const field = location.focus ? section.querySelector<HTMLElement>(fields[location.focus]) : null;
-    const target = field?.closest<HTMLElement>('label') ?? field ?? section;
+    const target = field?.closest<HTMLElement>('.ui-field, .ui-switch, label') ?? field ?? section;
     // Port settings may be inside a closed disclosure. Open its ancestors before scrolling.
     for (let parent = target.parentElement; parent && parent !== ref.current; parent = parent.parentElement) {
       if (parent instanceof HTMLDetailsElement) parent.open = true;

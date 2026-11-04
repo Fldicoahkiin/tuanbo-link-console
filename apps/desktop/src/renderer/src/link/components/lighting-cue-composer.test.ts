@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, lightingDocumentSchema, linkProjectSchema } from '@tb/schema';
 import { cueEventEntries } from './cue-event-view';
 import { cueIngredients, saveCueIngredients } from './LightingCueComposer';
-import { compileLightingNetworkActions, compileLightingPackets, moveLightingEffect, removeLightingEffects, LightingScheduler } from '@tb/core/link';
+import { compileLightingNetworkActions, compileLightingPackets, moveLightingEffect, removeLightingEffects } from '@tb/core/link';
 import { ma2SequenceLibrary } from '../view-models/ma2-sequence-library';
 
 it('空名称点位拖入控台素材，保存重开后仍从工程控台目录显示原名，组合名称与素材名称独立', () => {
@@ -19,7 +19,7 @@ it('空名称点位拖入控台素材，保存重开后仍从工程控台目录�
     { name: 'bj 294', sequence: 294, cue: '1', executor: '', delayMs: 0 },
     { name: '控台副歌', sequence: 346, cue: '2.5', executor: '1.101', delayMs: 800 }
   ];
-  const document = saveCueIngredients({ ...createLightingDocument(), outputMode: 'network' }, materials, '', 2000, 10000, 'point');
+  const document = saveCueIngredients(createLightingDocument(), materials, '', 2000, 10000, 'point');
   project.rundown = [{ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [], lighting: document }];
   const reopened = linkProjectSchema.parse(JSON.parse(JSON.stringify(project)));
   const lighting = reopened.rundown[0]!.lighting!;
@@ -40,25 +40,25 @@ it('空名称点位拖入控台素材，保存重开后仍从工程控台目录�
 });
 
 it('移除所有素材保留空 Cue，重开后加新素材仅发送新目标并保留原时间和编号', () => {
-  const original = saveCueIngredients({ ...createLightingDocument(), outputMode: 'network' }, ingredients, '点位', 2000, 10000, 'cue');
+  const original = saveCueIngredients(createLightingDocument(), ingredients, '点位', 2000, 10000, 'cue');
   const cleared = saveCueIngredients(original, [], '点位', 7000, 10000, 'cue');
   const reopened = lightingDocumentSchema.parse(JSON.parse(JSON.stringify(cleared)));
-  expect(reopened.tracks.flatMap(track => track.clips.flatMap(clip => clip.events))).toEqual([{ id: 'cue', kind: 'empty-cue', at: 2000, label: '点位', runMode: 'independent' }]);
+  expect(reopened.tracks.flatMap(track => track.clips.flatMap(clip => clip.events))).toEqual([{ id: 'cue', kind: 'empty-cue', at: 2000, label: '点位' }]);
   expect(cueIngredients(reopened, 'cue')).toEqual([]);
   expect(compileLightingNetworkActions(reopened)).toEqual([]);
   const filled = saveCueIngredients(reopened, [{ name: '新素材', sequence: 88, cue: '5.25', executor: '', delayMs: 0 }], '点位', 7000, 10000, 'cue');
   expect(cueIngredients(filled, 'cue')).toEqual([expect.objectContaining({ sequence: 88, cue: '5.25' })]);
-  expect(compileLightingNetworkActions(filled)).toEqual([{ atMs: 2000, releasePrevious: true, action: { target: 'sequence', action: 'goto', sequence: 88, cue: '5.25' } }]);
+  expect(compileLightingNetworkActions(filled)).toEqual([{ atMs: 2000, action: { target: 'sequence', action: 'goto', sequence: 88, cue: '5.25' } }]);
   expect(filled.tracks.flatMap(track => track.clips.flatMap(clip => clip.events))).toHaveLength(1);
 });
 
-it('埋步随工程保存重开及整体移动，网络调用先准备后正式，删除不残留', () => {
+it('旧工程的埋步随工程保存重开及整体移动，单击试听先准备后正式，删除不残留', () => {
   const ingredients = [{ name: '蓝光', sequence: 168, cue: '2', executor: '', delayMs: 0, preparation: { cue: '1', leadMs: 1500 } }];
-  const saved = saveCueIngredients({ ...createLightingDocument(), outputMode: 'network' }, ingredients, '副歌', 30000, 60000, 'cue');
+  const saved = saveCueIngredients(createLightingDocument(), ingredients, '副歌', 30000, 60000, 'cue');
   const reopened = lightingDocumentSchema.parse(JSON.parse(JSON.stringify(saved)));
   expect(cueIngredients(reopened, 'cue')).toEqual([expect.objectContaining({ preparation: { cue: '1', leadMs: 1500 } })]);
   expect(compileLightingNetworkActions(reopened)).toEqual([
-    { atMs: 28500, releasePrevious: true, action: { target: 'sequence', action: 'goto', sequence: 168, cue: '1' } },
+    { atMs: 28500, action: { target: 'sequence', action: 'goto', sequence: 168, cue: '1' } },
     { atMs: 30000, action: { target: 'sequence', action: 'goto', sequence: 168, cue: '2' } }
   ]);
   expect(compileLightingNetworkActions(moveLightingEffect(reopened, 'cue', 20000, 60000)).map(entry => entry.atMs)).toEqual([18500, 20000]);
@@ -66,17 +66,12 @@ it('埋步随工程保存重开及整体移动，网络调用先准备后正式�
   expect(compileLightingNetworkActions(removeLightingEffects(reopened, ['cue']))).toEqual([]);
   expect(() => saveCueIngredients(saved, ingredients, '太早', 500, 60000)).toThrow('埋步');
   expect(() => saveCueIngredients(saved, [{ ...ingredients[0]!, preparation: { cue: '2', leadMs: 1000 } }], '', 2000, 60000)).toThrow('准备 Cue');
-  expect(() => compileLightingPackets({ ...reopened, outputMode: 'timecode' })).toThrow('埋步');
 });
 
-it('多素材可各自埋步、关闭后不残留；MIDI 定位不补发之前的准备 Cue', () => {
-  const source = saveCueIngredients({ ...createLightingDocument(), outputMode: 'direct' }, ingredients.map(entry => ({ ...entry, preparation: { cue: '1', leadMs: 500 } })), '组合', 2000, 10000, 'cue');
+it('旧工程里多素材各自埋步，试听按 MIDI 先准备后正式，去掉后不残留', () => {
+  const source = saveCueIngredients(createLightingDocument(), ingredients.map(entry => ({ ...entry, preparation: { cue: '1', leadMs: 500 } })), '组合', 2000, 10000, 'cue');
   const packets = compileLightingPackets(source);
   expect(packets.map(entry => entry.atMs)).toEqual([1500, 1500, 2000, 2000]);
-  const sent: number[] = [];
-  const scheduler = new LightingScheduler(packets, packet => sent.push(packet.atMs));
-  scheduler.locate(1700); scheduler.tick(2000);
-  expect(sent).toEqual([2000, 2000]);
   const disabled = saveCueIngredients(source, ingredients, '组合', 2000, 10000, 'cue');
   expect(compileLightingPackets(disabled).map(entry => entry.atMs)).toEqual([2000, 2000]);
 });
@@ -140,11 +135,11 @@ it('编辑原有 Cue 和扩展组合保留轨道输出、静音、片段及原�
 });
 
 it('时间线编号独立于素材编号和名称，换成控台 Cue 26 后仍显示第 1 点', () => {
-  const blank = saveCueIngredients({ ...createLightingDocument(), outputMode: 'network' }, [], '', 0, 10000, 'point');
+  const blank = saveCueIngredients(createLightingDocument(), [], '', 0, 10000, 'point');
   const filled = saveCueIngredients(blank, [{ name: '001 暖场', sequence: 9001, cue: '26.000', executor: '', delayMs: 0 }], '', 0, 10000, 'point');
   expect(cueEventEntries(filled).map(entry => entry.cue)).toEqual(['1']);
   expect(filled.tracks.flatMap(track => track.clips.flatMap(clip => clip.events))).toEqual([expect.objectContaining({ id: 'point', label: '', cue: '26.000' })]);
   const moved = moveLightingEffect(filled, 'point', 2000, 10000);
   expect(cueEventEntries(moved).map(entry => entry.cue)).toEqual(['1']);
-  expect(compileLightingNetworkActions(moved)).toEqual([{ atMs: 2000, releasePrevious: true, action: { target: 'sequence', action: 'goto', sequence: 9001, cue: '26.000' } }]);
+  expect(compileLightingNetworkActions(moved)).toEqual([{ atMs: 2000, action: { target: 'sequence', action: 'goto', sequence: 9001, cue: '26.000' } }]);
 });

@@ -264,6 +264,10 @@ export type LinkDesktopApi = {
   readMa2Live(payload: import('@tb/schema').Ma2LiveRequest): Promise<import('@tb/schema').Ma2LiveSnapshot>;
   inputMa2Live(payload: import('@tb/schema').Ma2LiveInput): Promise<void>;
   releaseMa2Live(): Promise<void>;
+  /** One executor's state while a song plays, on its own read-only web remote session. */
+  observeMa2Executor(payload: import('@tb/schema').Ma2ExecutorObserveRequest): Promise<import('@tb/schema').Ma2ExecutorObservation>;
+  /** Ends that session and forgets its failure, before the next song is checked. */
+  releaseMa2Observer(): Promise<void>;
   updateMa2Layout(payload: import('@tb/schema').Ma2LayoutUpdateRequest): Promise<import('@tb/schema').Ma2LayoutSnapshot>;
   readMa2Layout(payload: import('@tb/schema').Ma2LayoutReadRequest): Promise<import('@tb/schema').Ma2LayoutSnapshot>;
   prepareMa2CueDeletion(payload: import('@tb/schema').Ma2CueDeletePrepare, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<import('@tb/schema').Ma2CueDeletePlan>;
@@ -277,7 +281,6 @@ export type LinkDesktopApi = {
   readMa2Executor(payload: import('@tb/schema').Ma2ExecutorReadRequest): Promise<import('@tb/schema').Ma2ExecutorPreview>;
   compareMa2(payload: import('@tb/schema').Ma2CompareRequest): Promise<import('./ma2-sync').Ma2SyncPreview>;
   applyMa2(payload: import('@tb/schema').Ma2ApplyRequest): Promise<import('@tb/schema').Ma2ApplyResult>;
-  prepareMa2AutoBindings(payload: import('@tb/schema').Ma2AutoBindRequest): Promise<import('@tb/schema').Ma2AutoBindResult>;
   renameMa2Object(payload: import('@tb/schema').Ma2RenameRequest): Promise<import('@tb/schema').Ma2RenameResult>;
   getAppInfo(): Promise<LinkAppInfo>;
   getUpdateStatus(): Promise<LinkUpdateStatus>;
@@ -401,7 +404,6 @@ export type LinkDesktopApi = {
   /** Full-scene mode: show or hide a source in the scene currently on program. */
   setObsProgramSourceEnabled(sourceName: string, enabled: boolean): Promise<void>;
   activateManagedObsOutput(): Promise<void>;
-  setInternalAudioCapture(enabled: boolean, sceneNames?: string[]): Promise<void>;
   executeManagedMediaEvent(payload: { projectPath: string; event: import('./managed-media-timeline').ManagedMediaEvent }): Promise<void>;
   seekManagedMedia(payload: { projectPath: string; event: import('./managed-media-timeline').ManagedMediaEvent }): Promise<void>;
   startExternalApplication(id: LinkProcessSnapshot['id']): Promise<LinkProcessSnapshot>;

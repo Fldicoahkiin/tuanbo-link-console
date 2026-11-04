@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ListPlus, Trash2 } from 'lucide-react';
 import { useProgramViewport } from './useProgramViewport';
-import { FloatingMenu } from './FloatingMenu';
+import { Menu, MenuItem } from '../ui';
 
 export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAddItem, onBlankClick, onImportFiles, selectedIds, onSelectionChange, onDeleteSelection, view = 'cards' }: { itemIds: string[]; renderItem: (index: number) => ReactNode; empty: ReactNode; compact: boolean; locked: boolean; onAddItem: () => void; onBlankClick: () => void; onImportFiles: (files: File[]) => Promise<void>; selectedIds: string[]; onSelectionChange: (ids: string[]) => void; onDeleteSelection: () => void; view?: 'list' | 'cards' }): JSX.Element {
   const virtual = useProgramViewport(itemIds, view, compact);
@@ -19,7 +19,7 @@ export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAdd
     window.addEventListener('keydown', key);
     return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('blur', close); window.removeEventListener('keydown', key); };
   }, [position]);
-  return <div ref={virtual.viewport} className="p1-media-grid program-virtual-grid" data-view={view} data-total-programs={itemIds.length} data-file-drop={fileDrop} tabIndex={0} aria-label="节目列表"
+  return <div ref={virtual.viewport} className="home-grid" data-view={view} data-total-programs={itemIds.length} data-file-drop={fileDrop} tabIndex={0} aria-label="节目列表"
     onScroll={event => virtual.scroll(event.currentTarget.scrollTop)}
     onFocusCapture={event => virtual.setFocused(event.target.closest<HTMLElement>('[data-program-id]')?.dataset.programId ?? null)}
     onPointerDown={event => {
@@ -73,7 +73,7 @@ export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAdd
       event.preventDefault(); event.stopPropagation(); setFileDrop(false);
       if (!locked) void onImportFiles(Array.from(event.dataTransfer.files));
     }} onClick={(event) => {
-    if (event.target === event.currentTarget || (event.target instanceof Element && (event.target.matches('.program-virtual-body') || event.target.closest('.p1-library-empty')))) onBlankClick();
+    if (event.target === event.currentTarget || (event.target instanceof Element && (event.target.matches('.home-grid-body') || event.target.closest('.home-empty')))) onBlankClick();
   }} onContextMenuCapture={event => {
     const card = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-program-id]') : null;
     if (locked || !card?.dataset.programId) return;
@@ -82,17 +82,17 @@ export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAdd
       setPosition({ x: event.clientX, y: event.clientY });
     } else onSelectionChange([]);
   }} onContextMenu={(event) => {
-    if (locked || (event.target instanceof Element && event.target.closest('.p1-media-card'))) return;
+    if (locked || (event.target instanceof Element && event.target.closest('.home-card'))) return;
     event.preventDefault();
     setPosition({ x: event.clientX, y: event.clientY });
   }}>
-    {itemIds.length ? <div className="program-virtual-body" style={{ height: virtual.totalHeight }}>
-      {virtual.indices.map(index => <div className="program-virtual-row" data-program-index={index} key={itemIds[index]} style={virtual.style(index)}>{renderItem(index)}</div>)}
+    {itemIds.length ? <div className="home-grid-body" style={{ height: virtual.totalHeight }}>
+      {virtual.indices.map(index => <div className="home-grid-row" data-program-index={index} key={itemIds[index]} style={virtual.style(index)}>{renderItem(index)}</div>)}
     </div> : empty}
-    {rectangle ? <div className="program-selection-rectangle" style={rectangle} /> : null}
-    {position && !locked ? <FloatingMenu x={position.x} y={position.y} className="resource-context-menu" label="节目列表菜单">
-      {selectedIds.length ? <button className="context-menu-item danger" role="menuitem" onClick={() => { setPosition(null); onDeleteSelection(); }}><Trash2 /><span>删除所选 {selectedIds.length} 个节目</span></button> : null}
-      <button className="context-menu-item" role="menuitem" onClick={() => { setPosition(null); onAddItem(); }}><ListPlus /><span>新建空白节目</span></button>
-    </FloatingMenu> : null}
+    {rectangle ? <div className="home-grid-lasso" style={rectangle} /> : null}
+    {position && !locked ? <Menu x={position.x} y={position.y} label="节目列表菜单" onClose={() => setPosition(null)}>
+      {selectedIds.length ? <MenuItem icon={Trash2} danger onSelect={() => { setPosition(null); onDeleteSelection(); }}>删除所选 {selectedIds.length} 个节目</MenuItem> : null}
+      <MenuItem icon={ListPlus} onSelect={() => { setPosition(null); onAddItem(); }}>新建空白节目</MenuItem>
+    </Menu> : null}
   </div>;
 }

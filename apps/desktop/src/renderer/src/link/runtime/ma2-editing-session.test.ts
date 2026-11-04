@@ -5,7 +5,7 @@ import { importMa2TimecodeCommand } from '@tb/core/link';
 import { convertMa2Timecode } from '../../../../main/link/ma2-timecode-conversion';
 import { useDocumentStore } from '../stores/document-store';
 import { importCachedMa2, scanMa2, useMa2ReadStore } from '../stores/ma2-read-store';
-import { useMa2AutoSyncStore } from './use-ma2-auto-sync';
+import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { prepareMa2Editing } from './ma2-editing-session';
 import { scanMa2Materials } from '../stores/ma2-material-read-store';
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
@@ -28,7 +28,7 @@ beforeEach(() => {
   const bound = importMa2TimecodeCommand('song', convertMa2Timecode(xml, [sequence], 9902)).execute(project);
   bound.ma2ReadState = { source: '192.0.2.1:30000', catalog, pairs: {}, failures: [], message: '', selectedTarget: null, query: '', filter: 'all' };
   useDocumentStore.getState().setProject(bound, 'test.tblink');
-  useMa2AutoSyncStore.setState({ request: null, status: 'off' });
+  useMa2SyncStore.setState({ songs: {} });
   useMa2ReadStore.setState({ busy: false });
   readCatalog.mockResolvedValue(catalog);
   vi.stubGlobal('window', { tbLink: { readMa2Catalog: readCatalog } });
@@ -41,7 +41,7 @@ it('重新连接核对目录并复用缓存，等待明确开始同步', async (
   expect(scanMa2).not.toHaveBeenCalled();
   expect(importCachedMa2).toHaveBeenCalledOnce();
   expect(scanMa2Materials).toHaveBeenCalledWith(connection, false);
-  expect(useMa2AutoSyncStore.getState().request).toBeNull();
+  expect(useMa2SyncStore.getState().songs).toEqual({});
   expect(message).toContain('实时同步');
   expect(message).toContain('工程里保存的控台数据');
 });
@@ -57,14 +57,14 @@ it('目录响应晚到时不向新工程导入或启用同步', async () => {
   readCatalog.mockImplementation(() => { useDocumentStore.getState().setProject(createEmptyLinkProject('另一工程'), null); return Promise.resolve(catalog); });
   await expect(prepareMa2Editing(connection, useDocumentStore.getState().documentId)).rejects.toThrow('工程已切换');
   expect(importCachedMa2).not.toHaveBeenCalled(); expect(scanMa2).not.toHaveBeenCalled();
-  expect(useMa2AutoSyncStore.getState().request).toBeNull();
+  expect(useMa2SyncStore.getState().songs).toEqual({});
 });
 it('连接之前的本地修改保留，不能因连接动作自动覆盖控台', async () => {
   const project = structuredClone(useDocumentStore.getState().project!);
   project.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[0]!.at = 1000;
   useDocumentStore.getState().setProject(project, 'test.tblink');
   expect(await prepareMa2Editing(connection, useDocumentStore.getState().documentId)).toContain('连接前做的本地修改');
-  expect(useMa2AutoSyncStore.getState().request).toBeNull();
+  expect(useMa2SyncStore.getState().songs).toEqual({});
 });
 it('含软件不转换的控台动作的时间线照样可写回，动作原样保留（2026-10-26）', async () => {
   const project = structuredClone(useDocumentStore.getState().project!);
@@ -72,5 +72,5 @@ it('含软件不转换的控台动作的时间线照样可写回，动作原样�
   useDocumentStore.getState().setProject(project, 'test.tblink');
   const summary = await prepareMa2Editing(connection, useDocumentStore.getState().documentId);
   expect(summary).toContain('1 条含控台原样动作'); expect(summary).not.toContain('还没有可以写回控台的时间线');
-  expect(importCachedMa2).toHaveBeenCalledOnce(); expect(useMa2AutoSyncStore.getState().request).toBeNull();
+  expect(importCachedMa2).toHaveBeenCalledOnce(); expect(useMa2SyncStore.getState().songs).toEqual({});
 });

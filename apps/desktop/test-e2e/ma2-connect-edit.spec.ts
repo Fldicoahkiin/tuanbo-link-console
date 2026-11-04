@@ -45,7 +45,7 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByLabel('MA2 连接方式').selectOption('network');
     await page.getByRole('button', { name: /^(连接控台|读取 Cue)$/ }).click();
-    await expect(page.getByText(/可在顶部打开“实时同步”/)).toBeVisible();
+    await expect(page.getByText(/灯光工作台左下角的“实时同步”开着时/)).toBeVisible();
     await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.locator('.waveform-cue-point')).toHaveCount(2);
     expect(await app.evaluate(() => process.env.TBLINK_EDIT_REQUEST)).toBeUndefined();
@@ -58,7 +58,7 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
     await page.mouse.move(first.x + 20 + (second.x - first.x) * 700 / 1500, first.y + first.height / 2, { steps: 12 });
     await page.mouse.up();
     await page.getByRole('button', { name: '同步状态详情', exact: true }).click();
-    await expect(page.getByRole('region', { name: '同步状态详情' })).toContainText('回读确认');
+    await expect(page.getByRole('dialog', { name: '同步状态详情' })).toContainText('回读确认');
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!.ma2Bindings![0]!.baselineTracks[0]!.clips[0]!.events[0]!.at)).toBe(700);
     const sent = await app.evaluate(() => process.env.TBLINK_EDIT_REQUEST);
     expect(ma2ApplyRequestSchema.parse(JSON.parse(sent ?? 'null')).document.tracks[0]!.clips[0]!.events[0]!.at).toBeCloseTo(700, -1);

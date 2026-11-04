@@ -10,7 +10,7 @@ export function importLightingReaper(text: string, externalMidi: ReadonlyMap<str
   const root = parseRpp(text);
   if (root.tag !== 'REAPER_PROJECT') throw new Error('不是 REAPER 工程');
   const resolveMidi = externalMidiResolver(externalMidi, projectPath);
-  const document = createLightingDocument(); document.outputMode = 'direct';
+  const document = createLightingDocument();
   const tempo = line(root, 'TEMPO');
   const bpm = numeric(tempo?.[1] ?? '120');
   const hasSignature = tempo?.[2] !== undefined || tempo?.[3] !== undefined;

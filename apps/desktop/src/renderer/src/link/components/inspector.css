@@ -1,0 +1,72 @@
+/*
+ * The editor's property panel from the 2026-10-30 interface rework, in the pages layer: the picture
+ * layout of a clip or camera Cue, a Cue's name, timecode and notes, and the audio clip fields. The
+ * inputs, switches and buttons are the shared ones of link/ui; this file only places them.
+ */
+@layer pages {
+  .cue-inspector .layout-preset-row { display: flex; flex-wrap: wrap; gap: var(--space-half); }
+  .cue-inspector .visual-layout-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1) var(--space-2); }
+  .cue-inspector .layout-number { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; gap: var(--space-1); min-width: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
+  .cue-inspector .layout-number > .ui-unit { max-width: 160px; }
+  .cue-inspector .visual-toggle { min-width: 0; font-size: var(--type-caption); }
+
+  .cue-inspector .cue-detail-header { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
+  .cue-inspector .cue-detail-header > .title-input { flex: 1; min-width: 0; max-width: none; font-weight: 500; }
+  .cue-inspector .cue-enabled { flex: none; gap: var(--space-1); margin-right: auto; }
+  .cue-inspector .timecode-editor { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-1); max-width: 420px; }
+  .cue-inspector .timecode-editor label { display: grid; gap: var(--space-half); min-width: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
+  .cue-inspector .timecode-editor .ui-input { max-width: none; }
+  .cue-inspector .cue-notes { height: 32px; min-height: 32px; padding-block: 8px; }
+
+  .cue-inspector .audio-inspector fieldset { display: grid; gap: var(--space-1); min-width: 0; margin: 0; padding: 0; border: 0; }
+  .cue-inspector .audio-inspector fieldset > .ui-button { justify-self: start; }
+  .cue-inspector .audio-inspector p { margin: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.6 var(--font-ui); }
+  .cue-inspector .audio-beat-properties { display: grid; gap: var(--space-1); }
+  .cue-inspector .audio-beat-properties h3 { margin: 0; }
+  .cue-inspector .audio-beat-properties > .ui-button { justify-self: start; }
+  .cue-inspector .audio-segment-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-2); }
+  .cue-inspector .audio-segment-fields label { display: grid; gap: var(--space-half); min-width: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
+  .cue-inspector :is(.audio-edit-actions, .audio-beat-levels) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-half); }
+
+  .cue-inspector .action-card-header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); margin: 0 0 var(--space-2); }
+  .cue-inspector .action-card-header > .action-kind { flex: 1 1 180px; max-width: none; }
+  .cue-inspector .action-card-header > .action-name { flex: 1 1 120px; width: 0; max-width: none; }
+  .cue-inspector .action-order { color: var(--color-text-secondary); font: 400 var(--type-caption)/1 var(--font-numeric); }
+  .cue-inspector .action-tools { display: flex; gap: 2px; margin-left: auto; }
+  @media (hover: hover) and (pointer: fine) {
+    .cue-inspector .action-delete:hover:not(:disabled) { color: var(--color-danger); background: var(--color-danger-soft); }
+  }
+  .cue-inspector .action-card .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-2); }
+
+  /* A lighting point or track (2026-11-01): the audition switch, then the point's or track's fields. */
+  .cue-inspector .lighting-inspector-host { display: grid; align-content: start; gap: var(--space-2); min-height: 0; padding: var(--space-2) var(--space-3) var(--space-3); overflow: auto; }
+  .cue-inspector .lighting-audition-switch { padding-bottom: var(--space-2); border-bottom: 1px solid var(--color-separator); }
+  .cue-inspector .lighting-audition-switch small { overflow-wrap: anywhere; }
+  .cue-inspector .lighting-inspector { display: grid; align-content: start; gap: var(--space-2); min-width: 0; height: auto; padding: 0; overflow: visible; }
+  .cue-inspector .lighting-inspector-source .ui-field { grid-template-columns: 72px minmax(0, 1fr); }
+  .cue-inspector .lighting-inspector-source .ui-field-label { font-size: var(--type-control); }
+  .cue-inspector .lighting-inspector-header { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-2); min-width: 0; }
+  .cue-inspector .lighting-inspector-header > div { display: grid; flex: 1; gap: var(--space-half); min-width: 0; }
+  .cue-inspector .lighting-inspector-eyebrow { color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
+  .cue-inspector .lighting-inspector-header strong { overflow: hidden; color: var(--color-text-strong); font: 500 var(--type-body)/1.4 var(--font-ui); white-space: nowrap; text-overflow: ellipsis; }
+  .cue-inspector .lighting-inspector-name { max-width: none; font-weight: 500; }
+  .cue-inspector .lighting-inspector-header > :is(output, .lighting-inspector-count) { flex: none; padding-bottom: 8px; color: var(--color-text-secondary); font: 400 var(--type-control)/1 var(--font-numeric); }
+  .cue-inspector .lighting-inspector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--space-2); min-width: 0; }
+  .cue-inspector .lighting-inspector-grid .ui-input[type='number'] { max-width: none; }
+  .cue-inspector .lighting-inspector-value { display: grid; align-content: start; gap: var(--space-half); min-width: 0; }
+  .cue-inspector .lighting-inspector-value > span { color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
+  .cue-inspector .lighting-inspector-value > strong { padding-block: 8px; color: var(--color-text); font: 400 var(--type-control)/1.4 var(--font-ui); overflow-wrap: anywhere; }
+  .cue-inspector :is(.lighting-inspector-hint, .lighting-inspector-empty) { grid-column: 1 / -1; margin: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.6 var(--font-ui); }
+  .cue-inspector .lighting-inspector-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); padding-top: var(--space-2); border-top: 1px solid var(--color-separator); }
+  .cue-inspector .lighting-inspector-actions > .ui-button[data-variant='danger'] { margin-left: auto; }
+  .cue-inspector .lighting-inspector > .ui-button { justify-self: start; }
+  .cue-inspector .lighting-track-more > .ui-disclosure-body { padding-left: 0; }
+  .cue-inspector .lighting-track-more > .ui-disclosure-body > .ui-button { justify-self: start; }
+  .cue-inspector .lighting-track-color { box-sizing: border-box; width: 48px; height: 32px; padding: 2px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-input); cursor: pointer; }
+
+  @container (max-width: 380px) {
+    .cue-inspector .visual-layout-grid { grid-template-columns: minmax(0, 1fr); }
+    .cue-inspector .cue-detail-header { flex-wrap: wrap; }
+    .cue-inspector .cue-detail-header > .title-input { flex-basis: 100%; }
+  }
+}

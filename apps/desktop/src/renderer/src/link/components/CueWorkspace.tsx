@@ -17,6 +17,8 @@ import { createPortal } from 'react-dom';
 import type { ProjectPlayer } from './ProjectPlayerControls';
 import { useEditorProgram, useEditorTransport } from './useEditorTransport';
 import { useEffect, useMemo, useState } from 'react';
+import { Button, Switch } from '../ui';
+import './inspector.css';
 import {
   addMediaFolderCommand,
   placeEmptyLightingCue,
@@ -69,7 +71,8 @@ type Props = {
   player: ProjectPlayer;
   sidebarHost: HTMLDivElement | null;
   toolbarHost: HTMLDivElement | null;
-  actionsHost: HTMLDivElement | null;
+  /** The sidebar place for the lighting workbench's console sync controls. */
+  syncHost: HTMLDivElement | null;
   coordinator: LinkRuntimeCoordinator | null;
   notify: (message: string, tone?: 'info' | 'error') => void;
   documentActions: DocumentActionProps;
@@ -81,7 +84,7 @@ function useTimelineReferenceAudio(audio: LinkProject['rundown'][number]['refere
     : null, [audio, projectPath, url]);
 }
 
-export function CueWorkspace({ workspace = 'visual', actionsHost, player, sidebarHost, toolbarHost, coordinator, notify, documentActions }: Props): JSX.Element {
+export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHost, toolbarHost, coordinator, notify, documentActions }: Props): JSX.Element {
   const lightingWorkspace = workspace === 'lighting';
   const librarySplit = useLightingLibrarySplit();
   // Low power only unloads the video editor's preview; the lighting workbench keeps its full timeline layout.
@@ -139,7 +142,7 @@ export function CueWorkspace({ workspace = 'visual', actionsHost, player, sideba
   return <div className={`cue-studio${lightingWorkspace ? ' lighting-workbench' : ''}${lowPower ? ' low-power-workspace' : ''}`} data-inspector={true}>
     {!lightingWorkspace && item && lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools key={item.id} tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null}
     {toolbarHost ? createPortal(<CueRundownHeader item={item} notify={notify} documentActions={documentActions} />, toolbarHost) : null}
-    {lightingWorkspace && actionsHost ? createPortal(<Ma2PendingChanges playing={playing || runtimeState !== 'idle'} notify={notify} />, actionsHost) : null}
+    {lightingWorkspace && syncHost ? createPortal(<Ma2PendingChanges playing={playing || runtimeState !== 'idle'} notify={notify} />, syncHost) : null}
     <div className={`cue-studio-grid${lightingSelection ? ' has-lighting-editor' : ''}`} style={workspaceLayout.style}>
       {sidebarHost && !lightingWorkspace ? createPortal(<ResourceLibrary
         folders={project.mediaFolders} assets={project.mediaAssets}
@@ -189,8 +192,8 @@ export function CueWorkspace({ workspace = 'visual', actionsHost, player, sideba
             onMoveObsToTop={(id) => { const entry = item?.cues.find((value) => value.id === id); if (entry && item?.visualLayers[0]) moveCue(id, timecodeToMilliseconds(entry.timecode, project.timebase.frameRate), item.visualLayers[0].id); }}
             onRemoveObs={removeCue} onDropObsResource={addObsResource} />{<button className="workspace-splitter vertical" aria-label="调整属性面板宽度" onPointerDown={(event) => workspaceLayout.beginResize('inspector', event)} onKeyDown={event => workspaceLayout.resizeWithKeyboard('inspector', event)} />}</> : null}
 
-      {lightingSelection && !lightingWorkspace ? <aside className="cue-inspector panel"><div className="panel-title"><span>灯光属性</span><button onClick={showCommonProperties}>常用设置</button></div><div className="lighting-inspector-host"><label><input type="checkbox" aria-label="选中 Cue 实时播放" checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />选中 Cue 实时播放</label><p role="status">{audition.enabled ? audition.status : '已关闭选中即播放'}</p>{lightingSelection ? <LightingTimelineInspector onOpenTools={openLightingTool} onError={(message) => notify(message, 'error')} preview={lightingPreview} onPreviewChange={setLightingPreview} document={lightingDocument} trackId={lightingSelection.trackId} selectedClipId={lightingSelection.clipId} selectedEventId={lightingSelection.eventId ?? null} selectedEventIds={lightingSelection.eventIds ?? []} onSelect={(trackId, clipId) => setLightingSelection({ trackId, clipId })} onChange={changeLighting} /> : null}</div></aside> : lightingWorkspace ? null : <aside className="cue-inspector panel" key={`${cue?.id ?? clip?.id ?? 'empty'}:${cue || clip ? revision : currentItemId}`}>
-        <div className="panel-title"><span>{cue ? '画面与动作' : clip ? '媒体属性' : audioEditor.selected ? '音频属性' : '属性'}</span>{cue || clip || audioEditor.selected ? <button onClick={showCommonProperties}>常用设置</button> : null}</div>
+      {lightingSelection && !lightingWorkspace ? <aside className="cue-inspector panel"><div className="panel-title"><span>灯光属性</span><Button variant="ghost" size="sm" onClick={showCommonProperties}>常用设置</Button></div><div className="lighting-inspector-host"><Switch className="lighting-audition-switch" label="选中 Cue 实时播放" aria-label="选中 Cue 实时播放" help={audition.enabled ? audition.status : '已关闭选中即播放'} checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />{lightingSelection ? <LightingTimelineInspector onOpenTools={openLightingTool} onError={(message) => notify(message, 'error')} preview={lightingPreview} onPreviewChange={setLightingPreview} document={lightingDocument} trackId={lightingSelection.trackId} selectedClipId={lightingSelection.clipId} selectedEventId={lightingSelection.eventId ?? null} selectedEventIds={lightingSelection.eventIds ?? []} onSelect={(trackId, clipId) => setLightingSelection({ trackId, clipId })} onChange={changeLighting} /> : null}</div></aside> : lightingWorkspace ? null : <aside className="cue-inspector panel" key={`${cue?.id ?? clip?.id ?? 'empty'}:${cue || clip ? revision : currentItemId}`}>
+        <div className="panel-title"><span>{cue ? '画面与动作' : clip ? '媒体属性' : audioEditor.selected ? '音频属性' : '属性'}</span>{cue || clip || audioEditor.selected ? <Button variant="ghost" size="sm" onClick={showCommonProperties}>常用设置</Button> : null}</div>
         {cue && item ? <CueInspector itemId={item.id} cue={cue} frameRate={project.timebase.frameRate} inventory={inventory} execute={execute} testAction={testAction} /> : clip && item && selectedAsset ? <ClipInspector
           clip={clip} asset={selectedAsset}
           itemId={item.id} notify={notify}
@@ -240,7 +243,7 @@ export function CueWorkspace({ workspace = 'visual', actionsHost, player, sideba
           onDeleteClip={removeClip}
           onDeleteCue={removeCue}
         /> : <div className="empty-panel studio-empty"><MonitorPlay /><h3>先选择当前节目</h3><p>然后把本地素材或 OBS 场景、来源拖到时间线上。</p></div>}
-        {lightingWorkspace && item ? <LightingEffectDock itemId={item.id} onCreated={selectCreatedCue} onAuditionTemplate={audition.selectTemplate} auditionStatus={audition.enabled ? audition.status : '已关闭选中即播放'} sidebarHost={sidebarHost} key={item.id} pointDetails={pointDetails} cueSelectionVersion={cueSelectionVersion} onLibrary={() => { setAnalysisOpen(false); setLightingTool(null); setPointDetails(false); }} externalPanel={analysisOpen ? <div className="music-analysis-host" ref={setAnalysisHost} /> : lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools inline tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null} playbackSettings={<><label className="lighting-output-choice"><span><input type="checkbox" aria-label="选中 Cue 实时播放" checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />时间线选中 Cue 试听</span><small role="status">{audition.enabled ? audition.status : '已关闭选中即播放'}</small></label></>} headerActions={<div className="lighting-header-actions"><button aria-current={lightingTool === 'files' ? 'page' : undefined} title="导入 / 导出" aria-label="导入 / 导出" onClick={() => openLightingTool('files')} disabled={playing || runtimeState !== 'idle'}><FolderInput /><span>导入与导出</span></button></div>} eventId={lightingSelection?.eventId} ms={playheadMs} durationMs={timelineReferenceAudio?.durationMs ?? 0} onNew={showCommonProperties} document={lightingDocument} disabled={false} onStamp={id => effectStamp.stamp(id, externalTransport && playing && clock?.read().ready ? clock.read().positionMs : playheadMs)} onChange={changeLighting} /> : null}
+        {lightingWorkspace && item ? <LightingEffectDock itemId={item.id} onCreated={selectCreatedCue} onAuditionTemplate={audition.selectTemplate} auditionStatus={audition.enabled ? audition.status : '已关闭选中即播放'} sidebarHost={sidebarHost} key={item.id} pointDetails={pointDetails} cueSelectionVersion={cueSelectionVersion} onLibrary={() => { setAnalysisOpen(false); setLightingTool(null); setPointDetails(false); }} externalPanel={analysisOpen ? <div className="music-analysis-host" ref={setAnalysisHost} /> : lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools inline tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null} playbackSettings={<Switch className="lighting-audition-switch" label="时间线选中 Cue 试听" aria-label="选中 Cue 实时播放" help={audition.enabled ? audition.status : '已关闭选中即播放'} checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />} headerActions={<Button variant="ghost" size="sm" icon={FolderInput} aria-pressed={lightingTool === 'files'} aria-label="导入 / 导出" onClick={() => openLightingTool('files')} disabled={playing || runtimeState !== 'idle'}>导入与导出</Button>} eventId={lightingSelection?.eventId} ms={playheadMs} durationMs={timelineReferenceAudio?.durationMs ?? 0} onNew={showCommonProperties} document={lightingDocument} disabled={false} onStamp={id => effectStamp.stamp(id, externalTransport && playing && clock?.read().ready ? clock.read().positionMs : playheadMs)} onChange={changeLighting} /> : null}
       </main>
 
     </div>

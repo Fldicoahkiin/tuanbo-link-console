@@ -30,7 +30,6 @@ export const linkSaveResultSchema = z.discriminatedUnion('status', [
 ]);
 export const linkSaveResponseSchema = linkSaveRequestSchema.extend({ result: linkSaveResultSchema }).strict();
 export const linkRuntimeActiveSchema = z.boolean();
-export const linkInternalAudioCaptureSchema = z.object({ enabled: z.boolean(), sceneNames: z.array(z.string().min(1)).max(1000).optional() });
 export const linkWindowControlActionSchema = z.enum(['minimize', 'toggleMaximize', 'close']);
 
 export const linkManagedMediaEventSchema = z.object({

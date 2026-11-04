@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type IntegrationProfile } from '@tb/schema';
-import { internalAudioEngine, internalAudioEngineLabel, projectOutputsMtc } from './internal-audio-engine';
+import { legacyAudioDeviceNotice, playerEngineLabel, projectOutputsMtc } from './internal-audio-engine';
 import { createDefaultIntegrationProfile } from './local-integration-profile';
 
 function project(outputMode?: 'timecode' | 'direct' | 'network') {
@@ -13,23 +13,22 @@ function profile(audioEngine: 'browser' | 'native' | undefined, mtcPort: boolean
   return value;
 }
 
-it('未单独设置引擎的档案默认用原生引擎；输出时间码时明确选了浏览器引擎就开播前拒绝，不偷偷切换', () => {
-  expect(internalAudioEngine(profile(undefined, true), project())).toEqual({ engine: 'native', outputsMtc: true, blocked: null });
-  expect(internalAudioEngine(profile(undefined, false), project())).toEqual({ engine: 'native', outputsMtc: false, blocked: null });
-  const chosen = internalAudioEngine(profile('browser', true), project());
-  expect(chosen).toMatchObject({ engine: 'browser', outputsMtc: true });
-  expect(chosen.blocked).toContain('请在“播放设置”里点“改用 Windows 原生音频”后再播放');
-  expect(internalAudioEngine(profile('browser', false), project('timecode')).blocked).not.toBeNull();
-  const native = internalAudioEngine(profile('native', true), project('timecode'));
-  expect(native).toEqual({ engine: 'native', outputsMtc: true, blocked: null });
-  expect(internalAudioEngineLabel(native)).toBe('Windows 原生音频（同时发送 MIDI 时间码）');
+it('只有 Windows 原生音频一种播放方式：档案里写着旧的浏览器方式也照样用原生音频', () => {
+  expect(playerEngineLabel(profile('browser', true), project())).toBe('Windows 原生音频（同时发送 MIDI 时间码）');
+  expect(playerEngineLabel(profile(undefined, false), project())).toBe('Windows 原生音频');
 });
 
-it('没有灯光的工程（纯音频加画面）继续可用浏览器引擎；有灯光的歌不论保存的输出方式都发时间码', () => {
+it('有灯光的歌不论保存的输出方式都发时间码', () => {
   expect(projectOutputsMtc(project())).toBe(false);
-  const choice = internalAudioEngine(profile('browser', false), project());
-  expect(choice).toEqual({ engine: 'browser', outputsMtc: false, blocked: null });
-  expect(internalAudioEngineLabel(choice)).toBe('浏览器音频');
   for (const mode of ['timecode', 'direct', 'network'] as const) expect(projectOutputsMtc(project(mode))).toBe(true);
   expect(projectOutputsMtc({ ...project('timecode'), playbackSource: 'p1' })).toBe(false);
+  expect(playerEngineLabel(profile(undefined, false), project('timecode'))).toBe('Windows 原生音频（同时发送 MIDI 时间码）');
+});
+
+it('旧播放方式下选过的设备不能直接用：明确告诉操作员现在用默认设备，不悄悄换', () => {
+  const old = { audioEngine: 'browser' as const, audioOutputDeviceId: 'browser-a', mtcOutputPortProfileId: null };
+  expect(legacyAudioDeviceNotice(old)).toContain('Windows 默认播放设备');
+  expect(legacyAudioDeviceNotice({ ...old, nativeAudioOutputDeviceId: 'native-a' })).toBeNull();
+  expect(legacyAudioDeviceNotice({ ...old, audioOutputDeviceId: 'default' })).toBeNull();
+  expect(legacyAudioDeviceNotice({ ...old, audioEngine: 'native' })).toBeNull();
 });

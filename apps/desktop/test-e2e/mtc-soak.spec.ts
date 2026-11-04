@@ -153,8 +153,8 @@ test('真实媒体时钟与 Windows MIDI 回环持续测量', async ({}, info) =
     await writeFile(info.outputPath('route.json'), JSON.stringify(route, null, 2));
     if (route.matched !== 8 || route.mismatches !== 0 || route.sent.length !== 0) throw new Error('MIDI 回环路由预检失败：测试字节未完整返回；请核对 A/B 配对或 Windows MIDI 驱动，尚未开始播放');
     if (internal) {
-      await page.locator('.player-transport .primary-button').click();
-      await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+      await page.locator('.home-player-play').click();
+      await expect(page.locator('.home-player[data-status="playing"]')).toBeVisible();
     } else {
       await page.locator('.lighting-track-name').click();
       await page.getByLabel('灯光播放方式').selectOption('linked');

@@ -4,9 +4,9 @@ import { X, Check, Save, Layers } from 'lucide-react';
 import { LightingTempoMap, lightingEventTime, removeLightingEffects, placeEmptyLightingCue } from '@tb/core/link';
 import { lightingDocumentSchema, lightingTrackSchema, type LightingDocument, type LightingEvent } from '@tb/schema';
 import { placeEffect } from './useLightingEffectStamp';
-import { LightingCuePreparation } from './LightingCuePreparation';
 import { CONSOLE_CUE_DRAG } from './lighting-material-drag';
 import { Ma2ConsoleName } from './Ma2ConsoleName';
+import { Button } from '../ui';
 import { ma2ConsoleCuePoolName, ma2ConsoleSequenceName, ma2SequenceLibrary, type LibrarySequence } from '../view-models/ma2-sequence-library';
 
 export type CueIngredient = { name: string; sequenceName?: string; sequence: number; cue: string; executor: string; delayMs: number; preparation?: Extract<LightingEvent, { kind: 'ma2' }>['preparation'] };
@@ -28,7 +28,7 @@ export function cueIngredients(document: LightingDocument, eventId?: string, lib
 }
 export function saveCueIngredients(document: LightingDocument, ingredients: CueIngredient[], name: string, ms: number, durationMs: number, eventId?: string): LightingDocument {
   const original = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === eventId || event.effectGroupId === eventId);
-  const runMode = original?.kind === 'ma2' || original?.kind === 'empty-cue' && original.runMode ? original.runMode : document.outputMode === 'timecode' ? undefined : 'independent';
+  const runMode = original?.kind === 'ma2' || original?.kind === 'empty-cue' ? original.runMode : undefined;
   if (!ingredients.length) return placeEmptyLightingCue(document, eventId ?? crypto.randomUUID(), ms, durationMs, name.trim());
   if (ingredients.some(entry => entry.executor && !/^[1-9]\d*\.[1-9]\d*$/.test(entry.executor))) throw new Error('执行器格式应为“页号.编号”，例如 1.5；留空则使用序列池');
   if (new Set(ingredients.map(entry => `${entry.executor ? `executor:${entry.executor}` : `sequence:${entry.sequence}`}:${entry.delayMs}`)).size !== ingredients.length) throw new Error('同一个序列或执行器在同一时刻只能运行一个 Cue。请调整组合延迟，或移除冲突的素材');
@@ -109,16 +109,20 @@ export function LightingCueComposer({ templateId, document, eventId, ms, duratio
     }} />
     {document.consoleSong?.points.some(point => point.id === targetId) ? <small className="cue-console-address">{document.consoleSong.executor ? `按钮第 ${document.consoleSong.executor.split('.')[0]} 页 · ${document.consoleSong.executor.split('.')[1]} 格` : `Layout ${document.consoleSong.layout}`} · 序列 {document.consoleSong.sequence} · Cue {Number(document.consoleSong.points.find(point => point.id === targetId)?.cue)}</small> : null}
     {document.consoleSong?.points.some(point => point.id === targetId) ? <Ma2ConsoleName name={name}/> : null}
-    {stored?.kind === 'ma2' || stored?.kind === 'empty-cue' ? <div className="cue-run-settings">
-      <div className="cue-run-mode" role="group" aria-label="Cue 运行方式">{([['independent', '单独运行'], ['follow', '跟随上一个']] as const).map(([value, title]) => <button key={value} aria-pressed={(stored.runMode ?? 'follow') === value} disabled={disabled || value === 'independent' && document.outputMode === 'timecode'} onClick={() => {
+    {(stored?.kind === 'ma2' || stored?.kind === 'empty-cue') && stored.runMode === 'independent' ? <div className="cue-run-settings">
+      {/* 2026-11-01: lighting only follows the timecode, so "单独运行" from the removed direct playback no longer applies. */}
+      <small>这个 Cue 还是以前的“单独运行”。现在灯光由控台按时间码运行，这个设置不起作用，同步到控台的原有时间线时还会被拦下。</small>
+      <Button size="sm" variant="secondary" disabled={disabled} onClick={() => {
         try {
           const groupId = stored.effectGroupId ?? stored.id;
-          const next = lightingDocumentSchema.parse({ ...document, version: 2, tracks: document.tracks.map(track => ({ ...track, clips: track.clips.map(clip => ({ ...clip, events: clip.events.map(event => (event.kind === 'ma2' || event.kind === 'empty-cue') && (event.effectGroupId ?? event.id) === groupId ? { ...event, runMode: value } : event) })) })) });
-          if (onChange(next, `Cue ${title}`) === false) throw new Error('运行方式保存失败');
+          const next = lightingDocumentSchema.parse({ ...document, version: 2, tracks: document.tracks.map(track => ({ ...track, clips: track.clips.map(clip => ({ ...clip, events: clip.events.map(event => {
+            if ((event.kind !== 'ma2' && event.kind !== 'empty-cue') || (event.effectGroupId ?? event.id) !== groupId) return event;
+            const rest = { ...event }; delete rest.runMode; return rest;
+          }) })) })) });
+          if (onChange(next, 'Cue 跟随上一个') === false) throw new Error('运行方式保存失败');
           setError('');
         } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-      }}>{title}</button>)}</div>
-      <small>{document.outputMode === 'timecode' ? '跟随时间码的工程由控台按时间线运行，不能选“单独运行”。' : stored.runMode === 'independent' ? '先结束前面的灯光组合，再运行这个 Cue。' : '保留前面的灯光组合，在上面叠加运行这个 Cue。'}{stored.kind === 'ma2' && stored.preparation ? ' 在埋步开始时切换。' : ''}{stored.kind === 'empty-cue' ? ' 空点位暂时不发指令，添加灯光或同步控台后生效。' : ''}</small>
+      }}>改成跟随上一个</Button>
     </div> : null}
     <div className="cue-composer-body"><div className="cue-content-heading"><span>包含素材</span><small>{ingredients.length}</small></div>
     <div className="cue-ingredients" aria-label="Cue 内容">{ingredients.map((entry, index) => <div className="cue-ingredient" key={`${entry.sequence}:${entry.executor}:${entry.cue}:${entry.delayMs}`}>
@@ -132,8 +136,11 @@ export function LightingCueComposer({ templateId, document, eventId, ms, duratio
     </div>)}</div>
     <div className="cue-drop-hint"><Layers /><span>{ingredients.length ? '拖入素材，或点素材上的 ＋' : '空 Cue · 拖入素材，或点素材上的 ＋'}</span></div>
     {eventId ? <small>素材修改会自动保存；空 Cue 不发送灯光指令。</small> : null}
-    {ingredients.length ? <LightingCuePreparation document={document} ingredients={ingredients} onChange={onIngredients} cueTime={cueTime} disabled={disabled} /> : null}
-    {ingredients.some(entry => entry.preparation) ? <small>埋步不能写入控台。这首歌含有埋步时无法同步到控台，演出时不会有灯光。请去掉埋步。</small> : null}
+    {ingredients.some(entry => entry.preparation) ? <div className="cue-run-settings">
+      {/* 2026-11-01: 埋步 only ran in the removed direct and network playback; the console timeline cannot hold it. */}
+      <small>这个 Cue 还带着以前的埋步。埋步写不进控台，带埋步的歌同步不到控台，演出时不会亮灯。</small>
+      <Button size="sm" variant="secondary" disabled={disabled} onClick={() => { onIngredients(ingredients.map(entry => { const rest = { ...entry }; delete rest.preparation; return rest; })); setSaved(false); }}>去掉埋步</Button>
+    </div> : null}
     <details className="cue-composer-advanced"><summary>存入素材库</summary><button disabled={disabled || !ingredients.length || !name.trim()} onClick={() => { try { const first = ingredients[0]!; const track = lightingTrackSchema.parse({id:crypto.randomUUID(),name:name.trim(),kind:'ma2',color:'#68c9ed',group:'',muted:false,solo:false,locked:false,channel:1,controller:7,portProfileId:'',noteNames:{},clips:[],cueStamp:{mode:'fixed',sequence:first.sequence,cue:first.cue,executor:first.executor}});const previous=document.templates.find(value=>value.id===templateId);const template={...previous,id:previous?.id ?? crypto.randomUUID(),name:name.trim(),track,nativeSequence:false,members:ingredients.map(({name,sequence,cue,executor,delayMs})=>({name,sequence,cue,executor,delayMs}))};const result=onChange({...document,templates:[...document.templates.filter(value=>value.id!==template.id),template]},'收藏灯光组合');if(result===false)throw new Error('保存组合失败');setError(''); } catch(cause){setError(cause instanceof Error ? cause.message : String(cause));} }}>{templateId ? '保存分类素材修改' : '保存为分类素材'}</button></details>
     {error ? <p role="alert">{error}</p> : null}
 

@@ -4,17 +4,17 @@ import { updateRundownItemCommand } from '@tb/core/link';
 import { Pencil } from 'lucide-react';
 import { useDocumentStore } from '../stores/document-store';
 import { DocumentActions, type DocumentActionProps } from './DocumentActions';
+import { Button, TextInput } from '../ui';
 
 export function CueRundownHeader({ item, documentActions, notify }: {
   item: RundownItem | null;
   documentActions: DocumentActionProps;
   notify: (message: string, tone?: 'info' | 'error') => void;
 }): JSX.Element {
-  return <header className="p1-project-ribbon editor-toolbar">
-    {item ? <ProgramName key={`${item.id}:${item.title}`} item={item} notify={notify} /> : <span className="editor-program-empty">未选择节目</span>}
-    <div className="toolbar-drag-space" />
-    <div className="editor-toolbar-actions"><DocumentActions {...documentActions} /></div>
-  </header>;
+  return <div className="titlebar-document" data-page="editor">
+    {item ? <ProgramName key={`${item.id}:${item.title}`} item={item} notify={notify} /> : <span className="titlebar-program-empty">未选择节目</span>}
+    <DocumentActions {...documentActions} />
+  </div>;
 }
 
 function ProgramName({ item, notify }: { item: RundownItem; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element {
@@ -32,7 +32,7 @@ function ProgramName({ item, notify }: { item: RundownItem; notify: (message: st
     }
     setEditing(false);
   };
-  return <div className="editor-program-name"><span>正在编辑</span>{editing
-    ? <input autoFocus aria-label="当前节目名称" value={name} onChange={(event) => setName(event.currentTarget.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { event.preventDefault(); setName(item.title); setEditing(false); } }} />
-    : <button onClick={() => setEditing(true)} title={item.title} aria-label={`修改节目名称：${item.title}`}><strong>{item.title}</strong><Pencil /></button>}</div>;
+  return <div className="titlebar-program"><span>正在编辑</span>{editing
+    ? <TextInput autoFocus aria-label="当前节目名称" value={name} onChange={(event) => setName(event.currentTarget.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { event.preventDefault(); setName(item.title); setEditing(false); } }} />
+    : <Button variant="ghost" className="titlebar-program-name" onClick={() => setEditing(true)} title={item.title} aria-label={`修改节目名称：${item.title}`}><strong>{item.title}</strong><Pencil aria-hidden="true" /></Button>}</div>;
 }

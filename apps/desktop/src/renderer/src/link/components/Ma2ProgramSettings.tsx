@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { useIntegrationStore } from '../stores/integration-store';
+import { Button, Card, Field, Notice, StatusBadge, Switch, TextInput } from '../ui';
+import type { ConnectionStatus } from '../view-models/connection-status';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 
 export function Ma2ProgramSettings({ disabled, notify }: {
@@ -28,21 +30,22 @@ export function Ma2ProgramSettings({ disabled, notify }: {
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setBusy(false); }
   };
-  return <section className="settings-section" aria-label="本机控台程序">
-    <div className="device-section-heading"><h3>本机控台与预演</h3></div>
-    <p className="settings-note">一键连接会打开选好的 onPC 和 MA 3D，已经在运行的会直接使用。程序是否运行、控台通信和 MIDI 输出会分别检查。装了多个版本时，请选择配套的版本。</p>
+  return <section className="settings-stack" aria-label="本机控台程序">
+    <p className="settings-lead">一键连接会打开选好的 onPC 和 MA 3D，已经在运行的直接用。程序是否运行、控台通信和 MIDI 输出分别检查。装了多个版本时，选配套的那个。</p>
     {(['ma2', 'ma3d'] as const).map(id => {
       const title = id === 'ma2' ? 'MA2 onPC' : 'MA 3D';
       const settings = profile?.[id];
       const process = processes[id];
-      return <div key={id} className="device-process-fields">
-        <label className="settings-row"><span>{title}</span><div className="device-path-control">
-          <input aria-label={`${title} 程序位置`} readOnly value={settings?.executablePath ?? ''} placeholder="一键识别或选择已安装的程序" />
-          <button disabled={disabled || busy} onClick={() => void update(id)} aria-label={`选择 ${title} 程序`}><FolderOpen />浏览</button>
-        </div></label>
-        <label className="settings-row"><span>一键启动 {title}</span><input type="checkbox" role="switch" checked={settings?.connectOnDemand ?? false} disabled={disabled || busy || !settings} onChange={event => void update(id, event.target.checked)} /></label>
-        <p className="settings-note">{process.status === 'running' ? `${title} 已运行` : process.error ?? `${title} 未运行`}</p>
-      </div>;
+      const running: ConnectionStatus = process.status === 'running' ? { state: 'ready', value: '已运行', detail: `${title} 正在运行` }
+        : process.error ? { state: 'error', value: '出错', detail: process.error } : { state: 'idle', value: '未运行', detail: `${title} 没有运行` };
+      return <Card key={id} level={3} title={title} actions={<StatusBadge name={title} status={running} />}>
+        <Field label="程序位置">{props => <div className="settings-path-control">
+          <TextInput {...props} aria-label={`${title} 程序位置`} readOnly value={settings?.executablePath ?? ''} placeholder="一键识别或选择已安装的程序" />
+          <Button variant="secondary" icon={FolderOpen} disabled={disabled || busy} onClick={() => void update(id)} aria-label={`选择 ${title} 程序`}>浏览</Button>
+        </div>}</Field>
+        <Switch label={`一键启动 ${title}`} help={settings ? '一键连接时顺便打开它' : '先选好程序位置'} checked={settings?.connectOnDemand ?? false} disabled={disabled || busy || !settings} onChange={event => void update(id, event.target.checked)} />
+        {process.error ? <Notice tone="error">{process.error}</Notice> : null}
+      </Card>;
     })}
   </section>;
 }

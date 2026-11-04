@@ -1,40 +1,74 @@
 import { useState } from 'react';
-import { Button } from './Button';
-import { SettingsActions, SettingsConfirm, SettingsFeedback, SettingsSwitch } from './SettingsControls';
-import type { SettingsCategory } from './settings-navigation';
-import { setPlaybackSourceCommand, setProjectFrameRateCommand } from '@tb/core/link';
-import type { MtcFrameRate } from '@tb/schema';
+import { ArrowRight, Film, FilePlus2, FolderOpen, Layers, ScanLine } from 'lucide-react';
+import { setInternalVideoAudioCommand, setPlaybackSourceCommand } from '@tb/core/link';
+import type { LinkProject } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { useDisplayPreferences } from '../stores/display-preferences-store';
-import { Film, Layers, LockKeyhole, ScanLine } from 'lucide-react';
+import { Button, Card, ChoiceGroup, Notice, Switch } from '../ui';
+import type { SettingsCategory } from './settings-navigation';
 
-type Props = { onCreate?: () => void; onOpen?: () => void; onNavigate?: (category: SettingsCategory) => void; section: 'playback' | 'seeking' | 'timecode' | 'workflow'; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void };
+type Notify = (message: string, tone?: 'info' | 'error') => void;
+/** A project without a source predates 联动台播放 and follows P1. */
+type PlaybackSource = NonNullable<LinkProject['playbackSource']>;
 
+const savedInProject = '已改好，记得保存工程';
 
-export function ProjectSettings({ section, disabled, notify, onCreate, onOpen, onNavigate }: Props): JSX.Element {
-  const [pendingRate, setPendingRate] = useState<MtcFrameRate | null>(null);
-  const [message, setMessage] = useState('');
-  const preciseSeeking = useDisplayPreferences((state) => state.preciseSeeking);
-  const project = useDocumentStore((state) => state.project);
-  const execute = useDocumentStore((state) => state.execute);
-  if (!project && (section === 'playback' || section === 'timecode')) return <SettingsFeedback>新建或打开工程后，可调整工程设置。<SettingsActions>{onCreate ? <Button onClick={onCreate}>新建工程</Button> : null}{onOpen ? <Button onClick={onOpen}>打开工程</Button> : null}</SettingsActions></SettingsFeedback>;
-  const changeFrameRate = (rate: MtcFrameRate): void => {
-    if (!project || rate === project.timebase.frameRate) return;
-    if (project.rundown.some((item) => item.cues.length > 0)) { setPendingRate(rate); return; }
-    try { execute(setProjectFrameRateCommand(rate)); setMessage('已应用到工程，请保存工程文件。'); }
-    catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
+/** 播放主控: who plays the music, and whether video clips keep their own sound. Saved in the project. */
+export function PlaybackSourceSettings({ disabled, notify, onCreate, onOpen, onNavigate }: {
+  disabled: boolean;
+  notify: Notify;
+  onCreate: () => void;
+  onOpen: () => void;
+  onNavigate: (category: SettingsCategory) => void;
+}): JSX.Element {
+  const project = useDocumentStore(state => state.project);
+  const execute = useDocumentStore(state => state.execute);
+  const [saved, setSaved] = useState(false);
+  if (!project) return <Notice title="还没有打开工程" actions={<>
+    <Button variant="primary" icon={FilePlus2} onClick={onCreate}>新建工程</Button>
+    <Button variant="secondary" icon={FolderOpen} onClick={onOpen}>打开工程</Button>
+  </>}>播放方式保存在工程里，新建或打开工程后才能设置。</Notice>;
+  const run = (change: () => void): void => {
+    try { change(); setSaved(true); }
+    catch (failure) { notify(failure instanceof Error ? failure.message : String(failure), 'error'); }
   };
-  return <fieldset className="settings-form project-settings-fields" disabled={disabled}>
-    {disabled ? <p className="settings-note"><LockKeyhole size={14} />停止播放后可修改设置</p> : null}
-    {section === 'playback' && project ? <><div className="settings-choice-group" role="radiogroup" aria-label="播放方式">{([{ value: 'internal', title: '联动台播放', help: '由联动台播放音乐，同时给灯光发送时间码。' }, { value: 'p1', title: '跟随 P1', help: '按 P1 发来的 MIDI 时间码跟随节目。' }] as const).map(option => <label className="settings-choice" key={option.value}><input type="radio" name="playback-source" checked={project.playbackSource === option.value} onChange={() => { execute(setPlaybackSourceCommand(option.value)); setMessage('已应用到工程，请保存工程文件。'); }} /><span>{option.title}<small>{option.help}</small></span></label>)}</div><Button className="secondary-button" onClick={() => onNavigate?.('audio')}>配置音频与 MIDI</Button></> : null}
-    {section === 'seeking' ? <><SettingsSwitch label="逐帧定位缓存" aria-label="视频定位缓存" checked={preciseSeeking} onChange={(event) => { try { useDisplayPreferences.getState().setPreciseSeeking(event.currentTarget.checked); } catch (error) { notify(`定位设置保存失败：${String(error)}`, 'error'); } }} /><p className="settings-note">原素材不变，第一次准备时会生成一份便于定位的副本，会多占一些磁盘空间。下次开播前检查时生效。</p>{!preciseSeeking ? <SettingsFeedback tone="warning">当前直接用原文件：有些编码格式可能定位不准或无法播放。</SettingsFeedback> : null}</> : null}
-    {section === 'timecode' && project ? <><label className="settings-row"><span>工程帧率</span><select aria-label="工程帧率" value={project.timebase.frameRate} onChange={(event) => changeFrameRate(event.currentTarget.value as MtcFrameRate)}>{(['24', '25', '29.97df', '30'] as const).map((rate) => <option key={rate} value={rate}>{rate} fps</option>)}</select></label><p className="settings-note">用来换算时间线和 Cue 的时间码，不会改变 OBS 的输出帧率。请和灯光控台或 P1 保持一致。</p></> : null}
-    {section === 'workflow' ? <div className="scene-workflow-notes">
-      <article><Layers /><div><h3>机位切换</h3><p>一个机位对应一个 OBS 场景，保留已有裁剪、拉腿与滤镜。</p></div></article>
-      <article><Film /><div><h3>素材与恢复</h3><p>每个素材使用独立场景。机位结束后，回到下层视频的对应位置。</p></div></article>
-      <article><ScanLine /><div><h3>画布与尺寸</h3><p>分辨率和画面方向在 OBS 里设置；素材和机位的时长在时间线上调整。</p></div></article>
-    </div> : null}
-    {message ? <p role="status" className="settings-note">{message}</p> : null}
-    {pendingRate && project ? <SettingsConfirm title="修改工程帧率？" confirmLabel="修改帧率" onClose={() => setPendingRate(null)} onConfirm={() => { try { execute(setProjectFrameRateCommand(pendingRate)); setMessage('已应用到工程，请保存工程文件。'); } catch (error) { notify(String(error), 'error'); } setPendingRate(null); }}>从 {project.timebase.frameRate} fps 改为 {pendingRate} fps 后，已有的 Cue 时间码会按新帧率换算。OBS 的输出帧率不变。</SettingsConfirm> : null}
-  </fieldset>;
+  return <>
+    <Card title="谁来播放音乐" actions={<Button variant="ghost" size="sm" icon={ArrowRight} onClick={() => onNavigate('audio')}>音频与 MIDI</Button>}>
+      <ChoiceGroup<PlaybackSource> label="播放方式" value={project.playbackSource ?? 'p1'} disabled={disabled} onChange={source => run(() => execute(setPlaybackSourceCommand(source)))} choices={[
+        { value: 'internal', title: '联动台播放', help: '联动台播放音乐，同时把时间码发给灯光控台。' },
+        { value: 'p1', title: '跟随 P1', help: 'P1 播放音乐，联动台按 P1 发来的时间码跟着走。' }
+      ]} />
+    </Card>
+    <Card title="视频原声">
+      <Switch label="播放视频素材自带的声音" aria-label="同时播放视频素材原声" help="联动台播放时，视频素材的声音和音乐一起放出来；关闭后只放音乐" disabled={disabled}
+        checked={project.internalVideoAudio === true} onChange={event => { const enabled = event.currentTarget.checked; run(() => execute(setInternalVideoAudioCommand(enabled))); }} />
+    </Card>
+    {saved ? <p className="settings-saved" role="status">{savedInProject}</p> : null}
+  </>;
+}
+
+/** 视频定位: whether clips get a copy that seeks to the exact frame. Saved on this computer. */
+export function SeekingSettings({ notify }: { notify: Notify }): JSX.Element {
+  const preciseSeeking = useDisplayPreferences(state => state.preciseSeeking);
+  return <Card>
+    <Switch label="逐帧定位缓存" aria-label="视频定位缓存" help="原素材不变。第一次准备时生成一份便于定位的副本，会多占一些磁盘空间；下次开播前检查时生效"
+      checked={preciseSeeking} onChange={event => {
+        try { useDisplayPreferences.getState().setPreciseSeeking(event.currentTarget.checked); }
+        catch (failure) { notify(`定位设置没有保存成功：${String(failure)}`, 'error'); }
+      }} />
+    {!preciseSeeking ? <Notice tone="warning">现在直接用原文件定位：有些编码格式可能定位不准或放不出来。</Notice> : null}
+  </Card>;
+}
+
+const sceneGuide = [
+  { icon: Layers, title: '机位切换', text: '一个机位对应一个 OBS 场景，保留已有的裁剪、拉腿和滤镜。' },
+  { icon: Film, title: '素材与恢复', text: '每个素材用自己的场景。机位片段结束后，回到下层视频的对应位置。' },
+  { icon: ScanLine, title: '画布与尺寸', text: '分辨率和画面方向在 OBS 里设置；素材和机位的时长在时间线上调整。' }
+] as const;
+
+/** 场景工作方式: how cameras and clips map to OBS scenes. Nothing to set. */
+export function SceneWorkflowGuide(): JSX.Element {
+  return <ul className="settings-guide">
+    {sceneGuide.map(({ icon: Icon, title, text }) => <li key={title}><Icon aria-hidden="true" /><div><h2>{title}</h2><p>{text}</p></div></li>)}
+  </ul>;
 }

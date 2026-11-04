@@ -1,0 +1,31 @@
+/*
+ * The timeline toolbar from the 2026-10-30 interface rework, in the pages layer. Three groups on one
+ * row: editing tools on the left, playback in the middle, the view on the right. The editor wraps them
+ * to a second row when the window is narrow; the lighting workbench keeps one row of 48 pixels and
+ * drops the frame buttons instead. The buttons, menus and drop-downs are the shared ones of link/ui.
+ */
+@layer pages {
+  .timeline-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1) var(--space-2); min-height: 52px; padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--color-separator); border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: var(--color-surface); }
+  .timeline-edit-controls, .timeline-view-controls, .timeline-transport, .timeline-stamp-controls, .cue-mouse-modes { display: flex; align-items: center; gap: var(--space-half); min-width: 0; }
+  .timeline-transport { gap: 2px; padding-inline: var(--space-1); border-inline: 1px solid var(--color-separator); }
+  .timeline-transport > .timeline-play-button { width: 36px; height: 36px; margin-inline: var(--space-half); border-radius: 50%; }
+  .timeline-transport > code { min-width: 104px; margin-left: var(--space-1); color: var(--color-text-strong); font: 600 16px/1 var(--font-numeric); font-variant-numeric: tabular-nums; letter-spacing: 0; }
+  .timeline-record-button[data-recording] { color: var(--color-danger); background: var(--color-danger-soft); }
+  .cue-mouse-modes { margin-right: var(--space-half); padding-right: var(--space-1); border-right: 1px solid var(--color-separator); }
+  .timeline-tool-error { display: inline-grid; place-items: center; width: 28px; height: 32px; color: var(--color-danger); }
+  .timeline-tool-error svg { width: 16px; height: 16px; }
+  .timeline-panel-button[data-tone='warning'] { color: var(--color-warning); }
+
+  .timeline-panel { display: grid; gap: var(--space-2); width: 248px; padding: var(--space-2); }
+  .timeline-display-panel { display: grid; gap: var(--space-half); }
+  .timeline-panel-note { margin: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.8 var(--font-ui); overflow-wrap: anywhere; }
+
+  .reference-timeline[data-lighting-timeline='true'] .timeline-toolbar { flex-wrap: nowrap; gap: var(--space-2); height: 48px; min-height: 48px; padding: 8px var(--space-2); border-radius: 0; }
+  .reference-timeline[data-lighting-timeline='true'] .timeline-transport { padding: 0; border: 0; }
+  .reference-timeline[data-lighting-timeline='true'] .timeline-transport > code { min-width: 96px; margin: 0; padding-inline: var(--space-1); font-size: 16px; font-weight: 600; }
+  @container lighting-timeline (max-width: 1050px) {
+    .reference-timeline[data-lighting-timeline='true'] .timeline-toolbar { gap: var(--space-1); padding-inline: var(--space-1); }
+    .reference-timeline[data-lighting-timeline='true'] :is(.timeline-edit-controls, .timeline-view-controls, .timeline-transport) { gap: 2px; }
+    .reference-timeline[data-lighting-timeline='true'] .timeline-transport > :is([aria-label='上一帧'], [aria-label='下一帧'], [aria-label='跳到时间线结尾']) { display: none; }
+  }
+}

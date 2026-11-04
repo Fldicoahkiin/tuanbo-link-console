@@ -1,22 +1,24 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { AudioWaveform, MonitorUp, type LucideIcon } from 'lucide-react';
-import { type LinkObsInventory } from '@tb/core/link';
-import type { LinkMidiAdapter } from '../../registry/link-midi-adapter';
-import { UpdateCenter } from './UpdateCenter';
-import { LicenseSettings } from './LicenseSettings';
-import { AppearanceControl } from './AppearanceControl';
-import { ShortcutSettings } from './ShortcutSettings';
-import { PlaybackPreferences } from './PlaybackPreferences';
-import { ProjectSettings } from './ProjectSettings';
-import { PowerModeSettings } from './PowerModeSettings';
-import { settingsScope, SETTINGS_SECTIONS, isDeviceSettingsCategory, type SettingsCategory } from './settings-navigation';
 import { useDocumentStore } from '../stores/document-store';
-import { SettingsPageHeader, SettingsFeedback } from './SettingsControls';
-import { Button } from './Button';
-import { DeviceConnectionsPage } from './DeviceConnectionsPage';
-import { FeedbackForm } from './FeedbackSettings';
-import { LogsWorkspace } from './LogsWorkspace';
 import { diagnosticContext } from '../view-models/diagnostic-context';
+import { Button, Notice } from '../ui';
+import { AppearanceControl } from './AppearanceControl';
+import { ArchiveSettings } from './ArchiveSettings';
+import { AudioMidiSettings, Ma2Settings, MaintenanceSettings } from './DeviceSettings';
+import { FeedbackForm } from './FeedbackSettings';
+import { LicenseSettings } from './LicenseSettings';
+import { LogsWorkspace } from './LogsWorkspace';
+import { LoopMidiSettings } from './LoopMidiSettings';
+import { PlaybackPreferences } from './PlaybackPreferences';
+import { PlaybackSourceSettings, SceneWorkflowGuide, SeekingSettings } from './ProjectSettings';
+import { PowerModeSettings } from './PowerModeSettings';
+import { SettingsPage } from './SettingsPage';
+import { SETTINGS_SECTIONS, type SettingsCategory } from './settings-navigation';
+import { ShortcutSettings } from './ShortcutSettings';
+import { SongImportSettings } from './SongImportSettings';
+import { TimecodeSettings } from './TimecodeSettings';
+import { UpdateCenter } from './UpdateCenter';
 
 type Notify = (message: string, tone?: 'info' | 'error') => void;
 
@@ -43,7 +45,16 @@ function OverviewDevice({ icon: Icon, kind, name, state, note }: {
   return <article className="integration-overview-device"><div className={`program-icon ${kind}`}><Icon /></div><div><strong>{name}</strong><span>{note}</span></div><span className={`status-pill ${ok ? 'ok' : bad ? 'error' : 'pending'}`}>{statusLabel(state)}</span></article>;
 }
 
-export function IntegrationSettingsDialog({ category, busy, runtimeActive, securityAvailable, nestedDialogOpen, midiPorts, inventory, notify, onRefresh, onRefreshMidi, onSave, onClose, onBusy, onNavigate, onCreate, onOpen, maintenance, songTools, children }: {
+/** Pages kept mounted while settings are open: their forms hold unsaved input (OBS, 程序维护) or a host the MA2 page fills. */
+const keptMounted: ReadonlySet<SettingsCategory> = new Set<SettingsCategory>(['audio', 'obs', 'ma2', 'virtual', 'maintenance', 'songs']);
+/** Pages whose settings cannot change while the show runs. */
+const lockedWhilePlaying: ReadonlySet<SettingsCategory> = new Set<SettingsCategory>(['audio', 'obs', 'ma2', 'virtual', 'maintenance', 'songs', 'source', 'timecode', 'archives', 'preferences']);
+
+/**
+ * The settings window (2026-10-30 rework): one SettingsPage per entry of the navigation, all with the
+ * same frame: title, what it is for, and whether it is saved on this computer or in the project.
+ */
+export function IntegrationSettingsDialog({ category, busy, runtimeActive, securityAvailable, nestedDialogOpen, notify, onRefresh, onRefreshMidi, onSave, onClose, onBusy, onNavigate, onCreate, onOpen, maintenance, songTools, children }: {
   category: SettingsCategory;
   onNavigate: (category: SettingsCategory) => void;
   onCreate: () => void;
@@ -52,23 +63,22 @@ export function IntegrationSettingsDialog({ category, busy, runtimeActive, secur
   runtimeActive: boolean;
   securityAvailable: boolean;
   nestedDialogOpen: boolean;
-  midiPorts: ReturnType<LinkMidiAdapter['listPorts']>;
-  inventory: LinkObsInventory | null;
   notify: Notify;
-
   onRefresh: () => void;
   onRefreshMidi: () => Promise<void>;
   onSave: () => void;
   onClose: () => void;
   onBusy: (busy: boolean) => void;
+  /** The OBS page's form. */
   children: ReactNode;
+  /** The start-up settings of OBS and P1, on 程序维护. */
   maintenance: ReactNode;
+  /** The P1 follow tools, on 歌曲导入. */
   songTools: ReactNode;
 }): JSX.Element {
   useSettingsEscape(nestedDialogOpen, onClose);
   const internal = useDocumentStore((state) => !state.project || state.project.playbackSource === 'internal');
   const hasMa2 = useDocumentStore((state) => Boolean(state.project?.ma2ReadState));
-  const deviceCategory = isDeviceSettingsCategory(category);
   const visited = useRef(new Set<SettingsCategory>());
   visited.current.add(category);
   const root = useRef<HTMLDivElement>(null);
@@ -80,25 +90,45 @@ export function IntegrationSettingsDialog({ category, busy, runtimeActive, secur
     scroll.scrollTop = savedPositions.get(category) ?? 0;
     return () => { savedPositions.set(category, scroll.scrollTop); };
   }, [category]);
+  const disabled = runtimeActive || busy;
+  const common = { disabled, notify, onBusy };
+  const content = (id: SettingsCategory): ReactNode => {
+    switch (id) {
+      case 'audio': return <AudioMidiSettings {...common} internal={internal} onRefreshMidi={onRefreshMidi} onNavigate={onNavigate} />;
+      case 'obs': return children;
+      case 'ma2': return <Ma2Settings {...common} onNavigate={onNavigate} />;
+      case 'virtual': return <LoopMidiSettings {...common} onRefreshMidi={onRefreshMidi} />;
+      case 'maintenance': return <MaintenanceSettings disabled={disabled} securityAvailable={securityAvailable} onSave={onSave} onRefresh={onRefresh}>{maintenance}</MaintenanceSettings>;
+      case 'songs': return <SongImportSettings disabled={disabled} notify={notify}>{songTools}</SongImportSettings>;
+      case 'source': return <PlaybackSourceSettings disabled={disabled} notify={notify} onCreate={onCreate} onOpen={onOpen} onNavigate={onNavigate} />;
+      case 'timecode': return <TimecodeSettings {...common} internal={internal} onCreate={onCreate} onOpen={onOpen} />;
+      case 'archives': return category === 'archives' ? <ArchiveSettings disabled={disabled} /> : null;
+      case 'preferences': return internal ? <PlaybackPreferences disabled={disabled} notify={notify} />
+        : <Notice actions={<Button variant="secondary" onClick={() => onNavigate('source')}>打开播放主控</Button>}>现在跟随 P1 播放，播放操作在 P1 里设置。</Notice>;
+      case 'shortcuts': return <ShortcutSettings />;
+      case 'performance': return <PowerModeSettings notify={notify} />;
+      case 'seeking': return <SeekingSettings notify={notify} />;
+      case 'workflow': return <SceneWorkflowGuide />;
+      case 'theme': return <AppearanceControl />;
+      case 'updates': return <UpdateCenter notify={notify} runtimeActive={runtimeActive} />;
+      case 'license': return <LicenseSettings runtimeActive={runtimeActive} />;
+      case 'feedback': return <FeedbackForm context={diagnosticContext} ma2Available={hasMa2} onOpenLogs={() => onNavigate('logs')} />;
+      case 'logs': return <LogsWorkspace notify={notify} />;
+    }
+  };
+  const notices = (id: SettingsCategory): ReactNode => {
+    const locked = runtimeActive && lockedWhilePlaying.has(id);
+    const insecure = !securityAvailable && (id === 'obs' || id === 'maintenance');
+    if (!locked && !insecure) return null;
+    return <>
+      {locked ? <Notice tone="warning">正在播放，这一页的设置先锁住了。停止播放后再改。</Notice> : null}
+      {insecure ? <Notice tone="warning" title="暂时连不上 OBS">Windows 安全存储用不了，OBS 密码存不进去。其他设置照常可以查看和修改。</Notice> : null}
+    </>;
+  };
   return <div ref={root} className="settings-session">
-    <div hidden={!deviceCategory}><DeviceConnectionsPage selected={deviceCategory ? category : 'obs'} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable} internal={internal} midiPorts={midiPorts} inventory={inventory} notify={notify} onRefresh={onRefresh} onRefreshMidi={onRefreshMidi} onSave={onSave} onBusy={onBusy} maintenance={maintenance} songTools={songTools} onNavigate={onNavigate}>{children}</DeviceConnectionsPage></div>
-    {SETTINGS_SECTIONS.filter(entry => !isDeviceSettingsCategory(entry.id) && visited.current.has(entry.id)).map(current => <section key={current.id} hidden={category !== current.id} data-settings-section={current.id} className="device-console settings-content-page" aria-label={`${current.name}设置`}>
-      <SettingsPageHeader title={current.name} description={current.detail} scope={settingsScope(current.id)} />
-      <div className="device-panel">
-        {current.id === 'performance' ? <PowerModeSettings notify={notify} /> : null}
-        {current.id === 'source' ? <ProjectSettings section="playback" disabled={runtimeActive || busy} notify={notify} onNavigate={onNavigate} onCreate={onCreate} onOpen={onOpen} /> : null}
-        {current.id === 'preferences' ? internal ? <PlaybackPreferences disabled={runtimeActive || busy} notify={notify} /> : <SettingsFeedback>当前跟随 P1 播放，请在 P1 中操作。<Button className="secondary-button" onClick={() => onNavigate('source')}>打开播放主控设置</Button></SettingsFeedback> : null}
-        {current.id === 'theme' ? <AppearanceControl /> : null}
-        {current.id === 'shortcuts' ? <ShortcutSettings /> : null}
-        {current.id === 'updates' ? <UpdateCenter notify={notify} inline runtimeActive={runtimeActive} /> : null}
-        {current.id === 'license' ? <LicenseSettings runtimeActive={runtimeActive} /> : null}
-        {current.id === 'seeking' || current.id === 'timecode' || current.id === 'workflow' ? <ProjectSettings section={current.id} disabled={runtimeActive || busy} notify={notify} onNavigate={onNavigate} onCreate={onCreate} onOpen={onOpen} /> : null}
-        {current.id === 'feedback' ? <FeedbackForm context={diagnosticContext} ma2Available={hasMa2} onOpenLogs={() => onNavigate('logs')} /> : null}
-        {current.id === 'logs' ? <LogsWorkspace notify={notify} settings /> : null}
-      </div>
-    </section>)}
+    {SETTINGS_SECTIONS.filter(entry => keptMounted.has(entry.id) || visited.current.has(entry.id)).map(section => <SettingsPage key={section.id} id={section.id} title={section.name} description={section.detail}
+      scope={section.scope} hidden={category !== section.id} notices={notices(section.id)}>{content(section.id)}</SettingsPage>)}
   </div>;
-
 }
 
 function useSettingsEscape(nestedDialogOpen: boolean, onClose: () => void): void {

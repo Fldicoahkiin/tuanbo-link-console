@@ -51,14 +51,15 @@ test('构造数据：移除属性分类后保留紧凑菜单、属性值、空 C
     await expect(pool.getByRole('button',{name:'属性筛选',exact:true})).toHaveCount(0);
     await pool.getByRole('button',{name:'试听序列 1 灯光步 1.000',exact:true}).click({button:'right'});
     const menu=page.getByRole('dialog',{name:'Cue 右键菜单'});
-    await expect(menu.getByRole('button')).toHaveCount(4);
+    await expect(menu.getByRole('menuitem')).toHaveCount(4);
     expect((await menu.boundingBox())!.height).toBeLessThan(240);
     await page.screenshot({path:info.outputPath('compact-context-menu.png')});
-    await menu.getByRole('button',{name:'设置分类',exact:true}).click();
-    expect(await menu.locator('.cue-menu-destinations').first().evaluate(element=>getComputedStyle(element).gridTemplateColumns.split(' ').length)).toBe(2);
+    await menu.getByRole('menuitem',{name:'设置分类',exact:true}).click();
+    await menu.getByText('面光、轮廓和效果用途',{exact:true}).click();await menu.getByRole('button',{name:'效果',exact:true}).click();
+    expect(await menu.locator('.cue-menu-leaves[data-section="effect"]').evaluate(element=>getComputedStyle(element).gridTemplateColumns.split(' ').length)).toBe(2);
     await page.screenshot({path:info.outputPath('category-submenu.png')});
     await menu.getByRole('button',{name:'返回右键菜单',exact:true}).click();
-    await menu.getByRole('button',{name:'查看灯具属性',exact:true}).click();
+    await menu.getByRole('menuitem',{name:'查看灯具属性',exact:true}).click();
     const details=page.getByRole('dialog',{name:'Cue 灯具属性'});
     await details.getByText('具体属性值与引用 · 1 条',{exact:true}).click();
     await expect(details.locator('.cue-stored-content')).toContainText('DIMMER');
@@ -95,7 +96,7 @@ test('构造数据：移除属性分类后保留紧凑菜单、属性值、空 C
     await expect(page.locator('.app-sidebar progress[aria-label="控台读取进度"]')).toHaveAttribute('value','1');
     await app.evaluate(({ipcMain})=>{ipcMain.emit('test:release-delete-plan');});
     await deletion.getByRole('button',{name:'确认删除控台 2 个空 Cue',exact:true}).click();
-    await expect(deletion).toContainText('已回读确认删除 2 个 Cue');
+    await expect(deletion).toContainText('已在控台确认删除 2 个 Cue');
     await expect(deletion.getByRole('alert')).toHaveCount(0);
     await deletion.getByRole('button',{name:'关闭',exact:true}).click();
     expect(await app.evaluate(()=>process.env.TBLINK_DELETE_COMMITS)).toBe('1');

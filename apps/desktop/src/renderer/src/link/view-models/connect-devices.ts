@@ -134,7 +134,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
     }, 'loopMIDI 已运行，端口另外检查');
     if (loop?.value === false) skip('loop', '没有安装虚拟 MIDI；用实体 MIDI 接口不受影响');
     const midi = await run('midi', '系统 MIDI', options.readMidiPorts, '系统 MIDI 检测通过');
-    const nativeMtc = usesNativeMidiOutput(profile, options.project, 'output');
+    const nativeMtc = usesNativeMidiOutput(options.project, 'output');
     const nativeDevices = useIntegrationStore.getState().nativeDevices;
     if (nativeMtc && nativeDevices) {
       profile = applyDetectedLightingMidiPorts(profile, nativeDevices.midiOutputs.map(port => ({ id: String(port.id), name: port.name,
@@ -196,7 +196,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
         checks.checking(key);
         if (!target.required) { skip(key, '未启用此接口'); continue; }
         const mapped = profile.midiPortProfiles.find(port => port.id === target.id && port.direction === target.direction);
-        const nativeOutput = usesNativeMidiOutput(profile, options.project, target.direction);
+        const nativeOutput = usesNativeMidiOutput(options.project, target.direction);
         await run(key, target.name, async () => {
           if (!mapped?.portName) throw new Error('还没设置接口，请在“音频与 MIDI”里选择');
           if (nativeOutput) {

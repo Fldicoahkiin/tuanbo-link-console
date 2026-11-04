@@ -1,4 +1,4 @@
-import { emptyInternalPlayerState, type InternalPlayerState } from '../runtime/internal-playback-controller';
+import { emptyInternalPlayerState, type InternalPlayerState } from '@tb/core/link';
 
 export type PlayerClockState = { positionMs: number; mtcPositionMs: number | null; mtcSentPositionMs: number | null };
 export type PlayerControlState = Omit<InternalPlayerState, keyof PlayerClockState> & { mtcSending: boolean };

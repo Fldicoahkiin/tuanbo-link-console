@@ -1,14 +1,14 @@
 import { Ma2LayoutCanvas } from './Ma2LayoutCanvas';
-import { useMa2SongSyncStore } from '../runtime/ma2-song-sync';
-import { useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
+import { ma2SyncPlaying, useMa2SyncStore } from '../stores/ma2-sync-store';
 import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, ChevronLeft, ChevronRight, Plus, RefreshCw, List, Grid2X2, Map, MoreHorizontal, CornerDownLeft } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, Plus, RefreshCw, List, Grid2X2, Map, MoreHorizontal, CornerDownLeft, Pencil, Move, ZoomIn, ZoomOut } from 'lucide-react';
 import type { Ma2LayoutSnapshot } from '@tb/schema';
 import { readMa2LayoutPage, useMa2LayoutPage, ma2LayoutConnection, updateMa2LayoutPage, currentMa2LayoutScope } from '../stores/ma2-layout-store';
 import { CuePoolGrid } from './CuePoolGrid';
 import { Ma2MaterialMenu } from './Ma2MaterialMenu';
 import { Ma2ConsoleName } from './Ma2ConsoleName';
+import { Button, IconButton, Switch } from '../ui';
 import '../ma2-layout.css';
 
 export function Ma2LayoutView({ selected, onBack, onNavigate, onSettings, renderItem, children, typeControl, toolbarHost }: {
@@ -29,7 +29,7 @@ export function Ma2LayoutView({ selected, onBack, onNavigate, onSettings, render
   useEffect(() => {
     if (!live || editing || state.busy || state.error) return;
     const timer = setInterval(() => {
-      if (useMa2AutoSyncStore.getState().timelinePlaying || useMa2AutoSyncStore.getState().previewPlaying || Object.values(useMa2SongSyncStore.getState().songs).some(song => song.checking || song.state === 'syncing')) return;
+      if (ma2SyncPlaying() || Object.values(useMa2SyncStore.getState().songs).some(song => song.checking || song.state === 'syncing')) return;
       void readMa2LayoutPage(state.page, true).catch((cause: unknown) => { setLive(false); setInputError(String(cause)); });
     }, 2500);
     return () => clearInterval(timer);
@@ -63,11 +63,11 @@ export function Ma2LayoutView({ selected, onBack, onNavigate, onSettings, render
       }}><List/></button>
       <button aria-label={view === 'native' ? '紧凑列表' : '控台原位置'} title={view === 'native' ? '切换紧凑列表' : '按控台原位置显示'} aria-pressed={view === 'native'} onClick={() => { setView(view === 'native' ? 'compact' : 'native'); setEditing(false); }}>{view === 'native' ? <Grid2X2/> : <Map/>}</button>
       <Ma2MaterialMenu label="页面选项" trigger={<MoreHorizontal/>} open={optionsOpen} onOpenChange={setOptionsOpen}>
-        <p>Layout {state.page}{state.snapshot?.name ? ` · ${state.snapshot.name}` : ''}</p>
-        <button disabled={state.busy} onClick={() => { setOptionsOpen(false); navigate(state.page); }}><RefreshCw/>刷新控台页面</button>
-        <button disabled={state.busy || !state.snapshot?.revision} onClick={() => { setLayoutName(state.snapshot?.name ?? ''); setRenaming(!renaming); }}>重命名页面</button>
-        <label className="ma2-page-live-option"><input type="checkbox" aria-label="实时同步控台页面" checked={live} onChange={event => setLive(event.target.checked)}/>实时同步</label>
-        {view === 'native' ? <><button aria-pressed={editing} disabled={state.busy || !state.snapshot?.revision} onClick={() => setEditing(!editing)}>编辑位置</button><div className="ma2-layout-zoom"><button aria-label="缩小控台页面" disabled={zoom <= .25} onClick={() => setZoom(Math.max(.25, zoom / 1.5))}>−</button><button onClick={() => { setZoom(1); setFitKey(value => value + 1); }}>适应</button><button aria-label="放大控台页面" disabled={zoom >= 8} onClick={() => setZoom(Math.min(8, zoom * 1.5))}>＋</button></div></> : null}
+        <p className="ma2-material-menu-label">Layout {state.page}{state.snapshot?.name ? ` · ${state.snapshot.name}` : ''}</p>
+        <Button variant="ghost" size="sm" icon={RefreshCw} disabled={state.busy} onClick={() => { setOptionsOpen(false); navigate(state.page); }}>刷新控台页面</Button>
+        <Button variant="ghost" size="sm" icon={Pencil} disabled={state.busy || !state.snapshot?.revision} onClick={() => { setLayoutName(state.snapshot?.name ?? ''); setRenaming(!renaming); }}>重命名页面</Button>
+        {view === 'native' ? <><Button variant="ghost" size="sm" icon={Move} aria-pressed={editing} disabled={state.busy || !state.snapshot?.revision} onClick={() => setEditing(!editing)}>编辑位置</Button><div className="ma2-layout-zoom" role="group" aria-label="缩放"><IconButton size="sm" variant="secondary" label="缩小控台页面" icon={ZoomOut} disabled={zoom <= .25} onClick={() => setZoom(Math.max(.25, zoom / 1.5))}/><Button variant="secondary" size="sm" onClick={() => { setZoom(1); setFitKey(value => value + 1); }}>适应</Button><IconButton size="sm" variant="secondary" label="放大控台页面" icon={ZoomIn} disabled={zoom >= 8} onClick={() => setZoom(Math.min(8, zoom * 1.5))}/></div></> : null}
+        <Switch className="ma2-page-live-option" label="实时同步" aria-label="实时同步控台页面" checked={live} onChange={event => setLive(event.currentTarget.checked)}/>
       </Ma2MaterialMenu>
       {selected ? <button aria-label="返回页面" title="返回页面" onClick={onBack}><ArrowLeft/></button> : null}
       {onSettings ? <button aria-label="新建 Cue" title="新建 Cue 与本曲同步" disabled={state.busy} onClick={onSettings}><Plus/></button> : null}

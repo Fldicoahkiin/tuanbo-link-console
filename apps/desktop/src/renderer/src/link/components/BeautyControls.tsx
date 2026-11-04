@@ -22,7 +22,7 @@ export function BeautySlider({ control }: { control: BeautyControl }): JSX.Eleme
     <div className="beauty-control-label"><label htmlFor={`beauty-${control.key}`}>{control.name}</label>
       <small>{control.prototype ? '' : '暂不支持'}</small>
       <button className="beauty-icon" title={`重置${control.name}`} aria-label={`重置${control.name}`} disabled={value === 0}
-        onClick={() => { begin(); change(control.key, 0); end(); }}><RotateCcw size={12} /></button>
+        onClick={() => { begin(); change(control.key, 0); end(); }}><RotateCcw size={16} /></button>
     </div>
     {tones ? <div className="beauty-tone-swatches" role="group" aria-label={`${control.name}色板`}>{tones.map(tone => <button key={tone.value}
       aria-label={`${control.name}：${tone.name}`} aria-pressed={value === tone.value}
@@ -53,12 +53,12 @@ export function BeautyPresets(): JSX.Element {
     </button>)}</div>
     {library.presets.length ? <div className="beauty-custom-presets">{library.presets.map(preset => <div key={preset.id}>
       <button title={preset.name} onClick={() => replace(preset.values)}>{preset.name}</button>
-      <button className="beauty-icon" aria-label={`删除预设${preset.name}`} onClick={() => deletePreset(preset.id)}><Trash2 size={13} /></button>
+      <button className="beauty-icon" aria-label={`删除预设${preset.name}`} onClick={() => deletePreset(preset.id)}><Trash2 size={16} /></button>
     </div>)}</div> : null}
     {naming ? <form className="beauty-save-form" onSubmit={event => { event.preventDefault(); if (savePreset(name)) { setNaming(false); setName(''); } }}>
       <input autoFocus aria-label="美颜预设名称" placeholder="输入预设名称" maxLength={30} value={name} onChange={event => setName(event.target.value)} />
       <button className="primary-button" type="submit" disabled={!name.trim()}>保存</button>
       <button className="secondary-button" type="button" onClick={() => setNaming(false)}>取消</button>
-    </form> : <button className="beauty-save-preset" onClick={() => setNaming(true)}><Save size={13} />存为我的预设</button>}
+    </form> : <button className="beauty-save-preset" onClick={() => setNaming(true)}><Save size={16} />存为我的预设</button>}
   </section>;
 }

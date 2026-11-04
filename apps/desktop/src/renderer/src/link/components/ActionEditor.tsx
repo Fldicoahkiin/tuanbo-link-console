@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Field, IconButton, Select, Switch, TextInput, WithUnit } from '../ui';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import { ArrowDown, ArrowUp, Play, Trash2 } from 'lucide-react';
 import { moveActionCommand, removeActionCommand, replaceActionCommand } from '@tb/core/link';
@@ -39,28 +39,26 @@ export function ActionEditor({ itemId, cueId, action, index, actionCount, onTest
   const supported = availableKinds.some((option) => option.kind === action.kind);
   const replace = (next: LinkAction): void => execute(replaceActionCommand(itemId, cueId, next));
   const text = (label: string, value: string, update: (value: string) => LinkAction) => (
-    <Field label={label}><input key={value} defaultValue={value} onBlur={(event) => { if (event.currentTarget.value !== value) replace(update(event.currentTarget.value)); }} /></Field>
+    <Field stacked label={label}>{(field) => <TextInput {...field} key={value} defaultValue={value} onBlur={(event) => { if (event.currentTarget.value !== value) replace(update(event.currentTarget.value)); }} />}</Field>
   );
   const number = (label: string, value: number, update: (value: number) => LinkAction, options?: { min?: number; max?: number; step?: number }) => (
-    <Field label={label}>
-      <PropertyNumberInput label={label} value={value} precision={3} {...options} onCommit={(next) => replace(update(next))} />
-    </Field>
+    <Field stacked label={label}>{(field) => <PropertyNumberInput {...field} className="ui-input" value={value} precision={3} {...options} onCommit={(next) => replace(update(next))} />}</Field>
   );
 
   return (
     <article className="action-card">
       <div className="action-card-header">
         {actionCount > 1 ? <span className="action-order">{String(index + 1).padStart(2, '0')}</span> : null}
-        <select aria-label="动作类型" value={action.kind} onChange={(event) => replace(changeActionKind(action, event.currentTarget.value as LinkAction['kind']))}>
+        <Select className="action-kind" aria-label="动作类型" value={action.kind} onChange={(event) => replace(changeActionKind(action, event.currentTarget.value as LinkAction['kind']))}>
           {!supported ? <option value={action.kind} disabled>旧版来源动作，请改用“切换场景”</option> : null}
           {availableKinds.map((option) => <option value={option.kind} key={option.kind}>{option.label}</option>)}
-        </select>
-        <input className="action-name" aria-label="动作名称" title="动作名称" key={action.label} defaultValue={action.label} onBlur={(event) => { if (event.currentTarget.value !== action.label) replace({ ...action, label: event.currentTarget.value }); }} />
+        </Select>
+        <TextInput className="action-name" aria-label="动作名称" title="动作名称" key={action.label} defaultValue={action.label} onBlur={(event) => { if (event.currentTarget.value !== action.label) replace({ ...action, label: event.currentTarget.value }); }} />
         <div className="action-tools">
-          {actionCount > 1 ? <><Button className="icon-button" disabled={index === 0} onClick={() => execute(moveActionCommand(itemId, cueId, action.id, index - 1))} title="上移"><ArrowUp /></Button>
-          <Button className="icon-button" disabled={index === actionCount - 1} onClick={() => execute(moveActionCommand(itemId, cueId, action.id, index + 1))} title="下移"><ArrowDown /></Button></> : null}
-          <Button className="icon-button" disabled={!supported} onClick={() => void onTest(action)} title="单步测试"><Play /></Button>
-          <Button className="icon-button danger" onClick={() => execute(removeActionCommand(itemId, cueId, action.id))} title="删除"><Trash2 /></Button>
+          {actionCount > 1 ? <><IconButton size="sm" label="上移" icon={ArrowUp} disabled={index === 0} onClick={() => execute(moveActionCommand(itemId, cueId, action.id, index - 1))} />
+          <IconButton size="sm" label="下移" icon={ArrowDown} disabled={index === actionCount - 1} onClick={() => execute(moveActionCommand(itemId, cueId, action.id, index + 1))} /></> : null}
+          <IconButton size="sm" label="单步测试" icon={Play} disabled={!supported} onClick={() => void onTest(action)} />
+          <IconButton size="sm" label="删除" className="action-delete" icon={Trash2} onClick={() => execute(removeActionCommand(itemId, cueId, action.id))} />
         </div>
       </div>
       <div className="form-grid compact">
@@ -105,7 +103,7 @@ function renderActionFields(
     case 'obs.setInputVolume':
       return <>{text('输入', action.inputName, (value) => ({ ...action, inputName: value }))}{number('音量 dB', action.volumeDb, (value) => ({ ...action, volumeDb: value }), { min: -100, max: 26, step: 0.1 })}</>;
     case 'obs.mediaAction':
-      return <>{text('媒体输入', action.inputName, (value) => ({ ...action, inputName: value }))}<Field label="操作"><select value={action.action} onChange={(event) => replace({ ...action, action: event.currentTarget.value as typeof action.action })}>{Object.entries({ restart: '重新播放', start: '播放', pause: '暂停', stop: '停止', next: '下一个', previous: '上一个' }).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field></>;
+      return <>{text('媒体输入', action.inputName, (value) => ({ ...action, inputName: value }))}<Field stacked label="操作">{(field) => <Select {...field} value={action.action} onChange={(event) => replace({ ...action, action: event.currentTarget.value as typeof action.action })}>{Object.entries({ restart: '重新播放', start: '播放', pause: '暂停', stop: '停止', next: '下一个', previous: '上一个' }).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select>}</Field></>;
     case 'obs.setTransition':
       return <>{text('转场', action.transitionName, (value) => ({ ...action, transitionName: value }))}{number('时长 ms', action.durationMs, (value) => ({ ...action, durationMs: value }), { min: 0, max: 20_000 })}</>;
     case 'obs.saveSourceScreenshot':
@@ -118,34 +116,30 @@ function renderActionFields(
     case 'midi.programChange':
       return <>{text('端口设置', action.portProfileId, (value) => ({ ...action, portProfileId: value }))}{number('通道', action.channel, (value) => ({ ...action, channel: value }), { min: 1, max: 16 })}{number('音色编号', action.program, (value) => ({ ...action, program: value }), { min: 0, max: 127 })}</>;
     case 'midi.showControl':
-      return <>{text('端口设置', action.portProfileId, (value) => ({ ...action, portProfileId: value }))}{number('设备编号', action.deviceId, (value) => ({ ...action, deviceId: value }), { min: 0, max: 127 })}{number('命令格式', action.commandFormat, (value) => ({ ...action, commandFormat: value }), { min: 0, max: 127 })}<Field label="命令"><select value={action.command} onChange={(event) => replace({ ...action, command: event.currentTarget.value as typeof action.command })}>{Object.entries({ go: '执行（Go）', stop: '停止', resume: '继续', load: '预载' }).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>{text('Cue 编号', action.cueNumber ?? '', (value) => ({ ...action, cueNumber: value || undefined }))}{text('Cue 列表', action.cueList ?? '', (value) => ({ ...action, cueList: value || undefined }))}{text('Cue 路径', action.cuePath ?? '', (value) => ({ ...action, cuePath: value || undefined }))}</>;
+      return <>{text('端口设置', action.portProfileId, (value) => ({ ...action, portProfileId: value }))}{number('设备编号', action.deviceId, (value) => ({ ...action, deviceId: value }), { min: 0, max: 127 })}{number('命令格式', action.commandFormat, (value) => ({ ...action, commandFormat: value }), { min: 0, max: 127 })}<Field stacked label="命令">{(field) => <Select {...field} value={action.command} onChange={(event) => replace({ ...action, command: event.currentTarget.value as typeof action.command })}>{Object.entries({ go: '执行（Go）', stop: '停止', resume: '继续', load: '预载' }).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select>}</Field>{text('Cue 编号', action.cueNumber ?? '', (value) => ({ ...action, cueNumber: value || undefined }))}{text('Cue 列表', action.cueList ?? '', (value) => ({ ...action, cueList: value || undefined }))}{text('Cue 路径', action.cuePath ?? '', (value) => ({ ...action, cuePath: value || undefined }))}</>;
   }
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
-  return <label className="field"><span>{label}</span>{children}</label>;
 }
 
 function SceneTransitionFields({ action, replace }: { action: Extract<LinkAction, { kind: 'obs.setProgramScene' }>; replace: (action: LinkAction) => void }): JSX.Element {
   const transitions = useIntegrationStore((state) => state.inventory?.transitions) ?? [];
   const selected = action.transition;
   return <>
-    <Field label="OBS 转场"><select aria-label="Cue OBS 转场" value={selected?.name ?? ''} onChange={(event) => {
+    <Field stacked label="OBS 转场">{(field) => <Select {...field} aria-label="Cue OBS 转场" value={selected?.name ?? ''} onChange={(event) => {
       const name = event.currentTarget.value;
       if (name) replace({ ...action, transition: { name, durationMs: selected?.durationMs ?? 300 } });
       else { const remaining = { ...action }; delete remaining.transition; replace(remaining); }
-    }}><option value="">沿用 OBS 当前转场</option>{[...new Set([...transitions, ...(selected ? [selected.name] : [])])].map((name) => <option key={name} value={name}>{name}{transitions.includes(name) ? '' : '（OBS 中找不到）'}</option>)}</select></Field>
-    {selected ? <Field label="过渡时长（毫秒）"><PropertyNumberInput label="Cue 过渡时长（毫秒）" min={50} max={20000} value={selected.durationMs} onCommit={(durationMs) => replace({ ...action, transition: { ...selected, durationMs } })} /><small>“切换”和固定时长的转场按 OBS 里设定的时长执行。</small></Field> : null}
+    }}><option value="">沿用 OBS 当前转场</option>{[...new Set([...transitions, ...(selected ? [selected.name] : [])])].map((name) => <option key={name} value={name}>{name}{transitions.includes(name) ? '' : '（OBS 中找不到）'}</option>)}</Select>}</Field>
+    {selected ? <Field stacked label="过渡时长" help="“切换”和固定时长的转场按 OBS 里设定的时长执行。">{(field) => <WithUnit unit="毫秒"><PropertyNumberInput {...field} className="ui-input" label="Cue 过渡时长（毫秒）" min={50} max={20000} value={selected.durationMs} onCommit={(durationMs) => replace({ ...action, transition: { ...selected, durationMs } })} /></WithUnit>}</Field> : null}
   </>;
 }
 
 function SceneField({ action, replace }: { action: Extract<LinkAction, { kind: 'obs.setProgramScene' }>; replace: (action: LinkAction) => void }): JSX.Element {
   const scenes = useIntegrationStore((state) => state.inventory?.scenes) ?? [];
-  return <Field label="场景"><select value={action.sceneName} onChange={(event) => replace({ ...action, sceneName: event.currentTarget.value, label: `切换场景 · ${event.currentTarget.value}` })}>{[...new Set([action.sceneName, ...scenes])].map((name) => <option key={name} value={name}>{name}</option>)}</select></Field>;
+  return <Field stacked label="场景">{(field) => <Select {...field} value={action.sceneName} onChange={(event) => replace({ ...action, sceneName: event.currentTarget.value, label: `切换场景 · ${event.currentTarget.value}` })}>{[...new Set([action.sceneName, ...scenes])].map((name) => <option key={name} value={name}>{name}</option>)}</Select>}</Field>;
 }
 
 function BooleanField({ label, value, onChange }: { label: string; value: boolean; onChange: (value: boolean) => void }): JSX.Element {
-  return <label className="check-field"><input type="checkbox" checked={value} onChange={(event) => onChange(event.currentTarget.checked)} /><span>{label}</span></label>;
+  return <Switch className="action-switch" label={label} checked={value} onChange={(event) => onChange(event.currentTarget.checked)} />;
 }
 
 export function defaultAction(kind: LinkAction['kind'], id: string = crypto.randomUUID()): LinkAction {

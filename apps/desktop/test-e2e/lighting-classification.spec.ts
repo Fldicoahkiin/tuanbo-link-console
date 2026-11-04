@@ -59,8 +59,10 @@ for(const scaled of [false,true]) test(`${scaled ? '规定高负载' : '千条�
     await expect(page.getByLabel('音乐网格间隔')).toHaveCount(0);
     await expect(page.locator('.music-grid-line')).toHaveCount(0);
     await expect(page.getByLabel('音乐分析', {exact:true})).toBeVisible();
-    const toolbar=await page.locator('.lighting-topbar-actions').boundingBox();expect(toolbar!.y).toBeLessThan(54);expect(toolbar!.height).toBeLessThanOrEqual(54);
-    await expect(page.locator('.lighting-topbar-actions').getByRole('button',{name:'保存',exact:true})).toBeVisible();
+    // The console sync controls belong to the workbench: at the foot of its sidebar, not on the title bar.
+    const sync=page.getByRole('region',{name:'灯光同步操作'});const syncBox=(await sync.boundingBox())!;const sidebar=(await page.locator('.app-sidebar').boundingBox())!;
+    expect(syncBox.x+syncBox.width).toBeLessThanOrEqual(sidebar.x+sidebar.width);expect(syncBox.y+syncBox.height).toBeLessThanOrEqual(sidebar.y+sidebar.height);
+    await expect(sync.getByRole('button',{name:'保存',exact:true})).toBeVisible();await expect(page.locator('.titlebar').getByRole('button',{name:'保存',exact:true})).toHaveCount(0);
     const library=page.getByRole('region',{name:'我的灯光分类'});const pool=library.locator('[aria-label="分类 Cue"]');
     await expect(pool).toHaveAttribute('data-total-cues','1000');
     const painted = await pool.locator('[data-cue-cell]').evaluateAll(elements => {
@@ -80,7 +82,7 @@ for(const scaled of [false,true]) test(`${scaled ? '规定高负载' : '千条�
     await writeFile(info.outputPath('ui-performance.json'),JSON.stringify({kind:'真实 Electron 编辑界面；静态构造素材，不代表视频解码负载',programs:scaled?200:1,assets:scaled?2000:0,cues:scaled?50000:0,library:1000,searchP95Ms:p95,timings},null,2));expect(p95).toBeLessThanOrEqual(100);
     await library.getByLabel('搜索分类 Cue').fill('前区灯光 999');await expect(pool).toHaveAttribute('data-total-cues','1');
     await library.locator('.classification-cell>button').first().click({button:'right'});
-    const context=page.getByRole('dialog',{name:'Cue 右键菜单'});await context.getByRole('button',{name:'设置分类',exact:true}).click();await context.getByText('面光、轮廓和效果用途',{exact:true}).click();await context.getByRole('button',{name:'效果',exact:true}).click();await context.getByRole('button',{name:'归入 效果 每八拍',exact:true}).click();await context.getByRole('button',{name:'确定',exact:true}).click();
+    const context=page.getByRole('dialog',{name:'Cue 右键菜单'});await context.getByRole('menuitem',{name:'设置分类',exact:true}).click();await context.getByText('面光、轮廓和效果用途',{exact:true}).click();await context.getByRole('button',{name:'效果',exact:true}).click();await context.getByRole('button',{name:'归入 效果 每八拍',exact:true}).click();await context.getByRole('button',{name:'确定',exact:true}).click();
     await library.getByLabel('搜索分类 Cue').fill('前区灯光 999');await expect(pool).toHaveAttribute('data-total-cues','1');
     await tabs.getByRole('button',{name:'效果',exact:true}).click();await page.getByRole('group',{name:'节拍灯光'}).getByRole('button',{name:'每八拍',exact:true}).click();await expect(pool).toHaveAttribute('data-total-cues','1');await page.screenshot({path:info.outputPath('effect-beat-library.png')});await tabs.getByRole('button',{name:'面光',exact:true}).click();
     await expect(page.getByLabel('节拍与音乐标记')).toHaveCount(0);

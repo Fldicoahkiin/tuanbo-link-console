@@ -4,11 +4,11 @@ import { useAuditionSelectionReset } from '../stores/ma2-audition-store';
 import { useDocumentStore } from '../stores/document-store';
 import { loadMa2MaterialCache } from './ma2-material-cache';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
-import { Search, Plus, ListFilter } from 'lucide-react';
+import { Search, Plus, ListFilter, RefreshCw } from 'lucide-react';
 import type { LightingDocument, Ma2PlaybackAction, Ma2PreviewState } from '@tb/schema';
 import { LightingCueAudition } from '../../registry/lighting-cue-audition';
 import '../ma2-sequence-preview.css';
+import './lighting-page.css';
 
 import { useConsoleCueClassification } from './useConsoleCueClassification';
 import { consoleCueKey, emptyMa2AttributeFilter, matchesMa2AttributeFilter, type ConsoleCueReference } from '@tb/core/link';
@@ -25,6 +25,7 @@ import { Ma2ExecutorPageView } from './Ma2ExecutorPageView';
 import { Ma2ExecutorKey } from './Ma2ExecutorKey';
 import { useMa2ExecutorInput } from '../runtime/use-ma2-executor-input';
 import { Ma2MaterialMenu } from './Ma2MaterialMenu';
+import { Button } from '../ui';
 import { Ma2CueLocations } from './Ma2CueLocations';
 import { useMa2ExecutorPageStore, selectMa2ExecutorPageKind } from '../stores/ma2-executor-page-store';
 export function Ma2SequencePreview({ document, initialSequence, initialExecutor, onUse, composing = false, onBrowseLayout, onLayoutSettings }: { composing?: boolean; initialSequence?: number; initialExecutor?: string; onBrowseLayout?: () => void; onLayoutSettings?: () => void; onClassify?: (value: import('./LightingUserLibrary').LibraryDraft) => void; document: LightingDocument; onUse: (sequence: number, cue: string, name: string, executor: string) => void; onClose: () => void }): JSX.Element {
@@ -56,10 +57,7 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
   const attributeReader=useMa2AttributeStore();
   const materialReading = useMa2MaterialReadStore(state => state.busy);
   const [refreshing, setRefreshing] = useState(false);
-  const [actionsHost, setActionsHost] = useState<HTMLElement | null>(null);
   const [pageToolbarHost, setPageToolbarHost] = useState<HTMLDivElement | null>(null);
-  const publishesActions = Boolean(onBrowseLayout);
-  useEffect(() => { setActionsHost(publishesActions ? window.document.getElementById('ma2-sidebar-read-actions') : null); }, [publishesActions]);
   const refreshMaterials = async (): Promise<void> => {
     setRefreshing(true); setError('');
     try { await scanMa2Materials(await ma2MaterialConnection()); }
@@ -162,7 +160,9 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
     return materialCell(<button disabled={busy} title={`序列 ${sequence.sequence} · Cue ${Number(value.number)} · ${name} · 点击试听`} aria-pressed={selectedCue === value.number} aria-label={`试听灯光步 ${value.number}`} onContextMenu={event=>classification.open(event,{sequence:sequence.sequence,cue:value.number,kind:'single'},name)} onClick={event => { classification.select({sequence:sequence.sequence,cue:value.number,kind:'single'},event,visibleCues.map(cue=>({sequence:sequence.sequence,cue:cue.number,kind:'single'})));setSelectedCue(value.number); if(!classification.showRemoved && !event.ctrlKey && !event.metaKey && !event.shiftKey && attributeFilter.status !== 'empty')void send('goto', value.number); }}><LightingCategoryColors sections={classification.sections.get(consoleCueKey({sequence:sequence.sequence,cue:value.number,kind:'single'}))??[]}/><Ma2CueCardLabel sequence={sequence} cue={value} name={name}/></button>, sequence, value.number, name);
   }} /> : null;
   return <section className="ma2-sequence-preview" aria-label="MA2 序列预览">
-    <header className="ma2-material-menubar" aria-label="控台素材工具栏"><LightingAuditionStop/><div role="group" aria-label="素材分类">{([['all','全部'],['single','单步'],['multi','多步']] as const).map(([value,title])=><button key={value} aria-pressed={category===value && selected===null} onClick={()=>{setCategory(value);setSelected(null);setSingleSequence(null);setSelectedCue(null);setRoute(null);}}>{title}</button>)}{onBrowseLayout ? <button aria-pressed={category === 'layout'} onClick={openLayout}>控台页面</button> : null}</div>{category === 'layout' ? <><div className="ma2-page-toolbar-host" ref={setPageToolbarHost}/></> : null}{controls}{sequence ? <Ma2CueLocations sequence={sequence.sequence}/> : null}<Ma2MaterialMenu label="素材筛选" trigger={<ListFilter/>} open={filtersOpen} onOpenChange={setFiltersOpen}>{classification.picked.length>0?<div className="ma2-classification-selection"><span>已选 {classification.picked.length} 项</span><button onClick={()=>classification.setPicked(visibleRefs)}>全选结果</button><button onClick={()=>classification.setPicked([])}>取消选择</button></div>:null}<button aria-pressed={attributeFilter.status === 'empty'} onClick={() => setAttributeFilter({ ...emptyMa2AttributeFilter, status: attributeFilter.status === 'empty' ? 'all' : 'empty' })}>仅空 Cue</button><button aria-pressed={classification.onlyUnclassified} onClick={()=>classification.setOnlyUnclassified(!classification.onlyUnclassified)}>未分类</button>{classification.hidden.size?<button aria-pressed={classification.showRemoved} onClick={()=>{classification.setShowRemoved(!classification.showRemoved);classification.setPicked([]);}}>已移除</button>:null}</Ma2MaterialMenu>{attributeFilter.status === 'empty' && (category === 'single' || selected !== null) ? <button disabled={attributeReader.busy || materialReading || !deletionCandidates.length} onClick={() => setDeleting(deletionCandidates)}>删除空 Cue</button> : null}<label className="ma2-pool-search"><Search size={15} /><input aria-label="搜索序列或 Cue" placeholder="搜索名称 / 编号" value={query} onChange={event=>setQuery(event.target.value)} /></label></header>
+    <header className="ma2-material-menubar" aria-label="控台素材工具栏"><LightingAuditionStop/><div role="group" aria-label="素材分类">{([['all','全部'],['single','单步'],['multi','多步']] as const).map(([value,title])=><button key={value} aria-pressed={category===value && selected===null} onClick={()=>{setCategory(value);setSelected(null);setSingleSequence(null);setSelectedCue(null);setRoute(null);}}>{title}</button>)}{onBrowseLayout ? <button aria-pressed={category === 'layout'} onClick={openLayout}>控台页面</button> : null}</div>{category === 'layout' ? <><div className="ma2-page-toolbar-host" ref={setPageToolbarHost}/></> : null}{controls}{sequence ? <Ma2CueLocations sequence={sequence.sequence}/> : null}<Ma2MaterialMenu label="素材筛选" trigger={<ListFilter/>} open={filtersOpen} onOpenChange={setFiltersOpen}>{classification.picked.length>0?<div className="ma2-classification-selection"><span>已选 {classification.picked.length} 项</span><Button variant="secondary" size="sm" onClick={()=>classification.setPicked(visibleRefs)}>全选结果</Button><Button variant="secondary" size="sm" onClick={()=>classification.setPicked([])}>取消选择</Button></div>:null}<p className="ma2-material-menu-label">只显示</p><Button variant="ghost" size="sm" aria-pressed={attributeFilter.status === 'empty'} onClick={() => setAttributeFilter({ ...emptyMa2AttributeFilter, status: attributeFilter.status === 'empty' ? 'all' : 'empty' })}>仅空 Cue</Button><Button variant="ghost" size="sm" aria-pressed={classification.onlyUnclassified} onClick={()=>classification.setOnlyUnclassified(!classification.onlyUnclassified)}>未分类</Button>{classification.hidden.size?<Button variant="ghost" size="sm" aria-pressed={classification.showRemoved} onClick={()=>{classification.setShowRemoved(!classification.showRemoved);classification.setPicked([]);}}>已移除</Button>:null}</Ma2MaterialMenu>{attributeFilter.status === 'empty' && (category === 'single' || selected !== null) ? <button disabled={attributeReader.busy || materialReading || !deletionCandidates.length} onClick={() => setDeleting(deletionCandidates)}>删除空 Cue</button> : null}<label className="ma2-pool-search"><Search size={16} /><input aria-label="搜索序列或 Cue" placeholder="搜索名称 / 编号" value={query} onChange={event=>setQuery(event.target.value)} /></label>
+      <button className="ma2-refresh-directory" aria-label="刷新素材目录" data-busy={materialReading || refreshing} title={materialReading || refreshing ? '正在刷新素材目录…' : '刷新素材目录：重新读取控台上的序列和 Cue 名称'} disabled={attributeReader.busy || materialReading || refreshing} onClick={() => void refreshMaterials()}><RefreshCw/></button></header>
+    {error || classification.message ? <p className="ma2-material-message" role={error ? 'alert' : 'status'}>{error || classification.message}</p> : null}
 
     {category === 'layout' && pageKind !== 'layout' ? <Ma2ExecutorPageView toolbarHost={pageToolbarHost} typeControl={pageTypeControl} selected={selected !== null} onBack={resetSelection} onNavigate={resetSelection} onSettings={onLayoutSettings} renderItem={renderExecutorItem} onEditItem={openExecutorItem}>{selectedGrid}</Ma2ExecutorPageView> : category === 'layout' ? <Ma2LayoutView toolbarHost={pageToolbarHost} typeControl={pageTypeControl} selected={selected !== null} onBack={resetSelection} onNavigate={resetSelection} onSettings={onLayoutSettings} renderItem={renderLayoutItem}>{selectedGrid}</Ma2LayoutView> : selectedGrid}
     {selected === null && category !== 'layout' ? <>
@@ -181,7 +181,5 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
     {classification.menu}
     {deleting ? <Ma2CueDeleteDialog refs={deleting} onClose={() => { setDeleting(null); classification.setPicked([]); }}/> : null}
 
-    {actionsHost ? createPortal(<div className="attribute-read-actions"><button className="ma2-refresh-directory" disabled={attributeReader.busy || materialReading || refreshing} onClick={() => void refreshMaterials()}>{materialReading || refreshing ? '正在刷新素材目录…' : '刷新素材目录'}</button>{attributeReader.activeId?<button onClick={()=>{void window.tbLink.cancelMa2Read(attributeReader.activeId!).catch((cause:unknown)=>setError(String(cause)));}}>取消读取</button>:null}</div>, actionsHost) : null}
-    {error || classification.message ? (actionsHost ? createPortal(<p className="ma2-material-message" role={error ? 'alert' : 'status'}>{error || classification.message}</p>, actionsHost) : <p role={error ? 'alert' : 'status'}>{error || classification.message}</p>) : null}
   </section>;
 }

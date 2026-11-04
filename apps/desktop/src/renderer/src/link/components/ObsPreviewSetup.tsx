@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button, Notice } from '../ui';
 import { useState } from 'react';
 import { Wrench } from 'lucide-react';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
@@ -27,9 +27,9 @@ export function ObsPreviewSetup({ disabled, notify, beforeRepair }: {
     }
     finally { setBusy(false); }
   };
-  return <div className="settings-field">
-    <p className="settings-note">检查联动台的预览组件，并自动安装或修复。需要 Windows 授权或重启 OBS 时，会引导你完成。</p>
-    <Button className="secondary-button" disabled={disabled || busy} onClick={() => void prepare()}><Wrench />{busy ? '正在检查组件…' : '检查并修复组件'}</Button>
-    {status ? <p className={status.state === 'error' ? 'device-error' : 'settings-note'} role={status.state === 'error' ? 'alert' : 'status'}>{status.detail}</p> : null}
-  </div>;
+  return <>
+    <p>检查联动台的预览组件，自动安装或修复。需要 Windows 授权或重启 OBS 时，会一步步带你完成。</p>
+    <div className="settings-actions-row"><Button variant="secondary" icon={Wrench} loading={busy} disabled={disabled || busy} onClick={() => void prepare()}>{busy ? '正在检查组件…' : '检查并修复组件'}</Button></div>
+    {status ? <Notice tone={status.state === 'error' ? 'error' : status.state === 'ready' ? 'success' : status.state === 'checking' ? 'busy' : 'info'}>{status.detail}</Notice> : null}
+  </>;
 }

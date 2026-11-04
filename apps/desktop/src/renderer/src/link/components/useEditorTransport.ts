@@ -3,7 +3,7 @@ import type { ProjectPlayer } from './ProjectPlayerControls';
 import { useSelectedProgram } from '../useSelectedProgram';
 import { useDocumentStore } from '../stores/document-store';
 import { LatestPosition } from '../runtime/latest-position';
-import { useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
+import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
 import { useDisplayPreferences } from '../stores/display-preferences-store';
 import { usePlayerClock } from '../usePlayerClock';
@@ -20,7 +20,7 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
   const [cursor, setCursor] = useState(0);
   const cursorRef = useRef(0);
   const [localPlaying, setLocalPlaying] = useState(false);
-  useEffect(() => { useMa2AutoSyncStore.setState({ previewPlaying: localPlaying }); return () => { useMa2AutoSyncStore.setState({ previewPlaying: false }); }; }, [localPlaying]);
+  useEffect(() => { useMa2SyncStore.setState({ previewPlaying: localPlaying }); return () => { useMa2SyncStore.setState({ previewPlaying: false }); }; }, [localPlaying]);
   const [seeking, setSeeking] = useState(false);
   const seekQueue = useRef<LatestPosition | null>(null);
   const resumeAfterSeek = useRef(false);
@@ -70,7 +70,7 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
     if (next && !external && !localAudioReady) { notify('音频还没准备好，请确认文件还在，并等它加载完成', 'error'); return; }
     // A console write in progress finishes on its own; playing never waits for it (2026-10-26) and later syncs wait for stop.
     if (seekQueue.current) { resumeAfterSeek.current = next; return; }
-    if (!external) { useMa2AutoSyncStore.setState({ previewPlaying: next }); setLocalPlaying(next); return; }
+    if (!external) { useMa2SyncStore.setState({ previewPlaying: next }); setLocalPlaying(next); return; }
     const controller = player.controller;
     if (!controller || !itemId) { if (next) notify('播放器还没准备好，请稍后再试', 'error'); return; }
     if (!next) { if (active && player.state.status === 'playing') void controller.pause().catch(report); return; }

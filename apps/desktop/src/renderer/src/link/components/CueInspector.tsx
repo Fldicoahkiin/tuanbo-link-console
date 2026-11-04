@@ -1,5 +1,6 @@
-import { Button } from './Button';
+import { Button, IconButton, Switch, TextArea, TextInput } from '../ui';
 import { PropertyNumberInput } from './PropertyNumberInput';
+import { LayoutNumber } from './LayoutNumber';
 import { addActionCommand, nominalFramesPerSecond, removeCueCommand, replaceActionCommand, replaceCueCommand, type LinkObsInventory } from '@tb/core/link';
 import type { LinkAction, LinkCue, LinkProject } from '@tb/schema';
 import { Crosshair, Maximize, Play, RotateCcw, Trash2 } from 'lucide-react';
@@ -22,12 +23,12 @@ export function CueInspector(props: {
     .filter(({ action }) => !visual || (action.id !== visual.showAction.id && action.id !== visual.transformAction?.id));
   return <div className="inspector-body cue-property-form">
     <div className="cue-detail-header">
-      <input className="title-input" aria-label="Cue 名称" defaultValue={cue.name} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitCueText(event.currentTarget, cue.name, (name) => execute(replaceCueCommand(itemId, { ...cue, name })), true)} />
-      <label className="check-field"><input type="checkbox" checked={cue.enabled} onChange={(event) => execute(replaceCueCommand(itemId, { ...cue, enabled: event.currentTarget.checked }))} /><span>启用</span></label>
-      <Button className="icon-button danger" title="删除 Cue" onClick={() => execute(removeCueCommand(itemId, cue.id))}><Trash2 /></Button>
+      <TextInput className="title-input" aria-label="Cue 名称" defaultValue={cue.name} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitCueText(event.currentTarget, cue.name, (name) => execute(replaceCueCommand(itemId, { ...cue, name })), true)} />
+      <Switch className="cue-enabled" label="启用" checked={cue.enabled} onChange={(event) => execute(replaceCueCommand(itemId, { ...cue, enabled: event.currentTarget.checked }))} />
+      <IconButton variant="danger" label="删除 Cue" icon={Trash2} onClick={() => execute(removeCueCommand(itemId, cue.id))} />
     </div>
     <TimecodeEditor cue={cue} frameRate={frameRate} onChange={(next) => execute(replaceCueCommand(itemId, next))} />
-    <textarea key={`${cue.id}:${cue.notes}`} aria-label="备注" rows={1} className="cue-notes" placeholder="备注（选填）" defaultValue={cue.notes} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitCueText(event.currentTarget, cue.notes, (notes) => execute(replaceCueCommand(itemId, { ...cue, notes })))} />
+    <TextArea key={`${cue.id}:${cue.notes}`} aria-label="备注" rows={1} className="cue-notes" placeholder="备注（选填）" defaultValue={cue.notes} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitCueText(event.currentTarget, cue.notes, (notes) => execute(replaceCueCommand(itemId, { ...cue, notes })))} />
     {visual ? <VisualCueLayoutEditor itemId={itemId} cueId={cue.id} visual={visual} testAction={testAction} /> : null}
     <div className="action-list">{visibleActions.map(({ action, index }) => <ActionEditor key={action.id} itemId={itemId} cueId={cue.id} action={action} index={index} actionCount={cue.actions.length} onTest={testAction} />)}</div>
   </div>;
@@ -51,7 +52,7 @@ function TimecodeEditor(props: {
   onChange: (cue: LinkCue) => void;
 }): JSX.Element {
   return <div className="timecode-editor">
-    {(['hours', 'minutes', 'seconds', 'frames'] as const).map((key) => <label key={key}><span>{{ hours: '时', minutes: '分', seconds: '秒', frames: '帧' }[key]}</span><PropertyNumberInput value={props.cue.timecode[key]} min={0} max={key === 'hours' ? 23 : key === 'frames' ? nominalFramesPerSecond(props.frameRate) - 1 : 59} onCommit={(value) => props.onChange({ ...props.cue, timecode: { ...props.cue.timecode, [key]: value } })} /></label>)}
+    {(['hours', 'minutes', 'seconds', 'frames'] as const).map((key) => <label key={key}><span>{{ hours: '时', minutes: '分', seconds: '秒', frames: '帧' }[key]}</span><PropertyNumberInput className="ui-input" value={props.cue.timecode[key]} min={0} max={key === 'hours' ? 23 : key === 'frames' ? nominalFramesPerSecond(props.frameRate) - 1 : 59} onCommit={(value) => props.onChange({ ...props.cue, timecode: { ...props.cue.timecode, [key]: value } })} /></label>)}
   </div>;
 }
 
@@ -84,10 +85,10 @@ function VisualCueLayoutEditor(props: { itemId: string; cueId: string; visual: V
   return <section className="visual-layout-editor">
     <div className="visual-source-summary" title={`OBS 场景：${props.visual.showAction.sceneName}；来源：${props.visual.showAction.sourceName}`}><small>{props.visual.sourceWidth !== null && props.visual.sourceHeight !== null ? `原始尺寸 ${Math.round(props.visual.sourceWidth)} × ${Math.round(props.visual.sourceHeight)}` : '还没读取来源尺寸'}</small>{props.visual.obsCanvasWidth !== null && (props.visual.obsCanvasWidth !== props.visual.canvasWidth || props.visual.obsCanvasHeight !== props.visual.canvasHeight) ? <em>OBS 画布为 {props.visual.obsCanvasWidth} × {props.visual.obsCanvasHeight}，请改为 1080 × 1920</em> : null}</div>
     <div className="layout-preset-row">
-      <button onClick={() => replaceTransform(originalTransform(props.visual))}><RotateCcw />原始大小</button>
-      <button onClick={() => patch({ positionX: props.visual.canvasWidth / 2, positionY: props.visual.canvasHeight / 2, alignment: 0 })}><Crosshair />画布居中</button>
-      <button disabled={fitScale === null} onClick={() => { if (fitScale !== null) replaceTransform({ ...originalTransform(props.visual), scaleX: fitScale, scaleY: fitScale }); }}><Maximize />适应画布</button>
-      <button title="把当前布局发送给 OBS 测试" onClick={() => void props.testAction(replaceTransform(current))}><Play />测试画面</button>
+      <Button variant="secondary" size="sm" icon={RotateCcw} onClick={() => replaceTransform(originalTransform(props.visual))}>原始大小</Button>
+      <Button variant="secondary" size="sm" icon={Crosshair} onClick={() => patch({ positionX: props.visual.canvasWidth / 2, positionY: props.visual.canvasHeight / 2, alignment: 0 })}>画布居中</Button>
+      <Button variant="secondary" size="sm" icon={Maximize} disabled={fitScale === null} onClick={() => { if (fitScale !== null) replaceTransform({ ...originalTransform(props.visual), scaleX: fitScale, scaleY: fitScale }); }}>适应画布</Button>
+      <Button variant="secondary" size="sm" icon={Play} title="把当前布局发送给 OBS 测试" onClick={() => void props.testAction(replaceTransform(current))}>测试画面</Button>
     </div>
     <div className="visual-layout-grid">
       <LayoutNumber label="位置 X" unit="px" value={current.positionX} onCommit={(value) => patch({ positionX: value })} />
@@ -95,17 +96,13 @@ function VisualCueLayoutEditor(props: { itemId: string; cueId: string; visual: V
       <LayoutNumber label="宽度" unit="%" value={current.scaleX * 100} onCommit={(value) => patch({ scaleX: Math.max(0.05, value / 100) })} />
       <LayoutNumber label="高度" unit="%" value={current.scaleY * 100} onCommit={(value) => patch({ scaleY: Math.max(0.05, value / 100) })} />
       <LayoutNumber label="旋转" unit="°" value={current.rotation} onCommit={(value) => patch({ rotation: value })} />
-      <label className="visual-toggle"><span>画面显示</span><input type="checkbox" checked={props.visual.showAction.enabled} onChange={(event) => execute(replaceActionCommand(props.itemId, props.cueId, { ...props.visual.showAction, enabled: event.currentTarget.checked }))} /></label>
+      <Switch className="visual-toggle" label="画面显示" checked={props.visual.showAction.enabled} onChange={(event) => execute(replaceActionCommand(props.itemId, props.cueId, { ...props.visual.showAction, enabled: event.currentTarget.checked }))} />
       <LayoutNumber label="上裁剪" unit="px" value={current.cropTop} onCommit={(value) => patch({ cropTop: Math.max(0, Math.round(value)) })} />
       <LayoutNumber label="右裁剪" unit="px" value={current.cropRight} onCommit={(value) => patch({ cropRight: Math.max(0, Math.round(value)) })} />
       <LayoutNumber label="下裁剪" unit="px" value={current.cropBottom} onCommit={(value) => patch({ cropBottom: Math.max(0, Math.round(value)) })} />
       <LayoutNumber label="左裁剪" unit="px" value={current.cropLeft} onCommit={(value) => patch({ cropLeft: Math.max(0, Math.round(value)) })} />
     </div>
   </section>;
-}
-
-function LayoutNumber(props: { label: string; unit: string; value: number; onCommit: (value: number) => void }): JSX.Element {
-  return <label className="layout-number"><span>{props.label}</span><div><PropertyNumberInput label={props.label} value={props.value} step={0.01} precision={2} onCommit={props.onCommit} /><small>{props.unit}</small></div></label>;
 }
 
 function resolveVisualCue(cue: LinkCue, inventory: LinkObsInventory | null): VisualCue | null {

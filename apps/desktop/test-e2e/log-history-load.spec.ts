@@ -55,10 +55,11 @@ test('近 200 MB 历史日志：打开日志页和导出 30 天都不把历史�
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     const region = page.getByRole('region', { name: '运行日志设置' });
     metrics.openLogPage = await measure(app, async () => {
+      await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '帮助与反馈', exact: true }).click();
       await page.getByRole('button', { name: '运行日志', exact: true }).click();
-      await expect(region.locator('.log-filters [role=status]')).toHaveText(/^\d+ 条$/, { timeout: 120_000 });
+      await expect(region.locator('.settings-log-filters [role=status]')).toHaveText(/^\d+ 条$/, { timeout: 120_000 });
     });
-    metrics.rowsShown = await region.locator('.log-row').count();
+    metrics.rowsShown = await region.locator('.settings-log-row').count();
     const range = region.getByLabel('导出范围');
     if (await range.count()) await range.selectOption('30');
     const exports = region.getByRole('region', { name: '导出日志与诊断' });

@@ -30,11 +30,11 @@ test('OBS 和 MIDI 均未连接时，有音频仍可开始播放', async ({}, in
     // The console timeline is not yet confirmed for this song: the song still plays, the check only warns.
     const startChecks = await recordStartCheckDialogs(app);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    const waveform = page.locator('.unified-player .home-waveform-monitor');
+    const waveform = page.locator('.home-player .home-waveform');
     const before = await waveform.boundingBox();
     expect(before).not.toBeNull();
-    await page.locator('.player-transport .primary-button').click();
-    await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+    await page.locator('.home-player-play').click();
+    await expect(page.locator('.home-player[data-status="playing"]')).toBeVisible();
     expect(await startChecks()).toEqual([]);
     await expect(page.locator('.player-diagnostics')).toHaveAttribute('data-status', 'notice');
     await expect(page.locator('.player-notice')).not.toBeVisible();
@@ -61,7 +61,7 @@ test('OBS 和 MIDI 均未连接时，有音频仍可开始播放', async ({}, in
       await expect(page.locator('.player-notice')).not.toBeVisible();
     }
     await page.locator('.player-diagnostics > summary').click();
-    await page.getByRole('region', { name: '实时音频频谱' }).click();
+    await page.getByRole('region', { name: '时间码与计时' }).click();
     await expect(page.locator('.player-notice')).not.toBeVisible();
     await page.screenshot({ path: info.outputPath('playback-compact.png') });
     await page.getByRole('button', { name: '停止播放', exact: true }).click();
@@ -89,10 +89,10 @@ test('真实损坏音频报错不挤压播放器，修复文件后可重新播�
     await page.reload();
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    const waveform = page.locator('.unified-player .home-waveform-monitor');
+    const waveform = page.locator('.home-player .home-waveform');
     const before = await waveform.boundingBox();
-    await page.locator('.player-transport .primary-button').click();
-    await expect(page.locator('.player-transport.status-error')).toBeVisible();
+    await page.locator('.home-player-play').click();
+    await expect(page.locator('.home-player[data-status="error"]')).toBeVisible();
     await expect(page.locator('.player-diagnostics')).toHaveAttribute('data-status', 'error');
     await expect(page.locator('.player-error')).not.toBeVisible();
     expect(await waveform.boundingBox()).toEqual(before);
@@ -105,14 +105,14 @@ test('真实损坏音频报错不挤压播放器，修复文件后可重新播�
     await page.screenshot({ path: info.outputPath('audio-error-details.png') });
     await page.keyboard.press('Escape');
     await writeFile(audioPath, wav);
-    await page.locator('.player-transport .primary-button').click();
-    await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+    await page.locator('.home-player-play').click();
+    await expect(page.locator('.home-player[data-status="playing"]')).toBeVisible();
     await expect(page.locator('.player-error')).toHaveCount(0);
     for (let attempt = 0; attempt < 3; attempt++) {
-      await page.locator('.player-transport .primary-button').click();
-      await expect(page.locator('.player-transport.status-paused')).toBeVisible();
-      await page.locator('.player-transport .primary-button').click();
-      await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+      await page.locator('.home-player-play').click();
+      await expect(page.locator('.home-player[data-status="paused"]')).toBeVisible();
+      await page.locator('.home-player-play').click();
+      await expect(page.locator('.home-player[data-status="playing"]')).toBeVisible();
     }
     expect(errors).toEqual([]);
     await page.getByRole('button', { name: '停止播放', exact: true }).click();

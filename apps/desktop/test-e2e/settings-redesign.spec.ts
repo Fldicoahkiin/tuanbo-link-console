@@ -35,11 +35,11 @@ async function select(page: Page, id: typeof SETTINGS_SECTIONS[number]['id']): P
   const group = SETTINGS_GROUPS.find(entry => entry.id === section.group)!;
   await page.getByRole('navigation', { name: '设置子菜单', exact: true }).getByRole('button', { name: group.name, exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单', exact: true }).getByRole('button', { name: section.name, exact: true }).click();
-  await expect(page.locator('.device-console:visible h1')).toHaveText(section.name);
+  await expect(page.locator('.settings-page:visible h1')).toHaveText(section.name);
 }
 
 async function audit(page: Page): Promise<unknown> {
-  return page.locator('.device-console:visible').evaluate(root => {
+  return page.locator('.settings-page:visible').evaluate(root => {
     const right = root.getBoundingClientRect().right;
     const elements = [...root.querySelectorAll<HTMLElement>('input,select,button,textarea,summary,h1,h2,h3,p,label')].filter(element => element.checkVisibility());
     const overflow = elements.filter(element => element.getBoundingClientRect().right > right + 1 || element.getBoundingClientRect().left < root.getBoundingClientRect().left - 1).map(element => element.getAttribute('aria-label') ?? element.textContent?.slice(0, 50));
@@ -94,7 +94,7 @@ test('设置全部页面双主题三尺寸、展开状态与缩放视觉矩阵',
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1540, 960));
     for (const id of ['obs', 'ma2', 'maintenance', 'license', 'songs'] as const) {
       await select(page, id);
-      await page.locator('.device-console:visible details').evaluateAll(details => details.forEach(element => { if (element instanceof HTMLDetailsElement) element.open = true; }));
+      await page.locator('.settings-page:visible details').evaluateAll(details => details.forEach(element => { if (element instanceof HTMLDetailsElement) element.open = true; }));
       expect(await audit(page), `expanded ${id}`).toMatchObject({ overflow: [], small: [], pageOverflow: false });
       await page.screenshot({ path: info.outputPath(`expanded-${id}.png`) });
       await page.locator('.content-scroll').evaluate(element => { element.scrollTop = element.scrollHeight; });
@@ -137,7 +137,7 @@ test('设置草稿隔离、密码显隐、退出确认、分类记忆与快捷�
     await expect(page.getByLabel('WebSocket 地址', { exact: true })).toHaveValue('127.0.0.1:4499');
     await select(page, 'preferences');
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-    await expect(page.locator('.device-console:visible h1')).toHaveText('OBS Studio');
+    await expect(page.locator('.settings-page:visible h1')).toHaveText('OBS Studio');
     await main.getByRole('button', { name: '节目单', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '离开设置？' })).toBeVisible();
     await page.getByRole('button', { name: '继续编辑', exact: true }).click();
@@ -149,18 +149,18 @@ test('设置草稿隔离、密码显隐、退出确认、分类记忆与快捷�
     await expect(page.getByLabel('OBS 密码', { exact: true })).toHaveValue('');
     await expect(page.getByLabel('OBS 密码', { exact: true })).toHaveAttribute('type', 'password');
     await select(page, 'shortcuts');
-    const count = await page.locator('.shortcut-binding').count();
-    await page.locator('.shortcut-binding button').first().click();
-    await expect(page.locator('.shortcut-binding')).toHaveCount(count - 1);
+    const count = await page.locator('.settings-shortcut-key').count();
+    await page.locator('.settings-shortcut-key button').first().click();
+    await expect(page.locator('.settings-shortcut-key')).toHaveCount(count - 1);
     await page.getByRole('button', { name: '撤销删除' }).click();
-    await expect(page.locator('.shortcut-binding')).toHaveCount(count);
+    await expect(page.locator('.settings-shortcut-key')).toHaveCount(count);
     await page.getByRole('button', { name: '恢复默认快捷键', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '恢复默认快捷键？' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('button', { name: '恢复默认快捷键', exact: true })).toBeFocused();
-    await page.locator('.shortcut-binding input').first().focus();
+    await page.locator('.settings-shortcut-key input').first().focus();
     await page.keyboard.press('Tab');
-    await expect(page.locator('.shortcut-binding button').first()).toBeFocused();
+    await expect(page.locator('.settings-shortcut-key button').first()).toBeFocused();
   } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
@@ -185,7 +185,7 @@ test('OBS 保存成功与连接失败分开显示，失败后可修正并连接'
     await page.getByLabel('WebSocket 地址', { exact: true }).fill('4499');
     await page.getByRole('button', { name: '保存并连接 OBS', exact: true }).click();
     await expect(page.getByText('连接配置已保存到本机。', { exact: true })).toBeVisible();
-    await expect(page.locator('.device-console:visible .tone-error')).toContainText('连接超时');
+    await expect(page.locator('.settings-page:visible .ui-notice[data-tone=error]')).toContainText('连接超时');
     expect((await page.evaluate(() => window.tbLink.loadIntegrationProfile()))?.obs.webSocketUrl).toBe('ws://127.0.0.1:4499');
     await app.evaluate(({ ipcMain, BrowserWindow }) => {
       ipcMain.removeHandler('link:obs-connect');
@@ -197,9 +197,9 @@ test('OBS 保存成功与连接失败分开显示，失败后可修正并连接'
     });
     await page.getByRole('button', { name: '保存并连接 OBS', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'OBS 已连接', exact: true })).toBeVisible();
-    await expect(page.locator('.device-console:visible .tone-error')).toHaveCount(0);
+    await expect(page.locator('.settings-page:visible .ui-notice[data-tone=error]')).toHaveCount(0);
     await page.getByRole('button', { name: '断开 OBS', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'OBS 尚未连接', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'OBS 还没连接', exact: true })).toBeVisible();
   } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
@@ -214,7 +214,7 @@ test('更新阶段直接呈现在设置页，下载信息与动作一致', async
       const status: LinkUpdateStatus = { phase, currentVersion: '0.4.46', availableVersion: '0.4.47', releaseDate: null, progressPercent: 45, transferredBytes: 4500000, totalBytes: 10000000, feedConfigured: phase !== 'notConfigured', installBlockedReason: null, message: `验收更新状态：${phase}` };
       await app.evaluate(({ BrowserWindow }, value) => { BrowserWindow.getAllWindows()[0]!.webContents.send('link:update-status', value); }, status);
       await expect(page.getByText(status.message, { exact: true })).toBeVisible();
-      if (phase === 'downloading') await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '45');
+      if (phase === 'downloading') await expect(page.getByRole('progressbar')).toHaveJSProperty('value', 45);
       if (phase === 'downloaded') await expect(page.getByRole('button', { name: '重启并安装' })).toBeVisible();
       if (phase === 'available') await expect(page.getByRole('button', { name: '下载更新' })).toBeVisible();
       await page.screenshot({ path: info.outputPath(`update-${phase}.png`) });
@@ -268,7 +268,7 @@ test('MA2 三种连接方式、凭证隔离、手动保存与搜索取消', asyn
     await page.getByRole('button', { name: '搜索控台' }).click();
     await expect(page.getByLabel('MA2 连接方式')).toBeDisabled();
     await page.getByRole('button', { name: '取消搜索', exact: true }).click();
-    await expect(page.getByText('未发现开放的远程端口，请检查网络和控台 Telnet 设置，或手动填写 IP。')).toBeVisible();
+    await expect(page.getByText('没找到开放的远程端口。检查网络和控台 Telnet 设置，或手动填写 IP。')).toBeVisible();
     await expect(page.getByLabel('MA2 连接方式')).toBeEnabled();
     expect(await audit(page)).toMatchObject({ overflow: [], small: [], pageOverflow: false });
     await page.screenshot({ path: info.outputPath('ma2-network.png') });

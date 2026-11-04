@@ -422,12 +422,16 @@ describe('素材独立场景播放', () => {
     await expect(scenes.compose('用户机位', [names.sceneName])).rejects.toThrow('独立');
   });
   it('叠加中的媒体启动与定位不抢走正式机位，也不静音同场其他层', async () => {
-    const { scenes, calls, responses } = fixture();
-    await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
-    await scenes.execute({ ...event, deferSceneSwitch: true }, 'C:/dance.mp4');
-    responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_PAUSED', mediaCursor: 2300 });
-    await scenes.seek({ ...event, deferSceneSwitch: true }, 'C:/dance.mp4', () => Promise.resolve());
-    expect(calls.some(call => call.requestType === 'SetCurrentProgramScene')).toBe(false);
+    // The start compares OBS's cursor with the music's elapsed time; a busy test machine must not count as music time.
+    vi.useFakeTimers({ toFake: ['performance'] });
+    try {
+      const { scenes, calls, responses } = fixture();
+      await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
+      await scenes.execute({ ...event, deferSceneSwitch: true }, 'C:/dance.mp4');
+      responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_PAUSED', mediaCursor: 2300 });
+      await scenes.seek({ ...event, deferSceneSwitch: true }, 'C:/dance.mp4', () => Promise.resolve());
+      expect(calls.some(call => call.requestType === 'SetCurrentProgramScene')).toBe(false);
+    } finally { vi.useRealTimers(); }
   });
   it('拖动只定位已准备的自有素材，不重载来源或重新启动媒体', async () => {
     const { scenes, calls, responses } = fixture();
@@ -541,15 +545,20 @@ describe('素材独立场景播放', () => {
       expect(calls.at(-1)?.requestData).toMatchObject({ mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' });
     } finally { vi.useRealTimers(); }
   });
+  // The music clock is performance.now() and this fixture's cursor does not run, so on real time a busy
+  // runner aged the music past the frame between PLAY and the check (Windows CI, 2026-11-01: 2606 against 2500).
   it('暂停完成精确定位后再继续，首次入场及机位返回每次只定位一次', async () => {
-    const { scenes, calls } = fixture(false, true);
-    await scenes.prepare('project', asset, 'C:/dance.mp4');
-    await scenes.execute(event, 'C:/dance.mp4');
-    await scenes.switchScene('机位');
-    await scenes.execute({ ...event, sourceOffsetMs: 6534 }, 'C:/dance.mp4');
-    expect(seekTargets(calls)).toHaveLength(2);
-    seekTargets(calls).forEach((target, index) => expect(target - [2300, 6534][index]!).toBeGreaterThanOrEqual(200));
-    seekTargets(calls).forEach((target, index) => expect(target - [2300, 6534][index]!).toBeLessThan(400));
+    vi.useFakeTimers();
+    try {
+      const { scenes, calls } = fixture(false, true);
+      await scenes.prepare('project', asset, 'C:/dance.mp4');
+      await held(scenes.execute(event, 'C:/dance.mp4'));
+      await scenes.switchScene('机位');
+      await held(scenes.execute({ ...event, sourceOffsetMs: 6534 }, 'C:/dance.mp4'));
+      expect(seekTargets(calls)).toHaveLength(2);
+      seekTargets(calls).forEach((target, index) => expect(target - [2300, 6534][index]!).toBeGreaterThanOrEqual(200));
+      seekTargets(calls).forEach((target, index) => expect(target - [2300, 6534][index]!).toBeLessThan(400));
+    } finally { vi.useRealTimers(); }
   });
   it('预检不重播未激活的来源，避免重播与暂停争用解码器', async () => {
     const { scenes, calls } = fixture();

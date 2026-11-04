@@ -1,4 +1,4 @@
-import { linkActionSchema, linkInternalAudioCaptureSchema, linkManagedMediaExecutionPayloadSchema, type LicenseStatus } from '@tb/schema';
+import { linkActionSchema, linkManagedMediaExecutionPayloadSchema, type LicenseStatus } from '@tb/schema';
 import { nativePlayerControlSchema } from '@tb/schema';
 
 const publicCalls = new Set([
@@ -28,7 +28,6 @@ export function needsProductLicense(channel: string, value: unknown): boolean {
     return control.kind !== 'stop' && control.kind !== 'pause' && control.kind !== 'stop-mtc';
   }
   if (channel === 'link:set-runtime-active') return value !== false;
-  if (channel === 'link:obs-internal-audio') return linkInternalAudioCaptureSchema.parse(value).enabled;
   if (channel === 'link:obs-execute-managed-media') return linkManagedMediaExecutionPayloadSchema.parse(value).event.phase === 'start';
   if (channel === 'link:obs-execute') {
     const action = linkActionSchema.parse(value);

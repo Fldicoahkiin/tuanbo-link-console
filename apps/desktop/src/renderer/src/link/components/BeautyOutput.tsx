@@ -26,7 +26,7 @@ export function BeautyOutput({ connected, onTarget }: { connected: boolean; onTa
     {source ? <p>当前画面：{source}</p> : null}
     {runtime?.phase === 'error' || error ? <>
       <p className="beauty-output-error" role="alert">{error || runtime?.message}</p>
-      <button className="secondary-button" disabled={installing} onClick={() => { void install(); }}><Download size={15} />检查并安装组件</button>
+      <button className="secondary-button" disabled={installing} onClick={() => { void install(); }}><Download size={16} />检查并安装组件</button>
     </> : null}
     {message ? <p role="status">{message}</p> : null}
   </section>;

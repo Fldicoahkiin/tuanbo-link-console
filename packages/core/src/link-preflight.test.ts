@@ -258,7 +258,7 @@ describe('MA2 控台 show', () => {
     const track = lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false,
       channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 5000, timeLock: 'time', muted: false,
         events: [{ id: 'cue', at: 1000, kind: 'ma2', sequence: 7, cue: '6.000', executor: '', label: '副歌', action: 'goto' }] }] });
-    const lighting = { ...createLightingDocument(), outputMode: 'network' as const, tracks: [track], ma2Library: { show: '2hao', readAt: '2026-10-13T00:00:00.000Z', sequences: [] } };
+    const lighting = { ...createLightingDocument(), tracks: [track], ma2Library: { show: '2hao', readAt: '2026-10-13T00:00:00.000Z', sequences: [] } };
     value.project = { ...value.project, schemaVersion: 2, rundown: value.project.rundown.map(item => ({ ...item, lighting })) };
     const showCheck = (ma2Show?: string) => runLinkPreflight({ ...value, ...(ma2Show ? { ma2Show } : {}) }).checks.find(check => check.id === 'ma2.show.item');
     expect(showCheck()).toBeUndefined();

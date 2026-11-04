@@ -27,15 +27,15 @@ for (const crash of [false, true]) test(`正式节目后台接续：界面繁忙
   let crashed = false;
   // After the renderer crash the window reloads; query it through main rather than the old page handle.
   const inWindow = (script: string) => app.evaluate(({ BrowserWindow }, code) => BrowserWindow.getAllWindows()[0]!.webContents.executeJavaScript(code) as Promise<unknown>, script);
-  const shown = async () => await inWindow(`(async () => ({ playing: Boolean(document.querySelector('.player-transport.status-playing')),
+  const shown = async () => await inWindow(`(async () => ({ playing: Boolean(document.querySelector('.home-player[data-status="playing"]')),
     status: await window.tbLink.getNativePlaybackStatus() }))()`) as { playing: boolean; status: NativePlayerStatus | null };
   try {
     await page.waitForFunction(() => Boolean(window.tbLink));
     await page.evaluate(profile => window.tbLink.saveIntegrationProfile({ profile }), profile); await page.reload();
     await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    await page.locator('.player-transport .primary-button').click();
-    await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+    await page.locator('.home-player-play').click();
+    await expect(page.locator('.home-player[data-status="playing"]')).toBeVisible();
     const before = await page.evaluate(() => window.tbLink.getNativePlaybackStatus()); evidence.before = before;
     expect(before).toMatchObject({ itemId: 'song-0', status: 'playing', mtcPortName: null });
     expect(before!.positionMs).toBeLessThan(1000);
@@ -69,7 +69,7 @@ for (const crash of [false, true]) test(`正式节目后台接续：界面繁忙
     } else {
       await page.keyboard.press('Escape');
       await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
-      await expect(page.locator('.player-transport.status-stopped')).toBeVisible();
+      await expect(page.locator('.home-player[data-status="stopped"]')).toBeVisible();
       await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); });
     }
     await closeDiscarding(app);

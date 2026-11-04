@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, type Ma2LiveConnect, type Ma2LiveInput, type Ma2LiveRequest, type Ma2LiveSnapshot } from '@tb/schema';
+import { ma2ExecutorObserveRequestSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, type Ma2ExecutorObservation, type Ma2ExecutorObserveRequest, type Ma2LiveConnect, type Ma2LiveInput, type Ma2LiveRequest, type Ma2LiveSnapshot } from '@tb/schema';
 import type { SecureProfileStore } from './secure-profile-store';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { writeFileAtomically } from './atomic-file';
@@ -19,7 +19,10 @@ export class Ma2LiveService {
   private pressed = new Map<string, { page: number; slot: number; id: number }>();
   private guard: ReturnType<typeof setTimeout> | null = null;
   private opening: Promise<Ma2LiveSnapshot> | null = null;
-  constructor(private readonly path: string, private readonly secrets: Pick<SecureProfileStore, 'saveCredential' | 'loadCredential'>, private readonly bridge: (request: Ma2LiveRequest) => Pick<Ma2OnpcBridge, 'request'>) {}
+  private observer: { client: Ma2LivePlayback; host: string } | null = null;
+  private observerFailure: string | null = null;
+  constructor(private readonly path: string, private readonly secrets: Pick<SecureProfileStore, 'saveCredential' | 'loadCredential'>, private readonly bridge: (request: Pick<Ma2LiveRequest, 'network'>) => Pick<Ma2OnpcBridge, 'request'>,
+    private readonly socket: (host: string) => Ma2LivePlayback = host => new Ma2LivePlayback(host)) {}
   private key(request: Ma2LiveRequest): string { return JSON.stringify([request.network, request.expectedSource]); }
   private secret(host: string, username: string): string { return `ma2-web-${createHash('sha256').update(`${host}:${username}`).digest('hex')}`; }
   private async profiles() {
@@ -27,7 +30,7 @@ export class Ma2LiveService {
     catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return []; throw error; }
   }
   close(): void {
-    this.generation += 1;
+    this.generation += 1; this.releaseObserver();
     this.release(); this.client?.close(); this.client = null; this.snapshot = null; this.scope = ''; this.failed = false;
   }
   release(): void {
@@ -86,6 +89,37 @@ export class Ma2LiveService {
       if (this.pressed.size) this.armRelease();
       return snapshot;
     } catch (error) { if (generation === this.generation && this.client === client) { this.release(); client.close(); this.failed = true; } throw error; }
+  }
+  /**
+   * One executor's state for the "console follows the timecode" check, on a web remote session of its
+   * own: an answer this software does not understand closes only that session, never the fader view.
+   * It logs in as the fader view's saved user and never sends a control. A failure stays until the next
+   * song is started (`releaseObserver`); nothing is retried.
+   */
+  async observe(input: Ma2ExecutorObserveRequest): Promise<Ma2ExecutorObservation> {
+    const request = ma2ExecutorObserveRequestSchema.parse(input);
+    try { this.bridge(request); }
+    catch (error) { return { kind: 'unavailable', reason: error instanceof Error ? error.message : String(error) }; }
+    if (this.observerFailure) throw new Error(this.observerFailure);
+    const host = request.network.host;
+    if (this.observer?.host !== host) {
+      this.observer?.client.close(); this.observer = null;
+      const profile = (await this.profiles()).find(value => value.host === host);
+      if (!profile) return { kind: 'unavailable', reason: '这台控台还没连过网页遥控（灯光工作台推杆页的“连接”）' };
+      const client = this.socket(host);
+      try { await client.connect(profile.username, await this.secrets.loadCredential(this.secret(profile.host, profile.username))); }
+      catch (error) { client.close(); throw this.observerFailed(error); }
+      this.observer = { client, host };
+    }
+    try {
+      const executor = await this.observer.client.observe(request.page, request.slot);
+      return executor ? { kind: 'executor', ...executor } : { kind: 'empty' };
+    } catch (error) { this.observer?.client.close(); this.observer = null; throw this.observerFailed(error); }
+  }
+  releaseObserver(): void { this.observer?.client.close(); this.observer = null; this.observerFailure = null; }
+  private observerFailed(error: unknown): Error {
+    this.observerFailure = error instanceof Error ? error.message : String(error);
+    return new Error(this.observerFailure);
   }
   private armRelease(): void {
     if (this.guard) clearTimeout(this.guard);

@@ -1,5 +1,5 @@
-import { Button } from './Button';
-import { ModalSurface } from './ModalSurface';
+import { Button } from '../ui/Button';
+import { ModalSurface } from '../ui/ModalSurface';
 import type { SettingsCategory } from './settings-navigation';
 
 function guidance(issue: string): { category: SettingsCategory; label: string; detail: string } {

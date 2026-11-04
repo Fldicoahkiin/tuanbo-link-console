@@ -35,7 +35,7 @@ it('原生混合时间线只试听指定序列 Cue，原文和完整播放限制
   expect(f.play).toHaveBeenCalledWith(expect.objectContaining({ action: { target: 'sequence', sequence: 1, cue: '2', action: 'goto' } }));
   expect(f.play).toHaveBeenCalledTimes(1); expect(f.send).not.toHaveBeenCalled();
   expect(f.document).toEqual(before);
-  expect(() => compileLightingNetworkActions({ ...f.document, outputMode: 'network' })).toThrow('控台原样');
+  expect(() => compileLightingNetworkActions(f.document)).toThrow('控台原样');
 });
 
 it('未放进时间线的素材点击也调用原序列 Cue，不插入事件或更改输出模式', async () => {

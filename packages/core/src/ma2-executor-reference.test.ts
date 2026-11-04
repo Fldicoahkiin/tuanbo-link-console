@@ -2,7 +2,6 @@ import { expect, it } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type LightingTrack, type Ma2TimecodePreview } from '@tb/schema';
 import { applyMa2ExecutorChangeCommand, ma2ExecutorDeletionUses } from './ma2-executor-change';
 import { nextLightingCue } from './lighting-cue-sequence';
-import { ma2AutoBindEvents } from './ma2-auto-bind';
 import { matchMa2Readback, resolveMa2ReadbackTracks } from './ma2-readback';
 
 function sample() {
@@ -42,7 +41,8 @@ it('移动迁移可编辑映射，继续打点和自动关联不产生新轨，�
   expect(binding.mappings[0]!.executor).toBe('1001.2'); expect(binding.trackMappings![0]!.executor).toBe('1001.2');
   expect(binding.sourceXml).toBe(original.sourceXml); expect(binding.baselineTracks).toEqual(original.baselineTracks);
   expect(nextLightingCue(moved, moved.tracks[0]!, 0).executor).toBe('1001.2');
-  expect(ma2AutoBindEvents(moved)).toEqual([]);
+  // Every Cue still plays the executor its track is bound to, so none of them needs a new track.
+  expect(moved.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).filter(event => event.kind === 'ma2' && event.executor !== '1001.2')).toEqual([]);
   const remote = createLightingDocument(); remote.tracks = structuredClone(moved.tracks);
   const preview: Ma2TimecodePreview = { target: 99, name: 'Timecode', readAt: original.readAt, sourceXml: '<MA>moved</MA>', document: remote, warnings: [], unconverted: [], mappings: structuredClone(binding.mappings), trackMappings: structuredClone(binding.trackMappings) };
   const match = matchMa2Readback(binding, preview);

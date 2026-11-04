@@ -36,7 +36,7 @@ test('灯光打点按钮、M 与快捷键修改', async ({}, info) => {
     await page.keyboard.press('m'); await expect(page.getByRole('button', { name: '音频 Cue 3', exact: true })).toHaveCount(0);
     await page.keyboard.press('k'); await expect(page.getByRole('button', { name: '音频 Cue 3', exact: true })).toHaveCount(1);
     await expect(page.getByLabel('滚轮移动速度', { exact: true })).toBeHidden();
-    await page.locator('summary[aria-label="时间线设置"]').click();
+    await page.getByRole('button', { name: '时间线设置', exact: true }).click();
     await expect(page.getByLabel('滚轮移动速度', { exact: true })).toHaveValue('0.1');
     await page.getByLabel('滚轮移动速度', { exact: true }).selectOption('0.5');
     await expect(page.getByLabel('滚轮移动速度', { exact: true })).toHaveValue('0.5');

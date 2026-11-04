@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { lightingDocumentSchema, type AutomaticMusicCandidates, type LightingDocument } from '@tb/schema';
 import type { LightingTimelineDisplay } from './LightingTimelineControls';
 import { AutomaticMusicPreview } from './AutomaticMusicResults';
-import { ModalSurface } from './ModalSurface';
+import { ModalSurface } from '../ui/ModalSurface';
 
 export function LightingMusicSections({ display, document, pixelsPerSecond, left, width, onSeek, onChange }: { display: LightingTimelineDisplay; document: LightingDocument; pixelsPerSecond: number; left: number; width: number; onSeek: (ms: number) => void; onChange: (next: LightingDocument, label: string) => void }): JSX.Element {
   const [editing, setEditing] = useState<string | null>(null);

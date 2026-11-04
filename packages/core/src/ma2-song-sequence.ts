@@ -61,7 +61,7 @@ function applyMa2SongConsoleEdits(document: LightingDocument, unchanged: Readonl
       id: crypto.randomUUID(), name: 'Cue 点位', start: 0, duration: 0, timeLock: 'time' as const, muted: false, events: []
     };
     const events: LightingEvent[] = [...clip.events, ...added.map(point => ({ id: point.id, kind: 'ma2' as const, at: point.atMs, action: 'goto' as const,
-      executor: binding.executor ?? '', sequence: binding.sequence, cue: point.cue, label: point.name, ...document.outputMode === 'timecode' ? {} : { runMode: 'independent' as const } }))];
+      executor: binding.executor ?? '', sequence: binding.sequence, cue: point.cue, label: point.name }))];
     const updated = { ...track, clips: [...track.clips.filter(entry => entry.id !== clip.id), { ...clip, events, duration: Math.max(clip.duration, ...events.map(event => event.at + 1)) }] };
     tracks = [...tracks.filter(entry => entry.id !== track.id), updated];
   }
@@ -87,6 +87,6 @@ export function applyMa2SongReadback(source: LightingDocument, observed: Ma2Song
     return [{ id, kind: 'ma2', at: event.at, action: 'goto', executor: result.binding.executor ?? '', sequence: result.binding.sequence, cue,
       label,
       ...(event.beatAnchor === undefined ? {} : { beatAnchor: event.beatAnchor }),
-      runMode: event.runMode ?? (document.outputMode === 'timecode' ? undefined : 'independent') }];
+      ...(event.runMode ? { runMode: event.runMode } : {}) }];
   }) })) })) });
 }

@@ -1,7 +1,6 @@
-import { NativeProgramPlayer, type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi } from '@tb/core/link';
+import { LightingOutputRelease, NativeProgramPlayer, type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi } from '@tb/core/link';
 import type { LinkProject, NativePlayerControl, NativePlayerStatus } from '@tb/schema';
 import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
-import { NativeLightingOutput } from './native-lighting-output';
 import type { MidiClaim, MidiClaimOwner } from './midi-port-broker';
 
 type AudioApi = Pick<LinkDesktopApi, 'prepareNativePlayback' | 'controlNativePlayback' | 'getNativePlaybackDevices'
@@ -9,7 +8,8 @@ type AudioApi = Pick<LinkDesktopApi, 'prepareNativePlayback' | 'controlNativePla
 type Dependencies = {
   executable: string;
   api: AudioApi;
-  network: Pick<LinkDesktopApi, 'getMa2NetworkStatus' | 'cancelMa2Playback' | 'playMa2Cue'>;
+  /** Switches the song's executors off when it stops; the console runs the lighting from the timecode. */
+  network: Pick<LinkDesktopApi, 'getMa2NetworkStatus' | 'playMa2Cue'>;
   audio(): NativePlayerStatus | null;
   /** Windows MIDI outputs as listed now, checked again when the last listing failed: waits for a lost action MIDI port. */
   midiOutputs(): Promise<readonly { id: number; name: string }[]>;
@@ -27,16 +27,14 @@ type Dependencies = {
 };
 
 /** Complete program transport owner. UI operations call this controller;
- * automatic boundaries, MIDI and direct lighting consume the native device
- * observations in main, even when the renderer is busy or hidden. */
+ * automatic boundaries and action MIDI consume the native device observations
+ * in main, even when the renderer is busy or hidden. */
 export class NativeProgramHost {
   readonly controller: NativeProgramPlayer;
   private readonly midi: NativeMidiHost;
-  private readonly lighting: NativeLightingOutput;
   private readonly listeners = new Set<(status: NativePlayerStatus) => void>();
   private disposed = false;
   private closing: Promise<void> | null = null;
-  private lightingSession: { sessionId: string; generation: number; itemId: string; ready: boolean } | null = null;
 
   constructor(project: LinkProject, path: string, revision: number, private readonly dependencies: Dependencies) {
     const error = (message: string) => this.controller.reportUnavailable(message);
@@ -49,8 +47,6 @@ export class NativeProgramHost {
         dependencies.midiRecovered(report, itemId); this.controller.clearFault(report.fault);
         this.controller.reportUnavailable(`动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）`);
       } });
-    this.lighting = new NativeLightingOutput({ executable: dependencies.executable, network: dependencies.network,
-      authorize: () => dependencies.authorize(), error, ...claim ? { claim: (name: string) => claim(name, '灯光 MIDI') } : {} });
     this.controller = new NativeProgramPlayer(project, path, revision, {
       prepare: async (itemId, positionMs, { signal }) => {
         const audio = dependencies.audio();
@@ -74,57 +70,16 @@ export class NativeProgramHost {
       ...dependencies.api,
       controlNativePlayback: request => { this.interrupt(request); return dependencies.api.controlNativePlayback(request); },
       onNativePlaybackStatus: listener => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
-    }, {
-      prepare: async (document, profile, positionMs) => {
-        const audio = dependencies.audio();
-        if (!audio || !['ready', 'paused'].includes(audio.status) || audio.positionMs !== positionMs) throw new Error('灯光准备的不是当前要播放的这首歌');
-        const session = { sessionId: audio.sessionId, generation: audio.generation, itemId: audio.itemId, ready: false };
-        this.lightingSession = session;
-        await this.lighting.prepare(document, profile, positionMs);
-        if (this.lightingSession !== session || this.disposed) throw new Error('灯光准备已取消');
-        session.ready = true;
-      },
-      // Command acknowledgements carry no new device timestamp. Only observe()
-      // below may tick lighting; otherwise a slow preparation would look stale
-      // as soon as the play command is acknowledged, before the first sample.
-      tick: () => undefined,
-      finish: async positionMs => { if (this.lightingSession?.ready) { await this.lighting.finish(positionMs); this.reportLightingFault(); } },
-      stop: () => this.stopLighting(), release: () => this.lighting.release(), close: () => { this.lightingSession = null; return this.lighting.close(); }
-    });
+    }, new LightingOutputRelease(dependencies.network));
   }
 
   observe(status: NativePlayerStatus, qpc100ns: string | null): void {
     if (this.disposed) return;
-    const lighting = this.lightingSession;
-    if (lighting && status.sessionId === lighting.sessionId && status.itemId === lighting.itemId && status.generation >= lighting.generation) {
-      lighting.generation = status.generation;
-      if (status.audioError || ['stopped', 'error', 'preparing'].includes(status.status)) this.stopLighting();
-      else if (!lighting.ready && status.status === 'playing') {
-        this.controller.reportUnavailable('灯光没赶上音频开始，这一首不发灯光，也不会中途补发'); this.stopLighting();
-      } else if (qpc100ns && qpc100ns !== '0' && lighting.ready) {
-        this.lighting.observe(status.positionMs, Number(qpc100ns) / 10000);
-        if (status.status === 'playing') {
-          try { this.lighting.tick(status.positionMs); this.reportLightingFault(); }
-          catch (error) { this.controller.reportUnavailable(`灯光动作已停止：${String(error)}`); this.stopLighting(); }
-        }
-      }
-    }
     this.midi.observe(status, qpc100ns);
     for (const listener of this.listeners) listener(status);
   }
 
-  interrupt(request: NativePlayerControl): void {
-    this.midi.interrupt(request);
-    const lighting = this.lightingSession;
-    if (lighting && request.sessionId === lighting.sessionId && request.generation >= lighting.generation
-      && ['pause', 'stop', 'seek'].includes(request.kind)) this.stopLighting();
-  }
-
-  private reportLightingFault(): void {
-    const fault = this.lighting.takeFault();
-    if (fault) { this.dependencies.notice(fault, this.lightingSession?.itemId ?? null); this.controller.reportFault(fault); }
-  }
-  private stopLighting(): void { this.lightingSession = null; this.lighting.stop(); }
+  interrupt(request: NativePlayerControl): void { this.midi.interrupt(request); }
 
   close(): Promise<void> {
     if (this.closing) return this.closing;

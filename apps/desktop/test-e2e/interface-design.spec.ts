@@ -29,7 +29,7 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
     await expect(create).toBeFocused();
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    await expect(page.locator('.p1-media-card')).toHaveCount(4);
+    await expect(page.locator('.home-card')).toHaveCount(4);
     const nav = page.getByRole('navigation', { name: '主要工作区' });
     await nav.getByRole('button', { name: '节目单', exact: true }).click();
     await page.getByRole('button', { name: '新建播放列表', exact: true }).click();
@@ -73,7 +73,7 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
           expect(workspace!.height).toBeGreaterThan(500);
           expect(workspace!.y + workspace!.height).toBeLessThanOrEqual(height! + 1);
           if (name === '节目单') {
-            const library = await page.locator('.p1-library-workbench').boundingBox();
+            const library = await page.locator('.home-library').boundingBox();
             expect(library!.height).toBeGreaterThan(200);
             expect(library!.y + library!.height).toBeLessThanOrEqual(height!);
           }
@@ -83,13 +83,13 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
       }
     }
     await nav.getByRole('button', { name: '节目单', exact: true }).click();
-    await expect(page.locator('.p1-item-inspector')).toBeVisible();
-    await expect(page.locator('.p1-media-grid')).toHaveAttribute('data-view', 'cards');
+    await expect(page.locator('.home-inspector')).toBeVisible();
+    await expect(page.locator('.home-grid')).toHaveAttribute('data-view', 'cards');
     await page.getByRole('button', { name: '卡片视图', exact: true }).click();
-    await expect(page.locator('.p1-media-grid')).toHaveAttribute('data-view', 'cards');
+    await expect(page.locator('.home-grid')).toHaveAttribute('data-view', 'cards');
     await page.getByRole('button', { name: '列表视图', exact: true }).click();
-    const cards = await page.locator('.p1-media-grid').boundingBox();
-    const properties = await page.locator('.p1-item-inspector').boundingBox();
+    const cards = await page.locator('.home-grid').boundingBox();
+    const properties = await page.locator('.home-inspector').boundingBox();
     if (!cards || !properties) throw new Error('节目列表和属性面板必须同时可见');
     expect(cards.x + cards.width <= properties.x + 1 || properties.x + properties.width <= cards.x + 1
       || cards.y + cards.height <= properties.y + 1 || properties.y + properties.height <= cards.y + 1,
@@ -110,12 +110,12 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
     await expect.poll(async () => (await inspector.boundingBox())!.width).toBe(inspectorBefore);
     await nav.getByRole('button', { name: '设置', exact: true }).click();
     const groups = page.getByRole('navigation', { name: '设置子菜单' });
-    for (const group of ['设备连接', '播放', '画面与同步', '外观与更新']) {
+    for (const group of ['设备连接', '当前工程', '播放', '画面', '外观与更新', '帮助与反馈']) {
       await groups.getByRole('button', { name: group, exact: true }).click();
       const sections = page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button');
       for (let index = 0; index < await sections.count(); index++) {
         await sections.nth(index).click();
-        await expect(page.locator('.device-console:visible')).toBeVisible();
+        await expect(page.locator('.settings-page:visible')).toBeVisible();
         await page.screenshot({ path: info.outputPath(`settings-${group}-${index}.png`) });
       }
     }
@@ -126,7 +126,7 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     const zoomImage = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0]!.webContents.capturePage()).toPNG().toString('base64'));
     await writeFile(info.outputPath('settings-200-percent.png'), Buffer.from(zoomImage, 'base64'));
-    expect(await page.locator('.device-console:visible').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await page.locator('.settings-page:visible').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(1));
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.keyboard.press('Tab');

@@ -58,7 +58,7 @@ export class LightingCueAudition {
     if (native && selectedEvents.some(event => event.kind !== 'ma2' || event.action !== 'goto' || !event.sequence || !event.cue)) throw new Error('控台时间线只能试听指定了序列和编号的 Cue');
     // This isolated operator audition contains only the explicitly selected Cue(s).
     // The original document and its native playback/writeback guards remain unchanged.
-    const preview: LightingDocument = { ...document, ma2Bindings: [], outputMode: 'direct', tracks: document.tracks.map(track => ({
+    const preview: LightingDocument = { ...document, ma2Bindings: [], tracks: document.tracks.map(track => ({
       ...track, muted: false, solo: false,
       clips: track.clips.map(clip => ({ ...clip, muted: false, start: 0, timeLock: 'time', events: clip.events.filter(event => event.kind === 'ma2' && (event.id === group || event.effectGroupId === group)).map(event => ({ ...event, ...(native ? { executor: '' } : {}), at: 0, preparation: undefined })) }))
     })) };
@@ -72,7 +72,7 @@ export class LightingCueAudition {
       if (generation !== this.generation) return 0;
       if (status.state !== 'connected' || !status.settings) throw new Error('序列池里的 Cue 通过网络播放，请先连接 MA2 网络（不需要绑定推杆或按键）');
       const { host, port, monitorPort, username } = status.settings;
-      const actions = compileLightingNetworkActions({ ...preview, outputMode: 'network' });
+      const actions = compileLightingNetworkActions(preview);
       const sessionId = crypto.randomUUID(); this.networkSession = sessionId;
       let count = 0;
       for (const entry of actions) {

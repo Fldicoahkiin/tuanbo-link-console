@@ -1,24 +1,29 @@
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
-import { createPortal } from 'react-dom';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { X } from 'lucide-react';
 import { ma2NetworkStatusSchema, type Ma2NetworkTarget } from '@tb/schema';
 import type { LightingTimelineProps } from './LightingTimeline';
 import { LightingArrangementSettings } from './LightingArrangementSettings';
 import { LightingFileActions } from './LightingFileActions';
 import { Ma2ProgramSync } from './Ma2ProgramSync';
+import { Dialog, IconButton } from '../ui';
+import './lighting-tools.css';
 
 export type LightingTool = 'tempo' | 'files' | 'sync';
 const titles: Record<LightingTool, string> = { tempo: '节拍与循环', files: '导入与导出', sync: '节目同步' };
 export function LightingTimelineTools(props: Pick<LightingTimelineProps, 'document' | 'onChange'> & { inline?: boolean; tool: LightingTool; programName: string; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void; onClose: () => void }): JSX.Element {
   const method = useMa2ModeStore((state) => state.method);
   const [busy, setBusy] = useState(false);
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => { if (props.inline) return; const node = dialog.current; node?.showModal(); return () => node?.close(); }, [props.inline]);
-  const content = <section className={props.inline ? "lighting-tools-dialog" : "lighting-tools-dialog settings-inline integration-workspace"}><div className="settings-detail">{!props.inline ? <header><div><h2>{titles[props.tool]}</h2><p>{props.programName}</p></div><button autoFocus disabled={busy} aria-label="关闭灯光工具" onClick={props.onClose}>关闭</button></header> : null}
-    <div className="settings-lighting">{props.tool === 'sync' ? method === 'midi' ? <p>当前用 MIDI 时间码同步，不需要扫描或同步控台节目。音频和端口请在设备设置里配置。</p> : <EditorMa2Sync disabled={props.disabled} notify={props.notify} onBusy={setBusy} /> : <fieldset disabled={props.disabled} className="lighting-settings">{props.tool === 'tempo' ? <LightingArrangementSettings document={props.document} onChange={props.onChange} /> : <div className="lighting-tools"><LightingFileActions document={props.document} onChange={props.onChange} notify={props.notify} /></div>}</fieldset>}
-  </div></div></section>;
-  if (props.inline) return content;
-  return createPortal(<dialog ref={dialog} aria-label={titles[props.tool]} className="lighting-tools-backdrop" onCancel={(event) => { event.preventDefault(); if (!busy) props.onClose(); }} onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) props.onClose(); }}>{content}</dialog>, window.document.body);
+  const close = (): void => { if (!busy) props.onClose(); };
+  const body = props.tool === 'sync'
+    ? method === 'midi' ? <p className="lighting-tool-note">当前用 MIDI 时间码同步，不需要扫描或同步控台节目。音频和端口请在设备设置里配置。</p> : <EditorMa2Sync disabled={props.disabled} notify={props.notify} onBusy={setBusy} />
+    : <fieldset disabled={props.disabled} className="lighting-tool-fields">{props.tool === 'tempo' ? <LightingArrangementSettings document={props.document} onChange={props.onChange} /> : <LightingFileActions document={props.document} onChange={props.onChange} notify={props.notify} />}</fieldset>;
+  // In the lighting workbench the tool takes the library's place; in the editor it is a window.
+  if (props.inline) return <section className="lighting-tool-panel" aria-label={titles[props.tool]}>
+    <header><div><h2>{titles[props.tool]}</h2><p>{props.programName}</p></div><IconButton label="关闭灯光工具" icon={X} disabled={busy} onClick={props.onClose} /></header>
+    <div className="lighting-tool-body">{body}</div>
+  </section>;
+  return <Dialog size="lg" title={titles[props.tool]} description={props.programName} closeLabel="关闭灯光工具" onClose={close}><div className="lighting-tool-body">{body}</div></Dialog>;
 }
 
 function EditorMa2Sync(props: { disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void; onBusy: (busy: boolean) => void }): JSX.Element {

@@ -10,7 +10,7 @@ async function openProject(app: ElectronApplication, file: string, first: boolea
   const page = await app.firstWindow();
   await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
   if (!first) { await page.getByRole('button', { name: '节目单', exact: true }).click(); await page.getByLabel('工程菜单', { exact: true }).click(); }
-  await page.getByRole('button', { name: '打开工程', exact: true }).click();
+  await page.getByRole(first ? 'button' : 'menuitem', { name: '打开工程', exact: true }).click();
   await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
   // The workbench timeline appears once the project has loaded; a Ctrl+S before that has no document to save.
   await expect(page.getByRole('button', { name: '音乐分析', exact: true })).toBeVisible();
@@ -95,10 +95,10 @@ test('真实短歌：自动识别分段、旧编号隐藏、纠错、保存恢�
     await panel.getByRole('button', { name: '保存修改', exact: true }).click();
     await expect.poll(async () => (await savedAnalysis())?.segments[0]?.name).toBe('核对段落');
     await page.locator('.music-detected-beat').nth(4).click({ button: 'right' });
-    await page.getByRole('button', { name: '删除拍点', exact: true }).click();
+    await page.getByRole('menuitem', { name: '删除拍点', exact: true }).click();
     await expect.poll(async () => (await savedAnalysis())?.beats.length).toBe(original.beats.length - 1);
     await page.locator('.music-tempo-segment').last().click({ button: 'right' });
-    await page.locator('.music-beat-context').getByRole('button', { name: '删除此段', exact: true }).click();
+    await page.getByRole('menu', { name: '音乐段落菜单' }).getByRole('menuitem', { name: '删除此段', exact: true }).click();
     await expect.poll(async () => (await savedAnalysis())?.segments.length).toBe(original.segments.length - 1);
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect.poll(async () => (await savedAnalysis())?.segments.length).toBe(original.segments.length);

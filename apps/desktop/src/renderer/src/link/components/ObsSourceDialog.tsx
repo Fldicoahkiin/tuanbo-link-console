@@ -1,6 +1,6 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { useState } from 'react';
-import { ModalSurface } from './ModalSurface';
+import { ModalSurface } from '../ui/ModalSurface';
 import { createPortal } from 'react-dom';
 import { obsSourceKinds, obsSourceSettingsSchema, type ObsSourceDraft, type ObsSourceKind, type ObsSourceOption, type ObsSourceSettings } from '@tb/schema';
 import { linkDesktopViewModel, linkFileViewModel } from '../view-models/link-desktop-view-model';

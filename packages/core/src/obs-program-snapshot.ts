@@ -20,8 +20,8 @@ export function createObsProgramSnapshot(project: LinkProject, itemId: string, r
     assets: project.mediaAssets.filter(asset => ids.has(asset.id)).map(asset => ({ ...asset, folderId: null })) };
 }
 
-/** Picture work: an enabled cue drives OBS or the song places media in OBS.
- * Such a song does not start when its picture cannot be prepared. */
+/** Picture work: an enabled cue drives OBS or the song places media in OBS. Such a song waits for its
+ * picture to be prepared before it starts, and plays without it when that fails (`programStart`). */
 export function itemNeedsObs(project: LinkProject, itemId: string): boolean {
   const item = project.rundown.find(entry => entry.id === itemId);
   return Boolean(item && (item.referenceMediaClips.length > 0

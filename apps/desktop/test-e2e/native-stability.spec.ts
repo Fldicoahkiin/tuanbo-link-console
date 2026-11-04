@@ -64,11 +64,11 @@ test('高负载工程正式原生音频连续节目与界面交互', async ({}, 
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await expect(page.locator('[data-total-programs]')).toHaveAttribute('data-total-programs', '200');
-    await expect(page.locator('.player-transport .primary-button')).toBeEnabled();
+    await expect(page.locator('.home-player-play')).toBeEnabled();
     // Explicitly disable this instance's MTC before preparation. The independent
     // prototype loopback owns its test port and must never receive a second sender.
-    await page.locator('.player-transport .primary-button').click();
-    await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+    await page.locator('.home-player-play').click();
+    await expect(page.locator('.home-player[data-status="playing"]')).toBeVisible();
     if (traceUi) await app.evaluate(async ({ BrowserWindow }, profileCpu) => {
       const debug = BrowserWindow.getAllWindows()[0]!.webContents.debugger;
       debug.attach('1.3');

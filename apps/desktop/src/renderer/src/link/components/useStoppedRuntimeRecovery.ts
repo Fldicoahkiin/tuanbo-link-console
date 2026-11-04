@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { LinkRuntimeState } from '@tb/core/link';
-import type { InternalPlayerState } from '../runtime/internal-playback-controller';
+import type { InternalPlayerState } from '@tb/core/link';
 import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
 import { RemoteNativeProgramPlayer } from '../runtime/remote-native-program-player';
 import type { ProjectPlayer } from './ProjectPlayerControls';

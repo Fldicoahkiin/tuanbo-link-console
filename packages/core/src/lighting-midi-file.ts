@@ -17,7 +17,7 @@ export function importLightingMidi(bytes: Uint8Array): LightingImport {
   if (midi.header.format === 2) throw new Error('暂不支持 MIDI Format 2 独立序列，请导出为 Format 1');
   const ppq = midi.header.ticksPerBeat;
   if (!ppq) throw new Error('请使用按节拍计时的 MIDI 文件，当前文件为 SMPTE 分帧格式');
-  const document = createLightingDocument(); document.outputMode = 'direct';
+  const document = createLightingDocument();
   const warnings = new Set<string>();
   const timedTracks = midi.tracks.map((events) => { let tick = 0; return events.map((event) => { tick += event.deltaTime; return { beat: tick / ppq, event }; }); });
   const tempoEvents = timedTracks.flat().filter(({ event }) => event.type === 'setTempo' || event.type === 'timeSignature').sort((a, b) => a.beat - b.beat);
@@ -139,7 +139,7 @@ export function exportLightingMidi(document: LightingDocument): Uint8Array {
       }
     }
     const controlTrack = { ...track, muted: false, solo: false, portProfileId: 'file-export', clips: track.clips.map((clip) => ({ ...clip, muted: false, events: clip.events.filter((event) => event.kind === 'ma2' || event.kind === 'point') })) };
-    const controls = compileLightingPackets({ ...document, outputMode: 'direct', tracks: [controlTrack] });
+    const controls = compileLightingPackets({ ...document, tracks: [controlTrack] });
     for (const control of controls) {
       const tick = Math.round(map.msToBeat(control.atMs) * ppq);
       if (control.bytes[0] === 0xf0) events.push({ tick, event: { deltaTime: 0, type: 'sysEx', data: control.bytes.slice(1) } });

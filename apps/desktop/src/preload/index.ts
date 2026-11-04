@@ -1,10 +1,9 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutDirectorySchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
 import { ma2ExecutorPageDirectorySchema, ma2ExecutorPageSchema, ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorUpdateResultSchema, ma2ExecutorInputSchema } from '@tb/schema';
-import { ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, ma2LiveSnapshotSchema } from '@tb/schema';
+import { ma2ExecutorObservationSchema, ma2ExecutorObserveRequestSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, ma2LiveSnapshotSchema } from '@tb/schema';
 import { ma2NetworkTargetSchema, ma2TimecodeRangesSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, ma2SongSyncResultSchema } from '@tb/schema';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { z } from 'zod';
-import { ma2AutoBindRequestSchema, ma2AutoBindResultSchema } from '@tb/schema';
 import { ma2RenameRequestSchema, ma2RenameResultSchema } from '@tb/schema';
 import { linkDocumentStateSchema, linkSaveRequestSchema, linkUnsavedChangesDecisionSchema } from '@tb/schema';
 import { ma2LayoutReadRequestSchema, ma2LayoutSnapshotSchema, ma2NewCueRequestSchema, ma2NewCueResultSchema } from '@tb/schema';
@@ -143,6 +142,8 @@ const tbLink: LinkDesktopBridgeApi = {
   readMa2Live: async payload => ma2LiveSnapshotSchema.parse(await invoke('link:ma2-live-read', ma2LiveRequestSchema.parse(payload))),
   inputMa2Live: async payload => { await invoke('link:ma2-live-input', ma2LiveInputSchema.parse(payload)); },
   releaseMa2Live: async () => { await invoke('link:ma2-live-release'); },
+  observeMa2Executor: async payload => ma2ExecutorObservationSchema.parse(await invoke('link:ma2-observe-executor', ma2ExecutorObserveRequestSchema.parse(payload))),
+  releaseMa2Observer: async () => { await invoke('link:ma2-observer-release'); },
   updateMa2Layout: async payload => ma2LayoutSnapshotSchema.parse(await invoke('link:ma2-layout-update', ma2LayoutUpdateRequestSchema.parse(payload))),
   readMa2Layout: async payload => ma2LayoutSnapshotSchema.parse(await invoke('link:ma2-layout', ma2LayoutReadRequestSchema.parse(payload))),
   prepareMa2CueDeletion: async (payload, progress) => ma2CueDeletePlanSchema.parse(await readMa2('link:ma2-cue-delete-prepare', ma2CueDeletePrepareSchema.parse(payload), progress)),
@@ -156,7 +157,6 @@ const tbLink: LinkDesktopBridgeApi = {
   readMa2Executor: (payload) => invoke('link:ma2-executor', payload),
   compareMa2: (payload) => invoke('link:ma2-compare', payload),
   applyMa2: (payload) => invoke('link:ma2-apply', payload),
-  prepareMa2AutoBindings: async payload => ma2AutoBindResultSchema.parse(await invoke('link:ma2-auto-bind', ma2AutoBindRequestSchema.parse(payload))),
   renameMa2Object: async payload => ma2RenameResultSchema.parse(await invoke('link:ma2-rename', ma2RenameRequestSchema.parse(payload))),
   getAppInfo: () => invoke('link:app-info'),
   getUpdateStatus: () => invoke('link:update-status'),
@@ -282,7 +282,6 @@ const tbLink: LinkDesktopBridgeApi = {
   getObsSourceScreenshot: (payload) => invoke('link:obs-source-screenshot', payload),
   executeObsAction: (action) => invoke('link:obs-execute', action),
   activateManagedObsOutput: () => invoke('link:obs-activate-managed-output'),
-  setInternalAudioCapture: (enabled, sceneNames) => invoke('link:obs-internal-audio', { enabled, sceneNames }),
   executeManagedMediaEvent: (payload) => invoke('link:obs-execute-managed-media', payload),
   seekManagedMedia: (payload) => invoke('link:obs-seek-managed-media', payload),
   startExternalApplication: (id) => invoke('link:process-start', id),

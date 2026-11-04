@@ -4,6 +4,7 @@ import type { PlaybackClock } from '../../registry/playback-clock';
 import { LightingRecorder, LightingTempoMap } from '@tb/core/link';
 import type { LightingClip, LightingDocument, LightingTempo, LightingTrack } from '@tb/schema';
 import { useIntegrationStore } from '../stores/integration-store';
+import { Button } from '../ui';
 
 export function LightingRecordingControls(props: { audioAvailable?: boolean; clip: LightingClip; track: LightingTrack; tempos: LightingTempo[]; playheadMs: number; clock: PlaybackClock; onRecorded: (take: LightingClip) => void; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element {
   const ports = useIntegrationStore((state) => state.profile?.midiPortProfiles);
@@ -89,7 +90,7 @@ export function LightingRecordingControls(props: { audioAvailable?: boolean; cli
     }
     finally { if (token === generation.current) setConnecting(false); }
   };
-  return <button className="timeline-record-button" disabled={!initialized || connecting || (!recording && props.track.locked)} aria-pressed={recording} title="记录播放时收到的 MIDI 操作，输入端口在设置里选择" onClick={() => { if (recording) stop(); else void start(); }}>{connecting ? '连接中…' : recording ? '结束录制' : '录制灯光'}</button>;
+  return <Button variant="ghost" className="timeline-record-button" data-recording={recording || undefined} disabled={!initialized || connecting || (!recording && props.track.locked)} aria-pressed={recording} title="记录播放时收到的 MIDI 操作，输入端口在设置里选择" onClick={() => { if (recording) stop(); else void start(); }}>{connecting ? '连接中…' : recording ? '结束录制' : '录制灯光'}</Button>;
 }
 
 export function TimelineLightingRecording(props: { audioAvailable?: boolean; document: LightingDocument; clipId: string | null; clock: PlaybackClock; playheadMs: number; onChange: (document: LightingDocument, label: string) => void; onError: (message: string) => void }): JSX.Element | null {

@@ -1,12 +1,13 @@
+import { Button, Dialog, IconButton } from './ui';
+import './components/titlebar.css';
 import { useSettingsExit } from './useSettingsExit';
-import { SettingsConfirm } from './components/SettingsControls';
 import { toUserErrorMessage } from '@tb/core/link';
 import { useMa2ReadStore } from './stores/ma2-read-store';
 import { useDocumentShortcuts } from './useDocumentShortcuts';
 import { useMidiPortMonitor } from './useMidiPortMonitor';
 import { initializeStartupDevices } from './startup-obs-connection';
 import { subscribeObsSceneSync } from './obs-scene-sync';
-import { ToolbarConnections } from './components/ToolbarConnections';
+import { TitlebarStatus } from './components/TitlebarStatus';
 import { RendererErrorBoundary } from './components/RendererErrorBoundary';
 import { ProjectDialog } from './components/ProjectDialog';
 import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -38,7 +39,10 @@ import { useRecoveryCopyWriter } from './recovery-copy-writer';
 import { confirmReplaceDocument, showOpenedProject, useDocumentCommands, useDocumentStateReport } from './project-document';
 import { useP1AutoFollow } from './useP1AutoFollow';
 import { useInternalPlayer } from './useInternalPlayer';
-import { useMa2AutoSync, useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
+import { useMa2Sync } from './runtime/use-ma2-sync';
+import { useConsoleFollow } from './runtime/use-console-follow';
+import { useStatusSources } from './runtime/use-status-sources';
+import { useMa2SyncStore } from './stores/ma2-sync-store';
 import { useMediaAudioPreparation } from './runtime/use-media-audio-preparation';
 import { useLicenseReminders } from './useLicenseReminders';
 import { TaskSidebarProgress } from './components/TaskSidebarProgress';
@@ -56,8 +60,7 @@ const NAVIGATION: NavigationItem[] = [
 
 export function LinkApp(): JSX.Element {
   useAppearanceTheme();
-  const [lightingActionsHost, setLightingActionsHost] = useState<HTMLDivElement | null>(null); const [connectHost, setConnectHost] = useState<HTMLDivElement | null>(null); const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null);
-  const [connectionStatusHost, setConnectionStatusHost] = useState<HTMLDivElement | null>(null);
+  const [syncHost, setSyncHost] = useState<HTMLDivElement | null>(null); const [connectHost, setConnectHost] = useState<HTMLDivElement | null>(null); const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null);
   const [editorSidebarHost, setEditorSidebarHost] = useState<HTMLDivElement | null>(null);
   const [playlistHost, setPlaylistHost] = useState<HTMLDivElement | null>(null);
   const [page, setPage] = useState<Page>('project');
@@ -87,7 +90,7 @@ export function LinkApp(): JSX.Element {
   const [playbackProject, setPlaybackProject] = useState(project);
   const internalPlayer = useInternalPlayer(coordinator, integrationInitialized, playbackProject);
   const editingLocked = internalPlayer.state.status === 'preparing' || ['preflight', 'armed', 'running', 'timecodeLost', 'paused', 'error', 'stopping'].includes(runtimeState);
-  const previewPlaying = useMa2AutoSyncStore(state => state.previewPlaying);
+  const previewPlaying = useMa2SyncStore(state => state.previewPlaying);
   const playbackLocked = editingLocked || previewPlaying || ['playing', 'paused'].includes(internalPlayer.state.status);
   useEffect(() => { if (!playbackLocked) setPlaybackProject(project); }, [playbackLocked, project]);
   useConnectionsEscape(connectionsOpen && !settingsOpen, () => setConnectionsOpen(false));
@@ -101,7 +104,8 @@ export function LinkApp(): JSX.Element {
   }, []);
 
   const midiMonitor = useDesktopIntegrationEvents(notify); useEffect(() => { try { useDisplayPreferences.getState().load(); } catch (error) { notify(`显示设置读取失败：${String(error)}`, 'error'); } }, [notify]);
-  useMa2AutoSync(editingLocked || internalPlayer.state.status === 'playing', notify);
+  useMa2Sync(editingLocked || internalPlayer.state.status === 'playing', notify);
+  useConsoleFollow(internalPlayer, playbackProject); useStatusSources();
   useProjectPersistence(notify); useRecoveryCopyWriter(); useMediaAudioPreparation(playbackLocked, notify);
 
   useDocumentStateReport(notify);
@@ -204,13 +208,13 @@ export function LinkApp(): JSX.Element {
     onRedo: () => useDocumentStore.getState().redo(), onSave: () => void saveProject()
   };
   const fileCommands = { replaceDisabled: playbackLocked || !project, onSaveAs: () => void saveProjectAs(), onRevert: () => void revertProject() };
-  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} fileCommands={fileCommands} /></div>{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace actionsHost={lightingActionsHost} key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
+  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} fileCommands={fileCommands} /></div>{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace syncHost={syncHost} key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
 
   return <RendererErrorBoundary>
     <div className="app-shell" data-workspace={connectionsOpen ? 'settings' : page}>
       <a className="skip-link" href="#workspace-content">跳到工作区</a>
-      <AppTopbar actionsHostRef={setLightingActionsHost} details={<ToolbarConnections player={internalPlayer} statusHost={connectionStatusHost} onSettings={(category, focus) => { setSettingsCategory(category); setSettingsLocation({ category, ...(focus ? { focus } : {}) }); openSettings(); }} />} statusHostRef={setConnectionStatusHost} connectHostRef={setConnectHost} toolbarHostRef={setToolbarHost} onWindowAction={controlWindow} />
-      <AppSidebar editorHostRef={setEditorSidebarHost} playlistHostRef={setPlaylistHost} settingsCategory={settingsCategory} onSettingsCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }}
+      <AppTopbar status={<TitlebarStatus player={internalPlayer} onSettings={(category, focus) => { setSettingsCategory(category); setSettingsLocation({ category, ...(focus ? { focus } : {}) }); openSettings(); }} />} connectHostRef={setConnectHost} toolbarHostRef={setToolbarHost} onWindowAction={controlWindow} />
+      <AppSidebar editorHostRef={setEditorSidebarHost} syncHostRef={setSyncHost} playlistHostRef={setPlaylistHost} settingsCategory={settingsCategory} onSettingsCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }}
         page={page} internal={project?.playbackSource === 'internal'} editingLocked={editingLocked}
         obsState={obs.status} p1State={processes.p1.status} runtimeState={runtimeState} settingsOpen={connectionsOpen} onPageChange={(next) => { leaveSettings(() => startTransition(() => setPage(next))); }} onSettings={openSettings}
         notify={notify}
@@ -222,7 +226,10 @@ export function LinkApp(): JSX.Element {
         </main>
       </section>
 
-      {settingsExit ? <SettingsConfirm cancelLabel="继续编辑" title="离开设置？" confirmLabel="放弃未保存修改" onClose={() => setSettingsExit(null)} onConfirm={settingsExit}>连接或启动设置还没保存，离开后这部分修改会丢失。其他已保存的设置和工程修改不受影响。</SettingsConfirm> : null}
+      {settingsExit ? <Dialog title="离开设置？" size="sm" onClose={() => setSettingsExit(null)} actions={<>
+        <Button variant="secondary" onClick={() => setSettingsExit(null)}>继续编辑</Button>
+        <Button variant="danger" onClick={settingsExit}>放弃未保存修改</Button>
+      </>}><p>连接或启动设置还没保存，离开后这部分修改会丢失。其他已保存的设置和工程修改不受影响。</p></Dialog> : null}
       {newProjectOpen ? <ProjectDialog name={newProjectName} error={newProjectError} onNameChange={setNewProjectName} onClose={() => setNewProjectOpen(false)} onCreate={() => void createProject()} /> : null}
     </div>
   </RendererErrorBoundary>;
@@ -237,8 +244,10 @@ function useConnectionsEscape(open: boolean, onClose: () => void): void {
   }, [open, onClose]);
 }
 
-function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange, playlistHostRef, page, internal, editingLocked, settingsOpen, onPageChange, onSettings, notify }: {
+function AppSidebar({ editorHostRef, syncHostRef, settingsCategory, onSettingsCategoryChange, playlistHostRef, page, internal, editingLocked, settingsOpen, onPageChange, onSettings, notify }: {
   editorHostRef: (element: HTMLDivElement | null) => void;
+  /** The lighting workbench puts its console sync controls here, under its own menu. */
+  syncHostRef: (element: HTMLDivElement | null) => void;
   settingsCategory: SettingsCategory;
   onSettingsCategoryChange: (category: SettingsCategory) => void;
   playlistHostRef: (element: HTMLDivElement | null) => void;
@@ -264,35 +273,37 @@ function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange,
     <div className="sidebar-context">
       <div className="sidebar-playlists" hidden={settingsOpen || page !== 'project'} ref={playlistHostRef} />
       <div className="sidebar-editor" hidden={settingsOpen || page === 'project'} ref={editorHostRef} />
+      <div className="sidebar-sync" hidden={settingsOpen || page !== 'lighting'} ref={syncHostRef} />
       {settingsOpen ? <SettingsNavigation selected={settingsCategory} onSelect={onSettingsCategoryChange} /> : null}
       <TaskSidebarProgress notify={notify}/>
     </div>
   </aside>;
 }
 
-function AppTopbar({ actionsHostRef, details, statusHostRef, connectHostRef, toolbarHostRef, onWindowAction }: {
-  actionsHostRef: (element: HTMLDivElement | null) => void;
-  details: ReactNode;
-  statusHostRef: (element: HTMLDivElement | null) => void;
+/**
+ * The window's title bar (2026-10-30 rework): the page's document controls, the connection status,
+ * free space to drag the window, one-click connect and the window buttons. It holds nothing that only
+ * one page needs beyond its document controls.
+ */
+function AppTopbar({ status, connectHostRef, toolbarHostRef, onWindowAction }: {
+  status: ReactNode;
   connectHostRef: (element: HTMLDivElement | null) => void;
   toolbarHostRef: (element: HTMLDivElement | null) => void;
   onWindowAction: (action: 'minimize' | 'toggleMaximize' | 'close') => void;
 }): JSX.Element {
-  return <div className="app-topbar">
-    <div className="persistent-project-toolbar" ref={toolbarHostRef} />
-    <div className="topbar-connection-status" ref={statusHostRef} />
-    <div className="topbar-drag-region" title="拖动窗口，双击最大化或还原" aria-hidden="true" />
-    <div className="lighting-topbar-actions" ref={actionsHostRef} />
-    <div className="topbar-details">{details}</div>
-    <div className="topbar-connect" ref={connectHostRef} />
-    <WorkspaceToolbar onWindowAction={onWindowAction} />
-  </div>;
-}
-
-function WorkspaceToolbar({ onWindowAction }: {
-  onWindowAction: (action: 'minimize' | 'toggleMaximize' | 'close') => void;
-}): JSX.Element {
-  return <header className="unified-toolbar" aria-label="窗口标题栏"><div className="window-controls" aria-label="窗口控制"><button aria-label="最小化窗口" onClick={() => onWindowAction('minimize')}><Minus /></button><button aria-label="最大化或还原窗口" onClick={() => onWindowAction('toggleMaximize')}><Maximize2 /></button><button className="window-close" aria-label="关闭窗口" onClick={() => onWindowAction('close')}><X /></button></div></header>;
+  return <header className="titlebar" aria-label="窗口标题栏">
+    <div className="titlebar-document-host" ref={toolbarHostRef} />
+    <div className="titlebar-middle">
+      {status}
+      <div className="titlebar-drag" title="拖动窗口，双击最大化或还原" aria-hidden="true" />
+    </div>
+    <div className="titlebar-connect" ref={connectHostRef} />
+    <div className="titlebar-window" role="group" aria-label="窗口控制">
+      <IconButton label="最小化窗口" icon={Minus} onClick={() => onWindowAction('minimize')} />
+      <IconButton label="最大化或还原窗口" icon={Maximize2} onClick={() => onWindowAction('toggleMaximize')} />
+      <IconButton label="关闭窗口" icon={X} className="titlebar-close" onClick={() => onWindowAction('close')} />
+    </div>
+  </header>;
 }
 
 function useRuntimeCloseProtection(

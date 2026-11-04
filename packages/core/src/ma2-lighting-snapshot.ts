@@ -34,8 +34,8 @@ export function ma2EventSnapshotProperties(event: LightingEvent, time: number, m
   const common = { time: String(time), muted: String(muted) };
   if (event.kind === 'ma2-fader') return { ...common, executor: event.executor, action: 'master', fader: event.fader, level: String(event.level), name: '主推杆' };
   if (event.kind !== 'ma2') throw new Error(`MA2 绑定轨道里有还不支持的 ${event.kind} 事件`);
-  if (event.runMode === 'independent') throw new Error('单独运行请用联动台的网络或 MIDI 直控播放，暂不支持写入控台 Timecode');
-  if (event.preparation) throw new Error('带埋步的 Cue 请用联动台的网络或 MIDI 直控播放，暂不支持写入控台 Timecode');
+  if (event.runMode === 'independent') throw new Error(`“${event.label}”设成了单独运行，控台时间线做不到。请在 Cue 编排里改成“跟随上一个”`);
+  if (event.preparation) throw new Error(`“${event.label}”带埋步，控台时间线做不到。请在 Cue 编排里去掉埋步`);
   return { ...common, executor: event.executor, action: event.action,
     cue: event.action === 'goto' ? event.cue ?? '' : '', sequence: event.action === 'goto' ? String(event.sequence) : '',
     name: event.action === 'goto' ? nativeName : event.action === 'go' ? '下一步' : '关闭执行器' };

@@ -1,28 +1,14 @@
 import { useSettingsDirty } from '../useSettingsDirty';
 import { useSettingsSessionStore } from '../stores/settings-session-store';
-import { ObsPreviewSetup } from './ObsPreviewSetup';
-import { Button } from './Button';
+import { Button, Notice } from '../ui';
+import { ProgramSettingsCards } from './ProgramMaintenanceSettings';
 import { ObsDeviceSettings } from './ObsDeviceSettings';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
 import { createDefaultIntegrationProfile, mergeIntegrationDraft, programDraftValues, mergeProgramSettings } from '../view-models/local-integration-profile';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import {
-  AudioWaveform,
-  CheckCircle2,
-  CircleAlert,
-  FolderOpen,
-  Link2,
-  ScanSearch,
-  MonitorUp,
-  Power,
-  ShieldCheck,
-  Square,
-  Wrench,
-  type LucideIcon
-} from 'lucide-react';
+import { ScanSearch } from 'lucide-react';
 import type { IntegrationProfile } from '@tb/schema';
-import { type LinkProcessSnapshot } from '@tb/core/link';
 import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
 import { LinkMidiAdapter, hasConnectedProfilePort } from '../../registry/link-midi-adapter';
 import { useDocumentStore } from '../stores/document-store';
@@ -32,7 +18,7 @@ import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { readAndStoreMidiPorts } from '../view-models/midi-device-inventory';
 import { runDesktopPreflight } from '../view-models/link-preflight-view-model';
 import { DetectionReport, useLocalIntegrationConnection } from './LocalIntegrationConnection';
-import { isMtcSignalReady, portName, updatePortProfile } from '../view-models/local-integration-midi';
+import { isMtcSignalReady } from '../view-models/local-integration-midi';
 import { P1ProjectSyncPanel } from './P1ProjectSyncPanel';
 import { IntegrationHero } from './IntegrationOverview';
 import { type SettingsCategory } from './settings-navigation';
@@ -172,14 +158,14 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
       setBusy(false);
     }
   };
-  return (<div className="page-stack integration-workspace">
-      {quickConnectHost ? createPortal(<button aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '按顺序连接已启用的设备，某一步没通过就会停下，后面的步骤不再执行'} disabled={busy || runtimeActive} onClick={localIntegration.connect}><ScanSearch />{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</button>, quickConnectHost) : null}
+  return (<div className="settings-content">
+      {quickConnectHost ? createPortal(<Button variant="primary" icon={ScanSearch} aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '按顺序连接已启用的设备，某一步没通过就会停下，后面的步骤不再执行'} disabled={busy || runtimeActive} onClick={localIntegration.connect}>{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</Button>, quickConnectHost) : null}
       {settingsOpen ? <IntegrationSettingsDialog
         key={revision} category={category} onNavigate={onCategoryChange} onCreate={onCreate} onOpen={onOpen} onBusy={setBusy} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable} nestedDialogOpen={false}
-        midiPorts={midiPorts} inventory={inventory} notify={notify}
+        notify={notify}
         onRefresh={() => void refresh()} onSave={() => void save()} onRefreshMidi={async () => { await readAndStoreMidiPorts(midiMonitor); }}
         onClose={onSettingsClose}
-        songTools={<div className="p1-follow-settings">
+        songTools={<div className="settings-stack">
       {internal ? null : <IntegrationHero
         busy={busy} securityAvailable={securityAvailable} coordinatorAvailable={coordinator !== null}
         currentItemTitle={currentItemTitle} runtimeState={runtimeState}
@@ -190,14 +176,13 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
       <P1ProjectSyncPanel heading={false} disabled={runtimeActive} notify={notify} />
       {/* P1's timecode matters only while following P1; under the internal player it is not expected (2026-10-28, picture 4). */}
       {internal ? null : autoFollowEnabled && runtimeState !== 'error' && mtcPortAvailable && !mtcReady
-        ? <section className="security-banner attention"><div><strong>等待 P1 播放或继续</strong><p>P1 暂停或停止时不会发送时间码，时间线和视频停在当前位置。直接在 P1 里继续、重播或切歌即可，不用重新选择节目。</p></div></section>
+        ? <Notice title="等待 P1 播放或继续">P1 暂停或停止时不会发送时间码，时间线和视频停在当前位置。直接在 P1 里继续、重播或切歌就行，不用重新选择节目。</Notice>
         : <P1MtcSetupNotice ready={mtcReady} portAvailable={mtcPortAvailable} />}
-      {!securityAvailable ? <section className="security-banner blocked"><span className="banner-symbol"><ShieldCheck /></span><div><strong>Windows 安全存储不可用</strong><p>暂时无法保存 OBS 密码，也无法连接 OBS。</p></div></section> : null}
       {localIntegration.detection ? <DetectionReport detection={localIntegration.detection} issues={localIntegration.issues} /> : null}
       </div>}
         maintenance={<>
         <ProgramSettingsCards
-          draft={draft} setDraft={setDraft} password={password} setPassword={setPassword} busy={busy} runtimeActive={runtimeActive}
+          draft={draft} setDraft={setDraft} busy={busy} runtimeActive={runtimeActive}
           securityAvailable={securityAvailable} processes={processes} midiPorts={midiPorts} inventory={inventory}
           persistDraft={persistPrograms} pickExecutable={pickExecutable} startProgram={startProgram} notify={notify}
         />
@@ -210,35 +195,6 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
   );
 }
 
-function ProgramSettingsCards({ draft, setDraft, busy, runtimeActive, securityAvailable, processes, midiPorts, inventory, persistDraft, pickExecutable, startProgram, notify }: {
-  draft: IntegrationProfile;
-  setDraft: React.Dispatch<React.SetStateAction<IntegrationProfile>>;
-  password: string;
-  setPassword: (value: string) => void;
-  busy: boolean;
-  runtimeActive: boolean;
-  securityAvailable: boolean;
-  processes: ReturnType<typeof useIntegrationStore.getState>['processes'];
-  midiPorts: ReturnType<LinkMidiAdapter['listPorts']>;
-  inventory: ReturnType<typeof useIntegrationStore.getState>['inventory'];
-  persistDraft: () => Promise<IntegrationProfile>;
-  pickExecutable: (id: 'obs' | 'p1') => Promise<void>;
-  startProgram: (id: 'obs' | 'p1') => Promise<void>;
-  notify: Props['notify'];
-}): JSX.Element {
-  const internal = useDocumentStore((state) => state.project?.playbackSource === 'internal');
-  return <fieldset className="device-program-list" disabled={runtimeActive}>
-    <ProgramProfileCard kind="obs" icon={MonitorUp} title="OBS Studio" process={processes.obs} busy={busy || runtimeActive} settings={draft.obs} acceptedVersion={draft.acceptedVersions.obs} onAcceptedVersionChange={(value) => setDraft({ ...draft, acceptedVersions: { ...draft.acceptedVersions, obs: value } })} onSettingsChange={(settings) => setDraft({ ...draft, obs: { ...draft.obs, ...settings } })} onPick={() => void pickExecutable('obs')} onStart={() => void startProgram('obs')} onStop={() => void runAction(() => linkDesktopViewModel.stopExternalApplication('obs'), notify)} maintenanceActions={<Button className="secondary-button" disabled={busy || !securityAvailable} onClick={() => void runAction(async () => { await persistDraft(); useIntegrationStore.getState().setObs(await linkDesktopViewModel.connectObs()); useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory()); }, notify)}><Link2 />重新连接 OBS</Button>}>
-      <ObsPreviewSetup disabled={busy || runtimeActive || !securityAvailable} notify={notify} beforeRepair={async () => { await persistDraft(); }} />
-    </ProgramProfileCard>
-    {!internal ? <ProgramProfileCard kind="p1" icon={AudioWaveform} title="P1" process={processes.p1} busy={busy || runtimeActive} settings={draft.p1} acceptedVersion={draft.acceptedVersions.p1} onAcceptedVersionChange={(value) => setDraft({ ...draft, acceptedVersions: { ...draft.acceptedVersions, p1: value } })} onSettingsChange={(settings) => setDraft({ ...draft, p1: { ...draft.p1, ...settings } })} onPick={() => void pickExecutable('p1')} onStart={() => void startProgram('p1')} onStop={() => void runAction(() => linkDesktopViewModel.stopExternalApplication('p1'), notify)}>
-      <MidiPortField label="旧节目 MIDI 输出" direction="output" value={portName(draft, 'lighting-output')} ports={midiPorts} onChange={(value) => setDraft(updatePortProfile(draft, 'lighting-output', 'output', value))} />
-      <Field label="P1 声音所在的 OBS 音频输入"><select value={draft.p1.obsAudioInputName ?? ''} onChange={(event) => setDraft({ ...draft, p1: { ...draft.p1, obsAudioInputName: event.currentTarget.value } })}><option value="">请选择 OBS 音频输入</option>{inventory?.inputs.map((inputName) => <option key={inputName} value={inputName}>{inputName}</option>)}</select></Field>
-      <Field label="预期 MTC 帧率"><select value={draft.p1.expectedFrameRate} onChange={(event) => setDraft({ ...draft, p1: { ...draft.p1, expectedFrameRate: event.currentTarget.value as IntegrationProfile['p1']['expectedFrameRate'] } })}>{['24', '25', '29.97df', '30'].map((rate) => <option key={rate}>{rate}</option>)}</select></Field>
-    </ProgramProfileCard> : null}
-  </fieldset>;
-}
-
 function stopRuntime(coordinator: LinkRuntimeCoordinator | null, runtimeState: string, notify: Props['notify']): void {
   if (!coordinator || runtimeState === 'idle' || runtimeState === 'stopping') return;
   coordinator.stop();
@@ -246,7 +202,9 @@ function stopRuntime(coordinator: LinkRuntimeCoordinator | null, runtimeState: s
 }
 
 function P1MtcSetupNotice({ ready, portAvailable }: { ready: boolean; portAvailable: boolean }): JSX.Element {
-  return <section className={`security-banner ${ready ? 'ok' : 'attention'}`}><span className="banner-symbol">{ready ? <CheckCircle2 /> : <CircleAlert />}</span><div><strong>{ready ? 'MTC 已连接' : portAvailable ? 'MIDI 端口可用，但没有收到连续的 MTC' : '还没收到 P1 的 MTC'}</strong><p>{ready ? '时间码正常，帧率一致。' : '没有收到时间码，OBS 不会跟随时间线。请确认 P1 显示“已发送”，并且 P1 设置里选了 MIDI 输出设备；只建好虚拟端口还不够。'}</p></div></section>;
+  return <Notice tone={ready ? 'success' : 'warning'} title={ready ? 'MTC 已连接' : portAvailable ? 'MIDI 接口可用，但没有收到连续的 MTC' : '还没收到 P1 的 MTC'}>
+    {ready ? '时间码正常，帧率一致。' : '没收到时间码，OBS 不会跟随时间线。请确认 P1 显示“已发送”，并且 P1 设置里选了 MIDI 输出设备；只建好虚拟接口还不够。'}
+  </Notice>;
 }
 
 function useSettingsMtcClock(active: boolean): number {
@@ -257,116 +215,6 @@ function useSettingsMtcClock(active: boolean): number {
     return () => window.clearInterval(timer);
   }, [active]);
   return now;
-}
-
-type ProgramSettingsValue = Pick<
-  IntegrationProfile['obs'],
-  'arguments' | 'executablePath' | 'workingDirectory' | 'startupTimeoutMs' | 'shutdownTimeoutMs'
->;
-
-function ProgramProfileCard({ kind, icon: Icon, title, process, busy, settings, acceptedVersion, onAcceptedVersionChange, onSettingsChange, onPick, onStart, onStop, maintenanceActions, children }: {
-  kind: 'obs' | 'p1';
-  icon: LucideIcon;
-  title: string;
-  process: LinkProcessSnapshot;
-  busy: boolean;
-  settings: ProgramSettingsValue;
-  acceptedVersion: string;
-  onAcceptedVersionChange: (value: string) => void;
-  onSettingsChange: (value: ProgramSettingsValue) => void;
-  onPick: () => void;
-  onStart: () => void;
-  onStop: () => void;
-  maintenanceActions?: React.ReactNode;
-  children?: React.ReactNode;
-}): JSX.Element {
-  return <section className={`device-program-card ${kind}`}>
-    <div className="device-program-heading">
-      <div className={`device-program-icon ${kind}`}><Icon /></div>
-      <div className="device-program-identity"><span><h3>{title}</h3><StatusPill state={process.status} /></span><p>{process.owned ? '由联动台启动，可在这里关闭' : process.status === 'running' ? <><CheckCircle2 />已在其他位置打开，请在原程序中关闭</> : `还没检测到 ${title}，可以先打开它`}</p></div>
-    </div>
-    {children ? <div className="program-maintenance-task"><h4>{kind === 'obs' ? '联动台预览没有画面' : 'P1 声音与时间码'}</h4><div className="form-grid">{children}</div></div> : null}
-    <details className="device-process-settings"><summary><Wrench />无法自动启动 {title}？设置程序位置</summary><DeviceProcessSettings title={title} process={process} busy={busy} settings={settings} acceptedVersion={acceptedVersion} onAcceptedVersionChange={onAcceptedVersionChange} onSettingsChange={onSettingsChange} onPick={onPick} onStart={onStart} onStop={onStop} maintenanceActions={maintenanceActions} /></details>
-  </section>;
-}
-
-function DeviceProcessSettings({ title, process, busy, settings, acceptedVersion, onAcceptedVersionChange, onSettingsChange, onPick, onStart, onStop, maintenanceActions }: {
-  title: string;
-  process: LinkProcessSnapshot;
-  busy: boolean;
-  settings: ProgramSettingsValue;
-  acceptedVersion: string;
-  onAcceptedVersionChange: (value: string) => void;
-  onSettingsChange: (value: ProgramSettingsValue) => void;
-  onPick: () => void;
-  onStart: () => void;
-  onStop: () => void;
-  maintenanceActions?: React.ReactNode;
-}) {
-  // The main process accepts only the program's own folder or one picked in its dialog.
-  const pickFolder = async (): Promise<void> => {
-    const folder = await linkDesktopViewModel.pickWorkingDirectory();
-    if (folder) onSettingsChange({ ...settings, workingDirectory: folder });
-  };
-  return <div className="device-process-fields">
-    <label className="settings-row"><span>程序位置</span><div className="device-path-control"><input aria-label={`${title} 可执行文件`} value={settings.executablePath} readOnly /><button disabled={busy} onClick={onPick} aria-label={`选择 ${title} 可执行文件`}><FolderOpen />浏览</button></div></label>
-    <p className="settings-note">选择已安装的 {title} 程序（.exe），然后保存启动设置。一般不需要修改下面的技术参数。</p>
-    <div className="device-panel-actions">{maintenanceActions}<Button className="secondary-button" disabled={busy} onClick={onStart}><Power />启动或连接 {title}</Button><Button className="secondary-button" disabled={busy || !process.owned} onClick={onStop}><Square />关闭 {title}</Button></div>
-    <details className="device-advanced"><summary>技术参数（排查启动问题时使用）</summary><div className="device-process-fields">
-    <Field label="启动文件夹"><div className="device-path-control"><input aria-label="启动文件夹" value={settings.workingDirectory} readOnly /><button disabled={busy} onClick={() => void pickFolder()} aria-label={`选择 ${title} 启动文件夹`}><FolderOpen />浏览</button></div></Field>
-    <Field label="已测试的程序版本（手动记录）"><input disabled={busy} value={acceptedVersion} onChange={(event) => onAcceptedVersionChange(event.currentTarget.value)} /></Field>
-    <Field label="启动参数"><textarea aria-label={`${title} 启动参数`} placeholder="每行一个参数，无需参数时留空" disabled={busy} value={settings.arguments.join('\n')} onChange={(event) => onSettingsChange({ ...settings, arguments: event.currentTarget.value.split(/\r?\n/).filter((argument) => argument !== '') })} /></Field>
-    <Field label="最多等待启动（秒）"><input disabled={busy} type="number" min="1" max="120" step="0.001" value={settings.startupTimeoutMs / 1000} onChange={(event) => onSettingsChange({ ...settings, startupTimeoutMs: Math.round(Number(event.currentTarget.value) * 1000) })} /></Field>
-    <Field label="最多等待关闭（秒）"><input disabled={busy} type="number" min="1" max="120" step="0.001" value={settings.shutdownTimeoutMs / 1000} onChange={(event) => onSettingsChange({ ...settings, shutdownTimeoutMs: Math.round(Number(event.currentTarget.value) * 1000) })} /></Field>
-    </div></details>
-  </div>;
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
-  return <label className="field"><span>{label}</span>{children}</label>;
-}
-
-function StatusPill({ state }: { state: string }): JSX.Element {
-  const ok = state === 'running' || state === 'connected';
-  const bad = state === 'error' || state === 'disconnected';
-  return <span className={`status-pill ${ok ? 'ok' : bad ? 'error' : 'pending'}`}>{statusLabel(state)}</span>;
-}
-
-function statusLabel(state: string): string {
-  if (state === 'running') return '运行中';
-  if (state === 'connected') return '已连接';
-  if (state === 'starting') return '启动中';
-  if (state === 'connecting') return '连接中';
-  if (state === 'reconnecting') return '重连中';
-  if (state === 'stopping') return '停止中';
-  if (state === 'disconnected') return '未连接';
-  if (state === 'notRunning') return '未运行';
-  if (state === 'error') return '异常';
-  return state;
-}
-
-function MidiPortField({ label, direction, value, ports, onChange }: {
-  label: string;
-  direction: 'input' | 'output';
-  value: string;
-  ports: ReturnType<LinkMidiAdapter['listPorts']>;
-  onChange: (value: string) => void;
-}): JSX.Element {
-  const options = ports.filter((port) => port.direction === direction && port.state === 'connected');
-  return <Field label={label}>
-    <select value={value} onChange={(event) => onChange(event.currentTarget.value)}>
-      <option value="">{options.length === 0 ? '未检测到 Windows MIDI 端口' : '请选择端口'}</option>
-      {options.map((port) => <option key={port.id} value={port.name}>{port.name}{port.manufacturer ? ` · ${port.manufacturer}` : ''}</option>)}
-    </select>
-  </Field>;
-}
-
-async function runAction(action: () => Promise<unknown>, notify: Props['notify']): Promise<void> {
-  try {
-    await action();
-  } catch (error) {
-    notify(error instanceof Error ? error.message : String(error), 'error');
-  }
 }
 
 async function saveProgramSettings(draft: IntegrationProfile): Promise<IntegrationProfile> {

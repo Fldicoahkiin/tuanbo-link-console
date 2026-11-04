@@ -2,8 +2,8 @@ import { confirmMa2RenameCommand, consoleLabelText, legacyMa2Renames, toConsoleL
 import { ma2RenameResultSchema, type LinkProject, type Ma2RenameRecord } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { archiveMa2Project } from './ma2-project-archive';
-import { ma2SongSyncSettings, startMa2SongSync, useMa2SongSyncStore } from './ma2-song-sync';
-import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
+import { ma2SongSyncSettings, startMa2SongSync } from './ma2-song-sync';
+import { ma2SyncPlaying, useMa2SyncStore } from '../stores/ma2-sync-store';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
 
 /** Names an earlier version wrote to the console in Chinese and the console still holds. */
@@ -39,18 +39,17 @@ export async function convertMa2LegacyNames(documentId: number): Promise<number>
     if (!state.project || !state.path) throw new Error('请先保存工程，再把控台名称改为拼音');
     return state.project;
   };
-  const playback = useMa2AutoSyncStore.getState();
-  if (playback.timelinePlaying || playback.previewPlaying) throw new Error('播放中不能改控台名称，请停止后再转换');
+  if (ma2SyncPlaying()) throw new Error('播放中不能改控台名称，请停止后再转换');
   const project = current();
   const legacy = legacyMa2ConsoleNames(project);
   if (!legacy.count) return 0;
   if (legacy.songs.length && !useMa2RealtimePreference.getState().enabled) throw new Error('请先开启实时同步，歌曲名称会在同步时改为拼音');
   for (const itemId of legacy.songs) {
-    if (!useMa2SongSyncStore.getState().songs[itemId] || useMa2SongSyncStore.getState().songs[itemId]?.state === 'paused') {
+    if (!useMa2SyncStore.getState().songs[itemId] || useMa2SyncStore.getState().songs[itemId]?.state === 'paused') {
       const item = project.rundown.find(value => value.id === itemId)!;
       startMa2SongSync(itemId, item.lighting?.consoleSong?.name ?? item.title, ma2SongSyncSettings(project, itemId));
     }
-    useMa2SongSyncStore.setState(state => ({ songs: { ...state.songs, [itemId]: { ...state.songs[itemId]!, rewriteLegacyNames: true, state: 'pending', nextCheckAt: 0, message: '等待把控台上的中文名称改为拼音' } } }));
+    useMa2SyncStore.setState(state => ({ songs: { ...state.songs, [itemId]: { ...state.songs[itemId]!, rewriteLegacyNames: true, state: 'pending', nextCheckAt: 0, message: '等待把控台上的中文名称改为拼音' } } }));
   }
   if (!legacy.renames.length) return legacy.count;
   const status = await window.tbLink.getMa2NetworkStatus();

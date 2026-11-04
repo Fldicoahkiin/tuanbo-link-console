@@ -39,8 +39,6 @@ import { ObsLivePreview } from './link/obs-live-preview';
 import { ObsNativeSeek } from './link/obs-native-seek';
 import { obsSourceCreateSchema, obsSourceNameSchema, obsSourceApplySchema, ma2BridgeRequestSchema, ma2ReadRequestSchema, ma2CompareRequestSchema, ma2ApplyRequestSchema, ma2CreateRequestSchema } from '@tb/schema';
 import { createMa2Timecode } from './link/ma2-create';
-import { ma2AutoBindRequestSchema } from '@tb/schema';
-import { prepareMa2AutoBindings } from './link/ma2-auto-bind-service';
 import { renameMa2Object } from './link/ma2-rename-service';
 import { ma2RenameRequestSchema } from '@tb/schema';
 import { ma2CatalogRequestSchema, ma2ReadProgressSchema, linkP1ProjectImportProgressSchema, type Ma2ReadProgressUpdate, type LinkP1ProjectImportProgress } from '@tb/schema';
@@ -59,7 +57,7 @@ import { Ma2NetworkSetup } from './link/ma2-network-setup';
 import { ma2NetworkSetupRequestSchema } from '@tb/schema';
 import { Ma2NetworkManager } from './link/ma2-network-manager';
 import { Ma2ConsoleBackups } from './link/ma2-console-backups';
-import { ma2PlaybackRequestSchema, ma2NetworkSaveSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema } from '@tb/schema';
+import { ma2PlaybackRequestSchema, ma2NetworkSaveSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, ma2ExecutorObserveRequestSchema } from '@tb/schema';
 import ma2PluginLua from '../../../../tools/ma2/tblink_bridge.lua?raw';
 import ma2PluginXml from '../../../../tools/ma2/tblink_bridge.xml?raw';
 import ma2PluginInstructions from '../../../../tools/ma2/README.md?raw';
@@ -97,7 +95,6 @@ import {
   linkUnsavedChangesReasonSchema,
   type LinkDocumentState,
   linkRuntimeActiveSchema,
-  linkInternalAudioCaptureSchema,
   linkExternalApplicationIdSchema,
   linkFilePathSchema,
   linkIntegrationProfileSavePayloadSchema,
@@ -1014,7 +1011,6 @@ function registerIpc(
       },
       network: {
         getMa2NetworkStatus: async () => { await ma2NetworkReady; return ma2Network.status(); },
-        cancelMa2Playback: sessionId => { ma2Network.cancelPlayback(sessionId); return Promise.resolve(); },
         playMa2Cue: async value => { await authorizeOutput(); return sendMa2Cue(value); }
       }
     });
@@ -1162,6 +1158,11 @@ function registerIpc(
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `推杆操作未完成：${String(error)}`, result: 'failed' }); throw error; }
   });
   handle('link:ma2-live-release', () => ma2Network.live().release());
+  handle('link:ma2-observe-executor', async (_event, value: unknown) => {
+    try { return await ma2Network.live().observe(ma2ExecutorObserveRequestSchema.parse(value)); }
+    catch (error) { await logger.record({ level: 'warning', category: 'device', device: 'MA2', message: `读不到控台执行器状态，这首歌不再核对控台在不在跟：${String(error)}`, result: 'failed' }); throw error; }
+  });
+  handle('link:ma2-observer-release', () => ma2Network.live().releaseObserver());
   handle('link:ma2-executor-page', async (_event, value: unknown) => {
     try { return await ma2Network.readExecutorPage(ma2ExecutorPageRequestSchema.parse(value)); }
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `读取执行器页面失败：${String(error)}`, result: 'failed' }); throw error; }
@@ -1189,17 +1190,6 @@ function registerIpc(
   handle('link:ma2-new-cue', async (_event,value:unknown) => {
     try { const result=await ma2Network.newCue(ma2NewCueRequestSchema.parse(value));await logger.record({level:'info',category:'device',device:'MA2',message:`已新建序列 ${result.sequence}，Layout ${result.layout.layout} 已确认`,result:'succeeded'});return result; }
     catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`新建 Cue 未完成：${String(error)}`,result:'failed'});throw error; }
-  });
-  handle('link:ma2-auto-bind', async (_event, value: unknown) => {
-    const request = ma2AutoBindRequestSchema.parse(value);
-    try {
-      const result = await prepareMa2AutoBindings((await getMa2Connection(request)).bridge, request, () => runtimeActive || nativePlaybackActive());
-      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `自动关联已确认：${result.plan.assignments.length} 个执行位置`, result: 'succeeded' });
-      return result;
-    } catch (error) {
-      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `自动关联未完成：${String(error)}`, result: 'failed' });
-      throw error;
-    }
   });
   handle('link:ma2-rename', async (_event, value: unknown) => {
     const request = ma2RenameRequestSchema.parse(value);
@@ -2072,16 +2062,6 @@ function registerIpc(
     return obs.setSourceEnabledInProgramScene(request.sourceName, request.enabled);
   });
   handle('link:obs-activate-managed-output', () => obs.activateManagedOutput());
-  handle('link:obs-internal-audio', async (_event, value: unknown) => {
-    if (!mainWindow) throw new Error('主控窗口不存在');
-    const profile = await requireProfile(profileStore);
-    const payload = linkInternalAudioCaptureSchema.parse(value);
-    if (payload.enabled && nativePlayer?.status && nativePlayer.status.status !== 'stopped') {
-      const identity = nativePlayer.audioCaptureIdentity;
-      return obs.setInternalAudioCapture(true, identity.executable, identity.title, identity.audioDeviceId, payload.sceneNames, identity.windowClass);
-    }
-    return obs.setInternalAudioCapture(payload.enabled, basename(process.execPath), mainWindow.getTitle(), profile.internalPlayer?.audioOutputDeviceId ?? 'default', payload.sceneNames);
-  });
   handle('link:obs-execute-managed-media', async (_event, payloadValue: unknown) => {
     const payload = linkManagedMediaExecutionPayloadSchema.parse(payloadValue);
     await projectAccess.assetFiles(payload.projectPath, [payload.event.relativePath]);
