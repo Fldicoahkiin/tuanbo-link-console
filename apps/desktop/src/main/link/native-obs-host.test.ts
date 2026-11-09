@@ -1,14 +1,17 @@
 import { expect, it, vi } from 'vitest';
-import { createObsProgramSnapshot, emptyInternalPlayerState, NativeProgramPlayer, type InternalPlayerState, type LinkDesktopApi } from '@tb/core/link';
-import { createEmptyLinkProject, parseLinkProject, type LinkAction, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus } from '@tb/schema';
+import { createObsProgramSnapshot, emptyInternalPlayerState, NativeProgramPlayer, ObsPictureLeftover, type InternalPlayerState, type LinkDesktopApi } from '@tb/core/link';
+import { createEmptyLinkProject, parseLinkProject, type LinkAction, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus, type NativeObsStop } from '@tb/schema';
 import { NativeObsHost } from './native-obs-host';
 import { NativeObsRequests } from './native-obs-requests';
 import { NativeObsPreloadPool } from './native-obs-preload';
-import type { NativeObsOutputs } from './native-obs-outputs';
+import { ObsPreparationCancelled, type NativeObsOutputs } from './native-obs-outputs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { NativePlaybackClient } from './native-playback-client';
+
+/** A failed picture cleanup as the operator reads it: what failed, why (no code prefixes, said once), what to check. */
+const LEFTOVER = 'OBS 无响应。请检查 OBS 节目画面上是否还留着刚才的素材';
 
 function setup(prepareNextFiles = vi.fn<(request: NativeObsPrepare, assertCurrent: () => void) => Promise<void>>(() => Promise.resolve())) {
   const project = parseLinkProject({ ...createEmptyLinkProject('后台测试'), playbackSource: 'internal', obsOutputMode: 'scenes',
@@ -43,7 +46,45 @@ it('下一节目文件仅在当前音频开始后准备一次，停止后在途�
   test.observe({ positionMs: 10 }, 10);
   expect(prepare).toHaveBeenCalledTimes(1);
   expect(() => assertCurrent?.()).not.toThrow();
-  await test.host.stop(); expect(() => assertCurrent?.()).toThrow('准备已取消');
+  // A stop of this song cancels it; that is not a failed preparation (no false 素材没有准备好 in the log).
+  await test.host.stop(); expect(() => assertCurrent?.()).toThrow(ObsPreparationCancelled);
+});
+
+it('当前这首停了：下一个节目的文件准备按取消结束，不记失败；停了以后真的失败照样记一次（2026-11-09）', async () => {
+  let finish: (error?: Error) => void = () => { throw new Error('还没开始准备'); };
+  // Ends with its own check of the song, as the real preparation does after each step.
+  const prepare = vi.fn<(_request: NativeObsPrepare, current: () => void) => Promise<void>>((_request, current) =>
+    new Promise<void>((resolve, reject) => { finish = error => { if (error) reject(error); else resolve(); }; }).then(() => current()));
+  const test = setup(prepare);
+  for (const generation of [1, 2]) {
+    test.change({ generation, status: 'ready', positionMs: 0 });
+    await test.host.prepare({ ...test.request, generation, nextFiles: { snapshot: test.song('next', 1).snapshot, positionMs: 0 } });
+    test.observe({ status: 'playing', generation, positionMs: 0 }, generation * 1000);
+    await test.host.stop();
+    // The first ends at its own check after the stop; the second fails for real once this song stopped.
+    if (generation === 1) finish(); else finish(new Error('OBS 读取目录失败：GetSceneList 请求排队超时（2000 ms）；还没发送'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  expect(prepare).toHaveBeenCalledTimes(2);
+  expect(test.failures).toEqual(['准备下一个节目的文件失败：OBS 读取目录失败：GetSceneList 请求排队超时（2000 ms）；还没发送']);
+});
+
+it('正式画面准备被停止中断：传给素材准备的检查按取消结束，不当成素材没准备好（2026-11-09）', async () => {
+  const test = setup(), failures: string[] = [];
+  let check: (() => void) | null = null, release: () => void = () => { throw new Error('还没开始准备'); };
+  const host = new NativeObsHost({ audio: () => test.audio(), changed: () => undefined, error: message => failures.push(message),
+    outputs: () => ({ executor: { id: 'test', supports: () => true, execute: () => Promise.resolve() },
+      guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
+      prepareOutputs: current => { check = current; return new Promise<void>(resolve => { release = resolve; }); },
+      releaseOutputs: () => Promise.resolve(), now: () => 0, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
+      recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-09T00:00:00Z', monotonicMs: 0 }) }) });
+  const preparing = host.prepare(test.request).catch((error: unknown) => error);
+  await vi.waitFor(() => expect(check).not.toBeNull());
+  expect(() => check!()).not.toThrow();
+  const stopping = host.stop();
+  expect(() => check!()).toThrow(ObsPreparationCancelled);
+  release(); await stopping; await preparing;
+  expect(failures).toEqual([]);
 });
 
 it('跨工程或跨修订的下一节目不能随当前节目准备', async () => {
@@ -245,7 +286,7 @@ it('暂停请求准入即取消排队画面，迟到的播放状态不能重新�
   expect(test.host.status?.state).toBe('stopped');
 });
 
-it('上一次的画面清理失败：这一首照常准备并按时间线切画面，在这一首上标红一次、只记一次，之后每一首不再显示', async () => {
+it('上一次的画面清理失败、节目自己的停止没收到：同一首重新准备时照常按时间线切画面，在这一首上标红一次、只记一次，之后每一首不再显示', async () => {
   const test = setup(); await test.host.prepare(test.request);
   test.observe({ status: 'playing', generation: 1, positionMs: 0 }, 0);
   await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(1));
@@ -260,50 +301,59 @@ it('上一次的画面清理失败：这一首照常准备并按时间线切画�
     expect(test.host.status?.state).toBe('running');
   }
   // The same song again (a seek or a replay): its earlier picture, not the previous song's.
-  expect(faults).toEqual(['上一次的画面没有清理干净，这一首照常播。原因：画面没有清理干净：OBS 无响应', undefined]);
+  expect(faults).toEqual([`上一次的画面没有清理干净，这一首照常播。原因：${LEFTOVER}`, undefined]);
   expect(test.failures).toEqual(['画面没有清理干净：OBS 无响应']);
   await test.host.stop();
 });
 
-it('停止时画面清理失败只记一次：之后的停止和选歌预备都不再失败、不再重复记录，也不重做清理（2026-11-09）', async () => {
+it('停止时画面清理失败：节目自己的停止收到一次；之后的停止、选歌预备和下一首都不再失败、不再重复，也不重做清理（2026-11-09）', async () => {
   const test = setup(); await test.host.prepare(test.request);
   test.observe({ status: 'playing', generation: 1, positionMs: 0 }, 0);
   await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(1));
   test.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
   // The operator stops: the audio stop reaches the picture first, then the program stops its own picture.
   test.host.interrupt({ version: 1, sessionId: test.request.sessionId, generation: 2, kind: 'stop' });
-  await expect(test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 1 })).resolves.toBeUndefined();
+  const own: NativeObsStop = { version: 1, sessionId: test.request.sessionId, generation: 1 };
+  const heard = await test.host.stopOwned(own).then(() => null, (error: unknown) => error);
+  expect(heard).toBeInstanceOf(ObsPictureLeftover); expect(heard).toMatchObject({ message: LEFTOVER, itemId: 'song' });
+  await expect(test.host.stopOwned(own)).resolves.toBeUndefined();
   // While stopped, each song the operator selects first makes sure no picture is on air (link-main's authorize).
   const select = async (): Promise<void> => { if (test.host.busy) throw new Error('正在播放时不能准备另一个节目'); await test.host.stop(); };
   for (let count = 0; count < 3; count++) await expect(select()).resolves.toBeUndefined();
-  expect(test.failures).toEqual(['画面没有清理干净：OBS 无响应']);
-  expect(test.releaseOutputs).toHaveBeenCalledOnce(); expect(test.host.status?.state).toBe('stopped');
+  expect(test.host.status?.state).toBe('stopped');
+  test.change({ generation: 3, itemId: 'next', status: 'ready', positionMs: 0 });
+  expect((await test.host.prepare(test.song('next', 3))).fault ?? null).toBeNull();
+  expect(test.failures).toEqual(['画面没有清理干净：OBS 无响应']); expect(test.releaseOutputs).toHaveBeenCalledOnce();
+  await test.host.stop();
 });
 
-it('上一首停止时画面清理失败：下一首照常准备、按时间线切画面，失败在下一首上标红一次（2026-11-09）', async () => {
+it('上一首停止时画面清理失败、节目自己的停止没收到：下一首照常准备、按时间线切画面，失败在下一首上标红一次；上一首迟到的停止按过期处理（2026-11-09）', async () => {
   const test = setup(); await test.host.prepare(test.request);
   test.observe({ status: 'playing', generation: 1, positionMs: 0 }, 0);
   await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(1));
   test.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
-  await test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 1 });
-  test.change({ generation: 2, itemId: 'next', status: 'ready', positionMs: 0 });
-  await expect(test.host.prepare(test.song('next', 2))).resolves.toMatchObject({ state: 'ready', itemId: 'next',
-    fault: '上一首的画面没有清理干净，这一首照常播。原因：画面没有清理干净：OBS 无响应' });
-  test.observe({ status: 'playing', generation: 2, positionMs: 0 }, 1000);
+  test.host.interrupt({ version: 1, sessionId: test.request.sessionId, generation: 2, kind: 'stop' });
+  test.change({ generation: 3, itemId: 'next', status: 'ready', positionMs: 0 });
+  await expect(test.host.prepare(test.song('next', 3))).resolves.toMatchObject({ state: 'ready', itemId: 'next',
+    fault: `上一首的画面没有清理干净，这一首照常播。原因：${LEFTOVER}` });
+  // The previous song's own stop arriving now is stale: it neither stops this song nor repeats the failure.
+  await expect(test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 1 })).rejects.toThrow('上一次准备');
+  test.observe({ status: 'playing', generation: 3, positionMs: 0 }, 1000);
   await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(2));
   expect(test.execute.mock.calls.at(-1)?.[0]).toMatchObject({ sceneName: '下一首机位0' });
   expect(test.host.status).toMatchObject({ state: 'running', itemId: 'next' });
   expect(test.failures).toEqual(['画面没有清理干净：OBS 无响应']);
-  await test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 2 });
-  test.change({ generation: 3, itemId: 'song', status: 'ready', positionMs: 0 });
-  expect((await test.host.prepare(test.song('song', 3))).fault ?? null).toBeNull();
+  await test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 3 });
+  test.change({ generation: 4, itemId: 'song', status: 'ready', positionMs: 0 });
+  expect((await test.host.prepare(test.song('song', 4))).fault ?? null).toBeNull();
   await test.host.stop();
 });
 
-it('自动下一首时上一首的画面清理失败：播放器在下一首上标红一次，没有另外的提示，只记一次，下一首照常切画面（2026-11-09）', async () => {
+/** The real program on the real picture host, wired as in the main process, with songs a and b. */
+function program(endAction: 'next' | 'stop') {
   const project = parseLinkProject({ ...createEmptyLinkProject('自动下一首'), playbackSource: 'internal', obsOutputMode: 'scenes',
     rundown: ['a', 'b'].map((id, index) => ({ id, title: id, referenceAudio: { assetId: `audio-${id}`, relativePath: `${id}.wav`, sha256: 'a'.repeat(64), durationMs: 4000 },
-      playback: { startMs: 0, endMs: 2000, mtcOffsetMs: 480000 + index * 20000, volume: 80, endAction: 'next', shortcut: '' },
+      playback: { startMs: 0, endMs: 2000, mtcOffsetMs: 480000 + index * 20000, volume: 80, endAction, shortcut: '' },
       cues: [{ id: `cue-${id}`, name: '机位', timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
         actions: [{ id: `scene-${id}`, kind: 'obs.setProgramScene', label: '切机位', sceneName: `机位-${id}` }] }] })) });
   let audio: NativePlayerStatus | null = null, state: InternalPlayerState = { ...emptyInternalPlayerState }, time = 0;
@@ -358,21 +408,57 @@ it('自动下一首时上一首的画面清理失败：播放器在下一首上�
     onNativeObsStatus: listener => { obsListeners.add(listener); return () => { obsListeners.delete(listener); }; },
     preloadNativeObs: () => Promise.resolve(), cancelNativeObsPreload: () => Promise.resolve()
   }, { prepare: () => Promise.resolve(), cancelPreparation: () => undefined, release: () => Promise.resolve() });
-  await player.play('a');
-  await vi.waitFor(() => expect(execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-a']));
-  releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
-  for (time = 50; time <= 2000; time += 50) {
-    emit({ status: time === 2000 ? 'ended' : 'playing', positionMs: time }); await new Promise(resolve => setTimeout(resolve, 0));
-  }
-  await vi.waitFor(() => expect(execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-a', 'scene-b']));
-  expect(state).toMatchObject({ status: 'playing', itemId: 'b', fault: '上一首的画面没有清理干净，这一首照常播。原因：画面没有清理干净：OBS 无响应' });
-  expect(notices.filter(notice => notice.includes('清理'))).toEqual([]);
-  expect(failures).toEqual(['画面没有清理干净：OBS 无响应']);
-  await player.dispose();
-  expect(failures).toEqual(['画面没有清理干净：OBS 无响应']); expect(releaseOutputs).toHaveBeenCalledTimes(2);
+  const playToEnd = async (): Promise<void> => {
+    const start = time;
+    for (let positionMs = 50; positionMs <= 2000; positionMs += 50) {
+      time = start + positionMs; emit({ status: positionMs === 2000 ? 'ended' : 'playing', positionMs }); await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  };
+  return { player, execute, releaseOutputs, failures, notices, state: () => state, playToEnd };
+}
+
+it('自动下一首时上一首的画面清理失败：播放器在下一首上标红一次，没有另外的提示，只记一次，下一首照常切画面（2026-11-09）', async () => {
+  const t = program('next');
+  await t.player.play('a');
+  await vi.waitFor(() => expect(t.execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-a']));
+  t.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
+  await t.playToEnd();
+  await vi.waitFor(() => expect(t.execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-a', 'scene-b']));
+  expect(t.state()).toMatchObject({ status: 'playing', itemId: 'b', fault: `上一首的画面没有清理干净，这一首照常播。原因：${LEFTOVER}` });
+  expect(t.state().notice ?? '').not.toContain('清理'); expect(t.notices.filter(notice => notice.includes('清理'))).toEqual([]);
+  expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']);
+  await t.player.dispose();
+  expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']); expect(t.releaseOutputs).toHaveBeenCalledTimes(2);
 });
 
-it('下一首接手的提前准备失败、清理也失败：下一首照常准备并按时间线切画面，两个原因都在下一首上标红，各记一次（2026-11-09）', async () => {
+it.each([['按停止', 'next'], ['播完就停的歌播完', 'stop']] as const)('%s时画面清理失败：停下的播放器马上提示一次、只记一次；之后再播歌不再显示（2026-11-09）', async (_case, endAction) => {
+  const t = program(endAction);
+  await t.player.play('a');
+  await vi.waitFor(() => expect(t.execute).toHaveBeenCalledTimes(1));
+  t.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
+  if (endAction === 'stop') await t.playToEnd(); else await t.player.stop();
+  await vi.waitFor(() => expect(t.state()).toMatchObject({ status: 'stopped', fault: null, notice: `画面清理失败：${LEFTOVER}` }));
+  expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']);
+  await t.player.play('b');
+  await vi.waitFor(() => expect(t.execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-a', 'scene-b']));
+  expect(t.state()).toMatchObject({ status: 'playing', itemId: 'b', fault: null });
+  expect(t.state().notice ?? '').not.toContain('清理');
+  expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']);
+  await t.player.dispose();
+});
+
+it('关闭节目时画面清理失败：只记一次，关闭照常完成，不挡住之后再开节目或退出软件（2026-11-09）', async () => {
+  const t = program('next');
+  await t.player.play('a');
+  await vi.waitFor(() => expect(t.execute).toHaveBeenCalledTimes(1));
+  t.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
+  await expect(t.player.dispose()).resolves.toBeUndefined();
+  expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']); expect(t.releaseOutputs).toHaveBeenCalledOnce();
+});
+
+/** Wired as in link-main: each song takes its picture from the pool, which prepares the next song's in the background
+ * once this one plays. The next song's background preparation waits until the test fails it. */
+function lookahead() {
   const test = setup(), failures: string[] = [], created: NativeObsOutputs[] = [];
   let time = 0, failLookahead: (error: Error) => void = () => { throw new Error('下一首还没开始预热'); };
   const execute = vi.fn<(action: LinkAction) => Promise<void>>(() => Promise.resolve());
@@ -385,30 +471,53 @@ it('下一首接手的提前准备失败、清理也失败：下一首照常准�
       recordLog: entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-09T00:00:00Z', monotonicMs: time }) };
     created.push(outputs); return outputs;
   };
-  // Wired as in link-main.
   const pool = new NativeObsPreloadPool({ authorize: () => Promise.resolve(), create, report: message => host.report(message) });
   const host = new NativeObsHost({ audio: () => test.audio(), changed: () => undefined, error: message => failures.push(message),
     outputs: (request, positionMs, assertCurrent) => pool.take(request, positionMs, assertCurrent),
     prepareNextFiles: async (request, assertCurrent) => { await pool.prepareNext(request, assertCurrent); } });
   const observe = (patch: Partial<NativePlayerStatus>, at: number): void => { time = at; test.change(patch); host.observe(test.audio(), (process.hrtime.bigint() / 100n).toString()); };
-  await host.prepare({ ...test.request, nextFiles: { snapshot: test.song('next', 1).snapshot, positionMs: 0 } });
-  observe({ status: 'playing', positionMs: 0 }, 0);
-  await vi.waitFor(() => expect(created).toHaveLength(2));
+  /** The first song plays while the next one's picture is prepared in the background; then it ends and stops its own picture. */
+  const playFirstToEnd = async (): Promise<void> => {
+    await host.prepare({ ...test.request, nextFiles: { snapshot: test.song('next', 1).snapshot, positionMs: 0 } });
+    observe({ status: 'playing', positionMs: 0 }, 0);
+    await vi.waitFor(() => expect(created).toHaveLength(2));
+    observe({ status: 'ended', positionMs: 50 }, 50);
+    await host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 1 });
+    test.change({ generation: 2, itemId: 'next', status: 'ready', positionMs: 0 });
+  };
+  return { test, host, failures, created, execute, observe, playFirstToEnd, fail: (error: Error) => failLookahead(error) };
+}
+
+it('下一首接手的提前准备失败、清理也失败：下一首照常准备并按时间线切画面，两个原因都在下一首上标红，各记一次（2026-11-09）', async () => {
+  const t = lookahead();
   // The song ends while the next song's picture is still being prepared in the background; the next song takes it over.
-  observe({ status: 'ended', positionMs: 50 }, 50);
-  await host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 1 });
-  test.change({ generation: 2, itemId: 'next', status: 'ready', positionMs: 0 });
-  const preparing = host.prepare(test.song('next', 2));
-  vi.mocked(created[1]!.releaseOutputs).mockRejectedValueOnce(new Error('画面没有清理干净：OBS 停止 请求排队超时（2000 ms）；还没发送'));
-  failLookahead(new Error('OBS 预热素材静音 请求排队超时（2000 ms）；还没发送'));
+  await t.playFirstToEnd();
+  const preparing = t.host.prepare(t.test.song('next', 2));
+  vi.mocked(t.created[1]!.releaseOutputs).mockRejectedValueOnce(new Error('画面没有清理干净：OBS 停止 请求排队超时（2000 ms）；还没发送'));
+  t.fail(new Error('OBS 预热素材静音 请求排队超时（2000 ms）；还没发送'));
   await expect(preparing).resolves.toMatchObject({ state: 'ready', itemId: 'next',
-    fault: '提前准备的画面没能用上，已改为重新准备。原因：OBS 预热素材静音 请求排队超时（2000 ms）；还没发送；提前准备的画面没有清理干净，不影响播放。原因：画面没有清理干净：OBS 停止 请求排队超时（2000 ms）；还没发送' });
-  expect(created).toHaveLength(3);
-  observe({ status: 'playing', generation: 2, positionMs: 0 }, 1000);
-  await vi.waitFor(() => expect(execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-0', 'next-scene-0']));
-  expect(failures).toEqual(['提前准备的画面没能用上，已改为重新准备。原因：OBS 预热素材静音 请求排队超时（2000 ms）；还没发送',
-    '提前准备的画面没有清理干净，不影响播放。原因：画面没有清理干净：OBS 停止 请求排队超时（2000 ms）；还没发送']);
-  await host.stop();
+    fault: '提前准备的画面没能用上，已改为重新准备。原因：OBS 预热素材静音 请求排队超时（2000 ms）；还没发送；提前准备的画面没有清理干净，不影响播放。原因：OBS 停止 请求排队超时（2000 ms）；还没发送' });
+  expect(t.created).toHaveLength(3);
+  t.observe({ status: 'playing', generation: 2, positionMs: 0 }, 1000);
+  await vi.waitFor(() => expect(t.execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-0', 'next-scene-0']));
+  expect(t.failures).toEqual(['提前准备的画面没能用上，已改为重新准备。原因：OBS 预热素材静音 请求排队超时（2000 ms）；还没发送',
+    '提前准备的画面没有清理干净，不影响播放。原因：OBS 停止 请求排队超时（2000 ms）；还没发送']);
+  await t.host.stop();
+});
+
+it('上一首停了、下一首还没来接手时提前准备失败：照样记一次，不当成取消；下一首照常准备画面（2026-11-09）', async () => {
+  const t = lookahead();
+  await t.playFirstToEnd();
+  // OBS answers only now: after this song stopped, before the next song asks for its picture.
+  t.fail(new Error('OBS 读取目录失败：GetSceneList 请求排队超时（2000 ms）；还没发送'));
+  await vi.waitFor(() => expect(t.failures).toEqual(['准备下一个节目的文件失败：OBS 读取目录失败：GetSceneList 请求排队超时（2000 ms）；还没发送']));
+  const status = await t.host.prepare(t.test.song('next', 2));
+  expect(status).toMatchObject({ state: 'ready', itemId: 'next' }); expect(status.fault ?? null).toBeNull();
+  expect(t.created).toHaveLength(3); expect(t.created[1]!.releaseOutputs).toHaveBeenCalledOnce();
+  t.observe({ status: 'playing', generation: 2, positionMs: 0 }, 1000);
+  await vi.waitFor(() => expect(t.execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-0', 'next-scene-0']));
+  expect(t.failures).toHaveLength(1);
+  await t.host.stop();
 });
 
 it('画面资源交接后被新的操作取消：照常报取消；释放失败另报一次，不顶替取消', async () => {

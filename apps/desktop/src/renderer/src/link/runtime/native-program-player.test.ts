@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, lightingDocumentSchema, linkCueSchema, parseLinkProject, type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus } from '@tb/schema';
-import { NativeProgramPlayer, type ProgramLightingOutput } from '@tb/core/link';
+import { NativeProgramPlayer, ObsPictureLeftover, type ProgramLightingOutput } from '@tb/core/link';
 import { emptyInternalPlayerState } from '@tb/core/link';
 import { nativeProgramSnapshot } from '@tb/core/link';
 import type { NativeObsPreload } from '@tb/schema';
@@ -601,5 +601,61 @@ it('时间码接口断开后标红；同一接口回来后红色换成一次「�
   f.emit({ mtcError: lost });
   expect(f.state().fault).toBe(`时间码没有发出，音频照常播放。原因：${lost}`);
   await f.player.stop();
+});
+
+describe('上一首的画面没有清理干净（2026-11-09）', () => {
+  /** As the picture host hands it to the program's own stop, once; the host has logged it already. */
+  const leftover = (itemId: string): ObsPictureLeftover => new ObsPictureLeftover(itemId, new Error('画面没有清理干净：Error: OBS 无响应'));
+  const reason = 'OBS 无响应。请检查 OBS 节目画面上是否还留着刚才的素材';
+
+  it('换下一首时收到：在下一首上标红，照常播，不另外提示也不再记一次；重播同一首写“上一次”', async () => {
+    const f = fixture();
+    await f.player.play('song-0');
+    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0')); f.deps.notice.mockClear();
+    await f.player.play('song-1');
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1', fault: `上一首的画面没有清理干净，这一首照常播。原因：${reason}` });
+    expect(f.state().notice ?? '').not.toContain('清理');
+    expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('清理'))).toEqual([]);
+    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-1'));
+    await f.player.play('song-1');
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1', fault: `上一次的画面没有清理干净，这一首照常播。原因：${reason}` });
+    await f.player.dispose();
+  });
+
+  it('开下一首途中按了停止：停下的播放器马上提示一次，不标红，也不再记一次', async () => {
+    const f = fixture();
+    await f.player.play('song-0');
+    let refuse: (error: Error) => void = () => { throw new Error('还没开始停上一首的画面'); };
+    f.api.stopNativeObs.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { refuse = reject; }));
+    f.deps.notice.mockClear();
+    const playing = f.player.play('song-1');
+    await vi.waitFor(() => expect(f.api.stopNativeObs).toHaveBeenCalledOnce());
+    const stopping = f.player.stop();
+    refuse(leftover('song-0')); await playing; await stopping;
+    expect(f.state()).toMatchObject({ status: 'stopped', fault: null, notice: `画面清理失败：${reason}` });
+    expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('清理'))).toEqual([]);
+    await f.player.dispose();
+  });
+
+  it('停不掉上一首的画面另有原因：照旧提示并记录，不当成没清理干净', async () => {
+    const f = fixture();
+    await f.player.play('song-0');
+    f.api.stopNativeObs.mockRejectedValueOnce(new Error('这是上一次准备的停止请求，已忽略'));
+    await f.player.play('song-1');
+    expect(f.state()).toMatchObject({ status: 'playing', fault: null, notice: '上一次的画面没清理干净：这是上一次准备的停止请求，已忽略' });
+    expect(f.deps.notice).toHaveBeenCalledWith('上一次的画面没清理干净：这是上一次准备的停止请求，已忽略', 'song-1');
+    await f.player.dispose();
+  });
+
+  it('关闭节目时才收到：关闭照常完成，不挡住之后再开节目；别的关闭失败照旧报出', async () => {
+    const f = fixture();
+    await f.player.play('song-0');
+    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0'));
+    await expect(f.player.dispose()).resolves.toBeUndefined();
+    const g = fixture();
+    await g.player.play('song-0');
+    g.api.stopNativeObs.mockRejectedValueOnce(new Error('OBS 停止请求没有送达'));
+    await expect(g.player.dispose()).rejects.toThrow('OBS 停止请求没有送达');
+  });
 });
 

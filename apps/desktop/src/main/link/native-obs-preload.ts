@@ -1,9 +1,11 @@
 import { nativeObsPreloadSchema, nativeObsStopSchema, type NativeObsPrepare, type NativeObsPreload, type NativeObsStop } from '@tb/schema';
 import { ObsPreparationCancelled, type NativeObsOutputs } from './native-obs-outputs';
-import { materialSceneTargets, projectFromObsSnapshot } from '@tb/core/link';
+import { materialSceneTargets, pictureCleanupReason, projectFromObsSnapshot, toUserErrorMessage } from '@tb/core/link';
 
-/** `settled`: the preparation itself has ended; its result goes to whoever asked for it. */
-type Entry = { origin: 'selection' | 'next'; request: NativeObsPreload; cancelled: boolean; settled: boolean; outputs: NativeObsOutputs | null; task: Promise<void>; assertOwner: (() => void) | null };
+/** `settled`: the preparation itself has ended; its result goes to whoever asked for it, unless `taken`:
+ * a song took it over before it ended, and that song hears its result. */
+type Entry = { origin: 'selection' | 'next'; request: NativeObsPreload; cancelled: boolean; settled: boolean; taken: boolean;
+  outputs: NativeObsOutputs | null; task: Promise<void>; assertOwner: (() => void) | null };
 type Dependencies = {
   authorize: (request: NativeObsPreload) => Promise<void>;
   create: (request: NativeObsPrepare, positionMs: number) => NativeObsOutputs;
@@ -43,7 +45,7 @@ export class NativeObsPreloadPool {
     const entry: Entry = {
       origin: 'next', request: { version: 1, sessionId: request.sessionId, generation: request.generation,
         projectPath: request.projectPath, preciseSeeking: request.preciseSeeking, snapshot: next.snapshot, positionMs: next.positionMs },
-      cancelled: false, settled: false, outputs: null, task: Promise.resolve(), assertOwner: null
+      cancelled: false, settled: false, taken: false, outputs: null, task: Promise.resolve(), assertOwner: null
     };
     this.entry = entry;
     const current = (): void => {
@@ -60,8 +62,10 @@ export class NativeObsPreloadPool {
     catch (error) {
       // A failed lookahead is cleaned up, not kept: the next song then prepares
       // the normal way, and later lookaheads are not refused (2026-11-09). The
-      // caller gets the lookahead's own failure; a failed cleanup is reported apart.
+      // caller gets the lookahead's own failure, once; a failed cleanup is reported apart.
       if (this.entry === entry) await this.discardReported();
+      // Taken over while it ran, its failure went to the song that took it over (take).
+      if (entry.taken) throw new ObsPreparationCancelled('下一个节目的准备已交给下一首');
       throw error;
     }
     return true;
@@ -72,7 +76,7 @@ export class NativeObsPreloadPool {
     const request = nativeObsPreloadSchema.parse(value);
     if (this.entry?.origin === 'selection' && this.entry.request.sessionId === request.sessionId && request.generation <= this.entry.request.generation) return Promise.reject(new Error('节目准备请求已过期'));
     const previous = this.discardReported();
-    const entry: Entry = { origin: 'selection', request, cancelled: false, settled: false, outputs: null, task: Promise.resolve(), assertOwner: null }; this.entry = entry;
+    const entry: Entry = { origin: 'selection', request, cancelled: false, settled: false, taken: false, outputs: null, task: Promise.resolve(), assertOwner: null }; this.entry = entry;
     const current = (): void => { if (entry.cancelled) throw new ObsPreparationCancelled('节目准备已取消'); entry.assertOwner?.(); };
     entry.task = (async () => {
       await previous; current();
@@ -96,14 +100,14 @@ export class NativeObsPreloadPool {
       this.entry = null; entry.assertOwner = () => {
         try { assertOwner(); } catch (error) { throw new ObsPreparationCancelled(errorText(error)); }
       };
-      const stillRunning = !entry.settled;
+      entry.taken = !entry.settled;
       try { await entry.task; return entry.outputs!; }
       catch (error) {
         // A failed preload (a selection refused because this very song started
         // preparing, or a lookahead that could not read its files) is not reused:
         // the song prepares its picture below. A failure from before this song took
-        // it over went to whoever asked for it; one after reaches nobody else.
-        if (stillRunning && !(error instanceof ObsPreparationCancelled)) this.dependencies.report(`提前准备的画面没能用上，已改为重新准备。原因：${errorText(error)}`);
+        // it over went to whoever asked for it; one after is reported here, once.
+        if (entry.taken && !(error instanceof ObsPreparationCancelled)) this.dependencies.report(`提前准备的画面没能用上，已改为重新准备。原因：${toUserErrorMessage(error)}`);
         await this.release(entry).catch((cleanup: unknown) => this.reportCleanup(cleanup));
       }
       assertOwner();
@@ -143,7 +147,7 @@ export class NativeObsPreloadPool {
     return released;
   }
   private reportCleanup(error: unknown): void {
-    this.dependencies.report(`提前准备的画面没有清理干净，不影响播放。原因：${errorText(error)}`);
+    this.dependencies.report(`提前准备的画面没有清理干净，不影响播放。原因：${pictureCleanupReason(error)}`);
   }
 }
 

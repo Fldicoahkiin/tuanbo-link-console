@@ -15,6 +15,23 @@ import { optionalOutputReady } from './optional-output-ready';
 type NativeApi = Pick<LinkDesktopApi, 'prepareNativePlayback' | 'controlNativePlayback' | 'getNativePlaybackDevices' | 'onNativePlaybackStatus' | 'prepareNativeObs' | 'stopNativeObs' | 'onNativeObsStatus' | 'preloadNativeObs' | 'cancelNativeObsPreload'>;
 type NativeAction = NativePlayerControl extends infer T ? T extends NativePlayerControl ? Omit<T, 'version' | 'sessionId' | 'generation'> : never : never;
 
+/** Why a picture was not fully cleaned up, as the operator reads it: no code prefixes, and that it was not cleaned up is not repeated. */
+export function pictureCleanupReason(error: unknown): string {
+  return toUserErrorMessage(error).replace(/画面没有清理干净[:：]\s*/gu, '').replace(/[。.；;\s]+$/u, '') || '未知错误';
+}
+
+/** A song's picture was not fully cleaned up (2026-11-09). The picture host logged it where the cleanup ran; the
+ * program hears it once, from its own stop of that picture, and shows it. Nothing retries the cleanup. */
+export class ObsPictureLeftover extends Error {
+  constructor(readonly itemId: string, error: unknown) {
+    super(`${pictureCleanupReason(error)}。请检查 OBS 节目画面上是否还留着刚才的素材`);
+  }
+  /** Shown in red on the song that starts after it, which plays on. */
+  next(itemId: string): string {
+    return `${itemId === this.itemId ? '上一次' : '上一首'}的画面没有清理干净，这一首照常播。原因：${this.message}`;
+  }
+}
+
 /** Platform-neutral program transport. The owning host supplies audio, OBS,
  * generic MIDI and lighting ports; no browser or Electron globals are required. */
 export class NativeProgramPlayer {
@@ -102,7 +119,7 @@ export class NativeProgramPlayer {
       if (!this.projectPath) throw new Error('请先保存工程，再播放');
       // An engine in error has exited and rejects every command; prepare replaces it.
       if (this.native && this.native.status !== 'stopped' && this.native.status !== 'ended' && this.native.status !== 'error') await this.command({ kind: 'stop' });
-      await this.optionalRuntime(() => this.stopObs(), '上一次的画面没清理干净');
+      await this.stopObs().catch((error: unknown) => this.previousPictureNotStopped(error));
       await this.optionalRuntime(() => this.dependencies.stop(), '上一次的联动没清理干净');
       if (!this.current(token)) return;
       const prepared = programStart(this.project, itemId, { revision: this.revision, positionMs, sampleRate: config.audioSampleRate ?? 48000,
@@ -220,6 +237,15 @@ export class NativeProgramPlayer {
   private showNotice(message: string): void {
     if (!this.state.notice?.includes(message)) this.update({ notice: [this.state.notice, message].filter(Boolean).join('；') });
   }
+  /** The picture before this play could not be stopped. Its failed cleanup, logged where it ran, is shown in red on the
+   * song starting or playing now, which plays on (2026-11-09), or on the player a stop left meanwhile; any other
+   * failure is shown and logged here. */
+  private previousPictureNotStopped(error: unknown): void {
+    this.runtimePrepared = false;
+    if (!(error instanceof ObsPictureLeftover)) this.reportUnavailable(`上一次的画面没清理干净：${toUserErrorMessage(error)}`);
+    else if (this.state.itemId && ['preparing', 'playing', 'paused'].includes(this.state.status)) this.reportFault(error.next(this.state.itemId));
+    else this.showNotice(`画面清理失败：${error.message}`);
+  }
   seek(positionMs: number): Promise<void> { return this.state.itemId ? this.play(this.state.itemId, positionMs, this.state.status === 'paused') : Promise.resolve(); }
   scrub(itemId: string, positionMs: number): Promise<void> {
     if (this.state.status === 'error') return Promise.resolve();
@@ -262,7 +288,10 @@ export class NativeProgramPlayer {
     const audio = run(() => this.requestedPreparation && this.native?.status !== 'error' ? this.command({ kind: 'stop' }) : undefined);
     // A stop still queued here never runs; the Off it owes goes out once the timecode has stopped, as the stop would.
     const lighting = audio.then(() => this.releaseLighting(), () => this.releaseLighting());
-    const cleanup = [scheduled, audio, lighting, run(() => this.cancelPreload()), run(() => this.stopObs()), run(() => this.dependencies.stop()), run(() => this.tail)];
+    // A picture left on air was logged where its cleanup ran. A program that closes has nowhere to show it, and it must
+    // not keep the next program from opening or the app from quitting (2026-11-09); any other failure still fails the close.
+    const picture = run(() => this.stopObs()).catch((error: unknown) => { if (!(error instanceof ObsPictureLeftover)) throw error; });
+    const cleanup = [scheduled, audio, lighting, run(() => this.cancelPreload()), picture, run(() => this.dependencies.stop()), run(() => this.tail)];
     this.closing = Promise.allSettled(cleanup).then(results => {
       const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : []);
       if (failures.length) throw new AggregateError(failures, failures.map(toUserErrorMessage).join('；'));
