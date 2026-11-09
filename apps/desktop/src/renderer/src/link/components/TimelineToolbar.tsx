@@ -23,6 +23,7 @@ import { playbackFramesPerSecond } from '@tb/core/link';
 import { clampTimelineTime, formatTimelineTimecode, snapTimelineTime } from './timeline-geometry';
 import type { ReferenceWaveformSource } from './ReferenceWaveform';
 import { usePreviewMediaLifecycle } from './usePreviewMediaLifecycle';
+import { keysBackToTimeline } from './timeline-keys';
 
 type Props = {
   externalTransport?: boolean | undefined;
@@ -105,18 +106,18 @@ export function TimelineToolbar(props: Props): JSX.Element {
   };
   const framesPerSecond = playbackFramesPerSecond(props.frameRate);
   const frameDurationMs = 1_000 / framesPerSecond;
-  /** After a mouse click the keys go back to the timeline, so M, ← and → keep working (0.5.9); a button pressed from
-   * the keyboard keeps the focus. */
-  const click = (action: () => void) => (event: MouseEvent<HTMLButtonElement>): void => {
-    action();
-    if (event.detail > 0) event.currentTarget.closest<HTMLElement>('.reference-timeline')?.focus({ preventScroll: true });
+  /** Any button on the toolbar, the ones the pages put in it too: after a mouse click the keys go back to the timeline. */
+  const giveKeysBack = (event: MouseEvent<HTMLDivElement>): void => {
+    if (keysBackToTimeline<Element>({ detail: event.detail, target: event.target instanceof Element ? event.target : null }, event.currentTarget)) {
+      event.currentTarget.closest<HTMLElement>('.reference-timeline')?.focus({ preventScroll: true });
+    }
   };
 
   const previousEditPoint = (): number => [...props.editPoints].filter((point) => point < props.playheadMs - frameDurationMs / 2).sort((a, b) => b - a)[0] ?? 0;
   const nextEditPoint = (): number => [...props.editPoints].filter((point) => point > props.playheadMs + frameDurationMs / 2).sort((a, b) => a - b)[0] ?? props.durationMs;
   const snapLabel = props.snapEnabled ? '关闭吸附' : '开启吸附';
 
-  return <div className="timeline-toolbar">
+  return <div className="timeline-toolbar" onClick={giveKeysBack}>
     <div className="timeline-edit-controls" role="group" aria-label="时间线剪辑工具">
       {props.stampControls}
       {props.tools ?? <>{props.recordingControl}
@@ -128,12 +129,12 @@ export function TimelineToolbar(props: Props): JSX.Element {
     </div>
 
     <div className="timeline-transport" role="group" aria-label="时间线播放控制">
-      <IconButton label="回到时间线开头" title="回到开头（Home）" icon={SkipBack} onClick={click(() => seekTo(0))} />
-      <IconButton label="上一帧" title="上一帧（←）" icon={StepBack} onClick={click(() => seekTo(props.playheadMs - frameDurationMs))} />
-      <IconButton className="timeline-play-button" variant="primary" label={props.playing ? '暂停时间线' : '播放时间线'} title={props.playing ? '暂停（Space）' : '播放（Space）'} icon={props.playing ? Pause : Play} onClick={click(props.onPlayPause)} />
-      <IconButton label="下一帧" title="下一帧（→）" icon={StepForward} onClick={click(() => seekTo(props.playheadMs + frameDurationMs))} />
-      <IconButton label="跳到时间线结尾" title="跳到结尾" icon={SkipForward} onClick={click(() => seekTo(props.durationMs))} />
-      {props.onStop ? <IconButton label="停止时间线" title="停止播放（Esc）" icon={Square} onClick={click(props.onStop)} /> : null}
+      <IconButton label="回到时间线开头" title="回到开头（Home）" icon={SkipBack} onClick={() => seekTo(0)} />
+      <IconButton label="上一帧" title="上一帧（←）" icon={StepBack} onClick={() => seekTo(props.playheadMs - frameDurationMs)} />
+      <IconButton className="timeline-play-button" variant="primary" label={props.playing ? '暂停时间线' : '播放时间线'} title={props.playing ? '暂停（Space）' : '播放（Space）'} icon={props.playing ? Pause : Play} onClick={() => props.onPlayPause()} />
+      <IconButton label="下一帧" title="下一帧（→）" icon={StepForward} onClick={() => seekTo(props.playheadMs + frameDurationMs)} />
+      <IconButton label="跳到时间线结尾" title="跳到结尾" icon={SkipForward} onClick={() => seekTo(props.durationMs)} />
+      {props.onStop ? <IconButton label="停止时间线" title="停止播放（Esc）" icon={Square} onClick={() => props.onStop?.()} /> : null}
       <code title="当前播放头时间码">{formatTimelineTimecode(props.playheadMs, props.frameRate)}</code>
       {props.outputControl}
     </div>
@@ -145,14 +146,14 @@ export function TimelineToolbar(props: Props): JSX.Element {
         <p className="timeline-panel-note">选中 Cue：滚轮移动 Cue<br />未选中：滚轮移动播放头<br />Shift + 滚轮：平移<br />Ctrl + 滚轮：缩放</p>
       </TimelinePanelButton> : null}
       {props.compact
-        ? <IconButton className="timeline-snap-state" label={snapLabel} icon={Magnet} aria-pressed={props.snapEnabled} onClick={click(() => props.onSnapEnabledChange(!props.snapEnabled))} />
-        : <Button variant="ghost" className="timeline-snap-state" icon={Magnet} aria-pressed={props.snapEnabled} aria-label={snapLabel} title={snapLabel} onClick={click(() => props.onSnapEnabledChange(!props.snapEnabled))}>吸附</Button>}
+        ? <IconButton className="timeline-snap-state" label={snapLabel} icon={Magnet} aria-pressed={props.snapEnabled} onClick={() => props.onSnapEnabledChange(!props.snapEnabled)} />
+        : <Button variant="ghost" className="timeline-snap-state" icon={Magnet} aria-pressed={props.snapEnabled} aria-label={snapLabel} title={snapLabel} onClick={() => props.onSnapEnabledChange(!props.snapEnabled)}>吸附</Button>}
       {!props.compact ? <Select width="auto" className="timeline-snap-distance" aria-label="吸附强度" title="片段两端、机位边缘和播放头之间的吸附距离" value={props.snapDistance} disabled={!props.snapEnabled} onChange={(event) => props.onSnapDistanceChange(Number(event.currentTarget.value))}><option value={8}>轻 · 8 px</option><option value={14}>标准 · 14 px</option><option value={22}>强 · 22 px</option></Select> : null}
-      <IconButton label="缩小时间线" icon={ZoomOut} onClick={click(props.onZoomOut)} />
+      <IconButton label="缩小时间线" icon={ZoomOut} onClick={() => props.onZoomOut()} />
       {props.compact
-        ? <IconButton className="timeline-fit-button" label="适合节目时长" title="缩放至全部节目内容" icon={Maximize2} onClick={click(props.onFit)} />
-        : <Button variant="ghost" className="timeline-fit-button" icon={Maximize2} aria-label="适合节目时长" title="缩放至全部节目内容" onClick={click(props.onFit)}>全部</Button>}
-      <IconButton label="放大时间线" icon={ZoomIn} onClick={click(props.onZoomIn)} />
+        ? <IconButton className="timeline-fit-button" label="适合节目时长" title="缩放至全部节目内容" icon={Maximize2} onClick={() => props.onFit()} />
+        : <Button variant="ghost" className="timeline-fit-button" icon={Maximize2} aria-label="适合节目时长" title="缩放至全部节目内容" onClick={() => props.onFit()}>全部</Button>}
+      <IconButton label="放大时间线" icon={ZoomIn} onClick={() => props.onZoomIn()} />
     </div>
 
     {!props.externalTransport && props.referenceAudio ? <audio

@@ -12,7 +12,7 @@ import { linkDesktopViewModel as desktop } from './view-models/link-desktop-view
 import { useRuntimeStore } from './stores/runtime-store';
 import { useDisplayPreferences } from './stores/display-preferences-store';
 import { useSelectedProgram } from './useSelectedProgram';
-import { keyTarget, playbackKeyAction, pressPlayButton } from './playback-keys';
+import { handlePlaybackKey, keyTarget } from './playback-keys';
 
 /** Player notices already logged as warnings in this window. */
 const notedNotices = new Set<string>();
@@ -55,19 +55,10 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   }, [controller, controlInputName]);
   useEffect(() => {
     if (!controller || !project) return;
-    const keyboard = (event: KeyboardEvent): void => {
-      const action = playbackKeyAction(event, keyTarget(event), { paused: settingsOpen, arrowKeys: useIntegrationStore.getState().profile?.internalPlayer?.arrowKeyPlayback === true,
-        song: key => project.rundown.find((entry) => entry.enabled && entry.playback?.shortcut === key)?.id });
-      if (!action) return;
-      event.preventDefault();
-      switch (action.kind) {
-        case 'song': void controller.play(action.itemId); return;
-        // The page's play button, never "the song played last" (0.5.9).
-        case 'play-button': pressPlayButton(); return;
-        case 'stop': void controller.stop(); return;
-        case 'skip': void controller.skip(action.direction); return;
-      }
-    };
+    const player = { play: (itemId: string) => void controller.play(itemId), stop: () => void controller.stop(), skip: (direction: -1 | 1) => void controller.skip(direction) };
+    const keyboard = (event: KeyboardEvent): void => handlePlaybackKey(event, keyTarget(event), { paused: settingsOpen,
+      arrowKeys: useIntegrationStore.getState().profile?.internalPlayer?.arrowKeyPlayback === true,
+      song: key => project.rundown.find((entry) => entry.enabled && entry.playback?.shortcut === key)?.id }, player);
     window.addEventListener('keydown', keyboard); return () => window.removeEventListener('keydown', keyboard);
   }, [controller, project, settingsOpen]);
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { cancelDragOnEscape, playbackKeyAction, pressPlayButton, registerPlayButton, spaceBelongsToControl } from './playback-keys';
+import { cancelDragOnEscape, handlePlaybackKey, playbackKeyAction, pressPlayButton, registerPlayButton, spaceBelongsToControl } from './playback-keys';
 
 type Node = { tag: string; attributes?: Record<string, string>; parent?: Node };
 /** `closest` over a parent chain for the plain selectors the helpers use: a tag, `.class` or `[name="value"]`. */
@@ -84,10 +84,64 @@ it('时间线里有焦点的工具栏、轨道和片段按钮上，空格是播�
   for (const key of [press('Space'), press('Escape')]) expect(playbackKeyAction(key, element({ tag: 'button', parent: toolbar }), keys())).toBeNull();
 });
 
+/** The player the window keys go to, writing down what they asked for. */
+function recorder(calls: string[]) {
+  return { play: (itemId: string) => { calls.push(`播放 ${itemId}`); }, stop: () => { calls.push('停止'); }, skip: (direction: -1 | 1) => { calls.push(`换歌 ${direction}`); } };
+}
+
 it('按住不放的重复键和 Cmd 组合不碰节目', () => {
   const body: Node = { tag: 'body' };
-  expect(playbackKeyAction(press('Space', { repeat: true }), element(body), keys())).toBeNull();
-  expect(playbackKeyAction({ ...press('Escape'), metaKey: true }, element(body), keys())).toBeNull();
+  const calls: string[] = [];
+  const leave = registerPlayButton(() => calls.push('播放按钮'));
+  // Held down, a key repeats its keydown. The window takes the repeats of its keys but acts once per press: a repeat
+  // it left alone made the focused button take Space, and letting go pressed it, so holding Space after clicking
+  // 「下一首」 paused the show and then jumped to the next song (0.5.9).
+  const held = [press('Space', { repeat: true }), press('Escape', { repeat: true }), press('ArrowDown', { repeat: true }), press('Digit3', { ctrlKey: true, repeat: true })];
+  for (const key of held) handlePlaybackKey(key, element(body), keys(), recorder(calls));
+  const onButton = press('Space', { repeat: true });
+  handlePlaybackKey(onButton, element({ tag: 'button', parent: body }), keys(), recorder(calls));
+  expect([...held, onButton].map(key => key.defaultPrevented)).toEqual([true, true, true, true, true]);
+  expect(calls).toEqual([]);
+
+  const command = { ...press('Escape'), metaKey: true };
+  expect(playbackKeyAction(command, element(body), keys())).toBeNull();
+  handlePlaybackKey(command, element(body), keys(), recorder(calls));
+  expect(command.defaultPrevented).toBe(false);
+  expect(calls).toEqual([]);
+  leave();
+});
+
+it('窗口的播放键都经同一个处理：单曲快捷键播那首，空格按当前页面的播放按钮，Esc 停止，↑↓ 换歌，键不再往下传（0.5.9）', () => {
+  const body: Node = { tag: 'body' };
+  const calls: string[] = [];
+  const leave = registerPlayButton(() => calls.push('播放按钮'));
+  const taken = [press('Digit3', { ctrlKey: true }), press('Space'), press('Escape'), press('ArrowUp'), press('ArrowDown')];
+  for (const key of taken) handlePlaybackKey(key, element(body), keys(), recorder(calls));
+  expect(taken.map(key => key.defaultPrevented)).toEqual([true, true, true, true, true]);
+  expect(calls).toEqual(['播放 第三首', '播放按钮', '停止', '换歌 -1', '换歌 1']);
+  // The settings page open, a field focused or the timeline focused: the key is left alone.
+  const left = [press('Escape'), press('Space'), press('Space')];
+  handlePlaybackKey(left[0]!, element(body), keys({ paused: true }), recorder(calls));
+  handlePlaybackKey(left[1]!, element({ tag: 'input', parent: body }), keys(), recorder(calls));
+  handlePlaybackKey(left[2]!, element({ tag: 'section', attributes: { class: 'reference-timeline' } }), keys(), recorder(calls));
+  expect(left.map(key => key.defaultPrevented)).toEqual([false, false, false]);
+  expect(calls).toHaveLength(5);
+  leave();
+});
+
+it('按住才起作用的控件（MA2 执行器的 Flash、Temp 键）自己用空格：空格按住闪灯，不当播放/暂停（0.5.8 回归）', () => {
+  const body: Node = { tag: 'body' };
+  const flash: Node = { tag: 'button', attributes: { 'data-momentary': 'true' }, parent: body };
+  expect(spaceBelongsToControl(element(flash))).toBe(true);
+  const calls: string[] = [];
+  const leave = registerPlayButton(() => calls.push('播放按钮'));
+  const key = press('Space');
+  handlePlaybackKey(key, element(flash), keys(), recorder(calls));
+  expect(key.defaultPrevented).toBe(false);
+  expect(calls).toEqual([]);
+  // A key pressed once, such as an executor's Go, is a plain button: Space plays and pauses there too.
+  expect(spaceBelongsToControl(element({ tag: 'button', parent: body }))).toBe(false);
+  leave();
 });
 
 it('拖动或修剪时按 Esc 只取消这次拖动，键不再往下传，节目不停（0.5.9）', () => {

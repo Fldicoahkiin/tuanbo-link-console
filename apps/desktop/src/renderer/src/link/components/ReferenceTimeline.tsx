@@ -46,7 +46,8 @@ import { timelineLayout, timelineMusicLayout, timelineRulerHeight } from './time
 import { LightingHeadings, LightingLanes, type LightingTimelineProps } from './LightingTimeline';
 import { TimelineMarkers } from './TimelineMarkers';
 import { useLightingPreview } from '../runtime/use-lighting-preview';
-import { keyTarget, registerPlayButton, spaceBelongsToControl } from '../playback-keys';
+import { keyTarget, registerPlayButton } from '../playback-keys';
+import { handleTimelineTransportKey } from './timeline-keys';
 
 function seekTimelineAudio(audio: HTMLAudioElement, milliseconds: number): void {
   const seconds = Number.isFinite(audio.duration) ? Math.min(milliseconds / 1_000, audio.duration) : milliseconds / 1_000;
@@ -283,15 +284,8 @@ function handleTimelineKeyDown(
   stop: () => void,
   playPause: () => void
 ): void {
-  if (event.key === 'Escape' && props.onStop && event.target instanceof HTMLElement && !event.target.closest('details[open],[role="dialog"],[aria-expanded="true"],input,textarea,select')) { event.preventDefault(); event.stopPropagation(); stop(); return; }
-  // A focused toolbar, track or clip button no longer takes Space as a second press (0.5.9). The lighting
-  // workbench's Space goes through its shortcut keys (useTimelineStamp) first.
-  if (event.code === 'Space' && !props.lightingWorkspace) {
-    if (spaceBelongsToControl(keyTarget(event))) return;
-    event.preventDefault();
-    playPause();
-    return;
-  }
+  // Escape and Space first: a focused toolbar, track or clip button no longer takes Space as a second press (0.5.9).
+  if (handleTimelineTransportKey(event, keyTarget(event), { lightingWorkspace: props.lightingWorkspace === true, stop: props.onStop ? stop : undefined, playPause })) return;
   if (isInteractiveTarget(event.target)) return;
   if (props.lightingWorkspace && ['Space', 'Home', 'End', 'ArrowLeft', 'ArrowRight'].includes(event.code)) return;
   const command = event.ctrlKey || event.metaKey;
