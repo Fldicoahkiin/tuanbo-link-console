@@ -69,7 +69,8 @@ function fixture() {
   native.devices.mockImplementation(() => Promise.resolve(devices));
   const error = vi.fn();
   const checkDeviceHealth = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
-  const options = { executable: 'test', changed: vi.fn(), error,
+  // The next song's own errors go to the same spy here; the tests that tell them apart pass their own preloadError.
+  const options = { executable: 'test', changed: vi.fn(), error, preloadError: error,
     checkDeviceHealth,
     resolveAudio: () => 'test.wav', cache: { prepare: () => Promise.resolve({ path: 'test.pcm', sampleRate: 48000 as const,
       baseMs: 0, streaming: false, frames: 480000, durationMs: 10000, availableMs: 10000,
@@ -436,7 +437,7 @@ it('接手提前准备好的下一首时，它的后台解码正好失败：这�
     p.measured.mockImplementation(phase => { if (phase === '设备检查与旧播放清理') fail(new Error('音频解码 30 秒没有进展，已停止解码')); });
     await expect(p.service.prepare({ ...f.request, generation: 3, snapshot: p.song('b') }))
       .resolves.toMatchObject({ itemId: 'b', status: 'ready', audioError: null });
-    expect(p.preloadError).toHaveBeenCalledExactlyOnceWith('下一首音频解码失败：音频解码 30 秒没有进展，已停止解码');
+    expect(p.preloadError).toHaveBeenCalledExactlyOnceWith('下一首提前准备的音频解码失败，播到这首时照常准备。原因：音频解码 30 秒没有进展，已停止解码');
     expect(f.error).not.toHaveBeenCalled();
     // B is decoded again, and its 音频已准备好 entry keeps every step of this preparation.
     expect(p.prepare).toHaveBeenCalledTimes(3); expect(p.released).toEqual(['a', 'b']);
@@ -452,7 +453,7 @@ it('下一首在后台自己准备失败：单独记一条，不算正在播的�
     p.prepare.mockRejectedValueOnce(new Error('音频解码或读取失败：EIO: i/o error, read'));
     await p.service.control({ ...envelope, generation: 2, kind: 'play' });
     await vi.waitFor(() => expect(p.preloadError).toHaveBeenCalledOnce());
-    expect(p.preloadError).toHaveBeenCalledWith('预先准备下一首音频失败：音频解码或读取失败：EIO: i/o error, read');
+    expect(p.preloadError).toHaveBeenCalledWith('下一首的音频没能提前准备好，播到这首时照常准备。原因：音频解码或读取失败：EIO: i/o error, read');
     expect(f.error).not.toHaveBeenCalled();
     expect(p.service.status).toMatchObject({ itemId: 'a', status: 'playing', audioError: null });
     await expect(p.service.prepare({ ...f.request, generation: 3, snapshot: p.song('b') }))

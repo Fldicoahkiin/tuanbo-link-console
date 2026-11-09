@@ -175,7 +175,7 @@ export class NativeAudioCache {
     if (bytes > this.budgetBytes) throw new Error('这段音频超过了音频缓存上限，请调大缓存上限；原素材没有改动');
     const entries: Manifest[] = []; let used = 0;
     for (const name of await readdir(this.directory)) {
-      if (/^[a-f0-9]{64}-(44100|48000)-\d+(\.pcm|\.[a-f0-9-]+\.partial)$/.test(name)) used += (await stat(join(this.directory, name))).size;
+      if (/^[a-f0-9]{64}-(44100|48000)-\d+(\.pcm|\.[a-f0-9-]+\.partial)$/.test(name)) used += await sizeOf(join(this.directory, name));
       if (!/^[a-f0-9]{64}-(44100|48000)-\d+\.json$/.test(name)) continue;
       if ((await stat(join(this.directory, name))).size > 16384) throw new Error('音频缓存元数据超过容量');
       const entry = manifestSchema.parse(JSON.parse(await readFile(join(this.directory, name), 'utf8')));
@@ -183,7 +183,7 @@ export class NativeAudioCache {
     }
     // Reserve the whole bounded decode, not only the bytes produced so far.
     // Otherwise two growing files could each pass the same disk/cache budget.
-    for (const active of this.active.values()) used += Math.max(0, active.reserve - (await stat(active.path)).size);
+    for (const active of this.active.values()) used += Math.max(0, active.reserve - await sizeOf(active.path));
     let count = entries.length + this.active.size;
     for (const entry of entries.sort((a, b) => a.lastUsed - b.lastUsed)) {
       if (used + bytes <= this.budgetBytes && count < this.maxEntries) break;
@@ -202,3 +202,10 @@ async function digest(path: string, signal: AbortSignal): Promise<string> {
   return hash.digest('hex');
 }
 function isMissing(error: unknown): boolean { return error instanceof Error && 'code' in error && error.code === 'ENOENT'; }
+
+/** What a cache file holds now. A decoder's file can be missing: FFmpeg has not created it yet (or is stuck before it
+ * does, after a refused cancel), or a release has just published or removed it. It then holds nothing, and its
+ * decoder's whole reserve is counted. Any other error is thrown. */
+async function sizeOf(path: string): Promise<number> {
+  try { return (await stat(path)).size; } catch (error) { if (isMissing(error)) return 0; throw error; }
+}

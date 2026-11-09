@@ -24,9 +24,9 @@ describe('audioErrorLog', () => {
   it('准备中途记下一首的事：单独一条，不带走这首走过的步骤，这首准备好的那条照样拿到全部步骤', () => {
     const { record, steps, log } = setup();
     steps.add('设备检查与旧播放清理', 12.4);
-    log.preloadError('下一首音频解码失败：音频解码 30 秒没有进展，已停止解码');
+    log.preloadError('下一首提前准备的音频解码失败，播到这首时照常准备。原因：音频解码 30 秒没有进展，已停止解码');
     expect(record).toHaveBeenCalledExactlyOnceWith({ level: 'error', category: 'device', device: '音频',
-      message: '下一首音频解码失败：音频解码 30 秒没有进展，已停止解码', result: 'failed' });
+      message: '下一首提前准备的音频解码失败，播到这首时照常准备。原因：音频解码 30 秒没有进展，已停止解码', result: 'failed' });
     steps.add('音源校验与解码预填充', 40);
     // What this song's 音频已准备好 entry takes.
     expect(steps.take()).toEqual([{ step: '设备检查与旧播放清理', ms: 12 }, { step: '音源校验与解码预填充', ms: 40 }]);
@@ -52,7 +52,7 @@ describe('audioErrorLog', () => {
     try {
       steps.add('设备检查与旧播放清理', 12);
       expect(() => log.error('音频引擎还没准备好')).not.toThrow();
-      expect(() => log.preloadError('下一首音频解码失败：音频解码 30 秒没有进展，已停止解码')).not.toThrow();
+      expect(() => log.preloadError('下一首提前准备的音频解码失败，播到这首时照常准备。原因：音频解码 30 秒没有进展，已停止解码')).not.toThrow();
       await vi.waitFor(() => expect(console).toHaveBeenCalledTimes(2));
       expect(console.mock.calls).toEqual([['正式音频日志写入失败', expect.any(Error)], ['正式音频日志写入失败', expect.any(Error)]]);
     } finally { console.mockRestore(); }

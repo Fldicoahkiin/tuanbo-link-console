@@ -27,7 +27,7 @@ export class NativeAudioPreload {
     task.promise = this.prepare(task).catch((error: unknown) => {
       // Only the cancellation itself is quiet. Any other failure is reported even after a cancel: a decoder that
       // would not stop, or a failure of the job's own that came just then. Either one came while letting it go.
-      if (!task.abort.signal.aborted) this.options.error(`预先准备下一首音频失败：${reason(error)}`);
+      if (!task.abort.signal.aborted) this.options.error(`下一首的音频没能提前准备好，播到这首时照常准备。原因：${reason(error)}`);
       else if (!isCancellation(error, task.abort.signal)) this.options.error(letGoFailure(error));
       return null;
     });
@@ -88,7 +88,7 @@ export class NativeAudioPreload {
       this.options.measured?.('预先准备下一首音频', performance.now() - started);
       void lease.completion.then(outcome => {
         if (!outcome.ok && this.task === task && !task.abort.signal.aborted && !task.consumed) {
-          task.result = null; this.options.error(`下一首音频解码失败：${outcome.error.message}`);
+          task.result = null; this.options.error(`下一首提前准备的音频解码失败，播到这首时照常准备。原因：${outcome.error.message}`);
         }
       });
       return result;
@@ -108,9 +108,10 @@ function isCancellation(error: unknown, signal: AbortSignal): boolean {
 function reason(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 
 /** An error while the next song is let go: its cleanup failed, or the job failed on its own just then. Either way that
- * audio is not used, and what plays goes on. */
+ * audio is not used. It claims nothing about what plays: a decoder that would not stop has kept the caller waiting
+ * about 5 s, and its source cannot be prepared again until it exits (the cache says so when that is tried). */
 function letGoFailure(error: unknown): string {
-  return `下一首提前准备的音频已放下，放下时出了错，这份音频不会再用，不影响当前播放。原因：${reason(error)}`;
+  return `下一首提前准备的音频已放下，放下时出了错，这份音频不会再用。如果反复出现，请导出诊断包发给售后。原因：${reason(error)}`;
 }
 
 function audioIdentity(snapshot: PlaybackSnapshot): string {

@@ -27,7 +27,7 @@ async function fixture() {
 }
 
 /** A failure while the next song is let go: its cleanup failed, or the job failed on its own just then. */
-const letGo = (cause: string) => `下一首提前准备的音频已放下，放下时出了错，这份音频不会再用，不影响当前播放。原因：${cause}`;
+const letGo = (cause: string) => `下一首提前准备的音频已放下，放下时出了错，这份音频不会再用。如果反复出现，请导出诊断包发给售后。原因：${cause}`;
 
 it('预填充不发设备指令，精确复用下一首音源；音量变化不重新解码，接管后由播放租约清理', async () => {
   const f = await fixture(); f.preload.start('p.tblink', f.snapshot); f.preload.start('p.tblink', f.snapshot);
@@ -134,7 +134,7 @@ it('接手时正好赶上下一首的后台解码失败：这首歌不会因此�
   fail(new Error('音频解码 30 秒没有进展，已停止解码'));
   await expect(taking).resolves.toBeNull();
   expect(f.release).toHaveBeenCalledOnce();
-  expect(f.error).toHaveBeenCalledExactlyOnceWith('下一首音频解码失败：音频解码 30 秒没有进展，已停止解码');
+  expect(f.error).toHaveBeenCalledExactlyOnceWith('下一首提前准备的音频解码失败，播到这首时照常准备。原因：音频解码 30 秒没有进展，已停止解码');
   // Nothing is left over: the next song is prepared ahead again and used.
   f.preload.start('p.tblink', f.snapshot);
   await f.prepared(2);

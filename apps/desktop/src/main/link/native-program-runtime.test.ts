@@ -40,7 +40,7 @@ async function fixture(gateNext = false) {
     cache: { prepare: async (input, signal) => {
       if (++preparedCount === 2 && gateNext) { nextPreparing = true; await nextGate; }
       return cache.prepare(input, signal);
-    } }, resolveAudio: () => path, error: message => { failures.push(message); }, changed: status => {
+    } }, resolveAudio: () => path, error: message => { failures.push(message); }, preloadError: message => { failures.push(message); }, changed: status => {
       const { itemId, generation, positionMs, offsetMs, underruns, audioError } = status;
       states.push({ itemId, generation, status: status.status, positionMs, offsetMs, underruns, audioError });
       for (const listener of listeners) listener(status);

@@ -99,6 +99,7 @@ async function fixture() {
   const options = { executable: resolve(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? 'tools/playback-engine/bin/tblink-playback.exe'),
     checkDeviceHealth: async () => { expect(await probeWindowsMidi(resolve('tools/midi-probe/bin/tblink-midi-probe.exe'))).toBe('ready'); },
     cache, resolveAudio: () => path, error: (message: string) => { failures.push(message); },
+    preloadError: (message: string) => { failures.push(message); },
     changed: (state: NativePlayerStatus) => { states.push(state); } };
   return { options, request, failures, states };
 }

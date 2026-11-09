@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtemp, rename, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { PlaybackSnapshot } from '@tb/schema';
 import type { DecodeResult } from './native-audio-decode';
@@ -18,7 +18,9 @@ type Decoder = { readonly finished: Promise<DecodeResult>; exit: (result: Decode
 const decoders = vi.hoisted(() => [] as Decoder[]);
 /** While held, a prefill has not decoded the start yet: it ends once let go, or when its preparation is cancelled. */
 const prefill = vi.hoisted(() => ({ held: false }));
-afterEach(() => { prefill.held = false; });
+/** Off: FFmpeg has started but not created its output file yet. */
+const output = vi.hoisted(() => ({ written: true }));
+afterEach(() => { prefill.held = false; output.written = true; });
 // Stands in for FFmpeg: the whole decode is written at once, and the test decides when the process exits.
 vi.mock('./native-audio-decode', async () => {
   const { writeFileSync } = await import('node:fs');
@@ -30,7 +32,7 @@ vi.mock('./native-audio-decode', async () => {
     private result: DecodeResult | null = null;
     private cancelled = false;
     constructor(options: { output: string; rate: number; maximumBytes: number }) {
-      writeFileSync(options.output, Buffer.alloc(options.maximumBytes - options.rate * 4));
+      if (output.written) writeFileSync(options.output, Buffer.alloc(options.maximumBytes - options.rate * 4));
       this.finished = new Promise(resolve => { this.exit = result => { this.result ??= result; resolve(this.result); }; });
       decoders.push(this);
     }
@@ -103,9 +105,29 @@ it('下一首还在预填充时换歌，解码进程不肯退出：运行日志�
   // The operator plays another song while this one is still decoding its start.
   expect(await preload.take('p.tblink', { ...snapshot, itemId: 'other' })).toBeNull();
   expect(error).toHaveBeenCalledExactlyOnceWith(
-    '下一首提前准备的音频已放下，放下时出了错，这份音频不会再用，不影响当前播放。原因：音频解码还没退出，进程保留，不会强制结束，也不会开始新的解码');
+    '下一首提前准备的音频已放下，放下时出了错，这份音频不会再用。如果反复出现，请导出诊断包发给售后。原因：音频解码还没退出，进程保留，不会强制结束，也不会开始新的解码');
   prefill.held = false;
   await expect(cache.prepare(input, signal)).rejects.toThrow('正在释放');
   decoder.exit({ ok: false, error: new Error('音频解码已取消') }); await decoder.finished;
   await (await cache.prepare(input, signal)).release();
+});
+
+it('切走的下一首解码进程还没写出文件就不肯退出：之后别的歌照常准备，不报找不到文件（2026-11-09）', async () => {
+  const { cache, input, signal } = await fixture();
+  const audio = Buffer.from('another song'), sourcePath = join(dirname(input.sourcePath), 'another.wav'); await writeFile(sourcePath, audio);
+  const other = { ...input, sourcePath, sourceSha256: createHash('sha256').update(audio).digest('hex') };
+  output.written = false; prefill.held = true;
+  const abort = new AbortController(), started = decoders.length;
+  const pending = cache.prepare(input, abort.signal);
+  await vi.waitFor(() => expect(decoders).toHaveLength(started + 1));
+  const stuck = decoders.at(-1)!; stuck.refuse = true;
+  // The operator moves on before FFmpeg has written anything, and FFmpeg does not exit.
+  abort.abort();
+  await expect(pending).rejects.toThrow('还没退出');
+  output.written = true; prefill.held = false;
+  const next = await cache.prepare(other, signal);
+  expect(next.streaming).toBe(true);
+  decoders.at(-1)!.exit({ ok: true }); expect(await next.completion).toEqual({ ok: true });
+  await next.release();
+  stuck.exit({ ok: false, error: new Error('音频解码已取消') }); await stuck.finished;
 });
