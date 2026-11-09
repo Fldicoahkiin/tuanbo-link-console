@@ -40,17 +40,18 @@ export type PlayerVersion = { state: Pick<ProgramPlayerState, 'status' | 'itemId
  * - `timeline`: 联动台播放 does not hold the song (stopped, another song, P1 follow): the timeline is what will play.
  * - `version`: it holds the song as the project was when playback started; `song` is undefined when that
  *   version has no such song.
- * - `unconfirmed`: it holds the song, but this window cannot tell from which version, for `reason`.
+ * - `unconfirmed`: it holds the song, but this window cannot tell from which version, for `reason`; `waiting` while
+ *   the background program has not answered the open yet (that takes a moment, nothing to do).
  */
 export type PictureOnAir =
   | { kind: 'timeline' }
   | { kind: 'version'; song: SongPicture | undefined }
-  | { kind: 'unconfirmed'; reason: string };
+  | { kind: 'unconfirmed'; reason: string; waiting?: true };
 
 export function pictureOnAir(itemId: string | null, internal: boolean, player: PlayerVersion): PictureOnAir {
   if (itemId === null || songInPlayer(player.state, internal) !== itemId) return { kind: 'timeline' };
   // A program kept playing over a window reload sends its state first: until it answers, it may play any version.
-  if (player.outdated === null) return { kind: 'unconfirmed', reason: '正在确认联动台播放在播哪一版' };
+  if (player.outdated === null) return { kind: 'unconfirmed', reason: '正在确认联动台播放在播哪一版', waiting: true };
   if (player.outdated) return { kind: 'unconfirmed', reason: '界面重新加载过，联动台播放还在按重新加载前的工程播这首歌，和这里打开的不是同一版' };
   if (!player.project) return { kind: 'unconfirmed', reason: '联动台没有记下这首歌开始播放时的时间线' };
   return { kind: 'version', song: songPicture(player.project, itemId) };
@@ -85,7 +86,8 @@ export function pictureMarks(onAir: PictureOnAir, current: SongPicture): Picture
   switch (onAir.kind) {
     case 'timeline': return { onAirtime: current.airtime, pending: NO_PENDING_PICTURE_EDITS, notice: null };
     case 'unconfirmed': return { onAirtime: null, pending: NO_PENDING_PICTURE_EDITS, notice: { tone: 'warning', text: '无法确认 OBS 按哪一版时间线在播',
-      detail: `原因：${onAir.reason}。时间线上先不标正在播出和改过的部分。${REPLAY}，就会按这里的时间线播。` } };
+      // Waiting for the answer takes a moment: nothing to do, so no advice to stop the song on air.
+      detail: `原因：${onAir.reason}。时间线上先不标正在播出和改过的部分。${onAir.waiting ? '确认以后这里会自动更新' : `${REPLAY}，就会按这里的时间线播`}。` } };
     case 'version': {
       const pending = pendingPictureEdits(onAir.song, current);
       return { onAirtime: onAir.song?.airtime ?? NO_AIRTIME, pending, notice: versionNotice(pending) };

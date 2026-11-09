@@ -1027,8 +1027,10 @@ function registerIpc(
     const attachment = await nativeProgram!.open(value, async (projectPath, project) => {
       await projectAccess.assetFiles(projectPath, projectFileReferences(project).map(file => file.relativePath));
     });
-    if (attachment !== 'opened') await logger.record({ level: 'warning', category: 'state', device: '播放器',
-      message: `重新加载的界面已接回后台播放的节目${attachment === 'outdated' ? '；界面里的工程和正在播放的版本不同，停止后会按界面里的工程重新准备' : ''}` });
+    // The program is taken over already: a log that cannot be written must not leave the window without the answer.
+    if (attachment !== 'opened') void logger.record({ level: 'warning', category: 'state', device: '播放器',
+      message: `重新加载的界面已接回后台播放的节目${attachment === 'outdated' ? '；界面里的工程和正在播放的版本不同，停止后会按界面里的工程重新准备' : ''}` })
+      .catch((error: unknown) => console.error('接回后台节目的日志未能保存', error));
     return attachment;
   }, 'listener');
   handle('link:native-program-control', (_event, value: unknown) => nativeProgram!.control(value), 'listener');

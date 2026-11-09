@@ -63,7 +63,7 @@ describe('OBS 按哪一版画面在播', () => {
     // The window reopened the project; the program it takes over has not said yet whether it plays this version.
     const reopened = started();
     for (const status of ['preparing', 'playing', 'paused'] as const) {
-      expect(pictureOnAir('song', true, holding(status, 'song', reopened, null))).toEqual({ kind: 'unconfirmed', reason: '正在确认联动台播放在播哪一版' });
+      expect(pictureOnAir('song', true, holding(status, 'song', reopened, null))).toEqual({ kind: 'unconfirmed', reason: '正在确认联动台播放在播哪一版', waiting: true });
     }
     expect(pictureOnAir('song', true, holding('stopped', 'song', reopened, null))).toEqual({ kind: 'timeline' });
     expect(pictureOnAir('song', true, holding('playing', 'other', reopened, null))).toEqual({ kind: 'timeline' });
@@ -133,7 +133,7 @@ describe('时间线上标出的画面', () => {
     expect(marks.pending).toEqual(NO_PENDING_PICTURE_EDITS);
     for (const seconds of [1, 3, 9, 12.5]) expect([...markedOnAir(marks.onAirtime, marks.pending.changed, frame(seconds), ['b'])]).toEqual([]);
     expect(marks.notice).toEqual({ tone: 'warning', text: '无法确认 OBS 按哪一版时间线在播',
-      detail: '原因：正在确认联动台播放在播哪一版。时间线上先不标正在播出和改过的部分。点方块按钮“停止播放”（或按 Esc）后重新播放，就会按这里的时间线播。' });
+      detail: '原因：正在确认联动台播放在播哪一版。时间线上先不标正在播出和改过的部分。确认以后这里会自动更新。' });
   });
 });
 
