@@ -431,7 +431,8 @@ it('自动下一首时上一首的画面清理失败：播放器在下一首上�
   expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']); expect(t.releaseOutputs).toHaveBeenCalledTimes(2);
 });
 
-it.each([['按停止', 'next'], ['播完就停的歌播完', 'stop']] as const)('%s时画面清理失败：停下的播放器马上提示一次、只记一次；之后再播歌不再显示（2026-11-09）', async (_case, endAction) => {
+// The stopped player's notice is also logged by the player, as before 2026-11-09; only the picture host's log is counted here.
+it.each([['按停止', 'next'], ['播完就停的歌播完', 'stop']] as const)('%s时画面清理失败：停下的播放器马上提示一次；之后再播歌不再显示、不再记录（2026-11-09）', async (_case, endAction) => {
   const t = program(endAction);
   await t.player.play('a');
   await vi.waitFor(() => expect(t.execute).toHaveBeenCalledTimes(1));
@@ -439,11 +440,13 @@ it.each([['按停止', 'next'], ['播完就停的歌播完', 'stop']] as const)(
   if (endAction === 'stop') await t.playToEnd(); else await t.player.stop();
   await vi.waitFor(() => expect(t.state()).toMatchObject({ status: 'stopped', fault: null, notice: `画面清理失败：${LEFTOVER}` }));
   expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']);
+  const stopNotices = t.notices.filter(notice => notice.includes('清理'));
   await t.player.play('b');
   await vi.waitFor(() => expect(t.execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-a', 'scene-b']));
   expect(t.state()).toMatchObject({ status: 'playing', itemId: 'b', fault: null });
   expect(t.state().notice ?? '').not.toContain('清理');
   expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']);
+  expect(t.notices.filter(notice => notice.includes('清理'))).toEqual(stopNotices);
   await t.player.dispose();
 });
 
@@ -454,6 +457,7 @@ it('关闭节目时画面清理失败：只记一次，关闭照常完成，不�
   t.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
   await expect(t.player.dispose()).resolves.toBeUndefined();
   expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']); expect(t.releaseOutputs).toHaveBeenCalledOnce();
+  expect(t.notices.filter(notice => notice.includes('清理'))).toEqual([]);
 });
 
 /** Wired as in link-main: each song takes its picture from the pool, which prepares the next song's in the background
