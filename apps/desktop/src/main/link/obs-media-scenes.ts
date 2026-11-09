@@ -45,6 +45,12 @@ class MediaBatchError extends Error {
   constructor(message: string, readonly executed: number) { super(message); }
 }
 
+/** Why a picture step failed, to follow "原因：" in a red text and to end before
+ * the next sentence there. */
+export function failureReason(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).replace(/[。.；;\s]+$/u, '');
+}
+
 export class ObsMediaScenes {
   private readonly prepared = new Map<string, { path: string; sha256: string; playbackPaths: readonly string[]; sceneName: string; sceneItemId: number; kind: LinkMediaAsset['kind'] }>();
   private readonly active = new Set<string>();
@@ -269,8 +275,10 @@ export class ObsMediaScenes {
           { requestType: 'TriggerMediaInputAction', requestData: { inputName: previousSource, mediaAction: retirement === 'pause' ? 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE' : 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP' } }
         ];
       }
-      // `through`: the batch position right after the retirement requests.
-      const retire = (through: number): { sourceName: string; through: number } | undefined => previousSource && retiring.length ? { sourceName: previousSource, through } : undefined;
+      // `start`: the batch position of the first retirement request. The old
+      // decoder is off air once its mute and hide ran, whatever its pause or
+      // stop then does.
+      const retire = (start: number): { sourceName: string; through: number } | undefined => previousSource && retiring.length ? { sourceName: previousSource, through: start + 2 } : undefined;
       // Set when this start seeked and released the decoder in step with the music.
       let seekedStart: { lateMs: number } | null = null, primedStart = false;
       if (event.phase === 'start') {
@@ -306,7 +314,7 @@ export class ObsMediaScenes {
             { requestType: 'SetSceneItemEnabled', requestData: { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemEnabled: true } },
             ...(event.deferSceneSwitch ? [] : [{ requestType: 'SetCurrentProgramScene' as const, requestData: { sceneName: target.sceneName } }]),
             ...(restart ? [{ requestType: 'TriggerMediaInputAction' as const, requestData: { inputName: event.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART' } }] : [])
-          ], event, others.length + retiring.length + 1, retire(others.length + retiring.length));
+          ], event, others.length + retiring.length + 1, retire(others.length));
           retiring = [];
           if (restart) await this.waitForState(event.sourceName, 'OBS_MEDIA_STATE_PLAYING');
         }
@@ -323,20 +331,18 @@ export class ObsMediaScenes {
             await this.waitForState(event.sourceName, 'OBS_MEDIA_STATE_PLAYING');
           }
         }
-        requests.push(...event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName), ...retiring);
+        const others = event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName);
+        requests.push(...others, ...retiring);
+        // The new decoder counts as on air once its show ran. It is shown before
+        // its sound is set, so a failure in between never leaves it audible while
+        // hidden; a primed decoder stays paused until the last request anyway.
         const reach = requests.length;
-        if (event.assetKind !== 'image') {
-          if (!primed) seekedStart = await this.positionMedia(event.sourceName, () => event.sourceOffsetMs + performance.now() - startedAt, continuing ? 100 : 30);
-          requests.push(
-          { requestType: 'SetInputMute', requestData: { inputName: event.sourceName, inputMuted: !event.embeddedAudioEnabled } }
-          );
-        }
-        requests.push(
-          { requestType: 'SetSceneItemEnabled', requestData: { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemEnabled: true } },
-          ...(event.deferSceneSwitch ? [] : [{ requestType: 'SetCurrentProgramScene' as const, requestData: { sceneName: target.sceneName } }])
-        );
+        if (event.assetKind !== 'image' && !primed) seekedStart = await this.positionMedia(event.sourceName, () => event.sourceOffsetMs + performance.now() - startedAt, continuing ? 100 : 30);
+        requests.push({ requestType: 'SetSceneItemEnabled', requestData: { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemEnabled: true } });
+        if (event.assetKind !== 'image') requests.push({ requestType: 'SetInputMute', requestData: { inputName: event.sourceName, inputMuted: !event.embeddedAudioEnabled } });
+        requests.push(...(event.deferSceneSwitch ? [] : [{ requestType: 'SetCurrentProgramScene' as const, requestData: { sceneName: target.sceneName } }]));
         if (event.assetKind !== 'image' && primed) requests.push({ requestType: 'TriggerMediaInputAction', requestData: { inputName: event.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' } });
-        await this.startBatch(requests, event, reach, retire(reach));
+        await this.startBatch(requests, event, reach, retire(others.length));
       } else {
         this.primed.delete(event.sourceName);
         if (event.assetKind !== 'image') requests.push(
@@ -371,6 +377,17 @@ export class ObsMediaScenes {
 
   /** Whether this decoder may still be on air, as far as OBS executed our requests. */
   isActive(inputName: string): boolean { return this.active.has(inputName); }
+
+  /** The material's next clip goes on in the file where the clip on this decoder
+   * ends, and its own decoder is not ready: this decoder plays on for it. From
+   * here on it counts as started for `toClipId`, so the drift check follows the
+   * new clip. Sends nothing to OBS. False, changing nothing, when the decoder is
+   * not on air for `fromClipId`. */
+  continueClip(inputName: string, fromClipId: string, toClipId: string): boolean {
+    if (!this.active.has(inputName) || this.startedClips.get(inputName) !== fromClipId) return false;
+    this.startedClips.set(inputName, toClipId);
+    return true;
+  }
 
   async switchScene(sceneName: string): Promise<void> {
     return this.run(async () => {
@@ -536,12 +553,13 @@ export class ObsMediaScenes {
   }
 
   /** Sends one batch of a start or seek. The books follow what OBS executed: the previous
-   * decoder retires once OBS ran the batch up to `retire.through`, and the starting
-   * decoder is on air (active, started for this clip, so the drift check reaches it)
-   * once the request at index `reach` ran. A request that was never sent changes
-   * nothing, so a failure never leaves two decoders of one material on air in
-   * the books, nor one that OBS never showed. A failure between the two leaves the
-   * material with no picture, and the error says so. Nothing is sent again. */
+   * decoder retires once OBS ran the batch up to `retire.through` (its mute and
+   * hide), and the starting decoder is on air (active, started for this clip, so
+   * the drift check reaches it) once the request at index `reach` (its show) ran.
+   * A request that was never sent changes nothing, so a failure never leaves two
+   * decoders of one material on air in the books, nor one that OBS never showed.
+   * A failure between the two leaves the material with no picture, and the error
+   * says so. Nothing is sent again. */
   private async startBatch(requests: Parameters<OBSWebSocket['callBatch']>[0], event: ManagedMediaEvent, reach: number,
     retire?: { sourceName: string; through: number }): Promise<void> {
     let executed = 0;
@@ -551,7 +569,7 @@ export class ObsMediaScenes {
     } catch (error) {
       if (error instanceof MediaBatchError) executed = error.executed;
       if (retire && executed >= retire.through && executed <= reach) {
-        throw new Error(`上一段的画面已经退下，这一段的画面没能显示出来。原因：${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`上一段的画面已经退下，这一段的画面没能显示出来。原因：${failureReason(error)}。后面的素材照常播`);
       }
       throw error;
     } finally {

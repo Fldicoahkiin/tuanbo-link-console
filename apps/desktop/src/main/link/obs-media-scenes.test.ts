@@ -2,7 +2,7 @@ import type { OBSWebSocket } from 'obs-websocket-js';
 import { describe, expect, it, vi } from 'vitest';
 import { materialSceneNames, type ManagedMediaEvent } from '@tb/core/link';
 import type { LinkMediaAsset } from '@tb/schema';
-import { ObsMediaScenes } from './obs-media-scenes';
+import { ObsMediaScenes, failureReason } from './obs-media-scenes';
 
 const asset: LinkMediaAsset = { id: 'clip', name: '舞蹈.mp4', kind: 'video', folderId: null, relativePath: 'assets/dance.mp4', sha256: 'a'.repeat(64), byteLength: 10 };
 const names = materialSceneNames('project', asset);
@@ -676,4 +676,11 @@ describe('素材独立场景播放', () => {
     calls.length = 0; await scenes.switchScene('拉腿机位');
     expect(calls).toEqual([{ requestType: 'SetCurrentProgramScene', requestData: { sceneName: '拉腿机位' } }]);
   });
+});
+
+it('红字里“原因：”后面的原因不带句末标点，后面接着写怎么办时不出现两个句号', () => {
+  expect(failureReason(new Error('OBS 没有回应。'))).toBe('OBS 没有回应');
+  expect(failureReason(new Error('素材状态读不到；'))).toBe('素材状态读不到');
+  expect(failureReason('SetInputMute：OBS 没能执行 SetInputMute. ')).toBe('SetInputMute：OBS 没能执行 SetInputMute');
+  expect(failureReason(new Error('SetSceneItemEnabled：OBS 没能执行 SetSceneItemEnabled'))).toBe('SetSceneItemEnabled：OBS 没能执行 SetSceneItemEnabled');
 });

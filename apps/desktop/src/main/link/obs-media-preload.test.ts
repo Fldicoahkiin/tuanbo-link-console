@@ -10,7 +10,7 @@ function mockScenes() {
     copyPresentation: vi.fn<ObsMediaScenes['copyPresentation']>(() => Promise.resolve()),
     prime: vi.fn<ObsMediaScenes['prime']>(async (_event, _path, run) => { await run(); }),
     execute: vi.fn<ObsMediaScenes['execute']>(() => Promise.resolve()), seek: vi.fn<ObsMediaScenes['seek']>(() => Promise.resolve()),
-    isActive: vi.fn<ObsMediaScenes['isActive']>(() => false) };
+    isActive: vi.fn<ObsMediaScenes['isActive']>(() => false), continueClip: vi.fn<ObsMediaScenes['continueClip']>(() => false) };
 }
 function mockNative() {
   return { prime: vi.fn<(name: string, restartRetained: boolean, kind: 'audio' | 'video') => Promise<void>>(() => Promise.resolve()), seek: vi.fn<(name: string, position: number) => Promise<void>>(() => Promise.resolve()) };
@@ -32,13 +32,14 @@ function setup(camera = false, kind: 'audio' | 'video' = 'video') {
 const current = (): void => undefined;
 const path = 'C:/shows/assets/video.mp4';
 
-/** One video on one track, `[start s, length ms]` per clip, and a camera `[start s, length s]` above it. */
-function song(clips: ReadonlyArray<readonly [number, number]>, camera?: readonly [number, number], sourceOffsetMs = 0): LinkProject {
+/** One video on one track, `[start s, length ms, source offset ms]` per clip (the offset defaults to
+ * `sourceOffsetMs`), and a camera `[start s, length s]` above it. */
+function song(clips: ReadonlyArray<readonly [number, number, number?]>, camera?: readonly [number, number], sourceOffsetMs = 0): LinkProject {
   return parseLinkProject({ ...createEmptyLinkProject('预备'), playbackSource: 'internal', obsOutputMode: 'scenes',
     mediaAssets: [{ id: 'video', name: '视频', kind: 'video', relativePath: 'assets/video.mp4', sha256: 'a'.repeat(64), byteLength: 1, durationMs: 60000, width: 1920, height: 1080 }],
     rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'camera', name: '机位' }, { id: 'video-layer', name: '视频' }],
-      referenceMediaClips: clips.map(([seconds, durationMs], index) => ({ id: `clip-${index}`, assetId: 'video', layerId: 'video-layer', label: '视频',
-        startTimecode: { hours: 0, minutes: 0, seconds, frames: 0 }, durationMs, sourceOffsetMs })),
+      referenceMediaClips: clips.map(([seconds, durationMs, offset], index) => ({ id: `clip-${index}`, assetId: 'video', layerId: 'video-layer', label: '视频',
+        startTimecode: { hours: 0, minutes: 0, seconds, frames: 0 }, durationMs, sourceOffsetMs: offset ?? sourceOffsetMs })),
       cues: camera ? [{ id: 'camera-cue', name: '机位', layerId: 'camera', timecode: { hours: 0, minutes: 0, seconds: camera[0], frames: 0 }, durationMs: camera[1] * 1000,
         actions: [{ id: 'camera-action', kind: 'obs.setProgramScene', label: '机位', sceneName: '机位1' }] }] : [] }] });
 }
@@ -121,9 +122,13 @@ function fakeObs() {
       default: throw new Error(`假 OBS 不认识 ${type}`);
     }
   };
-  const look = (): void => {
+  /** What the audience sees now: the top shown input of the program scene. */
+  const seen = (): OnAir => {
     const top = [...inputs].filter(([, entry]) => entry.scene === program && entry.enabled).sort((a, b) => b[1].item - a[1].item)[0];
-    const view = top ? { decoder: decoder(top[0]), state: top[1].state.replace('OBS_MEDIA_STATE_', ''), cursor: Math.round(cursor(top[1])) } : { decoder: null, state: '', cursor: 0 };
+    return top ? { decoder: decoder(top[0]), state: top[1].state.replace('OBS_MEDIA_STATE_', ''), cursor: Math.round(cursor(top[1])) } : { decoder: null, state: '', cursor: 0 };
+  };
+  const look = (): void => {
+    const view = seen();
     const last = onAir.at(-1);
     if (!last || last.decoder !== view.decoder || last.state !== view.state || last.cursor !== view.cursor) onAir.push(view);
   };
@@ -149,7 +154,7 @@ function fakeObs() {
     return (...values) => { if (used || !match(...values)) return false; used = true; return true; };
   };
   return {
-    client: client as unknown as OBSWebSocket, sent, onAir, decoder: (name: string): FakeInput => input(name), position: (name: string): number => Math.round(cursor(input(name))),
+    client: client as unknown as OBSWebSocket, sent, onAir, view: seen, decoder: (name: string): FakeInput => input(name), position: (name: string): number => Math.round(cursor(input(name))),
     request: <T>(operation: () => Promise<T>, label: string): Promise<T> => {
       if (cancelled) return Promise.reject(new Error(`OBS 动作已取消或已过时，没有发送：${label}`));
       const refused = refusals.map(refusal => refusal(label)).find(reason => reason !== null);
@@ -219,10 +224,11 @@ function withCameras(project: LinkProject, spans: ReadonlyArray<readonly [number
 }
 /** The program plays `project` on the per-input fake OBS as on the field machine:
  * every material prepared, the opening clips and their successors primed before
- * the clock starts. The music clock is moved by hand; `answer` is how OBS
- * answers each timeline action other than media, and `reports` lists how each
- * media action ended. */
-async function live(project: LinkProject, obs: FakeObs, answer: (action: LinkAction) => Promise<void> = () => Promise.resolve()) {
+ * the clock starts (only the opening clips for a cold auto-next song, `following`
+ * false). The music clock is moved by hand; `answer` is how OBS answers each
+ * timeline action other than media, `reports` lists how each media action ended
+ * and `faults` what the program reported besides. */
+async function live(project: LinkProject, obs: FakeObs, answer: (action: LinkAction) => Promise<void> = () => Promise.resolve(), following = true) {
   const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation());
   const preload = new ObsMediaPreload(project, 'song', scenes, obs.native);
   const file = (relativePath: string): string => `C:/shows/${relativePath}`;
@@ -232,12 +238,12 @@ async function live(project: LinkProject, obs: FakeObs, answer: (action: LinkAct
   }
   for (const event of new SceneOutputTimeline(project, 'song').at(0).media) {
     if (event.assetKind === 'image') continue;
-    await preload.prime(event, current); await preload.primeFollowing(event, current);
+    await preload.prime(event, current); if (following) await preload.primeFollowing(event, current);
   }
   let now = 0;
-  const reports: string[] = [];
+  const reports: string[] = [], faults: string[] = [];
   const session = new ObsProgramSession(project, 'C:/shows/test.tblink', 'song', {
-    now: () => now, fault: () => undefined,
+    now: () => now, fault: message => { faults.push(message); },
     recordLog: vi.fn<LinkDesktopApi['recordLog']>(entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-09T00:00:00Z', monotonicMs: now })),
     executeManagedMediaEvent: ({ event }) => preload.execute(event, file(event.relativePath)),
     guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
@@ -256,7 +262,9 @@ async function live(project: LinkProject, obs: FakeObs, answer: (action: LinkAct
       await new Promise(resolve => setTimeout(resolve, 0));
     }
   };
-  return { scenes, preload, session, reports, play, failures: (): string[] => reports.filter(line => line.includes(' failed')) };
+  /** The music is at `ms`, for the program's own clock reads (a pause, a resume). */
+  const at = (ms: number): void => { now = ms; };
+  return { scenes, preload, session, reports, faults, play, at, failures: (): string[] => reports.filter(line => line.includes(' failed')) };
 }
 /** Clips of 12 s back to back from the same video: each start hands over between its two decoders.
  * clip-0 plays on the first decoder and clip-1 waits primed on the second. */
@@ -273,6 +281,22 @@ async function handover(sourceOffsetMs = 100) {
   const primary = events[0]!.sourceName;
   return { project, obs, scenes, preload, events, primary, standby: `${primary}·预备` };
 }
+/** `count` other videos playing, each in its own scene, while `t`'s video hands over: a handover
+ * mutes them first, in this order. Returns their inputs. */
+async function othersPlaying(t: Awaited<ReturnType<typeof handover>>, count: number): Promise<string[]> {
+  const inputs: string[] = [];
+  for (let index = 0; index < count; index++) {
+    const asset = { ...t.project.mediaAssets[0]!, id: `video-${index + 2}`, name: `视频${index + 2}` }, names = materialSceneNames(t.project.projectId, asset);
+    await t.scenes.prepare(t.project.projectId, asset, path);
+    const other = { ...t.events[1]!, ...names, clipId: `other-${index}`, assetId: asset.id, assetName: asset.name, frameNumber: 0, sourceOffsetMs: 0 };
+    expect(await outcome(t.scenes.execute(other, path))).toBe('完成');
+    inputs.push(names.sourceName);
+  }
+  t.obs.sent.length = 0;
+  return inputs;
+}
+/** The red text of a handover OBS broke after the old picture went off and before the new one showed, at `request`. */
+const gap = (request: string): string => `上一段的画面已经退下，这一段的画面没能显示出来。原因：${request}：OBS 没能执行 ${request}`;
 
 it('正式播放前预热首段和接续段，播放中不重复创建或预热；再下一段仍复用原解码器', async () => {
   const t = setup(true);
@@ -397,7 +421,8 @@ it('预备未完成、失败、过期时均不能把下一片段显示为可播�
   await expect(t.preload.seek(event, t.path)).rejects.toThrow('定位路径或状态已改变');
 });
 
-it('预备失败放回预备槽：同一输入后面的片段照常准备和播出，失败的这一段不自动重试', async () => {
+it('预备失败放回预备槽：同一输入后面的片段照常准备和播出，失败的这一段不自动重试；它和上一段入点接不上，上一段在它的开始被拒绝时退下', async () => {
+  // Every clip starts 100 ms into the file: clip-1 does not continue clip-0's picture.
   const t = setup(), [first, second, third] = t.events;
   await t.preload.prime(first!, current); await t.preload.execute(first!, t.path);
   t.native.prime.mockRejectedValueOnce(new Error('解码器无响应'));
@@ -407,7 +432,7 @@ it('预备失败放回预备槽：同一输入后面的片段照常准备和播�
   expect(await t.preload.upcoming(450, current)).toMatchObject({ clipId: third!.clipId });
   await t.preload.execute(third!, t.path);
   expect(t.scenes.prime.mock.calls.map(([event]) => event.clipId)).toEqual(['clip-0', 'clip-1', 'clip-2']);
-  // clip-1 never goes on air, but clip-0 still ends at the cut: its own stop was left to clip-1's start.
+  // clip-1 never goes on air, but clip-0 still ends at the cut, when clip-1's start is refused: its own stop was left to clip-1's start.
   expect(t.scenes.execute.mock.calls.map(([event, , previous, retirement]) => [event.clipId, event.phase, event.sourceName === first!.sourceName ? '主' : '预备', previous ?? null, retirement]))
     .toEqual([['clip-0', 'start', '主', null, 'pause'], ['clip-0', 'stop', '主', null, 'pause'], ['clip-2', 'start', '主', null, 'stop']]);
   await t.preload.close();
@@ -503,7 +528,8 @@ it('按时交接：画面直接从正在播的解码器换到停在入点的预�
   try {
     const t = await handover();
     await t.preload.execute(t.events[1]!, path);
-    expect(t.obs.sent).toEqual(['静音 主', '隐藏 主', 'PAUSE 主', '静音 预备', '显示 预备', '切场景', 'PLAY 预备']);
+    // The new decoder is shown before its sound is set: it is never audible while hidden.
+    expect(t.obs.sent).toEqual(['静音 主', '隐藏 主', 'PAUSE 主', '显示 预备', '静音 预备', '切场景', 'PLAY 预备']);
     expect(t.obs.onAir.map(view => `${view.decoder} ${view.state} @${view.cursor}`)).toEqual(['主 PLAYING @100', '预备 PLAYING @100']);
     expect(t.obs.decoder(t.primary)).toMatchObject({ state: 'OBS_MEDIA_STATE_PAUSED', enabled: false, muted: true });
     expect(t.preload.resolveSource(t.primary)).toBe(t.standby);
@@ -576,7 +602,7 @@ it('晚到交接时 OBS 退下了旧解码器、却没能显示新解码器：�
     expect(t.obs.decoder(t.standby)).toMatchObject({ state: 'OBS_MEDIA_STATE_PAUSED', enabled: false, muted: true });
     expect(t.obs.onAir.at(-1)).toEqual({ decoder: null, state: '', cursor: 0 });
     expect([t.scenes.isActive(t.primary), t.scenes.isActive(t.standby)]).toEqual([false, false]);
-    expect(message).toBe('上一段的画面已经退下，这一段的画面没能显示出来。原因：SetSceneItemEnabled：OBS 没能执行 SetSceneItemEnabled');
+    expect(message).toBe(`${gap('SetSceneItemEnabled')}。后面的素材照常播`);
     // The new decoder still stands for clip-1, off air, and clip-1 is not started again.
     expect(t.preload.resolveSource(t.primary)).toBe(t.standby);
     expect(await t.preload.upcoming(400, current)).toBeNull();
@@ -584,6 +610,83 @@ it('晚到交接时 OBS 退下了旧解码器、却没能显示新解码器：�
     await t.preload.execute(third!, path);
     expect(t.obs.onAir.at(-1)).toMatchObject({ decoder: '主', state: 'PLAYING', cursor: 100 });
     expect(t.obs.sent.filter(entry => entry.startsWith('RESTART'))).toEqual([]);
+  } finally { vi.useRealTimers(); }
+});
+
+it('按时交接时 OBS 退下了旧解码器、却没能显示新解码器（这一段开着原声）：报错写明这一段没有画面、后面照常播；新解码器仍静音、不算在画面上，后面的片段照常播出', async () => {
+  vi.useFakeTimers();
+  try {
+    const t = await handover(), [, second, third] = t.events;
+    t.obs.failOnce((type, data) => type === 'SetSceneItemEnabled' && data.sceneItemEnabled === true);
+    const message = await outcome(t.preload.execute({ ...second!, embeddedAudioEnabled: true }, path));
+    expect(message).toBe(`${gap('SetSceneItemEnabled')}。后面的素材照常播`);
+    expect(t.obs.sent).toEqual(['静音 主', '隐藏 主', 'PAUSE 主']);
+    // Hidden, the new decoder kept its sound off: a resume cannot make it heard.
+    expect(t.obs.decoder(t.standby)).toMatchObject({ state: 'OBS_MEDIA_STATE_PAUSED', enabled: false, muted: true });
+    expect(t.obs.view()).toEqual({ decoder: null, state: '', cursor: 0 });
+    expect([t.scenes.isActive(t.primary), t.scenes.isActive(t.standby)]).toEqual([false, false]);
+    expect(await t.preload.upcoming(450, current)).toMatchObject({ clipId: 'clip-2' });
+    await t.preload.execute(third!, path);
+    expect(t.obs.view()).toMatchObject({ decoder: '主', state: 'PLAYING', cursor: 100 });
+  } finally { vi.useRealTimers(); }
+});
+
+it('晚到交接时有别的素材在播，OBS 隐藏了旧解码器、暂停它时出错：报错写明这一段没有画面，两个解码器都不算在画面上', async () => {
+  vi.useFakeTimers();
+  try {
+    const t = await handover(), [, second] = t.events;
+    await othersPlaying(t, 1);
+    t.obs.failOnce((type, data) => type === 'TriggerMediaInputAction' && data.inputName === t.primary);
+    const message = await outcome(t.preload.execute({ ...second!, sourceOffsetMs: second!.sourceOffsetMs + 600 }, path));
+    expect(message).toBe(`${gap('TriggerMediaInputAction')}。后面的素材照常播`);
+    // The other video's mute, then the old decoder's mute and hide.
+    expect(t.obs.sent).toEqual(['静音 主', '静音 主', '隐藏 主']);
+    expect(t.obs.decoder(t.primary)).toMatchObject({ enabled: false, muted: true });
+    expect([t.scenes.isActive(t.primary), t.scenes.isActive(t.standby)]).toEqual([false, false]);
+  } finally { vi.useRealTimers(); }
+});
+
+it.each([['晚到 600 ms', 600], ['按时', 0]])('交接时有三个别的素材在播（%s），OBS 静音最后一个时出错：旧解码器原样留在画面上、仍算在画面上，报 OBS 的原话', async (_case, lateMs) => {
+  vi.useFakeTimers();
+  try {
+    const t = await handover(), [, second] = t.events;
+    const others = await othersPlaying(t, 3);
+    t.obs.failOnce((type, data) => type === 'SetInputMute' && data.inputName === others[2] && data.inputMuted === true);
+    const message = await outcome(t.preload.execute({ ...second!, sourceOffsetMs: second!.sourceOffsetMs + lateMs }, path));
+    expect(message).toBe('SetInputMute：OBS 没能执行 SetInputMute');
+    expect(t.obs.sent).toEqual(['静音 主', '静音 主']);
+    expect(t.obs.decoder(t.primary)).toMatchObject({ state: 'OBS_MEDIA_STATE_PLAYING', enabled: true });
+    expect([t.scenes.isActive(t.primary), t.scenes.isActive(t.standby)]).toEqual([true, false]);
+    expect(t.preload.resolveSource(t.primary)).toBe(t.primary);
+  } finally { vi.useRealTimers(); }
+});
+
+it('按时交接时 OBS 显示了新解码器、设置它的声音时出错：新解码器算在画面上，记下的解码器就是它，报 OBS 的原话', async () => {
+  vi.useFakeTimers();
+  try {
+    const t = await handover(), [, second] = t.events;
+    t.obs.failOnce((type, data) => type === 'SetInputMute' && data.inputName === t.standby);
+    const message = await outcome(t.preload.execute(second!, path));
+    expect(message).toBe('SetInputMute：OBS 没能执行 SetInputMute');
+    expect(t.obs.sent).toEqual(['静音 主', '隐藏 主', 'PAUSE 主', '显示 预备']);
+    expect(t.obs.view()).toMatchObject({ decoder: '预备' });
+    // The clip's stop, pause, resume and the drift check reach the decoder the audience sees.
+    expect([t.scenes.isActive(t.primary), t.scenes.isActive(t.standby)]).toEqual([false, true]);
+    expect(t.preload.resolveSource(t.primary)).toBe(t.standby);
+  } finally { vi.useRealTimers(); }
+});
+
+it('晚到交接时有别的素材在播，旧解码器已经退下、OBS 静音新解码器时出错：报错写明这一段没有画面，两个解码器都不算在画面上', async () => {
+  vi.useFakeTimers();
+  try {
+    const t = await handover(), [, second] = t.events;
+    await othersPlaying(t, 1);
+    t.obs.failOnce((type, data) => type === 'SetInputMute' && data.inputName === t.standby && data.inputMuted === true);
+    const message = await outcome(t.preload.execute({ ...second!, sourceOffsetMs: second!.sourceOffsetMs + 600 }, path));
+    expect(message).toBe(`${gap('SetInputMute')}。后面的素材照常播`);
+    expect(t.obs.sent).toEqual(['静音 主', '静音 主', '隐藏 主', 'PAUSE 主']);
+    expect(t.obs.decoder(t.standby)).toMatchObject({ enabled: false });
+    expect([t.scenes.isActive(t.primary), t.scenes.isActive(t.standby)]).toEqual([false, false]);
   } finally { vi.useRealTimers(); }
 });
 
@@ -767,7 +870,7 @@ it('预热好的短片段整段落在 OBS 卡住时的积压里、被合并跳�
 
 const unplayed = '这一段素材没有播出：轮到它时这一段已经结束了，电脑或 OBS 当时太忙。后面的素材照常播，不用处理';
 
-it('剪切点上的点 Cue OBS 过 0.6 s 才回应，同一视频首尾相接的下一段（300 ms）轮到时已经结束：上一段照样按时间线退下，不接着往下播，后面的片段照常开播（2026-11-09）', async () => {
+it('剪切点上的点 Cue OBS 过 0.6 s 才回应，同一视频首尾相接的下一段（300 ms）轮到时已经结束：上一段在这一段的开始被拒绝时退下，不接着往下播，后面的片段照常开播（2026-11-09）', async () => {
   // clip-0 [0,2) s and clip-1 [2,2.3) s back to back, clip-2 [8,10) s: one video on one track. clip-1's start is what ends clip-0.
   const project = withPointCue(song([[0, 2000], [2, 300], [8, 2000]], undefined, 5000), 2), obs = fakeObs();
   let answer = (): void => undefined;
@@ -778,7 +881,7 @@ it('剪切点上的点 Cue OBS 过 0.6 s 才回应，同一视频首尾相接的
   await t.play(2000, 2600, false);
   answer();
   await t.play(2700, 7900, true);
-  // clip-0's decoder went off once, when clip-1's start came; nothing of the video is on air until clip-2.
+  // clip-0's decoder went off once, when clip-1's start came 0.6 s late and was refused; nothing of the video is on air until clip-2.
   expect(obs.decoder(primary)).toMatchObject({ state: 'OBS_MEDIA_STATE_PAUSED', enabled: false, muted: true });
   expect(obs.decoder(`${primary}·预备`)).toMatchObject({ enabled: false, muted: true });
   expect(obs.onAir.at(-1)).toEqual({ decoder: null, state: '', cursor: 0 });
@@ -791,7 +894,27 @@ it('剪切点上的点 Cue OBS 过 0.6 s 才回应，同一视频首尾相接的
   await t.session.stop();
 });
 
-it('剪切点上排在前面的台标停止 OBS 过 0.7 s 才回应，同一视频首尾相接的下一段轮到时已经结束：上一段照样退下，后面的片段照常开播（2026-11-09）', async () => {
+it('剪切点上的点 Cue OBS 过 0.6 s 才回应，同一视频切成首尾相接、入点接得上的下一段（300 ms）轮到时已经结束：照样算没有播出，上一段在这一段的开始被拒绝时退下，后面的片段照常开播', async () => {
+  // clip-0 [0,2) s from 5000 ms and clip-1 [2,2.3) s from 7000 ms: one video cut in two. clip-2 [8,10) s from 20000 ms.
+  const project = withPointCue(song([[0, 2000, 5000], [2, 300, 7000], [8, 2000, 20000]]), 2), obs = fakeObs();
+  let answer = (): void => undefined;
+  const answered = new Promise<void>(resolve => { answer = resolve; });
+  const t = await live(project, obs, action => action.id === 'filter-action' ? answered : Promise.resolve());
+  const primary = new SceneOutputTimeline(project, 'song').preloadEntries()[0]!.sourceName;
+  await t.play(0, 1900, true);
+  await t.play(2000, 2600, false);
+  answer();
+  await t.play(2700, 7900, true);
+  expect(t.failures()).toEqual([`clip-1 start failed：${unplayed}`]);
+  expect(obs.decoder(primary)).toMatchObject({ state: 'OBS_MEDIA_STATE_PAUSED', enabled: false, muted: true });
+  expect(obs.onAir.at(-1)).toEqual({ decoder: null, state: '', cursor: 0 });
+  await t.play(8000, 9000, true);
+  expect(t.reports).toContain('clip-2 start succeeded');
+  expect(t.failures()).toHaveLength(1);
+  await t.session.stop();
+});
+
+it('剪切点上排在前面的台标停止 OBS 过 0.7 s 才回应，同一视频首尾相接的下一段轮到时已经结束：上一段在这一段的开始被拒绝时退下，后面的片段照常开播（2026-11-09）', async () => {
   // Top track: a logo [0,2) s. Video track: clip-0 [0,2) s and clip-1 [2,2.5) s back to back, clip-2 [8,10) s.
   const project = withLogo(song([[0, 2000], [2, 500], [8, 2000]], undefined, 5000), [0, 2000]), obs = fakeObs();
   const logoScene = materialSceneNames(project.projectId, project.mediaAssets[1]!).sceneName;
@@ -830,10 +953,10 @@ it('只有一段的短素材（300 ms）排在一个 OBS 过 0.6 s 才回应的�
   await t.session.stop();
 });
 
-it('同一素材首尾相接的下一段没能在切换前准备好：上一段照样在它的结束点退下，不接着往下播；后面的片段照常准备和开播', async () => {
+it('同一素材首尾相接、但入点接不上的下一段没能在切换前准备好：上一段在这一段的开始被拒绝时退下，不接着往下播；后面的片段照常准备和开播', async () => {
   vi.useFakeTimers();
   try {
-    // clip-0 [0,2) s and clip-1 [2,4) s back to back, clip-2 [8,10) s.
+    // clip-0 [0,2) s and clip-1 [2,4) s back to back, both from 100 ms in the file, clip-2 [8,10) s.
     const project = song([[0, 2000], [2, 2000], [8, 2000]], undefined, 100), obs = fakeObs();
     const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation());
     const preload = new ObsMediaPreload(project, 'song', scenes, obs.native);
@@ -858,13 +981,152 @@ it('同一素材首尾相接的下一段没能在切换前准备好：上一段�
   } finally { vi.useRealTimers(); }
 });
 
-it('下一段的开始被拒绝时上一段也没能退下：报错写明，画面上的解码器仍记在这个素材名下，之后不再重发退下', async () => {
-  // clip-0 [0,2) s, clip-1 [2,4) s right after it, clip-2 [5,7) s: neither clip-1 nor clip-2 was prepared in time.
+const continued = '画面接着上一段往下播，前后是连着的。原因：这一段素材没能提前准备好。不用处理';
+
+it('同一视频切成首尾相接、入点接得上的两段，切换时后一段还在预热（OBS 卡住）：上一段的解码器接着往下播，画面不断、位置对；后一段准备好后不再开播它，它结束时照常退下（2026-11-09）', async () => {
+  // clip-0 [0,1) s from 5000 ms and clip-1 [1,4) s from 6000 ms: one video cut in two. clip-2 [8,10) s from 20000 ms.
+  const project = song([[0, 1000, 5000], [1, 3000, 6000], [8, 2000, 20000]]), obs = fakeObs();
+  // A cold auto-next song: only the opening clip is primed before the clock, and OBS is slow to set up the second decoder for clip-1.
+  const release = obs.holdNextBatch(batch => batch.some(entry => entry.requestType === 'SetInputMute' && String(entry.requestData?.inputName).endsWith('·预备')));
+  const t = await live(project, obs, () => Promise.resolve(), false);
+  const primary = new SceneOutputTimeline(project, 'song').preloadEntries()[0]!.sourceName, standby = `${primary}·预备`;
+  await t.play(0, 900, true);
+  const opened = obs.sent.length, views: OnAir[] = [];
+  for (let at = 1000; at <= 3900; at += 100) {
+    if (at === 1600) release();
+    await t.play(at, at, true);
+    views.push(obs.view());
+  }
+  // The first decoder plays on through the cut from where clip-0 started it, which is clip-1's picture: nothing went to it since.
+  expect(views.every(view => view.decoder === '主' && view.state === 'PLAYING')).toBe(true);
+  expect(obs.sent.slice(opened).filter(entry => entry.endsWith(' 主'))).toEqual([]);
+  expect(obs.decoder(primary)).toMatchObject({ state: 'OBS_MEDIA_STATE_PLAYING', enabled: true, base: 5000 });
+  // clip-1's late preparation does not start it a second time: the second decoder stays hidden and muted, for clip-2.
+  expect(obs.sent).not.toContain('显示 预备');
+  expect(obs.decoder(standby)).toMatchObject({ state: 'OBS_MEDIA_STATE_PAUSED', enabled: false, muted: true });
+  expect(t.failures()).toEqual([`clip-1 start failed：${continued}`]);
+  expect(t.faults).toEqual([]);
+  // clip-1's end takes the first decoder off; clip-2 starts on time on the second.
+  await t.play(4000, 7900, true);
+  expect(obs.decoder(primary)).toMatchObject({ state: 'OBS_MEDIA_STATE_PAUSED', enabled: false, muted: true });
+  // The second decoder was decoded and paused for clip-1: clip-2's preparation restarts it from there.
+  expect(obs.sent.filter(entry => entry.startsWith('预热 预备'))).toEqual(['预热 预备', '预热 预备 从已解码画面重启']);
+  await t.play(8000, 9000, true);
+  expect(t.reports).toContain('clip-2 start succeeded');
+  expect(obs.view()).toMatchObject({ decoder: '预备', state: 'PLAYING' });
+  expect(t.failures()).toHaveLength(1);
+  await t.session.stop();
+});
+
+it('同一视频切成首尾相接、入点接得上的两段，后一段预热直接失败：上一段的解码器接着往下播，位置对、漂移检查照管它；这一段结束时照常退下，之后不再准备、不再开播它', async () => {
+  vi.useFakeTimers();
+  try {
+    // clip-0 [0,2) s from 5000 ms and clip-1 [2,4) s from 7000 ms: one video cut in two. clip-2 [8,10) s from 20000 ms.
+    const project = song([[0, 2000, 5000], [2, 2000, 7000], [8, 2000, 20000]]), obs = fakeObs();
+    const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation());
+    const preload = new ObsMediaPreload(project, 'song', scenes, obs.native);
+    const [first, second, third] = new SceneOutputTimeline(project, 'song').preloadEntries(), primary = first!.sourceName;
+    await scenes.prepare(project.projectId, project.mediaAssets[0]!, path);
+    preload.register(project.projectId, project.mediaAssets[0]!, path);
+    await preload.prime(first!, current);
+    expect(await outcome(preload.execute(first!, path))).toBe('完成');
+    const started = performance.now(), file = (): number => 5000 + performance.now() - started;
+    // The second decoder never comes up for clip-1.
+    obs.failOnce(type => type === 'GetSourceScreenshot');
+    expect(await outcome(preload.upcoming(30, current))).toBe('OBS 没能执行 GetSourceScreenshot');
+    await vi.advanceTimersByTimeAsync(2000 - (performance.now() - started));
+    expect(await outcome(preload.execute(second!, path))).toBe(continued);
+    // Nothing went to OBS: the first decoder plays on, shown, at clip-1's place in the file.
+    expect(obs.view()).toMatchObject({ decoder: '主', state: 'PLAYING' });
+    expect(Math.abs(obs.position(primary) - file())).toBeLessThanOrEqual(100);
+    expect(preload.resolveSource(primary)).toBe(primary);
+    // clip-1 is not prepared again: the next preparation is clip-2's, on the second decoder.
+    const preparing = preload.upcoming(90, current);
+    expect(await outcome(preparing)).toBe('完成');
+    expect(await preparing).toMatchObject({ clipId: 'clip-2' });
+    // The drift check reaches it as clip-1's decoder.
+    await vi.advanceTimersByTimeAsync(1000);
+    const correction = scenes.correctDrift({ ...second!, sourceName: preload.resolveSource(second!.sourceName) }, () => file() + 600);
+    expect(await outcome(correction)).toBe('完成');
+    expect(await correction).toBeLessThan(-300);
+    // clip-1's end takes it off; clip-2 starts on time on the second decoder, which only then goes on air.
+    expect(await outcome(preload.execute({ ...second!, phase: 'stop', frameNumber: 120 }, path))).toBe('完成');
+    expect(obs.decoder(primary)).toMatchObject({ state: 'OBS_MEDIA_STATE_PAUSED', enabled: false, muted: true });
+    expect(obs.sent).not.toContain('显示 预备');
+    expect(await outcome(preload.execute(third!, path))).toBe('完成');
+    expect(obs.view()).toMatchObject({ decoder: '预备', state: 'PLAYING' });
+    expect(Math.abs(obs.view().cursor - 20000)).toBeLessThanOrEqual(100);
+  } finally { vi.useRealTimers(); }
+});
+
+it('接着往下播只认画面上正在播上一段的解码器：不在画面上的、在播别的片段的都不接；接上以后漂移检查跟着新的这一段走', async () => {
+  vi.useFakeTimers();
+  try {
+    const t = await handover(), [first, second, third] = t.events, started = performance.now();
+    // clip-0 plays on the first decoder; the second waits for clip-1, primed and off air.
+    expect(t.scenes.continueClip(t.standby, first!.clipId, second!.clipId)).toBe(false);
+    expect(t.scenes.continueClip(t.primary, second!.clipId, third!.clipId)).toBe(false);
+    expect(t.obs.sent).toEqual([]);
+    expect(t.scenes.continueClip(t.primary, first!.clipId, second!.clipId)).toBe(true);
+    expect(t.obs.sent).toEqual([]);
+    const aligned = (): number => 100 + 600 + performance.now() - started;
+    expect(await t.scenes.correctDrift({ ...first!, sourceName: t.primary }, aligned)).toBeNull();
+    const correction = t.scenes.correctDrift({ ...second!, sourceName: t.primary }, aligned);
+    expect(await outcome(correction)).toBe('完成');
+    expect(await correction).toBeLessThan(-300);
+    // After OBS reconnects the material is prepared again: nothing of it counts as on air until the picture is rebuilt.
+    expect(await outcome(t.scenes.prepare(t.project.projectId, t.project.mediaAssets[0]!, path))).toBe('完成');
+    expect(t.scenes.continueClip(t.primary, second!.clipId, third!.clipId)).toBe(false);
+  } finally { vi.useRealTimers(); }
+});
+
+it('同一视频的两段文件位置正好接得上、时间线上却隔着空档（上一段的停止没有单独发来），下一段没准备好：不当作接着播，上一段在被拒绝时退下', async () => {
+  // clip-0 [0,2) s from the file's start and clip-1 [3,5) s from 2000 ms: the file goes on, the timeline has a second's gap.
+  const t = mocked(song([[0, 2000, 0], [3, 2000, 2000]])), [first, second] = t.events;
+  t.scenes.continueClip.mockReturnValue(true);
+  await t.preload.prime(first!, current); await t.preload.execute(first!, path);
+  await expect(t.preload.execute(second!, path)).rejects.toThrow(new Error('下一个素材没能在切换前准备好：视频'));
+  expect(t.scenes.continueClip).not.toHaveBeenCalled();
+  expect(t.scenes.execute.mock.calls.map(([event]) => [event.clipId, event.phase])).toEqual([['clip-0', 'start'], ['clip-0', 'stop']]);
+});
+
+it('同一视频切成首尾相接、入点接得上的两段，后一段关了原声，切换时后一段没准备好：不接着往下播（会把上一段的原声带进这一段），上一段在被拒绝时退下', async () => {
+  // Video sound plays along with the music; clip-0 [0,2) s from 5000 ms with its sound, clip-1 [2,4) s from 7000 ms without.
+  const cut = song([[0, 2000, 5000], [2, 2000, 7000], [8, 2000, 20000]]);
+  const project = parseLinkProject({ ...cut, internalVideoAudio: true, rundown: cut.rundown.map(item => ({ ...item,
+    referenceMediaClips: item.referenceMediaClips.map(clip => clip.id === 'clip-1' ? { ...clip, embeddedAudioEnabled: false } : clip) })) });
+  const t = mocked(project), [first, second] = t.events;
+  expect([first!.embeddedAudioEnabled, second!.embeddedAudioEnabled]).toEqual([true, false]);
+  t.scenes.continueClip.mockReturnValue(true);
+  await t.preload.prime(first!, current); await t.preload.execute(first!, path);
+  await expect(t.preload.execute(second!, path)).rejects.toThrow(new Error('下一个素材没能在切换前准备好：视频'));
+  expect(t.scenes.continueClip).not.toHaveBeenCalled();
+  expect(t.scenes.execute.mock.calls.map(([event]) => [event.clipId, event.phase])).toEqual([['clip-0', 'start'], ['clip-0', 'stop']]);
+});
+
+it('上一段的退下已经发过一次、OBS 没执行（它仍在画面上），接得上的下一段又没准备好：不当作接着播，也不重发退下', async () => {
+  // clip-0 [0,2) s from 5000 ms and clip-1 [2,4) s from 7000 ms: one video cut in two.
+  const t = mocked(song([[0, 2000, 5000], [2, 2000, 7000]])), [first, second] = t.events, primary = first!.sourceName;
+  t.scenes.isActive.mockImplementation(name => name === primary);
+  t.scenes.continueClip.mockReturnValue(true);
+  await t.preload.prime(first!, current); await t.preload.execute(first!, path);
+  // clip-0's own stop reached the preload and OBS did not carry it out: the decoder may still be on air.
+  t.scenes.execute.mockRejectedValueOnce(new Error('SetSceneItemEnabled：OBS 没能执行 SetSceneItemEnabled'));
+  await expect(t.preload.execute({ ...first!, phase: 'stop', frameNumber: 60 }, path)).rejects.toThrow('SetSceneItemEnabled');
+  expect(t.preload.resolveSource(primary)).toBe(primary);
+  await expect(t.preload.execute(second!, path)).rejects.toThrow(new Error('下一个素材没能在切换前准备好：视频'));
+  expect(t.scenes.continueClip).not.toHaveBeenCalled();
+  expect(t.scenes.execute.mock.calls.filter(([event]) => event.phase === 'stop')).toHaveLength(1);
+});
+
+it('下一段的开始被拒绝时上一段也没能退下：报错写明并说明怎么办，画面上的解码器仍记在这个素材名下；退下不单独重发，同一素材的下一段交接时照常把它退下', async () => {
+  // clip-0 [0,2) s, clip-1 [2,4) s right after it, clip-2 [5,7) s, all from the file's start: neither clip-1 nor clip-2 was prepared in time.
   const t = mocked(song([[0, 2000], [2, 2000], [5, 2000]])), [first, second, third] = t.events, primary = first!.sourceName;
   t.scenes.isActive.mockImplementation(name => name === primary);
   await t.preload.prime(first!, current); await t.preload.execute(first!, path);
   t.scenes.execute.mockRejectedValueOnce(new Error('SetSceneItemEnabled：OBS 没能执行 SetSceneItemEnabled'));
-  await expect(t.preload.execute(second!, path)).rejects.toThrow(new Error('下一个素材没能在切换前准备好：视频。上一段的画面也没能退下，可能还留在 OBS 节目画面上。原因：SetSceneItemEnabled：OBS 没能执行 SetSceneItemEnabled'));
+  await expect(t.preload.execute(second!, path)).rejects.toThrow(new Error('下一个素材没能在切换前准备好：视频。上一段的画面也没能退下，可能还留在 OBS 节目画面上。'
+    + '原因：SetSceneItemEnabled：OBS 没能执行 SetSceneItemEnabled。如果 OBS 画面上还是上一段，在 OBS 里把它隐藏；后面的素材照常播'));
   // clip-2's start is refused as well; clip-0's retirement already went out once and is not sent again.
   await expect(t.preload.execute(third!, path)).rejects.toThrow(new Error('下一个素材没能在切换前准备好：视频'));
   expect(t.scenes.execute.mock.calls.filter(([event]) => event.phase === 'stop')).toHaveLength(1);
@@ -875,13 +1137,58 @@ it('下一段的开始被拒绝时上一段也没能退下：报错写明，画�
   expect(t.scenes.execute).toHaveBeenLastCalledWith({ ...third!, sourceOffsetMs: 333, sourceName: `${primary}·预备` }, path, primary, 'stop');
 });
 
-it('上一段的停止没有单独发来（重建画面时恰好落在下一段开头被省掉），下一段的开始又被拒绝：上一段照样退下', async () => {
+it('上一段的停止没有单独发来（重建画面时恰好落在下一段开头被省掉），下一段的开始又被拒绝：上一段在被拒绝时退下，停歌时这个素材的解码器仍会清理', async () => {
   // clip-0 [0,2) s and clip-1 [3,5) s with a gap; clip-0's own stop never reached the preload.
   const t = mocked(song([[0, 2000], [3, 2000]])), [first, second] = t.events;
   await t.preload.prime(first!, current); await t.preload.execute(first!, path);
   await expect(t.preload.execute(second!, path)).rejects.toThrow(new Error('下一个素材没能在切换前准备好：视频'));
   expect(t.scenes.execute.mock.calls.map(([event, , previous, retirement]) => [event.clipId, event.phase, event.sourceName === first!.sourceName, previous ?? null, retirement]))
     .toEqual([['clip-0', 'start', true, null, 'pause'], ['clip-0', 'stop', true, null, 'stop']]);
+  // clip-1 still counts as playing until its end, so pause and resume may reach the stopped decoder: the song's stop stops it again.
+  await t.preload.close();
+  expect(t.scenes.execute.mock.calls.slice(2).map(([event]) => [event.phase, event.sourceName === first!.sourceName])).toEqual([['stop', true]]);
+});
+
+it('下一段的开始被拒绝时退下的是预备解码器、主解码器早已停下：停歌时照样停下主解码器，这一段的暂停和继续会送到它', async () => {
+  // clip-0 [0,1) s, clip-1 [1,31) s on the second decoder, clip-2 [31,33) s right after it, not prepared in time.
+  // clip-2 is too far off at clip-1's start to keep the first decoder paused: the handover stopped it.
+  const t = mocked(song([[0, 1000], [1, 30000], [31, 2000]])), [first, second, third] = t.events, primary = first!.sourceName;
+  await t.preload.prime(first!, current); await t.preload.execute(first!, path);
+  await t.preload.prime(second!, current); await t.preload.execute(second!, path);
+  await expect(t.preload.execute(third!, path)).rejects.toThrow(new Error('下一个素材没能在切换前准备好：视频'));
+  expect(t.scenes.execute.mock.calls.map(([event, , previous, retirement]) => [event.clipId, event.phase, event.sourceName === primary ? '主' : '预备', previous === primary ? '主' : previous ?? null, retirement]))
+    .toEqual([['clip-0', 'start', '主', null, 'pause'], ['clip-1', 'start', '预备', '主', 'stop'], ['clip-1', 'stop', '预备', null, 'stop']]);
+  expect(t.preload.resolveSource(primary)).toBe(primary);
+  await t.preload.close();
+  expect(t.scenes.execute.mock.calls.slice(3).map(([event]) => [event.phase, event.sourceName === primary ? '主' : '预备'])).toEqual([['stop', '主']]);
+});
+
+it('入点接不上的下一段没能在切换前准备好，上一段在被拒绝时停止退下；操作员接着暂停又继续：停歌时这个素材的两个解码器都停下', async () => {
+  // clip-0 [0,1) s from 5000 ms and clip-1 [1,4) s from 9000 ms (the video jumps there); clip-2 at 30 s is too far off to keep clip-0's decoder paused.
+  const project = song([[0, 1000, 5000], [1, 3000, 9000], [30, 2000, 20000]]), obs = fakeObs();
+  const names = { resolve: (name: string): string => name };
+  // As in production (native-obs-outputs.ts): pause and resume go to the decoder the preload names for the material.
+  const answer = async (action: LinkAction): Promise<void> => {
+    if (action.kind !== 'obs.mediaAction') return;
+    await obs.client.call('TriggerMediaInputAction', { inputName: names.resolve(action.inputName),
+      mediaAction: action.action === 'pause' ? 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE' : 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' });
+  };
+  // OBS is slow to set up the second decoder for clip-1.
+  const release = obs.holdNextBatch(batch => batch.some(entry => entry.requestType === 'SetInputMute' && String(entry.requestData?.inputName).endsWith('·预备')));
+  const t = await live(project, obs, answer, false);
+  names.resolve = name => t.preload.resolveSource(name);
+  const primary = new SceneOutputTimeline(project, 'song').preloadEntries()[0]!.sourceName, standby = `${primary}·预备`;
+  await t.play(0, 900, true);
+  await t.play(1000, 1200, true);
+  expect(obs.decoder(primary)).toMatchObject({ state: 'OBS_MEDIA_STATE_STOPPED', enabled: false, muted: true });
+  expect(t.failures()).toEqual(['clip-1 start failed：下一个素材没能在切换前准备好：视频']);
+  await t.session.pause();
+  t.at(1300); t.session.clock(1300); await t.session.settled();
+  release();
+  await t.play(1400, 5000, true);
+  await t.session.stop();
+  expect([obs.decoder(primary).state, obs.decoder(standby).state]).toEqual(['OBS_MEDIA_STATE_STOPPED', 'OBS_MEDIA_STATE_STOPPED']);
+  expect([obs.decoder(primary).enabled, obs.decoder(standby).enabled]).toEqual([false, false]);
 });
 
 it('被机位盖住、开始又被合并跳过的片段，之后再被机位盖住：一直留着预备位置到它真正结束，不重复预热，再露出时照常开播', async () => {
