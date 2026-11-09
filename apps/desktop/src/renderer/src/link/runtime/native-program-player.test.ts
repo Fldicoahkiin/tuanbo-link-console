@@ -47,7 +47,7 @@ function fixture() {
   const deps = { prepare: vi.fn(() => Promise.resolve()), ingest: vi.fn(() => Promise.resolve()), started: vi.fn(), scrub: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()), resolveAudio: vi.fn(() => Promise.resolve('unused')),
     configuration: () => ({ outputDeviceId: 'default', mtcPortName: 'TEST', audioSampleRate: 48000 as const }),
-    changed: (next: typeof state) => { state = next; }, notice: vi.fn() };
+    changed: (next: typeof state) => { state = next; }, notice: vi.fn(), closedFault: vi.fn() };
   const lighting = { prepare: vi.fn<ProgramLightingOutput['prepare']>(() => Promise.resolve()), cancelPreparation: vi.fn<ProgramLightingOutput['cancelPreparation']>(), release: vi.fn<ProgramLightingOutput['release']>(() => Promise.resolve()) };
   const player = new NativeProgramPlayer(project, 'C:/test/project.tblink', 7, deps, api, lighting);
   return { player, project, deps, api, lighting, emit, state: () => state };
@@ -189,7 +189,12 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
     expect(f.lighting.release).toHaveBeenCalledOnce();
   });
 
-  it('销毁时补发的关灯失败照常提示并记录，不重试，也不让关闭播放器失败', async () => {
+  // 修复前：播放器关了以后，状态不再发给任何界面，关灯失败只写进运行日志（第二次起只是 info），屏幕上什么都没有。
+  // 这里只看播放器把失败交给宿主（closedFault）；宿主在窗口里标红、按错误记录，由 license-rules.test.ts 和
+  // main-process-errors.test.ts 守着。
+  const closedOff = '「音频 0」的灯光没能完全关闭，控台上可能还亮着，请在控台上关掉这首歌的执行器。原因：关灯指令没有发送：控台连接变了';
+
+  it('销毁时补发的关灯失败交给宿主，不再只写日志；不重试，也不让关闭播放器失败', async () => {
     const f = lit(); await f.player.play('song-0');
     const preparing = gate(), original = f.api.prepareNativePlayback.getMockImplementation()!;
     f.api.prepareNativePlayback.mockImplementationOnce(async request => { await preparing.promise; return original(request); });
@@ -200,8 +205,32 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
     await vi.waitFor(() => expect(f.lighting.release).toHaveBeenCalledOnce());
     preparing.open();
     await expect(closing).resolves.toBeUndefined(); await Promise.all([seeking, stopping]);
-    expect(f.deps.notice).toHaveBeenCalledWith('灯光没能完全关闭：关灯指令没有发送：控台连接变了', 'song-0');
+    expect(f.deps.closedFault).toHaveBeenCalledExactlyOnceWith(closedOff, 'song-0');
+    expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('灯光没能完全关闭'))).toEqual([]);
     expect(f.lighting.release).toHaveBeenCalledOnce();
+  });
+
+  it('停止正在关灯时播放器被销毁：关灯失败同样交给宿主，只发一次', async () => {
+    const f = lit(); await f.player.play('song-0');
+    let fail!: (error: Error) => void;
+    f.lighting.release.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = reject; }));
+    const stopping = f.player.stop();
+    await vi.waitFor(() => expect(f.lighting.release).toHaveBeenCalledOnce());
+    const closing = f.player.dispose();
+    fail(new Error('关灯指令没有发送：控台连接变了'));
+    await Promise.all([stopping, closing]);
+    expect(f.deps.closedFault).toHaveBeenCalledExactlyOnceWith(closedOff, 'song-0');
+    expect(f.lighting.release).toHaveBeenCalledOnce();
+  });
+
+  it('播放器还开着时停止的关灯失败照旧显示在播放器里，不另外弹窗', async () => {
+    const f = lit(); await f.player.play('song-0');
+    f.lighting.release.mockRejectedValueOnce(new Error('关灯指令没有发送：控台连接变了'));
+    await f.player.stop();
+    expect(f.state().notice).toContain('灯光没能完全关闭：关灯指令没有发送：控台连接变了');
+    expect(f.deps.notice).toHaveBeenCalledWith('灯光没能完全关闭：关灯指令没有发送：控台连接变了', 'song-0');
+    await f.player.dispose();
+    expect(f.deps.closedFault).not.toHaveBeenCalled();
   });
 });
 

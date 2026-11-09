@@ -21,8 +21,9 @@ const publicCalls = new Set([
 const workspaceSaveCalls = new Set(['link:save-project', 'link:write-recovery-copy', 'link:discard-recovery-copy',
   'link:project-document-worker', 'link:restart-project-document-worker']);
 
-/** Stopping never waits for a license: stop, pause, Off, mute and hide end what a checked run started (2026-11-09).
- * Anything that starts output or sends new content stays licensed. */
+/** Stopping never waits for a license: stop, pause, Off, mute and hide end what a checked run started (2026-11-09,
+ * docs/LICENSE_IMPLEMENTATION.md, license-rules.test.ts). Anything that starts output or sends new content stays licensed.
+ * Action MIDI decides by the same rule in one place, midiMessageNeedsLicense (packages/core midi-program.ts). */
 export function needsProductLicense(channel: string, value: unknown): boolean {
   if (publicCalls.has(channel)) return false;
   if (channel === 'link:native-player-control') {
@@ -42,19 +43,12 @@ export function needsProductLicense(channel: string, value: unknown): boolean {
   return true;
 }
 
-/** Action MIDI the playback program sends: Note Off and MIDI Show Control Stop end what the song started and go out
- * without a license, as they do from the window (link-midi-adapter); every other message is new content. */
-export function midiMessageNeedsLicense(bytes: readonly number[]): boolean {
-  const [status] = bytes;
-  if (status !== undefined && (status & 0xf0) === 0x80) return false;
-  // MSC: F0 7F <device> 02 <command format> <command>, where command 02 is Stop.
-  return !(status === 0xf0 && bytes[1] === 0x7f && bytes[3] === 0x02 && bytes[5] === 0x02);
-}
-
 /** A checked running session survives expiry until its show is over (license-reminders: a show running at expiry is
  * not interrupted). The window holds the session while its run is active. The main-process program holds it while it
  * keeps running the show the window checked, so a window that reloads or turns idle for a moment does not end a show
- * still on air. A program that stops lets go: the next show is checked again. */
+ * still on air. A program that stops lets go, and once the window's run has ended too the next show is checked again.
+ * Not guaranteed: a song started right after a stop, before the window's idle reaches main, still passes on the window's
+ * run, as it did with the single session grant before 0.5.9. */
 export class LicenseAccess {
   private windowHolds = false;
   private programRunning = false;

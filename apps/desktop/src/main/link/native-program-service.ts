@@ -19,7 +19,7 @@ export class NativeProgramService {
   private cleanup: Promise<void> = Promise.resolve();
   private running = false;
   /** `runningChanged`: the program started or stopped preparing, playing or paused, attached to a window or not;
-   * the license session of the show follows it (LicenseAccess). */
+   * the license session of the show follows it (link-main wires it through program-license.ts to LicenseAccess). */
   constructor(private readonly create: Factory, private readonly publish: (event: NativeProgramEvent) => void,
     private readonly authorize: () => Promise<void>, private readonly runningChanged?: (running: boolean) => void) {}
 

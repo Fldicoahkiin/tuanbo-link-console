@@ -430,7 +430,8 @@ export type LinkDesktopApi = {
   onObsInventoryChanged(listener: () => void): () => void;
   onProcessStatus(listener: (snapshot: LinkProcessSnapshot) => void): () => void;
   onUpdateStatus(listener: (status: LinkUpdateStatus) => void): () => void;
-  /** An uncaught main-process error, already logged; the app keeps running. */
+  /** A main-process failure that no other state shows, already logged as an error and shown in red: an uncaught error
+   * (the app keeps running), or a background program's failure after it closed (the lights-off its stop owed). */
   onMainProcessError(listener: (message: string) => void): () => void;
 };
 

@@ -24,6 +24,9 @@ type Dependencies = {
   midiRecovered(report: ActionMidiRecovery, itemId: string): void;
   obsChanged?(state: import('@tb/schema').NativeObsStatus): void;
   notice(message: string, itemId: string | null): void;
+  /** A failure after the program closed, which no player shows any more (the lights-off its stop owed): shown in the
+   * window in red and logged as an error. */
+  closedFault(message: string, itemId: string | null): void;
 };
 
 /** Complete program transport owner. UI operations call this controller;
@@ -65,6 +68,7 @@ export class NativeProgramHost {
       resolveAudio: () => Promise.reject(new Error('后台节目宿主不使用浏览器音源地址')),
       configuration: () => dependencies.configuration(), preciseSeeking: () => dependencies.preciseSeeking(),
       changed: state => dependencies.changed(state), notice: (message, itemId) => dependencies.notice(message, itemId),
+      closedFault: (message, itemId) => dependencies.closedFault(message, itemId),
       obsChanged: state => dependencies.obsChanged?.(state)
     }, {
       ...dependencies.api,

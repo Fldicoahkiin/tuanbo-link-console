@@ -17,7 +17,8 @@ import { localTestAccessEnabled, localTestLicenseStatus } from './link/local-tes
 import licensePublicKeys from './link/license-public-keys.json';
 import releasePublicKeys from './link/release-public-keys.json';
 import licenseConfig from './link/license-config.json';
-import { LicenseAccess, needsProductLicense } from './link/license-access';
+import { LicenseAccess } from './link/license-access';
+import { authorizeRequest, programLicense, type LicenseGate } from './link/program-license';
 import { licenseRequestSchema } from '@tb/schema';
 import { licenseLogDetails, licenseStateLabel } from './link/license-log';
 import { FeedbackService, feedbackContext, feedbackRange, type FeedbackIdentity } from './link/feedback-service';
@@ -154,7 +155,7 @@ import { ObsWebSocketAdapter } from './link/obs-websocket-adapter';
 import { ObsEditorPreview, findLocalObsPid } from './link/obs-editor-preview';
 import { P1ProjectService } from './link/p1-project-service';
 import { LinkRunLogger, redactValue, type LinkLogEntry, type LinkLogFilter } from './link/run-logger';
-import { mainProcessErrorReporter, reportMainProcessErrors } from './link/main-process-errors';
+import { closedProgramFaultReporter, mainProcessErrorReporter, reportMainProcessErrors } from './link/main-process-errors';
 import { SecureProfileStore } from './link/secure-profile-store';
 import { WindowsIntegrationDetector } from './link/windows-integration-detector';
 import { LoopMidiService } from './link/loop-midi-service';
@@ -783,6 +784,7 @@ function registerIpc(
   readLicenseStatus = getLicenseStatus;
   let licenseChanging = false;
   const licenseAccess = new LicenseAccess(getLicenseStatus);
+  const licenseGate: LicenseGate = { access: licenseAccess, changing: () => licenseChanging };
   releaseRendererRuntime = async () => {
     // Only release close protection after every owned output acknowledged stop.
     await licenseAccess.setActive(false);
@@ -793,12 +795,7 @@ function registerIpc(
     await licenseAccess.requireOutput();
     if (licenseChanging) throw new Error('正在更换授权，请完成后再试');
   };
-  authorizeProduct = async (channel, value) => {
-    const protectedCall = needsProductLicense(channel, value);
-    if (protectedCall && licenseChanging) throw new Error('授权操作还没完成，请稍后再试');
-    await licenseAccess.authorize(channel, value);
-    if (protectedCall && licenseChanging) throw new Error('正在更换授权，请完成后再试');
-  };
+  authorizeProduct = (channel, value) => authorizeRequest(licenseGate, channel, value);
   handle('link:license-require-output', () => authorizeOutput());
   const changeOnlineLicense = async (code?: string) => {
     if (runtimeActive || licenseChanging) throw new Error('请先停止播放，并等上一个授权操作完成');
@@ -983,6 +980,10 @@ function registerIpc(
   handle('link:ma2-play-cancel', (_event, sessionId: unknown) => { if (typeof sessionId !== 'string' || !/^[a-f0-9-]{36}$/i.test(sessionId)) throw new Error('无效的灯光会话'); ma2Network.cancelPlayback(sessionId); });
   handle('link:ma2-network-status', async () => { await ma2NetworkReady; return ma2Network.status(); });
   handle('link:ma2-current-show', async () => { await ma2NetworkReady; return ma2Network.currentShow(); });
+  // The program's lighting Off and its running state, as the license rules want them (program-license.ts).
+  const programOutputs = programLicense(licenseGate, { ready: ma2NetworkReady, status: () => ma2Network.status(), send: sendMa2Cue });
+  // A closed program shows nothing any more: what fails after it closed reaches the window in red.
+  const reportClosedProgramFault = closedProgramFaultReporter(entry => logger.record(entry), sendToRenderer);
   nativeProgram = new NativeProgramService((project, request, callbacks) => {
     // A channel that cannot join (OBS, timecode) repeats song after song until fixed: a warning the first time, then info.
     const notice = (message: string, itemId: string | null): void => {
@@ -1004,6 +1005,7 @@ function registerIpc(
           .catch((error: unknown) => console.error('动作 MIDI 恢复日志未能保存', error));
       },
       obsChanged: state => { if (state.state === 'running' || state.state === 'ready') callbacks.cueChanged(state.currentCueId); }, notice,
+      closedFault: (message, itemId) => reportClosedProgramFault(message, { projectId: project.projectId, itemId }),
       api: {
         prepareNativePlayback: value => playbackRequests.prepare(value), controlNativePlayback: value => playbackRequests.control(value),
         getNativePlaybackDevices: scope => player().devices(scope), prepareNativeObs: value => obsRequests.prepare(value),
@@ -1011,17 +1013,11 @@ function registerIpc(
         cancelNativeObsPreload: value => obsPreload.cancel(value),
         onNativeObsStatus: listener => { programObsListeners.add(listener); return () => { programObsListeners.delete(listener); }; }
       },
-      network: {
-        getMa2NetworkStatus: async () => { await ma2NetworkReady; return ma2Network.status(); },
-        // The program only switches its song's executors off; an Off goes out without a license, as from the window.
-        playMa2Cue: async value => { await authorizeProduct('link:ma2-play-cue', value); return sendMa2Cue(value); }
-      }
+      network: programOutputs.network
     });
     nativeProgramHost = host;
     return { controller: host.controller, close: async () => { await host.close(); if (nativeProgramHost === host) nativeProgramHost = null; } };
-  }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput(),
-  // The show keeps the license the window checked while the program runs it, also when the window reloads.
-  running => licenseAccess.setProgramRunning(running));
+  }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput(), programOutputs.runningChanged);
   // Session registration captures cancellation synchronously; output adapters
   // validate and authorize every actual audio, OBS, MIDI and lighting request.
   handle('link:native-program-open', async (_event, value: unknown) => {

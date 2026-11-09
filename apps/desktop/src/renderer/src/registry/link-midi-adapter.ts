@@ -2,7 +2,7 @@ import { refreshMidiAccess, requestMidiAccess, type MidiAccess, type MidiInput, 
   type MidiPortConnectionState, type MidiPortDeviceState } from './midi-access';
 import { requireOutputLicense } from './license-output';
 import type { IntegrationProfile, LinkAction, MtcFrameRate } from '@tb/schema';
-import { buildMidiShowControlMessage, type LinkActionExecutor } from '@tb/core/link';
+import { buildMidiShowControlMessage, encodeMidiAction, isMidiAction, midiMessageNeedsLicense, type LinkActionExecutor } from '@tb/core/link';
 export { buildMidiShowControlMessage } from '@tb/core/link';
 
 export type MidiPortProfile = {
@@ -217,7 +217,8 @@ export class LinkMidiAdapter implements LinkActionExecutor {
 
   async execute(action: LinkAction): Promise<void> {
     try {
-      if (action.kind !== 'midi.noteOff' && !(action.kind === 'midi.showControl' && action.command === 'stop')) await requireOutputLicense();
+      // Note Off and MSC Stop go out without a license; the playback program decides on the same bytes by the same rule.
+      if (!isMidiAction(action) || midiMessageNeedsLicense(encodeMidiAction(action))) await requireOutputLicense();
       this.executeSynchronous(action);
       if (action.kind === 'midi.noteOn' && action.durationMs !== undefined) {
         await new Promise<void>((resolve) => globalThis.setTimeout(resolve, action.durationMs));

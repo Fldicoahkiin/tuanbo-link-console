@@ -49,7 +49,11 @@ export class NativeProgramPlayer {
   private preloadGeneration = 0;
   private selectedPreload: { request: NativeObsStop; itemId: string } | null = null;
   /** A stop owes the song's Off until it went out once: from the queued stop, or from dispose when the player
-   * closes before that stop ran (it waited behind a seek, scrub or resume). Never sent twice, never retried. */
+   * closes before that stop ran (it waited behind a seek, scrub or resume). Never sent twice, never retried.
+   * Whether a close sends an Off depends on this history: a later play does not settle the debt (what switching songs
+   * does to the lights is the user's pending decision 4). After a stop skipped behind a seek, scrub or resume and then a
+   * play, the next stop or close sends one Off with the plan LightingOutputRelease holds by then, the new song's
+   * executors when it has lighting. The same close without such a skipped stop sends none. */
   private lightingOwed = false;
 
   readonly clock: PlaybackClock = {
@@ -184,11 +188,19 @@ export class NativeProgramPlayer {
     return this.enqueue(token, async () => { await stopping; await this.releaseLighting(); await this.optionalRuntime(() => this.cancelPreload(), '节目准备没清理干净'); await this.optionalRuntime(() => this.stopObs(), '画面清理失败'); await this.dependencies.stop(); this.runtimePrepared = false;
       if (this.current(token)) { this.boundary('pause'); this.update({ positionMs: 0, mtcSentPositionMs: null }); } });
   }
-  /** The Off a stop owes, sent once after the timecode stopped; a failure is shown and logged, nothing retries it. */
-  private releaseLighting(): Promise<void> {
-    if (!this.lightingOwed) return Promise.resolve();
+  /** The Off a stop owes, sent once after the timecode stopped; nothing retries it. A failure is shown in the player
+   * and logged. Once the player has closed no window shows its state any more, so the failure goes to the host
+   * (closedFault): in the window in red, and into the log as an error. */
+  private async releaseLighting(): Promise<void> {
+    if (!this.lightingOwed) return;
     this.lightingOwed = false;
-    return this.optionalRuntime(() => this.lighting.release(), '灯光没能完全关闭');
+    const itemId = this.state.itemId;
+    try { await this.lighting.release(); }
+    catch (error) {
+      if (!this.disposed) { this.runtimePrepared = false; this.reportUnavailable(`灯光没能完全关闭：${toUserErrorMessage(error)}`); return; }
+      const title = this.project.rundown.find(item => item.id === itemId)?.title;
+      this.dependencies.closedFault(`${title ? `「${title}」` : '这首歌'}的灯光没能完全关闭，控台上可能还亮着，请在控台上关掉这首歌的执行器。原因：${toUserErrorMessage(error)}`, itemId);
+    }
   }
   async reset(): Promise<void> { await this.stop(); if (this.state.status !== 'error') this.update({ itemId: null, playedItemIds: [], durationMs: 0 }); }
   externalStop(): void { void this.stop(); }

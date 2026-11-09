@@ -53,7 +53,7 @@ async function fixture(gateNext = false) {
     }, ingest: () => Promise.resolve(), pause: () => Promise.resolve(), stop: () => Promise.resolve(),
     resolveAudio: () => Promise.reject(new Error('原生宿主不使用浏览器音源地址')),
     configuration: () => ({ outputDeviceId: 'default', mtcPortName: null, audioSampleRate: 48000, preload: !gateNext }),
-    changed: next => { state = next; }, notice: message => { notices.push(message); }
+    changed: next => { state = next; }, notice: message => { notices.push(message); }, closedFault: message => { failures.push(message); }
   }, {
     prepareNativePlayback: request => service.prepare(request), controlNativePlayback: request => service.control(request),
     getNativePlaybackDevices: () => service.devices(),

@@ -30,6 +30,17 @@ export function buildMidiShowControlMessage(action: Extract<MidiAction, { kind: 
   return [0xf0, 0x7f, action.deviceId, 0x02, action.commandFormat, command, ...payload, 0xf7];
 }
 
+/** Stopping never waits for a license (2026-11-09, docs/LICENSE_IMPLEMENTATION.md): a Note Off and a MIDI Show Control
+ * Stop end what a song started and go out without one. Every other message is new content and stays licensed, a Note On
+ * with velocity 0 included. The one rule for both senders, on the bytes they send: the window's MIDI adapter
+ * (link-midi-adapter) and the playback program (NativeMidiPorts). */
+export function midiMessageNeedsLicense(bytes: readonly number[]): boolean {
+  const [status] = bytes;
+  if (status !== undefined && (status & 0xf0) === 0x80) return false;
+  // MSC: F0 7F <device> 02 <command format> <command>, where command 02 is Stop.
+  return !(status === 0xf0 && bytes[1] === 0x7f && bytes[3] === 0x02 && bytes[5] === 0x02);
+}
+
 type Event = { atMs: number; cueId: string; action: MidiAction; token: number; release: boolean };
 export type MidiProgramDependencies = {
   prepare(portProfileIds: readonly string[], signal: AbortSignal): Promise<void>;
