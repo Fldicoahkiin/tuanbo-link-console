@@ -247,15 +247,20 @@ it('OBS 重新连接后先重新准备场景，再按当前位置重建：素材
   await test.session.stop(); expect(calls.at(-1)?.[0].event.phase).toBe('stop');
 });
 
-it('重建失败交给调用方报告，画面通道继续；暂停或尚未开始时不重建', async () => {
+it('重建失败交给调用方报告，画面通道继续；尚未开始时不重建，暂停时只重新准备场景，继续时再按当前位置重建', async () => {
   const test = setup(videoFixture()); await test.session.prepare(0);
   const restore = vi.fn(() => Promise.resolve());
   expect(await test.session.rebuild(restore)).toBe(0); expect(restore).not.toHaveBeenCalled();
   await test.advance(0, 500);
   await expect(test.session.rebuild(() => Promise.reject(new Error('素材文件不可读')))).rejects.toThrow('素材文件不可读');
   expect(test.session.error).toBeNull(); await test.advance(600, 800);
-  await test.session.pause();
-  expect(await test.session.rebuild(restore)).toBe(0); expect(restore).not.toHaveBeenCalled(); await test.session.stop();
+  await test.session.pause(); const sent = test.actions.length;
+  expect(await test.session.rebuild(restore)).toBeNull(); expect(restore).toHaveBeenCalledOnce();
+  expect(test.actions).toHaveLength(sent); expect(test.dependencies.seekMedia).not.toHaveBeenCalled();
+  test.time(5000); test.session.clock(800); await test.session.settled();
+  expect(test.dependencies.seekMedia.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([800]);
+  expect(test.actions.at(-1)).toMatchObject({ kind: 'obs.mediaAction', action: 'start' });
+  expect(test.session.error).toBeNull(); await test.session.stop();
 });
 
 it('长片段每 5 秒按当前位置检查一次漂移，校正时标红；起播、定位后 1 秒内不检查', async () => {

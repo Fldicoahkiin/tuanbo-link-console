@@ -279,19 +279,23 @@ export class ObsProgramSession {
   /** Recovery rule B after OBS reconnects: what OBS shows is unknown and owned
    * decoders are forgotten. After in-flight decoder preparation settles, `restore`
    * prepares the owned scenes again; the picture is then rebuilt at the latest
-   * position. Resolves with the number of outputs sent, or null when a pause or
-   * stop came first: a resume then rebuilds the picture at its position. A
-   * failure rejects and leaves the channel running. */
+   * position. Resolves with the number of outputs sent, or null when the song
+   * is paused or a pause or stop came first: a resume then rebuilds the picture
+   * at its position. A failure rejects and leaves the channel running. */
   rebuild(restore: () => Promise<void>): Promise<number | null> {
-    if (!this.prepared || this.closed || this.failure || this.runtime.getState() !== 'running') return Promise.resolve(0);
+    const state = this.runtime.getState();
+    if (!this.prepared || this.closed || this.failure || (state !== 'running' && state !== 'paused')) return Promise.resolve(0);
     const generation = this.generation;
-    const current = (): boolean => generation === this.generation && !this.closed && !this.failure;
+    const current = (): boolean => generation === this.generation && !this.closed && !this.failure && this.runtime.getState() === 'running';
     this.restoring = true;
     const operation = this.tail.then(async () => {
       try {
+        // OBS forgot the owned scenes either way; while paused nothing is shown yet.
         await this.preloadWork; await restore();
         this.picture = 'lost';
-        return current() ? await this.rebuildPicture(current) : null;
+        if (!current()) return null;
+        // Not tried again by itself: the next send is the whole picture then.
+        try { return await this.rebuildPicture(current); } catch (error) { this.picture = 'partial'; throw error; }
       } finally { this.restoring = this.picture === 'lost'; }
     });
     this.tail = operation.then(() => undefined, () => undefined);
