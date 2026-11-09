@@ -49,14 +49,16 @@ it('跨工程或跨修订的下一节目不能随当前节目准备', async () =
   expect(test.execute).not.toHaveBeenCalled(); expect(test.prepareNextFiles).not.toHaveBeenCalled();
 });
 
-it('状态更新不能冒充设备采样；旧 QPC 不执行画面并标红，过时动作不补发，后续新采样继续', async () => {
+it('状态更新不能冒充设备采样；旧 QPC 晚到也照样切画面，不漏切，后续新采样继续（2026-11-09）', async () => {
   const test = setup(); await test.host.prepare(test.request);
   test.change({ status: 'playing', generation: 2 }); test.host.observe(test.audio());
   await new Promise(resolve => setTimeout(resolve, 0)); expect(test.execute).not.toHaveBeenCalled();
   test.observe({ positionMs: 0 }, 200, 200);
-  expect(test.host.status?.state).not.toBe('failed'); expect(test.host.status?.fault).toContain('100 ms'); expect(test.failures[0]).toContain('100 ms');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(test.host.status?.state).not.toBe('failed'); expect(test.execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-0']);
+  expect(test.failures).toEqual([]);
   for (let time = 250; time <= 1000; time += 50) { test.observe({ positionMs: time }, time); await new Promise(resolve => setTimeout(resolve, 0)); }
-  expect(test.execute).toHaveBeenCalledTimes(1);
+  expect(test.execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-0', 'scene-1']);
   expect(test.host.status?.state).toBe('running');
   expect(test.audio().status).toBe('playing');
 });

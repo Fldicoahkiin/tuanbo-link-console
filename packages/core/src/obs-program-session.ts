@@ -25,22 +25,8 @@ export type ObsProgramSessionDependencies = ManagedOutputRuntimeDependencies & {
   now: () => number;
 };
 
-type OutputGate = { allowed: () => boolean; dispatched: () => void; lateBeforeSend: () => boolean };
-/** The deadline applies until the first request of an output is sent. After
- * that only cancellation stops it, so a scene switch is never left without the
- * PLAY that belongs to it. */
-function outputGate(current: () => boolean, onTime: () => boolean): OutputGate {
-  let sent = false, late = false;
-  return {
-    allowed: () => {
-      if (!current()) return false;
-      if (sent || onTime()) return true;
-      late = true; return false;
-    },
-    dispatched: () => { sent = true; },
-    lateBeforeSend: () => late && !sent
-  };
-}
+/** Lateness up to this is logged; beyond it the operator sees it in red. Either way the action is sent. */
+const LATE_LOG_MS = 100, LATE_FAULT_MS = 1000;
 type TimelineEntry = { frame: number; priority: number; cue: LinkCue } | { frame: number; priority: number; event: ManagedMediaEvent };
 function timelineEntries(work: { cues: RuntimeUpdate['dueCues']; media: ManagedMediaEvent[] }): TimelineEntry[] {
   return [
@@ -142,13 +128,14 @@ export class ObsProgramSession {
     this.prepared = true;
   }
 
-  /** Called only for fresh playing/ended observations from the bound device. */
+  /** Called only for playing/ended observations from the bound device. A late
+   * observation still counts: what it crossed is sent now (2026-11-09: a switch
+   * on the timeline must never be skipped because the computer or OBS was busy). */
   clock(positionMs: number, observedAt = this.dependencies.now()): void {
     if (!this.prepared || this.closed || this.failure) return;
     try {
       const age = this.dependencies.now() - observedAt;
       if (!Number.isFinite(age) || age < 0) throw new Error(`播放位置的时间无效（已过 ${age} ms），画面联动已停止`);
-      if (age > 100) { this.fault(`播放位置晚到了 ${Math.round(age)} ms（超过 100 ms），这个位置的画面动作不执行，也不补发`); return; }
       const sample = this.sample(positionMs, observedAt), previousFrame = this.frame;
       let update: RuntimeUpdate;
       if (this.runtime.getState() === 'paused') {
@@ -172,14 +159,14 @@ export class ObsProgramSession {
       if (work.media.length) this.settleMedia(sample.totalFrames);
       const generation = this.generation;
       const current = (): boolean => generation === this.generation && !this.closed && !this.failure;
-      const onTime = (scheduledFrame: number): boolean => this.dependencies.now()
-        <= observedAt + 100 - Math.max(0, sample.totalFrames - scheduledFrame) * 1000 / playbackFramesPerSecond(sample.frameRate);
+      const dueAt = (scheduledFrame: number): number => observedAt
+        - Math.max(0, sample.totalFrames - scheduledFrame) * 1000 / playbackFramesPerSecond(sample.frameRate);
       const entries = timelineEntries(work);
       if (this.queued >= 64) {
         const reason = 'OBS 积压了超过 64 批画面动作，这一批没有发送；画面联动继续';
         this.fault(reason); void this.skip(entries, reason).catch(error => this.fault(`记录跳过的画面动作失败：${String(error)}`)); return;
       }
-      this.enqueue(() => this.send(entries, current, onTime));
+      this.enqueue(() => this.send(entries, current, dueAt));
     } catch (error) { this.fail(error); }
   }
 
@@ -202,7 +189,7 @@ export class ObsProgramSession {
         const frame = this.frame, work = this.managed.sceneTimeline!.restore(frame, this.runtime.shownSourcesAt(frame));
         const targets = work.media.filter(event => event.phase === 'start').map(event => this.managed.alignEvent(event, frame));
         this.managed.adoptSeek(targets, frame); this.settleMedia(frame);
-        await this.send(timelineEntries({ cues: work.cues, media: [] }), current, () => true);
+        await this.send(timelineEntries({ cues: work.cues, media: [] }), current, () => this.dependencies.now());
         for (const event of targets) if (current()) await this.dependencies.guardOutput(current, () => this.dependencies.seekMedia(event));
         const actions = this.managed.transportActions('start');
         if (actions.length && current()) this.dependencies.cueReport(await this.runner.run({ id: 'transport-start', name: '同步画面播放状态', notes: '', enabled: true,
@@ -214,27 +201,31 @@ export class ObsProgramSession {
     return operation;
   }
 
-  private async send(entries: TimelineEntry[], current: () => boolean, onTime: (frame: number) => boolean): Promise<void> {
+  /** Sends in timeline order. Lateness never drops an action: the next crossing
+   * only sends what changed since this one, so a skipped switch would leave the
+   * picture wrong until the following boundary. Only stop and pause cancel. */
+  private async send(entries: TimelineEntry[], current: () => boolean, dueAt: (frame: number) => number): Promise<void> {
     for (let index = 0; index < entries.length; index++) {
       const entry = entries[index]!;
       // A covered decoder keeps running. The preceding composition already
       // restored its visibility; there is no command left to send here.
-      // Do not turn a slow acknowledgement into a stale-command failure.
       if ('event' in entry && entry.event.phase === 'start' && entry.event.deferSceneSwitch
         && this.managed.isActiveMedia(entry.event)) continue;
       if (!current()) return;
       const group = this.group(entries, index); index += group.length - 1;
-      const gate = outputGate(current, () => onTime(entry.frame));
       const label = 'cue' in entry ? entry.cue.name : entry.event.assetName;
-      if (!gate.allowed()) {
-        if (!current()) return;
-        const reason = `OBS 动作晚了超过 100 ms，没有发送：${label}`;
-        this.fault(reason); await this.skip(group, reason); continue;
-      }
-      const results = await Promise.allSettled(group.map(member => this.output(member, gate)));
+      const lateMs = Math.round(this.dependencies.now() - dueAt(entry.frame));
+      const results = await Promise.allSettled(group.map(member => this.output(member, current)));
       for (const result of results) if (result.status === 'rejected') this.fault(`画面动作出错：${label}：${String(result.reason)}`);
-      if (gate.lateBeforeSend() && current()) this.fault(`OBS 动作晚了超过 100 ms，没有发送：${label}`);
+      if (lateMs > LATE_LOG_MS && current()) this.late(label, lateMs);
     }
+  }
+  /** Sent late: logged, and shown in red once it is late enough for the audience to notice. */
+  private late(label: string, lateMs: number): void {
+    const message = `画面动作晚了 ${lateMs} ms 才发出：${label}。电脑或 OBS 当时太忙，画面已经按时间线切过去了`;
+    if (lateMs > LATE_FAULT_MS) this.fault(message);
+    void this.dependencies.recordLog({ level: 'warning', category: 'action', message, projectId: this.project.projectId, itemId: this.itemId, device: 'obs',
+      details: { lateMs } }).catch(error => this.fault(`记录画面动作晚到失败：${String(error)}`));
   }
 
   /** Members that share one event boundary and are sent together. */
@@ -271,8 +262,8 @@ export class ObsProgramSession {
   }
 
   /** Failed results reach the host as red reports; nothing here ends the channel. */
-  private async output(entry: TimelineEntry, gate: OutputGate): Promise<void> {
-    if ('cue' in entry) { await this.cue(entry.cue, gate.allowed, gate.dispatched); return; }
+  private async output(entry: TimelineEntry, current: () => boolean): Promise<void> {
+    if ('cue' in entry) { await this.cue(entry.cue, current); return; }
     const event = entry.event;
     // A camera only covers these decoders; composition restores their
     // visibility. Repositioning them here interrupts a live media clock.
@@ -281,11 +272,11 @@ export class ObsProgramSession {
         id: `restore:${event.id}`, name: '恢复持续播放的素材', enabled: true, notes: '',
         timecode: frameNumberToTimecode(entry.frame, this.project.timebase.frameRate),
         actions: [{ id: `restore:${event.id}:scene`, label: '恢复底层画面', kind: 'obs.setProgramScene', sceneName: event.sceneName }]
-      }, gate.allowed, gate.dispatched);
+      }, current);
       return;
     }
-    const report = await this.dependencies.guardOutput(gate.allowed,
-      () => this.managed.executeMedia(this.managed.alignEvent(event, this.frame), 'live', gate.allowed), gate.dispatched);
+    const report = await this.dependencies.guardOutput(current,
+      () => this.managed.executeMedia(this.managed.alignEvent(event, this.frame), 'live', current));
     if (event.phase === 'start' && report.status === 'failed') this.failedStarts.add(event.clipId);
     this.dependencies.mediaReport(report);
   }
@@ -392,29 +383,26 @@ export class ObsProgramSession {
       await operation();
     }).catch(error => this.fault(`画面动作出错：${error instanceof Error ? error.message : String(error)}`)).finally(() => { this.queued--; });
   }
-  private async cue(cue: LinkCue, canExecute: () => boolean, dispatched?: () => void): Promise<CueExecutionReport> {
+  private async cue(cue: LinkCue, canExecute: () => boolean): Promise<CueExecutionReport> {
     const compiled = this.managed.compileVisualCue(cue);
     for (const action of compiled.actions) this.managed.trackVisualActionAttempt(cue.id, action);
-    const report = await this.dependencies.guardOutput(canExecute, () => this.runner.run(compiled, 'live', canExecute), dispatched);
+    const report = await this.dependencies.guardOutput(canExecute, () => this.runner.run(compiled, 'live', canExecute));
     this.managed.applyVisualCueResult(cue, compiled, report.results); this.dependencies.cueReport(report);
     return report;
   }
+  /** A late resume is still sent: a clip left paused is worse than one that starts
+   * late, and the drift check puts it back in step with the music. */
   private enqueueTransport(action: 'start' | 'pause', observedAt = this.dependencies.now()): void {
     const generation = this.generation; this.settleMedia(Math.max(0, this.frame));
     this.enqueue(async () => {
       const actions = this.managed.transportActions(action);
       if (!actions.length) return;
       const current = (): boolean => generation === this.generation && !this.closed && !this.failure;
-      const gate = outputGate(current, () => action !== 'start' || this.dependencies.now() <= observedAt + 100);
       const cue = { id: `transport-${action}`, name: '同步画面播放状态', notes: '', enabled: true,
         timecode: frameNumberToTimecode(Math.max(0, this.frame), this.project.timebase.frameRate), actions };
-      if (!gate.allowed()) {
-        if (!current()) return;
-        const reason = 'OBS 媒体恢复晚了超过 100 ms，没有发送继续播放；素材保持暂停，不会延迟启动';
-        this.fault(reason); this.dependencies.cueReport(await this.runner.skip(cue, 'live', reason)); return;
-      }
-      this.dependencies.cueReport(await this.dependencies.guardOutput(gate.allowed, () => this.runner.run(cue, 'live', gate.allowed), gate.dispatched));
-      if (gate.lateBeforeSend() && current()) this.fault('OBS 媒体恢复晚了超过 100 ms，没有发送继续播放；素材保持暂停，不会延迟启动');
+      const lateMs = Math.round(this.dependencies.now() - observedAt);
+      this.dependencies.cueReport(await this.dependencies.guardOutput(current, () => this.runner.run(cue, 'live', current)));
+      if (action === 'start' && lateMs > LATE_LOG_MS && current()) this.late('素材继续播放', lateMs);
     });
   }
   private sample(positionMs: number, observedAt = this.dependencies.now()): MtcSample {

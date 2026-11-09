@@ -80,15 +80,18 @@ it('画面动作失败时日志写明原因，记为错误', async () => {
   expect(failed).toEqual([expect.objectContaining({ level: 'error', message: '切机位 · failed：OBS 无响应' })]);
 });
 
-it('管道中积压的位置不能按收到时刻重新获得执行窗口；直播标红后由下一新鲜位置继续', async () => {
+const lateLogs = (test: ReturnType<typeof setup>): string[] => test.dependencies.recordLog.mock.calls.map(([entry]) => entry)
+  .filter(entry => entry.level === 'warning').map(entry => entry.message);
+
+it('管道中积压的位置晚到也照常执行：越过的画面动作现在发出并记晚到日志，之后照常（2026-11-09 不能漏切）', async () => {
   const test = setup(); await test.session.prepare(0);
   test.time(200); test.session.clock(0, 0); await test.session.settled();
-  expect(test.actions).toEqual([]);
-  expect(test.faults[0]).toContain('100 ms'); expect(test.session.error).toBeNull();
+  expect(test.actions.map(action => action.id)).toEqual(['action-0']);
+  expect(test.faults).toEqual([]); expect(test.session.error).toBeNull();
+  expect(lateLogs(test)).toEqual(['画面动作晚了 200 ms 才发出：机位 0。电脑或 OBS 当时太忙，画面已经按时间线切过去了']);
   test.time(250); test.session.clock(250, 250); await test.session.settled();
-  expect(test.actions).toEqual([]);
   for (let at = 300; at <= 1000; at += 100) { test.time(at); test.session.clock(at); await test.session.settled(); }
-  expect(test.actions.map(action => action.id)).toEqual(['action-1']);
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1']);
 });
 
 it('位置更新中断超过 100ms 按当前位置重建画面并标红：间隔内的机位此刻切换，后续动作继续', async () => {
@@ -101,14 +104,15 @@ it('位置更新中断超过 100ms 按当前位置重建画面并标红：间隔
   expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1', 'action-2']);
 });
 
-it('设备观察年龄和本机排队耗时共同计入画面执行边界；迟到动作不补发，后续动作继续', async () => {
+it('设备观察年龄和本机排队耗时都算晚到：晚了照样切过去并记日志，不会停在上一个机位', async () => {
   const test = setup(); await test.session.prepare(0); await test.advance(0, 900);
   test.time(1060); test.session.clock(1000, 1000);
   test.time(1110); await test.session.settled();
-  expect(test.actions.map(action => action.id)).toEqual(['action-0']);
-  expect(test.faults.join()).toContain('100 ms'); expect(test.session.error).toBeNull();
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1']);
+  expect(test.faults).toEqual([]); expect(test.session.error).toBeNull();
+  expect(lateLogs(test)).toEqual([expect.stringContaining('晚了 110 ms 才发出：机位 1')]);
   await test.advance(1200, 2000);
-  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-2']);
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1', 'action-2']);
 });
 
 it('从中间准备只恢复当前画面，不补发已越过的历史动作，未来事件继续一次', async () => {
@@ -144,14 +148,14 @@ it('停止先使旧代数失效，在途动作完成后不再发送队列里的�
   expect(test.states.at(-1)?.state).toBe('idle');
 });
 
-it('请求拖延后不补发过时画面并标红，通道继续执行后续画面', async () => {
+it('排队拖延超过 1 秒的画面动作仍然发出并标红，通道继续执行后续画面', async () => {
   const test = setup(); await test.session.prepare(0);
-  test.session.clock(0); test.time(101); await test.session.settled();
-  expect(test.actions).toEqual([]);
-  expect(test.faults[0]).toContain('100 ms'); expect(test.session.error).toBeNull();
-  expect(test.reports[0]?.results.map(result => result.status)).toEqual(['skipped']);
+  test.session.clock(0); test.time(1500); await test.session.settled();
+  expect(test.actions.map(action => action.id)).toEqual(['action-0']);
+  expect(test.faults).toEqual(['画面动作晚了 1500 ms 才发出：机位 0。电脑或 OBS 当时太忙，画面已经按时间线切过去了']); expect(test.session.error).toBeNull();
+  expect(test.reports[0]?.results.map(result => result.status)).toEqual(['succeeded']);
   await test.advance(200, 1000);
-  expect(test.actions.map(action => action.id)).toEqual(['action-1']);
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1']);
 });
 
 it('直播中 OBS 动作失败标红并继续后续动作，失败动作不自动重试', async () => {
@@ -335,12 +339,13 @@ it('暂停和继续只改变活动视频播放状态，不重建片段或从头�
   expect(test.dependencies.executeManagedMediaEvent.mock.calls.map(call => call[0].event.phase)).toEqual(['start', 'stop']);
 });
 
-it('恢复媒体也遵守设备观察的截止时间，排队过期不会迟到启动', async () => {
+it('恢复媒体晚到也照样继续播放并记日志，素材不会一直停着', async () => {
   const test = setup(videoFixture()); await test.session.prepare(0); await test.advance(0, 1000);
   await test.session.pause();
   test.time(5060); test.session.clock(1000, 5000); test.time(5110); await test.session.settled();
-  expect(test.actions.map(action => action.kind === 'obs.mediaAction' ? action.action : action.kind)).toEqual(['pause']);
-  expect(test.faults.join()).toContain('100 ms'); expect(test.session.error).toBeNull();
+  expect(test.actions.map(action => action.kind === 'obs.mediaAction' ? action.action : action.kind)).toEqual(['pause', 'start']);
+  expect(test.faults).toEqual([]); expect(test.session.error).toBeNull();
+  expect(lateLogs(test)).toEqual([expect.stringContaining('晚了 110 ms 才发出：素材继续播放')]);
 });
 
 it('动作按时开始发送后，后续子请求不被截止打断：切场景与播放要么都发送，要么都不发送', async () => {

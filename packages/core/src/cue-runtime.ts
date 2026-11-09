@@ -428,23 +428,26 @@ export class CueRuntime {
   }
 
   /** Recovery rule B: shown sources are state, so a show still within its span
-   * goes out now and a hide whose show went out is sent. Point actions in the
-   * gap are missed, never replayed. Everything is due at the current frame. */
+   * goes out now and a hide whose show went out is sent; a show whose span ended
+   * inside the gap is skipped with its hide. The song's own audio kept time, so
+   * the gap is known, not guessed: point actions in it are sent now, in order
+   * (2026-11-09: nothing on the timeline may be skipped). Everything is due at the current frame. */
   private rebuildAt(sample: MtcSample): RuntimeUpdate {
     const gapMs = Math.round(sample.receivedAtMs - this.lastSample!.receivedAtMs), frame = sample.totalFrames;
-    const due: DueCue[] = []; let missed = 0;
+    const due: DueCue[] = []; let late = 0;
     const now = (cue: LinkCue): void => { due.push({ cue, scheduledFrame: frame, executionId: crypto.randomUUID() }); this.executedCueIds.add(cue.id); };
     if (this.selectedItem) for (const { cue } of eventsBetween(this.scheduledCues, this.previousFrame, frame)) {
       if (this.executedCueIds.has(cue.id) || this.missedCueIds.has(cue.id)) continue;
       if (cue.id.endsWith(':duration-end')) { if (this.executedCueIds.has(cue.id.slice(0, -':duration-end'.length))) now(cue); continue; }
       const end = this.scheduledCues.find(entry => entry.cue.id === `${cue.id}:duration-end`)?.scheduledFrame;
       if (end !== undefined && end > frame) { now(cue); continue; }
+      if (end !== undefined) { this.executedCueIds.add(cue.id); this.executedCueIds.add(`${cue.id}:duration-end`); continue; }
       // The scene timeline rebuilds camera switches itself.
       if (cue.actions.length && cue.actions.every(action => action.kind === 'obs.setProgramScene')) { this.executedCueIds.add(cue.id); continue; }
-      this.missedCueIds.add(cue.id); missed += 1;
+      now(cue); late += 1;
     }
     this.previousFrame = frame; this.lastSample = sample; this.armedAtMs = null; this.state = 'running';
-    return { ...this.update(due, `播放位置更新中断了 ${gapMs} ms，画面已按当前位置恢复${missed ? `，错过了 ${missed} 个联动 Cue，没有补发` : ''}`), rebuild: true };
+    return { ...this.update(due, `播放位置更新中断了 ${gapMs} ms，画面已按当前位置恢复${late ? `，期间的 ${late} 个联动 Cue 现在补发` : ''}`), rebuild: true };
   }
 
   private markCrossedCuesAsMissed(currentFrame: number): void {
