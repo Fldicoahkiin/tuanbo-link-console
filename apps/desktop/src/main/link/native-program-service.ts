@@ -17,8 +17,11 @@ type Factory = (project: LinkProject, request: NativeProgramOpen, callbacks: {
 export class NativeProgramService {
   private current: Entry | null = null;
   private cleanup: Promise<void> = Promise.resolve();
+  private running = false;
+  /** `runningChanged`: the program started or stopped preparing, playing or paused, attached to a window or not;
+   * the license session of the show follows it (LicenseAccess). */
   constructor(private readonly create: Factory, private readonly publish: (event: NativeProgramEvent) => void,
-    private readonly authorize: () => Promise<void>) {}
+    private readonly authorize: () => Promise<void>, private readonly runningChanged?: (running: boolean) => void) {}
 
   /** `checkProject`: the window names the project the program reads; checked before a host is created. */
   async open(value: unknown, checkProject?: (projectPath: string, project: LinkProject) => Promise<void>): Promise<NativeProgramAttachment> {
@@ -39,14 +42,14 @@ export class NativeProgramService {
       state: { ...emptyInternalPlayerState }, sequence: 0, currentCueId: null, cancelled: false, orphaned: false,
       cancellation: new AbortController(), ready: Promise.resolve() };
     if (previous) { previous.cancelled = true; previous.cancellation.abort(); this.enqueueClose(previous); }
-    this.current = entry;
+    this.current = entry; this.reportRunning();
     entry.ready = this.cleanup.then(async () => {
       await this.authorized(entry.cancellation.signal);
       await checkProject?.(request.projectPath, project);
       if (this.current !== entry || entry.cancelled) return;
       entry.host = this.create(project, request, {
         configuration: () => entry.configuration,
-        changed: state => { entry.state = state; this.emit(entry); },
+        changed: state => { entry.state = state; this.reportRunning(); this.emit(entry); },
         cueChanged: id => { entry.currentCueId = id; this.emit(entry); }
       });
       entry.host.controller.clock.subscribeBoundary(boundary => this.emit(entry, boundary));
@@ -104,8 +107,13 @@ export class NativeProgramService {
 
   async close(): Promise<void> {
     const entry = this.current;
-    if (entry) { this.current = null; entry.cancelled = true; entry.cancellation.abort(); this.enqueueClose(entry); }
+    if (entry) { this.current = null; entry.cancelled = true; entry.cancellation.abort(); this.enqueueClose(entry); this.reportRunning(); }
     await this.cleanup;
+  }
+  private reportRunning(): void {
+    const running = this.current !== null && active(this.current.state);
+    if (running === this.running) return;
+    this.running = running; this.runningChanged?.(running);
   }
   private enqueueClose(entry: Entry): void {
     this.cleanup = this.cleanup.then(async () => {

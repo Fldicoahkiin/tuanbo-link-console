@@ -1,4 +1,4 @@
-import { linkActionSchema, linkManagedMediaExecutionPayloadSchema, type LicenseStatus } from '@tb/schema';
+import { linkActionSchema, linkManagedMediaExecutionPayloadSchema, ma2PlaybackRequestSchema, type LicenseStatus } from '@tb/schema';
 import { nativePlayerControlSchema } from '@tb/schema';
 
 const publicCalls = new Set([
@@ -21,12 +21,16 @@ const publicCalls = new Set([
 const workspaceSaveCalls = new Set(['link:save-project', 'link:write-recovery-copy', 'link:discard-recovery-copy',
   'link:project-document-worker', 'link:restart-project-document-worker']);
 
+/** Stopping never waits for a license: stop, pause, Off, mute and hide end what a checked run started (2026-11-09).
+ * Anything that starts output or sends new content stays licensed. */
 export function needsProductLicense(channel: string, value: unknown): boolean {
   if (publicCalls.has(channel)) return false;
   if (channel === 'link:native-player-control') {
     const control = nativePlayerControlSchema.parse(value);
     return control.kind !== 'stop' && control.kind !== 'pause' && control.kind !== 'stop-mtc';
   }
+  // A stopped song switches its executors off; Go and Goto light them.
+  if (channel === 'link:ma2-play-cue') return ma2PlaybackRequestSchema.parse(value).action.action !== 'off';
   if (channel === 'link:set-runtime-active') return value !== false;
   if (channel === 'link:obs-execute-managed-media') return linkManagedMediaExecutionPayloadSchema.parse(value).event.phase === 'start';
   if (channel === 'link:obs-execute') {
@@ -38,9 +42,24 @@ export function needsProductLicense(channel: string, value: unknown): boolean {
   return true;
 }
 
-/** A checked running session survives expiry; ending it always removes the grant. */
+/** Action MIDI the playback program sends: Note Off and MIDI Show Control Stop end what the song started and go out
+ * without a license, as they do from the window (link-midi-adapter); every other message is new content. */
+export function midiMessageNeedsLicense(bytes: readonly number[]): boolean {
+  const [status] = bytes;
+  if (status !== undefined && (status & 0xf0) === 0x80) return false;
+  // MSC: F0 7F <device> 02 <command format> <command>, where command 02 is Stop.
+  return !(status === 0xf0 && bytes[1] === 0x7f && bytes[3] === 0x02 && bytes[5] === 0x02);
+}
+
+/** A checked running session survives expiry until its show is over (license-reminders: a show running at expiry is
+ * not interrupted). The window holds the session while its run is active. The main-process program holds it while it
+ * keeps running the show the window checked, so a window that reloads or turns idle for a moment does not end a show
+ * still on air. A program that stops lets go: the next show is checked again. */
 export class LicenseAccess {
-  private sessionGranted = false;
+  private windowHolds = false;
+  private programRunning = false;
+  /** The program was running when the window last confirmed the session, and has kept running since. */
+  private programHolds = false;
   private generation = 0;
   private workspaceGranted = false;
   constructor(private readonly status: () => Promise<LicenseStatus>) {}
@@ -50,16 +69,22 @@ export class LicenseAccess {
     if (needsProductLicense(channel, value)) await this.requireOutput();
   }
   async requireOutput(): Promise<void> {
-    if (this.sessionGranted) return;
+    if (this.windowHolds || this.programHolds) return;
     const status = await this.status();
     if (status.state !== 'active' || !status.claims || status.claims.kind === 'trial') throw new Error(`使用团播联动台需要有效授权：${status.message}${status.state === 'inactive' ? '。请购买并激活本机' : ''}。`);
     this.workspaceGranted = true;
   }
+  /** The window's run starts (checked) or ends. */
   async setActive(active: boolean): Promise<void> {
-    if (!active) { this.generation += 1; this.sessionGranted = false; return; }
+    if (!active) { this.generation += 1; this.windowHolds = false; return; }
     const generation = this.generation;
     await this.requireOutput();
     if (generation !== this.generation) throw new Error('运行已停止，请重新开始');
-    this.sessionGranted = true;
+    this.windowHolds = true; this.programHolds = this.programRunning;
+  }
+  /** The main-process program is preparing, playing or paused (NativeProgramService), also with no window attached. */
+  setProgramRunning(running: boolean): void {
+    this.programRunning = running;
+    if (!running) this.programHolds = false;
   }
 }

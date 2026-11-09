@@ -45,6 +45,15 @@ it('发送前再次核对许可，取消许可等待不会发出已排队动作'
   await f.ports.close(); await pending; expect(f.output.send).not.toHaveBeenCalled();
 });
 
+it('许可失效时 Note Off 和 MSC Stop 照常发出，Note On 仍要许可', async () => {
+  const f = fixture(), stop = [0xf0, 0x7f, 0x7f, 0x02, 0x01, 0x02, 0x31, 0xf7];
+  await f.ports.prepare(['a'], new AbortController().signal);
+  f.authorize.mockRejectedValue(new Error('使用团播联动台需要有效授权：授权已到期'));
+  await f.ports.send('a', [0x80, 60, 0], 1000); await f.ports.send('a', stop, 1000);
+  await expect(f.ports.send('a', [0x90, 60, 100], 1000)).rejects.toThrow('有效授权');
+  expect(f.output.send.mock.calls.map(([bytes]) => bytes)).toEqual([[0x80, 60, 0], stop]);
+});
+
 it('没有 MIDI 动作不打开设备；无效档案不会误开其他输出', async () => {
   const empty = fixture(); await empty.ports.prepare([], new AbortController().signal); await empty.ports.close();
   expect(empty.authorize).not.toHaveBeenCalled(); expect(empty.create).not.toHaveBeenCalled();

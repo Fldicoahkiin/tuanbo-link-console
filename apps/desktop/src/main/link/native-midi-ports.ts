@@ -2,6 +2,7 @@ import type { IntegrationProfile } from '@tb/schema';
 import { MidiOutputFailure, NativeMidiOutput, type NativeMidiReceipt } from './native-midi-output';
 import { midiPortBusy, sharedPortMessage } from './midi-error';
 import type { MidiClaim } from './midi-port-broker';
+import { midiMessageNeedsLicense } from './license-access';
 
 type Port = { open(name: string): Promise<void>; send(bytes: readonly number[], deadline100ns: bigint): Promise<NativeMidiReceipt>; close(): Promise<void> };
 type Dependencies = { executable: string; authorize(): Promise<void>; failed(error: Error): void;
@@ -73,8 +74,10 @@ export class NativeMidiPorts {
     if (this.state !== 'ready' || this.failure) throw this.failure ?? new Error('MIDI 输出未准备或已取消');
     const output = this.byProfile.get(profileId);
     if (!output) throw new Error(`这一首没有准备 MIDI 输出：${profileId}`);
-    await this.authorize();
-    if (this.state !== 'ready' || this.failure) throw this.failure ?? new Error('MIDI 动作在许可检查期间已取消');
+    if (midiMessageNeedsLicense(bytes)) {
+      await this.authorize();
+      if (this.state !== 'ready' || this.failure) throw this.failure ?? new Error('MIDI 动作在许可检查期间已取消');
+    }
     await output.send(bytes, BigInt(Math.floor(deadlineAtMs * 10000)));
   }
 

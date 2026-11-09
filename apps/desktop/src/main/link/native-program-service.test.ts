@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createEmptyLinkProject, type NativeProgramOpen, type NativeProgramOperation, type NativeProgramEvent } from '@tb/schema';
-import { emptyInternalPlayerState, type PlaybackBoundary } from '@tb/core/link';
+import { emptyInternalPlayerState, type InternalPlayerState, type PlaybackBoundary } from '@tb/core/link';
 import { NativeProgramService } from './native-program-service';
 
 function deferred() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
@@ -108,4 +108,16 @@ it('窗口打开节目时工程检查拒绝则不创建宿主，之后可重新�
   await service.open(input, checkProject);
   expect(checkProject).toHaveBeenCalledWith(input.projectPath, expect.objectContaining({ name: '后台宿主测试' }));
   expect(create).toHaveBeenCalledOnce();
+});
+
+it('节目准备、播放、暂停时算在运行，界面退出和接管都不中断；停止、关闭或换成别的节目时算停下', async () => {
+  const running: boolean[] = [], create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(host);
+  const service = new NativeProgramService(create, vi.fn(), () => Promise.resolve(), value => running.push(value)), a = request();
+  const song = (status: InternalPlayerState['status']) => create.mock.calls.at(-1)![2].changed({ ...emptyInternalPlayerState, itemId: 'song', status });
+  await service.open(a); song('preparing'); song('playing'); song('paused'); song('playing');
+  await service.release(); expect(await service.open({ ...a, ownerId: randomUUID() })).toBe('adopted');
+  expect(running).toEqual([true]);
+  song('stopped'); song('error'); expect(running).toEqual([true, false]);
+  song('playing'); await service.open(request()); expect(running).toEqual([true, false, true, false]);
+  song('preparing'); await service.close(); expect(running).toEqual([true, false, true, false, true, false]);
 });

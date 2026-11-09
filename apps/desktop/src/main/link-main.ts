@@ -1011,12 +1011,15 @@ function registerIpc(
       },
       network: {
         getMa2NetworkStatus: async () => { await ma2NetworkReady; return ma2Network.status(); },
-        playMa2Cue: async value => { await authorizeOutput(); return sendMa2Cue(value); }
+        // The program only switches its song's executors off; an Off goes out without a license, as from the window.
+        playMa2Cue: async value => { await authorizeProduct('link:ma2-play-cue', value); return sendMa2Cue(value); }
       }
     });
     nativeProgramHost = host;
     return { controller: host.controller, close: async () => { await host.close(); if (nativeProgramHost === host) nativeProgramHost = null; } };
-  }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput());
+  }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput(),
+  // The show keeps the license the window checked while the program runs it, also when the window reloads.
+  running => licenseAccess.setProgramRunning(running));
   // Session registration captures cancellation synchronously; output adapters
   // validate and authorize every actual audio, OBS, MIDI and lighting request.
   handle('link:native-program-open', async (_event, value: unknown) => {
