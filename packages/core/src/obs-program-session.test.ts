@@ -124,15 +124,39 @@ it('从中间准备只恢复当前画面，不补发已越过的历史动作，�
   expect(test.session.error).toBeNull();
 });
 
-it('暂停即作废排队动作；恢复从实际音频位置继续', async () => {
+it('暂停时还没发出的切换，继续时按当前位置补上，暂停的时间不算晚到（继续时再恢复当前有效画面）', async () => {
   const test = setup(); await test.session.prepare(0); await test.advance(0, 900);
   test.time(1000); test.session.clock(1000);
   await test.session.pause();
   expect(test.actions.map(action => action.id)).toEqual(['action-0']);
   test.time(5000); test.session.clock(1000); await test.session.settled();
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1']);
   for (let at = 1100; at <= 2000; at += 100) { test.time(5000 + at - 1000); test.session.clock(at); await test.session.settled(); }
-  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-2']);
-  expect(test.session.error).toBeNull();
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1', 'action-2']);
+  expect(lateLogs(test)).toEqual([]); expect(test.faults).toEqual([]); expect(test.session.error).toBeNull();
+});
+
+it('暂停打断了正在发的切换：继续时重发此刻的完整画面，已发出的点 Cue 不重发', async () => {
+  const project = parseLinkProject({ ...createEmptyLinkProject('后台画面'), playbackSource: 'internal', obsOutputMode: 'scenes',
+    rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'layer-top', name: '特写' }, { id: 'layer-base', name: '全景' }], cues: [
+      { id: 'cue-base', name: '全景', layerId: 'layer-base', durationMs: 10000, timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
+        actions: [{ id: 'base', kind: 'obs.setProgramScene', label: '切机位', sceneName: '全景' }] },
+      { id: 'cue-close', name: '特写', layerId: 'layer-top', durationMs: 100, timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
+        actions: [{ id: 'close', kind: 'obs.setProgramScene', label: '切机位', sceneName: '特写' },
+          { id: 'filter', kind: 'obs.setSourceFilterEnabled', label: '滤镜', sourceName: '特写', filterName: '调色', enabled: true }] }] }] });
+  let release = (): void => { throw new Error('测试未初始化'); };
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const test = setup(project, action => action.id === 'close' ? gate : Promise.resolve());
+  await test.session.prepare(0); await test.advance(0, 900);
+  test.time(1000); test.session.clock(1000);
+  await vi.waitFor(() => expect(test.actions.map(action => action.id)).toEqual(['base', 'filter', 'close']));
+  const pausing = test.session.pause(); release(); await pausing;
+  // Resumed 100 ms later, after the close-up ended: OBS shows it, the timeline shows the wide shot.
+  test.time(5000); test.session.clock(1100); await test.session.settled();
+  expect(test.actions.map(action => action.id)).toEqual(['base', 'filter', 'close', 'base']);
+  for (let at = 1200; at <= 2000; at += 100) { test.time(5000 + at - 1100); test.session.clock(at); await test.session.settled(); }
+  expect(test.actions.map(action => action.id)).toEqual(['base', 'filter', 'close', 'base']);
+  expect(test.faults).toEqual([]); expect(test.session.error).toBeNull();
 });
 
 it('停止先使旧代数失效，在途动作完成后不再发送队列里的下一条', async () => {
@@ -370,7 +394,26 @@ it('动作按时开始发送后，后续子请求不被截止打断：切场景�
   expect(test.faults).toEqual([]);
 });
 
-it('画面队列积压时标红并跳过新批次，不结束画面通道', async () => {
+it('OBS 卡住期间积压的切换，放开后合并成此刻应有的画面一次发出，不逐个闪过中间机位；晚到标红', async () => {
+  const project = fixture();
+  project.rundown[0]!.cues.push({ id: 'cue-4', name: '机位 4', notes: '', enabled: true, timecode: { hours: 0, minutes: 0, seconds: 4, frames: 0 },
+    actions: [{ id: 'action-4', kind: 'obs.setProgramScene', label: '切机位', sceneName: '场景 4' }] });
+  let release = (): void => { throw new Error('测试未初始化'); };
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const test = setup(parseLinkProject(project), action => action.id === 'action-1' ? gate : Promise.resolve());
+  await test.session.prepare(0); await test.advance(0, 900);
+  // OBS has not answered the switch at 1 s; the music goes on to 3.6 s.
+  for (let at = 1000; at <= 3600; at += 100) { test.time(at); test.session.clock(at); await Promise.resolve(); }
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1']);
+  release(); await test.session.settled();
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1', 'action-3']);
+  expect(test.faults).toEqual(['画面晚了 1600 ms：电脑或 OBS 当时太忙，积压的 2 批画面动作已合并，直接切到了现在该有的画面']);
+  await test.advance(3700, 4000);
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1', 'action-3', 'action-4']);
+  expect(test.session.error).toBeNull(); expect(test.session.pendingCount).toBe(0);
+});
+
+it('画面队列长时间积压也不丢弃、不结束画面通道：放开后只发最后的机位，之后照常', async () => {
   let release = (): void => { throw new Error('测试未初始化'); };
   const gate = new Promise<void>(resolve => { release = resolve; });
   const project = fixture();
@@ -379,10 +422,13 @@ it('画面队列积压时标红并跳过新批次，不结束画面通道', asyn
     timecode: { hours: 0, minutes: 0, seconds: Math.floor(index / 10), frames: (index % 10) * 3 },
     actions: [{ id: `action-${index}`, kind: 'obs.setProgramScene' as const, label: '切机位', sceneName: `场景 ${index}` }] }));
   const test = setup(parseLinkProject(project), action => action.id === 'action-0' ? gate : Promise.resolve());
-  await test.session.prepare(0);
-  for (let index = 0; index < 80; index++) { test.time(index * 100); test.session.clock(index * 100); }
-  expect(test.faults.join()).toContain('积压'); expect(test.session.error).toBeNull();
+  await test.session.prepare(0); test.session.clock(0);
+  await vi.waitFor(() => expect(test.actions.map(action => action.id)).toEqual(['action-0']));
+  for (let index = 1; index < 80; index++) { test.time(index * 100); test.session.clock(index * 100); }
+  expect(test.faults).toEqual([]); expect(test.session.pendingCount).toBe(2);
   release(); await test.session.settled();
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-79']);
+  expect(test.faults).toEqual([expect.stringContaining('积压的 79 批画面动作已合并')]);
   test.time(8000); test.session.clock(8000); await test.session.settled();
   expect(test.session.error).toBeNull(); expect(test.actions.at(-1)?.id).toBe('action-80');
 });

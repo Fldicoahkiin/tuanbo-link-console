@@ -50,7 +50,13 @@ export class NativeObsPreloadPool {
       await entry.outputs.guardOutput(() => { current(); return true; }, () => entry.outputs!.preloadResources(current, 'background'));
       current();
     })();
-    await entry.task;
+    try { await entry.task; }
+    catch (error) {
+      // A failed lookahead is cleaned up, not kept: the next song then prepares
+      // the normal way, and later lookaheads are not refused (2026-11-09).
+      if (this.entry === entry) await this.discard();
+      throw error;
+    }
     return true;
   }
 
@@ -81,11 +87,12 @@ export class NativeObsPreloadPool {
     if (entry && !entry.cancelled && entry.request.sessionId === request.sessionId && resourceKey(entry.request, entry.request.positionMs) === resourceKey(request, positionMs)) {
       this.entry = null; entry.assertOwner = assertOwner;
       try { await entry.task; return entry.outputs!; }
-      catch (error) {
+      catch {
+        // A failed preload (a selection refused because this very song started
+        // preparing, or a lookahead that could not read its files) is not reused:
+        // the song prepares its picture below and reports its own failure. The
+        // preload's own failure was already reported where it ran.
         await entry.outputs?.releaseOutputs();
-        // A failed selection preload (for example refused because this very song started
-        // preparing) is not reused: the song prepares its picture below and reports its own failure.
-        if (entry.origin !== 'selection') throw error;
       }
       assertOwner();
       return this.dependencies.create(request, positionMs);

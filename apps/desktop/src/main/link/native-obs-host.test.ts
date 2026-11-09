@@ -240,6 +240,23 @@ it('暂停请求准入即取消排队画面，迟到的播放状态不能重新�
   expect(test.host.status?.state).toBe('stopped');
 });
 
+it('上一首画面清理失败标红，之后每一首照常准备并按时间线切画面', async () => {
+  const test = setup(); await test.host.prepare(test.request);
+  test.observe({ status: 'playing', generation: 1, positionMs: 0 }, 0);
+  await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(1));
+  test.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
+  for (const generation of [2, 3]) {
+    test.change({ generation, status: 'ready', positionMs: 0 });
+    await expect(test.host.prepare({ ...test.request, generation })).resolves.toMatchObject({ state: 'ready', generation });
+    test.observe({ status: 'playing', generation, positionMs: 0 }, generation * 1000);
+    await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(generation));
+    expect(test.host.status?.state).toBe('running');
+  }
+  expect(test.failures.filter(message => message.includes('没有清理干净'))).toEqual([
+    expect.stringContaining('画面没有清理干净'), expect.stringContaining('上一首的画面没有清理干净，这一首照常准备画面')]);
+  await test.host.stop();
+});
+
 it('新准备等待上一轮清理时也可取消，不能因尚未创建新 Entry 而漏掉停止', async () => {
   const test = setup(); await test.host.prepare(test.request);
   let release: () => void = () => { throw new Error('未初始化'); };

@@ -265,13 +265,18 @@ export class ObsMediaScenes {
         const wasActive = this.active.has(event.sourceName);
         const continuing = wasActive && this.startedClips.get(event.sourceName) === event.clipId;
         this.active.add(event.sourceName);
-        const primed = this.primed.get(event.sourceName) === 'ready'; primedStart = primed;
-        if (this.primed.has(event.sourceName) && !primed) throw new Error(`素材还没准备好：${event.assetName}`);
+        const ready = this.primed.get(event.sourceName) === 'ready';
+        if (this.primed.has(event.sourceName) && !ready) throw new Error(`素材还没准备好：${event.assetName}`);
         this.primed.delete(event.sourceName);
+        let primed = ready;
         if (primed) {
           const status = await this.request(() => this.client.call('GetMediaInputStatus', { inputName: event.sourceName }), '检查预热素材');
-          if (status.mediaState !== 'OBS_MEDIA_STATE_PAUSED' || Math.abs(status.mediaCursor - event.sourceOffsetMs) > 100) throw new Error(`准备的素材状态变了：${event.assetName}`);
+          // Sent late, or moved in OBS since: it then starts like an unprepared
+          // clip, on air first and located in step with the music. The scene
+          // switch is never skipped (2026-11-09).
+          primed = status.mediaState === 'OBS_MEDIA_STATE_PAUSED' && Math.abs(status.mediaCursor - event.sourceOffsetMs) <= 100;
         }
+        primedStart = primed;
         if (event.assetKind !== 'image' && !primed && !wasActive) {
           await this.batch([
             ...(event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName)),

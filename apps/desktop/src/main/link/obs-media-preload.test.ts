@@ -147,6 +147,30 @@ it('预备未完成、失败、过期时均不能把下一片段显示为可播�
   await expect(t.preload.seek(event, t.path)).rejects.toThrow('定位路径或状态已改变');
 });
 
+it('预备失败放回预备槽：同一输入后面的片段照常准备和播出，失败的这一段不自动重试', async () => {
+  const t = setup(), [first, second, third] = t.events;
+  await t.preload.prime(first!, current); await t.preload.execute(first!, t.path);
+  t.native.prime.mockRejectedValueOnce(new Error('解码器无响应'));
+  await expect(t.preload.upcoming(60, current)).rejects.toThrow('解码器无响应');
+  expect(await t.preload.upcoming(400, current)).toBeNull();
+  await expect(t.preload.execute(second!, t.path)).rejects.toThrow('没能在切换前准备好');
+  expect(await t.preload.upcoming(450, current)).toMatchObject({ clipId: third!.clipId });
+  await t.preload.execute(third!, t.path);
+  expect(t.scenes.prime.mock.calls.map(([event]) => event.clipId)).toEqual(['clip-0', 'clip-1', 'clip-2']);
+  expect(t.scenes.execute.mock.calls.map(([event]) => event.clipId)).toEqual(['clip-0', 'clip-2']);
+  await t.preload.close();
+});
+
+it('OBS 断开时预备失败的片段，重新连上 OBS 后照常准备一次', async () => {
+  const t = setup(), [first, second] = t.events;
+  await t.preload.prime(first!, current); await t.preload.execute(first!, t.path);
+  t.native.prime.mockRejectedValueOnce(new Error('OBS 未连接'));
+  await expect(t.preload.upcoming(60, current)).rejects.toThrow('OBS 未连接');
+  t.preload.register(t.project.projectId, t.project.mediaAssets[0]!, t.path);
+  expect(await t.preload.upcoming(400, current)).toMatchObject({ clipId: second!.clipId });
+  await t.preload.close();
+});
+
 it('错过播放边界的片段在当前位置仍应播出时先预备一次并交回，之后不再重复预备', async () => {
   const t = setup(), [first, second] = t.events;
   await t.preload.prime(first!, current); await t.preload.execute(first!, t.path);

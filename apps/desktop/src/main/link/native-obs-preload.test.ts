@@ -90,6 +90,31 @@ it('下一首提前完成解码预热，交接不重复创建，当前歌曲结�
   expect(t.create).toHaveBeenCalledTimes(1); expect(t.outputs.releaseOutputs).not.toHaveBeenCalled();
 });
 
+it('下一首后台预备失败：清理后不留给下一首继承，下一首照常准备，之后的预备也不被挡住（2026-11-09）', async () => {
+  const t = setup();
+  const next = { snapshot: { ...t.request.snapshot, item: { ...t.request.snapshot.item, id: 'next' } }, positionMs: 0 };
+  vi.mocked(t.outputs.preloadResources).mockRejectedValueOnce(new Error('素材文件读不了'));
+  await expect(t.pool.prepareNext({ ...t.request, nextFiles: next }, () => undefined)).rejects.toThrow('素材文件读不了');
+  expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(1);
+  expect(await t.pool.take({ ...t.request, generation: 3, snapshot: next.snapshot }, 0, () => undefined)).toBe(t.outputs);
+  expect(t.create).toHaveBeenCalledTimes(2);
+  const third = { snapshot: { ...t.request.snapshot, item: { ...t.request.snapshot.item, id: 'third' } }, positionMs: 0 };
+  await expect(t.pool.prepareNext({ ...t.request, generation: 3, snapshot: next.snapshot, nextFiles: third }, () => undefined)).resolves.toBe(true);
+});
+
+it('下一首后台预备还没完就开歌、随后失败：这首照常准备画面，不把预备的错误当成这首的错误', async () => {
+  const t = setup(); let fail: (error: Error) => void = () => { throw new Error('尚未开始'); };
+  vi.mocked(t.outputs.preloadResources).mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = reject; }));
+  const next = { snapshot: { ...t.request.snapshot, item: { ...t.request.snapshot.item, id: 'next' } }, positionMs: 0 };
+  const job = t.pool.prepareNext({ ...t.request, nextFiles: next }, () => undefined);
+  const rejected = expect(job).rejects.toThrow('素材文件读不了');
+  await vi.waitFor(() => expect(t.outputs.preloadResources).toHaveBeenCalled());
+  const taking = t.pool.take({ ...t.request, generation: 3, snapshot: next.snapshot }, 0, () => undefined);
+  fail(new Error('素材文件读不了'));
+  expect(await taking).toBe(t.outputs); await rejected;
+  expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(1); expect(t.create).toHaveBeenCalledTimes(2);
+});
+
 it('下一首修订不匹配时清理其解码器，不能把旧预备结果当成新工程', async () => {
   const t = setup();
   const next = { snapshot: { ...t.request.snapshot, item: { ...t.request.snapshot.item, id: 'next' } }, positionMs: 0 };

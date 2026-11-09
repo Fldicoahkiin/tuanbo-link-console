@@ -335,14 +335,23 @@ describe('素材独立场景播放', () => {
     await scenes.prime(opening, 'C:/dance.mp4', () => { setMediaState('OBS_MEDIA_STATE_PAUSED', 0); return Promise.resolve(); });
     await expect(scenes.execute({ ...opening, sourceOffsetMs: 23 }, 'C:/dance.mp4')).resolves.toBeUndefined();
   });
-  it('预热后外部更改位置，拒绝使用旧的准备结果，不自动重播', async () => {
-    const { scenes, calls, setMediaState } = fixture();
-    await scenes.prepare('project', asset, 'C:/dance.mp4');
-    const opening = { ...event, sourceOffsetMs: 0, deferSceneSwitch: true };
-    await scenes.prime(opening, 'C:/dance.mp4', () => { setMediaState('OBS_MEDIA_STATE_PAUSED', 0); return Promise.resolve(); }); calls.length = 0;
-    setMediaState('OBS_MEDIA_STATE_PAUSED', 2000);
-    await expect(scenes.execute(opening, 'C:/dance.mp4')).rejects.toThrow('准备的素材状态变了');
-    expect(calls.some(call => call.requestType === 'TriggerMediaInputAction')).toBe(false);
+  it.each([['晚到 600 ms', 600, 0], ['在 OBS 里被改过位置', 0, 2000]])('预热素材位置对不上（%s）：照常切到素材场景，按音乐位置定位后再播放，不报错（2026-11-09 不能漏切）', async (_case, offset, moved) => {
+    vi.useFakeTimers();
+    try {
+      const { scenes, calls, setMediaState } = fixture();
+      await scenes.prepare('project', asset, 'C:/dance.mp4');
+      const opening = { ...event, sourceOffsetMs: 0 };
+      await scenes.prime(opening, 'C:/dance.mp4', () => { setMediaState('OBS_MEDIA_STATE_PAUSED', 0); return Promise.resolve(); }); calls.length = 0;
+      if (moved) setMediaState('OBS_MEDIA_STATE_PAUSED', moved);
+      await expect(held(scenes.execute({ ...opening, sourceOffsetMs: offset }, 'C:/dance.mp4'))).resolves.toBeUndefined();
+      const actions = calls.map(call => JSON.stringify(call.requestData));
+      const switched = calls.findIndex(call => call.requestType === 'SetCurrentProgramScene');
+      expect(switched).toBeGreaterThanOrEqual(0); expect(actions.findIndex(action => action.includes('ACTION_RESTART'))).toBeGreaterThanOrEqual(switched);
+      if (!offset) { expect(seekTargets(calls)).toEqual([]); return; }
+      const seek = calls.findIndex(call => call.requestType === 'SetMediaInputCursor');
+      expect(seekTargets(calls)).toHaveLength(1); expect(seekTargets(calls)[0]).toBeGreaterThan(offset);
+      expect(actions.map(action => action.includes('ACTION_PLAY')).lastIndexOf(true)).toBeGreaterThan(seek);
+    } finally { vi.useRealTimers(); }
   });
   it('已成功停止的预备素材不在统一清理时再次停止，其他预备目标仍须清理', async () => {
     const { scenes, calls, setMediaState } = fixture();

@@ -90,7 +90,8 @@ describe('OBS 有界请求调度', () => {
     await Promise.resolve(); expect(sent).toHaveBeenCalledTimes(4);
     await vi.advanceTimersByTimeAsync(2000);
     const results = await Promise.all(work);
-    expect(results.every(value => value instanceof Error && value.message.includes('不确定是否已执行'))).toBe(true);
+    expect(results.map(value => value instanceof Error && (value.message.includes('不确定是否已执行') ? 'sent' : value.message.includes('还没发送') ? 'queued' : value.message)))
+      .toEqual(['sent', 'sent', 'sent', 'sent', 'queued', 'queued', 'queued']);
     expect(timedOut).toHaveBeenCalledTimes(1);
     const timings = scheduler.getTimings();
     expect(timings).toHaveLength(7);
@@ -101,6 +102,20 @@ describe('OBS 有界请求调度', () => {
     slow.resolve('迟到'); await Promise.resolve(); expect(sent).toHaveBeenCalledTimes(4);
     expect(scheduler.getTimings()).toEqual(timings);
     scheduler.connect(); expect(await scheduler.request(() => Promise.resolve('新会话'), '明确重连')).toBe('新会话');
+  });
+
+  it('OBS 忙时排队等待不算失去响应：从发出算起 2 秒内回应的请求照常完成，连接不作废（2026-11-09）', async () => {
+    vi.useFakeTimers();
+    const timedOut = vi.fn(); const scheduler = new ObsRequestScheduler(2000, timedOut); scheduler.connect();
+    const answer = (ms: number) => () => new Promise<string>(resolve => setTimeout(() => resolve(`${ms}`), ms));
+    const busy = Array.from({ length: 4 }, () => scheduler.request(answer(1500), '占用'));
+    const queued = scheduler.request(answer(1500), '切场景');
+    await vi.advanceTimersByTimeAsync(3000);
+    await expect(Promise.all([...busy, queued])).resolves.toEqual(['1500', '1500', '1500', '1500', '1500']);
+    expect(timedOut).not.toHaveBeenCalled();
+    expect(await scheduler.request(() => Promise.resolve('照常'), '之后')).toBe('照常');
+    const timing = scheduler.getTimings().find(entry => entry.label === '切场景');
+    expect(timing?.failed).toBe(false); expect(timing?.startedAt).not.toBeNull();
   });
 
   it('断线后即使重新连接，旧操作在本地等待之后也不能继续发送', async () => {

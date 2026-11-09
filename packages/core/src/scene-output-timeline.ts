@@ -132,10 +132,11 @@ export class SceneOutputTimeline {
     const work = boundaryWork(this.index.itemId, frame, [], stops, this.at(previous), this.at(frame));
     return { cues: [...work.cues, ...shownAt(due, frame)], media: work.media };
   }
-  /** Recovery rule B when OBS's picture state is unknown (after a reconnect): the
-   * picture at `frame` from nothing, with every clip on air entering at `frame`. */
-  restore(frame: number, shown: RuntimeUpdate['dueCues']): SceneWork {
-    const work = boundaryWork(this.index.itemId, frame, [], [], { cues: [], media: [] }, this.at(frame));
+  /** Recovery rule B when OBS's picture state is unknown (after a reconnect, or a
+   * pause cut a send short): the picture at `frame` from nothing, with every clip
+   * on air entering at `frame`, after the `stops` of clips that ended meanwhile. */
+  restore(frame: number, shown: RuntimeUpdate['dueCues'], stops: ManagedMediaEvent[] = []): SceneWork {
+    const work = boundaryWork(this.index.itemId, frame, [], stops.map(event => ({ ...event, frameNumber: frame })), { cues: [], media: [] }, this.at(frame));
     return { cues: [...work.cues, ...shownAt(shown, frame)], media: work.media };
   }
 }

@@ -98,7 +98,11 @@ export class NativeObsHost {
     const epoch = ++this.epoch;
     const previous = this.entry;
     if (previous) {
-      this.stopped = previous.session.stop();
+      // A failed cleanup is shown in red for its own song and stays failed (the
+      // session keeps that result); it must not keep this song, or any after it,
+      // from its picture.
+      this.stopped = previous.session.stop().catch((error: unknown) => this.dependencies.error(
+        `上一首的画面没有清理干净，这一首照常准备画面：${error instanceof Error ? error.message : String(error)}`));
       await this.stopped;
     }
     if (epoch !== this.epoch) throw new Error('画面准备已被新的操作取消');

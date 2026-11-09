@@ -14,6 +14,8 @@ export class ObsMediaPreload {
   private readonly starts: ManagedMediaEvent[];
   /** Clips prepared after their boundary (recovery rule B); each at most once. */
   private readonly late = new Set<string>();
+  /** Clips whose preparation failed: shown in red and never prepared again. */
+  private readonly failed = new Set<string>();
   private readonly lookaheadFrames: number;
   private readonly preparationSpacingFrames: number;
   private nextPreparationFrame = -Infinity;
@@ -34,6 +36,9 @@ export class ObsMediaPreload {
     // this session already used are still cleaned up when it stops.
     const previous = this.media.get(sourceName);
     this.media.set(sourceName, { path, current: null, pending: null, following: null, touched: previous?.touched ?? new Set(), retained: previous?.retained ?? new Set() });
+    // The operator reconnected OBS: the picture goes on from the next action, so
+    // a clip that failed to prepare while OBS was gone is prepared once more.
+    if (previous) for (const event of this.starts) if (event.sourceName === sourceName) this.failed.delete(event.clipId);
   }
   /** After OBS reconnects, standby decoders this session already used are prepared
    * again (hidden and muted), so the rebuild starts from the primary decoder and
@@ -62,20 +67,28 @@ export class ObsMediaPreload {
     // Retain ownership before any write: cancellation still has to close a
     // decoder which was created but whose acknowledgement has not arrived.
     media.touched.add(sourceName);
-    if (sourceName !== primary) await this.scenes.prepareStandby(primary);
-    else if (media.current) await this.scenes.copyPresentation(media.current.sourceName, primary);
-    assertCurrent();
-    await this.scenes.prime({ ...event, sourceName }, media.path, async () => {
+    try {
+      if (sourceName !== primary) await this.scenes.prepareStandby(primary);
+      else if (media.current) await this.scenes.copyPresentation(media.current.sourceName, primary);
       assertCurrent();
-      // Only our previously decoded and paused input can take this path. An
-      // initial decoder's PAUSED flag may precede its asynchronous reset. A
-      // retained input near EOF needs an explicit restart and advancing-frame
-      // confirmation; seeking an inactive EOF decoder is otherwise ignored.
-      await this.native.prime(sourceName, media.retained.has(sourceName), kind); assertCurrent();
-      if (event.sourceOffsetMs !== 0) await this.native.seek(sourceName, Math.round(event.sourceOffsetMs));
-      assertCurrent();
-    });
-    assertCurrent(); if (this.closed || media.pending !== slot) throw new Error('素材准备结果已过期');
+      await this.scenes.prime({ ...event, sourceName }, media.path, async () => {
+        assertCurrent();
+        // Only our previously decoded and paused input can take this path. An
+        // initial decoder's PAUSED flag may precede its asynchronous reset. A
+        // retained input near EOF needs an explicit restart and advancing-frame
+        // confirmation; seeking an inactive EOF decoder is otherwise ignored.
+        await this.native.prime(sourceName, media.retained.has(sourceName), kind); assertCurrent();
+        if (event.sourceOffsetMs !== 0) await this.native.seek(sourceName, Math.round(event.sourceOffsetMs));
+        assertCurrent();
+      });
+      assertCurrent(); if (this.closed || media.pending !== slot) throw new Error('素材准备结果已过期');
+    } catch (error) {
+      // The slot goes back, so later clips on this input still get prepared
+      // and played; this clip is not prepared again (no automatic retry).
+      if (media.pending === slot) media.pending = null;
+      this.failed.add(event.clipId);
+      throw error;
+    }
     slot.ready = true;
     media.retained.delete(sourceName);
   }
@@ -87,7 +100,8 @@ export class ObsMediaPreload {
     assertCurrent();
     if (frame < this.nextPreparationFrame) return null;
     const overdue = this.timeline.at(frame).media.find(event => (event.assetKind === 'audio' || event.assetKind === 'video')
-      && !this.late.has(event.clipId) && this.require(event).current?.event.clipId !== event.clipId && this.require(event).pending === null);
+      && !this.late.has(event.clipId) && !this.failed.has(event.clipId)
+      && this.require(event).current?.event.clipId !== event.clipId && this.require(event).pending === null);
     if (overdue) {
       this.late.add(overdue.clipId); this.nextPreparationFrame = frame + this.preparationSpacingFrames;
       await this.prime(overdue, assertCurrent); return overdue;
@@ -98,7 +112,7 @@ export class ObsMediaPreload {
     for (let index = low; index < this.starts.length; index++) {
       const event = this.starts[index]!;
       if (event.frameNumber > frame + this.lookaheadFrames) break;
-      if (next.has(event.sourceName)) continue;
+      if (next.has(event.sourceName) || this.failed.has(event.clipId)) continue;
       if (this.require(event).current?.event.clipId === event.clipId) continue;
       next.set(event.sourceName, event);
     }

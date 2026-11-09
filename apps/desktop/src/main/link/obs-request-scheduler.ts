@@ -76,12 +76,11 @@ export class ObsRequestScheduler {
         else resolve(result!);
         this.pump();
       };
+      // Waiting here only fails this request. The connection ends only when OBS
+      // leaves a request that went out unanswered for the whole limit: a busy
+      // OBS that answers late is not a lost one.
       const job: Job = { ...context, started: false, settled: false, reject: error => finish(error),
-        timer: setTimeout(() => {
-          const error = new Error(`OBS ${label} 请求超时（${this.timeoutMs} ms）${job.started ? '；不确定是否已执行，请检查 OBS 后重新连接' : '；还没发送'}`);
-          if (job.started) { this.invalidate(error); this.onTimeout(error); }
-          else finish(error);
-        }, this.timeoutMs),
+        timer: setTimeout(() => finish(new Error(`OBS ${label} 请求排队超时（${this.timeoutMs} ms）；还没发送`)), this.timeoutMs),
         start: () => {
           this.active.add(job);
           this.maximumActive = Math.max(this.maximumActive, this.active.size);
@@ -89,7 +88,13 @@ export class ObsRequestScheduler {
           Promise.resolve().then(() => {
             if (job.settled || job.generation !== this.generation) throw new Error('OBS 请求在发送前已取消');
             if (context.canSend && !context.canSend()) throw new Error(`OBS 动作已取消或已过时，没有发送：${label}`);
-            job.started = true; startedAt = performance.now(); this.requestCount++; context.dispatched?.();
+            job.started = true; startedAt = performance.now(); this.requestCount++;
+            clearTimeout(job.timer);
+            job.timer = setTimeout(() => {
+              const error = new Error(`OBS ${label} 请求超时（${this.timeoutMs} ms）；不确定是否已执行，请检查 OBS 后重新连接`);
+              this.invalidate(error); this.onTimeout(error);
+            }, this.timeoutMs);
+            context.dispatched?.();
             return this.context.run(context, operation);
           }).then(value => finish(null, value), error => finish(error));
         }

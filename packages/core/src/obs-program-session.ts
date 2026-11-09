@@ -4,6 +4,7 @@ import { CueRuntime, type RuntimeUpdate } from './cue-runtime';
 import { frameNumberToTimecode, millisecondsToFrameNumber, playbackFramesPerSecond, type MtcSample } from './mtc-timecode';
 import { ManagedOutputRuntime, type ManagedMediaExecutionReport, type ManagedOutputRuntimeDependencies } from './managed-output-runtime';
 import type { ManagedMediaEvent } from './managed-media-timeline';
+import type { SceneOutputTimeline } from './scene-output-timeline';
 
 export type ObsProgramSessionDependencies = ManagedOutputRuntimeDependencies & {
   /** `canSend` is checked before every request; `dispatched` runs when one is sent. */
@@ -27,10 +28,16 @@ export type ObsProgramSessionDependencies = ManagedOutputRuntimeDependencies & {
 
 /** Lateness up to this is logged; beyond it the operator sees it in red. Either way the action is sent. */
 const LATE_LOG_MS = 100, LATE_FAULT_MS = 1000;
-type TimelineEntry = { frame: number; priority: number; cue: LinkCue } | { frame: number; priority: number; event: ManagedMediaEvent };
-function timelineEntries(work: { cues: RuntimeUpdate['dueCues']; media: ManagedMediaEvent[] }): TimelineEntry[] {
+const lateText = (label: string, lateMs: number): string => `画面动作晚了 ${lateMs} ms 才发出：${label}。电脑或 OBS 当时太忙，画面已经按时间线切过去了`;
+type TimelineEntry = { frame: number; priority: number; cue: LinkCue; executionId: string } | { frame: number; priority: number; event: ManagedMediaEvent };
+type SceneWork = ReturnType<SceneOutputTimeline['cross']>;
+/** One clock step's timeline work, kept until all of it has been sent. `held`:
+ * a pause stopped sending it, so its lateness is not the computer's. */
+type Crossing = { from: number; due: RuntimeUpdate['dueCues']; media: ManagedMediaEvent[];
+  work: SceneWork; dueAt: (frame: number) => number; earliestDueMs: number; held: boolean };
+function timelineEntries(work: SceneWork): TimelineEntry[] {
   return [
-    ...work.cues.map(entry => ({ frame: entry.scheduledFrame, priority: 1, cue: entry.cue })),
+    ...work.cues.map(entry => ({ frame: entry.scheduledFrame, priority: 1, cue: entry.cue, executionId: entry.executionId })),
     ...work.media.map(event => ({ frame: event.frameNumber, priority: event.phase === 'stop' ? 0 : 2, event }))
   ].sort((left, right) => left.frame - right.frame || left.priority - right.priority);
 }
@@ -51,6 +58,16 @@ export class ObsProgramSession {
   private readonly managed: ManagedOutputRuntime;
   private readonly runner: CueActionRunner;
   private tail: Promise<void> = Promise.resolve();
+  /** Crossed but not yet completely sent, oldest first. Sent together as the
+   * picture at the latest one: after OBS answered slowly, superseded switches are
+   * not flashed one by one; after a pause, the resume restores what it cancelled. */
+  private readonly crossings: Crossing[] = [];
+  private drainQueued = false;
+  /** A pause cut a send short, so OBS may show part of a change: the next send
+   * is the whole picture at the current position. */
+  private interrupted = false;
+  /** Point Cues of queued crossings that went out before a pause cut the send short. */
+  private readonly sentDue = new Set<string>();
   private generation = 0;
   private queued = 0;
   private frame = -1;
@@ -155,19 +172,63 @@ export class ObsProgramSession {
       const media = this.managed.collectCrossed(previousFrame, sample.totalFrames);
       const work = update.rebuild ? this.managed.sceneTimeline!.rebuild(previousFrame, sample.totalFrames, update.dueCues, media)
         : this.managed.sceneTimeline!.cross(previousFrame, sample.totalFrames, update.dueCues, media);
-      if (!work.cues.length && !work.media.length) return;
-      if (work.media.length) this.settleMedia(sample.totalFrames);
-      const generation = this.generation;
-      const current = (): boolean => generation === this.generation && !this.closed && !this.failure;
-      const dueAt = (scheduledFrame: number): number => observedAt
-        - Math.max(0, sample.totalFrames - scheduledFrame) * 1000 / playbackFramesPerSecond(sample.frameRate);
-      const entries = timelineEntries(work);
-      if (this.queued >= 64) {
-        const reason = 'OBS 积压了超过 64 批画面动作，这一批没有发送；画面联动继续';
-        this.fault(reason); void this.skip(entries, reason).catch(error => this.fault(`记录跳过的画面动作失败：${String(error)}`)); return;
+      if (work.cues.length || work.media.length) {
+        if (work.media.length) this.settleMedia(sample.totalFrames);
+        const dueAt = (scheduledFrame: number): number => observedAt
+          - Math.max(0, sample.totalFrames - scheduledFrame) * 1000 / playbackFramesPerSecond(sample.frameRate);
+        this.crossings.push({ from: previousFrame, due: update.dueCues, media, work, dueAt,
+          earliestDueMs: dueAt(timelineEntries(work)[0]!.frame), held: false });
       }
-      this.enqueue(() => this.send(entries, current, dueAt));
+      // A resume with nothing newly crossed still sends what the pause held back.
+      if (this.crossings.length) this.scheduleDrain();
     } catch (error) { this.fail(error); }
+  }
+
+  /** At most one waiting drain: it takes every crossing present when it runs. */
+  private scheduleDrain(): void {
+    if (this.drainQueued || this.closed || this.failure) return;
+    this.drainQueued = true; this.queued++;
+    this.tail = this.tail.then(() => { this.drainQueued = false; return this.drain(); })
+      .catch(error => this.fault(`画面动作出错：${error instanceof Error ? error.message : String(error)}`)).finally(() => { this.queued--; });
+  }
+  /** One crossing goes out as computed. Several (OBS answered slowly, or a pause
+   * held them) go out once as the picture now: a switch already superseded is
+   * not shown, a clip that started and ended meanwhile does not start, and the
+   * late time is reported once (2026-11-09: what the timeline shows now is never
+   * skipped). Crossings leave only once completely sent; nothing that went out,
+   * failed or not, is sent again. */
+  private async drain(): Promise<void> {
+    if (this.closed || this.failure || this.runtime.getState() !== 'running' || !this.crossings.length) return;
+    const generation = this.generation;
+    const current = (): boolean => generation === this.generation && !this.closed && !this.failure;
+    const taken = this.crossings.slice(), only = taken.length === 1 && !this.interrupted ? taken[0]! : null;
+    const entries = timelineEntries(only ? only.work : this.catchUp(taken));
+    const sent = await this.send(entries, current, only && !only.held ? only.dueAt : null);
+    if (sent < entries.length) {
+      // A pause cut it short. The rest goes out on resume as part of the picture then.
+      for (const entry of entries.slice(0, sent)) if ('cue' in entry) this.sentDue.add(entry.executionId);
+      if (!this.closed && !this.failure) this.interrupted = true;
+      return;
+    }
+    this.crossings.splice(0, taken.length); this.sentDue.clear(); this.interrupted = false;
+    if (only) return;
+    const earliest = Math.min(...taken.map(crossing => crossing.held ? Infinity : crossing.earliestDueMs));
+    const lateMs = Math.round(this.dependencies.now() - earliest);
+    if (Number.isFinite(earliest) && lateMs > LATE_LOG_MS) {
+      this.late(lateMs, `画面晚了 ${lateMs} ms：电脑或 OBS 当时太忙，积压的 ${taken.length} 批画面动作已合并，直接切到了现在该有的画面`);
+    }
+  }
+  /** The picture at the current position for queued crossings: what changed since
+   * the last picture sent (everything, when a pause cut a send short), the stops
+   * of clips OBS still plays, then the point Cues not yet sent, in order. A show
+   * whose span ended on the way is skipped with its hide, as after a position gap. */
+  private catchUp(taken: Crossing[]): SceneWork {
+    const due = taken.flatMap(crossing => crossing.due).filter(entry => !this.sentDue.has(entry.executionId));
+    const ids = new Set(due.map(entry => entry.cue.id)), end = ':duration-end';
+    const kept = due.filter(entry => entry.cue.id.endsWith(end) ? !ids.has(entry.cue.id.slice(0, -end.length)) : !ids.has(`${entry.cue.id}${end}`));
+    const stops = taken.flatMap(crossing => crossing.media).filter(event => event.phase === 'stop' && this.managed.isActiveMedia(event));
+    const timeline = this.managed.sceneTimeline!;
+    return this.interrupted ? timeline.restore(this.frame, kept, stops) : timeline.rebuild(taken[0]!.from, this.frame, kept, stops);
   }
 
   /** Recovery rule B after OBS reconnects: what OBS shows is unknown and owned
@@ -186,6 +247,7 @@ export class ObsProgramSession {
         await this.preloadWork; await restore();
         if (!current()) return 0;
         this.failedStarts.clear(); this.preloadFrame = -Infinity;
+        // Crossings still queued go out after this; their point Cues are not lost.
         const frame = this.frame, work = this.managed.sceneTimeline!.restore(frame, this.runtime.shownSourcesAt(frame));
         const targets = work.media.filter(event => event.phase === 'start').map(event => this.managed.alignEvent(event, frame));
         this.managed.adoptSeek(targets, frame); this.settleMedia(frame);
@@ -203,26 +265,30 @@ export class ObsProgramSession {
 
   /** Sends in timeline order. Lateness never drops an action: the next crossing
    * only sends what changed since this one, so a skipped switch would leave the
-   * picture wrong until the following boundary. Only stop and pause cancel. */
-  private async send(entries: TimelineEntry[], current: () => boolean, dueAt: (frame: number) => number): Promise<void> {
-    for (let index = 0; index < entries.length; index++) {
+   * picture wrong until the following boundary. Only stop and pause cancel.
+   * `dueAt` null: the caller reports lateness itself. Resolves with how many
+   * entries went out; one cut short by a pause or stop is not counted. */
+  private async send(entries: TimelineEntry[], current: () => boolean, dueAt: ((frame: number) => number) | null): Promise<number> {
+    for (let index = 0; index < entries.length;) {
       const entry = entries[index]!;
       // A covered decoder keeps running. The preceding composition already
       // restored its visibility; there is no command left to send here.
       if ('event' in entry && entry.event.phase === 'start' && entry.event.deferSceneSwitch
-        && this.managed.isActiveMedia(entry.event)) continue;
-      if (!current()) return;
-      const group = this.group(entries, index); index += group.length - 1;
+        && this.managed.isActiveMedia(entry.event)) { index++; continue; }
+      if (!current()) return index;
+      const group = this.group(entries, index);
       const label = 'cue' in entry ? entry.cue.name : entry.event.assetName;
-      const lateMs = Math.round(this.dependencies.now() - dueAt(entry.frame));
+      const lateMs = dueAt ? Math.round(this.dependencies.now() - dueAt(entry.frame)) : 0;
       const results = await Promise.allSettled(group.map(member => this.output(member, current)));
       for (const result of results) if (result.status === 'rejected') this.fault(`画面动作出错：${label}：${String(result.reason)}`);
-      if (lateMs > LATE_LOG_MS && current()) this.late(label, lateMs);
+      if (!current()) return index;
+      if (lateMs > LATE_LOG_MS) this.late(lateMs, lateText(label, lateMs));
+      index += group.length;
     }
+    return entries.length;
   }
   /** Sent late: logged, and shown in red once it is late enough for the audience to notice. */
-  private late(label: string, lateMs: number): void {
-    const message = `画面动作晚了 ${lateMs} ms 才发出：${label}。电脑或 OBS 当时太忙，画面已经按时间线切过去了`;
+  private late(lateMs: number, message: string): void {
     if (lateMs > LATE_FAULT_MS) this.fault(message);
     void this.dependencies.recordLog({ level: 'warning', category: 'action', message, projectId: this.project.projectId, itemId: this.itemId, device: 'obs',
       details: { lateMs } }).catch(error => this.fault(`记录画面动作晚到失败：${String(error)}`));
@@ -281,13 +347,6 @@ export class ObsProgramSession {
     this.dependencies.mediaReport(report);
   }
 
-  private async skip(entries: TimelineEntry[], reason: string): Promise<void> {
-    for (const entry of entries) {
-      if ('cue' in entry) this.dependencies.cueReport(await this.runner.skip(this.managed.compileVisualCue(entry.cue), 'live', reason));
-      else for (const report of await this.managed.reportSkippedMedia([entry.event], reason)) this.dependencies.mediaReport(report);
-    }
-  }
-
   private preload(frame: number): void {
     const prepare = this.dependencies.prepareUpcoming;
     if (!prepare || this.restoring || this.preloadWork || frame - this.preloadFrame < playbackFramesPerSecond(this.project.timebase.frameRate) / 10) return;
@@ -339,6 +398,9 @@ export class ObsProgramSession {
     if (!this.prepared || this.closed || this.failure) return;
     if (this.runtime.getState() === 'paused') return;
     ++this.generation; this.advancing = false;
+    // What has not gone out waits for the resume, which then shows the picture at
+    // the resumed position (docs/OBS_SCENE_WORKFLOW.md: 继续时再恢复当前有效画面).
+    for (const crossing of this.crossings) crossing.held = true;
     this.requireUpdate(this.runtime.pauseAutomatic());
     this.enqueueTransport('pause');
     await this.tail;
@@ -402,7 +464,7 @@ export class ObsProgramSession {
         timecode: frameNumberToTimecode(Math.max(0, this.frame), this.project.timebase.frameRate), actions };
       const lateMs = Math.round(this.dependencies.now() - observedAt);
       this.dependencies.cueReport(await this.dependencies.guardOutput(current, () => this.runner.run(cue, 'live', current)));
-      if (action === 'start' && lateMs > LATE_LOG_MS && current()) this.late('素材继续播放', lateMs);
+      if (action === 'start' && lateMs > LATE_LOG_MS && current()) this.late(lateMs, lateText('素材继续播放', lateMs));
     });
   }
   private sample(positionMs: number, observedAt = this.dependencies.now()): MtcSample {
