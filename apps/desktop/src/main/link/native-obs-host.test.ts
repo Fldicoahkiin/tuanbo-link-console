@@ -405,7 +405,7 @@ function program(endActionOrOptions: 'next' | 'stop' | ProgramOptions) {
   let host: NativeObsHost | null = null;
   const pictures = (): NativeObsHost => { if (!host) throw new Error('画面宿主还没建好'); return host; };
   const pool = options.pool ? new NativeObsPreloadPool({ authorize: async () => { if (pictures().busy) throw new Error('正在播放时不能准备另一个节目'); await pictures().stop(); },
-    create: () => make(), report: (log, shown) => pictures().report(log, shown) }) : null;
+    create: () => make(), report: failure => pictures().report(failure) }) : null;
   host = new NativeObsHost({ audio: () => audio, error: message => failures.push(message),
     changed: status => { for (const listener of obsListeners) listener(status); },
     outputs: (request, positionMs, assertCurrent) => pool ? pool.take(request, positionMs, assertCurrent) : make(),
@@ -517,6 +517,82 @@ it('关闭节目时画面清理失败：只记一次，关闭照常完成；之�
   await next.dispose();
 });
 
+// 修复前：之后打开的节目第一首已经在等这次清理时，清理失败交还给了已经换掉的那一首，没人再收，红字一直不出来，只留在日志里。
+it('关闭节目时画面还在清理、之后打开的节目第一首已经在等这次清理：清理失败在这首歌上标红一次（2026-11-09）', async () => {
+  vi.useFakeTimers();
+  try {
+    const gate = hold();
+    let refuse: (error: Error) => void = () => { throw new Error('还没开始清理'); };
+    const cleaning = vi.fn(() => new Promise<void>((_resolve, reject) => { refuse = reject; }));
+    // Songs without picture work give their picture one second; OBS answers neither the first picture nor its cleanup in time.
+    const t = program({ cueSeconds: [], outputs: (base, index) => index === 0 ? { ...base, prepareOutputs: gate.wait, releaseOutputs: cleaning } : base });
+    const playing = t.player.play('a');
+    await vi.advanceTimersByTimeAsync(1100); await playing;
+    expect(t.state()).toMatchObject({ status: 'playing', itemId: 'a' });
+    gate.release();
+    await vi.waitFor(() => expect(cleaning).toHaveBeenCalledOnce());
+    // The window reloads, or another project opens: the program closes while that cleanup still waits on OBS.
+    await expect(t.player.dispose()).resolves.toBeUndefined();
+    const next = t.open(), prepare = vi.spyOn(t.host, 'prepare');
+    const starting = next.play('b');
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+    refuse(new Error('OBS 无响应'));
+    await starting;
+    await vi.waitFor(() => expect(t.state()).toMatchObject({ status: 'playing', itemId: 'b', fault: `上一首的画面没有清理干净，这一首照常播。原因：${LEFTOVER}` }));
+    expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']);
+    await next.play('a');
+    expect(t.state()).toMatchObject({ status: 'playing', itemId: 'a', fault: null });
+    await next.dispose();
+  } finally { vi.useRealTimers(); }
+});
+
+// 修复前：关闭的节目交还的清理失败放回了它自己那一首，已经接手画面的歌不会再来取，红字一直不出来，只留在日志里。
+it('关闭的节目交还画面清理失败：接手画面的歌还在播就在它上面标红，排在它原有的红字前面；接手的歌已经停了就在再下一首上标红，都只一次（2026-11-09）', async () => {
+  const test = setup();
+  /** The program's own stop of the song playing hears its failed cleanup; the program then closes before showing it. */
+  const failedStop = async (generation: number): Promise<ObsPictureLeftover> => {
+    test.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
+    const heard: unknown = await test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation }).then(() => null, (error: unknown) => error);
+    if (!(heard instanceof ObsPictureLeftover)) throw new Error('清理失败没有交给节目自己的停止');
+    return heard;
+  };
+  await test.host.prepare(test.request); test.observe({ status: 'playing', generation: 1, positionMs: 0 }, 0);
+  const first = await failedStop(1);
+  // The next program's song took the picture over and plays, already in red, when the closed program hands it back.
+  test.change({ generation: 2, itemId: 'next', status: 'ready', positionMs: 0 });
+  await test.host.prepare(test.song('next', 2)); test.observe({ status: 'playing', generation: 2, positionMs: 0 }, 1000);
+  test.host.report({ log: '乙：No source was found', shown: '乙' });
+  first.handBack();
+  expect(test.host.status).toMatchObject({ state: 'running', itemId: 'next', fault: `上一首的画面没有清理干净，这一首照常播。原因：${LEFTOVER}；乙` });
+  const second = await failedStop(2);
+  // This time the song that took the picture over has stopped already: the song after it shows it.
+  test.change({ generation: 3, itemId: 'song', status: 'ready', positionMs: 0 });
+  expect((await test.host.prepare(test.song('song', 3))).fault ?? null).toBeNull();
+  await test.host.stop();
+  second.handBack();
+  test.change({ generation: 4, status: 'ready', positionMs: 0 });
+  await expect(test.host.prepare(test.song('song', 4))).resolves.toMatchObject({ itemId: 'song', fault: `上一首的画面没有清理干净，这一首照常播。原因：${LEFTOVER}` });
+  await test.host.stop();
+  test.change({ generation: 5, status: 'ready', positionMs: 0 });
+  expect((await test.host.prepare(test.song('song', 5))).fault ?? null).toBeNull();
+  // Logged once each, where the cleanup ran.
+  expect(test.failures).toEqual(['画面没有清理干净：OBS 无响应', '乙：No source was found', '画面没有清理干净：OBS 无响应']);
+  await test.host.stop();
+});
+
+// 修复前：这一首的画面准备失败的红字整句顶掉“上一首的画面没有清理干净”，OBS 卡住时最常见。
+it('OBS 卡住：上一首的画面没清理干净、这一首的画面也准备失败：两条一起在这一首上标红，音乐照常播（2026-11-09）', async () => {
+  const t = program({ outputs: (base, index) => index === 0 ? { ...base, releaseOutputs: () => Promise.reject(new Error('OBS 无响应')) }
+    : index === 1 ? { ...base, prepareOutputs: () => Promise.reject(new Error('OBS 请求超时（2000 ms）')) } : base });
+  await t.player.play('a');
+  await vi.waitFor(() => expect(t.ids()).toEqual(['scene-a']));
+  await t.player.play('b');
+  expect(t.state()).toMatchObject({ status: 'playing', itemId: 'b',
+    fault: `上一首的画面没有清理干净，这一首照常播。原因：${LEFTOVER}；画面准备失败，音乐和时间码照常播放：OBS 请求超时（2000 ms）` });
+  expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应', 'OBS 请求超时（2000 ms）']);
+  await t.player.dispose();
+});
+
 it('画面清理失败的原因：运行日志里留着 OBS 的原话和来源名，界面上是看得懂的说法（2026-11-09）', async () => {
   const t = program('next');
   await t.player.play('a');
@@ -524,8 +600,9 @@ it('画面清理失败的原因：运行日志里留着 OBS 的原话和来源�
   t.releaseOutputs.mockRejectedValueOnce(new Error('SetInputSettings：No source was found by the name of `团播联动台·素材·开场`.'));
   await t.player.stop();
   expect(t.failures).toEqual(['画面没有清理干净：SetInputSettings：No source was found by the name of `团播联动台·素材·开场`.']);
+  // One next step: what to check after a failed cleanup, not the step a failed preparation suggests.
   expect(t.state()).toMatchObject({ status: 'stopped',
-    notice: '画面清理失败：OBS 中找不到需要的场景或来源。请重新同步素材后再播放。请检查 OBS 节目画面上是否还留着刚才的素材' });
+    notice: '画面清理失败：OBS 中找不到需要的场景或来源。请检查 OBS 节目画面上是否还留着刚才的素材' });
   await t.player.dispose();
 });
 
@@ -572,6 +649,23 @@ it('播放中拖动定位、画面还在准备时按 MIDI 暂停键：停在新�
   await t.player.resume(); await t.playTo(500, 1500);
   expect(t.ids()).toEqual(['scene-a', 'scene-a', 'scene-a-1']);
   expect(t.host.status?.state).toBe('running'); expect(t.state().fault).toBeNull();
+  await t.player.dispose();
+});
+
+// 修复前：准备中按 MIDI 播放键会从歌头重新准备并开播：音乐、时间码、灯光和画面都回到歌头。
+it('播放中点波形换位置、新位置的画面还在准备时按 MIDI 播放键：从新位置照常播，画面按新位置切，不从歌头重来（2026-11-09）', async () => {
+  const gate = hold();
+  const t = program({ cueSeconds: [0, 1], outputs: (base, index) => index === 1 ? { ...base, prepareOutputs: gate.wait } : base });
+  await t.player.play('a'); await t.playTo(0, 300);
+  const seeking = t.player.seek(1500);
+  await vi.waitFor(() => expect(gate.reached()).toBe(true));
+  expect(t.state().status).toBe('preparing');
+  t.player.receiveMidi(Uint8Array.from([0x90, 1, 100]));
+  gate.release(); await seeking;
+  expect(t.state()).toMatchObject({ status: 'playing', itemId: 'a', positionMs: 1500 });
+  // The camera at the new position; nothing from the head of the song again.
+  expect(t.ids()).toEqual(['scene-a', 'scene-a-1']);
+  expect(t.host.status).toMatchObject({ state: 'running', itemId: 'a' });
   await t.player.dispose();
 });
 
@@ -642,7 +736,7 @@ function lookahead() {
       recordLog: entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-09T00:00:00Z', monotonicMs: time }) };
     created.push(outputs); return outputs;
   };
-  const pool = new NativeObsPreloadPool({ authorize: () => Promise.resolve(), create, report: (log, shown) => host.report(log, shown) });
+  const pool = new NativeObsPreloadPool({ authorize: () => Promise.resolve(), create, report: failure => host.report(failure) });
   const host = new NativeObsHost({ audio: () => test.audio(), changed: () => undefined, error: message => failures.push(message),
     outputs: (request, positionMs, assertCurrent) => pool.take(request, positionMs, assertCurrent),
     prepareNextFiles: async (request, assertCurrent) => { await pool.prepareNext(request, assertCurrent); } });
@@ -673,6 +767,20 @@ it('下一首接手的提前准备失败、清理也失败：下一首照常准�
   await vi.waitFor(() => expect(t.execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-0', 'next-scene-0']));
   expect(t.failures).toEqual(['提前准备的画面没能用上，已改为重新准备。原因：OBS 预热素材静音 请求排队超时（2000 ms）；还没发送',
     '提前准备的画面没有清理干净，不影响播放。原因：OBS 停止 请求排队超时（2000 ms）；还没发送']);
+  await t.host.stop();
+});
+
+// 修复前：提前准备那边把“记进日志的原话”和“标红给人看的说法”按位置传给画面宿主，接线时两个对调了也没有检查发现。
+it('提前准备的画面清理失败：运行日志里是 OBS 的原话，下一首上标红的是看得懂的说法，两种说法不会对调（2026-11-09）', async () => {
+  const t = lookahead();
+  await t.playFirstToEnd();
+  const preparing = t.host.prepare(t.test.song('next', 2));
+  vi.mocked(t.created[1]!.releaseOutputs).mockRejectedValueOnce(new Error('画面没有清理干净：Error: SetInputSettings：No source was found by the name of `团播联动台·素材·next`.'));
+  t.fail(new Error('OBS 预热素材静音 请求排队超时（2000 ms）；还没发送'));
+  await expect(preparing).resolves.toMatchObject({ state: 'ready', itemId: 'next',
+    fault: '提前准备的画面没能用上，已改为重新准备。原因：OBS 预热素材静音 请求排队超时（2000 ms）；还没发送；提前准备的画面没有清理干净，不影响播放。原因：OBS 中找不到需要的场景或来源' });
+  expect(t.failures).toEqual(['提前准备的画面没能用上，已改为重新准备。原因：OBS 预热素材静音 请求排队超时（2000 ms）；还没发送',
+    '提前准备的画面没有清理干净，不影响播放。原因：SetInputSettings：No source was found by the name of `团播联动台·素材·next`.']);
   await t.host.stop();
 });
 
@@ -714,17 +822,17 @@ it('画面资源交接后被新的操作取消：照常报取消；释放失败�
 
 it('别处没人报告的预备清理失败交给宿主：记录原话一次；有歌在播就标红显示看得懂的说法；歌还在准备时等它有了画面状态再标红；没有歌时只记录', async () => {
   const test = setup();
-  test.host.report('甲：No source was found', '甲'); expect(test.host.status).toBeNull();
+  test.host.report({ log: '甲：No source was found', shown: '甲' }); expect(test.host.status).toBeNull();
   // Nothing played when it happened: not carried over to a later song.
   expect((await test.host.prepare(test.request)).fault ?? null).toBeNull();
   test.observe({ status: 'playing', generation: 1, positionMs: 0 }, 0);
-  test.host.report('乙：No source was found', '乙'); expect(test.host.status).toMatchObject({ state: 'running', fault: '乙' });
+  test.host.report({ log: '乙：No source was found', shown: '乙' }); expect(test.host.status).toMatchObject({ state: 'running', fault: '乙' });
   let release: () => void = () => { throw new Error('还没开始清理'); };
   test.releaseOutputs.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
   test.change({ generation: 2, status: 'ready', positionMs: 0 });
   const preparing = test.host.prepare({ ...test.request, generation: 2 });
   await vi.waitFor(() => expect(test.releaseOutputs).toHaveBeenCalledOnce());
-  test.host.report('丙：No source was found', '丙'); release();
+  test.host.report({ log: '丙：No source was found', shown: '丙' }); release();
   await expect(preparing).resolves.toMatchObject({ state: 'ready', generation: 2, fault: '丙' });
   expect(test.failures).toEqual(['甲：No source was found', '乙：No source was found', '丙：No source was found']);
   await test.host.stop();

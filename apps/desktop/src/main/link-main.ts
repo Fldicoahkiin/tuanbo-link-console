@@ -606,7 +606,7 @@ function registerIpc(
       },
       audioIdentity: () => { if (!nativePlayer) throw new Error('音频还没准备好'); return nativePlayer.audioCaptureIdentity; } }, positionMs),
     // Logged once and shown in red on the song playing; nativeObs is set just below, before any preparation runs.
-    report: (log, shown) => nativeObs?.report(log, shown)
+    report: failure => nativeObs?.report(failure)
   });
   nativeObsPreload = obsPreload;
   nativeObs = new NativeObsHost({

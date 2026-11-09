@@ -771,7 +771,7 @@ describe('上一首的画面没有清理干净（2026-11-09）', () => {
     await f.player.dispose();
   });
 
-  it('画面一秒没准备好、取消时没清理干净：在这首歌上标红，不另外提示也不再记一次', async () => {
+  it('画面一秒没准备好、取消时没清理干净：在这首歌上标红，说的是取消的画面准备，不是“上一次”；不另外提示也不再记一次', async () => {
     vi.useFakeTimers();
     try {
       const f = fixture();
@@ -779,11 +779,70 @@ describe('上一首的画面没有清理干净（2026-11-09）', () => {
       f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0'));
       const playing = f.player.play('song-0');
       await vi.advanceTimersByTimeAsync(1500); await playing;
-      expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-0' });
-      expect(f.state().fault).toContain(`画面没有清理干净，这一首照常播。原因：${reason}`);
+      expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-0', fault: `取消的画面准备没有清理干净，不影响播放。原因：${reason}` });
       expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('清理'))).toEqual([]);
       await f.player.dispose();
     } finally { vi.useRealTimers(); }
+  });
+
+  // 修复前：这首歌开播时播放器自己报的红字（画面准备失败、停止时关灯的准备失败）整句顶掉“上一首的画面没有清理干净”，
+  // 提醒去看 OBS 节目画面上有没有留着素材的那句只剩在日志里。
+  it('上一首的画面没清理干净、这一首的画面也准备失败（OBS 卡住）：两条一起标红，不互相顶掉', async () => {
+    const f = fixture(); f.project.obsOutputMode = 'scenes';
+    // The second song has picture work, so it waits for its picture and its failure is red.
+    f.project.rundown[1]!.cues = [linkCueSchema.parse({ id: 'cue', name: '机位', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
+      actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: '场景' }] })];
+    await f.player.play('song-0');
+    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0'));
+    f.api.prepareNativeObs.mockRejectedValueOnce(new Error('OBS 请求超时（2000 ms）'));
+    await f.player.play('song-1');
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1',
+      fault: `上一首的画面没有清理干净，这一首照常播。原因：${reason}；画面准备失败，音乐和时间码照常播放：OBS 请求超时（2000 ms）` });
+    await f.player.dispose();
+  });
+
+  it('上一首的画面没清理干净、这一首停止时关灯的准备也失败：两条一起标红', async () => {
+    const f = fixture(); f.project.rundown[1]!.lighting = createLightingDocument();
+    await f.player.play('song-0');
+    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0'));
+    f.lighting.prepare.mockRejectedValueOnce(new Error('MA2 没有连接'));
+    await f.player.play('song-1');
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1',
+      fault: `上一首的画面没有清理干净，这一首照常播。原因：${reason}；停止时可能关不掉这首歌的执行器：MA2 没有连接` });
+    await f.player.dispose();
+  });
+
+  // 修复前：开播时时间码没发出的红字整句顶掉“上一首的画面没有清理干净”。
+  it('上一首的画面没清理干净、这一首开播时时间码也没发出：两条一起标红；同一接口回来后只清掉时间码那条', async () => {
+    const f = fixture();
+    await f.player.play('song-0');
+    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0'));
+    const lost = 'Windows MIDI 输出失败（TEST）：接口已断开（错误码 6）；同一接口重新连接后自动恢复时间码';
+    // The engine reports the timecode lost while the song still prepares its picture.
+    const ready = f.api.prepareNativeObs.getMockImplementation()!;
+    f.api.prepareNativeObs.mockImplementationOnce(request => { f.emit({ mtcError: lost }); return ready(request); });
+    await f.player.play('song-1');
+    const cleanup = `上一首的画面没有清理干净，这一首照常播。原因：${reason}`;
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1', fault: `${cleanup}；时间码没有发出，音频照常播放。原因：${lost}` });
+    f.emit({ mtcError: null, mtcPortName: 'TEST', mtcRecovered: { portName: 'TEST', interruptedAt: '2026-11-09T08:00:00.000Z', recoveredAt: '2026-11-09T08:00:02.400Z', durationMs: 2400 } });
+    expect(f.state()).toMatchObject({ status: 'playing', fault: cleanup });
+    expect(f.state().notice).toContain('时间码中断 2.4 秒后已恢复（TEST）');
+    await f.player.dispose();
+  });
+
+  it('上一首的画面没清理干净、这一首开播时动作 MIDI 也断了：两条一起标红；接口回来后只清掉动作 MIDI 那条', async () => {
+    const f = fixture();
+    await f.player.play('song-0');
+    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0'));
+    const midi = '动作 MIDI 没有发出，音频照常播放。原因：接口已断开';
+    const ready = f.api.prepareNativeObs.getMockImplementation()!;
+    f.api.prepareNativeObs.mockImplementationOnce(request => { f.player.reportFault(midi); return ready(request); });
+    await f.player.play('song-1');
+    const cleanup = `上一首的画面没有清理干净，这一首照常播。原因：${reason}`;
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1', fault: `${cleanup}；${midi}` });
+    f.player.clearFault(midi);
+    expect(f.state()).toMatchObject({ status: 'playing', fault: cleanup });
+    await f.player.dispose();
   });
 
   it('同一首开播时画面那边也标了红：两条一起显示，画面那边重复发来也不变；之后播放中的新故障照常替换', async () => {
@@ -812,6 +871,94 @@ describe('上一首的画面没有清理干净（2026-11-09）', () => {
     await player.play('song-1');
     expect(f.state().fault).toBeNull();
     await player.dispose();
+  });
+});
+
+describe('准备中、拖动定位还没完时按播放键（2026-11-09）', () => {
+  const playKey = Uint8Array.from([0x90, 1, 100]);
+  /** The next picture preparation answers only when the test says so. */
+  function holdPicture(f: ReturnType<typeof fixture>): () => void {
+    const ready = f.api.prepareNativeObs.getMockImplementation()!;
+    let finish: () => void = () => { throw new Error('还没开始准备画面'); };
+    f.api.prepareNativeObs.mockImplementationOnce(request => new Promise(resolve => { finish = () => resolve(ready(request)); }));
+    return () => finish();
+  }
+
+  // 修复前：准备中按 MIDI 播放键（note 1）会从歌头重新准备并开播，刚点到的位置丢了，音乐、时间码和灯光都跳回歌头。
+  // 播放按钮和空格在准备中本来就不动。
+  it('暂停时点波形换位置、新位置还在准备时按 MIDI 播放键：不从歌头重新准备，停在新位置', async () => {
+    const f = fixture();
+    await f.player.play('song-0'); await f.player.pause();
+    const finish = holdPicture(f);
+    const seeking = f.player.seek(3000);
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledTimes(2));
+    expect(f.state().status).toBe('preparing');
+    f.player.receiveMidi(playKey);
+    finish(); await seeking;
+    expect(f.state()).toMatchObject({ status: 'paused', positionMs: 3000 });
+    await f.player.dispose();
+    // The first play and the seek: the key started nothing over from the head of the song.
+    expect(f.api.prepareNativePlayback.mock.calls.map(([request]) => request.snapshot.positionMs)).toEqual([500, 3000]);
+  });
+
+  it('播放中点波形换位置、新位置还在准备时按 MIDI 播放键：不从歌头重新准备，从新位置照常播', async () => {
+    const f = fixture();
+    await f.player.play('song-0');
+    const finish = holdPicture(f);
+    const seeking = f.player.seek(3000);
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledTimes(2));
+    f.player.receiveMidi(playKey);
+    finish(); await seeking;
+    expect(f.state()).toMatchObject({ status: 'playing', positionMs: 3000 });
+    await f.player.dispose();
+    expect(f.api.prepareNativePlayback.mock.calls.map(([request]) => request.snapshot.positionMs)).toEqual([500, 3000]);
+  });
+
+  // 修复前：歌停在曲尾时，继续播放按的是定位之前的位置，判断成“已经播完”，从歌头重播，拖到的位置丢了。
+  it('停在曲尾时把播放头拖回前面、定位指令还没回来就按继续：从拖到的位置接着播，不从歌头重播', async () => {
+    const f = fixture();
+    await f.player.play('song-0');
+    f.emit({ status: 'ended', positionMs: 9500 });
+    await vi.waitFor(() => expect(f.state().status).toBe('paused'));
+    const reply = f.api.controlNativePlayback.getMockImplementation()!;
+    let answer: () => void = () => { throw new Error('定位指令还没发出'); };
+    f.api.controlNativePlayback.mockImplementationOnce(command => new Promise(resolve => { answer = () => resolve(reply(command)); }));
+    const scrubbing = f.player.scrub('song-0', 2000);
+    await vi.waitFor(() => expect(f.api.controlNativePlayback.mock.calls.at(-1)?.[0].kind).toBe('seek'));
+    const resuming = f.player.resume();
+    answer(); await scrubbing; await resuming;
+    expect(f.state()).toMatchObject({ status: 'playing', positionMs: 2000 });
+    expect(f.api.prepareNativePlayback).toHaveBeenCalledOnce();
+    await f.player.dispose();
+  });
+
+  // 修复前：拖动定位还没完时只有第一下算数：判断用的是定位完成前的状态，后按的那一下被丢掉，要再按一次。
+  it('暂停时拖动定位还没完，先按继续又按暂停：以最后按的为准，停在新位置', async () => {
+    const f = fixture();
+    await f.player.play('song-0'); await f.player.pause();
+    const finish = holdPicture(f); f.api.controlNativePlayback.mockClear();
+    const scrubbing = f.player.scrub('song-0', 2000);
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledTimes(2));
+    const resuming = f.player.resume(), pausing = f.player.pause();
+    finish(); await scrubbing; await resuming; await pausing;
+    expect(f.state()).toMatchObject({ status: 'paused', positionMs: 2000 });
+    expect(f.api.controlNativePlayback.mock.calls.map(([command]) => command.kind)).toEqual(['seek']);
+    await f.player.dispose();
+  });
+
+  it('播放中拖动定位还没完，按两次 MIDI 播放键（暂停、再继续）：以最后按的为准，定位好了从新位置接着播，新位置的画面不停', async () => {
+    const f = fixture();
+    await f.player.play('song-0');
+    const finish = holdPicture(f); f.api.controlNativePlayback.mockClear();
+    const scrubbing = f.player.scrub('song-0', 2000);
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledTimes(2));
+    f.player.receiveMidi(playKey); f.player.receiveMidi(playKey);
+    finish(); await scrubbing;
+    expect(f.state()).toMatchObject({ status: 'playing', positionMs: 2000 });
+    expect(f.api.controlNativePlayback.mock.calls.map(([command]) => command.kind)).toEqual(['seek', 'play']);
+    // Only the picture before the scrub was stopped; the one prepared at the new position stays.
+    expect(f.api.stopNativeObs).toHaveBeenCalledOnce();
+    await f.player.dispose();
   });
 });
 

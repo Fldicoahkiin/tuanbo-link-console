@@ -17,6 +17,9 @@ type Dependencies = {
   error: (message: string) => void;
   prepareNextFiles?: (request: NativeObsPrepare, assertCurrent: () => void) => Promise<void>;
 };
+/** A picture failure nobody else reports, in two wordings (2026-11-09): `log` keeps OBS's own words with the request
+ * and source names, for the run log; `shown` is what the operator reads. Named, so the two cannot be swapped. */
+export type PictureFailure = { log: string; shown: string };
 
 /** Main-process ownership boundary. Admission binds to the exact audio session
  * and generation, never to a song name or a renderer timer. */
@@ -107,7 +110,7 @@ export class NativeObsHost {
 
   /** A failure nobody else reports (a picture prepared in advance and cleaned up in the background): `log`, with
    * OBS's own words, is logged once; `shown` is shown in red on the song playing or about to. */
-  report(log: string, shown: string): void {
+  report({ log, shown }: PictureFailure): void {
     this.dependencies.error(log);
     const entry = this.entry;
     if (this.preparing > 0 && entry?.request !== this.requested) this.unshown.push(shown);
@@ -127,8 +130,8 @@ export class NativeObsHost {
     const audio = this.assertAdmission(request), project = projectFromObsSnapshot(request.snapshot);
     const outputs = await this.dependencies.outputs(request, audio.positionMs, () => { if (epoch !== this.epoch) throw new Error('画面资源交接已取消'); });
     if (epoch !== this.epoch) {
-      await outputs.releaseOutputs().catch((error: unknown) => this.report(`取消的画面准备没有清理干净，不影响播放。原因：${pictureErrorDetail(error)}`,
-        `取消的画面准备没有清理干净，不影响播放。原因：${pictureCleanupReason(error)}`));
+      await outputs.releaseOutputs().catch((error: unknown) => this.report({ log: `取消的画面准备没有清理干净，不影响播放。原因：${pictureErrorDetail(error)}`,
+        shown: `取消的画面准备没有清理干净，不影响播放。原因：${pictureCleanupReason(error)}` }));
       throw new Error('画面资源交接已取消');
     }
     const faults = this.unshown.splice(0);
@@ -246,10 +249,21 @@ export class NativeObsHost {
   private cleanUp(entry: Entry): Promise<void> {
     entry.cleanup ??= entry.session.stop().catch((error: unknown) => {
       this.dependencies.error(`画面没有清理干净：${pictureErrorDetail(error)}`);
-      const leftover: ObsPictureLeftover = new ObsPictureLeftover(entry.request.snapshot.item.id, error, () => { entry.leftover ??= leftover; });
+      const leftover: ObsPictureLeftover = new ObsPictureLeftover(entry.request.snapshot.item.id, error, () => this.giveBack(entry, leftover));
       entry.leftover = leftover;
     });
     return entry.cleanup;
+  }
+  /** A program that closed before it could show a failed cleanup hands it back (2026-11-09). A song that already took
+   * the picture over, for example the next program's first song, which waited for this cleanup, will not ask for it
+   * again: it shows it now, next to its own fault. Otherwise the song that starts next shows it. */
+  private giveBack(entry: Entry, leftover: ObsPictureLeftover): void {
+    const current = this.entry;
+    if (current && current !== entry && !['stopped', 'failed'].includes(current.state.state)) {
+      this.patch({ fault: [leftover.next(current.request.snapshot.item.id), current.state.fault].filter(Boolean).join('；') });
+      return;
+    }
+    (current ?? entry).leftover ??= leftover;
   }
   /** That song's failed cleanup, for whoever shows it; afterwards nobody else gets it. */
   private claim(entry: Entry | null): ObsPictureLeftover | null {

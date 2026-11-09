@@ -3,6 +3,7 @@ import { createEmptyLinkProject, parseLinkProject, type NativeObsPreload } from 
 import { createObsProgramSnapshot, materialSceneNames } from '@tb/core/link';
 import { NativeObsPreloadPool } from './native-obs-preload';
 import { ObsPreparationCancelled, type NativeObsOutputs } from './native-obs-outputs';
+import type { PictureFailure } from './native-obs-host';
 
 function setup() {
   const project = parseLinkProject({ ...createEmptyLinkProject('预备'), playbackSource: 'internal', obsOutputMode: 'scenes', rundown: [{ id: 'song', title: '歌曲' }] });
@@ -16,7 +17,7 @@ function setup() {
     releaseOutputs: vi.fn(() => Promise.resolve()), seekMedia: vi.fn(() => Promise.resolve()), executeManagedMediaEvent: vi.fn(() => Promise.resolve()),
     recordLog: entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: new Date().toISOString(), monotonicMs: 0 })
   };
-  const authorize = vi.fn(() => Promise.resolve()), create = vi.fn(() => outputs), report = vi.fn<(log: string, shown: string) => void>();
+  const authorize = vi.fn(() => Promise.resolve()), create = vi.fn(() => outputs), report = vi.fn<(failure: PictureFailure) => void>();
   const pool = new NativeObsPreloadPool({ authorize, create, report });
   const stop = { version: request.version, sessionId: request.sessionId, generation: request.generation };
   const song = (id: string) => ({ ...request.snapshot, item: { ...request.snapshot.item, id } });
@@ -116,7 +117,7 @@ it('下一首后台预备还没完就开歌、随后失败：这首照常准备�
   expect(await taking).toBe(t.outputs); await handed;
   expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(1); expect(t.create).toHaveBeenCalledTimes(2);
   // Nobody else hears about a failure after the song took the preparation over: it is reported here, once, without code prefixes.
-  expect(t.report.mock.calls).toEqual([['提前准备的画面没能用上，已改为重新准备。原因：读取素材失败：素材文件读不了', '提前准备的画面没能用上，已改为重新准备。原因：读取素材失败：素材文件读不了']]);
+  expect(t.report.mock.calls).toEqual([[{ log: '提前准备的画面没能用上，已改为重新准备。原因：读取素材失败：素材文件读不了', shown: '提前准备的画面没能用上，已改为重新准备。原因：读取素材失败：素材文件读不了' }]]);
 });
 
 it.each([0, 1, 2, 3, 4, 5, 6, 7])('下一首提前准备刚失败、过 %i 个微任务下一首来接手：失败只报一次，只清理一次（2026-11-09）', async ticks => {
@@ -131,7 +132,7 @@ it.each([0, 1, 2, 3, 4, 5, 6, 7])('下一首提前准备刚失败、过 %i 个�
   for (let tick = 0; tick < ticks; tick++) await Promise.resolve();
   expect(await t.pool.take({ ...t.request, generation: 3, snapshot: t.song('B') }, 0, () => undefined)).toBe(t.outputs);
   await job;
-  expect([...asked, ...t.report.mock.calls.map(([message]) => message)]).toHaveLength(1);
+  expect([...asked, ...t.report.mock.calls.map(([failure]) => failure.log)]).toHaveLength(1);
   expect(t.outputs.releaseOutputs).toHaveBeenCalledOnce(); expect(t.create).toHaveBeenCalledTimes(2);
 });
 
@@ -205,7 +206,7 @@ it('下一首后台预备失败、它的清理也失败：报出预备本身的�
   vi.mocked(t.outputs.releaseOutputs).mockRejectedValueOnce(new Error('画面没有清理干净：OBS 停止 请求排队超时（2000 ms）；还没发送'));
   await expect(t.pool.prepareNext({ ...t.request, nextFiles: { snapshot: t.song('B'), positionMs: 0 } }, () => undefined)).rejects.toThrow('OBS 读取目录 请求排队超时');
   // The reason says it once, without repeating that the picture was not cleaned up.
-  expect(t.report.mock.calls).toEqual([['提前准备的画面没有清理干净，不影响播放。原因：OBS 停止 请求排队超时（2000 ms）；还没发送', '提前准备的画面没有清理干净，不影响播放。原因：OBS 停止 请求排队超时（2000 ms）；还没发送']]);
+  expect(t.report.mock.calls).toEqual([[{ log: '提前准备的画面没有清理干净，不影响播放。原因：OBS 停止 请求排队超时（2000 ms）；还没发送', shown: '提前准备的画面没有清理干净，不影响播放。原因：OBS 停止 请求排队超时（2000 ms）；还没发送' }]]);
   for (const [id, generation] of [['B', 3], ['C', 4], ['D', 5]] as const) {
     expect(await t.pool.take({ ...t.request, generation, snapshot: t.song(id) }, 0, () => undefined)).toBe(t.outputs);
   }
@@ -240,8 +241,8 @@ it('这首歌接手的预备失败、清理也失败：这首照常重新准备�
   fail(new Error('OBS 预热素材静音 请求排队超时（2000 ms）；还没发送'));
   expect(await taking).toBe(t.outputs); await handed;
   expect(t.create).toHaveBeenCalledTimes(2); expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(1);
-  expect(t.report.mock.calls).toEqual([['提前准备的画面没能用上，已改为重新准备。原因：OBS 预热素材静音 请求排队超时（2000 ms）；还没发送', '提前准备的画面没能用上，已改为重新准备。原因：OBS 预热素材静音 请求排队超时（2000 ms）；还没发送'],
-    ['提前准备的画面没有清理干净，不影响播放。原因：OBS 停止 请求排队超时（2000 ms）；还没发送', '提前准备的画面没有清理干净，不影响播放。原因：OBS 停止 请求排队超时（2000 ms）；还没发送']]);
+  expect(t.report.mock.calls).toEqual([[{ log: '提前准备的画面没能用上，已改为重新准备。原因：OBS 预热素材静音 请求排队超时（2000 ms）；还没发送', shown: '提前准备的画面没能用上，已改为重新准备。原因：OBS 预热素材静音 请求排队超时（2000 ms）；还没发送' }],
+    [{ log: '提前准备的画面没有清理干净，不影响播放。原因：OBS 停止 请求排队超时（2000 ms）；还没发送', shown: '提前准备的画面没有清理干净，不影响播放。原因：OBS 停止 请求排队超时（2000 ms）；还没发送' }]]);
 });
 
 it('报告的失败：运行日志里留着 OBS 的原话和来源名，界面上是看得懂的说法（2026-11-09）', async () => {
@@ -254,11 +255,13 @@ it('报告的失败：运行日志里留着 OBS 的原话和来源名，界面�
   vi.mocked(t.outputs.releaseOutputs).mockRejectedValueOnce(new Error('画面没有清理干净：Error: SetInputSettings：No source was found by the name of `团播联动台·素材·B`.'));
   fail(new Error('GetSceneItemId：No scene was found by the name of `团播联动台·素材·B`.'));
   expect(await taking).toBe(t.outputs); await handed;
+  // Named, so the log and the red text cannot change places on the way to the picture host (2026-11-09). A cleanup
+  // that failed is not a preparation that failed: its red text says what went wrong, without advice about preparing.
   expect(t.report.mock.calls).toEqual([
-    ['提前准备的画面没能用上，已改为重新准备。原因：GetSceneItemId：No scene was found by the name of `团播联动台·素材·B`.',
-      '提前准备的画面没能用上，已改为重新准备。原因：OBS 中找不到需要的场景或来源。请重新同步素材后再播放。'],
-    ['提前准备的画面没有清理干净，不影响播放。原因：SetInputSettings：No source was found by the name of `团播联动台·素材·B`.',
-      '提前准备的画面没有清理干净，不影响播放。原因：OBS 中找不到需要的场景或来源。请重新同步素材后再播放']]);
+    [{ log: '提前准备的画面没能用上，已改为重新准备。原因：GetSceneItemId：No scene was found by the name of `团播联动台·素材·B`.',
+      shown: '提前准备的画面没能用上，已改为重新准备。原因：OBS 中找不到需要的场景或来源。请重新同步素材后再播放。' }],
+    [{ log: '提前准备的画面没有清理干净，不影响播放。原因：SetInputSettings：No source was found by the name of `团播联动台·素材·B`.',
+      shown: '提前准备的画面没有清理干净，不影响播放。原因：OBS 中找不到需要的场景或来源' }]]);
 });
 
 it('接手预备的歌被取消：预备按取消结束，不当成失败报告；只清理一次，这首歌也不再准备', async () => {
@@ -279,7 +282,7 @@ it('重新选歌时上一份预备清理失败：新的选择照常预备，清�
   vi.mocked(t.outputs.releaseOutputs).mockRejectedValueOnce(new Error('画面没有清理干净：OBS 无响应'));
   await expect(t.pool.preload({ ...t.request, generation: 2, snapshot: t.song('B') })).resolves.toBeUndefined();
   expect(t.create).toHaveBeenCalledTimes(2);
-  expect(t.report.mock.calls).toEqual([['提前准备的画面没有清理干净，不影响播放。原因：OBS 无响应', '提前准备的画面没有清理干净，不影响播放。原因：OBS 无响应']]);
+  expect(t.report.mock.calls).toEqual([[{ log: '提前准备的画面没有清理干净，不影响播放。原因：OBS 无响应', shown: '提前准备的画面没有清理干净，不影响播放。原因：OBS 无响应' }]]);
 });
 
 it('开另一首歌时清理别的预备失败：这首照常准备画面，清理失败只报一次', async () => {
@@ -288,7 +291,7 @@ it('开另一首歌时清理别的预备失败：这首照常准备画面，清�
   vi.mocked(t.outputs.releaseOutputs).mockRejectedValueOnce(new Error('画面没有清理干净：OBS 无响应'));
   expect(await t.pool.take({ ...t.request, generation: 3, snapshot: t.song('C') }, 0, () => undefined)).toBe(t.outputs);
   expect(t.create).toHaveBeenCalledTimes(2);
-  expect(t.report.mock.calls).toEqual([['提前准备的画面没有清理干净，不影响播放。原因：OBS 无响应', '提前准备的画面没有清理干净，不影响播放。原因：OBS 无响应']]);
+  expect(t.report.mock.calls).toEqual([[{ log: '提前准备的画面没有清理干净，不影响播放。原因：OBS 无响应', shown: '提前准备的画面没有清理干净，不影响播放。原因：OBS 无响应' }]]);
 });
 
 it('选择预备在开歌前就失败：失败已经交给选歌的一方，开歌接手时不再重复报告', async () => {

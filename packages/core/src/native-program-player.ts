@@ -14,12 +14,21 @@ import { optionalOutputReady } from './optional-output-ready';
 
 type NativeApi = Pick<LinkDesktopApi, 'prepareNativePlayback' | 'controlNativePlayback' | 'getNativePlaybackDevices' | 'onNativePlaybackStatus' | 'prepareNativeObs' | 'stopNativeObs' | 'onNativeObsStatus' | 'preloadNativeObs' | 'cancelNativeObsPreload'>;
 type NativeAction = NativePlayerControl extends infer T ? T extends NativePlayerControl ? Omit<T, 'version' | 'sessionId' | 'generation'> : never : never;
+/** A scrub still placing the song at `positionMs`, and the last play or pause pressed meanwhile. */
+type Scrub = { token: number; positionMs: number; pressed: 'play' | 'pause' | null };
+/** This start's red text: why the picture before it was not cleaned up, the picture host's own fault for this start
+ * (which it repeats with each status), and the fault of this start shown next to the failed cleanup. */
+type StartFaults = { leftover: string | null; obs: string | null; fault: string | null };
 
 const notCleanedUp = /画面没有清理干净[:：]\s*/gu;
 
-/** Why a picture was not fully cleaned up, as the operator reads it: no code prefixes, and that it was not cleaned up is not repeated. */
+/** Why a picture was not fully cleaned up, as the operator reads it: no code prefixes, and that it was not cleaned up is
+ * not repeated. Only what went wrong: a known OBS error reads as what happened and then what to do, and that advice is
+ * for a preparation that failed, not for a cleanup (2026-11-09). What to check after a failed cleanup is said apart. */
 export function pictureCleanupReason(error: unknown): string {
-  return toUserErrorMessage(error).replace(notCleanedUp, '').replace(/[。.；;\s]+$/u, '') || '未知错误';
+  const detail = pictureErrorDetail(error), shown = toUserErrorMessage(detail);
+  const reason = shown === detail ? detail : shown.split('。')[0] ?? shown;
+  return reason.replace(/[。.；;\s]+$/u, '') || '未知错误';
 }
 
 /** What a picture failure said, as the run log keeps it (2026-11-09): OBS's own words with the request and source names,
@@ -41,6 +50,8 @@ export class ObsPictureLeftover extends Error {
   next(itemId: string): string {
     return `${itemId === this.itemId ? '上一次' : '上一首'}的画面没有清理干净，这一首照常播。原因：${this.message}`;
   }
+  /** Shown in red on the song whose own picture took too long and was given up on as it started; it plays on (2026-11-09). */
+  cancelled(): string { return `取消的画面准备没有清理干净，不影响播放。原因：${this.message}`; }
   /** A program that closes has nowhere to show it: the next song to start shows it instead. */
   handBack(): void { this.giveBack(); }
 }
@@ -85,13 +96,15 @@ export class NativeProgramPlayer {
    * play, the next stop or close sends one Off with the plan LightingOutputRelease holds by then, the new song's
    * executors when it has lighting. The same close without such a skipped stop sends none. */
   private lightingOwed = false;
-  /** The scrub still placing the song (its seek or its picture in flight). A pause or resume pressed meanwhile
-   * waits for it, instead of cancelling the picture it prepares at the new position (2026-11-09). */
-  private scrubbing: number | null = null;
-  /** In red at this start: why the picture before it was not cleaned up, and the picture host's own fault as this
-   * start's picture was prepared. Shown together, so neither replaces the other (2026-11-09). */
-  private leftoverFault: string | null = null;
-  private obsStartFault: string | null = null;
+  /** The scrub still placing the song (its seek or its picture in flight). A pause or resume pressed meanwhile does not
+   * cancel the picture it prepares at the new position: the last one pressed decides how the scrub ends, paused there
+   * or playing on from there (2026-11-09). */
+  private scrubbing: Scrub | null = null;
+  /** In red at this start, together (2026-11-09): why the picture before it was not cleaned up, first, and next to it
+   * what failed as the song started (the picture host, the picture, the lights' Off at stop, the timecode), so neither
+   * replaces the other. A fault after the start replaces them, as any later fault replaces the one shown. Each play
+   * and scrub starts over. */
+  private start: StartFaults = { leftover: null, obs: null, fault: null };
 
   readonly clock: PlaybackClock = {
     read: () => ({ positionMs: this.native?.positionMs ?? this.state.positionMs, durationMs: this.state.durationMs,
@@ -134,7 +147,7 @@ export class NativeProgramPlayer {
     const reuseSession = itemId === this.state.itemId && ['playing', 'paused'].includes(this.state.status);
     if (this.state.itemId !== itemId && this.state.status === 'playing') this.markPlayed();
     this.cancelScheduled(); this.runtimePrepared = false; this.timecodeOutput = idleTimecodeOutput; this.boundary('seek');
-    this.leftoverFault = null; this.obsStartFault = null;
+    this.start = { leftover: null, obs: null, fault: null };
     this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, fault: null, mtcConnectionFailed: false });
     return this.enqueue(token, async () => {
       if (!this.projectPath) throw new Error('请先保存工程，再播放');
@@ -193,9 +206,11 @@ export class NativeProgramPlayer {
   }
 
   pause(): Promise<void> {
+    const scrub = this.placing();
+    // Pressed while a scrub is still placing the song: it stays paused there, with the picture it prepares for that
+    // position, also when play was pressed before this during the same scrub (2026-11-09).
+    if (scrub) { if (this.scrubbedStatus(scrub) === 'playing') scrub.pressed = 'pause'; return this.tail; }
     if (this.state.status !== 'playing') return Promise.resolve();
-    // A scrub still placing the song leaves it paused there, with the picture it prepares for that position.
-    if (this.scrubbing === this.epoch) return this.tail;
     const token = ++this.epoch; this.cancelScheduled();
     return this.enqueue(token, async () => {
       await this.command({ kind: 'pause' }); if (!this.current(token)) return;
@@ -204,24 +219,36 @@ export class NativeProgramPlayer {
     });
   }
   resume(): Promise<void> {
+    const scrub = this.placing();
+    if (scrub && this.state.itemId) {
+      if (this.scrubbedStatus(scrub) !== 'paused') return this.tail;
+      // Placed at the end of the song, play plays it again from its start, as below.
+      if (scrub.positionMs >= this.state.durationMs) return this.play(this.state.itemId);
+      // Pressed while a scrub is still placing the song: it plays on from there once placed, with the picture the
+      // scrub prepares, instead of cancelling that picture and playing the rest of the song without it. Pressed again,
+      // it still plays on once; a pause pressed after it keeps the song paused there (2026-11-09).
+      scrub.pressed = 'play'; return this.tail;
+    }
     if (this.state.status !== 'paused' || !this.state.itemId) return Promise.resolve();
     if ((this.native?.positionMs ?? 0) >= this.state.durationMs) return this.play(this.state.itemId);
-    // Pressed while a scrub is still placing the song: it plays on from there once placed, with the picture the scrub
-    // prepares, instead of cancelling that picture and playing the rest of the song without it (2026-11-09).
-    const token = this.scrubbing === this.epoch ? this.epoch : ++this.epoch;
-    return this.enqueue(token, async () => {
-      // Pressed twice while the scrub ran: the first one plays on.
-      if (this.state.status !== 'paused') return;
-      const position = this.native!.positionMs;
-      if (!this.current(token)) return;
-      // Pause cancels unsent MIDI and releases owned notes. Prepare the future
-      // range before resuming audio; late preparation cannot join mid-song.
-      await this.prepareRuntime(this.state.itemId!, position, true, token);
-      if (!this.current(token)) return;
-      await this.command({ kind: 'play' }); if (!this.current(token)) return;
-      this.startCompanionClock();
-      this.update({ status: 'playing' }); this.consumeClock();
-    });
+    const token = ++this.epoch;
+    return this.enqueue(token, () => this.playOn(token));
+  }
+  /** Plays on from where the song is paused. Pause cancels unsent MIDI and releases owned notes: the range ahead is
+   * prepared before the audio resumes, as late preparation cannot join mid-song. */
+  private async playOn(token: number): Promise<void> {
+    if (this.state.status !== 'paused') return;
+    await this.prepareRuntime(this.state.itemId!, this.native!.positionMs, true, token);
+    if (!this.current(token)) return;
+    await this.command({ kind: 'play' }); if (!this.current(token)) return;
+    this.startCompanionClock();
+    this.update({ status: 'playing' }); this.consumeClock();
+  }
+  /** The scrub placing the song now, if one is: nothing newer was pressed or played since it began. */
+  private placing(): Scrub | null { return this.scrubbing?.token === this.epoch ? this.scrubbing : null; }
+  /** Playing or paused, as the operator last asked for while the scrub places the song. */
+  private scrubbedStatus(scrub: Scrub): InternalPlayerState['status'] {
+    return scrub.pressed === 'play' ? 'playing' : scrub.pressed === 'pause' ? 'paused' : this.state.status;
   }
   stop(): Promise<void> {
     const token = ++this.epoch; this.cancelScheduled(); this.update({ status: 'stopped', notice: null, fault: null });
@@ -251,10 +278,30 @@ export class NativeProgramPlayer {
   externalStop(): void { void this.stop(); }
   freeze(message: string): void { void this.stop().then(() => this.update({ status: 'error', error: message, errorTitle: '播放已中断' })); }
   runtimeUnavailable(message: string): void { this.runtimePrepared = false; this.reportUnavailable(message); }
-  /** A live output failure: shown in red; audio and the remaining actions continue. */
-  reportFault(message: string): void { if (['preparing', 'playing', 'paused'].includes(this.state.status) && this.state.fault !== message) this.update({ fault: message }); }
-  /** The output behind this red message is back: clear it if it is still the one shown. */
-  clearFault(message: string): void { if (this.state.fault === message) this.update({ fault: null }); }
+  /** A live output failure: shown in red; audio and the remaining actions continue. One reported as the song starts
+   * stays next to a failed cleanup shown there, instead of replacing it (2026-11-09). */
+  reportFault(message: string): void {
+    if (!['preparing', 'playing', 'paused'].includes(this.state.status)) return;
+    if (!this.starting()) { this.showFault(message); return; }
+    this.start.fault = message; this.showFault(this.startRed(message));
+  }
+  /** The output behind this red message is back: clear it if it is still the one shown, also next to a failed cleanup,
+   * which stays. */
+  clearFault(message: string): void {
+    if (this.state.fault === message) this.update({ fault: null });
+    else if (this.startFaultShown() === message) { this.start.fault = null; this.update({ fault: this.start.leftover }); }
+  }
+  /** The song or its picture is still being prepared (also at a scrub). */
+  private starting(): boolean { return this.state.status === 'preparing' || this.obsPreparing; }
+  /** This start's red text: the failed cleanup before it, then `fault`. */
+  private startRed(fault: string | null): string { return [this.start.leftover, fault].filter(Boolean).join('；'); }
+  /** The fault of this start, while it is in red (alone, or next to the failed cleanup before it). */
+  private startFaultShown(): string | null {
+    return this.start.fault !== null && this.state.fault === this.startRed(this.start.fault) ? this.start.fault : null;
+  }
+  /** The red text shown, as the output that reported it said it: without a failed cleanup shown before it. */
+  private shownFault(): string | null { return this.startFaultShown() ?? this.state.fault ?? null; }
+  private showFault(text: string): void { if (this.state.fault !== text) this.update({ fault: text }); }
   /** An output that could not join or left this song: logged and shown in red, audio continues. */
   private startFault(message: string): void { this.dependencies.notice?.(message, this.state.itemId); this.reportFault(message); }
   reportUnavailable(message: string): void {
@@ -268,24 +315,26 @@ export class NativeProgramPlayer {
   /** Every stop of a picture this program prepared ends here when it fails, but the one at closing, which hands a failed
    * cleanup back itself. A failed cleanup was logged where it ran (2026-11-09): it is shown in red on the song on stage,
    * which plays on, else on the stopped player; one heard after closing is handed back to the picture host for the next
-   * song. Any other failure to stop it is shown and logged here. */
-  private pictureNotStopped(error: unknown, doing: string): void {
+   * song. `givenUp`: the start whose own picture took too long and was cancelled, which says so while it is on stage.
+   * Any other failure to stop it is shown and logged here. */
+  private pictureNotStopped(error: unknown, doing: string, givenUp: StartFaults | null = null): void {
     if (!(error instanceof ObsPictureLeftover)) this.reportUnavailable(`${doing}：${toUserErrorMessage(error)}`);
     else if (this.disposed) error.handBack();
-    else if (this.state.itemId && ['preparing', 'playing', 'paused'].includes(this.state.status)) this.showLeftover(error.next(this.state.itemId));
+    else if (this.state.itemId && ['preparing', 'playing', 'paused'].includes(this.state.status)) this.showLeftover(givenUp === this.start ? error.cancelled() : error.next(this.state.itemId));
     else this.showNotice(`画面清理失败：${error.message}`);
   }
-  /** Joins the picture host's fault already shown for this start, which repeats it with each status. */
+  /** Shown first, next to the fault of this start already shown, if one is. */
   private showLeftover(message: string): void {
-    this.leftoverFault = message;
-    this.reportFault(this.obsStartFault && this.state.fault === this.obsStartFault ? `${message}；${this.obsStartFault}` : message);
+    const fault = this.startFaultShown();
+    this.start.leftover = message; this.showFault(this.startRed(fault));
   }
   seek(positionMs: number): Promise<void> { return this.state.itemId ? this.play(this.state.itemId, positionMs, this.state.status === 'paused') : Promise.resolve(); }
   scrub(itemId: string, positionMs: number): Promise<void> {
     if (this.state.status === 'error') return Promise.resolve();
     if (itemId !== this.state.itemId || !['playing', 'paused'].includes(this.state.status)) return this.play(itemId, positionMs, true);
-    const token = ++this.epoch; this.scrubbing = token; this.cancelScheduled(); this.boundary('seek');
-    this.leftoverFault = null; this.obsStartFault = null;
+    const token = ++this.epoch, scrub: Scrub = { token, positionMs, pressed: null };
+    this.scrubbing = scrub; this.cancelScheduled(); this.boundary('seek');
+    this.start = { leftover: null, obs: null, fault: null };
     return this.enqueue(token, async () => {
       try {
         await this.command({ kind: 'seek', positionMs }); if (!this.current(token)) return;
@@ -293,13 +342,23 @@ export class NativeProgramPlayer {
         await this.prepareObs(itemId, token); if (!this.current(token)) return;
         this.update({ status: 'paused', positionMs: this.native!.positionMs });
         if (this.runtimePrepared && this.dependencies.scrub) await this.optionalRuntime(() => this.dependencies.scrub!(positionMs), '联动定位失败');
-      } finally { if (this.scrubbing === token) this.scrubbing = null; }
+      } finally { if (this.scrubbing === scrub) this.scrubbing = null; }
+      // Play was the last pressed while it placed the song: it plays on from there, with the picture it prepared.
+      if (scrub.pressed === 'play' && this.current(token)) await this.playOn(token);
     });
   }
   skip(direction: -1 | 1): Promise<void> { const items = this.items(), index = items.findIndex(item => item.id === this.state.itemId); const next = items[(index + direction + items.length) % items.length]; return next ? this.play(next.id) : Promise.resolve(); }
   setEndAction(endAction: InternalPlayerState['endAction']): void { this.update({ endAction }); }
   setPlaylist(playlistId: string): void { this.update({ playlistId }); }
-  toggle(): Promise<void> { if (this.state.status === 'playing') return this.pause(); if (this.state.status === 'paused') return this.resume(); const item = this.items().find(item => item.id === this.state.itemId) ?? this.items()[0]; return item ? this.play(item.id) : Promise.resolve(); }
+  /** The play/pause key (MIDI note 1). Nothing while a song is being prepared, like the play buttons and Space: pressing
+   * it again would start the preparation over from the start of the song and lose the position it prepares (2026-11-09).
+   * While a scrub places the song it goes by what was last pressed meanwhile. */
+  toggle(): Promise<void> {
+    if (this.state.status === 'preparing') return Promise.resolve();
+    const scrub = this.placing(), status = scrub ? this.scrubbedStatus(scrub) : this.state.status;
+    if (status === 'playing') return this.pause(); if (status === 'paused') return this.resume();
+    const item = this.items().find(item => item.id === this.state.itemId) ?? this.items()[0]; return item ? this.play(item.id) : Promise.resolve();
+  }
   toggleMtc(): void {
     this.update({ mtcEnabled: !this.state.mtcEnabled });
     if (!this.state.mtcEnabled) this.mtcSuppressed = true;
@@ -341,9 +400,10 @@ export class NativeProgramPlayer {
     if (this.disposed || status.sessionId !== this.sessionId || status.generation !== this.nativeGeneration) return;
     // Like P1, an interrupted timecode resumes with a full frame; the service logs it, nothing turns red.
     this.native = status;
-    const timecode = timecodeOutputChange(this.timecodeOutput, status, this.state.fault); this.timecodeOutput = timecode.memory;
+    // The timecode's red text may stand next to a failed cleanup shown at this start; its recovery clears only its own.
+    const shown = this.shownFault(), timecode = timecodeOutputChange(this.timecodeOutput, status, shown); this.timecodeOutput = timecode.memory;
     if (timecode.fault) this.startFault(timecode.fault);
-    if (timecode.clearFault) this.update({ fault: null });
+    if (timecode.clearFault && shown) this.clearFault(shown);
     if (timecode.notice) this.reportUnavailable(timecode.notice);
     this.update({ mtcConnectionFailed: Boolean(status.mtcError), mtcPortName: status.mtcError ? null : status.mtcPortName,
       mtcSentPositionMs: status.mtcPortName && !status.mtcError && status.mtcSent ? status.offsetMs + status.positionMs : null });
@@ -359,9 +419,11 @@ export class NativeProgramPlayer {
     // A stopped picture channel is an output fault for a song with picture work; for one without, the notice above is all.
     const fault = status.state === 'failed' && this.picture === 'wait' ? `画面联动已停止：${status.reason ?? '未知错误'}` : status.fault;
     if (!fault) return;
-    if (this.obsPreparing) this.obsStartFault = fault;
+    if (this.obsPreparing) this.start.obs = fault;
     // The host repeats its fault with each status; its fault for this start stays next to a failed cleanup shown there.
-    this.reportFault(this.leftoverFault && fault === this.obsStartFault ? `${this.leftoverFault}；${fault}` : fault);
+    if (fault !== this.start.obs) { this.reportFault(fault); return; }
+    if (!['preparing', 'playing', 'paused'].includes(this.state.status)) return;
+    this.start.fault = fault; this.showFault(this.startRed(fault));
   }
   private async prepareObs(itemId: string, token: number): Promise<void> {
     if (!this.current(token) || !this.native) return;
@@ -374,8 +436,9 @@ export class NativeProgramPlayer {
         preciseSeeking: this.dependencies.preciseSeeking?.() ?? false, snapshot, ...(nextFiles ? { nextFiles } : {}) });
       // A song that needs its picture waits for it (a first play may build seek
       // caches); the operator can stop. Optional picture keeps the one-second window.
+      const start = this.start;
       const status = await (this.picture === 'wait' ? preparing : optionalOutputReady(preparing,
-        () => { void this.stopObs().catch((error: unknown) => this.pictureNotStopped(error, '取消画面准备失败')); }, '后台画面'));
+        () => { void this.stopObs().catch((error: unknown) => this.pictureNotStopped(error, '取消画面准备失败', start)); }, '后台画面'));
       if (this.current(token) && this.obsSession === envelope) this.receiveObs(status);
       else await this.stopObs().catch((error: unknown) => this.pictureNotStopped(error, '取消画面准备失败'));
     } catch (error) {

@@ -1,5 +1,6 @@
 import { nativeObsPreloadSchema, nativeObsStopSchema, type NativeObsPrepare, type NativeObsPreload, type NativeObsStop } from '@tb/schema';
 import { ObsPreparationCancelled, type NativeObsOutputs } from './native-obs-outputs';
+import type { PictureFailure } from './native-obs-host';
 import { materialSceneTargets, pictureCleanupReason, pictureErrorDetail, projectFromObsSnapshot, toUserErrorMessage } from '@tb/core/link';
 
 /** `settled`: the preparation itself has ended; its result goes to whoever asked for it, unless `taken`:
@@ -11,7 +12,7 @@ type Dependencies = {
   create: (request: NativeObsPrepare, positionMs: number) => NativeObsOutputs;
   /** A failure no caller hears about, reported once: the failed cleanup of a preparation that was replaced, or a
    * preparation that failed after its song took it over. `log` keeps OBS's own words; `shown` is what the operator reads. */
-  report: (log: string, shown: string) => void;
+  report: (failure: PictureFailure) => void;
 };
 
 /** One silent selected or upcoming program. Ownership transfers to the formal session only
@@ -108,8 +109,8 @@ export class NativeObsPreloadPool {
         // the song prepares its picture below. A failure from before this song took
         // it over went to whoever asked for it; one after is reported here, once.
         if (entry.taken && !(error instanceof ObsPreparationCancelled)) {
-          this.dependencies.report(`提前准备的画面没能用上，已改为重新准备。原因：${pictureErrorDetail(error)}`,
-            `提前准备的画面没能用上，已改为重新准备。原因：${toUserErrorMessage(error)}`);
+          this.dependencies.report({ log: `提前准备的画面没能用上，已改为重新准备。原因：${pictureErrorDetail(error)}`,
+            shown: `提前准备的画面没能用上，已改为重新准备。原因：${toUserErrorMessage(error)}` });
         }
         await this.release(entry).catch((cleanup: unknown) => this.reportCleanup(cleanup));
       }
@@ -150,8 +151,8 @@ export class NativeObsPreloadPool {
     return released;
   }
   private reportCleanup(error: unknown): void {
-    this.dependencies.report(`提前准备的画面没有清理干净，不影响播放。原因：${pictureErrorDetail(error)}`,
-      `提前准备的画面没有清理干净，不影响播放。原因：${pictureCleanupReason(error)}`);
+    this.dependencies.report({ log: `提前准备的画面没有清理干净，不影响播放。原因：${pictureErrorDetail(error)}`,
+      shown: `提前准备的画面没有清理干净，不影响播放。原因：${pictureCleanupReason(error)}` });
   }
 }
 
