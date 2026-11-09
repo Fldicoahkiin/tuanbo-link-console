@@ -67,10 +67,14 @@ import { useReferenceAudioUrl, useLightingDocument } from './useCueWorkspaceSetu
 import { editableTimelineDuration } from './timeline-geometry';
 import { createWorkspaceActions } from './workspace-actions';
 import type { DocumentActionProps } from './DocumentActions';
+import { PendingPictureNotice } from './PendingPictureNotice';
+import { NO_PENDING_PICTURE_EDITS, pendingPictureEdits } from '../view-models/pending-picture-edits';
 
 type Props = {
   workspace?: 'visual' | 'lighting';
   player: ProjectPlayer;
+  /** The project the player plays from: LinkApp keeps it as it was when playback started, until 停止. */
+  playbackProject: LinkProject | null;
   sidebarHost: HTMLDivElement | null;
   toolbarHost: HTMLDivElement | null;
   /** The sidebar place for the lighting workbench's console sync controls. */
@@ -86,7 +90,7 @@ function useTimelineReferenceAudio(audio: LinkProject['rundown'][number]['refere
     : null, [audio, projectPath, url]);
 }
 
-export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHost, toolbarHost, coordinator, notify, documentActions }: Props): JSX.Element {
+export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackProject, sidebarHost, toolbarHost, coordinator, notify, documentActions }: Props): JSX.Element {
   const lightingWorkspace = workspace === 'lighting';
   const librarySplit = useLightingLibrarySplit();
   // Low power only unloads the video editor's preview; the lighting workbench keeps its full timeline layout.
@@ -137,7 +141,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHo
   const timelineReferenceAudio = useTimelineReferenceAudio(item?.referenceAudio, projectPath, audioUrl);
   const timelineIndex = useMemo(() => project && item ? new TimelineStateIndex(project, item) : null, [item, project]);
   const timelineState = useMemo(() => timelineIndex?.at(playheadMs) ?? null, [timelineIndex, playheadMs]);
-  const sceneOutput = useSceneOutput(project, lightingWorkspace ? null : item?.id ?? null, playheadMs, obs.status === 'connected');
+  const sceneOutput = useSceneOutput(project, lightingWorkspace ? null : item?.id ?? null, playheadMs, obs.status === 'connected', player, playbackProject);
   const scenePreviewOutput = sceneOutput.preview;
   if (!project) return <div className="empty-panel full"><Clock3 /><h3>还没打开工程</h3><p>新建或打开工程后，就可以添加素材和 OBS 场景、来源。</p></div>;
   const { importMedia, addAssetClip, addObsResource, moveClip, moveClipToTop, trim, splitClip, duplicateClip, duplicateCue, transformClip, moveCue, removeClip, removeCue, setClipEmbeddedAudioEnabled, refreshObs, testAction } = createWorkspaceActions({ project, projectPath, documentId, item, cue, playheadMs, coordinator, execute, notify, setSelectedCueId, setSelectedClipId, setSelectedAssetId, setSelectedObsResource });
@@ -205,7 +209,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHo
       </aside>}
         </div>
         {!lowPower && !lightingWorkspace ? <button className="workspace-splitter horizontal" aria-label="调整时间线高度" onPointerDown={(event) => workspaceLayout.beginResize('timeline', event)} onKeyDown={event => workspaceLayout.resizeWithKeyboard('timeline', event)} /> : null}
-        {item && timelineState ? <ReferenceTimeline analysisPanel={{ host: analysisHost, open: analysisOpen, onOpen: () => { setLightingTool(null); setAnalysisOpen(true); }, onClose: () => setAnalysisOpen(false) }} outputControl={lightingWorkspace ? <>{project ? <LightingOutputControl project={project} item={item} /> : null}{externalTransport && (player.state.notice || player.state.error || player.state.fault) ? <PlayerStatusDetails error={player.state.error} errorTitle={player.state.errorTitle} notice={player.state.notice} fault={player.state.fault ?? null} engine={player.engine} /> : null}</> : undefined} onEffectDrop={lightingWorkspace ? effectStamp.stamp : undefined} onConsoleCueDrop={lightingWorkspace ? effectStamp.stampConsoleCue : undefined} lightingWorkspace={lightingWorkspace}
+        {item && timelineState ? <ReferenceTimeline analysisPanel={{ host: analysisHost, open: analysisOpen, onOpen: () => { setLightingTool(null); setAnalysisOpen(true); }, onClose: () => setAnalysisOpen(false) }} outputControl={lightingWorkspace ? <>{project ? <LightingOutputControl project={project} item={item} /> : null}{externalTransport && (player.state.notice || player.state.error || player.state.fault) ? <PlayerStatusDetails error={player.state.error} errorTitle={player.state.errorTitle} notice={player.state.notice} fault={player.state.fault ?? null} engine={player.engine} /> : null}</> : undefined} transportStatus={lightingWorkspace ? undefined : <PendingPictureNotice edits={sceneOutput.pending} />} onEffectDrop={lightingWorkspace ? effectStamp.stamp : undefined} onConsoleCueDrop={lightingWorkspace ? effectStamp.stampConsoleCue : undefined} lightingWorkspace={lightingWorkspace}
           audioEditor={audioEditor} onSelectAudio={selectAudio} externalTransport={externalTransport} transportClock={clock} onStop={()=>{stop();void stopMa2Audition().catch((error:unknown)=>notify(error instanceof Error?error.message:String(error),'error'));}}
           lighting={{ onCreateCue: lightingWorkspace ? ms => { const id = crypto.randomUUID(); const next = placeEmptyLightingCue(lightingDocument, id, ms, item.referenceAudio?.durationMs ?? 0); if (!changeLighting(next, '添加空 Cue')) return; selectCreatedCue(next, id); } : undefined, onClearSelection: () => { setLightingSelection(null); setPointDetails(false); }, onAuditionEvent: audition.select, onOpenTools: openLightingTool, detailOpen: lightingTool !== null, onError: (message) => notify(message, 'error'), preview: lightingPreview, onPreviewChange: setLightingPreview, mtcOrigin: () => programTimeOrigin(item), document: lightingDocument, selectedClipId: lightingSelection?.clipId ?? null, selectedEventId: lightingSelection?.eventId ?? null, selectedEventIds: lightingSelection?.eventIds ?? [], onSelectEvent: (trackId, clipId, eventId, eventIds) => { setAnalysisOpen(false); setSelectedClipId(null); setSelectedCueId(null); setLightingSelection({ trackId, clipId, eventId, eventIds: eventIds ?? [eventId] }); if (lightingWorkspace && (!eventIds || eventIds.length <= 1)) { setPointDetails(true); setLightingTool(null); setCueSelectionVersion(value => value + 1); } }, onSelect: (trackId, clipId) => { setSelectedClipId(null); setSelectedCueId(null); setLightingSelection({ trackId, clipId }); }, onChange: changeLighting }}
           projectPath={projectPath}
@@ -214,7 +218,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHo
           cues={item.cues}
           layers={item.visualLayers}
           timelineState={timelineState}
-          airtime={sceneOutput.airtime}
+          airtime={sceneOutput.airtime} onAirtime={sceneOutput.onAirtime} pending={sceneOutput.pending.changed}
           editRules={contentEditRules(project, item.id)}
           frameRate={project.timebase.frameRate}
           durationMs={durationMs}
@@ -262,13 +266,31 @@ const NO_AIRTIME: Airtime = new Map();
 
 /** One reading of what the output shows, by the output's own rule: which part
  * of each clip and camera plays (timeline), and the picture at the playhead
- * for the preview drawn without OBS. */
-function useSceneOutput(project: LinkProject | null, itemId: string | null, playheadMs: number, connected: boolean) {
+ * for the preview drawn without OBS. While the song plays, OBS plays the version
+ * it started with: the on-air marks follow that version (`onAirtime`), and the
+ * picture edits made since wait for a replay (`pending`). */
+function useSceneOutput(project: LinkProject | null, itemId: string | null, playheadMs: number, connected: boolean, player: ProjectPlayer, playbackProject: LinkProject | null) {
   const timeline = useMemo(() => project && itemId ? new SceneOutputTimeline(project, itemId) : null, [project, itemId]);
   const airtime = useMemo<Airtime>(() => timeline?.airtime() ?? NO_AIRTIME, [timeline]);
+  const onAir = versionOnAir(player, playbackProject, itemId);
+  const onAirtime = useMemo<Airtime | null>(() => {
+    if (!onAir || !itemId) return null;
+    // A version without the song has none of it on air.
+    return onAir.rundown.some(entry => entry.id === itemId) ? new SceneOutputTimeline(onAir, itemId).airtime() : NO_AIRTIME;
+  }, [onAir, itemId]);
+  const item = project?.rundown.find(entry => entry.id === itemId);
+  const pending = useMemo(() => onAir && item ? pendingPictureEdits(onAir.rundown.find(entry => entry.id === item.id), item) : NO_PENDING_PICTURE_EDITS, [onAir, item]);
   const frame = millisecondsToFrameNumber(playheadMs, project?.timebase.frameRate ?? '30');
   const preview = useMemo(() => timeline && !connected ? resolveScenePreviewOutput(timeline, frame) : null, [timeline, connected, frame]);
-  return { airtime, preview };
+  return { airtime, onAirtime: onAirtime ?? airtime, pending, preview };
+}
+
+/** The project OBS plays `itemId` from while 联动台播放 prepares, plays or pauses
+ * it: as it was when playback started (LinkApp keeps it until 停止). Null while
+ * that song is not playing. */
+function versionOnAir(player: ProjectPlayer, playbackProject: LinkProject | null, itemId: string | null): LinkProject | null {
+  return itemId !== null && player.state.itemId === itemId && ['preparing', 'playing', 'paused'].includes(player.state.status)
+    && playbackProject?.playbackSource === 'internal' ? playbackProject : null;
 }
 
 /** What the output would show without OBS: every clip in the picture, with the

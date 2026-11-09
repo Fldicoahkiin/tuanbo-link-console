@@ -1,0 +1,15 @@
+/*
+ * Picture edits made while the song plays (0.5.9): OBS keeps playing the version the song started
+ * with, so they take effect only after 停止 and playing again. Such a part gets a dashed edge and says
+ * “停下重播才生效” on its second line; one line under the toolbar counts them together with deletions,
+ * which the timeline no longer draws. In the pages layer, so it wins over the legacy timeline rules.
+ */
+@layer pages {
+  .reference-timeline :is(.timeline-clip, .timeline-cue).is-pending { border-style: dashed; border-color: var(--color-warning); }
+  .reference-timeline :is(.timeline-clip, .timeline-cue).is-pending > .timeline-pending-label { font: 500 var(--type-caption)/1 var(--font-ui); }
+
+  .timeline-pending-notice { display: flex; align-items: center; gap: var(--space-1); min-width: 0; min-height: 28px; margin: 0; padding: 0 var(--space-2); border-bottom: 1px solid var(--color-separator); color: var(--color-text-secondary); background: var(--color-warning-soft); font: 400 var(--type-caption)/1.5 var(--font-ui); white-space: nowrap; }
+  .timeline-pending-notice > svg { flex: none; width: 16px; height: 16px; stroke-width: 1.5; color: var(--color-warning); }
+  .timeline-pending-notice > strong { flex: none; color: var(--color-text-strong); font-weight: 500; }
+  .timeline-pending-notice > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+}

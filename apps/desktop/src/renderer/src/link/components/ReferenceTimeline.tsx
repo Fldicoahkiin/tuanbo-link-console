@@ -79,6 +79,10 @@ type Props = {
   timelineState: ResolvedTimelineState;
   /** What the output shows of each clip and camera (SceneOutputTimeline.airtime). */
   airtime: Airtime;
+  /** What OBS plays by, for the on-air marks: while the song plays, the airtime of the version it started with. */
+  onAirtime: Airtime;
+  /** Parts changed while the song plays, which OBS does not have yet (view-models/pending-picture-edits). */
+  pending: ReadonlySet<string>;
   editRules: ContentEditRules;
   frameRate: MtcFrameRate;
   durationMs: number;
@@ -249,7 +253,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
             {props.audioEditor ? <AudioTimelineSegments readOnly={props.lightingWorkspace === true} playheadMs={props.playheadMs} editor={props.audioEditor} peaks={waveform.peaks} scrollLeft={viewport.scrollLeft} viewportWidth={viewport.viewportWidth} pixelsPerSecond={viewport.pixelsPerSecond} onSelect={(id) => props.onSelectAudio?.(id)} onSeek={(ms) => seekTo(ms, true)} /> : null}
           </div>}
           {props.lightingWorkspace ? null : <ContentTracks layers={props.layers} clips={props.clips} cues={props.cues} assets={assets} frameRate={props.frameRate}
-            durationMs={props.durationMs} playheadMs={props.playheadMs} timelineState={props.timelineState} airtime={props.airtime}
+            durationMs={props.durationMs} playheadMs={props.playheadMs} timelineState={props.timelineState} airtime={props.airtime} onAirtime={props.onAirtime} pending={props.pending}
             selectedClipId={props.selectedClipId} selectedCueId={props.selectedCueId} audioSnapPoints={props.audioEditor?.points ?? []}
             rules={props.editRules} viewport={viewport} tracks={visualTracks} snap={{ enabled: snapEnabled, thresholdMs: snapThresholdMs }}
             lanePointer={lanePointer} focusTimeline={() => timelineRef.current?.focus()}

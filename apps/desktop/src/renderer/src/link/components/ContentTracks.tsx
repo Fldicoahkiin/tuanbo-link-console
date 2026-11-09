@@ -42,7 +42,12 @@ export type ContentTracksProps = {
   durationMs: number;
   playheadMs: number;
   timelineState: ResolvedTimelineState;
+  /** The parts covered by upper cameras in this timeline, dimmed. */
   airtime: Airtime;
+  /** What OBS plays by, for the on-air marks: while the song plays, the airtime of the version it started with. */
+  onAirtime: Airtime;
+  /** Parts (`media:` / `cue:` keys) changed while the song plays: marked, never shown on air. */
+  pending: ReadonlySet<string>;
   selectedClipId: string | null;
   selectedCueId: string | null;
   /** Points the song audio adds to snapping (its cut points). */
@@ -81,7 +86,7 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
     snapEnabled: snap.enabled, snapThresholdMs: snap.thresholdMs, snapPoints, bounds: props.rules.trimBounds, onSelect: select, onTrim: props.onTrim });
   const snapGuide = timelineSnapGuide(props, snap.enabled, itemDrag.drag);
   const frame = millisecondsToFrameNumber(props.playheadMs, props.frameRate);
-  const onAir = useMemo(() => onAirAt(props.airtime, frame), [props.airtime, frame]);
+  const onAir = useMemo(() => onAirAt(props.onAirtime, frame), [props.onAirtime, frame]);
   const shownSources = useMemo(() => new Set(props.timelineState.activeObsCueIds), [props.timelineState]);
   const drop = (event: DragEvent<HTMLElement>, layer?: VisualLayer): void => {
     event.preventDefault();
@@ -129,9 +134,10 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
           const ref = { kind: 'clip', id: clip.id } as const;
           const span = resolveTimelineClipSpan(clip, props.frameRate);
           const preview = itemPreview(ref, itemDrag.drag, trim.drag);
+          const pending = props.pending.has(`media:${clip.id}`);
           if (!held(ref) && !(rowInView && inView((preview.startMs ?? span.startMs) / 1000 * viewport.pixelsPerSecond, span.durationMs / 1000 * viewport.pixelsPerSecond))) return null;
           return <TimelineClip key={clip.id} clip={clip} asset={props.assets.get(clip.assetId)} span={span} frameRate={props.frameRate}
-            pixelsPerSecond={viewport.pixelsPerSecond} selected={props.selectedClipId === clip.id} active={onAir.has(`media:${clip.id}`)} locked={layer.locked}
+            pixelsPerSecond={viewport.pixelsPerSecond} selected={props.selectedClipId === clip.id} active={!pending && onAir.has(`media:${clip.id}`)} pending={pending} locked={layer.locked}
             offAir={offAirParts(span, props.airtime.get(`media:${clip.id}`))} preview={preview} {...handlers(ref, span)}
             onSelect={() => props.onSelectClip(clip.id)} onContextMenu={(event) => openMenu(event, ref)} />;
         })}
@@ -140,9 +146,10 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
           const span = timelineCueSpan(cue, props.frameRate);
           const preview = itemPreview(ref, itemDrag.drag, trim.drag);
           const startMs = preview.startMs ?? span?.startMs ?? timecodeToMilliseconds(cue.timecode, props.frameRate);
+          const pending = props.pending.has(`cue:${cue.id}`);
           if (!held(ref) && !(rowInView && inView(startMs / 1000 * viewport.pixelsPerSecond, (span?.durationMs ?? 0) / 1000 * viewport.pixelsPerSecond))) return null;
           return <TimelineCue key={cue.id} cue={cue} span={span} frameRate={props.frameRate} pixelsPerSecond={viewport.pixelsPerSecond}
-            selected={props.selectedCueId === cue.id} active={onAir.has(`cue:${cue.id}`) || shownSources.has(cue.id)} locked={layer.locked}
+            selected={props.selectedCueId === cue.id} active={!pending && (onAir.has(`cue:${cue.id}`) || shownSources.has(cue.id))} pending={pending} locked={layer.locked}
             offAir={span ? offAirParts(span, props.airtime.get(`cue:${cue.id}`)) : []} preview={preview}
             dragging={itemDrag.drag?.kind === 'cue' && itemDrag.drag.id === cue.id && itemDrag.drag.moved} {...handlers(ref, span)}
             onSelect={() => props.onSelectCue(cue.id)} onContextMenu={(event) => openMenu(event, ref)} />;
