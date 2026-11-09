@@ -220,7 +220,7 @@ export class NativePlayerService {
           const snapshot = this.source!.snapshot;
           const midi = await this.resolveMidi(epoch);
           this.requireEpoch(epoch);
-          await this.send({ kind: 'stop' }); await this.preload.cancel(); await this.releaseLease(); this.requireEpoch(epoch);
+          await this.send({ kind: 'stop' }); await this.preload.discard(); await this.releaseLease(); this.requireEpoch(epoch);
           const lease = await this.options.cache.prepare({ sourcePath: this.options.resolveAudio(this.source!.projectPath, snapshot.audio.relativePath),
             sourceSha256: snapshot.audio.sha256, expectedDurationMs: snapshot.audio.durationMs,
             sampleRate: snapshot.sampleRate, positionMs: request.positionMs }, signal!);
@@ -251,7 +251,8 @@ export class NativePlayerService {
       this.requireEpoch(epoch);
       if (request.kind === 'volume') this.volume = request.volume;
       if (request.kind === 'stop-mtc' || request.kind === 'stop') this.patch({ mtcPortName: null });
-      if (request.kind === 'stop') { this.patch({ status: 'stopped' }); await this.preload.cancel(); await this.releaseLease(); }
+      // The next song prepared ahead is only let go: a failed cleanup of it is reported, not this stop's failure.
+      if (request.kind === 'stop') { this.patch({ status: 'stopped' }); await this.preload.discard(); await this.releaseLease(); }
       if (request.kind === 'play' && this.source?.nextSnapshot) this.preload.start(this.source.projectPath, this.source.nextSnapshot);
     });
     const result = this.finish(operation, epoch);
@@ -266,7 +267,7 @@ export class NativePlayerService {
     const client = this.client;
     try { await Promise.all([client?.close(), this.deviceQuery.close(), this.audioDeviceQuery.close()]); }
     catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); throw error; }
-    this.client = null; this.releaseMtc(); await this.preload.cancel(); await this.releaseLease();
+    this.client = null; this.releaseMtc(); await this.preload.discard(); await this.releaseLease();
     if (this.state) this.patch({ status: 'stopped', enginePid: null, engineTitle: null });
   }
 

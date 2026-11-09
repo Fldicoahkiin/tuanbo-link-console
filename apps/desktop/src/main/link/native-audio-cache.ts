@@ -119,16 +119,29 @@ export class NativeAudioCache {
     if (active.count > 1) { active.count--; this.leases.set(active.key, active.count); return; }
     active.releasing = true;
     // Keep ownership until the child really exits. A refused cancellation leaves
-    // the active job registered and prevents another decoder from starting.
-    await active.decoder.cancel();
-    const result = await active.completion;
-    if (result.ok && active.manifest) {
-      await rename(active.path, active.cachedPath);
-      await writeFileAtomically(active.metadata, JSON.stringify(active.manifest)); active.published = true;
-    } else if (active.decoder.wasCancelled) {
-      try { await unlink(active.path); } catch (error) { if (!isMissing(error)) throw error; }
-    }
-    active.count = 0; this.leases.delete(active.key); this.active.delete(active.key);
+    // the active job registered and prevents another decoder from starting; it is
+    // let go once the child has exited.
+    try { await active.decoder.cancel(); }
+    catch (error) { void active.decoder.finished.then(() => this.forget(active)); throw error; }
+    // The child has exited and this was the last lease, so nobody else holds the entry: it is let
+    // go even when publishing or removing its file fails, and that failure goes to the releaser.
+    try {
+      const result = await active.completion;
+      if (result.ok && active.manifest) {
+        await rename(active.path, active.cachedPath);
+        await writeFileAtomically(active.metadata, JSON.stringify(active.manifest)); active.published = true;
+      } else if (active.decoder.wasCancelled) {
+        try { await unlink(active.path); } catch (error) { if (!isMissing(error)) throw error; }
+      }
+    } finally { this.forget(active); }
+  }
+
+  /** Drops a released entry. A file a failed release left behind is never used again: the next
+   * preparation of that source finds no cache entry and decodes it anew. */
+  private forget(active: Active): void {
+    active.count = 0;
+    if (this.active.get(active.key) !== active) return;
+    this.leases.delete(active.key); this.active.delete(active.key);
   }
 
   private activeLease(active: Active): NativeAudioLease {
@@ -148,9 +161,14 @@ export class NativeAudioCache {
       }) };
   }
 
+  /** Repeated calls share the release in progress. A failed one is not kept: calling again asks
+   * again, which does nothing once the entry has been let go. */
   private onceRelease(release: () => Promise<void>): () => Promise<void> {
     let operation: Promise<void> | null = null;
-    return () => { operation ??= release(); return operation; };
+    return () => {
+      operation ??= release().catch((error: unknown) => { operation = null; throw error; });
+      return operation;
+    };
   }
 
   private async makeRoom(bytes: number): Promise<void> {

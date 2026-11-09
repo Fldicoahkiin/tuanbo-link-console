@@ -31,25 +31,37 @@ export class NativeAudioPreload {
     const task = this.task;
     if (!task) return null;
     const matches = task.projectPath === projectPath && audioIdentity(task.snapshot) === audioIdentity(snapshot);
-    // Do not wait for an unfinished background decode at a user playback boundary.
-    if (!matches || !task.result) { await this.cancel(); return null; }
-    const actual = await stat(task.sourcePath);
+    // Do not wait for an unfinished background decode at a user playback boundary. This song is then
+    // prepared as usual: it has not been prepared yet, so that is not a retry.
+    if (!matches || !task.result) { await this.discard(); return null; }
+    const actual = await stat(task.sourcePath).catch(async (error: unknown) => {
+      if (this.task === task) await this.discard();
+      throw error;
+    });
     if (this.task !== task || task.abort.signal.aborted) return null;
     if (!sameIdentity(actual, task.result.identity)) {
-      await this.cancel(); throw new Error('预先准备好的音频原文件变了，请重新导入；旧音频不会被使用');
+      await this.discard(); throw new Error('预先准备好的音频原文件变了，请重新导入；旧音频不会被使用');
     }
     task.consumed = true; this.task = null;
     this.options.measured?.('使用预先准备的下一首音频', performance.now() - started);
     return task.result.lease;
   }
 
+  /** The pending job is let go whether or not its cleanup succeeds, so the next song can be prepared
+   * ahead again; a failed cleanup is thrown to the caller. */
   async cancel(): Promise<void> {
     const task = this.task;
     if (!task) return;
     task.abort.abort();
     task.cleanup ??= task.promise.then(async result => { if (result && !task.consumed) await result.lease.release(); });
-    await task.cleanup;
-    if (this.task === task) this.task = null;
+    try { await task.cleanup; } finally { if (this.task === task) this.task = null; }
+  }
+
+  /** Cancels for a caller that goes on either way: another song, a seek, stop or close. A failed
+   * cleanup is reported here and never becomes that caller's failure. */
+  async discard(): Promise<void> {
+    try { await this.cancel(); }
+    catch (error) { this.options.error(`预先准备的下一首音频没清理干净，这份音频不会再用。原因：${error instanceof Error ? error.message : String(error)}`); }
   }
 
   private async prepare(task: Task): Promise<Prepared> {

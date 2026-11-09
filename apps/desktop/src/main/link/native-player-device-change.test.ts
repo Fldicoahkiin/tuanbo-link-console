@@ -1,5 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { NativePlaybackCommand, NativePlaybackEvent, NativePlaybackDevices, NativePlayerPrepare } from '@tb/schema';
 import { NativePlayerService } from './native-player-service';
 import type { PortRecoveryReport } from './midi-port-recovery';
@@ -326,4 +329,60 @@ it('时间码接口被占用时说清是谁：本软件另一处用了同一接�
     native.emit!({ midiError: 7, qpc100ns: '5' });
     expect(alone.status?.mtcError).toBe('MIDI 接口「test-mtc」正被其他软件占用（错误码 7），时间码没有发出。请关闭 P1 等正在使用它的软件后重新播放。');
   } finally { await alone.close(); }
+});
+
+/** Songs with their own audio, prepared from a cache whose leases record their release; a song in
+ * `refuse` fails its next release once, like a rename Windows refused while a virus scanner held the file. */
+async function preloading(f: ReturnType<typeof fixture>) {
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-player-preload-')), path = join(directory, 'song.wav');
+  await writeFile(path, 'audio fixture');
+  const refuse = new Set<string>(), released: string[] = [], measured = vi.fn();
+  const prepare = vi.fn((input: { sourceSha256: string }) => {
+    const song = input.sourceSha256[0]!;
+    return Promise.resolve({ path: `${song}.pcm`, sampleRate: 48000 as const, baseMs: 0, streaming: false, frames: 480000,
+      durationMs: 10000, availableMs: 10000, completion: Promise.resolve({ ok: true as const }), release: () => {
+        if (refuse.delete(song)) return Promise.reject(new Error('EPERM: operation not permitted, rename'));
+        released.push(song); return Promise.resolve();
+      } });
+  });
+  const service = new NativePlayerService({ ...f.options, measured, resolveAudio: () => path, cache: { prepare } });
+  const song = (id: string) => ({ ...f.request.snapshot, itemId: id, audio: { ...f.request.snapshot.audio, sha256: id.repeat(64) } });
+  const preloaded = (count: number) => vi.waitFor(() => expect(measured.mock.calls.filter(([phase]) => phase === '预先准备下一首音频')).toHaveLength(count));
+  return { service, prepare, refuse, released, song, preloaded };
+}
+
+it('下一首提前准备的音频放不掉一次：只记一次错误；换歌、再提前准备、接着播都照常', async () => {
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, p = await preloading(f);
+  try {
+    await p.service.prepare({ ...f.request, snapshot: p.song('a'), nextSnapshot: p.song('b') });
+    await p.service.control({ ...envelope, generation: 2, kind: 'play' }); await p.preloaded(1);
+    // The operator jumps to C while B waits prepared, and letting B go fails once.
+    p.refuse.add('b');
+    await expect(p.service.prepare({ ...f.request, generation: 3, snapshot: p.song('c'), nextSnapshot: p.song('b') }))
+      .resolves.toMatchObject({ itemId: 'c', status: 'ready', audioError: null });
+    expect(f.error).toHaveBeenCalledOnce(); expect(f.error).toHaveBeenCalledWith(expect.stringContaining('EPERM'));
+    // B is prepared ahead again while C plays, and playing on to B uses it.
+    await p.service.control({ ...envelope, generation: 4, kind: 'play' }); await p.preloaded(2);
+    const decoded = p.prepare.mock.calls.length;
+    await expect(p.service.prepare({ ...f.request, generation: 5, snapshot: p.song('b') })).resolves.toMatchObject({ itemId: 'b', status: 'ready' });
+    expect(p.prepare).toHaveBeenCalledTimes(decoded);
+    expect(f.error).toHaveBeenCalledOnce();
+  } finally { await p.service.close(); }
+});
+
+it('停止和关闭时提前准备的下一首放不掉：记下错误，停止和关闭照常完成，当前这首的音频照常放掉', async () => {
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, p = await preloading(f);
+  try {
+    await p.service.prepare({ ...f.request, snapshot: p.song('a'), nextSnapshot: p.song('b') });
+    await p.service.control({ ...envelope, generation: 2, kind: 'play' }); await p.preloaded(1);
+    p.refuse.add('b');
+    await expect(p.service.control({ ...envelope, generation: 3, kind: 'stop' })).resolves.toMatchObject({ status: 'stopped', audioError: null });
+    expect(p.released).toEqual(['a']); expect(f.error).toHaveBeenCalledOnce();
+    await p.service.prepare({ ...f.request, generation: 4, snapshot: p.song('c'), nextSnapshot: p.song('d') });
+    await p.service.control({ ...envelope, generation: 5, kind: 'play' }); await p.preloaded(2);
+    p.refuse.add('d');
+    await p.service.close();
+    expect(p.service.status).toMatchObject({ status: 'stopped' });
+    expect(p.released).toEqual(['a', 'c']); expect(f.error).toHaveBeenCalledTimes(2);
+  } finally { await p.service.close(); }
 });

@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { PlaybackSnapshot } from '@tb/schema';
@@ -53,4 +53,42 @@ it('停止取消在途预填充，迟到完成只能释放，不能重新成为�
   await vi.waitFor(() => expect(f.prepare).toHaveBeenCalled());
   const cancelled = f.preload.cancel(); complete!(f.lease); await cancelled;
   expect(f.release).toHaveBeenCalledOnce(); expect(await f.preload.take('p.tblink', f.snapshot)).toBeNull();
+});
+
+it('下一首的租约释放失败一次：这次记下错误；之后换歌、换回这首、接着播都照常准备，预备也能重新开始', async () => {
+  const f = await fixture(); f.release.mockRejectedValueOnce(new Error('EPERM: operation not permitted, rename'));
+  f.preload.start('p.tblink', f.snapshot);
+  await vi.waitFor(() => expect(f.measured).toHaveBeenCalledWith('预先准备下一首音频', expect.any(Number)));
+  // Another song is played: it is prepared as usual, and the failed cleanup is reported once.
+  expect(await f.preload.take('p.tblink', { ...f.snapshot, itemId: 'other' })).toBeNull();
+  expect(f.error).toHaveBeenCalledOnce(); expect(f.error).toHaveBeenCalledWith(expect.stringContaining('EPERM'));
+  // Back to this song: nothing is left over, and the song after it is prepared ahead again.
+  expect(await f.preload.take('p.tblink', f.snapshot)).toBeNull();
+  f.preload.start('p.tblink', f.snapshot);
+  await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledTimes(2));
+  expect(await f.preload.take('p.tblink', f.snapshot)).toBe(f.lease);
+  expect(f.error).toHaveBeenCalledOnce();
+});
+
+it('取消时清理失败：错误交给取消的一方，这份预备照样放下，之后可以重新预备', async () => {
+  const f = await fixture(); f.release.mockRejectedValueOnce(new Error('EBUSY: resource busy or locked, rename'));
+  f.preload.start('p.tblink', f.snapshot);
+  await vi.waitFor(() => expect(f.measured).toHaveBeenCalled());
+  await expect(f.preload.cancel()).rejects.toThrow('EBUSY');
+  await f.preload.cancel();
+  f.preload.start('p.tblink', f.snapshot);
+  await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledTimes(2));
+  expect(f.release).toHaveBeenCalledOnce(); expect(f.error).not.toHaveBeenCalled();
+});
+
+it('接手时读不到原文件：这首歌照常报错，这份预备也放下，文件回来后可以重新预备', async () => {
+  const f = await fixture(); f.preload.start('p.tblink', f.snapshot);
+  await vi.waitFor(() => expect(f.measured).toHaveBeenCalled());
+  await rename(f.path, `${f.path}.moved`);
+  await expect(f.preload.take('p.tblink', f.snapshot)).rejects.toThrow('ENOENT');
+  expect(f.release).toHaveBeenCalledOnce();
+  await rename(`${f.path}.moved`, f.path);
+  f.preload.start('p.tblink', f.snapshot);
+  await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledTimes(2));
+  expect(await f.preload.take('p.tblink', f.snapshot)).toBe(f.lease);
 });
