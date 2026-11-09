@@ -58,7 +58,8 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
     await page.mouse.move(first.x + 20 + (second.x - first.x) * 700 / 1500, first.y + first.height / 2, { steps: 12 });
     await page.mouse.up();
     await page.getByRole('button', { name: '同步状态详情', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: '同步状态详情' })).toContainText('回读确认');
+    // Matching songs are only counted in the details; the badge says it was confirmed.
+    await expect(page.getByRole('dialog', { name: '同步状态详情' })).toContainText('首歌都和控台一致');
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!.ma2Bindings![0]!.baselineTracks[0]!.clips[0]!.events[0]!.at)).toBe(700);
     const sent = await app.evaluate(() => process.env.TBLINK_EDIT_REQUEST);
     expect(ma2ApplyRequestSchema.parse(JSON.parse(sent ?? 'null')).document.tracks[0]!.clips[0]!.events[0]!.at).toBeCloseTo(700, -1);

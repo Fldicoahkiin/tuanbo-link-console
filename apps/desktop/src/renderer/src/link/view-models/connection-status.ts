@@ -22,7 +22,7 @@ export function ma2EditingConnectionStatus(input: {
   if (input.networkError) return { state: 'error', value: '连接异常', detail: input.networkError };
   // The word and the colour say the same thing: a network login with a failed read/write check is not "connected".
   if (input.network?.state === 'connected') return input.bridge?.state === 'error'
-    ? { state: 'warning', value: '读写异常', detail: `控台网络已登录，但读写控台这一步失败：${input.bridge.detail}` }
+    ? { state: 'warning', value: '读写异常', detail: `控台网络已登录，但读写控台这一步没通过。原因：${input.bridge.detail}` }
     : { state: 'ready', value: '已连接', detail: input.bridge?.state === 'ready' ? `控台网络已连接；${input.bridge.detail}` : '控台网络已连接；每次读写时还会再检查通信和内容' };
   if (input.network?.state === 'connecting' || input.network?.state === 'authenticating') return { state: 'checking', value: '连接中', detail: '正在连接并登录控台' };
   return { state: input.network?.error ? 'error' : 'idle', value: '未连接', detail: input.network?.error ?? '还没连接控台' };

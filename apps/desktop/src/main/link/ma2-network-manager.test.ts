@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { Ma2NetworkManager } from './ma2-network-manager';
 import { meiNanXml, meiNanCues } from './fixtures/ma2-mei-nan-reconstruction';
 
-const memory = vi.hoisted(() => ({ file: null as string | null, localAddress: undefined as string | undefined, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true', show: '', pause: null as Promise<void> | null, drop: () => undefined, rpc: [] as string[], dropOnRun: false }));
+const memory = vi.hoisted(() => ({ file: null as string | null, localAddress: undefined as string | undefined, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true', show: '', pause: null as Promise<void> | null, drop: () => undefined, rpc: [] as string[], dropOnRun: false, priorities: [] as (string | undefined)[] }));
 vi.mock('node:fs/promises', () => ({ readFile: () => memory.file === null ? Promise.reject(Object.assign(new Error('Missing'), { code: 'ENOENT' })) : Promise.resolve(memory.file) }));
 vi.mock('./atomic-file', () => ({ writeFileAtomically: (_path: string, value: string) => { memory.file = value; return Promise.resolve(); } }));
 vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typeof import('./ma2-telnet')>(), Ma2Telnet: class {
@@ -13,8 +13,8 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
     memory.drop = () => { this.state = 'disconnected'; onState('disconnected'); };
   }
   async connect(): Promise<string> { memory.connects += 1; await memory.pause; this.state = 'connected'; return memory.version; }
-  async command(line: string, match: (text: string) => string | null, beforeSend?: () => void): Promise<string> {
-    await memory.pause; beforeSend?.();
+  async command(line: string, match: (text: string) => string | null, beforeSend?: () => void, priority?: string): Promise<string> {
+    memory.priorities.push(priority); await memory.pause; beforeSend?.();
     const cuePrefix = /TBLINK_CUES_[a-f0-9]{32}:/.exec(line)?.[0];
     if (cuePrefix) {
       const row = `12;${Buffer.from('截图重建序列').toString('hex')};${meiNanCues.map((cue, index) => `${index + 1},${cue},${Buffer.from(`Cue ${cue}`).toString('hex')}`).join(';')}`;
@@ -37,7 +37,7 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
   }
   disconnect(): void { memory.closes += 1; this.state = 'disconnected'; }
 } }));
-beforeEach(() => { memory.file = null; memory.connects = 0; memory.closes = 0; memory.pause = null; memory.version = '3.3.4.3'; memory.capabilities = 'Lua 5.3:true:true:true'; memory.show = ''; memory.rpc = []; memory.dropOnRun = false; });
+beforeEach(() => { memory.file = null; memory.connects = 0; memory.closes = 0; memory.pause = null; memory.version = '3.3.4.3'; memory.capabilities = 'Lua 5.3:true:true:true'; memory.show = ''; memory.rpc = []; memory.dropOnRun = false; memory.priorities = []; });
 const settings = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'lighting', autoConnect: true };
 it('意外断线会恢复原控台连接，主动断开则停止恢复且不重放操作', async () => {
   vi.useFakeTimers();
@@ -128,12 +128,24 @@ it('网络播放拒绝过期、换目标和停止后排队的指令', async () =
   const { host, port, monitorPort, username } = settings;
   const request = { network: { host, port, monitorPort, username }, sessionId: crypto.randomUUID(), deadlineAt: Date.now() + 1000, action: { target: 'sequence' as const, sequence: 168, cue: '1.250', action: 'goto' as const } };
   await expect(manager.playCue(request)).resolves.toBeUndefined();
-  await expect(manager.playCue({ ...request, deadlineAt: Date.now() - 1 })).rejects.toThrow('过期');
+  await expect(manager.playCue({ ...request, deadlineAt: Date.now() - 1 })).rejects.toThrow('控台正忙（比如在同步或读取歌曲），这条灯光指令等了 1 秒没发出去，已经取消，不会再发。请稍后再点一次');
+  await expect(manager.playCue({ ...request, deadlineAt: Date.now() - 1, action: { target: 'executor', executor: '1.101', action: 'off' } })).rejects.toThrow('执行器可能还亮着');
   await expect(manager.playCue({ ...request, network: { ...request.network, host: '127.0.0.2' } })).rejects.toThrow('目标已改变');
   let release: (() => void) | undefined;
   memory.pause = new Promise<void>(resolve => { release = resolve; });
   const queued = manager.playCue(request); manager.cancelPlayback(request.sessionId); release?.();
-  await expect(queued).rejects.toThrow('灯光播放已结束');
+  await expect(queued).rejects.toThrow('灯光播放已经停了');
+  manager.disconnect();
+});
+it('关灯指令插到同步读写前面发，点 Cue 照常按播放顺序排队', async () => {
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore());
+  await manager.save({ settings }); await manager.connect();
+  const { host, port, monitorPort, username } = settings;
+  const network = { host, port, monitorPort, username };
+  memory.priorities = [];
+  await manager.playCue({ network, sessionId: crypto.randomUUID(), deadlineAt: Date.now() + 1000, action: { target: 'executor', executor: '1.101', action: 'off' } });
+  await manager.playCue({ network, sessionId: crypto.randomUUID(), deadlineAt: Date.now() + 1000, action: { target: 'sequence', sequence: 168, cue: '1', action: 'goto' } });
+  expect(memory.priorities).toEqual(['stop', 'playback']);
   manager.disconnect();
 });
 function secretStore() {

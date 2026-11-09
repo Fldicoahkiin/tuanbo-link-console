@@ -21,6 +21,6 @@ export async function playMa2Cue(connection: Pick<Ma2Telnet, 'command'>, action:
   const dispatch = `gma.cmd('${command}');gma.echo('${marker}:SENT')`;
   const script = action.action === 'off' ? dispatch : `if gma.show.getobj.handle('${object}') then ${dispatch} else gma.echo('${marker}:MISSING') end`;
   const result = await connection.command(`Lua "${script}"`, text => ma2ResponseLine(text, `${marker}:`), beforeSend, priority);
-  if (result === 'MISSING') throw new Error(`控台上找不到 ${object}，请重新读取素材并检查编号`);
+  if (result === 'MISSING') throw new Error(`控台上已经没有 ${object} 了，可能在控台上删掉了。点“刷新素材目录”重新读取，它就不会再显示`);
   if (result !== 'SENT') throw new Error(`控台没有确认 ${command} 是否执行，请检查连接`);
 }

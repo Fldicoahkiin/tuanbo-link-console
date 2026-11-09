@@ -40,5 +40,5 @@ it('发送前验证会话，只接受关联回执，对象不存在明确失败'
   await playMa2Cue({ command }, action, beforeSend);
   expect(beforeSend).toHaveBeenCalledOnce();
   await expect(playMa2Cue({ command }, action, () => { throw new Error('已取消'); })).rejects.toThrow('已取消');
-  await expect(playMa2Cue({ command: () => Promise.resolve('MISSING') }, action, beforeSend)).rejects.toThrow('找不到');
+  await expect(playMa2Cue({ command: () => Promise.resolve('MISSING') }, action, beforeSend)).rejects.toThrow('控台上已经没有');
 });

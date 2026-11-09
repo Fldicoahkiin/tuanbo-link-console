@@ -3,6 +3,9 @@ import { requireOutputLicense } from './license-output';
 import { compileLightingPackets, compileLightingNetworkActions } from '@tb/core/link';
 import { ma2NetworkStatusSchema, ma2PlaybackActionSchema, type Ma2PlaybackAction, type IntegrationProfile, type LightingDocument } from '@tb/schema';
 
+/** A click may wait behind a sync job already on the wire; past this it is dropped, never sent late. */
+const auditionDeadlineMs = 3000;
+
 /** Explicit operator selection only; never called when restoring editor selection. */
 export class LightingCueAudition {
   private readonly midiStarted = new Map<string, { output: MidiOutput; bytes: number[] }>();
@@ -30,7 +33,7 @@ export class LightingCueAudition {
     if (status.state !== 'connected' || !status.settings) throw new Error('请先连接 MA2 网络');
     const { host, port, monitorPort, username } = status.settings;
     const sessionId = crypto.randomUUID(); this.networkSession = sessionId;
-    try { await window.tbLink.playMa2Audition({ version:1,generation:audition.generation,sessionId, action, network: { host, port, monitorPort, username }, deadlineAt: Date.now() + 1000 }); }
+    try { await window.tbLink.playMa2Audition({ version:1,generation:audition.generation,sessionId, action, network: { host, port, monitorPort, username }, deadlineAt: Date.now() + auditionDeadlineMs }); }
     catch (error) { if (generation !== this.generation) return false; throw error; }
     return generation === this.generation;
   }
@@ -77,7 +80,7 @@ export class LightingCueAudition {
       let count = 0;
       for (const entry of actions) {
         if (generation !== this.generation) return 0;
-        try { await window.tbLink.playMa2Audition({ version:1,generation:audition.generation,sessionId, network: { host, port, monitorPort, username }, action: entry.action, deadlineAt: Date.now() + 1000 }); }
+        try { await window.tbLink.playMa2Audition({ version:1,generation:audition.generation,sessionId, network: { host, port, monitorPort, username }, action: entry.action, deadlineAt: Date.now() + auditionDeadlineMs }); }
         catch (error) { if (generation !== this.generation) return 0; throw error; }
         count += 1;
       }

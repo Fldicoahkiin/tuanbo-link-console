@@ -14,6 +14,9 @@ export function lightingReleaseActions(document: LightingDocument): Ma2PlaybackA
   return [...new Map(actions.map(action => [JSON.stringify(action), action])).values()];
 }
 
+/** As long as an audition Off may wait: a sync job already on the wire finishes first. */
+const releaseDeadlineMs = 7000;
+
 export class LightingOutputRelease implements ProgramLightingOutput {
   private plan: { network: Ma2NetworkTarget; actions: Ma2PlaybackAction[] } | null = null;
   private generation = 0;
@@ -38,7 +41,10 @@ export class LightingOutputRelease implements ProgramLightingOutput {
     if (!plan) return;
     const status = ma2NetworkStatusSchema.parse(await this.api.getMa2NetworkStatus());
     if (status.state !== 'connected' || !status.settings || Object.entries(plan.network).some(([key, value]) => Reflect.get(status.settings!, key) !== value)) throw new Error('关灯指令没有发送：控台连接变了');
-    const sessionId = crypto.randomUUID();
-    for (const action of plan.actions) await this.api.playMa2Cue({ network: plan.network, action, sessionId, deadlineAt: Date.now() + 2000 });
+    const sessionId = crypto.randomUUID(), deadlineAt = Date.now() + releaseDeadlineMs;
+    // All Offs reach the console back to back, ahead of queued sync jobs; one failure never holds back the rest.
+    const results = await Promise.allSettled(plan.actions.map(action => this.api.playMa2Cue({ network: plan.network, action, sessionId, deadlineAt })));
+    const failed = results.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason instanceof Error ? failed.reason : new Error(String(failed.reason));
   }
 }

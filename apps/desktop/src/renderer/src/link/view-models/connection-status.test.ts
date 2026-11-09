@@ -9,7 +9,8 @@ it('编辑灯光跟随实际连接，不依赖一键检查；断开后不沿用�
   expect(ma2EditingConnectionStatus({ ...input, networkError: '状态读取失败' })).toMatchObject({ state: 'error', value: '连接异常' });
   const bridgeFailure = ma2EditingConnectionStatus({ ...input, bridge: { state: 'error', detail: '读写检查失败', checkedAt: 1 } });
   expect(bridgeFailure).toMatchObject({ state: 'warning', value: '读写异常' });
-  expect(bridgeFailure.detail).toContain('读写检查失败');
+  expect(bridgeFailure.detail).toBe('控台网络已登录，但读写控台这一步没通过。原因：读写检查失败');
+  expect(ma2EditingConnectionStatus({ ...input, bridge: { state: 'blocked', detail: '播放中没检查', checkedAt: 1 } })).toMatchObject({ state: 'ready', value: '已连接' });
   expect(ma2EditingConnectionStatus({ ...input, method: 'local', local: { status: 'ready', error: null } })).toMatchObject({ state: 'ready', value: '已连接' });
   expect(ma2EditingConnectionStatus({ ...input, method: 'midi' })).toMatchObject({ state: 'skipped', value: '未启用' });
 });

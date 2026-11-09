@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
 import type { LinkDesktopApi, LinkProcessSnapshot } from '@tb/core/link';
-import { connectDevices, type DeviceConnectionOptions } from './connect-devices';
+import { connectDevices, ma2BridgeWaitsForStop, type DeviceConnectionOptions } from './connect-devices';
+import { useRuntimeStore } from '../stores/runtime-store';
 import { createDefaultIntegrationProfile } from './local-integration-profile';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -269,6 +270,17 @@ it('控台当前 Show 名和上次读取的不一样：工程通信照样通过�
   api.getMa2CurrentShow.mockResolvedValueOnce('2hao');
   await connectDevices(config);
   expect(useConnectionCheckStore.getState().checks.bridge).toMatchObject({ state: 'ready', detail: '控台读写通信正常' });
+});
+it('联动开着时不检查控台读写，标成没执行而不是读写异常，停下后再点一键连接照常检查', async () => {
+  useRuntimeStore.getState().setState({ state: 'running' });
+  try {
+    await connectDevices(options());
+    expect(api.checkNetwork).not.toHaveBeenCalled();
+    expect(useConnectionCheckStore.getState().checks.bridge).toMatchObject({ state: 'blocked', detail: ma2BridgeWaitsForStop });
+    expect(useConnectionCheckStore.getState().checks.ma2?.state).toBe('ready');
+  } finally { useRuntimeStore.getState().setState({ state: 'idle' }); }
+  await connectDevices(options());
+  expect(api.checkNetwork).toHaveBeenCalledOnce(); expect(useConnectionCheckStore.getState().checks.bridge?.state).toBe('ready');
 });
 it('程序识别未通过即停止，不再保存配置或连接设备', async () => {
   api.detectLocalIntegrations.mockRejectedValueOnce(new Error('系统命令组件暂不可用'));

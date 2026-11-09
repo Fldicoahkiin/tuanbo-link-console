@@ -49,6 +49,9 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const recoveryError = useRecoveryCopyStore(state => state.error);
   const songSync = useMa2SyncStore(state => state.songs);
   const songs = Object.values(songSync);
+  // 2026-11-09: the details list only what does not match the console; matching songs are one count.
+  const unsettled = songs.filter(song => song.state !== 'verified');
+  const settled = songs.length - unsettled.length;
   const [busy, setBusy] = useState(false);
   const [archives, setArchives] = useState<ProjectArchiveResult['entries']>([]);
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -167,10 +170,11 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
       {recoveryError ? <p role="alert">{recoveryError}</p> : null}
       {archivingOff ? <p>已关闭存档，写入前不再备份。</p> : null}
       <p>同步方式：{WRITE_LABEL[writeMode]} · {CHANGES_LABEL[consoleChanges]}</p>
-      <p role={session.status === 'blocked' ? 'alert' : 'status'}>{notice || (manual ? '实时同步已关，修改先留在联动台。点“同步一次”写到控台。' : once !== null ? '正在按现在的同步方式把每首歌同步一次，完成后实时同步保持关闭。' : !useDocumentStore.getState().path ? '请先保存工程，保存后自动同步。' : session.status !== 'ready' || !songs.length ? session.message : '名称和 Cue 内容会双向比对，控台位置如下。')}</p>
-      {songs.map(song => <p key={song.itemId} role={song.state === 'blocked' ? 'alert' : 'status'}>{project.rundown.find(item => item.id === song.itemId)?.title ?? song.name}：{song.progress?.detail ?? song.message}</p>)}
+      <p role={session.status === 'blocked' ? 'alert' : 'status'}>{notice || (manual ? '实时同步已关，修改先留在联动台。点“同步一次”写到控台。' : once !== null ? '正在按现在的同步方式把每首歌同步一次，完成后实时同步保持关闭。' : !useDocumentStore.getState().path ? '请先保存工程，保存后自动同步。' : session.status !== 'ready' || !songs.length ? session.message : unsettled.length ? '这些歌和控台还对不上，或者正在同步：' : `${settled} 首歌都和控台一致。`)}</p>
+      {unsettled.map(song => <p key={song.itemId} role={song.state === 'blocked' ? 'alert' : 'status'}>{project.rundown.find(item => item.id === song.itemId)?.title ?? song.name}：{song.progress?.detail ?? song.message}</p>)}
+      {unsettled.length && settled ? <p>其余 {settled} 首歌和控台一致。</p> : null}
       {playing ? <p>播放时先暂存在本地，停止后再同步。</p> : null}
-      {names.state !== 'idle' && names.message ? <p role={names.state === 'blocked' ? 'alert' : 'status'}>改名：{names.message}</p> : null}
+      {names.state !== 'idle' && names.state !== 'verified' && names.message ? <p role={names.state === 'blocked' ? 'alert' : 'status'}>改名：{names.message}</p> : null}
       {renames.map(change => <p key={ma2RenameKey(change)}>序列 {change.sequence}{change.kind === 'single' ? ` · Cue ${change.cue}` : ''}：{change.confirmedName} → {change.name}</p>)}
       {renames.length ? <Button variant="secondary" size="sm" disabled={busy || working} onClick={() => void run(() => writeMa2NamesNow(useDocumentStore.getState().documentId))}>同步名称</Button> : null}
       {legacy.count ? <><p>控台上有 {legacy.count} 个以前写入的中文名称，控台只能显示英文和数字。</p><Button variant="secondary" size="sm" disabled={busy || working} onClick={() => void run(async () => { const count = await convertMa2LegacyNames(useDocumentStore.getState().documentId); setNotice(`已把 ${count} 个名称改成拼音，歌曲名称会在下次同步时写入`); })}>改为拼音</Button></> : null}

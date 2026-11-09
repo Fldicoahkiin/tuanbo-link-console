@@ -25,6 +25,15 @@ import { Ma2SongWatch } from './ma2-song-watch';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
 
 /** One chosen console, machine settings only. Auto-connect never replays writes. */
+/** Reading the console during a show could hold back its lighting: the check waits until playback stops. */
+export const ma2CheckWhilePlaying = '正在播放或联动还开着，这时不检查控台读写，免得耽误灯光指令。停止播放和联动后，点“一键连接”再检查一次';
+/** A command that waited behind another console job past its deadline is dropped, never sent late. */
+export function ma2BusyMessage(off: boolean, waitedMs: number): string {
+  const seconds = Math.max(1, Math.round(waitedMs / 1000));
+  return off
+    ? `控台正忙（比如在同步或读取歌曲），关灯指令等了 ${seconds} 秒没发出去，已经取消。这首歌的执行器可能还亮着，请再停一次，或者在控台上关掉`
+    : `控台正忙（比如在同步或读取歌曲），这条灯光指令等了 ${seconds} 秒没发出去，已经取消，不会再发。请稍后再点一次`;
+}
 export class Ma2NetworkManager {
   private readonly cancelledPlayback = new Map<string, number>();
   private profiles: Ma2NetworkSettings[] = [];
@@ -189,12 +198,14 @@ export class Ma2NetworkManager {
     const settings = this.settings; const connection = this.connection; const generation = this.generation;
     if (!settings || !connection || connection.state !== 'connected') throw new Error('序列池播放需要先在设备设置连接 MA2 网络');
     if (Object.entries(request.network).some(([key, value]) => Reflect.get(settings, key) !== value)) throw new Error('控台连接目标已改变，请重新选择 Cue');
+    const queuedAt = Date.now();
     const current = (): void => {
-      if (generation !== this.generation || connection.state !== 'connected' || this.cancelledPlayback.has(request.sessionId)) throw new Error('灯光播放已结束，排队的 Cue 已取消');
-      if (Date.now() > request.deadlineAt) throw new Error('灯光调用已过期，没有补发，请重新定位后播放');
+      if (generation !== this.generation || connection.state !== 'connected' || this.cancelledPlayback.has(request.sessionId)) throw new Error('灯光播放已经停了，还没发出的灯光指令不再发送');
+      if (Date.now() > request.deadlineAt) throw new Error(ma2BusyMessage(request.action.action === 'off', Date.now() - queuedAt));
     };
     current();
-    await playMa2Cue(connection, request.action, ()=>{current();options?.beforeSend?.();},options?.priority);
+    // An Off passes queued sync reads and writes, so stopping a song switches its lights off first.
+    await playMa2Cue(connection, request.action, ()=>{current();options?.beforeSend?.();},options?.priority ?? (request.action.action === 'off' ? 'stop' : 'playback'));
   }
   private credentialId(settings: Ma2NetworkSettings): string { return `ma2-${createHash('sha256').update(`${settings.host}:${settings.port}:${settings.username}`).digest('hex')}`; }
   async readCatalog(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal, targets?: readonly number[], checkpoint?: (catalog: Ma2Catalog, entry?: Ma2Catalog['entries'][number]) => Promise<void>, expectedSource?: Ma2CatalogRequest['expectedSource']): Promise<Ma2Catalog> {
@@ -341,7 +352,7 @@ export class Ma2NetworkManager {
     return show;
   }
   async checkCapabilities(): Promise<Ma2NetworkStatus> {
-    if (this.isPlaying()) throw new Error('请停止播放后检测控台兼容性');
+    if (this.isPlaying()) throw new Error(ma2CheckWhilePlaying);
     if (this.busy) throw new Error('MA2 正在处理连接请求');
     const connection = this.connection;
     if (!connection || connection.state !== 'connected' || !this.version) throw new Error('请先登录控台');

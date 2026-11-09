@@ -1132,8 +1132,12 @@ function registerIpc(
   handle('link:ma2-song-sync', async (event, value: unknown) => {
     const request = ma2SongSyncRequestSchema.parse(value);
     const task = beginMa2Read(event, request.progressId);
+    // 2026-11-09 实时同步慢: each pass logs how long it took, so a diagnostics package shows where the time goes.
+    const started = performance.now();
     try {
       const result = await ma2Network.syncSong(request, task.report, task.signal);
+      await logger.record({ level: 'info', category: 'device', device: 'MA2', itemId: request.itemId, message: `歌曲同步用了 ${Math.round(performance.now() - started)} ms${result.changed ? '，写入了控台' : '，控台已经一致'}`,
+        details: { elapsedMs: Math.round(performance.now() - started), changed: result.changed, points: request.points.length } });
       if (result.changed) await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `歌曲序列 ${result.binding.sequence} · ${result.binding.executor ? `执行器 ${result.binding.executor}` : `Layout ${result.binding.layout}`} 已写入控台并确认，备份 ${result.backupFile}`, result: 'succeeded' });
       return result;
     } catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `歌曲同步停止：${String(error)}`, result: 'failed' }); throw error; }

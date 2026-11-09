@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { createLightingDocument, lightingTrackSchema, type Ma2NetworkStatus } from '@tb/schema';
+import { createLightingDocument, lightingMa2BindingSchema, lightingTrackSchema, type Ma2NetworkStatus, type Ma2PlaybackRequest } from '@tb/schema';
 import { LightingOutputRelease, lightingReleaseActions } from './lighting-output-release';
 
 const song = { endpoint: 'console', show: '现场', layout: null, executor: '51.101', sequence: 36, name: '歌曲', baselineXml: '<MA/>', points: [] };
@@ -7,7 +7,7 @@ function fixture() {
   const document = { ...createLightingDocument(), consoleSong: song };
   document.tracks = [lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '歌曲', start: 0, duration: 180000, timeLock: 'time', muted: false, events: [100, 70000, 160000].map((at, index) => ({ id: `cue-${index}`, at, kind: 'ma2', action: 'goto', sequence: 36, cue: `${index + 1}.100`, executor: '1.105', label: '原灯光' })) }] })];
   const status: Ma2NetworkStatus = { state: 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, passwordSaved: false, version: '3.7.0.5', error: null };
-  const api = { getMa2NetworkStatus: vi.fn(() => Promise.resolve(status)), playMa2Cue: vi.fn(() => Promise.resolve()) };
+  const api = { getMa2NetworkStatus: vi.fn(() => Promise.resolve(status)), playMa2Cue: vi.fn<(request: Ma2PlaybackRequest) => Promise<void>>(() => Promise.resolve()) };
   return { document, status, api, release: new LightingOutputRelease(api) };
 }
 it('只关闭本节目去重后的执行器，单独停止不会输出全局 Off 或停用 Timecode', async () => {
@@ -33,4 +33,21 @@ it('播放只发时间码：停止只关时间码绑定的执行器和本曲控�
   expect(lightingReleaseActions(local)).toEqual([]);
   await f.release.prepare(local); expect(f.api.getMa2NetworkStatus).not.toHaveBeenCalled();
   await f.release.release(); expect(f.api.playMa2Cue).not.toHaveBeenCalled();
+});
+it('几个执行器的关灯指令一起排进去，同一个期限，一个失败也不耽误其他的', async () => {
+  const f = fixture();
+  const binding = lightingMa2BindingSchema.parse({ id: 'binding', timecode: 1, name: '歌曲', readAt: '2026-11-09T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [], mappings: [],
+    trackMappings: ['1.101', '1.102'].map((executor, index) => ({ trackId: `track-${index}`, path: `Track ${index}`, executor, subtracks: [] })) });
+  const document = { ...f.document, ma2Bindings: [binding] };
+  const started: string[] = []; const deadlines = new Set<number>();
+  f.api.playMa2Cue.mockImplementation(request => {
+    const executor = request.action.target === 'executor' ? request.action.executor : '';
+    started.push(executor); deadlines.add(request.deadlineAt);
+    return executor === '1.101' ? Promise.reject(new Error('控台正忙')) : Promise.resolve();
+  });
+  await f.release.prepare(document);
+  const before = Date.now();
+  await expect(f.release.release()).rejects.toThrow('控台正忙');
+  expect(started).toEqual(['1.101', '1.102', '51.101']);
+  expect(deadlines.size).toBe(1); expect([...deadlines][0]).toBeGreaterThanOrEqual(before + 7000);
 });
