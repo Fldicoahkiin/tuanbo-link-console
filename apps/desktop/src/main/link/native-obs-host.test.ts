@@ -329,7 +329,7 @@ it('自动下一首时上一首的画面清理失败：播放器在下一首上�
     prepare: () => Promise.resolve(), ingest: () => Promise.resolve(), pause: () => Promise.resolve(), stop: () => Promise.resolve(),
     resolveAudio: () => Promise.reject(new Error('原生播放不用音源地址')),
     configuration: () => ({ outputDeviceId: 'default', mtcPortName: null, audioSampleRate: 48000, preload: false }),
-    changed: next => { state = next; }, notice: message => { notices.push(message); }
+    changed: next => { state = next; }, notice: message => { notices.push(message); }, closedFault: message => { failures.push(message); }
   }, {
     prepareNativePlayback: request => {
       const { snapshot } = request;

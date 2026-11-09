@@ -13,7 +13,8 @@ export function useDragSession<T>(): {
   end: () => void;
 } {
   const [drag, setDrag] = useState<T | null>(null);
-  const [session] = useState(() => new DragSession<T>(window, value => setDrag(() => value)));
+  // The window in the app; the session only listens once a drag begins, so drawing without a window (tests) works.
+  const [session] = useState(() => new DragSession<T>(globalThis, value => setDrag(() => value)));
   useEffect(() => () => session.dispose(), [session]);
   return {
     drag,
