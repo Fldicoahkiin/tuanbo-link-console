@@ -47,6 +47,7 @@ import { useMediaAudioPreparation } from './runtime/use-media-audio-preparation'
 import { useLicenseReminders } from './useLicenseReminders';
 import { TaskSidebarProgress } from './components/TaskSidebarProgress';
 import { recordErrorNotice } from './error-notice-log';
+import { noticeText } from './notice-text';
 
 type Page = 'project' | 'cues' | 'lighting';
 type Notice = { id: string; message: string; tone: 'info' | 'error'; key?: string };
@@ -95,9 +96,10 @@ export function LinkApp(): JSX.Element {
   useEffect(() => { if (!playbackLocked) setPlaybackProject(project); }, [playbackLocked, project]);
   useConnectionsEscape(connectionsOpen && !settingsOpen, () => setConnectionsOpen(false));
 
-  const notify = useCallback((message: string, tone: 'info' | 'error' = 'info', key?: string) => {
+  /** `written`: the text is written for the operator already and is shown as it is (noticeText). */
+  const notify = useCallback((message: string, tone: 'info' | 'error' = 'info', key?: string, written = false) => {
     const id = crypto.randomUUID();
-    const displayMessage = tone === 'error' ? toUserErrorMessage(message) : message;
+    const displayMessage = noticeText(message, tone, written);
     if (tone === 'error' && message) recordErrorNotice(displayMessage, message);
     setNotices((current) => [...current.filter(notice => notice.message !== displayMessage && (!key || notice.key !== key)), ...(message ? [{ id, message: displayMessage, tone, ...(key ? { key } : {}) }] : [])]);
     if (tone === 'info') window.setTimeout(() => setNotices((current) => current.filter((notice) => notice.id !== id)), 5_000);
@@ -316,7 +318,7 @@ function useRuntimeCloseProtection(
   }, [notify, runtimeState]);
 }
 
-function useDesktopIntegrationEvents(notify: (message: string, tone?: 'info' | 'error') => void): ReturnType<typeof useMidiPortMonitor> {
+function useDesktopIntegrationEvents(notify: (message: string, tone?: 'info' | 'error', key?: string, written?: boolean) => void): ReturnType<typeof useMidiPortMonitor> {
   const midiMonitor = useMidiPortMonitor(notify);
   useEffect(() => {
     let cancelled = false;
@@ -347,7 +349,10 @@ function useDesktopIntegrationEvents(notify: (message: string, tone?: 'info' | '
         }
       }).catch(reportLogFailure);
     });
-    const unsubscribeMainErrors = linkDesktopViewModel.onMainProcessError(message => notify(message, 'error'));
+    // Written for the operator in main (main-process-errors.ts): shown as it is. Subscribed before the state below loads:
+    // the program opens only after that (useInternalPlayer waits for it), and main takes the open as the sign that red
+    // text reaches this window.
+    const unsubscribeMainErrors = linkDesktopViewModel.onMainProcessError(message => notify(message, 'error', undefined, true));
     void loadDesktopIntegrationState(() => cancelled, notify);
     return () => {
       cancelled = true;

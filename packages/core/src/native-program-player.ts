@@ -7,7 +7,8 @@ import type { LinkProject, NativePlayerControl, NativePlayerStatus, NativeObsPre
 import { nativeAudioAnalysis } from './native-audio-analysis';
 import type { PlaybackBoundary, PlaybackClock } from './program-player';
 import { emptyInternalPlayerState, type InternalPlayerDependencies, type InternalPlayerState } from './program-player';
-import type { ProgramLightingOutput } from './program-player';
+import type { LightingReleaseSong, ProgramLightingOutput } from './program-player';
+import { LightingReleaseFailure } from './lighting-output-release';
 import { nativeProgramSnapshot } from './native-program-snapshot';
 import { programStart, type ProgramStart } from './program-start';
 import { optionalOutputReady } from './optional-output-ready';
@@ -105,6 +106,8 @@ export class NativeProgramPlayer {
    * replaces the other. A fault after the start replaces them, as any later fault replaces the one shown. Each play
    * and scrub starts over. */
   private start: StartFaults = { leftover: null, obs: null, fault: null };
+  /** A window shows this player's state (setWatched). */
+  private watched = true;
 
   readonly clock: PlaybackClock = {
     read: () => ({ positionMs: this.native?.positionMs ?? this.state.positionMs, durationMs: this.state.durationMs,
@@ -189,7 +192,7 @@ export class NativeProgramPlayer {
       if (!this.current(token)) return;
       // The console runs the lighting from the timecode; only the Off at stop is prepared here.
       const prepareLighting = async (): Promise<void> => { if (item.lighting) {
-        try { await optionalOutputReady(this.lighting.prepare(item.lighting), () => this.lighting.cancelPreparation(), '停止时关灯'); }
+        try { await optionalOutputReady(this.lighting.prepare(item.lighting, { itemId, title: item.title }), () => this.lighting.cancelPreparation(), '停止时关灯'); }
         catch (error) { this.lighting.cancelPreparation(); if (this.current(token)) this.startFault(`停止时可能关不掉这首歌的执行器：${toUserErrorMessage(error)}`); }
       } };
       if (!this.current(token)) return;
@@ -261,19 +264,23 @@ export class NativeProgramPlayer {
       if (this.current(token)) { this.boundary('pause'); this.update({ positionMs: 0, mtcSentPositionMs: null }); } });
   }
   /** The Off a stop owes, sent once after the timecode stopped; nothing retries it. A failure is shown in the player
-   * and logged. Once the player has closed no window shows its state any more, so the failure goes to the host
-   * (closedFault): in the window in red, and into the log as an error. */
+   * and logged. When no window shows the player's state, after it closed or while its program plays on without a
+   * window (setWatched), the failure goes to the host (closedFault): in a window in red, and into the log as an error.
+   * It names the song the Off was prepared for (LightingReleaseFailure), not the one playing now. */
   private async releaseLighting(): Promise<void> {
     if (!this.lightingOwed) return;
     this.lightingOwed = false;
-    const itemId = this.state.itemId;
     try { await this.lighting.release(); }
     catch (error) {
-      if (!this.disposed) { this.runtimePrepared = false; this.reportUnavailable(`灯光没能完全关闭：${toUserErrorMessage(error)}`); return; }
-      const title = this.project.rundown.find(item => item.id === itemId)?.title;
-      this.dependencies.closedFault(`${title ? `「${title}」` : '这首歌'}的灯光没能完全关闭，控台上可能还亮着，请在控台上关掉这首歌的执行器。原因：${toUserErrorMessage(error)}`, itemId);
+      if (!this.disposed) this.runtimePrepared = false;
+      if (!this.disposed && this.watched) { this.reportUnavailable(`灯光没能完全关闭：${toUserErrorMessage(error)}`); return; }
+      const song = error instanceof LightingReleaseFailure ? error.song : null;
+      this.dependencies.closedFault(lightsLeftOn(song, error), song?.itemId ?? null);
     }
   }
+  /** Whether a window shows this player's state. NativeProgramService clears it while the program plays on after its
+   * window's renderer exited, and sets it again when a reloaded window takes the program over. */
+  setWatched(watched: boolean): void { this.watched = watched; }
   async reset(): Promise<void> { await this.stop(); if (this.state.status !== 'error') this.update({ itemId: null, playedItemIds: [], durationMs: 0 }); }
   externalStop(): void { void this.stop(); }
   freeze(message: string): void { void this.stop().then(() => this.update({ status: 'error', error: message, errorTitle: '播放已中断' })); }
@@ -534,4 +541,11 @@ export class NativeProgramPlayer {
   private markPlayed(): void { if (this.state.itemId) this.update({ playedItemIds: [...new Set([...this.state.playedItemIds, this.state.itemId])] }); }
   private current(token: number): boolean { return !this.disposed && token === this.epoch; }
   private update(patch: Partial<InternalPlayerState>): void { if (this.disposed) return; this.state = { ...this.state, ...patch }; this.dependencies.changed(this.state); }
+}
+
+/** A stop's Off failed where no player shows it (2026-11-09): what happened, why, and what the operator does. It names
+ * the song the Off was for; "这首歌" only when the failure does not say. */
+function lightsLeftOn(song: LightingReleaseSong | null, error: unknown): string {
+  const reason = toUserErrorMessage(error).replace(/[。.；;\s]+$/u, '') || '未知错误';
+  return `${song?.title ? `「${song.title}」` : '这首歌'}的灯光没能完全关闭，控台上可能还亮着。原因：${reason}。请在控台上关掉这首歌的执行器。`;
 }

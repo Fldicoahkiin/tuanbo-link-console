@@ -1,6 +1,7 @@
 import { emptyInternalPlayerState, type InternalPlayerState, type NativeProgramPlayer, type PlaybackBoundary } from '@tb/core/link';
 import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema, parseLinkProject,
   type LinkProject, type NativeProgramAttachment, type NativeProgramOpen, type NativeProgramConfiguration, type NativeProgramEvent } from '@tb/schema';
+import type { ClosedProgramFaults } from './main-process-errors';
 
 type Host = { controller: Pick<NativeProgramPlayer, keyof NativeProgramPlayer>; close(): Promise<void> };
 type Entry = { request: NativeProgramOpen; projectId: string; document: string; host: Host | null; configuration: NativeProgramConfiguration;
@@ -8,6 +9,8 @@ type Entry = { request: NativeProgramOpen; projectId: string; document: string; 
   cancellation: AbortController; ready: Promise<void> };
 type Factory = (project: LinkProject, request: NativeProgramOpen, callbacks: {
   configuration(): NativeProgramConfiguration; changed(state: InternalPlayerState): void; cueChanged(id: string | null): void;
+  /** A failure no player state shows (the player closed, or plays on without a window): logged and shown in red. */
+  closedFault(message: string, itemId: string | null): void;
 }) => Host;
 
 /** Owns the single formal program session. Old UI disposal cannot stop a new
@@ -18,13 +21,21 @@ export class NativeProgramService {
   private current: Entry | null = null;
   private cleanup: Promise<void> = Promise.resolve();
   private running = false;
-  /** `runningChanged`: the program started or stopped preparing, playing or paused, attached to a window or not;
-   * the license session of the show follows it (link-main wires it through program-license.ts to LicenseAccess). */
+  /** Every argument is required, so link-main cannot leave one out:
+   * - `runningChanged`: the program started or stopped preparing, playing or paused, attached to a window or not; the
+   *   license session of the show follows it (link-main passes `programLicense(...).runningChanged`, which reaches
+   *   LicenseAccess; license-rules.test.ts checks that path).
+   * - `faults`: where a failure goes that no player state shows. The service tells it when no window can show it (the
+   *   renderer exited) and when a window opened a program again. */
   constructor(private readonly create: Factory, private readonly publish: (event: NativeProgramEvent) => void,
-    private readonly authorize: () => Promise<void>, private readonly runningChanged?: (running: boolean) => void) {}
+    private readonly authorize: () => Promise<void>, private readonly runningChanged: (running: boolean) => void,
+    private readonly faults: ClosedProgramFaults) {}
 
   /** `checkProject`: the window names the project the program reads; checked before a host is created. */
   async open(value: unknown, checkProject?: (projectPath: string, project: LinkProject) => Promise<void>): Promise<NativeProgramAttachment> {
+    // A window opens a program only after it subscribed to main-process errors (LinkApp): red text reaches it from
+    // now on, also when this open is refused.
+    this.faults.windowOpened();
     const request = nativeProgramOpenSchema.parse(value);
     const project = parseLinkProject(JSON.parse(request.document));
     if (project.playbackSource !== 'internal') throw new Error('只有“联动台播放”的工程才能在后台播放');
@@ -35,6 +46,7 @@ export class NativeProgramService {
         throw new Error(`界面重新加载前的节目还在播放：${previous.request.projectPath}。请打开这个工程接回控制，或停止播放`);
       }
       previous.orphaned = false; previous.request = request; previous.configuration = request.configuration;
+      previous.host?.controller.setWatched(true);
       this.emit(previous);
       return previous.document === document ? 'adopted' : 'outdated';
     }
@@ -50,7 +62,8 @@ export class NativeProgramService {
       entry.host = this.create(project, request, {
         configuration: () => entry.configuration,
         changed: state => { entry.state = state; this.reportRunning(); this.emit(entry); },
-        cueChanged: id => { entry.currentCueId = id; this.emit(entry); }
+        cueChanged: id => { entry.currentCueId = id; this.emit(entry); },
+        closedFault: (message, itemId) => this.faults.report(message, { projectId: entry.projectId, itemId })
       });
       entry.host.controller.clock.subscribeBoundary(boundary => this.emit(entry, boundary));
       this.emit(entry);
@@ -60,10 +73,12 @@ export class NativeProgramService {
   }
 
   /** The owning window's renderer exited. A program that is preparing, playing or
-   * paused keeps its outputs running and is returned; anything else is closed. */
+   * paused keeps its outputs running and is returned; anything else is closed.
+   * Until a window opens a program again, no window shows red text: what fails meanwhile waits for it. */
   async release(): Promise<InternalPlayerState | null> {
+    this.faults.windowExited();
     const entry = this.current;
-    if (entry && active(entry.state)) { entry.orphaned = true; return entry.state; }
+    if (entry && active(entry.state)) { entry.orphaned = true; entry.host?.controller.setWatched(false); return entry.state; }
     await this.close();
     return null;
   }
@@ -113,7 +128,7 @@ export class NativeProgramService {
   private reportRunning(): void {
     const running = this.current !== null && active(this.current.state);
     if (running === this.running) return;
-    this.running = running; this.runningChanged?.(running);
+    this.running = running; this.runningChanged(running);
   }
   private enqueueClose(entry: Entry): void {
     this.cleanup = this.cleanup.then(async () => {

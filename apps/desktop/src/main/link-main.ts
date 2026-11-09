@@ -981,8 +981,9 @@ function registerIpc(
   handle('link:ma2-current-show', async () => { await ma2NetworkReady; return ma2Network.currentShow(); });
   // The program's lighting Off and its running state, as the license rules want them (program-license.ts).
   const programOutputs = programLicense(licenseGate, { ready: ma2NetworkReady, status: () => ma2Network.status(), send: sendMa2Cue });
-  // A closed program shows nothing any more: what fails after it closed reaches the window in red.
-  const reportClosedProgramFault = closedProgramFaultReporter(entry => logger.record(entry), sendToRenderer);
+  // What fails where no player shows it (the program closed, or plays on while no window is there) is logged as an error
+  // and shown in red in the window, or in the next window that opens a program.
+  const closedProgramFaults = closedProgramFaultReporter(entry => logger.record(entry), sendToRenderer);
   nativeProgram = new NativeProgramService((project, request, callbacks) => {
     // A channel that cannot join (OBS, timecode) repeats song after song until fixed: a warning the first time, then info.
     const notice = (message: string, itemId: string | null): void => {
@@ -1004,7 +1005,7 @@ function registerIpc(
           .catch((error: unknown) => console.error('动作 MIDI 恢复日志未能保存', error));
       },
       obsChanged: state => { if (state.state === 'running' || state.state === 'ready') callbacks.cueChanged(state.currentCueId); }, notice,
-      closedFault: (message, itemId) => reportClosedProgramFault(message, { projectId: project.projectId, itemId }),
+      closedFault: (message, itemId) => callbacks.closedFault(message, itemId),
       api: {
         prepareNativePlayback: value => playbackRequests.prepare(value), controlNativePlayback: value => playbackRequests.control(value),
         getNativePlaybackDevices: scope => player().devices(scope), prepareNativeObs: value => obsRequests.prepare(value),
@@ -1016,7 +1017,7 @@ function registerIpc(
     });
     nativeProgramHost = host;
     return { controller: host.controller, close: async () => { await host.close(); if (nativeProgramHost === host) nativeProgramHost = null; } };
-  }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput(), programOutputs.runningChanged);
+  }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput(), programOutputs.runningChanged, closedProgramFaults);
   // Session registration captures cancellation synchronously; output adapters
   // validate and authorize every actual audio, OBS, MIDI and lighting request.
   handle('link:native-program-open', async (_event, value: unknown) => {

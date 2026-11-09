@@ -113,7 +113,7 @@ function program() {
     seek: vi.fn(() => Promise.resolve()), scrub: vi.fn(() => Promise.resolve()), skip: vi.fn(() => Promise.resolve()),
     setVolume: vi.fn(), setEndAction: vi.fn(), setPlaylist: vi.fn(), toggleMtc: vi.fn(), receiveMidi: vi.fn(), fade: vi.fn(),
     preloadSelected: vi.fn(), freeze: vi.fn(), reportUnavailable: vi.fn(), runtimeUnavailable: vi.fn(), reportFault: vi.fn(), clearFault: vi.fn(), externalStop: vi.fn(),
-    getAudioAnalysis: () => null, dispose: vi.fn(() => Promise.resolve()) } };
+    setWatched: vi.fn(), getAudioAnalysis: () => null, dispose: vi.fn(() => Promise.resolve()) } };
 }
 function windowOpen(): NativeProgramOpen {
   return { version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1,
@@ -125,7 +125,8 @@ function show() {
   let status: LicenseStatus = valid;
   const { access, wiring } = programConsole(() => status);
   const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(program);
-  const service = new NativeProgramService(create, () => undefined, () => access.requireOutput(), wiring.runningChanged);
+  const service = new NativeProgramService(create, () => undefined, () => access.requireOutput(), wiring.runningChanged,
+    closedProgramFaultReporter(() => Promise.resolve(), () => undefined));
   const song = (state: 'preparing' | 'playing' | 'paused' | 'stopped' | 'error') => create.mock.calls.at(-1)![2].changed({ ...emptyInternalPlayerState, itemId: 'song', status: state });
   return { access, service, song, lapse: (next: LicenseStatus) => { status = next; } };
 }
@@ -185,27 +186,31 @@ describe('正在进行的演出跟后台节目走，不跟界面走', () => {
   });
 });
 
-/** The main-process program as link-main builds it, with fake audio and OBS: the real NativeProgramHost with its player and
- * lighting release, the program's license wiring (program-license.ts) and the report of failures after it closed. */
-function programHost() {
+/** The main-process program as link-main builds it, with fake audio and OBS: NativeProgramService creating the real
+ * NativeProgramHost with its player and lighting release, the program's license wiring (program-license.ts) and the report of
+ * failures no player shows (closedProgramFaultReporter). The window has opened the program. 「串场」 has no lighting. */
+async function programHost(endAction: 'pause' | 'stop' = 'pause') {
   let license = valid;
-  const { send, wiring } = programConsole(() => license);
-  // What reaches the window: link-main passes sendToRenderer here, and LinkApp shows link:main-process-error in red.
+  const { access, send, wiring } = programConsole(() => license);
+  // What reaches the window: link-main passes sendToRenderer here, and LinkApp shows link:main-process-error in red as it is.
   const toWindow = vi.fn<(channel: 'link:main-process-error', message: string) => void>();
   const record = vi.fn<(entry: LinkLogInput) => Promise<unknown>>(() => Promise.resolve());
-  const report = closedProgramFaultReporter(record, toWindow);
-  const project = parseLinkProject({ ...createEmptyLinkProject('授权规则'), playbackSource: 'internal',
-    rundown: [{ id: 'song', title: '开场', referenceAudio: { assetId: 'audio', relativePath: 'song.wav', sha256: 'a'.repeat(64), durationMs: 10000 },
-      playback: { startMs: 0, endMs: 9000, mtcOffsetMs: 480000, volume: 100, endAction: 'pause', shortcut: '' } }] });
+  // link-main's notice: the run log only (a warning the first time, then info).
+  const notices: string[] = [];
+  const referenceAudio = { assetId: 'audio', relativePath: 'song.wav', sha256: 'a'.repeat(64), durationMs: 10000 };
+  const playback = { startMs: 0, endMs: 9000, mtcOffsetMs: 480000, volume: 100, endAction, shortcut: '' };
+  const project = parseLinkProject({ ...createEmptyLinkProject('授权规则'), schemaVersion: 2, playbackSource: 'internal',
+    rundown: [{ id: 'song', title: '开场', referenceAudio, playback }, { id: 'interlude', title: '串场', referenceAudio, playback }] });
   project.rundown[0]!.lighting = { ...createLightingDocument(), consoleSong: { endpoint: 'console', show: '现场', layout: null, executor: '1.101', sequence: 36,
     name: '开场', baselineXml: '<MA/>', points: [] } };
-  let audio: NativePlayerStatus | null = null;
-  const prepareAudio = (request: NativePlayerPrepare): Promise<NativePlayerStatus> => {
+  let audio: NativePlayerStatus | null = null, held: Promise<void> | null = null;
+  const prepareAudio = async (request: NativePlayerPrepare): Promise<NativePlayerStatus> => {
+    if (held) await held;
     const s = request.snapshot;
     audio = { version: 1, sessionId: request.sessionId, generation: request.generation, itemId: s.itemId, status: 'ready', positionMs: s.positionMs,
       offsetMs: s.offsetMs, sampleRate: s.sampleRate, enginePid: 1, engineTitle: 'TBLINK Audio 1', mtcPortName: null, mtcSent: 0, audioError: null,
       mtcError: null, underruns: 0, mtcInterruptions: 0, gain: s.volume, analysis: null };
-    return Promise.resolve(audio);
+    return audio;
   };
   const controlAudio = (command: NativePlayerControl): Promise<NativePlayerStatus> => {
     if (!audio) return Promise.reject(new Error('没有准备音频'));
@@ -215,40 +220,106 @@ function programHost() {
     else if (command.kind === 'stop') next.status = 'stopped';
     audio = next; return Promise.resolve(next);
   };
-  const host = new NativeProgramHost(project, 'C:/test/show.tblink', 1, {
-    executable: 'tblink-playback.exe', audio: () => audio, midiOutputs: () => Promise.resolve([]), authorize: () => Promise.resolve(),
-    configuration: () => ({ outputDeviceId: 'default', mtcPortName: null, audioSampleRate: 48000, preload: false }), preciseSeeking: () => false,
-    changed: () => undefined, midiChanged: () => undefined, midiRecovered: () => undefined, notice: () => undefined,
-    closedFault: (message, itemId) => report(message, { projectId: project.projectId, itemId }),
-    network: wiring.network,
-    api: { prepareNativePlayback: prepareAudio, controlNativePlayback: controlAudio,
-      getNativePlaybackDevices: () => Promise.resolve({ protocol: 4, audio: [], midiOutputs: [], midiInputs: [] }),
-      prepareNativeObs: (request: NativeObsPrepare) => Promise.resolve({ version: 1, sessionId: request.sessionId, generation: request.generation,
-        itemId: request.snapshot.item.id, revision: request.snapshot.revision, state: 'ready', reason: null, currentCueId: null, nextCueId: null, pendingCount: 0, positionMs: 0 }),
-      stopNativeObs: () => Promise.resolve(), onNativeObsStatus: () => () => undefined,
-      preloadNativeObs: () => Promise.resolve(), cancelNativeObsPreload: () => Promise.resolve() }
-  });
-  return { host, send, toWindow, record, lapse: (next: LicenseStatus) => { license = next; } };
+  const hosts: NativeProgramHost[] = [];
+  const service = new NativeProgramService((opened, request, callbacks) => {
+    const host = new NativeProgramHost(opened, request.projectPath, request.revision, {
+      executable: 'tblink-playback.exe', audio: () => audio, midiOutputs: () => Promise.resolve([]), authorize: () => Promise.resolve(),
+      configuration: () => ({ outputDeviceId: 'default', mtcPortName: null, audioSampleRate: 48000, preload: false }), preciseSeeking: () => false,
+      changed: state => callbacks.changed(state), midiChanged: () => undefined, midiRecovered: () => undefined,
+      notice: message => { notices.push(message); }, closedFault: (message, itemId) => callbacks.closedFault(message, itemId),
+      network: wiring.network,
+      api: { prepareNativePlayback: prepareAudio, controlNativePlayback: controlAudio,
+        getNativePlaybackDevices: () => Promise.resolve({ protocol: 4, audio: [], midiOutputs: [], midiInputs: [] }),
+        prepareNativeObs: (request: NativeObsPrepare) => Promise.resolve({ version: 1, sessionId: request.sessionId, generation: request.generation,
+          itemId: request.snapshot.item.id, revision: request.snapshot.revision, state: 'ready', reason: null, currentCueId: null, nextCueId: null, pendingCount: 0, positionMs: 0 }),
+        stopNativeObs: () => Promise.resolve(), onNativeObsStatus: () => () => undefined,
+        preloadNativeObs: () => Promise.resolve(), cancelNativeObsPreload: () => Promise.resolve() }
+    });
+    hosts.push(host);
+    return { controller: host.controller, close: () => host.close() };
+  }, () => undefined, () => access.requireOutput(), wiring.runningChanged, closedProgramFaultReporter(record, toWindow));
+  /** What a window sends when it opens this project's program. */
+  const opening = (): NativeProgramOpen => ({ version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1,
+    document: JSON.stringify(project), configuration: { outputDeviceId: 'default', mtcPortName: null, preciseSeeking: false } });
+  const first = opening();
+  await service.open(first);
+  return { service, send, toWindow, record, notices, projectId: project.projectId, opening,
+    player: () => hosts.at(-1)!.controller,
+    play: (itemId: string) => service.control({ version: 1, ownerId: first.ownerId, operation: { kind: 'play', itemId } }),
+    /** The playback engine reports the end of the song. */
+    ended: () => hosts.at(-1)!.observe({ ...audio!, status: 'ended', positionMs: 9000 }, null),
+    /** Audio preparation waits until the returned function is called. */
+    hold: () => { let release!: () => void; held = new Promise<void>(resolve => { release = resolve; }); return () => { held = null; release(); }; },
+    lapse: (next: LicenseStatus) => { license = next; } };
 }
+/** The red text in the window, as the operator reads it: what happened, why, what to do. */
+const lightsLeftOn = (title: string) => `「${title}」的灯光没能完全关闭，控台上可能还亮着。原因：MA2 没有回应。请在控台上关掉这首歌的执行器。`;
 
 describe('停止后马上关闭后台节目（改了片段、重建播放器），这首歌的执行器照样关', () => {
   for (const [reason, status] of Object.entries(lapsed)) it(`${reason}：节目宿主照发这首歌的执行器 Off，不检查授权`, async () => {
-    const f = programHost();
-    await f.host.controller.play('song');
+    const f = await programHost();
+    await f.play('song');
     f.lapse(status);
-    await Promise.all([f.host.controller.stop(), f.host.close()]);
+    await Promise.all([f.player().stop(), f.service.close()]);
     expect(f.send.mock.calls.map(([request]) => request.action)).toEqual([off]);
     expect(f.toWindow).not.toHaveBeenCalled();
   });
 
   it('Off 没发出去：窗口里标红、按错误记录，不重发，关闭节目照常完成', async () => {
-    const f = programHost();
-    await f.host.controller.play('song');
+    const f = await programHost();
+    await f.play('song');
     f.send.mockRejectedValueOnce(new Error('MA2 没有回应'));
-    await Promise.all([f.host.controller.stop(), f.host.close()]);
-    const message = '「开场」的灯光没能完全关闭，控台上可能还亮着，请在控台上关掉这首歌的执行器。原因：MA2 没有回应';
-    expect(f.toWindow).toHaveBeenCalledExactlyOnceWith('link:main-process-error', message);
-    expect(f.record).toHaveBeenCalledWith(expect.objectContaining({ level: 'error', message, itemId: 'song', result: 'failed' }));
+    await Promise.all([f.player().stop(), f.service.close()]);
+    expect(f.toWindow).toHaveBeenCalledExactlyOnceWith('link:main-process-error', lightsLeftOn('开场'));
+    expect(f.record).toHaveBeenCalledExactlyOnceWith({ level: 'error', category: 'state', device: '播放器', projectId: f.projectId, itemId: 'song',
+      message: lightsLeftOn('开场'), result: 'failed' });
     expect(f.send).toHaveBeenCalledOnce();
+  });
+
+  // 修复前：红字里的歌名取自关闭那一刻在放的「串场」，操作员会去找一首根本没有执行器的歌。
+  it('补发的是上一首的关灯时，红字写上一首的歌名：定位时按停止被跳过，接着放不带灯光的「串场」，然后关闭节目', async () => {
+    const f = await programHost();
+    await f.play('song');
+    const release = f.hold();
+    const seeking = f.player().seek(2000), stopping = f.player().stop(), next = f.player().play('interlude');
+    release(); await Promise.all([seeking, stopping, next]);
+    expect(f.send).not.toHaveBeenCalled();
+    f.send.mockRejectedValueOnce(new Error('MA2 没有回应'));
+    await f.service.close();
+    expect(f.send.mock.calls.map(([request]) => request.action)).toEqual([off]);
+    expect(f.toWindow).toHaveBeenCalledExactlyOnceWith('link:main-process-error', lightsLeftOn('开场'));
+    expect(f.record).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ level: 'error', itemId: 'song', message: lightsLeftOn('开场') }));
+  });
+});
+
+describe('界面进程退出后节目在后台自己停下，这首歌的执行器照样关；没关掉要让操作员看到', () => {
+  for (const [reason, status] of Object.entries(lapsed)) it(`${reason}：界面退出后歌在后台放完停止，执行器 Off 照发，不检查授权`, async () => {
+    const f = await programHost('stop');
+    await f.play('song');
+    expect(await f.service.release()).toMatchObject({ status: 'playing' });
+    f.lapse(status);
+    f.ended();
+    await vi.waitFor(() => expect(f.send.mock.calls.map(([request]) => request.action)).toEqual([off]));
+    expect(f.record).not.toHaveBeenCalled();
+  });
+
+  // 修复前：节目没被关闭，失败只进了没有窗口在看的播放器状态，日志里是提示级；重新加载的界面打开工程时，这个已停下的节目
+  // 被替换掉，红字谁也看不到，控台停在最后一个 Cue。
+  it('Off 没发出去：马上按错误记录一次；红字等重新加载的界面打开节目时显示，只显示一次', async () => {
+    const f = await programHost('stop');
+    await f.play('song');
+    expect(await f.service.release()).toMatchObject({ status: 'playing' });
+    f.send.mockRejectedValueOnce(new Error('MA2 没有回应'));
+    f.ended();
+    await vi.waitFor(() => expect(f.record).toHaveBeenCalledOnce());
+    expect(f.record).toHaveBeenCalledWith({ level: 'error', category: 'state', device: '播放器', projectId: f.projectId, itemId: 'song',
+      message: lightsLeftOn('开场'), result: 'failed' });
+    expect(f.notices.filter(message => message.includes('灯光'))).toEqual([]);
+    expect(f.toWindow).not.toHaveBeenCalled();
+    // The song stopped while no window was there: the reloaded window replaces the program instead of taking it over.
+    expect(await f.service.open(f.opening())).toBe('opened');
+    expect(f.toWindow).toHaveBeenCalledExactlyOnceWith('link:main-process-error', lightsLeftOn('开场'));
+    await f.service.open(f.opening());
+    expect(f.toWindow).toHaveBeenCalledOnce(); expect(f.record).toHaveBeenCalledOnce(); expect(f.send).toHaveBeenCalledOnce();
   });
 });

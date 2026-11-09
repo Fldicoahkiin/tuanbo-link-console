@@ -44,14 +44,18 @@ export type AudioAnalysis = {
   readPeaks: () => readonly [number, number];
 };
 
+/** The rundown song whose lighting a lights-off belongs to. */
+export type LightingReleaseSong = { itemId: string; title: string };
+
 /** A playing song's lighting is the console's Timecode show following the song's timecode (2026-11-01: the
  * MIDI and network playback modes were removed). The player itself only switches the song's executors off
  * when it stops. */
 export type ProgramLightingOutput = {
-  /** Notes where the Off goes when the song stops; sends nothing. */
-  prepare(document: LightingDocument): Promise<void>;
+  /** Notes where the Off goes when `song` stops; sends nothing. */
+  prepare(document: LightingDocument, song: LightingReleaseSong): Promise<void>;
   /** Drops a preparation still under way; one that finished is kept for the stop. */
   cancelPreparation(): void;
-  /** The song stopped: its executors are switched off. */
+  /** The song stopped: its executors are switched off. A failure is a LightingReleaseFailure naming the song the
+   * Off was prepared for, which is not always the song playing now. */
   release(): Promise<void>;
 };

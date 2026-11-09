@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, lightingDocumentSchema, linkCueSchema, parseLinkProject, type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus } from '@tb/schema';
-import { NativeProgramPlayer, ObsPictureLeftover, type ProgramLightingOutput } from '@tb/core/link';
+import { LightingReleaseFailure, NativeProgramPlayer, ObsPictureLeftover, type ProgramLightingOutput } from '@tb/core/link';
 import { emptyInternalPlayerState } from '@tb/core/link';
 import { nativeProgramSnapshot } from '@tb/core/link';
 import type { NativeObsPreload } from '@tb/schema';
@@ -130,6 +130,8 @@ it('播放只发时间码：旧工程存成网络输出的歌也照发时间码�
   expect(f.lighting.prepare.mock.calls[0]?.[0]).toMatchObject({ outputMode: 'timecode' });
   expect(f.state().fault).toBeNull();
   await f.player.stop(); expect(f.lighting.release).toHaveBeenCalledOnce();
+  // The Off plan knows which song it is for: the failure names that song, not whichever plays when it goes out.
+  expect(f.lighting.prepare).toHaveBeenCalledWith(lighting, { itemId: 'song-0', title: '音频 0' });
   await f.player.dispose();
 });
 
@@ -191,8 +193,10 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
 
   // 修复前：播放器关了以后，状态不再发给任何界面，关灯失败只写进运行日志（第二次起只是 info），屏幕上什么都没有。
   // 这里只看播放器把失败交给宿主（closedFault）；宿主在窗口里标红、按错误记录，由 license-rules.test.ts 和
-  // main-process-errors.test.ts 守着。
-  const closedOff = '「音频 0」的灯光没能完全关闭，控台上可能还亮着，请在控台上关掉这首歌的执行器。原因：关灯指令没有发送：控台连接变了';
+  // main-process-errors.test.ts 守着。文案先说结果，再说原因，最后说怎么办（docs/UI_COPY_GUIDE.md）。
+  const closedOff = '「音频 0」的灯光没能完全关闭，控台上可能还亮着。原因：关灯指令没有发送：控台连接变了。请在控台上关掉这首歌的执行器。';
+  /** What LightingOutputRelease rejects with: the reason, and the song the Off was prepared for. */
+  const refused = (itemId = 'song-0', title = '音频 0') => new LightingReleaseFailure({ itemId, title }, new Error('关灯指令没有发送：控台连接变了'));
 
   it('销毁时补发的关灯失败交给宿主，不再只写日志；不重试，也不让关闭播放器失败', async () => {
     const f = lit(); await f.player.play('song-0');
@@ -200,7 +204,7 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
     f.api.prepareNativePlayback.mockImplementationOnce(async request => { await preparing.promise; return original(request); });
     const seeking = f.player.seek(3000);
     await vi.waitFor(() => expect(f.api.prepareNativePlayback).toHaveBeenCalledTimes(2));
-    f.lighting.release.mockRejectedValueOnce(new Error('关灯指令没有发送：控台连接变了'));
+    f.lighting.release.mockRejectedValueOnce(refused());
     const stopping = f.player.stop(), closing = f.player.dispose();
     await vi.waitFor(() => expect(f.lighting.release).toHaveBeenCalledOnce());
     preparing.open();
@@ -217,7 +221,7 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
     const stopping = f.player.stop();
     await vi.waitFor(() => expect(f.lighting.release).toHaveBeenCalledOnce());
     const closing = f.player.dispose();
-    fail(new Error('关灯指令没有发送：控台连接变了'));
+    fail(refused());
     await Promise.all([stopping, closing]);
     expect(f.deps.closedFault).toHaveBeenCalledExactlyOnceWith(closedOff, 'song-0');
     expect(f.lighting.release).toHaveBeenCalledOnce();
@@ -225,12 +229,58 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
 
   it('播放器还开着时停止的关灯失败照旧显示在播放器里，不另外弹窗', async () => {
     const f = lit(); await f.player.play('song-0');
-    f.lighting.release.mockRejectedValueOnce(new Error('关灯指令没有发送：控台连接变了'));
+    f.lighting.release.mockRejectedValueOnce(refused());
     await f.player.stop();
     expect(f.state().notice).toContain('灯光没能完全关闭：关灯指令没有发送：控台连接变了');
     expect(f.deps.notice).toHaveBeenCalledWith('灯光没能完全关闭：关灯指令没有发送：控台连接变了', 'song-0');
     await f.player.dispose();
     expect(f.deps.closedFault).not.toHaveBeenCalled();
+  });
+
+  // 修复前：红字里的歌名取自关闭那一刻正在放的歌。不带灯光的歌不换掉关灯计划，补发的是上一首的 Off，红字却叫操作员去找这一首的执行器。
+  it('红字写这份 Off 所属的歌：上一首的停止排在定位后面被跳过、接着放不带灯光的歌、然后关闭', async () => {
+    const f = lit(); await f.player.play('song-0');
+    const preparing = gate(), original = f.api.prepareNativePlayback.getMockImplementation()!;
+    f.api.prepareNativePlayback.mockImplementationOnce(async request => { await preparing.promise; return original(request); });
+    const seeking = f.player.seek(3000);
+    await vi.waitFor(() => expect(f.api.prepareNativePlayback).toHaveBeenCalledTimes(2));
+    const stopping = f.player.stop(), next = f.player.play('song-1');
+    preparing.open(); await Promise.all([seeking, stopping, next]);
+    expect(f.state()).toMatchObject({ itemId: 'song-1', status: 'playing' });
+    expect(f.lighting.prepare).toHaveBeenCalledOnce();
+    f.lighting.release.mockRejectedValueOnce(refused());
+    await f.player.dispose();
+    expect(f.deps.closedFault).toHaveBeenCalledExactlyOnceWith(closedOff, 'song-0');
+  });
+
+  // 修复前：界面进程退出后节目在后台继续，播放器没关，关灯失败只进播放器的提示（没有窗口看得到），日志里只是 warning，之后是 info。
+  it('没有窗口在看时（界面退出，节目在后台继续），停止的关灯失败交给宿主标红；窗口接回后照旧显示在播放器里', async () => {
+    const f = lit(); await f.player.play('song-0');
+    f.player.setWatched(false);
+    f.lighting.release.mockRejectedValueOnce(refused());
+    await f.player.stop();
+    expect(f.deps.closedFault).toHaveBeenCalledExactlyOnceWith(closedOff, 'song-0');
+    expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('灯光没能完全关闭'))).toEqual([]);
+    expect(f.state().notice ?? '').not.toContain('灯光没能完全关闭');
+    f.player.setWatched(true); await f.player.play('song-0');
+    f.lighting.release.mockRejectedValueOnce(refused());
+    await f.player.stop();
+    expect(f.state().notice).toContain('灯光没能完全关闭：关灯指令没有发送：控台连接变了');
+    expect(f.deps.closedFault).toHaveBeenCalledOnce();
+    await f.player.dispose();
+  });
+
+  it('原因自己带句号时不出现“。。”；不知道是哪首歌时写“这首歌”', async () => {
+    const f = lit(); await f.player.play('song-0'); f.player.setWatched(false);
+    f.lighting.release.mockRejectedValueOnce(new LightingReleaseFailure({ itemId: 'song-0', title: '音频 0' }, new Error('MA2 telnet timeout')));
+    await f.player.stop();
+    f.lighting.release.mockRejectedValueOnce(new Error('控台正忙。'));
+    await f.player.play('song-0'); await f.player.stop();
+    expect(f.deps.closedFault.mock.calls).toEqual([
+      ['「音频 0」的灯光没能完全关闭，控台上可能还亮着。原因：操作超时了。请检查目标程序是否正常运行，处理后再试。请在控台上关掉这首歌的执行器。', 'song-0'],
+      ['这首歌的灯光没能完全关闭，控台上可能还亮着。原因：控台正忙。请在控台上关掉这首歌的执行器。', null]
+    ]);
+    await f.player.dispose();
   });
 });
 
