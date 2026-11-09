@@ -3,7 +3,7 @@ import { DEFAULT_REFERENCE_CANVAS_TRANSFORM, createEmptyLinkProject, parseLinkPr
 import { millisecondsToFrameNumber, moveContentCommand, removeContentCommand, withContentTimeline, type LinkCommand } from '@tb/core/link';
 import { markedOnAir } from '../components/timeline-air';
 import { NO_PENDING_PICTURE_EDITS } from './pending-picture-edits';
-import { pictureMarks, pictureOnAir, songInPlayer, songPicture, type PlayerVersion } from './picture-on-air';
+import { holdsSong, pictureMarks, pictureOnAir, songInPlayer, songPicture, type PlayerVersion } from './picture-on-air';
 
 const at = (seconds: number) => ({ hours: 0, minutes: 0, seconds, frames: 0 });
 const camera = (id: string, seconds: number, durationMs: number): LinkCue => ({
@@ -20,7 +20,7 @@ function started(): LinkProject {
     referenceMediaClips: [{ id: 'opening', assetId: 'video', label: '开场', startTimecode: at(0), durationMs: 12_000, layerId: 'clips', canvasTransform: DEFAULT_REFERENCE_CANVAS_TRANSFORM }] }] });
 }
 const edit = (project: LinkProject, ...commands: LinkCommand[]): LinkProject => commands.reduce((value, command) => withContentTimeline(command).execute(value), project);
-const holding = (status: ProgramPlayerState['status'], itemId: string | null, project: LinkProject | null, outdated = false): PlayerVersion => ({ state: { status, itemId }, project, outdated });
+const holding = (status: ProgramPlayerState['status'], itemId: string | null, project: LinkProject | null, outdated: boolean | null = false): PlayerVersion => ({ state: { status, itemId }, project, outdated });
 const frame = (seconds: number): number => millisecondsToFrameNumber(seconds * 1_000, '30');
 
 describe('联动台播放拿着哪首歌：编辑器的走带和画面标记按同一个判断', () => {
@@ -57,6 +57,17 @@ describe('OBS 按哪一版画面在播', () => {
     expect(pictureOnAir('song', true, holding('stopped', 'song', project, true))).toEqual({ kind: 'timeline' });
     expect(pictureOnAir('song', true, holding('playing', 'other', project, true))).toEqual({ kind: 'timeline' });
     expect(pictureOnAir('song', true, holding('playing', 'song', null))).toEqual({ kind: 'unconfirmed', reason: '联动台没有记下这首歌开始播放时的时间线' });
+  });
+
+  it('评审场景：界面重新加载后，后台先发来“在播”、还没答复打开：还不知道是哪一版，先写无法确认和原因；没拿着这首歌时不影响', () => {
+    // The window reopened the project; the program it takes over has not said yet whether it plays this version.
+    const reopened = started();
+    for (const status of ['preparing', 'playing', 'paused'] as const) {
+      expect(pictureOnAir('song', true, holding(status, 'song', reopened, null))).toEqual({ kind: 'unconfirmed', reason: '正在确认联动台播放在播哪一版' });
+    }
+    expect(pictureOnAir('song', true, holding('stopped', 'song', reopened, null))).toEqual({ kind: 'timeline' });
+    expect(pictureOnAir('song', true, holding('playing', 'other', reopened, null))).toEqual({ kind: 'timeline' });
+    expect(pictureOnAir('song', false, holding('playing', 'song', reopened, null))).toEqual({ kind: 'timeline' });
   });
 });
 
@@ -113,5 +124,21 @@ describe('时间线上标出的画面', () => {
     for (const seconds of [1, 3, 9, 12.5]) expect([...markedOnAir(marks.onAirtime, marks.pending.changed, frame(seconds), ['b'])]).toEqual([]);
     expect(marks.notice).toEqual({ tone: 'warning', text: '无法确认 OBS 按哪一版时间线在播',
       detail: '原因：界面重新加载过，联动台播放还在按重新加载前的工程播这首歌，和这里打开的不是同一版。时间线上先不标正在播出和改过的部分。点方块按钮“停止播放”（或按 Esc）后重新播放，就会按这里的时间线播。' });
+  });
+
+  it('评审场景：后台还没答复打开时不按重新打开的工程标正在播出，提示写正在确认', () => {
+    const reopened = edit(started(), moveContentCommand('song', { kind: 'cue', id: 'b' }, 12_000, { track: 'cameras' }));
+    const marks = pictureMarks(pictureOnAir('song', true, holding('playing', 'song', reopened, null)), songPicture(reopened, 'song')!);
+    expect(marks.onAirtime).toBeNull();
+    expect(marks.pending).toEqual(NO_PENDING_PICTURE_EDITS);
+    for (const seconds of [1, 3, 9, 12.5]) expect([...markedOnAir(marks.onAirtime, marks.pending.changed, frame(seconds), ['b'])]).toEqual([]);
+    expect(marks.notice).toEqual({ tone: 'warning', text: '无法确认 OBS 按哪一版时间线在播',
+      detail: '原因：正在确认联动台播放在播哪一版。时间线上先不标正在播出和改过的部分。点方块按钮“停止播放”（或按 Esc）后重新播放，就会按这里的时间线播。' });
+  });
+});
+
+describe('联动台播放拿着歌的状态只在一处判断', () => {
+  it('准备中、播放中、暂停算拿着，停止和出错不算', () => {
+    expect((['preparing', 'playing', 'paused', 'stopped', 'error'] as const).map(holdsSong)).toEqual([true, true, true, false, false]);
   });
 });

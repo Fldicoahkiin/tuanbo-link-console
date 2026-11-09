@@ -5,6 +5,7 @@ import { PlaybackMidiInput } from '../registry/playback-midi-input';
 import { emptyInternalPlayerState, firstTimeWarning, mtcOutputSettings, toUserErrorMessage } from '@tb/core/link';
 import { RemoteNativeProgramPlayer, type RemotePlayerDependencies } from './runtime/remote-native-program-player';
 import { playerEngineLabel } from './view-models/internal-audio-engine';
+import { holdsSong } from './view-models/picture-on-air';
 import type { LinkRuntimeCoordinator } from './runtime/link-runtime-coordinator';
 import { useDocumentStore } from './stores/document-store';
 import { useIntegrationStore } from './stores/integration-store';
@@ -13,6 +14,7 @@ import { useRuntimeStore } from './stores/runtime-store';
 import { useDisplayPreferences } from './stores/display-preferences-store';
 import { useSelectedProgram } from './useSelectedProgram';
 import { handlePlaybackKey, keyTarget } from './playback-keys';
+import { openAnswer, playsOutdated, reopensShown, type OpenAnswer } from './program-attachment';
 
 /** Player notices already logged as warnings in this window. */
 const notedNotices = new Set<string>();
@@ -24,12 +26,13 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   const [view] = useState(() => new PlayerViewStore());
   const state = useSyncExternalStore(view.subscribeControl, view.readControl);
   const [generation, setGeneration] = useState(0);
-  // The background program answers the open after the state it sends; kept per controller, so it shows while paused too.
-  const [attachment, setAttachment] = useState<{ player: RemoteNativeProgramPlayer; outdated: boolean } | null>(null);
-  const outdated = attachment !== null && attachment.player === controller && attachment.outdated;
+  // The background program answers the open after the state it sends; kept per controller, so it shows while paused
+  // too. Null until the controller heard it (program-attachment).
+  const [answer, setAnswer] = useState<OpenAnswer<RemoteNativeProgramPlayer> | null>(null);
+  const outdated = playsOutdated(controller, answer);
   useEffect(() => {
     // A program taken over after a window reload may play an older document; once it stops, open the shown one.
-    if (outdated && !['preparing', 'playing', 'paused'].includes(state.status)) setGeneration(value => value + 1);
+    if (reopensShown(outdated, state.status)) setGeneration(value => value + 1);
   }, [outdated, state.status]);
   const profile = useIntegrationStore((value) => value.profile);
   const obsStatus = useIntegrationStore(value => value.obs.status);
@@ -42,7 +45,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   const requestedRate = profile?.internalPlayer?.audioSampleRate ?? 48000;
   const [audioConfiguration, setAudioConfiguration] = useState({ deviceId: requestedDevice, sampleRate: requestedRate });
   useEffect(() => {
-    if (['preparing', 'playing', 'paused'].includes(state.status)) return;
+    if (holdsSong(state.status)) return;
     setAudioConfiguration(current => current.deviceId === requestedDevice && current.sampleRate === requestedRate
       ? current : { deviceId: requestedDevice, sampleRate: requestedRate });
   }, [requestedDevice, requestedRate, state.status]);
@@ -80,7 +83,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
           .catch((error: unknown) => console.error('正式播放通道提示未能保存到日志', error));
       },
       preciseSeeking: () => useDisplayPreferences.getState().preciseSeeking,
-      attached: () => setAttachment({ player, outdated: player.outdated })
+      attached: () => setAnswer(openAnswer(player))
     };
     const player = new RemoteNativeProgramPlayer(project, path ?? '', useDocumentStore.getState().revision, dependencies, desktop, event => {
       const runtime = useRuntimeStore.getState();

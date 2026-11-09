@@ -7,27 +7,34 @@ import { NO_PENDING_PICTURE_EDITS, pendingPictureEdits, type PendingPictureEdits
  * for it (0.5.9). While 联动台播放 prepares, plays or pauses a song, OBS follows the project as it was
  * when playback started: LinkApp keeps that version until 停止, and edits made since wait for a replay
  * (pending-picture-edits). After a window reload the background program may play an older version
- * than the one this window opened (RemoteNativeProgramPlayer.outdated); then the window cannot tell
- * which, says so and why, and marks nothing on air. Worked out again on every edit, never stored.
+ * than the one this window opened (RemoteNativeProgramPlayer.outdated), and it sends its state before
+ * it answers the open that says so. Until it answered, and when it plays another version, the window
+ * cannot tell which version is on air: it says so and why, and marks nothing on air. Worked out again
+ * on every edit, never stored.
  */
 
 type Airtime = ReadonlyMap<string, readonly FrameRange[]>;
 const NO_AIRTIME: Airtime = new Map();
 
-/** The song 联动台播放 holds, preparing, playing or paused it; null while it is stopped or failed, and in a
- * project that follows P1 (`internal` false). The editor's transport follows the same song. */
-export function songInPlayer(state: Pick<ProgramPlayerState, 'status' | 'itemId'>, internal: boolean): string | null {
-  if (!internal) return null;
-  switch (state.status) {
-    case 'preparing': case 'playing': case 'paused': return state.itemId;
-    case 'stopped': case 'error': return null;
+/** 联动台播放 holds a song while it prepares, plays or pauses it; not once it stopped or failed. */
+export function holdsSong(status: ProgramPlayerState['status']): boolean {
+  switch (status) {
+    case 'preparing': case 'playing': case 'paused': return true;
+    case 'stopped': case 'error': return false;
   }
+}
+
+/** The song 联动台播放 holds (holdsSong); null while it holds none, and in a project that follows P1 (`internal`
+ * false). The editor's transport follows the same song. */
+export function songInPlayer(state: Pick<ProgramPlayerState, 'status' | 'itemId'>, internal: boolean): string | null {
+  return internal && holdsSong(state.status) ? state.itemId : null;
 }
 
 /** What this window knows of 联动台播放: its state, the project it opened it with (LinkApp keeps it as it was
  * when playback started, until 停止), and whether the background program plays another version of that
- * project, taken over after a window reload. */
-export type PlayerVersion = { state: Pick<ProgramPlayerState, 'status' | 'itemId'>; project: LinkProject | null; outdated: boolean };
+ * project, taken over after a window reload (`outdated`; null while the program has not answered the open
+ * yet, see program-attachment). */
+export type PlayerVersion = { state: Pick<ProgramPlayerState, 'status' | 'itemId'>; project: LinkProject | null; outdated: boolean | null };
 
 /**
  * - `timeline`: 联动台播放 does not hold the song (stopped, another song, P1 follow): the timeline is what will play.
@@ -42,6 +49,8 @@ export type PictureOnAir =
 
 export function pictureOnAir(itemId: string | null, internal: boolean, player: PlayerVersion): PictureOnAir {
   if (itemId === null || songInPlayer(player.state, internal) !== itemId) return { kind: 'timeline' };
+  // A program kept playing over a window reload sends its state first: until it answers, it may play any version.
+  if (player.outdated === null) return { kind: 'unconfirmed', reason: '正在确认联动台播放在播哪一版' };
   if (player.outdated) return { kind: 'unconfirmed', reason: '界面重新加载过，联动台播放还在按重新加载前的工程播这首歌，和这里打开的不是同一版' };
   if (!player.project) return { kind: 'unconfirmed', reason: '联动台没有记下这首歌开始播放时的时间线' };
   return { kind: 'version', song: songPicture(player.project, itemId) };

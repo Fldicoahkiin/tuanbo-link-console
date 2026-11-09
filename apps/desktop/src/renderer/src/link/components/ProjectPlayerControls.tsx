@@ -11,8 +11,9 @@ import { PlayerStatusDetails } from './PlayerStatusDetails';
 import { homePlayButton, pressHomePlayButton, registerHomePlayButton } from './play-buttons';
 
 /** `engine` names the audio engine this player uses, for the operator. `outdated`: the background program plays
- * another version of the project than this window opened it with, taken over after a window reload. */
-export type ProjectPlayer = { controller: RemoteNativeProgramPlayer | null; state: PlayerControlState; view: PlayerViewStore; engine: string; outdated: boolean };
+ * another version of the project than this window opened it with, taken over after a window reload; null until
+ * the program answered the open (program-attachment). */
+export type ProjectPlayer = { controller: RemoteNativeProgramPlayer | null; state: PlayerControlState; view: PlayerViewStore; engine: string; outdated: boolean | null };
 
 type EndAction = InternalPlayerState['endAction'];
 const endActions: ReadonlyArray<readonly [EndAction, string]> = [['next', '顺序连播'], ['stop', '播完停止'], ['pause', '播完暂停'], ['loop', '单曲循环']];
