@@ -249,6 +249,33 @@ test('灯光工作台拖 Cue 点（还在看得见的范围里）、手还按着
   } finally { await closeDiscarding(app); }
 });
 
+test('灯光工作台 Cue 点有焦点时按住 Enter：修改框只开一次，也不会自己保存、改写 Cue', async ({}, info) => {
+  // Off the frame grid, so a save would round it and leave something to undo.
+  const { app, page } = await open(info, [{ id: 'song-a', title: '第一首', audio: true, lighting: true }], { cueAtMs: 30_000.4 });
+  try {
+    const point = await lightingWorkbench(page);
+    await page.evaluate(() => {
+      Reflect.set(window, '__dialogs', 0);
+      new MutationObserver(records => {
+        for (const record of records) for (const node of record.addedNodes) {
+          if (node instanceof Element && node.matches('dialog.cue-point-dialog')) Reflect.set(window, '__dialogs', Number(Reflect.get(window, '__dialogs')) + 1);
+        }
+      }).observe(document.body, { childList: true, subtree: true });
+    });
+    const undo = page.getByRole('button', { name: '撤销', exact: true });
+    await expect(undo).toBeDisabled();
+    await point.focus();
+    await hold(page, 'Enter', 8);
+    expect(await page.evaluate(() => Number(Reflect.get(window, '__dialogs')))).toBe(1);
+    await expect(page.locator('dialog.cue-point-dialog')).toHaveCount(1);
+    await expect(undo).toBeDisabled();
+    // A fresh Enter in the time field still saves.
+    await page.keyboard.press('Enter');
+    await expect(page.locator('dialog.cue-point-dialog')).toHaveCount(0);
+    await expect(undo).toBeEnabled();
+  } finally { await closeDiscarding(app); }
+});
+
 test('灯光工作台正常拖 Cue 点（不按 Esc）：松手后移动生效', async ({}, info) => {
   const { app, page } = await open(info, [{ id: 'song-a', title: '第一首', audio: true, lighting: true }], { cueAtMs: 30_000 });
   try {
