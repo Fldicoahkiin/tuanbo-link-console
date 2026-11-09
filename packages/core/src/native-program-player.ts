@@ -48,6 +48,9 @@ export class NativeProgramPlayer {
   private sendingVolume = false;
   private preloadGeneration = 0;
   private selectedPreload: { request: NativeObsStop; itemId: string } | null = null;
+  /** A stop owes the song's Off until it went out once: from the queued stop, or from dispose when the player
+   * closes before that stop ran (it waited behind a seek, scrub or resume). Never sent twice, never retried. */
+  private lightingOwed = false;
 
   readonly clock: PlaybackClock = {
     read: () => ({ positionMs: this.native?.positionMs ?? this.state.positionMs, durationMs: this.state.durationMs,
@@ -174,11 +177,18 @@ export class NativeProgramPlayer {
   }
   stop(): Promise<void> {
     const token = ++this.epoch; this.cancelScheduled(); this.update({ status: 'stopped', notice: null, fault: null });
+    this.lightingOwed = true;
     // Stop reaches the main service immediately if preparation has already
     // published its session; otherwise the queued prepare cannot start audio.
     const stopping = (this.requestedPreparation ? this.command({ kind: 'stop' }) : Promise.resolve()).catch(error => { if (this.current(token)) this.fail(error); });
-    return this.enqueue(token, async () => { await stopping; await this.optionalRuntime(() => this.lighting.release(), '灯光没能完全关闭'); await this.optionalRuntime(() => this.cancelPreload(), '节目准备没清理干净'); await this.optionalRuntime(() => this.stopObs(), '画面清理失败'); await this.dependencies.stop(); this.runtimePrepared = false;
+    return this.enqueue(token, async () => { await stopping; await this.releaseLighting(); await this.optionalRuntime(() => this.cancelPreload(), '节目准备没清理干净'); await this.optionalRuntime(() => this.stopObs(), '画面清理失败'); await this.dependencies.stop(); this.runtimePrepared = false;
       if (this.current(token)) { this.boundary('pause'); this.update({ positionMs: 0, mtcSentPositionMs: null }); } });
+  }
+  /** The Off a stop owes, sent once after the timecode stopped; a failure is shown and logged, nothing retries it. */
+  private releaseLighting(): Promise<void> {
+    if (!this.lightingOwed) return Promise.resolve();
+    this.lightingOwed = false;
+    return this.optionalRuntime(() => this.lighting.release(), '灯光没能完全关闭');
   }
   async reset(): Promise<void> { await this.stop(); if (this.state.status !== 'error') this.update({ itemId: null, playedItemIds: [], durationMs: 0 }); }
   externalStop(): void { void this.stop(); }
@@ -235,13 +245,13 @@ export class NativeProgramPlayer {
   dispose(): Promise<void> {
     if (this.closing) return this.closing;
     ++this.epoch; this.disposed = true; this.unsubscribe(); this.boundaries.clear();
-    const cleanup = [
-      () => this.cancelScheduled(false),
-      () => this.requestedPreparation && this.native?.status !== 'error' ? this.command({ kind: 'stop' }) : undefined,
-      () => this.cancelPreload(), () => this.stopObs(), () => this.dependencies.stop(),
-      () => this.tail
-    ];
-    this.closing = Promise.allSettled(cleanup.map(operation => Promise.resolve().then(operation))).then(results => {
+    const run = (operation: () => unknown): Promise<unknown> => Promise.resolve().then(operation);
+    const scheduled = run(() => this.cancelScheduled(false));
+    const audio = run(() => this.requestedPreparation && this.native?.status !== 'error' ? this.command({ kind: 'stop' }) : undefined);
+    // A stop still queued here never runs; the Off it owes goes out once the timecode has stopped, as the stop would.
+    const lighting = audio.then(() => this.releaseLighting(), () => this.releaseLighting());
+    const cleanup = [scheduled, audio, lighting, run(() => this.cancelPreload()), run(() => this.stopObs()), run(() => this.dependencies.stop()), run(() => this.tail)];
+    this.closing = Promise.allSettled(cleanup).then(results => {
       const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : []);
       if (failures.length) throw new AggregateError(failures, failures.map(toUserErrorMessage).join('；'));
     });

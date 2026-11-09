@@ -133,6 +133,78 @@ it('播放只发时间码：旧工程存成网络输出的歌也照发时间码�
   await f.player.dispose();
 });
 
+describe('停止后马上改片段、重建播放器或关窗口，也关这首歌的执行器（0.5.9）', () => {
+  // 修复前：停止排在定位、拖动定位或继续播放后面时，播放器一销毁，排队的停止就被跳过，执行器 Off 一个都不发。
+  function lit() { const f = fixture(); f.project.rundown[0]!.lighting = createLightingDocument(); return f; }
+  function gate() { let open!: () => void; const promise = new Promise<void>(resolve => { open = resolve; }); return { promise, open }; }
+
+  it('定位还在准备时停止并销毁：等音频和时间码停下后关一次执行器', async () => {
+    const f = lit(); await f.player.play('song-0');
+    const preparing = gate(), original = f.api.prepareNativePlayback.getMockImplementation()!;
+    f.api.prepareNativePlayback.mockImplementationOnce(async request => { await preparing.promise; return original(request); });
+    const seeking = f.player.seek(3000);
+    await vi.waitFor(() => expect(f.api.prepareNativePlayback).toHaveBeenCalledTimes(2));
+    const stopping = f.player.stop();
+    const reply = f.api.controlNativePlayback.getMockImplementation()!, audioStopped = gate();
+    f.api.controlNativePlayback.mockImplementationOnce(async command => { await audioStopped.promise; return reply(command); });
+    const closing = f.player.dispose();
+    await vi.waitFor(() => expect(f.api.controlNativePlayback.mock.calls.filter(([command]) => command.kind === 'stop')).toHaveLength(3));
+    for (let tick = 0; tick < 10; tick++) await Promise.resolve();
+    expect(f.lighting.release).not.toHaveBeenCalled();
+    audioStopped.open();
+    await vi.waitFor(() => expect(f.lighting.release).toHaveBeenCalledOnce());
+    preparing.open(); await Promise.all([seeking, stopping, closing]);
+    expect(f.lighting.release).toHaveBeenCalledOnce();
+  });
+
+  it('拖动定位在等画面时停止并销毁：关一次执行器', async () => {
+    const f = lit(); f.project.obsOutputMode = 'scenes';
+    f.project.rundown[0]!.cues = [linkCueSchema.parse({ id: 'cue', name: '机位', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
+      actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: '场景' }] })];
+    await f.player.play('song-0');
+    const picture = gate(), ready = f.api.prepareNativeObs.getMockImplementation()!;
+    f.api.prepareNativeObs.mockImplementationOnce(async request => { await picture.promise; return ready(request); });
+    const scrubbing = f.player.scrub('song-0', 2000);
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledTimes(2));
+    const stopping = f.player.stop(), closing = f.player.dispose();
+    await vi.waitFor(() => expect(f.lighting.release).toHaveBeenCalledOnce());
+    picture.open(); await Promise.all([scrubbing, stopping, closing]);
+    expect(f.lighting.release).toHaveBeenCalledOnce();
+  });
+
+  it('继续播放在准备 MIDI 时停止并销毁：关一次执行器', async () => {
+    const f = lit(); await f.player.play('song-0'); await f.player.pause();
+    const midi = gate(); f.deps.prepare.mockImplementationOnce(() => midi.promise);
+    const resuming = f.player.resume();
+    await vi.waitFor(() => expect(f.deps.prepare).toHaveBeenCalledTimes(2));
+    const stopping = f.player.stop(), closing = f.player.dispose();
+    await vi.waitFor(() => expect(f.lighting.release).toHaveBeenCalledOnce());
+    midi.open(); await Promise.all([resuming, stopping, closing]);
+    expect(f.lighting.release).toHaveBeenCalledOnce();
+  });
+
+  it('停止已经关过灯，之后销毁不再发第二次', async () => {
+    const f = lit(); await f.player.play('song-0');
+    await f.player.stop(); await f.player.dispose();
+    expect(f.lighting.release).toHaveBeenCalledOnce();
+  });
+
+  it('销毁时补发的关灯失败照常提示并记录，不重试，也不让关闭播放器失败', async () => {
+    const f = lit(); await f.player.play('song-0');
+    const preparing = gate(), original = f.api.prepareNativePlayback.getMockImplementation()!;
+    f.api.prepareNativePlayback.mockImplementationOnce(async request => { await preparing.promise; return original(request); });
+    const seeking = f.player.seek(3000);
+    await vi.waitFor(() => expect(f.api.prepareNativePlayback).toHaveBeenCalledTimes(2));
+    f.lighting.release.mockRejectedValueOnce(new Error('关灯指令没有发送：控台连接变了'));
+    const stopping = f.player.stop(), closing = f.player.dispose();
+    await vi.waitFor(() => expect(f.lighting.release).toHaveBeenCalledOnce());
+    preparing.open();
+    await expect(closing).resolves.toBeUndefined(); await Promise.all([seeking, stopping]);
+    expect(f.deps.notice).toHaveBeenCalledWith('灯光没能完全关闭：关灯指令没有发送：控台连接变了', 'song-0');
+    expect(f.lighting.release).toHaveBeenCalledOnce();
+  });
+});
+
 it('有画面的歌等待画面准备完成（例如首次生成定位缓存）再开始，不因一秒窗口放弃画面', async () => {
   vi.useFakeTimers();
   try {
