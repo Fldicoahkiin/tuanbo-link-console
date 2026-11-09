@@ -39,6 +39,12 @@ const MEDIA_START_LEAD_MS = 200;
 /** Above the measured 66–100 ms steady cursor offset, so a clip in step is never repositioned. */
 const MEDIA_DRIFT_TOLERANCE_MS = 300;
 
+/** A batch OBS stopped part way (or never ran): `executed` requests before the
+ * failure took effect, in order. */
+class MediaBatchError extends Error {
+  constructor(message: string, readonly executed: number) { super(message); }
+}
+
 export class ObsMediaScenes {
   private readonly prepared = new Map<string, { path: string; sha256: string; playbackPaths: readonly string[]; sceneName: string; sceneItemId: number; kind: LinkMediaAsset['kind'] }>();
   private readonly active = new Set<string>();
@@ -250,42 +256,55 @@ export class ObsMediaScenes {
       const target = this.prepared.get(event.sourceName);
       if (!target || target.path !== path || target.sceneName !== event.sceneName) throw new Error(`素材场景还没准备好，请重新做开播前检查：${event.assetName}`);
       const requests: Parameters<OBSWebSocket['callBatch']>[0] = [];
+      // Retiring the previous decoder leads the first write of a handover, so the
+      // material never has two decoders on air, nor the old one running past its
+      // clip, while the new one is still being located.
+      let retiring: Parameters<OBSWebSocket['callBatch']>[0] = [];
       if (previousSource && previousSource !== event.sourceName) {
         const previous = this.prepared.get(previousSource);
         if (event.phase !== 'start' || !previous || previous.sceneName !== target.sceneName || previous.path !== path) throw new Error('接续只能替换同一素材的解码器');
-        requests.push(
+        retiring = [
           { requestType: 'SetInputMute', requestData: { inputName: previousSource, inputMuted: true } },
           { requestType: 'SetSceneItemEnabled', requestData: { sceneName: previous.sceneName, sceneItemId: previous.sceneItemId, sceneItemEnabled: false } },
           { requestType: 'TriggerMediaInputAction', requestData: { inputName: previousSource, mediaAction: retirement === 'pause' ? 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE' : 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP' } }
-        );
+        ];
       }
+      const retire = (): { sourceName: string; count: number } | undefined => previousSource && retiring.length ? { sourceName: previousSource, count: retiring.length } : undefined;
       // Set when this start seeked and released the decoder in step with the music.
       let seekedStart: { lateMs: number } | null = null, primedStart = false;
       if (event.phase === 'start') {
         const wasActive = this.active.has(event.sourceName);
         const continuing = wasActive && this.startedClips.get(event.sourceName) === event.clipId;
-        this.active.add(event.sourceName);
         const ready = this.primed.get(event.sourceName) === 'ready';
         if (this.primed.has(event.sourceName) && !ready) throw new Error(`素材还没准备好：${event.assetName}`);
-        this.primed.delete(event.sourceName);
-        let primed = ready;
-        if (primed) {
+        let primed = false, held = false;
+        if (ready) {
           const status = await this.request(() => this.client.call('GetMediaInputStatus', { inputName: event.sourceName }), '检查预热素材');
           // Sent late, or moved in OBS since: it then starts like an unprepared
           // clip, on air first and located in step with the music. The scene
           // switch is never skipped (2026-11-09).
-          primed = status.mediaState === 'OBS_MEDIA_STATE_PAUSED' && Math.abs(status.mediaCursor - event.sourceOffsetMs) <= 100;
+          held = status.mediaState === 'OBS_MEDIA_STATE_PAUSED';
+          primed = held && Math.abs(status.mediaCursor - event.sourceOffsetMs) <= 100;
         }
+        this.primed.delete(event.sourceName);
         primedStart = primed;
         if (event.assetKind !== 'image' && !primed && !wasActive) {
-          await this.batch([
-            ...(event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName)),
+          const others = event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName);
+          // Restart only a decoder with no frame to show, or one starting from the
+          // file's beginning (从零启动先激活自有场景，再执行重播). A prepared
+          // decoder paused elsewhere goes on air as it is and is located from
+          // there: a restart would show the file's opening frames first
+          // (docs/OBS_SCENE_WORKFLOW.md: 不静默回到开头).
+          const restart = !held || event.sourceOffsetMs === 0;
+          await this.startBatch([
+            ...retiring, ...others,
             { requestType: 'SetInputMute', requestData: { inputName: event.sourceName, inputMuted: true } },
             { requestType: 'SetSceneItemEnabled', requestData: { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemEnabled: true } },
             ...(event.deferSceneSwitch ? [] : [{ requestType: 'SetCurrentProgramScene' as const, requestData: { sceneName: target.sceneName } }]),
-            { requestType: 'TriggerMediaInputAction', requestData: { inputName: event.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART' } }
-          ]);
-          await this.waitForState(event.sourceName, 'OBS_MEDIA_STATE_PLAYING');
+            ...(restart ? [{ requestType: 'TriggerMediaInputAction' as const, requestData: { inputName: event.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART' } }] : [])
+          ], event, retiring.length + others.length, retire());
+          retiring = [];
+          if (restart) await this.waitForState(event.sourceName, 'OBS_MEDIA_STATE_PLAYING');
         }
         if (event.assetKind !== 'image' && !primed) {
           let state = await this.request(() => this.client.call('GetMediaInputStatus', { inputName: event.sourceName }), 'GetMediaInputStatus');
@@ -300,7 +319,8 @@ export class ObsMediaScenes {
             await this.waitForState(event.sourceName, 'OBS_MEDIA_STATE_PLAYING');
           }
         }
-        if (!event.deferSceneSwitch) requests.push(...this.muteOtherSources(target.sceneName));
+        requests.push(...retiring, ...event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName));
+        const reach = requests.length;
         if (event.assetKind !== 'image') {
           if (!primed) seekedStart = await this.positionMedia(event.sourceName, () => event.sourceOffsetMs + performance.now() - startedAt, continuing ? 100 : 30);
           requests.push(
@@ -312,6 +332,7 @@ export class ObsMediaScenes {
           ...(event.deferSceneSwitch ? [] : [{ requestType: 'SetCurrentProgramScene' as const, requestData: { sceneName: target.sceneName } }])
         );
         if (event.assetKind !== 'image' && primed) requests.push({ requestType: 'TriggerMediaInputAction', requestData: { inputName: event.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' } });
+        await this.startBatch(requests, event, reach, retire());
       } else {
         this.primed.delete(event.sourceName);
         if (event.assetKind !== 'image') requests.push(
@@ -319,10 +340,13 @@ export class ObsMediaScenes {
           { requestType: 'SetInputMute', requestData: { inputName: event.sourceName, inputMuted: true } }
         );
         requests.push({ requestType: 'SetSceneItemEnabled', requestData: { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemEnabled: false } });
+        await this.batch(requests);
+        this.active.delete(event.sourceName); this.startedClips.delete(event.sourceName);
       }
-      await this.batch(requests);
-      if (previousSource) this.active.delete(previousSource);
       if (event.phase === 'start' && event.assetKind !== 'image') {
+        // The clip is on air and already counts as started: a start found late or
+        // out of step here is reported, and the drift check still puts it back in
+        // step with the music (recovery rule B) instead of leaving it off.
         // The state acknowledgement already contains the actual decoded cursor.
         // Validate that same observation instead of adding a second RPC after
         // every layer start, which needlessly spends the output deadline.
@@ -338,10 +362,11 @@ export class ObsMediaScenes {
           throw new Error(`切场景后素材位置对不上：${event.assetName}，按音乐应该在 ${expected} ms，OBS 实际在 ${status.mediaCursor ?? '未知'} ms`);
         }
       }
-      if (event.phase === 'start') { this.active.add(event.sourceName); this.startedClips.set(event.sourceName, event.clipId); }
-      else { this.active.delete(event.sourceName); this.startedClips.delete(event.sourceName); }
     });
   }
+
+  /** Whether this decoder may still be on air, as far as OBS executed our requests. */
+  isActive(inputName: string): boolean { return this.active.has(inputName); }
 
   async switchScene(sceneName: string): Promise<void> {
     return this.run(async () => {
@@ -423,18 +448,21 @@ export class ObsMediaScenes {
     return this.run(async () => {
       const target = this.prepared.get(event.sourceName);
       if (event.phase !== 'start' || !target || target.path !== path || target.sceneName !== event.sceneName) throw new Error('要定位的素材还没准备好，或和工程对不上');
-      await this.batch([
-        ...(event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName)),
+      const others = event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName);
+      // A clip started from the middle (or rebuilt after a reconnect) is this
+      // decoder's clip once it is shown, also when locating it fails below: the
+      // drift check reaches it once it plays, and a later switch mutes it.
+      await this.startBatch([
+        ...others,
         { requestType: 'SetSceneItemEnabled', requestData: { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemEnabled: true } },
         ...(event.assetKind !== 'image' ? [{ requestType: 'SetInputMute' as const, requestData: { inputName: event.sourceName, inputMuted: !event.embeddedAudioEnabled } }] : []),
         ...(event.deferSceneSwitch ? [] : [{ requestType: 'SetCurrentProgramScene' as const, requestData: { sceneName: target.sceneName } }])
-      ]);
+      ], event, others.length);
       if (event.assetKind !== 'image') {
         await this.prepareSeekDecoder(event, target.sceneItemId);
         await native(event.sourceName, Math.round(event.sourceOffsetMs));
         await this.confirmSeek(event, target.sceneItemId);
       }
-      this.active.add(event.sourceName);
     });
   }
 
@@ -497,9 +525,31 @@ export class ObsMediaScenes {
 
   private async batch(requests: Parameters<OBSWebSocket['callBatch']>[0]): Promise<void> {
     const results = await this.request(() => this.client.callBatch(requests, { executionType: 0, haltOnFailure: true }), '素材场景批量控制');
-    const failure = results.find((result) => !result.requestStatus.result);
-    if (failure && !failure.requestStatus.result) throw new Error(`${failure.requestType}：${failure.requestStatus.comment}`);
-    if (results.length !== requests.length) throw new Error('OBS 素材控制响应不完整');
+    const failed = results.findIndex((result) => !result.requestStatus.result);
+    const failure = results[failed];
+    if (failure && !failure.requestStatus.result) throw new MediaBatchError(`${failure.requestType}：${failure.requestStatus.comment}`, failed);
+    if (results.length !== requests.length) throw new MediaBatchError('OBS 素材控制响应不完整', results.length);
+  }
+
+  /** Sends one batch of a start or seek. The books follow what OBS executed: the previous
+   * decoder retires once its `retire` requests ran, and the starting decoder is on
+   * air (active, started for this clip, so the drift check reaches it) once any
+   * request from index `reach` on ran. A request that was never sent changes
+   * nothing, so a failure never leaves two decoders of one material on air in
+   * the books, nor one that OBS never showed. Nothing is sent again. */
+  private async startBatch(requests: Parameters<OBSWebSocket['callBatch']>[0], event: ManagedMediaEvent, reach: number,
+    retire?: { sourceName: string; count: number }): Promise<void> {
+    let executed = 0;
+    try {
+      await this.batch(requests);
+      executed = requests.length;
+    } catch (error) {
+      if (error instanceof MediaBatchError) executed = error.executed;
+      throw error;
+    } finally {
+      if (retire && executed >= retire.count) { this.active.delete(retire.sourceName); this.startedClips.delete(retire.sourceName); }
+      if (executed > reach) { this.active.add(event.sourceName); this.startedClips.set(event.sourceName, event.clipId); }
+    }
   }
 
   private async waitForState(inputName: string, expected: string): Promise<MediaState> {

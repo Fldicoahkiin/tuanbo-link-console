@@ -346,9 +346,13 @@ describe('素材独立场景播放', () => {
       await expect(held(scenes.execute({ ...opening, sourceOffsetMs: offset }, 'C:/dance.mp4'))).resolves.toBeUndefined();
       const actions = calls.map(call => JSON.stringify(call.requestData));
       const switched = calls.findIndex(call => call.requestType === 'SetCurrentProgramScene');
-      expect(switched).toBeGreaterThanOrEqual(0); expect(actions.findIndex(action => action.includes('ACTION_RESTART'))).toBeGreaterThanOrEqual(switched);
-      if (!offset) { expect(seekTargets(calls)).toEqual([]); return; }
+      const restart = actions.findIndex(action => action.includes('ACTION_RESTART'));
+      expect(switched).toBeGreaterThanOrEqual(0);
+      // Starting from the file's beginning, the scene is switched first and the decoder restarted.
+      if (!offset) { expect(restart).toBeGreaterThan(switched); expect(seekTargets(calls)).toEqual([]); return; }
+      // Late, the decoder paused on its prepared frame is located from there, never restarted at the file's beginning.
       const seek = calls.findIndex(call => call.requestType === 'SetMediaInputCursor');
+      expect(restart).toBe(-1); expect(seek).toBeGreaterThan(switched);
       expect(seekTargets(calls)).toHaveLength(1); expect(seekTargets(calls)[0]).toBeGreaterThan(offset);
       expect(actions.map(action => action.includes('ACTION_PLAY')).lastIndexOf(true)).toBeGreaterThan(seek);
     } finally { vi.useRealTimers(); }
@@ -440,6 +444,38 @@ describe('素材独立场景播放', () => {
       responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_PAUSED', mediaCursor: 2300 });
       await scenes.seek({ ...event, deferSceneSwitch: true }, 'C:/dance.mp4', () => Promise.resolve());
       expect(calls.some(call => call.requestType === 'SetCurrentProgramScene')).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+  it('从中间开播或重连后定位的片段播放后同样做漂移检查，偏差超过 300 ms 按音乐重定位', async () => {
+    vi.useFakeTimers();
+    try {
+      const { scenes, calls, setMediaState } = fixture();
+      await scenes.prepare('project', asset, 'C:/dance.mp4');
+      await scenes.seek(event, 'C:/dance.mp4', (_name, position) => { setMediaState('OBS_MEDIA_STATE_PAUSED', position); return Promise.resolve(); });
+      // The program's PLAY reaches it; OBS then runs 500 ms ahead of the music.
+      calls.length = 0; setMediaState('OBS_MEDIA_STATE_PLAYING', 2800);
+      expect(await held(scenes.correctDrift(event, () => 2300))).toBe(500);
+      expect(seekTargets(calls)).toEqual([2500]);
+      expect(await scenes.correctDrift({ ...event, clipId: 'other' }, () => 2300)).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+  it('定位中途出错时片段已经切上画面：照常报错、不重发定位，之后的漂移检查仍按音乐校正它，切走时也会静音它', async () => {
+    vi.useFakeTimers();
+    try {
+      const { scenes, calls, setMediaState } = fixture();
+      await scenes.prepare('project', asset, 'C:/dance.mp4');
+      const native = vi.fn<(name: string, position: number) => Promise<void>>(() => Promise.reject(new Error('原生定位没有回应')));
+      const seeking = expect(scenes.seek(event, 'C:/dance.mp4', native)).rejects.toThrow('原生定位没有回应');
+      await held(seeking);
+      expect(native).toHaveBeenCalledTimes(1);
+      expect(calls.some(call => call.requestType === 'SetCurrentProgramScene')).toBe(true);
+      // It plays on air, 500 ms ahead of the music.
+      calls.length = 0; setMediaState('OBS_MEDIA_STATE_PLAYING', 2800);
+      expect(await held(scenes.correctDrift(event, () => 2300))).toBe(500);
+      expect(seekTargets(calls)).toEqual([2500]);
+      calls.length = 0;
+      await scenes.switchScene('机位1');
+      expect(calls).toContainEqual({ requestType: 'SetInputMute', requestData: { inputName: names.sourceName, inputMuted: true } });
     } finally { vi.useRealTimers(); }
   });
   it('拖动只定位已准备的自有素材，不重载来源或重新启动媒体', async () => {

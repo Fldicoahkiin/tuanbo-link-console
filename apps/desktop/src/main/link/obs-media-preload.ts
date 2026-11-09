@@ -1,10 +1,12 @@
-import { SceneOutputTimeline, materialSceneNames, playbackFramesPerSecond, type ManagedMediaEvent } from '@tb/core/link';
+import { SceneOutputTimeline, compileManagedMediaTimeline, materialSceneNames, playbackFramesPerSecond, type ManagedMediaEvent } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
 import type { ObsMediaScenes } from './obs-media-scenes';
 
 type Slot = { event: ManagedMediaEvent; sourceName: string; ready: boolean };
-type Media = { path: string; current: Slot | null; pending: Slot | null; following: Slot | null; touched: Set<string>; retained: Set<string> };
-type Scenes = Pick<ObsMediaScenes, 'prepareStandby' | 'copyPresentation' | 'prime' | 'execute' | 'seek'>;
+type Media = { path: string; current: Slot | null; pending: Slot | null; following: Slot | null; touched: Set<string>; retained: Set<string>;
+  /** Starts, stops and seeks of this material that OBS has not answered yet. */
+  busy: number };
+type Scenes = Pick<ObsMediaScenes, 'prepareStandby' | 'copyPresentation' | 'prime' | 'execute' | 'seek' | 'isActive'>;
 
 /** Two decoders per material, at most one future clip per material. Preparation
  * never starts output and is driven by the formal audio clock, not the UI. */
@@ -12,10 +14,14 @@ export class ObsMediaPreload {
   private readonly media = new Map<string, Media>();
   private readonly timeline: SceneOutputTimeline;
   private readonly starts: ManagedMediaEvent[];
+  /** Each clip's real end frame. A camera covering a clip does not end it. */
+  private readonly ends: ReadonlyMap<string, number>;
   /** Clips prepared after their boundary (recovery rule B); each at most once. */
   private readonly late = new Set<string>();
   /** Clips whose preparation failed: shown in red and never prepared again. */
   private readonly failed = new Set<string>();
+  /** Prepared clips that reached their end without starting; their slot went to the next clip. */
+  private readonly expired = new Set<string>();
   private readonly lookaheadFrames: number;
   private readonly preparationSpacingFrames: number;
   private nextPreparationFrame = -Infinity;
@@ -23,8 +29,10 @@ export class ObsMediaPreload {
   private closing: Promise<void> | null = null;
   constructor(project: LinkProject, itemId: string, private readonly scenes: Scenes,
     private readonly native: { prime: (name: string, restartRetained: boolean, kind: 'audio' | 'video') => Promise<void>; seek: (name: string, positionMs: number) => Promise<void> }) {
-    this.timeline = new SceneOutputTimeline(project, itemId);
+    const events = compileManagedMediaTimeline(project, itemId).events;
+    this.timeline = new SceneOutputTimeline(project, itemId, events);
     this.starts = this.timeline.preloadEntries();
+    this.ends = new Map(events.filter(event => event.phase === 'stop').map(event => [event.clipId, event.frameNumber]));
     this.lookaheadFrames = Math.ceil(10 * playbackFramesPerSecond(project.timebase.frameRate));
     // Eight live layers can still prepare inside the ten-second horizon.
     // Leave rendering time between decoder flush/upload bursts, rather than
@@ -35,7 +43,7 @@ export class ObsMediaPreload {
     // Registering again after OBS reconnects starts the decoder slots over; inputs
     // this session already used are still cleaned up when it stops.
     const previous = this.media.get(sourceName);
-    this.media.set(sourceName, { path, current: null, pending: null, following: null, touched: previous?.touched ?? new Set(), retained: previous?.retained ?? new Set() });
+    this.media.set(sourceName, { path, current: null, pending: null, following: null, touched: previous?.touched ?? new Set(), retained: previous?.retained ?? new Set(), busy: 0 });
     // The operator reconnected OBS: the picture goes on from the next action, so
     // a clip that failed to prepare while OBS was gone is prepared once more.
     if (previous) for (const event of this.starts) if (event.sourceName === sourceName) this.failed.delete(event.clipId);
@@ -95,13 +103,19 @@ export class ObsMediaPreload {
 
   /** Prepares at most one clip and returns it. A clip on air now whose decoder
    * missed its boundary goes first, once, so the program can start it late at
-   * the current position. */
+   * the current position. A material whose start, stop or seek OBS has not
+   * answered yet waits for a later clock sample: until the answer, its books may
+   * name a decoder OBS still shows, and preparing that one would be refused or
+   * would race the retirement. */
   async upcoming(frame: number, assertCurrent: () => void): Promise<ManagedMediaEvent | null> {
     assertCurrent();
+    this.expire(frame);
     if (frame < this.nextPreparationFrame) return null;
-    const overdue = this.timeline.at(frame).media.find(event => (event.assetKind === 'audio' || event.assetKind === 'video')
-      && !this.late.has(event.clipId) && !this.failed.has(event.clipId)
-      && this.require(event).current?.event.clipId !== event.clipId && this.require(event).pending === null);
+    const overdue = this.timeline.at(frame).media.find(event => {
+      if (event.assetKind !== 'audio' && event.assetKind !== 'video' || this.late.has(event.clipId) || this.failed.has(event.clipId)) return false;
+      const media = this.require(event);
+      return !media.busy && media.current?.event.clipId !== event.clipId && media.pending === null;
+    });
     if (overdue) {
       this.late.add(overdue.clipId); this.nextPreparationFrame = frame + this.preparationSpacingFrames;
       await this.prime(overdue, assertCurrent); return overdue;
@@ -120,7 +134,7 @@ export class ObsMediaPreload {
       const media = this.require(event);
       // The opening or immediately next clip still owns the only standby slot.
       // A later audio observation will prepare its successor after it enters.
-      return media.current?.event.clipId !== event.clipId && media.pending === null;
+      return !media.busy && media.current?.event.clipId !== event.clipId && media.pending === null;
     });
     const target = targets[0];
     if (!target) return null;
@@ -129,6 +143,22 @@ export class ObsMediaPreload {
     // remains inside the same ten-second horizon and never delays an event.
     this.nextPreparationFrame = frame + this.preparationSpacingFrames;
     await this.prime(target, assertCurrent); return target;
+  }
+
+  /** A prepared clip past its real end can no longer go on air: its start was
+   * merged away while OBS was busy, skipped after a position gap, or it ended
+   * before a late start. Its slot goes to the next clip of the material
+   * (2026-11-09: later clips must still play). The decoder stays owned and paused,
+   * so its next preparation restarts it. A clip a camera covers keeps its slot
+   * until its real end, since the camera's end shows it again. */
+  private expire(frame: number): void {
+    for (const media of this.media.values()) {
+      for (let slot = media.pending; slot?.ready && frame >= (this.ends.get(slot.event.clipId) ?? Infinity); slot = media.pending) {
+        this.expired.add(slot.event.clipId);
+        media.retained.add(slot.sourceName);
+        media.pending = media.following; media.following = null;
+      }
+    }
   }
 
   /** Allocate and warm the second decoder before the formal clock starts.
@@ -171,22 +201,54 @@ export class ObsMediaPreload {
     if (event.phase === 'stop') {
       if (!media.current || media.current.event.clipId !== event.clipId) return;
       const current = media.current; media.current = null;
-      await this.scenes.execute({ ...event, sourceName: current.sourceName }, path, undefined, retirement);
+      try {
+        await this.answered(media, () => this.scenes.execute({ ...event, sourceName: current.sourceName }, path, undefined, retirement));
+      } catch (error) {
+        // OBS did not carry the stop out, so the decoder may still be on air: it
+        // stays the material's current decoder. Transport controls reach it, and
+        // the material's next clip hands over from it (retiring it) instead of
+        // starting underneath it. The stop is not sent again.
+        if (this.scenes.isActive(current.sourceName) && media.current === null && this.media.get(event.sourceName) === media) media.current = current;
+        throw error;
+      }
       if (retain) media.retained.add(current.sourceName);
       if (!retain) media.touched.delete(current.sourceName);
       return;
     }
     const next = media.pending;
-    if (!next?.ready || next.event.clipId !== event.clipId) throw new Error(`下一个素材没能在切换前准备好：${event.assetName}`);
-    const previous = media.current;
-    media.current = next; media.pending = media.following; media.following = null;
-    await this.scenes.execute({ ...event, sourceName: next.sourceName }, path, previous?.sourceName, retirement);
-    // A successfully stopped input needs no further cleanup; a paused one
-    // remains owned until its next use or explicit session shutdown.
-    if (previous && previous.sourceName !== next.sourceName) {
-      if (retain) media.retained.add(previous.sourceName);
-      else media.touched.delete(previous.sourceName);
+    if (!next?.ready || next.event.clipId !== event.clipId) {
+      throw new Error(this.expired.has(event.clipId) ? `这一段素材没有播出：轮到它时已经过了它的结束时间，电脑或 OBS 当时太忙：${event.assetName}`
+        : `下一个素材没能在切换前准备好：${event.assetName}`);
     }
+    const previous = media.current;
+    const handover = previous && previous.sourceName !== next.sourceName ? previous.sourceName : null;
+    media.current = next; media.pending = media.following; media.following = null;
+    try {
+      await this.answered(media, () => this.scenes.execute({ ...event, sourceName: next.sourceName }, path, previous?.sourceName, retirement));
+    } catch (error) {
+      if (handover) this.handedOver(media, next, handover, retain, true);
+      throw error;
+    }
+    if (handover) this.handedOver(media, next, handover, retain, false);
+  }
+
+  /** A successfully stopped input needs no further cleanup; a paused one remains
+   * owned until its next use or explicit session shutdown. When OBS did not take
+   * the handover (nothing reached the new decoder, so the old one still plays),
+   * the old decoder stands for this clip: the clip's stop retires it, transport
+   * controls reach it, and the drift check leaves it alone. The new decoder stays
+   * paused for the next clip of the material. Nothing is sent again. */
+  private handedOver(media: Media, next: Slot, previous: string, retain: boolean, failed: boolean): void {
+    if (failed && this.scenes.isActive(previous)) {
+      if (this.media.get(next.event.sourceName) !== media || media.current !== next) return;
+      media.current = { event: next.event, sourceName: previous, ready: true };
+      media.retained.add(next.sourceName);
+      return;
+    }
+    if (retain) media.retained.add(previous);
+    // After a failure the stop may not have reached OBS (the connection can be
+    // gone), so the old decoder stays owned and the end of the song stops it.
+    else if (!failed) media.touched.delete(previous);
   }
 
   async seek(event: ManagedMediaEvent, path: string): Promise<void> {
@@ -197,7 +259,14 @@ export class ObsMediaPreload {
     media.touched.add(sourceName); media.pending = null; media.following = null;
     media.retained.delete(sourceName);
     media.current = { event, sourceName, ready: true };
-    await this.scenes.seek({ ...event, sourceName }, path, this.native.seek);
+    await this.answered(media, () => this.scenes.seek({ ...event, sourceName }, path, this.native.seek));
+  }
+
+  /** Runs one start, stop or seek of the material; its next preparation waits
+   * until OBS answered it, whether it succeeded or not. */
+  private async answered(media: Media, operation: () => Promise<void>): Promise<void> {
+    media.busy++;
+    try { await operation(); } finally { media.busy--; }
   }
 
   close(): Promise<void> {
