@@ -2,7 +2,7 @@ import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@
 import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
 import { ma2NetworkTargetSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
-import { firstTimeWarning, materialSceneTargets, projectFileReferences } from '@tb/core/link';
+import { firstTimeWarning, materialSceneTargets, projectFileReferences, type InternalPlayerState } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
 import { assertMa2ConnectionOwner, isLocalMa2Address, waitForMa2Listener } from './link/ma2-connection-owner';
@@ -176,6 +176,7 @@ import { midiPortHandleSchema, midiPortListRequestSchema, midiPortOpenSchema, mi
 import { NativePlayerUiPublisher } from './link/native-player-ui-publisher';
 import { NativeProgramHost } from './link/native-program-host';
 import { NativeProgramService } from './link/native-program-service';
+import { followWindowPage } from './link/window-page';
 import { NativePlaybackRequests } from './link/native-playback-requests';
 import { NativeObsHost } from './link/native-obs-host';
 import { NativeObsRequests } from './link/native-obs-requests';
@@ -260,6 +261,14 @@ async function closeNativePlayer(): Promise<void> {
   await nativePlayerShutdown;
   if (nativePlayer === player) nativePlayer = null;
   nativePlayerShutdown = null;
+}
+/** What the page in the main window held, once the page is gone (its renderer exited, or a new page replaced it): a
+ * program that is preparing, playing or paused keeps its outputs for the next page and is returned; otherwise the
+ * program, the audio and picture outputs and the runtime close. */
+async function releaseGonePage(): Promise<InternalPlayerState | null> {
+  const kept = await (nativeProgram?.release() ?? Promise.resolve(null));
+  if (!kept) { await closeNativePlayer(); await releaseRendererRuntime(); }
+  return kept;
 }
 function nativePlaybackActive(): boolean {
   return Boolean(nativePlayer?.status && ['preparing', 'playing', 'paused'].includes(nativePlayer.status.status));
@@ -452,13 +461,11 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
     });
     return { action: 'deny' };
   });
-  mainWindow.webContents.on('will-navigate', event => event.preventDefault());
   const window = mainWindow;
   let rendererReloadedAt = 0;
-  // A new page holds none of the MIDI ports the previous one opened.
-  mainWindow.webContents.on('did-start-navigation', details => {
-    if (details.isMainFrame && !details.isSameDocument) void midiPorts?.releaseWindow();
-  });
+  // The page may reload itself and nothing else; what it held is released once a new page replaced it (window-page.ts).
+  followWindowPage(mainWindow.webContents, { releaseMidi: () => midiPorts?.releaseWindow() ?? Promise.resolve(),
+    failSaves: message => rendererSaves.failAll(message), releaseProgram: releaseGonePage, record: entry => logger.record(entry) });
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     void midiPorts?.releaseWindow();
     // Nothing can be saved from a window that exited: the recovery copy holds the
@@ -468,13 +475,9 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
     documentState = { ...documentState, dirty: false, consoleSynced: false };
     // A program that is playing runs in main and keeps its audio, timecode, OBS and
     // lighting outputs; the reloaded window takes it over. Anything else stops.
-    void (nativeProgram?.release() ?? Promise.resolve(null)).then(async kept => {
-      if (kept) {
-        await logger.record({ level: 'warning', category: 'state', device: '播放器', ...(kept.itemId ? { itemId: kept.itemId } : {}),
-          message: `界面已退出，节目在后台继续播放（${Math.floor(kept.positionMs / 1000)} 秒），界面重新加载后会接回控制` });
-        return;
-      }
-      await closeNativePlayer(); await releaseRendererRuntime();
+    void releaseGonePage().then(async kept => {
+      if (kept) await logger.record({ level: 'warning', category: 'state', device: '播放器', ...(kept.itemId ? { itemId: kept.itemId } : {}),
+        message: `界面已退出，节目在后台继续播放（${Math.floor(kept.positionMs / 1000)} 秒），界面重新加载后会接回控制` });
     }).catch((error: unknown) => {
       void logger.record({ level: 'error', category: 'device', device: '音频', message: `界面退出后停止音频失败：${String(error)}`, result: 'failed' })
         .catch((loggingError: unknown) => console.error('记录音频停止失败', loggingError));

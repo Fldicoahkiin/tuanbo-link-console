@@ -227,12 +227,31 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
     expect(f.lighting.release).toHaveBeenCalledOnce();
   });
 
-  it('播放器还开着时停止的关灯失败照旧显示在播放器里，不另外弹窗', async () => {
+  it('播放器还开着时停止的关灯失败显示在播放器里，和红字一样写明哪首歌、怎么办，不另外弹窗', async () => {
     const f = lit(); await f.player.play('song-0');
     f.lighting.release.mockRejectedValueOnce(refused());
     await f.player.stop();
-    expect(f.state().notice).toContain('灯光没能完全关闭：关灯指令没有发送：控台连接变了');
-    expect(f.deps.notice).toHaveBeenCalledWith('灯光没能完全关闭：关灯指令没有发送：控台连接变了', 'song-0');
+    expect(f.state().notice).toContain(closedOff);
+    expect(f.deps.notice).toHaveBeenCalledWith(closedOff, 'song-0');
+    await f.player.dispose();
+    expect(f.deps.closedFault).not.toHaveBeenCalled();
+  });
+
+  // 修复前：播放器开着时只写“灯光没能完全关闭：原因”，不说是哪首歌、该怎么办，日志还记在正在放的歌上；补发的是上一首的
+  // Off 时，操作员会去找一首根本没有执行器的歌。
+  it('播放器开着时补发的是上一首的关灯：提示写上一首的歌名，日志也记在上一首', async () => {
+    const f = lit(); await f.player.play('song-0');
+    const preparing = gate(), original = f.api.prepareNativePlayback.getMockImplementation()!;
+    f.api.prepareNativePlayback.mockImplementationOnce(async request => { await preparing.promise; return original(request); });
+    const seeking = f.player.seek(3000);
+    await vi.waitFor(() => expect(f.api.prepareNativePlayback).toHaveBeenCalledTimes(2));
+    const stopping = f.player.stop(), next = f.player.play('song-1');
+    preparing.open(); await Promise.all([seeking, stopping, next]);
+    expect(f.state()).toMatchObject({ itemId: 'song-1', status: 'playing' });
+    f.lighting.release.mockRejectedValueOnce(refused());
+    await f.player.stop();
+    expect(f.state().notice).toContain(closedOff);
+    expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('灯光没能完全关闭'))).toEqual([[closedOff, 'song-0']]);
     await f.player.dispose();
     expect(f.deps.closedFault).not.toHaveBeenCalled();
   });
@@ -265,19 +284,25 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
     f.player.setWatched(true); await f.player.play('song-0');
     f.lighting.release.mockRejectedValueOnce(refused());
     await f.player.stop();
-    expect(f.state().notice).toContain('灯光没能完全关闭：关灯指令没有发送：控台连接变了');
+    expect(f.state().notice).toContain(closedOff);
     expect(f.deps.closedFault).toHaveBeenCalledOnce();
     await f.player.dispose();
   });
 
-  it('原因自己带句号时不出现“。。”；不知道是哪首歌时写“这首歌”', async () => {
-    const f = lit(); await f.player.play('song-0'); f.player.setWatched(false);
-    f.lighting.release.mockRejectedValueOnce(new LightingReleaseFailure({ itemId: 'song-0', title: '音频 0' }, new Error('MA2 telnet timeout')));
-    await f.player.stop();
+  // 修复前：原因取的是整句日常说法，超时的那句自己带着“请检查目标程序……”，红字里出现两个“怎么办”；认不出的英文报错前面
+  // 还多一个“操作未能完成：”。
+  it('原因只写原因：不带日常说法自己的下一步，也不带“操作未能完成：”；原因自己带句号时不出现“。。”；不知道是哪首歌时写“这首歌”', async () => {
+    const f = lit(); f.player.setWatched(false);
+    for (const cause of ['MA2 telnet timeout', 'connect ECONNREFUSED 192.0.2.1:30000', 'socket hang up']) {
+      f.lighting.release.mockRejectedValueOnce(new LightingReleaseFailure({ itemId: 'song-0', title: '音频 0' }, new Error(cause)));
+      await f.player.play('song-0'); await f.player.stop();
+    }
     f.lighting.release.mockRejectedValueOnce(new Error('控台正忙。'));
     await f.player.play('song-0'); await f.player.stop();
     expect(f.deps.closedFault.mock.calls).toEqual([
-      ['「音频 0」的灯光没能完全关闭，控台上可能还亮着。原因：操作超时了。请检查目标程序是否正常运行，处理后再试。请在控台上关掉这首歌的执行器。', 'song-0'],
+      ['「音频 0」的灯光没能完全关闭，控台上可能还亮着。原因：操作超时了。请在控台上关掉这首歌的执行器。', 'song-0'],
+      ['「音频 0」的灯光没能完全关闭，控台上可能还亮着。原因：连不上目标设备。请在控台上关掉这首歌的执行器。', 'song-0'],
+      ['「音频 0」的灯光没能完全关闭，控台上可能还亮着。原因：socket hang up。请在控台上关掉这首歌的执行器。', 'song-0'],
       ['这首歌的灯光没能完全关闭，控台上可能还亮着。原因：控台正忙。请在控台上关掉这首歌的执行器。', null]
     ]);
     await f.player.dispose();
@@ -563,6 +588,14 @@ describe('原生正式播放器的操作与会话', () => {
     const f = fixture(); await f.player.play('song-0'); f.deps.stop.mockClear();
     f.emit({ status: 'error', audioError: '设备失效' }); f.emit({ status: 'error', audioError: '设备失效' });
     expect(f.state().status).toBe('error'); expect(f.deps.stop).toHaveBeenCalledOnce();
+  });
+  // 这一处也给停止的关灯提示用（reportNotice）。
+  it('同一句提示还显示着时再报一次：不重复显示，也不重复记日志', async () => {
+    const f = fixture(); await f.player.play('song-0'); f.deps.notice.mockClear();
+    f.player.reportUnavailable('下一个节目无法提前准备：素材不见了'); f.player.reportUnavailable('下一个节目无法提前准备：素材不见了');
+    expect(f.state().notice).toBe('下一个节目无法提前准备：素材不见了');
+    expect(f.deps.notice.mock.calls).toEqual([['下一个节目无法提前准备：素材不见了', 'song-0']]);
+    await f.player.dispose();
   });
   it('OBS 准备到期让音频继续，迟到结果不能启用本轮联动', async () => {
     const f = fixture(); let release: (() => void) | undefined;

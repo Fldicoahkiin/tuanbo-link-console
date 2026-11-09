@@ -8,6 +8,8 @@ import { NativeProgramService } from './native-program-service';
 import { NativeProgramHost } from './native-program-host';
 import { programLicense } from './program-license';
 import { closedProgramFaultReporter } from './main-process-errors';
+import { followWindowPage } from './window-page';
+import { windowPageEvents } from './fixtures/window-page-events';
 import type { LinkLogInput } from './run-logger';
 
 /**
@@ -195,8 +197,8 @@ async function programHost(endAction: 'pause' | 'stop' = 'pause') {
   // What reaches the window: link-main passes sendToRenderer here, and LinkApp shows link:main-process-error in red as it is.
   const toWindow = vi.fn<(channel: 'link:main-process-error', message: string) => void>();
   const record = vi.fn<(entry: LinkLogInput) => Promise<unknown>>(() => Promise.resolve());
-  // link-main's notice: the run log only (a warning the first time, then info).
-  const notices: string[] = [];
+  // link-main's notice: the run log only (a warning the first time, then info), under the song it names.
+  const notices: { message: string; itemId: string | null }[] = [];
   const referenceAudio = { assetId: 'audio', relativePath: 'song.wav', sha256: 'a'.repeat(64), durationMs: 10000 };
   const playback = { startMs: 0, endMs: 9000, mtcOffsetMs: 480000, volume: 100, endAction, shortcut: '' };
   const project = parseLinkProject({ ...createEmptyLinkProject('授权规则'), schemaVersion: 2, playbackSource: 'internal',
@@ -212,7 +214,10 @@ async function programHost(endAction: 'pause' | 'stop' = 'pause') {
       mtcError: null, underruns: 0, mtcInterruptions: 0, gain: s.volume, analysis: null };
     return audio;
   };
+  /** What the program told the playback engine, in order: a 'stop' stops the music and the timecode. */
+  const controls: NativePlayerControl['kind'][] = [];
   const controlAudio = (command: NativePlayerControl): Promise<NativePlayerStatus> => {
+    controls.push(command.kind);
     if (!audio) return Promise.reject(new Error('没有准备音频'));
     const next: NativePlayerStatus = { ...audio, generation: command.generation };
     if (command.kind === 'play') next.status = 'playing';
@@ -226,7 +231,7 @@ async function programHost(endAction: 'pause' | 'stop' = 'pause') {
       executable: 'tblink-playback.exe', audio: () => audio, midiOutputs: () => Promise.resolve([]), authorize: () => Promise.resolve(),
       configuration: () => ({ outputDeviceId: 'default', mtcPortName: null, audioSampleRate: 48000, preload: false }), preciseSeeking: () => false,
       changed: state => callbacks.changed(state), midiChanged: () => undefined, midiRecovered: () => undefined,
-      notice: message => { notices.push(message); }, closedFault: (message, itemId) => callbacks.closedFault(message, itemId),
+      notice: (message, itemId) => { notices.push({ message, itemId }); }, closedFault: (message, itemId) => callbacks.closedFault(message, itemId),
       network: wiring.network,
       api: { prepareNativePlayback: prepareAudio, controlNativePlayback: controlAudio,
         getNativePlaybackDevices: () => Promise.resolve({ protocol: 4, audio: [], midiOutputs: [], midiInputs: [] }),
@@ -243,7 +248,7 @@ async function programHost(endAction: 'pause' | 'stop' = 'pause') {
     document: JSON.stringify(project), configuration: { outputDeviceId: 'default', mtcPortName: null, preciseSeeking: false } });
   const first = opening();
   await service.open(first);
-  return { service, send, toWindow, record, notices, projectId: project.projectId, opening,
+  return { service, access, send, toWindow, record, notices, controls, projectId: project.projectId, opening, audio: () => audio,
     player: () => hosts.at(-1)!.controller,
     play: (itemId: string) => service.control({ version: 1, ownerId: first.ownerId, operation: { kind: 'play', itemId } }),
     /** The playback engine reports the end of the song. */
@@ -292,6 +297,24 @@ describe('停止后马上关闭后台节目（改了片段、重建播放器）�
   });
 });
 
+// 修复前：窗口开着时，播放器里只写“灯光没能完全关闭：原因”，日志记在正在放的「串场」上；操作员会去找一首没有执行器的歌。
+describe('窗口开着时停止的关灯没发出去，播放器里的提示和日志写这份 Off 所属的歌', () => {
+  it('补发的是上一首「开场」的 Off：提示写「开场」和怎么办，日志记在「开场」上，不另外标红', async () => {
+    const f = await programHost();
+    await f.play('song');
+    const release = f.hold();
+    const seeking = f.player().seek(2000), stopping = f.player().stop(), next = f.player().play('interlude');
+    release(); await Promise.all([seeking, stopping, next]);
+    expect(f.send).not.toHaveBeenCalled();
+    f.send.mockRejectedValueOnce(new Error('MA2 没有回应'));
+    await f.player().stop();
+    expect(f.send.mock.calls.map(([request]) => request.action)).toEqual([off]);
+    expect(f.notices.filter(({ message }) => message.includes('灯光'))).toEqual([{ message: lightsLeftOn('开场'), itemId: 'song' }]);
+    expect(f.toWindow).not.toHaveBeenCalled();
+    expect(f.record).not.toHaveBeenCalled();
+  });
+});
+
 describe('界面进程退出后节目在后台自己停下，这首歌的执行器照样关；没关掉要让操作员看到', () => {
   for (const [reason, status] of Object.entries(lapsed)) it(`${reason}：界面退出后歌在后台放完停止，执行器 Off 照发，不检查授权`, async () => {
     const f = await programHost('stop');
@@ -314,12 +337,59 @@ describe('界面进程退出后节目在后台自己停下，这首歌的执行�
     await vi.waitFor(() => expect(f.record).toHaveBeenCalledOnce());
     expect(f.record).toHaveBeenCalledWith({ level: 'error', category: 'state', device: '播放器', projectId: f.projectId, itemId: 'song',
       message: lightsLeftOn('开场'), result: 'failed' });
-    expect(f.notices.filter(message => message.includes('灯光'))).toEqual([]);
+    expect(f.notices.filter(({ message }) => message.includes('灯光'))).toEqual([]);
     expect(f.toWindow).not.toHaveBeenCalled();
     // The song stopped while no window was there: the reloaded window replaces the program instead of taking it over.
     expect(await f.service.open(f.opening())).toBe('opened');
     expect(f.toWindow).toHaveBeenCalledExactlyOnceWith('link:main-process-error', lightsLeftOn('开场'));
     await f.service.open(f.opening());
     expect(f.toWindow).toHaveBeenCalledOnce(); expect(f.record).toHaveBeenCalledOnce(); expect(f.send).toHaveBeenCalledOnce();
+  });
+});
+
+/** The main window's page as link-main follows it (window-page.ts), over this program. */
+function reloadingPage(f: Awaited<ReturnType<typeof programHost>>) {
+  const page = windowPageEvents();
+  followWindowPage(page.page, { releaseMidi: () => Promise.resolve(), failSaves: () => undefined, releaseProgram: () => f.service.release(), record: f.record });
+  return page;
+}
+
+// 修复前：主进程拦下了页面自己的 location.reload()，错误画面上的“重新进入工作区”按了没反应；只放行重新加载的话，节目没被
+// 放开，新页面打开同一个工程时把正在放的节目换掉，音乐和时间码停下。
+describe('界面自己重新加载（错误画面上的“重新进入工作区”），演出不中断', () => {
+  for (const [reason, status] of Object.entries(lapsed)) it(`${reason}：歌在后台接着放，新页面打开同一个工程接回控制，不停歌、不检查授权`, async () => {
+    const f = await programHost();
+    const page = reloadingPage(f);
+    // The window's run of this show was checked while the license was valid.
+    await f.play('song'); await f.access.setActive(true);
+    f.lapse(status);
+    expect(page.reloadItself()).toBe(true);
+    await vi.waitFor(() => expect(f.record).toHaveBeenCalledOnce());
+    expect(f.record).toHaveBeenCalledWith(expect.objectContaining({ level: 'warning', itemId: 'song' }));
+    // The new page starts idle, then the operator opens the same project.
+    await f.access.setActive(false);
+    expect(await f.service.open(f.opening())).toBe('adopted');
+    expect(f.controls).not.toContain('stop');
+    expect(f.audio()?.status).toBe('playing');
+    await expect(f.access.requireOutput()).resolves.toBeUndefined();
+    expect(f.send).not.toHaveBeenCalled();
+  });
+
+  // 修复前：节目一直当作有窗口在看，后台停下时关灯失败只进了已经不在的那一页的播放器状态，谁也看不到。
+  it('新页面接回之前歌在后台放完停下、Off 没发出去：马上按错误记录一次；红字等新页面打开节目时显示，只显示一次', async () => {
+    const f = await programHost('stop');
+    const page = reloadingPage(f);
+    await f.play('song');
+    expect(page.reloadItself()).toBe(true);
+    await vi.waitFor(() => expect(f.record).toHaveBeenCalledOnce());
+    f.send.mockRejectedValueOnce(new Error('MA2 没有回应'));
+    f.ended();
+    await vi.waitFor(() => expect(f.record).toHaveBeenCalledTimes(2));
+    expect(f.record).toHaveBeenLastCalledWith({ level: 'error', category: 'state', device: '播放器', projectId: f.projectId, itemId: 'song',
+      message: lightsLeftOn('开场'), result: 'failed' });
+    expect(f.toWindow).not.toHaveBeenCalled();
+    expect(await f.service.open(f.opening())).toBe('opened');
+    expect(f.toWindow).toHaveBeenCalledExactlyOnceWith('link:main-process-error', lightsLeftOn('开场'));
+    expect(f.send).toHaveBeenCalledOnce();
   });
 });

@@ -16,8 +16,9 @@ export type InternalPlayerDependencies = {
   configuration: () => Omit<import('@tb/schema').NativeProgramConfiguration, 'preciseSeeking'>;
   changed: (state: InternalPlayerState) => void;
   notice?: (message: string, itemId: string | null) => void;
-  /** A failure after the player closed, which no player state shows any more (2026-11-09: the Off its stop owed and
-   * sent at close). The host shows it to the operator in red and logs it as an error. */
+  /** A failure no window sees in the player's state (2026-11-09: the Off a stop owed): after the player closed, or while
+   * its program plays on without a window (setWatched). The host logs it as an error and shows it in red, in the window or
+   * in the next window that opens a program. */
   closedFault: (message: string, itemId: string | null) => void;
   failed?: (message: string, itemId: string | null) => void;
   obsChanged?: (state: NativeObsStatus) => void;

@@ -24,7 +24,7 @@ export function reportMainProcessErrors(report: ReturnType<typeof mainProcessErr
 export type ClosedProgramFaults = {
   /** `message` is written for the operator; it is logged now and shown once. */
   report(message: string, context: { projectId: string; itemId: string | null }): void;
-  /** The window's renderer exited: nothing sent to it now would be shown. */
+  /** The window's page is gone (its renderer exited, or it reloaded): nothing sent to it now would be shown. */
   windowExited(): void;
   /** A window opened a program: it shows what is sent from now on, and what no window has shown yet. */
   windowOpened(): void;
@@ -33,7 +33,8 @@ export type ClosedProgramFaults = {
 /** A failure of a background program that no player shows (2026-11-09: the lights-off its stop owed, sent at close or
  * while the program played on without a window). It is logged as an error when it happens and shown once in red on the
  * main-process error channel, which the window shows as it is (LinkApp: onMainProcessError). It goes to the window
- * there is; while there is none, from a renderer exit until a window opens a program again, it waits for that window.
+ * there is; while there is none, from a renderer exit or a page reload until a window opens a program again, it waits
+ * for that window.
  * The window subscribes to the channel before it loads what it needs to open a program (LinkApp), so the open proves it
  * listens. A log that cannot be written does not hide it from the operator. */
 export function closedProgramFaultReporter(record: (entry: LinkLogInput) => Promise<unknown>,

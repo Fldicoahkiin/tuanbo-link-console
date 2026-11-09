@@ -1,7 +1,7 @@
 import { createObsProgramSnapshot } from './obs-program-snapshot';
 import { idleTimecodeOutput, timecodeOutputChange, type TimecodeOutputMemory } from './native-timecode-output';
 import { playlistItems, programPlaylists } from './program-playlists';
-import { toUserErrorMessage } from './link-user-error';
+import { toUserErrorMessage, toUserErrorReason } from './link-user-error';
 import type { LinkDesktopApi } from './link-desktop-contract';
 import type { LinkProject, NativePlayerControl, NativePlayerStatus, NativeObsPrepare, NativeObsStop, NativeObsStatus } from '@tb/schema';
 import { nativeAudioAnalysis } from './native-audio-analysis';
@@ -266,20 +266,23 @@ export class NativeProgramPlayer {
   /** The Off a stop owes, sent once after the timecode stopped; nothing retries it. A failure is shown in the player
    * and logged. When no window shows the player's state, after it closed or while its program plays on without a
    * window (setWatched), the failure goes to the host (closedFault): in a window in red, and into the log as an error.
-   * It names the song the Off was prepared for (LightingReleaseFailure), not the one playing now. */
+   * Either way the text and the log name the song the Off was prepared for (LightingReleaseFailure), not the one
+   * playing now. */
   private async releaseLighting(): Promise<void> {
     if (!this.lightingOwed) return;
     this.lightingOwed = false;
     try { await this.lighting.release(); }
     catch (error) {
       if (!this.disposed) this.runtimePrepared = false;
-      if (!this.disposed && this.watched) { this.reportUnavailable(`灯光没能完全关闭：${toUserErrorMessage(error)}`); return; }
-      const song = error instanceof LightingReleaseFailure ? error.song : null;
-      this.dependencies.closedFault(lightsLeftOn(song, error), song?.itemId ?? null);
+      const song = error instanceof LightingReleaseFailure ? error.song : null, message = lightsLeftOn(song, error);
+      // Logged under the song the Off was for, which may not be the one in the player now.
+      if (!this.disposed && this.watched) this.reportNotice(message, song?.itemId ?? null);
+      else this.dependencies.closedFault(message, song?.itemId ?? null);
     }
   }
   /** Whether a window shows this player's state. NativeProgramService clears it while the program plays on after its
-   * window's renderer exited, and sets it again when a reloaded window takes the program over. */
+   * window's page is gone (the renderer exited, or the page reloaded), and sets it again when the next page takes the
+   * program over. */
   setWatched(watched: boolean): void { this.watched = watched; }
   async reset(): Promise<void> { await this.stop(); if (this.state.status !== 'error') this.update({ itemId: null, playedItemIds: [], durationMs: 0 }); }
   externalStop(): void { void this.stop(); }
@@ -311,9 +314,11 @@ export class NativeProgramPlayer {
   private showFault(text: string): void { if (this.state.fault !== text) this.update({ fault: text }); }
   /** An output that could not join or left this song: logged and shown in red, audio continues. */
   private startFault(message: string): void { this.dependencies.notice?.(message, this.state.itemId); this.reportFault(message); }
-  reportUnavailable(message: string): void {
+  reportUnavailable(message: string): void { this.reportNotice(message, this.state.itemId); }
+  /** Shown once in the player's notice and logged under `itemId`. */
+  private reportNotice(message: string, itemId: string | null): void {
     if (this.state.notice?.includes(message)) return;
-    this.dependencies.notice?.(message, this.state.itemId);
+    this.dependencies.notice?.(message, itemId);
     this.showNotice(message);
   }
   private showNotice(message: string): void {
@@ -543,9 +548,10 @@ export class NativeProgramPlayer {
   private update(patch: Partial<InternalPlayerState>): void { if (this.disposed) return; this.state = { ...this.state, ...patch }; this.dependencies.changed(this.state); }
 }
 
-/** A stop's Off failed where no player shows it (2026-11-09): what happened, why, and what the operator does. It names
- * the song the Off was for; "这首歌" only when the failure does not say. */
+/** A stop's Off failed (2026-11-09): what happened, why, and what the operator does, in the player's notice or in red.
+ * It names the song the Off was for; "这首歌" only when the failure does not say. The reason is only the reason: the
+ * last sentence says what to do. */
 function lightsLeftOn(song: LightingReleaseSong | null, error: unknown): string {
-  const reason = toUserErrorMessage(error).replace(/[。.；;\s]+$/u, '') || '未知错误';
+  const reason = toUserErrorReason(error).replace(/[。.；;\s]+$/u, '') || '未知错误';
   return `${song?.title ? `「${song.title}」` : '这首歌'}的灯光没能完全关闭，控台上可能还亮着。原因：${reason}。请在控台上关掉这首歌的执行器。`;
 }

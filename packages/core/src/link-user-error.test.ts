@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { toUserErrorMessage } from './link-user-error';
+import { toUserErrorMessage, toUserErrorReason } from './link-user-error';
 it('OBS 密码与配置错误直接说明原因，而非要求先导出诊断', () => {
   expect(toUserErrorMessage(new Error('OBS WebSocket 连接失败：Authentication failed'))).toContain('OBS 需要密码，或者密码不对');
   expect(toUserErrorMessage(new Error('连接配置校验失败：profile.obs.webSocketUrl：Invalid URL'))).toContain('profile.obs.webSocketUrl');
@@ -54,4 +54,33 @@ it('只有“Invalid input”的校验错误同时写出被拒绝的字段，联
   expect(toUserErrorMessage(new Error(refine))).toBe('操作未能完成：Invalid input（字段 binding.executor）');
   const union = "Error: [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected string\"\n        }\n      ]\n    ],\n    \"path\": [\n      \"points\",\n      3\n    ],\n    \"message\": \"Invalid input\"\n  }\n]";
   expect(toUserErrorMessage(new Error(union))).toBe('操作未能完成：Invalid input（字段 points.3）');
+});
+
+// 修复前：关灯失败的红字把整句 toUserErrorMessage 当原因，这里自己加的下一步（“请检查目标程序……”）和“操作未能完成：”也跟了
+// 进去，一句话里出现两个“怎么办”。只要原因时只给原因；整句照旧。
+it('只要原因时不带这里自己加的下一步和“操作未能完成：”；整句照旧', () => {
+  expect(toUserErrorReason(new Error('MA2 telnet timeout'))).toBe('操作超时了');
+  expect(toUserErrorMessage(new Error('MA2 telnet timeout'))).toBe('操作超时了。请检查目标程序是否正常运行，处理后再试。');
+  expect(toUserErrorReason(new Error('connect ECONNREFUSED 192.0.2.1:30000'))).toBe('连不上目标设备');
+  expect(toUserErrorReason(new Error('Invalid URL'))).toBe('OBS 地址格式不正确');
+  expect(toUserErrorMessage(new Error('Invalid URL'))).toBe('OBS 地址格式不正确，请填写完整地址，例如 ws://127.0.0.1:4455。');
+  expect(toUserErrorReason(new Error("ENOENT: no such file or directory, stat 'D:\\a.wav'"))).toBe('所需文件或程序不存在：D:\\a.wav');
+  expect(toUserErrorReason(new Error('socket hang up'))).toBe('socket hang up');
+  expect(toUserErrorReason(new Error(toUserErrorMessage(new Error('socket hang up'))))).toBe('socket hang up');
+  expect(toUserErrorReason(new Error("Error invoking remote method 'link:ma2-play-cue': Error: 关灯指令没有发送：控台连接变了"))).toBe('关灯指令没有发送：控台连接变了');
+});
+
+// 修复前：「」里的歌名也参加判断。歌名有 5 个以上连续大写字母（「HAPPY」）时，写好的中文提示被当成技术报错，前面多了
+// “操作未能完成：”；歌名像英文报错（「Timeout」）时，整句被换成“操作超时了……”。
+it('「」里的名字（歌名、接口名）不参加判断：写好的中文提示原样显示；名字以外的技术报错照旧换成日常说法', () => {
+  for (const written of ['「HAPPY」的起始码改成了 MTC 01:00:00:00，但 Cue 没有换过来：原因见这条时间线',
+    '「HAPPY」：同步失败，没有自动重试：控台上的时间线没有读回来。修改保留在本地，处理好后点“刷新同步”',
+    '「Timeout」的起始码改成了 MTC 01:00:00:00，现在用 Timecode 3 跑灯', '「Fatal Error」的灯光没能完全关闭，控台上可能还亮着。原因：控台正忙。请在控台上关掉这首歌的执行器。',
+    'MIDI 接口「USB MIDI INTERFACE」已断开，插回后会自动恢复']) {
+    expect(toUserErrorMessage(new Error(written))).toBe(written);
+    expect(toUserErrorReason(new Error(written))).toBe(written);
+  }
+  expect(toUserErrorMessage(new Error('「HAPPY」同步失败 UNKNOWN_NATIVE_CODE'))).toBe('操作未能完成：「HAPPY」同步失败 UNKNOWN_NATIVE_CODE');
+  expect(toUserErrorMessage(new Error('「开场」：connect ECONNREFUSED 192.0.2.1:30000'))).toBe('连不上目标设备。请确认程序已经打开、连接服务已开启，并检查地址和端口。');
+  expect(toUserErrorMessage(new Error('「HAPPY」没有播放：Exception in native module'))).toBe('操作未能完成：「HAPPY」没有播放：Exception in native module');
 });

@@ -24,8 +24,9 @@ type Dependencies = {
   midiRecovered(report: ActionMidiRecovery, itemId: string): void;
   obsChanged?(state: import('@tb/schema').NativeObsStatus): void;
   notice(message: string, itemId: string | null): void;
-  /** A failure after the program closed, which no player shows any more (the lights-off its stop owed): shown in the
-   * window in red and logged as an error. */
+  /** A failure no window sees in the player's state (the lights-off a stop owed): after the program closed, or while it
+   * plays on without a window. NativeProgramService passes it to closedProgramFaultReporter, which logs it as an error
+   * and shows it in red, in the window or in the next window that opens a program. */
   closedFault(message: string, itemId: string | null): void;
 };
 

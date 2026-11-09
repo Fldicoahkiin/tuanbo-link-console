@@ -15,8 +15,8 @@ type Factory = (project: LinkProject, request: NativeProgramOpen, callbacks: {
 
 /** Owns the single formal program session. Old UI disposal cannot stop a new
  * program; replacement waits for acknowledged cleanup, never starts a second output.
- * A program keeps running when its window's renderer exits, until a reloaded window
- * of the same project takes it over. */
+ * A program keeps running when its window's renderer exits or its page reloads, until
+ * the next page of the same project takes it over. */
 export class NativeProgramService {
   private current: Entry | null = null;
   private cleanup: Promise<void> = Promise.resolve();
@@ -26,7 +26,7 @@ export class NativeProgramService {
    *   license session of the show follows it (link-main passes `programLicense(...).runningChanged`, which reaches
    *   LicenseAccess; license-rules.test.ts checks that path).
    * - `faults`: where a failure goes that no player state shows. The service tells it when no window can show it (the
-   *   renderer exited) and when a window opened a program again. */
+   *   window's page is gone) and when a window opened a program again. */
   constructor(private readonly create: Factory, private readonly publish: (event: NativeProgramEvent) => void,
     private readonly authorize: () => Promise<void>, private readonly runningChanged: (running: boolean) => void,
     private readonly faults: ClosedProgramFaults) {}
@@ -72,8 +72,8 @@ export class NativeProgramService {
     return 'opened';
   }
 
-  /** The owning window's renderer exited. A program that is preparing, playing or
-   * paused keeps its outputs running and is returned; anything else is closed.
+  /** The owning window's page is gone: its renderer exited, or a new page replaced it (window-page.ts). A program that
+   * is preparing, playing or paused keeps its outputs running and is returned; anything else is closed.
    * Until a window opens a program again, no window shows red text: what fails meanwhile waits for it. */
   async release(): Promise<InternalPlayerState | null> {
     this.faults.windowExited();

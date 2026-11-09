@@ -6,3 +6,10 @@ import { toUserErrorMessage } from '@tb/core/link';
 export function noticeText(message: string, tone: 'info' | 'error', written: boolean): string {
   return tone === 'error' && !written ? toUserErrorMessage(message) : message;
 }
+
+/** Shows what the main process sends on link:main-process-error in red, as it is (`written`). `subscribe` is
+ * linkDesktopViewModel.onMainProcessError; the returned function unsubscribes. */
+export function showMainProcessErrors(subscribe: (listener: (message: string) => void) => () => void,
+  notify: (message: string, tone: 'error', key: undefined, written: true) => void): () => void {
+  return subscribe(message => notify(message, 'error', undefined, true));
+}

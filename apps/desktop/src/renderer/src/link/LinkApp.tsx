@@ -47,7 +47,7 @@ import { useMediaAudioPreparation } from './runtime/use-media-audio-preparation'
 import { useLicenseReminders } from './useLicenseReminders';
 import { TaskSidebarProgress } from './components/TaskSidebarProgress';
 import { recordErrorNotice } from './error-notice-log';
-import { noticeText } from './notice-text';
+import { noticeText, showMainProcessErrors } from './notice-text';
 
 type Page = 'project' | 'cues' | 'lighting';
 type Notice = { id: string; message: string; tone: 'info' | 'error'; key?: string };
@@ -352,7 +352,7 @@ function useDesktopIntegrationEvents(notify: (message: string, tone?: 'info' | '
     // Written for the operator in main (main-process-errors.ts): shown as it is. Subscribed before the state below loads:
     // the program opens only after that (useInternalPlayer waits for it), and main takes the open as the sign that red
     // text reaches this window.
-    const unsubscribeMainErrors = linkDesktopViewModel.onMainProcessError(message => notify(message, 'error', undefined, true));
+    const unsubscribeMainErrors = showMainProcessErrors(listener => linkDesktopViewModel.onMainProcessError(listener), notify);
     void loadDesktopIntegrationState(() => cancelled, notify);
     return () => {
       cancelled = true;

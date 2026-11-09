@@ -8,14 +8,16 @@ import { ma2SyncPlaying, useMa2SyncStore } from '../stores/ma2-sync-store';
 
 type Notify = (message: string, tone?: 'info' | 'error') => void;
 
-/** Says once when a sync stops after failing, and when a rename is confirmed on the console. */
-function announce(notify: Notify, state: ReturnType<typeof useMa2SyncStore.getState>, previous: ReturnType<typeof useMa2SyncStore.getState>): void {
+/** Says once when a sync stops after failing, and when a rename is confirmed on the console. The song's title goes in
+ * 「」, as names do in on-screen text: toUserErrorMessage, which puts the red text into everyday words, does not look
+ * inside 「」, so a title such as HAPPY does not make the sentence read as a technical error. */
+export function announceMa2Sync(notify: Notify, state: ReturnType<typeof useMa2SyncStore.getState>, previous: ReturnType<typeof useMa2SyncStore.getState>): void {
   if (state.names.state === 'verified' && previous.names.state !== 'verified' && state.names.message === '名称已写入控台并回读确认') notify(state.names.message);
   if (state.names.state === 'blocked' && previous.names.state !== 'blocked') notify(state.names.message, 'error');
   for (const song of Object.values(state.songs)) {
     if (song.state !== 'blocked' || previous.songs[song.itemId]?.state === 'blocked') continue;
     const title = useDocumentStore.getState().project?.rundown.find(item => item.id === song.itemId)?.title ?? song.name;
-    notify(`${title}：${song.message}`, 'error');
+    notify(`「${title}」：${song.message}`, 'error');
   }
 }
 
@@ -43,7 +45,7 @@ export function useMa2Sync(playing: boolean, notify: Notify): void {
     const preferences = useMa2RealtimePreference.subscribe(() => { void tick(); });
     const modes = useMa2ModeStore.subscribe(() => { void prepareMa2RealtimeSession(); });
     const sync = useMa2SyncStore.subscribe((state, previous) => {
-      announce(notifyRef.current, state, previous);
+      announceMa2Sync(notifyRef.current, state, previous);
       // Playback or a preview stopping syncs what was kept meanwhile without waiting for the next poll.
       if (state.timelinePlaying !== previous.timelinePlaying || state.previewPlaying !== previous.previewPlaying) void tick();
     });
