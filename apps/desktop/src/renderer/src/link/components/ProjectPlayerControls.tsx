@@ -7,9 +7,8 @@ import type { PlayerControlState, PlayerViewStore } from '../stores/player-view-
 import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { Button, IconButton, Select } from '../ui';
-import { registerPlayButton } from '../playback-keys';
 import { PlayerStatusDetails } from './PlayerStatusDetails';
-import { homePlayButton, homePlayPress } from './play-buttons';
+import { homePlayButton, pressHomePlayButton, registerHomePlayButton } from './play-buttons';
 
 /** `engine` names the audio engine this player uses, for the operator. `outdated`: the background program plays
  * another version of the project than this window opened it with, taken over after a window reload. */
@@ -24,10 +23,12 @@ const isEndAction = (value: string): value is EndAction => endActions.some(([act
  * (`children`), then the transport on the left and the playing options on the right. `actions` sit at
  * the right of the heading, before the status details.
  */
-export function ProjectPlayerTransport({ controller, state, engine, selectedItem, onScreen = false, actions, children }: ProjectPlayer & {
+export function ProjectPlayerTransport({ controller, state, engine, selectedItem, onScreen = false, notify, actions, children }: ProjectPlayer & {
   selectedItem?: RundownItem | null | undefined;
   /** The home page is showing, so Space presses this play button (0.5.9). */
   onScreen?: boolean;
+  /** Tells the operator why Space did nothing, such as a song without audio. */
+  notify: (message: string) => void;
   actions?: ReactNode;
   children?: ReactNode;
 }): JSX.Element {
@@ -35,13 +36,9 @@ export function ProjectPlayerTransport({ controller, state, engine, selectedItem
   const reason = useRuntimeStore((value) => value.reason);
   const button = homePlayButton(project, state, selectedItem, controller !== null);
   const { items, selected, target, unavailable } = button;
-  const press = (): void => {
-    const request = homePlayPress(button, state.status);
-    if (request?.kind === 'pause') void controller?.pause();
-    else if (request?.kind === 'resume') void controller?.resume();
-    else if (request?.kind === 'play') void controller?.play(request.itemId);
-  };
-  useEffect(() => onScreen ? registerPlayButton(press) : undefined);
+  const press = (): void => pressHomePlayButton(button, state.status,
+    { pause: () => void controller?.pause(), resume: () => void controller?.resume(), play: itemId => void controller?.play(itemId) }, notify);
+  useEffect(() => registerHomePlayButton(onScreen, press));
   const next = state.endAction === 'loop' ? selected : state.endAction === 'next' ? items[items.findIndex((item) => item.id === state.itemId) + 1] : undefined;
   const stateText = state.status === 'preparing' && state.preparation ? `准备中 · ${state.preparation}` : statusLabel(state.status);
   return <section className="home-player" data-mode="internal" data-status={state.status} aria-label="节目播放控制">

@@ -141,7 +141,7 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
         if (file) void importReference(file);
       }} />
 
-      <ProjectPlaybackMonitor project={project} player={player} selectedItem={selectedItem} currentItemId={currentItemId} projectPath={projectPath} previewUrl={previewUrl} busy={busy} visible={toolbarHost !== null} />
+      <ProjectPlaybackMonitor project={project} player={player} selectedItem={selectedItem} currentItemId={currentItemId} projectPath={projectPath} previewUrl={previewUrl} busy={busy} visible={toolbarHost !== null} notify={notify} />
 
       <ProjectLibrary
         onImportSongs={onImportSongs}

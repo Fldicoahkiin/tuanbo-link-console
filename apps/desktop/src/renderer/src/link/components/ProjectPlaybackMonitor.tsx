@@ -16,9 +16,9 @@ import { Button, IconButton } from '../ui';
  * library and application navigation have no dependency on clock ticks.
  * 2026-10-30 rework: the player and the timecode come first and take only the height they need; the
  * spectrum is shown on request and the choice is remembered on this computer. */
-export function ProjectPlaybackMonitor({ project, player, selectedItem, currentItemId, projectPath, previewUrl, visible }: {
+export function ProjectPlaybackMonitor({ project, player, selectedItem, currentItemId, projectPath, previewUrl, visible, notify }: {
   project: LinkProject; player: ProjectPlayer; selectedItem: RundownItem | null | undefined; currentItemId: string | null;
-  projectPath: string | null; previewUrl: string | null; busy: boolean; visible: boolean;
+  projectPath: string | null; previewUrl: string | null; busy: boolean; visible: boolean; notify: (message: string) => void;
 }): JSX.Element {
   const clock = usePlayerClock(player.view, visible);
   const timecode = useRuntimeStore(state => visible ? state.timecode : null);
@@ -40,7 +40,7 @@ export function ProjectPlaybackMonitor({ project, player, selectedItem, currentI
   const waveform = <PlayerWaveformTimeline enabled={internal && !!player.controller && ['playing', 'paused'].includes(player.state.status)} onSeek={positionMs => void player.controller?.seek(positionMs)} source={projectPath && previewUrl && selectedItem?.referenceAudio ? { projectPath, url: previewUrl, sha256: selectedItem.referenceAudio.sha256, durationMs: selectedItem.referenceAudio.durationMs } : null} positionMs={selectedItem?.id === currentItemId ? currentMilliseconds : 0} />;
   const showSpectrum = internal && spectrum;
   return <section className="home-monitor" data-spectrum={showSpectrum} aria-label="播放与监看">
-    {internal ? <ProjectPlayerTransport {...player} selectedItem={selectedItem} controller={player.controller} onScreen={visible}
+    {internal ? <ProjectPlayerTransport {...player} selectedItem={selectedItem} controller={player.controller} onScreen={visible} notify={notify}
       actions={<IconButton label={spectrum ? '收起频谱' : '显示频谱'} icon={AudioLines} aria-pressed={spectrum} onClick={() => setSpectrum(!spectrum)} />}>{waveform}</ProjectPlayerTransport>
       : <section className="home-player" data-mode="following" aria-label="P1 跟随播放">
         <header className="home-player-heading">
