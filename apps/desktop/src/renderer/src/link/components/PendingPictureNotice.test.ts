@@ -40,6 +40,18 @@ describe('按住鼠标拖动、修剪时这行不增不减', () => {
       shown: () => shownWhilePressed(press, value) };
   }
 
+  it('评审场景：按下、拖放和松开都在捕获阶段听，时间线自己拦下冒泡（拖片段、拉宽音频行）也照样算；失去焦点只听窗口自己的', () => {
+    const phases: Record<string, boolean> = {};
+    const target = {
+      addEventListener: (type: string, _listener: EventListenerOrEventListenerObject | null, options?: boolean | AddEventListenerOptions) => {
+        phases[type] = typeof options === 'object' ? options.capture === true : options === true;
+      },
+      removeEventListener: () => undefined
+    };
+    watchPointerPress(target, () => undefined);
+    expect(phases).toEqual({ pointerdown: true, dragstart: true, pointerup: true, pointercancel: true, drop: true, dragend: true, blur: false });
+  });
+
   it('按下时记住当时显示的样子；按住期间歌停了、再按下一个手指也不变；松开以后才跟着变', () => {
     const shown = row(true);
     shown.fire('pointerdown'); shown.song(false);
