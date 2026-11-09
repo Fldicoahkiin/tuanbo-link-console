@@ -872,6 +872,36 @@ it('显示来源的时长内停止或拖动进度：旧的画面停止时把它�
   expect(sticker(refused)).toEqual([true]); expect(refused.session.error).toBeNull();
 });
 
+it('OBS 断线期间到点的隐藏没发出去：重新连上恢复画面时一起补发，来源不会一直留在画面上（2026-11-09）', async () => {
+  let connected = true;
+  const test = setup(stickerSpanFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')));
+  await test.session.prepare(0); await test.advance(0, 2000);
+  expect(sticker(test)).toEqual([true]);
+  // The hide at 3 s goes out while OBS is gone and fails.
+  connected = false; await test.advance(2100, 3500);
+  expect(sticker(test)).toEqual([true, false]);
+  connected = true;
+  expect(await test.session.rebuild(() => Promise.resolve())).toEqual({ sent: 2, failure: null });
+  expect(sticker(test)).toEqual([true, false, false]); expect(scenes(test).at(-1)).toBe('全景');
+  // Hidden for good: the stop has nothing left to hide.
+  await test.advance(3600, 4000); await test.session.stop();
+  expect(sticker(test)).toEqual([true, false, false]); expect(test.session.error).toBeNull();
+});
+
+it('OBS 重连准备场景时到了隐藏的时间：隐藏随恢复的画面发出一次，排队里的同一个隐藏不再发第二次', async () => {
+  const restoring = deferred();
+  const test = setup(stickerSpanFixture());
+  await test.session.prepare(0); await test.advance(0, 2000);
+  expect(sticker(test)).toEqual([true]);
+  const rebuilding = test.session.rebuild(() => restoring.promise);
+  // The hide at 3 s is crossed while the owned scenes are prepared again.
+  for (let at = 2100; at <= 3200; at += 100) { test.time(at); test.session.clock(at); }
+  restoring.release(); expect(await rebuilding).toEqual({ sent: 2, failure: null }); await test.session.settled();
+  await test.advance(3300, 3600);
+  expect(sticker(test)).toEqual([true, false]); expect(scenes(test).at(-1)).toBe('全景');
+  expect(test.session.error).toBeNull();
+});
+
 it('OBS 重连准备场景时暂停又继续，准备因那次暂停中断：照常重新准备一次再重建，不当成准备失败', async () => {
   const restoring = deferred(), order: string[] = [];
   const test = setup(videoFixture(), action => { if (action.kind === 'obs.mediaAction') order.push(action.action); return Promise.resolve(); });

@@ -1,6 +1,6 @@
 import type { LinkCue, LinkProject } from '@tb/schema';
 import { actionResultLog, CueActionRunner, type CueExecutionReport, type LinkActionExecutor } from './cue-action-runner';
-import { CueRuntime, type RuntimeUpdate } from './cue-runtime';
+import { CueRuntime, type DueCue, type RuntimeUpdate } from './cue-runtime';
 import { frameNumberToTimecode, millisecondsToFrameNumber, playbackFramesPerSecond, type MtcSample } from './mtc-timecode';
 import { ManagedOutputRuntime, type ManagedMediaExecutionReport, type ManagedOutputRuntimeDependencies } from './managed-output-runtime';
 import { MANAGED_OBS_SCENE_NAME, type ManagedMediaEvent } from './managed-media-timeline';
@@ -367,10 +367,11 @@ export class ObsProgramSession {
     this.failedStarts.clear(); this.preloadFrame = -Infinity;
     const frame = this.frame, shown = this.runtime.shownSourcesAt(frame);
     for (const entry of shown) this.maybeShown.add(entry.cue.id);
+    const owed = this.owedHides(frame, shown);
     const work = this.managed.sceneTimeline!.restore(frame, shown);
     const targets = work.media.filter(event => event.phase === 'start').map(event => this.managed.alignEvent(event, frame));
     this.managed.adoptSeek(targets, frame); this.settleMedia(frame);
-    if (!(await this.send(timelineEntries({ cues: work.cues, media: [] }), current, null, false)).complete) return null;
+    if (!(await this.send(timelineEntries({ cues: [...work.cues, ...owed], media: [] }), current, null, false)).complete) return null;
     for (const event of targets) {
       if (!current()) return null;
       try { await this.dependencies.guardOutput(current, () => this.dependencies.seekMedia(event)); }
@@ -387,7 +388,17 @@ export class ObsProgramSession {
     }
     if (!current()) return null;
     if (losses === this.losses) this.picture = this.crossings.length ? 'partial' : 'known';
-    return work.cues.length + targets.length;
+    return work.cues.length + owed.length + targets.length;
+  }
+  /** The hides a rebuild owes: a show OBS accepted whose span ended while the
+   * connection was gone, so its hide failed then. They go out with the rebuilt
+   * picture, and the same hide still queued is not sent a second time. */
+  private owedHides(frame: number, shown: DueCue[]): DueCue[] {
+    const showing = new Set(shown.map(entry => entry.cue.id));
+    const owed = [...this.openShows].filter(([show]) => !showing.has(show)).map(([, cue]) => cue);
+    const ids = new Set(owed.map(cue => cue.id));
+    for (const crossing of this.crossings) for (const entry of crossing.due) if (ids.has(entry.cue.id)) this.sentDue.add(entry.executionId);
+    return owed.map(cue => ({ cue, scheduledFrame: frame, executionId: crypto.randomUUID() }));
   }
 
   /** Sends in timeline order. Lateness never drops an action: the next crossing
