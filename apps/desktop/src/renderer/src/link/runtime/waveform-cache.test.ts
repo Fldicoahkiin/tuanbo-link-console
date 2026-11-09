@@ -28,3 +28,14 @@ it('失败明确返回，不因多个挂载自动重试', async () => {
   const again = cache.acquire(source); await expect(again.result).rejects.toThrow('缓存损坏'); again.release();
   expect(generate).toHaveBeenCalledTimes(1);
 });
+it('链接失效失败后，重新打开拿到新链接时再读一次；同一个旧链接不重试', async () => {
+  const generate = vi.fn((value: typeof source): Promise<number[]> => value.url === source.url ? Promise.reject(new Error('波形素材链接已失效')) : Promise.resolve([0.5]));
+  const cache = new WaveformCache(generate), stale = cache.acquire(source);
+  await expect(stale.result).rejects.toThrow('链接已失效'); stale.release();
+  const same = cache.acquire(source); await expect(same.result).rejects.toThrow('链接已失效'); same.release();
+  expect(generate).toHaveBeenCalledTimes(1);
+  const renewed = cache.acquire({ ...source, url: 'tblink://audio/renewed-url' });
+  expect(await renewed.result).toEqual([0.5]); renewed.release();
+  const later = cache.acquire({ ...source, url: 'tblink://audio/another-url' }); expect(await later.result).toEqual([0.5]); later.release();
+  expect(generate).toHaveBeenCalledTimes(2);
+});

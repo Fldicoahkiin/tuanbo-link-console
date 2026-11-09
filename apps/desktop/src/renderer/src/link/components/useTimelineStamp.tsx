@@ -8,6 +8,7 @@ import type { MtcFrameRate } from '@tb/schema';
 import { shortcutKey, shortcutLabel, useShortcutStore } from '../stores/shortcut-store';
 import type { LightingTimelineProps } from './LightingTimeline';
 import { stampTimeline } from './timeline-stamp';
+import { keyTarget, spaceBelongsToControl } from '../playback-keys';
 
 type Props = { lighting: LightingTimelineProps | undefined; playheadMs: number; durationMs: number; playing: boolean; frameRate: MtcFrameRate; clock: PlaybackClock; onPlayingChange: (playing: boolean) => void; onSeek: (ms: number) => void };
 export function useTimelineStamp(props: Props) {
@@ -38,9 +39,12 @@ export function useTimelineStamp(props: Props) {
   useEffect(() => {
     if (!lighting) return;
     const key = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented || event.repeat || event.target instanceof Element && event.target.closest('input,textarea,select,button,[role="button"],[role="menu"],.cue-pool-grid,[contenteditable="true"],[role="separator"]') || [...document.querySelectorAll('[role="dialog"],dialog[open],.settings-content-page,.effect-binding-backdrop')].some(element => element.getClientRects().length > 0)) return;
       const action = bindings.find(binding => binding.key === shortcutKey(event))?.action;
-      if (!action) return;
+      if (!action || event.defaultPrevented || event.repeat || [...document.querySelectorAll('[role="dialog"],dialog[open],.settings-content-page,.effect-binding-backdrop')].some(element => element.getClientRects().length > 0)) return;
+      // Play/pause works with a button focused too; the other keys still leave buttons alone.
+      const target = keyTarget(event);
+      if (target?.closest('.cue-pool-grid') || (action === 'play' ? spaceBelongsToControl(target)
+        : target?.closest('input,textarea,select,button,[role="button"],[role="menu"],[contenteditable="true"],[role="separator"]'))) return;
       event.preventDefault(); event.stopImmediatePropagation();
       if (action === 'stamp') { stamp(); return; }
       if (action === 'play') { if (!props.playing && props.playheadMs >= props.durationMs) props.onSeek(0); props.onPlayingChange(!props.playing); return; }
