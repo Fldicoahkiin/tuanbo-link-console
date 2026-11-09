@@ -33,6 +33,196 @@ describe('ObsWebSocketAdapter', () => {
     expect(client.calls).toEqual([['SetSceneItemEnabled', { sceneName: '场景 2', sceneItemId: 3, sceneItemEnabled: false }]]);
     await expect(adapter.setSourceEnabledInProgramScene('扑克牌特效.mov', false)).rejects.toThrow('里没有“扑克牌特效.mov”来源');
   });
+  it('只是 websocket 断线重连、OBS 一直开着：显示期间切过机位，重连后的重建把来源发回当初显示的场景，到点隐藏关掉它，不留开着的来源', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.program = '特写';
+    await obs.reconnect(adapter);
+    obs.client.calls.length = 0;
+    // The reconnect rebuild shows again what is on air at this position.
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.shownIn('贴纸')).toEqual(['全景']);
+    expect(obs.client.calls).toEqual([['GetSceneList', undefined], ['GetSceneItemList', { sceneName: '全景' }],
+      ['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 2, sceneItemEnabled: true }]]);
+    obs.program = '全景'; obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+    expect(obs.client.calls).toEqual([['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 2, sceneItemEnabled: false }]]);
+  });
+  it('重连后直接隐藏（如重连后停歌）：先核对记住的场景项还是这个来源，再关掉当初显示的那一项', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.program = '特写';
+    await obs.reconnect(adapter);
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+    expect(obs.client.calls).toEqual([['GetSceneList', undefined], ['GetSceneItemList', { sceneName: '全景' }],
+      ['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 2, sceneItemEnabled: false }]]);
+  });
+  it('重连后核对过记住的场景项、隐藏还没发出就被拦下：不忘记，再隐藏时不用重新核对', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.program = '特写';
+    await obs.reconnect(adapter);
+    // The check goes out, then a stop comes before the hide is sent.
+    let allowed = 2;
+    await expect(adapter.guardPlaybackOperation(() => allowed > 0, () => adapter.setSourceEnabledInProgramScene('贴纸', false), () => { allowed--; }))
+      .rejects.toThrow('没有发送');
+    expect(obs.shownIn('贴纸')).toEqual(['全景']);
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+    expect(obs.client.calls).toEqual([['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 2, sceneItemEnabled: false }]]);
+  });
+  it('重连到场景项已经变了的 OBS（重启过、场景删了）：旧记录作废，按当前直播场景处理，不碰别的来源', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    // OBS restarted with another layout: item 2 of 全景 is now the camera.
+    obs.load({ 全景: ['贴纸', '摄像机 1'], 特写: ['摄像机 2', '贴纸'] }, '特写', ['全景/摄像机 1']);
+    await obs.reconnect(adapter);
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.client.calls).toEqual([['GetSceneList', undefined], ['GetSceneItemList', { sceneName: '全景' }],
+      ['GetCurrentProgramScene', undefined], ['GetSceneItemList', { sceneName: '特写' }],
+      ['SetSceneItemEnabled', { sceneName: '特写', sceneItemId: 2, sceneItemEnabled: false }]]);
+    expect(obs.enabled('全景', '摄像机 1')).toBe(true);
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.shownIn('贴纸')).toEqual(['特写']);
+    expect(obs.client.calls).toEqual([['GetCurrentProgramScene', undefined], ['GetSceneItemList', { sceneName: '特写' }],
+      ['SetSceneItemEnabled', { sceneName: '特写', sceneItemId: 2, sceneItemEnabled: true }]]);
+    // Then the scene it was shown in is deleted.
+    obs.load({ 全景: ['摄像机 1', '贴纸'] }, '全景', ['全景/摄像机 1']);
+    await obs.reconnect(adapter);
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.client.calls).toEqual([['GetSceneList', undefined], ['GetCurrentProgramScene', undefined],
+      ['GetSceneItemList', { sceneName: '全景' }], ['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 2, sceneItemEnabled: true }]]);
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.client.calls).toEqual([['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 2, sceneItemEnabled: false }]]);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+    expect(obs.enabled('全景', '摄像机 1')).toBe(true);
+  });
+  it('连着 OBS 时换了场景集合或删改了场景：记住的场景项先核对，不会打开别的来源', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    // Another collection with the same scene names: item 2 of 全景 is now the camera.
+    obs.load({ 全景: ['贴纸', '摄像机 1'], 特写: ['摄像机 2', '贴纸'] }, '特写', []);
+    obs.client.emit('CurrentSceneCollectionChanged', { sceneCollectionName: '备用' });
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.enabled('全景', '摄像机 1')).toBe(false);
+    expect(obs.shownIn('贴纸')).toEqual(['特写']);
+  });
+  it('来源还开着时同一个显示又发一次（切过机位后）：只把原来那一项再打开，不在新机位里多开一个，隐藏时关掉它', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.program = '特写'; obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.shownIn('贴纸')).toEqual(['全景']);
+    expect(obs.client.calls).toEqual([['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 2, sceneItemEnabled: true }]]);
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+    expect(obs.client.calls).toEqual([['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 2, sceneItemEnabled: false }]]);
+  });
+  it('重连后核对记住的场景项时 OBS 请求失败：照常报错，不改去当前直播场景，记录留到下一次', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.program = '特写';
+    await obs.reconnect(adapter);
+    obs.client.calls.length = 0;
+    obs.client.requestErrors.set('GetSceneList', new Error('OBS 没有回应'));
+    await expect(adapter.setSourceEnabledInProgramScene('贴纸', false)).rejects.toThrow('OBS 没有回应');
+    expect(obs.client.calls.some(([request]) => request === 'SetSceneItemEnabled' || request === 'GetCurrentProgramScene')).toBe(false);
+    obs.client.requestErrors.clear();
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+  });
+  it('隐藏还没发出就被暂停或停止拦下：不忘记来源显示在哪，之后再隐藏（如停歌清理）仍关当初显示的那一项', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.program = '特写';
+    await expect(adapter.guardPlaybackOperation(() => false, () => adapter.setSourceEnabledInProgramScene('贴纸', false))).rejects.toThrow('没有发送');
+    expect(obs.shownIn('贴纸')).toEqual(['全景']);
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+    expect(obs.client.calls).toEqual([['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 2, sceneItemEnabled: false }]]);
+  });
+  it('显示发出后 OBS 没回应、随后重连：仍记住可能已经打开的那一项，重连后到点隐藏关掉它', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket, 20);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    obs.client.pendingRequests.add('SetSceneItemEnabled');
+    await expect(adapter.setSourceEnabledInProgramScene('贴纸', true)).rejects.toThrow('不确定是否已执行');
+    expect(adapter.getSnapshot().status).toBe('error');
+    obs.client.pendingRequests.clear(); obs.program = '特写';
+    await obs.reconnect(adapter);
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+  });
+  it('OBS 忙、显示的回应等到之后的隐藏发出后才回来：不把已经关掉的来源记回去，切机位后再显示仍出现在直播场景里', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    const showReached = obs.holdNext('SetSceneItemEnabled');
+    const show = adapter.setSourceEnabledInProgramScene('贴纸', true);
+    await showReached;
+    // A short span: its hide goes out and is answered first.
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    obs.release(); await show;
+    expect(obs.shownIn('贴纸')).toEqual([]);
+    obs.program = '特写';
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.shownIn('贴纸')).toEqual(['特写']);
+  });
+  it('重连后隐藏还在核对、之后的显示先做完（OBS 回应先后颠倒）：核对结果不抹掉显示刚记下的位置，之后的隐藏仍关掉它', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    // OBS restarted with another layout: the remembered item is now the camera.
+    obs.load({ 全景: ['贴纸', '摄像机 1'], 特写: ['摄像机 2', '贴纸'] }, '特写', []);
+    await obs.reconnect(adapter);
+    const hideReached = obs.holdNext('GetSceneList');
+    const hide = adapter.setSourceEnabledInProgramScene('贴纸', false);
+    await hideReached;
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.shownIn('贴纸')).toEqual(['特写']);
+    obs.program = '全景';
+    obs.release(); await hide;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+    expect(obs.enabled('全景', '摄像机 1')).toBe(false);
+  });
+  it('记住的那一项在 OBS 里被删了：隐藏照常报错，之后的显示按当前直播场景处理，不会一直失败', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.load({ 全景: ['摄像机 1'], 特写: ['摄像机 2', '贴纸'] }, '特写', []);
+    await expect(adapter.setSourceEnabledInProgramScene('贴纸', false)).rejects.toThrow('没有这个场景项');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.shownIn('贴纸')).toEqual(['特写']);
+  });
   it('监听拒绝被桌面音频或模糊进程采集，仅核对专用音频来源且不修改 OBS', async () => {
     const client = fakeObsClient(); const adapter = new ObsWebSocketAdapter(tmpdir(),client as unknown as OBSWebSocket);
     await adapter.connect('ws://127.0.0.1:4455','password');
@@ -410,6 +600,71 @@ function fakeObsClient(): FakeObsClient {
     }
   });
   return client;
+}
+
+type StatefulItem = { sourceName: string; sceneItemId: number; sceneItemEnabled: boolean };
+
+/** An OBS that keeps running while only the websocket drops: its scenes, items
+ * and whether each item is shown survive `reconnect`. `load` replaces them, as
+ * when OBS restarts or the operator edits scenes. Item ids count from 1 in each
+ * scene, as in OBS, so after a restart an old id can name another source. A
+ * request in `pendingRequests` is carried out, but its answer never comes back.
+ * `holdNext` carries out the next such request at once and keeps its answer until
+ * `release`, as a busy OBS answers late while later requests go through. */
+function statefulObs(layout: Record<string, string[]>, program: string) {
+  const client = fakeObsClient();
+  let scenes = new Map<string, StatefulItem[]>();
+  const holding = new Map<string, () => void>();
+  const held: Array<() => void> = [];
+  const obs = {
+    client, program,
+    /** Settles when that request reaches OBS. */
+    holdNext: (request: string): Promise<void> => new Promise(reached => { holding.set(request, reached); }),
+    release: (): void => { for (const answerLate of held.splice(0)) answerLate(); },
+    load(next: Record<string, string[]>, nextProgram: string, shown: readonly string[]): void {
+      scenes = new Map(Object.entries(next).map(([sceneName, sources]) => [sceneName, sources.map((sourceName, index) =>
+        ({ sourceName, sceneItemId: index + 1, sceneItemEnabled: shown.includes(`${sceneName}/${sourceName}`) }))]));
+      obs.program = nextProgram;
+    },
+    async reconnect(adapter: ObsWebSocketAdapter): Promise<void> {
+      client.emit('ConnectionClosed', new Error('网络断开'));
+      await adapter.connect('ws://127.0.0.1:4455', 'password');
+    },
+    enabled: (sceneName: string, sourceName: string): boolean =>
+      scenes.get(sceneName)?.find(item => item.sourceName === sourceName)?.sceneItemEnabled === true,
+    shownIn: (sourceName: string): string[] => [...scenes].filter(([, items]) =>
+      items.some(item => item.sourceName === sourceName && item.sceneItemEnabled)).map(([sceneName]) => sceneName)
+  };
+  obs.load(layout, program, []);
+  const answer = (request: string, fields: Record<string, unknown>): unknown => {
+    const items = scenes.get(String(fields.sceneName));
+    switch (request) {
+      case 'GetCurrentProgramScene': return { currentProgramSceneName: obs.program };
+      case 'GetSceneList': return { scenes: [...scenes.keys()].map(sceneName => ({ sceneName })) };
+      case 'GetSceneItemList': return items ? { sceneItems: items.map(item => ({ ...item })) } : new Error(`OBS 里没有场景“${String(fields.sceneName)}”`);
+      case 'SetSceneItemEnabled': {
+        const item = items?.find(entry => entry.sceneItemId === fields.sceneItemId);
+        if (!item) return new Error('OBS 里没有这个场景项');
+        item.sceneItemEnabled = fields.sceneItemEnabled === true;
+        return {};
+      }
+      default: return responseFor(request);
+    }
+  };
+  client.call = (request: string, data?: unknown): Promise<unknown> => {
+    client.calls.push([request, data]);
+    const requestError = client.requestErrors.get(request);
+    if (requestError !== undefined) return Promise.reject(requestError);
+    const result = answer(request, (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>);
+    if (client.pendingRequests.has(request)) return new Promise(() => undefined);
+    const reached = holding.get(request);
+    if (reached) {
+      holding.delete(request); reached();
+      return new Promise((resolve, reject) => { held.push(() => { if (result instanceof Error) reject(result); else resolve(result); }); });
+    }
+    return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
+  };
+  return obs;
 }
 
 function responseFor(request: string): unknown {

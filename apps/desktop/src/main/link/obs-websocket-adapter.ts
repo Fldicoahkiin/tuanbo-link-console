@@ -45,6 +45,9 @@ export type ObsOutputStatus = {
 };
 
 type StatusListener = (snapshot: ObsConnectionSnapshot) => void;
+/** `checked`: the connection on which OBS last confirmed that item is this source;
+ * null from when a show goes out until OBS answers it. */
+type ShownSource = { sceneName: string; sceneItemId: number; checked: number | null };
 
 const MEDIA_ACTIONS: Record<Extract<LinkAction, { kind: 'obs.mediaAction' }>['action'], string> = {
   restart: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
@@ -67,8 +70,13 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   private readonly listeners = new Set<StatusListener>();
   private readonly inventoryListeners = new Set<() => void>();
   private readonly programListeners = new Set<() => void>();
-  /** Where each program-scene source was shown, so hiding it later acts on that scene. */
-  private readonly shownInProgram = new Map<string, { sceneName: string; sceneItemId: number }>();
+  /** Where each program-scene source was shown and not hidden since, so hiding it,
+   * or showing it again, acts on that item. Kept across reconnects: OBS keeps its
+   * scene items when only the websocket drops. A record not confirmed on the
+   * current connection is checked against OBS before it is used. */
+  private readonly shownInProgram = new Map<string, ShownSource>();
+  /** Bumped by every connect, so a record from an earlier connection is checked first. */
+  private connection = 0;
   private snapshot: ObsConnectionSnapshot = {
     status: 'disconnected',
     obsVersion: null,
@@ -97,6 +105,11 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     const inventoryChanged = (): void => { for (const listener of this.inventoryListeners) listener(); };
     for (const event of ['SceneCreated', 'SceneRemoved', 'SceneNameChanged', 'SceneListChanged', 'CurrentSceneCollectionChanged', 'InputCreated', 'InputRemoved', 'InputNameChanged', 'SceneItemCreated', 'SceneItemRemoved'] as const) {
       this.client.on(event, inventoryChanged);
+    }
+    // Another scene collection, or a scene removed or renamed: an item id may now
+    // name another source, so what was shown is checked again before it is used.
+    for (const event of ['CurrentSceneCollectionChanged', 'SceneRemoved', 'SceneNameChanged'] as const) {
+      this.client.on(event, () => { for (const [sourceName, shown] of this.shownInProgram) this.shownInProgram.set(sourceName, { ...shown, checked: null }); });
     }
     this.client.on('ConnectionClosed', (error) => {
       this.requests.invalidate(new Error(`OBS 连接已关闭：${error.message}`));
@@ -165,7 +178,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
 
   async connect(url: string, password: string, timeoutMs = 10_000): Promise<ObsConnectionSnapshot> {
     this.requests.invalidate(new Error('OBS 正在更换连接，旧请求已取消'));
-    this.shownInProgram.clear();
+    this.connection++;
     this.updateSnapshot({
       status: this.snapshot.status === 'disconnected' ? 'connecting' : 'reconnecting',
       error: null
@@ -544,16 +557,50 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   }
 
   /** Full-scene mode: a show/hide-source cue acts on the scene now on program,
-   * whatever scene it was authored against (operator decision 2026-10-19). */
+   * whatever scene it was authored against (operator decision 2026-10-19). A
+   * source this app shows and has not hidden acts on the item it was shown in:
+   * its hide, and a repeated show such as the reconnect rebuild's, go there even
+   * after the program moved on or OBS reconnected, so nothing is left shown. */
   async setSourceEnabledInProgramScene(sourceName: string, enabled: boolean): Promise<void> {
     this.assertConnected();
-    const shown = enabled ? undefined : this.shownInProgram.get(sourceName);
-    if (shown) {
-      // The program may have changed since; hide the item where it was shown.
-      this.shownInProgram.delete(sourceName);
-      await this.request(() => this.client.call('SetSceneItemEnabled', { sceneName: shown.sceneName, sceneItemId: shown.sceneItemId, sceneItemEnabled: false }), 'SetSceneItemEnabled');
-      return;
+    const connection = this.connection;
+    const { sceneName, sceneItemId } = await this.shownItem(sourceName, connection) ?? await this.programSceneItem(sourceName);
+    const placed: ShownSource = { sceneName, sceneItemId, checked: null };
+    // Kept up to date as the request goes out, whatever OBS answers: a hide that
+    // went out counts as done, a show that went out may be on air. A request that
+    // never went out (pause, stop, a full queue) changes nothing.
+    const sent = (): void => {
+      if (enabled) { this.shownInProgram.set(sourceName, placed); return; }
+      const shown = this.shownInProgram.get(sourceName);
+      if (shown?.sceneName === sceneName && shown.sceneItemId === sceneItemId) this.shownInProgram.delete(sourceName);
+    };
+    await this.requests.guarded(() => true, () => this.request(() => this.client.call('SetSceneItemEnabled',
+      { sceneName, sceneItemId, sceneItemEnabled: enabled }), 'SetSceneItemEnabled'), sent);
+    // Up to four requests are in flight at once, so a hide or another show may have
+    // gone out before this answer came back; only a record still this show's is confirmed.
+    if (enabled && this.shownInProgram.get(sourceName) === placed) this.shownInProgram.set(sourceName, { ...placed, checked: connection });
+  }
+
+  /** The item this app showed `sourceName` in and has not hidden since, or null.
+   * A record not confirmed on this connection is used only while its scene still
+   * has that item and it is still this source; otherwise (OBS restarted, scenes
+   * edited) it is dropped and the scene on program is used. A failed request rejects. */
+  private async shownItem(sourceName: string, connection: number): Promise<ShownSource | null> {
+    const shown = this.shownInProgram.get(sourceName);
+    if (!shown || shown.checked === connection) return shown ?? null;
+    const scenes = await this.request(() => this.client.call('GetSceneList'), 'GetSceneList');
+    const items = collectNames(scenes.scenes, 'sceneName').includes(shown.sceneName)
+      ? (await this.request(() => this.client.call('GetSceneItemList', { sceneName: shown.sceneName }), 'GetSceneItemList')).sceneItems : [];
+    const valid = items.some(item => item.sceneItemId === shown.sceneItemId && item.sourceName === sourceName);
+    if (this.shownInProgram.get(sourceName) === shown) {
+      if (valid) this.shownInProgram.set(sourceName, { ...shown, checked: connection });
+      else this.shownInProgram.delete(sourceName);
     }
+    return valid ? shown : null;
+  }
+
+  /** The one item of this source in the scene now on program. */
+  private async programSceneItem(sourceName: string): Promise<{ sceneName: string; sceneItemId: number }> {
     const current = await this.request(() => this.client.call('GetCurrentProgramScene'), 'GetCurrentProgramScene');
     const sceneName = current.currentProgramSceneName;
     if (!sceneName) throw new Error('读不到 OBS 当前的直播场景');
@@ -563,8 +610,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     if (matches.length !== 1 || typeof sceneItemId !== 'number') {
       throw new Error(matches.length ? `当前直播场景“${sceneName}”里有多个“${sourceName}”来源，无法确定用哪一个` : `当前直播场景“${sceneName}”里没有“${sourceName}”来源`);
     }
-    await this.request(() => this.client.call('SetSceneItemEnabled', { sceneName, sceneItemId, sceneItemEnabled: enabled }), 'SetSceneItemEnabled');
-    if (enabled) this.shownInProgram.set(sourceName, { sceneName, sceneItemId });
+    return { sceneName, sceneItemId };
   }
 
   private async getSceneItemId(sceneName: string, sourceName: string): Promise<number> {
