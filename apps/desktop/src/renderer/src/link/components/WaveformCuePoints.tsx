@@ -58,8 +58,11 @@ export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPer
     {range ? <span className="cue-selection-box" style={{ left: Math.min(range.start, range.end) / 1000 * pixelsPerSecond, width: Math.abs(range.end - range.start) / 1000 * pixelsPerSecond }} /> : null}
     {context ? <Menu x={context.x} y={context.y} label="Cue 菜单" onClose={() => setContext(null)}><MenuItem icon={Trash2} danger shortcut="Backspace" disabled={disabled} onSelect={removeSelected}>{selection.length > 1 ? `删除 ${selection.length} 个 Cue` : '删除 Cue'}</MenuItem></Menu> : null}
     {entries.filter(entry => rows.has(entry.id)).map((entry) => {
-      const ms = drag?.id === entry.id ? drag.target : entry.ms;
-      if (ms * pixelsPerSecond / 1000 < scrollLeft - 50 || (ms - entry.preparationLeadMs) * pixelsPerSecond / 1000 > scrollLeft + viewportWidth + 50) return null;
+      const dragged = drag?.id === entry.id;
+      const ms = dragged ? drag.target : entry.ms;
+      // Points well outside the view are left out, but never the dragged one: it holds the pointer, and left out of the
+      // page the move it was dragged to was lost on release (0.5.9), as the lighting points and content tracks keep theirs.
+      if (!dragged && (ms * pixelsPerSecond / 1000 < scrollLeft - 50 || (ms - entry.preparationLeadMs) * pixelsPerSecond / 1000 > scrollLeft + viewportWidth + 50)) return null;
       const width = cueMarkerWidth(entry.cue);
       const markerTop = 6 + (rows.get(entry.id) ?? 0) * 28;
       return <Fragment key={entry.id}>{entry.preparationLeadMs > 0 ? <span className="waveform-cue-preparation" aria-label={`Cue ${entry.cue} 埋步提前 ${entry.preparationLeadMs / 1000} 秒`} style={{ left: Math.max(0, ms - entry.preparationLeadMs) * pixelsPerSecond / 1000, top: markerTop + 23, width: Math.min(ms, entry.preparationLeadMs) * pixelsPerSecond / 1000 }}><span>埋步</span></span> : null}<button className="waveform-cue-point" data-cue-id={entry.id} aria-label={`音频 Cue ${displayCueNumber(entry.cue)}`} aria-pressed={selection.includes(entry.id) || lighting.selectedEventId === entry.id} title={`Cue ${displayCueNumber(entry.cue)} · ${formatTimelineTimecode(ms, frameRate)} · 拖动定位，双击修改`} style={{ left: ms * pixelsPerSecond / 1000, top: markerTop, width, '--cue-guide-height': `${Math.max(0, contentHeight - markerTop - 32)}px` } as CSSProperties}

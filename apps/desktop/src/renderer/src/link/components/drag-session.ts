@@ -4,24 +4,25 @@ import { cancelDragOnEscape } from '../playback-keys';
 export type DragWindow = Pick<Window, 'addEventListener' | 'removeEventListener'>;
 /** The pressed element, which captures the pointer for the drag. */
 export type DragHandle = {
-  readonly isConnected: boolean;
   setPointerCapture(pointerId: number): void;
   hasPointerCapture(pointerId: number): boolean;
   contains(other: EventTarget | null): boolean;
 };
 
-type Active<T> = { element: DragHandle; pointerId: number; value: T };
+/** The drag going on; `drawn` until the component that holds it leaves. */
+type Active<T> = { element: DragHandle; pointerId: number; value: T; drawn: boolean };
 
 /**
  * One drag or trim on the timeline: a clip, a Cue point, a lighting point, a box selection, a track. The element that
- * was pressed drops or cancels it from its own pointer events. While it lasts, Escape only cancels it and goes no
- * further (0.5.9).
+ * was pressed drops or cancels it from its own pointer events. Until the pointer is let go, Escape only cancels it and
+ * goes no further, also once the element went away (0.5.9): a Cue point dragged out of view was left out of the page,
+ * and Escape pressed to give up the move stopped the show instead.
  *
  * The window watches the rest, in the capture phase so that it comes before the timeline's and the window's Escape
- * that stops the show. A drag whose element went away is over: with 顺序连播 the editor moves on to the next song
- * under the pointer, the element's own pointerup never comes, and the leftover drag swallowed the first Escape
- * afterwards, so the show only stopped on the second press (0.5.9). The release ends such a drag, and an Escape while
- * the element is gone stops the show as usual. Leaving the window ends a drag too.
+ * that stops the show. With 顺序连播 the editor moves on to the next song under the pointer, the element goes away,
+ * and its own pointerup never comes; a drag left over swallowed the first Escape after the release, so the show only
+ * stopped on the second press (0.5.9). The release ends such a drag wherever it lands, and so does leaving the window;
+ * the next Escape stops the show as usual.
  */
 export class DragSession<T> {
   private active: Active<T> | null = null;
@@ -32,7 +33,7 @@ export class DragSession<T> {
   begin(element: DragHandle, pointerId: number, value: T): void {
     this.unwatch();
     element.setPointerCapture(pointerId);
-    this.active = { element, pointerId, value };
+    this.active = { element, pointerId, value, drawn: true };
     this.view.addEventListener('keydown', this.escape, true);
     this.view.addEventListener('pointerup', this.release, true);
     this.view.addEventListener('pointercancel', this.release, true);
@@ -52,16 +53,20 @@ export class DragSession<T> {
     this.changed(value);
   }
 
-  /** The drag is over: dropped, cancelled, or its element went away. */
+  /** The drag is over: dropped, cancelled, or let go after its element went away. */
   end(): void {
-    if (!this.active) return;
+    const active = this.active;
+    if (!active) return;
     this.unwatch();
-    this.changed(null);
+    if (active.drawn) this.changed(null);
   }
 
-  /** The component leaves: stop watching, without drawing anything. */
+  /**
+   * The component leaves: nothing is drawn any more. A drag it held lasts until the pointer is let go, the same as one
+   * whose element alone went away, so that Escape before that only cancels it.
+   */
   dispose(): void {
-    this.unwatch();
+    if (this.active) this.active.drawn = false;
   }
 
   private unwatch(): void {
@@ -72,12 +77,7 @@ export class DragSession<T> {
     this.view.removeEventListener('blur', this.leave);
   }
 
-  private readonly escape = (event: KeyboardEvent): void => {
-    const active = this.active;
-    if (!active || event.key !== 'Escape') return;
-    if (active.element.isConnected) cancelDragOnEscape(event, true, () => this.end());
-    else this.end();
-  };
+  private readonly escape = (event: KeyboardEvent): void => cancelDragOnEscape(event, this.active !== null, () => this.end());
 
   /** A release the element will not see: it went away, or lost the pointer and the release landed elsewhere. */
   private readonly release = (event: PointerEvent): void => {

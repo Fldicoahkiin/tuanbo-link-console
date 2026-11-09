@@ -84,14 +84,45 @@ it('拖动中被拖的元素没了（顺序连播换到下一首），松手就�
   expect(escape.defaultPrevented || escape.propagationStopped).toBe(false);
 });
 
-it('元素没了、手还按着时按 Esc：拖动已经不在了，Esc 照常停节目，不再被吞掉', () => {
+it('元素没了（拖出视口被裁掉、顺序连播换了歌）、手还按着时按 Esc：只取消这次拖动，键不再往下传，节目不停；松手后第一下 Esc 照常停节目（0.5.9）', () => {
   const { view, drawn, drag } = session(); const clip = pressed();
   drag.begin(clip.element, 1, '灯光点');
   clip.remove();
   const escape = new Key('Escape'); view.send(escape);
-  expect(escape.defaultPrevented || escape.propagationStopped).toBe(false);
+  expect([escape.defaultPrevented, escape.propagationStopped]).toEqual([true, true]);
+  expect(drag.current()).toBeNull();
   expect(drawn).toEqual(['灯光点', null]);
   expect(view.listening()).toEqual([]);
+  view.send(new Release('pointerup', 1));
+  const next = new Key('Escape'); view.send(next);
+  expect(next.defaultPrevented || next.propagationStopped).toBe(false);
+});
+
+it('拖动中画面离开（组件卸载）、手还按着：不再画；按 Esc 只取消、不停节目，松手也一样结束；之后第一下 Esc 照常停节目（0.5.9）', () => {
+  const escaped = session(); const clip = pressed();
+  escaped.drag.begin(clip.element, 1, '片段 A');
+  escaped.drag.dispose(); clip.remove();
+  expect(escaped.view.listening()).toEqual(WATCHING);
+  const escape = new Key('Escape'); escaped.view.send(escape);
+  expect([escape.defaultPrevented, escape.propagationStopped]).toEqual([true, true]);
+  expect(escaped.view.listening()).toEqual([]);
+  const next = new Key('Escape'); escaped.view.send(next);
+  expect(next.defaultPrevented || next.propagationStopped).toBe(false);
+
+  const released = session(); const other = pressed();
+  released.drag.begin(other.element, 1, '片段 B');
+  released.drag.dispose(); other.remove();
+  released.view.send(new Release('pointerup', 1));
+  expect(released.view.listening()).toEqual([]);
+  const after = new Key('Escape'); released.view.send(after);
+  expect(after.defaultPrevented || after.propagationStopped).toBe(false);
+  // Nothing is drawn once the component left.
+  expect([escaped.drawn, released.drawn]).toEqual([['片段 A'], ['片段 B']]);
+
+  // A component that leaves with no drag going on leaves nothing behind.
+  const idle = session();
+  idle.drag.dispose();
+  expect(idle.view.listening()).toEqual([]);
 });
 
 it('正常松手交给元素自己放下：窗口不抢先取消；别的指针松开不算；放下后不再监听', () => {
@@ -149,8 +180,7 @@ it('窗口失去焦点、指针被系统取消时也结束拖动；新的拖动�
   first.remove();
   view.send(new Release('pointerup', 1));
   expect(drag.current()).toBe('第四次');
-  // A component that leaves stops watching without drawing.
-  drag.dispose();
+  second.letGo(); drag.end();
   expect(view.listening()).toEqual([]);
-  expect(drawn).toEqual(['第一次', null, '第二次', null, '第三次', '第四次']);
+  expect(drawn).toEqual(['第一次', null, '第二次', null, '第三次', '第四次', null]);
 });
