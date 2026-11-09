@@ -413,6 +413,11 @@ export class CueRuntime {
   /** The local formal audio clock; its own player reports a stalled position. */
   private ownsInternalClock(): boolean { return this.project.playbackSource === 'internal' && this.executionOwner === 'local'; }
 
+  /** The hide that ends a show-source Cue's span; null for any other Cue. */
+  durationEnd(cueId: string): LinkCue | null {
+    return cueId.endsWith(':duration-end') ? null : this.scheduledCues.find(entry => entry.cue.id === `${cueId}:duration-end`)?.cue ?? null;
+  }
+
   /** Recovery rule B when OBS lost its state (a reconnect): the show-source Cues
    * whose span covers `frame`, due now and counted as executed so their ends still hide. */
   shownSourcesAt(frame: number): DueCue[] {

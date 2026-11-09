@@ -240,25 +240,27 @@ it('OBS 重新连接后先重新准备场景，再按当前位置重建：素材
   await test.session.prepare(0); await test.advance(0, 1500);
   expect(calls.map(call => call[0].event.phase)).toEqual(['start']);
   test.dependencies.seekMedia.mockImplementation(event => { order.push(`seek ${event.sourceOffsetMs}`); return Promise.resolve(); });
-  expect(await test.session.rebuild(() => { order.push('restore'); return Promise.resolve(); })).toBe(1);
+  expect(await test.session.rebuild(() => { order.push('restore'); return Promise.resolve(); })).toEqual({ sent: 1, failure: null });
   expect(order).toEqual(['restore', 'seek 500']);
   expect(test.actions.at(-1)).toMatchObject({ kind: 'obs.mediaAction', action: 'start' });
   await test.advance(1600, 2000); expect(calls).toHaveLength(1); expect(test.session.error).toBeNull();
   await test.session.stop(); expect(calls.at(-1)?.[0].event.phase).toBe('stop');
 });
 
-it('重建失败交给调用方报告，画面通道继续；尚未开始时不重建，暂停时只重新准备场景，继续时再按当前位置重建', async () => {
+it('重建失败交给调用方报告，画面照常按当前位置重建；尚未开始时不重建，暂停时等继续再重新准备场景、按当前位置重建', async () => {
   const test = setup(videoFixture()); await test.session.prepare(0);
   const restore = vi.fn(() => Promise.resolve());
-  expect(await test.session.rebuild(restore)).toBe(0); expect(restore).not.toHaveBeenCalled();
+  expect(await test.session.rebuild(restore)).toEqual({ sent: 0, failure: null }); expect(restore).not.toHaveBeenCalled();
   await test.advance(0, 500);
-  await expect(test.session.rebuild(() => Promise.reject(new Error('素材文件不可读')))).rejects.toThrow('素材文件不可读');
+  expect(await test.session.rebuild(() => Promise.reject(new Error('素材文件不可读')))).toEqual({ sent: 1, failure: '素材文件不可读' });
+  expect(test.dependencies.seekMedia.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([500]);
   expect(test.session.error).toBeNull(); await test.advance(600, 800);
   await test.session.pause(); const sent = test.actions.length;
-  expect(await test.session.rebuild(restore)).toBeNull(); expect(restore).toHaveBeenCalledOnce();
-  expect(test.actions).toHaveLength(sent); expect(test.dependencies.seekMedia).not.toHaveBeenCalled();
+  expect(await test.session.rebuild(restore)).toBeNull(); expect(restore).not.toHaveBeenCalled();
+  expect(test.actions).toHaveLength(sent); expect(test.dependencies.seekMedia).toHaveBeenCalledOnce();
   test.time(5000); test.session.clock(800); await test.session.settled();
-  expect(test.dependencies.seekMedia.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([800]);
+  expect(restore).toHaveBeenCalledOnce();
+  expect(test.dependencies.seekMedia.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([500, 800]);
   expect(test.actions.at(-1)).toMatchObject({ kind: 'obs.mediaAction', action: 'start' });
   expect(test.session.error).toBeNull(); await test.session.stop();
 });
@@ -476,7 +478,7 @@ it.each(['camera', 'video'] as const)('OBS 重连恢复画面期间又越过两�
   test.time(1000); test.session.clock(1000); restoring.release();
   await vi.waitFor(() => expect(scenes(test).at(-1)).toBe('特写'));
   test.time(1050); test.session.clock(1050); test.time(1100); test.session.clock(1100);
-  sending.release(); expect(await rebuilding).toBe(1); await test.session.settled();
+  sending.release(); expect(await rebuilding).toEqual({ sent: 1, failure: null }); await test.session.settled();
   for (let at = 1200; at <= 2000; at += 100) { test.time(at); test.session.clock(at); await test.session.settled(); }
   if (base === 'camera') expect(scenes(test)).toEqual(['全景', '特写', '全景']);
   else expect(test.dependencies.executeManagedMediaEvent.mock.calls.map(call => [call[0].event.phase, call[0].event.sourceOffsetMs])).toEqual([['start', 0], ['start', 1100]]);
@@ -519,7 +521,7 @@ it('OBS 重连恢复时重新显示的来源：排队的显示和隐藏合并补
   test.time(1000); test.session.clock(1000); restoring.release();
   await vi.waitFor(() => expect(sticker(test)).toEqual([true]));
   test.time(1100); test.session.clock(1100);
-  showing.release(); expect(await rebuilding).toBe(2); await test.session.settled();
+  showing.release(); expect(await rebuilding).toEqual({ sent: 2, failure: null }); await test.session.settled();
   for (let at = 1200; at <= 3000; at += 100) { test.time(at); test.session.clock(at); await test.session.settled(); }
   expect(sticker(test).at(-1)).toBe(false); expect(scenes(test).at(-1)).toBe('全景');
   expect(test.session.error).toBeNull();
@@ -617,7 +619,7 @@ it('OBS 重连恢复画面定位素材时按了暂停：继续时重新定位再
   expect(test.session.error).toBeNull();
 });
 
-it('暂停前已经发出但失败的素材停止，继续时不再重发', async () => {
+it('暂停前已经发出但失败的素材停止，继续时不再重发，也不让这段素材接着播', async () => {
   const project = videoFixture(), item = project.rundown[0]!;
   item.referenceMediaClips[0]!.durationMs = 1000;
   item.visualLayers.push({ id: 'camera-layer', name: '机位', visible: true, locked: false });
@@ -637,7 +639,10 @@ it('暂停前已经发出但失败的素材停止，继续时不再重发', asyn
   for (let at = 1100; at <= 2000; at += 100) { test.time(5000 + at - 1000); test.session.clock(at); await test.session.settled(); }
   expect(phases()).toEqual(['start', 'stop']);
   expect(scenes(test)).toEqual(['机位']);
+  expect(outputs(test).filter(output => output === 'pause' || output === 'start')).toEqual(['pause']);
   expect(test.session.error).toBeNull();
+  // The song's stop still cleans it up; that it fails again is reported.
+  await expect(test.session.stop()).rejects.toThrow('画面没有清理干净：OBS 拒绝'); expect(phases()).toEqual(['start', 'stop', 'stop']);
 });
 
 it('合并补发的晚到从第一步发出时算起，不把 OBS 回应的时间算进去', async () => {
@@ -688,4 +693,197 @@ it('继续时 OBS 回应慢，排在后面的切换照样记晚到并标红', as
   expect(outputs(test)).toEqual(['pause', 'start', '机位']);
   expect(test.faults).toEqual(['画面动作晚了 1500 ms 才发出：覆盖。电脑或 OBS 当时太忙，画面已经按时间线切过去了']);
   expect(test.session.error).toBeNull();
+});
+
+it('合并补发的每一步都按积压最早的到期时间算晚到：前一步 OBS 回应慢拖晚了后面的点 Cue，照样标红', async () => {
+  const project = fixture(), item = project.rundown[0]!;
+  item.cues = [
+    { id: 'cue-a', name: '机位 A', notes: '', enabled: true, timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, actions: [{ id: 'a', kind: 'obs.setProgramScene', label: '切机位', sceneName: 'A' }] },
+    { id: 'cue-b', name: '机位 B', notes: '', enabled: true, timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 }, actions: [{ id: 'b', kind: 'obs.setProgramScene', label: '切机位', sceneName: 'B' }] },
+    { id: 'cue-p', name: '滤镜', notes: '', enabled: true, timecode: { hours: 0, minutes: 0, seconds: 1, frames: 6 }, actions: [{ id: 'p', kind: 'obs.setSourceFilterEnabled', label: '滤镜', sourceName: 'B', filterName: '调色', enabled: true }] },
+    { id: 'cue-c', name: '机位 C', notes: '', enabled: true, timecode: { hours: 0, minutes: 0, seconds: 1, frames: 9 }, actions: [{ id: 'c', kind: 'obs.setProgramScene', label: '切机位', sceneName: 'C' }] }];
+  const answering = deferred(), sentAt: Record<string, number> = {};
+  let now = 0;
+  const test = setup(parseLinkProject(project), action => {
+    sentAt[action.id] = now;
+    if (action.id === 'b') return answering.promise;
+    // OBS takes 1.9 s to answer the merged camera, within the request limit.
+    if (action.id === 'c') { now = 3300; test.time(now); }
+    return Promise.resolve();
+  });
+  const at = (time: number): void => { now = time; test.time(time); test.session.clock(time); };
+  await test.session.prepare(0);
+  for (let time = 0; time <= 900; time += 100) { at(time); await test.session.settled(); }
+  at(1000); await vi.waitFor(() => expect(test.actions.at(-1)?.id).toBe('b'));
+  at(1100); at(1200); at(1300);
+  now = 1400; test.time(1400); answering.release(); await test.session.settled();
+  expect(test.actions.map(action => action.id)).toEqual(['a', 'b', 'c', 'p']);
+  expect(sentAt).toMatchObject({ c: 1400, p: 3300 });
+  expect(test.faults).toEqual(['画面晚了 2100 ms：电脑或 OBS 当时太忙，积压的 2 批画面动作已合并，直接切到了现在该有的画面']);
+  expect(test.session.error).toBeNull();
+});
+
+/** A video from 0 s under a camera that covers it at 1 s. */
+function coveredVideoFixture(): LinkProject {
+  const project = videoFixture(), item = project.rundown[0]!;
+  item.visualLayers.unshift({ id: 'camera-layer', name: '机位', visible: true, locked: false });
+  item.cues.push({ id: 'camera', name: '特写', notes: '', enabled: true, layerId: 'camera-layer', durationMs: 3000,
+    timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 }, actions: [{ id: 'close', label: '机位', kind: 'obs.setProgramScene', sceneName: '特写' }] });
+  return parseLinkProject(project);
+}
+
+it('暂停时正在发的一步照常发完，但视频立刻跟着音乐暂停，不等这一步发完', async () => {
+  const switching = deferred();
+  const test = setup(coveredVideoFixture(), action => action.id === 'close' ? switching.promise : Promise.resolve());
+  await test.session.prepare(0); await test.advance(0, 900);
+  test.time(1000); test.session.clock(1000);
+  await vi.waitFor(() => expect(outputs(test)).toEqual(['特写']));
+  test.time(1050); const pausing = test.session.pause();
+  await vi.waitFor(() => expect(outputs(test)).toEqual(['特写', 'pause']));
+  test.time(4100); switching.release(); await pausing;
+  expect(outputs(test)).toEqual(['特写', 'pause']);
+  expect(lateLogs(test)).toEqual([]);
+  test.time(9000); test.session.clock(1050, 9000); await test.session.settled();
+  expect(outputs(test)).toEqual(['特写', 'pause', 'start']);
+  expect(test.faults).toEqual([]); expect(test.session.error).toBeNull();
+});
+
+it('暂停时正在开播的视频：这一步发完后马上补一次暂停，暂停晚了照样记下；继续时一起播放', async () => {
+  const project = videoFixture(); project.rundown[0]!.referenceMediaClips[0]!.startTimecode.seconds = 1;
+  const starting = deferred();
+  const test = setup(project);
+  test.dependencies.executeManagedMediaEvent.mockImplementation(async payload => { if (payload.event.phase === 'start') await starting.promise; });
+  await test.session.prepare(0); await test.advance(0, 900);
+  test.time(1000); test.session.clock(1000);
+  await vi.waitFor(() => expect(test.dependencies.executeManagedMediaEvent).toHaveBeenCalledOnce());
+  test.time(1050); const pausing = test.session.pause();
+  await Promise.resolve(); expect(outputs(test)).toEqual([]);
+  test.time(2300); starting.release(); await pausing;
+  expect(outputs(test)).toEqual(['pause']);
+  expect(test.faults).toEqual(['素材暂停晚了 1250 ms：电脑或 OBS 当时太忙，音乐停了素材还多播了一会儿。继续播放后会按音乐的位置校正']);
+  test.time(9000); test.session.clock(1050, 9000); await test.session.settled();
+  expect(outputs(test)).toEqual(['pause', 'start']);
+  expect(test.session.error).toBeNull();
+});
+
+it('暂停时开播的一步还没发完就继续了：不再补暂停，素材照常播放', async () => {
+  const project = videoFixture(); project.rundown[0]!.referenceMediaClips[0]!.startTimecode.seconds = 1;
+  const starting = deferred();
+  const test = setup(project);
+  test.dependencies.executeManagedMediaEvent.mockImplementation(async payload => { if (payload.event.phase === 'start') await starting.promise; });
+  await test.session.prepare(0); await test.advance(0, 900);
+  test.time(1000); test.session.clock(1000);
+  await vi.waitFor(() => expect(test.dependencies.executeManagedMediaEvent).toHaveBeenCalledOnce());
+  test.time(1050); void test.session.pause();
+  test.time(1200); test.session.clock(1050, 1200);
+  starting.release(); await test.session.settled();
+  expect(outputs(test)).toEqual(['start']);
+  expect(test.session.error).toBeNull();
+});
+
+it('OBS 重连准备场景时按了暂停（准备因暂停中断）：继续时先重新准备场景，再按继续的位置重建，不标“恢复失败”', async () => {
+  const restoring = deferred(), order: string[] = [];
+  const test = setup(videoFixture(), action => { if (action.kind === 'obs.mediaAction') order.push(action.action); return Promise.resolve(); });
+  await test.session.prepare(0); await test.advance(0, 1500);
+  test.dependencies.seekMedia.mockImplementation(event => { order.push(`seek ${event.sourceOffsetMs}`); return Promise.resolve(); });
+  let paused = false;
+  // Like the host: the scenes are prepared again step by step, and a pause refuses the next step.
+  const restore = vi.fn(async () => { order.push('restore'); await restoring.promise; if (paused) throw new Error('画面状态已变，没有恢复'); });
+  const rebuilding = test.session.rebuild(restore);
+  await vi.waitFor(() => expect(order).toEqual(['restore']));
+  paused = true; const pausing = test.session.pause(); restoring.release();
+  expect(await rebuilding).toBeNull(); await pausing;
+  expect(order).toEqual(['restore', 'pause']);
+  paused = false; test.time(5000); test.session.clock(1500); await test.session.settled();
+  expect(order).toEqual(['restore', 'pause', 'restore', 'seek 1500', 'start']);
+  expect(test.faults).toEqual(['画面已按继续播放的位置恢复（1 项）']);
+  expect(test.session.error).toBeNull();
+});
+
+it('OBS 重连准备场景时暂停又继续：继续时不会先让没对准的素材开播，场景准备好后按当前位置定位再播放', async () => {
+  const restoring = deferred(), order: string[] = [];
+  const test = setup(videoFixture(), action => { if (action.kind === 'obs.mediaAction') order.push(action.action); return Promise.resolve(); });
+  await test.session.prepare(0); await test.advance(0, 1500);
+  test.dependencies.seekMedia.mockImplementation(event => { order.push(`seek ${event.sourceOffsetMs}`); return Promise.resolve(); });
+  const rebuilding = test.session.rebuild(() => restoring.promise);
+  void test.session.pause();
+  test.time(5000); test.session.clock(1500);
+  test.time(5100); test.session.clock(1600);
+  expect(order).toEqual([]);
+  restoring.release(); expect(await rebuilding).toEqual({ sent: 1, failure: null }); await test.session.settled();
+  expect(order).toEqual(['seek 1600', 'start']);
+  expect(test.faults).toEqual([]); expect(test.session.error).toBeNull();
+});
+
+/** A wide camera all song, a close-up from 1.2 s for 0.3 s, and a sticker shown from 1 s for 2 s. */
+function stickerSpanFixture(): LinkProject {
+  return parseLinkProject({ ...createEmptyLinkProject('贴纸'), playbackSource: 'internal', obsOutputMode: 'scenes',
+    rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'layer-sticker', name: '贴纸' }, { id: 'layer-close', name: '特写' }, { id: 'layer-base', name: '全景' }], cues: [
+      { id: 'cue-base', name: '全景', layerId: 'layer-base', durationMs: 10000, timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
+        actions: [{ id: 'base', kind: 'obs.setProgramScene', label: '切机位', sceneName: '全景' }] },
+      { id: 'cue-close', name: '特写', layerId: 'layer-close', durationMs: 300, timecode: { hours: 0, minutes: 0, seconds: 1, frames: 6 },
+        actions: [{ id: 'close', kind: 'obs.setProgramScene', label: '切机位', sceneName: '特写' }] },
+      { id: 'show', name: '贴纸', layerId: 'layer-sticker', durationMs: 2000, timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
+        actions: [{ id: 'sticker', kind: 'obs.setSceneItemEnabled', label: '显示贴纸', sceneName: '全景', sourceName: '贴纸', enabled: true }] }] }] });
+}
+
+it('OBS 重连恢复时已经重新显示的来源，排队里的同一个显示不再发第二次，到点照常隐藏', async () => {
+  const restoring = deferred(), showing = deferred();
+  let gated = false;
+  const test = setup(stickerSpanFixture(), action => {
+    if (action.kind !== 'obs.setSceneItemEnabled' || !action.enabled || gated) return Promise.resolve();
+    gated = true; return showing.promise;
+  });
+  await test.session.prepare(0); await test.advance(0, 900);
+  test.time(950); test.session.clock(950); await test.session.settled();
+  const rebuilding = test.session.rebuild(() => restoring.promise);
+  // The show is crossed while the owned scenes are prepared again, the close-up while the rebuild shows it.
+  test.time(1000); test.session.clock(1000); restoring.release();
+  await vi.waitFor(() => expect(sticker(test)).toEqual([true]));
+  test.time(1200); test.session.clock(1200); test.time(1300); test.session.clock(1300);
+  showing.release(); expect(await rebuilding).toEqual({ sent: 2, failure: null }); await test.session.settled();
+  for (let at = 1400; at <= 3200; at += 100) { test.time(at); test.session.clock(at); await test.session.settled(); }
+  expect(sticker(test)).toEqual([true, false]);
+  expect(scenes(test).at(-1)).toBe('全景'); expect(test.session.error).toBeNull();
+});
+
+it('从中间开始播落在显示来源的时长里：切机位后马上显示，到点照常隐藏', async () => {
+  const test = setup(stickerSpanFixture());
+  await test.session.prepare(2000);
+  expect(outputs(test)).toEqual(['全景', 'obs.setSceneItemEnabled']); expect(sticker(test)).toEqual([true]);
+  for (let at = 2000; at <= 3200; at += 100) { test.time(10000 + at); test.session.clock(at); await test.session.settled(); }
+  expect(sticker(test)).toEqual([true, false]);
+  await test.session.stop(); expect(sticker(test)).toEqual([true, false]);
+  expect(test.session.error).toBeNull();
+});
+
+it('显示来源的时长内停止或拖动进度：旧的画面停止时把它隐藏，拖到时长外的新位置不再显示', async () => {
+  const first = setup(stickerSpanFixture());
+  await first.session.prepare(0); await first.advance(0, 2000);
+  expect(sticker(first)).toEqual([true]);
+  await first.session.stop();
+  expect(sticker(first)).toEqual([true, false]); expect(first.dependencies.releaseOutputs).toHaveBeenCalledOnce();
+  const second = setup(stickerSpanFixture());
+  await second.session.prepare(5000);
+  expect(sticker(second)).toEqual([]);
+  // A show OBS refused is not hidden again at the stop.
+  const refused = setup(stickerSpanFixture(), action => action.kind === 'obs.setSceneItemEnabled' ? Promise.reject(new Error('当前直播场景里没有“贴纸”来源')) : Promise.resolve());
+  await refused.session.prepare(0); await refused.advance(0, 2000); await refused.session.stop();
+  expect(sticker(refused)).toEqual([true]); expect(refused.session.error).toBeNull();
+});
+
+it('OBS 重连准备场景时暂停又继续，准备因那次暂停中断：照常重新准备一次再重建，不当成准备失败', async () => {
+  const restoring = deferred(), order: string[] = [];
+  const test = setup(videoFixture(), action => { if (action.kind === 'obs.mediaAction') order.push(action.action); return Promise.resolve(); });
+  await test.session.prepare(0); await test.advance(0, 1500);
+  test.dependencies.seekMedia.mockImplementation(event => { order.push(`seek ${event.sourceOffsetMs}`); return Promise.resolve(); });
+  let interrupted = false;
+  const restore = vi.fn(async () => { order.push('restore'); if (restore.mock.calls.length > 1) return; await restoring.promise; if (interrupted) throw new Error('画面状态已变，没有恢复'); });
+  const rebuilding = test.session.rebuild(restore);
+  await vi.waitFor(() => expect(order).toEqual(['restore']));
+  interrupted = true; void test.session.pause();
+  test.time(5000); test.session.clock(1500);
+  restoring.release(); expect(await rebuilding).toEqual({ sent: 1, failure: null }); await test.session.settled();
+  expect(order).toEqual(['restore', 'restore', 'seek 1500', 'start']);
+  expect(test.faults).toEqual([]); expect(test.session.error).toBeNull();
 });

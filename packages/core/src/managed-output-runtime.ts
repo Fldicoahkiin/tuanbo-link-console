@@ -30,6 +30,9 @@ export class ManagedOutputRuntime {
   get sceneTimeline(): SceneOutputTimeline | null { return this.preparedScenes; }
   private readonly executedMediaEventIds = new Set<string>();
   private readonly activeMediaByLayer = new Map<string, Map<string, ManagedMediaEvent>>();
+  /** Clips whose timeline stop went out and failed: still cleaned up at the song's
+   * stop, but a resume does not play them again (the stop is not re-sent either). */
+  private readonly stopAttempted = new Set<string>();
   private readonly activeObsSourcesByLayer = new Map<string, Set<string>>();
 
   constructor(
@@ -48,6 +51,7 @@ export class ManagedOutputRuntime {
   resetExecution(): void {
     this.executedMediaEventIds.clear();
     this.activeMediaByLayer.clear();
+    this.stopAttempted.clear();
     this.activeObsSourcesByLayer.clear();
   }
   /** Clips started in this run and not stopped since, one per source and layer. */
@@ -60,10 +64,15 @@ export class ManagedOutputRuntime {
     for (const entry of Array.isArray(event) ? event : event ? [event] : []) this.addActiveMedia(entry);
   }
 
-  transportActions(action: 'pause' | 'start'): LinkAction[] {
-    const names = new Set([...this.activeMediaByLayer.values()].flatMap((entries) =>
-      [...entries.values()].filter((event) => event.assetKind !== 'image').map((event) => event.sourceName)));
-    return [...names].map((inputName) => ({ id: crypto.randomUUID(), label: `P1 同步${action === 'pause' ? '暂停' : '继续'}`,
+  /** The inputs a pause or resume acts on: clips started in this run and not
+   * stopped since. A resume leaves out a clip whose timeline stop already went out. */
+  transportSources(action: 'pause' | 'start'): string[] {
+    return [...new Set(this.activeMedia().filter((event) => event.assetKind !== 'image'
+      && (action === 'pause' || !this.stopAttempted.has(event.clipId))).map((event) => event.sourceName))];
+  }
+
+  transportActions(action: 'pause' | 'start', sources = this.transportSources(action)): LinkAction[] {
+    return sources.map((inputName) => ({ id: crypto.randomUUID(), label: `P1 同步${action === 'pause' ? '暂停' : '继续'}`,
       kind: 'obs.mediaAction', inputName, action }));
   }
 
@@ -212,6 +221,7 @@ export class ManagedOutputRuntime {
       return mediaReport(executionId, event, 'succeeded', startedAt, performance.now());
     } catch (error) {
       if (event.phase === 'start') this.addActiveMedia(event);
+      else this.stopAttempted.add(event.clipId);
       return this.finishFailedMedia(event, executionId, startedAt, error instanceof Error ? error.message : String(error), mode);
     }
   }

@@ -216,8 +216,9 @@ it('播放中重新连接 OBS：重新准备本曲场景后按当前位置重建
   expect(test.host.status).toMatchObject({ state: 'running', fault: 'OBS 已重新连接，画面已按当前位置恢复（1 项）' });
   test.restoreScenes.mockRejectedValueOnce(new Error('素材文件不可读'));
   await test.host.reconnected();
-  expect(test.host.status).toMatchObject({ state: 'running', fault: 'OBS 已重新连接，但画面恢复失败：素材文件不可读' });
-  expect(test.failures.at(-1)).toBe('OBS 已重新连接，但画面恢复失败：素材文件不可读');
+  const partial = 'OBS 已重新连接，但素材场景没有重新准备好：素材文件不可读。机位已按当前位置恢复（1 项），素材可能播不出来';
+  expect(test.host.status).toMatchObject({ state: 'running', fault: partial });
+  expect(test.failures.at(-1)).toBe(partial);
 });
 
 it('准备阶段断线仍取消本轮画面，不带着未就绪的画面开播', async () => {
@@ -259,8 +260,8 @@ it('上一次的画面清理失败：这一首照常准备并按时间线切画�
     expect(test.host.status?.state).toBe('running');
   }
   // The same song again (a seek or a replay): its earlier picture, not the previous song's.
-  expect(faults).toEqual(['上一次的画面没有清理干净，这一首照常播。原因：画面没有清理干净：Error: OBS 无响应', undefined]);
-  expect(test.failures).toEqual(['画面没有清理干净：Error: OBS 无响应']);
+  expect(faults).toEqual(['上一次的画面没有清理干净，这一首照常播。原因：画面没有清理干净：OBS 无响应', undefined]);
+  expect(test.failures).toEqual(['画面没有清理干净：OBS 无响应']);
   await test.host.stop();
 });
 
@@ -275,7 +276,7 @@ it('停止时画面清理失败只记一次：之后的停止和选歌预备都�
   // While stopped, each song the operator selects first makes sure no picture is on air (link-main's authorize).
   const select = async (): Promise<void> => { if (test.host.busy) throw new Error('正在播放时不能准备另一个节目'); await test.host.stop(); };
   for (let count = 0; count < 3; count++) await expect(select()).resolves.toBeUndefined();
-  expect(test.failures).toEqual(['画面没有清理干净：Error: OBS 无响应']);
+  expect(test.failures).toEqual(['画面没有清理干净：OBS 无响应']);
   expect(test.releaseOutputs).toHaveBeenCalledOnce(); expect(test.host.status?.state).toBe('stopped');
 });
 
@@ -287,12 +288,12 @@ it('上一首停止时画面清理失败：下一首照常准备、按时间线�
   await test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 1 });
   test.change({ generation: 2, itemId: 'next', status: 'ready', positionMs: 0 });
   await expect(test.host.prepare(test.song('next', 2))).resolves.toMatchObject({ state: 'ready', itemId: 'next',
-    fault: '上一首的画面没有清理干净，这一首照常播。原因：画面没有清理干净：Error: OBS 无响应' });
+    fault: '上一首的画面没有清理干净，这一首照常播。原因：画面没有清理干净：OBS 无响应' });
   test.observe({ status: 'playing', generation: 2, positionMs: 0 }, 1000);
   await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(2));
   expect(test.execute.mock.calls.at(-1)?.[0]).toMatchObject({ sceneName: '下一首机位0' });
   expect(test.host.status).toMatchObject({ state: 'running', itemId: 'next' });
-  expect(test.failures).toEqual(['画面没有清理干净：Error: OBS 无响应']);
+  expect(test.failures).toEqual(['画面没有清理干净：OBS 无响应']);
   await test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 2 });
   test.change({ generation: 3, itemId: 'song', status: 'ready', positionMs: 0 });
   expect((await test.host.prepare(test.song('song', 3))).fault ?? null).toBeNull();
@@ -364,11 +365,11 @@ it('自动下一首时上一首的画面清理失败：播放器在下一首上�
     emit({ status: time === 2000 ? 'ended' : 'playing', positionMs: time }); await new Promise(resolve => setTimeout(resolve, 0));
   }
   await vi.waitFor(() => expect(execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-a', 'scene-b']));
-  expect(state).toMatchObject({ status: 'playing', itemId: 'b', fault: '上一首的画面没有清理干净，这一首照常播。原因：画面没有清理干净：Error: OBS 无响应' });
+  expect(state).toMatchObject({ status: 'playing', itemId: 'b', fault: '上一首的画面没有清理干净，这一首照常播。原因：画面没有清理干净：OBS 无响应' });
   expect(notices.filter(notice => notice.includes('清理'))).toEqual([]);
-  expect(failures).toEqual(['画面没有清理干净：Error: OBS 无响应']);
+  expect(failures).toEqual(['画面没有清理干净：OBS 无响应']);
   await player.dispose();
-  expect(failures).toEqual(['画面没有清理干净：Error: OBS 无响应']); expect(releaseOutputs).toHaveBeenCalledTimes(2);
+  expect(failures).toEqual(['画面没有清理干净：OBS 无响应']); expect(releaseOutputs).toHaveBeenCalledTimes(2);
 });
 
 it('下一首接手的提前准备失败、清理也失败：下一首照常准备并按时间线切画面，两个原因都在下一首上标红，各记一次（2026-11-09）', async () => {
