@@ -59,7 +59,8 @@ export class NativeObsHost {
     const current = (): void => { if (this.entry !== entry || entry.state.state !== 'running') throw new Error('画面状态已变，没有恢复'); };
     try {
       const sent = await entry.session.rebuild(() => entry.restoreScenes?.(current) ?? Promise.resolve());
-      this.fault(`OBS 已重新连接，画面已按当前位置恢复（${sent} 项）`);
+      this.fault(sent === null ? 'OBS 已重新连接；节目暂停了，继续播放时按当前位置恢复画面'
+        : `OBS 已重新连接，画面已按当前位置恢复（${sent} 项）`);
     } catch (error) {
       if (this.entry === entry) this.fault(`OBS 已重新连接，但画面恢复失败：${error instanceof Error ? error.message : String(error)}`);
     }

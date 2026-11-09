@@ -58,7 +58,10 @@ type RunnerOptions = {
   stopOnFailure?: boolean;
   now?: () => number;
   createExecutionId?: () => string;
-  obsTimeoutMs?: number;
+  /** Limit on one OBS action, 2 s by default. Null when each of its requests is
+   * limited on its own (the OBS request scheduler): a slow action then ends in
+   * order instead of being reported timed out while its last requests still go out. */
+  obsTimeoutMs?: number | null;
   onStatus?: (event: ActionExecutionEvent) => Promise<void>;
 };
 
@@ -66,14 +69,14 @@ export class CueActionRunner {
   private readonly stopOnFailure: boolean;
   private readonly now: () => number;
   private readonly createExecutionId: () => string;
-  private readonly obsTimeoutMs: number;
+  private readonly obsTimeoutMs: number | null;
   private readonly onStatus: ((event: ActionExecutionEvent) => Promise<void>) | null;
 
   constructor(private readonly executors: readonly LinkActionExecutor[], options: RunnerOptions = {}) {
     this.stopOnFailure = options.stopOnFailure ?? false;
     this.now = options.now ?? (() => performance.now());
     this.createExecutionId = options.createExecutionId ?? (() => crypto.randomUUID());
-    this.obsTimeoutMs = options.obsTimeoutMs ?? 2_000;
+    this.obsTimeoutMs = options.obsTimeoutMs === undefined ? 2_000 : options.obsTimeoutMs;
     this.onStatus = options.onStatus ?? null;
   }
 
@@ -145,7 +148,7 @@ export class CueActionRunner {
     let result: ActionExecutionResult;
     try {
       const execution = executor.execute(action);
-      await (action.kind.startsWith('obs.') ? withTimeout(execution, this.obsTimeoutMs, action.kind) : execution);
+      await (action.kind.startsWith('obs.') && this.obsTimeoutMs !== null ? withTimeout(execution, this.obsTimeoutMs, action.kind) : execution);
       const finishedAt = this.now();
       result = createResult(executionId, cueId, action, 'succeeded', startedAt, finishedAt);
     } catch (error) {
