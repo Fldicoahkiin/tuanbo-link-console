@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type PointerEvent } from 'react';
+import type { PointerEvent } from 'react';
 import type { LinkCue, ReferenceMediaClip, VisualLayer } from '@tb/schema';
 import type { TimelineDrag } from './TimelineItems';
-import { cancelDragOnEscape } from '../playback-keys';
+import { useDragSession } from './useDragSession';
 
 type Options = {
   clips: ReferenceMediaClip[];
@@ -23,15 +23,8 @@ export function useTimelineItemDrag(options: Options): {
   end: (event: PointerEvent<HTMLButtonElement>) => void;
   cancel: (event: PointerEvent<HTMLButtonElement>) => void;
 } {
-  const [drag, setDrag] = useState<TimelineDrag | null>(null);
-  const dragRef = useRef<TimelineDrag | null>(null);
-  useEffect(() => {
-    const clear = (): void => { dragRef.current = null; setDrag(null); };
-    const escape = (event: KeyboardEvent): void => cancelDragOnEscape(event, dragRef.current !== null, clear);
-    window.addEventListener('keydown', escape, true);
-    window.addEventListener('blur', clear);
-    return () => { window.removeEventListener('keydown', escape, true); window.removeEventListener('blur', clear); };
-  }, []);
+  // Escape, leaving the window and losing the dragged clip end the drag (DragSession).
+  const session = useDragSession<TimelineDrag>();
   const resolve = (current: TimelineDrag, clientX: number, clientY: number, draggedElement: HTMLElement): TimelineDrag => {
     const moved = current.moved || Math.hypot(clientX - current.startClientX, clientY - current.startClientY) >= 4;
     const target = current.layerMovable && moved
@@ -49,7 +42,6 @@ export function useTimelineItemDrag(options: Options): {
     if (event.button !== 0) return;
     event.stopPropagation();
     options.focusTimeline();
-    event.currentTarget.setPointerCapture(event.pointerId);
     if (kind === 'clip') options.onSelectClip(id);
     else options.onSelectCue(id);
     const originLayerId = kind === 'clip'
@@ -70,22 +62,18 @@ export function useTimelineItemDrag(options: Options): {
       layerMovable: originLayerId !== undefined && event.currentTarget.closest('[data-visual-layer-id]') !== null,
       moved: false
     };
-    dragRef.current = next;
-    setDrag(next);
+    session.begin(event, next);
   };
   const move = (event: PointerEvent<HTMLButtonElement>): void => {
-    const current = dragRef.current;
+    const current = session.current();
     if (!current || current.pointerId !== event.pointerId) return;
-    const next = resolve(current, event.clientX, event.clientY, event.currentTarget);
-    dragRef.current = next;
-    setDrag(next);
+    session.update(resolve(current, event.clientX, event.clientY, event.currentTarget));
   };
   const end = (event: PointerEvent<HTMLButtonElement>): void => {
-    const current = dragRef.current;
+    const current = session.current();
     if (!current || current.pointerId !== event.pointerId) return;
     const completed = resolve(current, event.clientX, event.clientY, event.currentTarget);
-    dragRef.current = null;
-    setDrag(null);
+    session.end();
     if (!completed.moved) return;
     const targetLayerId = completed.targetLayerId;
     if (options.layers.find((layer) => layer.id === targetLayerId)?.locked) return;
@@ -93,11 +81,9 @@ export function useTimelineItemDrag(options: Options): {
     else options.onMoveCue(completed.id, completed.previewMs, targetLayerId);
   };
   const cancel = (event: PointerEvent<HTMLButtonElement>): void => {
-    if (dragRef.current?.pointerId !== event.pointerId) return;
-    dragRef.current = null;
-    setDrag(null);
+    if (session.current()?.pointerId === event.pointerId) session.end();
   };
-  return { begin, cancel, drag, end, move };
+  return { begin, cancel, drag: session.drag, end, move };
 }
 
 function visualLayerBelowDraggedItem(draggedElement: HTMLElement, clientX: number, clientY: number): HTMLElement | null {

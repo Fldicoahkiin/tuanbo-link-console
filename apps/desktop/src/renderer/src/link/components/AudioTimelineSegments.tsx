@@ -1,24 +1,17 @@
-import { useEffect, useRef, useState, type PointerEvent } from 'react';
+import { useState, type PointerEvent } from 'react';
 import type { AudioSegment } from '@tb/schema';
 import { dragAudioSegment } from '@tb/core/link';
 import type { AudioEditor } from './useAudioEditor';
 import { AudioSegmentWaveform } from './AudioSegmentWaveform';
 import { AudioSegmentMenu } from './AudioSegmentMenu';
 import { ModalSurface } from '../ui/ModalSurface';
-import { cancelDragOnEscape } from '../playback-keys';
+import { useDragSession } from './useDragSession';
 
 type Drag = { id: string; edge: 'seek' | 'move' | 'start' | 'end'; clientX: number; segment: AudioSegment; deltaMs: number };
 export function AudioTimelineSegments({ samples, editor, pixelsPerSecond, onSelect, onSeek, peaks, scrollLeft, viewportWidth, sourceWaveform = false, snapTime, playheadMs, readOnly = false }: { samples?: AudioBuffer | null; editor: Pick<AudioEditor, 'audio' | 'title' | 'segments' | 'selectedId' | 'disabled' | 'busy' | 'points' | 'select' | 'update' | 'remove' | 'split'>; sourceWaveform?: boolean; snapTime?: (ms: number) => number; pixelsPerSecond: number; onSelect: (id: string) => void; onSeek: (ms: number) => void; peaks: readonly number[]; scrollLeft: number; viewportWidth: number;playheadMs:number; readOnly?:boolean }): JSX.Element {
-  const [drag, setDrag] = useState<Drag | null>(null);
-  const dragRef = useRef<Drag | null>(null);
-  const changeDrag = (next: Drag | null): void => { dragRef.current = next; setDrag(next); };
-  useEffect(() => {
-    const cancel = (): void => { dragRef.current = null; setDrag(null); };
-    // Escape during a drag only cancels it; the timeline would take it as stop.
-    const key = (event: KeyboardEvent): void => cancelDragOnEscape(event, dragRef.current !== null, cancel);
-    window.addEventListener('blur', cancel); window.addEventListener('keydown', key, true);
-    return () => { window.removeEventListener('blur', cancel); window.removeEventListener('keydown', key, true); };
-  }, []);
+  // Escape, leaving the window and losing the dragged segment end the drag (DragSession).
+  const session = useDragSession<Drag>();
+  const drag = session.drag;
   const [context,setContext]=useState<{id:string;x:number;y:number}|null>(null);
   const [editing,setEditing]=useState<string|null>(null);
   const contextSegment=editor.segments.find(segment=>segment.id===context?.id);
@@ -33,14 +26,12 @@ export function AudioTimelineSegments({ samples, editor, pixelsPerSecond, onSele
     event.stopPropagation(); event.currentTarget.closest<HTMLElement>('.audio-timeline-segment')?.focus({ preventScroll: true }); editor.select(segment.id); onSelect(segment.id);
     if (edge === 'move' && editor.disabled) {
       event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      changeDrag({ id: segment.id, edge: 'seek', segment, clientX: event.clientX, deltaMs: 0 });
+      session.begin(event, { id: segment.id, edge: 'seek', segment, clientX: event.clientX, deltaMs: 0 });
       seek(event, segment);
       return;
     }
     if (editor.disabled) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    changeDrag({ id: segment.id, edge, segment, clientX: event.clientX, deltaMs: 0 });
+    session.begin(event, { id: segment.id, edge, segment, clientX: event.clientX, deltaMs: 0 });
   };
   const moved=(state:Drag,clientX:number):AudioSegment=>{
     if(state.edge==='seek'||Math.abs(clientX-state.clientX)<4)return state.segment;
@@ -49,24 +40,24 @@ export function AudioTimelineSegments({ samples, editor, pixelsPerSecond, onSele
     return dragAudioSegment(editor.segments,state.id,state.edge,(snapTime?.(anchor+delta)??anchor+delta)-anchor,editor.audio?.durationMs??0);
   };
   const move = (event: PointerEvent<HTMLElement>): void => {
-    const drag = dragRef.current;
-    if (!drag) return;
+    const current = session.current();
+    if (!current) return;
     event.stopPropagation();
-    if (drag.edge === 'seek') { seek(event, drag.segment); return; }
-    const next=moved(drag,event.clientX);
-    const deltaMs=drag.edge==='end'?next.durationMs-drag.segment.durationMs:next.startMs-drag.segment.startMs;
-    changeDrag({ ...drag, deltaMs });
+    if (current.edge === 'seek') { seek(event, current.segment); return; }
+    const next=moved(current,event.clientX);
+    const deltaMs=current.edge==='end'?next.durationMs-current.segment.durationMs:next.startMs-current.segment.startMs;
+    session.update({ ...current, deltaMs });
   };
   const end = (event: PointerEvent<HTMLElement>): void => {
-    const drag = dragRef.current;
-    if (!drag) return;
+    const current = session.current();
+    if (!current) return;
     event.stopPropagation();
-    const segment = drag.segment;
-    if (drag.edge === 'seek') { seek(event, segment); changeDrag(null); return; }
-    const next=moved(drag,event.clientX);
+    const segment = current.segment;
+    if (current.edge === 'seek') { seek(event, segment); session.end(); return; }
+    const next=moved(current,event.clientX);
     if(next.startMs!==segment.startMs||next.sourceOffsetMs!==segment.sourceOffsetMs||next.durationMs!==segment.durationMs)void editor.update(segment.id,{startMs:next.startMs,sourceOffsetMs:next.sourceOffsetMs,durationMs:next.durationMs});
-    else if(drag.edge==='move'&&Math.abs(event.clientX-drag.clientX)<4)seek(event,segment);
-    changeDrag(null);
+    else if(current.edge==='move'&&Math.abs(event.clientX-current.clientX)<4)seek(event,segment);
+    session.end();
   };
   return <>
     {editor.segments.map((segment, index) => {
@@ -74,7 +65,7 @@ export function AudioTimelineSegments({ samples, editor, pixelsPerSecond, onSele
       const start = segment.startMs + (active?.edge === 'move' || active?.edge === 'start' ? active.deltaMs : 0);
       const duration = segment.durationMs + (active?.edge === 'end' ? active.deltaMs : active?.edge === 'start' ? -active.deltaMs : 0);
       return <div key={segment.id} className={`audio-timeline-segment${!readOnly && editor.selectedId === segment.id ? ' selected' : ''}`} role={readOnly ? undefined : "button"} tabIndex={readOnly ? undefined : 0} aria-label={readOnly ? "歌曲参考波形" : `音频片段 ${index + 1}`} aria-pressed={readOnly ? undefined : editor.selectedId===segment.id} aria-disabled={editor.disabled} aria-busy={editor.busy} title={readOnly ? undefined : `音频片段 ${index + 1} · 单击定位，拖动移动，两端裁剪，右键编辑`} style={{ left: Math.max(0, start) / 1000 * pixelsPerSecond, width: Math.max(2, duration / 1000 * pixelsPerSecond),cursor:readOnly?'crosshair':editor.busy?'progress':editor.disabled?'crosshair':'grab' }}
-        onPointerDown={(event) => begin(event, segment, 'move')} onPointerMove={move} onPointerUp={end} onPointerCancel={() => changeDrag(null)} onLostPointerCapture={() => changeDrag(null)}
+        onPointerDown={(event) => begin(event, segment, 'move')} onPointerMove={move} onPointerUp={end} onPointerCancel={session.end} onLostPointerCapture={session.end}
         onContextMenu={(event) => { if(readOnly)return; event.preventDefault(); event.stopPropagation(); event.currentTarget.focus();editor.select(segment.id); onSelect(segment.id);setContext({id:segment.id,x:event.clientX,y:event.clientY}); }}
         onDoubleClick={event=>{if(readOnly)return;event.stopPropagation();if(!editor.disabled)setEditing(segment.id);}}
         onKeyDown={(event) => { if(readOnly)return; if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); editor.select(segment.id); onSelect(segment.id); } if(editor.disabled||editor.selectedId!==segment.id)return; if (event.key === 'Delete'||event.key==='Backspace') { event.preventDefault(); event.stopPropagation(); void editor.remove(); }if(!event.ctrlKey&&!event.metaKey&&event.key.toLowerCase()==='s'){event.preventDefault();event.stopPropagation();void editor.split(playheadMs);} }}>

@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type PointerEvent } from 'react';
+import type { PointerEvent } from 'react';
 import { playbackFramesPerSecond, type ContentRef } from '@tb/core/link';
 import type { MtcFrameRate } from '@tb/schema';
 import { timelineInteractionTime } from './timeline-geometry';
-import { cancelDragOnEscape } from '../playback-keys';
+import { useDragSession } from './useDragSession';
 
 /** Trimming never reaches past a day; the bounds stop it well before. */
 const TIMELINE_LIMIT_MS = 86_399_000;
@@ -49,16 +49,8 @@ export function useContentTrim(input: {
   onSelect: (ref: ContentRef) => void;
   onTrim: (ref: ContentRef, startMs: number, durationMs: number) => void;
 }) {
-  const [drag, setDrag] = useState<ContentTrimDrag | null>(null);
-  const dragRef = useRef<ContentTrimDrag | null>(null);
-  const update = (next: ContentTrimDrag | null): void => { dragRef.current = next; setDrag(next); };
-  useEffect(() => {
-    const clear = (): void => { dragRef.current = null; setDrag(null); };
-    const escape = (event: KeyboardEvent): void => cancelDragOnEscape(event, dragRef.current !== null, clear);
-    window.addEventListener('keydown', escape, true);
-    window.addEventListener('blur', clear);
-    return () => { window.removeEventListener('keydown', escape, true); window.removeEventListener('blur', clear); };
-  }, []);
+  // Escape, leaving the window and losing the trimmed part end the trim (DragSession).
+  const session = useDragSession<ContentTrimDrag>();
   const resolve = (current: ContentTrimDrag, clientX: number): ContentTrimDrag => {
     if (Math.abs(clientX - current.startClientX) < 3) return current;
     const originEdgeMs = current.edge === 'start' ? current.originStartMs : current.originStartMs + current.originDurationMs;
@@ -72,27 +64,26 @@ export function useContentTrim(input: {
     event.preventDefault();
     event.stopPropagation();
     input.focusTimeline();
-    event.currentTarget.setPointerCapture(event.pointerId);
     input.onSelect(ref);
-    update({ ref, edge, pointerId: event.pointerId, startClientX: event.clientX, originPointerMs: input.timeAtClientX(event.clientX),
+    session.begin(event, { ref, edge, pointerId: event.pointerId, startClientX: event.clientX, originPointerMs: input.timeAtClientX(event.clientX),
       originStartMs: span.startMs, originDurationMs: span.durationMs, bounds: input.bounds(ref),
       previewStartMs: span.startMs, previewDurationMs: span.durationMs });
   };
   const move = (event: PointerEvent<HTMLElement>): void => {
-    const current = dragRef.current;
-    if (current?.pointerId === event.pointerId) update(resolve(current, event.clientX));
+    const current = session.current();
+    if (current?.pointerId === event.pointerId) session.update(resolve(current, event.clientX));
   };
   const end = (event: PointerEvent<HTMLElement>): void => {
-    const current = dragRef.current;
+    const current = session.current();
     if (current?.pointerId !== event.pointerId) return;
     const completed = resolve(current, event.clientX);
-    update(null);
+    session.end();
     if (completed.previewStartMs !== completed.originStartMs || completed.previewDurationMs !== completed.originDurationMs) {
       input.onTrim(completed.ref, completed.previewStartMs, completed.previewDurationMs);
     }
   };
   const cancel = (event: PointerEvent<HTMLElement>): void => {
-    if (dragRef.current?.pointerId === event.pointerId) update(null);
+    if (session.current()?.pointerId === event.pointerId) session.end();
   };
-  return { begin, cancel, drag, end, move };
+  return { begin, cancel, drag: session.drag, end, move };
 }
