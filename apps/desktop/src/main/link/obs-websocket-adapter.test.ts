@@ -113,7 +113,7 @@ describe('ObsWebSocketAdapter', () => {
     expect(obs.shownIn('贴纸')).toEqual([]);
     expect(obs.enabled('全景', '摄像机 1')).toBe(true);
   });
-  it('连着 OBS 时换了场景集合或删改了场景：记住的场景项先核对，不会打开别的来源', async () => {
+  it('连着 OBS 时换了场景集合：记住的场景项先核对，不会打开别的来源', async () => {
     const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
     const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
     await adapter.connect('ws://127.0.0.1:4455', 'password');
@@ -222,6 +222,163 @@ describe('ObsWebSocketAdapter', () => {
     await expect(adapter.setSourceEnabledInProgramScene('贴纸', false)).rejects.toThrow('没有这个场景项');
     await adapter.setSourceEnabledInProgramScene('贴纸', true);
     expect(obs.shownIn('贴纸')).toEqual(['特写']);
+  });
+  it('OBS 崩溃后重启、照原样载入场景，贴纸那一项回来时是关着的：联动台已经不在显示它，之后的显示按当前直播场景处理，不送回不在直播的场景', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    // OBS crashed while the sticker was shown, so its hide never went out. OBS
+    // loads the same scene collection again: same item ids, the sticker is off.
+    obs.load({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '特写', []);
+    await obs.reconnect(adapter);
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.shownIn('贴纸')).toEqual(['特写']);
+    expect(obs.client.calls).toEqual([['GetSceneList', undefined], ['GetSceneItemList', { sceneName: '全景' }],
+      ['GetCurrentProgramScene', undefined], ['GetSceneItemList', { sceneName: '特写' }],
+      ['SetSceneItemEnabled', { sceneName: '特写', sceneItemId: 2, sceneItemEnabled: true }]]);
+    obs.program = '全景'; obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+    expect(obs.client.calls).toEqual([['SetSceneItemEnabled', { sceneName: '特写', sceneItemId: 2, sceneItemEnabled: false }]]);
+  });
+  it('OBS 重启后记住的那一项是关着的、当前直播场景里没有这个来源：隐藏仍关那一项，不去当前直播场景找，不误报', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 近景: ['摄像机 3'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.load({ 全景: ['摄像机 1', '贴纸'], 近景: ['摄像机 3'] }, '近景', []);
+    await obs.reconnect(adapter);
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.client.calls).toEqual([['GetSceneList', undefined], ['GetSceneItemList', { sceneName: '全景' }],
+      ['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 2, sceneItemEnabled: false }]]);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+  });
+  it('OBS 重启后记住的那一项是关着的，重新显示还没发出就被暂停拦下：之后的隐藏（如停歌清理）仍关那一项，不去当前直播场景误报', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 近景: ['摄像机 3'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.load({ 全景: ['摄像机 1', '贴纸'], 近景: ['摄像机 3'] }, '近景', []);
+    await obs.reconnect(adapter);
+    // The check goes out, then a pause comes before the show is sent.
+    let allowed = 2;
+    await expect(adapter.guardPlaybackOperation(() => allowed > 0, () => adapter.setSourceEnabledInProgramScene('贴纸', true), () => { allowed--; }))
+      .rejects.toThrow('没有发送');
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.client.calls.at(-1)).toEqual(['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 2, sceneItemEnabled: false }]);
+  });
+  it('OBS 重启后核对出记住的那一项是关着的，隐藏还没发出就被拦下：不把它当成还在显示，之后的显示按当前直播场景处理', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.load({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '特写', []);
+    await obs.reconnect(adapter);
+    // The check goes out, then a stop comes before the hide is sent.
+    let allowed = 2;
+    await expect(adapter.guardPlaybackOperation(() => allowed > 0, () => adapter.setSourceEnabledInProgramScene('贴纸', false), () => { allowed--; }))
+      .rejects.toThrow('没有发送');
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.shownIn('贴纸')).toEqual(['特写']);
+    expect(obs.client.calls.at(-1)).toEqual(['SetSceneItemEnabled', { sceneName: '特写', sceneItemId: 2, sceneItemEnabled: true }]);
+  });
+  const turnOffWays: Array<[string, (obs: StatefulObs, adapter: ObsWebSocketAdapter) => Promise<void>]> = [
+    ['操作员在 OBS 里手动关掉', obs => { obs.toggle('全景', '贴纸', false); return Promise.resolve(); }],
+    ['在联动台的实时画布上关掉', (_obs, adapter) => adapter.liveEditor.edit({ sceneName: '全景', sceneItemId: 2, enabled: false })]
+  ];
+  it.each(turnOffWays)('同一次连接上，显示过的那一项被%s：之后的显示按当前直播场景处理，到点隐藏关掉它', async (_way, turnOff) => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    await turnOff(obs, adapter);
+    obs.program = '特写'; obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.shownIn('贴纸')).toEqual(['特写']);
+    expect(obs.client.calls).toEqual([['GetSceneList', undefined], ['GetSceneItemList', { sceneName: '全景' }],
+      ['GetCurrentProgramScene', undefined], ['GetSceneItemList', { sceneName: '特写' }],
+      ['SetSceneItemEnabled', { sceneName: '特写', sceneItemId: 2, sceneItemEnabled: true }]]);
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+    expect(obs.client.calls).toEqual([['SetSceneItemEnabled', { sceneName: '特写', sceneItemId: 2, sceneItemEnabled: false }]]);
+  });
+  it('显示期间在 OBS 里给那个场景改了名：记录跟着换成新名字，同样的显示再发一次仍是那一项，到点隐藏关掉它', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.program = '特写';
+    obs.renameScene('全景', '全景 A');
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.shownIn('贴纸')).toEqual(['全景 A']);
+    expect(obs.client.calls).toEqual([['GetSceneList', undefined], ['GetSceneItemList', { sceneName: '全景 A' }],
+      ['SetSceneItemEnabled', { sceneName: '全景 A', sceneItemId: 2, sceneItemEnabled: true }]]);
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+    expect(obs.client.calls).toEqual([['SetSceneItemEnabled', { sceneName: '全景 A', sceneItemId: 2, sceneItemEnabled: false }]]);
+  });
+  it('显示期间在 OBS 里删了那个场景、又建了同名场景：记录作废，不碰新场景里同一编号的别的来源，隐藏按当前直播场景处理', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.removeScene('全景');
+    obs.addScene('全景', ['摄像机 3', '摄像机 1'], ['全景/摄像机 1']);
+    obs.program = '特写'; obs.toggle('特写', '贴纸', true);
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.enabled('全景', '摄像机 1')).toBe(true);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+  });
+  it('显示期间在 OBS 里删掉那一项又加回来（编号变了）：同样的显示再发一次，打开新的那一项，不报“没有这个场景项”', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.removeItem('全景', '贴纸');
+    obs.addItem('全景', '贴纸');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.client.calls.at(-1)).toEqual(['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 3, sceneItemEnabled: true }]);
+    expect(obs.shownIn('贴纸')).toEqual(['全景']);
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+  });
+  it('OBS 忙、显示的回应还没回来时操作员在 OBS 里把它关了：回应回来后不当成还开着，之后的显示按当前直播场景处理', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    const showReached = obs.holdNext('SetSceneItemEnabled');
+    const show = adapter.setSourceEnabledInProgramScene('贴纸', true);
+    await showReached;
+    obs.toggle('全景', '贴纸', false);
+    obs.release(); await show;
+    obs.program = '特写';
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.shownIn('贴纸')).toEqual(['特写']);
+  });
+  it('联动台自己的显示、隐藏，以及操作员开关同一场景里别的来源，在 OBS 里引起的通知不让正常播放多发核对请求', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.toggle('全景', '摄像机 1', true); obs.toggle('全景', '摄像机 1', false);
+    obs.program = '特写';
+    // Shown again, as the reconnect rebuild does, then hidden at the end of its span.
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.client.calls.map(([request]) => request)).toEqual(['GetCurrentProgramScene', 'GetSceneItemList', 'SetSceneItemEnabled', 'SetSceneItemEnabled', 'SetSceneItemEnabled',
+      'GetCurrentProgramScene', 'GetSceneItemList', 'SetSceneItemEnabled', 'SetSceneItemEnabled']);
+    expect(obs.shownIn('贴纸')).toEqual([]);
   });
   it('监听拒绝被桌面音频或模糊进程采集，仅核对专用音频来源且不修改 OBS', async () => {
     const client = fakeObsClient(); const adapter = new ObsWebSocketAdapter(tmpdir(),client as unknown as OBSWebSocket);
@@ -603,32 +760,74 @@ function fakeObsClient(): FakeObsClient {
 }
 
 type StatefulItem = { sourceName: string; sceneItemId: number; sceneItemEnabled: boolean };
+type StatefulObs = ReturnType<typeof statefulObs>;
 
 /** An OBS that keeps running while only the websocket drops: its scenes, items
- * and whether each item is shown survive `reconnect`. `load` replaces them, as
- * when OBS restarts or the operator edits scenes. Item ids count from 1 in each
- * scene, as in OBS, so after a restart an old id can name another source. A
- * request in `pendingRequests` is carried out, but its answer never comes back.
- * `holdNext` carries out the next such request at once and keeps its answer until
+ * and whether each item is shown survive `reconnect`. `load` replaces them
+ * without a word, as when OBS restarts or loads other scenes while the app is not
+ * connected. Item ids count from 1 in each scene and, as in OBS, an id is never
+ * given again in the same scene, but after a restart an old id can name another
+ * source. While connected it reports changes as OBS does: an item shown or
+ * hidden (by a request, by hand with `toggle`, or from the live canvas), a scene
+ * renamed, removed or added, an item removed or added. A request in
+ * `pendingRequests` is carried out, but its answer never comes back. `holdNext`
+ * carries out the next such request at once and keeps its answer until
  * `release`, as a busy OBS answers late while later requests go through. */
 function statefulObs(layout: Record<string, string[]>, program: string) {
   const client = fakeObsClient();
   let scenes = new Map<string, StatefulItem[]>();
+  let lastIds = new Map<string, number>();
   const holding = new Map<string, () => void>();
   const held: Array<() => void> = [];
+  const itemOf = (sceneName: string, sourceName: string): StatefulItem => {
+    const item = scenes.get(sceneName)?.find(entry => entry.sourceName === sourceName);
+    if (!item) throw new Error(`测试场景“${sceneName}”里没有“${sourceName}”`);
+    return item;
+  };
+  const setEnabled = (sceneName: string, item: StatefulItem, sceneItemEnabled: boolean): void => {
+    if (item.sceneItemEnabled === sceneItemEnabled) return;
+    item.sceneItemEnabled = sceneItemEnabled;
+    client.emit('SceneItemEnableStateChanged', { sceneName, sceneItemId: item.sceneItemId, sceneItemEnabled });
+  };
+  const sceneOf = (sceneName: string, sources: readonly string[], shown: readonly string[]): StatefulItem[] => sources.map((sourceName, index) =>
+    ({ sourceName, sceneItemId: index + 1, sceneItemEnabled: shown.includes(`${sceneName}/${sourceName}`) }));
   const obs = {
     client, program,
     /** Settles when that request reaches OBS. */
     holdNext: (request: string): Promise<void> => new Promise(reached => { holding.set(request, reached); }),
     release: (): void => { for (const answerLate of held.splice(0)) answerLate(); },
     load(next: Record<string, string[]>, nextProgram: string, shown: readonly string[]): void {
-      scenes = new Map(Object.entries(next).map(([sceneName, sources]) => [sceneName, sources.map((sourceName, index) =>
-        ({ sourceName, sceneItemId: index + 1, sceneItemEnabled: shown.includes(`${sceneName}/${sourceName}`) }))]));
+      scenes = new Map(Object.entries(next).map(([sceneName, sources]) => [sceneName, sceneOf(sceneName, sources, shown)]));
+      lastIds = new Map(Object.entries(next).map(([sceneName, sources]) => [sceneName, sources.length]));
       obs.program = nextProgram;
     },
     async reconnect(adapter: ObsWebSocketAdapter): Promise<void> {
       client.emit('ConnectionClosed', new Error('网络断开'));
       await adapter.connect('ws://127.0.0.1:4455', 'password');
+    },
+    /** The operator shows or hides an item by hand in OBS. */
+    toggle: (sceneName: string, sourceName: string, enabled: boolean): void => { setEnabled(sceneName, itemOf(sceneName, sourceName), enabled); },
+    renameScene(oldSceneName: string, sceneName: string): void {
+      scenes = new Map([...scenes].map(([name, items]) => [name === oldSceneName ? sceneName : name, items]));
+      lastIds = new Map([...lastIds].map(([name, id]) => [name === oldSceneName ? sceneName : name, id]));
+      if (obs.program === oldSceneName) obs.program = sceneName;
+      client.emit('SceneNameChanged', { oldSceneName, sceneName });
+    },
+    removeScene(sceneName: string): void { scenes.delete(sceneName); client.emit('SceneRemoved', { sceneName, isGroup: false }); },
+    addScene(sceneName: string, sources: readonly string[], shown: readonly string[]): void {
+      scenes.set(sceneName, sceneOf(sceneName, sources, shown)); lastIds.set(sceneName, sources.length);
+      client.emit('SceneCreated', { sceneName, isGroup: false });
+    },
+    removeItem(sceneName: string, sourceName: string): void {
+      const item = itemOf(sceneName, sourceName);
+      scenes.set(sceneName, scenes.get(sceneName)!.filter(entry => entry !== item));
+      client.emit('SceneItemRemoved', { sceneName, sourceName, sceneItemId: item.sceneItemId });
+    },
+    addItem(sceneName: string, sourceName: string): void {
+      const sceneItemId = (lastIds.get(sceneName) ?? 0) + 1;
+      lastIds.set(sceneName, sceneItemId);
+      scenes.get(sceneName)!.push({ sourceName, sceneItemId, sceneItemEnabled: false });
+      client.emit('SceneItemCreated', { sceneName, sourceName, sceneItemId });
     },
     enabled: (sceneName: string, sourceName: string): boolean =>
       scenes.get(sceneName)?.find(item => item.sourceName === sourceName)?.sceneItemEnabled === true,
@@ -637,15 +836,17 @@ function statefulObs(layout: Record<string, string[]>, program: string) {
   };
   obs.load(layout, program, []);
   const answer = (request: string, fields: Record<string, unknown>): unknown => {
-    const items = scenes.get(String(fields.sceneName));
+    const sceneName = String(fields.sceneName);
+    const items = scenes.get(sceneName);
     switch (request) {
-      case 'GetCurrentProgramScene': return { currentProgramSceneName: obs.program };
-      case 'GetSceneList': return { scenes: [...scenes.keys()].map(sceneName => ({ sceneName })) };
-      case 'GetSceneItemList': return items ? { sceneItems: items.map(item => ({ ...item })) } : new Error(`OBS 里没有场景“${String(fields.sceneName)}”`);
+      case 'GetCurrentProgramScene': return { currentProgramSceneName: obs.program, sceneName: obs.program };
+      case 'GetSceneList': return { scenes: [...scenes.keys()].map(name => ({ sceneName: name })) };
+      case 'GetSceneItemList': return items ? { sceneItems: items.map(item => ({ ...item })) } : new Error(`OBS 里没有场景“${sceneName}”`);
+      case 'GetSceneItemLocked': return { sceneItemLocked: false };
       case 'SetSceneItemEnabled': {
         const item = items?.find(entry => entry.sceneItemId === fields.sceneItemId);
         if (!item) return new Error('OBS 里没有这个场景项');
-        item.sceneItemEnabled = fields.sceneItemEnabled === true;
+        setEnabled(sceneName, item, fields.sceneItemEnabled === true);
         return {};
       }
       default: return responseFor(request);

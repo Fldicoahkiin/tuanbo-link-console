@@ -45,8 +45,9 @@ export type ObsOutputStatus = {
 };
 
 type StatusListener = (snapshot: ObsConnectionSnapshot) => void;
-/** `checked`: the connection on which OBS last confirmed that item is this source;
- * null from when a show goes out until OBS answers it. */
+/** `checked`: the connection on which OBS last confirmed that item is this source
+ * and is shown; null from when a show goes out until OBS answers it, and from when
+ * OBS reports a change to that item or its scene until it is checked again. */
 type ShownSource = { sceneName: string; sceneItemId: number; checked: number | null };
 
 const MEDIA_ACTIONS: Record<Extract<LinkAction, { kind: 'obs.mediaAction' }>['action'], string> = {
@@ -73,7 +74,8 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   /** Where each program-scene source was shown and not hidden since, so hiding it,
    * or showing it again, acts on that item. Kept across reconnects: OBS keeps its
    * scene items when only the websocket drops. A record not confirmed on the
-   * current connection is checked against OBS before it is used. */
+   * current connection, or one OBS has since reported a change for, is checked
+   * against OBS before it is used. */
   private readonly shownInProgram = new Map<string, ShownSource>();
   /** Bumped by every connect, so a record from an earlier connection is checked first. */
   private connection = 0;
@@ -106,11 +108,20 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     for (const event of ['SceneCreated', 'SceneRemoved', 'SceneNameChanged', 'SceneListChanged', 'CurrentSceneCollectionChanged', 'InputCreated', 'InputRemoved', 'InputNameChanged', 'SceneItemCreated', 'SceneItemRemoved'] as const) {
       this.client.on(event, inventoryChanged);
     }
-    // Another scene collection, or a scene removed or renamed: an item id may now
-    // name another source, so what was shown is checked again before it is used.
-    for (const event of ['CurrentSceneCollectionChanged', 'SceneRemoved', 'SceneNameChanged'] as const) {
-      this.client.on(event, () => { for (const [sourceName, shown] of this.shownInProgram) this.shownInProgram.set(sourceName, { ...shown, checked: null }); });
-    }
+    // What this app showed may have changed in OBS: another scene collection (an
+    // item id may now name another source), its scene removed or renamed (the
+    // record follows the new name), its item removed, or turned off by hand or
+    // from the live canvas. The record is checked again before it is used. This
+    // app's own hide forgets its record as it goes out, before OBS reports it.
+    this.client.on('CurrentSceneCollectionChanged', () => { this.recheckShown(() => true); });
+    this.client.on('SceneRemoved', ({ sceneName }) => { this.recheckShown(shown => shown.sceneName === sceneName); });
+    this.client.on('SceneNameChanged', ({ oldSceneName, sceneName }) => { this.recheckShown(shown => shown.sceneName === oldSceneName, sceneName); });
+    this.client.on('SceneItemRemoved', ({ sceneName, sceneItemId }) => {
+      this.recheckShown(shown => shown.sceneName === sceneName && shown.sceneItemId === sceneItemId);
+    });
+    this.client.on('SceneItemEnableStateChanged', ({ sceneName, sceneItemId, sceneItemEnabled }) => {
+      if (!sceneItemEnabled) this.recheckShown(shown => shown.sceneName === sceneName && shown.sceneItemId === sceneItemId);
+    });
     this.client.on('ConnectionClosed', (error) => {
       this.requests.invalidate(new Error(`OBS 连接已关闭：${error.message}`));
       this.mediaScenes.clear();
@@ -559,12 +570,13 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   /** Full-scene mode: a show/hide-source cue acts on the scene now on program,
    * whatever scene it was authored against (operator decision 2026-10-19). A
    * source this app shows and has not hidden acts on the item it was shown in:
-   * its hide, and a repeated show such as the reconnect rebuild's, go there even
-   * after the program moved on or OBS reconnected, so nothing is left shown. */
+   * its hide, and a repeated show such as the reconnect rebuild's while OBS still
+   * shows that item, go there even after the program moved on or OBS reconnected,
+   * so nothing is left shown. */
   async setSourceEnabledInProgramScene(sourceName: string, enabled: boolean): Promise<void> {
     this.assertConnected();
     const connection = this.connection;
-    const { sceneName, sceneItemId } = await this.shownItem(sourceName, connection) ?? await this.programSceneItem(sourceName);
+    const { sceneName, sceneItemId } = await this.shownItem(sourceName, enabled, connection) ?? await this.programSceneItem(sourceName);
     const placed: ShownSource = { sceneName, sceneItemId, checked: null };
     // Kept up to date as the request goes out, whatever OBS answers: a hide that
     // went out counts as done, a show that went out may be on air. A request that
@@ -582,21 +594,37 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   }
 
   /** The item this app showed `sourceName` in and has not hidden since, or null.
-   * A record not confirmed on this connection is used only while its scene still
-   * has that item and it is still this source; otherwise (OBS restarted, scenes
-   * edited) it is dropped and the scene on program is used. A failed request rejects. */
-  private async shownItem(sourceName: string, connection: number): Promise<ShownSource | null> {
+   * A record that is not confirmed is checked against OBS first. If its scene no
+   * longer has that item, or the item is now another source (OBS restarted with
+   * other scenes, the scene or item removed), the record is dropped and the
+   * scene on program is used. If the item is there but off (OBS restarted and
+   * loaded it hidden, or it was turned off in OBS or on the live canvas), this
+   * app no longer shows it: a show uses the scene on program, while a hide still
+   * turns that item off, so it does not act on the scene on program, where this
+   * app showed nothing. A failed request rejects. */
+  private async shownItem(sourceName: string, enabled: boolean, connection: number): Promise<ShownSource | null> {
     const shown = this.shownInProgram.get(sourceName);
     if (!shown || shown.checked === connection) return shown ?? null;
     const scenes = await this.request(() => this.client.call('GetSceneList'), 'GetSceneList');
     const items = collectNames(scenes.scenes, 'sceneName').includes(shown.sceneName)
       ? (await this.request(() => this.client.call('GetSceneItemList', { sceneName: shown.sceneName }), 'GetSceneItemList')).sceneItems : [];
-    const valid = items.some(item => item.sceneItemId === shown.sceneItemId && item.sourceName === sourceName);
+    const item = items.find(entry => entry.sceneItemId === shown.sceneItemId && entry.sourceName === sourceName);
+    const on = item?.sceneItemEnabled === true;
     if (this.shownInProgram.get(sourceName) === shown) {
-      if (valid) this.shownInProgram.set(sourceName, { ...shown, checked: connection });
-      else this.shownInProgram.delete(sourceName);
+      // An item that is off stays unconfirmed: the hide that goes to it forgets it.
+      if (!item) this.shownInProgram.delete(sourceName);
+      else if (on) this.shownInProgram.set(sourceName, { ...shown, checked: connection });
     }
-    return valid ? shown : null;
+    return item && (on || !enabled) ? shown : null;
+  }
+
+  /** OBS reported a change to what `affected` records name: each is checked again
+   * before its next use. A new record object, so a check or show answer still on
+   * its way does not confirm it. A renamed scene is followed. */
+  private recheckShown(affected: (shown: ShownSource) => boolean, renamedTo?: string): void {
+    for (const [sourceName, shown] of this.shownInProgram) {
+      if (affected(shown)) this.shownInProgram.set(sourceName, { ...shown, sceneName: renamedTo ?? shown.sceneName, checked: null });
+    }
   }
 
   /** The one item of this source in the scene now on program. */
