@@ -4,8 +4,11 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { NativePlaybackCommand, NativePlaybackEvent, NativePlaybackDevices, NativePlayerPrepare } from '@tb/schema';
+import type { NativeAudioCache, NativeAudioLease } from './native-audio-cache';
+import type { DecodeResult } from './native-audio-decode';
 import { NativePlayerService } from './native-player-service';
 import type { PortRecoveryReport } from './midi-port-recovery';
+import { PreparationSteps, audioErrorLog } from './preparation-log';
 import { WindowsMidiHealth, midiHealthMessage, type MidiHealth } from './windows-midi-health';
 
 const native = vi.hoisted(() => ({ devices: vi.fn<(scope: 'all' | 'audio') => Promise<NativePlaybackDevices>>(), commands: vi.fn<(command: NativePlaybackCommand) => void>(),
@@ -333,23 +336,34 @@ it('时间码接口被占用时说清是谁：本软件另一处用了同一接�
 
 /** Songs with their own audio, prepared from a cache whose leases record their release; a song in
  * `refuse` fails its next release once, like a rename Windows refused while a virus scanner held the file.
- * As in the app, a failed cleanup of the next song prepared ahead is reported apart from `error`. */
+ * The run log is kept as in the app (link-main): `error` takes the steps of the preparation so far, whatever goes
+ * wrong with the next song prepared ahead goes to `preloadError` without taking them (audioErrorLog), and each
+ * 音频已准备好 entry takes what is left (`ready`). */
 async function preloading(f: ReturnType<typeof fixture>) {
   const directory = await mkdtemp(join(tmpdir(), 'tblink-player-preload-')), path = join(directory, 'song.wav');
   await writeFile(path, 'audio fixture');
-  const refuse = new Set<string>(), released: string[] = [], measured = vi.fn(), cleanupError = vi.fn();
-  const prepare = vi.fn((input: { sourceSha256: string }) => {
-    const song = input.sourceSha256[0]!;
-    return Promise.resolve({ path: `${song}.pcm`, sampleRate: 48000 as const, baseMs: 0, streaming: false, frames: 480000,
-      durationMs: 10000, availableMs: 10000, completion: Promise.resolve({ ok: true as const }), release: () => {
-        if (refuse.delete(song)) return Promise.reject(new Error('EPERM: operation not permitted, rename'));
-        released.push(song); return Promise.resolve();
-      } });
-  });
-  const service = new NativePlayerService({ ...f.options, measured, preloadCleanupError: cleanupError, resolveAudio: () => path, cache: { prepare } });
+  const refuse = new Set<string>(), released: string[] = [], measured = vi.fn<(phase: string, elapsedMs: number) => void>(), preloadError = vi.fn();
+  const lease = (song: string, completion: Promise<DecodeResult> = Promise.resolve({ ok: true })): NativeAudioLease => ({ path: `${song}.pcm`,
+    sampleRate: 48000, baseMs: 0, streaming: false, frames: 480000, durationMs: 10000, availableMs: 10000, completion, release: () => {
+      if (refuse.delete(song)) return Promise.reject(new Error('EPERM: operation not permitted, rename'));
+      released.push(song); return Promise.resolve();
+    } });
+  const prepare = vi.fn<NativeAudioCache['prepare']>(input => Promise.resolve(lease(input.sourceSha256[0]!)));
+  const steps = new PreparationSteps(() => undefined), log = audioErrorLog(steps, () => Promise.resolve());
+  const ready: { itemId: string; steps: string[] }[] = [];
+  let readyBoundary = '';
+  const service = new NativePlayerService({ ...f.options, resolveAudio: () => path, cache: { prepare },
+    measured: (phase, elapsedMs) => { measured(phase, elapsedMs); steps.add(phase, elapsedMs); },
+    changed: status => {
+      const boundary = `${status.sessionId}:${status.generation}`;
+      if (status.status !== 'ready' || boundary === readyBoundary) return;
+      readyBoundary = boundary; ready.push({ itemId: status.itemId, steps: steps.take().map(({ step }) => step) });
+    },
+    error: message => { f.error(message); log.error(message); },
+    preloadError: message => { preloadError(message); log.preloadError(message); } });
   const song = (id: string) => ({ ...f.request.snapshot, itemId: id, audio: { ...f.request.snapshot.audio, sha256: id.repeat(64) } });
   const preloaded = (count: number) => vi.waitFor(() => expect(measured.mock.calls.filter(([phase]) => phase === '预先准备下一首音频')).toHaveLength(count));
-  return { service, prepare, refuse, released, song, preloaded, cleanupError };
+  return { service, prepare, lease, refuse, released, song, preloaded, measured, preloadError, ready };
 }
 
 it('下一首提前准备的音频放不掉一次：只记一次错误；换歌、再提前准备、接着播都照常', async () => {
@@ -361,14 +375,16 @@ it('下一首提前准备的音频放不掉一次：只记一次错误；换歌�
     p.refuse.add('b');
     await expect(p.service.prepare({ ...f.request, generation: 3, snapshot: p.song('c'), nextSnapshot: p.song('b') }))
       .resolves.toMatchObject({ itemId: 'c', status: 'ready', audioError: null });
-    // Reported apart from C's preparation: it is not C's failure.
-    expect(p.cleanupError).toHaveBeenCalledOnce(); expect(p.cleanupError).toHaveBeenCalledWith(expect.stringContaining('EPERM'));
+    // Reported apart from C's preparation: it is not C's failure, and C's 音频已准备好 entry keeps all of its steps.
+    expect(p.preloadError).toHaveBeenCalledOnce(); expect(p.preloadError).toHaveBeenCalledWith(expect.stringContaining('EPERM'));
+    expect(p.ready.at(-1)?.itemId).toBe('c');
+    expect(p.ready.at(-1)?.steps).toEqual(expect.arrayContaining(['设备检查与旧播放清理', '音源校验与解码预填充', '原生进程准备', '音频设备与时钟准备']));
     // B is prepared ahead again while C plays, and playing on to B uses it.
     await p.service.control({ ...envelope, generation: 4, kind: 'play' }); await p.preloaded(2);
     const decoded = p.prepare.mock.calls.length;
     await expect(p.service.prepare({ ...f.request, generation: 5, snapshot: p.song('b') })).resolves.toMatchObject({ itemId: 'b', status: 'ready' });
     expect(p.prepare).toHaveBeenCalledTimes(decoded);
-    expect(p.cleanupError).toHaveBeenCalledOnce(); expect(f.error).not.toHaveBeenCalled();
+    expect(p.preloadError).toHaveBeenCalledOnce(); expect(f.error).not.toHaveBeenCalled();
   } finally { await p.service.close(); }
 });
 
@@ -380,14 +396,14 @@ it('定位时提前准备的下一首放不掉：定位照常完成，只单独�
     p.refuse.add('b');
     await expect(p.service.control({ ...envelope, generation: 3, kind: 'seek', positionMs: 2000 }))
       .resolves.toMatchObject({ status: 'paused', positionMs: 2000, audioError: null });
-    expect(p.cleanupError).toHaveBeenCalledOnce(); expect(p.cleanupError).toHaveBeenCalledWith(expect.stringContaining('EPERM'));
+    expect(p.preloadError).toHaveBeenCalledOnce(); expect(p.preloadError).toHaveBeenCalledWith(expect.stringContaining('EPERM'));
     expect(f.error).not.toHaveBeenCalled(); expect(p.released).toEqual(['a']);
     // Playing on prepares B ahead again, and moving on to B uses it.
     await p.service.control({ ...envelope, generation: 4, kind: 'play' }); await p.preloaded(2);
     const decoded = p.prepare.mock.calls.length;
     await expect(p.service.prepare({ ...f.request, generation: 5, snapshot: p.song('b') })).resolves.toMatchObject({ itemId: 'b', status: 'ready', audioError: null });
     expect(p.prepare).toHaveBeenCalledTimes(decoded);
-    expect(p.cleanupError).toHaveBeenCalledOnce(); expect(f.error).not.toHaveBeenCalled();
+    expect(p.preloadError).toHaveBeenCalledOnce(); expect(f.error).not.toHaveBeenCalled();
   } finally { await p.service.close(); }
 });
 
@@ -398,12 +414,50 @@ it('停止和关闭时提前准备的下一首放不掉：记下错误，停止�
     await p.service.control({ ...envelope, generation: 2, kind: 'play' }); await p.preloaded(1);
     p.refuse.add('b');
     await expect(p.service.control({ ...envelope, generation: 3, kind: 'stop' })).resolves.toMatchObject({ status: 'stopped', audioError: null });
-    expect(p.released).toEqual(['a']); expect(p.cleanupError).toHaveBeenCalledOnce();
+    expect(p.released).toEqual(['a']); expect(p.preloadError).toHaveBeenCalledOnce();
     await p.service.prepare({ ...f.request, generation: 4, snapshot: p.song('c'), nextSnapshot: p.song('d') });
     await p.service.control({ ...envelope, generation: 5, kind: 'play' }); await p.preloaded(2);
     p.refuse.add('d');
     await p.service.close();
     expect(p.service.status).toMatchObject({ status: 'stopped' });
-    expect(p.released).toEqual(['a', 'c']); expect(p.cleanupError).toHaveBeenCalledTimes(2); expect(f.error).not.toHaveBeenCalled();
+    expect(p.released).toEqual(['a', 'c']); expect(p.preloadError).toHaveBeenCalledTimes(2); expect(f.error).not.toHaveBeenCalled();
+  } finally { await p.service.close(); }
+});
+
+it('接手提前准备好的下一首时，它的后台解码正好失败：这条单独记，不带走这首的准备步骤；这首重新解码，准备好的那条步骤齐全', async () => {
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, p = await preloading(f);
+  try {
+    let fail!: (error: Error) => void;
+    const completion = new Promise<DecodeResult>(resolve => { fail = error => resolve({ ok: false, error }); });
+    await p.service.prepare({ ...f.request, snapshot: p.song('a'), nextSnapshot: p.song('b') });
+    p.prepare.mockResolvedValueOnce(p.lease('b', completion));
+    await p.service.control({ ...envelope, generation: 2, kind: 'play' }); await p.preloaded(1);
+    // The operator plays B. B's decode stalls just then: after the device check, while B's source file is read.
+    p.measured.mockImplementation(phase => { if (phase === '设备检查与旧播放清理') fail(new Error('音频解码 30 秒没有进展，已停止解码')); });
+    await expect(p.service.prepare({ ...f.request, generation: 3, snapshot: p.song('b') }))
+      .resolves.toMatchObject({ itemId: 'b', status: 'ready', audioError: null });
+    expect(p.preloadError).toHaveBeenCalledExactlyOnceWith('下一首音频解码失败：音频解码 30 秒没有进展，已停止解码');
+    expect(f.error).not.toHaveBeenCalled();
+    // B is decoded again, and its 音频已准备好 entry keeps every step of this preparation.
+    expect(p.prepare).toHaveBeenCalledTimes(3); expect(p.released).toEqual(['a', 'b']);
+    expect(p.ready.at(-1)?.itemId).toBe('b');
+    expect(p.ready.at(-1)?.steps).toEqual(expect.arrayContaining(['设备检查与旧播放清理', '音源校验与解码预填充', '原生进程准备', '音频设备与时钟准备']));
+  } finally { await p.service.close(); }
+});
+
+it('下一首在后台自己准备失败：单独记一条，不算正在播的这首的错误；播到它时照常重新准备', async () => {
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, p = await preloading(f);
+  try {
+    await p.service.prepare({ ...f.request, snapshot: p.song('a'), nextSnapshot: p.song('b') });
+    p.prepare.mockRejectedValueOnce(new Error('音频解码或读取失败：EIO: i/o error, read'));
+    await p.service.control({ ...envelope, generation: 2, kind: 'play' });
+    await vi.waitFor(() => expect(p.preloadError).toHaveBeenCalledOnce());
+    expect(p.preloadError).toHaveBeenCalledWith('预先准备下一首音频失败：音频解码或读取失败：EIO: i/o error, read');
+    expect(f.error).not.toHaveBeenCalled();
+    expect(p.service.status).toMatchObject({ itemId: 'a', status: 'playing', audioError: null });
+    await expect(p.service.prepare({ ...f.request, generation: 3, snapshot: p.song('b') }))
+      .resolves.toMatchObject({ itemId: 'b', status: 'ready', audioError: null });
+    expect(p.prepare).toHaveBeenCalledTimes(3);
+    expect(p.preloadError).toHaveBeenCalledOnce(); expect(f.error).not.toHaveBeenCalled();
   } finally { await p.service.close(); }
 });

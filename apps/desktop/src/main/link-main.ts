@@ -181,7 +181,7 @@ import { NativeObsHost } from './link/native-obs-host';
 import { NativeObsRequests } from './link/native-obs-requests';
 import { NativeObsPreloadPool } from './link/native-obs-preload';
 import { createNativeObsOutputs } from './link/native-obs-outputs';
-import { PreparationSteps } from './link/preparation-log';
+import { PreparationSteps, audioErrorLog } from './link/preparation-log';
 import { obsStatusLogEntry } from './link/obs-status-log';
 import { prepareNextObsFiles } from './link/native-obs-files';
 
@@ -732,12 +732,8 @@ function registerIpc(
               .catch((failure: unknown) => console.error('节目预备清理日志写入失败', failure)); });
         },
         measured,
-        // A failed preparation keeps the steps it got through.
-        error: message => { const steps = audioSteps.take(); void logger.record({ level: 'error', category: 'device', device: '音频', message, result: 'failed', ...(steps.length ? { details: { steps } } : {}) })
-          .catch((error: unknown) => console.error('正式音频日志写入失败', error)); },
-        // Not the failure of the song being prepared: its steps stay for its 音频已准备好 entry.
-        preloadCleanupError: message => { void logger.record({ level: 'error', category: 'device', device: '音频', message, result: 'failed' })
-          .catch((error: unknown) => console.error('正式音频日志写入失败', error)); },
+        // error keeps the steps a failed preparation got through; preloadError (the next song's) leaves them.
+        ...audioErrorLog(audioSteps, entry => logger.record(entry)),
         recovered: report => { void logger.record({ level: 'warning', category: 'device', device: '音频', ...(nativePlayer?.status ? { itemId: nativePlayer.status.itemId } : {}),
           message: `时间码中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）：从当前播放位置继续发送，中断期间的时间码不补发`,
           result: 'succeeded', details: report }).catch((error: unknown) => console.error('正式音频日志写入失败', error)); }

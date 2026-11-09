@@ -25,10 +25,11 @@ type Options = {
   resolveAudio: (projectPath: string, relativePath: string) => string;
   changed: (status: NativePlayerStatus, qpc100ns: string | null) => void;
   error: (message: string) => void;
-  /** The next song prepared ahead was let go but not cleaned up. It is not the failure of the song being prepared (or
-   * of a seek, stop or close), so it is reported apart from `error`, without that song's preparation steps; with no
-   * separate place given, it goes to `error`. */
-  preloadCleanupError?: (message: string) => void;
+  /** Whatever goes wrong with the next song prepared ahead: its own preparation or decode failing in the background, or
+   * an error while it is let go. It is not the failure of the song being prepared (or of a seek, stop or close), so it
+   * is reported apart from `error`, without that song's preparation steps; with no separate place given, it goes to
+   * `error`. */
+  preloadError?: (message: string) => void;
   /** The timecode port came back and timecode resumed. */
   recovered?: (report: PortRecoveryReport) => void;
   measured?: (phase: string, elapsedMs: number) => void;
@@ -67,7 +68,9 @@ export class NativePlayerService {
   /** The timecode output the engine may hold, kept from the editor until the engine lets it go. */
   private mtcHold: { name: string; claim: MidiClaim | null } | null = null;
   constructor(private readonly options: Options) {
-    this.preload = new NativeAudioPreload({ ...options, cleanupError: options.preloadCleanupError ?? options.error });
+    // Only the fields it needs: a spread of these options would hand it this player's `error` as well.
+    this.preload = new NativeAudioPreload({ cache: options.cache, resolveAudio: options.resolveAudio, measured: options.measured,
+      error: options.preloadError ?? options.error });
     this.deviceQuery = new NativeDeviceQuery(options.executable);
     this.audioDeviceQuery = new NativeDeviceQuery(options.executable, 'audio');
     // Windows MIDI often stalls or fails for a moment while a port is removed or added, so a health

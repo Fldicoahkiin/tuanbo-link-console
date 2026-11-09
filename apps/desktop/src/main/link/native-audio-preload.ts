@@ -7,11 +7,11 @@ type Prepared = { lease: NativeAudioLease; identity: Identity };
 type Task = { projectPath: string; sourcePath: string; snapshot: PlaybackSnapshot; abort: AbortController;
   result: Prepared | null; promise: Promise<Prepared | null>; consumed: boolean; cleanup: Promise<void> | null };
 type Options = { cache: Pick<NativeAudioCache, 'prepare'>; resolveAudio: (projectPath: string, relativePath: string) => string;
+  /** Whatever goes wrong with the next song in the background: its preparation or its decode failing on its own, or an
+   * error while it is let go for another song, a seek, stop or close. None of it is the failure of the song being
+   * prepared or of that seek, stop or close (take() throws what is), so it is reported here and never to them. */
   error: (message: string) => void;
-  /** The job was let go but not cleaned up. That happens while another song is prepared, or during a seek, stop or
-   * close, and is not their failure: it is reported here, apart from `error`. */
-  cleanupError: (message: string) => void;
-  measured?: (phase: string, elapsedMs: number) => void };
+  measured?: ((phase: string, elapsedMs: number) => void) | undefined };
 
 /** One pinned next-source lease. This never controls an audio/MIDI device or
  * starts output. The current player owns its separate lease throughout. */
@@ -25,12 +25,10 @@ export class NativeAudioPreload {
       promise: Promise.resolve(null), consumed: false, cleanup: null };
     this.task = task;
     task.promise = this.prepare(task).catch((error: unknown) => {
-      // Only the cancellation itself is quiet. Any other failure is reported even after a cancel, such as a
-      // decoder that would not stop: the cancel came from another song, a seek, stop or close, so it is a cleanup failure.
+      // Only the cancellation itself is quiet. Any other failure is reported even after a cancel: a decoder that
+      // would not stop, or a failure of the job's own that came just then. Either one came while letting it go.
       if (!task.abort.signal.aborted) this.options.error(`预先准备下一首音频失败：${reason(error)}`);
-      else if (!isCancellation(error, task.abort.signal)) {
-        this.options.cleanupError(`预先准备的下一首音频已取消，但没清理干净，这份音频不会再用。原因：${reason(error)}`);
-      }
+      else if (!isCancellation(error, task.abort.signal)) this.options.error(letGoFailure(error));
       return null;
     });
   }
@@ -74,7 +72,7 @@ export class NativeAudioPreload {
    * cleanup is reported here and never becomes that caller's failure. */
   async discard(): Promise<void> {
     try { await this.cancel(); }
-    catch (error) { this.options.cleanupError(`预先准备的下一首音频没清理干净，这份音频不会再用。原因：${reason(error)}`); }
+    catch (error) { this.options.error(letGoFailure(error)); }
   }
 
   private async prepare(task: Task): Promise<Prepared> {
@@ -108,6 +106,12 @@ function isCancellation(error: unknown, signal: AbortSignal): boolean {
 }
 
 function reason(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+
+/** An error while the next song is let go: its cleanup failed, or the job failed on its own just then. Either way that
+ * audio is not used, and what plays goes on. */
+function letGoFailure(error: unknown): string {
+  return `下一首提前准备的音频已放下，放下时出了错，这份音频不会再用，不影响当前播放。原因：${reason(error)}`;
+}
 
 function audioIdentity(snapshot: PlaybackSnapshot): string {
   return JSON.stringify([snapshot.projectId, snapshot.itemId, snapshot.revision, snapshot.audio.relativePath,

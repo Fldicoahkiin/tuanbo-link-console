@@ -90,8 +90,8 @@ it('解码进程不肯退出：同一音源明确说正在释放、不开新的�
 
 it('下一首还在预填充时换歌，解码进程不肯退出：运行日志里有这一条；同一音源说正在释放，进程退出后可以再准备', async () => {
   const { cache, input, signal } = await fixture();
-  const error = vi.fn(), cleanupError = vi.fn();
-  const preload = new NativeAudioPreload({ cache, resolveAudio: () => input.sourcePath, error, cleanupError });
+  const error = vi.fn();
+  const preload = new NativeAudioPreload({ cache, resolveAudio: () => input.sourcePath, error });
   const snapshot: PlaybackSnapshot = { version: 1, projectId: 'p', itemId: 'next', revision: 1,
     audio: { relativePath: 'source.wav', sha256: input.sourceSha256, durationMs: input.expectedDurationMs },
     startMs: 0, endMs: input.expectedDurationMs, positionMs: 0, offsetMs: 0, frameRate: 30, sampleRate: input.sampleRate, volume: 1 };
@@ -102,8 +102,8 @@ it('下一首还在预填充时换歌，解码进程不肯退出：运行日志�
   const decoder = decoders.at(-1)!; decoder.refuse = true;
   // The operator plays another song while this one is still decoding its start.
   expect(await preload.take('p.tblink', { ...snapshot, itemId: 'other' })).toBeNull();
-  expect(cleanupError).toHaveBeenCalledOnce(); expect(cleanupError).toHaveBeenCalledWith(expect.stringContaining('还没退出'));
-  expect(error).not.toHaveBeenCalled();
+  expect(error).toHaveBeenCalledExactlyOnceWith(
+    '下一首提前准备的音频已放下，放下时出了错，这份音频不会再用，不影响当前播放。原因：音频解码还没退出，进程保留，不会强制结束，也不会开始新的解码');
   prefill.held = false;
   await expect(cache.prepare(input, signal)).rejects.toThrow('正在释放');
   decoder.exit({ ok: false, error: new Error('音频解码已取消') }); await decoder.finished;
