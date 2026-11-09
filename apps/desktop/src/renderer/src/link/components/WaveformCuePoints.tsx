@@ -7,6 +7,7 @@ import type { MtcFrameRate } from '@tb/schema';
 import { cueEventEntries } from './cue-event-view';
 import { formatTimelineTimecode } from './timeline-geometry';
 import type { LightingTimelineProps } from './LightingTimeline';
+import { cancelDragOnEscape } from '../playback-keys';
 
 import { cueMarkerWidth, displayCueNumber, layoutCueMarkers } from './cue-marker-layout';
 type Entry = ReturnType<typeof cueEventEntries>[number];
@@ -17,7 +18,7 @@ export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPer
   const setDrag = (value: CuePointDrag | null): void => { dragRef.current = value; setDragState(value); };
   useEffect(() => {
     const cancel = (): void => { dragRef.current = null; setDragState(null); };
-    const escape = (event: KeyboardEvent): void => { if (event.key === 'Escape') cancel(); };
+    const escape = (event: KeyboardEvent): void => cancelDragOnEscape(event, dragRef.current !== null, cancel);
     window.addEventListener('keydown', escape, true); window.addEventListener('blur', cancel);
     return () => { window.removeEventListener('keydown', escape, true); window.removeEventListener('blur', cancel); };
   }, []);

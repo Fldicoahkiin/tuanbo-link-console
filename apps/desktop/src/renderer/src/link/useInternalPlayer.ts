@@ -12,12 +12,13 @@ import { linkDesktopViewModel as desktop } from './view-models/link-desktop-view
 import { useRuntimeStore } from './stores/runtime-store';
 import { useDisplayPreferences } from './stores/display-preferences-store';
 import { useSelectedProgram } from './useSelectedProgram';
-import { keyTarget, spaceBelongsToControl } from './playback-keys';
+import { keyTarget, playbackKeyAction, pressPlayButton } from './playback-keys';
 
 /** Player notices already logged as warnings in this window. */
 const notedNotices = new Set<string>();
 
-export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, ready: boolean, project: LinkProject | null) {
+/** `settingsOpen`: the settings or connection page is on screen, and the window's playback keys wait until it closes. */
+export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, ready: boolean, project: LinkProject | null, settingsOpen: boolean) {
   const path = useDocumentStore((state) => state.path);
   const [controller, setController] = useState<RemoteNativeProgramPlayer | null>(null);
   const [view] = useState(() => new PlayerViewStore());
@@ -52,19 +53,20 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   useEffect(() => {
     if (!controller || !project) return;
     const keyboard = (event: KeyboardEvent): void => {
-      const target = keyTarget(event), space = !event.ctrlKey && !event.altKey && event.code === 'Space';
-      // A focused button keeps Space for play/pause instead of being pressed again (2026-11-09).
-      if (event.metaKey || event.repeat || event.defaultPrevented || target?.closest('.reference-timeline')
-        || (space ? spaceBelongsToControl(target) : target?.closest('input,textarea,select,button,[contenteditable="true"],[role="slider"]'))) return;
-      const key = [...(event.ctrlKey ? ['Ctrl'] : []), ...(event.altKey ? ['Alt'] : []), ...(event.shiftKey ? ['Shift'] : []), event.code].join('+');
-      const item = project.rundown.find((entry) => entry.enabled && entry.playback?.shortcut === key);
-      if (item) { event.preventDefault(); void controller.play(item.id); }
-      else if (space) { event.preventDefault(); void controller.toggle(); }
-      else if (!event.ctrlKey && !event.altKey && event.code === 'Escape') { event.preventDefault(); void controller.stop(); }
-      else if (!event.ctrlKey && !event.altKey && useIntegrationStore.getState().profile?.internalPlayer?.arrowKeyPlayback && ['ArrowUp', 'ArrowDown'].includes(event.code)) { event.preventDefault(); void controller.skip(event.code === 'ArrowUp' ? -1 : 1); }
+      const action = playbackKeyAction(event, keyTarget(event), { paused: settingsOpen, arrowKeys: useIntegrationStore.getState().profile?.internalPlayer?.arrowKeyPlayback === true,
+        song: key => project.rundown.find((entry) => entry.enabled && entry.playback?.shortcut === key)?.id });
+      if (!action) return;
+      event.preventDefault();
+      switch (action.kind) {
+        case 'song': void controller.play(action.itemId); return;
+        // The page's play button, never "the song played last" (0.5.9).
+        case 'play-button': pressPlayButton(); return;
+        case 'stop': void controller.stop(); return;
+        case 'skip': void controller.skip(action.direction); return;
+      }
     };
     window.addEventListener('keydown', keyboard); return () => window.removeEventListener('keydown', keyboard);
-  }, [controller, project]);
+  }, [controller, project, settingsOpen]);
   useEffect(() => {
     if (!coordinator || !project || project.playbackSource !== 'internal' || !ready) {
       setController(null); view.publish(emptyInternalPlayerState); return;

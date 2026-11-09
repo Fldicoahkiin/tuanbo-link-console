@@ -106,7 +106,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHo
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [selectedObsResource, setSelectedObsResource] = useState<ObsResource | null>(null);
   const externalTransport = project?.playbackSource === 'internal';
-  const { playheadMs, playing, setPlayheadMs, setPlaying, reset, clock, stop, stopForEdit } = useEditorTransport(player, currentItemId, externalTransport, notify, lightingWorkspace ? null : coordinator, !item?.referenceAudio || Boolean(audioUrl));
+  const { playheadMs, playing, preparing, setPlayheadMs, setPlaying, reset, clock, stop, stopForEdit } = useEditorTransport(player, currentItemId, externalTransport, notify, lightingWorkspace ? null : coordinator, !item?.referenceAudio || Boolean(audioUrl));
   const [lightingSelection, setLightingSelection] = useState<{ trackId: string; clipId: string | null; eventId?: string; eventIds?: string[] } | null>(null);
   const runtimeState = useRuntimeStore((state) => state.state);
   useStoppedRuntimeRecovery(externalTransport, player, runtimeState, coordinator, notify);
@@ -219,7 +219,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, sidebarHo
           frameRate={project.timebase.frameRate}
           durationMs={durationMs}
           playheadMs={playheadMs}
-          playing={playing}
+          playing={playing} preparing={preparing}
           referenceAudio={timelineReferenceAudio} analysisSource={item.referenceAudio}
           selectedClipId={selectedClipId} selectedCueId={selectedCueId}
           onPlayheadChange={setPlayheadMs}

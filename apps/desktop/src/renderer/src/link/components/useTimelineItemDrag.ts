@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import type { LinkCue, ReferenceMediaClip, VisualLayer } from '@tb/schema';
 import type { TimelineDrag } from './TimelineItems';
+import { cancelDragOnEscape } from '../playback-keys';
 
 type Options = {
   clips: ReferenceMediaClip[];
@@ -26,7 +27,7 @@ export function useTimelineItemDrag(options: Options): {
   const dragRef = useRef<TimelineDrag | null>(null);
   useEffect(() => {
     const clear = (): void => { dragRef.current = null; setDrag(null); };
-    const escape = (event: KeyboardEvent): void => { if (event.key === 'Escape') clear(); };
+    const escape = (event: KeyboardEvent): void => cancelDragOnEscape(event, dragRef.current !== null, clear);
     window.addEventListener('keydown', escape, true);
     window.addEventListener('blur', clear);
     return () => { window.removeEventListener('keydown', escape, true); window.removeEventListener('blur', clear); };

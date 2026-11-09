@@ -10,7 +10,8 @@ import type { LightingTimelineProps } from './LightingTimeline';
 import { stampTimeline } from './timeline-stamp';
 import { keyTarget, spaceBelongsToControl } from '../playback-keys';
 
-type Props = { lighting: LightingTimelineProps | undefined; playheadMs: number; durationMs: number; playing: boolean; frameRate: MtcFrameRate; clock: PlaybackClock; onPlayingChange: (playing: boolean) => void; onSeek: (ms: number) => void };
+/** `onPlayPause` is the timeline's play button, which the play key presses. */
+type Props = { lighting: LightingTimelineProps | undefined; playheadMs: number; durationMs: number; playing: boolean; frameRate: MtcFrameRate; clock: PlaybackClock; onPlayPause: () => void; onPlayingChange: (playing: boolean) => void; onSeek: (ms: number) => void };
 export function useTimelineStamp(props: Props) {
   const { lighting } = props;
   const { bindings, load, error } = useShortcutStore();
@@ -47,7 +48,7 @@ export function useTimelineStamp(props: Props) {
         : target?.closest('input,textarea,select,button,[role="button"],[role="menu"],[contenteditable="true"],[role="separator"]'))) return;
       event.preventDefault(); event.stopImmediatePropagation();
       if (action === 'stamp') { stamp(); return; }
-      if (action === 'play') { if (!props.playing && props.playheadMs >= props.durationMs) props.onSeek(0); props.onPlayingChange(!props.playing); return; }
+      if (action === 'play') { props.onPlayPause(); return; }
       props.onPlayingChange(false);
       const step = 1000 / playbackFramesPerSecond(props.frameRate);
       props.onSeek(action === 'start' ? 0 : action === 'end' ? props.durationMs : Math.max(0, Math.min(props.durationMs, props.playheadMs + (action === 'previous' ? -step : step))));

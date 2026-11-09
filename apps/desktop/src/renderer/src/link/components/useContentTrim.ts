@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import { playbackFramesPerSecond, type ContentRef } from '@tb/core/link';
 import type { MtcFrameRate } from '@tb/schema';
 import { timelineInteractionTime } from './timeline-geometry';
+import { cancelDragOnEscape } from '../playback-keys';
 
 /** Trimming never reaches past a day; the bounds stop it well before. */
 const TIMELINE_LIMIT_MS = 86_399_000;
@@ -53,7 +54,7 @@ export function useContentTrim(input: {
   const update = (next: ContentTrimDrag | null): void => { dragRef.current = next; setDrag(next); };
   useEffect(() => {
     const clear = (): void => { dragRef.current = null; setDrag(null); };
-    const escape = (event: KeyboardEvent): void => { if (event.key === 'Escape' && dragRef.current) clear(); };
+    const escape = (event: KeyboardEvent): void => cancelDragOnEscape(event, dragRef.current !== null, clear);
     window.addEventListener('keydown', escape, true);
     window.addEventListener('blur', clear);
     return () => { window.removeEventListener('keydown', escape, true); window.removeEventListener('blur', clear); };

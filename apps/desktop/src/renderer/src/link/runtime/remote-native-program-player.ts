@@ -54,11 +54,6 @@ export class RemoteNativeProgramPlayer {
   resume(): Promise<void> { return this.send({ kind: 'resume' }); }
   stop(): Promise<void> { return this.send({ kind: 'stop' }); }
   reset(): Promise<void> { return this.send({ kind: 'reset' }); }
-  /** Starting from stop plays the song again; pause and resume keep the song's position. */
-  toggle(): Promise<void> {
-    if (this.state.status !== 'playing' && this.state.status !== 'paused' && this.state.itemId) return this.play(this.state.itemId);
-    return this.send({ kind: 'toggle' });
-  }
   seek(positionMs: number): Promise<void> { return this.send({ kind: 'seek', positionMs }); }
   scrub(itemId: string, positionMs: number): Promise<void> { return this.send({ kind: 'scrub', itemId, positionMs }); }
   skip(direction: -1 | 1): Promise<void> { return this.send({ kind: 'skip', direction }); }

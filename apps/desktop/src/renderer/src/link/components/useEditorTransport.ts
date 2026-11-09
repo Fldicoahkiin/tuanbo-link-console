@@ -7,6 +7,7 @@ import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
 import { useDisplayPreferences } from '../stores/display-preferences-store';
 import { usePlayerClock } from '../usePlayerClock';
+import { editorPlayRequest } from './play-buttons';
 
 export function useEditorProgram(player: ProjectPlayer, external: boolean, notify: (message: string, tone?: 'info' | 'error') => void): string | null {
   const [selected, select] = useSelectedProgram(notify);
@@ -73,14 +74,11 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
     if (!external) { useMa2SyncStore.setState({ previewPlaying: next }); setLocalPlaying(next); return; }
     const controller = player.controller;
     if (!controller || !itemId) { if (next) notify('播放器还没准备好，请稍后再试', 'error'); return; }
-    if (!next) { if (active && player.state.status === 'playing') void controller.pause().catch(report); return; }
-    if (player.state.status === 'preparing') return;
-    if (active && player.state.status === 'paused') void controller.resume().catch(report);
-    else {
-      const item = useDocumentStore.getState().project?.rundown.find((entry) => entry.id === itemId);
-      const startMs = item?.playback?.startMs ?? 0;
-      void controller.play(itemId, Math.max(startMs, cursorRef.current)).catch(report);
-    }
+    const item = useDocumentStore.getState().project?.rundown.find((entry) => entry.id === itemId);
+    const request = editorPlayRequest(next, player.state.status, active, item?.playback?.startMs ?? 0, cursorRef.current);
+    if (request?.kind === 'pause') void controller.pause().catch(report);
+    else if (request?.kind === 'resume') void controller.resume().catch(report);
+    else if (request?.kind === 'play') void controller.play(itemId, request.positionMs).catch(report);
   };
   const stop = (): void => { reset(); previewCoordinator?.cancelEditorPreview(); if (external) void player.controller?.stop().catch(report); };
   const stopForEdit = async (): Promise<void> => {
@@ -89,5 +87,7 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
     cursorRef.current = playheadMs; setCursor(playheadMs);
     await player.controller?.stop();
   };
-  return { playheadMs, playing, setPlayheadMs, setPlaying, reset, clock, stop, stopForEdit };
+  /** The show is being prepared: the play button and Space wait for it, so it never starts over (0.5.9). */
+  const preparing = external && player.state.status === 'preparing';
+  return { playheadMs, playing, preparing, setPlayheadMs, setPlaying, reset, clock, stop, stopForEdit };
 }

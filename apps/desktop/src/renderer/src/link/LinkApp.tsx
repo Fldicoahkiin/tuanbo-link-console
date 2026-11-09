@@ -88,7 +88,7 @@ export function LinkApp(): JSX.Element {
   const integrationInitialized = useIntegrationStore((state) => state.initialized);
   const runtimeState = useRuntimeStore((state) => state.state);
   const [playbackProject, setPlaybackProject] = useState(project);
-  const internalPlayer = useInternalPlayer(coordinator, integrationInitialized, playbackProject);
+  const internalPlayer = useInternalPlayer(coordinator, integrationInitialized, playbackProject, connectionsOpen);
   const editingLocked = internalPlayer.state.status === 'preparing' || ['preflight', 'armed', 'running', 'timecodeLost', 'paused', 'error', 'stopping'].includes(runtimeState);
   const previewPlaying = useMa2SyncStore(state => state.previewPlaying);
   const playbackLocked = editingLocked || previewPlaying || ['playing', 'paused'].includes(internalPlayer.state.status);
@@ -238,7 +238,7 @@ export function LinkApp(): JSX.Element {
 function useConnectionsEscape(open: boolean, onClose: () => void): void {
   useEffect(() => {
     if (!open) return;
-    const close = (event: KeyboardEvent): void => { if (event.key === 'Escape' && !event.defaultPrevented) onClose(); };
+    const close = (event: KeyboardEvent): void => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); onClose(); } };
     window.addEventListener('keydown', close);
     return () => window.removeEventListener('keydown', close);
   }, [open, onClose]);

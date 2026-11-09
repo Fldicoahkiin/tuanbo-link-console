@@ -6,6 +6,7 @@ import { Menu, MenuItem, MenuSeparator } from '../ui';
 import { useLightingClipboardStore } from '../stores/lighting-clipboard-store';
 import { LightingMasterCurve } from './LightingMasterCurve';
 import { masterCurveY } from './lighting-master-curve';
+import { cancelDragOnEscape } from '../playback-keys';
 
 function groupStackedEvents(tracks: LightingTrack[], map: LightingTempoMap, pixelsPerSecond: number): Map<string, LightingEvent[]> {
   const result = new Map<string, LightingEvent[]>();
@@ -135,8 +136,12 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
     props.onSelectEvent?.(track.id, clip.id, added.id);
   };
   useEffect(() => {
+    // Escape during a marquee only cancels it; the timeline would take it as stop (0.5.9).
+    const escape = (event: KeyboardEvent): void => cancelDragOnEscape(event, marquee.current !== null, () => { marquee.current = null; setRange(null); });
+    window.addEventListener('keydown', escape, true); return () => window.removeEventListener('keydown', escape, true);
+  }, []);
+  useEffect(() => {
     const key = (event: KeyboardEvent): void => {
-      if (event.code === 'Escape') { setDrag(null); marquee.current = null; setRange(null); }
       if (event.defaultPrevented || context || props.detailOpen || event.repeat || event.altKey || event.target instanceof Element && event.target.closest('input,textarea,select,[contenteditable="true"]')) return;
       const track = activeTrack; const clip = activeClip;
       if (!track || !clip) return;
@@ -268,7 +273,7 @@ function useLightingPointDrag() {
   const setDrag = (value: PointDrag | null): void => { dragRef.current = value; setDragState(value); };
   useEffect(() => {
     const cancel = (): void => { dragRef.current = null; setDragState(null); };
-    const key = (event: KeyboardEvent): void => { if (event.key === 'Escape') cancel(); };
+    const key = (event: KeyboardEvent): void => cancelDragOnEscape(event, dragRef.current !== null, cancel);
     window.addEventListener('keydown', key, true);
     window.addEventListener('blur', cancel);
     return () => { window.removeEventListener('keydown', key, true); window.removeEventListener('blur', cancel); };

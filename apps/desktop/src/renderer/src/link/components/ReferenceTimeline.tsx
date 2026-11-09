@@ -46,6 +46,7 @@ import { timelineLayout, timelineMusicLayout, timelineRulerHeight } from './time
 import { LightingHeadings, LightingLanes, type LightingTimelineProps } from './LightingTimeline';
 import { TimelineMarkers } from './TimelineMarkers';
 import { useLightingPreview } from '../runtime/use-lighting-preview';
+import { keyTarget, registerPlayButton, spaceBelongsToControl } from '../playback-keys';
 
 function seekTimelineAudio(audio: HTMLAudioElement, milliseconds: number): void {
   const seconds = Number.isFinite(audio.duration) ? Math.min(milliseconds / 1_000, audio.duration) : milliseconds / 1_000;
@@ -85,6 +86,8 @@ type Props = {
   referenceAudio: ReferenceWaveformSource | null;
   analysisSource?: import('@tb/schema').ReferenceAudio | undefined;
   playing: boolean;
+  /** The show is being prepared (联动台播放). */
+  preparing?: boolean;
   selectedClipId: string | null;
   selectedCueId: string | null;
   onPlayheadChange: (milliseconds: number) => void;
@@ -162,6 +165,15 @@ export function ReferenceTimeline(input: Props): JSX.Element {
     const milliseconds = viewport.timeAtClientX(clientX);
     return seekTo(milliseconds, updateAudio);
   };
+  /** The play button: play from the playhead (from the start once it reached the end), or pause. Space presses it
+   * anywhere on this page (0.5.9); while the show is being prepared it waits, so the preparation never starts over. */
+  const playPause = (): void => {
+    if (props.preparing) return;
+    const audioEndMs = props.referenceAudio?.durationMs;
+    if (!props.playing && (props.playheadMs >= props.durationMs || (audioEndMs !== undefined && props.playheadMs >= audioEndMs) || audioRef.current?.ended)) seekTo(0, true, false);
+    props.onPlayingChange(!props.playing);
+  };
+  useEffect(() => registerPlayButton(playPause));
   const playheadFrame = useFrameValue((clientX: number) => { seek(clientX, true); });
   const cancelPlayheadFrame = playheadFrame.cancel;
   useEffect(() => { cancelPlayheadFrame(); playheadPointerId.current = null; setClipboard(null); setClipContext(null); }, [props.timelineState.itemId, cancelPlayheadFrame]);
@@ -186,7 +198,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   };
   const lanePointer = { onPointerDown: beginPlayhead, onPointerMove: movePlayhead, onPointerUp: endPlayhead, onPointerCancel: cancelPlayhead };
 
-  const stamping = useTimelineStamp({ lighting: props.lightingWorkspace ? props.lighting : undefined, playheadMs: props.playheadMs, durationMs: props.referenceAudio?.durationMs ?? props.durationMs, playing: props.playing, frameRate: props.frameRate, clock, onPlayingChange: props.onPlayingChange, onSeek: ms => seekTo(ms, true) });
+  const stamping = useTimelineStamp({ lighting: props.lightingWorkspace ? props.lighting : undefined, playheadMs: props.playheadMs, durationMs: props.referenceAudio?.durationMs ?? props.durationMs, playing: props.playing, frameRate: props.frameRate, clock, onPlayPause: playPause, onPlayingChange: props.onPlayingChange, onSeek: ms => seekTo(ms, true) });
 
 
   return <section
@@ -197,9 +209,9 @@ export function ReferenceTimeline(input: Props): JSX.Element {
     data-duration-ms={props.durationMs} data-waveform-mode={waveformMode}
     ref={timelineRef} data-playhead-time={showPlayheadTime}
     tabIndex={0}
-    onKeyDown={(event) => handleTimelineKeyDown(event, props, clipboard, setClipboard, (milliseconds) => seekTo(milliseconds, true, false), () => deleteTimelineSelection(props), stopPlayback)}
+    onKeyDown={(event) => handleTimelineKeyDown(event, props, clipboard, setClipboard, (milliseconds) => seekTo(milliseconds, true, false), () => deleteTimelineSelection(props), stopPlayback, playPause)}
   >
-    <div><TimelineToolbar displayControl={props.lightingWorkspace && props.lighting ? <LightingTimelineControls playheadMs={props.playheadMs} beats={beatSegments} analysisPanel={props.analysisPanel} analysis={analysis} onChange={props.lighting.onChange} onSeek={ms => { viewport.revealTime(ms); seekTo(ms, true, false); }} projectPath={props.projectPath} source={props.analysisSource} playing={props.playing} document={props.lighting.document} display={musicDisplay} onDisplayChange={setMusicDisplay} /> : undefined} outputControl={props.outputControl} stampControls={stamping.controls} wheelSeek={props.lightingWorkspace ? wheelSeek : undefined} compact={props.lightingWorkspace === true} tools={props.lightingWorkspace ? <><div className="cue-mouse-modes" role="group" aria-label="鼠标模式"><IconButton label="定位" title="定位：点击或拖动波形、标尺" icon={MousePointer2} aria-pressed={cueMouseMode === 'seek'} onClick={() => setCueMouseMode('seek')} /><IconButton label="框选 Cue" title="框选 Cue：拖动框选，Delete 删除" icon={SquareDashedMousePointer} aria-pressed={cueMouseMode === 'select'} onClick={() => setCueMouseMode('select')} /></div><TimelinePanelButton label="波形显示方式" icon={AudioLines}><Field stacked label="波形显示方式">{(field) => <Select {...field} value={waveformMode} onChange={event => setWaveformMode(event.currentTarget.value)}><option value="rhythm">节奏波形</option><option value="waveform">原始波形</option><option value="spectrum">频谱</option></Select>}</Field></TimelinePanelButton></> : undefined} editPoints={seekSnapPointsMs} snapDistance={snapDistance} onSnapDistanceChange={setSnapDistance} externalTransport={props.externalTransport} onStop={props.onStop ? stopPlayback : undefined} recordingControl={props.lighting ? <><MenuButton label="灯光" menuLabel="灯光工具" className="timeline-lighting-tools">{(close) => lightingTools.filter(([tool]) => !props.lightingWorkspace || tool !== 'tempo').map(([tool, label, icon]) => <MenuItem key={tool} icon={icon} onSelect={() => { close(); props.lighting?.onOpenTools?.(tool); }}>{label}</MenuItem>)}</MenuButton><TimelineLightingRecording audioAvailable={Boolean(props.referenceAudio)} document={props.lighting.document} clipId={props.lighting.selectedClipId} clock={clock} playheadMs={props.playheadMs} onChange={props.lighting.onChange} onError={props.onPlaybackError} /></> : null} playbackReady={lightingPlayback.ready} frameRate={props.frameRate} durationMs={props.durationMs} playheadMs={props.playheadMs} playing={props.playing} referenceAudio={props.referenceAudio} snapEnabled={snapEnabled} audioRef={audioRef} onPlayheadChange={ms => { if (props.playing) props.onPlayheadChange(ms); else seekTo(ms, true, false); }} onPlayingChange={props.onPlayingChange} onPlaybackError={props.onPlaybackError} onSnapEnabledChange={setSnapEnabled} onZoomOut={viewport.zoomOut} onFit={viewport.fit} onZoomIn={viewport.zoomIn} />
+    <div><TimelineToolbar displayControl={props.lightingWorkspace && props.lighting ? <LightingTimelineControls playheadMs={props.playheadMs} beats={beatSegments} analysisPanel={props.analysisPanel} analysis={analysis} onChange={props.lighting.onChange} onSeek={ms => { viewport.revealTime(ms); seekTo(ms, true, false); }} projectPath={props.projectPath} source={props.analysisSource} playing={props.playing} document={props.lighting.document} display={musicDisplay} onDisplayChange={setMusicDisplay} /> : undefined} outputControl={props.outputControl} stampControls={stamping.controls} wheelSeek={props.lightingWorkspace ? wheelSeek : undefined} compact={props.lightingWorkspace === true} tools={props.lightingWorkspace ? <><div className="cue-mouse-modes" role="group" aria-label="鼠标模式"><IconButton label="定位" title="定位：点击或拖动波形、标尺" icon={MousePointer2} aria-pressed={cueMouseMode === 'seek'} onClick={() => setCueMouseMode('seek')} /><IconButton label="框选 Cue" title="框选 Cue：拖动框选，Delete 删除" icon={SquareDashedMousePointer} aria-pressed={cueMouseMode === 'select'} onClick={() => setCueMouseMode('select')} /></div><TimelinePanelButton label="波形显示方式" icon={AudioLines}><Field stacked label="波形显示方式">{(field) => <Select {...field} value={waveformMode} onChange={event => setWaveformMode(event.currentTarget.value)}><option value="rhythm">节奏波形</option><option value="waveform">原始波形</option><option value="spectrum">频谱</option></Select>}</Field></TimelinePanelButton></> : undefined} editPoints={seekSnapPointsMs} snapDistance={snapDistance} onSnapDistanceChange={setSnapDistance} externalTransport={props.externalTransport} onStop={props.onStop ? stopPlayback : undefined} recordingControl={props.lighting ? <><MenuButton label="灯光" menuLabel="灯光工具" className="timeline-lighting-tools">{(close) => lightingTools.filter(([tool]) => !props.lightingWorkspace || tool !== 'tempo').map(([tool, label, icon]) => <MenuItem key={tool} icon={icon} onSelect={() => { close(); props.lighting?.onOpenTools?.(tool); }}>{label}</MenuItem>)}</MenuButton><TimelineLightingRecording audioAvailable={Boolean(props.referenceAudio)} document={props.lighting.document} clipId={props.lighting.selectedClipId} clock={clock} playheadMs={props.playheadMs} onChange={props.lighting.onChange} onError={props.onPlaybackError} /></> : null} playbackReady={lightingPlayback.ready} frameRate={props.frameRate} durationMs={props.durationMs} playheadMs={props.playheadMs} playing={props.playing} referenceAudio={props.referenceAudio} snapEnabled={snapEnabled} audioRef={audioRef} onPlayheadChange={ms => { if (props.playing) props.onPlayheadChange(ms); else seekTo(ms, true, false); }} onPlayPause={playPause} onPlayingChange={props.onPlayingChange} onPlaybackError={props.onPlaybackError} onSnapEnabledChange={setSnapEnabled} onZoomOut={viewport.zoomOut} onFit={viewport.fit} onZoomIn={viewport.zoomIn} />
 
     {props.transportStatus}</div><div className="timeline-shell">
       <div className="timeline-heading-viewport" ref={viewport.headingViewportRef} onWheel={viewport.onHeadingsWheel}><div className="timeline-track-headings" style={headingStyle}>
@@ -263,20 +275,23 @@ function handleTimelineKeyDown(
   setClipboard: (target: TimelineTarget | null) => void,
   seekTo: (milliseconds: number) => void,
   deleteSelected: () => void,
-  stop: () => void
+  stop: () => void,
+  playPause: () => void
 ): void {
   if (event.key === 'Escape' && props.onStop && event.target instanceof HTMLElement && !event.target.closest('details[open],[role="dialog"],[aria-expanded="true"],input,textarea,select')) { event.preventDefault(); event.stopPropagation(); stop(); return; }
+  // A focused toolbar, track or clip button no longer takes Space as a second press (0.5.9). The lighting
+  // workbench's Space goes through its shortcut keys (useTimelineStamp) first.
+  if (event.code === 'Space' && !props.lightingWorkspace) {
+    if (spaceBelongsToControl(keyTarget(event))) return;
+    event.preventDefault();
+    playPause();
+    return;
+  }
   if (isInteractiveTarget(event.target)) return;
   if (props.lightingWorkspace && ['Space', 'Home', 'End', 'ArrowLeft', 'ArrowRight'].includes(event.code)) return;
   const command = event.ctrlKey || event.metaKey;
   // Lighting owns its clipboard; selecting a lighting clip excludes media paste.
   if (command && props.lighting?.selectedClipId && ['c', 'x', 'v'].includes(event.key.toLowerCase())) return;
-  if (event.code === 'Space') {
-    event.preventDefault();
-    if (!props.playing && props.playheadMs >= (props.referenceAudio?.durationMs ?? props.durationMs)) seekTo(0);
-    props.onPlayingChange(!props.playing);
-    return;
-  }
   if (event.key === 'Home') {
     event.preventDefault();
     props.onPlayingChange(false);

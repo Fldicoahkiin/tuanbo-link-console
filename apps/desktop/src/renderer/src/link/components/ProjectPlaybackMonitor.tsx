@@ -40,7 +40,7 @@ export function ProjectPlaybackMonitor({ project, player, selectedItem, currentI
   const waveform = <PlayerWaveformTimeline enabled={internal && !!player.controller && ['playing', 'paused'].includes(player.state.status)} onSeek={positionMs => void player.controller?.seek(positionMs)} source={projectPath && previewUrl && selectedItem?.referenceAudio ? { projectPath, url: previewUrl, sha256: selectedItem.referenceAudio.sha256, durationMs: selectedItem.referenceAudio.durationMs } : null} positionMs={selectedItem?.id === currentItemId ? currentMilliseconds : 0} />;
   const showSpectrum = internal && spectrum;
   return <section className="home-monitor" data-spectrum={showSpectrum} aria-label="播放与监看">
-    {internal ? <ProjectPlayerTransport {...player} selectedItem={selectedItem} controller={player.controller}
+    {internal ? <ProjectPlayerTransport {...player} selectedItem={selectedItem} controller={player.controller} onScreen={visible}
       actions={<IconButton label={spectrum ? '收起频谱' : '显示频谱'} icon={AudioLines} aria-pressed={spectrum} onClick={() => setSpectrum(!spectrum)} />}>{waveform}</ProjectPlayerTransport>
       : <section className="home-player" data-mode="following" aria-label="P1 跟随播放">
         <header className="home-player-heading">

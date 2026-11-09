@@ -1,13 +1,15 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { ListRestart, Pause, Play, RotateCcw, SkipBack, SkipForward, Square, Volume2 } from 'lucide-react';
-import { playlistItems, type InternalPlayerState } from '@tb/core/link';
+import type { InternalPlayerState } from '@tb/core/link';
 import type { RundownItem } from '@tb/schema';
 import type { RemoteNativeProgramPlayer } from '../runtime/remote-native-program-player';
 import type { PlayerControlState, PlayerViewStore } from '../stores/player-view-store';
 import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { Button, IconButton, Select } from '../ui';
+import { registerPlayButton } from '../playback-keys';
 import { PlayerStatusDetails } from './PlayerStatusDetails';
+import { homePlayButton, homePlayPress } from './play-buttons';
 
 /** `engine` names the audio engine this player uses, for the operator. */
 export type ProjectPlayer = { controller: RemoteNativeProgramPlayer | null; state: PlayerControlState; view: PlayerViewStore; engine: string };
@@ -21,19 +23,24 @@ const isEndAction = (value: string): value is EndAction => endActions.some(([act
  * (`children`), then the transport on the left and the playing options on the right. `actions` sit at
  * the right of the heading, before the status details.
  */
-export function ProjectPlayerTransport({ controller, state, engine, selectedItem, actions, children }: ProjectPlayer & {
+export function ProjectPlayerTransport({ controller, state, engine, selectedItem, onScreen = false, actions, children }: ProjectPlayer & {
   selectedItem?: RundownItem | null | undefined;
+  /** The home page is showing, so Space presses this play button (0.5.9). */
+  onScreen?: boolean;
   actions?: ReactNode;
   children?: ReactNode;
 }): JSX.Element {
   const project = useDocumentStore((value) => value.project);
   const reason = useRuntimeStore((value) => value.reason);
-  const items = project ? playlistItems(project, state.playlistId ?? 'all').filter((item) => item.enabled && item.referenceAudio) : [];
-  const active = state.status === 'playing' || state.status === 'paused';
-  const selected = active ? project?.rundown.find(item => item.id === state.itemId) : selectedItem ?? items.find(item => item.id === state.itemId);
-  const target = selected?.enabled && selected.referenceAudio ? selected : items[0];
-  const unavailable = !controller ? '播放器还没准备好' : state.status === 'preparing' ? '正在准备音频，点“停止”可以取消'
-    : !active && !target ? '当前节目和播放列表里没有可以播放的音频' : null;
+  const button = homePlayButton(project, state, selectedItem, controller !== null);
+  const { items, selected, target, unavailable } = button;
+  const press = (): void => {
+    const request = homePlayPress(button, state.status);
+    if (request?.kind === 'pause') void controller?.pause();
+    else if (request?.kind === 'resume') void controller?.resume();
+    else if (request?.kind === 'play') void controller?.play(request.itemId);
+  };
+  useEffect(() => onScreen ? registerPlayButton(press) : undefined);
   const next = state.endAction === 'loop' ? selected : state.endAction === 'next' ? items[items.findIndex((item) => item.id === state.itemId) + 1] : undefined;
   const stateText = state.status === 'preparing' && state.preparation ? `准备中 · ${state.preparation}` : statusLabel(state.status);
   return <section className="home-player" data-mode="internal" data-status={state.status} aria-label="节目播放控制">
@@ -57,11 +64,7 @@ export function ProjectPlayerTransport({ controller, state, engine, selectedItem
         <IconButton variant="secondary" label="上一首" icon={SkipBack} disabled={!controller || !items.length} onClick={() => void controller?.skip(-1)} />
         <Button variant="primary" className="home-player-play" icon={state.status === 'playing' ? Pause : Play}
           title={unavailable ?? (state.status === 'playing' ? '暂停播放' : state.status === 'paused' ? '继续播放' : `播放 ${target?.title ?? ''}`)}
-          loading={state.status === 'preparing'} disabled={unavailable !== null} onClick={() => {
-            if (state.status === 'playing') void controller?.pause();
-            else if (state.status === 'paused') void controller?.resume();
-            else if (target) void controller?.play(target.id);
-          }}>{state.status === 'playing' ? '暂停' : state.status === 'paused' ? '继续' : '播放'}</Button>
+          loading={state.status === 'preparing'} disabled={unavailable !== null} onClick={press}>{state.status === 'playing' ? '暂停' : state.status === 'paused' ? '继续' : '播放'}</Button>
         <Button variant="secondary" className="home-player-stop" icon={Square} aria-label="停止播放" title="停止播放" disabled={!controller} onClick={() => void controller?.stop()}>停止</Button>
         <IconButton variant="secondary" label="重播当前歌曲" icon={RotateCcw} disabled={!controller || !state.itemId} onClick={() => { if (state.itemId) void controller?.play(state.itemId); }} />
         <IconButton variant="secondary" label="下一首" icon={SkipForward} disabled={!controller || !items.length} onClick={() => void controller?.skip(1)} />

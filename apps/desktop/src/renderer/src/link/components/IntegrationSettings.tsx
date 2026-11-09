@@ -136,7 +136,8 @@ function useSettingsEscape(nestedDialogOpen: boolean, onClose: () => void): void
     const closeOnEscape = (event: KeyboardEvent): void => {
       const nestedOverlay = document.querySelector('dialog[open], .device-maintenance-backdrop, .diagnostics-log-backdrop');
       if (event.target instanceof HTMLSelectElement) return;
-      if (event.key === 'Escape' && !event.defaultPrevented && !nestedDialogOpen && !nestedOverlay) onClose();
+      // Escape here only closes the page; the window's playback keys wait while it is open (0.5.9).
+      if (event.key === 'Escape' && !event.defaultPrevented && !nestedDialogOpen && !nestedOverlay) { event.preventDefault(); onClose(); }
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => {
