@@ -50,17 +50,19 @@ const noticeIcon = { info: Info, success: CheckCircle2, warning: CircleAlert, er
 
 /**
  * A message in the page, next to what it is about: what happened, then what to do. Errors are
- * announced at once; the rest politely.
+ * announced at once; the rest politely. `compact` makes it one line across the top of a panel, such
+ * as under a toolbar: the title, then the text, cut off at the end of the line; `tooltip` holds all of it.
  */
-export function Notice({ tone = 'info', title, actions, onDismiss, children }: {
+export function Notice({ tone = 'info', title, actions, onDismiss, children, ...line }: {
   tone?: NoticeTone;
   title?: ReactNode;
   actions?: ReactNode;
   onDismiss?: () => void;
   children?: ReactNode;
-}): JSX.Element {
+} & ({ compact?: false } | { compact: true; tooltip: string })): JSX.Element {
   const Icon = noticeIcon[tone];
-  return <div className="ui-notice" data-tone={tone} role={tone === 'error' ? 'alert' : 'status'}>
+  return <div className="ui-notice" data-tone={tone} role={tone === 'error' ? 'alert' : 'status'}
+    data-density={line.compact ? 'compact' : undefined} title={line.compact ? line.tooltip : undefined}>
     <Icon aria-hidden="true" />
     <div className="ui-notice-copy">
       {title ? <strong>{title}</strong> : null}

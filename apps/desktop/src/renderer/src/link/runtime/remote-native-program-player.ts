@@ -6,6 +6,9 @@ type Api = Pick<LinkDesktopApi, 'openNativeProgram' | 'controlNativeProgram' | '
 /** What the window supplies: settings to play with, and where to show and log what happens. */
 export type RemotePlayerDependencies = Pick<InternalPlayerDependencies, 'configuration' | 'changed' | 'preciseSeeking'> & {
   notice: (message: string, itemId: string | null) => void;
+  /** The background program answered the open, so `outdated` is known now: it comes after the first state the
+   * program sends, and that state does not say which version of the project it plays. */
+  attached: () => void;
 };
 
 /** UI controller is a remote for the main-process program host. It never
@@ -43,7 +46,10 @@ export class RemoteNativeProgramPlayer {
     const audio = api.onNativePlaybackStatus(status => { if (!this.disposed) this.native = status; });
     this.unsubscribe = () => { program(); audio(); };
     this.ready = api.openNativeProgram({ version: 1, ownerId: this.ownerId, projectPath, revision,
-      document: JSON.stringify(project), configuration: this.configuration() }).then(attachment => { this.attachment = attachment; });
+      document: JSON.stringify(project), configuration: this.configuration() }).then(attachment => {
+      this.attachment = attachment;
+      if (!this.disposed) this.dependencies.attached();
+    });
     void this.ready.catch(error => this.failed(error));
   }
   /** Every song plays when the operator starts it (2026-10-26); the engine shows the start check as a warning. */

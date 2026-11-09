@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { offAirParts, offAirTitle, onAirAt } from './timeline-air';
+import { markedOnAir, offAirParts, offAirTitle, onAirAt } from './timeline-air';
 
 describe('时间线上标出不播出的部分', () => {
   it('中间被机位挡住的一段按片段长度的比例给出', () => {
@@ -18,5 +18,11 @@ describe('时间线上标出不播出的部分', () => {
     const airtime = new Map([['media:a', [{ start: 0, end: 30 }]], ['cue:b', [{ start: 30, end: 60 }]], ['cue:c', []]]);
     expect([...onAirAt(airtime, 29)]).toEqual(['media:a']);
     expect([...onAirAt(airtime, 30)]).toEqual(['cue:b']);
+  });
+  it('标“正在播出”：按 OBS 在播的那一版，加上播放头处显示着的来源；播放中改过的部分不标；确认不了是哪一版时什么都不标', () => {
+    const airtime = new Map([['media:a', [{ start: 0, end: 30 }]], ['cue:b', [{ start: 0, end: 60 }]]]);
+    expect([...markedOnAir(airtime, new Set(), 10, ['caption'])].sort()).toEqual(['cue:b', 'cue:caption', 'media:a']);
+    expect([...markedOnAir(airtime, new Set(['cue:b', 'cue:caption']), 10, ['caption'])]).toEqual(['media:a']);
+    expect([...markedOnAir(null, new Set(), 10, ['caption'])]).toEqual([]);
   });
 });

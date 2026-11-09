@@ -11,15 +11,18 @@ function fixture(wait?: Promise<NativeProgramAttachment>, project: LinkProject =
     onNativeProgramEvent: vi.fn<LinkDesktopApi['onNativeProgramEvent']>(() => vi.fn()),
     onNativePlaybackStatus: vi.fn<LinkDesktopApi['onNativePlaybackStatus']>(() => vi.fn())
   };
+  /** What `outdated` said each time the window was told the open was answered. */
+  const answered: boolean[] = [];
   const dependencies = { prepare: vi.fn(() => Promise.resolve()), ingest: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()), resolveAudio: vi.fn(() => Promise.reject(new Error('不能在界面播放原声'))),
-    configuration: () => ({ outputDeviceId: 'default', mtcPortName: null }), changed: vi.fn<InternalPlayerDependencies['changed']>(), notice: vi.fn() };
-  const observed = vi.fn(), player = new RemoteNativeProgramPlayer(project, 'C:/test/show.tblink', 1, dependencies, api, observed);
+    configuration: () => ({ outputDeviceId: 'default', mtcPortName: null }), changed: vi.fn<InternalPlayerDependencies['changed']>(), notice: vi.fn(),
+    attached: vi.fn(() => { answered.push(player.outdated); }) };
+  const observed = vi.fn(), player: RemoteNativeProgramPlayer = new RemoteNativeProgramPlayer(project, 'C:/test/show.tblink', 1, dependencies, api, observed);
   const ownerId = api.openNativeProgram.mock.calls[0]![0].ownerId;
   const emit = (patch: Partial<NativeProgramEvent> = {}) => api.onNativeProgramEvent.mock.calls[0]![0]({ version: 1, ownerId, sequence: 1,
     state: { ...emptyInternalPlayerState, status: 'playing', itemId: 'song', positionMs: 1234 },
     clock: { positionMs: 1234, durationMs: 5000, ready: true, playing: true, seeking: false }, currentCueId: null, ...patch });
-  return { api, dependencies, player, observed, emit, ownerId };
+  return { api, dependencies, player, observed, emit, ownerId, answered };
 }
 
 it('只显示当前会话递增序号；时钟与状态同步，旧界面事件不回写', async () => {
@@ -60,6 +63,18 @@ it('接管到与界面不同版本的节目时标记为过期，其余打开不�
   const outdated = fixture(Promise.resolve('outdated')), adopted = fixture(Promise.resolve('adopted'));
   await outdated.player.play('song'); await adopted.player.play('song');
   expect(outdated.player.outdated).toBe(true); expect(adopted.player.outdated).toBe(false); expect(fixture().player.outdated).toBe(false);
+});
+
+it('后台答复打开以后告诉界面，这时已经知道是不是过期的节目；销毁以后答复不再告诉界面', async () => {
+  // The program sends its state before it answers the open: the editor learns it is outdated only from this call.
+  const outdated = fixture(Promise.resolve('outdated')), adopted = fixture(Promise.resolve('adopted'));
+  outdated.emit({ sequence: 2, state: { ...emptyInternalPlayerState, status: 'paused', itemId: 'song' } });
+  expect(outdated.answered).toEqual([]);
+  await outdated.player.play('song'); await adopted.player.play('song');
+  expect(outdated.answered).toEqual([true]); expect(adopted.answered).toEqual([false]);
+  let release!: () => void; const wait = new Promise<NativeProgramAttachment>(resolve => { release = () => resolve('outdated'); }), late = fixture(wait);
+  await late.player.dispose(); release(); await wait;
+  expect(late.dependencies.attached).not.toHaveBeenCalled();
 });
 
 it('随时可播放：灯光需要处理的歌也直接发给后台播放，不弹窗、不拦，由后台显示提示（2026-10-26）', async () => {

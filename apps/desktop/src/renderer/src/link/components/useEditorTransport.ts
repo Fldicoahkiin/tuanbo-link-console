@@ -8,11 +8,12 @@ import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator
 import { useDisplayPreferences } from '../stores/display-preferences-store';
 import { usePlayerClock } from '../usePlayerClock';
 import { editorPlayRequest } from './play-buttons';
+import { songInPlayer } from '../view-models/picture-on-air';
 
 export function useEditorProgram(player: ProjectPlayer, external: boolean, notify: (message: string, tone?: 'info' | 'error') => void): string | null {
   const [selected, select] = useSelectedProgram(notify);
   useEffect(() => { if (external && player.state.itemId) select(player.state.itemId); }, [external, player.state.itemId, select]);
-  return external && ['playing', 'paused', 'preparing'].includes(player.state.status) ? player.state.itemId ?? selected : selected;
+  return songInPlayer(player.state, external) ?? selected;
 }
 
 /** The editor owns only its stopped cursor; the formal player owns audio and output. */
@@ -26,7 +27,8 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
   const seekQueue = useRef<LatestPosition | null>(null);
   const resumeAfterSeek = useRef(false);
   useEffect(() => { setSeeking(false); return () => { seekQueue.current?.cancel(); seekQueue.current = null; }; }, [itemId, player.controller, previewCoordinator]);
-  const active = external && player.state.itemId === itemId && ['playing', 'paused', 'preparing'].includes(player.state.status);
+  // The song 联动台播放 holds, as the picture marks see it (view-models/picture-on-air).
+  const active = itemId !== null && songInPlayer(player.state, external) === itemId;
   const playerClock = usePlayerClock(player.view, active);
   const playheadMs = active && !seeking ? playerClock.positionMs : cursor;
   const playing = external ? active && player.state.status === 'playing' : localPlaying;

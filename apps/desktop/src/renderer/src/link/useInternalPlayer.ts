@@ -24,10 +24,13 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   const [view] = useState(() => new PlayerViewStore());
   const state = useSyncExternalStore(view.subscribeControl, view.readControl);
   const [generation, setGeneration] = useState(0);
+  // The background program answers the open after the state it sends; kept per controller, so it shows while paused too.
+  const [attachment, setAttachment] = useState<{ player: RemoteNativeProgramPlayer; outdated: boolean } | null>(null);
+  const outdated = attachment !== null && attachment.player === controller && attachment.outdated;
   useEffect(() => {
     // A program taken over after a window reload may play an older document; once it stops, open the shown one.
-    if (controller?.outdated && !['preparing', 'playing', 'paused'].includes(state.status)) setGeneration(value => value + 1);
-  }, [controller, state.status]);
+    if (outdated && !['preparing', 'playing', 'paused'].includes(state.status)) setGeneration(value => value + 1);
+  }, [outdated, state.status]);
   const profile = useIntegrationStore((value) => value.profile);
   const obsStatus = useIntegrationStore(value => value.obs.status);
   const notifySelection = useCallback((message: string) => controller?.reportUnavailable(message), [controller]);
@@ -85,7 +88,8 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
           ...(itemId ? { itemId } : {}), device: '播放器' })
           .catch((error: unknown) => console.error('正式播放通道提示未能保存到日志', error));
       },
-      preciseSeeking: () => useDisplayPreferences.getState().preciseSeeking
+      preciseSeeking: () => useDisplayPreferences.getState().preciseSeeking,
+      attached: () => setAttachment({ player, outdated: player.outdated })
     };
     const player = new RemoteNativeProgramPlayer(project, path ?? '', useDocumentStore.getState().revision, dependencies, desktop, event => {
       const runtime = useRuntimeStore.getState();
@@ -118,5 +122,5 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     };
   }, [coordinator, project, path, ready, audioConfiguration, view, generation]);
   const engine = playerEngineLabel(profile, project);
-  return useMemo(() => ({ controller, state, view, engine }), [controller, state, view, engine]);
+  return useMemo(() => ({ controller, state, view, engine, outdated }), [controller, state, view, engine, outdated]);
 }

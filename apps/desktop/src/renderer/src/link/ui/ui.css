@@ -179,6 +179,12 @@
   .ui-notice-copy > div:not(.ui-notice-actions) { display: grid; gap: var(--space-half); }
   .ui-notice-copy strong { color: var(--color-text-strong); font-weight: 500; }
   .ui-notice-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-top: var(--space-half); }
+  /* One line across the top of a panel, under its toolbar: the title, then the text, cut off at the end of the line (the tooltip has all of it). */
+  .ui-notice[data-density='compact'] { align-items: center; min-height: 28px; padding: 0 var(--space-2); border-width: 0 0 1px; border-radius: 0; font-size: var(--type-caption); white-space: nowrap; }
+  .ui-notice[data-density='compact'] > svg { margin-top: 0; }
+  .ui-notice[data-density='compact'] > .ui-notice-copy { display: flex; align-items: baseline; gap: var(--space-1); overflow: hidden; }
+  .ui-notice[data-density='compact'] > .ui-notice-copy > strong { flex: none; }
+  .ui-notice[data-density='compact'] > .ui-notice-copy > div { display: block; min-width: 0; overflow: hidden; color: var(--color-text-secondary); text-overflow: ellipsis; }
   @keyframes ui-spin { to { transform: rotate(360deg); } }
 
   .ui-toolbar { display: flex; align-items: center; gap: var(--space-1); min-width: 0; min-height: 40px; }

@@ -4,7 +4,8 @@ import {
   moveContentCommand, moveVisualLayerCommand, placeContentCommand, removeContentCommand, replaceCueCommand,
   replaceReferenceMediaClipCommand, trimContentCommand, updateVisualLayerCommand, withContentTimeline, type LinkCommand
 } from '@tb/core/link';
-import { NO_PENDING_PICTURE_EDITS, pendingPictureEdits, pendingPictureNotice } from './pending-picture-edits';
+import { NO_PENDING_PICTURE_EDITS, pendingPictureEdits, type SongPicture } from './pending-picture-edits';
+import { songPicture } from './picture-on-air';
 
 const at = (seconds: number) => ({ hours: 0, minutes: 0, seconds, frames: 0 });
 const camera = (id: string, seconds: number, durationMs: number, layerId?: string): LinkCue => ({
@@ -15,23 +16,35 @@ const midi = (id: string, seconds: number, layerId?: string): LinkCue => ({
   id, name: id, enabled: true, notes: '', timecode: at(seconds), ...(layerId ? { layerId } : {}),
   actions: [{ id: `${id}-midi`, label: id, kind: 'midi.programChange', portProfileId: 'port', channel: 1, program: 1 }]
 });
+/** An older “显示来源” cue: no camera, it shows a source in the scene on program. */
+const showSource = (id: string, seconds: number, layerId: string): LinkCue => ({
+  id, name: id, enabled: true, notes: '', timecode: at(seconds), durationMs: 1_000, layerId,
+  actions: [{ id: `${id}-show`, label: `显示 ${id}`, kind: 'obs.setSceneItemEnabled', sceneName: '机位 a', sourceName: '字幕', enabled: true }]
+});
 const clip = (id: string, seconds: number, durationMs: number, layerId?: string): ReferenceMediaClip => ({
   id, assetId: 'video', label: id, startTimecode: at(seconds), durationMs, ...(layerId ? { layerId } : {}), canvasTransform: DEFAULT_REFERENCE_CANVAS_TRANSFORM
 });
 
+const video = { id: 'video', name: '开场视频', kind: 'video', folderId: null, relativePath: 'assets/video.mp4', sha256: 'a'.repeat(64), byteLength: 1, durationMs: 20_000, width: 1080, height: 1920 } as const;
 /** The project as it was when 联动台播放 started the song: cameras a and b over the opening clip. */
 function onAir(): LinkProject {
-  return parseLinkProject({ ...createEmptyLinkProject('现场'), playbackSource: 'internal', obsOutputMode: 'scenes', mediaAssets: [
-    { id: 'video', name: '开场视频', kind: 'video', folderId: null, relativePath: 'assets/video.mp4', sha256: 'a'.repeat(64), byteLength: 1, durationMs: 20_000, width: 1080, height: 1920 }
-  ], rundown: [{ id: 'song', title: '第三首', enabled: true, notes: '',
+  return parseLinkProject({ ...createEmptyLinkProject('现场'), playbackSource: 'internal', obsOutputMode: 'scenes', mediaAssets: [video], rundown: [{ id: 'song', title: '第三首', enabled: true, notes: '',
     visualLayers: [{ id: 'cameras', name: '轨道 1', visible: true, locked: false }, { id: 'clips', name: '轨道 2', visible: true, locked: false }],
     cues: [camera('a', 2, 3_000, 'cameras'), camera('b', 8, 2_000, 'cameras'), midi('smoke', 1, 'cameras')],
     referenceMediaClips: [clip('opening', 0, 12_000, 'clips')] }] });
 }
+/** Parts that never play: a switched-off camera and a clip on a hidden track; and a shown-source cue that does. */
+function withUnplayed(): LinkProject {
+  return parseLinkProject({ ...createEmptyLinkProject('现场'), playbackSource: 'internal', obsOutputMode: 'scenes', mediaAssets: [video], rundown: [{ id: 'song', title: '第三首', enabled: true, notes: '',
+    visualLayers: [{ id: 'cameras', name: '轨道 1', visible: true, locked: false }, { id: 'sources', name: '轨道 2', visible: true, locked: false }, { id: 'hidden', name: '轨道 3', visible: false, locked: false }],
+    cues: [camera('a', 2, 3_000, 'cameras'), { ...camera('off', 8, 2_000, 'cameras'), enabled: false }, showSource('caption', 4, 'sources')],
+    referenceMediaClips: [clip('backstage', 0, 12_000, 'hidden')] }] });
+}
 /** Edits made while it plays, each under the timeline rules as the editor makes them. */
 const edit = (project: LinkProject, ...commands: LinkCommand[]): LinkProject => commands.reduce((value, command) => withContentTimeline(command).execute(value), project);
 const song = (project: LinkProject): RundownItem => project.rundown[0]!;
-const pending = (playing: LinkProject, current: LinkProject) => pendingPictureEdits(song(playing), song(current));
+const picture = (project: LinkProject): SongPicture => songPicture(project, 'song')!;
+const pending = (playing: LinkProject, current: LinkProject) => pendingPictureEdits(picture(playing), picture(current));
 const cueOf = (project: LinkProject, id: string): LinkCue => song(project).cues.find(cue => cue.id === id)!;
 const clipOf = (project: LinkProject, id: string): ReferenceMediaClip => song(project).referenceMediaClips.find(entry => entry.id === id)!;
 
@@ -44,7 +57,6 @@ describe('播放中改的画面，停下重播才生效', () => {
       replaceReferenceMediaClipCommand('song', { ...clipOf(playing, 'opening'), label: '开场 · 新' }),
       updateVisualLayerCommand('song', { id: 'clips', name: '素材', visible: true, locked: true }));
     expect(pending(playing, renamed)).toEqual(NO_PENDING_PICTURE_EDITS);
-    expect(pendingPictureNotice(pending(playing, renamed))).toBeNull();
   });
 
   it('挪过的机位、修剪过和改过属性的素材标出来，没动的照旧', () => {
@@ -76,6 +88,28 @@ describe('播放中改的画面，停下重播才生效', () => {
     expect(pending(playing, removed)).toEqual({ changed: new Set(), removed: 2 });
   });
 
+  it('删掉本来就不播出的部分（停用的机位、隐藏轨道上的素材）不计数，提示里说的“照常播出”才属实；删掉显示来源的 Cue 照常计数', () => {
+    const playing = withUnplayed();
+    const unplayed = edit(playing, removeContentCommand('song', [{ kind: 'cue', id: 'off' }, { kind: 'clip', id: 'backstage' }]));
+    expect(pending(playing, unplayed)).toEqual(NO_PENDING_PICTURE_EDITS);
+    const caption = edit(playing, removeContentCommand('song', [{ kind: 'cue', id: 'caption' }]));
+    expect(pending(playing, caption)).toEqual({ changed: new Set(), removed: 1 });
+  });
+
+  it('挪动停用的机位、隐藏轨道上的素材不标；把它打开、把轨道显示出来，才标“停下重播才生效”', () => {
+    const playing = withUnplayed();
+    const moved = edit(playing, moveContentCommand('song', { kind: 'cue', id: 'off' }, 12_000, { track: 'cameras' }),
+      moveContentCommand('song', { kind: 'clip', id: 'backstage' }, 1_000, { track: 'hidden' }));
+    expect(song(moved).cues.find(cue => cue.id === 'off')?.timecode.seconds).toBe(12);
+    expect(pending(playing, moved)).toEqual(NO_PENDING_PICTURE_EDITS);
+    const switchedOn = edit(playing, replaceCueCommand('song', { ...cueOf(playing, 'off'), enabled: true }));
+    expect([...pending(playing, switchedOn).changed]).toEqual(['cue:off']);
+    const shown = edit(playing, updateVisualLayerCommand('song', { id: 'hidden', name: '轨道 3', visible: true, locked: false }));
+    expect([...pending(playing, shown).changed]).toEqual(['media:backstage']);
+    const caption = edit(playing, moveContentCommand('song', { kind: 'cue', id: 'caption' }, 6_000, { track: 'sources' }));
+    expect([...pending(playing, caption).changed]).toEqual(['cue:caption']);
+  });
+
   it('轨道显示、隐藏或换了上下位置，这条轨道上的画面都算修改', () => {
     const playing = onAir();
     const hidden = edit(playing, updateVisualLayerCommand('song', { id: 'clips', name: '轨道 2', visible: false, locked: false }));
@@ -98,18 +132,10 @@ describe('播放中改的画面，停下重播才生效', () => {
     const reversed = <T extends object>(value: T): T => Object.fromEntries(Object.entries(value).reverse()) as T;
     const rebuilt: RundownItem = { ...item, cues: item.cues.map(cue => reversed({ ...cue, actions: cue.actions.map(reversed), timecode: reversed(cue.timecode) })),
       referenceMediaClips: item.referenceMediaClips.map(entry => reversed({ ...entry, canvasTransform: reversed(entry.canvasTransform) })) };
-    expect(pendingPictureEdits(item, rebuilt)).toEqual(NO_PENDING_PICTURE_EDITS);
+    expect(pending(playing, { ...playing, rundown: [rebuilt] })).toEqual(NO_PENDING_PICTURE_EDITS);
   });
 
-  it('正在播的版本里没有这首歌时，这首歌的画面全都还没播', () => {
-    expect([...pendingPictureEdits(undefined, song(onAir())).changed].sort()).toEqual(['cue:a', 'cue:b', 'media:opening']);
-  });
-
-  it('工具栏先说改了几处、删了几处，再说怎么办', () => {
-    expect(pendingPictureNotice({ changed: new Set(['cue:b']), removed: 0 })).toEqual({ text: '播放中改了 1 处，停下重播才生效',
-      detail: 'OBS 还在按开始播放时的时间线播。点“停止”后重新播放，才会用上改过的时间线。' });
-    expect(pendingPictureNotice({ changed: new Set(), removed: 2 })).toEqual({ text: '播放中删了 2 处，停下重播才生效',
-      detail: 'OBS 还在按开始播放时的时间线播，删掉的 2 处也照常播出。点“停止”后重新播放，才会用上改过的时间线。' });
-    expect(pendingPictureNotice({ changed: new Set(['cue:b', 'media:opening']), removed: 1 })?.text).toBe('播放中改了 2 处、删了 1 处，停下重播才生效');
+  it('正在播的版本里没有这首歌时，这首歌会播出的画面全都还没播', () => {
+    expect([...pendingPictureEdits(undefined, picture(onAir())).changed].sort()).toEqual(['cue:a', 'cue:b', 'media:opening']);
   });
 });

@@ -32,6 +32,18 @@ export function onAirAt(airtime: Airtime, frame: number): Set<string> {
   return keys;
 }
 
+/** The parts marked on air at `frame`: on air by `onAirtime`, the version OBS plays (view-models/picture-on-air),
+ * or a source shown at the playhead (`shownSourceIds`, from the timeline's state); never one of the parts changed
+ * since the song started (`pending`), which OBS does not have yet; none at all when `onAirtime` is null, as the
+ * version OBS plays cannot be confirmed. */
+export function markedOnAir(onAirtime: Airtime | null, pending: ReadonlySet<string>, frame: number, shownSourceIds: readonly string[]): Set<string> {
+  if (!onAirtime) return new Set();
+  const keys = onAirAt(onAirtime, frame);
+  for (const id of shownSourceIds) keys.add(`cue:${id}`);
+  for (const key of pending) keys.delete(key);
+  return keys;
+}
+
 /** Hover text for a part with covered stretches. */
 export function offAirTitle(parts: readonly OffAirPart[]): string | null {
   if (!parts.length) return null;

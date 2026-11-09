@@ -79,8 +79,9 @@ type Props = {
   timelineState: ResolvedTimelineState;
   /** What the output shows of each clip and camera (SceneOutputTimeline.airtime). */
   airtime: Airtime;
-  /** What OBS plays by, for the on-air marks: while the song plays, the airtime of the version it started with. */
-  onAirtime: Airtime;
+  /** What OBS plays by, for the on-air marks: while the song plays, the airtime of the version it started with;
+   * null when that version cannot be confirmed (view-models/picture-on-air). */
+  onAirtime: Airtime | null;
   /** Parts changed while the song plays, which OBS does not have yet (view-models/pending-picture-edits). */
   pending: ReadonlySet<string>;
   editRules: ContentEditRules;

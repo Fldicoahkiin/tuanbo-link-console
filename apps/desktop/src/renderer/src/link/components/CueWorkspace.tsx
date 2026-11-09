@@ -31,7 +31,6 @@ import {
   renameMediaAssetCommand,
   renameMediaFolderCommand,
   TimelineStateIndex,
-  millisecondsToFrameNumber,
   LightingTempoMap,
   lightingEventTime,
   programTimeOrigin,
@@ -59,16 +58,14 @@ import { ResourceLibrary, type ObsResource } from './ResourceLibrary';
 import { useAssetAvailability } from './useAssetAvailability';
 import { useWorkspaceLayout } from './useWorkspaceLayout';
 import { ReferenceStage } from './ReferenceStage';
-import { SceneOutputTimeline } from '@tb/core/link';
 import { contentEditRules } from './ContentTracks';
-import type { Airtime } from './timeline-air';
 import { useDisplayPreferences } from '../stores/display-preferences-store';
 import { useReferenceAudioUrl, useLightingDocument } from './useCueWorkspaceSetup';
 import { editableTimelineDuration } from './timeline-geometry';
 import { createWorkspaceActions } from './workspace-actions';
 import type { DocumentActionProps } from './DocumentActions';
 import { PendingPictureNotice } from './PendingPictureNotice';
-import { NO_PENDING_PICTURE_EDITS, pendingPictureEdits } from '../view-models/pending-picture-edits';
+import { useSceneOutput } from './useSceneOutput';
 
 type Props = {
   workspace?: 'visual' | 'lighting';
@@ -209,7 +206,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
       </aside>}
         </div>
         {!lowPower && !lightingWorkspace ? <button className="workspace-splitter horizontal" aria-label="调整时间线高度" onPointerDown={(event) => workspaceLayout.beginResize('timeline', event)} onKeyDown={event => workspaceLayout.resizeWithKeyboard('timeline', event)} /> : null}
-        {item && timelineState ? <ReferenceTimeline analysisPanel={{ host: analysisHost, open: analysisOpen, onOpen: () => { setLightingTool(null); setAnalysisOpen(true); }, onClose: () => setAnalysisOpen(false) }} outputControl={lightingWorkspace ? <>{project ? <LightingOutputControl project={project} item={item} /> : null}{externalTransport && (player.state.notice || player.state.error || player.state.fault) ? <PlayerStatusDetails error={player.state.error} errorTitle={player.state.errorTitle} notice={player.state.notice} fault={player.state.fault ?? null} engine={player.engine} /> : null}</> : undefined} transportStatus={lightingWorkspace ? undefined : <PendingPictureNotice edits={sceneOutput.pending} />} onEffectDrop={lightingWorkspace ? effectStamp.stamp : undefined} onConsoleCueDrop={lightingWorkspace ? effectStamp.stampConsoleCue : undefined} lightingWorkspace={lightingWorkspace}
+        {item && timelineState ? <ReferenceTimeline analysisPanel={{ host: analysisHost, open: analysisOpen, onOpen: () => { setLightingTool(null); setAnalysisOpen(true); }, onClose: () => setAnalysisOpen(false) }} outputControl={lightingWorkspace ? <>{project ? <LightingOutputControl project={project} item={item} /> : null}{externalTransport && (player.state.notice || player.state.error || player.state.fault) ? <PlayerStatusDetails error={player.state.error} errorTitle={player.state.errorTitle} notice={player.state.notice} fault={player.state.fault ?? null} engine={player.engine} /> : null}</> : undefined} transportStatus={lightingWorkspace ? undefined : <PendingPictureNotice notice={sceneOutput.marks.notice} />} onEffectDrop={lightingWorkspace ? effectStamp.stamp : undefined} onConsoleCueDrop={lightingWorkspace ? effectStamp.stampConsoleCue : undefined} lightingWorkspace={lightingWorkspace}
           audioEditor={audioEditor} onSelectAudio={selectAudio} externalTransport={externalTransport} transportClock={clock} onStop={()=>{stop();void stopMa2Audition().catch((error:unknown)=>notify(error instanceof Error?error.message:String(error),'error'));}}
           lighting={{ onCreateCue: lightingWorkspace ? ms => { const id = crypto.randomUUID(); const next = placeEmptyLightingCue(lightingDocument, id, ms, item.referenceAudio?.durationMs ?? 0); if (!changeLighting(next, '添加空 Cue')) return; selectCreatedCue(next, id); } : undefined, onClearSelection: () => { setLightingSelection(null); setPointDetails(false); }, onAuditionEvent: audition.select, onOpenTools: openLightingTool, detailOpen: lightingTool !== null, onError: (message) => notify(message, 'error'), preview: lightingPreview, onPreviewChange: setLightingPreview, mtcOrigin: () => programTimeOrigin(item), document: lightingDocument, selectedClipId: lightingSelection?.clipId ?? null, selectedEventId: lightingSelection?.eventId ?? null, selectedEventIds: lightingSelection?.eventIds ?? [], onSelectEvent: (trackId, clipId, eventId, eventIds) => { setAnalysisOpen(false); setSelectedClipId(null); setSelectedCueId(null); setLightingSelection({ trackId, clipId, eventId, eventIds: eventIds ?? [eventId] }); if (lightingWorkspace && (!eventIds || eventIds.length <= 1)) { setPointDetails(true); setLightingTool(null); setCueSelectionVersion(value => value + 1); } }, onSelect: (trackId, clipId) => { setSelectedClipId(null); setSelectedCueId(null); setLightingSelection({ trackId, clipId }); }, onChange: changeLighting }}
           projectPath={projectPath}
@@ -218,7 +215,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
           cues={item.cues}
           layers={item.visualLayers}
           timelineState={timelineState}
-          airtime={sceneOutput.airtime} onAirtime={sceneOutput.onAirtime} pending={sceneOutput.pending.changed}
+          airtime={sceneOutput.airtime} onAirtime={sceneOutput.marks.onAirtime} pending={sceneOutput.marks.pending.changed}
           editRules={contentEditRules(project, item.id)}
           frameRate={project.timebase.frameRate}
           durationMs={durationMs}
@@ -261,46 +258,6 @@ function toMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-
-const NO_AIRTIME: Airtime = new Map();
-
-/** One reading of what the output shows, by the output's own rule: which part
- * of each clip and camera plays (timeline), and the picture at the playhead
- * for the preview drawn without OBS. While the song plays, OBS plays the version
- * it started with: the on-air marks follow that version (`onAirtime`), and the
- * picture edits made since wait for a replay (`pending`). */
-function useSceneOutput(project: LinkProject | null, itemId: string | null, playheadMs: number, connected: boolean, player: ProjectPlayer, playbackProject: LinkProject | null) {
-  const timeline = useMemo(() => project && itemId ? new SceneOutputTimeline(project, itemId) : null, [project, itemId]);
-  const airtime = useMemo<Airtime>(() => timeline?.airtime() ?? NO_AIRTIME, [timeline]);
-  const onAir = versionOnAir(player, playbackProject, itemId);
-  const onAirtime = useMemo<Airtime | null>(() => {
-    if (!onAir || !itemId) return null;
-    // A version without the song has none of it on air.
-    return onAir.rundown.some(entry => entry.id === itemId) ? new SceneOutputTimeline(onAir, itemId).airtime() : NO_AIRTIME;
-  }, [onAir, itemId]);
-  const item = project?.rundown.find(entry => entry.id === itemId);
-  const pending = useMemo(() => onAir && item ? pendingPictureEdits(onAir.rundown.find(entry => entry.id === item.id), item) : NO_PENDING_PICTURE_EDITS, [onAir, item]);
-  const frame = millisecondsToFrameNumber(playheadMs, project?.timebase.frameRate ?? '30');
-  const preview = useMemo(() => timeline && !connected ? resolveScenePreviewOutput(timeline, frame) : null, [timeline, connected, frame]);
-  return { airtime, onAirtime: onAirtime ?? airtime, pending, preview };
-}
-
-/** The project OBS plays `itemId` from while 联动台播放 prepares, plays or pauses
- * it: as it was when playback started (LinkApp keeps it until 停止). Null while
- * that song is not playing. */
-function versionOnAir(player: ProjectPlayer, playbackProject: LinkProject | null, itemId: string | null): LinkProject | null {
-  return itemId !== null && player.state.itemId === itemId && ['preparing', 'playing', 'paused'].includes(player.state.status)
-    && playbackProject?.playbackSource === 'internal' ? playbackProject : null;
-}
-
-/** What the output would show without OBS: every clip in the picture, with the
- * camera beneath them, never just the topmost one. */
-function resolveScenePreviewOutput(timeline: SceneOutputTimeline, frame: number) {
-  const { camera, clipIds } = timeline.picture(frame);
-  const action = camera?.actions.find((entry) => entry.kind === 'obs.setProgramScene');
-  return { scene: camera && action?.kind === 'obs.setProgramScene' ? { cueId: camera.id, sceneName: action.sceneName } : null,
-    mediaClipIds: new Set(clipIds) };
-}
 
 function createCommandRunner(
   execute: ReturnType<typeof useDocumentStore.getState>['execute'],
