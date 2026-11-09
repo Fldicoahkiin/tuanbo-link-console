@@ -7,7 +7,11 @@ type Prepared = { lease: NativeAudioLease; identity: Identity };
 type Task = { projectPath: string; sourcePath: string; snapshot: PlaybackSnapshot; abort: AbortController;
   result: Prepared | null; promise: Promise<Prepared | null>; consumed: boolean; cleanup: Promise<void> | null };
 type Options = { cache: Pick<NativeAudioCache, 'prepare'>; resolveAudio: (projectPath: string, relativePath: string) => string;
-  error: (message: string) => void; measured?: (phase: string, elapsedMs: number) => void };
+  error: (message: string) => void;
+  /** The job was let go but not cleaned up. That happens while another song is prepared, or during a seek, stop or
+   * close, and is not their failure: it is reported here, apart from `error`. */
+  cleanupError: (message: string) => void;
+  measured?: (phase: string, elapsedMs: number) => void };
 
 /** One pinned next-source lease. This never controls an audio/MIDI device or
  * starts output. The current player owns its separate lease throughout. */
@@ -20,8 +24,13 @@ export class NativeAudioPreload {
     const task: Task = { projectPath, sourcePath: '', snapshot, abort: new AbortController(), result: null,
       promise: Promise.resolve(null), consumed: false, cleanup: null };
     this.task = task;
-    task.promise = this.prepare(task).catch(error => {
-      if (!task.abort.signal.aborted) this.options.error(`预先准备下一首音频失败：${error instanceof Error ? error.message : String(error)}`);
+    task.promise = this.prepare(task).catch((error: unknown) => {
+      // Only the cancellation itself is quiet. Any other failure is reported even after a cancel, such as a
+      // decoder that would not stop: the cancel came from another song, a seek, stop or close, so it is a cleanup failure.
+      if (!task.abort.signal.aborted) this.options.error(`预先准备下一首音频失败：${reason(error)}`);
+      else if (!isCancellation(error, task.abort.signal)) {
+        this.options.cleanupError(`预先准备的下一首音频已取消，但没清理干净，这份音频不会再用。原因：${reason(error)}`);
+      }
       return null;
     });
   }
@@ -31,20 +40,24 @@ export class NativeAudioPreload {
     const task = this.task;
     if (!task) return null;
     const matches = task.projectPath === projectPath && audioIdentity(task.snapshot) === audioIdentity(snapshot);
+    // Held apart from the job: its background decode can fail, and clear the job's result, while the source is read below.
+    const result = task.result;
     // Do not wait for an unfinished background decode at a user playback boundary. This song is then
     // prepared as usual: it has not been prepared yet, so that is not a retry.
-    if (!matches || !task.result) { await this.discard(); return null; }
+    if (!matches || !result) { await this.discard(); return null; }
     const actual = await stat(task.sourcePath).catch(async (error: unknown) => {
       if (this.task === task) await this.discard();
       throw error;
     });
     if (this.task !== task || task.abort.signal.aborted) return null;
-    if (!sameIdentity(actual, task.result.identity)) {
+    // Its decode failed meanwhile (already reported): this song is prepared as usual, as when it was not ready.
+    if (task.result !== result) { await this.discard(); return null; }
+    if (!sameIdentity(actual, result.identity)) {
       await this.discard(); throw new Error('预先准备好的音频原文件变了，请重新导入；旧音频不会被使用');
     }
     task.consumed = true; this.task = null;
     this.options.measured?.('使用预先准备的下一首音频', performance.now() - started);
-    return task.result.lease;
+    return result.lease;
   }
 
   /** The pending job is let go whether or not its cleanup succeeds, so the next song can be prepared
@@ -61,7 +74,7 @@ export class NativeAudioPreload {
    * cleanup is reported here and never becomes that caller's failure. */
   async discard(): Promise<void> {
     try { await this.cancel(); }
-    catch (error) { this.options.error(`预先准备的下一首音频没清理干净，这份音频不会再用。原因：${error instanceof Error ? error.message : String(error)}`); }
+    catch (error) { this.options.cleanupError(`预先准备的下一首音频没清理干净，这份音频不会再用。原因：${reason(error)}`); }
   }
 
   private async prepare(task: Task): Promise<Prepared> {
@@ -88,6 +101,13 @@ export class NativeAudioPreload {
 function sameIdentity(a: Identity, b: Identity): boolean {
   return a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && a.ino === b.ino;
 }
+
+/** The job's own cancellation as the cache ends with it: the signal's reason, or Node's AbortError from a timer or a file read. */
+function isCancellation(error: unknown, signal: AbortSignal): boolean {
+  return error === signal.reason || (error instanceof Error && error.name === 'AbortError');
+}
+
+function reason(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 
 function audioIdentity(snapshot: PlaybackSnapshot): string {
   return JSON.stringify([snapshot.projectId, snapshot.itemId, snapshot.revision, snapshot.audio.relativePath,

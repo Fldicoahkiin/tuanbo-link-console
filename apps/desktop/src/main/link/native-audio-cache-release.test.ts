@@ -1,10 +1,12 @@
-import { expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtemp, rename, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import type { PlaybackSnapshot } from '@tb/schema';
 import type { DecodeResult } from './native-audio-decode';
 import { NativeAudioCache } from './native-audio-cache';
+import { NativeAudioPreload } from './native-audio-preload';
 
 // A release's rename can be refused, the way Windows refuses one while a virus scanner holds the file.
 vi.mock('node:fs/promises', async importOriginal => {
@@ -14,9 +16,13 @@ vi.mock('node:fs/promises', async importOriginal => {
 
 type Decoder = { readonly finished: Promise<DecodeResult>; exit: (result: DecodeResult) => void; refuse: boolean };
 const decoders = vi.hoisted(() => [] as Decoder[]);
+/** While held, a prefill has not decoded the start yet: it ends once let go, or when its preparation is cancelled. */
+const prefill = vi.hoisted(() => ({ held: false }));
+afterEach(() => { prefill.held = false; });
 // Stands in for FFmpeg: the whole decode is written at once, and the test decides when the process exits.
 vi.mock('./native-audio-decode', async () => {
   const { writeFileSync } = await import('node:fs');
+  const { setTimeout: delay } = await import('node:timers/promises');
   return { NativeAudioDecode: class implements Decoder {
     readonly finished: Promise<DecodeResult>;
     exit: (result: DecodeResult) => void = () => undefined;
@@ -28,7 +34,10 @@ vi.mock('./native-audio-decode', async () => {
       this.finished = new Promise(resolve => { this.exit = result => { this.result ??= result; resolve(this.result); }; });
       decoders.push(this);
     }
-    readyThrough(): Promise<void> { return Promise.resolve(); }
+    // Checked every 10 ms like the growing file, until the start is decoded or the preparation is cancelled.
+    async readyThrough(_bytes: number, signal: AbortSignal): Promise<void> {
+      while (prefill.held) await delay(10, undefined, { signal });
+    }
     cancel(): Promise<void> {
       if (this.result) return Promise.resolve();
       this.cancelled = true;
@@ -76,5 +85,27 @@ it('解码进程不肯退出：同一音源明确说正在释放、不开新的�
   const again = await cache.prepare(input, signal);
   expect(decoders).toHaveLength(started + 1);
   await again.release(); await first.release();
+  await (await cache.prepare(input, signal)).release();
+});
+
+it('下一首还在预填充时换歌，解码进程不肯退出：运行日志里有这一条；同一音源说正在释放，进程退出后可以再准备', async () => {
+  const { cache, input, signal } = await fixture();
+  const error = vi.fn(), cleanupError = vi.fn();
+  const preload = new NativeAudioPreload({ cache, resolveAudio: () => input.sourcePath, error, cleanupError });
+  const snapshot: PlaybackSnapshot = { version: 1, projectId: 'p', itemId: 'next', revision: 1,
+    audio: { relativePath: 'source.wav', sha256: input.sourceSha256, durationMs: input.expectedDurationMs },
+    startMs: 0, endMs: input.expectedDurationMs, positionMs: 0, offsetMs: 0, frameRate: 30, sampleRate: input.sampleRate, volume: 1 };
+  prefill.held = true;
+  const started = decoders.length;
+  preload.start('p.tblink', snapshot);
+  await vi.waitFor(() => expect(decoders).toHaveLength(started + 1));
+  const decoder = decoders.at(-1)!; decoder.refuse = true;
+  // The operator plays another song while this one is still decoding its start.
+  expect(await preload.take('p.tblink', { ...snapshot, itemId: 'other' })).toBeNull();
+  expect(cleanupError).toHaveBeenCalledOnce(); expect(cleanupError).toHaveBeenCalledWith(expect.stringContaining('还没退出'));
+  expect(error).not.toHaveBeenCalled();
+  prefill.held = false;
+  await expect(cache.prepare(input, signal)).rejects.toThrow('正在释放');
+  decoder.exit({ ok: false, error: new Error('音频解码已取消') }); await decoder.finished;
   await (await cache.prepare(input, signal)).release();
 });

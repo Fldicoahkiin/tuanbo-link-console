@@ -332,11 +332,12 @@ it('时间码接口被占用时说清是谁：本软件另一处用了同一接�
 });
 
 /** Songs with their own audio, prepared from a cache whose leases record their release; a song in
- * `refuse` fails its next release once, like a rename Windows refused while a virus scanner held the file. */
+ * `refuse` fails its next release once, like a rename Windows refused while a virus scanner held the file.
+ * As in the app, a failed cleanup of the next song prepared ahead is reported apart from `error`. */
 async function preloading(f: ReturnType<typeof fixture>) {
   const directory = await mkdtemp(join(tmpdir(), 'tblink-player-preload-')), path = join(directory, 'song.wav');
   await writeFile(path, 'audio fixture');
-  const refuse = new Set<string>(), released: string[] = [], measured = vi.fn();
+  const refuse = new Set<string>(), released: string[] = [], measured = vi.fn(), cleanupError = vi.fn();
   const prepare = vi.fn((input: { sourceSha256: string }) => {
     const song = input.sourceSha256[0]!;
     return Promise.resolve({ path: `${song}.pcm`, sampleRate: 48000 as const, baseMs: 0, streaming: false, frames: 480000,
@@ -345,10 +346,10 @@ async function preloading(f: ReturnType<typeof fixture>) {
         released.push(song); return Promise.resolve();
       } });
   });
-  const service = new NativePlayerService({ ...f.options, measured, resolveAudio: () => path, cache: { prepare } });
+  const service = new NativePlayerService({ ...f.options, measured, preloadCleanupError: cleanupError, resolveAudio: () => path, cache: { prepare } });
   const song = (id: string) => ({ ...f.request.snapshot, itemId: id, audio: { ...f.request.snapshot.audio, sha256: id.repeat(64) } });
   const preloaded = (count: number) => vi.waitFor(() => expect(measured.mock.calls.filter(([phase]) => phase === '预先准备下一首音频')).toHaveLength(count));
-  return { service, prepare, refuse, released, song, preloaded };
+  return { service, prepare, refuse, released, song, preloaded, cleanupError };
 }
 
 it('下一首提前准备的音频放不掉一次：只记一次错误；换歌、再提前准备、接着播都照常', async () => {
@@ -360,13 +361,33 @@ it('下一首提前准备的音频放不掉一次：只记一次错误；换歌�
     p.refuse.add('b');
     await expect(p.service.prepare({ ...f.request, generation: 3, snapshot: p.song('c'), nextSnapshot: p.song('b') }))
       .resolves.toMatchObject({ itemId: 'c', status: 'ready', audioError: null });
-    expect(f.error).toHaveBeenCalledOnce(); expect(f.error).toHaveBeenCalledWith(expect.stringContaining('EPERM'));
+    // Reported apart from C's preparation: it is not C's failure.
+    expect(p.cleanupError).toHaveBeenCalledOnce(); expect(p.cleanupError).toHaveBeenCalledWith(expect.stringContaining('EPERM'));
     // B is prepared ahead again while C plays, and playing on to B uses it.
     await p.service.control({ ...envelope, generation: 4, kind: 'play' }); await p.preloaded(2);
     const decoded = p.prepare.mock.calls.length;
     await expect(p.service.prepare({ ...f.request, generation: 5, snapshot: p.song('b') })).resolves.toMatchObject({ itemId: 'b', status: 'ready' });
     expect(p.prepare).toHaveBeenCalledTimes(decoded);
-    expect(f.error).toHaveBeenCalledOnce();
+    expect(p.cleanupError).toHaveBeenCalledOnce(); expect(f.error).not.toHaveBeenCalled();
+  } finally { await p.service.close(); }
+});
+
+it('定位时提前准备的下一首放不掉：定位照常完成，只单独记一次错误；接着播放时下一首重新提前准备', async () => {
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, p = await preloading(f);
+  try {
+    await p.service.prepare({ ...f.request, snapshot: p.song('a'), nextSnapshot: p.song('b') });
+    await p.service.control({ ...envelope, generation: 2, kind: 'play' }); await p.preloaded(1);
+    p.refuse.add('b');
+    await expect(p.service.control({ ...envelope, generation: 3, kind: 'seek', positionMs: 2000 }))
+      .resolves.toMatchObject({ status: 'paused', positionMs: 2000, audioError: null });
+    expect(p.cleanupError).toHaveBeenCalledOnce(); expect(p.cleanupError).toHaveBeenCalledWith(expect.stringContaining('EPERM'));
+    expect(f.error).not.toHaveBeenCalled(); expect(p.released).toEqual(['a']);
+    // Playing on prepares B ahead again, and moving on to B uses it.
+    await p.service.control({ ...envelope, generation: 4, kind: 'play' }); await p.preloaded(2);
+    const decoded = p.prepare.mock.calls.length;
+    await expect(p.service.prepare({ ...f.request, generation: 5, snapshot: p.song('b') })).resolves.toMatchObject({ itemId: 'b', status: 'ready', audioError: null });
+    expect(p.prepare).toHaveBeenCalledTimes(decoded);
+    expect(p.cleanupError).toHaveBeenCalledOnce(); expect(f.error).not.toHaveBeenCalled();
   } finally { await p.service.close(); }
 });
 
@@ -377,12 +398,12 @@ it('停止和关闭时提前准备的下一首放不掉：记下错误，停止�
     await p.service.control({ ...envelope, generation: 2, kind: 'play' }); await p.preloaded(1);
     p.refuse.add('b');
     await expect(p.service.control({ ...envelope, generation: 3, kind: 'stop' })).resolves.toMatchObject({ status: 'stopped', audioError: null });
-    expect(p.released).toEqual(['a']); expect(f.error).toHaveBeenCalledOnce();
+    expect(p.released).toEqual(['a']); expect(p.cleanupError).toHaveBeenCalledOnce();
     await p.service.prepare({ ...f.request, generation: 4, snapshot: p.song('c'), nextSnapshot: p.song('d') });
     await p.service.control({ ...envelope, generation: 5, kind: 'play' }); await p.preloaded(2);
     p.refuse.add('d');
     await p.service.close();
     expect(p.service.status).toMatchObject({ status: 'stopped' });
-    expect(p.released).toEqual(['a', 'c']); expect(f.error).toHaveBeenCalledTimes(2);
+    expect(p.released).toEqual(['a', 'c']); expect(p.cleanupError).toHaveBeenCalledTimes(2); expect(f.error).not.toHaveBeenCalled();
   } finally { await p.service.close(); }
 });
