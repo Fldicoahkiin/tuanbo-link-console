@@ -647,15 +647,171 @@ describe('上一首的画面没有清理干净（2026-11-09）', () => {
     await f.player.dispose();
   });
 
-  it('关闭节目时才收到：关闭照常完成，不挡住之后再开节目；别的关闭失败照旧报出', async () => {
+  it('关闭节目时才收到：交还给画面那边，由之后开播的歌显示；关闭照常完成，不挡住之后再开节目；别的关闭失败照旧报出', async () => {
     const f = fixture();
     await f.player.play('song-0');
-    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0'));
+    const handedBack = vi.fn();
+    f.api.stopNativeObs.mockRejectedValueOnce(new ObsPictureLeftover('song-0', new Error('画面没有清理干净：Error: OBS 无响应'), handedBack));
     await expect(f.player.dispose()).resolves.toBeUndefined();
+    expect(handedBack).toHaveBeenCalledOnce();
     const g = fixture();
     await g.player.play('song-0');
     g.api.stopNativeObs.mockRejectedValueOnce(new Error('OBS 停止请求没有送达'));
     await expect(g.player.dispose()).rejects.toThrow('OBS 停止请求没有送达');
+  });
+
+  it('按停止时收到：停下的播放器提示一次，不标红，也不再记一次；停不掉另有原因时照旧提示并记录', async () => {
+    const f = fixture();
+    await f.player.play('song-0');
+    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0')); f.deps.notice.mockClear();
+    await f.player.stop();
+    expect(f.state()).toMatchObject({ status: 'stopped', fault: null, notice: `画面清理失败：${reason}` });
+    expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('清理'))).toEqual([]);
+    await f.player.play('song-1');
+    f.api.stopNativeObs.mockRejectedValueOnce(new Error('OBS 停止请求没有送达'));
+    await f.player.stop();
+    expect(f.state()).toMatchObject({ status: 'stopped', notice: '画面清理失败：OBS 停止请求没有送达' });
+    expect(f.deps.notice).toHaveBeenCalledWith('画面清理失败：OBS 停止请求没有送达', 'song-1');
+    await f.player.dispose();
+  });
+
+  it('拖动定位时收到：在这首歌上标红，不另外提示也不再记一次；新位置的画面照常准备，再定位时不再带上它', async () => {
+    const f = fixture(), ready = f.api.prepareNativeObs.getMockImplementation()!, taken = '提前准备的画面没能用上，已改为重新准备。原因：OBS 无响应';
+    await f.player.play('song-0'); await f.player.pause();
+    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0')); f.deps.notice.mockClear();
+    await f.player.scrub('song-0', 2000);
+    expect(f.state()).toMatchObject({ status: 'paused', positionMs: 2000, fault: `上一次的画面没有清理干净，这一首照常播。原因：${reason}` });
+    expect(f.state().notice ?? '').not.toContain('清理');
+    expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('清理'))).toEqual([]);
+    expect(f.api.prepareNativeObs).toHaveBeenCalledTimes(2);
+    f.api.prepareNativeObs.mockImplementationOnce(async request => ({ ...await ready(request), fault: taken }));
+    await f.player.scrub('song-0', 3000);
+    expect(f.state()).toMatchObject({ status: 'paused', positionMs: 3000, fault: taken });
+    await f.player.dispose();
+  });
+
+  it('拖动定位还没完时连按两次继续：定位好了只接着播一次，画面不停，MIDI Cue 也只准备一次', async () => {
+    const f = fixture(), ready = f.api.prepareNativeObs.getMockImplementation()!;
+    await f.player.play('song-0'); await f.player.pause();
+    let finish: () => void = () => { throw new Error('还没开始准备画面'); };
+    f.api.prepareNativeObs.mockImplementationOnce(request => new Promise(resolve => { finish = () => resolve(ready(request)); }));
+    f.deps.prepare.mockClear(); f.api.controlNativePlayback.mockClear();
+    const scrubbing = f.player.scrub('song-0', 2000);
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledTimes(2));
+    const first = f.player.resume(), second = f.player.resume();
+    finish(); await scrubbing; await first; await second;
+    expect(f.state()).toMatchObject({ status: 'playing', positionMs: 2000, fault: null });
+    expect(f.deps.prepare).toHaveBeenCalledOnce();
+    expect(f.api.controlNativePlayback.mock.calls.map(([command]) => command.kind)).toEqual(['seek', 'play']);
+    // Only the scrub's stop of the picture before it; the picture at the new position stays.
+    expect(f.api.stopNativeObs).toHaveBeenCalledOnce();
+    await f.player.dispose();
+  });
+
+  it('取消的画面准备在新开的歌那边已经标红之后才报没清理干净：两条一起显示', async () => {
+    const f = fixture(), ready = f.api.prepareNativeObs.getMockImplementation()!, taken = '提前准备的画面没能用上，已改为重新准备。原因：OBS 无响应';
+    let finish: () => void = () => { throw new Error('还没开始准备画面'); };
+    let refuse: (error: Error) => void = () => { throw new Error('还没开始停画面'); };
+    f.api.prepareNativeObs.mockImplementationOnce(request => new Promise(resolve => { finish = () => resolve(ready(request)); }))
+      .mockImplementationOnce(async request => ({ ...await ready(request), fault: taken }));
+    f.api.stopNativeObs.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { refuse = reject; }));
+    const first = f.player.play('song-0');
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledOnce());
+    const second = f.player.play('song-1');
+    finish(); await first; await second;
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1', fault: taken });
+    refuse(leftover('song-0'));
+    await vi.waitFor(() => expect(f.state().fault).toBe(`上一首的画面没有清理干净，这一首照常播。原因：${reason}；${taken}`));
+    await f.player.dispose();
+  });
+
+  it('关闭节目以后，取消的画面准备才报没清理干净：同样交还给画面那边', async () => {
+    const f = fixture(), ready = f.api.prepareNativeObs.getMockImplementation()!, handedBack = vi.fn();
+    let finish: () => void = () => { throw new Error('还没开始准备画面'); };
+    let refuse: (error: Error) => void = () => { throw new Error('还没开始停画面'); };
+    f.api.prepareNativeObs.mockImplementationOnce(request => new Promise(resolve => { finish = () => resolve(ready(request)); }));
+    f.api.stopNativeObs.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { refuse = reject; }));
+    const playing = f.player.play('song-0');
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledOnce());
+    const stopping = f.player.stop(), closing = f.player.dispose();
+    refuse(new ObsPictureLeftover('song-0', new Error('画面没有清理干净：OBS 无响应'), handedBack)); finish();
+    await expect(closing).resolves.toBeUndefined(); await playing; await stopping;
+    expect(handedBack).toHaveBeenCalledOnce(); expect(f.api.stopNativeObs).toHaveBeenCalledOnce();
+  });
+
+  it('画面刚准备好的同时关闭节目、这首歌的画面没清理干净：同样交还给画面那边，关闭照常完成', async () => {
+    const f = fixture(), handedBack = vi.fn(); f.project.obsOutputMode = 'scenes';
+    f.project.rundown[0]!.cues = [linkCueSchema.parse({ id: 'cue', name: '机位', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
+      actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: '场景' }] })];
+    let finish: () => void = () => { throw new Error('还没开始准备画面'); };
+    // The answer comes in the same moment as the close: the song, which waits for its picture, stops it before the close does.
+    f.api.prepareNativeObs.mockImplementationOnce(request => new Promise(resolve => { finish = () => resolve({ version: 1, sessionId: request.sessionId,
+      generation: request.generation, itemId: request.snapshot.item.id, revision: request.snapshot.revision, state: 'ready', reason: null,
+      currentCueId: null, nextCueId: null, pendingCount: 0, positionMs: 0 }); }));
+    f.api.stopNativeObs.mockRejectedValueOnce(new ObsPictureLeftover('song-0', new Error('画面没有清理干净：OBS 无响应'), handedBack));
+    const playing = f.player.play('song-0');
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledOnce());
+    finish(); const closing = f.player.dispose();
+    await expect(closing).resolves.toBeUndefined(); await playing;
+    expect(handedBack).toHaveBeenCalledOnce(); expect(f.api.stopNativeObs).toHaveBeenCalledOnce();
+  });
+
+  it('画面还在准备时换歌、取消的画面没清理干净：在新开的歌上标红，不另外提示也不再记一次', async () => {
+    const f = fixture(), ready = f.api.prepareNativeObs.getMockImplementation()!;
+    let finish: () => void = () => { throw new Error('还没开始准备画面'); };
+    f.api.prepareNativeObs.mockImplementationOnce(request => new Promise(resolve => { finish = () => resolve(ready(request)); }));
+    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0'));
+    const first = f.player.play('song-0');
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledOnce());
+    const second = f.player.play('song-1');
+    finish(); await first; await second;
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1', fault: `上一首的画面没有清理干净，这一首照常播。原因：${reason}` });
+    expect(f.state().notice ?? '').not.toContain('清理');
+    expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('清理'))).toEqual([]);
+    await f.player.dispose();
+  });
+
+  it('画面一秒没准备好、取消时没清理干净：在这首歌上标红，不另外提示也不再记一次', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      f.api.prepareNativeObs.mockImplementationOnce(() => new Promise<NativeObsStatus>(() => undefined));
+      f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0'));
+      const playing = f.player.play('song-0');
+      await vi.advanceTimersByTimeAsync(1500); await playing;
+      expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-0' });
+      expect(f.state().fault).toContain(`画面没有清理干净，这一首照常播。原因：${reason}`);
+      expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('清理'))).toEqual([]);
+      await f.player.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('同一首开播时画面那边也标了红：两条一起显示，画面那边重复发来也不变；之后播放中的新故障照常替换', async () => {
+    const f = fixture();
+    let receive: ((value: NativeObsStatus) => void) | null = null;
+    f.api.onNativeObsStatus.mockImplementation(listener => { receive = listener; return () => undefined; });
+    const player = new NativeProgramPlayer(f.project, 'C:/test/project.tblink', 7, f.deps, f.api, f.lighting);
+    await player.play('song-0');
+    const ready = f.api.prepareNativeObs.getMockImplementation()!, taken = '提前准备的画面没能用上，已改为重新准备。原因：OBS 无响应';
+    f.api.prepareNativeObs.mockImplementationOnce(async request => ({ ...await ready(request), fault: taken }));
+    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0'));
+    await player.play('song-1');
+    const red = `上一首的画面没有清理干净，这一首照常播。原因：${reason}；${taken}`;
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1', fault: red });
+    const request = f.api.prepareNativeObs.mock.calls.at(-1)![0];
+    const running: NativeObsStatus = { version: 1, sessionId: request.sessionId, generation: request.generation, itemId: 'song-1', revision: 7,
+      state: 'running', reason: null, currentCueId: null, nextCueId: null, pendingCount: 0, positionMs: 1000, fault: taken };
+    receive!(running);
+    expect(f.state().fault).toBe(red);
+    receive!({ ...running, fault: '画面动作失败：机位 · OBS 无响应' });
+    expect(f.state().fault).toBe('画面动作失败：机位 · OBS 无响应');
+    // The next start is its own: the earlier failed cleanup does not come back with it.
+    f.api.prepareNativeObs.mockImplementationOnce(async request => ({ ...await ready(request), fault: taken }));
+    await player.play('song-0');
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-0', fault: taken });
+    await player.play('song-1');
+    expect(f.state().fault).toBeNull();
+    await player.dispose();
   });
 });
 

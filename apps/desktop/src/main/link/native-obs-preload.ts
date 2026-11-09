@@ -1,6 +1,6 @@
 import { nativeObsPreloadSchema, nativeObsStopSchema, type NativeObsPrepare, type NativeObsPreload, type NativeObsStop } from '@tb/schema';
 import { ObsPreparationCancelled, type NativeObsOutputs } from './native-obs-outputs';
-import { materialSceneTargets, pictureCleanupReason, projectFromObsSnapshot, toUserErrorMessage } from '@tb/core/link';
+import { materialSceneTargets, pictureCleanupReason, pictureErrorDetail, projectFromObsSnapshot, toUserErrorMessage } from '@tb/core/link';
 
 /** `settled`: the preparation itself has ended; its result goes to whoever asked for it, unless `taken`:
  * a song took it over before it ended, and that song hears its result. */
@@ -9,9 +9,9 @@ type Entry = { origin: 'selection' | 'next'; request: NativeObsPreload; cancelle
 type Dependencies = {
   authorize: (request: NativeObsPreload) => Promise<void>;
   create: (request: NativeObsPrepare, positionMs: number) => NativeObsOutputs;
-  /** A failure no caller hears about, reported once: the failed cleanup of a preparation
-   * that was replaced, or a preparation that failed after its song took it over. */
-  report: (message: string) => void;
+  /** A failure no caller hears about, reported once: the failed cleanup of a preparation that was replaced, or a
+   * preparation that failed after its song took it over. `log` keeps OBS's own words; `shown` is what the operator reads. */
+  report: (log: string, shown: string) => void;
 };
 
 /** One silent selected or upcoming program. Ownership transfers to the formal session only
@@ -107,7 +107,10 @@ export class NativeObsPreloadPool {
         // preparing, or a lookahead that could not read its files) is not reused:
         // the song prepares its picture below. A failure from before this song took
         // it over went to whoever asked for it; one after is reported here, once.
-        if (entry.taken && !(error instanceof ObsPreparationCancelled)) this.dependencies.report(`提前准备的画面没能用上，已改为重新准备。原因：${toUserErrorMessage(error)}`);
+        if (entry.taken && !(error instanceof ObsPreparationCancelled)) {
+          this.dependencies.report(`提前准备的画面没能用上，已改为重新准备。原因：${pictureErrorDetail(error)}`,
+            `提前准备的画面没能用上，已改为重新准备。原因：${toUserErrorMessage(error)}`);
+        }
         await this.release(entry).catch((cleanup: unknown) => this.reportCleanup(cleanup));
       }
       assertOwner();
@@ -147,7 +150,8 @@ export class NativeObsPreloadPool {
     return released;
   }
   private reportCleanup(error: unknown): void {
-    this.dependencies.report(`提前准备的画面没有清理干净，不影响播放。原因：${pictureCleanupReason(error)}`);
+    this.dependencies.report(`提前准备的画面没有清理干净，不影响播放。原因：${pictureErrorDetail(error)}`,
+      `提前准备的画面没有清理干净，不影响播放。原因：${pictureCleanupReason(error)}`);
   }
 }
 
