@@ -5,8 +5,9 @@ type Outputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'medi
   /** Prepares this song's owned scenes again after OBS reconnects; starts no decoder. */
   restoreScenes?: (assertCurrent: () => void) => Promise<void>;
 };
+/** `cleanup`: this song's picture cleanup, run once; it ends with why it failed, or null. */
 type Entry = { request: NativeObsPrepare; session: ObsProgramSession; state: NativeObsStatus; awaitingPause: boolean; ended: boolean; filesStarted: boolean;
-  now: () => number; restoreScenes: Outputs['restoreScenes'] };
+  now: () => number; restoreScenes: Outputs['restoreScenes']; cleanup: Promise<string | null> | null };
 type Dependencies = {
   audio: () => NativePlayerStatus | null;
   outputs: (request: NativeObsPrepare, positionMs: number, assertCurrent: () => void) => Outputs | Promise<Outputs>;
@@ -21,7 +22,8 @@ export class NativeObsHost {
   private entry: Entry | null = null;
   private requested: NativeObsPrepare | null = null;
   private epoch = 0;
-  private stopped: Promise<void> = Promise.resolve();
+  /** Reported while a song's picture was being prepared: shown on that song once its picture exists. */
+  private unshown: string[] = [];
   private displayed: NativeObsStatus | null = null;
   private displayedAt = -Infinity;
   private preparing = 0;
@@ -89,7 +91,18 @@ export class NativeObsHost {
     this.assertAdmission(request);
     this.requested = request;
     this.preparing++;
-    try { return await this.prepareSession(request); } finally { this.preparing--; }
+    try { return await this.prepareSession(request); }
+    // A song that never got its picture leaves nothing to show them on; they are in the log.
+    finally { if (--this.preparing === 0) this.unshown = []; }
+  }
+
+  /** A failure nobody else reports (a picture prepared in advance and cleaned up in the
+   * background): logged once, and shown in red on the song playing or about to. */
+  report(message: string): void {
+    this.dependencies.error(message);
+    const entry = this.entry;
+    if (this.preparing > 0 && entry?.request !== this.requested) this.unshown.push(message);
+    else if (entry && !['stopped', 'failed'].includes(entry.state.state)) this.patch({ fault: message });
   }
 
   /** A program picture is being prepared or is on air; a preselection must not stop it. */
@@ -98,25 +111,27 @@ export class NativeObsHost {
   private async prepareSession(request: NativeObsPrepare): Promise<NativeObsStatus> {
     const epoch = ++this.epoch;
     const previous = this.entry;
-    if (previous) {
-      // A failed cleanup is shown in red for its own song and stays failed (the
-      // session keeps that result); it must not keep this song, or any after it,
-      // from its picture.
-      this.stopped = previous.session.stop().catch((error: unknown) => this.dependencies.error(
-        `上一首的画面没有清理干净，这一首照常准备画面：${error instanceof Error ? error.message : String(error)}`));
-      await this.stopped;
-    }
+    // A failed cleanup was logged where it ran. It must not keep this song, or any
+    // after it, from its picture; it is shown in red on this song, whose picture
+    // goes on (2026-11-09). The previous song's own status is no longer shown.
+    const leftover = previous ? await this.cleanUp(previous) : null;
     if (epoch !== this.epoch) throw new Error('画面准备已被新的操作取消');
     const audio = this.assertAdmission(request), project = projectFromObsSnapshot(request.snapshot);
+    const outputs = await this.dependencies.outputs(request, audio.positionMs, () => { if (epoch !== this.epoch) throw new Error('画面资源交接已取消'); });
+    if (epoch !== this.epoch) {
+      await outputs.releaseOutputs().catch((error: unknown) => this.report(`取消的画面准备没有清理干净，不影响播放。原因：${error instanceof Error ? error.message : String(error)}`));
+      throw new Error('画面资源交接已取消');
+    }
+    const faults = this.unshown.splice(0);
+    if (previous && leftover) faults.unshift(`${previous.request.snapshot.item.id === request.snapshot.item.id ? '上一次' : '上一首'}的画面没有清理干净，这一首照常播。原因：${leftover}`);
     const state: NativeObsStatus = { version: 1, sessionId: request.sessionId, generation: request.generation,
       itemId: request.snapshot.item.id, revision: request.snapshot.revision, state: 'preparing', reason: null,
-      nextCueId: null, currentCueId: null, pendingCount: 0, positionMs: audio.positionMs };
-    const outputs = await this.dependencies.outputs(request, audio.positionMs, () => { if (epoch !== this.epoch) throw new Error('画面资源交接已取消'); });
-    if (epoch !== this.epoch) { await outputs.releaseOutputs(); throw new Error('画面资源交接已取消'); }
+      nextCueId: null, currentCueId: null, pendingCount: 0, positionMs: audio.positionMs, ...(faults.length ? { fault: faults.join('；') } : {}) };
     const session = new ObsProgramSession(project, request.projectPath, request.snapshot.item.id, {
       ...outputs,
       state: update => {
-        if (this.entry?.request !== request) return;
+        // A failed cleanup is reported once, by cleanUp; it does not fail the song again.
+        if (this.entry?.request !== request || this.entry.cleanup) return;
         if (update.state === 'error' || update.state === 'timecodeLost') this.fail(update.reason ?? '画面准备已失效');
       },
       // Failed actions are already in the action log; show them without ending the channel.
@@ -132,7 +147,7 @@ export class NativeObsHost {
       },
       fault: message => { if (this.entry?.request === request) this.fault(message); }
     });
-    const entry = { request, session, state, awaitingPause: false, ended: false, filesStarted: false, now: outputs.now, restoreScenes: outputs.restoreScenes };
+    const entry: Entry = { request, session, state, awaitingPause: false, ended: false, filesStarted: false, now: outputs.now, restoreScenes: outputs.restoreScenes, cleanup: null };
     this.entry = entry; this.publish();
     try {
       await session.prepare(audio.positionMs);
@@ -142,8 +157,7 @@ export class NativeObsHost {
       this.patch({ state: 'ready', nextCueId: session.nextCueId, notice: outputs.outputNotice?.() ?? null }); return entry.state;
     } catch (error) {
       if (this.entry === entry && epoch === this.epoch) this.fail(error instanceof Error ? error.message : String(error));
-      try { await session.stop(); }
-      catch (cleanup) { this.dependencies.error(`取消画面准备后清理失败：${String(cleanup)}`); }
+      await this.cleanUp(entry);
       throw error;
     }
   }
@@ -198,14 +212,23 @@ export class NativeObsHost {
     }
   }
 
+  /** Resolves once the picture is cleaned up, even if that failed: the failure is logged
+   * once where it ran and shown on the next song, never on each later stop or selection. */
   async stop(): Promise<void> {
     ++this.epoch;
     const entry = this.entry;
-    if (!entry || entry.state.state === 'stopped') return this.stopped;
-    this.patch({ state: 'stopped', pendingCount: 0 });
-    this.stopped = entry.session.stop();
-    try { await this.stopped; }
-    catch (error) { if (this.entry === entry) this.fail(error instanceof Error ? error.message : String(error)); throw error; }
+    if (!entry) return;
+    if (entry.state.state !== 'stopped') this.patch({ state: 'stopped', pendingCount: 0 });
+    await this.cleanUp(entry);
+  }
+
+  /** Runs once per song; a stop or a new song arriving meanwhile waits for the same cleanup. Never retried. */
+  private cleanUp(entry: Entry): Promise<string | null> {
+    entry.cleanup ??= entry.session.stop().then(() => null, (error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.dependencies.error(reason); return reason;
+    });
+    return entry.cleanup;
   }
 
   private assertAdmission(request: NativeObsPrepare): NativePlayerStatus {

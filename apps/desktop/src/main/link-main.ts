@@ -603,7 +603,9 @@ function registerIpc(
         if (nativeObs?.status?.sessionId === request.sessionId) nativeObs.disconnect(error.message);
         else console.error('已结束画面会话的运行日志未能落盘', error);
       },
-      audioIdentity: () => { if (!nativePlayer) throw new Error('音频还没准备好'); return nativePlayer.audioCaptureIdentity; } }, positionMs)
+      audioIdentity: () => { if (!nativePlayer) throw new Error('音频还没准备好'); return nativePlayer.audioCaptureIdentity; } }, positionMs),
+    // Logged once and shown in red on the song playing; nativeObs is set just below, before any preparation runs.
+    report: message => nativeObs?.report(message)
   });
   nativeObsPreload = obsPreload;
   nativeObs = new NativeObsHost({
