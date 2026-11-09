@@ -256,9 +256,9 @@ export class ObsMediaScenes {
       const target = this.prepared.get(event.sourceName);
       if (!target || target.path !== path || target.sceneName !== event.sceneName) throw new Error(`素材场景还没准备好，请重新做开播前检查：${event.assetName}`);
       const requests: Parameters<OBSWebSocket['callBatch']>[0] = [];
-      // Retiring the previous decoder leads the first write of a handover, so the
-      // material never has two decoders on air, nor the old one running past its
-      // clip, while the new one is still being located.
+      // Retiring the previous decoder goes out in the first write of a handover,
+      // ahead of the new decoder, so the material never has two decoders on air,
+      // nor the old one running past its clip, while the new one is still being located.
       let retiring: Parameters<OBSWebSocket['callBatch']>[0] = [];
       if (previousSource && previousSource !== event.sourceName) {
         const previous = this.prepared.get(previousSource);
@@ -269,7 +269,8 @@ export class ObsMediaScenes {
           { requestType: 'TriggerMediaInputAction', requestData: { inputName: previousSource, mediaAction: retirement === 'pause' ? 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE' : 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP' } }
         ];
       }
-      const retire = (): { sourceName: string; count: number } | undefined => previousSource && retiring.length ? { sourceName: previousSource, count: retiring.length } : undefined;
+      // `through`: the batch position right after the retirement requests.
+      const retire = (through: number): { sourceName: string; through: number } | undefined => previousSource && retiring.length ? { sourceName: previousSource, through } : undefined;
       // Set when this start seeked and released the decoder in step with the music.
       let seekedStart: { lateMs: number } | null = null, primedStart = false;
       if (event.phase === 'start') {
@@ -296,13 +297,16 @@ export class ObsMediaScenes {
           // there: a restart would show the file's opening frames first
           // (docs/OBS_SCENE_WORKFLOW.md: 不静默回到开头).
           const restart = !held || event.sourceOffsetMs === 0;
+          // Other materials are muted before the old decoder retires, and the
+          // new decoder's own requests follow the retirement directly: only a
+          // failure on those leaves this material with no picture.
           await this.startBatch([
-            ...retiring, ...others,
+            ...others, ...retiring,
             { requestType: 'SetInputMute', requestData: { inputName: event.sourceName, inputMuted: true } },
             { requestType: 'SetSceneItemEnabled', requestData: { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemEnabled: true } },
             ...(event.deferSceneSwitch ? [] : [{ requestType: 'SetCurrentProgramScene' as const, requestData: { sceneName: target.sceneName } }]),
             ...(restart ? [{ requestType: 'TriggerMediaInputAction' as const, requestData: { inputName: event.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART' } }] : [])
-          ], event, retiring.length + others.length, retire());
+          ], event, others.length + retiring.length + 1, retire(others.length + retiring.length));
           retiring = [];
           if (restart) await this.waitForState(event.sourceName, 'OBS_MEDIA_STATE_PLAYING');
         }
@@ -319,7 +323,7 @@ export class ObsMediaScenes {
             await this.waitForState(event.sourceName, 'OBS_MEDIA_STATE_PLAYING');
           }
         }
-        requests.push(...retiring, ...event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName));
+        requests.push(...event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName), ...retiring);
         const reach = requests.length;
         if (event.assetKind !== 'image') {
           if (!primed) seekedStart = await this.positionMedia(event.sourceName, () => event.sourceOffsetMs + performance.now() - startedAt, continuing ? 100 : 30);
@@ -332,7 +336,7 @@ export class ObsMediaScenes {
           ...(event.deferSceneSwitch ? [] : [{ requestType: 'SetCurrentProgramScene' as const, requestData: { sceneName: target.sceneName } }])
         );
         if (event.assetKind !== 'image' && primed) requests.push({ requestType: 'TriggerMediaInputAction', requestData: { inputName: event.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' } });
-        await this.startBatch(requests, event, reach, retire());
+        await this.startBatch(requests, event, reach, retire(reach));
       } else {
         this.primed.delete(event.sourceName);
         if (event.assetKind !== 'image') requests.push(
@@ -532,22 +536,26 @@ export class ObsMediaScenes {
   }
 
   /** Sends one batch of a start or seek. The books follow what OBS executed: the previous
-   * decoder retires once its `retire` requests ran, and the starting decoder is on
-   * air (active, started for this clip, so the drift check reaches it) once any
-   * request from index `reach` on ran. A request that was never sent changes
+   * decoder retires once OBS ran the batch up to `retire.through`, and the starting
+   * decoder is on air (active, started for this clip, so the drift check reaches it)
+   * once the request at index `reach` ran. A request that was never sent changes
    * nothing, so a failure never leaves two decoders of one material on air in
-   * the books, nor one that OBS never showed. Nothing is sent again. */
+   * the books, nor one that OBS never showed. A failure between the two leaves the
+   * material with no picture, and the error says so. Nothing is sent again. */
   private async startBatch(requests: Parameters<OBSWebSocket['callBatch']>[0], event: ManagedMediaEvent, reach: number,
-    retire?: { sourceName: string; count: number }): Promise<void> {
+    retire?: { sourceName: string; through: number }): Promise<void> {
     let executed = 0;
     try {
       await this.batch(requests);
       executed = requests.length;
     } catch (error) {
       if (error instanceof MediaBatchError) executed = error.executed;
+      if (retire && executed >= retire.through && executed <= reach) {
+        throw new Error(`上一段的画面已经退下，这一段的画面没能显示出来。原因：${error instanceof Error ? error.message : String(error)}`);
+      }
       throw error;
     } finally {
-      if (retire && executed >= retire.count) { this.active.delete(retire.sourceName); this.startedClips.delete(retire.sourceName); }
+      if (retire && executed >= retire.through) { this.active.delete(retire.sourceName); this.startedClips.delete(retire.sourceName); }
       if (executed > reach) { this.active.add(event.sourceName); this.startedClips.set(event.sourceName, event.clipId); }
     }
   }

@@ -22,6 +22,9 @@ export class ObsMediaPreload {
   private readonly failed = new Set<string>();
   /** Prepared clips that reached their end without starting; their slot went to the next clip. */
   private readonly expired = new Set<string>();
+  /** Decoders whose retirement already went out once, whatever OBS answered.
+   * Nothing retires them again by itself (no automatic retry). */
+  private readonly retirementSent = new WeakSet<Slot>();
   private readonly lookaheadFrames: number;
   private readonly preparationSpacingFrames: number;
   private nextPreparationFrame = -Infinity;
@@ -200,25 +203,24 @@ export class ObsMediaPreload {
     const retirement = retain ? 'pause' : 'stop';
     if (event.phase === 'stop') {
       if (!media.current || media.current.event.clipId !== event.clipId) return;
-      const current = media.current; media.current = null;
-      try {
-        await this.answered(media, () => this.scenes.execute({ ...event, sourceName: current.sourceName }, path, undefined, retirement));
-      } catch (error) {
-        // OBS did not carry the stop out, so the decoder may still be on air: it
-        // stays the material's current decoder. Transport controls reach it, and
-        // the material's next clip hands over from it (retiring it) instead of
-        // starting underneath it. The stop is not sent again.
-        if (this.scenes.isActive(current.sourceName) && media.current === null && this.media.get(event.sourceName) === media) media.current = current;
-        throw error;
-      }
-      if (retain) media.retained.add(current.sourceName);
-      if (!retain) media.touched.delete(current.sourceName);
-      return;
+      return this.retire(media, media.current, event, path, retain, retirement);
     }
     const next = media.pending;
     if (!next?.ready || next.event.clipId !== event.clipId) {
-      throw new Error(this.expired.has(event.clipId) ? `这一段素材没有播出：轮到它时已经过了它的结束时间，电脑或 OBS 当时太忙：${event.assetName}`
-        : `下一个素材没能在切换前准备好：${event.assetName}`);
+      // Nothing of this clip goes on air, but the timeline still ends the clip
+      // before it. Back to back on one decoder pair, that end was left to this
+      // start's handover (its own stop is not sent), so the old decoder would
+      // play on past its end. A previous clip whose end has passed and whose
+      // retirement never went out is retired now; one already sent, failed or
+      // not, is not sent again.
+      const previous = media.current, expired = this.expired.has(event.clipId);
+      const refused = expired ? '这一段素材没有播出：轮到它时这一段已经结束了，电脑或 OBS 当时太忙' : `下一个素材没能在切换前准备好：${event.assetName}`;
+      if (previous && !this.retirementSent.has(previous) && (this.ends.get(previous.event.clipId) ?? Infinity) <= event.frameNumber) {
+        try { await this.retire(media, previous, { ...previous.event, phase: 'stop' }, path, retain, retirement); }
+        catch (error) { throw new Error(`${refused}。上一段的画面也没能退下，可能还留在 OBS 节目画面上。原因：${error instanceof Error ? error.message : String(error)}`); }
+      }
+      // A clip that ended unplayed needs nothing from the operator: later clips play as usual.
+      throw new Error(expired ? `${refused}。后面的素材照常播，不用处理` : refused);
     }
     const previous = media.current;
     const handover = previous && previous.sourceName !== next.sourceName ? previous.sourceName : null;
@@ -232,12 +234,31 @@ export class ObsMediaPreload {
     if (handover) this.handedOver(media, next, handover, retain, false);
   }
 
+  /** Takes the current decoder off air for the end of its clip, once. When OBS
+   * did not carry it out the decoder may still be on air: it stays the
+   * material's current decoder. Transport controls reach it, and the material's
+   * next clip hands over from it (retiring it) instead of starting underneath
+   * it. The retirement is not sent again. */
+  private async retire(media: Media, current: Slot, stop: ManagedMediaEvent, path: string, retain: boolean, retirement: 'pause' | 'stop'): Promise<void> {
+    media.current = null; this.retirementSent.add(current);
+    try {
+      await this.answered(media, () => this.scenes.execute({ ...stop, sourceName: current.sourceName }, path, undefined, retirement));
+    } catch (error) {
+      if (this.scenes.isActive(current.sourceName) && media.current === null && this.media.get(stop.sourceName) === media) media.current = current;
+      throw error;
+    }
+    if (retain) media.retained.add(current.sourceName);
+    else media.touched.delete(current.sourceName);
+  }
+
   /** A successfully stopped input needs no further cleanup; a paused one remains
    * owned until its next use or explicit session shutdown. When OBS did not take
-   * the handover (nothing reached the new decoder, so the old one still plays),
-   * the old decoder stands for this clip: the clip's stop retires it, transport
-   * controls reach it, and the drift check leaves it alone. The new decoder stays
-   * paused for the next clip of the material. Nothing is sent again. */
+   * the handover (the old decoder still counts as on air), the old decoder stands
+   * for this clip: the clip's stop retires it, transport controls reach it, and the
+   * drift check leaves it alone. The new decoder stays paused for the next clip of
+   * the material. When OBS took the old decoder off but never showed the new one,
+   * the new one still stands for this clip, off air: its stop and the material's
+   * next clip reach it, and it is not started again. Nothing is sent again. */
   private handedOver(media: Media, next: Slot, previous: string, retain: boolean, failed: boolean): void {
     if (failed && this.scenes.isActive(previous)) {
       if (this.media.get(next.event.sourceName) !== media || media.current !== next) return;
