@@ -79,3 +79,12 @@ it('Flash 这类按住才亮的执行器键：按住空格或 Enter 时按下、
     expect(flash.sent).toEqual(['按下 100.1 第 2 键', '松开 100.1 第 2 键']);
   }
 });
+
+it('用鼠标点 Flash 这类按住才亮的键：按下时按一次、松开时放开一次，之后的 click 不再按（否则控台上一直亮着，0.5.9）', () => {
+  const flash = draw(1);
+  const pointer = { button: 0, pointerId: 1, currentTarget: { setPointerCapture: () => undefined } };
+  flash.button.props.onPointerDown?.(pointer as unknown as React.PointerEvent<HTMLButtonElement>);
+  flash.button.props.onPointerUp?.(pointer as unknown as React.PointerEvent<HTMLButtonElement>);
+  flash.button.props.onClick?.({ stopPropagation: () => undefined } as unknown as React.MouseEvent<HTMLButtonElement>);
+  expect(flash.sent).toEqual(['按下 100.1 第 2 键', '松开 100.1 第 2 键']);
+});

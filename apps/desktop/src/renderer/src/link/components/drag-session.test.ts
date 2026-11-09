@@ -137,6 +137,28 @@ it('正常松手交给元素自己放下：窗口不抢先取消；别的指针�
   expect(view.listening()).toEqual([]);
 });
 
+it('元素没了、按着的那根手指还没松：另一根手指（指针）松开或被取消都不算，Esc 照样只取消；只有它自己松开才结束（触摸屏，0.5.9）', () => {
+  const { view, drawn, drag } = session(); const clip = pressed();
+  drag.begin(clip.element, 1, '机位片段');
+  // 顺序连播 moves on: the clip goes away while finger 1 still holds it.
+  clip.remove();
+  view.send(new Release('pointerup', 2)); view.send(new Release('pointercancel', 2));
+  expect(drag.current()).toBe('机位片段');
+  expect(view.listening()).toEqual(WATCHING);
+  const escape = new Key('Escape'); view.send(escape);
+  expect([escape.defaultPrevented, escape.propagationStopped]).toEqual([true, true]);
+  expect(drag.current()).toBeNull();
+
+  drag.begin(clip.element, 1, '机位片段');
+  clip.remove();
+  view.send(new Release('pointerup', 2));
+  expect(drag.current()).toBe('机位片段');
+  view.send(new Release('pointerup', 1));
+  expect(drag.current()).toBeNull();
+  expect(view.listening()).toEqual([]);
+  expect(drawn).toEqual(['机位片段', null, '机位片段', null]);
+});
+
 it('元素还在、只是丢了指针时：手还按着按 Esc 只取消拖动；松在元素上交给它自己放下，松在别处就结束', () => {
   const { view, drawn, drag } = session(); const clip = pressed();
   drag.begin(clip.element, 1, '片段 A');
