@@ -30,3 +30,16 @@ export function playsOutdated<Controller>(controller: Controller | null, answer:
 export function reopensShown(outdated: boolean | null, status: ProgramPlayerState['status']): boolean {
   return outdated === true && !holdsSong(status);
 }
+
+/** The audio output a program is opened with. */
+export type AudioConfiguration = { deviceId: string; sampleRate: number };
+
+/**
+ * The output the window's program uses: the device settings, except while it holds a song (a change waits for
+ * 停止). The window applies it while rendering, before its first open: the settings arrive together with `ready`
+ * after a reload, and opening once with the old output and again with the new one closes the background program
+ * the first open had just taken over, which stops the show. `current` is returned as is when nothing changes.
+ */
+export function followAudioConfiguration<Configuration extends AudioConfiguration>(current: Configuration, requested: Configuration, holding: boolean): Configuration {
+  return holding || (current.deviceId === requested.deviceId && current.sampleRate === requested.sampleRate) ? current : requested;
+}

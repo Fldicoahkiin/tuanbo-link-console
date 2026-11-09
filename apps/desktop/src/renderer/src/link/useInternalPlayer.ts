@@ -14,7 +14,7 @@ import { useRuntimeStore } from './stores/runtime-store';
 import { useDisplayPreferences } from './stores/display-preferences-store';
 import { useSelectedProgram } from './useSelectedProgram';
 import { handlePlaybackKey, keyTarget } from './playback-keys';
-import { openAnswer, playsOutdated, reopensShown, type OpenAnswer } from './program-attachment';
+import { followAudioConfiguration, openAnswer, playsOutdated, reopensShown, type OpenAnswer } from './program-attachment';
 
 /** Player notices already logged as warnings in this window. */
 const notedNotices = new Set<string>();
@@ -44,11 +44,9 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   const requestedDevice = profile?.internalPlayer?.nativeAudioOutputDeviceId ?? 'default';
   const requestedRate = profile?.internalPlayer?.audioSampleRate ?? 48000;
   const [audioConfiguration, setAudioConfiguration] = useState({ deviceId: requestedDevice, sampleRate: requestedRate });
-  useEffect(() => {
-    if (holdsSong(state.status)) return;
-    setAudioConfiguration(current => current.deviceId === requestedDevice && current.sampleRate === requestedRate
-      ? current : { deviceId: requestedDevice, sampleRate: requestedRate });
-  }, [requestedDevice, requestedRate, state.status]);
+  // While rendering, not in an effect: the program below must open with the configured output the first time.
+  const followed = followAudioConfiguration(audioConfiguration, { deviceId: requestedDevice, sampleRate: requestedRate }, holdsSong(state.status));
+  if (followed !== audioConfiguration) setAudioConfiguration(followed);
   const controlInputName = profile?.midiPortProfiles.find((entry) => entry.id === profile.internalPlayer?.controlInputPortProfileId)?.portName;
   useEffect(() => {
     if (!controller || !controlInputName) return;

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { emptyInternalPlayerState, type LinkDesktopApi } from '@tb/core/link';
 import { createEmptyLinkProject, parseLinkProject, type NativeProgramAttachment, type ProgramPlayerState } from '@tb/schema';
-import { openAnswer, playsOutdated, reopensShown, type OpenAnswer } from './program-attachment';
+import { followAudioConfiguration, openAnswer, playsOutdated, reopensShown, type OpenAnswer } from './program-attachment';
 import { RemoteNativeProgramPlayer } from './runtime/remote-native-program-player';
 import { pictureOnAir } from './view-models/picture-on-air';
 
@@ -59,7 +59,7 @@ describe('评审场景：界面重新加载后接回还在播的节目，后台�
     const outdated = reopenedWindow(), adopted = reopenedWindow();
     for (const window of [outdated, adopted]) {
       window.playing();
-      expect(window.onAir()).toEqual({ kind: 'unconfirmed', reason: '正在确认联动台播放在播哪一版' });
+      expect(window.onAir()).toEqual({ kind: 'unconfirmed', reason: '正在确认联动台播放在播哪一版', waiting: true });
     }
     await outdated.answer('outdated'); await adopted.answer('adopted');
     expect(outdated.onAir()).toEqual({ kind: 'unconfirmed', reason: '界面重新加载过，联动台播放还在按重新加载前的工程播这首歌，和这里打开的不是同一版' });
@@ -76,5 +76,21 @@ describe('接回的节目是另一版时，停下以后按界面里的工程重�
 
   it('同一版，或者还没答复：都不重开', () => {
     for (const outdated of [false, null]) expect(statuses.map(status => reopensShown(outdated, status))).toEqual([false, false, false, false, false]);
+  });
+});
+
+describe('播放器打开时用设备设置里的声卡', () => {
+  const configured = { deviceId: '声卡 2', sampleRate: 48000 };
+
+  it('设置和界面开始时的不一样：没拿着歌就换成设置里的（重新加载后第一次打开就用它，不先用默认声卡开一次再重开）', () => {
+    expect(followAudioConfiguration({ deviceId: 'default', sampleRate: 48000 }, configured, false)).toEqual(configured);
+    expect(followAudioConfiguration({ deviceId: '声卡 2', sampleRate: 44100 }, configured, false)).toEqual(configured);
+  });
+
+  it('拿着歌时不换，停下以后再换；没变化时返回原来那份，界面不会因此重开播放器', () => {
+    const current = { deviceId: 'default', sampleRate: 48000 };
+    expect(followAudioConfiguration(current, configured, true)).toBe(current);
+    const same = { deviceId: '声卡 2', sampleRate: 48000 };
+    expect(followAudioConfiguration(same, configured, false)).toBe(same);
   });
 });
