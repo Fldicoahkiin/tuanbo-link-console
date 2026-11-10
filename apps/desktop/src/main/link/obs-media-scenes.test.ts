@@ -679,6 +679,24 @@ describe('素材独立场景播放', () => {
         { requestType: 'SetInputMute', requestData: { inputName: names.sourceName, inputMuted: !after } }]);
     } finally { vi.useRealTimers(); }
   });
+  it.each([false, true])('解码器接着往下播、改算下一段后，下一段的开始只做上画面那一步：显示、按它的设置开声音、切到它的场景（叠加里=%s 时不切），不暂停、不定位、不重播', async deferred => {
+    vi.useFakeTimers();
+    try {
+      const { scenes, calls, setMediaState } = fixture(); await scenes.prepare('project', asset, 'C:/dance.mp4');
+      await held(scenes.execute(event, 'C:/dance.mp4'));
+      expect(scenes.continueClip(names.sourceName, event.clipId, { clipId: 'next', embeddedAudioEnabled: true })).toBe(true);
+      // The decoder has played on to where the next clip starts in the file, 60 ms ahead of the
+      // music: in step for a start that continues it (100 ms), so its media clock is left alone.
+      setMediaState('OBS_MEDIA_STATE_PLAYING', 3460);
+      calls.length = 0;
+      await held(scenes.execute({ ...event, id: 'next', clipId: 'next', sourceOffsetMs: 3400, embeddedAudioEnabled: true, deferSceneSwitch: deferred }, 'C:/dance.mp4'));
+      expect(calls.filter(call => call.requestType !== 'GetMediaInputStatus')).toEqual([
+        { requestType: 'SetSceneItemEnabled', requestData: { sceneName: names.sceneName, sceneItemId: 1, sceneItemEnabled: true } },
+        { requestType: 'SetInputMute', requestData: { inputName: names.sourceName, inputMuted: false } },
+        ...(deferred ? [] : [{ requestType: 'SetCurrentProgramScene', requestData: { sceneName: names.sceneName } }])]);
+      expect(scenes.isActive(names.sourceName)).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
   it('叠加里开着原声的素材被机位盖住后，切回叠加时切场景之后恢复它的声音', async () => {
     vi.useFakeTimers();
     try {
