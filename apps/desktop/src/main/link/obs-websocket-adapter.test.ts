@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { OBSWebSocket } from 'obs-websocket-js';
 import { describe, expect, it } from 'vitest';
+import { createObsProgramSnapshot, type LinkDesktopApi } from '@tb/core/link';
+import { createEmptyLinkProject, parseLinkProject, type NativePlayerStatus } from '@tb/schema';
 import { ObsWebSocketAdapter } from './obs-websocket-adapter';
+import { NativeObsHost } from './native-obs-host';
 import type { ObsEditorPreview } from './obs-editor-preview';
 
 describe('ObsWebSocketAdapter', () => {
@@ -177,6 +180,127 @@ describe('ObsWebSocketAdapter', () => {
     obs.client.pendingRequests.clear(); obs.program = '特写';
     await obs.reconnect(adapter);
     await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+  });
+  // The hide went out and its answer never came: OBS may or may not have run it.
+  const unansweredHides: Array<[string, boolean, boolean]> = [
+    ['连接断了，OBS 已经执行了', false, true], ['连接断了，OBS 没收到', false, false],
+    ['请求超时，OBS 已经执行了', true, true], ['请求超时，OBS 没收到', true, false]
+  ];
+  it.each(unansweredHides)('隐藏发出后没等到回应（%s）：重连后再隐藏（如重建画面时补发）仍关当初显示的那一项，不去关当前直播场景里操作员自己的同名来源', async (_case, timeout, executed) => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket, timeout ? 20 : 2000);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    // 特写 is on program now, with the operator's own sticker on.
+    obs.program = '特写'; obs.toggle('特写', '贴纸', true);
+    const reached = executed ? obs.holdNext('SetSceneItemEnabled') : obs.loseNext('SetSceneItemEnabled');
+    const hidden = expect(adapter.setSourceEnabledInProgramScene('贴纸', false)).rejects.toThrow(timeout ? '不确定是否已执行' : 'OBS 连接已关闭');
+    await reached;
+    if (!timeout) obs.client.emit('ConnectionClosed', new Error('网络断开'));
+    await hidden;
+    expect(obs.shownIn('贴纸')).toEqual(executed ? ['特写'] : ['全景', '特写']);
+    await obs.reconnect(adapter);
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.client.calls).toEqual([['GetSceneList', undefined], ['GetSceneItemList', { sceneName: '全景' }],
+      ['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 2, sceneItemEnabled: false }]]);
+    expect(obs.shownIn('贴纸')).toEqual(['特写']);
+  });
+  const lostHides: Array<[string, boolean]> = [['OBS 已经执行了', true], ['OBS 没收到', false]];
+  it.each(lostHides)('隐藏发出后连接断了、没等到回应（%s）：重连后同一个来源再显示（下一段）时，按 OBS 里那一项实际开没开着处理', async (_case, executed) => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.program = '特写';
+    const reached = executed ? obs.holdNext('SetSceneItemEnabled') : obs.loseNext('SetSceneItemEnabled');
+    const hidden = expect(adapter.setSourceEnabledInProgramScene('贴纸', false)).rejects.toThrow('OBS 连接已关闭');
+    await reached;
+    await obs.reconnect(adapter); await hidden;
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    // Hidden in OBS: the next span shows on the scene on program. Still on: the
+    // hide never happened, so the source is still shown where it was.
+    expect(obs.shownIn('贴纸')).toEqual(executed ? ['特写'] : ['全景']);
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+  });
+  it('隐藏还没等到回应时，同一个来源的下一次显示先做完，隐藏随后超时：不把旧的那一项记回去，重连后的隐藏关掉新显示的那一项', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket, 20);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.program = '特写';
+    // OBS runs the hide but its answer never comes; the next show goes out and is answered meanwhile.
+    const reached = obs.holdNext('SetSceneItemEnabled');
+    const hidden = expect(adapter.setSourceEnabledInProgramScene('贴纸', false)).rejects.toThrow('不确定是否已执行');
+    await reached;
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    expect(obs.shownIn('贴纸')).toEqual(['特写']);
+    await hidden;
+    await obs.reconnect(adapter);
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.shownIn('贴纸')).toEqual([]);
+  });
+  it.each(lostHides)('节目画面接到这个适配器（生产接线）：到点的隐藏发出后连接断了（%s），特写在播时重新连上，重建画面补发的隐藏关掉全景里的贴纸，全景回来时贴纸不在画面上，特写里操作员自己的贴纸不动（2026-11-09）', async (_case, executed) => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    obs.toggle('特写', '贴纸', true);
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    const song = await stickerSongOnAir(adapter);
+    await song.play(0, 7900);
+    expect(obs.program).toBe('特写'); expect(obs.shownIn('贴纸')).toEqual(['全景', '特写']);
+    // The 8 s hide goes out to 全景, then the connection drops before OBS answers.
+    const reached = executed ? obs.holdNext('SetSceneItemEnabled') : obs.loseNext('SetSceneItemEnabled');
+    await song.play(8000, 8000); await reached;
+    obs.client.emit('ConnectionClosed', new Error('网络断开'));
+    await song.play(8100, 8900);
+    await song.reconnect();
+    expect(obs.shownIn('贴纸')).toEqual(['特写']);
+    expect(song.host.status).toMatchObject({ state: 'running', fault: 'OBS 已重新连接，画面已按当前位置恢复（2 项）' });
+    await song.play(9000, 13000);
+    expect(obs.program).toBe('全景'); expect(obs.enabled('全景', '贴纸')).toBe(false);
+    await song.stop();
+    expect(obs.shownIn('贴纸')).toEqual(['特写']); expect(song.host.status?.state).toBe('stopped');
+  });
+  it('节目画面接到这个适配器（生产接线）：7 秒断线、8 秒的隐藏没发出去，9 秒重新连上时补发的隐藏刚发出连接又断了，9.5 秒再连上后仍关掉全景里的贴纸，全景回来时贴纸不在画面上（2026-11-09）', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    const song = await stickerSongOnAir(adapter);
+    await song.play(0, 6900);
+    obs.client.emit('ConnectionClosed', new Error('网络断开'));
+    await song.play(7000, 8900);
+    expect(obs.shownIn('贴纸')).toEqual(['全景']);
+    // The rebuild's owed hide goes out to 全景, and the connection drops again before OBS gets it.
+    const lost = obs.loseNext('SetSceneItemEnabled');
+    const connecting = adapter.connect('ws://127.0.0.1:4455', 'password');
+    await lost; obs.client.emit('ConnectionClosed', new Error('网络断开'));
+    await connecting; await song.recovered();
+    expect(obs.shownIn('贴纸')).toEqual(['全景']);
+    expect(song.host.status?.fault).toBe('OBS 已重新连接，画面按当前位置恢复了 1 项，隐藏来源 · 贴纸没有完成。原因：OBS 连接已关闭：网络断开。请在 OBS 里检查这一项，需要的话手动调好');
+    await song.play(9000, 9500);
+    await song.reconnect();
+    expect(obs.shownIn('贴纸')).toEqual([]);
+    expect(song.host.status).toMatchObject({ state: 'running', fault: 'OBS 已重新连接，画面已按当前位置恢复（2 项）' });
+    await song.play(9600, 13000);
+    expect(obs.program).toBe('全景'); expect(obs.enabled('全景', '贴纸')).toBe(false);
+    await song.stop();
+    expect(obs.shownIn('贴纸')).toEqual([]); expect(song.host.status?.state).toBe('stopped');
+  });
+  it('隐藏发出后 OBS 回了错误（同一次连接）：那一项不当成已经关掉，再隐藏前先向 OBS 核对，仍开着就关它', async () => {
+    const obs = statefulObs({ 全景: ['摄像机 1', '贴纸'], 特写: ['摄像机 2', '贴纸'] }, '全景');
+    const adapter = new ObsWebSocketAdapter(tmpdir(), obs.client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    await adapter.setSourceEnabledInProgramScene('贴纸', true);
+    obs.program = '特写';
+    obs.client.requestErrors.set('SetSceneItemEnabled', new Error('OBS 正忙，没有执行'));
+    await expect(adapter.setSourceEnabledInProgramScene('贴纸', false)).rejects.toThrow('OBS 正忙');
+    obs.client.requestErrors.delete('SetSceneItemEnabled');
+    obs.client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('贴纸', false);
+    expect(obs.client.calls).toEqual([['GetSceneList', undefined], ['GetSceneItemList', { sceneName: '全景' }],
+      ['SetSceneItemEnabled', { sceneName: '全景', sceneItemId: 2, sceneItemEnabled: false }]]);
     expect(obs.shownIn('贴纸')).toEqual([]);
   });
   it('OBS 忙、显示的回应等到之后的隐藏发出后才回来：不把已经关掉的来源记回去，切机位后再显示仍出现在直播场景里', async () => {
@@ -772,12 +896,15 @@ type StatefulObs = ReturnType<typeof statefulObs>;
  * renamed, removed or added, an item removed or added. A request in
  * `pendingRequests` is carried out, but its answer never comes back. `holdNext`
  * carries out the next such request at once and keeps its answer until
- * `release`, as a busy OBS answers late while later requests go through. */
+ * `release`, as a busy OBS answers late while later requests go through.
+ * `loseNext`: the next such request never reaches OBS and is never answered, as
+ * when the connection drops while it is on its way. */
 function statefulObs(layout: Record<string, string[]>, program: string) {
   const client = fakeObsClient();
   let scenes = new Map<string, StatefulItem[]>();
   let lastIds = new Map<string, number>();
   const holding = new Map<string, () => void>();
+  const losing = new Map<string, () => void>();
   const held: Array<() => void> = [];
   const itemOf = (sceneName: string, sourceName: string): StatefulItem => {
     const item = scenes.get(sceneName)?.find(entry => entry.sourceName === sourceName);
@@ -795,6 +922,8 @@ function statefulObs(layout: Record<string, string[]>, program: string) {
     client, program,
     /** Settles when that request reaches OBS. */
     holdNext: (request: string): Promise<void> => new Promise(reached => { holding.set(request, reached); }),
+    /** Settles when that request is sent. */
+    loseNext: (request: string): Promise<void> => new Promise(sent => { losing.set(request, sent); }),
     release: (): void => { for (const answerLate of held.splice(0)) answerLate(); },
     load(next: Record<string, string[]>, nextProgram: string, shown: readonly string[]): void {
       scenes = new Map(Object.entries(next).map(([sceneName, sources]) => [sceneName, sceneOf(sceneName, sources, shown)]));
@@ -840,6 +969,7 @@ function statefulObs(layout: Record<string, string[]>, program: string) {
     const items = scenes.get(sceneName);
     switch (request) {
       case 'GetCurrentProgramScene': return { currentProgramSceneName: obs.program, sceneName: obs.program };
+      case 'SetCurrentProgramScene': obs.program = sceneName; return {};
       case 'GetSceneList': return { scenes: [...scenes.keys()].map(name => ({ sceneName: name })) };
       case 'GetSceneItemList': return items ? { sceneItems: items.map(item => ({ ...item })) } : new Error(`OBS 里没有场景“${sceneName}”`);
       case 'GetSceneItemLocked': return { sceneItemLocked: false };
@@ -856,6 +986,8 @@ function statefulObs(layout: Record<string, string[]>, program: string) {
     client.calls.push([request, data]);
     const requestError = client.requestErrors.get(request);
     if (requestError !== undefined) return Promise.reject(requestError);
+    const sent = losing.get(request);
+    if (sent) { losing.delete(request); sent(); return new Promise(() => undefined); }
     const result = answer(request, (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>);
     if (client.pendingRequests.has(request)) return new Promise(() => undefined);
     const reached = holding.get(request);
@@ -866,6 +998,54 @@ function statefulObs(layout: Record<string, string[]>, program: string) {
     return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
   };
   return obs;
+}
+
+/** A song on air as link-main.ts and native-obs-outputs.ts run it: NativeObsHost and
+ * its ObsProgramSession send the timeline through this adapter, a dropped connection
+ * is shown on the song, and a reconnect while it plays rebuilds its picture. 全景
+ * for the whole song, 特写 6–12 s, the sticker 1–8 s on the scene on program. */
+async function stickerSongOnAir(adapter: ObsWebSocketAdapter) {
+  const at = (seconds: number) => ({ hours: 0, minutes: 0, seconds, frames: 0 });
+  const project = parseLinkProject({ ...createEmptyLinkProject('贴纸'), playbackSource: 'internal', obsOutputMode: 'scenes',
+    rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'layer-sticker', name: '贴纸' }, { id: 'layer-close', name: '特写' }, { id: 'layer-wide', name: '全景' }], cues: [
+      { id: 'wide', name: '全景', layerId: 'layer-wide', durationMs: 20_000, timecode: at(0), actions: [{ id: 'wide-scene', kind: 'obs.setProgramScene', label: '切全景', sceneName: '全景' }] },
+      { id: 'close', name: '特写', layerId: 'layer-close', durationMs: 6_000, timecode: at(6), actions: [{ id: 'close-scene', kind: 'obs.setProgramScene', label: '切特写', sceneName: '特写' }] },
+      { id: 'sticker', name: '贴纸', layerId: 'layer-sticker', durationMs: 7_000, timecode: at(1),
+        actions: [{ id: 'sticker-show', kind: 'obs.setSceneItemEnabled', label: '显示贴纸', sceneName: '全景', sourceName: '贴纸', enabled: true }] }] }] });
+  let audio: NativePlayerStatus = { version: 1, sessionId: '64f37673-7a65-4c81-b5b4-09c1b9f94cb3', generation: 1, itemId: 'song', status: 'ready',
+    positionMs: 0, offsetMs: 0, sampleRate: 48000, enginePid: 1, engineTitle: '测试', mtcPortName: null, mtcSent: 0,
+    audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: 1, analysis: null };
+  let now = 0;
+  const host = new NativeObsHost({ audio: () => audio, changed: () => undefined, error: () => undefined,
+    outputs: () => ({ now: () => now,
+      executor: { id: adapter.id, supports: action => adapter.supports(action),
+        execute: action => action.kind === 'obs.setSceneItemEnabled' ? adapter.setSourceEnabledInProgramScene(action.sourceName, action.enabled) : adapter.execute(action) },
+      guardOutput: (canSend, operation, dispatched) => adapter.guardPlaybackOperation(canSend, operation, dispatched),
+      prepareOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), restoreScenes: () => Promise.resolve(),
+      seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
+      recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-09T00:00:00Z', monotonicMs: now }) }) });
+  let connected = true, recovering = Promise.resolve();
+  adapter.subscribe(state => {
+    if (state.status === 'connected' && !connected && host.status?.state === 'running') recovering = host.reconnected();
+    connected = state.status === 'connected';
+    if (!connected) host.disconnect(state.error || 'OBS 已断开');
+  });
+  await host.prepare({ version: 1, sessionId: audio.sessionId, generation: 1, preciseSeeking: false, projectPath: 'C:/shows/test.tblink',
+    snapshot: createObsProgramSnapshot(project, 'song', 1) });
+  audio = { ...audio, status: 'playing', generation: 2 };
+  return { host,
+    /** The device clock every 100 ms; each observation's picture actions are sent before the next. */
+    play: async (fromMs: number, throughMs: number): Promise<void> => {
+      for (let position = fromMs; position <= throughMs; position += 100) {
+        now = position; audio = { ...audio, positionMs: position };
+        host.observe(audio, (process.hrtime.bigint() / 100n).toString());
+        await new Promise(resolve => { setImmediate(resolve); });
+      }
+    },
+    reconnect: async (): Promise<void> => { await adapter.connect('ws://127.0.0.1:4455', 'password'); await recovering; },
+    /** Settles once the rebuild of the latest reconnect has been reported. */
+    recovered: (): Promise<void> => recovering,
+    stop: async (): Promise<void> => { audio = { ...audio, status: 'stopped' }; await host.stop(); } };
 }
 
 function responseFor(request: string): unknown {

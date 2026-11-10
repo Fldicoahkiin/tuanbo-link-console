@@ -37,15 +37,45 @@ type SceneWork = ReturnType<SceneOutputTimeline['cross']>;
 type Crossing = { from: number; due: RuntimeUpdate['dueCues']; media: ManagedMediaEvent[];
   work: SceneWork; dueAt: (frame: number) => number; earliestDueMs: number; shift: number };
 /** What OBS shows as far as this session knows. `known`: the picture where the
- * first queued crossing starts. `partial`: a pause stopped a send between two
- * of its steps. `lost`: OBS reconnected and the picture is not rebuilt yet. */
-type Picture = 'known' | 'partial' | 'lost';
+ * first queued crossing starts. `rebuilt`: the picture at `rebuiltAt`, where a
+ * rebuild left it while crossings from before it were still queued. `partial`: a
+ * pause stopped a send between two of its steps. `lost`: OBS reconnected and the
+ * picture is not rebuilt yet. */
+type Picture = 'known' | 'rebuilt' | 'partial' | 'lost';
 /** `lateMs`: the most any step went out after it was due, or null if nothing went out. */
 type SendResult = { complete: boolean; lateMs: number | null };
-/** `failure`: why the owned scenes could not be prepared again, if they could not. */
-/** What a reconnect rebuilt: the outputs sent, and why the owned scenes were not
- * prepared again (null when they were). */
-export type ObsRecovery = { sent: number; failure: string | null };
+/** A part of a rebuilt picture that did not come back: what it was, and why. */
+export type ObsRecoveryMiss = { label: string; reason: string };
+/** What a rebuild did: `sent` parts of the picture (cameras, shown sources, owed
+ * hides, clips located), `succeeded` of them OBS carried out, `failed` what did not
+ * come back and why (clips not played again included), and `failure` why the owned
+ * scenes were not prepared again (null when they were). */
+export type ObsRecovery = { sent: number; succeeded: number; failed: ObsRecoveryMiss[]; failure: string | null };
+/** How a rebuild's parts came back, counted as they do. */
+type Tally = { succeeded: number; failed: ObsRecoveryMiss[] };
+/** A part sent as a Cue is back once OBS carried out each of its actions; each one it did not is a miss, with why. */
+function tallyCue(tally: Tally, report: CueExecutionReport): void {
+  const missed = report.results.filter(result => result.status !== 'succeeded');
+  if (!missed.length) tally.succeeded++;
+  for (const result of missed) tally.failed.push({ label: result.action.label, reason: result.error ?? '没有完成' });
+}
+/** The red text for a rebuilt picture (2026-11-09: it never says more came back
+ * than did): what happened and what came back, each part that did not with why,
+ * then what to do. `reconnect`: rebuilt as OBS reconnected, at the current
+ * position; otherwise on the resume after it, at the resumed position. */
+export function obsRecoveryText(recovery: ObsRecovery, reconnect: boolean): string {
+  const at = reconnect ? '当前位置' : '继续播放的位置', scenesLost = recovery.failure !== null;
+  // What happened first: OBS came back, and whether the owned scenes were prepared again.
+  const opening = !scenesLost ? (reconnect ? 'OBS 已重新连接，' : '')
+    : `${reconnect ? 'OBS 已重新连接，但' : 'OBS 重新连接后'}素材场景没有重新准备好：${recovery.failure}。`;
+  const picture = scenesLost ? '机位' : '画面', missed = recovery.failed;
+  if (!missed.length) return `${opening}${picture}已按${at}恢复（${recovery.sent} 项）${scenesLost ? '，素材可能播不出来' : ''}`;
+  const reason = (miss: ObsRecoveryMiss): string => miss.reason.replace(/[。；\s]+$/, '');
+  const what = missed.length === 1 ? `${missed[0]!.label}没有完成。原因：${reason(missed[0]!)}`
+    : `${missed.length} 项没有完成：${missed.map(miss => `${miss.label}（原因：${reason(miss)}）`).join('；')}`;
+  const back = recovery.succeeded ? `${picture}按${at}恢复了 ${recovery.succeeded} 项，` : `${picture}没有按${at}恢复，`;
+  return `${opening}${back}${what}。${scenesLost ? '素材可能播不出来，' : ''}请在 OBS 里检查${missed.length === 1 ? '这一项' : '这几项'}，需要的话手动调好`;
+}
 const DURATION_END = ':duration-end';
 function timelineEntries(work: SceneWork): TimelineEntry[] {
   return [
@@ -75,8 +105,11 @@ export class ObsProgramSession {
    * not flashed one by one; after a pause, the resume restores what it cancelled. */
   private readonly crossings: Crossing[] = [];
   private drainQueued = false;
-  /** Anything but `known` makes the next send the whole picture at the current position. */
+  /** `known` and `rebuilt` send what changed since the picture OBS shows; anything
+   * else makes the next send the whole picture at the current position. */
   private picture: Picture = 'known';
+  /** The frame of the picture a rebuild left, while `picture` is `rebuilt`. */
+  private rebuiltAt = -1;
   /** What already went out for the queued crossings, failed or not, so the picture
    * sent for them later does not send it again: point Cues by execution, clip
    * events by id, and the shows the reconnect rebuild sent again, by Cue. */
@@ -85,6 +118,11 @@ export class ObsProgramSession {
   private readonly maybeShown = new Set<string>();
   /** Set by an OBS reconnect until the owned scenes are prepared again; a pause leaves it for the resume. */
   private pendingRestore: (() => Promise<void>) | null = null;
+  /** Reconnect rebuilds queued behind the work in flight and not started yet: the
+   * picture is rebuilt once, by the latest reconnect, not first by a drain queued
+   * before it. Such a drain leaves the picture to them and does not wait in a loop:
+   * each rebuild sends what is still queued once it is done. */
+  private queuedRebuilds = 0;
   /** Why the last restore failed, until the rebuild after it reports it. */
   private restoreFailure: string | null = null;
   /** Counts reconnects: a send that started before one does not mark the picture known. */
@@ -237,18 +275,21 @@ export class ObsProgramSession {
    * not shown, a clip that started and ended meanwhile does not start, and the
    * late time is reported once (2026-11-09: what the timeline shows now is never
    * skipped). Crossings leave only once completely sent; nothing that went out,
-   * failed or not, is sent again. A picture lost to an OBS reconnect is rebuilt first. */
+   * failed or not, is sent again. A picture lost to an OBS reconnect is rebuilt
+   * first, once: by that reconnect's own rebuild while it is still queued. */
   private async drain(): Promise<void> {
     if (!this.playing()) return;
     if (this.picture === 'lost') {
+      // A reconnect queued behind this drain rebuilds the picture, reports it
+      // once and then sends what is still queued (see rebuild).
+      if (this.queuedRebuilds) return;
       let rebuilt: ObsRecovery | null;
       // Not tried again by itself: the next send is the whole picture then.
       try { rebuilt = await this.recover(); }
       catch (error) { this.dropQueued(); this.picture = 'partial'; this.fault(`画面动作出错：${errorText(error)}`); return; }
       finally { this.restoring = this.picture === 'lost'; }
       if (!rebuilt) return;
-      this.fault(rebuilt.failure === null ? `画面已按继续播放的位置恢复（${rebuilt.sent} 项）`
-        : `OBS 重新连接后素材场景没有重新准备好：${rebuilt.failure}。机位已按继续播放的位置恢复（${rebuilt.sent} 项），素材可能播不出来`);
+      this.fault(obsRecoveryText(rebuilt, false));
       if (!this.playing() || this.picture === 'lost') return;
     }
     const generation = this.generation, losses = this.losses;
@@ -300,6 +341,9 @@ export class ObsProgramSession {
       .filter(event => event.phase === 'stop' && this.managed.isActiveMedia(event) && !this.attemptedMedia.has(event.id));
     const timeline = this.managed.sceneTimeline!;
     if (this.picture === 'known') return timeline.rebuild(taken[0]!.from, this.frame, kept, stops);
+    // A rebuild already put back the picture at its frame: the camera, shown
+    // sources and clips on air then are not sent again, only what came after.
+    if (this.picture === 'rebuilt') return timeline.rebuild(this.rebuiltAt, this.frame, kept, stops);
     const work = timeline.restore(this.frame, kept, stops);
     // A clip start that already went out and failed is not sent again.
     return { cues: work.cues, media: work.media.filter(event => event.phase !== 'start'
@@ -316,15 +360,20 @@ export class ObsProgramSession {
    * scenes were not prepared. The channel keeps running. */
   rebuild(restore: () => Promise<void>): Promise<ObsRecovery | null> {
     const state = this.runtime.getState();
-    if (!this.prepared || this.closed || this.failure || (state !== 'running' && state !== 'paused')) return Promise.resolve({ sent: 0, failure: null });
-    this.picture = 'lost'; this.losses++; this.pendingRestore = restore; this.restoring = true;
+    if (!this.prepared || this.closed || this.failure || (state !== 'running' && state !== 'paused')) return Promise.resolve({ sent: 0, succeeded: 0, failed: [], failure: null });
+    this.picture = 'lost'; this.losses++; this.pendingRestore = restore; this.restoring = true; this.queuedRebuilds++;
     const operation = this.tail.then(async () => {
+      this.queuedRebuilds--;
       try { return await this.recover(); }
       catch (error) {
         // Not tried again by itself: the next send is the whole picture then.
         if (this.picture === 'lost' && !this.pendingRestore) this.picture = 'partial';
         throw error;
-      } finally { this.restoring = this.picture === 'lost'; }
+      } finally {
+        this.restoring = this.picture === 'lost';
+        // What a drain left to this rebuild goes out after it, without waiting for the next position.
+        if (this.crossings.length) this.scheduleDrain();
+      }
     });
     this.tail = operation.then(() => undefined, () => undefined);
     return operation;
@@ -348,20 +397,21 @@ export class ObsProgramSession {
         if (this.pendingRestore === restore) this.pendingRestore = null;
       }
       const generation = this.generation;
-      const sent = await this.rebuildPicture(() => generation === this.generation && this.playing());
-      if (sent === null) continue;
+      const rebuilt = await this.rebuildPicture(() => generation === this.generation && this.playing());
+      if (rebuilt === null) continue;
       const failure = this.restoreFailure; this.restoreFailure = null;
-      return { sent, failure };
+      return { ...rebuilt, failure };
     }
     return null;
   }
   /** The picture at the current position from nothing, like a start from the
    * middle: camera and shown sources first, clips on air located at the music,
-   * then played together. A clip that cannot be located is shown in red and the
-   * rest still plays. Crossings still queued go out after this as the whole
-   * picture then, so their point Cues are not lost. Null when a pause or stop
-   * came first: the picture stays lost. */
-  private async rebuildPicture(current: () => boolean): Promise<number | null> {
+   * then played together. A part that does not come back (a clip that cannot be
+   * located among them) does not stop the rest; the result says which and why, and
+   * whoever reports the rebuild says it once. Crossings still queued go out after
+   * this as what changed since this picture, so their point Cues are not lost.
+   * Null when a pause or stop came first: the picture stays lost. */
+  private async rebuildPicture(current: () => boolean): Promise<Omit<ObsRecovery, 'failure'> | null> {
     if (!current()) return null;
     const losses = this.losses;
     this.failedStarts.clear(); this.preloadFrame = -Infinity;
@@ -371,24 +421,34 @@ export class ObsProgramSession {
     const work = this.managed.sceneTimeline!.restore(frame, shown);
     const targets = work.media.filter(event => event.phase === 'start').map(event => this.managed.alignEvent(event, frame));
     this.managed.adoptSeek(targets, frame); this.settleMedia(frame);
-    if (!(await this.send(timelineEntries({ cues: [...work.cues, ...owed], media: [] }), current, null, false)).complete) return null;
+    const tally: Tally = { succeeded: 0, failed: [] };
+    if (!(await this.send(timelineEntries({ cues: [...work.cues, ...owed], media: [] }), current, null, false, tally)).complete) return null;
     for (const event of targets) {
       if (!current()) return null;
-      try { await this.dependencies.guardOutput(current, () => this.dependencies.seekMedia(event)); }
+      try { await this.dependencies.guardOutput(current, () => this.dependencies.seekMedia(event)); tally.succeeded++; }
       catch (error) {
         if (!current()) return null;
-        this.fault(`素材没有对准当前位置：${event.assetName}：${errorText(error)}。音乐照常播放，这个素材的画面可能和音乐对不上`);
+        tally.failed.push({ label: `素材“${event.assetName}”对准音乐的位置`, reason: errorText(error) });
       }
     }
     const sources = this.managed.transportSources('start');
     if (sources.length && current()) {
-      this.dependencies.cueReport(await this.dependencies.guardOutput(current, () => this.runner.run({ id: 'transport-start', name: '同步画面播放状态', notes: '', enabled: true,
-        timecode: frameNumberToTimecode(frame, this.project.timebase.frameRate), actions: this.managed.transportActions('start', sources) }, 'live', current)));
+      const report = await this.dependencies.guardOutput(current, () => this.runner.run({ id: 'transport-start', name: '同步画面播放状态', notes: '', enabled: true,
+        timecode: frameNumberToTimecode(frame, this.project.timebase.frameRate), actions: this.managed.transportActions('start', sources) }, 'live', current));
+      this.dependencies.cueReport(report);
+      for (const result of report.results) if (result.status !== 'succeeded') {
+        const input = result.action.kind === 'obs.mediaAction' ? result.action.inputName : null;
+        tally.failed.push({ label: input === null ? result.action.label : `素材“${targets.find(event => event.sourceName === input)?.assetName ?? input}”继续播放`,
+          reason: result.error ?? '没有完成' });
+      }
       this.played(sources);
     }
     if (!current()) return null;
-    if (losses === this.losses) this.picture = this.crossings.length ? 'partial' : 'known';
-    return work.cues.length + owed.length + targets.length;
+    if (losses === this.losses) {
+      // Crossings queued meanwhile go out as what changed since this picture.
+      this.picture = this.crossings.length ? 'rebuilt' : 'known'; this.rebuiltAt = frame;
+    }
+    return { sent: work.cues.length + owed.length + targets.length, ...tally };
   }
   /** The hides a rebuild owes: a show OBS accepted whose span ended while the
    * connection was gone, so its hide failed then. They go out with the rebuilt
@@ -407,8 +467,9 @@ export class ObsProgramSession {
    * whole even if a pause comes meanwhile, so what went out is exactly known;
    * a pause stops the send before the next step, stop or a failure at once.
    * Each step is measured against `dueAt` when it goes out; `each` reports it
-   * there, otherwise the caller reports the largest once. */
-  private async send(entries: TimelineEntry[], current: () => boolean, dueAt: ((frame: number) => number) | null, each: boolean): Promise<SendResult> {
+   * there, otherwise the caller reports the largest once. With a `tally` (a
+   * rebuild), how each part came back is counted there instead of reported. */
+  private async send(entries: TimelineEntry[], current: () => boolean, dueAt: ((frame: number) => number) | null, each: boolean, tally?: Tally): Promise<SendResult> {
     const sending = (): boolean => !this.closed && !this.failure;
     let lateMs: number | null = null;
     for (let index = 0; index < entries.length;) {
@@ -423,7 +484,12 @@ export class ObsProgramSession {
       const late = dueAt ? Math.round(this.dependencies.now() - dueAt(entry.frame)) : 0;
       lateMs = Math.max(lateMs ?? late, late);
       const results = await Promise.allSettled(group.map(member => this.output(member, sending)));
-      for (const result of results) if (result.status === 'rejected') this.fault(`画面动作出错：${label}：${String(result.reason)}`);
+      results.forEach((result, member) => {
+        if (result.status === 'fulfilled') { if (tally && result.value) tallyCue(tally, result.value); return; }
+        const part = group[member]!;
+        if (tally) tally.failed.push({ label: 'cue' in part ? part.cue.name : part.event.assetName, reason: errorText(result.reason) });
+        else this.fault(`画面动作出错：${label}：${String(result.reason)}`);
+      });
       if (each && late > LATE_LOG_MS) this.late(late, lateText(label, late));
       index += group.length;
     }
@@ -471,19 +537,19 @@ export class ObsProgramSession {
 
   /** Failed results reach the host as red reports; nothing here ends the channel.
    * What goes out is recorded first, so a later send for the same crossings
-   * does not send it again. */
-  private async output(entry: TimelineEntry, canSend: () => boolean): Promise<void> {
-    if ('cue' in entry) { this.sentDue.add(entry.executionId); await this.cue(entry.cue, canSend); return; }
+   * does not send it again. Resolves with the report of the Cue it sent, or null
+   * for a clip event (reported to the host as a clip). */
+  private async output(entry: TimelineEntry, canSend: () => boolean): Promise<CueExecutionReport | null> {
+    if ('cue' in entry) { this.sentDue.add(entry.executionId); return this.cue(entry.cue, canSend); }
     const event = entry.event;
     // A camera only covers these decoders; composition restores their
     // visibility. Repositioning them here interrupts a live media clock.
     if (event.phase === 'start' && this.managed.isActiveMedia(event)) {
-      if (!event.deferSceneSwitch) await this.cue({
+      return event.deferSceneSwitch ? null : this.cue({
         id: `restore:${event.id}`, name: '恢复持续播放的素材', enabled: true, notes: '',
         timecode: frameNumberToTimecode(entry.frame, this.project.timebase.frameRate),
         actions: [{ id: `restore:${event.id}:scene`, label: '恢复底层画面', kind: 'obs.setProgramScene', sceneName: event.sceneName }]
       }, canSend);
-      return;
     }
     const report = await this.dependencies.guardOutput(canSend,
       () => this.managed.executeMedia(this.managed.alignEvent(event, this.frame), 'live', canSend));
@@ -491,6 +557,7 @@ export class ObsProgramSession {
     if (event.phase === 'start' && report.status !== 'skipped') this.played([event.sourceName]);
     if (event.phase === 'start' && report.status === 'failed') this.failedStarts.add(event.clipId);
     this.dependencies.mediaReport(report);
+    return null;
   }
   /** A play request for these inputs ended while the song is paused: it may have
    * reached OBS after the pause did, so they are paused once the step settles. */

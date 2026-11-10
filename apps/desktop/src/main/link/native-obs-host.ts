@@ -1,4 +1,4 @@
-import { ObsPictureLeftover, ObsProgramSession, pictureCleanupReason, pictureErrorDetail, projectFromObsSnapshot, type ObsProgramSessionDependencies } from '@tb/core/link';
+import { ObsPictureLeftover, ObsProgramSession, obsRecoveryText, pictureCleanupReason, pictureErrorDetail, projectFromObsSnapshot, type ObsProgramSessionDependencies } from '@tb/core/link';
 import { nativeObsPrepareSchema, nativeObsStopSchema, nativeObsStatusSchema, type NativeObsPrepare, type NativeObsStop, type NativeObsStatus, type NativePlayerStatus, type NativePlayerControl } from '@tb/schema';
 import { ObsPreparationCancelled } from './native-obs-outputs';
 
@@ -63,8 +63,10 @@ export class NativeObsHost {
 
   /** Recovery rule B after the operator reconnects OBS while this song plays: OBS
    * forgot the owned scenes, so they are prepared again and the picture is rebuilt
-   * at the current position while audio continues. Reported in red either way;
-   * scenes that could not be prepared again do not stop the cameras coming back. */
+   * at the current position while audio continues. Reported in red either way, and
+   * logged once; scenes that could not be prepared again do not stop the cameras
+   * coming back. A rebuilt part that did not come back stays named in that text
+   * (2026-11-09: never a success over its own red text). */
   async reconnected(): Promise<void> {
     const entry = this.entry;
     if (!entry || entry.state.state !== 'running') return;
@@ -72,9 +74,7 @@ export class NativeObsHost {
     const current = (): void => { if (this.entry !== entry || entry.state.state !== 'running') throw new ObsPreparationCancelled('画面状态已变，没有恢复'); };
     try {
       const rebuilt = await entry.session.rebuild(() => entry.restoreScenes?.(current) ?? Promise.resolve());
-      this.fault(rebuilt === null ? 'OBS 已重新连接；节目暂停了，继续播放时按当前位置恢复画面'
-        : rebuilt.failure === null ? `OBS 已重新连接，画面已按当前位置恢复（${rebuilt.sent} 项）`
-        : `OBS 已重新连接，但素材场景没有重新准备好：${rebuilt.failure}。机位已按当前位置恢复（${rebuilt.sent} 项），素材可能播不出来`);
+      this.fault(rebuilt === null ? 'OBS 已重新连接；节目暂停了，继续播放时按当前位置恢复画面' : obsRecoveryText(rebuilt, true));
     } catch (error) {
       if (this.entry === entry) this.fault(`OBS 已重新连接，但画面恢复失败：${error instanceof Error ? error.message : String(error)}`);
     }

@@ -262,6 +262,20 @@ it('播放中重新连接 OBS：重新准备本曲场景后按当前位置重建
   expect(test.failures.at(-1)).toBe(partial);
 });
 
+it('播放中重新连接 OBS，恢复的机位没切成：红字写明哪项没恢复、原因和怎么办，不用“已恢复”盖掉它，错误日志记一次（2026-11-09）', async () => {
+  const test = setup(); await test.host.prepare(test.request);
+  test.observe({ status: 'playing', generation: 2, positionMs: 0 }, 0);
+  for (let time = 50; time <= 1500; time += 50) { test.observe({ positionMs: time }, time); await new Promise(resolve => setTimeout(resolve, 0)); }
+  test.host.disconnect('OBS 网络断开');
+  test.execute.mockRejectedValueOnce(new Error('OBS 无响应'));
+  const logged = test.failures.length;
+  await test.host.reconnected();
+  expect(test.execute.mock.calls.at(-1)?.[0]).toMatchObject({ kind: 'obs.setProgramScene', sceneName: '机位1' });
+  const missed = 'OBS 已重新连接，画面没有按当前位置恢复，切机位没有完成。原因：OBS 无响应。请在 OBS 里检查这一项，需要的话手动调好';
+  expect(test.host.status).toMatchObject({ state: 'running', fault: missed });
+  expect(test.failures.slice(logged)).toEqual([missed]);
+});
+
 it('重新连接 OBS 后恢复画面途中这首歌停了：恢复按取消结束，不当成素材没准备好，也不另记失败（2026-11-09）', async () => {
   const test = setup(); await test.host.prepare(test.request);
   test.observe({ status: 'playing', generation: 2, positionMs: 0 }, 0);

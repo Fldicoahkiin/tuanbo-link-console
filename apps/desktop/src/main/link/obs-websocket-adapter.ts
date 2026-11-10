@@ -46,8 +46,9 @@ export type ObsOutputStatus = {
 
 type StatusListener = (snapshot: ObsConnectionSnapshot) => void;
 /** `checked`: the connection on which OBS last confirmed that item is this source
- * and is shown; null from when a show goes out until OBS answers it, and from when
- * OBS reports a change to that item or its scene until it is checked again. */
+ * and is shown; null from when a show goes out until OBS answers it, from when a
+ * hide of it went out and did not succeed, and from when OBS reports a change to
+ * that item or its scene, until it is checked again. */
 type ShownSource = { sceneName: string; sceneItemId: number; checked: number | null };
 
 const MEDIA_ACTIONS: Record<Extract<LinkAction, { kind: 'obs.mediaAction' }>['action'], string> = {
@@ -71,11 +72,11 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   private readonly listeners = new Set<StatusListener>();
   private readonly inventoryListeners = new Set<() => void>();
   private readonly programListeners = new Set<() => void>();
-  /** Where each program-scene source was shown and not hidden since, so hiding it,
-   * or showing it again, acts on that item. Kept across reconnects: OBS keeps its
-   * scene items when only the websocket drops. A record not confirmed on the
-   * current connection, or one OBS has since reported a change for, is checked
-   * against OBS before it is used. */
+  /** Where each program-scene source was shown and not hidden since (a hide that
+   * did not succeed does not count), so hiding it, or showing it again, acts on
+   * that item. Kept across reconnects: OBS keeps its scene items when only the
+   * websocket drops. A record not confirmed on the current connection, or one OBS
+   * has since reported a change for, is checked against OBS before it is used. */
   private readonly shownInProgram = new Map<string, ShownSource>();
   /** Bumped by every connect, so a record from an earlier connection is checked first. */
   private connection = 0;
@@ -112,7 +113,8 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     // item id may now name another source), its scene removed or renamed (the
     // record follows the new name), its item removed, or turned off by hand or
     // from the live canvas. The record is checked again before it is used. This
-    // app's own hide forgets its record as it goes out, before OBS reports it.
+    // app's own hide forgets its record as it goes out, before OBS reports it,
+    // and remembers it again, to be checked, if that hide does not succeed.
     this.client.on('CurrentSceneCollectionChanged', () => { this.recheckShown(() => true); });
     this.client.on('SceneRemoved', ({ sceneName }) => { this.recheckShown(shown => shown.sceneName === sceneName); });
     this.client.on('SceneNameChanged', ({ oldSceneName, sceneName }) => { this.recheckShown(shown => shown.sceneName === oldSceneName, sceneName); });
@@ -572,22 +574,34 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
    * source this app shows and has not hidden acts on the item it was shown in:
    * its hide, and a repeated show such as the reconnect rebuild's while OBS still
    * shows that item, go there even after the program moved on or OBS reconnected,
-   * so nothing is left shown. */
+   * so nothing is left shown. A hide that went out and did not succeed does not
+   * count as hidden: the one sent again after a reconnect goes to that item too. */
   async setSourceEnabledInProgramScene(sourceName: string, enabled: boolean): Promise<void> {
     this.assertConnected();
     const connection = this.connection;
     const { sceneName, sceneItemId } = await this.shownItem(sourceName, enabled, connection) ?? await this.programSceneItem(sourceName);
     const placed: ShownSource = { sceneName, sceneItemId, checked: null };
-    // Kept up to date as the request goes out, whatever OBS answers: a hide that
-    // went out counts as done, a show that went out may be on air. A request that
-    // never went out (pause, stop, a full queue) changes nothing.
+    // Kept up to date as the request goes out: a show that went out may be on air,
+    // a hide that went out forgets the item, until it is known whether it worked.
+    // A request that never went out (pause, stop, a full queue) changes nothing.
+    const hiding: { forgotten?: ShownSource } = {};
     const sent = (): void => {
       if (enabled) { this.shownInProgram.set(sourceName, placed); return; }
       const shown = this.shownInProgram.get(sourceName);
-      if (shown?.sceneName === sceneName && shown.sceneItemId === sceneItemId) this.shownInProgram.delete(sourceName);
+      if (shown?.sceneName === sceneName && shown.sceneItemId === sceneItemId) { this.shownInProgram.delete(sourceName); hiding.forgotten = shown; }
     };
-    await this.requests.guarded(() => true, () => this.request(() => this.client.call('SetSceneItemEnabled',
-      { sceneName, sceneItemId, sceneItemEnabled: enabled }), 'SetSceneItemEnabled'), sent);
+    try {
+      await this.requests.guarded(() => true, () => this.request(() => this.client.call('SetSceneItemEnabled',
+        { sceneName, sceneItemId, sceneItemEnabled: enabled }), 'SetSceneItemEnabled'), sent);
+    } catch (error) {
+      // A hide that went out and did not succeed may not have happened: OBS may
+      // have run it and its answer was lost (the connection dropped, the request
+      // timed out), or it never reached OBS. The item is remembered again, to be
+      // checked against OBS before its next use, unless a newer show took its
+      // place, so the hide sent again after a reconnect still goes there.
+      if (hiding.forgotten && !this.shownInProgram.has(sourceName)) this.shownInProgram.set(sourceName, { ...hiding.forgotten, checked: null });
+      throw error;
+    }
     // Up to four requests are in flight at once, so a hide or another show may have
     // gone out before this answer came back; only a record still this show's is confirmed.
     if (enabled && this.shownInProgram.get(sourceName) === placed) this.shownInProgram.set(sourceName, { ...placed, checked: connection });
