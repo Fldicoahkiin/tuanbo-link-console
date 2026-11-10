@@ -23,6 +23,13 @@ type Active = { key: string; path: string; cachedPath: string; metadata: string;
 export type NativeAudioLease = { path: string; sampleRate: 44100 | 48000; baseMs: number; streaming: boolean;
   frames: number; durationMs: number; availableMs: number; completion: Promise<DecodeResult>; release: () => Promise<void> };
 
+/** The decode files a decoder of the app may still write, in every cache: several caches can use one directory at a
+ * time (link-main gives each player service a new cache while the last one's decoder may still be exiting, and every
+ * listening in the editor makes one). Registered as the decoder starts, let go once it has exited. Only one copy of the
+ * app runs (link-main's single-instance lock), so a decode file of these directories that is not here is written by nobody. */
+const writing = new Set<string>();
+const decodeFile = /^[a-f0-9]{64}-(44100|48000)-\d+\.[a-f0-9-]+\.partial$/;
+
 /** Original audio is fingerprinted before output. A private growing PCM file
  * starts playback after a two-second prefill, independently of total duration.
  * Only fully decoded, validated files become reusable cache entries. */
@@ -89,7 +96,7 @@ export class NativeAudioCache {
       const active: Active = { key, path: temporary, cachedPath: path, metadata, decoder, count: 1,
         completion: Promise.resolve({ ok: true }), manifest: null, published: false, releasing: false,
         reserve, frames, baseFrame, durationMs: request.expectedDurationMs, sampleRate: request.sampleRate };
-      this.active.set(key, active); this.leases.set(key, 1);
+      this.active.set(key, active); this.leases.set(key, 1); writing.add(temporary);
       active.completion = this.validateDecode(active, request, initial, baseFrame, frames, reserve);
       try {
         const neededFrames = Math.min(frames, Math.ceil(request.positionMs * request.sampleRate / 1000) - baseFrame + request.sampleRate * 2);
@@ -120,9 +127,10 @@ export class NativeAudioCache {
     active.releasing = true;
     // Keep ownership until the child really exits. A refused cancellation leaves
     // the active job registered and prevents another decoder from starting; it is
-    // let go once the child has exited.
+    // let go once the child has exited, and what it wrote is removed then. A file that cannot be removed then is
+    // left like one a crash leaves: room-making removes it later (removeLeftover).
     try { await active.decoder.cancel(); }
-    catch (error) { void active.decoder.finished.then(() => this.forget(active)); throw error; }
+    catch (error) { void active.decoder.finished.then(async () => { await removeLeftover(active.path); this.forget(active); }); throw error; }
     // The child has exited and this was the last lease, so nobody else holds the entry: it is let
     // go even when publishing or removing its file fails, and that failure goes to the releaser.
     try {
@@ -139,7 +147,7 @@ export class NativeAudioCache {
   /** Drops a released entry. A file a failed release left behind is never used again: the next
    * preparation of that source finds no cache entry and decodes it anew. */
   private forget(active: Active): void {
-    active.count = 0;
+    active.count = 0; writing.delete(active.path);
     if (this.active.get(active.key) !== active) return;
     this.leases.delete(active.key); this.active.delete(active.key);
   }
@@ -173,8 +181,15 @@ export class NativeAudioCache {
 
   private async makeRoom(bytes: number): Promise<void> {
     if (bytes > this.budgetBytes) throw new Error('这段音频超过了音频缓存上限，请调大缓存上限；原素材没有改动');
-    const entries: Manifest[] = []; let used = 0;
+    const entries: Manifest[] = []; let used = 0, kept: Error | null = null;
     for (const name of await readdir(this.directory)) {
+      // A decode file no decoder writes any more (left by a crash, a kill, a failed decode or a failed release) is
+      // never used again. One that cannot be removed stays and is counted, and a full cache then says so.
+      if (decodeFile.test(name) && !writing.has(join(this.directory, name))) {
+        const failure = await removeLeftover(join(this.directory, name));
+        if (!failure) continue;
+        kept ??= failure;
+      }
       if (/^[a-f0-9]{64}-(44100|48000)-\d+(\.pcm|\.[a-f0-9-]+\.partial)$/.test(name)) used += await sizeOf(join(this.directory, name));
       if (!/^[a-f0-9]{64}-(44100|48000)-\d+\.json$/.test(name)) continue;
       if ((await stat(join(this.directory, name))).size > 16384) throw new Error('音频缓存元数据超过容量');
@@ -190,7 +205,9 @@ export class NativeAudioCache {
       if (this.leases.has(entry.key)) continue;
       await unlink(join(this.directory, `${entry.key}.pcm`)); await unlink(join(this.directory, `${entry.key}.json`)); used -= entry.bytes; count--;
     }
-    if (used + bytes > this.budgetBytes || count >= this.maxEntries) throw new Error('正在播放和准备的音频已经占满缓存');
+    if (used + bytes > this.budgetBytes || count >= this.maxEntries) throw kept
+      ? new Error('正在播放和准备的音频已经占满缓存，其中有用不上的临时音频文件删不掉，可能正被别的程序打开。请过一会儿再试；一直这样的话，重启电脑后再试。', { cause: kept })
+      : new Error('正在播放和准备的音频已经占满缓存');
   }
 }
 
@@ -202,6 +219,12 @@ async function digest(path: string, signal: AbortSignal): Promise<string> {
   return hash.digest('hex');
 }
 function isMissing(error: unknown): boolean { return error instanceof Error && 'code' in error && error.code === 'ENOENT'; }
+
+/** Removes a decode file nobody writes any more. Returns why it could not, or null once it is gone. */
+async function removeLeftover(path: string): Promise<Error | null> {
+  try { await unlink(path); return null; }
+  catch (error) { return isMissing(error) ? null : error instanceof Error ? error : new Error(String(error)); }
+}
 
 /** What a cache file holds now. A decoder's file can be missing: FFmpeg has not created it yet (or is stuck before it
  * does, after a refused cancel), or a release has just published or removed it. It then holds nothing, and its
