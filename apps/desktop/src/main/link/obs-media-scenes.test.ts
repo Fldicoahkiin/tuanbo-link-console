@@ -2,7 +2,7 @@ import type { OBSWebSocket } from 'obs-websocket-js';
 import { describe, expect, it, vi } from 'vitest';
 import { materialSceneNames, type ManagedMediaEvent } from '@tb/core/link';
 import type { LinkMediaAsset } from '@tb/schema';
-import { ObsMediaScenes, failureReason } from './obs-media-scenes';
+import { MediaOutOfStepError, ObsMediaScenes, failureReason } from './obs-media-scenes';
 
 const asset: LinkMediaAsset = { id: 'clip', name: '舞蹈.mp4', kind: 'video', folderId: null, relativePath: 'assets/dance.mp4', sha256: 'a'.repeat(64), byteLength: 10 };
 const names = materialSceneNames('project', asset);
@@ -335,6 +335,16 @@ describe('素材独立场景播放', () => {
     await scenes.prime(opening, 'C:/dance.mp4', () => { setMediaState('OBS_MEDIA_STATE_PAUSED', 0); return Promise.resolve(); });
     await expect(scenes.execute({ ...opening, sourceOffsetMs: 23 }, 'C:/dance.mp4')).resolves.toBeUndefined();
   });
+  it('预热素材 PLAY 后 OBS 报它比音乐落后 250 ms：报位置对不上（新开播的按 100 ms 核对，300 ms 的容差只给已经在画面上播着这一段的解码器），它仍算在画面上', async () => {
+    const { scenes, setMediaState } = fixture(false, false, -250);
+    await scenes.prepare('project', asset, 'C:/dance.mp4');
+    const opening = { ...event, sourceOffsetMs: 1000, deferSceneSwitch: true };
+    await scenes.prime(opening, 'C:/dance.mp4', () => { setMediaState('OBS_MEDIA_STATE_PAUSED', 1000); return Promise.resolve(); });
+    const starting = scenes.execute({ ...opening, sourceOffsetMs: 1023 }, 'C:/dance.mp4');
+    await expect(starting).rejects.toThrow(/^切场景后素材位置对不上：舞蹈\.mp4，按音乐应该在 10\d\d ms，OBS 实际在 750 ms$/);
+    await expect(starting).rejects.toBeInstanceOf(MediaOutOfStepError);
+    expect(scenes.isActive(names.sourceName)).toBe(true);
+  });
   it.each([['晚到 600 ms', 600, 0], ['在 OBS 里被改过位置', 0, 2000]])('预热素材位置对不上（%s）：照常切到素材场景，按音乐位置定位后再播放，不报错（2026-11-09 不能漏切）', async (_case, offset, moved) => {
     vi.useFakeTimers();
     try {
@@ -626,7 +636,27 @@ describe('素材独立场景播放', () => {
   it('切场景前位置正确、切场景后被 OBS 重置时不能报告成功', async () => {
     const { scenes } = fixture(true);
     await scenes.prepare('project', asset, 'C:/dance.mp4');
-    await expect(scenes.execute(event, 'C:/dance.mp4')).rejects.toThrow(/切场景后素材位置对不上：舞蹈\.mp4，按音乐应该在 2\d{3} ms，OBS 实际在 0 ms/);
+    const starting = scenes.execute(event, 'C:/dance.mp4');
+    await expect(starting).rejects.toThrow(/切场景后素材位置对不上：舞蹈\.mp4，按音乐应该在 2\d{3} ms，OBS 实际在 0 ms/);
+    // OBS carried the start out: the clip is on air, only out of step with the music.
+    await expect(starting).rejects.toBeInstanceOf(MediaOutOfStepError);
+    expect(scenes.isActive(names.sourceName)).toBe(true);
+  });
+  it('切场景后 OBS 没报出素材位置：报位置对不上（OBS 实际在 未知 ms），但不当作只是和音乐差了一点（漂移检查读不到位置，也校正不了它）', async () => {
+    const { scenes, client, responses } = fixture();
+    await scenes.prepare('project', asset, 'C:/dance.mp4');
+    // The first scene switch activates the decoder before it is positioned; the
+    // second is the start's own show and switch.
+    const callBatch = client.callBatch;
+    let switches = 0;
+    client.callBatch = (batch) => {
+      const result = callBatch(batch);
+      if (batch.some((entry) => entry.requestType === 'SetCurrentProgramScene') && ++switches === 2) responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_PLAYING', mediaCursor: null });
+      return result;
+    };
+    const starting = scenes.execute(event, 'C:/dance.mp4');
+    await expect(starting).rejects.toThrow(/^切场景后素材位置对不上：舞蹈\.mp4，按音乐应该在 2\d{3} ms，OBS 实际在 未知 ms$/);
+    await expect(starting).rejects.not.toBeInstanceOf(MediaOutOfStepError);
   });
   it('播放时启动解码器并按位置切换，回读实际状态', async () => {
     const { scenes, calls } = fixture(); await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
@@ -694,6 +724,47 @@ describe('素材独立场景播放', () => {
         { requestType: 'SetSceneItemEnabled', requestData: { sceneName: names.sceneName, sceneItemId: 1, sceneItemEnabled: true } },
         { requestType: 'SetInputMute', requestData: { inputName: names.sourceName, inputMuted: false } },
         ...(deferred ? [] : [{ requestType: 'SetCurrentProgramScene', requestData: { sceneName: names.sceneName } }])]);
+      expect(scenes.isActive(names.sourceName)).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+  it.each([[250, false], [-250, false], [400, true], [-400, true]])('解码器接着往下播、改算下一段后，它和音乐差 %s ms：300 ms（漂移检查的容差）以内不暂停、不定位，开始也不报位置对不上；超过才按音乐重新定位（%s）', async (ahead, located) => {
+    vi.useFakeTimers();
+    try {
+      const { scenes, calls, setMediaState } = fixture(); await scenes.prepare('project', asset, 'C:/dance.mp4');
+      await held(scenes.execute(event, 'C:/dance.mp4'));
+      expect(scenes.continueClip(names.sourceName, event.clipId, { clipId: 'next', embeddedAudioEnabled: false })).toBe(true);
+      setMediaState('OBS_MEDIA_STATE_PLAYING', 3400 + ahead);
+      calls.length = 0;
+      const starting = scenes.execute({ ...event, id: 'next', clipId: 'next', sourceOffsetMs: 3400 }, 'C:/dance.mp4');
+      await vi.advanceTimersByTimeAsync(400);
+      await expect(starting).resolves.toBeUndefined();
+      const transport = calls.filter(call => call.requestType === 'SetMediaInputCursor' || JSON.stringify(call.requestData).includes('ACTION_PAUSE'));
+      expect(transport.length > 0).toBe(located);
+      expect(scenes.isActive(names.sourceName)).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+  it('解码器接着往下播、和音乐差 400 ms 被按音乐重新定位，放开后 OBS 报它比音乐落后 250 ms：照样报位置对不上（定位过的按 100 ms 核对，和新开播的一样），它仍算在画面上', async () => {
+    vi.useFakeTimers();
+    try {
+      const { scenes, client, setMediaState } = fixture(); await scenes.prepare('project', asset, 'C:/dance.mp4');
+      await held(scenes.execute(event, 'C:/dance.mp4'));
+      expect(scenes.continueClip(names.sourceName, event.clipId, { clipId: 'next', embeddedAudioEnabled: false })).toBe(true);
+      setMediaState('OBS_MEDIA_STATE_PLAYING', 3400 + 400);
+      // The seek lands on its target; once played, OBS reports the decoder 250 ms short of it.
+      const call = client.call;
+      let target = 0;
+      client.call = (requestType, requestData) => {
+        const result = call(requestType, requestData);
+        if (requestType === 'SetMediaInputCursor' && typeof requestData === 'object' && requestData !== null && 'mediaCursor' in requestData && typeof requestData.mediaCursor === 'number') target = requestData.mediaCursor;
+        if (requestType === 'TriggerMediaInputAction' && JSON.stringify(requestData).includes('ACTION_PLAY')) setMediaState('OBS_MEDIA_STATE_PLAYING', target - 250);
+        return result;
+      };
+      const starting = scenes.execute({ ...event, id: 'next', clipId: 'next', sourceOffsetMs: 3400 }, 'C:/dance.mp4');
+      const failure = starting.then(() => null, (error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(400);
+      expect(target).toBeGreaterThan(3400);
+      expect(await failure).toBeInstanceOf(MediaOutOfStepError);
+      expect(String(await failure)).toMatch(/切场景后素材位置对不上：舞蹈\.mp4，按音乐应该在 3\d{3} ms，OBS 实际在 3\d{3} ms/);
       expect(scenes.isActive(names.sourceName)).toBe(true);
     } finally { vi.useRealTimers(); }
   });

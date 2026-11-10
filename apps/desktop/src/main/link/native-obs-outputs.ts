@@ -11,7 +11,7 @@ import type { ObsNativeSeek } from './obs-native-seek';
 import type { NativePlayerService } from './native-player-service';
 import type { LinkRunLogger } from './run-logger';
 import { redactValue } from './run-logger';
-import { ObsMediaPreload } from './obs-media-preload';
+import { ObsMediaPreload, ObsPreparationNotNeeded } from './obs-media-preload';
 import { obsMediaDecodeTargets } from './obs-media-decode';
 import { obsMediaCachePaths } from './obs-media-paths';
 import { PreparationSteps, SLOW_PREPARATION_STEP_MS } from './preparation-log';
@@ -76,6 +76,24 @@ export function pictureDriftCheck(scenes: Pick<ObsMediaScenes, 'correctDrift'>, 
   };
 }
 
+/** The lookahead of a song's picture (ObsMediaPreload.upcoming). A clip whose
+ * preparation failed once it already played on from the decoder of the clip it
+ * continues needs nothing: the program is not told (its red text would say the
+ * clip may not play, while it is on air), and the run log gets one line. */
+export function pictureUpcoming(decoders: Pick<ObsMediaPreload, 'upcoming'>, log: PictureLog): (frame: number, assertCurrent: () => void) => Promise<ManagedMediaEvent | null> {
+  return async (frame, assertCurrent) => {
+    try { return await decoders.upcoming(frame, assertCurrent); }
+    catch (error) {
+      if (!(error instanceof ObsPreparationNotNeeded)) throw error;
+      void log.record({ level: 'warning', category: 'device', device: '后台画面', projectId: log.projectId, itemId: log.itemId,
+        message: `准备素材没成功：${error.event.assetName}。这一段已经接着上一段往下播，画面照常。原因：${error.reason}。不用处理，后面的素材照常播`, result: 'failed',
+        details: { clipId: error.event.clipId, inputName: error.decoder, error: error.reason } })
+        .catch((failure: unknown) => console.error('没用上的素材准备失败未能记入日志', failure));
+      return null;
+    }
+  };
+}
+
 /** Per-program adapters. Original documents are neither rewritten nor reread;
  * only this immutable snapshot's referenced resources are prepared. */
 export function createNativeObsOutputs(request: NativeObsPrepare, services: Services, positionMs: number): NativeObsOutputs {
@@ -95,9 +113,11 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
   });
   const recordLog: NativeObsOutputs['recordLog'] = entry => logger.recordBuffered(entry.category === 'action' && entry.result === 'failed'
     ? { ...entry, details: { ...entry.details, obsRequests: obs.getRequestDiagnostics() } } : entry, services.logFailure);
+  const pictureLog: PictureLog = { record: recordLog, projectId: project.projectId, itemId: request.snapshot.item.id };
+  const upcoming = pictureUpcoming(preload, pictureLog);
   const outputs: NativeObsOutputs = {
     outputNotice: () => captureNotice,
-    now: () => performance.now(), executor: pictureExecutor(obs, preload, { record: recordLog, projectId: project.projectId, itemId: request.snapshot.item.id }),
+    now: () => performance.now(), executor: pictureExecutor(obs, preload, pictureLog),
     guardOutput: (canSend, operation, dispatched) => obs.guardPlaybackOperation(canSend, operation, dispatched),
     recordLog,
     preloadResources: async (assertCurrent, preparationPhase = 'idle') => {
@@ -267,7 +287,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       }
       assertCurrent();
     },
-    prepareUpcoming: (frame, assertCurrent) => obs.preparePlaybackMedia(() => preload.upcoming(frame, assertCurrent)),
+    prepareUpcoming: (frame, assertCurrent) => obs.preparePlaybackMedia(() => upcoming(frame, assertCurrent)),
     releaseOutputs: async () => {
       const cleanup = [() => preload.close(), () => obs.mediaScenes.releasePrimed(materialTargets.flatMap(target => [target.sourceName, `${target.sourceName}·预备`])),
         () => obs.mediaScenes.releaseImages(materialTargets.filter(target => target.asset.kind === 'image').map(target => target.sourceName)), () => logger.flush()];

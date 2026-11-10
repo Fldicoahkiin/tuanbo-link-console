@@ -1,16 +1,38 @@
 import { SceneOutputTimeline, compileManagedMediaTimeline, materialSceneNames, playbackFramesPerSecond, type ManagedMediaEvent } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
-import { failureReason, type ObsMediaScenes } from './obs-media-scenes';
+import { MediaOutOfStepError, failureReason, type ObsMediaScenes } from './obs-media-scenes';
+
+/** A clip's preparation that failed once the clip was already on air, playing on
+ * from the decoder of the clip it continues: nothing went wrong on air, and the
+ * prepared decoder is not needed for it. */
+export class ObsPreparationNotNeeded extends Error {
+  constructor(readonly event: ManagedMediaEvent, readonly decoder: string, readonly reason: string) { super(reason); }
+}
 
 type Slot = { event: ManagedMediaEvent; sourceName: string; ready: boolean;
-  /** The clip's start failed before OBS showed this decoder: it still stands for
-   * the clip (its stop and the material's next clip reach it), but nothing of the
-   * clip is on air, so pauses, resumes and the drift check have nothing to reach. */
+  /** The clip's start (or the seek that put it on air from the middle) failed
+   * before OBS showed this decoder: it still stands for the clip (its stop and the
+   * material's next clip reach it), but nothing of the clip is on air, so pauses,
+   * resumes and the drift check have nothing to reach. */
   offAir?: true };
 type Media = { path: string; current: Slot | null; pending: Slot | null; following: Slot | null; touched: Set<string>; retained: Set<string>;
   /** Starts, stops and seeks of this material that OBS has not answered yet. */
   busy: number };
 type Scenes = Pick<ObsMediaScenes, 'prepareStandby' | 'copyPresentation' | 'prime' | 'execute' | 'seek' | 'isActive' | 'continueClip'>;
+
+/** The red text of a clip playing on from the decoder of the clip it continues,
+ * when its on-air step went wrong. The decoder plays on and stands for the clip
+ * either way. When OBS carried the step out and only the position came out of
+ * step with the music, the clip is on air with its scene and sound: nothing is
+ * for the operator to do, the drift check puts it back in step once it is off by
+ * more than its tolerance. Otherwise OBS may not show it, or not with its sound. */
+function continuationFailure(event: ManagedMediaEvent, error: unknown): string {
+  const reason = failureReason(error), what = event.assetKind === 'audio' ? '声音' : '画面';
+  if (error instanceof MediaOutOfStepError) return `${what}接着上一段往下播，切到了这一段，但和音乐没对齐。原因：${reason}。差得多时联动台过几秒会自动按音乐校正，不用处理；后面的素材照常播`;
+  return event.assetKind === 'audio'
+    ? `声音接着上一段往下播，切到这一段时出了错。原因：${reason}。如果这一段的声音不对，在 OBS 混音器里调整；后面的素材照常播`
+    : `画面接着上一段往下播，切到这一段时出了错。原因：${reason}。如果 OBS 节目画面上不是这段素材，在 OBS 里切到它的场景；后面的素材照常播`;
+}
 /** A clip as the timeline places it: its first and real end frame (a camera covering
  * it does not end it) and where in the file it starts. */
 type Clip = { start: number; end: number; sourceOffsetMs: number };
@@ -75,10 +97,11 @@ export class ObsMediaPreload {
   resolveSource(logicalName: string): string { return this.media.get(logicalName)?.current?.sourceName ?? logicalName; }
   /** Where a pause, a resume or the drift check of the material's clip goes: the
    * decoder of the clip on air now. Null when nothing of the material is on air
-   * (its start was refused or failed before OBS showed it, or its clip ended), so
-   * such an action reaches no decoder: a stopped decoder is not woken, nor one
-   * primed for a later clip moved off its frame. A name that is not one of this
-   * song's materials is the user's own OBS input and passes as it is. */
+   * (its start was refused, its start or seek failed before OBS showed it, or its
+   * clip ended), so such an action reaches no decoder: a stopped decoder is not
+   * woken, nor one primed for a later clip moved off its frame. A name that is not
+   * one of this song's materials is the user's own OBS input and passes as it is
+   * (every material of the song is registered before its picture can play). */
   onAirSource(logicalName: string): string | null {
     const media = this.media.get(logicalName);
     if (!media) return logicalName;
@@ -121,6 +144,12 @@ export class ObsMediaPreload {
       // and played; this clip is not prepared again (no automatic retry).
       if (media.pending === slot) media.pending = null;
       this.failed.add(event.clipId);
+      // Failed after the clip went on air on the decoder of the clip it continues
+      // (see the late-ready case below): the picture plays on as it should.
+      const playing = media.current;
+      if (this.media.get(event.sourceName) === media && playing?.event.clipId === event.clipId && playing.sourceName !== sourceName) {
+        throw new ObsPreparationNotNeeded(event, sourceName, failureReason(error));
+      }
       throw error;
     }
     if (media.current?.event.clipId === event.clipId) {
@@ -255,11 +284,7 @@ export class ObsMediaPreload {
         && this.scenes.continueClip(previous.sourceName, previous.event.clipId, event)) {
         media.current = { event, sourceName: previous.sourceName, ready: true };
         try { await this.answered(media, () => this.scenes.execute({ ...event, sourceName: previous.sourceName }, path, undefined, retirement)); }
-        catch (error) {
-          throw new Error(event.assetKind === 'audio'
-            ? `声音接着上一段往下播，切到这一段时出了错。原因：${failureReason(error)}。如果这一段的声音不对，在 OBS 混音器里调整；后面的素材照常播`
-            : `画面接着上一段往下播，切到这一段时出了错。原因：${failureReason(error)}。如果 OBS 节目画面上不是这段素材，在 OBS 里切到它的场景；后面的素材照常播`);
-        }
+        catch (error) { throw new Error(continuationFailure(event, error)); }
         return;
       }
       // Otherwise nothing of this clip goes on air, but the timeline still ends
@@ -361,8 +386,16 @@ export class ObsMediaPreload {
     const sourceName = media.pending?.sourceName ?? media.current?.sourceName ?? event.sourceName;
     media.touched.add(sourceName); media.pending = null; media.following = null;
     media.retained.delete(sourceName);
-    media.current = { event, sourceName, ready: true };
-    await this.answered(media, () => this.scenes.seek({ ...event, sourceName }, path, this.native.seek));
+    const slot: Slot = { event, sourceName, ready: true };
+    media.current = slot;
+    try { await this.answered(media, () => this.scenes.seek({ ...event, sourceName }, path, this.native.seek)); }
+    catch (error) {
+      // OBS never showed this decoder: it stands for the clip, off air, as after a
+      // start that failed before its show. The program's play after the rebuild
+      // and later pauses reach no decoder; the clip's stop still reaches it.
+      if (this.media.get(event.sourceName) === media && media.current === slot && !this.scenes.isActive(sourceName)) media.current = { ...slot, offAir: true };
+      throw error;
+    }
   }
 
   /** Runs one start, stop or seek of the material; its next preparation waits

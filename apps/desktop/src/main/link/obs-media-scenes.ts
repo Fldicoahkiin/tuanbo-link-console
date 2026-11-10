@@ -45,6 +45,11 @@ class MediaBatchError extends Error {
   constructor(message: string, readonly executed: number) { super(message); }
 }
 
+/** A start OBS carried out whole, found out of step with the music afterwards:
+ * the clip is on air (shown, its sound, its scene) and counts as started, and the
+ * drift check puts it back in step once it is off by more than its tolerance. */
+export class MediaOutOfStepError extends Error {}
+
 /** Why a picture step failed, to follow "原因：" in a red text and to end before
  * the next sentence there. */
 export function failureReason(error: unknown): string {
@@ -283,9 +288,18 @@ export class ObsMediaScenes {
       const retire = (start: number): { sourceName: string; through: number } | undefined => previousSource && retiring.length ? { sourceName: previousSource, through: start + 2 } : undefined;
       // Set when this start seeked and released the decoder in step with the music.
       let seekedStart: { lateMs: number } | null = null, primedStart = false;
+      // How far from the music a decoder this start leaves running may be
+      // afterwards: the drift check's tolerance for one on air for this clip already.
+      let inStepMs = 100;
       if (event.phase === 'start') {
         const wasActive = this.active.has(event.sourceName);
+        // On air for this clip already (it plays on from the clip this one continues
+        // in the file, or the clip comes back from under a camera): in step within
+        // the drift check's tolerance, like any clip playing on. Its media clock is
+        // not moved at the cut (a pause and seek would freeze the picture, and its
+        // sound); the drift check puts it back in step beyond that.
         const continuing = wasActive && this.startedClips.get(event.sourceName)?.clipId === event.clipId;
+        if (continuing) inStepMs = MEDIA_DRIFT_TOLERANCE_MS;
         const ready = this.primed.get(event.sourceName) === 'ready';
         if (this.primed.has(event.sourceName) && !ready) throw new Error(`素材还没准备好：${event.assetName}`);
         let primed = false, held = false;
@@ -339,7 +353,7 @@ export class ObsMediaScenes {
         // its sound is set, so a failure in between never leaves it audible while
         // hidden; a primed decoder stays paused until the last request anyway.
         const reach = requests.length;
-        if (event.assetKind !== 'image' && !primed) seekedStart = await this.positionMedia(event.sourceName, () => event.sourceOffsetMs + performance.now() - startedAt, continuing ? 100 : 30);
+        if (event.assetKind !== 'image' && !primed) seekedStart = await this.positionMedia(event.sourceName, () => event.sourceOffsetMs + performance.now() - startedAt, continuing ? MEDIA_DRIFT_TOLERANCE_MS : 30);
         requests.push({ requestType: 'SetSceneItemEnabled', requestData: { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemEnabled: true } });
         if (event.assetKind !== 'image') requests.push({ requestType: 'SetInputMute', requestData: { inputName: event.sourceName, inputMuted: !event.embeddedAudioEnabled } });
         requests.push(...(event.deferSceneSwitch ? [] : [{ requestType: 'SetCurrentProgramScene' as const, requestData: { sceneName: target.sceneName } }]));
@@ -370,10 +384,15 @@ export class ObsMediaScenes {
         // ahead that stays frozen for a few hundred ms (measured on the field
         // machine, 2026-10-22). Seeked and primed starts were verified before
         // PLAY: the paused frame, and for a seek the moment the music reached it.
-        // A decoder that OBS reset behind the music is still caught.
-        if (seekedStart && seekedStart.lateMs > 100) throw new Error(`素材开始播放时比音乐晚了 ${Math.round(seekedStart.lateMs)} ms：${event.assetName} 定位解码太慢`);
-        if (typeof status.mediaCursor !== 'number' || status.mediaCursor < expected - 100 || !seekedStart && !primedStart && status.mediaCursor > expected + 100) {
-          throw new Error(`切场景后素材位置对不上：${event.assetName}，按音乐应该在 ${expected} ms，OBS 实际在 ${status.mediaCursor ?? '未知'} ms`);
+        // A decoder that OBS reset behind the music is still caught. A decoder left
+        // running on air for this clip is judged by the tolerance it was left by.
+        if (seekedStart && seekedStart.lateMs > 100) throw new MediaOutOfStepError(`素材开始播放时比音乐晚了 ${Math.round(seekedStart.lateMs)} ms：${event.assetName} 定位解码太慢`);
+        const tolerance = seekedStart ? 100 : inStepMs;
+        if (typeof status.mediaCursor !== 'number' || status.mediaCursor < expected - tolerance || !seekedStart && !primedStart && status.mediaCursor > expected + tolerance) {
+          const message = `切场景后素材位置对不上：${event.assetName}，按音乐应该在 ${expected} ms，OBS 实际在 ${status.mediaCursor ?? '未知'} ms`;
+          // A position OBS did not report is not known to be out of step, and the
+          // drift check cannot correct it either.
+          throw typeof status.mediaCursor === 'number' ? new MediaOutOfStepError(message) : new Error(message);
         }
       }
     });
