@@ -1,8 +1,9 @@
 import { dirname } from 'node:path';
 import { stat, statfs } from 'node:fs/promises';
-import { firstTimeWarning, millisecondsToFrameNumber, preciseSeekAssetIds, preflightLogEntries, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type ObsProgramSessionDependencies } from '@tb/core/link';
+import { firstTimeWarning, millisecondsToFrameNumber, preciseSeekAssetIds, preflightLogEntries, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type LinkActionExecutor, type ManagedMediaEvent, type ObsProgramSessionDependencies } from '@tb/core/link';
 import type { NativeObsPrepare } from '@tb/schema';
 import type { ObsWebSocketAdapter } from './obs-websocket-adapter';
+import type { ObsMediaScenes } from './obs-media-scenes';
 import type { LinkProjectService } from './link-project-service';
 import type { MediaPreviewService } from './media-preview-service';
 import type { SecureProfileStore } from './secure-profile-store';
@@ -33,6 +34,48 @@ type Services = {
   seenNotices: Set<string>;
 };
 
+/** What a song's picture actions reach: OBS, and the decoders the song's materials take turns on. */
+type PictureObs = Pick<ObsWebSocketAdapter, 'supports' | 'execute' | 'setSourceEnabledInProgramScene'> & Pick<LinkActionExecutor, 'id'>;
+/** Where the executor records an action it did not send. */
+type PictureLog = { record: ObsProgramSessionDependencies['recordLog']; projectId: string; itemId: string };
+type PictureDecoders = Pick<ObsMediaPreload, 'resolveSource' | 'onAirSource'>;
+
+/** The OBS executor of a song's picture. An action naming a material's input
+ * reaches the decoder that stands for the material's clip now. A pause or resume
+ * of a material with nothing on air (its start was refused or failed before OBS
+ * showed it) reaches no decoder: it is not sent, not a failure, and the run log
+ * gets one line. A name that is not one of the song's materials (the user's own
+ * OBS input) passes as it is. */
+export function pictureExecutor(obs: PictureObs, decoders: PictureDecoders, log: PictureLog): LinkActionExecutor {
+  return { id: obs.id, supports: action => obs.supports(action),
+    execute: action => {
+      // Program snapshots exist only in full-scene mode: show/hide acts on the scene on program.
+      if (action.kind === 'obs.setSceneItemEnabled') return obs.setSourceEnabledInProgramScene(decoders.resolveSource(action.sourceName), action.enabled);
+      if (action.kind === 'obs.mediaAction') {
+        const inputName = decoders.onAirSource(action.inputName);
+        if (inputName !== null) return obs.execute({ ...action, inputName });
+        const what = action.action === 'pause' ? '素材暂停' : action.action === 'start' ? '素材继续播放' : '素材动作';
+        void log.record({ level: 'info', category: 'action', device: 'obs', projectId: log.projectId, itemId: log.itemId, actionId: action.id,
+          message: `${what}没有发给 OBS：这个素材这时没有画面在播，不用处理`, result: 'skipped', details: { inputName: action.inputName, action: action.action } })
+          .catch((error: unknown) => console.error('没有发给 OBS 的素材动作未能记入日志', error));
+        return Promise.resolve();
+      }
+      return obs.execute('inputName' in action ? { ...action, inputName: decoders.resolveSource(action.inputName) }
+        : 'sourceName' in action ? { ...action, sourceName: decoders.resolveSource(action.sourceName) } : action);
+    } };
+}
+
+/** The drift check of a song's picture (recovery rule B), on the decoder of the
+ * material's clip on air now; none when nothing of the material is on air. */
+export function pictureDriftCheck(scenes: Pick<ObsMediaScenes, 'correctDrift'>, decoders: Pick<ObsMediaPreload, 'onAirSource'>): (event: ManagedMediaEvent) => Promise<number | null> {
+  return event => {
+    const sourceName = decoders.onAirSource(event.sourceName);
+    if (sourceName === null) return Promise.resolve(null);
+    const received = performance.now();
+    return scenes.correctDrift({ ...event, sourceName }, () => event.sourceOffsetMs + performance.now() - received);
+  };
+}
+
 /** Per-program adapters. Original documents are neither rewritten nor reread;
  * only this immutable snapshot's referenced resources are prepared. */
 export function createNativeObsOutputs(request: NativeObsPrepare, services: Services, positionMs: number): NativeObsOutputs {
@@ -50,16 +93,13 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
     prime: async (name, retained, kind) => { if (!address) throw new Error('画面连接还没准备好'); await seek.prime(address, name, retained, kind); },
     seek: async (name, position) => { if (!address) throw new Error('画面连接还没准备好'); await seek.seek(address, name, position); }
   });
+  const recordLog: NativeObsOutputs['recordLog'] = entry => logger.recordBuffered(entry.category === 'action' && entry.result === 'failed'
+    ? { ...entry, details: { ...entry.details, obsRequests: obs.getRequestDiagnostics() } } : entry, services.logFailure);
   const outputs: NativeObsOutputs = {
     outputNotice: () => captureNotice,
-    now: () => performance.now(), executor: { id: obs.id, supports: action => obs.supports(action),
-      // Program snapshots exist only in full-scene mode: show/hide acts on the scene on program.
-      execute: action => action.kind === 'obs.setSceneItemEnabled' ? obs.setSourceEnabledInProgramScene(preload.resolveSource(action.sourceName), action.enabled)
-        : obs.execute('inputName' in action ? { ...action, inputName: preload.resolveSource(action.inputName) }
-          : 'sourceName' in action ? { ...action, sourceName: preload.resolveSource(action.sourceName) } : action) },
+    now: () => performance.now(), executor: pictureExecutor(obs, preload, { record: recordLog, projectId: project.projectId, itemId: request.snapshot.item.id }),
     guardOutput: (canSend, operation, dispatched) => obs.guardPlaybackOperation(canSend, operation, dispatched),
-    recordLog: entry => logger.recordBuffered(entry.category === 'action' && entry.result === 'failed'
-      ? { ...entry, details: { ...entry.details, obsRequests: obs.getRequestDiagnostics() } } : entry, services.logFailure),
+    recordLog,
     preloadResources: async (assertCurrent, preparationPhase = 'idle') => {
       const started = performance.now(); let previous = started;
       // One 画面准备完成 entry carries every stage and asset; only a slow one is recorded as it happens.
@@ -253,10 +293,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
         throw error;
       }
     },
-    correctMediaDrift: event => {
-      const received = performance.now();
-      return obs.mediaScenes.correctDrift({ ...event, sourceName: preload.resolveSource(event.sourceName) }, () => event.sourceOffsetMs + performance.now() - received);
-    },
+    correctMediaDrift: pictureDriftCheck(obs.mediaScenes, preload),
     seekMedia: async event => {
       if (!address) throw new Error('画面连接还没准备好');
       const target = address;

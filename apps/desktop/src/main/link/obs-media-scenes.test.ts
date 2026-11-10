@@ -646,6 +646,59 @@ describe('素材独立场景播放', () => {
     expect(calls.some((call) => call.requestType === 'SetMediaInputCursor')).toBe(false);
     expect(calls.filter((call) => call.requestType === 'TriggerMediaInputAction')).toHaveLength(0);
   });
+  it.each([true, false])('机位结束切回仍在播的素材：切场景之后按片段的设置恢复它的声音（开着原声=%s），被机位盖住时一直静音', async embedded => {
+    vi.useFakeTimers();
+    try {
+      const { scenes, calls } = fixture(); await scenes.prepare('project', asset, 'C:/dance.mp4');
+      await held(scenes.execute({ ...event, embeddedAudioEnabled: embedded }, 'C:/dance.mp4'));
+      calls.length = 0; await scenes.switchScene('拉腿机位');
+      expect(calls).toEqual([{ requestType: 'SetCurrentProgramScene', requestData: { sceneName: '拉腿机位' } },
+        { requestType: 'SetInputMute', requestData: { inputName: names.sourceName, inputMuted: true } }]);
+      calls.length = 0; await scenes.switchScene(names.sceneName);
+      expect(calls).toEqual([{ requestType: 'SetCurrentProgramScene', requestData: { sceneName: names.sceneName } },
+        { requestType: 'SetInputMute', requestData: { inputName: names.sourceName, inputMuted: !embedded } }]);
+      // A decoder stopped since is not touched.
+      await scenes.execute({ ...event, phase: 'stop' }, 'C:/dance.mp4');
+      calls.length = 0; await scenes.switchScene(names.sceneName);
+      expect(calls).toEqual([{ requestType: 'SetCurrentProgramScene', requestData: { sceneName: names.sceneName } }]);
+    } finally { vi.useRealTimers(); }
+  });
+  it.each([[true, false], [false, true]])('解码器接着往下播、改算下一段（原声开着=%s 换成开着=%s）：之后机位结束切回时，声音按下一段的设置恢复，不按上一段的；不是它上面那一段时什么也不改', async (before, after) => {
+    vi.useFakeTimers();
+    try {
+      const { scenes, calls } = fixture(); await scenes.prepare('project', asset, 'C:/dance.mp4');
+      await held(scenes.execute({ ...event, embeddedAudioEnabled: before }, 'C:/dance.mp4'));
+      calls.length = 0;
+      expect(scenes.continueClip(names.sourceName, 'other', { clipId: 'next', embeddedAudioEnabled: after })).toBe(false);
+      expect(scenes.continueClip(names.sourceName, event.clipId, { clipId: 'next', embeddedAudioEnabled: after })).toBe(true);
+      // It sends nothing itself: the next clip's own start sets the sound when it goes through.
+      expect(calls).toEqual([]);
+      await scenes.switchScene('拉腿机位');
+      calls.length = 0; await scenes.switchScene(names.sceneName);
+      expect(calls).toEqual([{ requestType: 'SetCurrentProgramScene', requestData: { sceneName: names.sceneName } },
+        { requestType: 'SetInputMute', requestData: { inputName: names.sourceName, inputMuted: !after } }]);
+    } finally { vi.useRealTimers(); }
+  });
+  it('叠加里开着原声的素材被机位盖住后，切回叠加时切场景之后恢复它的声音', async () => {
+    vi.useFakeTimers();
+    try {
+      const { scenes, calls, responses } = fixture(); await scenes.prepare('project', asset, 'C:/dance.mp4');
+      responses.set('GetSceneList', { scenes: [{ sceneName: '机位1' }, { sceneName: '机位2' }, { sceneName: names.sceneName }] });
+      responses.set('GetSceneItemList', { sceneItems: [] }); responses.set('CreateSceneItem', { sceneItemId: 3 });
+      const output = '团播联动台·叠加·原声';
+      await scenes.prepareComposition(output, [names.sceneName, '机位2'], ['机位1']);
+      await held(scenes.execute({ ...event, embeddedAudioEnabled: true, deferSceneSwitch: true }, 'C:/dance.mp4'));
+      await scenes.compose(output, [names.sceneName, '机位2']);
+      await scenes.switchScene('机位1');
+      expect(calls.at(-1)).toEqual({ requestType: 'SetInputMute', requestData: { inputName: names.sourceName, inputMuted: true } });
+      calls.length = 0; await scenes.compose(output, [names.sceneName, '机位2']);
+      expect(calls).toEqual([{ requestType: 'SetCurrentProgramScene', requestData: { sceneName: output } },
+        { requestType: 'SetInputMute', requestData: { inputName: names.sourceName, inputMuted: false } }]);
+      // Left out of the composition, it is muted before the switch, as before.
+      calls.length = 0; await scenes.compose(output, ['机位2']);
+      expect(calls.filter(call => call.requestType === 'SetInputMute')).toEqual([{ requestType: 'SetInputMute', requestData: { inputName: names.sourceName, inputMuted: true } }]);
+    } finally { vi.useRealTimers(); }
+  });
   it('重新使用已有素材场景也关闭激活重播和隐藏卸载，保留其他来源设置', async () => {
     const { scenes, calls, responses } = fixture();
     responses.set('GetSceneList', { scenes: [{ sceneName: names.sceneName }] });

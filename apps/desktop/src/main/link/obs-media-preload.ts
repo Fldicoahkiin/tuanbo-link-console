@@ -2,14 +2,18 @@ import { SceneOutputTimeline, compileManagedMediaTimeline, materialSceneNames, p
 import type { LinkProject } from '@tb/schema';
 import { failureReason, type ObsMediaScenes } from './obs-media-scenes';
 
-type Slot = { event: ManagedMediaEvent; sourceName: string; ready: boolean };
+type Slot = { event: ManagedMediaEvent; sourceName: string; ready: boolean;
+  /** The clip's start failed before OBS showed this decoder: it still stands for
+   * the clip (its stop and the material's next clip reach it), but nothing of the
+   * clip is on air, so pauses, resumes and the drift check have nothing to reach. */
+  offAir?: true };
 type Media = { path: string; current: Slot | null; pending: Slot | null; following: Slot | null; touched: Set<string>; retained: Set<string>;
   /** Starts, stops and seeks of this material that OBS has not answered yet. */
   busy: number };
 type Scenes = Pick<ObsMediaScenes, 'prepareStandby' | 'copyPresentation' | 'prime' | 'execute' | 'seek' | 'isActive' | 'continueClip'>;
 /** A clip as the timeline places it: its first and real end frame (a camera covering
- * it does not end it), where in the file it starts, and whether its own sound plays. */
-type Clip = { start: number; end: number; sourceOffsetMs: number; audible: boolean };
+ * it does not end it) and where in the file it starts. */
+type Clip = { start: number; end: number; sourceOffsetMs: number };
 
 /** Two decoders per material, at most one future clip per material. Preparation
  * never starts output and is driven by the formal audio clock, not the UI. */
@@ -40,7 +44,7 @@ export class ObsMediaPreload {
     this.starts = this.timeline.preloadEntries();
     const ends = new Map(events.filter(event => event.phase === 'stop').map(event => [event.clipId, event.frameNumber]));
     this.clips = new Map(events.filter(event => event.phase === 'start').map(event => [event.clipId,
-      { start: event.frameNumber, end: ends.get(event.clipId) ?? Infinity, sourceOffsetMs: event.sourceOffsetMs, audible: event.embeddedAudioEnabled }]));
+      { start: event.frameNumber, end: ends.get(event.clipId) ?? Infinity, sourceOffsetMs: event.sourceOffsetMs }]));
     this.frameMs = 1000 / playbackFramesPerSecond(project.timebase.frameRate);
     this.lookaheadFrames = Math.ceil(10 * playbackFramesPerSecond(project.timebase.frameRate));
     // Eight live layers can still prepare inside the ten-second horizon.
@@ -66,7 +70,20 @@ export class ObsMediaPreload {
       await this.scenes.prepareStandby(primary); assertCurrent();
     }
   }
+  /** The decoder that stands for the material's clip now, or the name itself for
+   * a name that is not one of this song's materials (an OBS input of the user's). */
   resolveSource(logicalName: string): string { return this.media.get(logicalName)?.current?.sourceName ?? logicalName; }
+  /** Where a pause, a resume or the drift check of the material's clip goes: the
+   * decoder of the clip on air now. Null when nothing of the material is on air
+   * (its start was refused or failed before OBS showed it, or its clip ended), so
+   * such an action reaches no decoder: a stopped decoder is not woken, nor one
+   * primed for a later clip moved off its frame. A name that is not one of this
+   * song's materials is the user's own OBS input and passes as it is. */
+  onAirSource(logicalName: string): string | null {
+    const media = this.media.get(logicalName);
+    if (!media) return logicalName;
+    return media.current && !media.current.offAir ? media.current.sourceName : null;
+  }
 
   async prime(event: ManagedMediaEvent, assertCurrent: () => void): Promise<void> {
     assertCurrent(); if (this.closed) throw new Error('素材准备已关闭');
@@ -230,12 +247,20 @@ export class ObsMediaPreload {
       // is on air already: the decoder playing the clip before it plays on and
       // stands for this clip, as after a failed handover. The clip's stop, pause,
       // resume and the drift check reach that decoder, and the material's next
-      // clip hands over from it. Nothing goes to OBS; the clip is reported once,
-      // with nothing for the operator to do.
+      // clip hands over from it. It still gets this clip's on-air step (shown, its
+      // own sound, its scene on program), as a continuing start: its media clock
+      // is not moved while it is in step. The clip counts as started; a step OBS
+      // did not carry out is reported once and not sent again.
       if (!expired && previous && !this.retirementSent.has(previous) && this.continues(previous.event, event)
-        && this.scenes.continueClip(previous.sourceName, previous.event.clipId, event.clipId)) {
+        && this.scenes.continueClip(previous.sourceName, previous.event.clipId, event)) {
         media.current = { event, sourceName: previous.sourceName, ready: true };
-        throw new Error(`${event.assetKind === 'audio' ? '声音' : '画面'}接着上一段往下播，前后是连着的。原因：这一段素材没能提前准备好。不用处理`);
+        try { await this.answered(media, () => this.scenes.execute({ ...event, sourceName: previous.sourceName }, path, undefined, retirement)); }
+        catch (error) {
+          throw new Error(event.assetKind === 'audio'
+            ? `声音接着上一段往下播，切到这一段时出了错。原因：${failureReason(error)}。如果这一段的声音不对，在 OBS 混音器里调整；后面的素材照常播`
+            : `画面接着上一段往下播，切到这一段时出了错。原因：${failureReason(error)}。如果 OBS 节目画面上不是这段素材，在 OBS 里切到它的场景；后面的素材照常播`);
+        }
+        return;
       }
       // Otherwise nothing of this clip goes on air, but the timeline still ends
       // the clip before it. Back to back on one decoder pair, that end was left to
@@ -244,7 +269,8 @@ export class ObsMediaPreload {
       // retirement never went out is retired now, when this start is refused. Its
       // retirement goes out once, whatever OBS answers: one OBS did not carry out
       // leaves that decoder the material's current one, and the material's next
-      // handover retires it as usual.
+      // handover retires it as usual. Pauses, resumes and the drift check of this
+      // clip then reach no decoder (onAirSource).
       const refused = expired ? '这一段素材没有播出：轮到它时这一段已经结束了，电脑或 OBS 当时太忙' : `下一个素材没能在切换前准备好：${event.assetName}`;
       try {
         if (previous && !this.retirementSent.has(previous) && (this.clips.get(previous.event.clipId)?.end ?? Infinity) <= event.frameNumber) {
@@ -254,22 +280,22 @@ export class ObsMediaPreload {
           }
         }
       } finally {
-        // The program still counts this clip as playing until its end, so while
-        // no decoder of its own is on air its pause and resume go to the
-        // material's main decoder, even one stopped here or before. That decoder
-        // stays owned: the song's stop stops it, whatever those reached.
+        // The material's main decoder stays owned, also one stopped here or
+        // before: the song's stop stops it.
         media.touched.add(event.sourceName);
       }
       // A clip that ended unplayed needs nothing from the operator: later clips play as usual.
       throw new Error(expired ? `${refused}。后面的素材照常播，不用处理` : refused);
     }
     const previous = media.current;
-    const handover = previous && previous.sourceName !== next.sourceName ? previous.sourceName : null;
+    const handover = previous && previous.sourceName !== next.sourceName ? previous : null;
     media.current = next; media.pending = media.following; media.following = null;
     try {
       await this.answered(media, () => this.scenes.execute({ ...event, sourceName: next.sourceName }, path, previous?.sourceName, retirement));
     } catch (error) {
       if (handover) this.handedOver(media, next, handover, retain, true);
+      // OBS never showed the new decoder: it stands for the clip, off air.
+      if (this.media.get(event.sourceName) === media && media.current === next && !this.scenes.isActive(next.sourceName)) media.current = { ...next, offAir: true };
       throw error;
     }
     if (handover) this.handedOver(media, next, handover, retain, false);
@@ -294,33 +320,38 @@ export class ObsMediaPreload {
 
   /** Whether `next` continues `previous` in the file without a cut: it starts on
    * the frame `previous` ends, at the place in the file `previous` has reached
-   * by then (within a frame), with the same sound setting (the decoder playing
-   * on keeps the sound of `previous`). */
+   * by then (within a frame). The sound follows the clip: the start of `next`
+   * sets the decoder's sound by its own setting. */
   private continues(previous: ManagedMediaEvent, next: ManagedMediaEvent): boolean {
     const before = this.clips.get(previous.clipId), after = this.clips.get(next.clipId);
-    return before !== undefined && after !== undefined && previous.clipId !== next.clipId && before.end === after.start && before.audible === after.audible
+    return before !== undefined && after !== undefined && previous.clipId !== next.clipId && before.end === after.start
       && Math.abs(before.sourceOffsetMs + (before.end - before.start) * this.frameMs - after.sourceOffsetMs) <= this.frameMs;
   }
 
   /** A successfully stopped input needs no further cleanup; a paused one remains
    * owned until its next use or explicit session shutdown. When OBS did not take
    * the handover (the old decoder still counts as on air), the old decoder stands
-   * for this clip: the clip's stop retires it, transport controls reach it, and the
-   * drift check leaves it alone. The new decoder stays paused for the next clip of
-   * the material. When OBS took the old decoder off but never showed the new one,
-   * the new one still stands for this clip, off air: its stop and the material's
-   * next clip reach it, and it is not started again. Nothing is sent again. */
-  private handedOver(media: Media, next: Slot, previous: string, retain: boolean, failed: boolean): void {
-    if (failed && this.scenes.isActive(previous)) {
+   * for this clip: the clip's stop retires it and transport controls reach it.
+   * When this clip continues the old one in the file, the old decoder plays this
+   * clip's picture: from here on it counts as started for it, so the drift check
+   * follows it and the material's next clip can continue it in turn. Otherwise
+   * the drift check leaves it alone. The new decoder stays paused for the next
+   * clip of the material. When OBS took the old decoder off but never showed the
+   * new one, the new one still stands for this clip, off air: its stop and the
+   * material's next clip reach it, and it is not started again. Nothing is sent
+   * again. */
+  private handedOver(media: Media, next: Slot, previous: Slot, retain: boolean, failed: boolean): void {
+    if (failed && this.scenes.isActive(previous.sourceName)) {
       if (this.media.get(next.event.sourceName) !== media || media.current !== next) return;
-      media.current = { event: next.event, sourceName: previous, ready: true };
+      if (this.continues(previous.event, next.event)) this.scenes.continueClip(previous.sourceName, previous.event.clipId, next.event);
+      media.current = { event: next.event, sourceName: previous.sourceName, ready: true };
       media.retained.add(next.sourceName);
       return;
     }
-    if (retain) media.retained.add(previous);
+    if (retain) media.retained.add(previous.sourceName);
     // After a failure the stop may not have reached OBS (the connection can be
     // gone), so the old decoder stays owned and the end of the song stops it.
-    else if (!failed) media.touched.delete(previous);
+    else if (!failed) media.touched.delete(previous.sourceName);
   }
 
   async seek(event: ManagedMediaEvent, path: string): Promise<void> {
