@@ -24,6 +24,12 @@ export function reportMainProcessErrors(report: ReturnType<typeof mainProcessErr
 export type ClosedProgramFaults = {
   /** `message` is written for the operator; it is logged now and shown once. */
   report(message: string, context: { projectId: string; itemId: string | null }): void;
+  /** What closes after the program (its picture, a preselected picture, the music monitor) did not close (2026-11-10):
+   * `shown` is shown once like `report`'s message; `log`, when given, is logged now (the monitor logs its own). */
+  closeFailed(shown: string, log: LinkLogInput | null): void;
+  /** Runs `during` (the program closing at quit) and returns what `report` was given meanwhile: the lights-off its stop
+   * owed that did not go out, which the quit then asks about (programLightsQuitPrompt). Logged and shown as always. */
+  collect(during: () => Promise<void>): Promise<string[]>;
   /** The window's page is gone (its renderer exited, or it reloaded): nothing sent to it now would be shown. */
   windowExited(): void;
   /** A window opened a program: it shows what is sent from now on, and what no window has shown yet. */
@@ -39,13 +45,22 @@ export type ClosedProgramFaults = {
  * listens. A log that cannot be written does not hide it from the operator. */
 export function closedProgramFaultReporter(record: (entry: LinkLogInput) => Promise<unknown>,
   sendToWindow: (channel: 'link:main-process-error', message: string) => void): ClosedProgramFaults {
-  let windowShows = false;
+  let windowShows = false, collected: string[] | null = null;
   const unshown: string[] = [];
+  const show = (message: string): void => { if (windowShows) sendToWindow('link:main-process-error', message); else unshown.push(message); };
+  const log = (entry: LinkLogInput): void => {
+    void record(entry).catch((failure: unknown) => console.error('后台节目的错误未能写入日志', failure, entry.message));
+  };
   return {
     report: (message, { projectId, itemId }) => {
-      void record({ level: 'error', category: 'state', device: '播放器', projectId, ...(itemId ? { itemId } : {}), message, result: 'failed' })
-        .catch((failure: unknown) => console.error('后台节目的错误未能写入日志', failure, message));
-      if (windowShows) sendToWindow('link:main-process-error', message); else unshown.push(message);
+      log({ level: 'error', category: 'state', device: '播放器', projectId, ...(itemId ? { itemId } : {}), message, result: 'failed' });
+      show(message); collected?.push(message);
+    },
+    closeFailed: (shown, entry) => { if (entry) log(entry); show(shown); },
+    collect: async during => {
+      const messages: string[] = []; collected = messages;
+      try { await during(); } finally { collected = null; }
+      return messages;
     },
     windowExited: () => { windowShows = false; },
     windowOpened: () => {
@@ -53,4 +68,13 @@ export function closedProgramFaultReporter(record: (entry: LinkLogInput) => Prom
       for (const message of unshown.splice(0)) sendToWindow('link:main-process-error', message);
     }
   };
+}
+
+/** Asked at quit when the lights-off a program owed did not go out as the program closed (2026-11-10), as when the
+ * lighting audition cannot be stopped (decided 2026-10-19): 返回软件 or 仍然退出, with each song's sentence. */
+export function programLightsQuitPrompt(messages: readonly string[]): {
+  type: 'warning'; title: string; message: string; detail: string; buttons: string[]; defaultId: number; cancelId: number; noLink: boolean;
+} {
+  return { type: 'warning', title: '灯光没能关闭', message: `退出前没能关掉${messages.length > 1 ? '这几首歌' : '这首歌'}的灯光。`,
+    detail: `${messages.join('\n')}\n\n如果仍然退出，控台上可能还保持着当前的灯光，请到控台手动处理。`, buttons: ['返回软件', '仍然退出'], defaultId: 0, cancelId: 0, noLink: true };
 }

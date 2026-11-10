@@ -90,6 +90,41 @@ it('播放中画面通道的直播故障显示为输出异常，音频继续；�
   await player.dispose();
 });
 
+// 修复前：画面那边每次发状态都带着它的旧故障，播放器每次都重新报一遍，把之后动作 MIDI、时间码报的新故障顶回去。
+it('画面那边每次发状态都重复它的旧故障：之后动作 MIDI 或时间码的红字照常显示；画面那边换了新故障才显示，换歌重新算', async () => {
+  const f = fixture();
+  let receive: ((value: NativeObsStatus) => void) | null = null;
+  f.api.onNativeObsStatus.mockImplementation(listener => { receive = listener; return () => undefined; });
+  const player = new NativeProgramPlayer(f.project, 'C:/test/project.tblink', 7, f.deps, f.api, f.lighting);
+  await player.play('song-0');
+  const request = f.api.prepareNativeObs.mock.calls.at(-1)![0], old = '画面动作失败：机位 · OBS 无响应';
+  const running: NativeObsStatus = { version: 1, sessionId: request.sessionId, generation: request.generation, itemId: 'song-0', revision: 7,
+    state: 'running', reason: null, currentCueId: null, nextCueId: null, pendingCount: 0, positionMs: 1000, fault: old };
+  receive!(running);
+  expect(f.state().fault).toBe(old);
+  const midi = '动作 MIDI 没有发出，音频照常播放。原因：接口已断开';
+  player.reportFault(midi);
+  receive!({ ...running, positionMs: 1050 });
+  expect(f.state().fault).toBe(midi);
+  const lost = 'Windows MIDI 输出失败（TEST）：接口已断开（错误码 6）；同一接口重新连接后自动恢复时间码';
+  f.emit({ mtcError: lost });
+  receive!({ ...running, positionMs: 1100 });
+  expect(f.state().fault).toBe(`时间码没有发出，音频照常播放。原因：${lost}`);
+  f.emit({ mtcError: null, mtcPortName: 'TEST', mtcRecovered: { portName: 'TEST', interruptedAt: '2026-11-10T08:00:00.000Z', recoveredAt: '2026-11-10T08:00:02.400Z', durationMs: 2400 } });
+  receive!({ ...running, positionMs: 1150 });
+  expect(f.state().fault).toBeNull();
+  receive!({ ...running, positionMs: 1200, fault: '画面动作失败：机位 2 · OBS 无响应' });
+  expect(f.state().fault).toBe('画面动作失败：机位 2 · OBS 无响应');
+  receive!({ ...running, positionMs: 1250 });
+  expect(f.state().fault).toBe(old);
+  // The next song's picture is its own: the same fault there is shown again, from its first status on.
+  const ready = f.api.prepareNativeObs.getMockImplementation()!;
+  f.api.prepareNativeObs.mockImplementationOnce(async next => ({ ...await ready(next), fault: old }));
+  await player.play('song-1');
+  expect(f.state()).toMatchObject({ itemId: 'song-1', fault: old });
+  await player.dispose();
+});
+
 it('时间码短暂中断和 P1 一样按整帧继续，不标红；音频与时间码继续', async () => {
   const f = fixture();
   await f.player.play('song-0');
@@ -730,17 +765,32 @@ describe('上一首的画面没有清理干净（2026-11-09）', () => {
     await f.player.dispose();
   });
 
-  it('关闭节目时才收到：交还给画面那边，由之后开播的歌显示；关闭照常完成，不挡住之后再开节目；别的关闭失败照旧报出', async () => {
+  it('关闭节目时才收到：交还给画面那边，由之后开播的歌显示；关闭照常完成，不挡住之后再开节目', async () => {
     const f = fixture();
     await f.player.play('song-0');
     const handedBack = vi.fn();
     f.api.stopNativeObs.mockRejectedValueOnce(new ObsPictureLeftover('song-0', new Error('画面没有清理干净：Error: OBS 无响应'), handedBack));
     await expect(f.player.dispose()).resolves.toBeUndefined();
     expect(handedBack).toHaveBeenCalledOnce();
+  });
+
+  // 修复前：关闭节目时画面停不掉另有原因（画面那边把它当成上一次的停止请求，或请求没有送达），或者提前准备的画面
+  // 清理失败，整个关闭就算失败：主进程之后再也开不了节目，也退不出软件。
+  it('关闭节目时画面停不掉另有原因、提前准备的画面也没清理干净：各记一次，关闭照常完成；只有音频停不掉时关闭才算失败', async () => {
+    const f = fixture();
+    await f.player.play('song-0'); f.deps.notice.mockClear();
+    f.api.stopNativeObs.mockRejectedValueOnce(new Error('这是上一次准备的停止请求，已忽略，当前节目不受影响'));
+    await expect(f.player.dispose()).resolves.toBeUndefined();
+    expect(f.deps.notice.mock.calls).toEqual([['关闭节目时画面清理失败：这是上一次准备的停止请求，已忽略，当前节目不受影响', 'song-0']]);
     const g = fixture();
-    await g.player.play('song-0');
-    g.api.stopNativeObs.mockRejectedValueOnce(new Error('OBS 停止请求没有送达'));
-    await expect(g.player.dispose()).rejects.toThrow('OBS 停止请求没有送达');
+    await g.player.play('song-0'); await g.player.stop(); g.player.preloadSelected('song-1'); g.deps.notice.mockClear();
+    g.api.cancelNativeObsPreload.mockRejectedValueOnce(new Error('OBS 请求超时（2000 ms）'));
+    await expect(g.player.dispose()).resolves.toBeUndefined();
+    expect(g.deps.notice.mock.calls).toEqual([['关闭节目时提前准备的画面没清理干净：OBS 请求超时（2000 ms）', 'song-0']]);
+    const h = fixture();
+    await h.player.play('song-0');
+    h.api.controlNativePlayback.mockRejectedValueOnce(new Error('音频引擎没有响应'));
+    await expect(h.player.dispose()).rejects.toThrow('音频引擎没有响应');
   });
 
   it('按停止时收到：停下的播放器提示一次，不标红，也不再记一次；停不掉另有原因时照旧提示并记录', async () => {
@@ -925,6 +975,30 @@ describe('上一首的画面没有清理干净（2026-11-09）', () => {
     expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1', fault: `${cleanup}；${midi}` });
     f.player.clearFault(midi);
     expect(f.state()).toMatchObject({ status: 'playing', fault: cleanup });
+    await f.player.dispose();
+  });
+
+  // 修复前：拖动定位让开播的记录重新开始，红字却还是两条一起的那句：时间码或动作 MIDI 之后恢复了，也清不掉自己那条。
+  for (const output of ['时间码', '动作 MIDI'] as const) it(`两条一起标红后拖动定位：${output}之后恢复，照样只清掉自己那条`, async () => {
+    const f = fixture();
+    await f.player.play('song-0');
+    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0'));
+    const lost = 'Windows MIDI 输出失败（TEST）：接口已断开（错误码 6）；同一接口重新连接后自动恢复时间码';
+    const midi = '动作 MIDI 没有发出，音频照常播放。原因：接口已断开';
+    const ready = f.api.prepareNativeObs.getMockImplementation()!;
+    f.api.prepareNativeObs.mockImplementationOnce(request => {
+      if (output === '时间码') f.emit({ mtcError: lost }); else f.player.reportFault(midi);
+      return ready(request);
+    });
+    await f.player.play('song-1');
+    const cleanup = `上一首的画面没有清理干净，这一首照常播。原因：${reason}`;
+    const red = output === '时间码' ? `时间码没有发出，音频照常播放。原因：${lost}` : midi;
+    expect(f.state().fault).toBe(`${cleanup}；${red}`);
+    await f.player.pause(); await f.player.scrub('song-1', 3000); await f.player.scrub('song-1', 3500);
+    expect(f.state()).toMatchObject({ status: 'paused', positionMs: 3500, fault: `${cleanup}；${red}` });
+    if (output === '时间码') f.emit({ mtcError: null, mtcPortName: 'TEST', mtcRecovered: { portName: 'TEST', interruptedAt: '2026-11-10T08:00:00.000Z', recoveredAt: '2026-11-10T08:00:02.400Z', durationMs: 2400 } });
+    else f.player.clearFault(midi);
+    expect(f.state()).toMatchObject({ status: 'paused', fault: cleanup });
     await f.player.dispose();
   });
 

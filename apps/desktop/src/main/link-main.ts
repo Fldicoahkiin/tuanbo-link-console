@@ -155,7 +155,8 @@ import { ObsWebSocketAdapter } from './link/obs-websocket-adapter';
 import { ObsEditorPreview, findLocalObsPid } from './link/obs-editor-preview';
 import { P1ProjectService } from './link/p1-project-service';
 import { LinkRunLogger, redactValue, type LinkLogEntry, type LinkLogFilter } from './link/run-logger';
-import { closedProgramFaultReporter, mainProcessErrorReporter, reportMainProcessErrors } from './link/main-process-errors';
+import { closedProgramFaultReporter, mainProcessErrorReporter, programLightsQuitPrompt, reportMainProcessErrors } from './link/main-process-errors';
+import { closeEngineOutputs } from './link/engine-shutdown';
 import { SecureProfileStore } from './link/secure-profile-store';
 import { WindowsIntegrationDetector } from './link/windows-integration-detector';
 import { LoopMidiService } from './link/loop-midi-service';
@@ -233,6 +234,9 @@ let authorizeOutput: () => Promise<void> = () => Promise.reject(new Error('授�
 let authorizeProduct: (channel: string, value: unknown) => Promise<void> = () => Promise.reject(new Error('授权服务还没准备好'));
 let readLicenseStatus: () => Promise<LicenseStatus> = () => Promise.reject(new Error('授权服务还没准备好'));
 let ipcLogger: LinkRunLogger | null = null;
+/** What fails where no player shows it (a program that closed, or plays on while no window is there, and what closes
+ * after the program) is logged as an error and shown in red in the window, or in the next window that opens a program. */
+const programFaults = closedProgramFaultReporter(entry => ipcLogger ? ipcLogger.record(entry) : Promise.reject(new Error('运行日志还没准备好')), sendToRenderer);
 let allowWindowClose = false;
 let stopAuditionForQuit: (() => Promise<void>) | null = null;
 let quitFlowRunning = false;
@@ -248,27 +252,25 @@ let nativeProgramHost: NativeProgramHost | null = null;
 /** Every MIDI port the window uses is opened here, in main, and only while it is in use. */
 let midiPorts: MidiPortBroker | null = null;
 
-async function closeNativePlayer(): Promise<void> {
-  await nativeProgram?.close();
+/** The audio engine and what plays with it, once no program is left. Only an engine that could not close fails this
+ * (closeEngineOutputs): a failed close keeps the owned instance and blocks another engine from opening the same device.
+ * Never claim stopped or spawn a replacement. The picture, the preselected pictures and the monitor that do not close
+ * are reported once and hold up nothing (2026-11-10). */
+async function closeEngine(): Promise<void> {
   const player = nativePlayer;
-  nativePlayerShutdown ??= (async () => {
-    const results = await Promise.allSettled([player?.close(), nativeObs?.stop(), nativeObsPreload?.close(), musicMonitor?.stop()]);
-    const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : []);
-    if (failures.length) throw new AggregateError(failures, '音频或画面没能完全关闭，请查看运行日志');
-  })();
-  // A failed close keeps the owned instance and blocks another engine from
-  // opening the same device. Never claim stopped or spawn a replacement.
+  nativePlayerShutdown ??= closeEngineOutputs({ engine: player?.close(), picture: nativeObs?.stop(), preload: nativeObsPreload?.close(),
+    monitor: musicMonitor?.stop() }, programFaults);
   await nativePlayerShutdown;
   if (nativePlayer === player) nativePlayer = null;
   nativePlayerShutdown = null;
 }
 /** What the page in the main window held, once the page is gone (its renderer exited, or a new page replaced it): a
- * program that is preparing, playing or paused keeps its outputs for the next page and is returned; otherwise the
- * program, the audio and picture outputs and the runtime close. */
-async function releaseGonePage(): Promise<InternalPlayerState | null> {
-  const kept = await (nativeProgram?.release() ?? Promise.resolve(null));
-  if (!kept) { await closeNativePlayer(); await releaseRendererRuntime(); }
-  return kept;
+ * program that is preparing, playing or paused keeps its outputs for the next page and is returned; otherwise that
+ * program closes, then the audio and picture outputs and the runtime, unless the next page opened a program meanwhile:
+ * that one keeps them (NativeProgramService.release, 2026-11-10). */
+function releaseGonePage(): Promise<InternalPlayerState | null> {
+  const teardown = async (): Promise<void> => { await closeEngine(); await releaseRendererRuntime(); };
+  return nativeProgram ? nativeProgram.release(teardown) : teardown().then(() => null);
 }
 function nativePlaybackActive(): boolean {
   return Boolean(nativePlayer?.status && ['preparing', 'playing', 'paused'].includes(nativePlayer.status.status));
@@ -984,9 +986,6 @@ function registerIpc(
   handle('link:ma2-current-show', async () => { await ma2NetworkReady; return ma2Network.currentShow(); });
   // The program's lighting Off and its running state, as the license rules want them (program-license.ts).
   const programOutputs = programLicense(licenseGate, { ready: ma2NetworkReady, status: () => ma2Network.status(), send: sendMa2Cue });
-  // What fails where no player shows it (the program closed, or plays on while no window is there) is logged as an error
-  // and shown in red in the window, or in the next window that opens a program.
-  const closedProgramFaults = closedProgramFaultReporter(entry => logger.record(entry), sendToRenderer);
   nativeProgram = new NativeProgramService((project, request, callbacks) => {
     // A channel that cannot join (OBS, timecode) repeats song after song until fixed: a warning the first time, then info.
     const notice = (message: string, itemId: string | null): void => {
@@ -1020,7 +1019,7 @@ function registerIpc(
     });
     nativeProgramHost = host;
     return { controller: host.controller, close: async () => { await host.close(); if (nativeProgramHost === host) nativeProgramHost = null; } };
-  }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput(), programOutputs.runningChanged, closedProgramFaults);
+  }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput(), programOutputs.runningChanged, programFaults);
   // Session registration captures cancellation synchronously; output adapters
   // validate and authorize every actual audio, OBS, MIDI and lighting request.
   handle('link:native-program-open', async (_event, value: unknown) => {
@@ -2247,7 +2246,17 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
     recordQuitStep('操作员选择仍然退出', { error: reason });
   }
   recordQuitStep('退出前关闭音频和画面');
-  await closeNativePlayer();
+  // The Off the program's stop owed goes out as it closes. One that did not is asked about like the audition's, before
+  // the audio engine closes (2026-11-10); it is logged and shown in red as well.
+  const lightsLeftOn = await programFaults.collect(() => nativeProgram?.close() ?? Promise.resolve());
+  if (lightsLeftOn.length > 0) {
+    recordQuitStep('节目的灯光没能关闭', { error: lightsLeftOn.join('\n') });
+    const options = programLightsQuitPrompt(lightsLeftOn);
+    const choice = mainWindow && !mainWindow.isDestroyed() ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
+    if (choice.response !== 1) { recordQuitStep('返回软件处理节目的灯光'); return false; }
+    recordQuitStep('操作员选择仍然退出', { error: lightsLeftOn.join('\n') });
+  }
+  await closeEngine();
   const owned = (['p1', 'ma3d', 'ma2', 'obs'] as const)
     .map((id) => processManager.getSnapshot(id))
     .filter((snapshot) => snapshot.owned && snapshot.pid !== null);

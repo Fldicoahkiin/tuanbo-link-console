@@ -230,6 +230,20 @@ it('OBS 断开时清理已预热的下一首失败：失败只交给关闭的一
   expect(t.create).toHaveBeenCalledTimes(4); expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(2); expect(t.report).not.toHaveBeenCalled();
 });
 
+// 修复前：节目停止或关闭时，清理选中歌曲提前准备的画面失败，取消就跟着失败：关闭节目也算失败，之后再也开不了节目、
+// 退不出软件。
+it('取消选中歌曲提前准备的画面时清理失败：报一次“不影响播放”，取消照常完成，之后照常预备和接管', async () => {
+  const t = setup(); await t.pool.preload(t.request);
+  vi.mocked(t.outputs.releaseOutputs).mockRejectedValueOnce(new Error('画面没有清理干净：Error: OBS 无响应'));
+  await expect(t.pool.cancel(t.stop)).resolves.toBeUndefined();
+  const text = '提前准备的画面没有清理干净，不影响播放。原因：OBS 无响应';
+  expect(t.report.mock.calls).toEqual([[{ log: text, shown: text }]]);
+  await expect(t.pool.preload({ ...t.request, generation: 2 })).resolves.toBeUndefined();
+  expect(await t.pool.take({ ...t.request, generation: 3 }, 500, () => undefined)).toBe(t.outputs);
+  await expect(t.pool.close()).resolves.toBeUndefined();
+  expect(t.create).toHaveBeenCalledTimes(2); expect(t.report).toHaveBeenCalledOnce();
+});
+
 it('这首歌接手的预备失败、清理也失败：这首照常重新准备画面，预备和清理的失败各报一次', async () => {
   const t = setup(); let fail: (error: Error) => void = () => { throw new Error('尚未开始'); };
   vi.mocked(t.outputs.preloadResources).mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = reject; }));

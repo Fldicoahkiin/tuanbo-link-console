@@ -106,6 +106,12 @@ export class NativeProgramPlayer {
    * replaces the other. A fault after the start replaces them, as any later fault replaces the one shown. Each play
    * and scrub starts over. */
   private start: StartFaults = { leftover: null, obs: null, fault: null };
+  /** The start a scrub started over, while its red is still shown as it was: an output in it that comes back still clears
+   * its own part, next to the failed cleanup, which stays (2026-11-10). Of no use once anything else is shown in red. */
+  private carried: StartFaults | null = null;
+  /** The picture host's fault for the picture this program runs now, as last heard. The host repeats it with each status:
+   * it is shown when it changes, so a later fault of another output stays shown (2026-11-10). A new picture starts over. */
+  private obsFault: { session: NativeObsStop; text: string | null } | null = null;
   /** A window shows this player's state (setWatched). */
   private watched = true;
 
@@ -150,7 +156,7 @@ export class NativeProgramPlayer {
     const reuseSession = itemId === this.state.itemId && ['playing', 'paused'].includes(this.state.status);
     if (this.state.itemId !== itemId && this.state.status === 'playing') this.markPlayed();
     this.cancelScheduled(); this.runtimePrepared = false; this.timecodeOutput = idleTimecodeOutput; this.boundary('seek');
-    this.start = { leftover: null, obs: null, fault: null };
+    this.start = { leftover: null, obs: null, fault: null }; this.carried = null;
     this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, fault: null, mtcConnectionFailed: false });
     return this.enqueue(token, async () => {
       if (!this.projectPath) throw new Error('请先保存工程，再播放');
@@ -298,19 +304,22 @@ export class NativeProgramPlayer {
   /** The output behind this red message is back: clear it if it is still the one shown, also next to a failed cleanup,
    * which stays. */
   clearFault(message: string): void {
-    if (this.state.fault === message) this.update({ fault: null });
-    else if (this.startFaultShown() === message) { this.start.fault = null; this.update({ fault: this.start.leftover }); }
+    if (this.state.fault === message) { this.update({ fault: null }); return; }
+    const record = [this.start, this.carried].find(entry => this.faultShown(entry) === message);
+    if (record) { record.fault = null; this.update({ fault: record.leftover }); }
   }
   /** The song or its picture is still being prepared (also at a scrub). */
   private starting(): boolean { return this.state.status === 'preparing' || this.obsPreparing; }
-  /** This start's red text: the failed cleanup before it, then `fault`. */
-  private startRed(fault: string | null): string { return [this.start.leftover, fault].filter(Boolean).join('；'); }
+  /** A start's red text (this start's, unless another is named): the failed cleanup before it, then `fault`. */
+  private startRed(fault: string | null, record: StartFaults = this.start): string { return [record.leftover, fault].filter(Boolean).join('；'); }
   /** The fault of this start, while it is in red (alone, or next to the failed cleanup before it). */
-  private startFaultShown(): string | null {
-    return this.start.fault !== null && this.state.fault === this.startRed(this.start.fault) ? this.start.fault : null;
+  private startFaultShown(): string | null { return this.faultShown(this.start); }
+  /** The fault of a start, while that start's red is shown. */
+  private faultShown(record: StartFaults | null): string | null {
+    return record?.fault != null && this.state.fault === this.startRed(record.fault, record) ? record.fault : null;
   }
   /** The red text shown, as the output that reported it said it: without a failed cleanup shown before it. */
-  private shownFault(): string | null { return this.startFaultShown() ?? this.state.fault ?? null; }
+  private shownFault(): string | null { return this.startFaultShown() ?? this.faultShown(this.carried) ?? this.state.fault ?? null; }
   private showFault(text: string): void { if (this.state.fault !== text) this.update({ fault: text }); }
   /** An output that could not join or left this song: logged and shown in red, audio continues. */
   private startFault(message: string): void { this.dependencies.notice?.(message, this.state.itemId); this.reportFault(message); }
@@ -324,11 +333,11 @@ export class NativeProgramPlayer {
   private showNotice(message: string): void {
     if (!this.state.notice?.includes(message)) this.update({ notice: [this.state.notice, message].filter(Boolean).join('；') });
   }
-  /** Every stop of a picture this program prepared ends here when it fails, but the one at closing, which hands a failed
-   * cleanup back itself. A failed cleanup was logged where it ran (2026-11-09): it is shown in red on the song on stage,
-   * which plays on, else on the stopped player; one heard after closing is handed back to the picture host for the next
-   * song. `givenUp`: the start whose own picture took too long and was cancelled, which says so while it is on stage.
-   * Any other failure to stop it is shown and logged here. */
+  /** Every stop of a picture this program prepared ends here when it fails, also the one at closing. A failed cleanup
+   * was logged where it ran (2026-11-09): it is shown in red on the song on stage, which plays on, else on the stopped
+   * player; one heard at or after closing is handed back to the picture host for the next song. `givenUp`: the start
+   * whose own picture took too long and was cancelled, which says so while it is on stage. Any other failure to stop it
+   * is shown and logged here (after closing, only logged). */
   private pictureNotStopped(error: unknown, doing: string, givenUp: StartFaults | null = null): void {
     if (!(error instanceof ObsPictureLeftover)) this.reportUnavailable(`${doing}：${toUserErrorMessage(error)}`);
     else if (this.disposed) error.handBack();
@@ -346,6 +355,8 @@ export class NativeProgramPlayer {
     if (itemId !== this.state.itemId || !['playing', 'paused'].includes(this.state.status)) return this.play(itemId, positionMs, true);
     const token = ++this.epoch, scrub: Scrub = { token, positionMs, pressed: null };
     this.scrubbing = scrub; this.cancelScheduled(); this.boundary('seek');
+    // The scrub starts its own record; the red shown stays as it is, and what is in it can still clear its own part.
+    this.carried = this.faultShown(this.start) !== null ? this.start : this.faultShown(this.carried) !== null ? this.carried : null;
     this.start = { leftover: null, obs: null, fault: null };
     return this.enqueue(token, async () => {
       try {
@@ -396,11 +407,12 @@ export class NativeProgramPlayer {
     const audio = run(() => this.requestedPreparation && this.native?.status !== 'error' ? this.command({ kind: 'stop' }) : undefined);
     // A stop still queued here never runs; the Off it owes goes out once the timecode has stopped, as the stop would.
     const lighting = audio.then(() => this.releaseLighting(), () => this.releaseLighting());
-    // A picture left on air was logged where its cleanup ran. A program that closes has nowhere to show it: it hands it
-    // back, and the next song to start shows it. It must not keep the next program from opening or the app from quitting
-    // (2026-11-09); any other failure still fails the close.
-    const picture = run(() => this.stopObs()).catch((error: unknown) => { if (error instanceof ObsPictureLeftover) error.handBack(); else throw error; });
-    const cleanup = [scheduled, audio, lighting, run(() => this.cancelPreload()), picture, run(() => this.dependencies.stop()), run(() => this.tail)];
+    // A picture, or a preselected one, that is not cleaned up never keeps the next program from opening or the app from
+    // quitting (2026-11-09, 2026-11-10): a picture left on air is handed back, and the next song to start shows it; any
+    // other failure is logged once here. The audio, MIDI or the queue that cannot stop still fail the close.
+    const preload = run(() => this.cancelPreload()).catch((error: unknown) => this.reportUnavailable(`关闭节目时提前准备的画面没清理干净：${toUserErrorMessage(error)}`));
+    const picture = run(() => this.stopObs()).catch((error: unknown) => this.pictureNotStopped(error, '关闭节目时画面清理失败'));
+    const cleanup = [scheduled, audio, lighting, preload, picture, run(() => this.dependencies.stop()), run(() => this.tail)];
     this.closing = Promise.allSettled(cleanup).then(results => {
       const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : []);
       if (failures.length) throw new AggregateError(failures, failures.map(toUserErrorMessage).join('；'));
@@ -429,10 +441,12 @@ export class NativeProgramPlayer {
     if (status.notice) this.reportUnavailable(status.notice);
     if (status.state === 'failed' || status.state === 'stopped' && status.reason) this.reportUnavailable(`画面没有联动或已停止，音频照常播放。原因：${status.reason ?? '未知错误'}`);
     // A stopped picture channel is an output fault for a song with picture work; for one without, the notice above is all.
-    const fault = status.state === 'failed' && this.picture === 'wait' ? `画面联动已停止：${status.reason ?? '未知错误'}` : status.fault;
-    if (!fault) return;
+    const fault = (status.state === 'failed' && this.picture === 'wait' ? `画面联动已停止：${status.reason ?? '未知错误'}` : status.fault) ?? null;
+    const heard = this.obsFault?.session === this.obsSession ? this.obsFault.text : null;
+    this.obsFault = { session: this.obsSession, text: fault };
+    if (!fault || fault === heard) return;
     if (this.obsPreparing) this.start.obs = fault;
-    // The host repeats its fault with each status; its fault for this start stays next to a failed cleanup shown there.
+    // The host's fault for this start stays next to a failed cleanup shown there.
     if (fault !== this.start.obs) { this.reportFault(fault); return; }
     if (!['preparing', 'playing', 'paused'].includes(this.state.status)) return;
     this.start.fault = fault; this.showFault(this.startRed(fault));

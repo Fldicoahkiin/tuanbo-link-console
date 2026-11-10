@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { closedProgramFaultReporter, mainProcessErrorReporter } from './main-process-errors';
+import { closedProgramFaultReporter, mainProcessErrorReporter, programLightsQuitPrompt } from './main-process-errors';
 import type { LinkLogInput } from './run-logger';
 
 it('主进程未捕获的错误记录原文和调用栈并通知界面，日志写入失败也不吞掉通知', async () => {
@@ -66,4 +66,42 @@ it('没有窗口能显示时（界面进程退出、还没重新加载好），�
   expect(toWindow.mock.calls).toEqual([['link:main-process-error', message], ['link:main-process-error', other]]);
   expect(record).toHaveBeenCalledTimes(2);
   expect(record.mock.calls.map(([entry]) => entry.level)).toEqual(['error', 'error']);
+});
+
+// 修复前：画面、提前准备的画面或独立监听在节目之后没关掉，整个关闭算失败，之后再也开不了节目、退不出软件；
+// 现在只说一次，和节目的失败一样记录、标红。
+it('节目之后关掉的画面或独立监听没关掉：按给的记录写一次错误，红字和节目的失败一样只显示一次，没有窗口时留给下一个窗口', () => {
+  const { record, toWindow, faults } = reporter();
+  const shown = '提前准备的画面没有清理干净，不影响播放。原因：OBS 无响应';
+  const log = { level: 'error' as const, category: 'device' as const, device: '后台画面', message: '提前准备的画面没有清理干净，不影响播放。原因：OBS 无响应（GetSceneItemList）', result: 'failed' as const };
+  faults.closeFailed(shown, log);
+  expect(record).toHaveBeenCalledExactlyOnceWith(log); expect(toWindow).not.toHaveBeenCalled();
+  faults.windowOpened();
+  expect(toWindow).toHaveBeenCalledExactlyOnceWith('link:main-process-error', shown);
+  // The monitor logs its own failure: nothing more is logged for it.
+  faults.closeFailed('独立监听没能完全关掉，不影响之后播放。原因：监听进程没有退出', null);
+  expect(record).toHaveBeenCalledOnce();
+  expect(toWindow).toHaveBeenLastCalledWith('link:main-process-error', '独立监听没能完全关掉，不影响之后播放。原因：监听进程没有退出');
+});
+
+// 修复前：退出时节目补发的关灯没发出去，只在马上要关掉的窗口里闪一下红字，软件就退出了，控台上的灯还亮着。
+it('退出时关节目这段里没关掉的灯光：照常记录、标红，另外交给退出流程去问操作员；别的时候报的不算', async () => {
+  const { record, toWindow, faults } = reporter();
+  faults.windowOpened();
+  faults.report('「串场」的灯光没能完全关闭，控台上可能还亮着。原因：控台连接变了。请在控台上关掉这首歌的执行器。', { projectId: 'project', itemId: 'interlude' });
+  const collected = await faults.collect(() => { faults.report(message, { projectId: 'project', itemId: 'song' }); return Promise.resolve(); });
+  expect(collected).toEqual([message]);
+  expect(record).toHaveBeenCalledTimes(2); expect(toWindow).toHaveBeenLastCalledWith('link:main-process-error', message);
+  faults.closeFailed('画面没有清理干净，不影响之后播放。原因：OBS 无响应。请检查 OBS 节目画面上是否还留着刚才的素材', null);
+  await expect(faults.collect(() => Promise.reject(new Error('音频引擎没有响应')))).rejects.toThrow('音频引擎没有响应');
+  expect(await faults.collect(() => Promise.resolve())).toEqual([]);
+});
+
+// 和退出前停不掉灯光试听时一样问（2026-10-19 定的：返回软件 / 仍然退出），说的是哪首歌、为什么、怎么办。
+it('退出时节目的灯光没关掉：和灯光试听停不掉时一样问返回软件还是仍然退出，默认返回软件，写上这首歌的那句话', () => {
+  expect(programLightsQuitPrompt([message])).toEqual({ type: 'warning', title: '灯光没能关闭', message: '退出前没能关掉这首歌的灯光。',
+    detail: `${message}\n\n如果仍然退出，控台上可能还保持着当前的灯光，请到控台手动处理。`, buttons: ['返回软件', '仍然退出'], defaultId: 0, cancelId: 0, noLink: true });
+  const other = '「返场」的灯光没能完全关闭，控台上可能还亮着。原因：控台连接变了。请在控台上关掉这首歌的执行器。';
+  expect(programLightsQuitPrompt([message, other])).toMatchObject({ message: '退出前没能关掉这几首歌的灯光。',
+    detail: `${message}\n${other}\n\n如果仍然退出，控台上可能还保持着当前的灯光，请到控台手动处理。` });
 });

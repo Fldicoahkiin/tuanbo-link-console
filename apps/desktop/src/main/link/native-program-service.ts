@@ -43,7 +43,8 @@ export class NativeProgramService {
     const previous = this.current, document = JSON.stringify(project);
     if (previous?.orphaned && active(previous.state)) {
       if (previous.request.projectPath !== request.projectPath || previous.projectId !== project.projectId) {
-        throw new Error(`界面重新加载前的节目还在播放：${previous.request.projectPath}。请打开这个工程接回控制，或停止播放`);
+        // There is no control here for the program playing in the background: only its own project takes it back (2026-11-10).
+        throw new Error(`界面重新加载前的节目还在后台播放，现在打开的工程不能播放。请打开工程「${previous.request.projectPath}」接回控制，再在那里停止播放`);
       }
       previous.orphaned = false; previous.request = request; previous.configuration = request.configuration;
       previous.host?.controller.setWatched(true);
@@ -73,13 +74,24 @@ export class NativeProgramService {
   }
 
   /** The owning window's page is gone: its renderer exited, or a new page replaced it (window-page.ts). A program that
-   * is preparing, playing or paused keeps its outputs running and is returned; anything else is closed.
-   * Until a window opens a program again, no window shows red text: what fails meanwhile waits for it. */
-  async release(): Promise<InternalPlayerState | null> {
+   * is preparing, playing or paused keeps its outputs running and is returned; anything else is closed, and then
+   * `teardown` runs (link-main: the audio engine, the picture and the runtime the gone page held). Only what that page
+   * held: a program the next page opened meanwhile stays open and keeps them, so `teardown` is left out; one it opens
+   * while `teardown` runs waits for it (2026-11-10). A failed `teardown` is returned here and does not hold up later
+   * programs. Until a window opens a program again, no window shows red text: what fails meanwhile waits for it. */
+  async release(teardown: () => Promise<void> = () => Promise.resolve()): Promise<InternalPlayerState | null> {
     this.faults.windowExited();
     const entry = this.current;
     if (entry && active(entry.state)) { entry.orphaned = true; entry.host?.controller.setWatched(false); return entry.state; }
-    await this.close();
+    if (entry) this.retire(entry);
+    const released = this.cleanup.then(async (): Promise<{ failed: unknown } | null> => {
+      if (this.current) return null;
+      try { await teardown(); return null; } catch (error) { return { failed: error }; }
+    });
+    // A program that could not close keeps blocking new ones, as close() does.
+    this.cleanup = released.then(() => undefined);
+    const result = await released;
+    if (result) throw result.failed;
     return null;
   }
 
@@ -121,9 +133,12 @@ export class NativeProgramService {
   }
 
   async close(): Promise<void> {
-    const entry = this.current;
-    if (entry) { this.current = null; entry.cancelled = true; entry.cancellation.abort(); this.enqueueClose(entry); this.reportRunning(); }
+    if (this.current) this.retire(this.current);
     await this.cleanup;
+  }
+  /** The current program is closed: nothing reaches it any more, and a new one waits for its outputs. */
+  private retire(entry: Entry): void {
+    this.current = null; entry.cancelled = true; entry.cancellation.abort(); this.enqueueClose(entry); this.reportRunning();
   }
   private reportRunning(): void {
     const running = this.current !== null && active(this.current.state);

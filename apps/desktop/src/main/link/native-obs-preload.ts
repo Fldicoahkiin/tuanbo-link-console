@@ -121,10 +121,13 @@ export class NativeObsPreloadPool {
     return this.dependencies.create(request, positionMs);
   }
 
+  /** The program's stop or close drops its selected song's preparation. A failed cleanup is reported once and never
+   * fails that stop or close: a closing program must not keep the next one from opening or the app from quitting
+   * (2026-11-10). */
   cancel(value: NativeObsStop): Promise<void> {
     const request = nativeObsStopSchema.parse(value);
     if (!this.entry || this.entry.origin !== 'selection' || this.entry.request.sessionId !== request.sessionId || this.entry.request.generation !== request.generation) return Promise.resolve();
-    return this.discard();
+    return this.discardReported();
   }
   cancelNext(sessionId: string): Promise<void> {
     if (this.entry?.origin !== 'next' || this.entry.request.sessionId !== sessionId) return Promise.resolve();
