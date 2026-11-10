@@ -15,8 +15,10 @@ class FakeOutput {
   readonly sent: { bytes: readonly number[]; deadline: bigint }[] = [];
   closes = 0;
   exit: Deferred | null = null;
+  /** While set, the helper has not opened the port yet. */
+  static opening: Deferred | null = null;
   constructor(readonly failed: (error: Error) => void) {}
-  open(name: string): Promise<void> { this.opened.push(name); return Promise.resolve(); }
+  open(name: string): Promise<void> { this.opened.push(name); return FakeOutput.opening?.promise ?? Promise.resolve(); }
   send(bytes: readonly number[], deadline: bigint): Promise<void> { this.sent.push({ bytes, deadline }); return Promise.resolve(); }
   close(): Promise<void> { this.closes += 1; return this.exit?.promise ?? Promise.resolve(); }
 }
@@ -33,13 +35,14 @@ function closedReason(events: readonly MidiPortEvent[], handle: number): string 
 }
 
 let broker: MidiPortBroker | null = null;
-afterEach(async () => { await broker?.dispose(); broker = null; vi.useRealTimers(); });
+afterEach(async () => { FakeOutput.opening = null; await broker?.dispose(); broker = null; vi.useRealTimers(); });
 
-function setup(ports = { midiInputs: [{ id: 0, name: 'P1 MTC' }], midiOutputs: [{ id: 0, name: 'USB MIDI Interface' }, { id: 1, name: 'Microsoft GS Wavetable Synth' }] }) {
+function setup(ports = { midiInputs: [{ id: 0, name: 'P1 MTC' }], midiOutputs: [{ id: 0, name: 'USB MIDI Interface' }, { id: 1, name: 'Microsoft GS Wavetable Synth' }] },
+  authorize: () => Promise<void> = () => Promise.resolve()) {
   const outputs: FakeOutput[] = [], inputs: FakeInput[] = [], events: MidiPortEvent[] = [];
   const list = vi.fn<(recheck: boolean) => Promise<typeof ports>>(() => Promise.resolve(ports));
   broker = new MidiPortBroker({
-    authorize: () => Promise.resolve(),
+    authorize,
     list,
     createOutput: failed => { const output = new FakeOutput(failed); outputs.push(output); return output; },
     createInput: (receive, failed) => { const input = new FakeInput(receive, failed); inputs.push(input); return input; },
@@ -139,6 +142,47 @@ it('窗口刷新或退出时关掉它打开的所有接口', async () => {
   expect(outputs[0]!.closes).toBe(1);
   expect(inputs[0]!.closes).toBe(1);
   await expect(broker.send(output, [0x90, 60, 100])).rejects.toThrow('已关闭');
+});
+
+const ports = { midiInputs: [{ id: 0, name: 'P1 MTC' }], midiOutputs: [{ id: 0, name: 'USB MIDI Interface' }] };
+const pageGone = '没有打开 MIDI 接口「P1 MTC」：要用它的界面已经重新加载或退出了';
+
+it('界面打开接口还在等授权检查时重新加载：这次打开不再打开接口，也不留下没人用的占用（2026-11-10）', async () => {
+  const authorization = deferred();
+  const { broker, inputs } = setup(ports, () => authorization.promise);
+  const opening = broker.open('input', 'P1 MTC');
+  await broker.releaseWindow();
+  authorization.resolve();
+  await expect(opening).rejects.toThrow(pageGone);
+  expect(inputs).toHaveLength(0);
+});
+
+it('旧界面的打开等授权时新界面打开了同一接口：新界面关掉后接口就关，不被旧界面占着（2026-11-10）', async () => {
+  const authorization = deferred();
+  let first = true;
+  const { broker, inputs } = setup(ports, () => { if (!first) return Promise.resolve(); first = false; return authorization.promise; });
+  const stale = broker.open('input', 'P1 MTC');
+  await broker.releaseWindow();
+  const fresh = await broker.open('input', 'P1 MTC');
+  authorization.resolve();
+  await expect(stale).rejects.toThrow(pageGone);
+  expect(inputs).toHaveLength(1);
+  await broker.close(fresh);
+  expect(inputs[0]!.closes).toBe(1);
+});
+
+it('界面打开接口还在等接口打开时重新加载：接口关掉，这次打开说界面已经没了（2026-11-10）', async () => {
+  FakeOutput.opening = deferred();
+  const { broker, outputs } = setup(ports);
+  const opening = broker.open('output', 'USB MIDI Interface');
+  await vi.waitFor(() => expect(outputs[0]?.opened).toEqual(['USB MIDI Interface']));
+  await broker.releaseWindow();
+  FakeOutput.opening.resolve();
+  await expect(opening).rejects.toThrow('没有打开 MIDI 接口「USB MIDI Interface」：要用它的界面已经重新加载或退出了');
+  expect(outputs[0]!.closes).toBe(1);
+  const fresh = await broker.open('output', 'USB MIDI Interface');
+  await broker.close(fresh);
+  expect(outputs.map(output => output.closes)).toEqual([1, 1]);
 });
 
 it('读取列表时去掉软件合成器，并定时刷新、关掉拔掉的接口', async () => {

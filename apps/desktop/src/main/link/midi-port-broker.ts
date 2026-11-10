@@ -44,6 +44,8 @@ export class MidiPortBroker {
   private readonly formal = new Map<string, Map<number, MidiClaimOwner>>();
   private nextHandle = 0;
   private nextClaim = 0;
+  /** Counts the pages that went away (releaseWindow): an open still waiting when its page went belongs to nobody. */
+  private page = 0;
   private listing: Promise<MidiPortList> | null = null;
   private emitted: string | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -67,12 +69,18 @@ export class MidiPortBroker {
 
   async open(direction: Direction, name: string): Promise<number> {
     if (this.disposed) throw new Error('MIDI 服务已关闭');
+    // The page that asks can reload or exit while this waits. Its releaseWindow has then let go of all it held, and
+    // what this open would add is held by nobody: it opens nothing, and the port of a new page is never kept open by it.
+    const page = this.page;
     await this.dependencies.authorize();
+    if (this.page !== page) throw new Error(pageGoneMessage(name));
     if (direction === 'output') this.requireFree(name);
     const key = `${direction}:${name}`;
     let channel = this.channels.get(key);
     if (!channel || channel.closed) channel = this.start(direction, name);
     await channel.ready;
+    // The channel was in use when the page went, so releaseWindow shut it too: nothing of the gone page stays open.
+    if (this.page !== page) throw new Error(pageGoneMessage(name));
     if (channel.closed || this.disposed) throw new Error(channel.reason ?? `MIDI 接口「${name}」已关闭`);
     const handle = ++this.nextHandle;
     channel.handles.add(handle); this.handles.set(handle, channel);
@@ -116,6 +124,7 @@ export class MidiPortBroker {
 
   /** The window reloaded or exited: nothing it opened is in use any more. */
   async releaseWindow(): Promise<void> {
+    this.page++;
     this.handles.clear();
     await Promise.all([...this.channels.values()].filter(channel => !channel.closed).map(channel => this.shut(channel, null)));
   }
@@ -225,6 +234,9 @@ export class MidiPortBroker {
 function takenMessage(name: string, owner: MidiClaimOwner): string {
   return owner === '接口检查' ? `正在检查 MIDI 接口「${name}」，这里的 MIDI 已停止。检查完成后再试。`
     : `正在播放的节目要用 MIDI 接口「${name}」发${owner}，这里的 MIDI 已停止。停止播放后再试。`;
+}
+function pageGoneMessage(name: string): string {
+  return `没有打开 MIDI 接口「${name}」：要用它的界面已经重新加载或退出了。新界面要用时会自己再打开。`;
 }
 function busyMessage(name: string, owners: readonly MidiClaimOwner[]): string {
   const playback = owners.filter(owner => owner !== '接口检查');
