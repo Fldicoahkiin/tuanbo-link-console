@@ -147,6 +147,7 @@ docs/                           设计、实施、验收和服务器安装说明
   2. CI 通过后用 GitHub API 触发 Release Windows（`workflow_dispatch`，ref 选 master 或 `release/X.Y.Z`，`commit` 填 40 位提交号），tag 由工作流自己打（`scripts/tag-release.mjs`）。推 `vX.Y.Z` 标签也能发。
   3. 之后自动：GitHub 云端打包签名 → 草稿 Release → 工位电脑计划任务 `tblink-relay` 搬运（只传变化的部分）→ 服务器校验后上线 → 草稿转正式 → Website Release 更新官网。
   4. 工位电脑不在线时，在 Mac 上跑 `pnpm release:relay`，重复运行是安全的。
+- **版本里放什么、什么时候发由用户定**（2026-11-10）：不自己分版本排计划；用户说哪些要完成就做哪些，做完报告，用户说发才发。
 - **版本号不跳号**（2026-10-26）：tag 打了但打包失败、没发布出去的版本，修好后在修复提交上重新触发，tag 自动挪过去，版本号不变。
 - 完整流程图和排查表见 README「发布与部署链路」和 [docs/RELEASE_CHAIN.md](./docs/RELEASE_CHAIN.md)。
 
