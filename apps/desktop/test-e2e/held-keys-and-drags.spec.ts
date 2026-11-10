@@ -3,13 +3,14 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject, type Ma2ExecutorInput } from '@tb/schema';
+import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
 import { launchExecutorFixture } from './ma2-executor-fixture';
 import { closeDiscarding } from './save-questions';
 
 /*
- * Keys held down and drags cancelled with Escape, in the built app (0.5.9). The unit tests guard the decisions
- * (playback-keys, timeline-keys, drag-session, ma2-executor-keys); these guard the components that call them.
- * Local only, like every e2e spec: CI does not run them.
+ * Keys held down, keys pressed in a dialog and drags cancelled with Escape, in the built app (0.5.9). The unit tests
+ * guard the decisions (playback-keys, timeline-keys, drag-session, ma2-executor-keys, cue-point-keys); these guard the
+ * components that call them. Local only, like every e2e spec: CI does not run them.
  */
 
 const SECONDS = 60;
@@ -25,10 +26,13 @@ function wave(): Buffer {
   return data;
 }
 
-type Song = { id: string; title: string; audio: boolean; enabled?: boolean; lighting?: boolean; layers?: boolean };
+type Song = { id: string; title: string; audio: boolean; enabled?: boolean; lighting?: boolean; layers?: boolean; shortcut?: string };
 
-/** Opens a show of `songs`: a minute of audio each, a lighting Cue at `cueAtMs`, two camera tracks. */
-async function open(info: TestInfo, songs: Song[], options: { cueAtMs?: number; source?: 'internal' | 'p1' } = {}): Promise<{ app: ElectronApplication; page: Page }> {
+/**
+ * Opens a show of `songs`: a minute of audio each, a lighting Cue at `cueAtMs`, two camera tracks, a song's own
+ * shortcut; `arrowKeys` turns on ↑↓ changing songs on this computer first.
+ */
+async function open(info: TestInfo, songs: Song[], options: { cueAtMs?: number; source?: 'internal' | 'p1'; arrowKeys?: boolean } = {}): Promise<{ app: ElectronApplication; page: Page }> {
   const audio = wave();
   const sha256 = createHash('sha256').update(audio).digest('hex');
   await mkdir(info.outputPath('assets/reference-audio'), { recursive: true });
@@ -43,6 +47,7 @@ async function open(info: TestInfo, songs: Song[], options: { cueAtMs?: number; 
       ...(song.layers ? { visualLayers: [{ id: 'layer-1', name: '图层一' }, { id: 'layer-2', name: '图层二' }],
         cues: [{ id: 'cue-1', name: '机位一', timecode: { hours: 0, minutes: 0, seconds: 2, frames: 0 }, durationMs: 2000, layerId: 'layer-1' },
           { id: 'cue-2', name: '机位二', timecode: { hours: 0, minutes: 0, seconds: 5, frames: 0 }, durationMs: 2000, layerId: 'layer-2' }] } : {}),
+      ...(song.shortcut ? { playback: { volume: 100, startMs: 0, endMs: SECONDS * 1000, mtcOffsetMs: 0, shortcut: song.shortcut } } : {}),
       ...(song.audio ? { referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/audio.wav', sha256, durationMs: SECONDS * 1000 } } : {}) })) });
   const file = info.outputPath('keys.tblink'); await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
@@ -52,6 +57,14 @@ async function open(info: TestInfo, songs: Song[], options: { cueAtMs?: number; 
     dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] });
     dialog.showMessageBox = () => Promise.resolve({ response: 0, checkboxChecked: false });
   }, file);
+  if (options.arrowKeys) {
+    await page.waitForFunction(() => Boolean(window.tbLink));
+    const profile = createDefaultIntegrationProfile(); profile.obs.autoConnectOnLaunch = false;
+    profile.internalPlayer = { arrowKeyPlayback: true, mtcOutputPortProfileId: null, audioOutputDeviceId: 'default' };
+    await page.evaluate(value => window.tbLink.saveIntegrationProfile({ profile: value }), profile);
+    await page.reload();
+    await page.waitForFunction(() => Boolean(window.tbLink));
+  }
   await page.getByRole('button', { name: '打开工程', exact: true }).click();
   await expect(page.locator('.home-card').first()).toBeVisible();
   return { app, page };
@@ -83,6 +96,38 @@ async function countEscapes(page: Page): Promise<() => Promise<number>> {
   });
   return () => page.evaluate(() => Number(Reflect.get(window, '__escapes')));
 }
+
+/**
+ * Writes down what the window asks the show in the main process (联动台播放) to do from now on: play, stop, skip to
+ * another song, seek. No sound plays on Linux, so a stop or skip reaching the main process is what "the show stopped" means.
+ */
+async function recordTransport(app: ElectronApplication): Promise<{ asked: () => Promise<string[]>; clear: () => Promise<void> }> {
+  await app.evaluate(({ ipcMain }) => {
+    const handlers = Reflect.get(ipcMain, '_invokeHandlers') as Map<string, (event: unknown, request: unknown) => unknown>;
+    const control = handlers.get('link:native-program-control');
+    if (!control) throw new Error('主进程没有节目控制的处理');
+    const asked: string[] = []; Reflect.set(globalThis, '__transport', asked);
+    handlers.set('link:native-program-control', (event, request) => {
+      const kind: unknown = Reflect.get(Object(Reflect.get(Object(request), 'operation')), 'kind');
+      if (typeof kind === 'string' && ['play', 'pause', 'resume', 'stop', 'reset', 'toggle', 'seek', 'scrub', 'skip'].includes(kind)) asked.push(kind);
+      return control(event, request);
+    });
+  });
+  return {
+    asked: () => app.evaluate(() => [...(Reflect.get(globalThis, '__transport') as string[])]),
+    clear: () => app.evaluate(() => { (Reflect.get(globalThis, '__transport') as string[]).length = 0; })
+  };
+}
+
+/** Opens 「MTC 时间码状态」 from the title bar's 详细. */
+async function mtcStatus(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /^详细/ }).click();
+  await page.getByRole('button', { name: /^MTC 状态/ }).click();
+  await expect(page.locator('dialog.ui-dialog[open]')).toHaveCount(1);
+}
+
+/** Three songs, the third with its own shortcut Ctrl+3. */
+const threeSongs: Song[] = [{ id: 'song-a', title: '第一首', audio: true }, { id: 'song-b', title: '第二首', audio: true }, { id: 'song-c', title: '第三首', audio: true, shortcut: 'Ctrl+Digit3' }];
 
 /** The lighting workbench without snapping, zoomed in `zoom` steps. */
 async function lightingWorkbench(page: Page, zoom = 0): Promise<Locator> {
@@ -328,5 +373,85 @@ test('编辑器正常拖机位片段（不按 Esc）：松手后时间移动生�
     await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2, { steps: 10 });
     await page.mouse.up(); await page.waitForTimeout(400);
     expect(await left(page.locator('[data-visual-layer-id="layer-1"] .timeline-cue').first())).toBeGreaterThan(before + 60);
+  } finally { await closeDiscarding(app); }
+});
+
+test('首页「MTC 时间码状态」开着、点了对话框里的文字（焦点落在对话框上）：Esc 只关对话框，不停节目；开了方向键换歌时 ↓ 不换歌', async ({}, info) => {
+  const { app, page } = await open(info, threeSongs, { arrowKeys: true });
+  try {
+    const transport = await recordTransport(app);
+    await mtcStatus(page);
+    await page.locator('dialog.ui-dialog[open] h2').click();
+    expect(await page.evaluate(() => document.activeElement?.matches('dialog.ui-dialog') === true)).toBe(true);
+    await page.keyboard.press('ArrowDown'); await page.waitForTimeout(400);
+    await expect(page.locator('dialog.ui-dialog[open]')).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('dialog[open]')).toHaveCount(0);
+    await page.waitForTimeout(400);
+    expect(await transport.asked()).toEqual([]);
+    // The dialog closed, the same keys reach the show again.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press('Escape'); await page.keyboard.press('ArrowDown');
+    await expect.poll(transport.asked).toEqual(['stop', 'skip']);
+  } finally { await closeDiscarding(app); }
+});
+
+test('首页「MTC 时间码状态」开着、焦点掉到了页面上（有焦点的按钮被移除或变灰）：空格、↓、歌曲快捷键都不碰节目，Esc 只关对话框', async ({}, info) => {
+  const { app, page } = await open(info, threeSongs, { arrowKeys: true });
+  try {
+    const transport = await recordTransport(app);
+    await mtcStatus(page);
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    for (const key of ['Space', 'ArrowDown', 'Control+Digit3']) await page.keyboard.press(key);
+    await page.waitForTimeout(600);
+    await expect(page.locator('dialog.ui-dialog[open]')).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('dialog[open]')).toHaveCount(0);
+    await page.waitForTimeout(400);
+    expect(await transport.asked()).toEqual([]);
+  } finally { await closeDiscarding(app); }
+});
+
+test('灯光工作台（联动台播放）「修改 Cue 卡点」开着：焦点在「取消」上、或点了对话框标题后按 Esc，只关对话框，播放头不动、节目不停', async ({}, info) => {
+  const { app, page } = await open(info, [{ id: 'song-a', title: '第一首', audio: true, lighting: true }], { cueAtMs: 30_000 });
+  try {
+    const point = await lightingWorkbench(page);
+    const transport = await recordTransport(app);
+    await page.locator('.reference-timeline').focus(); await page.keyboard.press('End'); await page.waitForTimeout(300);
+    const timecode = page.locator('code[title="当前播放头时间码"]');
+    const end = await timecode.textContent();
+    await transport.clear();
+    const focusings: Array<() => Promise<void>> = [() => page.keyboard.press('Tab'), () => page.locator('dialog.cue-point-dialog[open] h3').click()];
+    for (const focus of focusings) {
+      await point.focus(); await page.keyboard.press('Enter');
+      await expect(page.locator('dialog.cue-point-dialog[open]')).toHaveCount(1);
+      await focus();
+      await page.keyboard.press('Escape');
+      await expect(page.locator('dialog.cue-point-dialog')).toHaveCount(0);
+      await expect(timecode).toHaveText(end!);
+    }
+    await page.waitForTimeout(400);
+    expect(await transport.asked()).toEqual([]);
+  } finally { await closeDiscarding(app); }
+});
+
+test('编辑器拖机位片段、手还按着时连按两下 Esc：两下都只取消，不停节目；松手后片段不动，之后第一下 Esc 照常停节目', async ({}, info) => {
+  const { app, page } = await open(info, [{ id: 'song-a', title: '第一首', audio: true, layers: true }]);
+  try {
+    await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
+    const clip = page.locator('[data-visual-layer-id="layer-1"] .timeline-cue').first();
+    await expect(clip).toBeVisible();
+    const transport = await recordTransport(app);
+    const box = (await clip.boundingBox())!;
+    const before = await left(clip);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2, { steps: 10 });
+    await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+    await page.keyboard.press('Escape'); await page.waitForTimeout(400);
+    expect(await transport.asked()).toEqual([]);
+    await page.mouse.up(); await page.waitForTimeout(400);
+    expect(await left(page.locator('[data-visual-layer-id="layer-1"] .timeline-cue').first())).toBe(before);
+    await page.keyboard.press('Escape');
+    await expect.poll(transport.asked).toEqual(['stop']);
   } finally { await closeDiscarding(app); }
 });

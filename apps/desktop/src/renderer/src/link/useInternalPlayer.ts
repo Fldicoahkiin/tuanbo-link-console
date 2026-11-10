@@ -13,7 +13,7 @@ import { linkDesktopViewModel as desktop } from './view-models/link-desktop-view
 import { useRuntimeStore } from './stores/runtime-store';
 import { useDisplayPreferences } from './stores/display-preferences-store';
 import { useSelectedProgram } from './useSelectedProgram';
-import { handlePlaybackKey, keyTarget } from './playback-keys';
+import { handlePlaybackKey, keyTarget, modalDialogOpen } from './playback-keys';
 import { followAudioConfiguration, openAnswer, playsOutdated, reopensShown, type OpenAnswer } from './program-attachment';
 
 /** Player notices already logged as warnings in this window. */
@@ -57,7 +57,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   useEffect(() => {
     if (!controller || !project) return;
     const player = { play: (itemId: string) => void controller.play(itemId), stop: () => void controller.stop(), skip: (direction: -1 | 1) => void controller.skip(direction) };
-    const keyboard = (event: KeyboardEvent): void => handlePlaybackKey(event, keyTarget(event), { paused: settingsOpen,
+    const keyboard = (event: KeyboardEvent): void => handlePlaybackKey(event, keyTarget(event), { paused: settingsOpen, modalOpen: modalDialogOpen(document),
       arrowKeys: useIntegrationStore.getState().profile?.internalPlayer?.arrowKeyPlayback === true,
       song: key => project.rundown.find((entry) => entry.enabled && entry.playback?.shortcut === key)?.id }, player);
     window.addEventListener('keydown', keyboard); return () => window.removeEventListener('keydown', keyboard);

@@ -1,13 +1,17 @@
 import type { ShortcutBinding } from '../stores/shortcut-store';
-import { isInside, spaceBelongsToControl, takeKey, type KeyTarget } from '../playback-keys';
+import { DIALOGS, isInside, spaceBelongsToControl, takeKey, type KeyTarget } from '../playback-keys';
 
 /*
  * The keys of the editor's and the lighting workbench's timeline (ReferenceTimeline, useTimelineStamp, TimelineToolbar):
  * what each key does, and where the keys go after a click. A held key acts once per press (`takeKey`).
  */
 
-/** Where Escape belongs to an open menu or panel, or to a field, which close or cancel with it. */
-const OWN_ESCAPE = 'details[open],[role="dialog"],[aria-expanded="true"],input,textarea,select';
+/**
+ * Where Escape belongs to an open dialog, menu or panel, or to a field, which close or cancel with it. The dialogs in
+ * the timeline (修改 Cue 卡点, 编辑歌曲段落, 编辑音频片段) are native <dialog> elements without a role: with the focus
+ * on one or on its buttons, Escape stopped the show and the dialog stayed open (0.5.9).
+ */
+const OWN_ESCAPE = `details[open],${DIALOGS},[aria-expanded="true"],input,textarea,select`;
 
 /**
  * The timeline's transport keys, before its editing keys. Escape stops the show and goes no further; in an open

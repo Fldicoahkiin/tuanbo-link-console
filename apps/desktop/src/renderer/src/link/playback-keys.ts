@@ -1,9 +1,27 @@
 /**
+ * An open dialog, which keeps every key pressed in it: Escape closes it, and no key there stops, plays or changes the
+ * song. The app's modal dialogs are native <dialog> elements without a role (ModalSurface and Dialog, the lighting
+ * attribute, Cue delete, attribute filter and category dialogs); the panels that open beside a button are
+ * [role="dialog"] (Popover). Known by the role alone, a dialog of the first kind did not count: with the focus on it,
+ * Escape stopped the show and the dialog stayed open (0.5.9).
+ */
+export const DIALOGS = 'dialog,[role="dialog"],[role="alertdialog"]';
+
+/**
+ * Whether a native modal dialog is open (`dialog:modal`). The page behind one cannot be reached, but the focus can
+ * still fall out of it onto the page body, when its focused button goes away or is disabled, and the keys pressed
+ * then went to the show. Only modal dialogs count: Space plays and pauses while a panel beside a button is open.
+ */
+export function modalDialogOpen(page: { querySelector(selectors: string): unknown }): boolean {
+  return page.querySelector('dialog:modal') !== null;
+}
+
+/**
  * Keys a focused control uses itself: typing, picking from a list or menu, sliders and resizers, anything in a dialog,
  * and controls held down for as long as Space or Enter is (`data-momentary`), such as the Flash and Temp keys of an MA2
  * executor: Space there flashes the light, it does not play or pause the show (taken away in 0.5.8).
  */
-const OWN_KEYS = 'input,textarea,select,[contenteditable="true"],[role="slider"],[role="spinbutton"],[role="combobox"],[role="listbox"],[role="menu"],[role="menuitem"],[role="separator"],[role="dialog"],[role="alertdialog"],dialog,[data-momentary="true"]';
+const OWN_KEYS = `input,textarea,select,[contenteditable="true"],[role="slider"],[role="spinbutton"],[role="combobox"],[role="listbox"],[role="menu"],[role="menuitem"],[role="separator"],${DIALOGS},[data-momentary="true"]`;
 
 /** The element a key went to, as far as the key helpers look at it. */
 export type KeyTarget = { closest(selectors: string): unknown };
@@ -37,17 +55,22 @@ export function takeKey(event: Pick<KeyboardEvent, 'repeat' | 'preventDefault'>,
 /** What a key pressed anywhere in the window does while 联动台播放 plays the show. */
 export type PlaybackKeyAction = { kind: 'song'; itemId: string } | { kind: 'play-button' } | { kind: 'stop' } | { kind: 'skip'; direction: -1 | 1 };
 type PlaybackKeyEvent = Pick<KeyboardEvent, 'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey' | 'defaultPrevented'>;
-export type PlaybackKeyContext = { paused: boolean; arrowKeys: boolean; song: (key: string) => string | undefined };
+/**
+ * `paused`: the settings or connection page is open. `modalOpen`: a native modal dialog is open (`modalDialogOpen`).
+ * `arrowKeys`: ↑↓ change songs. `song`: the song a key is the shortcut of.
+ */
+export type PlaybackKeyContext = { paused: boolean; modalOpen: boolean; arrowKeys: boolean; song: (key: string) => string | undefined };
 
 /**
  * The window's playback keys: a song's own shortcut plays that song, Space presses the play button of the page on
  * screen (see `registerPlayButton`), Escape stops, ↑↓ go to the previous or next song when that is turned on. The
  * timeline takes its own keys. While the settings or connection page is open (`paused`) none of these work, so Escape
- * there only closes the page (0.5.9). A held key repeats the same action; `handlePlaybackKey` does it once per press.
+ * there only closes the page (0.5.9); nor do they in an open dialog (`DIALOGS`) or while a modal one is open, so
+ * Escape there only closes the dialog. A held key repeats the same action; `handlePlaybackKey` does it once per press.
  */
 export function playbackKeyAction(event: PlaybackKeyEvent, target: KeyTarget | null, context: PlaybackKeyContext): PlaybackKeyAction | null {
   const plain = !event.ctrlKey && !event.altKey, space = plain && event.code === 'Space';
-  if (context.paused || event.metaKey || event.defaultPrevented || isInside(target, '.reference-timeline')
+  if (context.paused || context.modalOpen || event.metaKey || event.defaultPrevented || isInside(target, `.reference-timeline,${DIALOGS}`)
     || (space ? spaceBelongsToControl(target) : isInside(target, 'input,textarea,select,button,[contenteditable="true"],[role="slider"]'))) return null;
   const itemId = context.song([...(event.ctrlKey ? ['Ctrl'] : []), ...(event.altKey ? ['Alt'] : []), ...(event.shiftKey ? ['Shift'] : []), event.code].join('+'));
   if (itemId) return { kind: 'song', itemId };
@@ -95,8 +118,9 @@ export function pressPlayButton(): void {
 
 /**
  * Escape during a drag or a trim only cancels it and goes no further: the timeline and the window would otherwise take
- * the same press as "stop the show" (0.5.9). For listeners on window in the capture phase, which run first; drags use
- * it through `DragSession` (components/drag-session.ts).
+ * the same press as "stop the show" (0.5.9). `dragging` holds until the pointer is let go, so Escape pressed again
+ * after cancelling goes no further either. For listeners on window in the capture phase, which run first; drags use it
+ * through `DragSession` (components/drag-session.ts).
  */
 export function cancelDragOnEscape(event: Pick<KeyboardEvent, 'key' | 'preventDefault' | 'stopPropagation'>, dragging: boolean, cancel: () => void): void {
   if (event.key !== 'Escape' || !dragging) return;

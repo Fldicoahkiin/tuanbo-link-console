@@ -92,6 +92,32 @@ it('时间线里 Esc 停止节目，键不再往下传，按住只停一次；�
   expect(calls).toEqual(['停止', '停止']);
 });
 
+it('时间线里的原生对话框（<dialog>，不写 role：修改 Cue 卡点、编辑歌曲段落、编辑音频片段）：焦点在对话框本身、在「取消」「保存卡点」上按 Esc 都只关对话框，节目不停；空格也归对话框（演出中关「修改 Cue 卡点」停了节目）', () => {
+  const calls: string[] = [];
+  const dialog: Node = { tag: 'dialog', attributes: { class: 'modal-surface cue-point-dialog', 'aria-label': '修改 Cue 卡点', open: '' }, parent: timeline };
+  const footer: Node = { tag: 'footer', parent: { tag: 'form', attributes: { class: 'effect-binding-form' }, parent: dialog } };
+  const cancel: Node = { tag: 'button', attributes: { type: 'button' }, parent: footer }, save: Node = { tag: 'button', parent: footer };
+  // Mounted on the page body by a component in the timeline (createPortal): its keys still come through the timeline.
+  const mounted: Node = { tag: 'dialog', attributes: { class: 'lighting-attribute-dialog', open: '' }, parent: { tag: 'body' } };
+  const alert: Node = { tag: 'div', attributes: { role: 'alertdialog' }, parent: timeline };
+  for (const target of [dialog, cancel, save, mounted, { tag: 'button', parent: mounted }, alert]) {
+    for (const lighting of [true, false]) {
+      const escape = press('Escape'), space = press('Space');
+      expect(handleTimelineTransportKey(escape, element(target), page(calls, lighting))).toBe(false);
+      expect(handleTimelineTransportKey(space, element(target), page(calls, lighting))).toBe(false);
+      expect([escape.defaultPrevented, escape.propagationStopped, space.defaultPrevented]).toEqual([false, false, false]);
+    }
+    const play = press('Space');
+    handleLightingShortcut(play, element(target), shortcut('play'), () => calls.push('播放/暂停'));
+    expect(play.defaultPrevented || play.immediatePropagationStopped).toBe(false);
+  }
+  expect(calls).toEqual([]);
+  // Out of the dialog, Escape on the timeline stops the show as before.
+  expect(handleTimelineTransportKey(press('Escape'), element(timeline), page(calls, true))).toBe(true);
+  expect(handleTimelineTransportKey(press('Escape'), element(playButton), page(calls))).toBe(true);
+  expect(calls).toEqual(['停止', '停止']);
+});
+
 type Action = ShortcutBinding['action'];
 const shortcut = (action: Action | undefined, covered = false) => ({ action, covered: () => covered });
 

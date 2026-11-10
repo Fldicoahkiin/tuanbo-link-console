@@ -51,7 +51,7 @@ function session() {
 
 const WATCHING = ['blur', 'keydown（捕获）', 'pointercancel（捕获）', 'pointerup（捕获）'];
 
-it('拖动中按 Esc 只取消这次拖动，键不再往下传，节目不停；Esc 和松手在窗口的捕获阶段判断，先于时间线和窗口的停止键（0.5.9）', () => {
+it('拖动中按 Esc 只取消这次拖动，键不再往下传，节目不停；手还按着时再按 Esc 也只被拿走，松手后第一下 Esc 照常停节目；Esc 和松手在窗口的捕获阶段判断，先于时间线和窗口的停止键（0.5.9）', () => {
   const { view, drawn, drag } = session(); const clip = pressed();
   drag.begin(clip.element, 1, '片段 A');
   expect(clip.element.hasPointerCapture(1)).toBe(true);
@@ -65,10 +65,45 @@ it('拖动中按 Esc 只取消这次拖动，键不再往下传，节目不停�
   expect([escape.defaultPrevented, escape.propagationStopped]).toEqual([true, true]);
   expect(drag.current()).toBeNull();
   expect(drawn).toEqual(['片段 A', '片段 A 移到 3 秒', null]);
-  // Over: the next Escape stops the show as usual.
+  // The hand still holds the pointer: Escape pressed again to make sure is taken too and does nothing else, and
+  // moving on does not bring the drag back.
+  expect(view.listening()).toEqual(WATCHING);
+  const again = new Key('Escape'); view.send(again);
+  expect([again.defaultPrevented, again.propagationStopped]).toEqual([true, true]);
+  drag.update('片段 A 移到 5 秒');
+  expect(drag.current()).toBeNull();
+  expect(drawn).toEqual(['片段 A', '片段 A 移到 3 秒', null]);
+  // Let go on the element, which still holds the pointer and has nothing to drop: the first Escape after that stops the show.
+  view.send(new Release('pointerup', 1, clip.inside));
   expect(view.listening()).toEqual([]);
   const next = new Key('Escape'); view.send(next);
   expect(next.defaultPrevented || next.propagationStopped).toBe(false);
+  expect(drawn).toEqual(['片段 A', '片段 A 移到 3 秒', null]);
+});
+
+it('Esc 取消以后到松手以前，Esc 都只被拿走；另一根手指松开不算；松手、指针被系统取消、窗口失去焦点、元素没了以后松手、元素自己结束，任何一个之后第一下 Esc 照常停节目（0.5.9）', () => {
+  type Ending = (parts: { view: ReturnType<typeof fakeWindow>; clip: ReturnType<typeof pressed>; drag: DragSession<string> }) => void;
+  const endings: Array<[string, Ending]> = [
+    ['松在元素上（元素还握着指针）', ({ view, clip }) => view.send(new Release('pointerup', 1, clip.inside))],
+    ['松在别处（元素丢了指针）', ({ view, clip }) => { clip.letGo(); view.send(new Release('pointerup', 1, new EventTarget())); }],
+    ['指针被系统取消', ({ view }) => view.send(new Release('pointercancel', 1))],
+    ['窗口失去焦点', ({ view }) => view.send(new Event('blur'))],
+    ['元素没了以后松手', ({ view, clip }) => { clip.remove(); view.send(new Release('pointerup', 1)); }],
+    ['元素自己松手结束', ({ clip, drag }) => { clip.letGo(); drag.end(); }]
+  ];
+  for (const [name, letGo] of endings) {
+    const { view, drawn, drag } = session(); const clip = pressed();
+    drag.begin(clip.element, 1, '灯光点');
+    view.send(new Key('Escape'));
+    view.send(new Release('pointerup', 2)); view.send(new Release('pointercancel', 2));
+    const held = new Key('Escape'); view.send(held);
+    expect([name, held.defaultPrevented, held.propagationStopped]).toEqual([name, true, true]);
+    letGo({ view, clip, drag });
+    expect([name, view.listening()]).toEqual([name, []]);
+    const next = new Key('Escape'); view.send(next);
+    expect([name, next.defaultPrevented || next.propagationStopped]).toEqual([name, false]);
+    expect([name, drawn]).toEqual([name, ['灯光点', null]]);
+  }
 });
 
 it('拖动中被拖的元素没了（顺序连播换到下一首），松手就结束这次拖动，之后第一下 Esc 照常停节目（0.5.9 回归）', () => {
@@ -84,7 +119,7 @@ it('拖动中被拖的元素没了（顺序连播换到下一首），松手就�
   expect(escape.defaultPrevented || escape.propagationStopped).toBe(false);
 });
 
-it('元素没了（拖出视口被裁掉、顺序连播换了歌）、手还按着时按 Esc：只取消这次拖动，键不再往下传，节目不停；松手后第一下 Esc 照常停节目（0.5.9）', () => {
+it('元素没了（拖出视口被裁掉、顺序连播换了歌）、手还按着时按 Esc：只取消这次拖动，键不再往下传，节目不停；再按 Esc 也一样；松手后第一下 Esc 照常停节目（0.5.9）', () => {
   const { view, drawn, drag } = session(); const clip = pressed();
   drag.begin(clip.element, 1, '灯光点');
   clip.remove();
@@ -92,22 +127,40 @@ it('元素没了（拖出视口被裁掉、顺序连播换了歌）、手还按�
   expect([escape.defaultPrevented, escape.propagationStopped]).toEqual([true, true]);
   expect(drag.current()).toBeNull();
   expect(drawn).toEqual(['灯光点', null]);
-  expect(view.listening()).toEqual([]);
+  expect(view.listening()).toEqual(WATCHING);
+  const again = new Key('Escape'); view.send(again);
+  expect([again.defaultPrevented, again.propagationStopped]).toEqual([true, true]);
   view.send(new Release('pointerup', 1));
+  expect(view.listening()).toEqual([]);
   const next = new Key('Escape'); view.send(next);
   expect(next.defaultPrevented || next.propagationStopped).toBe(false);
+  expect(drawn).toEqual(['灯光点', null]);
 });
 
-it('拖动中画面离开（组件卸载）、手还按着：不再画；按 Esc 只取消、不停节目，松手也一样结束；之后第一下 Esc 照常停节目（0.5.9）', () => {
+it('拖动中画面离开（组件卸载）、手还按着：不再画；按 Esc 只取消、不停节目，再按 Esc 也一样，松手也一样结束；之后第一下 Esc 照常停节目（0.5.9）', () => {
   const escaped = session(); const clip = pressed();
   escaped.drag.begin(clip.element, 1, '片段 A');
   escaped.drag.dispose(); clip.remove();
   expect(escaped.view.listening()).toEqual(WATCHING);
   const escape = new Key('Escape'); escaped.view.send(escape);
   expect([escape.defaultPrevented, escape.propagationStopped]).toEqual([true, true]);
+  expect(escaped.view.listening()).toEqual(WATCHING);
+  const again = new Key('Escape'); escaped.view.send(again);
+  expect([again.defaultPrevented, again.propagationStopped]).toEqual([true, true]);
+  escaped.view.send(new Release('pointerup', 1));
   expect(escaped.view.listening()).toEqual([]);
   const next = new Key('Escape'); escaped.view.send(next);
   expect(next.defaultPrevented || next.propagationStopped).toBe(false);
+  // Gone and cancelled, then the window loses the focus before the release: over as well.
+  const blurred = session(); const gone = pressed();
+  blurred.drag.begin(gone.element, 1, '片段 C');
+  blurred.drag.dispose(); gone.remove();
+  blurred.view.send(new Key('Escape'));
+  blurred.view.send(new Event('blur'));
+  expect(blurred.view.listening()).toEqual([]);
+  const later = new Key('Escape'); blurred.view.send(later);
+  expect(later.defaultPrevented || later.propagationStopped).toBe(false);
+  expect(blurred.drawn).toEqual(['片段 C']);
 
   const released = session(); const other = pressed();
   released.drag.begin(other.element, 1, '片段 B');
