@@ -122,10 +122,10 @@ export class LinkMidiAdapter implements LinkActionExecutor {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const output = direction === 'output' ? this.resolveOutput(id) : this.resolveInput(id);
-        if (output.state !== 'connected') throw new Error(`MIDI 接口已断开：${output.name}`);
+        if (output.state !== 'connected') throw new Error(`MIDI 接口「${output.name}」已断开`);
         if (opened.has(output.id)) continue;
-        await Promise.race([output.open(), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`MIDI 接口打开超时：${output.name}`)), 5000); })]);
-        if (output.state !== 'connected') throw new Error(`MIDI 接口已断开：${output.name}`);
+        await Promise.race([output.open(), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`MIDI 接口「${output.name}」打开超时`)), 5000); })]);
+        if (output.state !== 'connected') throw new Error(`MIDI 接口「${output.name}」已断开`);
         opened.add(output.id);
         if (direction === 'output') this.openedOutputs.add(this.resolveOutput(id));
       } catch (error) { issues.push(toMessage(error)); }
@@ -150,10 +150,10 @@ export class LinkMidiAdapter implements LinkActionExecutor {
       onPorts(ports);
       const matches = ports.filter((port) => port.direction === 'input' && port.name === profile.portName && port.state === 'connected');
       if (matches.length === 1) return;
-      if (matches.length > 1) throw new Error(`有多个同名的 P1 MTC 输入端口：${profile.portName}`);
+      if (matches.length > 1) throw new Error(`有多个同名的 P1 MTC 输入端口「${profile.portName}」`);
       await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 250));
     }
-    throw new Error(`P1 MTC 输入端口在 ${timeoutMs} ms 内没有准备好：${profile.portName}`);
+    throw new Error(`P1 MTC 输入端口「${profile.portName}」在 ${timeoutMs} ms 内没有准备好`);
   }
 
   dispose(): void {
@@ -272,11 +272,11 @@ export class LinkMidiAdapter implements LinkActionExecutor {
     const matches = this.access ? [...this.access.inputs.values()].filter((port) => port.name === profile.portName) : [];
     if (matches.length !== 1) {
       throw new Error(matches.length === 0
-        ? `MIDI 输入端口不存在：${profile.portName}`
-        : `有多个同名的 MIDI 输入端口：${profile.portName}`);
+        ? `MIDI 输入端口「${profile.portName}」不存在`
+        : `有多个同名的 MIDI 输入端口「${profile.portName}」`);
     }
     const input = matches[0];
-    if (!input) throw new Error(`MIDI 输入端口不存在：${profile.portName}`);
+    if (!input) throw new Error(`MIDI 输入端口「${profile.portName}」不存在`);
     return input;
   }
 
@@ -299,11 +299,11 @@ export class LinkMidiAdapter implements LinkActionExecutor {
     const matches = this.access ? [...this.access.outputs.values()].filter((port) => port.name === profile.portName) : [];
     if (matches.length !== 1) {
       throw new Error(matches.length === 0
-        ? `MIDI 输出端口不存在：${profile.portName}`
-        : `有多个同名的 MIDI 输出端口：${profile.portName}`);
+        ? `MIDI 输出端口「${profile.portName}」不存在`
+        : `有多个同名的 MIDI 输出端口「${profile.portName}」`);
     }
     const output = matches[0];
-    if (!output) throw new Error(`MIDI 输出端口不存在：${profile.portName}`);
+    if (!output) throw new Error(`MIDI 输出端口「${profile.portName}」不存在`);
     return output;
   }
 

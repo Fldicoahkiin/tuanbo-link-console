@@ -5,6 +5,7 @@ import { LinkMidiAdapter, buildMidiShowControlMessage, hasConnectedProfilePort, 
 import { refreshMidiAccess, requestMidiAccess, type MidiAccess, type MidiInput, type MidiMessage, type MidiOutput,
   type MidiPortConnectionState, type MidiPortDeviceState } from './midi-access';
 import type { IntegrationProfile } from '@tb/schema';
+import { toUserErrorMessage } from '@tb/core/link';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -174,7 +175,7 @@ describe('LinkMidiAdapter', () => {
       portProfileId: 'missing',
       channel: 1,
       program: 1
-    })).rejects.toThrow('端口不存在');
+    })).rejects.toThrow('MIDI 输出端口「Missing」不存在');
     expect(() => buildMidiShowControlMessage({
       id: 'msc',
       label: 'MSC',
@@ -223,9 +224,39 @@ describe('LinkMidiAdapter', () => {
       portProfileId: 'out',
       channel: 1,
       program: 1
-    })).rejects.toThrow('MIDI 输出端口不存在：P1 Control');
+    })).rejects.toThrow('MIDI 输出端口「P1 Control」不存在');
     adapter.dispose();
     expect(access.listeners.size).toBe(0);
+  });
+
+  it('接口名放在「」里：名字里有大写英文或 Timeout 时，提示照原样显示（2026-11-10）', async () => {
+    vi.useFakeTimers();
+    const access = new FakeAccess(); installAccess(access);
+    const disconnected = new FakePort('a', 'USB MIDI INTERFACE', 'output', access); disconnected.state = 'disconnected';
+    const stuck = new FakePort('b', 'Timeout Box', 'output', access); stuck.open.mockReturnValue(new Promise<void>(() => undefined));
+    access.outputs.set('a', disconnected); access.outputs.set('b', stuck);
+    access.inputs.set('c', new FakePort('c', 'MTC INPUT', 'input', access)); access.inputs.set('d', new FakePort('d', 'MTC INPUT', 'input', access));
+    const profiles: Record<string, MidiPortProfile> = { gone: { id: 'gone', direction: 'output', portName: 'USB MIDI INTERFACE' },
+      slow: { id: 'slow', direction: 'output', portName: 'Timeout Box' }, missing: { id: 'missing', direction: 'output', portName: 'HAPPY OUT' },
+      twin: { id: 'twin', direction: 'input', portName: 'MTC INPUT' }, absent: { id: 'absent', direction: 'input', portName: 'NO SUCH INPUT' } };
+    const adapter = new LinkMidiAdapter(id => profiles[id] ?? null, vi.fn());
+    const opening = adapter.openOutputs(['gone', 'slow']);
+    await vi.advanceTimersByTimeAsync(5000);
+    const texts = [...await opening];
+    const rejection = async (run: () => Promise<unknown>): Promise<string> => run().then(() => '', (error: unknown) => error instanceof Error ? error.message : String(error));
+    texts.push(await rejection(() => adapter.execute({ id: 'pc', label: 'Program', kind: 'midi.programChange', portProfileId: 'missing', channel: 1, program: 1 })));
+    texts.push(await rejection(() => adapter.subscribeMtc('twin', '30', vi.fn())));
+    texts.push(await rejection(() => adapter.subscribeMtc('absent', '30', vi.fn())));
+    texts.push(await rejection(() => adapter.waitForConnectedInput('twin', 1000, vi.fn())));
+    access.inputs.delete('d'); access.inputs.get('c')!.state = 'disconnected';
+    const waiting = rejection(() => adapter.waitForConnectedInput('twin', 1000, vi.fn()));
+    await vi.advanceTimersByTimeAsync(1000);
+    texts.push(await waiting);
+    expect(texts).toEqual(['MIDI 接口「USB MIDI INTERFACE」已断开', 'MIDI 接口「Timeout Box」打开超时', 'MIDI 输出端口「HAPPY OUT」不存在',
+      '有多个同名的 MIDI 输入端口「MTC INPUT」', 'MIDI 输入端口「NO SUCH INPUT」不存在', '有多个同名的 P1 MTC 输入端口「MTC INPUT」',
+      'P1 MTC 输入端口「MTC INPUT」在 1000 ms 内没有准备好']);
+    expect(texts.map(text => toUserErrorMessage(new Error(text)))).toEqual(texts);
+    adapter.dispose();
   });
 
   it('端口清单读取失败时明确上报一次，不当作端口仍在', async () => {

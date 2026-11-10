@@ -9,7 +9,7 @@ export class PlaybackMidiInput {
     if (generation !== this.generation) return;
     const matches = [...access.inputs.values()].filter((port) => port.name === portName && port.state === 'connected');
     const input = matches[0];
-    if (matches.length !== 1 || !input) throw new Error(`播放控制的 MIDI 输入找不到，或有多个同名端口：${portName}`);
+    if (matches.length !== 1 || !input) throw new Error(`播放控制的 MIDI 输入「${portName}」找不到，或有多个同名端口`);
     await input.open();
     if (generation !== this.generation) { void input.close().catch((error: unknown) => console.error(`MIDI 接口「${portName}」关闭失败`, error)); return; }
     const unsubscribeMessages = input.onMessage(message => this.receive(message.data));
