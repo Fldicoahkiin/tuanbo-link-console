@@ -1658,7 +1658,7 @@ it('入点接不上的下一段预热直接失败，上一段在被拒绝时暂�
   } finally { vi.useRealTimers(); }
 });
 
-it('操作员写的 Cue 里的 OBS 动作（不是节目里的素材）照原名发出；节目里素材的暂停送到它画面上的那个解码器', async () => {
+it('操作员写的 Cue 里的 OBS 动作（不是节目里的素材）和没准备成的素材照原名发出；节目里素材的暂停送到它画面上的那个解码器', async () => {
   vi.useFakeTimers();
   try {
     const t = await handover();
@@ -1671,8 +1671,12 @@ it('操作员写的 Cue 里的 OBS 动作（不是节目里的素材）照原名
     await executor.execute({ id: 'intro-sound', label: '片头声音', kind: 'obs.setInputMute', inputName: '片头视频', muted: false });
     await executor.execute({ id: 'logo', label: '台标', kind: 'obs.setSceneItemEnabled', sceneName: '机位1', sourceName: '台标', enabled: true });
     await executor.execute({ id: 'pause', label: '同步暂停', kind: 'obs.mediaAction', inputName: t.primary, action: 'pause' });
+    // A material whose preparation failed before the preload took it (its file could not be
+    // read, or OBS did not set up its source): its pause goes out under its own name, as before.
+    const unprepared = materialSceneNames(t.project.projectId, { ...t.project.mediaAssets[0]!, id: 'video-2', name: '视频2' }).sourceName;
+    await executor.execute({ id: 'pause-2', label: '同步暂停', kind: 'obs.mediaAction', inputName: unprepared, action: 'pause' });
     expect(sent.map(action => [action.kind, 'inputName' in action ? action.inputName : 'sourceName' in action ? action.sourceName : null])).toEqual([
-      ['obs.mediaAction', '片头视频'], ['obs.setInputMute', '片头视频'], ['obs.setSceneItemEnabled', '台标'], ['obs.mediaAction', t.standby]]);
+      ['obs.mediaAction', '片头视频'], ['obs.setInputMute', '片头视频'], ['obs.setSceneItemEnabled', '台标'], ['obs.mediaAction', t.standby], ['obs.mediaAction', unprepared]]);
     expect(logs).not.toHaveBeenCalled();
   } finally { vi.useRealTimers(); }
 });
