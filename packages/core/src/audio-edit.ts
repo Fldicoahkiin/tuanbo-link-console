@@ -61,11 +61,18 @@ export function editedSongDurationMs(audio: ReferenceAudio, tracks: readonly Pic
   return saved === undefined ? undefined : Math.max(saved, audioTracksEndMs(tracks));
 }
 
-/** Whole frames at the project's frame rate, in whole milliseconds. */
-function frameAlignedMs(milliseconds: number, frameRate: MtcFrameRate): number {
-  const fps = playbackFramesPerSecond(frameRate);
-  return Math.round(Math.round(milliseconds / 1_000 * fps) * 1_000 / fps);
+/** Blank time in whole frames at the project's frame rate, to the nearest frame; negative takes time away. The song's
+ * content moves by these frames; the audio and the lighting by `blankFramesMs` of them. */
+export function blankFrames(milliseconds: number, frameRate: MtcFrameRate): number {
+  return Math.sign(milliseconds) * Math.round(Math.abs(milliseconds) / 1_000 * playbackFramesPerSecond(frameRate));
 }
+
+/** `frames` whole frames in whole milliseconds (the audio's unit). */
+export function blankFramesMs(frames: number, frameRate: MtcFrameRate): number {
+  return Math.sign(frames) * Math.round(Math.abs(frames) * 1_000 / playbackFramesPerSecond(frameRate));
+}
+
+const frameAlignedMs = (milliseconds: number, frameRate: MtcFrameRate): number => blankFramesMs(blankFrames(milliseconds, frameRate), frameRate);
 
 /** Blank time before and after the music: every track's segments move together by `leadDeltaMs` (rounded to whole
  * frames, so every event on the console moves by the same frames), and the song lasts to the new last end plus
@@ -73,7 +80,7 @@ function frameAlignedMs(milliseconds: number, frameRate: MtcFrameRate): number {
  * main process's (audio-edit-service). The song's beats follow the segments by themselves (songBeats). */
 export function padAudioTimeline(audio: ReferenceAudio, leadDeltaMs: number, tailMs: number, frameRate: MtcFrameRate): { tracks: AudioTrack[]; durationMs: number } {
   if (!Number.isFinite(leadDeltaMs) || !Number.isFinite(tailMs) || tailMs < 0) throw new Error('空白的长度无效');
-  const delta = Math.sign(leadDeltaMs) * frameAlignedMs(Math.abs(leadDeltaMs), frameRate);
+  const delta = frameAlignedMs(leadDeltaMs, frameRate);
   if (songLeadBlankMs(audio) + delta < 0) throw new Error('前面的空白不能比 0 还短');
   const tracks = audioTracks(audio).map((track) => ({ ...track, segments: track.segments.map((segment) => ({ ...segment, startMs: segment.startMs + delta })) }));
   const durationMs = audioTracksEndMs(tracks) + frameAlignedMs(tailMs, frameRate);

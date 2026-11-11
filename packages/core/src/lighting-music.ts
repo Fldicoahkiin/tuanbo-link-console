@@ -1,4 +1,4 @@
-import { createLightingMusic, lightingDocumentSchema, type LightingDocument, type LightingEvent, type LightingMusic, type LightingTempo } from '@tb/schema';
+import { createLightingMusic, lightingDocumentSchema, type LightingClip, type LightingDocument, type LightingEvent, type LightingMusic, type LightingTempo } from '@tb/schema';
 import { LightingTempoMap, lightingEventTime } from './lighting-edit';
 
 export const MUSIC_GRID_CHOICES = [0.25, 0.5, 1, 2, 4, 8, 16, 32];
@@ -68,16 +68,22 @@ export function setMusicCueLock(document: LightingDocument, ids: ReadonlySet<str
   return lightingDocumentSchema.parse({ ...document, version: 2, tracks: document.tracks.map(track => ({ ...track, clips: track.clips.map(clip => {
     if (!clip.events.some(event => ids.has(event.id))) return clip;
     if (track.locked) throw new Error('轨道已锁定');
-    const start = clip.timeLock === 'time' ? clip.start : map.beatToMs(clip.start);
-    const duration = clip.timeLock === 'time' ? clip.duration : map.beatToMs(clip.start + clip.duration) - start;
-    return { ...clip, timeLock: 'time', start, duration, events: clip.events.map(event => {
-      const ms = lightingEventTime(clip, event, map); const next = { ...event, at: ms - start };
-      if (next.kind === 'note' && event.kind === 'note' && clip.timeLock === 'beat') next.duration = map.beatToMs(clip.start + event.at + event.duration) - ms;
-      if (ids.has(event.id) ? beatLocked : clip.timeLock === 'beat' || event.beatAnchor !== undefined) next.beatAnchor = musicMsToBeat(document, ms);
-      else delete next.beatAnchor;
-      return next;
-    }) };
+    return musicClipInTime(document, clip, map, event => ids.has(event.id) ? beatLocked : clip.timeLock === 'beat' || event.beatAnchor !== undefined);
   }) })) });
+}
+/** One clip in absolute time, every event where it plays now; `anchored` events keep following the beats through a
+ * `beatAnchor` (their beat on the music grid), the others lose it. The one conversion a beat clip goes through, whether
+ * the operator locks its cues to time (setMusicCueLock) or the whole song moves (lighting-shift). */
+export function musicClipInTime(document: LightingDocument, clip: LightingClip, map: LightingTempoMap, anchored: (event: LightingEvent, ms: number) => boolean): LightingClip {
+  const start = clip.timeLock === 'time' ? clip.start : map.beatToMs(clip.start);
+  const duration = clip.timeLock === 'time' ? clip.duration : map.beatToMs(clip.start + clip.duration) - start;
+  return { ...clip, timeLock: 'time', start, duration, events: clip.events.map(event => {
+    const ms = lightingEventTime(clip, event, map); const next = { ...event, at: ms - start };
+    if (next.kind === 'note' && event.kind === 'note' && clip.timeLock === 'beat') next.duration = map.beatToMs(clip.start + event.at + event.duration) - ms;
+    if (anchored(event, ms)) next.beatAnchor = musicMsToBeat(document, ms);
+    else delete next.beatAnchor;
+    return next;
+  }) };
 }
 export function moveMusicCues(document: LightingDocument, changes: CuePositionChange[], durationMs: number): LightingDocument {
   const updates = new Map(changes.map(change => [change.id, change.toMs])); const map = new LightingTempoMap(document.tempos);

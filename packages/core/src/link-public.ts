@@ -16,6 +16,8 @@ export * from './project-asset-files';
 export * from './project-version-change';
 export * from './managed-media-timeline';
 export * from './content-timeline';
+export * from './lighting-shift';
+export * from './song-padding';
 export * from './scene-output-timeline';
 export * from './managed-output-runtime';
 export * from './timeline-state';

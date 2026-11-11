@@ -11,6 +11,10 @@ import { commitItemContent, createItemContentCommand, draftItemContent, type Lin
  * - Trimming stops at the neighbours on the track and at the source's ends.
  * - Tracks with nothing on them are removed.
  * - visualLayers[0] is the top track; upper tracks cover lower ones.
+ * - Moving the whole song (blank time before the music, shiftContent): every
+ *   clip and cue moves by the same frames, on its own track, so nothing changes
+ *   relative to anything else; taking blank time away stops at the earliest
+ *   part (contentTimeRange).
  * Older projects are brought under these rules when opened, keeping what they
  * played: see normalizeContentTimeline.
  */
@@ -295,6 +299,33 @@ export function removeContentCommand(itemId: string, refs: readonly ContentRef[]
     item.cues = item.cues.filter(cue => !cues.has(cue.id));
     pruneEmptyTracks(item);
   }, now);
+}
+
+/** The song's clips and cues, every one `deltaFrames` later (earlier when negative), on the same tracks and with the
+ * same lengths, so their order and overlaps stay as they are. Of a song's timed fields only these two are the content
+ * timeline's: clip `startTimecode` and cue `timecode`. Clip `sourceOffsetMs`/`durationMs`, cue `durationMs` and action
+ * durations are lengths; tracks have no time. A part that would start before the song's start refuses the move. */
+export function shiftContent(item: RundownItem, deltaFrames: number, frameRate: MtcFrameRate): Pick<RundownItem, 'referenceMediaClips' | 'cues'> {
+  if (!Number.isSafeInteger(deltaFrames)) throw new Error('挪动的帧数无效');
+  const moved = (timecode: LinkCue['timecode']): LinkCue['timecode'] => {
+    const frame = timecodeToFrameNumber(timecode, frameRate) + deltaFrames;
+    if (frame < 0) throw new Error('前面的空白里还有机位、素材或 Cue，请先挪开');
+    return frameNumberToTimecode(frame, frameRate);
+  };
+  return {
+    referenceMediaClips: item.referenceMediaClips.map(clip => ({ ...clip, startTimecode: moved(clip.startTimecode) })),
+    cues: item.cues.map(cue => ({ ...cue, timecode: moved(cue.timecode) }))
+  };
+}
+
+/** Where the song's earliest part starts and its latest part ends, in ms; null without parts. Instant cues count
+ * where they are; a camera cue saved without a length counts where it starts. */
+export function contentTimeRange(item: RundownItem, frameRate: MtcFrameRate): { startMs: number; endMs: number } | null {
+  const spans = [...item.referenceMediaClips.map(clip => clipSpan(clip, frameRate)),
+    ...item.cues.map(cue => cueSpan(cue, frameRate) ?? (() => { const start = timecodeToFrameNumber(cue.timecode, frameRate); return { start, end: start }; })())];
+  if (!spans.length) return null;
+  const toMs = (frame: number): number => frame / playbackFramesPerSecond(frameRate) * 1_000;
+  return { startMs: toMs(Math.min(...spans.map(span => span.start))), endMs: toMs(Math.max(...spans.map(span => span.end))) };
 }
 
 /** Whether each song object is under the rules, per frame rate. Songs are never changed in place (every change is a
