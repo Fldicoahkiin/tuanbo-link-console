@@ -707,7 +707,8 @@ function registerIpc(
         },
         executable: engineExecutable,
         claimMidiOutput: name => midiPortBroker.claimFormal(name, '时间码'),
-        cache: new NativeAudioCache(join(app.getPath('userData'), 'native-audio-streams'), ffmpegPath.replace('app.asar', 'app.asar.unpacked'), undefined, undefined, measured),
+        cache: new NativeAudioCache(join(app.getPath('userData'), 'native-audio-streams'), ffmpegPath.replace('app.asar', 'app.asar.unpacked'), undefined, undefined, measured,
+          (message, details) => { void logger.record({ level: 'warning', category: 'system', device: '音频', message, details }).catch((error: unknown) => console.error('音频缓存日志写入失败', error)); }),
         resolveAudio: (projectPath, relativePath) => projectService.resolveReferenceAudio(projectPath, relativePath),
         changed: (status, qpc100ns) => {
           nativeObs?.observe(status, qpc100ns); nativeProgramHost?.observe(status, qpc100ns); nativePlayerUi.publish(status);

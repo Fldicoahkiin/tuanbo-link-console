@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { toUserErrorMessage } from '@tb/core/link';
 import type { PlaybackSnapshot } from '@tb/schema';
 import type { DecodeResult } from './native-audio-decode';
-import { NativeAudioCache } from './native-audio-cache';
+import { NativeAudioCache, type NativeAudioCacheWarn } from './native-audio-cache';
 import { NativeAudioPreload } from './native-audio-preload';
 
 // A release's rename, or removing a file, can be refused, the way Windows refuses one while another program holds the file.
@@ -209,5 +209,22 @@ it('没写完的文件删不掉：照样算进缓存，缓存满了时说明原�
   expect(await exists(left)).toBe(true);
   const lease = await cache.prepare(input, signal);
   expect(await exists(left)).toBe(false);
+  decoders.at(-1)!.exit({ ok: true }); await lease.release();
+});
+
+it('删不掉的没写完的文件：每个文件只写一次警告，带路径和文件错误码，不是每次准备都写（2026-11-11）', async () => {
+  const { input, signal, directory } = await fixture(budget);
+  const warn = vi.fn<NativeAudioCacheWarn>();
+  const cache = new NativeAudioCache(directory, 'ffmpeg', budget, undefined, undefined, warn);
+  const first = await leftover(directory, 200_000);
+  const second = join(directory, `${'d'.repeat(64)}-48000-0.0f0e0d0c-0b0a-4908-8706-050403020101.partial`); await writeFile(second, Buffer.alloc(200_000));
+  for (let attempt = 0; attempt < 6; attempt++) vi.mocked(unlink).mockRejectedValueOnce(Object.assign(new Error('EBUSY: resource busy or locked, unlink'), { code: 'EBUSY' }));
+  for (let attempt = 0; attempt < 3; attempt++) await expect(cache.prepare(input, signal)).rejects.toThrow('删不掉');
+  expect(warn).toHaveBeenCalledTimes(2);
+  expect(warn.mock.calls.map(call => call[1]).sort((a, b) => a.path.localeCompare(b.path))).toEqual([{ path: first, code: 'EBUSY' }, { path: second, code: 'EBUSY' }]);
+  expect(warn.mock.calls[0]?.[0]).toContain(warn.mock.calls[0]?.[1].path);
+  const lease = await cache.prepare(input, signal);
+  expect(await exists(first)).toBe(false);
+  expect(warn).toHaveBeenCalledTimes(2);
   decoders.at(-1)!.exit({ ok: true }); await lease.release();
 });

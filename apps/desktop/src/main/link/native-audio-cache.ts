@@ -28,6 +28,10 @@ export type NativeAudioLease = { path: string; sampleRate: 44100 | 48000; baseMs
  * listening in the editor makes one). Registered as the decoder starts, let go once it has exited. Only one copy of the
  * app runs (link-main's single-instance lock), so a decode file of these directories that is not here is written by nobody. */
 const writing = new Set<string>();
+/** Decode files that could not be removed and are already in the run log, so each is logged once, not on every attempt. */
+const reported = new Set<string>();
+/** Says into the run log that a decode file could not be removed: which file, and the file error code. */
+export type NativeAudioCacheWarn = (message: string, details: { path: string; code: string }) => void;
 const decodeFile = /^[a-f0-9]{64}-(44100|48000)-\d+\.[a-f0-9-]+\.partial$/;
 
 /** Original audio is fingerprinted before output. A private growing PCM file
@@ -41,7 +45,8 @@ export class NativeAudioCache {
   private busy = false;
   constructor(private readonly directory: string, private readonly ffmpeg: string,
     private readonly budgetBytes = 8 * 1024 ** 3, private readonly maxEntries = 256,
-    private readonly measured: (phase: string, elapsedMs: number) => void = () => undefined) {}
+    private readonly measured: (phase: string, elapsedMs: number) => void = () => undefined,
+    private readonly warn: NativeAudioCacheWarn = () => undefined) {}
 
   async prepare(input: z.input<typeof requestSchema>, signal: AbortSignal): Promise<NativeAudioLease> {
     const request = requestSchema.parse(input); signal.throwIfAborted();
@@ -130,7 +135,7 @@ export class NativeAudioCache {
     // let go once the child has exited, and what it wrote is removed then. A file that cannot be removed then is
     // left like one a crash leaves: room-making removes it later (removeLeftover).
     try { await active.decoder.cancel(); }
-    catch (error) { void active.decoder.finished.then(async () => { await removeLeftover(active.path); this.forget(active); }); throw error; }
+    catch (error) { void active.decoder.finished.then(async () => { await removeLeftover(active.path, this.warn); this.forget(active); }); throw error; }
     // The child has exited and this was the last lease, so nobody else holds the entry: it is let
     // go even when publishing or removing its file fails, and that failure goes to the releaser.
     try {
@@ -186,7 +191,7 @@ export class NativeAudioCache {
       // A decode file no decoder writes any more (left by a crash, a kill, a failed decode or a failed release) is
       // never used again. One that cannot be removed stays and is counted, and a full cache then says so.
       if (decodeFile.test(name) && !writing.has(join(this.directory, name))) {
-        const failure = await removeLeftover(join(this.directory, name));
+        const failure = await removeLeftover(join(this.directory, name), this.warn);
         if (!failure) continue;
         kept ??= failure;
       }
@@ -220,10 +225,18 @@ async function digest(path: string, signal: AbortSignal): Promise<string> {
 }
 function isMissing(error: unknown): boolean { return error instanceof Error && 'code' in error && error.code === 'ENOENT'; }
 
-/** Removes a decode file nobody writes any more. Returns why it could not, or null once it is gone. */
-async function removeLeftover(path: string): Promise<Error | null> {
-  try { await unlink(path); return null; }
-  catch (error) { return isMissing(error) ? null : error instanceof Error ? error : new Error(String(error)); }
+/** Removes a decode file nobody writes any more. Returns why it could not, or null once it is gone. A file that stays is
+ * reported once through `warn`, with its path and the file error code, however often removing it is tried again. */
+async function removeLeftover(path: string, warn: NativeAudioCacheWarn): Promise<Error | null> {
+  try { await unlink(path); reported.delete(path); return null; }
+  catch (error) {
+    if (isMissing(error)) { reported.delete(path); return null; }
+    if (!reported.has(path)) {
+      reported.add(path);
+      warn(`临时音频文件删不掉，留在缓存目录里：${path}`, { path, code: error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : 'UNKNOWN' });
+    }
+    return error instanceof Error ? error : new Error(String(error));
+  }
 }
 
 /** What a cache file holds now. A decoder's file can be missing: FFmpeg has not created it yet (or is stuck before it
