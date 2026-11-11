@@ -78,11 +78,11 @@ docs/                           设计、实施、验收和服务器安装说明
 1. 所有 LinkProject 修改必须封装为 `LinkCommand` 并经 `useDocumentStore.execute(command)`；组件禁止直接改工程对象。
 2. 分层方向固定为 Schema/Domain → Registry/Adapters → Stores/Runtime → Components → 最小 IPC，不得倒流。
 3. IPC 只传已定义的 DTO，不承载 Cue、时间码、开播前检查等业务判断。
-4. 外部边界错误必须明确返回、展示并记录；禁止静默 fallback、吞异常、自动重试，或在联动台播放和 P1 跟随之间自动切换。例外只有用户授权并写进文档的几处：第 2 节的 MIDI 端口恢复，LIGHTING_WORKFLOW.md「同步规则」里的重试。
+4. 外部边界错误必须明确返回、展示并记录；禁止静默 fallback、吞异常、自动重试，或在联动台播放和 P1 跟随之间自动切换。例外只有用户授权并写进文档的几处：第 2 节的 MIDI 端口恢复，LIGHTING_WORKFLOW.md「同步规则」里的重试，以及 2026-11-10 用户定的“有次数上限的自动恢复”（声卡、时间码、画面：画面按此刻该有的样子补一次、后面的素材再准备一次、素材和音乐对不上时校正），次数只写在 `packages/core/src/output-recovery.ts`，每次都标红、记运行日志，到上限就停下等人处理；点 Cue 不重发。
 5. OBS 请求默认 2 秒超时；外部程序只能按精确路径、PID、启动时间和所有权管理。
 6. 只关闭本次由联动台启动的进程；对方拒绝关闭时保留进程，绝不强杀。
 7. 工程不保存密码、MIDI 端口名或外部程序绝对路径，这些放本机设备设置。OBS 密码只用 Electron `safeStorage`，不可用时不降级存明文。
-8. 排练时第一个失败的动作挡住后续动作；直播时失败标红但继续。两者都不自动重试。
+8. 排练时第一个失败的动作挡住后续动作，不自动补；直播时失败标红但继续，画面只按第 4 条的例外在 `output-recovery.ts` 的次数内自动补，其余不自动重试。
 9. P1 跟随时 MTC 丢失或异常跳变冻结自动 Cue。手动模式要明确重同步；用户授权的 P1 自动选歌模式允许从 P1 点击切歌或重播启动新会话，同位置继续则恢复并定位视频。未知区间或中途跳变不猜、不补执行。
 10. 禁止 `any`、`as any`、`eslint-disable`、空 `catch` 和补丁式兼容分支。
 
@@ -108,6 +108,7 @@ docs/                           设计、实施、验收和服务器安装说明
 | 动作 MIDI 晚到怎么办 | `packages/core/src/midi-late-rule.ts`（2026-11-10）：Program Change、Control Change 照发并标红，Note On、MSC Go 晚 100 ms 以上只跳过这一条，Note Off、MSC Stop 总是发；一条失败不停整路 |
 | OBS 请求谁先发 | `apps/desktop/src/main/link/obs-request-scheduler.ts` 的档位和 `pump`：切画面的请求单独一档，始终有位置；截图等画面发完再发 |
 | 自己恢复几次算到头 | `packages/core/src/output-recovery.ts` 一张表（2026-11-11）：声卡 1 分钟断流 5 次停这首歌，时间码一首歌失败 3 次这首歌不再发，等等。别处不写重试次数；每次恢复都标红、记日志 |
+| 画面失败怎么分级、补不补 | 分级只在 `packages/core/src/obs-program-session.ts` 的 `verdictOf`（2026-11-11）：做到了、撤回了、OBS 拒绝了、不确定（没回应，或发出去以后失败）。补不补只由 `packages/core/src/picture-reconcile.ts` 的 `judge` 定：失败的和不确定的都按此刻该有的画面补一次，排练时不补，OBS 断着时不补、不花次数；次数照上一行那张表，发出去那一刻才计数。每一项的状态列在 `NativeObsStatus.items`，状态面板「这首歌的画面」照着显示（`view-models/status-center.ts` 的 `pictureStatus`）。别处不自己重发画面动作（`output-rules.test.ts` 规则 2–4 守着） |
 | 欠着的关灯 | 规则在 `packages/core/src/lighting-off-ledger.ts`（2026-11-11）：停止关这首歌的执行器，换歌只关上一首独有的，正在用的绝不关。全应用一张清单，主人是主进程 `apps/desktop/src/main/link/lighting-off-service.ts`：节目、试听（`link:lighting-off`）、退出时的询问和演出状态都经它；没发出去的留着，控台重新连上后补发 1 次（次数在 `output-recovery.ts`），再按停止全部重发；关灯不过授权。控台确认以后按轮读回灯关了没有（2026-11-11）：只在已经连着的网页遥控会话上读，1–90 只用“控台在不在跟”那条会话，Button 区只在按键选了网页遥控时用 Button 会话，不在推杆页自己的会话上读，不为读回登录；等几秒、读几次只写在 `output-recovery.ts` 的 `LIGHTING_OFF_READ_BACK`；还在运行的标黄不标红，再按停止才重发，没读的不写日志、界面照旧。同一条网页遥控会话上的请求排队轮流发（`ma2-live-playback.ts` 的 `turn`），借别人的会话读只用 `peek`、`peekButtons`：看不懂的回答不关会话。别处不再自己发 Off、不另记“还欠着” |
 | 节目现在在哪一步、这时能做什么 | 规则在 `packages/core/src/show-state.ts` 的 `showGate`，状态由主进程 `apps/desktop/src/main/link/show-state-service.ts` 算（2026-11-11），界面只照着显示（`stores/show-state-store.ts`）。新的“播放时不能做”都问它，不再各处自己判断“在不在播放” |
 | 后台节目会话和工程版本 | 主进程 `apps/desktop/src/main/link/native-program-service.ts`（2026-11-11）：一个窗口页面一个长期的节目，页面第一次打开时检查授权，之后每一路输出照旧各自过授权。修改只经 `link:native-program-document` 送新的一版（界面 `runtime/program-document-feed.ts`）：一次只有一个在路上；开歌前先送最新一版，上一次没送进去的也在这时再送一次，别的时候不自己重送。一版只带改过的歌、删掉的歌、顺序和工程自己的字段（`packages/core/src/project-version-change.ts`，按是不是同一个对象来比），主进程只拼在它手里最新的那一版上，对不上就答复重送、界面整份送一次；增量和整份过同一套检查（每首歌和工程字段的 schema、整个工程的关系、和打开节目一样的文件检查）。整份在自己的 worker 里编码（`stores/project-codec.ts` 的 `programDocumentCodec`），不和保存排队。会开歌的控制等它前面的版本，停止和复位不等、并让还在等的开歌作废（主进程 `entry.turn`、界面 `turn`；哪些算开歌只在 `packages/schema/src/native-program.ts` 的 `nativeProgramStartsSong`）。拿着歌时这一版等停止以后才用。版本按 (sessionId, revision) 认，节目事件带着在播的版本，窗口靠它知道在播哪一版（`program-attachment.ts`）；事件序号由服务统一往上数，同一页换了节目也接得上。播放器上的选择不随修改变；声卡按一轮播放固定（`packages/core/src/native-program-player.ts` 的 `runOutput`）。只有换工程或路径、上次打开失败、退出取消以后才重新打开节目，别处不再因为工程变了就关掉重开（`program-session-rules.test.ts` 守着） |
