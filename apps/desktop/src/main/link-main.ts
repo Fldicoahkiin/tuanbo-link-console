@@ -179,6 +179,7 @@ import { NativePlayerUiPublisher } from './link/native-player-ui-publisher';
 import { NativeProgramHost } from './link/native-program-host';
 import { NativeProgramService } from './link/native-program-service';
 import { ShowStateService } from './link/show-state-service';
+import { LightingOffService } from './link/lighting-off-service';
 import { followWindowPage } from './link/window-page';
 import { NativePlaybackRequests } from './link/native-playback-requests';
 import { NativeObsHost } from './link/native-obs-host';
@@ -252,6 +253,8 @@ let nativeObsPreload: NativeObsPreloadPool | null = null;
 let nativeProgram: NativeProgramService | null = null;
 /** The show state's one live source (show-state-service.ts); built with the program it follows. */
 let showState: ShowStateService | null = null;
+/** The one list of lights-off still owed (design 01 R13): the program and the window's previews share it; the quit asks about it. */
+let lightingOff: LightingOffService | null = null;
 let nativeProgramHost: NativeProgramHost | null = null;
 /** Every MIDI port the window uses is opened here, in main, and only while it is in use. */
 let midiPorts: MidiPortBroker | null = null;
@@ -1003,6 +1006,14 @@ function registerIpc(
   handle('link:ma2-current-show', async () => { await ma2NetworkReady; return ma2Network.currentShow(); });
   // The program's lighting Off and its running state, as the license rules want them (program-license.ts).
   const programOutputs = programLicense(licenseGate, { ready: ma2NetworkReady, status: () => ma2Network.status(), send: sendMa2Cue });
+  const lightsOff = new LightingOffService({ console: programOutputs.network,
+    resending: count => { void logger.record({ level: 'warning', category: 'device', device: 'MA2', message: `控台重新连上了，补发 ${count} 条还没确认的关灯指令` })
+      .catch((error: unknown) => console.error('关灯补发日志未能保存', error)); },
+    failed: (message, song) => programFaults.closeFailed(message, { level: 'error', category: 'device', device: 'MA2', ...(song ? { itemId: song.itemId } : {}), message, result: 'failed' }) });
+  lightingOff = lightsOff;
+  app.once('will-quit', () => lightsOff.close());
+  // Off only: never refused for license (license-access.ts publicCalls).
+  handle('link:lighting-off', (_event, value: unknown) => lightsOff.receive(value));
   nativeProgram = new NativeProgramService((project, request, callbacks) => {
     // A channel that cannot join (OBS, timecode) repeats song after song until fixed: a warning the first time, then info.
     const notice = (message: string, itemId: string | null): void => {
@@ -1032,12 +1043,12 @@ function registerIpc(
         cancelNativeObsPreload: value => obsPreload.cancel(value),
         onNativeObsStatus: listener => { programObsListeners.add(listener); return () => { programObsListeners.delete(listener); }; }
       },
-      network: programOutputs.network
+      lighting: lightsOff
     });
     nativeProgramHost = host;
     return { controller: host.controller, close: async () => { await host.close(); if (nativeProgramHost === host) nativeProgramHost = null; } };
   }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput(), programOutputs.runningChanged, programFaults);
-  showState = new ShowStateService(nativeProgram, show => sendToRenderer('link:show-state', show));
+  showState = new ShowStateService(nativeProgram, show => sendToRenderer('link:show-state', show), lightsOff);
   handle('link:show-state-get', () => showState!.current());
   handle('link:show-activity', (_event, value: unknown) => { showState!.report(value); });
   // Session registration captures cancellation synchronously; output adapters
@@ -2303,7 +2314,9 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
       return true;
     },
     program: nativeProgram,
-    faults: programFaults,
+    // What the quit asks about is the lights-off list itself (R13): what the program's close owed and did not send, and
+    // any Off still owed from before (a stop, a song change, a preview), once every Off on its way was answered.
+    faults: { collect: async during => { await during(); await lightingOff?.settled(); return lightingOff?.quitMessages() ?? []; } },
     quitWithLightsOn: async lightsLeftOn => {
       // Asked like the audition's (2026-11-10); it is logged and shown in red as well.
       recordQuitStep('节目的灯光没能关闭', { error: lightsLeftOn.join('\n') });

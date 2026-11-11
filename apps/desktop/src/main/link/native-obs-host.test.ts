@@ -468,7 +468,7 @@ function program(endActionOrOptions: 'next' | 'stop' | ProgramOptions) {
     prepareNativeObs: request => requests.prepare(request), stopNativeObs: request => requests.stop(request),
     onNativeObsStatus: listener => { obsListeners.add(listener); return () => { obsListeners.delete(listener); }; },
     preloadNativeObs: () => Promise.resolve(), cancelNativeObsPreload: () => Promise.resolve()
-  }, { prepare: () => Promise.resolve(), cancelPreparation: () => undefined, release: () => Promise.resolve() });
+  }, { change: () => Promise.resolve({ failed: [] }), stop: () => Promise.resolve({ failed: [] }) });
   /** The music plays on from `from` to `to` ms (the end of the song is 2000 ms). */
   const playTo = async (from: number, to: number): Promise<void> => {
     const start = time - from;

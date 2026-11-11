@@ -1,4 +1,4 @@
-import { LightingOutputRelease, NativeProgramPlayer, type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi } from '@tb/core/link';
+import { NativeProgramPlayer, type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type ProgramLightingOutput } from '@tb/core/link';
 import type { LinkProject, NativePlayerControl, NativePlayerStatus } from '@tb/schema';
 import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
 import type { MidiClaim, MidiClaimOwner } from './midi-port-broker';
@@ -8,8 +8,9 @@ type AudioApi = Pick<LinkDesktopApi, 'prepareNativePlayback' | 'controlNativePla
 type Dependencies = {
   executable: string;
   api: AudioApi;
-  /** Switches the song's executors off when it stops; the console runs the lighting from the timecode. */
-  network: Pick<LinkDesktopApi, 'getMa2NetworkStatus' | 'playMa2Cue'>;
+  /** The application's one lights-off ledger (LightingOffService): the console runs the lighting from the timecode, and
+   * this switches off the executors a stop or a song change lets go (design 01 R13). */
+  lighting: ProgramLightingOutput;
   audio(): NativePlayerStatus | null;
   /** Windows MIDI outputs as listed now, checked again when the last listing failed: waits for a lost action MIDI port. */
   midiOutputs(): Promise<readonly { id: number; name: string }[]>;
@@ -76,7 +77,7 @@ export class NativeProgramHost {
       ...dependencies.api,
       controlNativePlayback: request => { this.interrupt(request); return dependencies.api.controlNativePlayback(request); },
       onNativePlaybackStatus: listener => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
-    }, new LightingOutputRelease(dependencies.network));
+    }, dependencies.lighting);
   }
 
   observe(status: NativePlayerStatus, qpc100ns: string | null): void {

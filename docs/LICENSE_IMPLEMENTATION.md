@@ -20,11 +20,12 @@
 | 哪些请求不过授权 | `apps/desktop/src/main/link/license-access.ts` 的 `needsProductLicense`，界面的 IPC 和后台节目都经它判断 |
 | 哪些 MIDI 不过授权 | `packages/core/src/midi-program.ts` 的 `midiMessageNeedsLicense`，按发出去的字节判断；界面的 MIDI 适配器（`link-midi-adapter.ts`）和后台节目（`native-midi-ports.ts`）都用它，两边一致由 [midi-license-rule.test.ts](../apps/desktop/src/renderer/src/registry/midi-license-rule.test.ts) 守着 |
 | 后台节目的关灯请求和运行状态怎么接到授权检查 | `apps/desktop/src/main/link/program-license.ts`，link-main 只调用它 |
+| 关灯由谁发 | 主进程唯一的关灯清单 `apps/desktop/src/main/link/lighting-off-service.ts`（2026-11-11，R13）：节目的停止和换歌、界面的试听（`link:lighting-off`，在 `needsProductLicense` 的免授权名单里）都经它，它再经 `program-license.ts` 的控台接法发 Off，所以 Off 照样不过授权 |
 | 授权由谁持有 | `LicenseAccess`：界面一份，后台节目一份 |
 
 没有保证的地方：停止后马上开下一首，如果下一首的准备比界面的“空闲”先到主进程，这一首仍按界面这一场的授权通过。0.5.9 之前只有一份会话授权时也是这样，这次没有改。
 
-停止后马上关闭后台节目（改了片段、重建播放器、关窗口）时，停止欠下的执行器 Off 在关闭时补发一次，不重试。补发失败时节目已经关了，播放器上不再显示，所以失败按错误写进运行日志，窗口还开着时用红色提示告诉操作员去控台上关掉这首歌的执行器（`main-process-errors.ts` 的 `closedProgramFaultReporter`）。没有窗口看得到播放器时（节目已关闭，或界面退出、重新加载后节目在后台接着播），补发的 Off 失败也是当场按错误写进运行日志，并在窗口里标红一次；界面正在重新加载时，等新页面打开节目时再显示。红字写这次 Off 所属的那首歌（不是正在放的歌），先说结果、再说原因、最后说怎么办，不重发；窗口开着时播放器里的提示也是这一句，日志记在那首歌上。
+停止后马上关闭后台节目（改了片段、重建播放器、关窗口）时，停止欠下的执行器 Off 在关闭时补发一次。2026-11-11 起（R13）没发出去的 Off 留在主进程的关灯清单里，控台重新连上后补发 1 次、再按停止全部重发（`docs/LIGHTING_WORKFLOW.md`「换歌关灯和欠着的关灯」），下面说的“不重发”只指关闭节目那一刻。补发失败时节目已经关了，播放器上不再显示，所以失败按错误写进运行日志，窗口还开着时用红色提示告诉操作员去控台上关掉这首歌的执行器（`main-process-errors.ts` 的 `closedProgramFaultReporter`）。没有窗口看得到播放器时（节目已关闭，或界面退出、重新加载后节目在后台接着播），补发的 Off 失败也是当场按错误写进运行日志，并在窗口里标红一次；界面正在重新加载时，等新页面打开节目时再显示。红字写这次 Off 所属的那首歌（不是正在放的歌），先说结果、再说原因、最后说怎么办，不重发；窗口开着时播放器里的提示也是这一句，日志记在那首歌上。
 
 界面重新加载（错误画面上的“重新进入工作区”）和界面进程意外退出走同一处处理（link-main 的 `releaseGonePage`；`window-page.ts` 跟着窗口里的页面）：新页面换上之后，才放开上一页占着的 MIDI 接口、主进程在等它回答的保存和节目。正在准备、播放或暂停的节目留在后台接着放，打开同一个工程就接回，不停歌，也不重新检查授权（上面第 3 条）；没在放的就关掉。只放行页面自己发起的同一网址重新加载，别的跳转（链接、拖进窗口的文件）一律拦下，也不放开任何东西。
 

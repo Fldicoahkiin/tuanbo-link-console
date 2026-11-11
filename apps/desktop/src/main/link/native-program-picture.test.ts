@@ -63,7 +63,7 @@ function rig(execute: (action: LinkAction) => Promise<void>, admit: () => boolea
     prepareNativeObs: request => requests.prepare(request), stopNativeObs: request => requests.stop(request),
     onNativeObsStatus: listener => { obsListeners.add(listener); return () => { obsListeners.delete(listener); }; },
     preloadNativeObs: request => pool?.preload(request) ?? Promise.resolve(), cancelNativeObsPreload: request => pool?.cancel(request) ?? Promise.resolve()
-  }, { prepare: () => Promise.resolve(), cancelPreparation: () => undefined, release: () => Promise.resolve() });
+  }, { change: () => Promise.resolve({ failed: [] }), stop: () => Promise.resolve({ failed: [] }) });
   /** The music plays on from `from` to `to` ms, one engine status every 20 ms. */
   const playTo = async (from: number, to: number): Promise<void> => {
     for (let at = from; at <= to; at += 20) { now = at; emit({ positionMs: at }); await new Promise(resolve => setTimeout(resolve, 0)); }

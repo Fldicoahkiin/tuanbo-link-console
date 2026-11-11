@@ -244,6 +244,9 @@ export type LinkDesktopApi = {
   checkMa2Capabilities(): Promise<import('@tb/schema').Ma2NetworkStatus>;
   playMa2Cue(payload: import('@tb/schema').Ma2PlaybackRequest): Promise<void>;
   cancelMa2Playback(sessionId: string): Promise<void>;
+  /** Lighting only the window runs (its previews, a stop pressed while following P1) tells the main process's one
+   * lights-off ledger what it uses and what it owes (link:lighting-off); the Offs that did not go out come back. */
+  oweLightingOff(request: import('@tb/schema').LightingOffRequest): Promise<import('@tb/schema').LightingOffResult>;
   playMa2Audition(payload: import('@tb/schema').Ma2AuditionRequest): Promise<void>;
   controlMa2Audition(payload: import('@tb/schema').Ma2AuditionControl): Promise<import('@tb/schema').Ma2AuditionState>;
   onMa2AuditionState(listener:(state:import('@tb/schema').Ma2AuditionState)=>void):()=>void;

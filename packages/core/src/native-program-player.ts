@@ -7,8 +7,8 @@ import type { LinkProject, NativePlayerControl, NativePlayerStatus, NativeObsPre
 import { nativeAudioAnalysis } from './native-audio-analysis';
 import type { PlaybackBoundary, PlaybackClock } from './program-player';
 import { emptyInternalPlayerState, type InternalPlayerDependencies, type InternalPlayerState } from './program-player';
-import type { LightingReleaseSong, ProgramLightingOutput } from './program-player';
-import { LightingReleaseFailure } from './lighting-output-release';
+import type { LightingOffOutcome, LitSong, ProgramLightingOutput } from './program-player';
+import { lightsLeftOnText } from './lighting-off-ledger';
 import { nativeProgramSnapshot } from './native-program-snapshot';
 import { programStart, type ProgramStart } from './program-start';
 import { optionalOutputReady } from './optional-output-ready';
@@ -94,13 +94,13 @@ export class NativeProgramPlayer {
   private sendingVolume = false;
   private preloadGeneration = 0;
   private selectedPreload: { request: NativeObsStop; itemId: string } | null = null;
-  /** A stop owes the song's Off until it went out once: from the queued stop, or from dispose when the player
-   * closes before that stop ran (it waited behind a seek, scrub or resume). Never sent twice, never retried.
-   * Whether a close sends an Off depends on this history: a later play does not settle the debt (what switching songs
-   * does to the lights is the user's pending decision 4). After a stop skipped behind a seek, scrub or resume and then a
-   * play, the next stop or close sends one Off with the plan LightingOutputRelease holds by then, the new song's
-   * executors when it has lighting. The same close without such a skipped stop sends none. */
-  private lightingOwed = false;
+  /** The song whose executors the console runs from this program's timecode: set as a song starts, let go by its stop
+   * (or by the next song, 第 4 题). The lights-off ledger of the main process decides what to switch off (R13). */
+  private lit: LitSong | null = null;
+  /** A stop was pressed and has not told the ledger yet: from the queued stop, or from dispose when the player closes
+   * before that stop ran (it waited behind a seek, scrub or resume). A song that starts meanwhile settles it: its change
+   * lets the previous song's executors go. A close without such a stop owes nothing. */
+  private stopOwed = false;
   /** The scrub still placing the song (its seek or its picture in flight). A pause or resume pressed meanwhile does not
    * cancel the picture it prepares at the new position: the last one pressed decides how the scrub ends, paused there
    * or playing on from there (2026-11-09). */
@@ -175,6 +175,8 @@ export class NativeProgramPlayer {
         mtcPortName: config.mtcPortName, check: !reuseSession });
       const item = this.project.rundown.find(entry => entry.id === itemId)!;
       for (const warning of prepared.warnings) this.reportUnavailable(warning);
+      // The previous timecode has stopped: the previous song's executors this one does not use go off, without waiting.
+      this.changeLighting(item.lighting ? { document: item.lighting, song: { itemId, title: item.title } } : null);
       this.allowMtc = prepared.allowMtc; this.picture = prepared.picture;
       const sendMtc = this.allowMtc && this.state.mtcEnabled;
       const midiPortName = sendMtc ? config.mtcPortName : null;
@@ -204,13 +206,9 @@ export class NativeProgramPlayer {
       if (!this.current(token)) { await this.command({ kind: 'stop' }); return; }
       if (this.mtcSuppressed && result.mtcPortName) await this.command({ kind: 'stop-mtc' });
       if (!this.current(token)) return;
-      // The console runs the lighting from the timecode; only the Off at stop is prepared here.
-      const prepareLighting = async (): Promise<void> => { if (item.lighting) {
-        try { await optionalOutputReady(this.lighting.prepare(item.lighting, { itemId, title: item.title }), () => this.lighting.cancelPreparation(), '停止时关灯'); }
-        catch (error) { this.lighting.cancelPreparation(); if (this.current(token)) this.startFault(`停止时可能关不掉这首歌的执行器：${toUserErrorMessage(error)}`); }
-      } };
       if (!this.current(token)) return;
-      await Promise.all([prepareLighting(), this.prepareRuntime(itemId, snapshot.positionMs, reuseSession, token), this.prepareObs(itemId, token)]);
+      // The console runs the lighting from the timecode; nothing of it is prepared here.
+      await Promise.all([this.prepareRuntime(itemId, snapshot.positionMs, reuseSession, token), this.prepareObs(itemId, token)]);
       if (!this.current(token)) return;
       // The volume may have changed while the song was prepared: it starts at the volume it has now.
       const target = this.outputVolume() / 100;
@@ -278,26 +276,40 @@ export class NativeProgramPlayer {
   }
   stop(): Promise<void> {
     const token = ++this.epoch; this.cancelScheduled(); this.update({ status: 'stopped', notice: null, fault: null, volumeOverride: null });
-    this.lightingOwed = true;
+    this.stopOwed = true;
     // Stop reaches the main service immediately if preparation has already
     // published its session; otherwise the queued prepare cannot start audio.
     const stopping = (this.requestedPreparation ? this.command({ kind: 'stop' }) : Promise.resolve()).catch(error => { if (this.current(token)) this.fail(error); });
-    return this.enqueue(token, async () => { await stopping; await this.releaseLighting(); await this.optionalRuntime(() => this.cancelPreload(), '节目准备没清理干净');
+    return this.enqueue(token, async () => { await stopping; await this.releaseLighting('stop'); await this.optionalRuntime(() => this.cancelPreload(), '节目准备没清理干净');
       await this.stopObs().catch((error: unknown) => this.pictureNotStopped(error, '画面清理失败')); await this.dependencies.stop(); this.runtimePrepared = false;
       if (this.current(token)) { this.boundary('pause'); this.update({ positionMs: 0, mtcSentPositionMs: null }); } });
   }
-  /** The Off a stop owes, sent once after the timecode stopped; nothing retries it. A failure is shown in the player
-   * and logged. When no window shows the player's state, after it closed or while its program plays on without a
-   * window (setWatched), the failure goes to the host (closedFault): in a window in red, and into the log as an error.
-   * Either way the text and the log name the song the Off was prepared for (LightingReleaseFailure), not the one
-   * playing now. */
-  private async releaseLighting(): Promise<void> {
-    if (!this.lightingOwed) return;
-    this.lightingOwed = false;
-    try { await this.lighting.release(); }
-    catch (error) {
-      if (!this.disposed) this.runtimePrepared = false;
-      const song = error instanceof LightingReleaseFailure ? error.song : null, message = lightsLeftOn(song, error);
+  /** The stop pressed tells the ledger once the timecode stopped: the song's executors go off, and every Off still owed
+   * is sent once more. What did not go out stays owed in the ledger (it resends once after the console connects). */
+  private async releaseLighting(cause: 'stop' | 'close'): Promise<void> {
+    if (!this.stopOwed) return;
+    this.stopOwed = false;
+    const lit = this.lit; this.lit = null;
+    const outcome = await this.lighting.stop(lit, cause).catch((error: unknown): LightingOffOutcome => ({ failed: [{ song: lit?.song ?? null, reason: toUserErrorReason(error) }] }));
+    if (outcome.failed.length && !this.disposed) this.runtimePrepared = false;
+    this.offsFailed(outcome);
+  }
+  /** A song starts in place of the one lit before (第 4 题): the ledger switches off what only the previous one used. */
+  private changeLighting(next: LitSong | null): void {
+    const previous = this.lit; this.lit = next; this.stopOwed = false;
+    if (!previous && !next) return;
+    void this.lighting.change(previous, next).catch((error: unknown): LightingOffOutcome => ({ failed: [{ song: previous?.song ?? null, reason: toUserErrorReason(error) }] }))
+      .then(outcome => this.offsFailed(outcome));
+  }
+  /** Offs that did not go out: shown in the player and logged. When no window shows the player's state, after it closed or
+   * while its program plays on without a window (setWatched), they go to the host (closedFault): in a window in red, and
+   * into the log as an error. Either way the text and the log name the song the Off was for, not the one playing now. */
+  private offsFailed(outcome: LightingOffOutcome): void {
+    const shown = new Set<string>();
+    for (const { song, reason } of outcome.failed) {
+      const message = lightsLeftOnText(song, reason);
+      if (shown.has(message)) continue;
+      shown.add(message);
       // Logged under the song the Off was for, which may not be the one in the player now.
       if (!this.disposed && this.watched) this.reportNotice(message, song?.itemId ?? null);
       else this.dependencies.closedFault(message, song?.itemId ?? null);
@@ -452,7 +464,7 @@ export class NativeProgramPlayer {
     const scheduled = run(() => this.cancelScheduled(false));
     const audio = run(() => this.requestedPreparation && this.native?.status !== 'error' ? this.command({ kind: 'stop' }) : undefined);
     // A stop still queued here never runs; the Off it owes goes out once the timecode has stopped, as the stop would.
-    const lighting = audio.then(() => this.releaseLighting(), () => this.releaseLighting());
+    const lighting = audio.then(() => this.releaseLighting('close'), () => this.releaseLighting('close'));
     // A picture, or a preselected one, that is not cleaned up never keeps the next program from opening or the app from
     // quitting (2026-11-09, 2026-11-10): a picture left on air is handed back, and the next song to start shows it; any
     // other failure is logged once here. Nor does the action MIDI that does not close (2026-11-11): the host logs it as
@@ -603,7 +615,7 @@ export class NativeProgramPlayer {
   private cancelScheduled(cancelObsPreparation = true): void {
     this.runtimePreparation?.abort();
     if (cancelObsPreparation && this.obsPreparing) void this.stopObs().catch((error: unknown) => this.pictureNotStopped(error, '取消画面准备失败'));
-    this.lighting.cancelPreparation(); this.finishing = false; this.lastPosition = -1; this.pendingPosition = null; this.volumePending = null; this.reflectGain = false;
+    this.finishing = false; this.lastPosition = -1; this.pendingPosition = null; this.volumePending = null; this.reflectGain = false;
   }
   private fail(error: unknown): void { ++this.epoch; this.cancelScheduled(); this.update({ status: 'error', error: toUserErrorMessage(error), errorTitle: this.state.status === 'preparing' ? '没有开始播放：准备失败' : '播放操作失败' }); if (this.native?.status !== 'error' && this.native?.status !== 'stopped') void this.command({ kind: 'stop' }).catch(cleanup => this.reportUnavailable(`停止音频失败：${toUserErrorMessage(cleanup)}`)); void this.dependencies.stop().catch(cleanup => this.reportUnavailable(`停止联动失败：${toUserErrorMessage(cleanup)}`)); }
   private boundary(event: PlaybackBoundary): void { for (const listener of this.boundaries) listener(event); }
@@ -621,10 +633,3 @@ function actionMidiLeftOpen(error: unknown): string {
   return `关闭节目时动作 MIDI 没有正常关掉，之后的歌照常播放。原因：${reason}。如果之后的歌没有发出动作 MIDI，请检查 MIDI 接口和线。`;
 }
 
-/** A stop's Off failed (2026-11-09): what happened, why, and what the operator does, in the player's notice or in red.
- * It names the song the Off was for; "这首歌" only when the failure does not say. The reason is only the reason: the
- * last sentence says what to do. */
-function lightsLeftOn(song: LightingReleaseSong | null, error: unknown): string {
-  const reason = toUserErrorReason(error).replace(/[。.；;\s]+$/u, '') || '未知错误';
-  return `${song?.title ? `「${song.title}」` : '这首歌'}的灯光没能完全关闭，控台上可能还亮着。原因：${reason}。请在控台上关掉这首歌的执行器。`;
-}

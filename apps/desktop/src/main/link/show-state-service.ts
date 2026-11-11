@@ -8,6 +8,9 @@ export type ShowProgramSource = {
   onStateChanged(listener: () => void): () => void;
 };
 
+/** The lights-off ledger as the show reads it (LightingOffService): an Off on its way keeps a stopped program stopping. */
+export type ShowLightingSource = { sending(): boolean; onChanged(listener: () => void): () => void };
+
 const noActivity: LinkShowActivity = { version: 1, p1: null, preview: false };
 
 /**
@@ -15,17 +18,20 @@ const noActivity: LinkShowActivity = { version: 1, p1: null, preview: false };
  * the background program and of what the window reports (P1 following, its previews), never stored anywhere else. The
  * window mirrors it (useShowStateStore) to disable what has to wait; the main process asks `gate` again and has the
  * last word. What the window reported goes with its page: P1 following and the previews end with the page.
- * Not yet an input: the Off a stop still owes (`lightingOffOwed`). The player keeps that to itself until the lights-off
- * ledger takes it over (01 R13); until then a stopping internal program shows as idle, as it did before.
+ * `lighting`: the lights-off ledger (01 R13). `lightingOffOwed` is an Off still on its way to the console: the stop is
+ * not finished until the console answered. An Off that did not go out and waits for the console does not hold the show:
+ * waiting is not failing (AGENTS §4), it stays red in the ledger instead.
  */
 export class ShowStateService {
   private activity: LinkShowActivity = noActivity;
   private show: ShowState;
   private published: string;
 
-  constructor(private readonly program: ShowProgramSource, private readonly publish: (show: LinkShowState) => void) {
+  constructor(private readonly program: ShowProgramSource, private readonly publish: (show: LinkShowState) => void,
+    private readonly lighting: ShowLightingSource | null = null) {
     this.show = this.derive(); this.published = JSON.stringify(this.show);
     program.onStateChanged(() => this.update());
+    lighting?.onChanged(() => this.update());
   }
 
   current(): ShowState { return this.show; }
@@ -48,7 +54,7 @@ export class ShowStateService {
   private derive(): ShowState {
     const program = this.program.snapshot();
     const internal: ShowInputs['internal'] = program ? { status: program.state.status, itemId: program.state.itemId,
-      positionMs: program.state.positionMs, durationMs: program.state.durationMs, lightingOffOwed: false } : null;
+      positionMs: program.state.positionMs, durationMs: program.state.durationMs, lightingOffOwed: this.lighting?.sending() ?? false } : null;
     const p1 = this.activity.p1 && this.activity.p1.state !== 'idle' ? { state: this.activity.p1.state, itemId: this.activity.p1.itemId } : null;
     return deriveShowState({ internal, p1, preview: this.activity.preview,
       program: program ? { projectPath: program.projectPath, projectId: program.projectId, watched: program.watched } : null });

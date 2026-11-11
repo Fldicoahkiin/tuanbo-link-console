@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { LightingOutputRelease, lightingTimeOrigin, mtcOutputSettings } from '@tb/core/link';
+import { lightingTimeOrigin, mtcOutputSettings } from '@tb/core/link';
 import type { LightingDocument, MtcFrameRate } from '@tb/schema';
 import { MediaMtcOutput } from '../../registry/media-mtc-output';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -8,22 +8,24 @@ import { reportCoordinatorError } from './runtime-action-log';
 /**
  * The lighting of an editor preview: MIDI timecode from the song's MTC start, so the console's Timecode show
  * runs the lighting the way the show will. Since 2026-11-01 that is the only way a song drives lighting; the
- * timeline itself is never sent. Stopping switches the song's executors off, as formal playback does.
+ * timeline itself is never sent. Stopping switches the song's executors off, as formal playback does: the main process's
+ * one lights-off ledger (lighting-off-service.ts, design 01 R13) is told which executors the preview runs and, at stop,
+ * owes their Off; what did not go out stays owed there and is sent once more when the console connects.
  * `mtcOrigin` is the song's MTC start, the one the program sends (2026-10-26: P1-follow previews used to
  * start from the console binding, 0 for a song made in the software). Without it the binding's start is used.
  */
 export function useLightingPreview(input: { enabled: boolean; document: LightingDocument | undefined; mtcOrigin?: (() => number) | undefined; audioRef: RefObject<HTMLAudioElement>; playing: boolean; frameRate: MtcFrameRate; onError: (message: string) => void }): { ready: boolean; stop: () => Promise<void> } {
-  /** The Off of the last preview that played lighting, sent when the operator stops. */
-  const ownedRelease = useRef<LightingOutputRelease | null>(null);
+  /** The last preview that played lighting: its executors' Off is owed when the operator stops. */
+  const ownedRelease = useRef<{ document: LightingDocument } | null>(null);
   const [ready, setReady] = useState(false);
   const latest = useRef(input); latest.current = input;
   const stop = async (): Promise<void> => {
     const release = ownedRelease.current; ownedRelease.current = null;
-    if (release) await release.release();
+    if (release) await owePreviewOff(release.document);
   };
   useEffect(() => () => {
     const release = ownedRelease.current; ownedRelease.current = null;
-    void release?.release().catch((error: unknown) => {
+    if (release) void owePreviewOff(release.document).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       latest.current.onError(message);
       reportCoordinatorError(message, failure => latest.current.onError(failure));
@@ -35,7 +37,7 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
     const hasLightingContent = Boolean(document.ma2Bindings?.length) || document.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.kind !== 'empty-cue')));
     const mtc = new MediaMtcOutput();
     // A replaced preview is never released any more: only the latest one switches its executors off.
-    const release = input.enabled ? new LightingOutputRelease({ getMa2NetworkStatus: () => window.tbLink.getMa2NetworkStatus(), playMa2Cue: request => window.tbLink.playMa2Cue(request) }) : null;
+    const release = input.enabled ? { document } : null;
     if (release) ownedRelease.current = release;
     let seekAudio: HTMLAudioElement | null = null;
     let cancelled = false; let timer: ReturnType<typeof setInterval> | null = null;
@@ -57,7 +59,8 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
       const originMs = sendsMtc ? (latest.current.mtcOrigin ?? (() => lightingTimeOrigin(document)))() : 0;
       const audio = input.audioRef.current;
       if (!audio || !audio.getAttribute('src')) { if (input.enabled) throw new Error('请先给节目添加音乐，再开启灯光试听'); return; }
-      if (release) await release.prepare(document);
+      // Its executors are in use now: an Off still owed for them (an earlier stop) is not sent.
+      if (release) await window.tbLink.oweLightingOff({ version: 1, source: 'preview', phase: 'start', document, song: null });
       if (!current()) { cleanup(); return; }
       if (sendsMtc) {
         // The same port and send mode as formal playback: the preview fires the lights the way the show will.
@@ -77,7 +80,13 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
       }, 5);
     };
     void start().catch((error: unknown) => { cleanup(); if (!cancelled) fail(error); });
-    return () => { cancelled = true; release?.cancelPreparation(); cleanup(); };
+    return () => { cancelled = true; cleanup(); };
   }, [input.playing, input.audioRef, input.enabled]);
   return { ready: !input.enabled || !input.document?.tracks.length || ready, stop };
+}
+
+/** The preview stopped: the ledger owes its executors' Off. Throws with why when one did not go out. */
+async function owePreviewOff(document: LightingDocument): Promise<void> {
+  const result = await window.tbLink.oweLightingOff({ version: 1, source: 'preview', phase: 'stop', document, song: null });
+  if (result.failed.length) throw new Error([...new Set(result.failed.map(failure => failure.reason))].join('；'));
 }

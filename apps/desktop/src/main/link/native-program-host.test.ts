@@ -10,6 +10,7 @@ import { NativeAudioCache } from './native-audio-cache';
 import { NativePlayerService } from './native-player-service';
 import { probeWindowsMidi } from './windows-midi-health';
 import { NativeProgramHost } from './native-program-host';
+import { LightingOffService } from './lighting-off-service';
 
 const windowsTest = it.skipIf(process.platform !== 'win32' || process.env.TBLINK_NATIVE_ENGINE_TEST !== '1');
 
@@ -44,8 +45,8 @@ windowsTest('正式后台宿主使用真实 WASAPI 换歌、暂停恢复；空�
       getNativePlaybackDevices: () => service.devices(), prepareNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')),
       stopNativeObs: () => Promise.resolve(), onNativeObsStatus: () => () => undefined,
       preloadNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')), cancelNativeObsPreload: () => Promise.resolve() },
-    network: { getMa2NetworkStatus: () => Promise.reject(new Error('空灯光不应访问控台')),
-      playMa2Cue: () => Promise.reject(new Error('隔离测试禁止网络灯光输出')) }
+    lighting: new LightingOffService({ console: { getMa2NetworkStatus: () => Promise.reject(new Error('空灯光不应访问控台')),
+      playMa2Cue: () => Promise.reject(new Error('隔离测试禁止网络灯光输出')) }, resending: () => undefined, failed: message => errors.push(message) })
   });
   host.controller.toggleMtc();
   try {
@@ -91,8 +92,8 @@ windowsTest('44.1kHz 真实引擎曲尾不在整采样上时，灯光按引擎�
       getNativePlaybackDevices: () => service.devices(), prepareNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')),
       stopNativeObs: () => Promise.resolve(), onNativeObsStatus: () => () => undefined,
       preloadNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')), cancelNativeObsPreload: () => Promise.resolve() },
-    network: { getMa2NetworkStatus: () => Promise.reject(new Error('空灯光不应访问控台')),
-      playMa2Cue: () => Promise.reject(new Error('隔离测试禁止网络灯光输出')) }
+    lighting: new LightingOffService({ console: { getMa2NetworkStatus: () => Promise.reject(new Error('空灯光不应访问控台')),
+      playMa2Cue: () => Promise.reject(new Error('隔离测试禁止网络灯光输出')) }, resending: () => undefined, failed: message => errors.push(message) })
   });
   host.controller.toggleMtc();
   try {

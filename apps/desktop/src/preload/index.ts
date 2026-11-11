@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { ma2RenameRequestSchema, ma2RenameResultSchema } from '@tb/schema';
 import { linkDocumentStateSchema, linkSaveRequestSchema, linkUnsavedChangesDecisionSchema } from '@tb/schema';
 import { linkShowActivitySchema, linkShowStateSchema } from '@tb/schema';
+import { lightingOffRequestSchema, lightingOffResultSchema } from '@tb/schema';
 import { ma2LayoutReadRequestSchema, ma2LayoutSnapshotSchema, ma2NewCueRequestSchema, ma2NewCueResultSchema } from '@tb/schema';
 import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema, ma2CueDeletePlanSchema, ma2CueDeleteResultSchema } from '@tb/schema';
 import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema, nativeProgramClosedSchema } from '@tb/schema';
@@ -121,6 +122,7 @@ const tbLink: LinkDesktopBridgeApi = {
   checkMa2Capabilities: () => invoke('link:ma2-capabilities'),
   playMa2Cue: (payload) => invoke('link:ma2-play-cue', payload),
   cancelMa2Playback: (sessionId) => invoke('link:ma2-play-cancel', sessionId),
+  oweLightingOff: async request => lightingOffResultSchema.parse(await invoke('link:lighting-off', lightingOffRequestSchema.parse(request))),
   playMa2Audition: request=>invoke('link:ma2-audition-play',ma2AuditionRequestSchema.parse(request)),
   controlMa2Audition: async request=>ma2AuditionStateSchema.parse(await invoke('link:ma2-audition-control',ma2AuditionControlSchema.parse(request))),
   onMa2AuditionState: listener=>{const receive=(_event:Electron.IpcRendererEvent,input:unknown):void=>listener(ma2AuditionStateSchema.parse(input));ipcRenderer.on('link:ma2-audition-state',receive);return()=>ipcRenderer.removeListener('link:ma2-audition-state',receive);},

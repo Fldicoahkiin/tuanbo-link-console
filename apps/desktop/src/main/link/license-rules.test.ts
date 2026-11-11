@@ -6,6 +6,7 @@ import { emptyInternalPlayerState, midiMessageNeedsLicense, type PlaybackBoundar
 import { LicenseAccess, needsProductLicense } from './license-access';
 import { NativeProgramService } from './native-program-service';
 import { NativeProgramHost } from './native-program-host';
+import { LightingOffService } from './lighting-off-service';
 import { programLicense } from './program-license';
 import { closedProgramFaultReporter } from './main-process-errors';
 import { followWindowPage } from './window-page';
@@ -226,13 +227,15 @@ async function programHost(endAction: 'pause' | 'stop' = 'pause') {
     audio = next; return Promise.resolve(next);
   };
   const hosts: NativeProgramHost[] = [];
+  // link-main's one lights-off ledger, on the program's console wiring (program-license.ts).
+  const lightsOff = new LightingOffService({ console: wiring.network, resending: () => undefined, failed: () => undefined });
   const service = new NativeProgramService((opened, request, callbacks) => {
     const host = new NativeProgramHost(opened, request.projectPath, request.revision, {
       executable: 'tblink-playback.exe', audio: () => audio, midiOutputs: () => Promise.resolve([]), authorize: () => Promise.resolve(),
       configuration: () => ({ outputDeviceId: 'default', mtcPortName: null, audioSampleRate: 48000, preload: false }), preciseSeeking: () => false,
       changed: state => callbacks.changed(state), midiChanged: () => undefined, midiRecovered: () => undefined,
       notice: (message, itemId) => { notices.push({ message, itemId }); }, closedFault: (message, itemId) => callbacks.closedFault(message, itemId),
-      network: wiring.network,
+      lighting: lightsOff,
       api: { prepareNativePlayback: prepareAudio, controlNativePlayback: controlAudio,
         getNativePlaybackDevices: () => Promise.resolve({ protocol: 4, audio: [], midiOutputs: [], midiInputs: [] }),
         prepareNativeObs: (request: NativeObsPrepare) => Promise.resolve({ version: 1, sessionId: request.sessionId, generation: request.generation,
@@ -282,33 +285,34 @@ describe('停止后马上关闭后台节目（改了片段、重建播放器）�
   });
 
   // 修复前：红字里的歌名取自关闭那一刻在放的「串场」，操作员会去找一首根本没有执行器的歌。
-  it('补发的是上一首的关灯时，红字写上一首的歌名：定位时按停止被跳过，接着放不带灯光的「串场」，然后关闭节目', async () => {
+  // 第 4 题（R13）：上一首的 Off 在换到「串场」时就发（不带灯光的「串场」用不上它的执行器），不再等到关闭节目。
+  it('换歌关的是上一首的灯：定位时按停止被跳过，接着放不带灯光的「串场」时就发「开场」的 Off，不检查授权；之后关闭节目不再补发', async () => {
     const f = await programHost();
     await f.play('song');
     const release = f.hold();
     const seeking = f.player().seek(2000), stopping = f.player().stop(), next = f.player().play('interlude');
+    f.lapse(lapsed.到期!);
     release(); await Promise.all([seeking, stopping, next]);
-    expect(f.send).not.toHaveBeenCalled();
-    f.send.mockRejectedValueOnce(new Error('MA2 没有回应'));
+    await vi.waitFor(() => expect(f.send.mock.calls.map(([request]) => request.action)).toEqual([off]));
     await f.service.close();
-    expect(f.send.mock.calls.map(([request]) => request.action)).toEqual([off]);
-    expect(f.toWindow).toHaveBeenCalledExactlyOnceWith('link:main-process-error', lightsLeftOn('开场'));
-    expect(f.record).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ level: 'error', itemId: 'song', message: lightsLeftOn('开场') }));
+    expect(f.send).toHaveBeenCalledOnce();
+    expect(f.toWindow).not.toHaveBeenCalled();
   });
 });
 
 // 修复前：窗口开着时，播放器里只写“灯光没能完全关闭：原因”，日志记在正在放的「串场」上；操作员会去找一首没有执行器的歌。
 describe('窗口开着时停止的关灯没发出去，播放器里的提示和日志写这份 Off 所属的歌', () => {
-  it('补发的是上一首「开场」的 Off：提示写「开场」和怎么办，日志记在「开场」上，不另外标红', async () => {
+  // 第 4 题（R13）：「开场」的 Off 在换到「串场」时发；没发出去的留在清单里，再按一次停止时重发。
+  it('换歌时上一首「开场」的 Off 没发出去：提示写「开场」和怎么办，日志记在「开场」上，不另外标红；再按停止重发一次', async () => {
     const f = await programHost();
     await f.play('song');
     const release = f.hold();
+    f.send.mockRejectedValueOnce(new Error('MA2 没有回应'));
     const seeking = f.player().seek(2000), stopping = f.player().stop(), next = f.player().play('interlude');
     release(); await Promise.all([seeking, stopping, next]);
-    expect(f.send).not.toHaveBeenCalled();
-    f.send.mockRejectedValueOnce(new Error('MA2 没有回应'));
+    await vi.waitFor(() => expect(f.notices.filter(({ message }) => message.includes('灯光'))).toEqual([{ message: lightsLeftOn('开场'), itemId: 'song' }]));
     await f.player().stop();
-    expect(f.send.mock.calls.map(([request]) => request.action)).toEqual([off]);
+    expect(f.send.mock.calls.map(([request]) => request.action)).toEqual([off, off]);
     expect(f.notices.filter(({ message }) => message.includes('灯光'))).toEqual([{ message: lightsLeftOn('开场'), itemId: 'song' }]);
     expect(f.toWindow).not.toHaveBeenCalled();
     expect(f.record).not.toHaveBeenCalled();

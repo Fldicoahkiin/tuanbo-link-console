@@ -49,15 +49,20 @@ export type AudioAnalysis = {
 /** The rundown song whose lighting a lights-off belongs to. */
 export type LightingReleaseSong = { itemId: string; title: string };
 
+/** A song's lighting as the program runs it: its document, and the rundown song it belongs to. */
+export type LitSong = { document: LightingDocument; song: LightingReleaseSong };
+/** The Offs of one request that did not go out, each with the song it was for and why. They stay owed. */
+export type LightingOffOutcome = { failed: { song: LightingReleaseSong | null; reason: string }[] };
+
 /** A playing song's lighting is the console's Timecode show following the song's timecode (2026-11-01: the
- * MIDI and network playback modes were removed). The player itself only switches the song's executors off
- * when it stops. */
+ * MIDI and network playback modes were removed). The player only tells the lights-off ledger of the main process
+ * (lighting-off-service.ts, design 01 R13) which song's executors it uses and when it lets them go; the ledger decides
+ * what to switch off and keeps what did not go out. Both resolve once the Offs they asked for were answered. */
 export type ProgramLightingOutput = {
-  /** Notes where the Off goes when `song` stops; sends nothing. */
-  prepare(document: LightingDocument, song: LightingReleaseSong): Promise<void>;
-  /** Drops a preparation still under way; one that finished is kept for the stop. */
-  cancelPreparation(): void;
-  /** The song stopped: its executors are switched off. A failure is a LightingReleaseFailure naming the song the
-   * Off was prepared for, which is not always the song playing now. */
-  release(): Promise<void>;
+  /** `next` starts in place of `previous` (第 4 题): only what `previous` used and `next` does not is switched off, and
+   * the executors of `next` are in use now. Called after the previous timecode stopped; the start does not wait for it. */
+  change(previous: LitSong | null, next: LitSong | null): Promise<LightingOffOutcome>;
+  /** The song stopped (or the program closed after a stop it owed): every executor of `song` is switched off, and every
+   * Off still owed is sent once more (pressing stop again). */
+  stop(song: LitSong | null, cause: 'stop' | 'close'): Promise<LightingOffOutcome>;
 };

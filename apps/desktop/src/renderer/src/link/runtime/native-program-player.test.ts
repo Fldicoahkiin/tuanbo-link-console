@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, lightingDocumentSchema, linkCueSchema, parseLinkProject, type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus } from '@tb/schema';
-import { LightingReleaseFailure, NativeProgramPlayer, ObsPictureLeftover, type ProgramLightingOutput } from '@tb/core/link';
+import { NativeProgramPlayer, ObsPictureLeftover, type LightingOffOutcome, type ProgramLightingOutput } from '@tb/core/link';
 import { emptyInternalPlayerState } from '@tb/core/link';
 import { nativeProgramSnapshot } from '@tb/core/link';
 import type { NativeObsPreload } from '@tb/schema';
@@ -48,7 +48,8 @@ function fixture() {
     stop: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()), resolveAudio: vi.fn(() => Promise.resolve('unused')),
     configuration: () => ({ outputDeviceId: 'default', mtcPortName: 'TEST', audioSampleRate: 48000 as const }),
     changed: (next: typeof state) => { state = next; }, notice: vi.fn(), closedFault: vi.fn() };
-  const lighting = { prepare: vi.fn<ProgramLightingOutput['prepare']>(() => Promise.resolve()), cancelPreparation: vi.fn<ProgramLightingOutput['cancelPreparation']>(), release: vi.fn<ProgramLightingOutput['release']>(() => Promise.resolve()) };
+  // The main process's lights-off ledger (LightingOffService) as the player sees it: told what a start uses and a stop lets go.
+  const lighting = { change: vi.fn<ProgramLightingOutput['change']>(() => Promise.resolve({ failed: [] })), stop: vi.fn<ProgramLightingOutput['stop']>(() => Promise.resolve({ failed: [] })) };
   const player = new NativeProgramPlayer(project, 'C:/test/project.tblink', 7, deps, api, lighting);
   return { player, project, deps, api, lighting, emit, state: () => state };
 }
@@ -144,7 +145,7 @@ it('随时可播放：开播检查不过的歌照发本曲起始码的时间码�
     pairs: {}, failures: [], selectedTarget: null, query: '', filter: 'all', message: '' };
   await f.player.play('song-0');
   expect(f.api.prepareNativePlayback.mock.calls[0]?.[0]).toMatchObject({ midiPortName: 'TEST', snapshot: { offsetMs: 480000 } });
-  expect(f.lighting.prepare).toHaveBeenCalledOnce();
+  expect(f.lighting.change).toHaveBeenCalledOnce();
   expect(f.state()).toMatchObject({ status: 'playing', fault: null }); expect(f.state().notice).toMatch(/^控台 Timecode 2 从 .*对不上.*；时间码照常发送(；|$)/);
   await f.player.seek(3000);
   expect(f.api.prepareNativePlayback.mock.calls[1]?.[0].midiPortName).toBe('TEST'); expect(f.state().fault).toBeNull();
@@ -155,18 +156,19 @@ it('随时可播放：开播检查不过的歌照发本曲起始码的时间码�
   await f.player.dispose();
 });
 
-it('播放只发时间码：旧工程存成网络输出的歌也照发时间码，灯光只准备停止时的关闭，停止时释放本曲执行器', async () => {
+it('播放只发时间码：旧工程存成网络输出的歌也照发时间码，开播只告诉关灯清单这首歌在用的执行器，停止时释放本曲执行器', async () => {
   const f = fixture(), lighting = lightingDocumentSchema.parse({ ...createLightingDocument(), outputMode: 'network' });
   lighting.tracks = [{ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {},
     clips: [{ id: 'clip', name: '编排', start: 0, duration: 5000, timeLock: 'time', muted: false, events: [{ id: 'cue', kind: 'ma2', at: 1000, sequence: 1, executor: '1.101', cue: '1', action: 'goto', label: '开场', runMode: 'independent' }] }] }];
   f.project.rundown[0]!.lighting = lighting;
   await f.player.play('song-0');
   expect(f.api.prepareNativePlayback.mock.calls[0]?.[0].midiPortName).toBe('TEST');
-  expect(f.lighting.prepare.mock.calls[0]?.[0]).toMatchObject({ outputMode: 'timecode' });
+  expect(f.lighting.change.mock.calls[0]?.[1]?.document).toMatchObject({ outputMode: 'timecode' });
   expect(f.state().fault).toBeNull();
-  await f.player.stop(); expect(f.lighting.release).toHaveBeenCalledOnce();
-  // The Off plan knows which song it is for: the failure names that song, not whichever plays when it goes out.
-  expect(f.lighting.prepare).toHaveBeenCalledWith(lighting, { itemId: 'song-0', title: '音频 0' });
+  // The Off knows which song it is for: the failure names that song, not whichever plays when it goes out.
+  const song0 = { document: lighting, song: { itemId: 'song-0', title: '音频 0' } };
+  expect(f.lighting.change).toHaveBeenCalledExactlyOnceWith(null, song0);
+  await f.player.stop(); expect(f.lighting.stop).toHaveBeenCalledExactlyOnceWith(song0, 'stop');
   await f.player.dispose();
 });
 
@@ -187,11 +189,11 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
     const closing = f.player.dispose();
     await vi.waitFor(() => expect(f.api.controlNativePlayback.mock.calls.filter(([command]) => command.kind === 'stop')).toHaveLength(3));
     for (let tick = 0; tick < 10; tick++) await Promise.resolve();
-    expect(f.lighting.release).not.toHaveBeenCalled();
+    expect(f.lighting.stop).not.toHaveBeenCalled();
     audioStopped.open();
-    await vi.waitFor(() => expect(f.lighting.release).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(f.lighting.stop).toHaveBeenCalledOnce());
     preparing.open(); await Promise.all([seeking, stopping, closing]);
-    expect(f.lighting.release).toHaveBeenCalledOnce();
+    expect(f.lighting.stop).toHaveBeenCalledOnce();
   });
 
   it('拖动定位在等画面时停止并销毁：关一次执行器', async () => {
@@ -204,9 +206,9 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
     const scrubbing = f.player.scrub('song-0', 2000);
     await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledTimes(2));
     const stopping = f.player.stop(), closing = f.player.dispose();
-    await vi.waitFor(() => expect(f.lighting.release).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(f.lighting.stop).toHaveBeenCalledOnce());
     picture.open(); await Promise.all([scrubbing, stopping, closing]);
-    expect(f.lighting.release).toHaveBeenCalledOnce();
+    expect(f.lighting.stop).toHaveBeenCalledOnce();
   });
 
   it('继续播放在准备 MIDI 时停止并销毁：关一次执行器', async () => {
@@ -215,23 +217,23 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
     const resuming = f.player.resume();
     await vi.waitFor(() => expect(f.deps.prepare).toHaveBeenCalledTimes(2));
     const stopping = f.player.stop(), closing = f.player.dispose();
-    await vi.waitFor(() => expect(f.lighting.release).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(f.lighting.stop).toHaveBeenCalledOnce());
     midi.open(); await Promise.all([resuming, stopping, closing]);
-    expect(f.lighting.release).toHaveBeenCalledOnce();
+    expect(f.lighting.stop).toHaveBeenCalledOnce();
   });
 
   it('停止已经关过灯，之后销毁不再发第二次', async () => {
     const f = lit(); await f.player.play('song-0');
     await f.player.stop(); await f.player.dispose();
-    expect(f.lighting.release).toHaveBeenCalledOnce();
+    expect(f.lighting.stop).toHaveBeenCalledOnce();
   });
 
   // 修复前：播放器关了以后，状态不再发给任何界面，关灯失败只写进运行日志（第二次起只是 info），屏幕上什么都没有。
   // 这里只看播放器把失败交给宿主（closedFault）；宿主在窗口里标红、按错误记录，由 license-rules.test.ts 和
   // main-process-errors.test.ts 守着。文案先说结果，再说原因，最后说怎么办（docs/UI_COPY_GUIDE.md）。
-  const closedOff = '「音频 0」的灯光没能完全关闭，控台上可能还亮着。原因：关灯指令没有发送：控台连接变了。请在控台上关掉这首歌的执行器。';
-  /** What LightingOutputRelease rejects with: the reason, and the song the Off was prepared for. */
-  const refused = (itemId = 'song-0', title = '音频 0') => new LightingReleaseFailure({ itemId, title }, new Error('关灯指令没有发送：控台连接变了'));
+  const closedOff = '「音频 0」的灯光没能完全关闭，控台上可能还亮着。原因：现在连着的不是原来那台控台，关灯指令没有发送。请在控台上关掉这首歌的执行器。';
+  /** What the lights-off ledger answers when the Off did not go out: the reason, and the song the Off was for. */
+  const refused = (itemId = 'song-0', title = '音频 0'): LightingOffOutcome => ({ failed: [{ song: { itemId, title }, reason: '现在连着的不是原来那台控台，关灯指令没有发送' }] });
 
   it('销毁时补发的关灯失败交给宿主，不再只写日志；不重试，也不让关闭播放器失败', async () => {
     const f = lit(); await f.player.play('song-0');
@@ -239,32 +241,32 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
     f.api.prepareNativePlayback.mockImplementationOnce(async request => { await preparing.promise; return original(request); });
     const seeking = f.player.seek(3000);
     await vi.waitFor(() => expect(f.api.prepareNativePlayback).toHaveBeenCalledTimes(2));
-    f.lighting.release.mockRejectedValueOnce(refused());
+    f.lighting.stop.mockResolvedValueOnce(refused());
     const stopping = f.player.stop(), closing = f.player.dispose();
-    await vi.waitFor(() => expect(f.lighting.release).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(f.lighting.stop).toHaveBeenCalledOnce());
     preparing.open();
     await expect(closing).resolves.toBeUndefined(); await Promise.all([seeking, stopping]);
     expect(f.deps.closedFault).toHaveBeenCalledExactlyOnceWith(closedOff, 'song-0');
     expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('灯光没能完全关闭'))).toEqual([]);
-    expect(f.lighting.release).toHaveBeenCalledOnce();
+    expect(f.lighting.stop).toHaveBeenCalledOnce();
   });
 
   it('停止正在关灯时播放器被销毁：关灯失败同样交给宿主，只发一次', async () => {
     const f = lit(); await f.player.play('song-0');
-    let fail!: (error: Error) => void;
-    f.lighting.release.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = reject; }));
+    let fail!: () => void;
+    f.lighting.stop.mockImplementationOnce(() => new Promise<LightingOffOutcome>(resolve => { fail = () => resolve(refused()); }));
     const stopping = f.player.stop();
-    await vi.waitFor(() => expect(f.lighting.release).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(f.lighting.stop).toHaveBeenCalledOnce());
     const closing = f.player.dispose();
-    fail(refused());
+    fail();
     await Promise.all([stopping, closing]);
     expect(f.deps.closedFault).toHaveBeenCalledExactlyOnceWith(closedOff, 'song-0');
-    expect(f.lighting.release).toHaveBeenCalledOnce();
+    expect(f.lighting.stop).toHaveBeenCalledOnce();
   });
 
   it('播放器还开着时停止的关灯失败显示在播放器里，和红字一样写明哪首歌、怎么办，不另外弹窗', async () => {
     const f = lit(); await f.player.play('song-0');
-    f.lighting.release.mockRejectedValueOnce(refused());
+    f.lighting.stop.mockResolvedValueOnce(refused());
     await f.player.stop();
     expect(f.state().notice).toContain(closedOff);
     expect(f.deps.notice).toHaveBeenCalledWith(closedOff, 'song-0');
@@ -272,52 +274,60 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
     expect(f.deps.closedFault).not.toHaveBeenCalled();
   });
 
-  // 修复前：播放器开着时只写“灯光没能完全关闭：原因”，不说是哪首歌、该怎么办，日志还记在正在放的歌上；补发的是上一首的
-  // Off 时，操作员会去找一首根本没有执行器的歌。
-  it('播放器开着时补发的是上一首的关灯：提示写上一首的歌名，日志也记在上一首', async () => {
+  // 修复前：播放器开着时只写“灯光没能完全关闭：原因”，不说是哪首歌、该怎么办，日志还记在正在放的歌上；关的是上一首的
+  // Off 时，操作员会去找一首根本没有执行器的歌。第 4 题（R13）以后，上一首的 Off 在换歌时就发，不再等到下一次停止或关闭。
+  it('播放器开着时换歌关的是上一首的灯：提示写上一首的歌名，日志也记在上一首；之后停止和关闭不再发上一首的', async () => {
     const f = lit(); await f.player.play('song-0');
     const preparing = gate(), original = f.api.prepareNativePlayback.getMockImplementation()!;
     f.api.prepareNativePlayback.mockImplementationOnce(async request => { await preparing.promise; return original(request); });
     const seeking = f.player.seek(3000);
     await vi.waitFor(() => expect(f.api.prepareNativePlayback).toHaveBeenCalledTimes(2));
+    f.lighting.change.mockResolvedValueOnce(refused());
     const stopping = f.player.stop(), next = f.player.play('song-1');
     preparing.open(); await Promise.all([seeking, stopping, next]);
     expect(f.state()).toMatchObject({ itemId: 'song-1', status: 'playing' });
-    f.lighting.release.mockRejectedValueOnce(refused());
-    await f.player.stop();
-    expect(f.state().notice).toContain(closedOff);
+    const song0 = { document: f.project.rundown[0]!.lighting!, song: { itemId: 'song-0', title: '音频 0' } };
+    // The stop skipped behind the seek: the song change lets song 0's executors go, song 1 has no lighting.
+    expect(f.lighting.change.mock.calls.at(-1)).toEqual([song0, null]);
+    await vi.waitFor(() => expect(f.state().notice).toContain(closedOff));
     expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('灯光没能完全关闭'))).toEqual([[closedOff, 'song-0']]);
+    await f.player.stop();
+    expect(f.lighting.stop).toHaveBeenCalledExactlyOnceWith(null, 'stop');
     await f.player.dispose();
+    expect(f.lighting.stop).toHaveBeenCalledOnce();
     expect(f.deps.closedFault).not.toHaveBeenCalled();
   });
 
   // 修复前：红字里的歌名取自关闭那一刻正在放的歌。不带灯光的歌不换掉关灯计划，补发的是上一首的 Off，红字却叫操作员去找这一首的执行器。
-  it('红字写这份 Off 所属的歌：上一首的停止排在定位后面被跳过、接着放不带灯光的歌、然后关闭', async () => {
+  it('红字写这份 Off 所属的歌：上一首的停止排在定位后面被跳过、接着放不带灯光的歌、然后关闭；关闭时不再欠上一首的', async () => {
     const f = lit(); await f.player.play('song-0');
     const preparing = gate(), original = f.api.prepareNativePlayback.getMockImplementation()!;
     f.api.prepareNativePlayback.mockImplementationOnce(async request => { await preparing.promise; return original(request); });
     const seeking = f.player.seek(3000);
     await vi.waitFor(() => expect(f.api.prepareNativePlayback).toHaveBeenCalledTimes(2));
+    const answer = gate(); let settle!: () => void;
+    f.lighting.change.mockImplementationOnce(() => new Promise<LightingOffOutcome>(resolve => { settle = () => resolve(refused()); answer.open(); }));
     const stopping = f.player.stop(), next = f.player.play('song-1');
     preparing.open(); await Promise.all([seeking, stopping, next]);
     expect(f.state()).toMatchObject({ itemId: 'song-1', status: 'playing' });
-    expect(f.lighting.prepare).toHaveBeenCalledOnce();
-    f.lighting.release.mockRejectedValueOnce(refused());
     await f.player.dispose();
-    expect(f.deps.closedFault).toHaveBeenCalledExactlyOnceWith(closedOff, 'song-0');
+    // The console answers the song change's Off after the player closed: the host shows it.
+    settle(); await answer.promise;
+    await vi.waitFor(() => expect(f.deps.closedFault).toHaveBeenCalledExactlyOnceWith(closedOff, 'song-0'));
+    expect(f.lighting.stop).not.toHaveBeenCalled();
   });
 
   // 修复前：界面进程退出后节目在后台继续，播放器没关，关灯失败只进播放器的提示（没有窗口看得到），日志里只是 warning，之后是 info。
   it('没有窗口在看时（界面退出，节目在后台继续），停止的关灯失败交给宿主标红；窗口接回后照旧显示在播放器里', async () => {
     const f = lit(); await f.player.play('song-0');
     f.player.setWatched(false);
-    f.lighting.release.mockRejectedValueOnce(refused());
+    f.lighting.stop.mockResolvedValueOnce(refused());
     await f.player.stop();
     expect(f.deps.closedFault).toHaveBeenCalledExactlyOnceWith(closedOff, 'song-0');
     expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('灯光没能完全关闭'))).toEqual([]);
     expect(f.state().notice ?? '').not.toContain('灯光没能完全关闭');
     f.player.setWatched(true); await f.player.play('song-0');
-    f.lighting.release.mockRejectedValueOnce(refused());
+    f.lighting.stop.mockResolvedValueOnce(refused());
     await f.player.stop();
     expect(f.state().notice).toContain(closedOff);
     expect(f.deps.closedFault).toHaveBeenCalledOnce();
@@ -328,11 +338,12 @@ describe('停止后马上改片段、重建播放器或关窗口，也关这首�
   // 还多一个“操作未能完成：”。
   it('原因只写原因：不带日常说法自己的下一步，也不带“操作未能完成：”；原因自己带句号时不出现“。。”；不知道是哪首歌时写“这首歌”', async () => {
     const f = lit(); f.player.setWatched(false);
+    // The ledger itself could not be reached: the player names the song it stopped and only the reason.
     for (const cause of ['MA2 telnet timeout', 'connect ECONNREFUSED 192.0.2.1:30000', 'socket hang up']) {
-      f.lighting.release.mockRejectedValueOnce(new LightingReleaseFailure({ itemId: 'song-0', title: '音频 0' }, new Error(cause)));
+      f.lighting.stop.mockRejectedValueOnce(new Error(cause));
       await f.player.play('song-0'); await f.player.stop();
     }
-    f.lighting.release.mockRejectedValueOnce(new Error('控台正忙。'));
+    f.lighting.stop.mockResolvedValueOnce({ failed: [{ song: null, reason: '控台正忙。' }] });
     await f.player.play('song-0'); await f.player.stop();
     expect(f.deps.closedFault.mock.calls).toEqual([
       ['「音频 0」的灯光没能完全关闭，控台上可能还亮着。原因：操作超时了。请在控台上关掉这首歌的执行器。', 'song-0'],
@@ -493,21 +504,24 @@ describe('原生正式播放器的操作与会话', () => {
     await f.player.stop();
     expect(f.api.controlNativePlayback.mock.calls.at(-1)?.[0].kind).toBe('stop');
   });
-  it.each(['pause', 'next'] as const)('曲尾不发灯光指令，原定的 %s 照常进行，停止时才关执行器', async endAction => {
+  it.each(['pause', 'next'] as const)('曲尾不发灯光指令，原定的 %s 照常进行；暂停的停止时才关执行器，接着放下一首按换歌关', async endAction => {
     const f = fixture();
     f.project.rundown[0]!.lighting = createLightingDocument();
     f.project.rundown[0]!.playback!.endAction = endAction;
     await f.player.play('song-0');
-    expect(f.lighting.prepare).toHaveBeenCalledOnce();
+    expect(f.lighting.change).toHaveBeenCalledOnce();
     f.emit({ status: 'ended', positionMs: 9500 });
     await vi.waitFor(() => expect(f.state()).toMatchObject({
       status: endAction === 'pause' ? 'paused' : 'playing',
       itemId: endAction === 'pause' ? 'song-0' : 'song-1', error: null
     }));
     expect(f.state().playedItemIds).toContain('song-0');
-    expect(f.lighting.release).not.toHaveBeenCalled();
+    expect(f.lighting.stop).not.toHaveBeenCalled();
+    // 第 4 题：接着放下一首就是换歌，只关上一首独有的执行器（不带灯光的下一首用不上任何一个）。
+    const song0 = { document: f.project.rundown[0]!.lighting, song: { itemId: 'song-0', title: '音频 0' } };
+    expect(f.lighting.change.mock.calls).toEqual(endAction === 'pause' ? [[null, song0]] : [[null, song0], [song0, null]]);
     await f.player.stop();
-    expect(f.lighting.release).toHaveBeenCalledOnce();
+    expect(f.lighting.stop).toHaveBeenCalledExactlyOnceWith(endAction === 'pause' ? song0 : null, 'stop');
   });
   it('界面伴随 Cue 启动失败不停止已开始的后台音频与 OBS', async () => {
     const f = fixture(); f.deps.started.mockImplementation(() => { throw new Error('本地 MIDI 起点已错过'); });
@@ -677,7 +691,7 @@ for (const mode of ['network', 'direct', 'timecode']) it(`原生播放：控台�
   expect(result).toMatchObject({ allowMtc: true, notice: null, snapshot: { offsetMs: 480000 } });
   await f.player.play('song-0');
   expect(f.state()).toMatchObject({ status: 'playing', fault: null }); expect(f.state().notice).toMatch(/Timecode 2、3 的起点和这首歌相同.*时间码照常发送/);
-  expect(f.lighting.prepare).toHaveBeenCalledOnce();
+  expect(f.lighting.change).toHaveBeenCalledOnce();
   expect(f.api.prepareNativePlayback.mock.calls[0]?.[0].midiPortName).toBe('TEST');
   await f.player.stop();
 });
@@ -955,17 +969,6 @@ describe('上一首的画面没有清理干净（2026-11-09）', () => {
     await f.player.play('song-1');
     expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1',
       fault: `上一首的画面没有清理干净，这一首照常播。原因：${reason}；画面准备失败，音乐和时间码照常播放：OBS 请求超时（2000 ms）` });
-    await f.player.dispose();
-  });
-
-  it('上一首的画面没清理干净、这一首停止时关灯的准备也失败：两条一起标红', async () => {
-    const f = fixture(); f.project.rundown[1]!.lighting = createLightingDocument();
-    await f.player.play('song-0');
-    f.api.stopNativeObs.mockRejectedValueOnce(leftover('song-0'));
-    f.lighting.prepare.mockRejectedValueOnce(new Error('MA2 没有连接'));
-    await f.player.play('song-1');
-    expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1',
-      fault: `上一首的画面没有清理干净，这一首照常播。原因：${reason}；停止时可能关不掉这首歌的执行器：MA2 没有连接` });
     await f.player.dispose();
   });
 

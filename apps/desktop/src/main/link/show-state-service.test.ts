@@ -90,3 +90,19 @@ it('界面上报的内容在边界上校验，不合格的不改状态', async (
   expect(() => show.report({ p1: null, preview: false })).toThrow();
   expect(show.current()).toMatchObject({ phase: 'idle' });
 });
+
+// R13：关灯清单接进演出状态。停下的节目在关灯指令发往控台、还没回应时算“节目在停止”；回应以后回到空闲。
+it('停下的节目还有关灯指令在发时算在停止，发完回到空闲', async () => {
+  const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(() => host());
+  const program = new NativeProgramService(create, vi.fn(), () => Promise.resolve(), () => undefined, closedProgramFaultReporter(() => Promise.resolve(), vi.fn()));
+  let sending = false, changed: () => void = () => undefined;
+  const show = new ShowStateService(program, vi.fn(), { sending: () => sending, onChanged: listener => { changed = listener; return () => undefined; } });
+  await program.open(request());
+  const player = create.mock.calls[0]![2];
+  player.changed({ ...playing, status: 'stopped' });
+  expect(show.current()).toMatchObject({ phase: 'idle' });
+  sending = true; changed();
+  expect(show.current()).toMatchObject({ phase: 'stopping', source: 'internal' });
+  sending = false; changed();
+  expect(show.current()).toMatchObject({ phase: 'idle' });
+});

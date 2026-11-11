@@ -58,7 +58,7 @@ function program(opened: LinkProject) {
   const dependencies = { prepare: () => Promise.resolve(), ingest: () => Promise.resolve(), stop: () => Promise.resolve(), pause: () => Promise.resolve(),
     resolveAudio: () => Promise.resolve('unused'), configuration: () => ({ outputDeviceId: 'default', mtcPortName: null, audioSampleRate: 48000 as const }),
     changed: (next: InternalPlayerState) => { state = next; }, notice: vi.fn(), closedFault: vi.fn() };
-  const lighting = { prepare: () => Promise.resolve(), cancelPreparation: () => undefined, release: () => Promise.resolve() };
+  const lighting = { change: () => Promise.resolve({ failed: [] }), stop: () => Promise.resolve({ failed: [] }) };
   const player = new NativeProgramPlayer(opened, 'C:/show/每首歌的音量.tblink', 1, dependencies, api, lighting);
   /** What the engine plays at now, 0–100. */
   const gain = async (): Promise<number> => { await new Promise(resolve => setTimeout(resolve, 0)); return Math.round((status?.gain ?? Number.NaN) * 100); };

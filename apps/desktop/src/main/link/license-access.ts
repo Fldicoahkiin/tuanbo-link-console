@@ -17,7 +17,9 @@ const publicCalls = new Set([
   // Protecting unsaved work never waits for a license: the save itself follows the save rule.
   'link:set-document-state', 'link:resolve-unsaved-changes', 'link:save-response',
   // The show state is read and reported only; whether an output may start stays licensed where it starts.
-  'link:show-state-get', 'link:show-activity'
+  'link:show-state-get', 'link:show-activity',
+  // The lights-off ledger: the window's previews say what they use and what they owe; it only ever sends Off.
+  'link:lighting-off'
 ]);
 
 const workspaceSaveCalls = new Set(['link:save-project', 'link:write-recovery-copy', 'link:discard-recovery-copy',

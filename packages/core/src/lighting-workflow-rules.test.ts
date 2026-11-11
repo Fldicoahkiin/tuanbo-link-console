@@ -9,6 +9,8 @@ import { nativeProgramSnapshot } from './native-program-snapshot';
 import { programStart } from './program-start';
 import { parseP1TimeOrigin, programTimeOrigin } from './ma2-time-origin';
 import { encodeMediaTimecode } from './mtc-output';
+import { LightingOffLedger, lightingReleaseActions, songChangeOffs } from './lighting-off-ledger';
+import { OUTPUT_RECOVERY_RULES } from './output-recovery';
 
 /**
  * The ten lighting workflow rules the operator set on 2026-10-26 (docs/LIGHTING_WORKFLOW.md), one
@@ -160,5 +162,47 @@ describe('第 9 条：随时可以播放，任何原因都不拦', () => {
   it('配对上的歌显示两边的起始码：歌曲的和控台 Timecode 的是同一个', () => {
     const status = songLightingStatus(project(), '甲');
     expect(status).toMatchObject({ state: 'matched', timecode: 7, startMs: SONG_START_MS });
+  });
+});
+
+/** A song whose console sequence sits on `own` and whose Timecode tracks run `executors`. */
+function litSong(own: string, executors: string[] = []) {
+  const lighting = createLightingDocument();
+  lighting.consoleSong = { endpoint: 'console', show: '现场', layout: null, executor: own, sequence: 36, name: '歌曲', baselineXml: '<MA/>', points: [] };
+  lighting.ma2Bindings = [{ id: 'binding', timecode: 7, name: '灯光 7', readAt: '2026-11-11T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [], mappings: [],
+    trackMappings: executors.map((executor, index) => ({ trackId: `track-${index}`, path: `Track ${index}`, executor, subtracks: [] })), playback: 'editable', timeOriginMs: SONG_START_MS }];
+  return lighting;
+}
+const executorsOf = (actions: ReturnType<typeof lightingReleaseActions>) => actions.map(action => action.target === 'executor' ? action.executor : '');
+
+describe('关灯清单：欠着的关灯只有一份（第 4 题，2026-11-11，R13）', () => {
+  it('停止只关这首歌在控台上的执行器，不发全局 Off（播放只发时间码，2026-11-01）', () => {
+    expect(executorsOf(lightingReleaseActions(litSong('1.110', ['1.101', '1.102'])))).toEqual(['1.101', '1.102', '1.110']);
+    expect(lightingReleaseActions(createLightingDocument())).toEqual([]);
+  });
+  it('换歌时发的 Off 等于上一首用到的减去下一首也用的', () => {
+    expect(executorsOf(songChangeOffs(litSong('1.110', ['1.101', '1.102']), litSong('1.120', ['1.102'])))).toEqual(['1.101', '1.110']);
+    expect(executorsOf(songChangeOffs(litSong('1.110'), null))).toEqual(['1.110']);
+  });
+  it('正在用的执行器绝不关：开始的歌划掉欠它的 Off，用着的时候也不会再欠', () => {
+    const ledger = new LightingOffLedger();
+    const [sent] = ledger.owe(lightingReleaseActions(litSong('1.110')), { itemId: '甲', title: '歌曲甲' }, 'stop', null);
+    ledger.fail('1.110', sent!.attempt, '没有连接控台', null, null);
+    ledger.use('program', ['1.110']);
+    expect(ledger.owed()).toEqual([]);
+    expect(ledger.owe(lightingReleaseActions(litSong('1.110')), null, 'preview', null)).toEqual([]);
+    expect(ledger.onConnected(2, 0)).toEqual([]);
+  });
+  it('没连上时留在清单里，连上后补发 1 次（次数只在恢复上限表里）；再按停止把没确认的全部重发', () => {
+    expect(OUTPUT_RECOVERY_RULES['lighting.offResend'].limit).toEqual({ kind: 'count', max: 1 });
+    const ledger = new LightingOffLedger();
+    const [sent] = ledger.owe(lightingReleaseActions(litSong('1.110')), { itemId: '甲', title: '歌曲甲' }, 'stop', null);
+    ledger.fail('1.110', sent!.attempt, '没有连接控台', null, null);
+    const [resent] = ledger.onConnected(2, 0);
+    expect(resent).toMatchObject({ executor: '1.110', resent: true });
+    ledger.fail('1.110', resent!.attempt, 'MA2 没有回应', 2, null);
+    expect(ledger.onConnected(3, 1)).toEqual([]);
+    expect(ledger.owed()).toMatchObject([{ executor: '1.110', state: 'failed' }]);
+    expect(ledger.resendOnStop().map(entry => entry.executor)).toEqual(['1.110']);
   });
 });
