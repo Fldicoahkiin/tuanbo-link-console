@@ -1189,3 +1189,101 @@ it('OBS 重连恢复画面让素材继续播放时按了暂停：继续以后素
   expect(outputs(test).slice(before)).toContain('start');
   expect(test.session.error).toBeNull();
 });
+
+/** Videos on their own tracks: [clip id, asset id, track, start s, length ms], the first track on top. */
+function clipsFixture(clips: [string, string, string, number, number][], layers: string[]): LinkProject {
+  return parseLinkProject({ ...createEmptyLinkProject('素材'), playbackSource: 'internal', obsOutputMode: 'scenes',
+    mediaAssets: [...new Set(clips.map(clip => clip[1]))].map(id => ({ id, name: id, kind: 'video', relativePath: `assets/${id}.mp4`, sha256: 'a'.repeat(64), byteLength: 1, durationMs: 20000, width: 1920, height: 1080 })),
+    rundown: [{ id: 'song', title: '歌曲', cues: [], visualLayers: layers.map(id => ({ id, name: id })),
+      referenceMediaClips: clips.map(([id, assetId, layerId, seconds, durationMs]) => ({ id, assetId, layerId, label: id, startTimecode: { hours: 0, minutes: 0, seconds, frames: 0 }, durationMs })) }] });
+}
+const mediaSent = (test: ReturnType<typeof setup>): string[] => test.dependencies.executeManagedMediaEvent.mock.calls.map(([payload]) => `${payload.event.phase} ${payload.event.clipId}`);
+const mediaLogs = (test: ReturnType<typeof setup>): string[] => test.dependencies.recordLog.mock.calls.map(([entry]) => entry.message).filter(message => message.includes('素材 ·'));
+
+it('OBS 重连时已经结束的素材：恢复画面不再发它的停止，只记一条“没有成功启动”的跳过（2026-11-11 R3c 按账本判断）', async () => {
+  const test = setup(clipsFixture([['a', 'va', 'track', 0, 1000], ['b', 'vb', 'track', 2, 3000]], ['track']));
+  await test.session.prepare(0); await test.advance(0, 900);
+  const restoring = deferred(), rebuilt = test.session.rebuild(() => restoring.promise);
+  for (let at = 1000; at <= 1300; at += 100) { test.time(at); test.session.clock(at); }
+  restoring.release(); await rebuilt; await test.advance(1400, 2500); await test.session.stop();
+  expect(mediaSent(test)).toEqual(['start a', 'start b', 'stop b']);
+  expect(mediaLogs(test)).toEqual(['播放素材 · va · succeeded', '停止素材 · va · skipped：对应的片段这次没有成功启动', '播放素材 · vb · succeeded', '停止素材 · vb · succeeded']);
+  expect(test.session.error).toBeNull();
+});
+
+it('几路素材同时在播：漂移检查和停歌按最近一次开播的先后，同一个素材后一段从头再排（2026-11-11 R3c）', async () => {
+  const project = clipsFixture([['a', 'va', 'upper', 0, 3000], ['b', 'vb', 'lower', 1, 15000], ['c', 'va', 'upper', 4, 12000]], ['upper', 'lower']);
+  const test = setup(project), correct = vi.fn<(event: import('./managed-media-timeline').ManagedMediaEvent) => Promise<number | null>>(() => Promise.resolve(null));
+  const session = new ObsProgramSession(project, 'C:/shows/test.tblink', 'song', { ...test.dependencies, correctMediaDrift: correct });
+  await session.prepare(0);
+  for (let time = 0; time <= 10000; time += 100) { test.time(time); session.clock(time); await session.settled(); }
+  expect(correct.mock.calls.map(([event]) => `${event.clipId} ${event.sourceOffsetMs}`)).toEqual(['b 4000', 'c 1000', 'b 9000', 'c 6000']);
+  await session.stop();
+  expect(mediaSent(test).slice(-2)).toEqual(['stop b', 'stop c']);
+});
+
+it('OBS 重连恢复画面中途停歌：恢复时要定位的素材照样停掉，恢复前已经结束的不再停（2026-11-11 R3c）', async () => {
+  const seeking = deferred();
+  const test = setup(clipsFixture([['a', 'va', 'one', 0, 9000], ['b', 'vb', 'two', 0, 9000], ['c', 'vc', 'three', 1, 9000], ['d', 'vd', 'four', 0, 1000]], ['one', 'two', 'three', 'four']));
+  await test.session.prepare(0); await test.advance(0, 900);
+  test.dependencies.seekMedia.mockImplementation(() => seeking.promise);
+  const rebuilt = test.session.rebuild(() => Promise.resolve());
+  test.time(1200); test.session.clock(1200);
+  await vi.waitFor(() => expect(test.dependencies.seekMedia).toHaveBeenCalled());
+  const stopping = test.session.stop(); seeking.release(); await rebuilt.catch(() => null); await stopping;
+  expect(mediaSent(test)).toEqual(['start a', 'start b', 'start d', 'stop a', 'stop b', 'stop c']);
+});
+
+it('从中间开播定位素材时停歌：还没定位的素材也照样停掉（2026-11-11 R3c）', async () => {
+  const seeking = deferred();
+  const test = setup(clipsFixture([['a', 'va', 'one', 0, 9000], ['b', 'vb', 'two', 0, 9000]], ['one', 'two']));
+  test.dependencies.seekMedia.mockImplementationOnce(() => seeking.promise);
+  const preparing = test.session.prepare(1500).catch(() => null);
+  await vi.waitFor(() => expect(test.dependencies.seekMedia).toHaveBeenCalled());
+  const stopping = test.session.stop(); seeking.release(); await preparing; await stopping;
+  expect(test.dependencies.seekMedia).toHaveBeenCalledOnce();
+  expect(mediaSent(test)).toEqual(['stop a', 'stop b']);
+});
+
+it('素材开始或结束后 1 秒内不查漂移（2026-11-11 R3c）', async () => {
+  const project = clipsFixture([['a', 'va', 'upper', 0, 20000], ['b', 'vb', 'lower', 4, 3000]], ['upper', 'lower']);
+  project.rundown[0]!.referenceMediaClips[1]!.startTimecode.frames = 15;
+  const test = setup(project), correct = vi.fn<(event: import('./managed-media-timeline').ManagedMediaEvent) => Promise<number | null>>(() => Promise.resolve(null));
+  const session = new ObsProgramSession(project, 'C:/shows/test.tblink', 'song', { ...test.dependencies, correctMediaDrift: correct });
+  await session.prepare(0);
+  for (let time = 0; time <= 16000; time += 100) { test.time(time); session.clock(time); await session.settled(); }
+  // b starts at 4.5 s and ends at 7.5 s: the checks due at 5 s and 7.5 s wait a second, then every 5 s.
+  expect(correct.mock.calls.map(([event]) => `${event.clipId} ${event.sourceOffsetMs}`)).toEqual(['a 5500', 'b 1000', 'a 10500', 'a 15500']);
+  await session.stop();
+});
+
+it('OBS 重连恢复画面后自有输出场景里的来源：重连前隐藏没成功的，恢复画面时再隐藏一次，下一个来源不再另外隐藏它（2026-11-11 R3c）', async () => {
+  const project = parseLinkProject({ ...createEmptyLinkProject('来源'), playbackSource: 'internal', obsOutputMode: 'scenes',
+    rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'cams', name: '机位' }], cues: [
+      { id: 'one', name: '一号', layerId: 'cams', durationMs: 1000, timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
+        actions: [{ id: 'one-show', kind: 'obs.setSceneItemEnabled', label: '显示一号', sceneName: '团播联动台输出', sourceName: '一号', enabled: true }] },
+      { id: 'two', name: '二号', layerId: 'cams', durationMs: 4000, timecode: { hours: 0, minutes: 0, seconds: 2, frames: 0 },
+        actions: [{ id: 'two-show', kind: 'obs.setSceneItemEnabled', label: '显示二号', sceneName: '团播联动台输出', sourceName: '二号', enabled: true }] }] }] });
+  let refused = false;
+  const test = setup(project, action => action.kind === 'obs.setSceneItemEnabled' && !action.enabled && !refused ? (refused = true, Promise.reject(new Error('OBS 拒绝'))) : Promise.resolve());
+  await test.session.prepare(0); await test.advance(0, 1500);
+  await test.session.rebuild(() => Promise.resolve()); await test.advance(1600, 3000); await test.session.stop();
+  expect(test.actions.map(action => action.kind === 'obs.setSceneItemEnabled' ? `${action.sourceName} ${action.enabled}` : action.kind)).toEqual(['一号 true', '一号 false', '一号 false', '二号 true', '二号 false']);
+});
+
+it('素材停止被 OBS 拒绝后 OBS 重连，恢复画面前停歌：停歌时照样再停一次（2026-11-11 R3c）', async () => {
+  const test = setup(clipsFixture([['a', 'va', 'track', 0, 1000]], ['track']));
+  test.dependencies.executeManagedMediaEvent.mockImplementation(payload => payload.event.id === 'managed-media:a:stop' ? Promise.reject(new Error('OBS 拒绝')) : Promise.resolve());
+  await test.session.prepare(0); await test.advance(0, 1500);
+  const restoring = deferred(), rebuilt = test.session.rebuild(() => restoring.promise);
+  const stopping = test.session.stop(); restoring.release(); await rebuilt.catch(() => null); await stopping;
+  expect(mediaSent(test)).toEqual(['start a', 'stop a', 'stop a']);
+});
+
+it('素材已经停好后 OBS 重连，恢复画面前停歌：不再停第二次（2026-11-11 R3c）', async () => {
+  const test = setup(clipsFixture([['a', 'va', 'track', 0, 1000]], ['track']));
+  await test.session.prepare(0); await test.advance(0, 1500);
+  const restoring = deferred(), rebuilt = test.session.rebuild(() => restoring.promise);
+  const stopping = test.session.stop(); restoring.release(); await rebuilt.catch(() => null); await stopping;
+  expect(mediaSent(test)).toEqual(['start a', 'stop a']);
+});

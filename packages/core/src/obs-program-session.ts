@@ -2,9 +2,10 @@ import type { LinkCue, LinkProject } from '@tb/schema';
 import { actionResultLog, CueActionRunner, type CueExecutionReport, type LinkActionExecutor } from './cue-action-runner';
 import { CueRuntime, type DueCue, type RuntimeUpdate } from './cue-runtime';
 import { frameNumberToTimecode, millisecondsToFrameNumber, playbackFramesPerSecond, type MtcSample } from './mtc-timecode';
-import { ManagedOutputRuntime, type ManagedMediaExecutionReport, type ManagedMediaOutcome, type ManagedOutputRuntimeDependencies } from './managed-output-runtime';
+import { alignManagedMediaEvent, ManagedOutputRuntime, MEDIA_NOT_STARTED, mediaTransportActions, type ManagedMediaExecutionReport, type ManagedMediaOutcome,
+  type ManagedOutputRuntimeDependencies } from './managed-output-runtime';
 import { compileManagedMediaTimeline, MANAGED_OBS_SCENE_NAME, type ManagedMediaEvent } from './managed-media-timeline';
-import { ObsPictureLedger, showKey, showMayBeOn, type LedgerWrite } from './obs-picture-ledger';
+import { ObsPictureLedger, showKey, showMayBeOn, type DecoderState, type Known, type LedgerWrite } from './obs-picture-ledger';
 import type { OnAirPicture } from './on-air-picture';
 import type { RecoveryBudgetView } from './output-recovery';
 import { COMPOSITION_GROUP_STARTS, DECODER_GROUP_STARTS, pictureOpWrites, planPictureReconcile, whilePaused, type PictureOp, type ReconcilePlan } from './picture-reconcile';
@@ -92,6 +93,18 @@ export function obsRecoveryText(recovery: ObsRecovery, reconnect: boolean): stri
   const back = recovery.succeeded ? `${picture}按${at}恢复了 ${recovery.succeeded} 项，` : `${picture}没有按${at}恢复，`;
   return `${opening}${back}${what}。${scenesLost ? '素材可能播不出来，' : ''}请在 OBS 里检查${missed.length === 1 ? '这一项' : '这几项'}，需要的话手动调好`;
 }
+/** The clip a decoder may still play or hold paused, as far as the ledger knows: one it
+ * confirmed or was sent; one whose start, pause, resume or stop OBS refused (it may be on
+ * air all the same); after a reconnect or a request not answered, the last one written, also
+ * a stop (whether it was confirmed is the session's: see `sentStarts`). */
+function mayHold(known: Known<DecoderState> | undefined): string | null {
+  if (!known) return null;
+  switch (known.state) {
+    case 'confirmed': case 'pending': return known.value.mode === 'stopped' ? null : known.value.clipId;
+    case 'failed': return known.value.clipId;
+    case 'unknown': return known.last ? known.last.clipId : null;
+  }
+}
 /** What a Cue's report means for the ledger: refused if any action was, answered if any went out, otherwise not sent. */
 function cueOutcome(report: CueExecutionReport): Outcome {
   const failed = report.results.find(result => result.status === 'failed');
@@ -131,6 +144,13 @@ export class ObsProgramSession {
   private readonly cueById: ReadonlyMap<string, LinkCue>;
   private readonly starts = new Map<string, ManagedMediaEvent>();
   private readonly stops = new Map<string, ManagedMediaEvent>();
+  /** Every clip event of the song, for the boundaries a clock step crossed. */
+  private readonly mediaEvents: readonly ManagedMediaEvent[];
+  /** The start each decoder was last sent this run (or located at, from the middle or on a
+   * rebuild), most recent last, until OBS confirmed its stop. Not what OBS holds, which is the
+   * ledger's: kept so the drift check and the song's stop act on the clip as it was sent, in
+   * the order it was, and so a stop OBS refused still counts after a reconnect forgot it. */
+  private readonly sentStarts = new Map<string, ManagedMediaEvent>();
   private readonly fps: number;
   private tail: Promise<void> = Promise.resolve();
   /** Clock steps not yet completely sent, oldest first. One goes out as crossed; several
@@ -197,7 +217,8 @@ export class ObsProgramSession {
     this.timeline = this.managed.sceneTimeline!;
     this.cueById = new Map(item.cues.map(cue => [cue.id, cue]));
     for (const cue of item.cues) for (const action of cue.actions) if (action.kind === 'obs.setSceneItemEnabled') this.spanCue.set(action.id, cue.id);
-    for (const event of compileManagedMediaTimeline(project, itemId).events) (event.phase === 'start' ? this.starts : this.stops).set(event.clipId, event);
+    this.mediaEvents = compileManagedMediaTimeline(project, itemId).events;
+    for (const event of this.mediaEvents) (event.phase === 'start' ? this.starts : this.stops).set(event.clipId, event);
     this.fps = playbackFramesPerSecond(project.timebase.frameRate);
   }
 
@@ -236,9 +257,7 @@ export class ObsProgramSession {
         await this.output(entry, allowed, allowed);
       }
       const targets = entries.filter((entry): entry is MediaEntry => entry.kind === 'media');
-      // A seek may reach OBS before its acknowledgement is interrupted. Retain
-      // the intended owned targets so cancellation can clean them up as well.
-      this.managed.adoptSeek(targets.map(entry => entry.event), frame); this.settleMedia(frame);
+      this.locate(targets, [], frame);
       for (const entry of targets) {
         this.requireCurrent(generation);
         const [decoder, ...program] = entry.writes;
@@ -287,7 +306,7 @@ export class ObsProgramSession {
       this.advancing = true; this.frame = sample.totalFrames;
       if (update.state !== 'running') return;
       this.preload(sample.totalFrames); this.watchDrift(sample.totalFrames);
-      if (this.managed.collectCrossed(previousFrame, sample.totalFrames).length) this.settleMedia(sample.totalFrames);
+      if (this.crossedMedia(previousFrame, sample.totalFrames)) this.settleMedia(sample.totalFrames);
       const points = this.points(update.dueCues), cut = this.cutIn(previousFrame, sample.totalFrames);
       if (cut !== null || points.length || update.rebuild) {
         const dueAt = (scheduledFrame: number): number => observedAt
@@ -299,6 +318,11 @@ export class ObsProgramSession {
       // what the pause held back, and rebuilds a picture a pause kept from being rebuilt.
       if (this.ticks.length || this.lost || resumed) this.scheduleDrain();
     } catch (error) { this.fail(error); }
+  }
+  /** Whether a clip starts or ends in (from, to]. The position only moves forward here: a
+   * step back freezes the channel (`CueRuntime`), so no boundary is crossed twice. */
+  private crossedMedia(from: number, to: number): boolean {
+    return this.mediaEvents.some(event => from < event.frameNumber && event.frameNumber <= to);
   }
   /** The first cut point in (from, to], or null. */
   private cutIn(from: number, to: number): number | null {
@@ -447,7 +471,7 @@ export class ObsProgramSession {
           // A handover goes out as the later half's start: the output carries its predecessor's decoder on (no seek, no restart).
           // Only the clip that is the whole picture switches the program to its own scene; any
           // other start (a composition layer, a sound) leaves the program to the switch.
-          const event = this.managed.alignEvent({ ...start, deferSceneSwitch: !(target.kind === 'clip' && target.clipId === op.clip.clipId) }, frame);
+          const event = this.align({ ...start, deferSceneSwitch: !(target.kind === 'clip' && target.clipId === op.clip.clipId) }, frame);
           const lateMs = this.lateReady.has(start.clipId) ? Math.round(Math.max(0, frame - start.frameNumber) * 1000 / this.fps) : null;
           entries.push({ kind: 'media', slot: 'start', frame: 0, priority: 0, label: start.assetName, writes: pictureOpWrites(op), event, lateMs });
           break;
@@ -571,7 +595,7 @@ export class ObsProgramSession {
     const frame = this.frame, entries = this.layout(this.translate(this.plan(frame, 'running', true), frame, true), [], frame, true);
     const targets = entries.filter((entry): entry is MediaEntry => entry.kind === 'media' && entry.event.phase === 'start');
     const parts = entries.filter(entry => !targets.includes(entry as MediaEntry));
-    this.managed.adoptSeek(targets.map(entry => entry.event), frame); this.settleMedia(frame);
+    this.locate(targets, parts, frame);
     const tally: Tally = { succeeded: 0, failed: [] };
     if (!(await this.send(parts, current, null, false, tally)).complete) return cancelled();
     for (const entry of targets) {
@@ -591,7 +615,7 @@ export class ObsProgramSession {
       let report: CueExecutionReport;
       try {
         report = await this.dependencies.guardOutput(current, () => this.runner.run({ id: 'transport-start', name: '同步画面播放状态', notes: '', enabled: true,
-          timecode: frameNumberToTimecode(frame, this.project.timebase.frameRate), actions: this.managed.transportActions('start', playing.map(entry => entry.event.sourceName)) }, 'live', current));
+          timecode: frameNumberToTimecode(frame, this.project.timebase.frameRate), actions: mediaTransportActions('start', playing.map(entry => entry.event.sourceName)) }, 'live', current));
       } catch (error) {
         // Located but whether they play is not known: the next pass starts them again.
         for (const entry of playing) if (entry.writes[0]) this.ledger.unanswered(entry.writes[0], errorText(error));
@@ -677,6 +701,8 @@ export class ObsProgramSession {
    * the host as red reports; nothing here ends the channel. Resolves with the report
    * of the Cue it sent, or null for a clip event (reported to the host as a clip). */
   private async output(entry: Entry, canSend: () => boolean, current: () => boolean): Promise<CueExecutionReport | null> {
+    // A clip this run never started (or OBS forgot since) has nothing to stop: as the ledger held it before this step.
+    const absent = entry.kind === 'media' && entry.event.phase === 'stop' && !this.held(entry.event.sourceName, entry.event.clipId);
     for (const write of entry.writes) this.ledger.sent(write, this.dependencies.now());
     try {
       if (entry.kind === 'cue') {
@@ -685,9 +711,10 @@ export class ObsProgramSession {
         this.settle(entry.writes, cueOutcome(report));
         return report;
       }
-      const event = entry.event, absent = event.phase === 'stop' && !this.managed.isActiveMedia(event);
-      const report = await this.dependencies.guardOutput(canSend, () => this.managed.executeMedia(event, 'live', canSend));
-      // A clip this run never started has nothing to stop.
+      const event = entry.event;
+      const report = await this.dependencies.guardOutput(canSend, () => absent ? this.managed.skippedMedia(event, MEDIA_NOT_STARTED) : this.managed.sendMedia(event, 'live', canSend));
+      if (event.phase === 'start' && report.status !== 'skipped') this.sentStart(event);
+      else if (report.status === 'succeeded' && this.sentStarts.get(event.sourceName)?.clipId === event.clipId) this.sentStarts.delete(event.sourceName);
       if (absent && report.status === 'skipped') for (const write of entry.writes) {
         if (write.element === 'decoder') this.ledger.observe({ element: 'decoder', key: write.key, value: write.value }, this.dependencies.now());
       } else this.settle(entry.writes, report.status === 'succeeded' ? 'ok' : report.status === 'failed'
@@ -722,6 +749,38 @@ export class ObsProgramSession {
       .finally(() => { this.preloadWork = null; });
   }
 
+  /** Clips located at `frame`, from the middle or on a rebuild: OBS prepared the owned scenes
+   * (again), so what this run sent before no longer plays, and the stops a rebuild would send
+   * find nothing to stop. Each clip located counts as sent from here, so that a cancellation
+   * before its seek still stops it with the song. */
+  private locate(targets: readonly MediaEntry[], parts: readonly Entry[], frame: number): void {
+    this.managed.resetExecution(); this.settleMedia(frame); this.sentStarts.clear();
+    const now = this.dependencies.now();
+    for (const entry of parts) {
+      const [write] = entry.writes;
+      if (entry.kind === 'media' && write?.element === 'decoder') this.ledger.observe({ element: 'decoder', key: write.key, value: write.value }, now);
+    }
+    for (const entry of targets) {
+      const [write] = entry.writes;
+      this.sentStart(entry.event);
+      if (write?.element === 'decoder') this.ledger.sent(write, now);
+    }
+  }
+  private sentStart(event: ManagedMediaEvent): void {
+    this.sentStarts.delete(event.sourceName); this.sentStarts.set(event.sourceName, event);
+  }
+  /** Whether the ledger says this decoder may still hold the clip this run sent it. */
+  private held(sourceName: string, clipId: string): boolean {
+    return this.sentStarts.get(sourceName)?.clipId === clipId && mayHold(this.ledger.state().decoders.get(sourceName)) === clipId;
+  }
+  /** The clips that may be on air, as each was sent, in the order they were. */
+  private onAir(): ManagedMediaEvent[] {
+    return [...this.sentStarts.values()].filter(event => this.held(event.sourceName, event.clipId));
+  }
+  private align(event: ManagedMediaEvent, frame: number): ManagedMediaEvent {
+    return alignManagedMediaEvent(event, this.starts.get(event.clipId) ?? event, frame, this.project.timebase.frameRate);
+  }
+
   private settleMedia(frame: number): void {
     this.nextDriftCheck = Math.max(this.nextDriftCheck, frame + this.fps);
   }
@@ -732,10 +791,10 @@ export class ObsProgramSession {
     this.nextDriftCheck = frame + 5 * this.fps;
     const generation = this.generation;
     this.enqueue(async () => {
-      for (const event of this.managed.activeMedia()) {
+      for (const event of this.onAir()) {
         const current = (): boolean => generation === this.generation && !this.closed && !this.failure && this.runtime.getState() === 'running';
         if (event.assetKind === 'image' || !current()) continue;
-        const drift = await this.dependencies.guardOutput(current, () => correct(this.managed.alignEvent(event, this.frame)));
+        const drift = await this.dependencies.guardOutput(current, () => correct(this.align(event, this.frame)));
         if (drift !== null) this.fault(`素材和音乐差了 ${drift} ms，已按当前位置校正：${event.assetName}`);
       }
     });
@@ -798,10 +857,11 @@ export class ObsProgramSession {
     this.closed = true; ++this.generation; this.dependencies.state(this.runtime.stop());
     await this.tail;
     await this.preloadWork;
-    const errors: string[] = [], cleanup = this.managed.takeCleanup();
-    for (const event of cleanup.mediaEvents) {
+    // Every clip that may still be on air stops with the song, as it was sent.
+    const errors: string[] = [], stops = this.onAir().map(event => ({ ...event, id: `${event.id}:operator-stop`, phase: 'stop' as const }));
+    for (const event of stops) {
       try {
-        const report = await this.managed.executeMedia(event, 'live'); this.dependencies.mediaReport(report);
+        const report = await this.managed.sendMedia(event, 'live'); this.dependencies.mediaReport(report);
         if (report.status === 'failed') errors.push(report.error ?? '停止素材失败');
       } catch (error) { errors.push(errorText(error)); }
     }
@@ -814,7 +874,7 @@ export class ObsProgramSession {
         write: { element: 'show', key, value: { ...value, enabled: false }, target: 'off' } }, 'after');
       return entry?.kind === 'cue' ? [entry.cue] : [];
     });
-    for (const cue of [...cleanup.cameraCues, ...hides]) {
+    for (const cue of [...this.managed.takeCleanup().cameraCues, ...hides]) {
       try {
         const failed = (await this.cue(cue, () => true)).results.find(result => result.status === 'failed');
         if (failed) errors.push(failed.error ?? `${failed.action.label}没有完成`);
@@ -851,7 +911,7 @@ export class ObsProgramSession {
     const sources = [...new Set([...ops.map(op => op.sourceName), ...extra])];
     if (!sources.length || !current() || this.runtime.getState() !== (action === 'pause' ? 'paused' : 'running')) return;
     const cue = { id: `transport-${action}`, name: '同步画面播放状态', notes: '', enabled: true,
-      timecode: frameNumberToTimecode(Math.max(0, this.frame), this.project.timebase.frameRate), actions: this.managed.transportActions(action, sources) };
+      timecode: frameNumberToTimecode(Math.max(0, this.frame), this.project.timebase.frameRate), actions: mediaTransportActions(action, sources) };
     const lateMs = Math.round(this.dependencies.now() - since);
     for (const op of ops) this.ledger.sent(op.write, this.dependencies.now());
     let report: CueExecutionReport;

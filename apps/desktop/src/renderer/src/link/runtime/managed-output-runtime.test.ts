@@ -65,6 +65,16 @@ describe('ManagedOutputRuntime', () => {
     expect(dependencies.executeManagedMediaEvent).toHaveBeenCalledTimes(2);
   });
 
+  it('没有启动过的片段：停止不发给 OBS，记一条跳过和原因', async () => {
+    const dependencies = createDependencies();
+    const runtime = new ManagedOutputRuntime(createEmptyLinkProject('测试'), 'C:\\show\\test.tblink', dependencies);
+    const stop: ManagedMediaEvent = { ...event(), id: 'managed-media:clip:stop', phase: 'stop', frameNumber: 30 };
+
+    await expect(runtime.executeMedia(stop, 'live')).resolves.toMatchObject({ status: 'skipped', error: '对应的片段这次没有成功启动' });
+    expect(dependencies.executeManagedMediaEvent).not.toHaveBeenCalled();
+    expect(dependencies.recordLog).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'skipped', message: '停止素材 · video.mp4 · skipped：对应的片段这次没有成功启动' }));
+  });
+
   it('重同步时将此前未执行的素材边界记为 skipped 且不调用 OBS', async () => {
     const dependencies = createDependencies();
     const project = createEmptyLinkProject('测试');

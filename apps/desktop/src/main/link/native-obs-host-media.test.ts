@@ -9,11 +9,11 @@ import { MediaOnAirError, MediaOutOfStepError, ObsMediaScenes } from './obs-medi
 import { ObsRequestNotSent, ObsRequestScheduler, ObsRequestUnanswered } from './obs-request-scheduler';
 
 /** Watches each clip event's step: the report the picture session's output() gets from
- * executeMedia, and what output() hands its ledger writes (settle; the originals still run). */
+ * sendMedia, and what output() hands its ledger writes (settle; the originals still run). */
 afterEach(() => { vi.restoreAllMocks(); });
 let watched: { reports: { mock: { results: Array<{ value: unknown }> } }; settles: { mock: { calls: unknown[][] } } } | null = null;
 function watchSteps(): void {
-  watched = { reports: vi.spyOn(ManagedOutputRuntime.prototype, 'executeMedia'),
+  watched = { reports: vi.spyOn(ManagedOutputRuntime.prototype, 'sendMedia'),
     settles: vi.spyOn(ObsProgramSession.prototype as unknown as { settle: (writes: unknown, outcome: unknown) => void }, 'settle') };
 }
 
