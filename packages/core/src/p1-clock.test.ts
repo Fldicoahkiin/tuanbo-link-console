@@ -95,11 +95,19 @@ describe('P1Clock', () => {
     expect(clock.state.phase).toBe('waiting');
   });
 
-  it('接口时间倒退直接报错，不按它判断', () => {
+  it('心跳之后读到一条时间略早的消息是正常的：不报错，“现在”取较晚的那个，断码照样按它算', () => {
     const clock = new P1Clock(manualProject(), 'manual');
     clock.arm('song');
-    clock.idle(at(2_000));
-    expect(() => clock.idle(at(1_999))).toThrow(/倒退/);
+    const { endMs } = play(clock, 0, 8, 1_000);
+    expect(clock.state.phase).toBe('running');
+    const running = clock.state;
+    expect(clock.idle(at(endMs + 100))).toEqual([]);
+    // Written by the driver 5 ms before the heartbeat, read after it.
+    expect(clock.message([0x90, 60, 100], at(endMs + 95))).toEqual([]);
+    expect(clock.state).toEqual(running);
+    // "Now" did not go back: an older heartbeat changes nothing, and silence is still counted on the interface's time.
+    expect(clock.idle(at(endMs + 90))).toEqual([]);
+    expect(clock.idle(at(endMs + 700))).toMatchObject([{ kind: 'frozen', cause: 'lost' }]);
   });
 
   it('停止后不再产生事件，可以重新待命', () => {

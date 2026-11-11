@@ -69,7 +69,7 @@ type Position = { itemId: string; sample: MtcSample };
 export class P1Clock {
   private readonly decoder = new MtcQuarterFrameDecoder();
   private current: P1FollowState = { phase: 'idle' };
-  /** The interface's "now": the latest message or heartbeat timestamp. */
+  /** The interface's "now": the later of the newest message and heartbeat timestamps. */
   private nowMs: number | null = null;
   /** Last position that kept time while running; a freeze keeps it for the resume check. */
   private last: Position | null = null;
@@ -160,8 +160,9 @@ export class P1Clock {
   private advance(at100ns: bigint): number {
     if (at100ns < 0n) throw new Error('MIDI 接口时间无效');
     const atMs = Number(at100ns) / 10_000;
-    if (this.nowMs !== null && atMs < this.nowMs) throw new Error('MIDI 接口时间倒退了，P1 时间码不能按这个时间判断');
-    this.nowMs = atMs;
+    // A message read just after a heartbeat may carry a slightly earlier time: it reached the driver before the heartbeat
+    // was written (native-midi-input.ts). That is normal, so "now" is the later of the two and nothing is refused.
+    if (this.nowMs === null || atMs > this.nowMs) this.nowMs = atMs;
     return atMs;
   }
 
