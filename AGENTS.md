@@ -98,6 +98,7 @@ docs/                           设计、实施、验收和服务器安装说明
 | MA2 同步 | 方式 1、方式 2 和改名走同一个逐首同步、同一份状态（`runtime/ma2-song-sync.ts`、`stores/ma2-sync-store.ts`） |
 | 顶栏和各处显示的状态 | `view-models/status-center.ts` |
 | 内容时间线的放置、移动、修剪 | `packages/core/src/content-timeline.ts` |
+| 某一帧该显示什么 | `packages/core/src/scene-output-timeline.ts` 的 `pictureAt`（2026-11-11）：上层盖住下层，机位是整个画面，音效不算画面，没有画面时留着最后结束的机位；显示来源按自己的区间开着。正式播出（`at`）、离线预览（`picture`）、时间线变暗（`airtime`）、预载和编辑器舞台（`TimelineStateIndex`）都从它读，类型在 `on-air-picture.ts`。别处不再自己判断哪段素材在画面里（`output-rules.test.ts` 规则 1 守着）。输出放不了的片段（没分轨道、素材不存在）由 `collectManagedMediaTimeline` 列出原因：编辑器照常打开，开播前检查和正式播放照旧挡住 |
 | MIDI 端口的开关 | 主进程 `midi-port-broker.ts`。界面不用 Web MIDI：`navigator.requestMIDIAccess` 会占住电脑上全部 MIDI 端口，Windows 报错误 7 或 4 |
 | 动作 MIDI 晚到怎么办 | `packages/core/src/midi-late-rule.ts`（2026-11-10）：Program Change、Control Change 照发并标红，Note On、MSC Go 晚 100 ms 以上只跳过这一条，Note Off、MSC Stop 总是发；一条失败不停整路 |
 | OBS 请求谁先发 | `apps/desktop/src/main/link/obs-request-scheduler.ts` 的档位和 `pump`：切画面的请求单独一档，始终有位置；截图等画面发完再发 |
