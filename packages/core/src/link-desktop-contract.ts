@@ -276,6 +276,8 @@ export type LinkDesktopApi = {
   readMa2Live(payload: import('@tb/schema').Ma2LiveRequest): Promise<import('@tb/schema').Ma2LiveSnapshot>;
   inputMa2Live(payload: import('@tb/schema').Ma2LiveInput): Promise<void>;
   releaseMa2Live(): Promise<void>;
+  /** One row of 15 Button executors as the Button session reads it, for the console page (C1); nothing is read with the plugin chosen. */
+  readMa2ButtonLive(payload: import('@tb/schema').Ma2ButtonLiveRequest): Promise<import('@tb/schema').Ma2ButtonLive>;
   /** One executor's state while a song plays, on its own read-only web remote session. */
   observeMa2Executor(payload: import('@tb/schema').Ma2ExecutorObserveRequest): Promise<import('@tb/schema').Ma2ExecutorObservation>;
   /** Ends that session and forgets its failure, before the next song is checked. */

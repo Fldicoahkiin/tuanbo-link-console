@@ -1,6 +1,8 @@
 import { Ma2LayoutCanvas } from './Ma2LayoutCanvas';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
-import { currentShowGate, useShowGate } from '../stores/show-state-store';
+import { currentShowGate, useShowGate, useShowStateStore } from '../stores/show-state-store';
+import { Ma2ConsoleBanner } from './Ma2ConsolePage';
+import { ma2ConsoleBanner } from '../view-models/ma2-console-page';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, ChevronLeft, ChevronRight, Plus, RefreshCw, List, Grid2X2, Map, MoreHorizontal, CornerDownLeft, Pencil, Move, ZoomIn, ZoomOut } from 'lucide-react';
@@ -29,6 +31,7 @@ export function Ma2LayoutView({ selected, onBack, onNavigate, onSettings, render
   const refreshGate = useShowGate('ma2.executorPage.refresh');
   const mutateGate = useShowGate('ma2.executor.mutate');
   const mutateWaits = mutateGate.kind === 'wait';
+  const banner = ma2ConsoleBanner(useShowStateStore(value => value.show));
   const [view, setView] = useState<'compact' | 'native'>('compact');
   const [zoom, setZoom] = useState(1); const [fitKey, setFitKey] = useState(0); const [editing, setEditing] = useState(false); const [live, setLive] = useState(false);
   const [pages, setPages] = useState<import('@tb/schema').Ma2LayoutDirectory>([]); const [listing, setListing] = useState(false);
@@ -84,7 +87,8 @@ export function Ma2LayoutView({ selected, onBack, onNavigate, onSettings, render
     </div>, toolbarHost) : null}
     {pagesOpen ? <div ref={pagesPanel} className="ma2-layout-page-picker" role="dialog" aria-label="选择控台页面"><header><strong>控台页面</strong><button onClick={() => setPagesOpen(false)}>关闭</button></header>{pages.length ? <select aria-label="控台所有页面" size={Math.min(8, pages.length)} value={pages.some(page => page.layout === state.page) ? state.page : ''} onChange={event => navigate(Number(event.target.value))}>{pages.map(page => <option key={page.layout} value={page.layout}>{page.layout} · {page.name}</option>)}</select> : <p>控台没有已建立的 Layout</p>}</div> : null}
     {renaming ? <form className="ma2-layout-rename" onSubmit={event => { event.preventDefault(); void updateMa2LayoutPage({ positions: [], name: layoutName }).then(() => setRenaming(false)).catch((cause: unknown) => setInputError(String(cause))); }}><input aria-label="控台页面名称" required maxLength={512} value={layoutName} onChange={event => setLayoutName(event.target.value)}/><Ma2ConsoleName name={layoutName}/><button disabled={state.busy || mutateWaits}>保存名称到控台</button><button type="button" onClick={() => setRenaming(false)}>取消</button></form> : null}
-    {refreshGate.kind === 'wait' ? <p className="ma2-layout-note" role="status">{refreshGate.message}</p> : null}
+    {/* While the show is on the banner says what waits (design 03 §4.3.1); the page's own reads ask showGate. */}
+    {selected ? null : <Ma2ConsoleBanner banner={banner}/>}
     {state.busy && !state.snapshot ? <div className="ma2-layout-empty" role="status">正在读取第 {state.page} 页…</div> : inputError || state.error ? <div className="ma2-layout-empty" role="alert">{inputError || state.error}</div> : selected ? children : state.snapshot ? <>
       {items.length ? view === 'native' ? <Ma2LayoutCanvas key={`${state.scope}:${state.page}:${fitKey}`} snapshot={state.snapshot} items={items} zoom={zoom} editing={editing && !state.busy && !mutateWaits} onMove={(id, x, y) => { void updateMa2LayoutPage({ positions: [{ id, x, y }] }).catch((cause: unknown) => setInputError(String(cause))); }}/> : <CuePoolGrid key={`${state.scope}:${state.page}`} keys={items.map(({ item }) => item.id)} label={`Layout ${state.page} 素材`} cellWidth={156} rowHeight={50} render={index => items[index]!.content}/> : <div className="ma2-layout-empty">{state.snapshot.items.length ? '本页没有符合筛选条件的 Cue' : '此页面没有 Cue 按钮'}</div>}
       {state.snapshot.omittedFixtures > 0 ? <p className="ma2-layout-note">本页另有 {state.snapshot.omittedFixtures} 个灯具符号，这里只显示池对象。</p> : null}

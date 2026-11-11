@@ -2,7 +2,7 @@ import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@
 import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema, ma2ExecutorChannelChoiceRequestSchema } from '@tb/schema';
 import { ma2NetworkTargetSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
-import { firstTimeWarning, holdForShow, lightingReadBackLogs, materialSceneTargets, projectFileReferences, showGate, toUserErrorReason, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
+import { firstTimeWarning, holdForShow, isShowWait, lightingReadBackLogs, materialSceneTargets, projectFileReferences, showGate, toUserErrorReason, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
 import { assertMa2ConnectionOwner, isLocalMa2Address, waitForMa2Listener } from './link/ma2-connection-owner';
@@ -58,7 +58,7 @@ import { Ma2NetworkSetup } from './link/ma2-network-setup';
 import { ma2NetworkSetupRequestSchema } from '@tb/schema';
 import { Ma2NetworkManager } from './link/ma2-network-manager';
 import { Ma2ConsoleBackups } from './link/ma2-console-backups';
-import { ma2PlaybackRequestSchema, ma2NetworkSaveSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, ma2ExecutorObserveRequestSchema } from '@tb/schema';
+import { ma2PlaybackRequestSchema, ma2NetworkSaveSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, ma2ExecutorObserveRequestSchema, ma2ButtonLiveRequestSchema } from '@tb/schema';
 import ma2PluginLua from '../../../../tools/ma2/tblink_bridge.lua?raw';
 import ma2PluginXml from '../../../../tools/ma2/tblink_bridge.xml?raw';
 import ma2PluginInstructions from '../../../../tools/ma2/README.md?raw';
@@ -1151,6 +1151,13 @@ function registerIpc(
     const snapshot = await (await getMa2Connection(request)).bridge.request('SNAPSHOT', request.target);
     return convertMa2Snapshot(snapshot, request.target, [], request.timeOriginMs);
   });
+  /**
+   * A console request that failed, in the run log. One the show held (the program moves, prepares or stops: isShowWait)
+   * is a wait, not a failure (00-order §16): it is logged as waiting, with its own words, never as an error.
+   */
+  const recordMa2Failure = (what: string, failure: string, error: unknown, itemId?: string): Promise<unknown> => logger.record(isShowWait(error)
+    ? { level: 'info', category: 'device', device: 'MA2', ...(itemId ? { itemId } : {}), message: `${what}在等节目：${error instanceof Error ? error.message : String(error)}`, result: 'queued' }
+    : { level: 'error', category: 'device', device: 'MA2', ...(itemId ? { itemId } : {}), message: failure, result: 'failed' });
   handle('link:ma2-catalog', async (event, value: unknown) => {
     const request = ma2CatalogRequestSchema.parse(value);
     if (request.projectPath) projectAccess.requireShown(request.projectPath);
@@ -1167,7 +1174,7 @@ function registerIpc(
       await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `已扫描 ${catalog.entries.length} 条 Timecode，其中 ${catalog.entries.filter(entry => entry.error).length} 条读取出错`, result: catalog.entries.some(entry => entry.error) ? 'failed' : 'succeeded' });
       return catalog;
     } catch (error) {
-      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `控台扫描没有完成：${error instanceof Error ? error.message : String(error)}`, result: 'failed' });
+      await recordMa2Failure('扫描控台', `控台扫描没有完成：${error instanceof Error ? error.message : String(error)}`, error);
       throw error;
     } finally { task.finish(); }
   });
@@ -1189,19 +1196,19 @@ function registerIpc(
       if (!directoryCheck) await logger.record({ level: result.errors.length ? 'error' : 'info', category: 'device', device: 'MA2', message: `效果库读取 ${result.sequences.length} 条序列；异常：${JSON.stringify(result.errors)}`, result: result.errors.length ? 'failed' : 'succeeded' });
       return result;
     } catch (error) {
-      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `${directoryCheck ? '控台序列目录没有核对成功' : '效果库读取失败'}：${String(error)}`, result: 'failed' });
+      await recordMa2Failure(directoryCheck ? '核对控台序列目录' : '读取效果库', `${directoryCheck ? '控台序列目录没有核对成功' : '效果库读取失败'}：${String(error)}`, error);
       throw error;
     } finally { task.finish(); }
   });
   handle('link:ma2-layout', async (_event,value:unknown) => {
     try { return await ma2Network.readLayout(ma2LayoutReadRequestSchema.parse(value)); }
-    catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`Layout 读取失败：${String(error)}`,result:'failed'}); throw error; }
+    catch(error) { await recordMa2Failure('读取 Layout', `Layout 读取失败：${String(error)}`, error); throw error; }
   });
   handle('link:ma2-cue-delete-prepare', async (event,value:unknown) => {
     if (ma2Reads.size) throw new Error('请等待当前控台读取结束');
     const request = ma2CueDeletePrepareSchema.parse(value); projectAccess.requireShown(request.projectPath); const task = beginMa2Read(event,request.progressId);
     try { return await ma2Network.prepareCueDeletion(request,task.report); }
-    catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`检查空 Cue 删除清单失败：${String(error)}`,result:'failed'}); throw error; }
+    catch(error) { await recordMa2Failure('检查空 Cue 删除清单', `检查空 Cue 删除清单失败：${String(error)}`, error); throw error; }
     finally { task.finish(); }
   });
   handle('link:ma2-cue-delete-commit', async (event,value:unknown) => {
@@ -1211,13 +1218,13 @@ function registerIpc(
       const result = await ma2Network.commitCueDeletion(request,task.report);
       await logger.record({level:result.error?'error':'info',category:'device',device:'MA2',message:`已删除 ${result.deleted.length} 个空 Cue；备份 ${result.backups.join('；')}；${result.error??'控台确认无误'}`,result:result.error?'failed':'succeeded'});
       return result;
-    } catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`空 Cue 没有删完：${String(error)}`,result:'failed'}); throw error; }
+    } catch(error) { await recordMa2Failure('删除空 Cue', `空 Cue 没有删完：${String(error)}`, error); throw error; }
     finally { task.finish(); }
   });
   handle('link:ma2-song-check', async (_event, value: unknown) => ma2Network.checkSong(ma2SongCheckRequestSchema.parse(value)));
   handle('link:ma2-timecode-ranges', async (_event, value: unknown) => {
     try { return await ma2Network.timecodeRanges(ma2NetworkTargetSchema.parse(value)); }
-    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `读取控台时间码节目范围失败：${String(error)}`, result: 'failed' }); throw error; }
+    catch (error) { await recordMa2Failure('读取控台时间码节目范围', `读取控台时间码节目范围失败：${String(error)}`, error); throw error; }
   });
   handle('link:ma2-song-sync', async (event, value: unknown) => {
     const request = ma2SongSyncRequestSchema.parse(value);
@@ -1230,13 +1237,13 @@ function registerIpc(
         details: { elapsedMs: Math.round(performance.now() - started), changed: result.changed, points: request.points.length } });
       if (result.changed) await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `歌曲序列 ${result.binding.sequence} · ${result.binding.executor ? `执行器 ${result.binding.executor}` : `Layout ${result.binding.layout}`} 已写入控台并确认，备份 ${result.backupFile}`, result: 'succeeded' });
       return result;
-    } catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `歌曲同步停止：${String(error)}`, result: 'failed' }); throw error; }
+    } catch (error) { await recordMa2Failure('歌曲同步', `歌曲同步停止：${String(error)}`, error, request.itemId); throw error; }
     finally { task.finish(); }
   });
   handle('link:ma2-layouts', async (_event, value: unknown) => ma2Network.listLayouts(ma2LayoutDirectoryRequestSchema.parse(value)));
   handle('link:ma2-executor-pages', async (_event, value: unknown) => {
     try { return await ma2Network.listExecutorPages(ma2LayoutDirectoryRequestSchema.parse(value)); }
-    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `读取执行器页面目录失败：${String(error)}`, result: 'failed' }); throw error; }
+    catch (error) { await recordMa2Failure('读取执行器页面目录', `读取执行器页面目录失败：${String(error)}`, error); throw error; }
   });
   handle('link:ma2-live-connect', async (_event, value: unknown) => {
     const request = ma2LiveConnectSchema.parse(value); knownSecrets.add(request.password);
@@ -1258,6 +1265,9 @@ function registerIpc(
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `推杆操作未完成：${String(error)}`, result: 'failed' }); throw error; }
   });
   handle('link:ma2-live-release', () => ma2Network.live().release());
+  // The console page asks every second for each row it shows (C1): read through the Button session's own one-second
+  // cache, never logged in for; a read that fails is shown in its cells and not logged, as the fader reads before it.
+  handle('link:ma2-button-live', (_event, value: unknown) => ma2Network.live().buttonLive(ma2ButtonLiveRequestSchema.parse(value)));
   handle('link:ma2-observe-executor', async (_event, value: unknown) => {
     try { return await ma2Network.live().observe(ma2ExecutorObserveRequestSchema.parse(value)); }
     catch (error) { await logger.record({ level: 'warning', category: 'device', device: 'MA2', message: `读不到控台执行器状态，这首歌不再核对控台在不在跟：${String(error)}`, result: 'failed' }); throw error; }
@@ -1265,7 +1275,7 @@ function registerIpc(
   handle('link:ma2-observer-release', () => ma2Network.live().releaseObserver());
   handle('link:ma2-executor-page', async (_event, value: unknown) => {
     try { return await ma2Network.readExecutorPage(ma2ExecutorPageRequestSchema.parse(value)); }
-    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `读取执行器页面失败：${String(error)}`, result: 'failed' }); throw error; }
+    catch (error) { await recordMa2Failure('读取执行器页面', `读取执行器页面失败：${String(error)}`, error); throw error; }
   });
   handle('link:ma2-executor-update', async (_event, value: unknown) => {
     const request = ma2ExecutorUpdateRequestSchema.parse(value);
@@ -1273,7 +1283,7 @@ function registerIpc(
       const result = await ma2Network.updateExecutor(request);
       await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `执行器 ${request.page}.${request.slot} ${request.action.kind} 已确认，备份 ${result.backupFile}`, result: 'succeeded' });
       return result;
-    } catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `执行器修改需要确认：${String(error)}`, result: 'failed' }); throw error; }
+    } catch (error) { await recordMa2Failure('修改执行器', `执行器修改需要确认：${String(error)}`, error); throw error; }
   });
   handle('link:ma2-executor-channel-choice', async (_event, value: unknown) => {
     const { choice } = ma2ExecutorChannelChoiceRequestSchema.parse(value);
@@ -1295,11 +1305,11 @@ function registerIpc(
   });
   handle('link:ma2-layout-update', async (_event, value: unknown) => {
     try { const result = await ma2Network.updateLayout(ma2LayoutUpdateRequestSchema.parse(value)); await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `Layout ${result.layout} 的名称和位置已确认`, result: 'succeeded' }); return result; }
-    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `Layout 修改未完成：${String(error)}`, result: 'failed' }); throw error; }
+    catch (error) { await recordMa2Failure('修改 Layout', `Layout 修改未完成：${String(error)}`, error); throw error; }
   });
   handle('link:ma2-new-cue', async (_event,value:unknown) => {
     try { const result=await ma2Network.newCue(ma2NewCueRequestSchema.parse(value));await logger.record({level:'info',category:'device',device:'MA2',message:`已新建序列 ${result.sequence}，Layout ${result.layout.layout} 已确认`,result:'succeeded'});return result; }
-    catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`新建 Cue 未完成：${String(error)}`,result:'failed'});throw error; }
+    catch(error) { await recordMa2Failure('新建 Cue', `新建 Cue 未完成：${String(error)}`, error); throw error; }
   });
   handle('link:ma2-rename', async (_event, value: unknown) => {
     const request = ma2RenameRequestSchema.parse(value);
@@ -1310,7 +1320,7 @@ function registerIpc(
       await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `控台改名已确认：Sequence ${result.sequence} ${result.kind === 'single' ? `Cue ${result.cue}` : ''} → ${result.name}；备份 ${result.backupFile}`, result: 'succeeded' });
       return result;
     } catch (error) {
-      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `控台改名未确认：${String(error)}`, result: 'failed' });
+      await recordMa2Failure('控台改名', `控台改名未确认：${String(error)}`, error);
       throw error;
     }
   });
@@ -1333,7 +1343,7 @@ function registerIpc(
       await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `执行器 ${request.executor} 与 Cue 列表已读取`, result: 'succeeded' });
       return result;
     } catch (error) {
-      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: error instanceof Error ? error.message : String(error), result: 'failed' });
+      await recordMa2Failure(`读取执行器 ${request.executor}`, error instanceof Error ? error.message : String(error), error);
       throw error;
     }
   });

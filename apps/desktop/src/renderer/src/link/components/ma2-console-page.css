@@ -1,0 +1,56 @@
+/*
+ * The console page (C1): the show banner under the toolbar, each cell's console state and fader, and the footer with how
+ * keys reach the console. One accent (blue) for the banner's dot; red only for a press that did not reach the console,
+ * yellow for what waits on the console (a value not shown yet, a cell that changed).
+ */
+@layer components {
+  .ma2-console-banner {
+    display: flex; flex: none; align-items: center; gap: var(--space-1); min-width: 0; padding: var(--space-half) var(--space-2);
+    border-bottom: 1px solid var(--color-hairline); color: var(--color-text-secondary); font: 400 var(--type-caption)/1.5 var(--font-ui);
+    white-space: nowrap;
+  }
+  .ma2-console-banner > strong { flex: none; color: var(--color-text); font-weight: 500; }
+  .ma2-console-banner-dot { flex: none; width: var(--space-1); height: var(--space-1); border-radius: var(--radius-pill); background: var(--color-accent); }
+  .ma2-console-banner-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+  .ma2-console-cell-status { display: flex; flex: none; flex-direction: column; gap: var(--space-half); min-width: 0; padding: 0 var(--space-half) var(--space-half); }
+  .ma2-console-cell-line {
+    display: flex; align-items: center; gap: var(--space-half); min-width: 0; overflow: hidden; color: var(--color-text-secondary);
+    font: 400 var(--type-caption)/1.25 var(--font-ui); text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ma2-console-cell-line[data-tone="danger"] { color: var(--color-danger); }
+  .ma2-console-cell-line[data-tone="warning"] { color: var(--color-warning); }
+  .ma2-console-cell-line[data-tone="quiet"], .ma2-console-cell-line[data-stale="true"] { color: var(--color-text-tertiary); }
+  .ma2-console-run { flex: none; width: var(--space-1); height: var(--space-1); border: 1px solid var(--color-border-strong); border-radius: var(--radius-pill); }
+  .ma2-console-cell-line[data-running="true"] { color: var(--color-text); }
+  .ma2-console-cell-line[data-running="true"] .ma2-console-run { border-color: var(--color-success); background: var(--color-success); }
+  .ma2-console-cell-line[data-stale="true"] .ma2-console-run { opacity: 0.5; }
+
+  .ma2-console-fader { display: flex; align-items: center; gap: var(--space-half); min-width: 0; }
+  .ma2-console-fader > input { flex: 1; min-width: 0; height: var(--space-2); margin: 0; accent-color: var(--color-accent); }
+  .ma2-console-fader > output { flex: none; max-width: 50%; overflow: hidden; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.25 var(--font-numeric); text-overflow: ellipsis; white-space: nowrap; }
+  .ma2-console-fader[data-state="late"] > output { color: var(--color-warning); }
+
+  /* A press on its way shows pressed at once; one that did not reach the console marks its own cell only. */
+  .ma2-executor-cell[data-key-state="sending"] .ma2-executor-key { background: var(--color-accent-soft-strong); }
+  .ma2-executor-cell[data-key-state="failed"] { border-color: var(--color-danger); }
+  .ma2-executor-cell[data-running="true"] { border-bottom-color: var(--color-success); }
+  .ma2-executor-band[data-executor-band="fader"]:has(.ma2-console-fader) { flex-basis: calc(var(--space-6) * 2.5); }
+
+  .ma2-console-badge {
+    flex: none; padding: 0 var(--space-half); border-radius: var(--radius-sm); background: var(--color-accent-soft-strong); color: var(--color-accent);
+    font: 400 var(--type-caption)/1.25 var(--font-ui);
+  }
+
+  .ma2-console-footer {
+    display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: var(--space-half) var(--space-2); min-width: 0; padding: var(--space-half) var(--space-2);
+    border-top: 1px solid var(--color-hairline); color: var(--color-text-secondary); font: 400 var(--type-caption)/1.5 var(--font-ui);
+  }
+  .ma2-console-footer-line { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ma2-console-footer-line[data-tone="warning"] { color: var(--color-warning); }
+  .ma2-console-login { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-half) var(--space-1); }
+  .ma2-console-login > form { display: flex; gap: var(--space-half); }
+  .ma2-console-login input { width: calc(var(--space-6) * 3); }
+
+  .ma2-console-wait { color: var(--color-text-secondary); font: 400 var(--type-caption)/1.5 var(--font-ui); }
+}

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { ma2ExecutorFunctions, type LightingReadBack } from '@tb/core/link';
 import { ma2ExecutorInputSchema, type Ma2ExecutorChannel, type Ma2ExecutorInput, type Ma2LayoutDirectoryRequest, type Ma2NetworkTarget } from '@tb/schema';
+import { ma2ButtonLiveRequestSchema, type Ma2ButtonLive, type Ma2ButtonLiveRequest } from '@tb/schema';
 import { ma2ExecutorObserveRequestSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, type Ma2ExecutorObservation, type Ma2ExecutorObserveRequest, type Ma2LiveConnect, type Ma2LiveInput, type Ma2LiveRequest, type Ma2LiveSnapshot } from '@tb/schema';
 import type { SecureProfileStore } from './secure-profile-store';
 import type { Ma2Telnet } from './ma2-telnet';
@@ -233,6 +234,23 @@ export class Ma2LiveService {
       }
     }
     return results;
+  }
+  /**
+   * What the console shows for one row of 15 Button executors, for the console page (C1). Read only on the Button session
+   * that is connected already, through `buttonRead`, so a row is asked at most once a second however often the page and the
+   * keys ask, and never logged in for: with the console plugin chosen nothing goes to the console at all, and a session that
+   * is not connected says so (the next key logs it in again). An answer this software does not understand only throws
+   * (`peek`): the keys keep their session. The Show is not checked: this only shows, the key's own checks still run.
+   */
+  async buttonLive(input: Ma2ButtonLiveRequest): Promise<Ma2ButtonLive> {
+    const request = ma2ButtonLiveRequestSchema.parse(input); this.telnet(request);
+    if (this.channels.chosen() !== 'webRemote') return { kind: 'off', why: 'plugin', reason: 'Button 区的按键走控台插件' };
+    const scope = this.key(request);
+    if (this.channels.forKey(scope, request.start) !== 'webRemote') return { kind: 'off', why: 'unverified', reason: this.channels.buttons(scope).webRemote.reason };
+    const session = this.buttons?.scope === scope && this.buttons.client.connected ? this.buttons : null;
+    if (!session) return { kind: 'off', why: 'disconnected', reason: 'Button 区的网页遥控现在没连着' };
+    const read = await this.buttonRead(session, request.page, request.start, 'peek');
+    return { kind: 'live', page: read.page, start: read.start, readAt: read.readAt, items: read.items.map(item => ({ slot: item.slot, width: item.width, name: item.name, objectNumber: item.objectNumber, running: item.running, cue: item.cue })) };
   }
   /** The borrowed session a read-back range goes on now, or null when it is not connected (`readBack`). */
   private readBackRange(network: Ma2NetworkTarget, scope: string | null, buttons: boolean): ((page: number, start: number) => Promise<{ slot: number; width: number; running: boolean }[]>) | null {

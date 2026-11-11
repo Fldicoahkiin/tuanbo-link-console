@@ -28,6 +28,23 @@ export type Ma2LiveConnect = z.infer<typeof ma2LiveConnectSchema>;
 export type Ma2LiveSnapshot = z.infer<typeof ma2LiveSnapshotSchema>;
 export type Ma2LiveInput = z.infer<typeof ma2LiveInputSchema>;
 
+/** One row of 15 Button executors (101, 116, … 176) the console page shows the console's state for (C1). */
+export const ma2ButtonLiveRequestSchema = ma2ExecutorPageRequestSchema.extend({ start: z.number().int().min(101).max(176).refine(value => (value - 101) % 15 === 0) }).strict();
+/**
+ * What the Button session read for that row, or why there is nothing: `plugin`, the keys go on the console plugin (no
+ * Button session, nothing read); `unverified`, the web remote was chosen but the console's Button area was not read back
+ * (`reason`); `disconnected`, the Button session is not connected now (it logs in again on the next key, not for this).
+ */
+export const ma2ButtonLiveSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('live'), page: z.number().int().min(1).max(9999), start: z.number().int().min(101).max(176), readAt: z.number().finite(),
+    items: z.array(z.object({ slot: z.number().int().min(101).max(190), width: z.number().int().min(1).max(15), name: z.string().max(512), objectNumber: z.string().max(128), running: z.boolean(), cue: z.string().max(1024) }).strict()).max(15)
+  }).strict(),
+  z.object({ kind: z.literal('off'), why: z.enum(['plugin', 'unverified', 'disconnected']), reason: z.string().max(512) }).strict()
+]);
+export type Ma2ButtonLiveRequest = z.infer<typeof ma2ButtonLiveRequestSchema>;
+export type Ma2ButtonLive = z.infer<typeof ma2ButtonLiveSchema>;
+
 /** One executor read back during playback, to confirm the console runs with the timecode. Slots 1–90 are fader executors, 101–190 button executors. */
 export const ma2ExecutorObserveRequestSchema = z.object({ network: ma2NetworkTargetSchema, page: z.number().int().min(1).max(9999), slot: z.number().int().min(1).max(190) }).strict()
   .refine(value => value.slot <= 90 || value.slot >= 101, '执行器格位须在 1–90 或 101–190');
