@@ -56,6 +56,7 @@ export * from './output-failure';
 export * from './output-recovery';
 export * from './program-player';
 export * from './midi-program';
+export * from './midi-late-rule';
 export * from './lighting-output-release';
 export * from './native-program-player';
 export * from './native-audio-analysis';

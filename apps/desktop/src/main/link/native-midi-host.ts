@@ -87,13 +87,16 @@ export class NativeMidiHost {
       prepare: (ids, signal) => ports.prepare(ids, signal), send: (id, bytes, deadline) => ports.send(id, bytes, deadline),
       close: () => ports.close(), now: this.now,
       sent: cueId => { if (this.entry?.session === session) { this.entry.sent = true; this.patch({ currentCueId: cueId }); } },
+      // Missed and late-sent actions are logged and shown on their own lines (2026-11-10); neither stops the channel.
       missed: message => { if (this.entry?.session === session) this.dependencies.fault(message, identity.itemId); },
+      late: message => { if (this.entry?.session === session) this.dependencies.fault(message, identity.itemId); },
       failed: error => {
         // While its port is waited for, the lost port was reported once above; the dead helper's close is not news.
         if (!this.lost) this.dependencies.error(error.message);
         if (this.entry?.session === session) this.patch({ state: 'failed', reason: error.message });
       }
-    });
+    // The playing program is a live show: a message that did not go out is marked red and the rest goes on.
+    }, 'live');
     const state: NativeMidiChannelState = { ...identity, state: 'preparing', reason: null, currentCueId: null };
     const opened: Entry = { identity, session, state, resumed: outage !== null, skipped: 0, sent: false }; entry = opened; this.entry = opened; this.dependencies.changed(state);
     try {

@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type NativePlayerStatus } from '@tb/schema';
 import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
 import { MidiOutputFailure } from './native-midi-output';
-import { frameNumberToTimecode } from '@tb/core/link';
+import { frameNumberToTimecode, MidiMessageSkipped } from '@tb/core/link';
 
 function fixture(cueFrames: readonly number[] = [0]) {
   const project = parseLinkProject({ ...createEmptyLinkProject('后台 MIDI 宿主'), playbackSource: 'internal', rundown: [{ id: 'song', title: '节目',
@@ -31,7 +31,8 @@ it('仅实际设备时钟开始通用 MIDI，音频原始偏移不重复加到�
   f.observe({ status: 'playing', generation: 2 }, null); expect(f.ports.send).not.toHaveBeenCalled();
   f.observe({ status: 'playing', generation: 2, positionMs: 20 });
   await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledOnce());
-  expect(f.ports.send).toHaveBeenCalledWith('out', [0xc0, 1], 1080);
+  // Program Change: the helper gets until one second after it is handed over (2026-11-10, midi-late-rule.ts).
+  expect(f.ports.send).toHaveBeenCalledWith('out', [0xc0, 1], 2000);
   expect(f.host.status?.state).toBe('running'); expect(f.errors).toEqual([]); await f.host.stop();
 });
 
@@ -68,11 +69,24 @@ it('新音频会话替换及停止使旧 MIDI 队列失效，不依赖界面转�
   expect(f.ports.close).toHaveBeenCalledOnce(); expect(f.ports.send).not.toHaveBeenCalled();
 });
 
-it('主进程卡顿后迟到的设备位置：错过的动作标红记录，通道继续运行', async () => {
+// 2026-11-10 第 6 题改了这条：以前晚到的 Program Change 记为错过、不发；现在照发并标红写明晚了多少。
+it('主进程卡顿后迟到的设备位置：晚到的 PC 照发并标红，通道继续运行', async () => {
   const f = fixture(); await f.host.prepare(f.project, f.identity);
   f.observe({ status: 'playing', generation: 2, positionMs: 20 }, '8000000');
-  expect(f.faults).toEqual([['播放位置更新中断，错过了 1 个 MIDI 动作，没有补发', 'song']]);
-  expect(f.ports.send).not.toHaveBeenCalled(); expect(f.errors).toEqual([]); expect(f.host.status?.state).toBe('running');
+  await vi.waitFor(() => expect(f.faults).toHaveLength(1));
+  expect(f.faults[0]?.[0]).toContain('MIDI 动作晚了 220 ms 才发出：PC 1'); expect(f.faults[0]?.[1]).toBe('song');
+  expect(f.ports.send).toHaveBeenCalledWith('out', [0xc0, 1], 2000); expect(f.errors).toEqual([]); expect(f.host.status?.state).toBe('running');
+  await f.host.stop();
+});
+
+it('接口只拒绝这一条（-7、-6）：标红记下，通道不停，下一条照发，不等端口恢复', async () => {
+  const f = fixture([0, 60]); await f.host.prepare(f.project, f.identity);
+  f.ports.send.mockRejectedValueOnce(new MidiMessageSkipped('上一条 SysEx 没有及时发完（错误码 -6）', -6));
+  f.observe({ status: 'playing', generation: 2, positionMs: 20 });
+  await vi.waitFor(() => expect(f.faults).toHaveLength(1));
+  expect(f.faults[0]?.[0]).toContain('MIDI 动作没有发出：PC 1');
+  f.observe({ positionMs: 2010 }); await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(2));
+  expect(f.host.status?.state).toBe('running'); expect(f.errors).toEqual([]); expect(f.outputs).not.toHaveBeenCalled();
   await f.host.stop();
 });
 
@@ -108,7 +122,7 @@ it('播放中动作 MIDI 接口断开：同一接口回来后从当前位置起�
   expect(f.ports.prepare).toHaveBeenCalledTimes(2); expect(f.host.status?.state).toBe('ready');
   f.observe({ positionMs: 4010 });
   await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(2));
-  expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 1090);
+  expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 2000);
   expect(f.faults).toHaveLength(1); expect(f.errors).toEqual([]);
   await f.host.stop();
 });
@@ -126,7 +140,7 @@ it('重新打开后首个动作发送失败：继续等待同一接口并再次�
   f.observe({ positionMs: 2500 });
   await vi.waitFor(() => expect(f.recovered).toHaveLength(2), { timeout: 3000 });
   f.observe({ positionMs: 4010 }); await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(3));
-  expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 1090); expect(f.faults).toHaveLength(2); expect(f.errors).toEqual([]);
+  expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 2000); expect(f.faults).toHaveLength(2); expect(f.errors).toEqual([]);
   expect(f.recovered[1]?.[0].fault).toContain('第一个动作没有发出');
   await f.host.stop();
 });

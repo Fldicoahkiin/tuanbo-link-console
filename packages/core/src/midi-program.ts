@@ -1,6 +1,8 @@
 import type { LinkAction, LinkProject } from '@tb/schema';
 import { compileRundownTimelineCues } from './timeline-state';
 import { playbackFramesPerSecond } from './mtc-timecode';
+import { midiLateVerdict, midiMessageKind, MidiMessageSkipped } from './midi-late-rule';
+import { OutputFailureRecord, type OutputMode } from './output-failure';
 
 export type MidiAction = Extract<LinkAction, { kind: `midi.${string}` }>;
 export function isMidiAction(action: LinkAction): action is MidiAction { return action.kind.startsWith('midi.'); }
@@ -33,33 +35,38 @@ export function buildMidiShowControlMessage(action: Extract<MidiAction, { kind: 
 /** Stopping never waits for a license (2026-11-09, docs/LICENSE_IMPLEMENTATION.md): a Note Off and a MIDI Show Control
  * Stop end what a song started and go out without one. Every other message is new content and stays licensed, a Note On
  * with velocity 0 included. The one rule for both senders, on the bytes they send: the window's MIDI adapter
- * (link-midi-adapter) and the playback program (NativeMidiPorts). */
+ * (link-midi-adapter) and the playback program (NativeMidiPorts). The stop-type messages are the `release` kind of
+ * the late rule (midi-late-rule.ts), so "always goes out" means the same for the license and for lateness. */
 export function midiMessageNeedsLicense(bytes: readonly number[]): boolean {
-  const [status] = bytes;
-  if (status !== undefined && (status & 0xf0) === 0x80) return false;
-  // MSC: F0 7F <device> 02 <command format> <command>, where command 02 is Stop.
-  return !(status === 0xf0 && bytes[1] === 0x7f && bytes[3] === 0x02 && bytes[5] === 0x02);
+  return midiMessageKind(bytes) !== 'release';
 }
 
 type Event = { atMs: number; cueId: string; action: MidiAction; token: number; release: boolean };
 export type MidiProgramDependencies = {
   prepare(portProfileIds: readonly string[], signal: AbortSignal): Promise<void>;
+  /** Rejects with `MidiMessageSkipped` when only this message was refused; any other rejection means the port failed. */
   send(portProfileId: string, bytes: readonly number[], deadlineAtMs: number): Promise<void>;
   /** Cancel unsent commands immediately; resolve only after owned notes and
    * driver buffers are released. Never reset other senders' notes. */
   close(): Promise<void>;
   now(): number;
   sent(cueId: string, actionId: string, release: boolean): void;
-  /** Actions skipped because the audio position arrived or was sent too late;
-   * the channel keeps running. */
+  /** Actions that did not go out (too late, refused one by one, or held in a rehearsal); the channel keeps running. */
   missed(message: string): void;
+  /** Program Change and Control Change that went out late; the channel keeps running. */
+  late(message: string): void;
   failed(error: Error): void;
 };
 
+/** What the actions of one clock observation came to, reported once after they have all been handled. */
+type Tick = { missed: string[]; late: { label: string; lateMs: number }[]; refused: { label: string; reason: string }[]; held: number };
+
 /** Generic MIDI channel driven by observations of the actual audio device.
  * Note durations are timeline events, never uncancellable wall-clock timers.
- * An action past its 100ms boundary is reported missed and never sent later;
- * the release of a note this session sent still goes out. */
+ * Lateness follows `midiLateVerdict` (2026-11-10): a press 100 ms or more late is skipped and never sent later, a
+ * Program Change or Control Change goes out late and is marked red, a release always goes out (only the release of
+ * a note this session sent). One late or refused message never stops the channel; only a port failure does. In a
+ * rehearsal the first message that did not go out holds the later ones (AGENTS §4.8), releases still go out. */
 export class MidiProgramSession {
   private readonly events: readonly Event[];
   private readonly ports: readonly string[];
@@ -75,10 +82,12 @@ export class MidiProgramSession {
   private closing: Promise<void> | null = null;
   /** Audio position of the first action not sent because the session failed. */
   private unsentFromMs: number | null = null;
+  private readonly failures: OutputFailureRecord;
 
-  constructor(project: LinkProject, itemId: string, private readonly dependencies: MidiProgramDependencies) {
+  constructor(project: LinkProject, itemId: string, private readonly dependencies: MidiProgramDependencies, mode: OutputMode) {
     const item = project.rundown.find(entry => entry.id === itemId);
     if (project.playbackSource !== 'internal' || !item || !item.enabled) throw new Error('后台 MIDI 只支持已启用的“联动台播放”节目');
+    this.failures = new OutputFailureRecord(mode);
     let token = 0;
     const events: Event[] = [];
     for (const { cue, scheduledFrame } of compileRundownTimelineCues(item, project.timebase.frameRate)) {
@@ -129,40 +138,27 @@ export class MidiProgramSession {
 
   clock(positionMs: number, observedAtMs: number): void {
     if (this.state !== 'ready' && this.state !== 'running') return;
-    try {
-      const now = this.dependencies.now(), age = now - observedAtMs;
-      if (!Number.isFinite(positionMs) || positionMs < this.position || !Number.isFinite(age) || age < 0) {
-        throw new Error('MIDI 收到的音频位置倒退或无效，已停止 MIDI 输出，不补发之前的动作');
+    const now = this.dependencies.now(), age = now - observedAtMs;
+    if (!Number.isFinite(positionMs) || positionMs < this.position || !Number.isFinite(age) || age < 0) {
+      this.fail(new Error('MIDI 收到的音频位置倒退或无效，已停止 MIDI 输出，不补发之前的动作')); return;
+    }
+    this.state = 'running'; this.position = positionMs;
+    const tick: Tick = { missed: [], late: [], refused: [], held: 0 }, epoch = this.epoch;
+    let missed = 0, handled = 0;
+    while (this.cursor < this.events.length && this.events[this.cursor]!.atMs <= positionMs) {
+      const event = this.events[this.cursor++]!; handled++;
+      // When the device clock says this action was due, on the same clock as `now`.
+      const dueAtMs = observedAtMs - (positionMs - event.atMs);
+      let bytes: number[];
+      try { bytes = encodeMidiAction(event.action); } catch (error) {
+        const reason = toError(error).message;
+        tick.refused.push({ label: event.action.label, reason }); this.itemFailed(event, 'midi-message-invalid', reason); continue;
       }
-      this.state = 'running'; this.position = positionMs;
-      let missed = 0;
-      while (this.cursor < this.events.length && this.events[this.cursor]!.atMs <= positionMs) {
-        const event = this.events[this.cursor++]!;
-        const deadline = observedAtMs + 100 - Math.max(0, positionMs - event.atMs), epoch = this.epoch;
-        if (!event.release && deadline <= now) { missed++; continue; }
-        if (this.queued >= 32) throw new Error('MIDI 动作积压，已停止 MIDI 输出');
-        this.queued++;
-        this.tail = this.tail.then(async () => {
-          if (epoch !== this.epoch || this.failure) { if (this.failure && !event.release) this.unsentFromMs ??= event.atMs; return; }
-          const key = noteKey(event.action), owned = key ? this.notes.get(key) : undefined;
-          if (event.release) {
-            if (!owned?.delete(event.token)) return;
-            if (owned.size) return;
-            this.notes.delete(key!);
-          }
-          const sending = this.dependencies.now();
-          if (!event.release && sending >= deadline) { this.dependencies.missed(`MIDI 动作晚了超过 100 ms，没有补发：${event.action.label}`); return; }
-          await this.dependencies.send(event.action.portProfileId, encodeMidiAction(event.action), event.release ? Math.max(deadline, sending + 100) : deadline);
-          if (epoch !== this.epoch || this.failure) return;
-          if (key && event.action.kind === 'midi.noteOn' && event.action.velocity > 0) {
-            const notes = this.notes.get(key) ?? new Set<number>(); notes.add(event.token); this.notes.set(key, notes);
-          } else if (key) this.notes.delete(key);
-          this.dependencies.sent(event.cueId, event.action.id, event.release);
-        }).catch(error => { if (!event.release) this.unsentFromMs ??= event.atMs; if (epoch === this.epoch) this.fail(toError(error)); })
-          .finally(() => { this.queued--; });
-      }
-      if (missed) this.dependencies.missed(`播放位置更新中断，错过了 ${missed} 个 MIDI 动作，没有补发`);
-    } catch (error) { this.fail(toError(error)); }
+      if (!midiLateVerdict(bytes, dueAtMs, now).send) { missed++; this.itemFailed(event, 'midi-message-late', '播放位置更新晚了'); continue; }
+      this.queue(event, bytes, dueAtMs, epoch, tick);
+    }
+    if (missed) this.dependencies.missed(`播放位置更新中断，错过了 ${missed} 个 MIDI 动作，没有补发`);
+    if (handled) this.tail = this.tail.then(() => { if (epoch === this.epoch) this.report(tick); });
   }
 
   close(): Promise<void> {
@@ -178,6 +174,57 @@ export class MidiProgramSession {
     return this.closing;
   }
 
+  private queue(event: Event, bytes: readonly number[], dueAtMs: number, epoch: number, tick: Tick): void {
+    this.queued++;
+    this.tail = this.tail.then(async () => {
+      if (epoch !== this.epoch || this.failure) { if (this.failure && !event.release) this.unsentFromMs ??= event.atMs; return; }
+      if (this.holding() && midiMessageKind(bytes) !== 'release') { tick.held++; return; }
+      const key = noteKey(event.action), owned = key ? this.notes.get(key) : undefined;
+      if (event.release) {
+        if (!owned?.delete(event.token)) return;
+        if (owned.size) return;
+        this.notes.delete(key!);
+      }
+      const verdict = midiLateVerdict(bytes, dueAtMs, this.dependencies.now());
+      if (!verdict.send) { tick.missed.push(event.action.label); this.itemFailed(event, 'midi-message-late', '排队等发送时晚了'); return; }
+      let confirmed = true;
+      try { await this.dependencies.send(event.action.portProfileId, bytes, verdict.deadlineAtMs); } catch (error) {
+        if (!(error instanceof MidiMessageSkipped)) throw error;
+        tick.refused.push({ label: event.action.label, reason: error.message });
+        this.itemFailed(event, error.code === -1 ? 'midi-message-invalid' : 'midi-message-late', error.message);
+        // Taken by the driver but confirmed late: its note is still this session's to release.
+        if (!error.possiblySent) return;
+        confirmed = false;
+      }
+      if (epoch !== this.epoch || this.failure) return;
+      if (key && event.action.kind === 'midi.noteOn' && event.action.velocity > 0) {
+        const notes = this.notes.get(key) ?? new Set<number>(); notes.add(event.token); this.notes.set(key, notes);
+      } else if (key) this.notes.delete(key);
+      if (!confirmed) return;
+      if (verdict.markLate) tick.late.push({ label: event.action.label, lateMs: Math.round(verdict.lateMs) });
+      this.dependencies.sent(event.cueId, event.action.id, event.release);
+    }).catch(error => { if (!event.release) this.unsentFromMs ??= event.atMs; if (epoch === this.epoch) this.fail(toError(error)); })
+      .finally(() => { this.queued--; });
+  }
+
+  /** One message did not go out: only this one, unless a rehearsal holds the rest (output-failure.ts). */
+  private itemFailed(event: Event, kind: 'midi-message-late' | 'midi-message-invalid', detail: string): void {
+    this.failures.report({ scope: 'item', channel: 'actionMidi', item: `${event.cueId}/${event.action.id}`, kind, detail });
+  }
+  private holding(): boolean { return this.failures.holding !== null; }
+
+  private report(tick: Tick): void {
+    if (tick.missed.length) this.dependencies.missed(`MIDI 动作晚了超过 100 ms，没有补发：${labels(tick.missed)}`);
+    const reasons = new Map<string, string[]>();
+    for (const { label, reason } of tick.refused) reasons.set(reason, [...reasons.get(reason) ?? [], label]);
+    for (const [reason, refused] of reasons) this.dependencies.missed(`MIDI 动作没有发出：${labels(refused)}，后面的动作照常发送。原因：${reason}`);
+    if (tick.late.length) {
+      const most = Math.max(...tick.late.map(entry => entry.lateMs));
+      this.dependencies.late(`MIDI 动作晚了 ${most} ms 才发出：${labels(tick.late.map(entry => entry.label))}。请看一下接收的设备有没有切过去；经常这样时，检查电脑是否太忙`);
+    }
+    if (tick.held) this.dependencies.missed(`排练时前面的 MIDI 动作没有发出，后面的 ${tick.held} 个动作不再发送。检查后重新播放这首歌`);
+  }
+
   private fail(error: Error): void {
     if (this.failure || this.state === 'closed') return;
     this.failure = error; this.state = 'failed'; this.dependencies.failed(error);
@@ -185,6 +232,10 @@ export class MidiProgramSession {
   }
 }
 
+/** Up to three names, then how many there were in all. */
+function labels(names: readonly string[]): string {
+  return names.length > 3 ? `${names.slice(0, 3).join('、')} 等 ${names.length} 个` : names.join('、');
+}
 function toError(error: unknown): Error { return error instanceof Error ? error : new Error(String(error)); }
 function noteKey(action: MidiAction): string | null {
   return action.kind === 'midi.noteOn' || action.kind === 'midi.noteOff' ? JSON.stringify([action.portProfileId, action.channel, action.note]) : null;
