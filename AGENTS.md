@@ -104,7 +104,7 @@ docs/                           设计、实施、验收和服务器安装说明
 | 自己恢复几次算到头 | `packages/core/src/output-recovery.ts` 一张表（2026-11-11）：声卡 1 分钟断流 5 次停这首歌，时间码一首歌失败 3 次这首歌不再发，等等。别处不写重试次数；每次恢复都标红、记日志 |
 | 欠着的关灯 | 规则在 `packages/core/src/lighting-off-ledger.ts`（2026-11-11）：停止关这首歌的执行器，换歌只关上一首独有的，正在用的绝不关。全应用一张清单，主人是主进程 `apps/desktop/src/main/link/lighting-off-service.ts`：节目、试听（`link:lighting-off`）、退出时的询问和演出状态都经它；没发出去的留着，控台重新连上后补发 1 次（次数在 `output-recovery.ts`），再按停止全部重发；关灯不过授权。别处不再自己发 Off、不另记“还欠着” |
 | 节目现在在哪一步、这时能做什么 | 规则在 `packages/core/src/show-state.ts` 的 `showGate`，状态由主进程 `apps/desktop/src/main/link/show-state-service.ts` 算（2026-11-11），界面只照着显示（`stores/show-state-store.ts`）。新的“播放时不能做”都问它，不再各处自己判断“在不在播放” |
-| 按键谁来处理 | `apps/desktop/src/renderer/src/link/keys/`（2026-11-11）：窗口上只有 `key-router.ts` 一个按键监听，一次按键归谁由 `key-route.ts` 的 `routeKey` 按“输入框、弹窗、拖动、页面、全局”的顺序定，键位在 `keymap.ts` 一张表。组件自己用的键用 `ownKeys` 声明；Esc 能关的面板、菜单和列表用 `useKeyOverlay` 登记，由路由关最上面那一个，自己不听 Esc（都由 `key-routing-scan.test.ts` 守着）。不再往 window 或 document 上新加 keydown 监听；拖动、时间线和灯光快捷键这几处旧监听还在，接完之前按 `key-router.ts` 开头写的方式让路 |
+| 按键谁来处理 | `apps/desktop/src/renderer/src/link/keys/`（2026-11-11）：窗口上只有 `key-router.ts` 一个按键监听，一次按键归谁由 `key-route.ts` 的 `routeKey` 按“输入框、弹窗、拖动、页面、全局”的顺序定，键位在 `keymap.ts` 一张表。组件自己用的键用 `ownKeys` 声明；Esc 能关的面板、菜单和列表用 `useKeyOverlay` 登记，由路由关最上面那一个，自己不听 Esc；拖动用 `useDragSession`（Esc 能取消）或 `useCapturedDrag`（边拖边写、取消不了）登记，拖动中的 Esc 和会改工程的键由路由拦，拖动自己不听按键（都由 `key-routing-scan.test.ts` 守着）。不再往 window 或 document 上新加 keydown 监听；时间线和灯光快捷键这两处旧监听还在，接完之前按 `key-router.ts` 开头写的方式让路 |
 
 同一次复盘定下的另外几条：
 
