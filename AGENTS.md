@@ -97,6 +97,7 @@ docs/                           设计、实施、验收和服务器安装说明
 | 怎么认控台 | 只按编号认，不看 Show 名和 IP（`packages/core/src/ma2-console-identity.ts`） |
 | 歌和控台时间线怎么配对 | 只看时间码节目编号和 MTC 起始码（`packages/core/src/ma2-pairing-state.ts`） |
 | MA2 同步 | 方式 1、方式 2 和改名走同一个逐首同步、同一份状态（`runtime/ma2-song-sync.ts`、`stores/ma2-sync-store.ts`） |
+| 执行器按键和推杆走哪条通道 | `apps/desktop/src/main/link/ma2-executor-channel.ts`（2026-11-11）：推杆和推杆页的按键走网页遥控；执行器页 Button 区（101–190）的按键默认走控台插件，和 0.5.8 一样，这时对控台不多连、不多读。操作员在 Button 栏的小菜单里选了网页遥控（每台电脑记住，`runtime/ma2-realtime-preference.ts`）才去试读 Button 区，读回的格号和请求的一致才走网页遥控，否则照旧走插件并写明原因；1–90 和 191 以后的按键一直走插件。通道只因为操作员改选择或重新连接而变，出错不换，演出中也一样（`ma2-channel-rules.test.ts` 守着）。两条通道上松开都会取消还在路上的按下。别处不再自己判断按键走哪条 |
 | 顶栏和各处显示的状态 | `view-models/status-center.ts` |
 | 内容时间线的放置、移动、修剪 | `packages/core/src/content-timeline.ts` |
 | 拖动、修剪时落在哪 | `apps/desktop/src/renderer/src/link/components/drag-preview.ts`（2026-11-11）：按下时拍一份快照（时间线在屏幕上的位置、每条轨道的位置、吸附点），之后每帧用 `dragTarget`、`trimTarget` 算一次，直接写到页面上，松手才发一条命令；放置和修剪的规则仍只在 `content-timeline.ts`。音频片段、灯光点的拖动和框选用 `useFramedDrag` 每帧算一次。不再用 `elementFromPoint` 找轨道，不在每次鼠标移动时更新 React 状态（`drag-preview.test.ts` 守着） |
