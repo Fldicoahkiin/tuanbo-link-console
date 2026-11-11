@@ -33,7 +33,7 @@ export function timelineLayout(props: LayoutInput, contentWidth: number, pixelsP
   return {
     contentStyle,
     headingStyle: { gridTemplateRows: contentStyle.gridTemplateRows },
-    visualTracks: { start: timelineRulerHeight(props) + audioRows * audioHeight, lightingIndex, lightingHeight: lightingRows * 72 },
+    visualTracks: { start: timelineRulerHeight(props) + audioRows * audioHeight, lightingIndex, lightingHeight: lightingRows * 72, coveredTop: timelineRulerHeight(props) },
     waveformContentWidth: props.referenceAudio ? Math.min(contentWidth, props.referenceAudio.durationMs / 1_000 * pixelsPerSecond) : contentWidth
   };
 }

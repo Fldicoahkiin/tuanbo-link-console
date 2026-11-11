@@ -1,13 +1,5 @@
 import { LightingTempoMap, lightingEventTime, timecodeToMilliseconds, type ResolvedTimelineState } from '@tb/core/link';
 import type { LightingDocument, LinkCue, MtcFrameRate, ReferenceMediaClip } from '@tb/schema';
-import type { TimelineDrag } from './TimelineItems';
-
-export function timelineSnapGuide(props: { clips: ReferenceMediaClip[]; cues: LinkCue[]; timelineState: ResolvedTimelineState; frameRate: MtcFrameRate; playheadMs: number; durationMs: number }, enabled: boolean, moving: TimelineDrag | null): number | undefined {
-  if (!enabled || !moving?.moved) return undefined;
-  const duration = timelineItemDuration(props, moving);
-  return [0, props.durationMs, ...timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playheadMs, moving)]
-    .find(point => Math.abs(point - moving.previewMs) < 1 || Math.abs(point - moving.previewMs - duration) < 1);
-}
 
 /** How long a clip or cue lasts on the timeline; an instant cue lasts 0. */
 export function timelineItemDuration(props: { clips: readonly ReferenceMediaClip[]; cues: readonly LinkCue[] }, target: { kind: 'clip' | 'cue'; id: string }): number {

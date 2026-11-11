@@ -33,8 +33,8 @@ function drawn(project: LinkProject, onAirtime: Airtime | null, pending: Readonl
     layers: item.visualLayers, clips: item.referenceMediaClips, cues: item.cues, assets: new Map(), frameRate: project.timebase.frameRate, durationMs: 20_000,
     playhead: new EditorPlayhead(9_000), timelineState: new TimelineStateIndex(project, item).at(9_000), airtime: new SceneOutputTimeline(project, 'song').airtime(), onAirtime, pending,
     selectedClipId: null, selectedCueId: null, audioSnapPoints: [], rules: contentEditRules(project, 'song'),
-    viewport: { pixelsPerSecond: 50, scrollLeft: 0, scrollTop: 0, viewportWidth: 2_000, viewportHeight: 600, timeAtClientX: () => 0, editTimeAtClientX: () => 0 },
-    tracks: { start: 0, lightingIndex: item.visualLayers.length, lightingHeight: 0 }, snap: { enabled: false, thresholdMs: 0 }, lanePointer: {},
+    viewport: { viewportRef: { current: null }, pixelsPerSecond: 50, scrollLeft: 0, scrollTop: 0, viewportWidth: 2_000, viewportHeight: 600, timeAtClientX: () => 0 },
+    tracks: { start: 0, lightingIndex: item.visualLayers.length, lightingHeight: 0, coveredTop: 0 }, snap: { enabled: false, thresholdMs: 0 }, lanePointer: {},
     focusTimeline: vi.fn(), onOpenMenu: vi.fn(), onSelectClip: vi.fn(), onSelectCue: vi.fn(), onMoveClip: vi.fn(), onMoveCue: vi.fn(), onTrim: vi.fn(),
     onDropAsset: vi.fn(), onDropObsResource: vi.fn()
   };

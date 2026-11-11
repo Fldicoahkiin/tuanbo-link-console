@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import {
   addMediaAssetCommand,
   frameNumberToTimecode,
@@ -44,6 +45,17 @@ export type WorkspaceActionsInput = {
   setSelectedAssetId: (id: string | null) => void;
   setSelectedObsResource: (resource: ObsResource | null) => void;
 };
+
+/**
+ * The editor's actions, the same functions until what they act on changes (0.5.9 E3): the playhead is read when an
+ * action runs, so the page does not draw again as it moves and the timeline's props stay the same between edits.
+ */
+export function useWorkspaceActions(input: Omit<WorkspaceActionsInput, 'project' | 'playheadMs'> & { project: LinkProject | null; playhead: { read(): number } }): ReturnType<typeof createWorkspaceActions> | null {
+  const { project, projectPath, documentId, item, cue, playhead, coordinator, execute, notify, setSelectedCueId, setSelectedClipId, setSelectedAssetId, setSelectedObsResource } = input;
+  return useMemo(() => project ? createWorkspaceActions({ project, projectPath, documentId, item, cue, get playheadMs() { return playhead.read(); },
+    coordinator, execute, notify, setSelectedCueId, setSelectedClipId, setSelectedAssetId, setSelectedObsResource }) : null,
+  [project, projectPath, documentId, item, cue, playhead, coordinator, execute, notify, setSelectedCueId, setSelectedClipId, setSelectedAssetId, setSelectedObsResource]);
+}
 
 export function createWorkspaceActions(input: WorkspaceActionsInput) {
   const mediaActions = createMediaActions(input);

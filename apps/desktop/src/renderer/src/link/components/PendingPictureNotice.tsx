@@ -26,9 +26,9 @@ export type PressTarget = Pick<EventTarget, 'addEventListener' | 'removeEventLis
  * pointercancel, and it ends with a drop or a dragend instead of a pointerup.
  *
  * An end is told a task later, once every handler of that event ran. The timeline works out where a dragged part
- * lands from the layout at the release (useTimelineItemDrag: elementFromPoint); told at once, React would remove or
- * insert the row in the microtask between the window's listener and the timeline's own, and the part would land on
- * the track 28 px away, possibly a hidden or locked one. A press or drag beginning before then goes on holding (a
+ * lands from where the timeline was on screen at the press (drag-preview.ts snapshot) and the release; told at once,
+ * React would remove or insert the row in the microtask between the window's listener and the timeline's own, and the
+ * part would land on the track 28 px away, possibly a hidden or locked one. A press or drag beginning before then goes on holding (a
  * quick double click). Losing focus ends a press at once: nothing in the window sees its release. Returns the way to
  * stop, which also drops an end not told yet.
  */

@@ -6,9 +6,9 @@ import {
   DEFAULT_TIMELINE_PIXELS_PER_SECOND,
   fitTimelinePixelsPerSecond,
   MAX_TIMELINE_PIXELS_PER_SECOND,
-  MAX_TIMELINE_TIME_MS,
   MIN_TIMELINE_PIXELS_PER_SECOND,
   timelineContentWidth,
+  timelineEditTimeFromClientX,
   timelineTimeFromClientX
 } from './timeline-geometry';
 
@@ -194,7 +194,7 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
     },
     editTimeAtClientX: (clientX) => {
       const viewport = viewportRef.current;
-      return viewport ? Math.min(MAX_TIMELINE_TIME_MS, Math.max(0, (clientX - viewport.getBoundingClientRect().left + viewport.scrollLeft) / pixelsPerSecond * 1000)) : 0;
+      return viewport ? timelineEditTimeFromClientX({ clientX, viewportLeft: viewport.getBoundingClientRect().left, scrollLeft: viewport.scrollLeft, pixelsPerSecond }) : 0;
     },
     zoomIn: () => zoomAt(pixelsPerSecond * 1.25),
     zoomOut: () => zoomAt(pixelsPerSecond / 1.25),

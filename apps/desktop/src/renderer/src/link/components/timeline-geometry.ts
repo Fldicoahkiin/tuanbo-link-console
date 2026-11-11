@@ -104,6 +104,11 @@ export function timelineTimeFromClientX(input: {
   return clampTimelineTime(contentX / input.pixelsPerSecond * 1_000, input.durationMs);
 }
 
+/** The time at `clientX` while editing: not held to the song's length, only to a day (a part may be moved past the end). */
+export function timelineEditTimeFromClientX(input: { clientX: number; viewportLeft: number; scrollLeft: number; pixelsPerSecond: number }): number {
+  return Math.min(MAX_TIMELINE_TIME_MS, Math.max(0, (input.clientX - input.viewportLeft + input.scrollLeft) / input.pixelsPerSecond * 1000));
+}
+
 export function chooseTimelineTickInterval(pixelsPerSecond: number): number {
   return TICK_INTERVALS_MS.find((interval) => interval / 1_000 * pixelsPerSecond >= 72)
     ?? TICK_INTERVALS_MS.at(-1)!;
