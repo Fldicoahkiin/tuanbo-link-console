@@ -19,12 +19,12 @@ const project: LinkProject = parseLinkProject({
   ]
 });
 
-function draw(selectedId: string, playlistId: string, search = '', locked = false): string {
-  const filteredItems = playlistItems(project, playlistId).filter(item => item.title.includes(search));
+function draw(selectedId: string, playlistId: string, search = '', locked = false, shown: LinkProject = project): string {
+  const filteredItems = playlistItems(shown, playlistId).filter(item => item.title.includes(search));
   return renderToStaticMarkup(React.createElement(ProjectLibrary, {
     onImportSongs: () => undefined, onOpenCueEditor: () => undefined, onImportFiles: () => Promise.resolve(), onAddItem: () => undefined,
-    playedItemIds: [], playlistHost: null, notify: () => undefined, locked, metadataLocked: locked, project, revision: 1, filteredItems,
-    selectedItem: project.rundown.find(item => item.id === selectedId) ?? null, selectedItemId: selectedId, selectedPlaylistId: playlistId, search,
+    playedItemIds: [], playlistHost: null, notify: () => undefined, locked, metadataLocked: locked, volumeLocked: false, project: shown, revision: 1, filteredItems,
+    selectedItem: shown.rundown.find(item => item.id === selectedId) ?? null, selectedItemId: selectedId, selectedPlaylistId: playlistId, search,
     currentItemId: null, onSelectPlaylist: () => undefined, onSearch: () => undefined, onChooseItem: () => undefined,
     onChooseReference: () => undefined, onSelectCurrentItem: () => undefined
   }));
@@ -48,5 +48,18 @@ describe('首页上移、下移按看得见的歌曲走', () => {
     expect(searching).toContain('搜索结果里不能调整顺序，清空搜索后再拖动');
     expect(draw('a1', 'a', '', true)).toContain('正在播放或处理中，停下后才能调整顺序');
     expect(draw('a1', 'a')).toContain('按住拖动可以调整顺序');
+  });
+});
+
+describe('每首歌自己的音量（2026-11-09）', () => {
+  it('挂着歌时节目属性里的“歌曲音量”照样能改，其余播放属性停下后才能改；旁边写明 P1 跟随时由 P1 控制', () => {
+    const html = draw('a1', 'all', '', true, { ...project, playbackSource: 'internal' });
+    const volume = /<input[^>]*aria-label="歌曲音量"[^>]*>/.exec(html)?.[0] ?? '';
+    expect(volume).not.toBe('');
+    expect(volume).not.toContain('disabled');
+    // The volume sits before the fieldset that locks the other playback settings while a song plays.
+    expect(html.indexOf('aria-label="歌曲音量"')).toBeLessThan(html.indexOf('<fieldset disabled'));
+    expect(html.indexOf('aria-label="开始（秒）"')).toBeGreaterThan(html.indexOf('<fieldset disabled'));
+    expect(html).toContain('只用于联动台播放；P1 跟随时由 P1 控制音量');
   });
 });

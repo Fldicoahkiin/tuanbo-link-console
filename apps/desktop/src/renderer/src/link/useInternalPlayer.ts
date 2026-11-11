@@ -4,6 +4,7 @@ import { PlayerViewStore } from './stores/player-view-store';
 import { PlaybackMidiInput } from '../registry/playback-midi-input';
 import { emptyInternalPlayerState, firstTimeWarning, mtcOutputSettings, toUserErrorMessage } from '@tb/core/link';
 import { RemoteNativeProgramPlayer, type RemotePlayerDependencies } from './runtime/remote-native-program-player';
+import { songVolumeSync } from './runtime/song-volume-sync';
 import { playerEngineLabel } from './view-models/internal-audio-engine';
 import { holdsSong } from './view-models/picture-on-air';
 import type { LinkRuntimeCoordinator } from './runtime/link-runtime-coordinator';
@@ -54,6 +55,13 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     void input.connect(controlInputName).catch((error: unknown) => controller.reportUnavailable(`播放控制 MIDI 不可用：${String(error)}`));
     return () => input.dispose();
   }, [controller, controlInputName]);
+  useEffect(() => {
+    if (!controller || !project) return;
+    // Volume-only stand-in for the version stream (song-volume-sync): a saved song volume reaches the program at once.
+    const sync = songVolumeSync(project, (itemId, volume) => controller.setSongVolume(itemId, volume));
+    sync(useDocumentStore.getState().project);
+    return useDocumentStore.subscribe(state => sync(state.project));
+  }, [controller, project]);
   useEffect(() => {
     if (!controller || !project) return;
     const player = { play: (itemId: string) => void controller.play(itemId), stop: () => void controller.stop(), skip: (direction: -1 | 1) => void controller.skip(direction) };

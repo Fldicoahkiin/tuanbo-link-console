@@ -46,6 +46,7 @@
   .home-volume input { width: 96px; margin: 0; accent-color: var(--color-accent); cursor: pointer; }
   .home-volume input:disabled { cursor: not-allowed; opacity: 0.45; }
   .home-volume output { min-width: 4ch; text-align: right; font-variant-numeric: tabular-nums; }
+  .home-volume-midi { color: var(--color-warning); white-space: nowrap; }
   .home-fades { display: inline-flex; align-items: center; gap: var(--space-half); }
   .home-player-preview { width: 100%; height: 36px; }
   .home-player-empty { display: flex; align-items: center; gap: var(--space-1); margin: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.5 var(--font-ui); }

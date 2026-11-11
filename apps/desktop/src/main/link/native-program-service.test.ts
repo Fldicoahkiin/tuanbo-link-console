@@ -20,7 +20,7 @@ function host() {
     play: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()), resume: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()), reset: vi.fn(() => Promise.resolve()), toggle: vi.fn(() => Promise.resolve()),
     seek: vi.fn(() => Promise.resolve()), scrub: vi.fn(() => Promise.resolve()), skip: vi.fn(() => Promise.resolve()),
-    setVolume: vi.fn(), setEndAction: vi.fn(), setPlaylist: vi.fn(), toggleMtc: vi.fn(), receiveMidi: vi.fn(), fade: vi.fn(),
+    setSongVolume: vi.fn(), previewVolume: vi.fn(), overrideVolume: vi.fn(), setEndAction: vi.fn(), setPlaylist: vi.fn(), toggleMtc: vi.fn(), receiveMidi: vi.fn(), fade: vi.fn(),
     preloadSelected: vi.fn(), freeze: vi.fn(), reportUnavailable: vi.fn(), runtimeUnavailable: vi.fn(), reportFault: vi.fn(), clearFault: vi.fn(), externalStop: vi.fn(),
     setWatched: vi.fn(), getAudioAnalysis: () => null, dispose: vi.fn(() => Promise.resolve()) } };
 }
@@ -336,4 +336,15 @@ it('关音频和画面还没完时新页面打开节目：等它关完再建新�
   await vi.waitFor(() => expect(record).toHaveBeenCalledOnce());
   expect(record).toHaveBeenCalledWith(expect.objectContaining({ level: 'error', message: '界面重新加载了，上一页的节目、音频或画面没能关掉。原因：音频引擎没有响应' }));
   expect(await service.open(request())).toBe('opened'); expect(create).toHaveBeenCalledTimes(3);
+});
+
+it('播放条拖动只试听，保存的歌曲音量单独送到节目；没标明试听的音量请求不进入控制器（2026-11-09）', async () => {
+  const output = host(), service = new NativeProgramService(vi.fn(() => output), vi.fn(), () => Promise.resolve(), unlicensed, quiet()), input = request();
+  await service.open(input);
+  await service.control(command(input, { kind: 'volume', volume: 40, preview: true }));
+  expect(output.controller.previewVolume).toHaveBeenCalledWith(40);
+  await service.control(command(input, { kind: 'songVolume', itemId: 'song', volume: 40 }));
+  expect(output.controller.setSongVolume).toHaveBeenCalledWith('song', 40);
+  await expect(service.control({ version: 1, ownerId: input.ownerId, operation: { kind: 'volume', volume: 40 } })).rejects.toThrow();
+  expect(output.controller.overrideVolume).not.toHaveBeenCalled();
 });

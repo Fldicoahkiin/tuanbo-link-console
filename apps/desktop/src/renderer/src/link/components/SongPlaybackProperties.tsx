@@ -1,6 +1,6 @@
 import type { InputHTMLAttributes } from 'react';
 import { PropertyNumberInput } from './PropertyNumberInput';
-import { formatMtcOffset, parseMtcOffset, programTimeOrigin, setItemPlaybackCommand } from '@tb/core/link';
+import { defaultItemPlayback, formatMtcOffset, parseMtcOffset, programTimeOrigin, savedSongVolume, setItemPlaybackCommand, setItemVolumeCommand } from '@tb/core/link';
 import type { RundownItem } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { Disclosure, Select, WithUnit } from '../ui';
@@ -15,7 +15,7 @@ function useSongPlayback(item: RundownItem, notify: Notify) {
   try { originMs = programTimeOrigin(item); }
   catch (error) { originError = error instanceof Error ? error.message : String(error); }
   // A song without its own end action follows the player's 播放方式.
-  const value: Playback = item.playback ?? { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: originMs, shortcut: '' };
+  const value: Playback = item.playback ?? defaultItemPlayback(item, originMs);
   const offset = originError ? item.p1Media?.midiStartTime ?? '' : formatMtcOffset(value.mtcOffsetMs, frameRate);
   const commit = (next: Playback): boolean => {
     try { useDocumentStore.getState().execute(setItemPlaybackCommand(item.id, next)); return true; }
@@ -51,7 +51,20 @@ export function SongMtcStartInput({ item, notify, ...props }: Omit<InputHTMLAttr
     }} />;
 }
 
-export function SongPlaybackProperties({ item, notify, collapseAdvanced = false }: { collapseAdvanced?: boolean; item: RundownItem; notify: Notify }): JSX.Element {
+/**
+ * The song's own volume (2026-11-09, docs/SONG_VOLUME.md), the same value as the player-bar slider. It stays editable
+ * while 联动台播放 holds the song, and the song in the player plays at it at once (useSongVolumeSync).
+ */
+export function SongVolumeField({ item, notify, disabled = false }: { item: RundownItem; notify: Notify; disabled?: boolean }): JSX.Element {
+  const commit = (volume: number): boolean => {
+    try { useDocumentStore.getState().execute(setItemVolumeCommand(item.id, volume, crypto.randomUUID())); return true; }
+    catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); return false; }
+  };
+  return <label title="仅影响这首音频，随工程保存。0% 为静音，100% 为原始音量。"><span>音量<small>只用于联动台播放；P1 跟随时由 P1 控制音量</small></span><WithUnit unit="%"><PropertyNumberInput className="ui-input" label="歌曲音量" min={0} max={100} disabled={disabled} value={savedSongVolume(item)} onCommit={commit} /></WithUnit></label>;
+}
+
+/** `withVolume` false: the volume is shown apart (SongVolumeField), outside a fieldset locked while a song plays. */
+export function SongPlaybackProperties({ item, notify, collapseAdvanced = false, withVolume = true }: { collapseAdvanced?: boolean; item: RundownItem; notify: Notify; withVolume?: boolean }): JSX.Element {
   const { frameRate, originError, value, commit, save } = useSongPlayback(item, notify);
   const timecode = <label className="mtc-offset-field" title={originError ?? `歌曲播放位置 + MTC 起始时间 = 输出时间码。${item.p1Media ? `P1 导入原值：${item.p1Media.midiStartTime}（秒或时:分:秒）。` : ''}修改后下次播放生效。`}><span>MTC 起始时间<small>时:分:秒:帧 · {frameRate}</small></span><SongMtcStartInput item={item} notify={notify} className="ui-input" aria-label="MTC 起始时间（时:分:秒:帧）" /></label>;
   const advanced = <>
@@ -64,7 +77,7 @@ export function SongPlaybackProperties({ item, notify, collapseAdvanced = false 
     }} /></label>
   </>;
   return <>
-    <label title="仅影响这首音频，随工程保存。0% 为静音，100% 为原始音量。"><span>音量</span><WithUnit unit="%"><PropertyNumberInput className="ui-input" label="歌曲音量" min={0} max={100} value={value.volume} onCommit={(volume) => save({ volume })} /></WithUnit></label>
+    {withVolume ? <SongVolumeField item={item} notify={notify} /> : null}
     <label><span>播完动作</span><Select aria-label="逐曲播完动作" value={value.endAction ?? ''} onChange={(event) => {
       const endAction = event.currentTarget.value;
       if (endAction === 'next' || endAction === 'loop' || endAction === 'pause' || endAction === 'stop') save({ endAction });

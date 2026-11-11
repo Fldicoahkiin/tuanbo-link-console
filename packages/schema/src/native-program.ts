@@ -10,7 +10,10 @@ export const programPlayerStateSchema = z.object({
   mtcSentPositionMs: time.nullable().optional(), errorTitle: z.string().nullable(), notice: z.string().nullable(), mtcConnectionFailed: z.boolean(),
   preparation: z.string().nullable().optional(),
   /** Latest live output failure of this song; playback continues. */
-  fault: z.string().nullable().optional()
+  fault: z.string().nullable().optional(),
+  /** The temporary volume MIDI CC7 set for this run of the song (2026-11-09): not saved, gone when the song changes
+   * or stops. Null or absent: the song plays at its own saved volume. */
+  volumeOverride: z.number().min(0).max(100).nullable().optional()
 }).strict();
 export type ProgramPlayerState = z.infer<typeof programPlayerStateSchema>;
 export const nativeProgramConfigurationSchema = z.object({
@@ -35,7 +38,10 @@ const operation = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('seek'), positionMs: time }).strict(),
   z.object({ kind: z.literal('scrub'), itemId: z.string(), positionMs: time }).strict(),
   z.object({ kind: z.literal('skip'), direction: z.union([z.literal(-1), z.literal(1)]) }).strict(),
-  z.object({ kind: z.literal('volume'), volume: z.number().min(0).max(100) }).strict(),
+  // The player-bar slider while it is dragged: heard at once, saved nowhere (song volume, 2026-11-09).
+  z.object({ kind: z.literal('volume'), volume: z.number().min(0).max(100), preview: z.literal(true) }).strict(),
+  // A song's saved volume changed in the window's project (useSongVolumeSync); the program plays it from now on.
+  z.object({ kind: z.literal('songVolume'), itemId: z.string().min(1), volume: z.number().min(0).max(100) }).strict(),
   z.object({ kind: z.literal('endAction'), endAction: z.enum(['stop', 'next', 'loop', 'pause']) }).strict(),
   z.object({ kind: z.literal('playlist'), playlistId: z.string() }).strict(),
   z.object({ kind: z.literal('preload'), itemId: z.string() }).strict(),

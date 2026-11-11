@@ -144,6 +144,7 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
         notify={notify}
         locked={locked}
         metadataLocked={locked && (busy || !internal || player.state.status !== 'paused')}
+        volumeLocked={busy}
         playItem={internal ? playProgram : undefined}
         project={project}
         revision={revision}

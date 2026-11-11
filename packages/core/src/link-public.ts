@@ -5,6 +5,7 @@ export * from './p1-auto-follow';
 export * from './cue-runtime';
 export * from './cue-action-runner';
 export * from './link-command';
+export * from './song-volume-gesture';
 export * from './audio-edit';
 export * from './ibt-beat-result';
 export * from './link-preflight';

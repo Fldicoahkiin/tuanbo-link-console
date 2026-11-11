@@ -1,6 +1,6 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ListRestart, Pause, Play, RotateCcw, SkipBack, SkipForward, Square, Volume2 } from 'lucide-react';
-import type { InternalPlayerState } from '@tb/core/link';
+import { savedSongVolume, setItemVolumeCommand, SongVolumeGesture, type InternalPlayerState, type SongVolumeStep } from '@tb/core/link';
 import type { RundownItem } from '@tb/schema';
 import type { RemoteNativeProgramPlayer } from '../runtime/remote-native-program-player';
 import type { PlayerControlState, PlayerViewStore } from '../stores/player-view-store';
@@ -8,6 +8,7 @@ import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { Button, IconButton, Select } from '../ui';
 import { PlayerStatusDetails } from './PlayerStatusDetails';
+import { songVolumeView } from '../view-models/song-volume';
 import { homePlayButton, pressHomePlayButton, registerHomePlayButton } from './play-buttons';
 
 /** `engine` names the audio engine this player uses, for the operator. `outdated`: the background program plays
@@ -73,11 +74,7 @@ export function ProjectPlayerTransport({ controller, state, engine, selectedItem
           const value = event.currentTarget.value;
           if (isEndAction(value)) controller?.setEndAction(value);
         }}>{endActions.map(([action, label]) => <option key={action} value={action}>{label}</option>)}</Select>
-        <label className="home-volume" title="临时音量，只影响这次播放。要固定每首歌的音量，请在右侧节目属性里设置">
-          <Volume2 aria-hidden="true" />
-          <input aria-label="播放音量" type="range" min={0} max={100} disabled={!controller || !state.itemId} value={state.volume} onChange={(event) => controller?.setVolume(Number(event.currentTarget.value))} />
-          <output>{Math.round(state.volume)}%</output>
-        </label>
+        <SongVolumeSlider controller={controller} state={state} selectedItem={selectedItem} notify={notify} />
         <span className="home-fades">
           <Button variant="secondary" size="sm" disabled={!controller} onClick={() => controller?.fade(false)}>淡入</Button>
           <Button variant="secondary" size="sm" disabled={!controller} onClick={() => controller?.fade(true)}>淡出</Button>
@@ -86,6 +83,61 @@ export function ProjectPlayerTransport({ controller, state, engine, selectedItem
       </div>
     </div>
   </section>;
+}
+
+/**
+ * The player-bar slider is the song's own volume, saved in the project (2026-11-09, docs/SONG_VOLUME.md): the song in
+ * the player when one is, otherwise the selected song. A drag is heard at once and saved when let go, as one undo step;
+ * the program hears the saved volume through useSongVolumeSync. A MIDI CC7 volume holds this run only and is shown
+ * next to it.
+ */
+function SongVolumeSlider({ controller, state, selectedItem, notify }: {
+  controller: RemoteNativeProgramPlayer | null; state: PlayerControlState; selectedItem: RundownItem | null | undefined; notify: (message: string) => void;
+}): JSX.Element {
+  const project = useDocumentStore(value => value.project);
+  const { item, playing, saved, override } = songVolumeView(project, state, selectedItem?.id ?? null);
+  const [gesture] = useState(() => new SongVolumeGesture());
+  const [preview, setPreview] = useState<{ itemId: string; volume: number } | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const shown = preview && preview.itemId === item?.id ? preview.volume : saved;
+  const apply = (step: SongVolumeStep): void => {
+    switch (step.kind) {
+      case 'none': setPreview(null); return;
+      case 'preview':
+        setPreview({ itemId: step.itemId, volume: step.volume });
+        // Heard only from the song in the player; the selected song that is not playing is only saved on release.
+        if (step.itemId === playing) controller?.previewVolume(step.volume);
+        return;
+      case 'commit': {
+        setPreview(null);
+        const song = useDocumentStore.getState().project?.rundown.find(entry => entry.id === step.itemId);
+        if (!song || savedSongVolume(song) === step.volume) return;
+        try { useDocumentStore.getState().execute(setItemVolumeCommand(step.itemId, step.volume, step.gestureId)); }
+        catch (error) {
+          // Not saved: the song in the player goes back to the volume it has.
+          if (step.itemId === playing) controller?.previewVolume(savedSongVolume(song));
+          notify(`音量没有保存：${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
+  };
+  const release = useRef<() => void>(() => undefined); release.current = () => apply(gesture.release());
+  useEffect(() => {
+    // The change event is the release of a drag in Chromium; pointerup alone misses a release outside the window.
+    const element = input.current, listener = (): void => release.current();
+    element?.addEventListener('change', listener);
+    return () => element?.removeEventListener('change', listener);
+  }, []);
+  return <label className="home-volume" title="这首歌的音量，松手后保存进工程">
+    <Volume2 aria-hidden="true" />
+    <input ref={input} aria-label={item ? `「${item.title}」的音量` : '歌曲音量'} type="range" min={0} max={100} disabled={!item?.referenceAudio} value={shown}
+      onFocus={() => gesture.focus()}
+      onPointerDown={() => { if (item) gesture.press(item.id); }}
+      onPointerUp={() => release.current()} onPointerCancel={() => release.current()}
+      onChange={(event) => { if (item) apply(gesture.input(item.id, Number(event.currentTarget.value))); }} />
+    <output>{Math.round(shown)}%</output>
+    {override !== null ? <span className="home-volume-midi" title="调音台推子（MIDI CC7）定的音量，只用于这一遍，换歌或停止后回到这首歌保存的音量">MIDI 临时 {Math.round(override)}%</span> : null}
+  </label>;
 }
 
 function statusLabel(status: InternalPlayerState['status']): string { return ({ stopped: '已停止', preparing: '准备中', playing: '播放中', paused: '已暂停', error: '需要处理' })[status]; }

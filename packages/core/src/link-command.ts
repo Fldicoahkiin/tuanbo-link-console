@@ -30,7 +30,7 @@ import {
   type VisualLayer,
   type RundownItem
 } from '@tb/schema';
-import { parseP1TimeOrigin } from './ma2-time-origin';
+import { parseP1TimeOrigin, programTimeOrigin } from './ma2-time-origin';
 
 export type LinkCommand = {
   readonly id: string;
@@ -91,6 +91,31 @@ export function setItemPlaybackCommand(itemId: string, playback: NonNullable<Run
     if (playback.shortcut && project.rundown.some((entry) => entry.id !== itemId && entry.playback?.shortcut.toLowerCase() === playback.shortcut.toLowerCase())) throw new Error('快捷键已被其他歌曲使用');
     item.playback = playback;
   });
+}
+
+type ItemPlayback = NonNullable<RundownItem['playback']>;
+
+/** The playback settings of a song that has none saved yet: full volume, the whole audio, no shortcut, and the MTC
+ * start the song already plays with (`programTimeOrigin`), so saving one setting never moves its timecode. The only
+ * place these defaults live (song volume, 2026-11-09). `mtcOffsetMs`: for a song whose start cannot be read, the value
+ * to show meanwhile. */
+export function defaultItemPlayback(item: Pick<RundownItem, 'playback' | 'p1Media' | 'lighting'>, mtcOffsetMs = programTimeOrigin(item)): ItemPlayback {
+  return { volume: DEFAULT_SONG_VOLUME, startMs: 0, endMs: 0, mtcOffsetMs, shortcut: '' };
+}
+
+/** A song plays at its original volume until one is saved for it. */
+const DEFAULT_SONG_VOLUME = 100;
+/** The song's own volume as saved, 0–100. */
+export function savedSongVolume(item: Pick<RundownItem, 'playback'>): number { return item.playback?.volume ?? DEFAULT_SONG_VOLUME; }
+
+/** The song's own volume, saved in the project (2026-11-09). One gesture (a slider drag, a run of key presses in one
+ * focus, one edit of the field) is one `gestureId`, and its commands share one undo step. */
+export function setItemVolumeCommand(itemId: string, volume: number, gestureId: string): LinkCommand {
+  const parsed = rundownItemSchema.shape.playback.unwrap().shape.volume.parse(volume);
+  return { ...createCommand('修改歌曲音量', (project) => {
+    const item = requireItem(project, itemId);
+    item.playback = { ...(item.playback ?? defaultItemPlayback(item)), volume: parsed };
+  }), historyGroup: `song-volume:${itemId}:${gestureId}` };
 }
 
 export function setProjectFrameRateCommand(frameRate: MtcFrameRate, now?: TimestampProvider): LinkCommand {

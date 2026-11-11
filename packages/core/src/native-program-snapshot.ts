@@ -1,4 +1,5 @@
 import { programTimeOrigin } from './ma2-time-origin';
+import { savedSongVolume } from './link-command';
 import { playbackSnapshotSchema, type LinkProject, type PlaybackSnapshot } from '@tb/schema';
 
 /**
@@ -27,6 +28,6 @@ export function nativeProgramSnapshot(project: LinkProject, itemId: string, revi
   const snapshot = playbackSnapshotSchema.parse({ version: 1, projectId: project.projectId, itemId, revision,
     audio: { relativePath: audio.relativePath, sha256: audio.sha256, durationMs: audio.durationMs },
     startMs, endMs, positionMs: positionMs ?? startMs, offsetMs: allowMtc ? offsetMs : 0,
-    frameRate: rate === '24' ? 24 : rate === '25' ? 25 : rate === '29.97df' ? 29.97 : 30, sampleRate, volume: (item.playback?.volume ?? 100) / 100 });
+    frameRate: rate === '24' ? 24 : rate === '25' ? 25 : rate === '29.97df' ? 29.97 : 30, sampleRate, volume: savedSongVolume(item) / 100 });
   return { snapshot, notice, allowMtc };
 }

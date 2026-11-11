@@ -12,6 +12,7 @@ import { LightingReleaseFailure } from './lighting-output-release';
 import { nativeProgramSnapshot } from './native-program-snapshot';
 import { programStart, type ProgramStart } from './program-start';
 import { optionalOutputReady } from './optional-output-ready';
+import { savedSongVolume } from './link-command';
 
 type NativeApi = Pick<LinkDesktopApi, 'prepareNativePlayback' | 'controlNativePlayback' | 'getNativePlaybackDevices' | 'onNativePlaybackStatus' | 'prepareNativeObs' | 'stopNativeObs' | 'onNativeObsStatus' | 'preloadNativeObs' | 'cancelNativeObsPreload'>;
 type NativeAction = NativePlayerControl extends infer T ? T extends NativePlayerControl ? Omit<T, 'version' | 'sessionId' | 'generation'> : never : never;
@@ -87,6 +88,9 @@ export class NativeProgramPlayer {
   private readonly unsubscribe: () => void;
   private readonly analysis = nativeAudioAnalysis(() => this.native);
   private volumePending: { volume: number; durationMs: number } | null = null;
+  /** Saved song volumes the window's project changed after this program opened with `project` (setSongVolume). The
+   * song's own volume is this, else what `project` saved (2026-11-09). */
+  private readonly songVolumes = new Map<string, number>();
   private sendingVolume = false;
   private preloadGeneration = 0;
   private selectedPreload: { request: NativeObsStop; itemId: string } | null = null;
@@ -157,7 +161,9 @@ export class NativeProgramPlayer {
     if (this.state.itemId !== itemId && this.state.status === 'playing') this.markPlayed();
     this.cancelScheduled(); this.runtimePrepared = false; this.timecodeOutput = idleTimecodeOutput; this.boundary('seek');
     this.start = { leftover: null, obs: null, fault: null }; this.carried = null;
-    this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, fault: null, mtcConnectionFailed: false });
+    // A MIDI CC7 volume is for this run of the song only: another song plays at its own volume.
+    const override = itemId === this.state.itemId ? this.state.volumeOverride ?? null : null;
+    this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, fault: null, mtcConnectionFailed: false, volumeOverride: override });
     return this.enqueue(token, async () => {
       if (!this.projectPath) throw new Error('请先保存工程，再播放');
       // An engine in error has exited and rejects every command; prepare replaces it.
@@ -172,11 +178,13 @@ export class NativeProgramPlayer {
       this.allowMtc = prepared.allowMtc; this.picture = prepared.picture;
       const sendMtc = this.allowMtc && this.state.mtcEnabled;
       const midiPortName = sendMtc ? config.mtcPortName : null;
-      const snapshot = { ...prepared.snapshot, volume: config.fadeInMs && !paused ? 0 : prepared.snapshot.volume };
+      // The song's own volume as saved now (or this run's CC7 volume), not as `project` had it when this program opened.
+      const level = this.outputVolume() / 100;
+      const snapshot = { ...prepared.snapshot, volume: config.fadeInMs && !paused ? 0 : level };
       const loop = item.lighting?.loop;
       this.loopStart = loop?.enabled && loop.startMs < loop.endMs && loop.startMs >= snapshot.startMs && loop.endMs <= snapshot.endMs && snapshot.positionMs < loop.endMs ? loop.startMs : null;
       if (this.loopStart !== null && loop) snapshot.endMs = loop.endMs;
-      this.update({ positionMs: snapshot.positionMs, durationMs: snapshot.endMs, volume: prepared.snapshot.volume * 100,
+      this.update({ positionMs: snapshot.positionMs, durationMs: snapshot.endMs, volume: level * 100,
         endAction: item.playback?.endAction ?? this.state.endAction, mtcPositionMs: this.allowMtc ? snapshot.positionMs + snapshot.offsetMs : null });
       let nextSnapshot: ProgramStart['snapshot'] | undefined;
       if (config.preload !== false) {
@@ -204,8 +212,13 @@ export class NativeProgramPlayer {
       if (!this.current(token)) return;
       await Promise.all([prepareLighting(), this.prepareRuntime(itemId, snapshot.positionMs, reuseSession, token), this.prepareObs(itemId, token)]);
       if (!this.current(token)) return;
+      // The volume may have changed while the song was prepared: it starts at the volume it has now.
+      const target = this.outputVolume() / 100;
+      if (config.fadeInMs && !paused) await this.command({ kind: 'volume', volume: target, durationMs: config.fadeInMs });
+      else if (target !== snapshot.volume) await this.command({ kind: 'volume', volume: target, durationMs: 0 });
+      if (!this.current(token)) return;
+      if (target !== level) this.update({ volume: target * 100 });
       if (paused) { await this.command({ kind: 'pause' }); if (this.runtimePrepared) await this.optionalRuntime(() => this.dependencies.pause(), 'MIDI Cue 暂停失败'); this.update({ status: 'paused' }); return; }
-      if (config.fadeInMs) await this.command({ kind: 'volume', volume: prepared.snapshot.volume, durationMs: config.fadeInMs });
       if (!this.current(token)) return;
       await this.command({ kind: 'play' });
       if (!this.current(token)) return;
@@ -249,6 +262,10 @@ export class NativeProgramPlayer {
     if (this.state.status !== 'paused') return;
     await this.prepareRuntime(this.state.itemId!, this.native!.positionMs, true, token);
     if (!this.current(token)) return;
+    // A pause drops a volume change still queued, and a fade-out left the gain down: the song plays on at its volume.
+    const target = this.outputVolume() / 100;
+    if (this.native!.gain !== target) { await this.command({ kind: 'volume', volume: target, durationMs: 0 }); if (!this.current(token)) return; }
+    this.reflectGain = false; this.update({ volume: target * 100 });
     await this.command({ kind: 'play' }); if (!this.current(token)) return;
     this.startCompanionClock();
     this.update({ status: 'playing' }); this.consumeClock();
@@ -260,7 +277,7 @@ export class NativeProgramPlayer {
     return scrub.pressed === 'play' ? 'playing' : scrub.pressed === 'pause' ? 'paused' : this.state.status;
   }
   stop(): Promise<void> {
-    const token = ++this.epoch; this.cancelScheduled(); this.update({ status: 'stopped', notice: null, fault: null });
+    const token = ++this.epoch; this.cancelScheduled(); this.update({ status: 'stopped', notice: null, fault: null, volumeOverride: null });
     this.lightingOwed = true;
     // Stop reaches the main service immediately if preparation has already
     // published its session; otherwise the queued prepare cannot start audio.
@@ -388,15 +405,44 @@ export class NativeProgramPlayer {
     if (!this.state.mtcEnabled && this.native && !['preparing', 'stopped', 'error'].includes(this.native.status)) void this.command({ kind: 'stop-mtc' }).catch(error => this.reportUnavailable(`停止时间码失败：${toUserErrorMessage(error)}`));
     else if (this.state.mtcEnabled) this.reportUnavailable('下次播放时会重新准备时间码，这首歌不会中途补发。');
   }
-  setVolume(volume: number): void { if (!Number.isFinite(volume)) return; this.reflectGain = false; const target = Math.max(0, Math.min(100, volume)); this.update({ volume: target }); this.queueVolume(target / 100, 0); }
-  fade(out: boolean): void { const config = this.dependencies.configuration(), volume = this.project.rundown.find(item => item.id === this.state.itemId)?.playback?.volume ?? 100; this.reflectGain = true; this.queueVolume(out ? 0 : volume / 100, (out ? config.fadeOutMs : config.fadeInMs) ?? 500); }
+  /** A song's own volume was saved (2026-11-09; the window's useSongVolumeSync sends it): the song plays at it from
+   * now on, and at once when it is the song in the player and no CC7 volume holds this run. */
+  setSongVolume(itemId: string, volume: number): void {
+    if (!Number.isFinite(volume)) return;
+    this.songVolumes.set(itemId, clampVolume(volume));
+    // While the song is prepared, its start reads the volume (play).
+    if (itemId === this.state.itemId && ['playing', 'paused'].includes(this.state.status) && this.state.volumeOverride == null) this.output(this.outputVolume());
+  }
+  /** The player-bar slider while it is dragged: heard at once, saved nowhere; the release saves it (setSongVolume).
+   * The operator took the slider, so a CC7 volume of this run gives way to it. */
+  previewVolume(volume: number): void {
+    if (!Number.isFinite(volume) || !['playing', 'paused'].includes(this.state.status)) return;
+    if (this.state.volumeOverride != null) this.update({ volumeOverride: null });
+    this.output(clampVolume(volume));
+  }
+  /** MIDI CC7: a temporary volume for this run of the song only (2026-11-09). Not saved and not undone; cleared when
+   * the song changes or stops; with no song in the player there is no run for it to hold. */
+  overrideVolume(volume: number): void {
+    if (!Number.isFinite(volume) || !['preparing', 'playing', 'paused'].includes(this.state.status)) return;
+    const target = clampVolume(volume); this.update({ volumeOverride: target }); this.output(target);
+  }
+  fade(out: boolean): void { const config = this.dependencies.configuration(); this.reflectGain = true; this.queueVolume(out ? 0 : this.outputVolume() / 100, (out ? config.fadeOutMs : config.fadeInMs) ?? 500); }
+  /** What the song in the player plays at: this run's CC7 volume, else the song's own saved volume. */
+  private outputVolume(): number {
+    const itemId = this.state.itemId;
+    if (this.state.volumeOverride != null) return this.state.volumeOverride;
+    if (!itemId) return 100;
+    const item = this.project.rundown.find(entry => entry.id === itemId);
+    return this.songVolumes.get(itemId) ?? (item ? savedSongVolume(item) : 100);
+  }
+  private output(volume: number): void { this.reflectGain = false; this.update({ volume }); this.queueVolume(volume / 100, 0); }
   getAudioAnalysis() { return this.state.status === 'playing' ? this.analysis : null; }
   receiveMidi(bytes: Uint8Array): void {
     const [status, number, value] = bytes; if (status === undefined || number === undefined || number > 127) return;
     if ((status & 0xf0) === 0x90 && value !== undefined && value > 0 && value <= 127) {
       if (number === 1) void this.toggle(); else if (number === 2) void this.stop();
       else if (number >= 60) { const item = playlistItems(this.project, this.state.playlistId ?? 'all')[number - 60]; if (item?.enabled && item.referenceAudio) void this.play(item.id); }
-    } else if ((status & 0xf0) === 0xb0 && number === 7 && value !== undefined && value <= 127) this.setVolume(value * 100 / 127);
+    } else if ((status & 0xf0) === 0xb0 && number === 7 && value !== undefined && value <= 127) this.overrideVolume(value * 100 / 127);
     else if ((status & 0xf0) === 0xc0) { const list = programPlaylists(this.project)[number]; if (list) this.setPlaylist(list.id); }
   }
   dispose(): Promise<void> {
@@ -564,6 +610,8 @@ export class NativeProgramPlayer {
   private current(token: number): boolean { return !this.disposed && token === this.epoch; }
   private update(patch: Partial<InternalPlayerState>): void { if (this.disposed) return; this.state = { ...this.state, ...patch }; this.dependencies.changed(this.state); }
 }
+
+function clampVolume(volume: number): number { return Math.max(0, Math.min(100, volume)); }
 
 /** The action MIDI did not close as the program closed (2026-11-11): what happened, why, and what the operator does. */
 function actionMidiLeftOpen(error: unknown): string {

@@ -11,6 +11,7 @@ import {
   programTimeOrigin,
   removeRundownItemCommand,
   reorderedVisibleIds,
+  savedSongVolume,
   updateRundownItemCommand
 } from '@tb/core/link';
 import type { LinkProject, RundownItem } from '@tb/schema';
@@ -23,7 +24,7 @@ import { formatDuration } from './media-utils';
 import { ProgramGrid } from './ProgramGrid';
 import { ProgramPlaylistPane } from './ProgramPlaylistPane';
 import { SongMtcStart } from './SongMtcStart';
-import { SongPlaybackProperties } from './SongPlaybackProperties';
+import { SongPlaybackProperties, SongVolumeField } from './SongPlaybackProperties';
 import { useProgramSelection } from './useProgramSelection';
 
 type ProjectLibraryProps = {
@@ -36,6 +37,8 @@ type ProjectLibraryProps = {
   notify: (message: string, tone?: 'info' | 'error') => void;
   locked: boolean;
   metadataLocked: boolean;
+  /** The song's own volume can be changed (also while a song plays) unless this is set. */
+  volumeLocked: boolean;
   playItem?: ((item: RundownItem) => void) | undefined;
   project: LinkProject;
   revision: number;
@@ -136,7 +139,7 @@ export function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
           return <article className="home-card" data-program-id={item.id} data-selected={item.id === selectedItemId} data-current={current} data-disabled={!item.enabled} data-batch-selected={visibleBatchIds.includes(item.id)} data-runtime={current ? runtime : 'idle'} title={`${item.title}\n${reorderHint}`} aria-label={`${item.title}，${props.playItem ? doubleClickPlayback ? '双击播放' : '单击播放' : '单击选中'}`} key={`${item.id}:${revision}`} tabIndex={0} draggable={false} onClick={() => props.playItem && !doubleClickPlayback ? props.playItem(item) : props.onChooseItem(item)} onDoubleClick={() => { if (doubleClickPlayback && props.playItem) props.playItem(item); else if (!props.playItem) props.onSelectCurrentItem(item); }} onContextMenu={(event) => { event.preventDefault(); if (props.locked) return; props.onChooseItem(item); setContext({ item, x: event.clientX, y: event.clientY }); }} onKeyDown={(event) => { if (event.key === 'Enter' && event.target === event.currentTarget) { event.preventDefault(); start(item); } }}>
             <button type="button" className="home-card-index" title={props.playItem ? '播放这首' : '设为当前节目'} disabled={!item.enabled} onClick={(event) => { event.stopPropagation(); start(item); }}>{index + 1}</button>
             <strong className="home-card-title">{item.title}</strong>
-            <span className="home-card-state">{project.playbackSource === 'internal' && item.referenceAudio ? <Button variant="ghost" size="sm" className="home-card-volume" aria-label={`${item.title} 独立音量`} title="设置这首音频的独立音量，随工程保存" disabled={props.locked} onDoubleClick={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openProperties(item); }}>音量 {item.playback?.volume ?? 100}%</Button> : null}
+            <span className="home-card-state">{project.playbackSource === 'internal' && item.referenceAudio ? <Button variant="ghost" size="sm" className="home-card-volume" aria-label={`${item.title} 独立音量`} title="设置这首音频的独立音量，随工程保存" disabled={props.volumeLocked} onDoubleClick={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openProperties(item); }}>音量 {savedSongVolume(item)}%</Button> : null}
               {current ? <span className="home-card-live"><Check aria-hidden="true" />{runtime === 'running' ? '播放中' : runtime === 'paused' ? '已暂停' : '当前节目'}</span> : props.playedItemIds.includes(item.id) ? <span>已播放</span> : <span className="home-card-hint">{props.playItem ? doubleClickPlayback ? '双击播放' : '点击播放' : item.p1Media ? 'P1 音频' : '联动节目'}</span>}</span>
             <span className="home-card-meta"><span className="home-card-time">{formatDuration(item.referenceAudio?.durationMs ?? 0)}</span><span className="home-card-contents"><Film aria-hidden="true" />{programContents(item)}</span></span>
             <span className="home-card-mtc">{item.referenceAudio ? <SongMtcStart project={project} item={item} /> : null}</span>
@@ -156,8 +159,10 @@ export function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
           <label><span>名称</span><TextInput key={selectedItem.title} className="title-input" disabled={props.metadataLocked} aria-label="节目名称" title="回车保存，Esc 取消" defaultValue={selectedItem.title} onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter' || event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (event.key === 'Escape') event.currentTarget.value = selectedItem.title; event.currentTarget.blur(); } }} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitText(event.currentTarget, 'title')} /></label>
           <label><span>备注</span><TextArea key={`${selectedItem.id}:${selectedItem.notes}`} aria-label="备注" disabled={props.metadataLocked} rows={2} defaultValue={selectedItem.notes} placeholder="选填" onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitText(event.currentTarget, 'notes')} /></label>
         </div>
+        {/* The song's own volume stays editable while a song plays (2026-11-09); the rest waits for 停止. */}
+        {project.playbackSource === 'internal' ? <div className="home-inspector-fields" role="group" aria-label="歌曲音量"><SongVolumeField item={selectedItem} notify={props.notify} disabled={props.volumeLocked} /></div> : null}
         <fieldset disabled={props.locked} className="home-inspector-locked">
-          {project.playbackSource === 'internal' ? <div className="home-inspector-fields" role="group" aria-label="歌曲播放"><SongPlaybackProperties item={selectedItem} notify={props.notify} collapseAdvanced /></div> : null}
+          {project.playbackSource === 'internal' ? <div className="home-inspector-fields" role="group" aria-label="歌曲播放"><SongPlaybackProperties item={selectedItem} notify={props.notify} collapseAdvanced withVolume={false} /></div> : null}
           <Switch label="启用" help="停用的节目不会被播放，也不能设为当前节目" checked={selectedItem.enabled} onChange={(event) => execute(updateRundownItemCommand(selectedItem.id, { title: selectedItem.title, enabled: event.currentTarget.checked, notes: selectedItem.notes }))} />
           <div className="home-inspector-commands">
             <Button variant="secondary" icon={Check} disabled={!selectedItem.enabled || selectedItem.id === currentItemId} onClick={() => props.onSelectCurrentItem(selectedItem)}>{selectedItem.id === currentItemId ? '当前节目' : '设为当前节目'}</Button>
