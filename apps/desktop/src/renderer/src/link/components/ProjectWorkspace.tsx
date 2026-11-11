@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { addRundownItemCommand, playlistItems, programPlaylists, setReferenceAudioCommand } from '@tb/core/link';
 import type { RundownItem } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
+import { currentShowWait, useShowGate } from '../stores/show-state-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
 import { useSelectedProgram } from '../useSelectedProgram';
@@ -46,7 +47,11 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
   const [busy, setBusy] = useState(false);
   const [missingAssetsRequest, setMissingAssetsRequest] = useState(0);
   const importPending = useRef(false);
+  // `editingLocked` is P1 follow's lock (LinkApp); in 联动台播放 a held song locks nothing here as a whole (0.5.9 S8a).
   const locked = editingLocked || busy;
+  // Importing and finding missing files wait for 停止 (showGate media.import, media.relink).
+  const importGate = useShowGate('media.import'), relinkGate = useShowGate('media.relink');
+  const importWait = importGate.kind === 'wait' ? importGate.message : null;
   const internal = project?.playbackSource === 'internal';
   const fileInput = useRef<HTMLInputElement>(null);
   const [audioTargetId, setAudioTargetId] = useState<string | null>(null);
@@ -89,6 +94,9 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
   };
 
   const chooseReference = (itemId: string): void => {
+    // The audio of the song on stage waits for it to stop, so does any import while the show is on.
+    const wait = currentShowWait('media.import') ?? currentShowWait('song.audio.edit', itemId);
+    if (wait) { notify(wait); return; }
     if (!projectPath) {
       notify('请先保存工程，再导入参考音频。', 'error');
       return;
@@ -119,7 +127,7 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
 
   return (
     <div className="home-page">
-      <MissingAssetsDialog request={missingAssetsRequest} locked={locked} notify={notify} />
+      <MissingAssetsDialog request={missingAssetsRequest} locked={locked || relinkGate.kind === 'wait'} notify={notify} />
       {toolbarHost ? createPortal(<ProjectTitlebar name={project.name} path={projectPath} dirty={dirty} locked={locked} documentActions={documentActions} fileCommands={fileCommands}
         onOpen={onOpen} onCreate={onCreate} onFindMissing={() => setMissingAssetsRequest((request) => request + 1)} />, toolbarHost) : null}
 
@@ -134,6 +142,7 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
         onImportSongs={onImportSongs}
         onImportFiles={async files => {
           if (locked || importPending.current) return;
+          if (importWait) { notify(importWait); return; }
           importPending.current = true; setBusy(true);
           try { await importProgramFiles(files, selectedPlaylistId, notify); setSearch(''); }
           finally { importPending.current = false; setBusy(false); }
@@ -143,6 +152,7 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
         playlistHost={playlistHost}
         notify={notify}
         locked={locked}
+        importBlocked={importWait}
         metadataLocked={locked && (busy || !internal || player.state.status !== 'paused')}
         volumeLocked={busy}
         playItem={internal ? playProgram : undefined}

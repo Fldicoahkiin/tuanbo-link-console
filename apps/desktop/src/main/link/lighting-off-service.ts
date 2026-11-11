@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { LightingOffLedger, lightingExecutors, lightingReadBackDelays, lightingReleaseActions, lightsLeftOnAfterResendText, lightsLeftOnText, owedOffTexts, songChangeOffs, toUserErrorReason,
+import { LightingOffLedger, lightingExecutors, litChangeOffs, litExecutors, litReleaseActions, lightingReadBackDelays, lightingReleaseActions, lightsLeftOnAfterResendText, lightsLeftOnText, owedOffTexts, toUserErrorReason,
   type LightingOffCheck, type LightingOffOutcome, type LightingReadBack, type LightingReadBackResult, type LightingReleaseSong, type LinkDesktopApi, type LitSong, type OffSend, type OwedOff,
   type ProgramLightingOutput } from '@tb/core/link';
 import { lightingOffRequestSchema, type LightingOffResult, type Ma2NetworkSettings, type Ma2NetworkStatus, type Ma2NetworkTarget } from '@tb/schema';
@@ -50,8 +50,8 @@ export class LightingOffService implements ProgramLightingOutput {
 
   /** `next` starts in place of `previous`: the executors only `previous` used go off, and those of `next` are in use. */
   change(previous: LitSong | null, next: LitSong | null): Promise<LightingOffOutcome> {
-    this.ledger.use('program', lightingExecutors(next?.document ?? null));
-    const offs = previous ? songChangeOffs(previous.document, next?.document ?? null) : [];
+    this.ledger.use('program', litExecutors(next));
+    const offs = previous ? litChangeOffs(previous, next) : [];
     const sends = this.ledger.owe(offs, previous?.song ?? null, 'song-change', null);
     this.changed();
     return this.deliver(sends);
@@ -60,8 +60,14 @@ export class LightingOffService implements ProgramLightingOutput {
   /** The program stopped `song` (null: nothing was lit): its executors go off, and every Off still owed goes once more. */
   stop(song: LitSong | null, cause: 'stop' | 'close'): Promise<LightingOffOutcome> {
     this.ledger.use('program', []);
-    const sends = song ? this.ledger.owe(lightingReleaseActions(song.document), song.song, cause, null) : [];
+    const sends = song ? this.ledger.owe(litReleaseActions(song), song.song, cause, null) : [];
     return this.deliver([...sends, ...this.ledger.resendOnStop()]);
+  }
+
+  /** The song on air got a newer version of its lighting (0.5.9 S8a): its executors in use only grow; nothing is sent. */
+  widen(song: LitSong): void {
+    this.ledger.widen('program', litExecutors(song));
+    this.changed();
   }
 
   /** What the window runs itself (link:lighting-off). */

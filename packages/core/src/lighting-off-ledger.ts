@@ -1,6 +1,6 @@
 import type { LightingDocument, Ma2NetworkTarget, Ma2PlaybackAction } from '@tb/schema';
 import { LIGHTING_OFF_READ_BACK, OUTPUT_RECOVERY_RULES, OutputRecovery } from './output-recovery';
-import type { LightingReleaseSong } from './program-player';
+import type { LightingReleaseSong, LitSong } from './program-player';
 
 /**
  * The lights-off still owed, in one list for the whole application (design 01 §4.11, R13; 第 4 题 2026-11-11). The
@@ -37,6 +37,31 @@ export function lightingReleaseActions(document: LightingDocument): Ma2PlaybackA
 /** The executors a song's console timeline runs: the ones its stop switches off. */
 export function lightingExecutors(document: LightingDocument | null): string[] {
   return document ? lightingReleaseActions(document).flatMap(action => action.target === 'executor' ? [action.executor] : []) : [];
+}
+
+/** The versions of a song's lighting the console may have run in this pass, oldest first (0.5.9 S8a). */
+export function litDocuments(lit: LitSong): LightingDocument[] { return [...lit.earlier ?? [], lit.document]; }
+/** Every executor any version of the song's lighting in this pass runs: what its stop switches off. */
+export function litExecutors(lit: LitSong | null): string[] {
+  return lit ? [...new Set(litDocuments(lit).flatMap(document => lightingExecutors(document)))] : [];
+}
+/** The Offs of every version of the song's lighting in this pass, once per executor. */
+export function litReleaseActions(lit: LitSong): Ma2PlaybackAction[] {
+  const actions = litDocuments(lit).flatMap(document => lightingReleaseActions(document));
+  return [...new Map(actions.map(action => [JSON.stringify(action), action])).values()];
+}
+/** A song change (第 4 题) after a pass that may have run several versions of the previous song's lighting: the Offs of
+ * every executor those versions used and the next song does not. */
+export function litChangeOffs(previous: LitSong, next: LitSong | null): Ma2PlaybackAction[] {
+  const kept = new Set(litExecutors(next));
+  return litReleaseActions(previous).filter(action => action.target !== 'executor' || !kept.has(action.executor));
+}
+/** The song on air with a newer version of its lighting (0.5.9 S8a): the versions before it stay part of this pass, so
+ * the executors it holds only grow until it stops. The same document again changes nothing. */
+export function litAlso(lit: LitSong | null, document: LightingDocument, song: LightingReleaseSong): LitSong {
+  if (!lit) return { document, song };
+  if (litDocuments(lit).includes(document)) return lit;
+  return { document, song: lit.song, earlier: litDocuments(lit) };
 }
 
 /** A song change (第 4 题): the Offs of what `previous` used and `next` does not. What both use stays on, with the next
@@ -103,6 +128,14 @@ export class LightingOffLedger {
       this.confirmed.delete(executor); this.unconfirmed.delete(executor);
       if (this.entries.delete(executor)) this.recovery.forget(resendRow, executor);
     }
+  }
+  /** `user`'s timecode may run these executors as well from now on (0.5.9 S8a: the song on air got a newer version of its
+   * lighting). What it ran before stays in use. An executor that already owes an Off keeps owing it and is not taken
+   * into use: the Off was owed before this version, and the console may not run the new version yet. */
+  widen(user: LightingUser, executors: Iterable<string>): void {
+    const using = new Set(this.users.get(user) ?? []);
+    for (const executor of executors) if (!this.entries.has(executor)) using.add(executor);
+    this.users.set(user, using);
   }
   /** The executors `user`'s timecode runs now. */
   using(user: LightingUser): string[] { return [...this.users.get(user) ?? []]; }

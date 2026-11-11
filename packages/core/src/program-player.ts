@@ -59,8 +59,11 @@ export function isPreviousNotStopped(error: unknown): boolean {
 /** The rundown song whose lighting a lights-off belongs to. */
 export type LightingReleaseSong = { itemId: string; title: string };
 
-/** A song's lighting as the program runs it: its document, and the rundown song it belongs to. */
-export type LitSong = { document: LightingDocument; song: LightingReleaseSong };
+/** A song's lighting as the program runs it: its document, and the rundown song it belongs to. `earlier`: the
+ * versions of its lighting that arrived before `document` while the song played (0.5.9 S8a). The console may have run
+ * any of them in this pass (it is written to while paused), so a stop or a song change switches off the executors of
+ * them all (lighting-off-ledger.ts `litExecutors`). */
+export type LitSong = { document: LightingDocument; song: LightingReleaseSong; earlier?: readonly LightingDocument[] };
 /** The Offs of one request that did not go out, each with the song it was for and why. They stay owed. */
 export type LightingOffOutcome = { failed: { song: LightingReleaseSong | null; reason: string }[] };
 
@@ -75,4 +78,7 @@ export type ProgramLightingOutput = {
   /** The song stopped (or the program closed after a stop it owed): every executor of `song` is switched off, and every
    * Off still owed is sent once more (pressing stop again). */
   stop(song: LitSong | null, cause: 'stop' | 'close'): Promise<LightingOffOutcome>;
+  /** The song on air got a newer version of its lighting (0.5.9 S8a; `song` is the one it had, also with this version,
+   * litAlso): its executors in use only grow, nothing is switched off, and an Off already owed stays owed. */
+  widen(song: LitSong): void;
 };

@@ -3,12 +3,13 @@ import { idleTimecodeOutput, timecodeOutputChange, type TimecodeOutputMemory } f
 import { playlistItems, programPlaylists } from './program-playlists';
 import { toUserErrorMessage, toUserErrorReason } from './link-user-error';
 import type { LinkDesktopApi } from './link-desktop-contract';
-import type { LinkProject, NativePlayerControl, NativePlayerStatus, NativeObsPrepare, NativeObsStop, NativeObsStatus } from '@tb/schema';
+import type { LinkProject, RundownItem, NativePlayerControl, NativePlayerStatus, NativeObsPrepare, NativeObsStop, NativeObsStatus } from '@tb/schema';
 import { nativeAudioAnalysis } from './native-audio-analysis';
 import type { PlaybackBoundary, PlaybackClock } from './program-player';
 import { emptyInternalPlayerState, type InternalPlayerDependencies, type InternalPlayerState } from './program-player';
 import type { LightingOffOutcome, LitSong, ProgramLightingOutput } from './program-player';
-import { lightsLeftOnText } from './lighting-off-ledger';
+import { litAlso, lightsLeftOnText } from './lighting-off-ledger';
+import { liveRevisionEffect } from './live-revision-effect';
 import { nativeProgramSnapshot } from './native-program-snapshot';
 import { programStart, type ProgramStart } from './program-start';
 import { optionalOutputReady } from './optional-output-ready';
@@ -132,6 +133,10 @@ export class NativeProgramPlayer {
   private obsFault: { session: NativeObsStop; text: string | null } | null = null;
   /** A window shows this player's state (setWatched). */
   private watched = true;
+  /** The song this program started and the version it started with (0.5.9 S8a, design 02 §3.5): until it stops or
+   * another song starts, its audio, timecode, picture and action MIDI follow this version, also at a seek, a scrub, a
+   * loop or a restart of the same song. `project` and `revision` are the newest version, which the next song plays. */
+  private onAir: { itemId: string; project: LinkProject; revision: number } | null = null;
 
   readonly clock: PlaybackClock = {
     read: () => ({ positionMs: this.native?.positionMs ?? this.state.positionMs, durationMs: this.state.durationMs,
@@ -147,18 +152,66 @@ export class NativeProgramPlayer {
     this.unsubscribe = () => { audio(); obs(); };
   }
 
-  /** The project this player plays now: while a song is held, the version it started with. */
-  currentProject(): LinkProject { return this.project; }
-  /** The window's project changed while no song is held (0.5.9 S7, design 02 §3.4): the next song plays this version.
-   * Nothing closes or opens again, and the player's own settings (播完后, the playlist, timecode on or off) stay as they
-   * are. A held song (preparing, playing, paused) keeps the version it started with: NativeProgramService keeps the
-   * newer one until the song stops. The selected song's preparation follows when the window asks again
+  /** The version the song on stage follows (its picture and action MIDI, 0.5.9 S8a): while a song is held, the version
+   * it started with; otherwise the newest version, which the next song plays. */
+  currentProject(): LinkProject { return this.songVersion(this.state.itemId).project; }
+  /** The window's project changed (0.5.9 S7, S8a; design 02 §3.4, §3.5): the next song plays this version. Nothing
+   * closes or opens again, and the player's own settings (播完后, the playlist, timecode on or off) stay as they are. A
+   * held song (preparing, playing, paused) keeps the version it started with; of this version it takes at once only what
+   * does not touch its audio, timecode, picture or actions: its saved volume, its own end action, and the executors its
+   * lighting may run (liveRevisionEffect). The selected song's preparation follows when the window asks again
    * (preloadSelected). */
   updateProject(project: LinkProject, revision: number, projectPath: string): void {
-    if (this.holding()) throw new Error('节目还拿着一首歌，这一版等停止以后才用');
+    const before = this.project;
     this.project = project; this.revision = revision; this.projectPath = projectPath;
-    // The saved song volumes heard while a song was held (setSongVolume) are in this version.
-    this.songVolumes.clear();
+    const held = this.holding() ? this.state.itemId : null;
+    // The saved song volumes heard before this version (setSongVolume) are in it: with no song held all of them; else
+    // those of the songs whose saved volume it changes, so the version and the volume heard never disagree.
+    if (!held) { this.songVolumes.clear(); return; }
+    for (const itemId of [...this.songVolumes.keys()]) {
+      const was = before.rundown.find(item => item.id === itemId), now = project.rundown.find(item => item.id === itemId);
+      if (!now || !was || savedSongVolume(was) !== savedSongVolume(now)) this.songVolumes.delete(itemId);
+    }
+    // A song pressed whose start has not run yet starts with the newest version (play): nothing to take or to say here.
+    if (this.onAir?.itemId !== held) return;
+    const started = this.onAir.project;
+    const effect = liveRevisionEffect(before, project, { itemId: held, started });
+    const title = (started.rundown.find(item => item.id === held) ?? before.rundown.find(item => item.id === held))?.title ?? held;
+    // Logged only: the song on air plays on as it started, its audio and timecode untouched.
+    if (effect.removedHeld) this.dependencies.notice?.(`这次修改删掉或停用了正在播的「${title}」，这首歌照原样播完，之后的歌按新的工程播`, held);
+    else if (effect.audio) this.dependencies.notice?.(`这次修改改了正在播的「${title}」的音频或时间码，这首歌照原样播完，停下重播才生效`, held);
+    if (effect.endAction) {
+      const item = project.rundown.find(entry => entry.id === held);
+      // The song's own end action, else the player bar's 播完后, which a version that does not touch it never replaces.
+      this.update({ endAction: item?.playback?.endAction ?? this.defaultEndAction() });
+    }
+    if (effect.volume !== null && ['playing', 'paused'].includes(this.state.status)) {
+      // A CC7 volume of this run is what outputVolume gives, so the output stays; the saved one is heard once it gives
+      // way. While the song is prepared, its start reads it.
+      const volume = this.outputVolume();
+      if (volume !== this.state.volume) this.output(volume);
+    }
+    // The executors the song may run only grow until it stops (R13): nothing goes off because of an edit.
+    if (effect.lighting && (!this.lit || this.lit.song.itemId === held)) {
+      this.lit = litAlso(this.lit, effect.lighting, this.lit?.song ?? { itemId: held, title: project.rundown.find(item => item.id === held)?.title ?? title });
+      this.lighting.widen(this.lit);
+    }
+  }
+  /** The version `itemId` plays: the one it started with while it is the song held, else the newest. */
+  private songVersion(itemId: string | null): { project: LinkProject; revision: number } {
+    const onAir = this.onAir;
+    return onAir && itemId === onAir.itemId && this.holding() && this.state.itemId === itemId ? onAir : { project: this.project, revision: this.revision };
+  }
+  /** The song after `itemId` in the newest version's playlist (0.5.9 S8a). A held song no longer there (deleted or
+   * disabled) is found where it stood in the version it started with: the next song after it the newest version plays. */
+  private nextAfter(itemId: string): RundownItem | undefined {
+    const items = this.items(), index = items.findIndex(item => item.id === itemId);
+    if (index >= 0) return items[index + 1];
+    if (this.onAir?.itemId !== itemId) return undefined;
+    const order = playlistItems(this.onAir.project, this.state.playlistId ?? 'all').map(item => item.id), at = order.indexOf(itemId);
+    if (at < 0) return undefined;
+    for (const id of order.slice(at + 1)) { const found = items.find(item => item.id === id); if (found) return found; }
+    return undefined;
   }
   /** The window selected a song, or the project changed: its picture is prepared. Asked again for the same song after
    * the project changed, it is prepared again with this version once the edits pause (0.5.9 S7): a song started then
@@ -219,6 +272,8 @@ export class NativeProgramPlayer {
     if (this.selectedPreload?.itemId !== itemId) this.selectedPreload = null;
     this.mtcSuppressed = !this.state.mtcEnabled;
     const reuseSession = itemId === this.state.itemId && ['playing', 'paused'].includes(this.state.status);
+    // The song held plays on with the version it started with, also when it is placed again (a seek, a loop, a restart).
+    const kept = itemId === this.state.itemId && this.holding() && this.onAir?.itemId === itemId ? this.onAir : null;
     if (this.state.itemId !== itemId && this.state.status === 'playing') this.markPlayed();
     this.cancelScheduled(); this.runtimePrepared = false; this.timecodeOutput = idleTimecodeOutput; this.boundary('seek');
     this.start = { leftover: null, obs: null, fault: null }; this.carried = null;
@@ -232,12 +287,17 @@ export class NativeProgramPlayer {
       await this.stopObs().catch((error: unknown) => this.pictureNotStopped(error, '上一次的画面没清理干净'));
       await this.optionalRuntime(() => this.dependencies.stop(), '上一次的联动没清理干净');
       if (!this.current(token)) return;
-      const prepared = programStart(this.project, itemId, { revision: this.revision, positionMs, sampleRate: config.audioSampleRate,
+      // Another song, or the same one from stopped, starts with the newest version.
+      const version = kept ?? { itemId, project: this.project, revision: this.revision };
+      const prepared = programStart(version.project, itemId, { revision: version.revision, positionMs, sampleRate: config.audioSampleRate,
         mtcPortName: config.mtcPortName, check: !reuseSession });
-      const item = this.project.rundown.find(entry => entry.id === itemId)!;
+      this.onAir = version;
+      const item = version.project.rundown.find(entry => entry.id === itemId)!;
       for (const warning of prepared.warnings) this.reportUnavailable(warning);
       // The previous timecode has stopped: the previous song's executors this one does not use go off, without waiting.
-      this.changeLighting(item.lighting ? { document: item.lighting, song: { itemId, title: item.title } } : null);
+      // Placed again, the song keeps every executor its versions so far may run (R13).
+      this.changeLighting(kept && this.lit?.song.itemId === itemId ? this.lit
+        : item.lighting ? { document: item.lighting, song: { itemId, title: item.title } } : null);
       this.allowMtc = prepared.allowMtc; this.picture = prepared.picture;
       const sendMtc = this.allowMtc && this.state.mtcEnabled;
       const midiPortName = sendMtc ? config.mtcPortName : null;
@@ -252,11 +312,12 @@ export class NativeProgramPlayer {
         endAction: item.playback?.endAction ?? this.defaultEndAction(), mtcPositionMs: this.allowMtc ? snapshot.positionMs + snapshot.offsetMs : null });
       let nextSnapshot: ProgramStart['snapshot'] | undefined;
       if (config.preload !== false) {
-        const items = this.items();
-        const next = this.loopStart !== null || this.state.endAction === 'loop' ? item
-          : this.state.endAction === 'next' ? items[items.findIndex(entry => entry.id === itemId) + 1] : undefined;
+        // The song again plays this version; another song plays the newest one, which the engine takes beside this song
+        // only when they are the same version (a different one would never be taken: not prepared).
+        const again = this.loopStart !== null || this.state.endAction === 'loop';
+        const next = again ? item : this.state.endAction === 'next' && version.revision === this.revision ? this.nextAfter(itemId) : undefined;
         if (next) try {
-          nextSnapshot = nativeProgramSnapshot(this.project, next.id, this.revision,
+          nextSnapshot = nativeProgramSnapshot(again ? version.project : this.project, next.id, version.revision,
             this.loopStart ?? undefined, config.audioSampleRate).snapshot;
         } catch (error) { this.reportUnavailable(`下一个节目无法提前准备：${toUserErrorMessage(error)}`); }
       }
@@ -360,7 +421,7 @@ export class NativeProgramPlayer {
     const token = ++this.epoch; this.cancelScheduled(); this.transportIntent = 'playing';
     // The run is over: the player bar shows its own 播完后 again, not the end action of the song that stopped.
     this.update({ status: 'stopped', notice: null, fault: null, pictureItems: [], volumeOverride: null, endAction: this.defaultEndAction() });
-    this.stopOwed = true;
+    this.stopOwed = true; this.onAir = null;
     // Stop reaches the main service immediately if preparation has already
     // published its session; otherwise the queued prepare cannot start audio.
     const stopping = (this.requestedPreparation ? this.command({ kind: 'stop' }) : Promise.resolve()).catch(error => { if (this.current(token)) this.fail(error); });
@@ -488,7 +549,12 @@ export class NativeProgramPlayer {
       if (this.transportIntent === 'playing') await this.playOn(token);
     });
   }
-  skip(direction: -1 | 1): Promise<void> { const items = this.items(), index = items.findIndex(item => item.id === this.state.itemId); const next = items[(index + direction + items.length) % items.length]; return next ? this.play(next.id) : Promise.resolve(); }
+  skip(direction: -1 | 1): Promise<void> {
+    const items = this.items(), index = items.findIndex(item => item.id === this.state.itemId);
+    // A held song the newest version no longer plays: the next one after where it stood.
+    const next = index < 0 && direction === 1 && this.state.itemId ? this.nextAfter(this.state.itemId) ?? items[0] : items[(index + direction + items.length) % items.length];
+    return next ? this.play(next.id) : Promise.resolve();
+  }
   /** The player bar's 播完后: what this song does when it ends, and every later song without its own end action. */
   setEndAction(endAction: InternalPlayerState['endAction']): void { this.update({ endAction, defaultEndAction: endAction }); }
   setPlaylist(playlistId: string): void { this.update({ playlistId }); }
@@ -535,7 +601,8 @@ export class NativeProgramPlayer {
     const itemId = this.state.itemId;
     if (this.state.volumeOverride != null) return this.state.volumeOverride;
     if (!itemId) return 100;
-    const item = this.project.rundown.find(entry => entry.id === itemId);
+    // As saved in the newest version; a held song it no longer has keeps the volume of the version it started with.
+    const item = this.project.rundown.find(entry => entry.id === itemId) ?? this.songVersion(itemId).project.rundown.find(entry => entry.id === itemId);
     return this.songVolumes.get(itemId) ?? (item ? savedSongVolume(item) : 100);
   }
   private output(volume: number): void { this.reflectGain = false; this.update({ volume }); this.queueVolume(volume / 100, 0); }
@@ -614,7 +681,8 @@ export class NativeProgramPlayer {
     if (!this.current(token) || !this.native) return;
     const envelope: NativeObsStop = { version: 1, sessionId: this.sessionId, generation: this.nativeGeneration };
     try {
-      const snapshot = createObsProgramSnapshot(this.project, itemId, this.revision);
+      // The picture of the version the song plays (0.5.9 S8a): the one it started with while it is held.
+      const version = this.songVersion(itemId), snapshot = createObsProgramSnapshot(version.project, itemId, version.revision);
       const nextFiles = this.nextObsFiles(itemId);
       this.obsSession = envelope; this.obsPreparing = true;
       const preparing = this.api.prepareNativeObs({ ...envelope, projectPath: this.projectPath,
@@ -636,8 +704,9 @@ export class NativeProgramPlayer {
     finally { if (this.obsSession === envelope) this.obsPreparing = false; }
   }
   private nextObsFiles(itemId: string): NativeObsPrepare['nextFiles'] {
-    if (this.dependencies.configuration().preload === false || this.state.endAction !== 'next') return undefined;
-    const items = this.items(), next = items[items.findIndex(item => item.id === itemId) + 1];
+    // The next song plays the newest version; files of it beside this song's picture only when they are the same version.
+    if (this.dependencies.configuration().preload === false || this.state.endAction !== 'next' || this.songVersion(itemId).revision !== this.revision) return undefined;
+    const next = this.nextAfter(itemId);
     if (!next) return undefined;
     try {
       return { snapshot: createObsProgramSnapshot(this.project, next.id, this.revision),
@@ -677,7 +746,7 @@ export class NativeProgramPlayer {
       this.boundary('end'); this.markPlayed(); this.cancelScheduled();
       if (this.state.endAction === 'pause') { this.transportIntent = 'paused'; this.update({ status: 'paused' }); if (this.runtimePrepared) await this.optionalRuntime(() => this.dependencies.pause(), 'MIDI Cue 结束暂停失败'); }
       else if (this.state.endAction === 'loop' && this.state.itemId) await this.play(this.state.itemId);
-      else { const items = this.items(), next = items[items.findIndex(item => item.id === this.state.itemId) + 1]; if (this.state.endAction === 'next' && next) await this.play(next.id); else await this.stop(); }
+      else { const next = this.state.itemId ? this.nextAfter(this.state.itemId) : undefined; if (this.state.endAction === 'next' && next) await this.play(next.id); else await this.stop(); }
     } catch (error) { if (this.current(token)) this.fail(error); }
   }
   private queueVolume(volume: number, durationMs: number): void {

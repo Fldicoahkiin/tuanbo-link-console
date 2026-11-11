@@ -8,11 +8,11 @@ export type ProgramDocument = { project: LinkProject; path: string; sessionId: s
 export function sameProgramDocument(a: Pick<ProgramDocument, 'path' | 'sessionId' | 'revision'>, b: Pick<ProgramDocument, 'path' | 'sessionId' | 'revision'>): boolean {
   return a.path === b.path && a.sessionId === b.sessionId && a.revision === b.revision;
 }
-/** One key per version, as the program names the version it plays (NativeProgramEvent.documentVersion). */
+/** One key per version, as the program names the versions it holds (NativeProgramEvent.documentVersion, pictureVersion). */
 export function programVersionKey(version: NativeProgramDocumentVersion): string { return `${version.sessionId}:${version.revision}`; }
 
-/** How many of the versions sent last are kept besides the one the program plays: only what a held song's marks and the
- * version the program takes next can name. */
+/** How many of the versions sent last are kept besides the ones the program names: only what a held song's marks and
+ * the version the program takes next can name. */
 const KEPT_VERSIONS = 4;
 
 /**
@@ -46,10 +46,10 @@ export class ProgramDocumentFeed {
   private epoch = 0;
   /** Versions leave in the order they were made: one waits for the one before it to be encoded and handed over. */
   private issuing: Promise<void> = Promise.resolve();
-  /** The projects sent, oldest first; `onAir` is the version the program was last seen playing, kept however many
-   * newer ones follow while a song is held. */
+  /** The projects sent, oldest first; `namedKeys` are the versions the program last named (the newest it holds, and the one
+   * the held song's picture follows), kept however many newer ones follow while a song is held (0.5.9 S8a). */
   private readonly versions = new Map<string, LinkProject>();
-  private onAir: string | null = null;
+  private namedKeys: ReadonlySet<string> = new Set();
 
   constructor(private readonly ownerId: string, private readonly read: () => ProgramDocument | null,
     private readonly send: (request: NativeProgramDocument) => Promise<NativeProgramDocumentAnswer>,
@@ -71,14 +71,15 @@ export class ProgramDocumentFeed {
    * Settles once it and every version before it were handed to the program, never rejected. */
   flush(): Promise<void> { return this.push(false, true); }
   /** The project of the version `key` (programVersionKey), if this page sent it; null when another page did (a
-   * program taken over after a reload) or it is long past. Asked with the version the program plays, it forgets older
-   * ones. */
-  project(key: string): LinkProject | null {
-    const project = this.versions.get(key);
-    if (!project) return null;
-    this.onAir = key;
-    for (const kept of [...this.versions.keys()]) { if (kept === key) break; this.versions.delete(kept); }
-    return project;
+   * program taken over after a reload) or it is long past. */
+  project(key: string): LinkProject | null { return this.versions.get(key) ?? null; }
+  /** The versions the program names now (its event): kept while it names them; the ones sent before the oldest of them
+   * are forgotten, as nothing names them any more. */
+  named(keys: readonly string[]): void {
+    const known = keys.filter(key => this.versions.has(key));
+    this.namedKeys = new Set(known);
+    if (!known.length) return;
+    for (const kept of [...this.versions.keys()]) { if (this.namedKeys.has(kept)) break; this.versions.delete(kept); }
   }
 
   private push(resync = false, again = false): Promise<void> {
@@ -130,7 +131,7 @@ export class ProgramDocumentFeed {
     this.versions.delete(key); this.versions.set(key, document.project);
     for (const kept of [...this.versions.keys()]) {
       if (this.versions.size <= KEPT_VERSIONS + 1) break;
-      if (kept !== this.onAir) this.versions.delete(kept);
+      if (!this.namedKeys.has(kept)) this.versions.delete(kept);
     }
   }
 }

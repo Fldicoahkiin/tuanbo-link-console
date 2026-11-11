@@ -35,7 +35,7 @@ it('动作 MIDI 按播放器现在的那一版工程准备：停着时换上的�
     getNativePlaybackDevices: () => Promise.resolve({ protocol: 4 as const, audio: [], midiOutputs: [], midiInputs: [] }),
     prepareNativeObs: () => Promise.reject(new Error('没有 OBS')), stopNativeObs: () => Promise.resolve(), onNativeObsStatus: () => () => undefined,
     preloadNativeObs: () => Promise.reject(new Error('没有 OBS')), cancelNativeObsPreload: () => Promise.resolve() },
-    lighting: { change: () => Promise.resolve({ failed: [] }), stop: () => Promise.resolve({ failed: [] }) }
+    lighting: { change: () => Promise.resolve({ failed: [] }), stop: () => Promise.resolve({ failed: [] }), widen: () => undefined }
   });
   try {
     await host.controller.play('song');

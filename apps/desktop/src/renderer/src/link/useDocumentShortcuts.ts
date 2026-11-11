@@ -29,11 +29,13 @@ export function runDocumentShortcut(action: DocumentShortcut, locked: boolean, h
   else if (!locked || history.redoScope === 'lighting') actions.redo();
 }
 
-/** Ctrl+S, Ctrl+Shift+S, Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z, handed to the window's key router. */
-export function useDocumentShortcuts(locked: boolean, save: () => Promise<void>, saveAs: () => Promise<void>): void {
+/** Ctrl+S, Ctrl+Shift+S, Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z, handed to the window's key router. `historyLocked`: only
+ * lighting steps undo and redo (P1 follow runs, the editor previews); `saveAsLocked`: save-as waits (0.5.9 S8a: in
+ * 联动台播放 a held song no longer locks undo and redo, the document store checks the song on stage). */
+export function useDocumentShortcuts(historyLocked: boolean, saveAsLocked: boolean, save: () => Promise<void>, saveAs: () => Promise<void>): void {
   const run = (action: DocumentShortcut): void => {
     const state = useDocumentStore.getState();
-    runDocumentShortcut(action, locked, { undoScope: state.past.at(-1)?.command.scope, redoScope: state.future.at(-1)?.command.scope },
+    runDocumentShortcut(action, action === 'save-as' ? saveAsLocked : historyLocked, { undoScope: state.past.at(-1)?.command.scope, redoScope: state.future.at(-1)?.command.scope },
       { save: () => void save(), saveAs: () => void saveAs(), undo: () => state.undo(), redo: () => state.redo() });
   };
   useKeyCommands('global', {

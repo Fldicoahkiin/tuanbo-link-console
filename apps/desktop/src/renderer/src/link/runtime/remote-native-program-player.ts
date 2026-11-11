@@ -45,8 +45,9 @@ export class RemoteNativeProgramPlayer {
    * song before to stop: send), `failed` (the next edit opens again). */
   private link: { kind: 'opening' | 'open' | 'refused'; document: ProgramDocument } | { kind: 'failed' } = { kind: 'failed' };
   private readonly feed: ProgramDocumentFeed;
-  /** The version the program plays, as its last event said. */
+  /** The newest version the program holds, and the one the held song's picture follows, as its last event said. */
   private onAir: string | null = null;
+  private picture: string | null = null;
   private readonly analysis = nativeAudioAnalysis(() => this.native?.itemId === this.state.itemId ? this.native : null);
   readonly clock: PlaybackClock = {
     read: () => this.clockState,
@@ -66,7 +67,8 @@ export class RemoteNativeProgramPlayer {
       this.state = { ...event.state, playedItemIds: ids.length === this.state.playedItemIds.length
         && ids.every((id, index) => id === this.state.playedItemIds[index]) ? this.state.playedItemIds : ids };
       this.clockState = event.clock;
-      this.onAir = programVersionKey(event.documentVersion);
+      this.onAir = programVersionKey(event.documentVersion); this.picture = programVersionKey(event.pictureVersion);
+      this.feed.named([this.onAir, this.picture]);
       this.dependencies.changed(this.state); this.observed(event);
       if (event.boundary) for (const listener of this.boundaries) listener(event.boundary);
       // Another project waited for the held song to stop.
@@ -91,9 +93,12 @@ export class RemoteNativeProgramPlayer {
     // Another project or path is another program, once the held song has stopped (the window waits for 停止 to open one).
     if (!holds(this.state.status)) this.open();
   }
-  /** The project of the version the program plays; null while unknown (not answered yet, or a program taken over after
-   * a reload that plays a version this page never had). */
+  /** The newest version the program holds (the next song plays it); null while unknown (not answered yet, or a program
+   * taken over after a reload whose version this page never had). */
   get project(): LinkProject | null { return this.link.kind === 'open' && this.onAir ? this.feed.project(this.onAir) : null; }
+  /** The version the picture of the song on stage follows (0.5.9 S8a): while a song is held, the one it started with;
+   * null while unknown, as `project`. */
+  get pictureProject(): LinkProject | null { return this.link.kind === 'open' && this.picture ? this.feed.project(this.picture) : null; }
   /** Whether the program answered this page's open. */
   get attached(): boolean { return this.link.kind === 'open'; }
   /** Every song plays when the operator starts it (2026-10-26); the engine shows the start check as a warning. */

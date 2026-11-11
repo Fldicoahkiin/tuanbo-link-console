@@ -1,7 +1,7 @@
 import { Button, Dialog, IconButton } from './ui';
 import './components/titlebar.css';
 import { useSettingsExit } from './useSettingsExit';
-import { toUserErrorMessage } from '@tb/core/link';
+import { isShowWait, toUserErrorMessage } from '@tb/core/link';
 import { useMa2ReadStore } from './stores/ma2-read-store';
 import { useDocumentShortcuts } from './useDocumentShortcuts';
 import { useMidiPortMonitor } from './useMidiPortMonitor';
@@ -30,7 +30,8 @@ import { useAppearanceTheme } from './components/AppearanceControl';
 import { useDisplayPreferences } from './stores/display-preferences-store';
 import { ProjectWorkspace } from './components/ProjectWorkspace';
 import { LinkRuntimeCoordinator } from './runtime/link-runtime-coordinator';
-import { selectCanRedo, selectCanUndo, useDocumentStore } from './stores/document-store';
+import { selectCanRedo, selectCanUndo, useDocumentStore, useHistoryWait } from './stores/document-store';
+import { useShowGate } from './stores/show-state-store';
 import { useIntegrationStore } from './stores/integration-store';
 import { useRuntimeStore } from './stores/runtime-store';
 import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
@@ -82,19 +83,19 @@ export function LinkApp(): JSX.Element {
   const projectPath = useDocumentStore((state) => state.path);
   const documentId = useDocumentStore((state) => state.documentId);
   const documentError = useDocumentStore((state) => state.error);
-  const canUndo = useDocumentStore(selectCanUndo);
-  const canRedo = useDocumentStore(selectCanRedo);
-  const lightingUndo = useDocumentStore(state => state.past.at(-1)?.command.scope === 'lighting');
-  const lightingRedo = useDocumentStore(state => state.future.at(-1)?.command.scope === 'lighting');
   const obs = useIntegrationStore((state) => state.obs);
   const processes = useIntegrationStore((state) => state.processes);
   const integrationInitialized = useIntegrationStore((state) => state.initialized);
   const runtimeState = useRuntimeStore((state) => state.state);
   const [playbackProject, setPlaybackProject] = useState(project);
   const internalPlayer = useInternalPlayer(coordinator, integrationInitialized, playbackProject);
-  const editingLocked = internalPlayer.state.status === 'preparing' || ['preflight', 'armed', 'running', 'timecodeLost', 'paused', 'error', 'stopping'].includes(runtimeState);
+  // P1 follow locks editing while it runs. 联动台播放 does not (0.5.9 S8a): a held song plays on as it started, the edits it
+  // cannot take wait in the document store (showGate song.audio.edit, song.remove), and the order, another project and
+  // save-as wait for 停止 where they are offered.
+  const editingLocked = project?.playbackSource !== 'internal' && (internalPlayer.state.status === 'preparing' || ['preflight', 'armed', 'running', 'timecodeLost', 'paused', 'error', 'stopping'].includes(runtimeState));
   const previewPlaying = useMa2SyncStore(state => state.previewPlaying);
-  const playbackLocked = editingLocked || previewPlaying || ['playing', 'paused'].includes(internalPlayer.state.status);
+  const playbackLocked = editingLocked || previewPlaying || ['preparing', 'playing', 'paused'].includes(internalPlayer.state.status);
+  const locks = useDocumentLocks(editingLocked || previewPlaying, playbackLocked);
   useEffect(() => { if (!playbackLocked) setPlaybackProject(project); }, [playbackLocked, project]);
   // The window's one key listener (keys/key-router.ts). While the connection and settings page is open, the window's
   // playback keys wait and Escape there only closes the page (0.5.9; useKeyOverlay below).
@@ -104,6 +105,8 @@ export function LinkApp(): JSX.Element {
   /** `written`: the text is written for the operator already and is shown as it is (noticeText). */
   const notify = useCallback((message: string, tone: 'info' | 'error' = 'info', key?: string, written = false) => {
     const id = crypto.randomUUID();
+    // A wait is not a failure (AGENTS §4): never in red, also when the edit that hit it reports it as an error.
+    if (tone === 'error' && isShowWait(message)) tone = 'info';
     const displayMessage = noticeText(message, tone, written);
     if (tone === 'error' && message) recordErrorNotice(displayMessage, message);
     setNotices((current) => [...current.filter(notice => notice.message !== displayMessage && (!key || notice.key !== key)), ...(message ? [{ id, message: displayMessage, tone, ...(key ? { key } : {}) }] : [])]);
@@ -112,7 +115,7 @@ export function LinkApp(): JSX.Element {
 
   const midiMonitor = useDesktopIntegrationEvents(notify); useEffect(() => { try { useDisplayPreferences.getState().load(); } catch (error) { notify(`显示设置读取失败：${String(error)}`, 'error'); } }, [notify]);
   useMa2Sync(notify);
-  useConsoleFollow(internalPlayer, internalPlayer.programProject); useStatusSources(); useShowStateMirror(notify);
+  useConsoleFollow(internalPlayer, internalPlayer.pictureProject); useStatusSources(); useShowStateMirror(notify);
   useProjectPersistence(notify); useRecoveryCopyWriter(); useMediaAudioPreparation(playbackLocked, notify);
 
   useDocumentStateReport(notify);
@@ -210,17 +213,17 @@ export function LinkApp(): JSX.Element {
     useMa2ReadStore.setState({ openWorkspace: false });
     leaveSettings(() => setPage('lighting'));
   }, [openLighting, leaveSettings]);
-  useDocumentShortcuts(playbackLocked, saveProject, saveProjectAs);
+  useDocumentShortcuts(locks.historyLocked, locks.saveAsLocked, saveProject, saveProjectAs);
   const documentActions = {
-    canUndo: canUndo && (!playbackLocked || lightingUndo), canRedo: canRedo && (!playbackLocked || lightingRedo),
+    ...locks.history,
     historyDisabled: false,
     // Saving keeps the path, so it stays available while playing; Save As and revert do not.
     disabled: !project,
     onUndo: () => useDocumentStore.getState().undo(),
     onRedo: () => useDocumentStore.getState().redo(), onSave: () => void saveProject()
   };
-  const fileCommands = { replaceDisabled: playbackLocked || !project, onSaveAs: () => void saveProjectAs(), onRevert: () => void revertProject() };
-  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} fileCommands={fileCommands} /></div>{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace syncHost={syncHost} key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} playbackProject={internalPlayer.programProject} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
+  const fileCommands = { replaceDisabled: locks.replaceLocked || !project, openDisabled: locks.replaceLocked, onSaveAs: () => void saveProjectAs(), onRevert: () => void revertProject() };
+  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} fileCommands={fileCommands} /></div>{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace syncHost={syncHost} key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} playbackProject={internalPlayer.pictureProject} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
 
   return <RendererErrorBoundary>
     <div className="app-shell" data-workspace={connectionsOpen ? 'settings' : page}>
@@ -406,6 +409,25 @@ function useUpdateAvailableNotice(notify: (message: string, tone?: 'info' | 'err
       notify(`有新版本 ${status.availableVersion}，可在「设置 › 外观与更新 › 软件更新」中查看`, 'info', 'update-available');
     });
   }, [notify]);
+}
+
+/**
+ * What the document commands wait for (0.5.9 S8a). Undo and redo wait only while P1 follow runs or the editor previews
+ * (`historyLocked`: only lighting steps then); in 联动台播放 a step the song on stage cannot take waits with its reason
+ * (useHistoryWait), the rest runs. Another project, revert and save-as wait for 停止 (showGate document.replace,
+ * document.saveAs).
+ */
+function useDocumentLocks(historyLocked: boolean, playbackLocked: boolean) {
+  const canUndo = useDocumentStore(selectCanUndo), canRedo = useDocumentStore(selectCanRedo);
+  const lightingUndo = useDocumentStore(state => state.past.at(-1)?.command.scope === 'lighting');
+  const lightingRedo = useDocumentStore(state => state.future.at(-1)?.command.scope === 'lighting');
+  const undoWait = useHistoryWait('undo'), redoWait = useHistoryWait('redo');
+  const replaceGate = useShowGate('document.replace'), saveAsGate = useShowGate('document.saveAs');
+  return {
+    historyLocked, saveAsLocked: playbackLocked || saveAsGate.kind === 'wait',
+    replaceLocked: playbackLocked || replaceGate.kind === 'wait' || saveAsGate.kind === 'wait',
+    history: { canUndo: canUndo && (!historyLocked || lightingUndo) && undoWait === null, canRedo: canRedo && (!historyLocked || lightingRedo) && redoWait === null, undoWait, redoWait }
+  };
 }
 
 function useDocumentErrorNotification(

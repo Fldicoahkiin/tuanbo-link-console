@@ -50,7 +50,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   const [controller, setController] = useState<RemoteNativeProgramPlayer | null>(null);
   const [view] = useState(() => new PlayerViewStore());
   const state = useSyncExternalStore(view.subscribeControl, view.readControl);
-  // The version the program last said it plays (NativeProgramEvent.documentVersion), and how many opens it answered.
+  // The versions the program last named (NativeProgramEvent.documentVersion and pictureVersion), and how many opens it answered.
   const [programVersion, setProgramVersion] = useState<string | null>(null);
   const [attachments, setAttachments] = useState(0);
   const plays = programPlays(controller, programVersion, attachments);
@@ -122,7 +122,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       attached: () => setAttachments(value => value + 1)
     };
     const player = new RemoteNativeProgramPlayer(dependencies, desktop, event => {
-      setProgramVersion(programVersionKey(event.documentVersion));
+      setProgramVersion(`${programVersionKey(event.documentVersion)} ${programVersionKey(event.pictureVersion)}`);
       const runtime = useRuntimeStore.getState();
       const status = event.state.status === 'playing' ? 'running' : event.state.status === 'stopped' ? 'idle'
         : event.state.status === 'preparing' ? 'preflight' : event.state.status;
@@ -159,6 +159,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     return () => coordinator.onInternalStop(null);
   }, [coordinator, controller]);
   const engine = playerEngineLabel(profile, project);
-  const { outdated, project: programProject } = plays;
-  return useMemo(() => ({ controller, state, view, engine, outdated, programProject }), [controller, state, view, engine, outdated, programProject]);
+  // `programProject`: the newest version the program holds; `pictureProject`: the one the song on stage follows (0.5.9 S8a).
+  const { outdated, project: programProject, pictureProject } = plays;
+  return useMemo(() => ({ controller, state, view, engine, outdated, programProject, pictureProject }), [controller, state, view, engine, outdated, programProject, pictureProject]);
 }

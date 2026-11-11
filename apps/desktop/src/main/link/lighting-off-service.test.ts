@@ -469,3 +469,22 @@ describe('关灯读回（M8）', () => {
     } finally { f.close(); }
   });
 });
+
+// 0.5.9 S8a：拿着歌时改了它的灯光，执行器只增不减；停止关这一遍所有版本用过的；已经欠着的不取消。
+describe('拿着歌时改灯光', () => {
+  it('widen 不发任何 Off；停止关所有版本的执行器；欠着的 Off 照旧欠着', async () => {
+    const f = fixture(); f.status.state = 'disconnected';
+    await f.service.stop(lit('b', '返场', ['1.103']), 'stop');
+    expect(f.service.owed().map(entry => entry.executor)).toEqual(['1.103']);
+    f.status.state = 'connected';
+    const first = lit('a', '开场', ['1.101']);
+    await f.service.change(null, first);
+    const widened = { document: document(['1.102', '1.103']), song: first.song, earlier: [first.document] };
+    f.service.widen(widened);
+    expect(f.playMa2Cue).not.toHaveBeenCalled();
+    expect(f.service.owed().map(entry => entry.executor)).toEqual(['1.103']);
+    await f.service.stop(widened, 'stop');
+    expect(new Set(f.executors())).toEqual(new Set(['1.101', '1.102', '1.103']));
+    expect(f.service.owed()).toEqual([]);
+  });
+});

@@ -70,17 +70,19 @@ export const nativeProgramDocumentSchema = z.object({
 }).strict().refine(request => (request.change.kind === 'full') === (request.base === null),
   { message: '整份工程不带基准版本，增量必须带基准版本', path: ['base'] });
 export type NativeProgramDocument = z.infer<typeof nativeProgramDocumentSchema>;
-/** `applied`: the program took the version; `stopped`, it plays it from the next song on; `next-pass`, a song is held
- * and it plays it once the song stops; `live` is for a later step (this pass). `resync`: the program has no `base`
- * for an increment, the window sends the whole document. */
+/** `applied`: the program took the version; `stopped`, no song was held and the next song plays it; `live`, a song is
+ * held: it plays on as it started and takes of this version only its saved volume, its own end action and the
+ * executors its lighting may run (0.5.9 S8a), the next song plays it. `resync`: the program has no `base` for an
+ * increment, the window sends the whole document. */
 export const nativeProgramDocumentAnswerSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('applied'), revision: z.number().int().nonnegative(), effect: z.enum(['stopped', 'live', 'next-pass']) }).strict(),
+  z.object({ kind: z.literal('applied'), revision: z.number().int().nonnegative(), effect: z.enum(['stopped', 'live']) }).strict(),
   z.object({ kind: z.literal('resync'), reason: z.string() }).strict()
 ]);
 export type NativeProgramDocumentAnswer = z.infer<typeof nativeProgramDocumentAnswerSchema>;
 /** How a window's open request attached: a new program, or the program that kept
  * playing after the previous window's renderer exited. `outdated` means that
- * program plays a different document than the reloaded window shows. */
+ * program had a different document than the reloaded window shows: it takes the window's from now on, and the song
+ * it holds plays on as it started (0.5.9 S8a). */
 export type NativeProgramAttachment = 'opened' | 'adopted' | 'outdated';
 const operation = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('play'), itemId: z.string(), positionMs: time.optional(), paused: z.boolean().optional() }).strict(),
@@ -112,8 +114,11 @@ export const nativeProgramEventSchema = z.object({
   version: z.literal(1), ownerId: z.string().uuid(), sequence: z.number().int().nonnegative(), state: programPlayerStateSchema,
   clock: z.object({ positionMs: time, durationMs: time, ready: z.boolean(), playing: z.boolean(), seeking: z.boolean() }).strict(),
   boundary: z.enum(['pause', 'seek', 'end']).optional(), currentCueId: z.string().nullable(),
-  /** The version of the project the program plays now (0.5.9 S7): while a song is held, the one it started with. */
-  documentVersion: nativeProgramDocumentVersionSchema
+  /** The newest version of the project the program holds (0.5.9 S7, S8a): the next song plays it. */
+  documentVersion: nativeProgramDocumentVersionSchema,
+  /** The version the picture of the song on stage follows (0.5.9 S8a): while a song is held, the one it started with;
+   * with none held, `documentVersion`. */
+  pictureVersion: nativeProgramDocumentVersionSchema
 }).strict();
 export type NativeProgramEvent = z.infer<typeof nativeProgramEventSchema>;
 /** The quit closed the program the window `ownerId` opened, and the operator went back to the app (返回软件, or a quit

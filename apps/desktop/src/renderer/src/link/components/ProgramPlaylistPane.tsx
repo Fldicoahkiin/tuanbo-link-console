@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, ListMusic, Plus, Pencil, Trash2 } from 'lucide-reac
 import { editProgramPlaylistCommand, playlistDropIndex, playlistItems, playlistOrderFromP1, programPlaylists } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
+import { useShowGate } from '../stores/show-state-store';
 import { Button, Dialog, IconButton, Menu, MenuItem, TextInput } from '../ui';
 import { useDragSession } from './useDragSession';
 import { useDragEdgeScroll, verticalScrollerOf } from './useDragEdgeScroll';
@@ -25,7 +26,10 @@ export function ProgramPlaylistPane(props: { project: LinkProject; selectedId: s
   const press = useRef<{ pointerId: number; id: string; x: number; y: number } | null>(null);
   const suppressClick = useRef(false);
   const [refused, setRefused] = useState(false);
-  const moveBlocked = props.locked ? '正在播放或处理中，停下后才能调整顺序'
+  // The order of the lists is the show's order too (MIDI program change picks a list by it): it waits like the songs'
+  // order (showGate rundown.reorder, 0.5.9 S8a).
+  const reorderGate = useShowGate('rundown.reorder');
+  const moveBlocked = reorderGate.kind === 'wait' ? reorderGate.message : props.locked ? '正在播放或处理中，停下后才能调整顺序'
     : playlistOrderFromP1(props.project) ? '这些播放列表来自 P1，顺序跟 P1 一致，请在 P1 里调整' : null;
   const drag = session.drag;
   const listIds = lists.map(list => list.id);

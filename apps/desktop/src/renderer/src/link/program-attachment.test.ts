@@ -10,14 +10,21 @@ const project = parseLinkProject({ ...createEmptyLinkProject('现场'), playback
 
 describe('后台节目答复打开以后，界面才知道它在播哪一版', () => {
   it('没有控制器、还没答复、还没听到版本：都不知道（null），不当成同一版', () => {
-    expect(programPlays(null, 'a:1', 1)).toEqual({ outdated: null, project: null });
-    expect(programPlays({ attached: false, project }, 'a:1', 1)).toEqual({ outdated: null, project: null });
-    expect(programPlays({ attached: true, project }, null, 1)).toEqual({ outdated: null, project: null });
+    const unknown = { outdated: null, project: null, pictureProject: null };
+    expect(programPlays(null, 'a:1', 1)).toEqual(unknown);
+    expect(programPlays({ attached: false, project, pictureProject: project }, 'a:1', 1)).toEqual(unknown);
+    expect(programPlays({ attached: true, project, pictureProject: project }, null, 1)).toEqual(unknown);
   });
 
-  it('播的是这一页送过的版本：就是那一版的工程；不是这一页送的：另一版', () => {
-    expect(programPlays({ attached: true, project }, 'a:1', 1)).toEqual({ outdated: false, project });
-    expect(programPlays({ attached: true, project: null }, 'a:1', 1)).toEqual({ outdated: true, project: null });
+  it('画面跟的是这一页送过的版本：就是那一版的工程；不是这一页送的：另一版', () => {
+    expect(programPlays({ attached: true, project, pictureProject: project }, 'a:1', 1)).toEqual({ outdated: false, project, pictureProject: project });
+    expect(programPlays({ attached: true, project: null, pictureProject: null }, 'a:1', 1)).toEqual({ outdated: true, project: null, pictureProject: null });
+  });
+
+  it('拿着歌时最新一版已经是这一页的，画面还跟开始那一版（0.5.9 S8a）：按画面那一版判断', () => {
+    const newer = { ...project, name: '新的一版' };
+    expect(programPlays({ attached: true, project: newer, pictureProject: project }, 'a:2 a:1', 1)).toEqual({ outdated: false, project: newer, pictureProject: project });
+    expect(programPlays({ attached: true, project: newer, pictureProject: null }, 'a:2 b:9', 1)).toEqual({ outdated: true, project: newer, pictureProject: null });
   });
 });
 
@@ -48,11 +55,11 @@ describe('评审场景：界面重新加载后接回还在播的节目，后台�
       /** The program kept playing over the reload: it sends its state first, naming the version it plays. */
       playing: (documentVersion: NativeProgramDocumentVersion) => api.onNativeProgramEvent.mock.calls[0]![0]({ version: 1, ownerId, sequence: 1,
         state: { ...emptyInternalPlayerState, status: 'playing', itemId: 'song', positionMs: 12_500 },
-        clock: { positionMs: 12_500, durationMs: 20_000, ready: true, playing: true, seeking: false }, currentCueId: null, documentVersion }),
+        clock: { positionMs: 12_500, durationMs: 20_000, ready: true, playing: true, seeking: false }, currentCueId: null, documentVersion, pictureVersion: documentVersion }),
       answer: async (attachment: NativeProgramAttachment) => { answerOpen(attachment); await new Promise(resolve => setTimeout(resolve, 0)); },
       onAir: () => {
         const plays = programPlays(controller, version, attachments);
-        return pictureOnAir('song', true, { state, project: plays.project, outdated: plays.outdated });
+        return pictureOnAir('song', true, { state, project: plays.pictureProject, outdated: plays.outdated });
       }
     };
   }

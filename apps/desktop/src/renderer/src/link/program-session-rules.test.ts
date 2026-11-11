@@ -104,7 +104,7 @@ function mainProcess() {
   const hosts: InstanceType<typeof NativeProgramHost>[] = [];
   let closes = 0;
   const pages = new Set<{ event: Set<(event: NativeProgramEvent) => void>; closed: Set<(closed: NativeProgramClosed) => void> }>();
-  const lighting: ProgramLightingOutput = { change: () => Promise.resolve({ failed: [] }), stop: () => Promise.resolve({ failed: [] }) };
+  const lighting: ProgramLightingOutput = { change: () => Promise.resolve({ failed: [] }), stop: () => Promise.resolve({ failed: [] }), widen: () => undefined };
   const service = new NativeProgramService((project, request, callbacks) => {
     const host = new NativeProgramHost(project, request.projectPath, request.revision, {
       executable: 'tblink-playback.exe', audio: () => audio, midiOutputs: () => Promise.resolve([]), authorize: () => Promise.resolve(),
@@ -236,7 +236,9 @@ describe('一个窗口页面一个长期的节目（0.5.9 S7）', () => {
     for (let round = 1; round <= 5; round += 1) { edit(`播放中第 ${round} 版`); await settle(); }
     expect(w.main.opens).toHaveBeenCalledOnce(); expect(w.main.closes()).toBe(0);
     expect(w.main.player().currentProject().rundown[0]!.title).toBe('开场');
-    expect(w.seen.player?.programProject?.rundown[0]!.title).toBe('开场');
+    // 0.5.9 S8a: the program holds the newest version; the picture of the song on stage follows the one it started with.
+    expect(w.seen.player?.pictureProject?.rundown[0]!.title).toBe('开场');
+    expect(w.seen.player?.programProject?.rundown[0]!.title).toBe('播放中第 5 版');
     await React.act(() => w.player().stop()); await settle();
     expect(w.main.player().currentProject().rundown[0]!.title).toBe('播放中第 5 版');
     await React.act(() => w.player().play('song')); await settle();

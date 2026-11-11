@@ -413,12 +413,12 @@ describe('修改送进后台节目不过授权，也不发出任何输出', () =
     expect(f.audio()).toBeNull(); expect(f.controls).toEqual([]); expect(f.send).not.toHaveBeenCalled();
   });
 
-  it('拿着歌时送来的新一版：不出输出、不重新准备，这首歌照旧；停下以后才换上', async () => {
+  it('拿着歌时送来的新一版：当即收下（live），不出输出、不重新准备，这首歌照旧按开始的那一版；停下以后下一首用它', async () => {
     const f = await programHost();
     await f.play('song');
     const audio = f.audio(), controls = [...f.controls], sent = f.send.mock.calls.length;
     f.lapse(lapsed.到期!);
-    expect(await f.service.document(version(f, 2, '改名的开场'), () => Promise.resolve())).toEqual({ kind: 'applied', revision: 2, effect: 'next-pass' });
+    expect(await f.service.document(version(f, 2, '改名的开场'), () => Promise.resolve())).toEqual({ kind: 'applied', revision: 2, effect: 'live' });
     expect(f.audio()).toBe(audio); expect(f.controls).toEqual(controls); expect(f.send).toHaveBeenCalledTimes(sent);
     expect(f.player().currentProject().rundown[0]!.title).toBe('开场');
     await f.player().stop();

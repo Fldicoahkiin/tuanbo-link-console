@@ -61,6 +61,7 @@ export * from './program-player';
 export * from './midi-program';
 export * from './midi-late-rule';
 export * from './lighting-off-ledger';
+export * from './live-revision-effect';
 export * from './native-program-player';
 export * from './native-audio-analysis';
 export * from './native-program-snapshot';

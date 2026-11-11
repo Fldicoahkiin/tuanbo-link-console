@@ -49,7 +49,7 @@ function fixture() {
     configuration: () => ({ outputDeviceId: 'default', mtcPortName: 'TEST', audioSampleRate: 48000 as const }),
     changed: (next: typeof state) => { state = next; }, notice: vi.fn(), closedFault: vi.fn() };
   // The main process's lights-off ledger (LightingOffService) as the player sees it: told what a start uses and a stop lets go.
-  const lighting = { change: vi.fn<ProgramLightingOutput['change']>(() => Promise.resolve({ failed: [] })), stop: vi.fn<ProgramLightingOutput['stop']>(() => Promise.resolve({ failed: [] })) };
+  const lighting = { change: vi.fn<ProgramLightingOutput['change']>(() => Promise.resolve({ failed: [] })), stop: vi.fn<ProgramLightingOutput['stop']>(() => Promise.resolve({ failed: [] })), widen: vi.fn<ProgramLightingOutput['widen']>() };
   const player = new NativeProgramPlayer(project, 'C:/test/project.tblink', 7, deps, api, lighting);
   return { player, project, deps, api, lighting, emit, state: () => state };
 }
@@ -1279,16 +1279,21 @@ describe('节目换上新的一版工程', () => {
     await f.player.dispose();
   });
 
-  it('拿着歌时不换：这首歌照旧按开始时的那一版放', async () => {
+  it('拿着歌时收下新的一版（0.5.9 S8a）：这首歌照旧按开始时的那一版放，定位也是；停下以后下一首按新的一版', async () => {
     const f = fixture();
     await f.player.play('song-0');
-    expect(() => f.player.updateProject(edited(f.project, 1000), 8, 'C:/test/project.tblink')).toThrow('节目还拿着一首歌');
+    const next = edited(f.project, 1000);
+    f.player.updateProject(next, 8, 'C:/test/project.tblink');
     expect(f.player.currentProject()).toBe(f.project);
     await f.player.pause();
-    expect(() => f.player.updateProject(edited(f.project, 1000), 8, 'C:/test/project.tblink')).toThrow('节目还拿着一首歌');
+    f.player.updateProject(edited(f.project, 1000), 9, 'C:/test/project.tblink');
+    expect(f.player.currentProject()).toBe(f.project);
+    await f.player.seek(2000);
+    expect(f.api.prepareNativePlayback.mock.lastCall?.[0].snapshot).toMatchObject({ revision: 7, startMs: 500 });
     await f.player.stop();
-    f.player.updateProject(edited(f.project, 1000), 8, 'C:/test/project.tblink');
     expect(f.player.currentProject().rundown[0]!.playback!.startMs).toBe(1000);
+    await f.player.play('song-0');
+    expect(f.api.prepareNativePlayback.mock.lastCall?.[0].snapshot).toMatchObject({ revision: 9, startMs: 1000 });
     await f.player.dispose();
   });
 

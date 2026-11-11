@@ -27,7 +27,7 @@ function fixture(wait?: Promise<NativeProgramAttachment>, project: LinkProject =
   const emit = (patch: Partial<NativeProgramEvent> = {}) => api.onNativeProgramEvent.mock.calls[0]![0]({ version: 1, ownerId, sequence: sequence++,
     state: { ...emptyInternalPlayerState, status: 'playing', itemId: 'song', positionMs: 1234 },
     clock: { positionMs: 1234, durationMs: 5000, ready: true, playing: true, seeking: false }, currentCueId: null,
-    documentVersion: { sessionId: SESSION, revision: 1 }, ...patch });
+    documentVersion: { sessionId: SESSION, revision: 1 }, pictureVersion: patch.documentVersion ?? { sessionId: SESSION, revision: 1 }, ...patch });
   /** Main tells the windows that the quit closed the program `ownerId` opened, and the operator went back to the app. */
   const closedByQuit = (id: string) => api.onNativeProgramClosed.mock.calls[0]![0]({ version: 1, ownerId: id });
   /** The operator edits: the document store has a newer version. */

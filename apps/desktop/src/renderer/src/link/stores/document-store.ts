@@ -1,10 +1,13 @@
 /// <reference types="vite/client" />
+import { useMemo } from 'react';
 import { create, type StateCreator } from 'zustand';
 import { shareProjectStructure } from './share-project-structure';
 import { isWorkerValidatedProject } from './project-codec';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { parseLinkProject, validateLinkProjectRelations, type LinkProject } from '@tb/schema';
-import { migrateSongMusic, normalizeContentTimeline, obsSceneOutputCommand, withContentTimeline, withMa2Pairings, type DroppedSongBeats, type LinkCommand } from '@tb/core/link';
+import { migrateSongMusic, normalizeContentTimeline, obsSceneOutputCommand, showGate, songStructureChanges, toUserErrorMessage, withContentTimeline, withMa2Pairings,
+  type DroppedSongBeats, type LinkCommand, type ShowState } from '@tb/core/link';
+import { useShowStateStore } from './show-state-store';
 
 type HistoryFrame = {
   command: LinkCommand;
@@ -20,6 +23,29 @@ function rebaseFrame(frame: HistoryFrame, project: LinkProject): LinkProject {
   for (const rebase of frame.rebases?.values() ?? []) next = rebase(next);
   return next;
 }
+
+/** What undo (`frame` is the last of `past`) or redo (the last of `future`) makes of `project`. */
+function historyStep(project: LinkProject, frame: HistoryFrame, direction: 'undo' | 'redo'): LinkProject {
+  return direction === 'undo' ? shareProjectStructure(frame.before, rebaseFrame(frame, frame.command.undo(frame.before)))
+    : shareProjectStructure(project, rebaseFrame(frame, frame.command.execute(project)));
+}
+
+/**
+ * A song on stage plays on with the version it started with (0.5.9 S8a, design 02 §3.5): an edit that changes its audio
+ * itself (songAudioStructureKey) or deletes or disables it waits until it stops. The wait in showGate's words, with
+ * the show as `show` has it; null when `next` may be committed. In P1 follow every song counts as on stage (showGate).
+ */
+function stageWait(before: LinkProject, next: LinkProject, show: ShowState): string | null {
+  const changes = songStructureChanges(before, next);
+  const wait = (op: 'song.remove' | 'song.audio.edit', itemId: string): string | null => {
+    const gate = showGate(op, show, itemId);
+    return gate.kind === 'wait' ? gate.message : null;
+  };
+  for (const itemId of changes.removed) { const message = wait('song.remove', itemId); if (message) return message; }
+  for (const itemId of changes.audio) { const message = wait('song.audio.edit', itemId); if (message) return message; }
+  return null;
+}
+const currentShow = (): ShowState => useShowStateStore.getState().show;
 
 /** How a project entered the editor: as read from disk, upgraded in memory, or restored unsaved content. */
 export type DocumentOpening = { upgraded?: boolean; restored?: boolean };
@@ -48,6 +74,7 @@ export type DocumentStoreState = {
   songMusicOpening: SongMusicOpening | null;
   past: HistoryFrame[];
   future: HistoryFrame[];
+  /** What went wrong with the last edit, or what it waits for (a wait reads as one, isShowWait): shown once. */
   error: string | null;
   setProject: (project: LinkProject | null, path: string | null, opening?: DocumentOpening) => void;
   markSaved: (path: string, stateId: string, documentId: number) => void;
@@ -124,6 +151,9 @@ const documentState: StateCreator<DocumentStoreState> = (set, get) => {
       try {
         const prepared = withMa2Pairings(withContentTimeline(command));
         const next = shareProjectStructure(state.project, prepared.execute(state.project));
+        // Not committed: the song on stage cannot take it. Said as a wait, and thrown like any edit that was not made.
+        const wait = stageWait(state.project, next, currentShow());
+        if (wait) throw new Error(wait);
         const rebase = prepared.rebaseHistory;
         const stateId = crypto.randomUUID();
         if (rebase) {
@@ -159,7 +189,10 @@ const documentState: StateCreator<DocumentStoreState> = (set, get) => {
       const state = get();
       const frame = state.past.at(-1);
       if (!frame || !state.project) return;
-      const restored = shareProjectStructure(frame.before, rebaseFrame(frame, frame.command.undo(frame.before)));
+      const restored = historyStep(state.project, frame, 'undo');
+      // The song on stage cannot take it: said as a wait, the step stays where it is (the button says it beforehand).
+      const wait = stageWait(state.project, restored, currentShow());
+      if (wait) { set({ error: wait }); return; }
       set({
         project: restored,
         dirty: frame.beforeStateId !== state.savedStateId,
@@ -174,7 +207,9 @@ const documentState: StateCreator<DocumentStoreState> = (set, get) => {
       const state = get();
       const frame = state.future.at(-1);
       if (!frame || !state.project) return;
-      const applied = shareProjectStructure(state.project, rebaseFrame(frame, frame.command.execute(state.project)));
+      const applied = historyStep(state.project, frame, 'redo');
+      const wait = stageWait(state.project, applied, currentShow());
+      if (wait) { set({ error: wait }); return; }
       set({
         project: applied,
         dirty: frame.stateId !== state.savedStateId,
@@ -210,6 +245,24 @@ if (import.meta.hot && hotData) {
 
 export const selectCanUndo = (state: DocumentStoreState): boolean => state.past.length > 0;
 export const selectCanRedo = (state: DocumentStoreState): boolean => state.future.length > 0;
+
+/** Why undo (or redo) waits now: its step would change a song on stage in a way it cannot take (0.5.9 S8a), in
+ * showGate's words; null when it may run. Worked out only while a song is on stage; a step that cannot be worked out
+ * then says why instead. */
+export function historyWait(state: Pick<DocumentStoreState, 'project' | 'past' | 'future'>, direction: 'undo' | 'redo', show: ShowState): string | null {
+  const frame = direction === 'undo' ? state.past.at(-1) : state.future.at(-1);
+  if (!frame || !state.project || showGate('song.remove', show).kind === 'allow') return null;
+  let next: LinkProject;
+  try { next = historyStep(state.project, frame, direction); } catch (error) { return toUserErrorMessage(error); }
+  return stageWait(state.project, next, show);
+}
+/** `historyWait` for the undo and redo buttons: worked out again when the step, the project or the show changes. */
+export function useHistoryWait(direction: 'undo' | 'redo'): string | null {
+  const frame = useDocumentStore(state => direction === 'undo' ? state.past.at(-1) : state.future.at(-1));
+  const project = useDocumentStore(state => state.project);
+  const show = useShowStateStore(state => state.show);
+  return useMemo(() => frame && project ? historyWait({ project, past: [frame], future: [frame] }, direction, show) : null, [frame, project, show, direction]);
+}
 
 export function assertDocumentSession(documentId: number): DocumentStoreState {
   const state = useDocumentStore.getState();

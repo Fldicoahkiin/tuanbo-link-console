@@ -4,12 +4,16 @@ import { projectCodecResponseSchema, type ProjectCodecResponse } from './project
 const validated = new WeakSet<LinkProject>();
 export function isWorkerValidatedProject(project: LinkProject): boolean { return validated.has(project); }
 type Pending = { resolve: (value: ProjectCodecResponse) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
+/** What a codec says when it took too long or has too much queued, in the words of what it does (0.5.9 S8a): the file
+ * codec's words read wrong after 「这次修改没送进节目：」. */
+type CodecWords = { timeout: string; busy: string };
 
 class ProjectCodec {
   private worker: Worker | null = null;
   private failure: Error | null = null;
   private sequence = 0;
   private pending = new Map<number, Pending>();
+  constructor(private readonly words: CodecWords) {}
 
   async decode(content: string): Promise<LinkProject> {
     const result = await this.request({ kind: 'decode', content });
@@ -33,7 +37,7 @@ class ProjectCodec {
   }
   private request(payload: { kind: 'decode'; content: string } | { kind: 'encode'; project: LinkProject }): Promise<ProjectCodecResponse> {
     if (this.failure) return Promise.reject(this.failure);
-    if (this.pending.size >= 4) return Promise.reject(new Error('工程处理任务太多，这次操作没有执行，请等当前任务完成后重试'));
+    if (this.pending.size >= 4) return Promise.reject(new Error(this.words.busy));
     if (!this.worker) {
       this.worker = new Worker(new URL('./project-codec-worker.ts', import.meta.url), { type: 'module' });
       this.worker.onmessage = event => {
@@ -49,7 +53,7 @@ class ProjectCodec {
     }
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(new Error('工程处理超过 30 秒还没完成。原文件没有改动，可以在提示里重启工程处理后重试')), 30000);
+      const timer = setTimeout(() => this.fail(new Error(this.words.timeout)), 30000);
       this.pending.set(id, { resolve, reject, timer });
       try { this.worker!.postMessage({ version: 1, id, ...payload }); }
       catch (error) { this.pending.delete(id); clearTimeout(timer); reject(error instanceof Error ? error : new Error(String(error))); }
@@ -61,7 +65,14 @@ class ProjectCodec {
     this.pending.clear();
   }
 }
-export const projectCodec = new ProjectCodec();
+export const projectCodec = new ProjectCodec({
+  timeout: '工程处理超过 30 秒还没完成。原文件没有改动，可以在提示里重启工程处理后重试',
+  busy: '工程处理任务太多，这次操作没有执行，请等当前任务完成后重试'
+});
 /** The whole project as the background program gets it (0.5.9 S9): its own worker, so the versions sent while editing
- * never queue behind or ahead of opening and saving the file. */
-export const programDocumentCodec = new ProjectCodec();
+ * never queue behind or ahead of opening and saving the file. Its words follow 「这次修改没送进节目：」 (0.5.9 S8a); the
+ * next edit or play sends the newest version again and starts the worker again (encodeProgramDocument). */
+export const programDocumentCodec = new ProjectCodec({
+  timeout: '整理这一版工程超过 30 秒还没完成，节目还在用上一版。下一次修改或按播放时会再送一次',
+  busy: '前面还有几版没整理完，这一版没有送。下一次修改或按播放时会再送一次'
+});

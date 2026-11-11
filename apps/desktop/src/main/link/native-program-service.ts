@@ -12,9 +12,10 @@ type Host = { controller: Pick<NativeProgramPlayer, keyof NativeProgramPlayer>; 
 /** A version of the window's project the program has (0.5.9 S7). */
 type Version = { project: LinkProject; version: NativeProgramDocumentVersion };
 /** The program of one window's page, from its open until it closes (0.5.9 S7: one session, not one per edit). `project`
- * and `version` are what it plays now; `pending`, a newer version that waits for the held song to stop. */
+ * and `version` are the newest version it has (0.5.9 S8a: a held song takes it as it arrives, liveRevisionEffect);
+ * `versions` names each project it was given, so an event says which one the held song's picture follows. */
 type Entry = { request: NativeProgramOpen; projectId: string; project: LinkProject; version: NativeProgramDocumentVersion;
-  pending: Version | null; host: Host | null; configuration: NativeProgramConfiguration;
+  versions: WeakMap<LinkProject, NativeProgramDocumentVersion>; host: Host | null; configuration: NativeProgramConfiguration;
   state: InternalPlayerState; currentCueId: string | null; cancelled: boolean; orphaned: boolean;
   cancellation: AbortController; ready: Promise<void>;
   /** The page's versions in the order it sent them (0.5.9 S9): each is checked (its files too) before the next, and a
@@ -88,16 +89,16 @@ export class NativeProgramService {
         throw new Error(`界面重新加载前的节目还在后台播放，现在打开的工程不能播放。请打开工程「${previous.request.projectPath}」接回控制，再在那里停止播放`);
       }
       const same = JSON.stringify(previous.project) === JSON.stringify(project);
-      // The program plays on with the version it has; the page's own version waits for 停止 (design 02 问题 3). The
-      // same document is this page's version already.
-      if (same) { previous.version = version; previous.pending = null; } else previous.pending = { project, version };
+      // The same document is this page's version already. Another one is the newest from now on: the song held plays
+      // on as it started (0.5.9 S8a), its picture following a version this page never had, and the next song plays it.
+      if (same) { previous.version = version; previous.versions.set(previous.project, version); } else this.apply(previous, { project, version });
       previous.orphaned = false; previous.request = request; previous.configuration = request.configuration;
       previous.host?.controller.setWatched(true);
       this.stateChanged();
       this.emit(previous);
       return same ? 'adopted' : 'outdated';
     }
-    const entry: Entry = { request, projectId: project.projectId, project, version, pending: null, host: null, configuration: request.configuration,
+    const entry: Entry = { request, projectId: project.projectId, project, version, versions: new WeakMap([[project, version]]), host: null, configuration: request.configuration,
       state: { ...emptyInternalPlayerState }, currentCueId: null, cancelled: false, orphaned: false,
       cancellation: new AbortController(), ready: Promise.resolve(), documents: Promise.resolve(), turn: Promise.resolve(), stops: 0, start: () => Promise.resolve(), heldBack: false };
     // Nobody waits for this close: what fails in it is logged and shown here, and stays `held` if the engine went on.
@@ -114,8 +115,6 @@ export class NativeProgramService {
         configuration: () => entry.configuration,
         changed: state => {
           entry.state = state;
-          // The held song stopped: the newest version of the page plays from the next song on.
-          if (entry.pending && !active(state)) this.apply(entry, entry.pending);
           this.reportRunning(); this.emit(entry);
         },
         cueChanged: id => { entry.currentCueId = id; this.emit(entry); },
@@ -133,12 +132,13 @@ export class NativeProgramService {
     return 'opened';
   }
 
-  /** A newer version of the page's project (0.5.9 S7, S9; design 02 §3.3–§3.4, §3.7), needing no license: it only
-   * changes what the program holds in memory. With no song held it plays from the next song on; with one held it waits
-   * for 停止. A page whose program closed, another page, and another project or path are refused: those open again.
-   * Applied in the order the page sent them, before any later control of the page that starts a song.
-   * A version is the whole document or an increment on the newest version the program has (`base`: the pending one if
-   * a song is held); an increment on any other version is answered `resync`, and the page sends the whole document. Both
+  /** A newer version of the page's project (0.5.9 S7, S8a, S9; design 02 §3.3–§3.5, §3.7), needing no license: it only
+   * changes what the program holds in memory. The next song plays it; a song held plays on as it started and takes of
+   * it only what liveRevisionEffect says (answered `live`). A page whose program closed, another page, and another
+   * project or path are refused: those open again. Applied in the order the page sent them, before any later control
+   * of the page that starts a song.
+   * A version is the whole document or an increment on the newest version the program has (`base`); an increment on
+   * any other version is answered `resync`, and the page sends the whole document. Both
    * pass the same checks: the whole project as `parseLinkProject` checks it, and the files it references inside the
    * project's folder (`checkFiles`, as an open checks them; an increment, the files the version before did not have). */
   async document(value: unknown, checkFiles: (projectPath: string, relativePaths: string[]) => Promise<void>): Promise<NativeProgramDocumentAnswer> {
@@ -155,8 +155,8 @@ export class NativeProgramService {
     if (request.key.projectId !== entry.projectId || request.key.projectPath !== entry.request.projectPath) {
       throw new Error('这一版属于另一个工程，节目没有换工程。请重新打开工程');
     }
-    // The newest version this program has: the one waiting for 停止, else the one it plays.
-    const latest: Version = entry.pending ?? { project: entry.project, version: entry.version };
+    // The newest version this program has, also while a song is held.
+    const latest: Version = { project: entry.project, version: entry.version };
     let project: LinkProject, known: ReadonlySet<string>;
     if (request.change.kind === 'full') {
       project = parseLinkProject(JSON.parse(request.change.document)); known = new Set();
@@ -172,9 +172,9 @@ export class NativeProgramService {
     await checkFiles(entry.request.projectPath, projectFileReferences(project).map(file => file.relativePath).filter(path => !known.has(path)));
     if (!this.receiving(entry, request.ownerId)) throw new Error(PROGRAM_CLOSED);
     const next: Version = { project, version: { sessionId: request.key.sessionId, revision: request.revision } };
-    if (active(entry.state)) { entry.pending = next; return { kind: 'applied', revision: request.revision, effect: 'next-pass' }; }
+    const live = active(entry.state);
     this.apply(entry, next); this.emit(entry);
-    return { kind: 'applied', revision: request.revision, effect: 'stopped' };
+    return { kind: 'applied', revision: request.revision, effect: live ? 'live' : 'stopped' };
   }
   /** `entry` is the open program of the page `ownerId`, shown in its window. */
   private receiving(entry: Entry, ownerId: string): boolean {
@@ -285,9 +285,10 @@ export class NativeProgramService {
     this.stateListeners.add(listener);
     return () => { this.stateListeners.delete(listener); };
   }
-  /** `next` is what the program plays from now on; with no host yet, the host is built with it. */
+  /** `next` is the newest version from now on: the next song plays it, a song held takes what liveRevisionEffect says;
+   * with no host yet, the host is built with it. */
   private apply(entry: Entry, next: Version): void {
-    entry.project = next.project; entry.version = next.version; entry.pending = null;
+    entry.project = next.project; entry.version = next.version; entry.versions.set(next.project, next.version);
     entry.host?.controller.updateProject(next.project, next.version.revision, entry.request.projectPath);
   }
   /** The current program is closed: nothing reaches it any more, and a new one waits for its outputs. */
@@ -344,8 +345,10 @@ export class NativeProgramService {
     if (entry.cancelled || entry.orphaned || this.current !== entry) return;
     const clock = entry.host?.controller.clock.read() ?? { positionMs: entry.state.positionMs, durationMs: entry.state.durationMs,
       ready: false, playing: false, seeking: entry.state.status === 'preparing' };
+    // The project the held song's picture follows, as the version the program was given it with (0.5.9 S8a).
+    const picture = entry.host ? entry.versions.get(entry.host.controller.currentProject()) ?? entry.version : entry.version;
     this.publish(nativeProgramEventSchema.parse({ version: 1, ownerId: entry.request.ownerId, sequence: ++this.sequence,
-      state: entry.state, clock, currentCueId: entry.currentCueId, documentVersion: entry.version, ...(boundary ? { boundary } : {}) }));
+      state: entry.state, clock, currentCueId: entry.currentCueId, documentVersion: entry.version, pictureVersion: picture, ...(boundary ? { boundary } : {}) }));
   }
 }
 

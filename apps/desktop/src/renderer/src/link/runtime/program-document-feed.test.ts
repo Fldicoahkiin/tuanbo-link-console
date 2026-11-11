@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { emptyInternalPlayerState } from '@tb/core/link';
 import { createEmptyLinkProject, parseLinkProject, type LinkProject, type NativeProgramDocument, type NativeProgramDocumentAnswer } from '@tb/schema';
-import { ProgramDocumentFeed, type ProgramDocument } from './program-document-feed';
+import { ProgramDocumentFeed, programVersionKey, type ProgramDocument } from './program-document-feed';
 import { NativeProgramService } from '../../../../main/link/native-program-service';
 import { closedProgramFaultReporter } from '../../../../main/link/main-process-errors';
 
@@ -21,7 +21,8 @@ async function connected(options: { encode?: (project: LinkProject) => Promise<s
   const clock = { read: () => ({ positionMs: 0, durationMs: 1000, ready: true, playing: false, seeking: false }),
     subscribeBoundary: (): (() => void) => () => undefined };
   const updateProject = vi.fn<(project: LinkProject, revision: number) => void>();
-  const controller = { clock, updateProject, setWatched: vi.fn() } as unknown as ReturnType<ConstructorParameters<typeof NativeProgramService>[0]>['controller'];
+  // The song on stage follows the version it was given last here (no song is started in these cases).
+  const controller = { clock, updateProject, setWatched: vi.fn(), currentProject: () => updateProject.mock.lastCall?.[0] } as unknown as ReturnType<ConstructorParameters<typeof NativeProgramService>[0]>['controller'];
   let playerChanged: ((state: typeof emptyInternalPlayerState) => void) | null = null;
   const service = new NativeProgramService((_project, _request, callbacks) => { playerChanged = state => callbacks.changed(state); return { controller, close: () => Promise.resolve() }; }, () => undefined, () => Promise.resolve(), () => undefined,
     closedProgramFaultReporter(() => Promise.resolve(), () => undefined));
@@ -54,7 +55,7 @@ async function connected(options: { encode?: (project: LinkProject) => Promise<s
     service, feed, send, encode, failed, updateProject,
     edit: (change: (project: LinkProject) => LinkProject) => { current = { ...current, project: change(current.project), revision: current.revision + 1 }; },
     current: () => current,
-    /** The program plays a song: newer versions wait for 停止. */
+    /** The program holds a song: newer versions reach it at once (0.5.9 S8a, answered `live`). */
     hold: () => playerChanged?.({ ...emptyInternalPlayerState, status: 'playing', itemId: 'a' }),
     /** The project the program plays now. */
     playing: () => updateProject.mock.lastCall?.[0],
@@ -165,12 +166,26 @@ describe('整份发送', () => {
 });
 
 describe('拿着歌时', () => {
-  it('增量照旧等停止（next-pass），节目手里等着的那一版就是下一次的基准', async () => {
+  it('增量照样拼在节目手里最新的那一版上，节目当即收下（live，0.5.9 S8a），它就是下一次的基准', async () => {
     const f = await connected();
     f.hold();
     f.edit(rename(0, '第二版')); f.feed.changed(); await settle();
     f.edit(rename(1, '第三版')); f.feed.changed(); await settle();
     expect(f.sent()).toEqual([{ revision: 2, base: 1, kind: 'items' }, { revision: 3, base: 2, kind: 'items' }]);
-    expect(f.updateProject).not.toHaveBeenCalled(); expect(f.failed).not.toHaveBeenCalled();
+    expect(await f.send.mock.results[1]!.value).toEqual({ kind: 'applied', revision: 3, effect: 'live' });
+    expect(f.updateProject.mock.calls.map(([, revision]) => revision)).toEqual([2, 3]);
+    expect(f.playing()?.rundown.map(item => item.title)).toEqual(['第二版', '第三版']);
+    expect(f.failed).not.toHaveBeenCalled();
+  });
+
+  it('画面跟的那一版（这首歌开始的那一版）一直记着，改多少次都不丢；停下以后不再点名它就忘掉', async () => {
+    const f = await connected();
+    const started = programVersionKey(f.current()), first = f.current().project;
+    f.hold();
+    for (let round = 2; round <= 12; round += 1) { f.edit(rename(0, `第 ${round} 版`)); f.feed.changed(); await settle(); f.feed.named([programVersionKey(f.current()), started]); }
+    expect(f.feed.project(started)).toBe(first);
+    expect(f.feed.project(programVersionKey(f.current()))?.rundown[0]!.title).toBe('第 12 版');
+    f.feed.named([programVersionKey(f.current())]);
+    expect(f.feed.project(started)).toBeNull();
   });
 });

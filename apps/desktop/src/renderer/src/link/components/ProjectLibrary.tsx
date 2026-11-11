@@ -38,6 +38,8 @@ type ProjectLibraryProps = {
   playlistHost: HTMLDivElement | null;
   notify: (message: string, tone?: 'info' | 'error') => void;
   locked: boolean;
+  /** Why importing songs waits now (showGate media.import), null when it may run. */
+  importBlocked: string | null;
   metadataLocked: boolean;
   /** The song's own volume can be changed (also while a song plays) unless this is set. */
   volumeLocked: boolean;
@@ -103,6 +105,10 @@ export function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
   // Whether the show lets the order change is showGate's to say, in its words (00-order §2.4); `locked` still covers
   // the rest (an import running, the mirror one change late).
   const reorderGate = useShowGate('rundown.reorder');
+  // The song on stage keeps its audio and stays in the show until it stops (0.5.9 S8a): the rest of its properties do not wait.
+  const removeGate = useShowGate('song.remove', selectedItem?.id), audioGate = useShowGate('song.audio.edit', selectedItem?.id);
+  const removeBlocked = removeGate.kind === 'wait' ? removeGate.message : null;
+  const audioBlocked = props.importBlocked ?? (audioGate.kind === 'wait' ? audioGate.message : null);
   const reorderBlocked = reorderGate.kind === 'wait' ? reorderGate.message : props.locked ? '正在播放或处理中，停下后才能调整顺序'
     : search.trim() ? '搜索结果里不能调整顺序，清空搜索后再拖动' : null;
   const moveVisible = (ids: string[], gap: number | null): void => {
@@ -129,7 +135,7 @@ export function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
           <IconButton size="sm" label="列表视图" icon={List} aria-pressed={view === 'list'} onClick={() => setView('list')} />
           <IconButton size="sm" label="卡片视图" icon={LayoutGrid} aria-pressed={view === 'cards'} onClick={() => setView('cards')} />
         </div>
-        <Button variant="secondary" icon={FileAudio} disabled={props.locked} onClick={props.onImportSongs}>导入歌曲 / P1</Button>
+        <Button variant="secondary" icon={FileAudio} disabled={props.locked || props.importBlocked !== null} {...props.importBlocked ? { title: props.importBlocked } : {}} onClick={props.onImportSongs}>导入歌曲 / P1</Button>
         <Button variant="secondary" icon={Plus} disabled={props.locked} onClick={props.onAddItem}>新建节目</Button>
         <IconButton label="节目属性" icon={SlidersHorizontal} aria-expanded={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)} />
       </header>
@@ -168,17 +174,17 @@ export function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
         {project.playbackSource === 'internal' ? <div className="home-inspector-fields" role="group" aria-label="歌曲音量"><SongVolumeField item={selectedItem} notify={props.notify} disabled={props.volumeLocked} /></div> : null}
         <fieldset disabled={props.locked} className="home-inspector-locked">
           {project.playbackSource === 'internal' ? <div className="home-inspector-fields" role="group" aria-label="歌曲播放"><SongPlaybackProperties item={selectedItem} notify={props.notify} collapseAdvanced withVolume={false} /></div> : null}
-          <Switch label="启用" help="停用的节目不会被播放，也不能设为当前节目" checked={selectedItem.enabled} onChange={(event) => execute(updateRundownItemCommand(selectedItem.id, { title: selectedItem.title, enabled: event.currentTarget.checked, notes: selectedItem.notes }))} />
+          <Switch label="启用" help={selectedItem.enabled && removeBlocked ? removeBlocked : '停用的节目不会被播放，也不能设为当前节目'} disabled={selectedItem.enabled && removeBlocked !== null} checked={selectedItem.enabled} onChange={(event) => execute(updateRundownItemCommand(selectedItem.id, { title: selectedItem.title, enabled: event.currentTarget.checked, notes: selectedItem.notes }))} />
           <div className="home-inspector-commands">
             <Button variant="secondary" icon={Check} disabled={!selectedItem.enabled || selectedItem.id === currentItemId} onClick={() => props.onSelectCurrentItem(selectedItem)}>{selectedItem.id === currentItemId ? '当前节目' : '设为当前节目'}</Button>
             <Button variant="secondary" icon={SlidersHorizontal} className="inspector-edit" disabled={!selectedItem.enabled} onClick={() => { props.onSelectCurrentItem(selectedItem); props.onOpenCueEditor(); }}>编辑内容</Button>
-            <Button variant="secondary" icon={FileAudio} onClick={() => props.onChooseReference(selectedItem.id)}>{selectedItem.referenceAudio ? '更换音频' : '添加音频'}</Button>
+            <Button variant="secondary" icon={FileAudio} disabled={audioBlocked !== null} {...audioBlocked ? { title: audioBlocked } : {}} onClick={() => props.onChooseReference(selectedItem.id)}>{selectedItem.referenceAudio ? '更换音频' : '添加音频'}</Button>
           </div>
           <div className="home-inspector-actions" role="group" aria-label="排序、复制和删除">
             <IconButton label="上移" title={reorderBlocked ?? '上移'} icon={ArrowUp} disabled={!step(selectedItem.id, -1)} onClick={() => step(selectedItem.id, -1)?.()} />
             <IconButton label="下移" title={reorderBlocked ?? '下移'} icon={ArrowDown} disabled={!step(selectedItem.id, 1)} onClick={() => step(selectedItem.id, 1)?.()} />
             <IconButton label="复制" icon={Copy} onClick={() => execute(duplicateRundownItemCommand(selectedItem.id))} />
-            <IconButton variant="danger" label="删除" icon={Trash2} onClick={() => { if (window.confirm(`确认删除节目“${selectedItem.title}”？`)) execute(removeRundownItemCommand(selectedItem.id)); }} />
+            <IconButton variant="danger" label="删除" {...removeBlocked ? { title: removeBlocked } : {}} disabled={removeBlocked !== null} icon={Trash2} onClick={() => { if (window.confirm(`确认删除节目“${selectedItem.title}”？`)) execute(removeRundownItemCommand(selectedItem.id)); }} />
           </div>
         </fieldset>
       </div> : <div className="home-empty"><FileAudio aria-hidden="true" /><span>在节目单里选一首歌，就能在这里修改它</span></div>}

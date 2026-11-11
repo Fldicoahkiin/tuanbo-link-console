@@ -23,7 +23,7 @@ function draw(selectedId: string, playlistId: string, search = '', locked = fals
   const filteredItems = playlistItems(shown, playlistId).filter(item => item.title.includes(search));
   return renderToStaticMarkup(React.createElement(ProjectLibrary, {
     onImportSongs: () => undefined, onOpenCueEditor: () => undefined, onImportFiles: () => Promise.resolve(), onAddItem: () => undefined,
-    playedItemIds: [], playlistHost: null, notify: () => undefined, locked, metadataLocked: locked, volumeLocked: false, project: shown, revision: 1, filteredItems,
+    playedItemIds: [], playlistHost: null, notify: () => undefined, locked, importBlocked: null, metadataLocked: locked, volumeLocked: false, project: shown, revision: 1, filteredItems,
     selectedItem: shown.rundown.find(item => item.id === selectedId) ?? null, selectedItemId: selectedId, selectedPlaylistId: playlistId, search,
     currentItemId: null, onSelectPlaylist: () => undefined, onSearch: () => undefined, onChooseItem: () => undefined,
     onChooseReference: () => undefined, onSelectCurrentItem: () => undefined

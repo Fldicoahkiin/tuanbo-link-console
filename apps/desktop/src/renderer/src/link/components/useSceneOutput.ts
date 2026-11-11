@@ -13,7 +13,8 @@ const NO_MARKS: PictureMarks = { onAirtime: NO_AIRTIME, pending: NO_PENDING_PICT
  * plays in this timeline (`airtime`, for dimming what upper cameras cover), the marks for the picture
  * on air (`marks`, view-models/picture-on-air: while 联动台播放 holds the song, OBS plays the version it
  * started with), and the picture at the playhead for the preview drawn without OBS.
- * `playbackProject`: the project of the version the program plays (useInternalPlayer `programProject`, 0.5.9 S7). */
+ * `playbackProject`: the project of the version the picture on air follows (useInternalPlayer `pictureProject`, 0.5.9
+ * S8a): while a song is held, the one it started with. */
 export function useSceneOutput(project: LinkProject | null, itemId: string | null, playhead: EditorPlayhead, connected: boolean,
   player: Pick<PlayerVersion, 'state' | 'outdated'>, playbackProject: LinkProject | null) {
   const timeline = useMemo(() => project && itemId ? new SceneOutputTimeline(project, itemId) : null, [project, itemId]);

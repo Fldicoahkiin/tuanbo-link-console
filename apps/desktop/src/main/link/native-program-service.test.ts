@@ -433,20 +433,25 @@ it('同一个工程的新一版只换节目手里的工程：不关、不重建�
   expect(events.at(-1)?.documentVersion).toEqual({ sessionId: a.sessionId, revision: 2 });
 });
 
-it('拿着歌时送来的新一版等停止：先不换，停下那一刻换上最新的一版，下一首用它', async () => {
+it('拿着歌时送来的新一版当即交给节目（live，0.5.9 S8a）；事件里的画面版本是这首歌开始的那一版，停下以后和最新的一版相同', async () => {
   const output = host(), events: NativeProgramEvent[] = [];
   const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(() => output);
   const service = new NativeProgramService(create, event => events.push(event), () => Promise.resolve(), unlicensed, quiet()), a = request();
   await service.open(a); const callbacks = create.mock.calls[0]![2];
+  // The player says the song on stage follows the version it started with: the one the program opened with.
+  output.controller.currentProject.mockReturnValue(create.mock.calls[0]![0]);
   callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'playing' });
-  expect(await service.document(documentOf(a, 2), noFiles)).toEqual({ kind: 'applied', revision: 2, effect: 'next-pass' });
-  expect(await service.document(documentOf(a, 3, { name: '第三版' }), noFiles)).toMatchObject({ effect: 'next-pass' });
+  expect(await service.document(documentOf(a, 2), noFiles)).toEqual({ kind: 'applied', revision: 2, effect: 'live' });
+  expect(await service.document(documentOf(a, 3, { name: '第三版' }), noFiles)).toMatchObject({ effect: 'live' });
+  expect(output.controller.updateProject).toHaveBeenCalledTimes(2);
+  expect(output.controller.updateProject).toHaveBeenLastCalledWith(expect.objectContaining({ name: '第三版' }), 3, a.projectPath);
   callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'paused' });
-  expect(output.controller.updateProject).not.toHaveBeenCalled();
-  expect(events.at(-1)?.documentVersion).toEqual({ sessionId: a.sessionId, revision: 1 });
+  expect(events.at(-1)).toMatchObject({ documentVersion: { sessionId: a.sessionId, revision: 3 }, pictureVersion: { sessionId: a.sessionId, revision: 1 } });
+  // Stopped, the song on stage is the next one: the newest version.
+  output.controller.currentProject.mockReturnValue(output.controller.updateProject.mock.lastCall![0]);
   callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'stopped' });
-  expect(output.controller.updateProject).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: '第三版' }), 3, a.projectPath);
-  expect(events.at(-1)?.documentVersion).toEqual({ sessionId: a.sessionId, revision: 3 });
+  expect(events.at(-1)).toMatchObject({ documentVersion: { sessionId: a.sessionId, revision: 3 }, pictureVersion: { sessionId: a.sessionId, revision: 3 } });
+  expect(output.controller.updateProject).toHaveBeenCalledTimes(2);
 });
 
 it('别的页面、关了的节目、另一个工程送来的版本都不收；增量版本要整份重送', async () => {
@@ -479,21 +484,24 @@ it('同一个页面拿着歌时不能换工程：打开被拒绝，节目照常�
   expect(first.close).toHaveBeenCalledOnce(); expect(create).toHaveBeenCalledTimes(2);
 });
 
-it('重新加载后接回、答复是另一版：节目照旧播接回的那一版，页面的版本等停止；停下时换成页面的版本', async () => {
+it('重新加载后接回、答复是另一版：页面的版本当即是最新的一版（0.5.9 S8a），这首歌照原样播，画面版本是重新加载前那一版；停下以后都是页面的版本', async () => {
   const output = host(), events: NativeProgramEvent[] = [];
   const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(() => output);
   const service = new NativeProgramService(create, event => events.push(event), () => Promise.resolve(), unlicensed, quiet()), a = request();
   await service.open(a); const callbacks = create.mock.calls[0]![2];
+  output.controller.currentProject.mockReturnValue(create.mock.calls[0]![0]);
   callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'playing' });
   await service.release();
   const reloaded = { ...a, ownerId: randomUUID(), sessionId: randomUUID(), revision: 5,
     document: JSON.stringify({ ...JSON.parse(a.document) as Record<string, unknown>, name: '重新加载后的修改' }) };
   expect(await service.open(reloaded)).toBe('outdated');
-  expect(events.at(-1)).toMatchObject({ ownerId: reloaded.ownerId, documentVersion: { sessionId: a.sessionId, revision: 1 } });
-  expect(output.controller.updateProject).not.toHaveBeenCalled();
-  callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'stopped' });
   expect(output.controller.updateProject).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: '重新加载后的修改' }), 5, a.projectPath);
-  expect(events.at(-1)?.documentVersion).toEqual({ sessionId: reloaded.sessionId, revision: 5 });
+  expect(events.at(-1)).toMatchObject({ ownerId: reloaded.ownerId, documentVersion: { sessionId: reloaded.sessionId, revision: 5 },
+    pictureVersion: { sessionId: a.sessionId, revision: 1 } });
+  output.controller.currentProject.mockReturnValue(output.controller.updateProject.mock.lastCall![0]);
+  callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'stopped' });
+  expect(output.controller.updateProject).toHaveBeenCalledOnce();
+  expect(events.at(-1)).toMatchObject({ documentVersion: { sessionId: reloaded.sessionId, revision: 5 }, pictureVersion: { sessionId: reloaded.sessionId, revision: 5 } });
 });
 
 it('重新加载后接回、答复是同一版：节目播的就是这一页的版本，不另等停止', async () => {
@@ -559,21 +567,22 @@ it('增量拼在节目手里的那一版上，和整份发送的结果逐字段�
   expect(f.playing()).toEqual(whole(renamed));
 });
 
-it('base 不是节目手里的那一版：答复 resync，节目手里的不变；拿着歌时手里的是等停止的那一版', async () => {
+it('base 不是节目手里的那一版：答复 resync，节目手里的不变；拿着歌时手里最新的就是刚收下的那一版', async () => {
   const f = await increments();
   const renamed: LinkProject = { ...f.project, name: '改名' };
   expect(await f.send(3, 2, f.items(f.project, renamed))).toEqual({ kind: 'resync', reason: '节目这边没有这次修改所基于的版本' });
   expect(await f.send(3, 1, f.items(f.project, renamed), randomUUID())).toMatchObject({ kind: 'resync' });
   expect(f.output.controller.updateProject).not.toHaveBeenCalled();
   f.hold();
-  expect(await f.send(2, 1, f.items(f.project, renamed))).toMatchObject({ kind: 'applied', revision: 2, effect: 'next-pass' });
+  expect(await f.send(2, 1, f.items(f.project, renamed))).toMatchObject({ kind: 'applied', revision: 2, effect: 'live' });
   const again: LinkProject = { ...renamed, name: '再改' };
-  // The newest version the program has is 2, waiting for 停止: an increment on 1 does not fit it.
+  // The newest version the program has is 2, taken while the song is held: an increment on 1 does not fit it.
   expect(await f.send(3, 1, f.items(f.project, again))).toMatchObject({ kind: 'resync' });
-  expect(await f.send(3, 2, f.items(renamed, again))).toMatchObject({ kind: 'applied', revision: 3, effect: 'next-pass' });
-  expect(f.output.controller.updateProject).not.toHaveBeenCalled();
+  expect(await f.send(3, 2, f.items(renamed, again))).toMatchObject({ kind: 'applied', revision: 3, effect: 'live' });
+  expect(f.output.controller.updateProject).toHaveBeenCalledTimes(2);
   f.release();
   expect(f.playing()).toEqual(whole(again));
+  expect(f.output.controller.updateProject).toHaveBeenCalledTimes(2);
 });
 
 it('改动的歌引用了工程外的文件（不在素材文件夹、经链接指到工程外）：拒绝，节目手里的版本不变；整份发送一样拒绝', async () => {

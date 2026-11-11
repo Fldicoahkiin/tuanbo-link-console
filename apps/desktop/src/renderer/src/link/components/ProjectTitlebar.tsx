@@ -35,8 +35,8 @@ export function ProjectTitlebar({ name, path, dirty, locked, documentActions, fi
     {/* Saving stays available while playing; undo and redo wait like other edits here. */}
     <DocumentActions {...documentActions} historyDisabled={Boolean(documentActions.historyDisabled) || locked} />
     {menu ? <Menu x={menu.x} y={menu.y} label="工程操作" onClose={() => setMenu(null)}>
-      <MenuItem icon={FolderOpen} disabled={locked} onSelect={() => run(onOpen)}>打开工程</MenuItem>
-      <MenuItem icon={FilePlus2} disabled={locked} onSelect={() => run(onCreate)}>新建独立工程</MenuItem>
+      <MenuItem icon={FolderOpen} disabled={locked || fileCommands.openDisabled} onSelect={() => run(onOpen)}>打开工程</MenuItem>
+      <MenuItem icon={FilePlus2} disabled={locked || fileCommands.openDisabled} onSelect={() => run(onCreate)}>新建独立工程</MenuItem>
       <MenuItem icon={SaveAll} disabled={fileCommands.replaceDisabled} onSelect={() => run(fileCommands.onSaveAs)}>另存为…</MenuItem>
       <MenuSeparator />
       <MenuItem icon={History} disabled={fileCommands.replaceDisabled || !path || !dirty} onSelect={() => run(fileCommands.onRevert)}>恢复到上次保存</MenuItem>

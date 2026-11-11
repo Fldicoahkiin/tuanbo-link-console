@@ -1,8 +1,11 @@
+import { isShowWait } from '@tb/core/link';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 
 /** Record uncaught UI errors even when the settings or project screens cannot mount. */
 export function installRendererErrorLog(): () => void {
   const record = (message: string, failure: unknown): void => {
+    // An edit the song on stage cannot take is a wait, not a failure (0.5.9 S8a): the window shows it once as a wait.
+    if (isShowWait(failure)) return;
     void linkDesktopViewModel.recordLog({ level: 'error', category: 'system', device: 'Electron', result: 'failed',
       message: message.slice(0, 8192), details: { stack: failure instanceof Error ? failure.stack?.slice(0, 32768) ?? '' : '' }
     }).catch((error: unknown) => console.error('无法保存界面错误日志', error));
