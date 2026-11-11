@@ -22,7 +22,7 @@ export function songLightingStatus(project: LinkProject, itemId: string): SongLi
   const item = project.rundown.find(value => value.id === itemId);
   if (!item) throw new Error(`节目单中没有 ${itemId}`);
   const own = item.lighting?.consoleSong;
-  if (item.lighting && own?.timecode) return ownShowStatus(item, item.lighting, own, own.timecode);
+  if (item.lighting && own?.timecode) return cachedOwnShowStatus(item, item.lighting, own, own.timecode);
   if (own && !own.executor) return { state: 'unmatched', reason: '这首歌的控台序列只放在 Layout 页面上，没有执行器位置，建不了时间码节目' };
   if (own) return { state: 'unmatched', reason: '控台上还没有这首歌的时间码节目，同步时自动建立' };
   const match = ma2SongPairs(project);
@@ -52,6 +52,20 @@ type Item = LinkProject['rundown'][number];
 type Lighting = NonNullable<Item['lighting']>;
 type ConsoleSong = NonNullable<Lighting['consoleSong']>;
 const frames = (ms: number): number => Math.round(ms * 30 / 1000);
+
+/**
+ * A song with its own Timecode show is read from the song alone: its lighting and its start (playback,
+ * P1 media). Commands give new objects only to what they change, so another song's edit or a rename
+ * keeps this answer. Matching by start compares every song and is worked out per project instead.
+ */
+const ownShows = new WeakMap<Lighting, { playback: Item['playback']; p1Media: Item['p1Media']; status: SongLightingStatus }>();
+function cachedOwnShowStatus(item: Item, lighting: Lighting, song: ConsoleSong, timecode: NonNullable<ConsoleSong['timecode']>): SongLightingStatus {
+  const known = ownShows.get(lighting);
+  if (known && known.playback === item.playback && known.p1Media === item.p1Media) return known.status;
+  const status = ownShowStatus(item, lighting, song, timecode);
+  ownShows.set(lighting, { playback: item.playback, p1Media: item.p1Media, status });
+  return status;
+}
 
 /**
  * A song with the program's own Timecode show: ready while every point still fires its own Cue of

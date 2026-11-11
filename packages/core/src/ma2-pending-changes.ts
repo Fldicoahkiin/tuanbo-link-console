@@ -1,28 +1,41 @@
 import { snapshotMa2LightingBinding } from './ma2-lighting-snapshot';
-import type { LinkProject, Ma2SyncObject } from '@tb/schema';
+import type { LightingDocument, LinkProject, Ma2SyncObject } from '@tb/schema';
 
 export type Ma2PendingChange = {
   itemId: string; title: string; bindingId: string; target: number;
   changes: Array<{ id: string; before: Ma2SyncObject | null; after: Ma2SyncObject | null }>;
   error: string | null;
 };
-
-const computed = new WeakMap<LinkProject, readonly Ma2PendingChange[]>();
+type BindingChange = Omit<Ma2PendingChange, 'itemId' | 'title'>;
 
 /**
- * Derived from the persisted baseline, so undo, redo and reopening need no second queue. Kept per
- * project snapshot: commands produce a new project, so one snapshot always gives the same answer
- * and asking once per song costs one pass over the project.
+ * Kept per song lighting: commands give a new lighting object only to the song they change and the
+ * store shares the rest (shareProjectStructure), so an edit compares that one song again. The song's
+ * id and title are added when the project's list is put together, so a rename compares nothing.
  */
+const bySong = new WeakMap<LightingDocument, readonly BindingChange[]>();
+/** One list per project snapshot, so asking again for the same snapshot gives the same array. */
+const byProject = new WeakMap<LinkProject, readonly Ma2PendingChange[]>();
+
+/** Derived from the persisted baseline, so undo, redo and reopening need no second queue. */
 export function ma2PendingChanges(project: LinkProject | null): readonly Ma2PendingChange[] {
   if (!project) return [];
-  const known = computed.get(project);
+  const known = byProject.get(project);
   if (known) return known;
-  const result = project.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).flatMap((binding): Ma2PendingChange[] => {
-    if (!item.lighting) return [];
-    const entry = { itemId: item.id, title: item.title, bindingId: binding.id, target: binding.timecode };
+  const result = project.rundown.flatMap(item => item.lighting
+    ? songChanges(item.lighting).map(change => ({ itemId: item.id, title: item.title, ...change }))
+    : []);
+  byProject.set(project, result);
+  return result;
+}
+
+function songChanges(lighting: LightingDocument): readonly BindingChange[] {
+  const known = bySong.get(lighting);
+  if (known) return known;
+  const result = (lighting.ma2Bindings ?? []).flatMap((binding): BindingChange[] => {
+    const entry = { bindingId: binding.id, target: binding.timecode };
     try {
-      const { base, local } = snapshotMa2LightingBinding(item.lighting, binding.id, { consoleVersion: 'pending', baselineRevision: 'baseline', localRevision: 'local' });
+      const { base, local } = snapshotMa2LightingBinding(lighting, binding.id, { consoleVersion: 'pending', baselineRevision: 'baseline', localRevision: 'local' });
       const before = new Map(base.objects.map(object => [object.id, object]));
       const after = new Map(local.objects.map(object => [object.id, object]));
       const changes = [...new Set([...before.keys(), ...after.keys()])].flatMap(id => {
@@ -31,7 +44,7 @@ export function ma2PendingChanges(project: LinkProject | null): readonly Ma2Pend
       });
       return changes.length ? [{ ...entry, changes, error: null }] : [];
     } catch (error) { return [{ ...entry, changes: [], error: error instanceof Error ? error.message : String(error) }]; }
-  }));
-  computed.set(project, result);
+  });
+  bySong.set(lighting, result);
   return result;
 }

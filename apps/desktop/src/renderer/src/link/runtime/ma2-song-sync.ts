@@ -7,7 +7,7 @@ import { locateMa2Executor, ma2ExecutorLocationLabel, loadMa2ExecutorPage } from
 import { recordRuntimeOperator, reportCoordinatorError } from './runtime-action-log';
 import { updateMa2Song as update, useMa2SyncStore, type NameSync, type SongSync } from '../stores/ma2-sync-store';
 import { currentShowWait } from '../stores/show-state-store';
-import { confirmMa2Edit, consoleSeenAt, editTimes, noteMa2LocalEdits, songSignature, songStart } from './ma2-edit-times';
+import { confirmMa2Edit, consoleSeenAt, editTimes, noteMa2LocalEdits, songSignature, songStart, type Program } from './ma2-edit-times';
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { ma2SyncActive, useMa2RealtimePreference } from './ma2-realtime-preference';
 import { useProgramSelectionStore } from '../stores/program-selection-store';
@@ -46,25 +46,69 @@ function dueAt(entry: SongSync): number | undefined {
   return Math.min(entry.nextCheckAt ?? Number.POSITIVE_INFINITY, entry.checkedAt + FOCUSED_RECHECK_MS);
 }
 let running = false;
-/** Confirmed songs whose local content no longer matches what the console confirmed wait for a sync again. */
+/**
+ * Confirmed songs whose local content no longer matches what the console confirmed wait for a sync again.
+ * The edit time is noted at once (the latest-wins rule compares it); the comparison waits for an idle
+ * moment so typing in a large project does not stall, at most 200 ms. A pass of tickMa2SongSync runs a
+ * waiting comparison first, so a pass never starts from an older mark. This is the window's own state,
+ * not an external boundary: nothing is retried.
+ */
 export function markPendingMa2Songs(): void {
   noteMa2LocalEdits();
+  if (cancelScheduledCheck) return;
+  const run = (): void => { cancelScheduledCheck = null; checkPendingMa2Songs(); };
+  if (typeof requestIdleCallback === 'function') {
+    const handle = requestIdleCallback(run, { timeout: 200 });
+    cancelScheduledCheck = () => { cancelIdleCallback(handle); };
+  } else {
+    const handle = setTimeout(run, 0);
+    cancelScheduledCheck = () => { clearTimeout(handle); };
+  }
+}
+/** Runs the comparison markPendingMa2Songs left waiting for an idle moment now; nothing when none waits. */
+export function flushPendingMa2Songs(): void {
+  if (!cancelScheduledCheck) return;
+  cancelScheduledCheck(); cancelScheduledCheck = null;
+  checkPendingMa2Songs();
+}
+/** Right after a pass confirms a song: an edit made meanwhile waits for its own sync, not the next check. */
+function markPendingMa2SongsNow(): void {
+  markPendingMa2Songs();
+  flushPendingMa2Songs();
+}
+/** Cancels the comparison waiting for an idle moment; null when none waits. */
+let cancelScheduledCheck: (() => void) | null = null;
+/**
+ * What each confirmed song was last compared with and what came of it (null: matches what the console
+ * confirmed, otherwise why it waits). The answer is worked out from these inputs alone, so a song whose
+ * lighting, start, name and acknowledged content are the same objects is not compared again.
+ */
+type ComparedSong = { sessionId: string; lighting: object; playback: unknown; p1Media: unknown; name: string; acknowledged: string | undefined; outcome: string | null };
+const comparedSongs = new Map<string, ComparedSong>();
+function checkPendingMa2Songs(): void {
   const project = useDocumentStore.getState().project;
-  for (const entry of Object.values(useMa2SyncStore.getState().songs)) {
+  const songs = useMa2SyncStore.getState().songs;
+  for (const itemId of comparedSongs.keys()) if (!songs[itemId]) comparedSongs.delete(itemId);
+  for (const entry of Object.values(songs)) {
     if (entry.state !== 'verified') continue;
     const item = project?.rundown.find(value => value.id === entry.itemId);
     const lighting = item?.lighting;
     if (!project || !item || !lighting) continue;
-    // Way 1 keeps the baseline the console confirmed in the song, so any difference from it is an edit to sync.
-    if (lighting.ma2Bindings?.length) {
-      if (ma2PendingChanges(project).some(change => change.itemId === item.id)) update(entry, { state: 'pending', nextCheckAt: 0, message: '修改已暂存，等待同步' });
-      continue;
-    }
-    try {
-      if (entry.acknowledged !== songSignature(ma2SongPoints(lighting), lighting.consoleSong?.name ?? entry.name, songStart(item))) update(entry, { state: 'pending', nextCheckAt: 0, message: '修改已暂存，等待同步' });
-    } catch (cause) {
-      update(entry, { state: 'pending', nextCheckAt: 0, message: cause instanceof Error ? cause.message : String(cause) });
-    }
+    const inputs = { sessionId: entry.sessionId, lighting, playback: item.playback, p1Media: item.p1Media, name: entry.name, acknowledged: entry.acknowledged };
+    const known = comparedSongs.get(entry.itemId);
+    const same = known !== undefined && (Object.keys(inputs) as Array<keyof typeof inputs>).every(key => known[key] === inputs[key]);
+    const outcome = same ? known.outcome : pendingReason(project, entry, item, lighting);
+    comparedSongs.set(entry.itemId, { ...inputs, outcome });
+    if (outcome !== null) update(entry, { state: 'pending', nextCheckAt: 0, message: outcome });
+  }
+}
+function pendingReason(project: NonNullable<ReturnType<typeof useDocumentStore.getState>['project']>, entry: SongSync, item: Program, lighting: NonNullable<Program['lighting']>): string | null {
+  // Way 1 keeps the baseline the console confirmed in the song, so any difference from it is an edit to sync.
+  if (lighting.ma2Bindings?.length) return ma2PendingChanges(project).some(change => change.itemId === item.id) ? '修改已暂存，等待同步' : null;
+  try {
+    return entry.acknowledged !== songSignature(ma2SongPoints(lighting), lighting.consoleSong?.name ?? entry.name, songStart(item)) ? '修改已暂存，等待同步' : null;
+  } catch (cause) {
+    return cause instanceof Error ? cause.message : String(cause);
   }
 }
 /** A new session reads the console in full on its first pass: nothing is taken as already confirmed. */
@@ -210,7 +254,7 @@ async function syncImportedSong(entry: SongSync): Promise<void> {
     ...outcome.held ? { state: 'pending' as const, recheckRevision: useDocumentStore.getState().revision, message: outcome.held }
       : { state: 'verified' as const, recheckRevision: undefined, message: shows ? `${shows} ${outcome.wrote ? '已写入控台并回读确认' : '和控台一致'}${chosen ? `；${chosen}` : ''}` : '这首歌的控台时间码起点和歌曲不一致，暂不核对；起始码对上后会自动同步' } });
   // An edit made while this song was being written waits for its own sync instead of the next check.
-  markPendingMa2Songs();
+  markPendingMa2SongsNow();
 }
 
 /** What a successful pass clears: a failure after it is reported again, and a one-time 用联动台的 is used up. */
@@ -242,6 +286,8 @@ async function syncNames(): Promise<void> {
 
 /** Serialize console reconciliation; local editing and saving remain independent. */
 export async function tickMa2SongSync(): Promise<void> {
+  // The pass starts from the latest marks, not from a comparison still waiting for an idle moment.
+  flushPendingMa2Songs();
   if (running || readMa2Method() !== 'network' || !ma2SyncActive()) return;
   running = true;
   try {
@@ -307,7 +353,7 @@ export async function tickMa2SongSync(): Promise<void> {
             consoleSeenAt(entry, 'own', null);
             update(entry, { checking: false, state: 'verified', waitingForConnection: false, checkedAt: Date.now(), nextCheckAt: Date.now() + BACKGROUND_RECHECK_MS, message: confirmedMessage(binding), ...succeeded });
             // An edit made while the console was compared is not confirmed by that comparison.
-            markPendingMa2Songs(); continue;
+            markPendingMa2SongsNow(); continue;
           }
           // The check does not say what changed, only that the console is no longer the confirmed baseline.
           consoleSeenAt(entry, 'own', entry.remoteRevision);
@@ -380,7 +426,7 @@ export async function tickMa2SongSync(): Promise<void> {
           rewriteLegacyNames: false, acknowledged: songSignature(ma2SongPoints(confirmed), result.binding.name, start), consoleSeen: undefined, ...succeeded,
           message: confirmedMessage(result.binding, result.consoleEdits) });
         // An edit made while this song was being written waits for its own sync instead of the next check.
-        markPendingMa2Songs();
+        markPendingMa2SongsNow();
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
         // A transport loss is a wait state. After reconnect, the service reads

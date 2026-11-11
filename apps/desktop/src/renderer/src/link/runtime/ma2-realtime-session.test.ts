@@ -4,7 +4,7 @@ import { legacyMa2Renames, ma2SongPoints, pendingMa2Renames, renameConsoleCueCom
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { useShowStateStore } from '../stores/show-state-store';
-import { startMa2SongSync, stopMa2SongSync, tickMa2SongSync, ma2SongSyncSettings, markPendingMa2Songs } from './ma2-song-sync';
+import { startMa2SongSync, stopMa2SongSync, tickMa2SongSync, ma2SongSyncSettings, markPendingMa2Songs, flushPendingMa2Songs } from './ma2-song-sync';
 import { useProgramSelectionStore } from '../stores/program-selection-store';
 import { useMtcStartAllocationStore } from '../stores/mtc-start-allocation-store';
 import { setMa2ConsoleChanges, setMa2WriteMode, useMa2RealtimePreference } from './ma2-realtime-preference';
@@ -209,7 +209,8 @@ it('有起始码的已确认歌曲：改别的歌不再把它标成待同步；�
     useDocumentStore.getState().execute(setLightingCommand(itemId, lighting));
     markPendingMa2Songs();
   };
-  edit('second');
+  // The comparison waits for an idle moment; run it now so the check below sees its answer.
+  edit('second'); flushPendingMa2Songs();
   expect(useMa2SyncStore.getState().songs.first?.state).toBe('verified');
   check.mockImplementation(() => { edit('first'); return Promise.resolve(false); });
   vi.advanceTimersByTime(30001); await tickMa2SongSync();
@@ -217,6 +218,36 @@ it('有起始码的已确认歌曲：改别的歌不再把它标成待同步；�
   expect(useMa2SyncStore.getState().songs.first?.state).toBe('pending');
   await tickMa2SongSync();
   expect(sync).toHaveBeenCalledTimes(2);
+});
+it('改了已确认的歌：编辑时间当下记下，待同步的比较排到空闲时；同步这一轮开始前一定先比较完', async () => {
+  vi.useFakeTimers();
+  useDocumentStore.getState().setProject(boundFirst(), 'song.tblink');
+  sync.mockImplementation(answerOwn); check.mockResolvedValue(false);
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  await tickMa2SongSync();
+  expect(useMa2SyncStore.getState().songs.first?.state).toBe('verified');
+  expect(useMa2SyncStore.getState().songs.first?.localEditedAt).toBeUndefined();
+  const edit = (): void => {
+    const lighting = structuredClone(useDocumentStore.getState().project!.rundown[0]!.lighting!);
+    const event = lighting.tracks[0]!.clips[0]!.events[0]!;
+    if (event.kind !== 'empty-cue' && event.kind !== 'ma2') throw new Error('fixture 应为 Cue 点');
+    event.label = `${event.label}改`;
+    useDocumentStore.getState().execute(setLightingCommand('first', lighting));
+    markPendingMa2Songs();
+  };
+  edit();
+  expect(useMa2SyncStore.getState().songs.first?.localEditedAt).toEqual(expect.any(Number));
+  expect(useMa2SyncStore.getState().songs.first?.state).toBe('verified');
+  vi.advanceTimersByTime(200);
+  expect(useMa2SyncStore.getState().songs.first).toMatchObject({ state: 'pending', message: '修改已暂存，等待同步' });
+  // Not yet compared when the pass starts: the pass compares first and syncs the edit.
+  await tickMa2SongSync();
+  expect(useMa2SyncStore.getState().songs.first?.state).toBe('verified');
+  edit();
+  expect(useMa2SyncStore.getState().songs.first?.state).toBe('verified');
+  await tickMa2SongSync();
+  expect(sync).toHaveBeenCalledTimes(3);
+  expect(useMa2SyncStore.getState().songs.first?.state).toBe('verified');
 });
 it('回读后绑定没变但空 Cue 已有了控台编号：照样写回歌曲，下一轮只复查不再整首同步', async () => {
   vi.useFakeTimers();
