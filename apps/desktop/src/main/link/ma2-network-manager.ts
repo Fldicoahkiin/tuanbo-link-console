@@ -95,7 +95,11 @@ export class Ma2NetworkManager {
     return this.songWatch.changed(this.connection, bridge, request);
   }
   private liveService: Ma2LiveService | null = null;
-  live(): Ma2LiveService { return this.liveService ??= new Ma2LiveService(`${this.path}.playback.json`, this.secrets, request => this.get(request.network).bridge); }
+  live(): Ma2LiveService { return this.liveService ??= new Ma2LiveService(`${this.path}.playback.json`, this.secrets, request => {
+    this.get(request.network);
+    if (!this.connection) throw new Error('请先连接控台');
+    return this.connection;
+  }); }
   private layouts(): Ma2LayoutService {
     if (!this.consoleBackups) throw new Error('控台备份记录还没准备好');
     return this.layoutService ??= new Ma2LayoutService(`${this.path}.layouts.json`, this.isPlaying, this.consoleBackups);

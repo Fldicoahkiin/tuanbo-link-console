@@ -3,9 +3,9 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { ma2ExecutorObserveRequestSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, type Ma2ExecutorObservation, type Ma2ExecutorObserveRequest, type Ma2LiveConnect, type Ma2LiveInput, type Ma2LiveRequest, type Ma2LiveSnapshot } from '@tb/schema';
 import type { SecureProfileStore } from './secure-profile-store';
-import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import type { Ma2Telnet } from './ma2-telnet';
 import { writeFileAtomically } from './atomic-file';
-import { listMa2ExecutorPages } from './ma2-executor-page';
+import { verifyMa2ShowSource } from './ma2-show-probe';
 import { Ma2LivePlayback } from './ma2-live-playback';
 
 const profilesSchema = z.array(z.object({ host: z.ipv4(), username: z.string().min(1).max(256) }).strict()).max(128);
@@ -21,7 +21,9 @@ export class Ma2LiveService {
   private opening: Promise<Ma2LiveSnapshot> | null = null;
   private observer: { client: Ma2LivePlayback; host: string } | null = null;
   private observerFailure: string | null = null;
-  constructor(private readonly path: string, private readonly secrets: Pick<SecureProfileStore, 'saveCredential' | 'loadCredential'>, private readonly bridge: (request: Pick<Ma2LiveRequest, 'network'>) => Pick<Ma2OnpcBridge, 'request'>,
+  /** `telnet` is the logged-in Telnet line to the console this request names; it throws when that is not the one
+   * connected. The Show check before a read is one short command on it, never a plugin transaction (M6). */
+  constructor(private readonly path: string, private readonly secrets: Pick<SecureProfileStore, 'saveCredential' | 'loadCredential'>, private readonly telnet: (request: Pick<Ma2LiveRequest, 'network'>) => Pick<Ma2Telnet, 'command'>,
     private readonly socket: (host: string) => Ma2LivePlayback = host => new Ma2LivePlayback(host)) {}
   private key(request: Ma2LiveRequest): string { return JSON.stringify([request.network, request.expectedSource]); }
   private secret(host: string, username: string): string { return `ma2-web-${createHash('sha256').update(`${host}:${username}`).digest('hex')}`; }
@@ -52,7 +54,7 @@ export class Ma2LiveService {
   private async connectSession(input: Ma2LiveConnect): Promise<Ma2LiveSnapshot> {
     const request = ma2LiveConnectSchema.parse(input); this.close();
     const generation = this.generation;
-    await listMa2ExecutorPages(this.bridge(request), { network: request.network, expectedSource: request.expectedSource });
+    await verifyMa2ShowSource(this.telnet(request), request.expectedSource);
     if (generation !== this.generation) throw new Error('控台连接已改变');
     const client = new Ma2LivePlayback(request.network.host); this.client = client;
     try {
@@ -67,7 +69,7 @@ export class Ma2LiveService {
     } catch (error) { client.close(); if (generation === this.generation && this.client === client) this.failed = true; throw error; }
   }
   async read(input: Ma2LiveRequest): Promise<Ma2LiveSnapshot> {
-    const request = ma2LiveRequestSchema.parse(input); this.bridge(request);
+    const request = ma2LiveRequestSchema.parse(input); this.telnet(request);
     if (this.failed) throw new Error('实时推杆已停止，请重新连接');
     if (!this.client) {
       const generation = this.generation;
@@ -81,7 +83,7 @@ export class Ma2LiveService {
     const generation = this.generation;
     const client = this.client;
     try {
-      if (Date.now() - this.verifiedAt > 1000) { await listMa2ExecutorPages(this.bridge(request), { network: request.network, expectedSource: request.expectedSource }); this.verifiedAt = Date.now(); }
+      if (Date.now() - this.verifiedAt > 1000) { await verifyMa2ShowSource(this.telnet(request), request.expectedSource); this.verifiedAt = Date.now(); }
       if (generation !== this.generation) throw new Error('控台连接已改变');
       const snapshot = await client.read(request.page, request.start);
       if (generation !== this.generation) throw new Error('控台连接已改变');
@@ -98,7 +100,7 @@ export class Ma2LiveService {
    */
   async observe(input: Ma2ExecutorObserveRequest): Promise<Ma2ExecutorObservation> {
     const request = ma2ExecutorObserveRequestSchema.parse(input);
-    try { this.bridge(request); }
+    try { this.telnet(request); }
     catch (error) { return { kind: 'unavailable', reason: error instanceof Error ? error.message : String(error) }; }
     if (this.observerFailure) throw new Error(this.observerFailure);
     const host = request.network.host;
@@ -126,7 +128,7 @@ export class Ma2LiveService {
     this.guard = setTimeout(() => { this.release(); this.failed = true; this.client?.close(); }, 1500);
   }
   input(input: Ma2LiveInput): void {
-    const request = ma2LiveInputSchema.parse(input); this.bridge(request);
+    const request = ma2LiveInputSchema.parse(input); this.telnet(request);
     const release = request.action.kind === 'button' && !request.action.pressed;
     const key = request.action.kind === 'button' ? `${request.page}:${request.slot}:${request.action.id}` : '';
     if (release) {

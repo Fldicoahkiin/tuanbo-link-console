@@ -5,8 +5,11 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { type Ma2LiveConnect, type Ma2LiveSnapshot } from '@tb/schema';
 import { Ma2LiveService } from './ma2-live-service';
 import type { Ma2LivePlayback } from './ma2-live-playback';
+import { Ma2CommandQueue, type Ma2CommandPriority } from './ma2-command-queue';
+import { ma2CommandKind } from './ma2-telnet';
 
-const mock = vi.hoisted(() => ({ input: vi.fn(), close: vi.fn(), read: vi.fn(), connect: vi.fn() }));
+const mock = vi.hoisted(() => ({ input: vi.fn(), close: vi.fn(), read: vi.fn(), connect: vi.fn(), pages: vi.fn() }));
+vi.mock('./ma2-executor-page', () => ({ listMa2ExecutorPages: mock.pages }));
 vi.mock('./ma2-live-playback', () => ({ Ma2LivePlayback: class {
   connected = true; input = mock.input; close = mock.close; read = mock.read; connect = mock.connect;
 } }));
@@ -16,13 +19,27 @@ const readRequest = { network: request.network, expectedSource: source, page: 10
 const snapshot = (): Ma2LiveSnapshot => ({ page: 1000, start: 1, readAt: Date.now(), items: [{ slot: 1, width: 1, name: 'test', objectType: 'LT', objectNumber: '9900', running: false, cue: '', blocks: [{ slot: 1, fader: { value: 1, min: 0, max: 1, name: 'LTP', text: '100%' }, buttons: [{ id: 0, name: 'Flash', active: false }] }] }] });
 beforeEach(() => { vi.clearAllMocks(); mock.connect.mockResolvedValue(undefined); mock.read.mockImplementation(() => Promise.resolve(snapshot())); });
 afterEach(() => vi.useRealTimers());
+const hex = (value: string): string => `H${Buffer.from(value).toString('hex')}`;
+/** The console's Telnet line over the real command queue: the Show check and plugin steps share it. */
+function fakeTelnet() {
+  const queue = new Ma2CommandQueue();
+  const console = { ...source };
+  const sent: string[] = [];
+  const command = vi.fn((line: string, match: (text: string) => string | null, _beforeSend?: unknown, priority: Ma2CommandPriority = 'normal') => queue.schedule(() => {
+    sent.push(ma2CommandKind(line));
+    const marker = /TBLINK_SHOWCHECK_[a-f0-9]{32}/.exec(line)?.[0];
+    const reply = marker ? match(`${marker}:${hex(console.show)},${hex(console.generation)},${hex(console.version)}\r\n`) : 'ACK';
+    return reply === null ? Promise.reject(new Error('No response')) : Promise.resolve(reply);
+  }, priority, ma2CommandKind(line)));
+  return { telnet: { command }, console, sent, queue };
+}
 async function setup() {
   const dir = await mkdtemp(join(tmpdir(), 'tblink-fader-test-'));
   const secrets = { saveCredential: vi.fn<(_key: string, value: string) => Promise<void>>().mockResolvedValue(undefined), loadCredential: vi.fn().mockResolvedValue('test-secret') };
-  const bridge = { request: vi.fn().mockResolvedValue(JSON.stringify({ ...source, buttonPage: 1, faderPage: 1000, pages: [] })) };
-  const service = new Ma2LiveService(join(dir, 'profiles.json'), secrets, () => bridge);
+  const line = fakeTelnet();
+  const service = new Ma2LiveService(join(dir, 'profiles.json'), secrets, () => line.telnet);
   await service.connect(request);
-  return { service, secrets, bridge };
+  return { service, secrets, ...line };
 }
 it('checks source, saves credentials separately and refuses empty, stale and unrelated targets', async () => {
   const { service, secrets } = await setup();
@@ -55,9 +72,9 @@ it('a missing renderer heartbeat releases a held button and blocks later writes 
   } finally { service.close(); }
 });
 it('source change during polling stops the live connection instead of showing old values', async () => {
-  const { service, bridge } = await setup(); vi.useFakeTimers();
+  const { service, console } = await setup(); vi.useFakeTimers();
   try {
-    bridge.request.mockResolvedValue(JSON.stringify({ ...source, show: 'other', buttonPage: 1, faderPage: 1000, pages: [] }));
+    console.show = 'other';
     await vi.advanceTimersByTimeAsync(1001);
     await expect(service.read(readRequest)).rejects.toThrow('Show');
     expect(mock.close).toHaveBeenCalled();
@@ -91,9 +108,9 @@ it('uses the reported fader range for speed and special masters instead of assum
 it('核对控台在不在跟：用推杆页存过的用户另开一个只读连接；没连过网页遥控时说明原因；失败后这首歌不再读，换下一首前清掉', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tblink-observer-test-'));
   const secrets = { saveCredential: vi.fn<(_key: string, value: string) => Promise<void>>().mockResolvedValue(undefined), loadCredential: vi.fn().mockResolvedValue('test-secret') };
-  const bridge = { request: vi.fn().mockResolvedValue(JSON.stringify({ ...source, buttonPage: 1, faderPage: 1000, pages: [] })) };
+  const { telnet } = fakeTelnet();
   const observer = { connect: vi.fn(() => Promise.resolve()), observe: vi.fn(() => Promise.resolve<{ running: boolean; cue: string; name: string } | null>({ running: true, cue: '    5 FuGe', name: 'Song' })), close: vi.fn() };
-  const service = new Ma2LiveService(join(dir, 'profiles.json'), secrets, () => bridge, () => observer as unknown as Ma2LivePlayback);
+  const service = new Ma2LiveService(join(dir, 'profiles.json'), secrets, () => telnet, () => observer as unknown as Ma2LivePlayback);
   const observe = { network: request.network, page: 1000, slot: 101 };
   try {
     const unavailable = await service.observe(observe);
@@ -112,5 +129,44 @@ it('核对控台在不在跟：用推杆页存过的用户另开一个只读连�
     expect(mock.close).not.toHaveBeenCalled();
     service.releaseObserver();
     expect(await service.observe(observe)).toMatchObject({ kind: 'executor' });
+  } finally { service.close(); }
+});
+
+it('网页遥控核对 Show 用一条短命令，不走插件', async () => {
+  const { service, telnet, sent } = await setup(); vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    vi.setSystemTime(Date.now() + 1001);
+    await service.read(readRequest);
+    expect(mock.pages).not.toHaveBeenCalled();
+    expect(sent).toEqual(['show-check', 'show-check']);
+    expect(telnet.command.mock.calls.every(call => call[3] === 'playback')).toBe(true);
+  } finally { service.close(); }
+});
+it('插件命令执行中，核对排在下一条后台命令前面', async () => {
+  const { service, queue, sent } = await setup(); vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    sent.length = 0;
+    let finish: (value: string) => void = () => { throw new Error('plugin step has not started'); };
+    const run = queue.schedule(() => { sent.push('plugin:run'); return new Promise<string>(resolve => { finish = resolve; }); }, 'normal', 'plugin:run');
+    const next = queue.schedule(() => { sent.push('plugin:read'); return Promise.resolve('DATA:00'); }, 'normal', 'plugin:read');
+    vi.setSystemTime(Date.now() + 1001);
+    const reading = service.read(readRequest);
+    await new Promise(resolve => setImmediate(resolve));
+    // A Telnet command on the line is never taken back: the check waits for this one step, not the whole sync.
+    expect(sent).toEqual(['plugin:run']);
+    finish('DONE:1');
+    await expect(reading).resolves.toMatchObject({ page: 1000 });
+    await Promise.all([run, next]);
+    expect(sent).toEqual(['plugin:run', 'show-check', 'plugin:read']);
+    expect(mock.pages).not.toHaveBeenCalled();
+  } finally { service.close(); }
+});
+it('插件没在运行时说明原因并停下实时状态，不当成 Show 没变', async () => {
+  const { service, console } = await setup(); vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    console.generation = '';
+    vi.setSystemTime(Date.now() + 1001);
+    await expect(service.read(readRequest)).rejects.toThrow('插件没在运行');
+    await expect(service.read(readRequest)).rejects.toThrow('已停止');
   } finally { service.close(); }
 });
