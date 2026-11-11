@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type WheelEvent as ReactWheelEvent } from 'react';
 import { initialTimelineSize, useTimelineViewportSize } from './useTimelineViewportSize';
+import { timelineMotion } from './timeline-motion';
 import {
   buildVisibleTimelineTicks,
   chooseTimelineTickInterval,
@@ -48,6 +49,7 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
   const [zoom, setZoom] = useState({ key: fitKey, manual: false, pixelsPerSecond: initialPixelsPerSecond });
   const [scrollLeft, setScrollLeft] = useState(() => initialScrollLeft(durationMs, initialPixelsPerSecond, initialPositionMs, fitKey));
   const measuredScrollLeft = useRef(scrollLeft);
+  const measuredScrollTop = useRef(0);
   const revealFrame = useRef<number | null>(null);
   const layoutMode = fitKey === undefined ? 'visual' : 'lighting';
   const { width: viewportWidth, height: viewportHeight, observed: observedViewport } = useTimelineViewportSize(viewportRef, layoutMode, scrollLeft);
@@ -90,6 +92,7 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
     const viewport = viewportRef.current;
     if (!viewport) return;
     const next = Math.min(MAX_TIMELINE_PIXELS_PER_SECOND, Math.max(MIN_TIMELINE_PIXELS_PER_SECOND, nextPixelsPerSecond));
+    timelineMotion.moved();
     const bounds = viewport.getBoundingClientRect();
     const anchorX = clientX ?? bounds.left + bounds.width / 2;
     const anchorTime = timelineTimeFromClientX({
@@ -143,6 +146,8 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
     const wheel = (event: WheelEvent): void => {
       event.preventDefault();
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientWidth : 1;
+      // Scrolled or zoomed by hand: the OBS live canvas draws fewer frames meanwhile. Wheel seeking moves the playhead, not the timeline.
+      if (event.ctrlKey || !onWheelSeek || event.shiftKey || event.deltaY === 0) timelineMotion.moved();
       if (event.ctrlKey) {
         if (event.deltaY !== 0) zoomAt(pixelsPerSecond * (event.deltaY < 0 ? 1.18 : 1 / 1.18), event.clientX);
       } else if (onWheelSeek && !event.shiftKey && event.deltaY !== 0) {
@@ -165,6 +170,7 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
       const area = viewportRef.current;
       if (!area || event.ctrlKey || event.shiftKey) return;
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? area.clientHeight : 1;
+      timelineMotion.moved();
       area.scrollTop += event.deltaY * unit;
     },
     pixelsPerSecond,
@@ -176,9 +182,14 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
     gridSize,
     ticks,
     onScroll: () => {
-      measuredScrollLeft.current = viewportRef.current?.scrollLeft ?? 0;
-      setScrollLeft(measuredScrollLeft.current);
-      setScrollTop(viewportRef.current?.scrollTop ?? 0);
+      const left = viewportRef.current?.scrollLeft ?? 0, top = viewportRef.current?.scrollTop ?? 0;
+      // A scroll this hook did not set itself (the scroll bar dragged) is the user's: the timeline is moving. The page
+      // turning with the playhead is set here first, so it does not count; under a pixel is the browser rounding.
+      if (Math.abs(left - measuredScrollLeft.current) >= 1 || Math.abs(top - measuredScrollTop.current) >= 1) timelineMotion.moved();
+      measuredScrollLeft.current = left;
+      measuredScrollTop.current = top;
+      setScrollLeft(left);
+      setScrollTop(top);
       if (headingViewportRef.current && viewportRef.current) headingViewportRef.current.scrollTop = viewportRef.current.scrollTop;
     },
     timeAtClientX: (clientX) => {

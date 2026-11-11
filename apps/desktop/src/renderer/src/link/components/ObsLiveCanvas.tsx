@@ -4,6 +4,7 @@ import { obsLiveSceneSchema, type ObsLiveEdit, type ObsLiveScene } from '@tb/sch
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 import { ObsLiveSelection } from './ObsLiveSelection';
 import { obsPreviewSession } from '../view-models/obs-preview-session';
+import { LiveFramePainter, livePreviewRun, livePreviewWanted } from './obs-live-frames';
 
 let liveSession: Promise<void> = Promise.resolve();
 
@@ -24,6 +25,7 @@ export const ObsLiveCanvas = memo(function ObsLiveCanvas({ editable = true, onAs
   const [suspended, setSuspended] = useState(false);
   const [visible, setVisible] = useState(false);
   const previewFailed = useRef(false);
+  const [painter] = useState(() => new LiveFramePainter(() => canvas.current));
   useEffect(() => { active.current = true; return () => { active.current = false; pending.current = null; }; }, []);
   const acceptScene = useCallback((next: ObsLiveScene): void => {
     if (!active.current) return;
@@ -62,30 +64,19 @@ export const ObsLiveCanvas = memo(function ObsLiveCanvas({ editable = true, onAs
     return () => { active = false; unsubscribe(); };
   }, [restart, suspended, visible, acceptScene]);
   useEffect(() => {
-    if (suspended || !visible) return;
+    if (!livePreviewWanted({ visible, suspended, failed: previewFailed.current })) return;
     let active = true;
-    if (previewFailed.current) return;
     const preview = obsPreviewSession.open();
     setError(null);
-    const run = async (): Promise<void> => {
-      try {
-        while (active) {
-          const frame = await preview.next();
-          if (!active) break;
-          const target = canvas.current;
-          const context = target?.getContext('2d', { alpha: false });
-          if (!target || !context) throw new Error('无法创建 OBS 实时画布');
-          if (target.width !== frame.width || target.height !== frame.height) { target.width = frame.width; target.height = frame.height; }
-          if (!(frame.rgba.buffer instanceof ArrayBuffer)) throw new Error('OBS 视频帧缓冲区类型无效');
-          const pixels = new Uint8ClampedArray(frame.rgba.buffer, frame.rgba.byteOffset, frame.rgba.byteLength);
-          context.putImageData(new ImageData(pixels, frame.width, frame.height), 0, 0);
-        }
-      } catch (reason) { if (active) { previewFailed.current = true; setError(toUserErrorMessage(reason)); } }
-      finally { await preview.close(); }
-    };
-    liveSession = liveSession.then(async () => { if (active) await run(); }).catch((reason: unknown) => { if (active) setError(toUserErrorMessage(reason)); console.error('OBS 预览会话失败', reason); });
-    return () => { active = false; void preview.close().catch((reason: unknown) => { console.error('关闭 OBS 预览失败', reason); }); };
-  }, [restart, suspended, visible]);
+    // Frames at a cap (obs-live-frames.ts): 30 a second, about 10 while the timeline moves, uncapped while a source is moved here.
+    const frames = livePreviewRun(preview, {
+      draw: (frame) => { if (active) painter.draw(frame); },
+      editingCanvas: () => editing.current,
+      failed: (reason) => { if (active) { previewFailed.current = true; setError(toUserErrorMessage(reason)); } }
+    });
+    liveSession = liveSession.then(async () => { if (active) await frames.run(); }).catch((reason: unknown) => { if (active) setError(toUserErrorMessage(reason)); console.error('OBS 预览会话失败', reason); });
+    return () => { active = false; frames.stop(); void preview.close().catch((reason: unknown) => { console.error('关闭 OBS 预览失败', reason); }); };
+  }, [restart, suspended, visible, painter]);
   const repair = async (): Promise<void> => {
     if (repairing) return;
     setRepairing(true);

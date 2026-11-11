@@ -63,6 +63,7 @@
 - `ObsLiveEditor` 使用准确场景名和 sceneItemId 编辑；场景切换、来源锁定时拒绝变换。订阅来源变换、显隐、锁定及当前正式场景事件。
 - `ObsLiveCanvas`、`ObsLiveSelection`、`ObsLiveProperties` 已提供新画布、来源选中、移动缩放、显隐锁定、旋转与数值裁剪。真实 OBS 与隔离浏览器的双向位置同步测试通过。
 - 帧协议分包、非法尺寸、确认流控，以及来源锁定和场景切换保护共 4 项单测通过；类型检查、目标文件 Lint、构建通过。
+- 画布帧数上限（0.5.9 E6，`components/obs-live-frames.ts`）：界面按动画帧跑，到点才向主进程要下一帧，一次只有一个请求在路上，所以主进程和原生桥也少干活。平时每秒 30 帧；时间线上拖动或修剪片段、滚动或缩放时间线时约 10 帧（`components/timeline-motion.ts`，由 `DragPreview` 和 `useTimelineViewport` 报告），停下 300 ms 后回到 30；在实时画布上直接拖 OBS 来源时不设上限，跟屏幕刷新走，和以前一样流畅。拖播放头、滚轮定位和播放时自动翻页不算时间线在动。`ImageData` 和 context 复用，画面尺寸变了才重建。窗口隐藏、修复中或失败后不请求画面。未实机验证。
 - 安装目标：ProgramData/obs-studio/plugins/tblink-realtime-preview。安装包已配置携带 DLL，Windows 构建脚本校验固定编译器 SHA-256 后编译。
 
 ## 当前用户实例验收（2026-09-14）

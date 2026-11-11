@@ -1,6 +1,7 @@
 import { playbackFramesPerSecond, type ContentRef } from '@tb/core/link';
 import type { MtcFrameRate } from '@tb/schema';
 import { timelineEditTimeFromClientX, timelineInteractionTime, timelineMoveSnapPoints } from './timeline-geometry';
+import { timelineMotion, type MotionReport } from './timeline-motion';
 
 /*
  * A drag or trim on the editor's tracks without React on every move (0.5.9 E3, 05 设计 4.5). The press takes a
@@ -200,13 +201,14 @@ export class DragPreview<P, R> {
   private shown: string;
   private over = false;
 
-  constructor(private readonly work: DragPreviewWork<P, R>, initial: R, private readonly frames: FrameScheduler = animationFrames) {
+  constructor(private readonly work: DragPreviewWork<P, R>, initial: R, private readonly frames: FrameScheduler = animationFrames, private readonly motion: MotionReport = timelineMotion) {
     this.shown = work.drawn(initial);
   }
 
-  /** The pointer moved: kept, and worked out in the next frame. */
+  /** The pointer moved: kept, and worked out in the next frame. The timeline counts as moving (timeline-motion.ts). */
   move(pointer: P): void {
     if (this.over) return;
+    this.motion.moved();
     this.pending = pointer;
     this.last = pointer;
     if (this.frame === null) this.frame = this.frames.request(this.draw);
