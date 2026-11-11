@@ -91,6 +91,28 @@ it('上一个节目关闭失败、引擎还在响：打开得到“上一首还�
   expect(later[0]!.controller.play).toHaveBeenCalledOnce();
 });
 
+// 评审：文案叫人“再按一次停止”，现场会连按。连按的两次都读到“被挡住”，各建一个宿主，前一个被盖掉、没人关。
+it('被挡住以后连按两次停止：引擎还在响时两次都得到同一句拒绝、不建宿主；引擎停了时只建一个宿主，第二次按的是正常停止', async () => {
+  const first = host(), sounding = { now: true }, held = { ...first, engineStopped: vi.fn(() => !sounding.now) }, later: ReturnType<typeof host>[] = [];
+  const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>().mockReturnValueOnce(held)
+    .mockImplementation(() => { const made = host(); later.push(made); return made; });
+  const service = new NativeProgramService(create, vi.fn(), () => Promise.resolve(), unlicensed, quiet());
+  await service.open(request()); first.close.mockRejectedValue(new Error('设备拒绝关闭'));
+  const next = request();
+  await expect(service.open(next)).rejects.toThrow('上一首还没停下');
+  const refusal = '上一首还没停下：设备拒绝关闭。再按一次停止';
+  const both = await Promise.allSettled([service.control(command(next, { kind: 'stop' })), service.control(command(next, { kind: 'stop' }))]);
+  expect(both.map(result => result.status === 'rejected' ? toUserErrorMessage(result.reason) : 'ok')).toEqual([refusal, refusal]);
+  expect(create).toHaveBeenCalledOnce();
+  sounding.now = false;
+  await Promise.all([service.control(command(next, { kind: 'stop' })), service.control(command(next, { kind: 'stop' }))]);
+  expect(create).toHaveBeenCalledTimes(2); expect(later).toHaveLength(1);
+  expect(later[0]!.controller.stop).toHaveBeenCalledOnce();
+  // Once open, a stop is a stop again.
+  await service.control(command(next, { kind: 'stop' }));
+  expect(create).toHaveBeenCalledTimes(2); expect(later[0]!.controller.stop).toHaveBeenCalledTimes(2);
+});
+
 it('上一个节目关闭失败、引擎已经停了：照常打开；这次失败以后，后面的节目照样被关，关闭的人看到失败', async () => {
   const first = host(), stopped = { ...first, engineStopped: vi.fn(() => true) }, later: ReturnType<typeof host>[] = [];
   const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>().mockReturnValueOnce(stopped)

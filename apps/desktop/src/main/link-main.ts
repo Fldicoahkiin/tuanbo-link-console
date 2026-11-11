@@ -721,7 +721,11 @@ function registerIpc(
     if (heldEngine) {
       // Read the engine process now: gone, a new engine may open; still there, none opens beside it (0.5.9 S6). This
       // runs when the operator asks for playback, not on a timer.
-      if (heldEngine.player.engineRunning()) throw new Error(`上一首的音频引擎还没退出：${heldEngine.reason}。联动台不会强制结束它，等它退出后再按播放`);
+      // Gone: the timecode port it held is let go here, before the new engine claims it; the audio file and the next
+      // song's preparation follow, and what cannot go is logged and shown by the old service itself.
+      const leftover = heldEngine.player.releaseExited();
+      if (!leftover) throw new Error(`上一首的音频引擎还没退出：${heldEngine.reason}。联动台不会强制结束它，等它退出后再按播放`);
+      void leftover;
       if (nativePlayer === heldEngine.player) nativePlayer = null;
       heldEngine = null;
     }
@@ -741,6 +745,8 @@ function registerIpc(
         },
         executable: engineExecutable,
         claimMidiOutput: name => midiPortBroker.claimFormal(name, '时间码'),
+        // Logged through `error` already (audioErrorLog); shown in red here, or in the next window (0.5.9 S6).
+        closeFault: message => programFaults.closeFailed(message, null),
         cache: new NativeAudioCache(join(app.getPath('userData'), 'native-audio-streams'), ffmpegPath.replace('app.asar', 'app.asar.unpacked'), undefined, undefined, measured,
           (message, details) => { void logger.record({ level: 'warning', category: 'system', device: '音频', message, details }).catch((error: unknown) => console.error('音频缓存日志写入失败', error)); }),
         resolveAudio: (projectPath, relativePath) => projectService.resolveReferenceAudio(projectPath, relativePath),

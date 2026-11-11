@@ -41,6 +41,9 @@ type Options = {
   beforeControl?: (request: NativePlayerControl) => void;
   /** Takes the timecode output from the editor before the engine opens it. */
   claimMidiOutput?: (portName: string) => Promise<MidiClaim>;
+  /** Shown in red: what an engine that exited after a failed close held could not be let go (releaseExited). It is
+   * logged through `error` as well. */
+  closeFault?: (message: string) => void;
 };
 
 /** One process and one serialized command stream, owned by the app session.
@@ -96,10 +99,28 @@ export class NativePlayerService {
   }
 
   get status(): NativePlayerStatus | null { return this.state; }
-  /** Read from the engine now, not from `status` (0.5.9 S6): whether its process is still there, and whether it may be
-   * sounding. Asked after a close failed, before another program or engine opens. */
-  engineRunning(): boolean { return this.client?.running ?? false; }
+  /** Read from the engine now, not from `status` (0.5.9 S6): whether it may be sounding. Asked after a program's close
+   * failed, before another program opens. */
   engineSounding(): boolean { return this.client?.sounding ?? false; }
+  /** After a close that failed (0.5.9 S6): once the engine process is gone (it exited normally, after the timeout, or
+   * with an error code), what it held is let go: the timecode port before this returns, then the audio file and the next
+   * song's preparation. While the process is there nothing is let go, as it may still use them, and this returns null.
+   * The promise never rejects: what cannot be let go is logged (`error`) and shown in red (`closeFault`). */
+  releaseExited(): Promise<void> | null {
+    if (this.client?.running) return null;
+    this.client = null;
+    try { this.releaseMtc(); } catch (error) { this.leftHeld('时间码接口', error); }
+    return (async () => {
+      // A next song that does not let go reports it itself (preloadError).
+      await this.preload.discard();
+      try { await this.releaseLease(); } catch (error) { this.leftHeld('上一首的音频文件', error); }
+    })();
+  }
+  private leftHeld(what: string, error: unknown): void {
+    const reason = (error instanceof Error ? error.message : String(error)).replace(/[。.；;\s]+$/u, '') || '未知错误';
+    const message = `音频引擎已经退出，但${what}没能放开：${reason}。之后的歌照常播放；如果${what === '时间码接口' ? '时间码接口打不开' : '之后读不到这首歌的音频'}，请重启联动台`;
+    this.options.error(message); this.options.closeFault?.(message);
+  }
   get audioCaptureIdentity(): { executable: string; title: string; windowClass: string; audioDeviceId: string } {
     const identity = this.client?.identity;
     if (!identity || !this.source || !this.state || !['ready', 'playing', 'paused', 'ended'].includes(this.state.status)
@@ -291,7 +312,13 @@ export class NativePlayerService {
     await this.pending;
     const client = this.client;
     try { await Promise.all([client?.close(), this.deviceQuery.close(), this.audioDeviceQuery.close()]); }
-    catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); throw error; }
+    catch (error) {
+      this.fail(error instanceof Error ? error : new Error(String(error)));
+      // An engine that is gone already (an exit with an error code, or a query that failed beside a clean exit) lets go
+      // of what it held now; the close still fails and is reported (0.5.9 S6).
+      await this.releaseExited();
+      throw error;
+    }
     // A next song whose decoder would not stop is only reported, so close() completes and lets that decoder go.
     // Caveat: it stays registered in this service's cache alone. link-main gives the next service a new
     // NativeAudioCache, which does not know that process: until it exits, the same source can be decoded again

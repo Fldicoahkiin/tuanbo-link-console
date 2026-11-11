@@ -81,7 +81,8 @@ export class NativeProgramService {
       this.letGo(entry);
       await this.authorized(entry.cancellation.signal);
       await checkProject?.(request.projectPath, project);
-      if (this.current !== entry || entry.cancelled) return;
+      // A program builds at most one host.
+      if (this.current !== entry || entry.cancelled || entry.host) return;
       entry.host = this.create(project, request, {
         configuration: () => entry.configuration,
         changed: state => { entry.state = state; this.reportRunning(); this.emit(entry); },
@@ -136,7 +137,9 @@ export class NativeProgramService {
     if (request.operation.kind === 'close') { await this.close(); return; }
     // Refused because the song before had not stopped: stop is the operator asking again (not a retry of ours). The
     // engine is read once more; stopped now, this program opens and the next play plays, else the same refusal.
-    if (request.operation.kind === 'stop' && entry.heldBack) { entry.ready = this.cleanup.then(entry.start); await entry.ready; return; }
+    // One start at a time: `heldBack` is cleared as this one begins (letGo sets it again on a refusal), so a stop pressed
+    // meanwhile waits for the same `ready` below and gets the same answer: the refusal, or a normal stop once open.
+    if (request.operation.kind === 'stop' && entry.heldBack) { entry.heldBack = false; entry.ready = this.cleanup.then(entry.start); await entry.ready; return; }
     await entry.ready;
     if (entry !== this.current || entry.cancelled || !entry.host) throw new Error('播放控制已取消');
     if (request.configuration) entry.configuration = request.configuration;
