@@ -9,11 +9,32 @@ import { inspectMa2SequenceXml, inspectMa2ExecutorXml, inspectMa2TimecodeXml, re
 export type Ma2Operation = 'PING' | 'PAGES' | 'PAGE' | 'LIST' | 'LISTSEQ' | 'SEQUENCE' | 'SEQCUES' | 'READ' | 'SNAPSHOT' | 'SCOPE' | 'APPLY' | 'SYNC' | 'CREATE' | 'EXECUTOR' | 'ASSIGNSEQ' | 'LABEL' | 'DISCARD' | 'TCRANGES';
 /** Fires after every acknowledged line of a long transfer; response reads also say how many bytes have arrived. */
 export type Ma2TransferProgress = (download?: { completed: number; total: number }) => void;
+/** The plugin's two request slots (M4): 'bg' for syncs and long reads, 'fg' for a short read an operator waits for. */
+export type Ma2Lane = 'bg' | 'fg';
 export type Ma2Wire = {
   /** `beforeStep` runs before each plugin step (the first included) with the steps done so far; throwing stops there
-   * and releases the request. */
-  exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: (done: number) => void): Promise<string>;
+   * and releases the request. `lane`: the plugin slot the request takes ('bg' when left out). */
+  exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: (done: number) => void | Promise<void>, lane?: Ma2Lane): Promise<string>;
+  /** True once the running plugin is known to keep a foreground lane; false or null (not known yet): one lane only. */
+  readonly lanes?: boolean | null;
 };
+
+/**
+ * Which lane a request takes when the plugin has two (M4, 03 §4.2.1). Foreground: reads only, short (one or a few
+ * steps, no large answer) and someone waits for them on screen: the executor page being looked at and the page list,
+ * one executor read before a key press, the version check, and the Timecode and Sequence directories (the live
+ * session checks the latter every 5 s, the page view and every catalog read start with one). Everything that writes
+ * the console stays in the background and never jumps the queue, so a rename cannot make a sync's snapshot check
+ * fail midway; so do the long reads (a Timecode show, a Sequence, the snapshots a sync rests on, the Timecode ranges)
+ * and DISCARD, which removes files. The plugin refuses anything else on 'fg'.
+ */
+export function ma2Lane(operation: Ma2Operation): Ma2Lane {
+  switch (operation) {
+    case 'PING': case 'PAGES': case 'PAGE': case 'LIST': case 'LISTSEQ': case 'EXECUTOR': return 'fg';
+    case 'SEQUENCE': case 'SEQCUES': case 'READ': case 'SNAPSHOT': case 'SCOPE': case 'TCRANGES': case 'DISCARD':
+    case 'APPLY': case 'SYNC': case 'CREATE': case 'ASSIGNSEQ': case 'LABEL': return 'bg';
+  }
+}
 
 /**
  * What the show must allow before each plugin step of `operation` (M3, 第 3 题): writing the console waits as a sync,
@@ -63,39 +84,45 @@ export class Ma2BridgeFailure extends Error {
   constructor(message: string, readonly requestId: string, readonly sent: boolean, options: ErrorOptions, readonly backupFile: string | null = null) { super(message, options); }
 }
 
-/** One request at a time; timeout is an uncertain outcome and is never retried. */
+type Ma2LaneQueue = { tail: Promise<void>; queued: number; epoch: number };
+
+/** One request at a time on each plugin lane; timeout is an uncertain outcome and is never retried. */
 export class Ma2OnpcBridge {
-  private exchangeTail: Promise<void> = Promise.resolve();
-  private queuedExchanges = 0;
-  private exchangeEpoch = 0;
+  // Each lane is its own queue: a failure cancels what waits on its own lane only. A plugin with one lane
+  // (from before M4, or not known yet) and the local file bridge get everything on 'bg'.
+  private readonly queues: Record<Ma2Lane, Ma2LaneQueue> = { bg: { tail: Promise.resolve(), queued: 0, epoch: 0 }, fg: { tail: Promise.resolve(), queued: 0, epoch: 0 } };
   /** `show`: asked again right before a write or an assignment goes on the wire, and before every further plugin step
    * of any request (ma2StepGate). The local file bridge runs a request in one go and has no step to stop at. */
   constructor(private readonly dataDirectory: string | Ma2Wire, private readonly show: ShowGateReader) {
     if (typeof dataDirectory === 'string' && !isAbsolute(dataDirectory)) throw new Error('MA2 数据目录必须是绝对路径');
   }
-  async request(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: Ma2TransferProgress): Promise<string> {
-    return (await this.exchange(operation, target, expected, desired, signal, progress)).response;
+  /** `behind: 'bg'` queues a foreground read behind the background lane anyway: a read that a console change made
+   * straight on the Telnet line follows, so that change waits for a running sync instead of jumping ahead of it. */
+  async request(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: Ma2TransferProgress, behind?: 'bg'): Promise<string> {
+    return (await this.exchange(operation, target, expected, desired, signal, progress, behind)).response;
   }
-  async exchange(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: Ma2TransferProgress): Promise<{ response: string; requestId: string }> {
+  async exchange(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: Ma2TransferProgress, behind?: 'bg'): Promise<{ response: string; requestId: string }> {
     signal?.throwIfAborted();
-    if (this.queuedExchanges >= 32) throw new Error('控台操作太多，请等当前操作完成');
-    const epoch = this.exchangeEpoch;
-    this.queuedExchanges += 1;
-    const result = this.exchangeTail.then(async () => {
-      if (epoch !== this.exchangeEpoch) throw new Error('上一个控台操作没完成，排队的操作已取消');
-      try { return await this.performExchange(operation, target, expected, desired, signal, progress); }
+    const lane: Ma2Lane = typeof this.dataDirectory !== 'string' && this.dataDirectory.lanes === true ? behind ?? ma2Lane(operation) : 'bg';
+    const queue = this.queues[lane];
+    if (queue.queued >= 32) throw new Error('控台操作太多，请等当前操作完成');
+    const epoch = queue.epoch;
+    queue.queued += 1;
+    const result = queue.tail.then(async () => {
+      if (epoch !== queue.epoch) throw new Error('上一个控台操作没完成，排队的操作已取消');
+      try { return await this.performExchange(operation, target, expected, desired, signal, progress, lane); }
       catch (error) {
         // A request that stopped for the show is no uncertain outcome: what waits behind it meets the same gate itself.
-        if (!isShowWait(error)) this.exchangeEpoch += 1;
+        if (!isShowWait(error)) queue.epoch += 1;
         throw error;
       }
-    }).finally(() => { this.queuedExchanges -= 1; });
-    // Serialize the entire transaction, including all chunks and response release.
+    }).finally(() => { queue.queued -= 1; });
+    // Serialize the entire transaction on its lane, including all chunks and response release.
     // Scheduling consumes rejection only internally; callers retain the original error.
-    this.exchangeTail = result.then(() => undefined, () => undefined);
+    queue.tail = result.then(() => undefined, () => undefined);
     return result;
   }
-  private async performExchange(operation: Ma2Operation, target: number, expected: string, desired: string, signal?: AbortSignal, progress?: Ma2TransferProgress): Promise<{ response: string; requestId: string }> {
+  private async performExchange(operation: Ma2Operation, target: number, expected: string, desired: string, signal: AbortSignal | undefined, progress: Ma2TransferProgress | undefined, lane: Ma2Lane): Promise<{ response: string; requestId: string }> {
     signal?.throwIfAborted();
     if (!Number.isInteger(target) || target < 1 || target > 99999) throw new Error('Timecode 编号无效');
     const writing = operation === 'APPLY' || operation === 'SYNC' || operation === 'CREATE';
@@ -160,7 +187,11 @@ export class Ma2OnpcBridge {
         const gate = ma2StepGate(operation);
         const writeStep = ma2WriteStep(operation, expected, desired);
         const stopped: { at: number | null } = { at: null };
-        const beforeStep = (done: number): void => {
+        const beforeStep = async (done: number): Promise<void> => {
+          // M4: before each background step, the foreground requests queued by now are done whole. Not before the
+          // read-back that follows the write, which goes straight on; foreground requests only read, under names of
+          // their own, so one that runs meanwhile changes nothing the read-back sees.
+          if (lane === 'bg' && done !== writeStep) await this.queues.fg.tail;
           if (gate === null || done === writeStep) return;
           try { holdForShow(this.show, gate, ma2StepWaitDetail(operation, done, writeStep)); }
           catch (wait) { stopped.at = done; throw wait; }
@@ -169,7 +200,7 @@ export class Ma2OnpcBridge {
           return validate(await this.dataDirectory.exchange(id, operation, target, body, () => {
             hold('这一步没有发给控台。');
             sent = true;
-          }, signal, progress, beforeStep));
+          }, signal, progress, beforeStep, lane));
         } catch (error) {
           // Stopped before its write step: the console holds what it held, so the write was never sent.
           if (error instanceof Ma2BridgeFailure && stopped.at !== null && writeStep !== null && stopped.at < writeStep) {

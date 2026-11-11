@@ -534,11 +534,17 @@ local function poll()
 end
 -- Telnet carries bounded hexadecimal data, never source code supplied by a project.
 -- No LuaSocket dependency. Each command has its own response token.
-local network = nil
+-- Two lanes, one request each: 'bg' for syncs and long reads, 'fg' for short reads an operator waits
+-- for (a page, the directory, one executor), run whole between two steps of the 'bg' request. Each
+-- lane expires on its own. A 'begin' that names no lane (a program before lanes, the bridge upgrade
+-- check) takes 'bg' and needs both lanes free, as the one request it was before.
+local lanes = { bg = nil, fg = nil }
+local foreground = { PING = true, PAGES = true, PAGE = true, LIST = true, LISTSEQ = true, EXECUTOR = true }
 local snapshot_cache = nil
 local function hex(data) return (data:gsub('.', function(c) return string.format('%02x', string.byte(c)) end)) end
+local function idle(net) return not net or gma.gettime() > net.expires end
 -- The request's answer is ready: keep it for 'read' and say how long it is.
-local function finished()
+local function finished(network)
   local id = network.id
   network.response = network.job.response; network.job = nil
   assert(#network.response <= 33554500, 'Response exceeds limit')
@@ -556,12 +562,12 @@ local function finished()
   return 'DONE:' .. #network.response
 end
 -- One step of the request: STEP:<steps done> while more remain, DONE:<size> after the last.
-local function proceed()
+local function proceed(network)
   advance(network.job)
-  if network.job.response then return finished() end
+  if network.job.response then return finished(network) end
   return 'STEP:' .. network.job.done
 end
-_G.TBLINK_NET = function(token, action, id, a, b, c)
+_G.TBLINK_NET = function(token, action, id, a, b, c, lane)
   if not token:match('^[a-f0-9]+$') or #token ~= 32 then return end
   local ok, result = pcall(function()
     assert(active and _G.TBLINK_BRIDGE_GENERATION == generation, 'Bridge is stopped')
@@ -577,11 +583,20 @@ _G.TBLINK_NET = function(token, action, id, a, b, c)
       assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'SEQCUES' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'ASSIGNSEQ' or a == 'LABEL' or a == 'DISCARD' or a == 'TCRANGES', 'Invalid operation')
       assert(type(b) == 'number' and b >= 1 and b <= 99999 and b == math.floor(b), 'Invalid target')
       assert(type(c) == 'number' and c >= 0 and c <= 33554432 and c == math.floor(c), 'Invalid payload size')
-      assert(not network or gma.gettime() > network.expires, 'Another network request is pending')
-      network = { id = id, op = a, target = b, size = c, bytes = 0, chunks = {}, base = base, expires = gma.gettime() + 120 }
-      return 'ACK'
+      assert(lane == nil or lane == 'bg' or lane == 'fg', 'Invalid lane')
+      -- Only reads go on 'fg', and none that leaves state for a later request (a snapshot for beginsync).
+      assert(lane ~= 'fg' or (action == 'begin' and foreground[a]), 'Operation not allowed on the foreground lane')
+      local named = lane ~= nil
+      lane = lane or 'bg'
+      assert(idle(lanes[lane]) and (named or idle(lanes.fg)), 'Another network request is pending')
+      local other = lanes[lane == 'bg' and 'fg' or 'bg']
+      assert(not other or other.id ~= id, 'Request already pending')
+      lanes[lane] = { id = id, op = a, target = b, size = c, bytes = 0, chunks = {}, base = base, expires = gma.gettime() + 120 }
+      -- A program that names the lane learns from the answer that this bridge has two.
+      return named and 'ACK:lanes' or 'ACK'
     end
-    assert(network and network.id == id and gma.gettime() <= network.expires, 'Network request expired or mismatched')
+    local network = (lanes.bg and lanes.bg.id == id and lanes.bg) or (lanes.fg and lanes.fg.id == id and lanes.fg) or nil
+    assert(network and gma.gettime() <= network.expires, 'Network request expired or mismatched')
     network.expires = gma.gettime() + 120
     if action == 'chunk' then
       assert(not network.done and a == #network.chunks + 1, 'Invalid chunk order')
@@ -599,20 +614,21 @@ _G.TBLINK_NET = function(token, action, id, a, b, c)
       network.job = start(id .. '\n' .. network.op .. '\n' .. network.target .. '\n' .. #body .. '\n' .. body)
       -- With 'steps' the first step runs now and the program sends 'step' for each next one.
       -- Without it (an older program, or the bridge upgrade check) every step runs now, as before.
-      if a == 'steps' then return proceed() end
+      if a == 'steps' then return proceed(network) end
       repeat advance(network.job) until network.job.response
-      return finished()
+      return finished(network)
     end
     if action == 'step' then
       assert(network.done and network.job and not network.response, 'No step pending')
-      return proceed()
+      return proceed(network)
     end
     if action == 'read' then
       assert(network.done and network.response, 'No response available')
       assert(type(a) == 'number' and a >= 0 and a < #network.response and a == math.floor(a), 'Invalid response offset')
       return 'DATA:' .. hex(network.response:sub(a + 1, a + 256))
     end
-    if action == 'release' then network = nil; return 'ACK' end
+    -- Releases this request's lane only; the other lane's request goes on.
+    if action == 'release' then lanes[lanes.bg == network and 'bg' or 'fg'] = nil; return 'ACK' end
     error('Unknown network action')
   end)
   gma.echo('TBLINK_RPC_' .. token .. ':' .. (ok and result or 'ERR:' .. hex(tostring(result))))

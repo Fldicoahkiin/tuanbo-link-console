@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { bridgeSource, Ma2LuaConsole, singleRunBridgeSource } from './fixtures/ma2-lua-console';
 import { Ma2NetworkWire } from './ma2-network-wire';
-import { Ma2OnpcBridge, parseMa2Ping, type Ma2Operation } from './ma2-onpc-bridge';
+import { ma2Lane, Ma2OnpcBridge, parseMa2Ping, type Ma2Lane, type Ma2Operation } from './ma2-onpc-bridge';
 import { ensureMa2NetworkBridge } from './ma2-bridge-installer';
 import { showStopped } from './fixtures/show-gates';
 import { ma2ResponseLine } from './ma2-telnet';
@@ -187,7 +187,7 @@ function checkSteps(ma2: Ma2LuaConsole, stepped: boolean): void {
 type Outcome = { results: string[]; commands: string[]; state: Buffer };
 // Positions in Lua's own error messages move with the source; the message itself must not.
 const normalize = (message: string): string => message.replace(/\[string "tblink_bridge"\]:\d+: /g, '');
-async function record(source: string, setup: ((ma2: Ma2LuaConsole) => void) | undefined, run: Flow['run']): Promise<Outcome> {
+async function record(source: string, setup: ((ma2: Ma2LuaConsole) => void) | undefined, run: Flow['run'], lane: Ma2Lane = 'bg'): Promise<Outcome> {
   const ma2 = new Ma2LuaConsole(source);
   show(ma2); setup?.(ma2);
   const wire = new Ma2NetworkWire(ma2);
@@ -195,7 +195,7 @@ async function record(source: string, setup: ((ma2: Ma2LuaConsole) => void) | un
   let index = 0;
   const exchange = async (request: Request): Promise<string> => {
     try {
-      const value = await wire.exchange(requestId(index++), request.operation, request.target, request.body ?? '', () => undefined);
+      const value = await wire.exchange(requestId(index++), request.operation, request.target, request.body ?? '', () => undefined, undefined, undefined, undefined, lane);
       results.push(`OK ${value}`); return value;
     } catch (error) { results.push(`ERROR ${normalize(error instanceof Error ? error.message : String(error))}`); return ''; }
   };
@@ -218,6 +218,20 @@ describe('插件真实代码：和一次做完的旧插件结果逐字节一样'
     const before = await record(singleRunBridgeSource, flow.setup, flow.run);
     expect(before.results.map(result => result.startsWith('OK ') ? 'OK' : result.slice(6))).toEqual(baseline[flow.name]);
     expect(await record(bridgeSource, flow.setup, flow.run)).toEqual(before);
+  });
+});
+
+// M4: a read on the foreground lane runs the same console commands in the same order and answers the same as on
+// the one lane before lanes; only what the foreground lane takes is tried there.
+describe('前台道上的只读请求：和一次做完的旧插件结果逐字节一样（M4）', () => {
+  const foreground = scenarios.filter(scenario => scenario.requests.every(request => ma2Lane(request.operation) === 'fg'));
+  it('前台道的场景都在：页面、页面目录、目录、执行器', () => {
+    expect(foreground.map(scenario => scenario.name)).toEqual(['PAGES', 'PAGE', 'LIST LISTSEQ', 'EXECUTOR', 'EXECUTOR changed during read']);
+  });
+  it.each(foreground)('$name', async scenario => {
+    const before = await record(singleRunBridgeSource, scenario.setup, sequential(scenario.requests));
+    expect(before.results.map(result => result.startsWith('OK ') ? 'OK' : result.slice(6))).toEqual(baseline[scenario.name]);
+    expect(await record(bridgeSource, scenario.setup, sequential(scenario.requests), 'fg')).toEqual(before);
   });
 });
 

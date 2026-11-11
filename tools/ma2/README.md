@@ -42,8 +42,16 @@
 - 每条命令都给这次请求续期，停在半路的请求仍是 120 秒后才让别人开始，和以前一样。一步出错时整件请求结束，回答和以前一次做完时出错一样（`ERROR` 加原因），`release` 后下一次 `begin` 照常开始。没有在等的步时 `step` 报 `No step pending`，什么都不做。
 - 不带 `'steps'` 的 `run`（分步以前的联动台，以及联动台升级插件时对旧插件的核对）把所有步一次做完再回 `DONE`，和以前的插件完全一样；本机文件桥也一样一次做完。分步以前的插件不认 `'steps'`，`run` 直接回 `DONE`，新联动台照常走完。
 - `PING` 的回答是控台版本，分步的插件在后面另起一行 `steps=1`。
-- 节目开始走时联动台在两步之间停下（`apps/desktop/src/main/link/ma2-onpc-bridge.ts` 的 `ma2StepGate`，按 `showGate` 定）：不再发下一条 `step`，马上发 `release`，`release` 不等节目。写入那一步（APPLY、CREATE 是第 1 步，SYNC 是第 `2×序列数+3` 步，`ma2WriteStep`）和它后面的读回不停，所以停下的请求一定还没写入。`PING`、`DISCARD` 任何时候都发。插件本身没有改。
+- 节目开始走时联动台在两步之间停下（`apps/desktop/src/main/link/ma2-onpc-bridge.ts` 的 `ma2StepGate`，按 `showGate` 定）：不再发下一条 `step`，马上发 `release`，`release` 不等节目。写入那一步（APPLY、CREATE 是第 1 步，SYNC 是第 `2×序列数+3` 步，`ma2WriteStep`）和它后面的读回不停，所以停下的请求一定还没写入。`PING`、`DISCARD` 任何时候都发。这一条插件本身没有改；两条道上各自按这条停。
 - 每一步里执行的控台命令、先后顺序、核对和回答都和分步以前一样，由 `apps/desktop/src/main/link/ma2-bridge-lua.test.ts` 在 Lua 5.3 解释器里跑插件原文核对。**未在实体控台和 onPC 上验证。**
+
+### 两条道：前台只读、后台同步（0.5.9，M4）
+
+- 插件里同时最多两件请求：后台道 `bg` 一件（同步、改名、自动关联、读时间线和序列、快照），前台道 `fg` 一件（只读）。`begin` 在最后多带一个道名：`TBLINK_NET(token,'begin',id,op,target,size,'bg'|'fg')`，认道名的插件回 `ACK:lanes`，分道以前的插件不认这个参数，照旧回 `ACK`，联动台由此知道只有一条道，所有请求都走一条（`Ma2NetworkWire.lanes`）。后面的 `chunk`、`run`、`step`、`read`、`release` 按请求编号找到自己那条道，不带道名。
+- 前台道只收 `PING`、`PAGES`、`PAGE`、`LIST`、`LISTSEQ`、`EXECUTOR`，别的一律回 `Operation not allowed on the foreground lane`：会写控台的（APPLY、SYNC、CREATE、LABEL、ASSIGNSEQ）、会删文件的（DISCARD）、会给后面的请求留快照的（SNAPSHOT、SCOPE，`beginsync` 只在后台道）都不行；长的读取（READ、SEQUENCE、SEQCUES、TCRANGES）也留在后台。
+- 联动台这边（`ma2-onpc-bridge.ts` 的 `ma2Lane`）：后台道每走一步之前，先等那时已经排着的前台请求整个做完，再发下一步；写入那一步后面紧跟的读回不等。前台请求只读、临时导出文件名带自己的请求编号，所以在两步之间做完不改变后台请求看到的任何东西。一条道上的请求出错只取消这条道上排着的请求；等待（节目在走）谁都不取消。
+- 两条道各自 120 秒过期，一条过期不影响另一条；`release` 只放自己那条。不带道名的 `begin`（分道以前的联动台、升级插件时的核对）占后台道，并且要两条道都空着，和以前“只有一件请求”一样。
+- 本机文件桥一次做完一个请求文件，没有道，不变。`PING` 的回答不变（仍是版本加 `steps=1`），有没有两条道看 `begin` 的回答。
 - 已知：SYNC 的预检快照现在分成多步，一个 Sequence 在它自己的两次导出核对之后、写入那一步之前被改，写入那一步只再比对 Timecode，拦不住；以前整件事在一次 Lua 调用里做完，这段时间几乎为零。
 
 ## 验证范围

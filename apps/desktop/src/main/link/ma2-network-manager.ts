@@ -70,11 +70,11 @@ export class Ma2NetworkManager {
   }
   private services: { bridge: Ma2OnpcBridge; service: Ma2ApplyService } | null = null;
   private wire: Ma2NetworkWire | null = null;
-  /** A plugin transaction left open by a dropped connection, released once on the next login to the same console. */
-  private unreleased: { id: string; settings: Ma2NetworkSettings } | null = null;
+  /** Plugin transactions (one per lane) left open by a dropped connection, released once on the next login to the same console. */
+  private unreleased: { ids: string[]; settings: Ma2NetworkSettings } | null = null;
   private keepUnreleased(): void {
-    const id = this.wire?.unreleasedRequest;
-    if (id && this.settings) this.unreleased = { id, settings: this.settings };
+    const ids = this.wire?.unreleasedRequests ?? [];
+    if (ids.length && this.settings) this.unreleased = { ids, settings: this.settings };
     this.wire = null;
   }
   private beforeConnectionChange: (() => Promise<()=>void>) | null = null;
@@ -335,9 +335,9 @@ export class Ma2NetworkManager {
       this.version = version;
       // Free the slot before installing or upgrading the bridge: an upgrade needs an idle transaction too.
       const abandoned = this.unreleased; this.unreleased = null;
-      if (abandoned && this.sameTarget(abandoned.settings)) {
-        try { await new Ma2NetworkWire(connection).releaseAbandoned(abandoned.id); this.notice?.('info', `已释放上次断线时未完成的控台请求 ${abandoned.id}`); }
-        catch (cause) { this.notice?.('warning', `上次断线时未完成的控台请求 ${abandoned.id} 未能释放：${cause instanceof Error ? cause.message : String(cause)}；控台插件会在 2 分钟内自动释放`); }
+      if (abandoned && this.sameTarget(abandoned.settings)) for (const id of abandoned.ids) {
+        try { await new Ma2NetworkWire(connection).releaseAbandoned(id); this.notice?.('info', `已释放上次断线时未完成的控台请求 ${id}`); }
+        catch (cause) { this.notice?.('warning', `上次断线时未完成的控台请求 ${id} 未能释放：${cause instanceof Error ? cause.message : String(cause)}；控台插件会在 2 分钟内自动释放`); }
       }
       if (generation !== this.generation) return this.status();
       if (this.bundledBridge) await ensureMa2NetworkBridge(connection, this.bundledBridge);

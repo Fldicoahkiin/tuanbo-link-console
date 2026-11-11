@@ -28,7 +28,9 @@ export class Ma2ExecutorMutationService {
     let attempted = false; let backupFile = '';
     const sourceAddress = `${request.page}.${request.slot}`;
     try {
-      const sourceXml = await bridge.request('PAGE', request.page);
+      // Read behind the background lane (M4): the change below goes straight on the Telnet line, so it waits for a
+      // running sync instead of jumping ahead of it and making that sync see the console changing under it.
+      const sourceXml = await bridge.request('PAGE', request.page, '', '', undefined, undefined, 'bg');
       const source = inspectMa2ExecutorPageXml(sourceXml, request.page);
       if (!source.source || Object.entries(request.expectedSource).some(([key, value]) => Reflect.get(source.source!, key) !== value)) throw new Error('控台的 Show 或连接变了，请重新读取这一页');
       const item = source.items.find(value => value.slot === request.slot);
