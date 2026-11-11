@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ObsRequestScheduler, type ObsRequestPriority } from './obs-request-scheduler';
+import { ObsRequestNotSent, ObsRequestScheduler, ObsRequestUnanswered, type ObsRequestPriority } from './obs-request-scheduler';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -33,6 +33,39 @@ describe('OBS 有界请求调度', () => {
     expect(sent).not.toHaveBeenCalled();
     expect(scheduler.getStats()).toMatchObject({ requests: 4, queued: 0, active: 0 });
     await scheduler.request(sent, '其他有效动作'); expect(sent).toHaveBeenCalledTimes(1);
+  });
+
+  it('没发出去的请求和发出去没回应的请求各有自己的类型，文案不变（2026-11-11 R3b）', async () => {
+    const scheduler = new ObsRequestScheduler(50, () => undefined); scheduler.connect();
+    const gate = deferred<void>();
+    const busy = Array.from({ length: 4 }, () => scheduler.run('program', () => scheduler.request(() => gate.promise, '占用通道')).catch((error: unknown) => error));
+    // Queued behind the four, then out of date when its turn comes.
+    let current = true;
+    const cancelled = scheduler.guarded(() => current, () => scheduler.run('urgent', () => scheduler.request(() => Promise.resolve(), '节目动作'))).catch((error: unknown) => error);
+    // Still queued when the four time out and end the connection (its own queue limit ends later).
+    await new Promise(resolve => setTimeout(resolve, 25));
+    const queued = scheduler.run('program', () => scheduler.request(() => Promise.resolve(), '排着的动作')).catch((error: unknown) => error);
+    await Promise.resolve(); current = false;
+    const [first] = await Promise.all(busy), late = await queued;
+    expect(first).toBeInstanceOf(ObsRequestUnanswered);
+    expect(String((first as Error).message)).toBe('OBS 占用通道 请求超时（50 ms）；不确定是否已执行，请检查 OBS 后重新连接');
+    expect(late).toBeInstanceOf(ObsRequestNotSent); expect(late).not.toBeInstanceOf(ObsRequestUnanswered);
+    expect((late as Error).message).toBe((first as Error).message); expect((late as Error).cause).toBe(first);
+    gate.resolve();
+    const refused = await cancelled;
+    expect(refused).toBeInstanceOf(ObsRequestNotSent);
+  });
+
+  it('排队时被取消的请求轮到它时按没发出去报（2026-11-11 R3b）', async () => {
+    const scheduler = new ObsRequestScheduler(2000, () => undefined); scheduler.connect();
+    const gate = deferred<void>();
+    const busy = Array.from({ length: 4 }, () => scheduler.run('program', () => scheduler.request(() => gate.promise, '占用通道')));
+    let current = true;
+    const pending = scheduler.guarded(() => current, () => scheduler.run('urgent', () => scheduler.request(() => Promise.resolve(), '节目动作'))).catch((error: unknown) => error);
+    await Promise.resolve(); current = false; gate.resolve(); await Promise.all(busy);
+    const error = await pending;
+    expect(error).toBeInstanceOf(ObsRequestNotSent);
+    expect((error as Error).message).toBe('OBS 动作已取消或已过时，没有发送：节目动作');
   });
 
   it('多请求动作的后续请求继续校验原保护窗口，嵌套操作不能移除取消条件', async () => {

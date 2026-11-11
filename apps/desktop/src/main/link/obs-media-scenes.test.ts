@@ -2,7 +2,7 @@ import type { OBSWebSocket } from 'obs-websocket-js';
 import { describe, expect, it, vi } from 'vitest';
 import { materialSceneNames, type ManagedMediaEvent } from '@tb/core/link';
 import type { LinkMediaAsset } from '@tb/schema';
-import { MediaOutOfStepError, ObsMediaScenes, failureReason } from './obs-media-scenes';
+import { MediaOnAirError, MediaOutOfStepError, ObsMediaScenes, failureReason } from './obs-media-scenes';
 
 const asset: LinkMediaAsset = { id: 'clip', name: '舞蹈.mp4', kind: 'video', folderId: null, relativePath: 'assets/dance.mp4', sha256: 'a'.repeat(64), byteLength: 10 };
 const names = materialSceneNames('project', asset);
@@ -657,6 +657,23 @@ describe('素材独立场景播放', () => {
     const starting = scenes.execute(event, 'C:/dance.mp4');
     await expect(starting).rejects.toThrow(/^切场景后素材位置对不上：舞蹈\.mp4，按音乐应该在 2\d{3} ms，OBS 实际在 未知 ms$/);
     await expect(starting).rejects.not.toBeInstanceOf(MediaOutOfStepError);
+  });
+  it('开始做完以后的核对没过：错误照旧抛出，类型标明素材已在画面上；位置对不上算没对齐，没报位置不算（2026-11-11 R3b）', async () => {
+    const run = async (cursor: number | null): Promise<unknown> => {
+      const { scenes, client, responses } = fixture();
+      await scenes.prepare('project', asset, 'C:/dance.mp4');
+      const callBatch = client.callBatch;
+      let switches = 0;
+      client.callBatch = (batch) => {
+        const result = callBatch(batch);
+        if (batch.some((entry) => entry.requestType === 'SetCurrentProgramScene') && ++switches === 2) responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_PLAYING', mediaCursor: cursor });
+        return result;
+      };
+      return scenes.execute(event, 'C:/dance.mp4').then(() => null, (error: unknown) => error);
+    };
+    const unknown = await run(null), behind = await run(0);
+    expect(unknown).toBeInstanceOf(MediaOnAirError); expect(unknown).not.toBeInstanceOf(MediaOutOfStepError);
+    expect(behind).toBeInstanceOf(MediaOutOfStepError); expect(behind).toBeInstanceOf(MediaOnAirError);
   });
   it('播放时启动解码器并按位置切换，回读实际状态', async () => {
     const { scenes, calls } = fixture(); await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
