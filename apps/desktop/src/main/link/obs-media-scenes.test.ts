@@ -1,5 +1,5 @@
 import type { OBSWebSocket } from 'obs-websocket-js';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { materialSceneNames, type ManagedMediaEvent } from '@tb/core/link';
 import type { LinkMediaAsset } from '@tb/schema';
 import { MediaOnAirError, MediaOutOfStepError, ObsMediaScenes, failureReason } from './obs-media-scenes';
@@ -61,6 +61,12 @@ async function held<T>(operation: Promise<T>): Promise<T> {
 }
 
 describe('素材独立场景播放', () => {
+  // The music clock is performance.now() and this fixture's cursor does not run. On the real clock a busy
+  // runner fires the start's hold late and ages the music past the frame before the check (Windows CI,
+  // 2026-11-01 and 2026-11-11: about 2608 against 2500). Every test here runs on a clock that moves in
+  // 20 ms steps only when the event loop is free; a test that steps time itself installs its own.
+  beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true, advanceTimeDelta: 20 }); });
+  afterEach(() => { vi.useRealTimers(); });
   it.each([true, false])('预备解码器只接受已核验的同素材旧缓存，拒绝其他文件（自有=%s）', async owned => {
     const { scenes, client, calls, responses } = fixture();
     const currentCache = 'C:/cache/new-hash.mkv', oldCache = 'C:/cache/old-hash.mkv';
