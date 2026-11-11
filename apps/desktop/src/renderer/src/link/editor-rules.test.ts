@@ -8,6 +8,7 @@ import { acceptMusicStructure, ma2PendingChanges, setSongMusicCommand, songBeats
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type AutomaticMusicCandidates } from '@tb/schema';
 import { useAudioEditor, type AudioEditor } from './components/useAudioEditor';
 import { claimAutomaticRecognition, claimRecognitionResult, detectSimpleBeats, isSimpleBeats, musicRecognitionKey, simpleDetectionKey, simpleDetectionOffer, simpleDetectionState, simpleDetectionWrite, useMusicBeatSegments, writeSimpleBeats } from './components/useMusicBeatSegments';
+import { songBeatSnapPoints } from './components/timeline-snap-points';
 import { useAutomaticMusicAnalysis } from './runtime/use-automatic-music-analysis';
 import { useDocumentStore } from './stores/document-store';
 import { useRuntimeStore } from './stores/runtime-store';
@@ -283,5 +284,35 @@ describe('规则 8：没装识别组件的电脑用简易检测，点了才跑�
     expect(await detectSimpleBeats(key, 'song', 'C:/shows/简易.tblink', analyze)).toBe('running'); // kept, not yet written
     expect(analyze).toHaveBeenCalledTimes(1);
     expect(writeSimpleBeats(key, false)).toBe('write');
+  });
+});
+
+describe('规则 9：编辑器的节拍吸附点只来自 songBeats，和灯光工作台同一份（E12）', () => {
+  it('吸附点是 songBeats(item).editPointsMs 里现在显示出来的那些和段落边；疏密换了跟着换；没有节拍就没有', () => {
+    openWithBeats();
+    const beats = songBeats(song());
+    if (beats.state !== 'ready') throw new Error('节拍没有识别出来');
+    const { editor, lighting } = bothViews();
+    expect(lighting.snapPoints).toBe(beats.editPointsMs);
+    expect(editor.snapPoints).toBe(songBeatSnapPoints(beats, 'standard'));
+    // Every point is one of the song's edit points: the beats drawn every two beats and the section's edges (0 and 8 s).
+    expect(editor.snapPoints.every(at => beats.editPointsMs.includes(at))).toBe(true);
+    expect(editor.snapPoints).toEqual([0, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]);
+    expect(editor.snapPoints).toEqual(expect.arrayContaining(editor.points));
+    expect(songBeatSnapPoints(beats, 'dense')).toEqual(beats.editPointsMs);
+    expect(songBeatSnapPoints({ state: 'none' }, 'standard')).toEqual([]);
+  });
+
+  it('编辑器里没有第二处算节拍吸附点：editPointsMs 只在这两处读，时间线吸附只用 audioEditor.snapPoints', () => {
+    const lines = (pattern: RegExp) => sourceFiles(LINK).flatMap(file => readFileSync(file, 'utf8').split(/\r?\n/).flatMap(line =>
+      pattern.test(line) ? [relative(LINK, file).replaceAll('\\', '/')] : []));
+    expect([...new Set(lines(/\beditPointsMs\b/))].sort()).toEqual(['components/timeline-snap-points.ts', 'components/useMusicBeatSegments.ts']);
+    expect([...new Set(lines(/\bsongBeatSnapPoints\(/))].sort()).toEqual(['components/timeline-snap-points.ts', 'components/useAudioEditor.ts']);
+    // The beats drawn (`points`) are for showing and splitting; nothing snaps to them.
+    expect(lines(/audioEditor\??\.points\b/)).toEqual([]);
+    const timeline = readFileSync(join(LINK, 'components/ReferenceTimeline.tsx'), 'utf8');
+    expect(timeline).toMatch(/beatSnapPoints=\{props\.audioEditor\?\.snapPoints \?\? \[\]\}/);
+    const tracks = readFileSync(join(LINK, 'components/ContentTracks.tsx'), 'utf8');
+    expect(tracks.match(/beats: props\.beatSnapPoints/g)?.length).toBe(2); // the drag's and the trim's snapshot, at the press
   });
 });

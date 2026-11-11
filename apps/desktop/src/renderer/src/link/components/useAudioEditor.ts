@@ -4,6 +4,7 @@ import { referenceAudioSchema, type AudioBeatLevel, type AudioSegment, type Audi
 import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
+import { songBeatSnapPoints } from './timeline-snap-points';
 
 export function useAudioEditor(item: RundownItem | null, projectPath: string | null, disabled: boolean, notify: (message: string, tone?: 'info' | 'error') => void, beforeEdit?: () => Promise<void>) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -23,6 +24,8 @@ export function useAudioEditor(item: RundownItem | null, projectPath: string | n
   const beats = item ? songBeats(item) : undefined;
   const shown = beats?.state === 'ready' ? songBeatsAtDensity(beats.beats, level) : null;
   const points = useMemo(() => shown ? shown.map(beat => beat.atMs) : [], [shown]);
+  // What dragging, trimming and moving the playhead snap to: the beats drawn now and the section edges (0.5.9 E12).
+  const snapPoints = songBeatSnapPoints(beats, level);
   const currentItem = (): RundownItem | undefined => useDocumentStore.getState().project?.rundown.find((entry) => entry.id === item?.id);
   const current = (): boolean => currentItem()?.referenceAudio === audio;
   const commit = (next: NonNullable<RundownItem['referenceAudio']>, label: string): void => {
@@ -56,7 +59,7 @@ export function useAudioEditor(item: RundownItem | null, projectPath: string | n
   });
   const remove = (track: AudioTrack, id: string | null): Promise<void> => run(async () => { await changeTrack(track.id, track.segments.filter(segment => segment.id !== id), '删除音频片段'); setSelectedId(null); });
   return {
-    audio, title: activeTrack?.title ?? '歌曲音频', tracks, activeTrackId: activeTrack?.id, segments, selected, selectedId, setSelectedId, level, setLevel, points,
+    audio, title: activeTrack?.title ?? '歌曲音频', tracks, activeTrackId: activeTrack?.id, segments, selected, selectedId, setSelectedId, level, setLevel, points, snapPoints,
     /** The song has beats saved. */
     hasBeats: beats?.state === 'ready', simpleBeats: beats?.state === 'ready' && beats.method === 'ibt', beatsStale: beats?.state === 'stale' ? beats.reason : null, busy, disabled: disabled || busy,
     trackEditor: (track: AudioTrack) => ({ audio: track.source, title: track.title, segments: track.segments, selectedId: activeTrack?.id === track.id ? selectedId : null, busy, disabled: disabled || busy, points: track.id === tracks[0]?.id ? points : [], select: (id: string | null) => selectTrack(track.id, id), update: (id: string, patch: Partial<Pick<AudioSegment, 'startMs' | 'durationMs' | 'sourceOffsetMs'>>) => update(track, id, patch), remove: () => remove(track, selectedId), split: (timeMs:number) => run(async()=>{ const next=splitAudioSegments(track.segments,[timeMs]);if(next.length===track.segments.length)throw new Error('播放头需要位于音频片段内部');await changeTrack(track.id,next,'分割音频片段'); }) }),

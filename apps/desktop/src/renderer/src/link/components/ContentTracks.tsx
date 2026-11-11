@@ -69,8 +69,8 @@ export type ContentTracksProps = {
   pending: ReadonlySet<string>;
   selectedClipId: string | null;
   selectedCueId: string | null;
-  /** Points the song audio adds to snapping (its cut points). */
-  audioSnapPoints: readonly number[];
+  /** The song's beat points snapping adds (`songBeatSnapPoints`, from `songBeats`); none for a song without beats. */
+  beatSnapPoints: readonly number[];
   rules: ContentEditRules;
   viewport: Pick<TimelineViewport, 'viewportRef' | 'pixelsPerSecond' | 'scroll' | 'view' | 'timeAtClientX'>;
   /** Where the first track starts, where the lighting row sits between tracks, and how much of the top the ruler covers. */
@@ -107,7 +107,7 @@ function partAt(event: { target: EventTarget | null; currentTarget: Element }): 
 export function ContentTracks(props: ContentTracksProps): JSX.Element {
   const { viewport, snap } = props;
   const select = (ref: ContentRef): void => { if (ref.kind === 'clip') props.onSelectClip(ref.id); else props.onSelectCue(ref.id); };
-  const snapPoints = (target?: ContentRef): number[] => timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playhead.read(), target);
+  const snapPoints = (target?: ContentRef): number[] => [...timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playhead.read(), target), ...props.beatSnapPoints];
   const dropNote = useRef<HTMLElement>(null);
   /** The viewport as it is on screen at a press: one read of the DOM for the whole drag. */
   const measure = (): DragViewport => {
@@ -122,7 +122,7 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
     layers: props.layers,
     snapshot: (press): ItemDragSnapshot => { const viewport = measure(), own = ownPoints(press.ref); return {
       viewport, layout: trackLayout(props.layers, props.tracks), frameRate: props.frameRate, durationMs: props.durationMs,
-      snap: { enabled: snap.enabled, thresholdMs: snap.thresholdMs, before: [0, props.durationMs, ...own.before], after: own.after, audio: [...props.audioSnapPoints] },
+      snap: { enabled: snap.enabled, thresholdMs: snap.thresholdMs, before: [0, props.durationMs, ...own.before], after: own.after, beats: props.beatSnapPoints },
       placeTaken: props.rules.placeTaken, ref: press.ref, originMs: press.originMs, itemDurationMs: timelineItemDuration(props, press.ref),
       grabOffsetMs: snapshotTimeAt(viewport, press.clientX) - press.originMs, startClientX: press.clientX, startClientY: press.clientY, originLayerId: press.originLayerId, layerMovable: press.layerMovable
     }; },
@@ -133,8 +133,8 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
     onSelectClip: props.onSelectClip, onSelectCue: props.onSelectCue, onMoveClip: props.onMoveClip, onMoveCue: props.onMoveCue
   });
   const trim = useContentTrim({
-    // A trimmed edge snaps to every other part's edges and the playhead, as it did before the trim left React.
-    snapshot: (ref) => ({ viewport: measure(), frameRate: props.frameRate, snap: { enabled: snap.enabled, thresholdMs: snap.thresholdMs, ...ownPoints(ref) } }),
+    // A trimmed edge snaps to every other part's edges, the playhead and the song's beats, fixed at the press.
+    snapshot: (ref) => ({ viewport: measure(), frameRate: props.frameRate, snap: { enabled: snap.enabled, thresholdMs: snap.thresholdMs, ...ownPoints(ref), beats: props.beatSnapPoints } }),
     playhead: () => props.playhead.read(),
     focusTimeline: props.focusTimeline, bounds: props.rules.trimBounds, onSelect: select, onTrim: props.onTrim,
     label: (ref, startMs, durationMs) => partLabel(ref, startMs, durationMs, props)

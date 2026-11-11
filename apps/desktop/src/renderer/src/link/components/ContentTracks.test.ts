@@ -33,7 +33,7 @@ function drawn(project: LinkProject, onAirtime: Airtime | null, pending: Readonl
   const props: ContentTracksProps = {
     layers: item.visualLayers, clips: item.referenceMediaClips, cues: item.cues, assets: new Map(), frameRate: project.timebase.frameRate, durationMs: 20_000,
     playhead: new EditorPlayhead(9_000), timelineState: new TimelineStateIndex(project, item).at(9_000), airtime: new SceneOutputTimeline(project, 'song').airtime(), onAirtime, pending,
-    selectedClipId: null, selectedCueId: null, audioSnapPoints: [], rules: contentEditRules(project, 'song'),
+    selectedClipId: null, selectedCueId: null, beatSnapPoints: [], rules: contentEditRules(project, 'song'),
     viewport: { viewportRef: { current: null }, pixelsPerSecond: 50, scroll: new TimelineScroll(), view: { left: 0, width: 2_000, top: 0, height: 600 }, timeAtClientX: () => 0 },
     tracks: { start: 0, lightingIndex: item.visualLayers.length, lightingHeight: 0, coveredTop: 0 }, snap: { enabled: false, thresholdMs: 0 }, lanePointer: {},
     focusTimeline: vi.fn(), onOpenMenu: vi.fn(), onSelectClip: vi.fn(), onSelectCue: vi.fn(), onMoveClip: vi.fn(), onMoveCue: vi.fn(), onTrim: vi.fn(),

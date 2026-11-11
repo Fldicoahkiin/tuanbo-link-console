@@ -60,11 +60,12 @@ export function trackAtY(snapshot: { viewport: DragViewport; layout: TrackLayout
 }
 
 /**
- * The points a part snaps to, as the drag asked for them before: the timeline's own (its start, its end, every
- * clip's and camera's edges, instant cues; `before` and `after` the playhead) and the song audio's cut points. The
- * playhead is read in the frame, so a drag while the song plays snaps to where it is now, as it did.
+ * The points a part snaps to, fixed at the press: the timeline's own (its start, its end, every clip's and camera's
+ * edges, instant cues; `before` and `after` the playhead) and the song's `beats` (`songBeatSnapPoints`, from
+ * `songBeats`, 0.5.9 E12; empty for a song without beats). The playhead is read in the frame, so a drag while the song
+ * plays snaps to where it is now; nothing else is worked out again while the part is held.
  */
-export type DragSnap = { enabled: boolean; thresholdMs: number; before: readonly number[]; after: readonly number[]; audio: readonly number[] };
+export type DragSnap = { enabled: boolean; thresholdMs: number; before: readonly number[]; after: readonly number[]; beats: readonly number[] };
 
 /** A clip or camera being moved, and everything about it fixed at the press. */
 export type ItemDragSnapshot = {
@@ -117,7 +118,7 @@ export function dragTarget(snapshot: ItemDragSnapshot, pointer: DragPointer): It
   const timeline = [...snap.before, pointer.playheadMs, ...snap.after];
   const wantedMs = snapshotTimeAt(snapshot.viewport, pointer.clientX) - snapshot.grabOffsetMs;
   const startMs = timelineInteractionTime(wantedMs, Math.max(snapshot.durationMs, wantedMs), snapshot.frameRate, snap.enabled,
-    snap.enabled ? timelineMoveSnapPoints([...timeline, ...snap.audio], snapshot.itemDurationMs) : [], snap.thresholdMs);
+    snap.enabled ? timelineMoveSnapPoints([...timeline, ...snap.beats], snapshot.itemDurationMs) : [], snap.thresholdMs);
   const hit = snapshot.layerMovable ? trackAtY(snapshot, pointer.clientY, pointer.clientX) : null;
   const layerId = !snapshot.layerMovable || hit === null ? snapshot.originLayerId : hit.kind === 'new' ? null : hit.layerId;
   const band = typeof layerId === 'string' ? snapshot.layout.bands.find(entry => entry.layerId === layerId) : undefined;
@@ -138,7 +139,7 @@ export type TrimBounds = { minStartMs: number; maxEndMs: number };
 export type TrimSnapshot = {
   viewport: DragViewport;
   frameRate: MtcFrameRate;
-  snap: Omit<DragSnap, 'audio'>;
+  snap: DragSnap;
   edge: 'start' | 'end';
   startClientX: number;
   originPointerMs: number;
@@ -166,7 +167,7 @@ export function trimTarget(snapshot: TrimSnapshot, clientX: number, playheadMs: 
   if (Math.abs(clientX - snapshot.startClientX) < 3) return previous;
   const originEdgeMs = snapshot.edge === 'start' ? snapshot.originStartMs : snapshot.originStartMs + snapshot.originDurationMs;
   const edgeMs = timelineInteractionTime(originEdgeMs + snapshotTimeAt(snapshot.viewport, clientX) - snapshot.originPointerMs, TRIM_LIMIT_MS,
-    snapshot.frameRate, snapshot.snap.enabled, [...snapshot.snap.before, playheadMs, ...snapshot.snap.after], snapshot.snap.thresholdMs);
+    snapshot.frameRate, snapshot.snap.enabled, [...snapshot.snap.before, playheadMs, ...snapshot.snap.after, ...snapshot.snap.beats], snapshot.snap.thresholdMs);
   return trimPreview(snapshot, edgeMs, 1_000 / playbackFramesPerSecond(snapshot.frameRate));
 }
 

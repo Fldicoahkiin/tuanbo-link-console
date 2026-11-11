@@ -24,7 +24,7 @@ function song(): LinkProject {
 }
 
 const DURATION_MS = 20_000;
-const SNAP = { enabled: true, thresholdMs: 280 };
+const SNAP = { enabled: true, thresholdMs: 280, beats: [] as readonly number[] };
 const VIEWPORT: DragViewport = { left: 200, top: 300, width: 1_000, height: 260, scrollLeft: 150, scrollTop: 40, pixelsPerSecond: 50 };
 const LIGHTING_INDEX = 1;
 
@@ -76,7 +76,7 @@ function snapshotFor(project: LinkProject, ref: ContentRef, originMs: number, gr
   const cue = item.cues.find(entry => entry.id === ref.id)!;
   return {
     viewport: VIEWPORT, layout: trackLayout(item.visualLayers, layout.visualTracks), frameRate: project.timebase.frameRate, durationMs: DURATION_MS,
-    snap: { ...SNAP, before: [0, DURATION_MS, 0], after: timelineSnapPoints(state, item.cues, project.timebase.frameRate, undefined, ref).slice(1), audio: [] },
+    snap: { ...SNAP, before: [0, DURATION_MS, 0], after: timelineSnapPoints(state, item.cues, project.timebase.frameRate, undefined, ref).slice(1) },
     placeTaken: (part, startMs, layerId) => contentPlaceTaken(project, 'song', part, startMs, layerId), ref, originMs, itemDurationMs: cue.durationMs ?? 0,
     grabOffsetMs: (grab.x - VIEWPORT.left + VIEWPORT.scrollLeft) / VIEWPORT.pixelsPerSecond * 1000 - originMs,
     startClientX: grab.x, startClientY: grab.y, originLayerId: cue.layerId, layerMovable: true
@@ -162,6 +162,31 @@ describe('拖动的落点：按帧算的和以前每次移动都算的一样', (
     expect(trimTarget(trim, 200 + 7.9 * 50 - 150, 0, span)).toEqual({ startMs: 2_000, durationMs: 6_000 });
     // 6.05 s with the playhead at 6.12 s: the edge lands on the playhead.
     expect(trimTarget(trim, 200 + 6.05 * 50 - 150, 6_120, span)).toEqual({ startMs: 2_000, durationMs: 4_120 });
+  });
+
+  it('吸附到歌的节拍（E12）：拖动和修剪都吸快照里的节拍；关掉吸附或这首歌没有节拍就不吸', () => {
+    // b dragged so it starts at 13.45 s, near nothing of the timeline's own; a beat at 13.5 s.
+    const x = 200 + (13.45 + 0.2) * 50 - 150; // the grab is 0.2 s into b
+    const plain = snapshotFor(project, ref, originMs, grab);
+    const withBeats: ItemDragSnapshot = { ...plain, snap: { ...plain.snap, beats: [13_500] } };
+    const pointer = { clientX: x, clientY: grab.y, moved: true, playheadMs: 0 };
+    expect(dragTarget(withBeats, pointer).startMs).toBe(13_500);
+    expect(dragTarget(plain, pointer).startMs).not.toBe(13_500);
+    expect(dragTarget({ ...withBeats, snap: { ...withBeats.snap, enabled: false } }, pointer).startMs).not.toBe(13_500);
+    // b's end meeting a beat at 17 s snaps too: b starts at 15 s.
+    expect(dragTarget({ ...plain, snap: { ...plain.snap, beats: [17_000] } }, { ...pointer, clientX: 200 + (14.95 + 0.2) * 50 - 150 }).startMs).toBe(15_000);
+
+    // Camera a (2 s to 4 s) trimmed at its end to 6.45 s; a beat at 6.5 s.
+    const item = project.rundown[0]!, frameRate = project.timebase.frameRate, held = { kind: 'cue', id: 'a' } as const;
+    const state = resolveTimelineState(project, item, 0);
+    const startClientX = 250, timeAt = (clientX: number): number => (clientX - VIEWPORT.left + VIEWPORT.scrollLeft) / VIEWPORT.pixelsPerSecond * 1000;
+    const trim = { viewport: VIEWPORT, frameRate, snap: { ...SNAP, ...heldSnapPoints(state, item.cues, frameRate, held), beats: [6_500] }, edge: 'end' as const, startClientX,
+      originPointerMs: timeAt(startClientX), originStartMs: 2_000, originDurationMs: 2_000, bounds: contentTrimBounds(project, 'song', held) };
+    const span = { startMs: 2_000, durationMs: 2_000 }, edgeX = 200 + 6.45 * 50 - 150;
+    expect(trimTarget(trim, edgeX, 0, span)).toEqual({ startMs: 2_000, durationMs: 4_500 });
+    expect(trimTarget({ ...trim, snap: { ...trim.snap, beats: [] } }, edgeX, 0, span).durationMs).not.toBe(4_500);
+    // The timeline's own points still win a tie with a beat: camera b's start at 8 s.
+    expect(trimTarget({ ...trim, snap: { ...trim.snap, beats: [7_840] } }, 200 + 7.92 * 50 - 150, 0, span)).toEqual({ startMs: 2_000, durationMs: 6_000 });
   });
 });
 
