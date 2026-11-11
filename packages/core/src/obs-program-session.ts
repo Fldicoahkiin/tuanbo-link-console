@@ -2,7 +2,7 @@ import type { LinkCue, LinkProject } from '@tb/schema';
 import { actionResultLog, CueActionRunner, type CueExecutionReport, type LinkActionExecutor } from './cue-action-runner';
 import { CueRuntime, type DueCue, type RuntimeUpdate } from './cue-runtime';
 import { frameNumberToTimecode, millisecondsToFrameNumber, playbackFramesPerSecond, type MtcSample } from './mtc-timecode';
-import { ManagedOutputRuntime, type ManagedMediaExecutionReport, type ManagedOutputRuntimeDependencies } from './managed-output-runtime';
+import { ManagedOutputRuntime, type ManagedMediaExecutionReport, type ManagedMediaOutcome, type ManagedOutputRuntimeDependencies } from './managed-output-runtime';
 import { compileManagedMediaTimeline, MANAGED_OBS_SCENE_NAME, type ManagedMediaEvent } from './managed-media-timeline';
 import { ObsPictureLedger, showKey, showMayBeOn, type LedgerWrite } from './obs-picture-ledger';
 import type { OnAirPicture } from './on-air-picture';
@@ -54,7 +54,9 @@ type Entry = { frame: number; priority: number; slot: Slot; label: string; write
   | { kind: 'cue'; cue: LinkCue; point: string | null; layers: readonly string[] | null }
   | { kind: 'media'; event: ManagedMediaEvent; lateMs: number | null });
 type MediaEntry = Extract<Entry, { kind: 'media' }>;
-type Outcome = 'ok' | 'withdrawn' | { failed: string };
+/** `step`: what a clip event came to, as the output told it (R3b). Every failed kind is still
+ * written into the ledger as a failure; R5 decides by the kind whether to repair. */
+type Outcome = 'ok' | 'withdrawn' | { failed: string; step?: ManagedMediaOutcome };
 type DecoderOp = Extract<PictureOp, { kind: 'decoder.pause' | 'decoder.resume' }>;
 /** `lateMs`: the most any step went out after it was due, or null if nothing went out. */
 type SendResult = { complete: boolean; lateMs: number | null };
@@ -688,7 +690,8 @@ export class ObsProgramSession {
       // A clip this run never started has nothing to stop.
       if (absent && report.status === 'skipped') for (const write of entry.writes) {
         if (write.element === 'decoder') this.ledger.observe({ element: 'decoder', key: write.key, value: write.value }, this.dependencies.now());
-      } else this.settle(entry.writes, report.status === 'succeeded' ? 'ok' : report.status === 'failed' ? { failed: report.error ?? '素材动作没有完成' } : 'withdrawn');
+      } else this.settle(entry.writes, report.status === 'succeeded' ? 'ok' : report.status === 'failed'
+        ? { failed: report.error ?? '素材动作没有完成', ...(report.outcome ? { step: report.outcome } : {}) } : 'withdrawn');
       this.dependencies.mediaReport(report);
       if (event.phase === 'start' && report.status === 'failed') this.refusedStarts.add(event.clipId);
       if (entry.lateMs !== null && report.status !== 'skipped') this.lateReady.delete(event.clipId);

@@ -1,9 +1,10 @@
 import { dirname } from 'node:path';
 import { stat, statfs } from 'node:fs/promises';
-import { firstTimeWarning, millisecondsToFrameNumber, preciseSeekAssetIds, preflightLogEntries, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type LinkActionExecutor, type ManagedMediaEvent, type ObsProgramSessionDependencies } from '@tb/core/link';
+import { firstTimeWarning, millisecondsToFrameNumber, preciseSeekAssetIds, preflightLogEntries, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type LinkActionExecutor, type ManagedMediaEvent, type ManagedMediaOutcome, type ObsProgramSessionDependencies } from '@tb/core/link';
 import type { NativeObsPrepare } from '@tb/schema';
 import type { ObsWebSocketAdapter } from './obs-websocket-adapter';
-import type { ObsMediaScenes } from './obs-media-scenes';
+import { MediaOnAirError, MediaOutOfStepError, type ObsMediaScenes } from './obs-media-scenes';
+import { ObsRequestNotSent, ObsRequestUnanswered } from './obs-request-scheduler';
 import type { LinkProjectService } from './link-project-service';
 import type { MediaPreviewService } from './media-preview-service';
 import type { SecureProfileStore } from './secure-profile-store';
@@ -90,6 +91,45 @@ export function pictureUpcoming(decoders: Pick<ObsMediaPreload, 'upcoming'>, log
         details: { clipId: error.event.clipId, inputName: error.decoder, error: error.reason } })
         .catch((failure: unknown) => console.error('没用上的素材准备失败未能记入日志', failure));
       return null;
+    }
+  };
+}
+
+/** The error and the errors it was raised from (`cause`), outermost first. */
+function errorChain(error: unknown): Error[] {
+  const chain: Error[] = [];
+  for (let current = error; current instanceof Error && chain.length < 8 && !chain.includes(current); current = current.cause) chain.push(current);
+  return chain;
+}
+
+/** What a media step that threw came to, by the error's type and the types it was raised
+ * from, never by its wording. `sent`: one of the step's requests went out to OBS. */
+export function mediaStepOutcome(error: unknown, sent: boolean): Exclude<ManagedMediaOutcome, { kind: 'done' }> {
+  const reason = error instanceof Error ? error.message : String(error), chain = errorChain(error);
+  const unanswered = chain.some(item => item instanceof ObsRequestUnanswered);
+  if (!sent && (unanswered || chain.some(item => item instanceof ObsRequestNotSent))) return { kind: 'withdrawn', reason };
+  if (unanswered) return { kind: 'unanswered', reason };
+  const onAir = chain.find(item => item instanceof MediaOnAirError);
+  return { kind: 'failed', reason, onAir: onAir !== undefined, outOfStep: onAir instanceof MediaOutOfStepError };
+}
+
+/** The clip events of a song's picture, on the decoders its materials take turns on. Resolves with
+ * what the step came to, for the picture session's ledger; the report and the run log read as they
+ * did when this threw. Watching the step's requests go out sends nothing and changes no guard. */
+export function pictureMediaStep(obs: Pick<ObsWebSocketAdapter, 'guardPlaybackOperation' | 'getRequestDiagnostics'>, decoders: Pick<ObsMediaPreload, 'execute'>,
+  projectPath: string, resolve: (relativePath: string) => string, log: { record: LinkRunLogger['record']; projectId: string; itemId: string }): NativeObsOutputs['executeManagedMediaEvent'] {
+  return async (payload): Promise<ManagedMediaOutcome> => {
+    if (payload.projectPath !== projectPath) return { kind: 'failed', reason: '画面素材和当前工程对不上', onAir: false, outOfStep: false };
+    let sent = false;
+    try {
+      await obs.guardPlaybackOperation(() => true, () => decoders.execute(payload.event, resolve(payload.event.relativePath)), () => { sent = true; });
+      return { kind: 'done' };
+    } catch (error) {
+      await log.record({ level: 'error', category: 'device', device: '后台画面', projectId: log.projectId,
+        itemId: log.itemId, message: '素材动作失败的请求耗时', result: 'failed',
+        details: { clipId: payload.event.clipId, error: error instanceof Error ? error.message : String(error),
+          ...obs.getRequestDiagnostics() } });
+      return mediaStepOutcome(error, sent);
     }
   };
 }
@@ -302,17 +342,8 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       }
       if (errors.length) throw new Error(`画面没有清理干净：${errors.join('；')}`);
     },
-    executeManagedMediaEvent: async payload => {
-      if (payload.projectPath !== path) throw new Error('画面素材和当前工程对不上');
-      try { await preload.execute(payload.event, projects.resolveMediaAsset(path, payload.event.relativePath)); }
-      catch (error) {
-        await logger.record({ level: 'error', category: 'device', device: '后台画面', projectId: project.projectId,
-          itemId: request.snapshot.item.id, message: '素材动作失败的请求耗时', result: 'failed',
-          details: { clipId: payload.event.clipId, error: error instanceof Error ? error.message : String(error),
-            ...obs.getRequestDiagnostics() } });
-        throw error;
-      }
-    },
+    executeManagedMediaEvent: pictureMediaStep(obs, preload, path, relativePath => projects.resolveMediaAsset(path, relativePath),
+      { record: entry => logger.record(entry), projectId: project.projectId, itemId: request.snapshot.item.id }),
     // The drift check runs inside the picture session's own queue, where the next cut waits for it: it stays at the
     // `program` tier of the material scenes, so a cut never ends up waiting behind a screenshot through it.
     correctMediaDrift: pictureDriftCheck(obs.mediaScenes, preload),

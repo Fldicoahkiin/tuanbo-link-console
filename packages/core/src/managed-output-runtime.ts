@@ -6,12 +6,28 @@ import type { LinkRunMode } from './cue-runtime';
 import type { LinkAction, LinkCue, LinkProject, RundownItem } from '@tb/schema';
 import { SceneOutputTimeline } from './scene-output-timeline';
 
+/** What a media step came to, as the main process's OBS output tells it. `withdrawn`: none of
+ * its requests went out; `unanswered`: one went out and OBS never answered, so it may or may
+ * not have been carried out; `failed`: OBS refused or the step stopped part way, `onAir` when
+ * the clip is on the picture all the same, `outOfStep` when that clip is not in step with the
+ * music. The report and its log keep the wording the step's error had; only the picture
+ * session reads the kind. */
+export type ManagedMediaOutcome =
+  | { kind: 'done' }
+  | { kind: 'withdrawn'; reason: string }
+  | { kind: 'unanswered'; reason: string }
+  | { kind: 'failed'; reason: string; onAir: boolean; outOfStep: boolean };
+
+/** `outcome`: the step's kind, when the output told it (the renderer's P1 following does not). */
 export type ManagedMediaExecutionReport = {
   executionId: string; event: ManagedMediaEvent; status: 'succeeded' | 'failed' | 'skipped';
-  startedAt: number; finishedAt: number; durationMs: number; error?: string;
+  startedAt: number; finishedAt: number; durationMs: number; error?: string; outcome?: ManagedMediaOutcome;
 };
 
-export type ManagedOutputRuntimeDependencies = Pick<LinkDesktopApi, 'executeManagedMediaEvent' | 'recordLog'>;
+/** `executeManagedMediaEvent` either throws, as over IPC, or resolves with the step's outcome. */
+export type ManagedOutputRuntimeDependencies = Pick<LinkDesktopApi, 'recordLog'> & {
+  executeManagedMediaEvent: (payload: Parameters<LinkDesktopApi['executeManagedMediaEvent']>[0]) => Promise<ManagedMediaOutcome | void>;
+};
 
 export type ManagedOutputCleanup = { cameraCues: LinkCue[]; mediaEvents: ManagedMediaEvent[] };
 
@@ -213,17 +229,27 @@ export class ManagedOutputRuntime {
       await this.recordMediaEvent(event, executionId, 'skipped', performance.now() - startedAt, reason);
       return mediaReport(executionId, event, 'skipped', startedAt, performance.now(), reason);
     }
+    let outcome: ManagedMediaOutcome | void;
     try {
-      await this.dependencies.executeManagedMediaEvent({ projectPath: this.projectPath, event });
-      if (event.phase === 'start') this.addActiveMedia(event);
-      else this.removeActiveMedia(event);
-      await this.recordMediaEvent(event, executionId, 'succeeded', performance.now() - startedAt);
-      return mediaReport(executionId, event, 'succeeded', startedAt, performance.now());
+      outcome = await this.dependencies.executeManagedMediaEvent({ projectPath: this.projectPath, event });
+      if (!outcome || outcome.kind === 'done') {
+        if (event.phase === 'start') this.addActiveMedia(event);
+        else this.removeActiveMedia(event);
+        await this.recordMediaEvent(event, executionId, 'succeeded', performance.now() - startedAt);
+        return { ...mediaReport(executionId, event, 'succeeded', startedAt, performance.now()), ...(outcome ? { outcome } : {}) };
+      }
     } catch (error) {
-      if (event.phase === 'start') this.addActiveMedia(event);
-      else this.stopAttempted.add(event.clipId);
-      return this.finishFailedMedia(event, executionId, startedAt, error instanceof Error ? error.message : String(error), mode);
+      return this.failedMedia(event, executionId, startedAt, error instanceof Error ? error.message : String(error), mode);
     }
+    // An outcome other than done is reported exactly as the error it stands for would be.
+    return this.failedMedia(event, executionId, startedAt, outcome.reason, mode, outcome);
+  }
+
+  private failedMedia(event: ManagedMediaEvent, executionId: string, startedAt: number, error: string, mode: LinkRunMode,
+    outcome?: ManagedMediaOutcome): Promise<ManagedMediaExecutionReport> {
+    if (event.phase === 'start') this.addActiveMedia(event);
+    else this.stopAttempted.add(event.clipId);
+    return this.finishFailedMedia(event, executionId, startedAt, error, mode, outcome);
   }
 
   private async finishFailedMedia(
@@ -231,10 +257,11 @@ export class ManagedOutputRuntime {
     executionId: string,
     startedAt: number,
     error: string,
-    mode: LinkRunMode
+    mode: LinkRunMode,
+    outcome?: ManagedMediaOutcome
   ): Promise<ManagedMediaExecutionReport> {
     await this.recordMediaEvent(event, executionId, 'failed', performance.now() - startedAt, error);
-    const report = mediaReport(executionId, event, 'failed', startedAt, performance.now(), error);
+    const report = { ...mediaReport(executionId, event, 'failed', startedAt, performance.now(), error), ...(outcome ? { outcome } : {}) };
     if (mode === 'rehearsal') throw new ManagedMediaExecutionError(report);
     return report;
   }
