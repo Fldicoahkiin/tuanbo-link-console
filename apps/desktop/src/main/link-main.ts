@@ -1094,6 +1094,8 @@ function registerIpc(
     return attachment;
   }, 'listener');
   handle('link:native-program-control', (_event, value: unknown) => nativeProgram!.control(value), 'listener');
+  // A newer version of the page's project (0.5.9 S7): kept in memory, no output starts from it, so no license is asked.
+  handle('link:native-program-document', (_event, value: unknown) => nativeProgram!.document(value), 'listener');
   handle('link:ma2-export-plugin', async () => {
     const selected = await dialog.showOpenDialog({ title: '选择 MA2 插件导出位置', properties: ['openDirectory', 'createDirectory'] });
     if (selected.canceled || !selected.filePaths[0]) return null;

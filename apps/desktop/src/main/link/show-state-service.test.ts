@@ -7,7 +7,7 @@ import { closedProgramFaultReporter } from './main-process-errors';
 import { ShowStateService } from './show-state-service';
 
 function request(): NativeProgramOpen {
-  return { version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1,
+  return { version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1, sessionId: randomUUID(),
     document: JSON.stringify({ ...createEmptyLinkProject('演出状态测试'), playbackSource: 'internal' }),
     configuration: { outputDeviceId: 'default', mtcPortName: null, preciseSeeking: false } };
 }
@@ -20,7 +20,7 @@ function host() {
     seek: vi.fn(() => Promise.resolve()), scrub: vi.fn(() => Promise.resolve()), skip: vi.fn(() => Promise.resolve()),
     setSongVolume: vi.fn(), previewVolume: vi.fn(), overrideVolume: vi.fn(), setEndAction: vi.fn(), setPlaylist: vi.fn(), toggleMtc: vi.fn(), receiveMidi: vi.fn(), fade: vi.fn(),
     preloadSelected: vi.fn(), freeze: vi.fn(), reportUnavailable: vi.fn(), runtimeUnavailable: vi.fn(), reportFault: vi.fn(), clearFault: vi.fn(), externalStop: vi.fn(),
-    setWatched: vi.fn(), getAudioAnalysis: () => null, dispose: vi.fn(() => Promise.resolve()) } };
+    setWatched: vi.fn(), updateProject: vi.fn(), currentProject: vi.fn(), getAudioAnalysis: () => null, dispose: vi.fn(() => Promise.resolve()) } };
 }
 /** The real program service, with its player state in the test's hands, and the show state built on it as link-main does. */
 async function opened() {

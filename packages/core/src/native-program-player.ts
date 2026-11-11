@@ -96,7 +96,13 @@ export class NativeProgramPlayer {
   private readonly songVolumes = new Map<string, number>();
   private sendingVolume = false;
   private preloadGeneration = 0;
-  private selectedPreload: { request: NativeObsStop; itemId: string } | null = null;
+  /** The selected song's preparation: its picture as this program's project had it at `revision`, in `projectPath`. */
+  private selectedPreload: { request: NativeObsStop; itemId: string; revision: number; projectPath: string } | null = null;
+  /** The selected song's preparation is made again once the edits pause (0.5.9 S7): a drag sends many versions. */
+  private preloadRefresh: ReturnType<typeof setTimeout> | null = null;
+  /** The sound card a run plays on (0.5.9 S7): read from the settings as a song starts from stopped, kept until the
+   * player stops, so a seek or the next song of the same run never moves the music to another card mid-show. */
+  private runOutput: { outputDeviceId: string; audioSampleRate: 44100 | 48000 } | null = null;
   /** The song whose executors the console runs from this program's timecode: set as a song starts, let go by its stop
    * (or by the next song, 第 4 题). The lights-off ledger of the main process decides what to switch off (R13). */
   private lit: LitSong | null = null;
@@ -133,7 +139,7 @@ export class NativeProgramPlayer {
       playing: this.native?.status === 'playing', seeking: this.state.status === 'preparing' }),
     subscribeBoundary: listener => { this.boundaries.add(listener); return () => { this.boundaries.delete(listener); }; }
   };
-  constructor(private readonly project: LinkProject, private readonly projectPath: string, private readonly revision: number,
+  constructor(private project: LinkProject, private projectPath: string, private revision: number,
     private readonly dependencies: InternalPlayerDependencies, private readonly api: NativeApi,
     private readonly lighting: ProgramLightingOutput) {
     const audio = api.onNativePlaybackStatus(status => this.receive(status));
@@ -141,13 +147,48 @@ export class NativeProgramPlayer {
     this.unsubscribe = () => { audio(); obs(); };
   }
 
+  /** The project this player plays now: while a song is held, the version it started with. */
+  currentProject(): LinkProject { return this.project; }
+  /** The window's project changed while no song is held (0.5.9 S7, design 02 §3.4): the next song plays this version.
+   * Nothing closes or opens again, and the player's own settings (播完后, the playlist, timecode on or off) stay as they
+   * are. A held song (preparing, playing, paused) keeps the version it started with: NativeProgramService keeps the
+   * newer one until the song stops. The selected song's preparation follows when the window asks again
+   * (preloadSelected). */
+  updateProject(project: LinkProject, revision: number, projectPath: string): void {
+    if (this.holding()) throw new Error('节目还拿着一首歌，这一版等停止以后才用');
+    this.project = project; this.revision = revision; this.projectPath = projectPath;
+    // The saved song volumes heard while a song was held (setSongVolume) are in this version.
+    this.songVolumes.clear();
+  }
+  /** The window selected a song, or the project changed: its picture is prepared. Asked again for the same song after
+   * the project changed, it is prepared again with this version once the edits pause (0.5.9 S7): a song started then
+   * takes over a preparation only of the very version it plays. */
   preloadSelected(itemId: string): void {
-    if (this.disposed || !this.projectPath || ['preparing', 'playing', 'paused'].includes(this.state.status)
-      || this.dependencies.configuration().preload === false || this.selectedPreload?.itemId === itemId) return;
+    if (this.disposed || !this.projectPath || this.holding() || this.dependencies.configuration().preload === false) return;
+    const selected = this.selectedPreload;
+    if (selected?.itemId === itemId) {
+      if (selected.revision !== this.revision || selected.projectPath !== this.projectPath) this.refreshPreload(itemId);
+      return;
+    }
+    this.cancelPreloadRefresh(); this.preloadNow(itemId);
+  }
+  private refreshPreload(itemId: string): void {
+    this.cancelPreloadRefresh();
+    this.preloadRefresh = setTimeout(() => {
+      this.preloadRefresh = null;
+      if (this.disposed || this.holding() || this.selectedPreload?.itemId !== itemId) return;
+      // A song no longer in the project is not prepared; the window selects another one.
+      if (!this.project.rundown.some(item => item.id === itemId)) { this.selectedPreload = null; return; }
+      this.preloadNow(itemId);
+    }, PRELOAD_REFRESH_MS);
+  }
+  private cancelPreloadRefresh(): void { if (this.preloadRefresh !== null) { clearTimeout(this.preloadRefresh); this.preloadRefresh = null; } }
+  private holding(): boolean { return ['preparing', 'playing', 'paused'].includes(this.state.status); }
+  private preloadNow(itemId: string): void {
     try {
       const prepared = nativeProgramSnapshot(this.project, itemId, this.revision, undefined, this.dependencies.configuration().audioSampleRate ?? 48000);
       const request: NativeObsStop = { version: 1, sessionId: this.sessionId, generation: ++this.preloadGeneration };
-      const selection = { request, itemId }; this.selectedPreload = selection;
+      const selection = { request, itemId, revision: this.revision, projectPath: this.projectPath }; this.selectedPreload = selection;
       void this.api.preloadNativeObs({ ...request, projectPath: this.projectPath, positionMs: prepared.snapshot.positionMs,
         preciseSeeking: this.dependencies.preciseSeeking?.() ?? false, snapshot: createObsProgramSnapshot(this.project, itemId, this.revision) })
         // Once the song is being played it prepares its own picture; a preselection refused meanwhile is not a failure.
@@ -161,7 +202,11 @@ export class NativeProgramPlayer {
 
   /** Every song starts with its timecode (2026-10-26); `programStart` decides what joins it. */
   play(itemId: string, positionMs?: number, paused = false): Promise<void> {
-    const config = this.dependencies.configuration(), token = ++this.epoch;
+    const settings = this.dependencies.configuration(), token = ++this.epoch;
+    this.cancelPreloadRefresh();
+    // A run starts from stopped on the sound card set now; the songs and seeks of the same run stay on it.
+    if (!this.holding() || !this.runOutput) this.runOutput = { outputDeviceId: settings.outputDeviceId, audioSampleRate: settings.audioSampleRate ?? 48000 };
+    const config = { ...settings, ...this.runOutput };
     this.transportIntent = paused ? 'paused' : 'playing';
     // The service discards another song's preselected picture for this play; that is not a failure.
     if (this.selectedPreload?.itemId !== itemId) this.selectedPreload = null;
@@ -180,7 +225,7 @@ export class NativeProgramPlayer {
       await this.stopObs().catch((error: unknown) => this.pictureNotStopped(error, '上一次的画面没清理干净'));
       await this.optionalRuntime(() => this.dependencies.stop(), '上一次的联动没清理干净');
       if (!this.current(token)) return;
-      const prepared = programStart(this.project, itemId, { revision: this.revision, positionMs, sampleRate: config.audioSampleRate ?? 48000,
+      const prepared = programStart(this.project, itemId, { revision: this.revision, positionMs, sampleRate: config.audioSampleRate,
         mtcPortName: config.mtcPortName, check: !reuseSession });
       const item = this.project.rundown.find(entry => entry.id === itemId)!;
       for (const warning of prepared.warnings) this.reportUnavailable(warning);
@@ -205,7 +250,7 @@ export class NativeProgramPlayer {
           : this.state.endAction === 'next' ? items[items.findIndex(entry => entry.id === itemId) + 1] : undefined;
         if (next) try {
           nextSnapshot = nativeProgramSnapshot(this.project, next.id, this.revision,
-            this.loopStart ?? undefined, config.audioSampleRate ?? 48000).snapshot;
+            this.loopStart ?? undefined, config.audioSampleRate).snapshot;
         } catch (error) { this.reportUnavailable(`下一个节目无法提前准备：${toUserErrorMessage(error)}`); }
       }
       this.requestedPreparation = true;
@@ -498,7 +543,7 @@ export class NativeProgramPlayer {
   }
   dispose(): Promise<void> {
     if (this.closing) return this.closing;
-    ++this.epoch; this.disposed = true; this.unsubscribe(); this.boundaries.clear();
+    ++this.epoch; this.disposed = true; this.unsubscribe(); this.boundaries.clear(); this.cancelPreloadRefresh();
     const run = (operation: () => unknown): Promise<unknown> => Promise.resolve().then(operation);
     const scheduled = run(() => this.cancelScheduled(false));
     const audio = run(() => this.requestedPreparation && this.native?.status !== 'error' ? this.command({ kind: 'stop' }) : undefined);
@@ -584,7 +629,7 @@ export class NativeProgramPlayer {
     if (!next) return undefined;
     try {
       return { snapshot: createObsProgramSnapshot(this.project, next.id, this.revision),
-        positionMs: nativeProgramSnapshot(this.project, next.id, this.revision, undefined, this.dependencies.configuration().audioSampleRate ?? 48000).snapshot.positionMs };
+        positionMs: nativeProgramSnapshot(this.project, next.id, this.revision, undefined, this.runOutput?.audioSampleRate ?? this.dependencies.configuration().audioSampleRate ?? 48000).snapshot.positionMs };
     } catch (error) { this.reportUnavailable(`下一个节目的文件没有准备：${toUserErrorMessage(error)}`); return undefined; }
   }
   private async stopObs(): Promise<void> {
@@ -663,6 +708,9 @@ export class NativeProgramPlayer {
   private current(token: number): boolean { return !this.disposed && token === this.epoch; }
   private update(patch: Partial<InternalPlayerState>): void { if (this.disposed) return; this.state = { ...this.state, ...patch }; this.dependencies.changed(this.state); }
 }
+
+/** How long the edits pause before the selected song is prepared again with the newest version (0.5.9 S7). */
+const PRELOAD_REFRESH_MS = 300;
 
 function clampVolume(volume: number): number { return Math.max(0, Math.min(100, volume)); }
 

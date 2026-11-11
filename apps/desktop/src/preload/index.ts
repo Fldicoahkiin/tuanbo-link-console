@@ -10,7 +10,8 @@ import { linkShowActivitySchema, linkShowStateSchema } from '@tb/schema';
 import { lightingOffRequestSchema, lightingOffResultSchema } from '@tb/schema';
 import { ma2LayoutReadRequestSchema, ma2LayoutSnapshotSchema, ma2NewCueRequestSchema, ma2NewCueResultSchema } from '@tb/schema';
 import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema, ma2CueDeletePlanSchema, ma2CueDeleteResultSchema } from '@tb/schema';
-import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema, nativeProgramClosedSchema } from '@tb/schema';
+import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema, nativeProgramClosedSchema, nativeProgramDocumentSchema,
+  nativeProgramDocumentAnswerSchema } from '@tb/schema';
 import { ma2AuditionRequestSchema,ma2AuditionControlSchema,ma2AuditionStateSchema } from '@tb/schema';
 import { musicAnalysisRequestSchema, musicAnalysisProgressSchema, musicAnalysisControlSchema, musicAnalysisResultSchema } from '@tb/schema';
 import { automaticMusicRequestSchema, automaticMusicControlSchema, automaticMusicJobSchema, automaticMusicStatusSchema } from '@tb/schema';
@@ -48,6 +49,7 @@ async function readMa2<T>(channel: string, payload: { progressId?: string | unde
 const tbLink: LinkDesktopBridgeApi = {
   openNativeProgram: request => invoke('link:native-program-open', nativeProgramOpenSchema.parse(request)),
   controlNativeProgram: request => invoke('link:native-program-control', nativeProgramControlSchema.parse(request)),
+  documentNativeProgram: async request => nativeProgramDocumentAnswerSchema.parse(await invoke('link:native-program-document', nativeProgramDocumentSchema.parse(request))),
   onNativeProgramEvent: listener => {
     const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(nativeProgramEventSchema.parse(value));
     ipcRenderer.on('link:native-program-event', receive);

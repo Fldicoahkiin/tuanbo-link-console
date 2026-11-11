@@ -10,7 +10,7 @@ import { windowPageEvents } from './fixtures/window-page-events';
 import { releaseGonePage } from './engine-shutdown';
 
 function deferred() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
-function request(): NativeProgramOpen { return { version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1,
+function request(): NativeProgramOpen { return { version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1, sessionId: randomUUID(),
   document: JSON.stringify({ ...createEmptyLinkProject('后台宿主测试'), playbackSource: 'internal' }),
   configuration: { outputDeviceId: 'default', mtcPortName: null, preciseSeeking: false } }; }
 function host() {
@@ -22,7 +22,7 @@ function host() {
     seek: vi.fn(() => Promise.resolve()), scrub: vi.fn(() => Promise.resolve()), skip: vi.fn(() => Promise.resolve()),
     setSongVolume: vi.fn(), previewVolume: vi.fn(), overrideVolume: vi.fn(), setEndAction: vi.fn(), setPlaylist: vi.fn(), toggleMtc: vi.fn(), receiveMidi: vi.fn(), fade: vi.fn(),
     preloadSelected: vi.fn(), freeze: vi.fn(), reportUnavailable: vi.fn(), runtimeUnavailable: vi.fn(), reportFault: vi.fn(), clearFault: vi.fn(), externalStop: vi.fn(),
-    setWatched: vi.fn(), getAudioAnalysis: () => null, dispose: vi.fn(() => Promise.resolve()) } };
+    setWatched: vi.fn(), updateProject: vi.fn(), currentProject: vi.fn(), getAudioAnalysis: () => null, dispose: vi.fn(() => Promise.resolve()) } };
 }
 function command(input: NativeProgramOpen, operation: NativeProgramOperation) { return { version: 1, ownerId: input.ownerId, operation }; }
 /** The program's running state goes nowhere in these tests; license-rules.test.ts follows it to LicenseAccess. */
@@ -406,4 +406,98 @@ it('播放条拖动只试听，保存的歌曲音量单独送到节目；没标�
   expect(output.controller.setSongVolume).toHaveBeenCalledWith('song', 40);
   await expect(service.control({ version: 1, ownerId: input.ownerId, operation: { kind: 'volume', volume: 40 } })).rejects.toThrow();
   expect(output.controller.overrideVolume).not.toHaveBeenCalled();
+});
+
+// 0.5.9 S7：一个页面一个长期的节目，修改只送新的一版（design 02 §3.3、§3.4）。
+function documentOf(input: NativeProgramOpen, revision: number, patch: Record<string, unknown> = {}) {
+  const project = { ...JSON.parse(input.document) as Record<string, unknown>, ...patch };
+  return { version: 1, ownerId: input.ownerId, key: { sessionId: input.sessionId, projectId: projectOf(input), projectPath: input.projectPath },
+    revision, base: null, change: { kind: 'full', document: JSON.stringify(project) } };
+}
+
+it('同一个工程的新一版只换节目手里的工程：不关、不重建、不再要授权，事件写明这一版', async () => {
+  const output = host(), events: NativeProgramEvent[] = [], authorize = vi.fn(() => Promise.resolve());
+  const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(() => output);
+  const service = new NativeProgramService(create, event => events.push(event), authorize, unlicensed, quiet()), a = request();
+  await service.open(a);
+  expect(events.at(-1)?.documentVersion).toEqual({ sessionId: a.sessionId, revision: 1 });
+  expect(service.document(documentOf(a, 2, { name: '改了名字' }))).toEqual({ kind: 'applied', revision: 2, effect: 'stopped' });
+  expect(create).toHaveBeenCalledOnce(); expect(output.close).not.toHaveBeenCalled(); expect(authorize).toHaveBeenCalledOnce();
+  expect(output.controller.updateProject).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: '改了名字' }), 2, a.projectPath);
+  expect(events.at(-1)?.documentVersion).toEqual({ sessionId: a.sessionId, revision: 2 });
+});
+
+it('拿着歌时送来的新一版等停止：先不换，停下那一刻换上最新的一版，下一首用它', async () => {
+  const output = host(), events: NativeProgramEvent[] = [];
+  const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(() => output);
+  const service = new NativeProgramService(create, event => events.push(event), () => Promise.resolve(), unlicensed, quiet()), a = request();
+  await service.open(a); const callbacks = create.mock.calls[0]![2];
+  callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'playing' });
+  expect(service.document(documentOf(a, 2))).toEqual({ kind: 'applied', revision: 2, effect: 'next-pass' });
+  expect(service.document(documentOf(a, 3, { name: '第三版' }))).toMatchObject({ effect: 'next-pass' });
+  callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'paused' });
+  expect(output.controller.updateProject).not.toHaveBeenCalled();
+  expect(events.at(-1)?.documentVersion).toEqual({ sessionId: a.sessionId, revision: 1 });
+  callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'stopped' });
+  expect(output.controller.updateProject).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: '第三版' }), 3, a.projectPath);
+  expect(events.at(-1)?.documentVersion).toEqual({ sessionId: a.sessionId, revision: 3 });
+});
+
+it('别的页面、关了的节目、另一个工程送来的版本都不收；增量版本要整份重送', async () => {
+  const output = host(), service = new NativeProgramService(vi.fn(() => output), vi.fn(), () => Promise.resolve(), unlicensed, quiet()), a = request();
+  await service.open(a);
+  expect(() => service.document({ ...documentOf(a, 2), ownerId: randomUUID() })).toThrow(goneProgram);
+  expect(() => service.document({ ...documentOf(a, 2), key: { sessionId: a.sessionId, projectId: randomUUID(), projectPath: a.projectPath } }))
+    .toThrow('这一版属于另一个工程');
+  expect(() => service.document({ ...documentOf(a, 2), key: { sessionId: a.sessionId, projectId: projectOf(a), projectPath: 'C:/test/另一个.tblink' } }))
+    .toThrow('这一版属于另一个工程');
+  expect(() => service.document({ ...documentOf(a, 2), extra: true })).toThrow();
+  expect(service.document({ ...documentOf(a, 2), base: 1 })).toEqual({ kind: 'resync', reason: '节目这边没有这次修改所基于的版本' });
+  expect(output.controller.updateProject).not.toHaveBeenCalled();
+  await service.close();
+  expect(() => service.document(documentOf(a, 3))).toThrow(goneProgram);
+});
+
+it('同一个页面拿着歌时不能换工程：打开被拒绝，节目照常播；停下以后再打开就换', async () => {
+  const first = host(), second = host(), create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>()
+    .mockReturnValueOnce(first).mockReturnValueOnce(second);
+  const service = new NativeProgramService(create, vi.fn(), () => Promise.resolve(), unlicensed, quiet()), a = request();
+  await service.open(a); create.mock.calls[0]![2].changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'playing' });
+  const other = { ...request(), ownerId: a.ownerId };
+  await expect(service.open(other)).rejects.toThrow('节目还在播放，现在不能换工程。请先停止播放');
+  expect(first.close).not.toHaveBeenCalled(); expect(create).toHaveBeenCalledOnce();
+  create.mock.calls[0]![2].changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'stopped' });
+  expect(await service.open(other)).toBe('opened');
+  expect(first.close).toHaveBeenCalledOnce(); expect(create).toHaveBeenCalledTimes(2);
+});
+
+it('重新加载后接回、答复是另一版：节目照旧播接回的那一版，页面的版本等停止；停下时换成页面的版本', async () => {
+  const output = host(), events: NativeProgramEvent[] = [];
+  const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(() => output);
+  const service = new NativeProgramService(create, event => events.push(event), () => Promise.resolve(), unlicensed, quiet()), a = request();
+  await service.open(a); const callbacks = create.mock.calls[0]![2];
+  callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'playing' });
+  await service.release();
+  const reloaded = { ...a, ownerId: randomUUID(), sessionId: randomUUID(), revision: 5,
+    document: JSON.stringify({ ...JSON.parse(a.document) as Record<string, unknown>, name: '重新加载后的修改' }) };
+  expect(await service.open(reloaded)).toBe('outdated');
+  expect(events.at(-1)).toMatchObject({ ownerId: reloaded.ownerId, documentVersion: { sessionId: a.sessionId, revision: 1 } });
+  expect(output.controller.updateProject).not.toHaveBeenCalled();
+  callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'stopped' });
+  expect(output.controller.updateProject).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: '重新加载后的修改' }), 5, a.projectPath);
+  expect(events.at(-1)?.documentVersion).toEqual({ sessionId: reloaded.sessionId, revision: 5 });
+});
+
+it('重新加载后接回、答复是同一版：节目播的就是这一页的版本，不另等停止', async () => {
+  const output = host(), events: NativeProgramEvent[] = [];
+  const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(() => output);
+  const service = new NativeProgramService(create, event => events.push(event), () => Promise.resolve(), unlicensed, quiet()), a = request();
+  await service.open(a); const callbacks = create.mock.calls[0]![2];
+  callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'playing' });
+  await service.release();
+  const reloaded = { ...a, ownerId: randomUUID(), sessionId: randomUUID(), revision: 0 };
+  expect(await service.open(reloaded)).toBe('adopted');
+  expect(events.at(-1)?.documentVersion).toEqual({ sessionId: reloaded.sessionId, revision: 0 });
+  callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'stopped' });
+  expect(output.controller.updateProject).not.toHaveBeenCalled();
 });

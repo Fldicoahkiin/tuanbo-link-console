@@ -192,6 +192,8 @@ export type LinkLogEntryDto = {
 export type LinkDesktopApi = {
   openNativeProgram(request: import('@tb/schema').NativeProgramOpen): Promise<import('@tb/schema').NativeProgramAttachment>;
   controlNativeProgram(request: import('@tb/schema').NativeProgramControl): Promise<void>;
+  /** A newer version of the page's project for the program it opened (0.5.9 S7). */
+  documentNativeProgram(request: import('@tb/schema').NativeProgramDocument): Promise<import('@tb/schema').NativeProgramDocumentAnswer>;
   onNativeProgramEvent(listener: (event: import('@tb/schema').NativeProgramEvent) => void): () => void;
   onNativeProgramClosed(listener: (event: import('@tb/schema').NativeProgramClosed) => void): () => void;
   projectArchives(request: import('@tb/schema').ProjectArchiveRequest): Promise<import('@tb/schema').ProjectArchiveResult>;

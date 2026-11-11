@@ -4,11 +4,10 @@ import { NO_PENDING_PICTURE_EDITS, pendingPictureEdits, type PendingPictureEdits
 
 /**
  * Which version of a song's picture OBS plays while the editor shows it, and what the timeline marks
- * for it (0.5.9). While 联动台播放 prepares, plays or pauses a song, OBS follows the project as it was
- * when playback started: LinkApp keeps that version until 停止, and edits made since wait for a replay
- * (pending-picture-edits). After a window reload the background program may play an older version
- * than the one this window opened (RemoteNativeProgramPlayer.outdated), and it sends its state before
- * it answers the open that says so. Until it answered, and when it plays another version, the window
+ * for it (0.5.9). While 联动台播放 prepares, plays or pauses a song, OBS follows the version the song
+ * started with (each program event names it, 0.5.9 S7), and edits made since wait for a replay
+ * (pending-picture-edits). After a window reload the background program may play a version this page
+ * never sent (program-attachment), and it sends its state before it answers the open. Until it answered, and when it plays another version, the window
  * cannot tell which version is on air: it says so and why, and marks nothing on air. Worked out again
  * on every edit, never stored.
  */
@@ -30,10 +29,9 @@ export function songInPlayer(state: Pick<ProgramPlayerState, 'status' | 'itemId'
   return internal && holdsSong(state.status) ? state.itemId : null;
 }
 
-/** What this window knows of 联动台播放: its state, the project it opened it with (LinkApp keeps it as it was
- * when playback started, until 停止), and whether the background program plays another version of that
- * project, taken over after a window reload (`outdated`; null while the program has not answered the open
- * yet, see program-attachment). */
+/** What this window knows of 联动台播放: its state, the project of the version it plays, and whether the
+ * background program plays a version this page did not send, taken over after a window reload (`outdated`;
+ * null while the program has not answered the open yet, see program-attachment). */
 export type PlayerVersion = { state: Pick<ProgramPlayerState, 'status' | 'itemId'>; project: LinkProject | null; outdated: boolean | null };
 
 /**

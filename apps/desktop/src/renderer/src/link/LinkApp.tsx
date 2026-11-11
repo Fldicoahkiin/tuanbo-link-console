@@ -112,7 +112,7 @@ export function LinkApp(): JSX.Element {
 
   const midiMonitor = useDesktopIntegrationEvents(notify); useEffect(() => { try { useDisplayPreferences.getState().load(); } catch (error) { notify(`显示设置读取失败：${String(error)}`, 'error'); } }, [notify]);
   useMa2Sync(notify);
-  useConsoleFollow(internalPlayer, playbackProject); useStatusSources(); useShowStateMirror(notify);
+  useConsoleFollow(internalPlayer, internalPlayer.programProject); useStatusSources(); useShowStateMirror(notify);
   useProjectPersistence(notify); useRecoveryCopyWriter(); useMediaAudioPreparation(playbackLocked, notify);
 
   useDocumentStateReport(notify);
@@ -220,7 +220,7 @@ export function LinkApp(): JSX.Element {
     onRedo: () => useDocumentStore.getState().redo(), onSave: () => void saveProject()
   };
   const fileCommands = { replaceDisabled: playbackLocked || !project, onSaveAs: () => void saveProjectAs(), onRevert: () => void revertProject() };
-  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} fileCommands={fileCommands} /></div>{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace syncHost={syncHost} key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} playbackProject={playbackProject} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
+  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} fileCommands={fileCommands} /></div>{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace syncHost={syncHost} key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} playbackProject={internalPlayer.programProject} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
 
   return <RendererErrorBoundary>
     <div className="app-shell" data-workspace={connectionsOpen ? 'settings' : page}>

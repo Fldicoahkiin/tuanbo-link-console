@@ -1257,3 +1257,93 @@ describe('定位还在准备时按暂停、继续，和播完后（0.5.9 S5）',
   });
 });
 
+// 0.5.9 S7：节目不再随修改关掉重开，修改送进来的是新的一版工程。
+describe('节目换上新的一版工程', () => {
+  function edited(project: ReturnType<typeof fixture>['project'], startMs: number) {
+    const next = structuredClone(project);
+    next.rundown[0]!.playback!.startMs = startMs;
+    return next;
+  }
+
+  it('停着时换上新的一版：下一首按新的一版放；播放条上的“播完后”、选的歌单、时间码开关都不变', async () => {
+    const f = fixture();
+    f.player.setEndAction('next'); f.player.setPlaylist('list-1'); f.player.toggleMtc();
+    const before = f.state();
+    const next = edited(f.project, 1000);
+    f.player.updateProject(next, 8, 'C:/test/project.tblink');
+    expect(f.state()).toBe(before);
+    expect(f.state()).toMatchObject({ defaultEndAction: 'next', playlistId: 'list-1', mtcEnabled: false });
+    expect(f.player.currentProject()).toBe(next);
+    await f.player.play('song-0');
+    expect(f.api.prepareNativePlayback.mock.calls[0]?.[0].snapshot).toMatchObject({ positionMs: 1000 });
+    await f.player.dispose();
+  });
+
+  it('拿着歌时不换：这首歌照旧按开始时的那一版放', async () => {
+    const f = fixture();
+    await f.player.play('song-0');
+    expect(() => f.player.updateProject(edited(f.project, 1000), 8, 'C:/test/project.tblink')).toThrow('节目还拿着一首歌');
+    expect(f.player.currentProject()).toBe(f.project);
+    await f.player.pause();
+    expect(() => f.player.updateProject(edited(f.project, 1000), 8, 'C:/test/project.tblink')).toThrow('节目还拿着一首歌');
+    await f.player.stop();
+    f.player.updateProject(edited(f.project, 1000), 8, 'C:/test/project.tblink');
+    expect(f.player.currentProject().rundown[0]!.playback!.startMs).toBe(1000);
+    await f.player.dispose();
+  });
+
+  it('声卡按一轮播放算：停着时改的设置下一首就用；播放中改的，这一轮的切歌和定位都还在原来的声卡上，停下以后才换', async () => {
+    const f = fixture();
+    const configuration = vi.spyOn(f.deps, 'configuration');
+    configuration.mockReturnValue({ outputDeviceId: '声卡 2', mtcPortName: 'TEST', audioSampleRate: 48000 });
+    await f.player.play('song-0');
+    configuration.mockReturnValue({ outputDeviceId: '声卡 3', mtcPortName: 'TEST', audioSampleRate: 48000 });
+    await f.player.play('song-1'); await f.player.seek(2000);
+    await f.player.stop();
+    await f.player.play('song-0');
+    expect(f.api.prepareNativePlayback.mock.calls.map(call => call[0].audioDeviceId)).toEqual(['声卡 2', '声卡 2', '声卡 2', '声卡 3']);
+    await f.player.dispose();
+  });
+
+  it('选中的歌在换了新的一版以后重新准备画面，等修改停 300 ms 才做一次；歌被删了就不准备', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture(); f.project.obsOutputMode = 'scenes';
+      f.player.preloadSelected('song-0');
+      expect(f.api.preloadNativeObs).toHaveBeenCalledTimes(1);
+      for (const revision of [8, 9, 10]) {
+        const next = edited(f.project, 500); next.obsOutputMode = 'scenes';
+        f.player.updateProject(next, revision, 'C:/test/project.tblink'); f.player.preloadSelected('song-0');
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      expect(f.api.preloadNativeObs).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(f.api.preloadNativeObs).toHaveBeenCalledTimes(2);
+      expect(f.api.preloadNativeObs.mock.calls[1]?.[0].snapshot.revision).toBe(10);
+      // The same version again does nothing.
+      f.player.preloadSelected('song-0'); await vi.advanceTimersByTimeAsync(300);
+      expect(f.api.preloadNativeObs).toHaveBeenCalledTimes(2);
+      const removed = structuredClone(f.player.currentProject()); removed.rundown = removed.rundown.filter(item => item.id !== 'song-0');
+      f.player.updateProject(removed, 11, 'C:/test/project.tblink'); f.player.preloadSelected('song-0');
+      await vi.advanceTimersByTimeAsync(300);
+      expect(f.api.preloadNativeObs).toHaveBeenCalledTimes(2);
+      expect(f.deps.notice).not.toHaveBeenCalled();
+      await f.player.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('开始播放时取消还没做的重新准备：不在播放中另准备画面', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture(); f.project.obsOutputMode = 'scenes';
+      f.player.preloadSelected('song-0');
+      const next = edited(f.project, 500); next.obsOutputMode = 'scenes';
+      f.player.updateProject(next, 8, 'C:/test/project.tblink'); f.player.preloadSelected('song-0');
+      await f.player.play('song-0');
+      await vi.advanceTimersByTimeAsync(300);
+      expect(f.api.preloadNativeObs).toHaveBeenCalledTimes(1);
+      await f.player.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+});
+

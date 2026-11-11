@@ -12,9 +12,9 @@ import { songVolumeView } from '../view-models/song-volume';
 import { homePlayButton, pressHomePlayButton } from './play-buttons';
 import { useKeyCommands } from '../keys/useKeyCommands';
 
-/** `engine` names the audio engine this player uses, for the operator. `outdated`: the background program plays
- * another version of the project than this window opened it with, taken over after a window reload; null until
- * the program answered the open (program-attachment). */
+/** `engine` names the audio engine this player uses, for the operator. `outdated`: the background program plays a
+ * version of the project this page did not send, taken over after a window reload; null until the program answered
+ * the open (program-attachment). */
 export type ProjectPlayer = { controller: RemoteNativeProgramPlayer | null; state: PlayerControlState; view: PlayerViewStore; engine: string; outdated: boolean | null };
 
 type EndAction = InternalPlayerState['endAction'];

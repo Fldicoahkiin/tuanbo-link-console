@@ -116,10 +116,10 @@ function program() {
     seek: vi.fn(() => Promise.resolve()), scrub: vi.fn(() => Promise.resolve()), skip: vi.fn(() => Promise.resolve()),
     setSongVolume: vi.fn(), previewVolume: vi.fn(), overrideVolume: vi.fn(), setEndAction: vi.fn(), setPlaylist: vi.fn(), toggleMtc: vi.fn(), receiveMidi: vi.fn(), fade: vi.fn(),
     preloadSelected: vi.fn(), freeze: vi.fn(), reportUnavailable: vi.fn(), runtimeUnavailable: vi.fn(), reportFault: vi.fn(), clearFault: vi.fn(), externalStop: vi.fn(),
-    setWatched: vi.fn(), getAudioAnalysis: () => null, dispose: vi.fn(() => Promise.resolve()) } };
+    setWatched: vi.fn(), updateProject: vi.fn(), currentProject: vi.fn(), getAudioAnalysis: () => null, dispose: vi.fn(() => Promise.resolve()) } };
 }
 function windowOpen(): NativeProgramOpen {
-  return { version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1,
+  return { version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1, sessionId: randomUUID(),
     document: JSON.stringify({ ...createEmptyLinkProject('授权规则'), playbackSource: 'internal' }),
     configuration: { outputDeviceId: 'default', mtcPortName: null, preciseSeeking: false } };
 }
@@ -247,11 +247,11 @@ async function programHost(endAction: 'pause' | 'stop' = 'pause') {
     return { controller: host.controller, close: () => host.close() };
   }, () => undefined, () => access.requireOutput(), wiring.runningChanged, closedProgramFaultReporter(record, toWindow));
   /** What a window sends when it opens this project's program. */
-  const opening = (): NativeProgramOpen => ({ version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1,
+  const opening = (): NativeProgramOpen => ({ version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1, sessionId: randomUUID(),
     document: JSON.stringify(project), configuration: { outputDeviceId: 'default', mtcPortName: null, preciseSeeking: false } });
   const first = opening();
   await service.open(first);
-  return { service, access, send, toWindow, record, notices, controls, projectId: project.projectId, opening, audio: () => audio,
+  return { service, access, send, toWindow, record, notices, controls, projectId: project.projectId, project, first, opening, audio: () => audio,
     player: () => hosts.at(-1)!.controller,
     play: (itemId: string) => service.control({ version: 1, ownerId: first.ownerId, operation: { kind: 'play', itemId } }),
     /** The playback engine reports the end of the song. */
@@ -395,5 +395,33 @@ describe('界面自己重新加载（错误画面上的“重新进入工作区�
     expect(await f.service.open(f.opening())).toBe('opened');
     expect(f.toWindow).toHaveBeenCalledExactlyOnceWith('link:main-process-error', lightsLeftOn('开场'));
     expect(f.send).toHaveBeenCalledOnce();
+  });
+});
+
+// 0.5.9 S7（design 02 §3.3）：修改送进节目的只是新的一版工程，只改节目手里的工程，不是一次输出。
+describe('修改送进后台节目不过授权，也不发出任何输出', () => {
+  type Host = Awaited<ReturnType<typeof programHost>>;
+  const version = (f: Host, revision: number, title: string) => ({ version: 1, ownerId: f.first.ownerId,
+    key: { sessionId: f.first.sessionId, projectId: f.projectId, projectPath: f.first.projectPath }, revision, base: null,
+    change: { kind: 'full', document: JSON.stringify({ ...f.project, rundown: f.project.rundown.map(item => item.id === 'song' ? { ...item, title } : item) }) } });
+
+  for (const [reason, status] of Object.entries(lapsed)) it(`${reason}：停着时送来的新一版照样换上，不检查授权，不准备音频、不发灯光`, async () => {
+    const f = await programHost();
+    f.lapse(status);
+    expect(f.service.document(version(f, 2, '改名的开场'))).toEqual({ kind: 'applied', revision: 2, effect: 'stopped' });
+    expect(f.player().currentProject().rundown[0]!.title).toBe('改名的开场');
+    expect(f.audio()).toBeNull(); expect(f.controls).toEqual([]); expect(f.send).not.toHaveBeenCalled();
+  });
+
+  it('拿着歌时送来的新一版：不出输出、不重新准备，这首歌照旧；停下以后才换上', async () => {
+    const f = await programHost();
+    await f.play('song');
+    const audio = f.audio(), controls = [...f.controls], sent = f.send.mock.calls.length;
+    f.lapse(lapsed.到期!);
+    expect(f.service.document(version(f, 2, '改名的开场'))).toEqual({ kind: 'applied', revision: 2, effect: 'next-pass' });
+    expect(f.audio()).toBe(audio); expect(f.controls).toEqual(controls); expect(f.send).toHaveBeenCalledTimes(sent);
+    expect(f.player().currentProject().rundown[0]!.title).toBe('开场');
+    await f.player().stop();
+    expect(f.player().currentProject().rundown[0]!.title).toBe('改名的开场');
   });
 });

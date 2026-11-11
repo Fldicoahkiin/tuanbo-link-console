@@ -27,12 +27,39 @@ export const nativeProgramConfigurationSchema = z.object({
   lightingProfile: integrationProfileSchema.nullable().optional(), preciseSeeking: z.boolean()
 }).strict();
 export type NativeProgramConfiguration = z.infer<typeof nativeProgramConfigurationSchema>;
+/** Which version of the window's project a document is (0.5.9 S7): the document store's `sessionId` (new on every
+ * open, new project and revert) and its `revision` within it. */
+export const nativeProgramDocumentVersionSchema = z.object({ sessionId: z.string().uuid(), revision: z.number().int().nonnegative() }).strict();
+export type NativeProgramDocumentVersion = z.infer<typeof nativeProgramDocumentVersionSchema>;
+/** A window's page attaches to the background program (0.5.9 S7): `ownerId` is the page's, made once when it loads. */
 export const nativeProgramOpenSchema = z.object({
   version: z.literal(1), ownerId: z.string().uuid(), projectPath: z.string(), revision: z.number().int().nonnegative(),
+  sessionId: z.string().uuid(),
   // Large documents cross contextBridge as text, then undergo project validation in main.
   document: z.string().min(1).max(128 * 1024 * 1024), configuration: nativeProgramConfigurationSchema
 }).strict();
 export type NativeProgramOpen = z.infer<typeof nativeProgramOpenSchema>;
+/** The window's project changed (0.5.9 S7, design 02 §3.3): the attached page sends the new version to the program.
+ * `key` names the project; a different project or path is a new open, never a document. `base` is the version an
+ * increment builds on; a whole document has none (only whole documents are sent for now). */
+export const nativeProgramDocumentSchema = z.object({
+  version: z.literal(1), ownerId: z.string().uuid(),
+  key: z.object({ sessionId: z.string().uuid(), projectId: z.string().min(1), projectPath: z.string() }).strict(),
+  revision: z.number().int().nonnegative(),
+  base: z.number().int().nonnegative().nullable(),
+  change: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('full'), document: z.string().min(1).max(128 * 1024 * 1024) }).strict()
+  ])
+}).strict();
+export type NativeProgramDocument = z.infer<typeof nativeProgramDocumentSchema>;
+/** `applied`: the program took the version; `stopped`, it plays it from the next song on; `next-pass`, a song is held
+ * and it plays it once the song stops; `live` is for a later step (this pass). `resync`: the program has no `base`
+ * for an increment, the window sends the whole document. */
+export const nativeProgramDocumentAnswerSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('applied'), revision: z.number().int().nonnegative(), effect: z.enum(['stopped', 'live', 'next-pass']) }).strict(),
+  z.object({ kind: z.literal('resync'), reason: z.string() }).strict()
+]);
+export type NativeProgramDocumentAnswer = z.infer<typeof nativeProgramDocumentAnswerSchema>;
 /** How a window's open request attached: a new program, or the program that kept
  * playing after the previous window's renderer exited. `outdated` means that
  * program plays a different document than the reloaded window shows. */
@@ -62,7 +89,9 @@ export type NativeProgramOperation = NativeProgramControl['operation'];
 export const nativeProgramEventSchema = z.object({
   version: z.literal(1), ownerId: z.string().uuid(), sequence: z.number().int().nonnegative(), state: programPlayerStateSchema,
   clock: z.object({ positionMs: time, durationMs: time, ready: z.boolean(), playing: z.boolean(), seeking: z.boolean() }).strict(),
-  boundary: z.enum(['pause', 'seek', 'end']).optional(), currentCueId: z.string().nullable()
+  boundary: z.enum(['pause', 'seek', 'end']).optional(), currentCueId: z.string().nullable(),
+  /** The version of the project the program plays now (0.5.9 S7): while a song is held, the one it started with. */
+  documentVersion: nativeProgramDocumentVersionSchema
 }).strict();
 export type NativeProgramEvent = z.infer<typeof nativeProgramEventSchema>;
 /** The quit closed the program the window `ownerId` opened, and the operator went back to the app (返回软件, or a quit

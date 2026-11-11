@@ -92,7 +92,7 @@ it('画面动作失败后动作 MIDI 断开或时间码没发出：红字换成�
   await player.dispose();
 });
 
-const open = (): NativeProgramOpen => ({ version: 1, ownerId: randomUUID(), projectPath: path, revision: 4, document: JSON.stringify(project),
+const open = (): NativeProgramOpen => ({ version: 1, ownerId: randomUUID(), projectPath: path, revision: 4, sessionId: randomUUID(), document: JSON.stringify(project),
   configuration: { outputDeviceId: 'default', mtcPortName: null, preciseSeeking: false } });
 
 // 修复前：画面那边没收下这首歌的画面准备（它没看到这首歌的音频），节目关闭时停画面的请求就被它当成“上一次准备的”

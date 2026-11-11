@@ -2,45 +2,56 @@ import { expect, it, vi } from 'vitest';
 import { emptyInternalPlayerState, type InternalPlayerDependencies, type LinkDesktopApi } from '@tb/core/link';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type LinkProject, type NativeProgramAttachment, type NativeProgramEvent } from '@tb/schema';
 import { RemoteNativeProgramPlayer } from './remote-native-program-player';
+import type { ProgramDocument } from './program-document-feed';
 
 const song = parseLinkProject({ ...createEmptyLinkProject('远程控制'), playbackSource: 'internal', rundown: [{ id: 'song', title: '歌曲' }] });
+const SESSION = crypto.randomUUID();
 function fixture(wait?: Promise<NativeProgramAttachment>, project: LinkProject = song) {
   const api = {
     openNativeProgram: vi.fn<LinkDesktopApi['openNativeProgram']>(() => wait ?? Promise.resolve('opened')),
     controlNativeProgram: vi.fn<LinkDesktopApi['controlNativeProgram']>(() => Promise.resolve()),
+    documentNativeProgram: vi.fn<LinkDesktopApi['documentNativeProgram']>(request => Promise.resolve({ kind: 'applied', revision: request.revision, effect: 'stopped' })),
     onNativeProgramEvent: vi.fn<LinkDesktopApi['onNativeProgramEvent']>(() => vi.fn()),
     onNativeProgramClosed: vi.fn<LinkDesktopApi['onNativeProgramClosed']>(() => stopListening),
     onNativePlaybackStatus: vi.fn<LinkDesktopApi['onNativePlaybackStatus']>(() => vi.fn())
   };
   const stopListening = vi.fn();
-  /** What `outdated` said each time the window was told the open was answered. */
-  const answered: boolean[] = [];
+  /** The window's project (the document store). */
+  let document: ProgramDocument | null = { project, path: 'C:/test/show.tblink', sessionId: SESSION, revision: 1 };
   const dependencies = { prepare: vi.fn(() => Promise.resolve()), ingest: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()), resolveAudio: vi.fn(() => Promise.reject(new Error('不能在界面播放原声'))),
     configuration: () => ({ outputDeviceId: 'default', mtcPortName: null }), changed: vi.fn<InternalPlayerDependencies['changed']>(), notice: vi.fn(),
-    attached: vi.fn(() => { answered.push(player.outdated); }), closed: vi.fn() };
-  const observed = vi.fn(), player: RemoteNativeProgramPlayer = new RemoteNativeProgramPlayer(project, 'C:/test/show.tblink', 1, dependencies, api, observed);
-  const ownerId = api.openNativeProgram.mock.calls[0]![0].ownerId;
-  const emit = (patch: Partial<NativeProgramEvent> = {}) => api.onNativeProgramEvent.mock.calls[0]![0]({ version: 1, ownerId, sequence: 1,
+    document: () => document, attached: vi.fn() };
+  const observed = vi.fn(), ownerId = crypto.randomUUID(), player = new RemoteNativeProgramPlayer(dependencies, api, observed, ownerId);
+  let sequence = 1;
+  const emit = (patch: Partial<NativeProgramEvent> = {}) => api.onNativeProgramEvent.mock.calls[0]![0]({ version: 1, ownerId, sequence: sequence++,
     state: { ...emptyInternalPlayerState, status: 'playing', itemId: 'song', positionMs: 1234 },
-    clock: { positionMs: 1234, durationMs: 5000, ready: true, playing: true, seeking: false }, currentCueId: null, ...patch });
+    clock: { positionMs: 1234, durationMs: 5000, ready: true, playing: true, seeking: false }, currentCueId: null,
+    documentVersion: { sessionId: SESSION, revision: 1 }, ...patch });
   /** Main tells the windows that the quit closed the program `ownerId` opened, and the operator went back to the app. */
   const closedByQuit = (id: string) => api.onNativeProgramClosed.mock.calls[0]![0]({ version: 1, ownerId: id });
-  return { api, dependencies, player, observed, emit, ownerId, answered, closedByQuit, stopListening };
+  /** The operator edits: the document store has a newer version. */
+  const edit = (next: Partial<ProgramDocument> = {}) => {
+    document = document && { ...document, revision: document.revision + 1, ...next }; player.documentChanged();
+  };
+  const close = () => { document = null; player.documentChanged(); };
+  return { api, dependencies, player, observed, emit, ownerId, closedByQuit, stopListening, edit, close, document: () => document };
 }
+const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 // 修复前：退出时关掉了窗口的节目，操作员选“返回软件”以后窗口不知道，按播放只得到“这个播放控制请求来自已关闭的界面”。
-it('退出时这个窗口的节目被关掉、操作员回到软件：告诉窗口重新打开节目；别的窗口的节目、销毁以后都不算', async () => {
-  const f = fixture();
+it('退出时这个窗口的节目被关掉、操作员回到软件：页面重新打开节目；别的窗口的节目、销毁以后都不算', async () => {
+  const f = fixture(); await settle();
   f.closedByQuit(crypto.randomUUID());
-  expect(f.dependencies.closed).not.toHaveBeenCalled();
+  expect(f.api.openNativeProgram).toHaveBeenCalledOnce();
   f.closedByQuit(f.ownerId);
-  expect(f.dependencies.closed).toHaveBeenCalledOnce();
+  expect(f.api.openNativeProgram).toHaveBeenCalledTimes(2);
+  expect(f.api.openNativeProgram.mock.calls[1]![0]).toMatchObject({ ownerId: f.ownerId, revision: 1, sessionId: SESSION });
   expect(f.api.controlNativeProgram).not.toHaveBeenCalled();
   await f.player.dispose();
   expect(f.stopListening).toHaveBeenCalledOnce();
   f.closedByQuit(f.ownerId);
-  expect(f.dependencies.closed).toHaveBeenCalledOnce();
+  expect(f.api.openNativeProgram).toHaveBeenCalledTimes(2);
 });
 
 it('只显示当前会话递增序号；时钟与状态同步，旧界面事件不回写', async () => {
@@ -68,6 +79,7 @@ it('尚在打开时销毁立即发送关闭，不等待许可，也不发送迟�
   const play = f.player.play('song'); await f.player.dispose();
   expect(f.api.controlNativeProgram.mock.calls.map(call => call[0].operation.kind)).toEqual(['close']);
   release(); await play; expect(f.api.controlNativeProgram).toHaveBeenCalledOnce();
+  expect(f.dependencies.attached).not.toHaveBeenCalled();
 });
 
 it('后台控制拒绝明确显示并记录，不静默切回浏览器', async () => {
@@ -77,22 +89,13 @@ it('后台控制拒绝明确显示并记录，不静默切回浏览器', async (
   expect(f.dependencies.notice).toHaveBeenCalledWith('输出关闭未完成', null); expect(f.dependencies.resolveAudio).not.toHaveBeenCalled();
 });
 
-it('接管到与界面不同版本的节目时标记为过期，其余打开不标记', async () => {
-  const outdated = fixture(Promise.resolve('outdated')), adopted = fixture(Promise.resolve('adopted'));
-  await outdated.player.play('song'); await adopted.player.play('song');
-  expect(outdated.player.outdated).toBe(true); expect(adopted.player.outdated).toBe(false); expect(fixture().player.outdated).toBe(false);
-});
-
-it('后台答复打开以后告诉界面，这时已经知道是不是过期的节目；销毁以后答复不再告诉界面', async () => {
-  // The program sends its state before it answers the open: the editor learns it is outdated only from this call.
-  const outdated = fixture(Promise.resolve('outdated')), adopted = fixture(Promise.resolve('adopted'));
-  outdated.emit({ sequence: 2, state: { ...emptyInternalPlayerState, status: 'paused', itemId: 'song' } });
-  expect(outdated.answered).toEqual([]);
-  await outdated.player.play('song'); await adopted.player.play('song');
-  expect(outdated.answered).toEqual([true]); expect(adopted.answered).toEqual([false]);
-  let release!: () => void; const wait = new Promise<NativeProgramAttachment>(resolve => { release = () => resolve('outdated'); }), late = fixture(wait);
-  await late.player.dispose(); release(); await wait;
-  expect(late.dependencies.attached).not.toHaveBeenCalled();
+it('节目在播哪一版按事件里的版本号认：是这一页送过的就知道是哪个工程，接回的另一页的版本不知道（null）', async () => {
+  const f = fixture(); await settle();
+  expect(f.player.attached).toBe(true);
+  f.emit();
+  expect(f.player.project).toBe(song);
+  f.emit({ documentVersion: { sessionId: crypto.randomUUID(), revision: 7 } });
+  expect(f.player.project).toBeNull();
 });
 
 it('随时可播放：灯光需要处理的歌也直接发给后台播放，不弹窗、不拦，由后台显示提示（2026-10-26）', async () => {
@@ -122,4 +125,59 @@ it('打开被拒绝、因为上一首还没停下：按停止照样发给后台�
   await vi.waitFor(() => expect(other.dependencies.notice).toHaveBeenCalledOnce());
   await other.player.stop();
   expect(other.api.controlNativeProgram).not.toHaveBeenCalled();
+});
+
+// 0.5.9 S7：原来每次修改都关掉节目再打开一个。
+it('同一个工程的修改只送新的一版，不重新打开；送的是整份工程', async () => {
+  const f = fixture(); await settle();
+  f.edit(); await settle();
+  expect(f.api.openNativeProgram).toHaveBeenCalledOnce();
+  expect(f.api.controlNativeProgram).not.toHaveBeenCalled();
+  expect(f.api.documentNativeProgram).toHaveBeenCalledOnce();
+  expect(f.api.documentNativeProgram.mock.calls[0]![0]).toMatchObject({ ownerId: f.ownerId, revision: 2, base: null,
+    key: { sessionId: SESSION, projectId: song.projectId, projectPath: 'C:/test/show.tblink' }, change: { kind: 'full', document: JSON.stringify(song) } });
+});
+
+it('上一版还在路上时，开始播放之前先把最新的一版送过去，播放跟在它后面', async () => {
+  const f = fixture(); await settle();
+  let answer!: () => void;
+  f.api.documentNativeProgram.mockImplementationOnce(request => new Promise(resolve => { answer = () => resolve({ kind: 'applied', revision: request.revision, effect: 'stopped' }); }));
+  f.edit(); f.edit();
+  expect(f.api.documentNativeProgram).toHaveBeenCalledOnce();
+  await f.player.play('song');
+  expect(f.api.documentNativeProgram.mock.calls.map(call => call[0].revision)).toEqual([2, 3]);
+  const order = [...f.api.documentNativeProgram.mock.invocationCallOrder, ...f.api.controlNativeProgram.mock.invocationCallOrder];
+  expect(order).toEqual([...order].sort((a, b) => a - b));
+  answer(); await settle();
+  expect(f.api.documentNativeProgram).toHaveBeenCalledTimes(2);
+});
+
+it('换了工程：拿着歌时不换，停下以后打开另一个；没有工程时不送也不报错', async () => {
+  const f = fixture(); await settle();
+  f.emit({ state: { ...emptyInternalPlayerState, status: 'playing', itemId: 'song' } });
+  const other = { ...song, projectId: crypto.randomUUID() };
+  f.edit({ project: other });
+  expect(f.api.openNativeProgram).toHaveBeenCalledOnce();
+  f.emit({ state: { ...emptyInternalPlayerState, status: 'stopped' } });
+  expect(f.api.openNativeProgram).toHaveBeenCalledTimes(2);
+  expect(f.api.openNativeProgram.mock.calls[1]![0]).toMatchObject({ document: JSON.stringify(other), revision: 2 });
+  await settle();
+  f.close();
+  expect(f.api.documentNativeProgram).not.toHaveBeenCalled(); expect(f.dependencies.notice).not.toHaveBeenCalled();
+});
+
+it('打开失败以后，下一次修改重新打开（原来每次修改都重建一次），不自己重试', async () => {
+  const f = fixture(Promise.reject(new Error('授权没有通过')));
+  await vi.waitFor(() => expect(f.dependencies.notice).toHaveBeenCalledOnce());
+  await settle(); expect(f.api.openNativeProgram).toHaveBeenCalledOnce();
+  f.api.openNativeProgram.mockResolvedValue('opened');
+  f.edit(); await settle();
+  expect(f.api.openNativeProgram).toHaveBeenCalledTimes(2);
+  expect(f.player.attached).toBe(true);
+});
+
+it('改了设备设置：发 configure，带上现在的设置', async () => {
+  const f = fixture(); await settle();
+  f.player.configure(); await settle();
+  expect(f.api.controlNativeProgram.mock.calls[0]![0].operation).toEqual({ kind: 'configure', configuration: { outputDeviceId: 'default', mtcPortName: null, preciseSeeking: false } });
 });

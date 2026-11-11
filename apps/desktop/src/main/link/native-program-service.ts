@@ -1,14 +1,20 @@
 import { emptyInternalPlayerState, previousNotStopped, toUserErrorReason, type InternalPlayerState, type NativeProgramPlayer, type PlaybackBoundary } from '@tb/core/link';
-import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema, parseLinkProject,
-  type LinkProject, type NativeProgramAttachment, type NativeProgramOpen, type NativeProgramConfiguration, type NativeProgramEvent } from '@tb/schema';
+import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramDocumentSchema, nativeProgramEventSchema, parseLinkProject,
+  type LinkProject, type NativeProgramAttachment, type NativeProgramDocumentAnswer, type NativeProgramDocumentVersion, type NativeProgramOpen,
+  type NativeProgramConfiguration, type NativeProgramEvent } from '@tb/schema';
 import type { ClosedProgramFaults } from './main-process-errors';
 
 type Host = { controller: Pick<NativeProgramPlayer, keyof NativeProgramPlayer>; close(): Promise<void>;
   /** Reads the audio engine now, not a status kept from before (0.5.9 S6): true once it has stopped. Asked only after
    * this host's close failed. A host that cannot tell is taken as still sounding. */
   engineStopped?(): boolean };
-type Entry = { request: NativeProgramOpen; projectId: string; document: string; host: Host | null; configuration: NativeProgramConfiguration;
-  state: InternalPlayerState; sequence: number; currentCueId: string | null; cancelled: boolean; orphaned: boolean;
+/** A version of the window's project the program has (0.5.9 S7). */
+type Version = { project: LinkProject; version: NativeProgramDocumentVersion };
+/** The program of one window's page, from its open until it closes (0.5.9 S7: one session, not one per edit). `project`
+ * and `version` are what it plays now; `pending`, a newer version that waits for the held song to stop. */
+type Entry = { request: NativeProgramOpen; projectId: string; project: LinkProject; version: NativeProgramDocumentVersion;
+  pending: Version | null; host: Host | null; configuration: NativeProgramConfiguration;
+  state: InternalPlayerState; currentCueId: string | null; cancelled: boolean; orphaned: boolean;
   cancellation: AbortController; ready: Promise<void>;
   /** Builds this entry's host on the close chain; again when the operator presses stop after `heldBack`. */
   start: () => Promise<void>;
@@ -24,14 +30,16 @@ type Factory = (project: LinkProject, request: NativeProgramOpen, callbacks: {
   closedFault(message: string, itemId: string | null, kind?: 'leftOpen'): void;
 }) => Host;
 
-/** Owns the single formal program session. Old UI disposal cannot stop a new
- * program; replacement waits for acknowledged cleanup, never starts a second output.
- * A program keeps running when its window's renderer exits or its page reloads, until
- * the next page of the same project takes it over. */
 /** The program as the show state reads it (ShowStateService): the player's state, the project it plays and whether a
  * window shows it (false while it plays on after its page is gone). */
 export type NativeProgramSnapshot = { state: InternalPlayerState; projectPath: string; projectId: string; watched: boolean };
 
+/** Owns the single formal program session (0.5.9 S7, design 02 §3.2). A window's page opens it once; the page's edits
+ * reach it as versions (`document`), so editing never closes or opens it again: it ends at the quit, when its page is
+ * gone with nothing held, when the page leaves 联动台播放 (close), or when the page opens another project or path. Old UI
+ * disposal cannot stop a new program; replacement waits for acknowledged cleanup, never starts a second output. A
+ * program keeps running when its window's renderer exits or its page reloads, until the next page of the same project
+ * takes it over. */
 export class NativeProgramService {
   private current: Entry | null = null;
   /** Closes and openings in turn. Never rejected (0.5.9 S6): one close that fails holds up no later close or open; what it
@@ -39,6 +47,9 @@ export class NativeProgramService {
   private cleanup: Promise<void> = Promise.resolve();
   private held: Held | null = null;
   private running = false;
+  /** Event order across every program of the app: a page keeps one owner for all the programs it opens (0.5.9 S7), and
+   * drops an event not newer than the last it heard, so a new program's events never count from 0 again. */
+  private sequence = 0;
   private readonly stateListeners = new Set<() => void>();
   /** Every argument is required, so link-main cannot leave one out:
    * - `runningChanged`: the program started or stopped preparing, playing or paused, attached to a window or not; the
@@ -58,21 +69,27 @@ export class NativeProgramService {
     const request = nativeProgramOpenSchema.parse(value);
     const project = parseLinkProject(JSON.parse(request.document));
     if (project.playbackSource !== 'internal') throw new Error('只有“联动台播放”的工程才能在后台播放');
-    if (this.current?.request.ownerId === request.ownerId) throw new Error('节目控制会话编号重复');
-    const previous = this.current, document = JSON.stringify(project);
+    const previous = this.current, version = { sessionId: request.sessionId, revision: request.revision };
+    // The same page opens again only for another project or path, or after its open failed: never in place of the song
+    // it holds (opening another project waits for 停止 in the window).
+    if (previous?.request.ownerId === request.ownerId && active(previous.state)) throw new Error('节目还在播放，现在不能换工程。请先停止播放');
     if (previous?.orphaned && active(previous.state)) {
       if (previous.request.projectPath !== request.projectPath || previous.projectId !== project.projectId) {
         // There is no control here for the program playing in the background: only its own project takes it back (2026-11-10).
         throw new Error(`界面重新加载前的节目还在后台播放，现在打开的工程不能播放。请打开工程「${previous.request.projectPath}」接回控制，再在那里停止播放`);
       }
+      const same = JSON.stringify(previous.project) === JSON.stringify(project);
+      // The program plays on with the version it has; the page's own version waits for 停止 (design 02 问题 3). The
+      // same document is this page's version already.
+      if (same) { previous.version = version; previous.pending = null; } else previous.pending = { project, version };
       previous.orphaned = false; previous.request = request; previous.configuration = request.configuration;
       previous.host?.controller.setWatched(true);
       this.stateChanged();
       this.emit(previous);
-      return previous.document === document ? 'adopted' : 'outdated';
+      return same ? 'adopted' : 'outdated';
     }
-    const entry: Entry = { request, projectId: project.projectId, document, host: null, configuration: request.configuration,
-      state: { ...emptyInternalPlayerState }, sequence: 0, currentCueId: null, cancelled: false, orphaned: false,
+    const entry: Entry = { request, projectId: project.projectId, project, version, pending: null, host: null, configuration: request.configuration,
+      state: { ...emptyInternalPlayerState }, currentCueId: null, cancelled: false, orphaned: false,
       cancellation: new AbortController(), ready: Promise.resolve(), start: () => Promise.resolve(), heldBack: false };
     // Nobody waits for this close: what fails in it is logged and shown here, and stays `held` if the engine went on.
     if (previous) { previous.cancelled = true; previous.cancellation.abort(); void this.enqueueClose(previous).catch((error: unknown) => this.closeFailed(previous, error)); }
@@ -83,9 +100,15 @@ export class NativeProgramService {
       await checkProject?.(request.projectPath, project);
       // A program builds at most one host.
       if (this.current !== entry || entry.cancelled || entry.host) return;
-      entry.host = this.create(project, request, {
+      // The version the page sent last, also one that reached it while this was authorized.
+      entry.host = this.create(entry.project, { ...request, revision: entry.version.revision }, {
         configuration: () => entry.configuration,
-        changed: state => { entry.state = state; this.reportRunning(); this.emit(entry); },
+        changed: state => {
+          entry.state = state;
+          // The held song stopped: the newest version of the page plays from the next song on.
+          if (entry.pending && !active(state)) this.apply(entry, entry.pending);
+          this.reportRunning(); this.emit(entry);
+        },
         cueChanged: id => { entry.currentCueId = id; this.emit(entry); },
         closedFault: (message, itemId, kind) => {
           if (!kind) { this.faults.report(message, { projectId: entry.projectId, itemId }); return; }
@@ -99,6 +122,27 @@ export class NativeProgramService {
     entry.ready = this.cleanup.then(entry.start);
     await entry.ready;
     return 'opened';
+  }
+
+  /** A newer version of the page's project (0.5.9 S7, design 02 §3.3–§3.4), needing no license: it only changes what the
+   * program holds in memory. With no song held it plays from the next song on; with one held it waits for 停止. A page
+   * whose program closed, another page, and another project or path are refused: those open again. Applied in the order
+   * the page sent them, before any later control of the page. */
+  document(value: unknown): NativeProgramDocumentAnswer {
+    const request = nativeProgramDocumentSchema.parse(value), entry = this.current;
+    if (!entry || entry.cancelled || entry.orphaned || entry.request.ownerId !== request.ownerId) throw new Error(PROGRAM_CLOSED);
+    // Only whole documents for now: an increment has nothing here to build on.
+    if (request.base !== null) return { kind: 'resync', reason: '节目这边没有这次修改所基于的版本' };
+    if (request.key.projectId !== entry.projectId || request.key.projectPath !== entry.request.projectPath) {
+      throw new Error('这一版属于另一个工程，节目没有换工程。请重新打开工程');
+    }
+    const project = parseLinkProject(JSON.parse(request.change.document));
+    if (project.projectId !== entry.projectId) throw new Error('这一版属于另一个工程，节目没有换工程。请重新打开工程');
+    if (project.playbackSource !== 'internal') throw new Error('只有“联动台播放”的工程才能在后台播放');
+    const next: Version = { project, version: { sessionId: request.key.sessionId, revision: request.revision } };
+    if (active(entry.state)) { entry.pending = next; return { kind: 'applied', revision: request.revision, effect: 'next-pass' }; }
+    this.apply(entry, next); this.emit(entry);
+    return { kind: 'applied', revision: request.revision, effect: 'stopped' };
   }
 
   /** The owning window's page is gone: its renderer exited, or a new page replaced it (window-page.ts). A program that
@@ -132,7 +176,7 @@ export class NativeProgramService {
       if (request.operation.kind === 'close') return;
       // The program this window opened is closed (by the quit, a page reload or a newer program); a window the quit
       // returned to opens a new one by itself (NativeProgramClosed).
-      throw new Error('这个窗口的节目已经关了，这次操作没有执行。请重新打开工程，再开始播放');
+      throw new Error(PROGRAM_CLOSED);
     }
     if (request.operation.kind === 'close') { await this.close(); return; }
     // Refused because the song before had not stopped: stop is the operator asking again (not a retry of ours). The
@@ -193,6 +237,11 @@ export class NativeProgramService {
     this.stateListeners.add(listener);
     return () => { this.stateListeners.delete(listener); };
   }
+  /** `next` is what the program plays from now on; with no host yet, the host is built with it. */
+  private apply(entry: Entry, next: Version): void {
+    entry.project = next.project; entry.version = next.version; entry.pending = null;
+    entry.host?.controller.updateProject(next.project, next.version.revision, entry.request.projectPath);
+  }
   /** The current program is closed: nothing reaches it any more, and a new one waits for its outputs. */
   private retire(entry: Entry): Promise<void> {
     this.current = null; entry.cancelled = true; entry.cancellation.abort();
@@ -247,10 +296,14 @@ export class NativeProgramService {
     if (entry.cancelled || entry.orphaned || this.current !== entry) return;
     const clock = entry.host?.controller.clock.read() ?? { positionMs: entry.state.positionMs, durationMs: entry.state.durationMs,
       ready: false, playing: false, seeking: entry.state.status === 'preparing' };
-    this.publish(nativeProgramEventSchema.parse({ version: 1, ownerId: entry.request.ownerId, sequence: ++entry.sequence,
-      state: entry.state, clock, currentCueId: entry.currentCueId, ...(boundary ? { boundary } : {}) }));
+    this.publish(nativeProgramEventSchema.parse({ version: 1, ownerId: entry.request.ownerId, sequence: ++this.sequence,
+      state: entry.state, clock, currentCueId: entry.currentCueId, documentVersion: entry.version, ...(boundary ? { boundary } : {}) }));
   }
 }
+
+/** What a page is told whose program is closed (by the quit, a page reload or a newer program); a page the quit
+ * returned to opens a new one by itself (NativeProgramClosed). */
+const PROGRAM_CLOSED = '这个窗口的节目已经关了，这次操作没有执行。请重新打开工程，再开始播放';
 
 function active(state: InternalPlayerState): boolean {
   return state.status === 'preparing' || state.status === 'playing' || state.status === 'paused';

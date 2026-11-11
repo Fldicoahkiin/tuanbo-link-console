@@ -4,9 +4,9 @@ import { PlayerViewStore } from './stores/player-view-store';
 import { PlaybackMidiInput } from '../registry/playback-midi-input';
 import { emptyInternalPlayerState, firstTimeWarning, mtcOutputSettings, toUserErrorMessage } from '@tb/core/link';
 import { RemoteNativeProgramPlayer, type RemotePlayerDependencies } from './runtime/remote-native-program-player';
+import { programVersionKey, type ProgramDocument } from './runtime/program-document-feed';
 import { songVolumeSync } from './runtime/song-volume-sync';
 import { playerEngineLabel } from './view-models/internal-audio-engine';
-import { holdsSong } from './view-models/picture-on-air';
 import type { LinkRuntimeCoordinator } from './runtime/link-runtime-coordinator';
 import { useDocumentStore } from './stores/document-store';
 import { useIntegrationStore } from './stores/integration-store';
@@ -15,38 +15,54 @@ import { useRuntimeStore } from './stores/runtime-store';
 import { useDisplayPreferences } from './stores/display-preferences-store';
 import { useSelectedProgram } from './useSelectedProgram';
 import { useKeyCommands, useSongShortcuts } from './keys/useKeyCommands';
-import { followAudioConfiguration, openAnswer, playsOutdated, reopensShown, type OpenAnswer } from './program-attachment';
+import { programPlays } from './program-attachment';
 
 /** Player notices already logged as warnings in this window. */
 const notedNotices = new Set<string>();
 
+/** The device settings the program plays with, as they are now. The program keeps a song's sound card until the song
+ * ends (NativeProgramPlayer.runOutput), so a change made while one plays is heard from the next song on. */
+export function programConfiguration(): ReturnType<RemotePlayerDependencies['configuration']> {
+  const profile = useIntegrationStore.getState().profile;
+  const mtc = mtcOutputSettings(profile);
+  return { lightingProfile: profile, outputDeviceId: profile?.internalPlayer?.nativeAudioOutputDeviceId ?? 'default',
+    audioSampleRate: profile?.internalPlayer?.audioSampleRate ?? 48000, mtcPortName: mtc.portName, mtcSendMode: mtc.sendMode,
+    preload: profile?.internalPlayer?.preload ?? true, fadeInMs: profile?.internalPlayer?.fadeInMs ?? 0, fadeOutMs: profile?.internalPlayer?.fadeOutMs ?? 500 };
+}
+
+/** The window's project as the program gets it (the document store, 0.5.9 S7); null when it follows P1 or none is open. */
+export function programDocument(): ProgramDocument | null {
+  const { project, path, sessionId, revision } = useDocumentStore.getState();
+  return project?.playbackSource === 'internal' ? { project, path: path ?? '', sessionId, revision } : null;
+}
+
+/** `project`: the project the window shows the player with (LinkApp keeps it until 停止); the program itself gets every
+ * version from the document store (RemoteNativeProgramPlayer.documentChanged). */
 export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, ready: boolean, project: LinkProject | null) {
-  const path = useDocumentStore((state) => state.path);
   const [controller, setController] = useState<RemoteNativeProgramPlayer | null>(null);
   const [view] = useState(() => new PlayerViewStore());
   const state = useSyncExternalStore(view.subscribeControl, view.readControl);
-  const [generation, setGeneration] = useState(0);
-  // The background program answers the open after the state it sends; kept per controller, so it shows while paused
-  // too. Null until the controller heard it (program-attachment).
-  const [answer, setAnswer] = useState<OpenAnswer<RemoteNativeProgramPlayer> | null>(null);
-  const outdated = playsOutdated(controller, answer);
-  useEffect(() => {
-    // A program taken over after a window reload may play an older document; once it stops, open the shown one.
-    if (reopensShown(outdated, state.status)) setGeneration(value => value + 1);
-  }, [outdated, state.status]);
+  // The version the program last said it plays (NativeProgramEvent.documentVersion), and how many opens it answered.
+  const [programVersion, setProgramVersion] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState(0);
+  const plays = programPlays(controller, programVersion, attachments);
   const profile = useIntegrationStore((value) => value.profile);
   const obsStatus = useIntegrationStore(value => value.obs.status);
   const notifySelection = useCallback((message: string) => controller?.reportUnavailable(message), [controller]);
   const [selectedItemId] = useSelectedProgram(notifySelection);
   useEffect(() => {
+    // Also each time the program takes a newer version: the selected song is prepared as it is now.
     if (obsStatus === 'connected' && selectedItemId) controller?.preloadSelected(selectedItemId);
-  }, [controller, obsStatus, selectedItemId]);
-  const requestedDevice = profile?.internalPlayer?.nativeAudioOutputDeviceId ?? 'default';
-  const requestedRate = profile?.internalPlayer?.audioSampleRate ?? 48000;
-  const [audioConfiguration, setAudioConfiguration] = useState({ deviceId: requestedDevice, sampleRate: requestedRate });
-  // While rendering, not in an effect: the program below must open with the configured output the first time.
-  const followed = followAudioConfiguration(audioConfiguration, { deviceId: requestedDevice, sampleRate: requestedRate }, holdsSong(state.status));
-  if (followed !== audioConfiguration) setAudioConfiguration(followed);
+  }, [controller, obsStatus, selectedItemId, programVersion]);
+  useEffect(() => {
+    if (!controller) return;
+    // The device settings changed: the program plays the next song with them (a song held keeps its sound card).
+    let last = JSON.stringify(programConfiguration());
+    return useIntegrationStore.subscribe(() => {
+      const next = JSON.stringify(programConfiguration());
+      if (next !== last) { last = next; controller.configure(); }
+    });
+  }, [controller]);
   const controlInputName = profile?.midiPortProfiles.find((entry) => entry.id === profile.internalPlayer?.controlInputPortProfileId)?.portName;
   useEffect(() => {
     if (!controller || !controlInputName) return;
@@ -56,7 +72,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   }, [controller, controlInputName]);
   useEffect(() => {
     if (!controller || !project) return;
-    // Volume-only stand-in for the version stream (song-volume-sync): a saved song volume reaches the program at once.
+    // A held song takes the next version only after 停止 (0.5.9 S7); its saved volume reaches it at once (song-volume-sync).
     const sync = songVolumeSync(project, (itemId, volume) => controller.setSongVolume(itemId, volume));
     sync(useDocumentStore.getState().project);
     return useDocumentStore.subscribe(state => sync(state.project));
@@ -77,30 +93,28 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     find: key => keys.project.rundown.find((entry) => entry.enabled && entry.playback?.shortcut === key)?.id,
     play: itemId => void keys.controller.play(itemId)
   });
+  const internal = coordinator !== null && project?.playbackSource === 'internal';
+  // One program per window page (0.5.9 S7): opened once, sent each newer version of the project, so editing never closes
+  // or opens it. It closes when the window leaves 联动台播放 (P1, no project, or the page goes).
   useEffect(() => {
-    if (!coordinator || !project || project.playbackSource !== 'internal' || !ready) {
-      setController(null); view.publish(emptyInternalPlayerState); return;
+    if (!internal || !ready) {
+      setController(null); setProgramVersion(null); view.publish(emptyInternalPlayerState); return;
     }
     // The main-process program host prepares audio, OBS, MIDI and lighting; this window only configures and observes it.
     const dependencies: RemotePlayerDependencies = {
-      configuration: () => {
-        const profile = useIntegrationStore.getState().profile;
-        const mtc = mtcOutputSettings(profile);
-        return { lightingProfile: profile, outputDeviceId: audioConfiguration.deviceId, audioSampleRate: audioConfiguration.sampleRate, mtcPortName: mtc.portName, mtcSendMode: mtc.sendMode,
-          preload: profile?.internalPlayer?.preload ?? true, fadeInMs: profile?.internalPlayer?.fadeInMs ?? 0, fadeOutMs: profile?.internalPlayer?.fadeOutMs ?? 500 };
-      }, changed: view.publish,
+      configuration: programConfiguration, changed: view.publish, document: programDocument,
       // A channel that cannot join repeats song after song until fixed: a warning the first time, then info.
       notice: (message, itemId) => {
-        void desktop.recordLog({ level: firstTimeWarning(notedNotices, message), category: 'state', message, projectId: project.projectId,
+        const projectId = useDocumentStore.getState().project?.projectId;
+        void desktop.recordLog({ level: firstTimeWarning(notedNotices, message), category: 'state', message, ...(projectId ? { projectId } : {}),
           ...(itemId ? { itemId } : {}), device: '播放器' })
           .catch((error: unknown) => console.error('正式播放通道提示未能保存到日志', error));
       },
       preciseSeeking: () => useDisplayPreferences.getState().preciseSeeking,
-      attached: () => setAnswer(openAnswer(player)),
-      // The quit closed this program and the operator went back to the app: open a new one, so the next song plays.
-      closed: () => setGeneration(value => value + 1)
+      attached: () => setAttachments(value => value + 1)
     };
-    const player = new RemoteNativeProgramPlayer(project, path ?? '', useDocumentStore.getState().revision, dependencies, desktop, event => {
+    const player = new RemoteNativeProgramPlayer(dependencies, desktop, event => {
+      setProgramVersion(programVersionKey(event.documentVersion));
       const runtime = useRuntimeStore.getState();
       const status = event.state.status === 'playing' ? 'running' : event.state.status === 'stopped' ? 'idle'
         : event.state.status === 'preparing' ? 'preflight' : event.state.status;
@@ -108,7 +122,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
         runtime.setState({ state: status, currentItemId: event.state.itemId, currentCueId: event.currentCueId, mode: 'live', reason: event.state.error });
       }
     });
-    coordinator.onInternalStop(() => player.externalStop());
+    const unsubscribeDocument = useDocumentStore.subscribe(() => player.documentChanged());
     const unsubscribe = useRuntimeStore.subscribe((next, previous) => {
       if (next.state !== previous.state && ['error', 'timecodeLost'].includes(next.state)) player.runtimeUnavailable(next.reason ?? '联动已中断');
     });
@@ -124,12 +138,19 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       const media = next.mediaReports !== previous.mediaReports ? next.mediaReports.at(-1) : undefined;
       if (media?.status === 'failed') player.reportFault(`素材播放失败：${media.event.assetName} · ${media.error ?? '未知错误'}`);
     });
-    setController(player); view.publish(emptyInternalPlayerState);
+    setController(player); setProgramVersion(null); view.publish(emptyInternalPlayerState);
     return () => {
-      unsubscribe(); unsubscribeFaults(); coordinator.onInternalStop(null);
+      unsubscribeDocument(); unsubscribe(); unsubscribeFaults();
       void player.dispose().catch(error => dependencies.notice(`关闭播放器失败：${toUserErrorMessage(error)}`, null));
     };
-  }, [coordinator, project, path, ready, audioConfiguration, view, generation]);
+  }, [internal, ready, view]);
+  // The coordinator is made again with each project the window shows; the program stays (0.5.9 S7).
+  useEffect(() => {
+    if (!coordinator || !controller) return;
+    coordinator.onInternalStop(() => controller.externalStop());
+    return () => coordinator.onInternalStop(null);
+  }, [coordinator, controller]);
   const engine = playerEngineLabel(profile, project);
-  return useMemo(() => ({ controller, state, view, engine, outdated }), [controller, state, view, engine, outdated]);
+  const { outdated, project: programProject } = plays;
+  return useMemo(() => ({ controller, state, view, engine, outdated, programProject }), [controller, state, view, engine, outdated, programProject]);
 }

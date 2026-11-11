@@ -61,7 +61,9 @@ export class NativeProgramHost {
         if (signal?.aborted) throw new Error('MIDI 准备已取消');
         signal?.addEventListener('abort', cancelled, { once: true });
         try {
-          await this.midi.prepare(project, { sessionId: audio.sessionId, generation: audio.generation, itemId });
+          // The project the player plays now, not the one this host was built with (0.5.9 S7: the program stays open
+          // while the window edits, and takes each version once no song is held).
+          await this.midi.prepare(this.controller.currentProject(), { sessionId: audio.sessionId, generation: audio.generation, itemId });
           if (signal?.aborted || this.disposed) throw new Error('MIDI 准备已取消');
         } finally { signal?.removeEventListener('abort', cancelled); }
       },

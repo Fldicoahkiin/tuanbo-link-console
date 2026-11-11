@@ -7,7 +7,7 @@ import { closedProgramFaultReporter } from './main-process-errors';
 import { quitInOrder, type QuitSteps } from './quit-order';
 import type { ExternalApplicationId } from './external-process-manager';
 
-function request(): NativeProgramOpen { return { version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1,
+function request(): NativeProgramOpen { return { version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1, sessionId: randomUUID(),
   document: JSON.stringify({ ...createEmptyLinkProject('退出顺序'), playbackSource: 'internal' }),
   configuration: { outputDeviceId: 'default', mtcPortName: null, preciseSeeking: false } }; }
 function host(order: string[]) {
@@ -19,7 +19,7 @@ function host(order: string[]) {
     seek: vi.fn(() => Promise.resolve()), scrub: vi.fn(() => Promise.resolve()), skip: vi.fn(() => Promise.resolve()),
     setSongVolume: vi.fn(), previewVolume: vi.fn(), overrideVolume: vi.fn(), setEndAction: vi.fn(), setPlaylist: vi.fn(), toggleMtc: vi.fn(), receiveMidi: vi.fn(), fade: vi.fn(),
     preloadSelected: vi.fn(), freeze: vi.fn(), reportUnavailable: vi.fn(), runtimeUnavailable: vi.fn(), reportFault: vi.fn(), clearFault: vi.fn(), externalStop: vi.fn(),
-    setWatched: vi.fn(), getAudioAnalysis: () => null, dispose: vi.fn(() => Promise.resolve()) } };
+    setWatched: vi.fn(), updateProject: vi.fn(), currentProject: vi.fn(), getAudioAnalysis: () => null, dispose: vi.fn(() => Promise.resolve()) } };
 }
 const command = (input: NativeProgramOpen, operation: NativeProgramOperation) => ({ version: 1, ownerId: input.ownerId, operation });
 const play = (service: NativeProgramService, input: NativeProgramOpen) => service.control(command(input, { kind: 'play', itemId: 'song' }))
