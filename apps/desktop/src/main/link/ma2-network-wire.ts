@@ -15,7 +15,9 @@ export class Ma2NetworkWire implements Ma2Wire {
   }
   private async call(action: string, id: string, argumentsText = ''): Promise<string> {
     const token = randomBytes(16).toString('hex');
-    const missing = Buffer.from('请先在 MA2 运行新版 tblink_bridge 插件').toString('hex');
+    // The console lost the bridge's globals (a Show was loaded or the console restarted).
+    // The bridge is installed at login only, so the way back is to connect again.
+    const missing = Buffer.from('控台连接组件没在运行，可能是控台换过 Show 或重启过。没在播放时，到设置里把控台断开再连接一次，联动台会把它装回去').toString('hex');
     const prefix = `TBLINK_RPC_${token}:`;
     const line = `Lua "if TBLINK_NET then TBLINK_NET('${token}','${action}','${id}'${argumentsText}) else gma.echo('${prefix}ERR:${missing}') end"`;
     const result = await this.connection.command(line, (text) => ma2ResponseLine(text, prefix));

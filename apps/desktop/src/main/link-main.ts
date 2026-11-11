@@ -1094,6 +1094,7 @@ function registerIpc(
   handle('link:ma2-effect-library', async (event, value: unknown) => {
     const request = ma2CatalogRequestSchema.parse(value);
     if (request.projectPath) projectAccess.requireShown(request.projectPath);
+    const directoryCheck = request.targets?.length === 0;
     const task = beginMa2Read(event, request.progressId);
     try {
       await ma2NetworkReady;
@@ -1103,10 +1104,12 @@ function registerIpc(
       const report = async (update: import('@tb/schema').Ma2ReadProgressUpdate): Promise<void> => { await recovery?.record(update); task.report?.(update); };
       const result = request.network ? await ma2Network.readLibrary(request.network, report, 'library', task.signal, request.targets, request.expectedSource, request.details) : await readMa2EffectLibrary((await getMa2Connection(request)).bridge, () => runtimeActive, report, task.signal, request.targets, request.expectedSource, request.details);
       await recovery?.complete(result);
-      await logger.record({ level: result.errors.length ? 'error' : 'info', category: 'device', device: 'MA2', message: `效果库读取 ${result.sequences.length} 条序列；异常：${JSON.stringify(result.errors)}`, result: result.errors.length ? 'failed' : 'succeeded' });
+      // With no targets this is the live session's check of the sequence directory, asked
+      // every few seconds: it reads no sequence, so a success is not a line in the log.
+      if (!directoryCheck) await logger.record({ level: result.errors.length ? 'error' : 'info', category: 'device', device: 'MA2', message: `效果库读取 ${result.sequences.length} 条序列；异常：${JSON.stringify(result.errors)}`, result: result.errors.length ? 'failed' : 'succeeded' });
       return result;
     } catch (error) {
-      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `效果库读取失败：${String(error)}`, result: 'failed' });
+      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `${directoryCheck ? '控台序列目录没有核对成功' : '效果库读取失败'}：${String(error)}`, result: 'failed' });
       throw error;
     } finally { task.finish(); }
   });
