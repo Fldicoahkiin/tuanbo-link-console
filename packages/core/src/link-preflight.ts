@@ -1,5 +1,6 @@
 import { parseIntegrationProfile, parseLinkProject, type IntegrationProfile, type LinkAction, type LinkProject, type MtcFrameRate } from '@tb/schema';
 import { compileManagedMediaTimeline } from './managed-media-timeline';
+import { clipObsTransform, obsMaterialPresentation } from './media-obs-transform';
 import { validateP1TimecodeRanges } from './p1-auto-follow';
 import { expectedMa2Shows, ma2ShowMismatch } from './ma2-show-identity';
 
@@ -130,11 +131,12 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
     for (const clip of item.referenceMediaClips) {
       const asset = project.mediaAssets.find((candidate) => candidate.id === clip.assetId);
       if (!asset) continue;
-      const scaleX = clip.canvasTransform.scale * clip.canvasTransform.scaleX;
-      const scaleY = clip.canvasTransform.scale * clip.canvasTransform.scaleY;
-      if (asset.width && asset.height && (scaleX > 1 || scaleY > 1)) {
+      // Only a clip whose look the project sends to OBS is sized by it; the others show as OBS has them (E16).
+      const look = clipObsTransform(clip);
+      const { scaleX, scaleY } = look ? obsMaterialPresentation(look, project.outputCanvas).sceneItemTransform : { scaleX: 1, scaleY: 1 };
+      if (asset.width && asset.height && (Math.abs(scaleX) > 1 || Math.abs(scaleY) > 1)) {
         checks.push(warning(`quality.upscale.${clip.id}`, `素材清晰度：${asset.name}`,
-          `原图 ${asset.width}×${asset.height}，会放大到约 ${Math.round(asset.width * scaleX)}×${Math.round(asset.height * scaleY)}；放大不会让画面更清晰`));
+          `原图 ${asset.width}×${asset.height}，会放大到约 ${Math.round(asset.width * Math.abs(scaleX))}×${Math.round(asset.height * Math.abs(scaleY))}；放大不会让画面更清晰`));
       }
       checks.push(context.mediaAssets[asset.id]?.fileAvailable
         ? passed(`asset.media.${clip.id}`, `时间线素材：${asset.name}`, '文件可读')

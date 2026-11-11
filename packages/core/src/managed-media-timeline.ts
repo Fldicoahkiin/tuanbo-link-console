@@ -7,6 +7,7 @@ import type {
 } from '@tb/schema';
 import { frameNumberToTimecode } from './mtc-timecode';
 import { audioContainsMediaSource } from './audio-edit';
+import { clipObsTransform } from './media-obs-transform';
 import { resolveTimelineClipSpan, wasTimelineFrameCrossed } from './timeline-state';
 
 export const MANAGED_OBS_SCENE_NAME = '团播联动台输出';
@@ -30,7 +31,9 @@ export type ManagedMediaEvent = {
   relativePath: string;
   sourceOffsetMs: number;
   embeddedAudioEnabled: boolean;
-  transform: ReferenceCanvasTransform;
+  /** The clip's look in OBS, set on the decoder's scene item before it goes on air; undefined leaves OBS's look as it
+   * is (`media-obs-transform.ts`). */
+  transform?: ReferenceCanvasTransform | undefined;
 };
 
 export type ManagedMediaTimeline = {
@@ -87,7 +90,7 @@ export function collectManagedMediaTimeline(project: LinkProject, itemId: string
       embeddedAudioEnabled: asset.kind === 'audio' || asset.kind === 'video' && clip.embeddedAudioEnabled !== false
         && !(project.playbackSource === 'internal' && audioContainsMediaSource(item.referenceAudio, asset.id))
         && (project.playbackSource !== 'internal' || project.internalVideoAudio === true),
-      transform: clip.canvasTransform
+      transform: asset.kind === 'audio' ? undefined : clipObsTransform(clip)
     } as const;
     return [
       { ...base, id: `managed-media:${clip.id}:start`, phase: 'start', frameNumber: span.startFrame },
@@ -127,6 +130,21 @@ export function materialSceneTargets(project: LinkProject, itemId?: string): Arr
     }
   }
   return result;
+}
+
+/** The clip of this song an OBS source of ours shows, for an edit of that source on the live canvas (E16): the
+ * material's decoder or its standby copy. Null for any other source (the user's own, and ours that are not a
+ * material's picture), which the live canvas edits in OBS as before. Among several clips of the material on that track
+ * the selected one; with none selected the edit is refused, since each clip keeps its own look. */
+export function clipOfMaterialSource(project: LinkProject, itemId: string, sourceName: string, selectedClipId: string | null): string | null {
+  const decoder = sourceName.endsWith('·预备') ? sourceName.slice(0, -'·预备'.length) : sourceName;
+  if (!decoder.startsWith(`${MANAGED_OBS_SOURCE_PREFIX}素材·`) || !decoder.endsWith('·来源')) return null;
+  const clips = [...new Set(collectManagedMediaTimeline(project, itemId).events
+    .filter(event => event.phase === 'start' && event.sourceName === decoder && event.assetKind !== 'audio').map(event => event.clipId))];
+  if (!clips.length) throw new Error('这个素材不在当前这首歌里，没有记下它的位置。请在这首歌的时间线上调整');
+  if (selectedClipId && clips.includes(selectedClipId)) return selectedClipId;
+  if (clips.length === 1) return clips[0]!;
+  throw new Error('这个素材在这首歌里有好几段，每段的位置各记各的。请先在时间线上选中要改的那一段，再拖');
 }
 
 export function managedMediaEventTimecode(event: ManagedMediaEvent, frameRate: MtcFrameRate) {

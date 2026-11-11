@@ -19,7 +19,7 @@ export const projectDocumentResponseSchema = z.discriminatedUnion('kind', [
   /** `olderFormat`: the file is one older releases open and the content is not; its backup would get this name, and
    * `reasons` is what in the content needs the new format (`schemaVersion3Reasons`). */
   z.object({ ...envelope, kind: z.literal('save-checked'), olderFormat: z.object({ backupName: z.string().min(1).max(4096),
-    reasons: z.array(schemaVersion3ReasonSchema).max(2) }).strict().nullable() }).strict(),
+    reasons: z.array(schemaVersion3ReasonSchema).max(3) }).strict().nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal('inspected'), name: z.string().min(1) }).strict(),
   z.object({ ...envelope, kind: z.literal('error'), error: z.string().min(1).max(8192) }).strict()
 ]);

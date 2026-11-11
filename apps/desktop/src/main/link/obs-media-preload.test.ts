@@ -1,7 +1,7 @@
 import type { OBSWebSocket } from 'obs-websocket-js';
 import { expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkProject } from '@tb/schema';
-import { MediaPreparationFailed, ObsProgramSession, SceneOutputTimeline, materialSceneNames, type CueExecutionReport, type LinkDesktopApi } from '@tb/core/link';
+import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkProject, type ReferenceCanvasTransform } from '@tb/schema';
+import { MediaPreparationFailed, ObsProgramSession, SceneOutputTimeline, materialSceneNames, obsMaterialPresentation, type CueExecutionReport, type LinkDesktopApi } from '@tb/core/link';
 import { ObsMediaPreload, ObsPreparationNotNeeded } from './obs-media-preload';
 import { MediaOutOfStepError, ObsMediaScenes } from './obs-media-scenes';
 import { pictureDriftCheck, pictureExecutor, pictureUpcoming } from './native-obs-outputs';
@@ -50,7 +50,9 @@ function mocked(project: LinkProject) {
   return { preload, scenes, native, events: new SceneOutputTimeline(project, 'song').preloadEntries() };
 }
 
-type FakeInput = { scene: string; item: number; state: string; base: number; since: number; muted: boolean; enabled: boolean };
+type FakeInput = { scene: string; item: number; state: string; base: number; since: number; muted: boolean; enabled: boolean; look?: Record<string, unknown> };
+/** A write of a scene item's look: whose, to what, and whether the audience saw that item then. */
+type LookWrite = { sceneName: string; input: string; look: Record<string, unknown>; onAir: boolean };
 type OnAir = { decoder: string | null; state: string; cursor: number };
 type Batch = Array<{ requestType: string; requestData?: Record<string, unknown> }>;
 /** OBS keeping each input's own state, as on the field machine: which decoder the
@@ -61,8 +63,11 @@ function fakeObs() {
   let nextItem = 1, program = '', seekDelayMs = 0, cancelled = false, cancelAfterSwitch = false;
   /** The next matching batch waits here: sent, but OBS has not carried it out yet. */
   let gate: { match: (batch: Batch) => boolean; wait: Promise<void> } | null = null, holding = false;
-  const sent: string[] = [], onAir: OnAir[] = [];
+  const sent: string[] = [], onAir: OnAir[] = [], lookWrites: LookWrite[] = [];
+  /** Each time the audience sees another input, or the one it sees gets another look: the input and its look. */
+  const seenLooks: Array<{ input: string | null; look: string }> = [];
   const landing = new Map<string, { at: number; to: number }>();
+  const itemOf = (data: Record<string, unknown>): [string, FakeInput] | undefined => [...inputs].find(([, candidate]) => candidate.scene === data.sceneName && candidate.item === data.sceneItemId);
   /** OBS carries the request out with an error; a batch stops there. */
   const failures: Array<(type: string, data: Record<string, unknown>) => boolean> = [];
   /** Requests that never go out: a queue timeout, or the operator paused. */
@@ -88,10 +93,18 @@ function fakeObs() {
       case 'GetVideoSettings': return { baseWidth: 1080, baseHeight: 1920 };
       case 'GetInputSettings': return { inputKind: 'ffmpeg_source', inputSettings: { local_file: path, hw_decode: true, restart_on_activate: false, close_when_inactive: false, looping: false } };
       case 'GetSceneItemList': return { sceneItems: [...inputs].filter(([, entry]) => entry.scene === data.sceneName).map(([sourceName, entry]) => ({ sourceName, sceneItemId: entry.item })) };
-      case 'GetSceneItemTransform': return { sceneItemTransform: { sourceWidth: 1080, sourceHeight: 1920 } };
+      case 'GetSceneItemTransform': return { sceneItemTransform: { sourceWidth: 1080, sourceHeight: 1920, ...itemOf(data)?.[1].look } };
       case 'GetSourceFilterList': return { filters: [] };
       case 'GetSourceScreenshot': return { imageData: 'data:image/png;base64,x' };
-      case 'SetSceneItemTransform': case 'SetInputSettings': return {};
+      case 'SetSceneItemTransform': {
+        const entry = itemOf(data);
+        if (!entry) throw new Error('OBS 里没有这个场景项');
+        const look = data.sceneItemTransform as Record<string, unknown>;
+        lookWrites.push({ sceneName: String(data.sceneName), input: entry[0], look, onAir: entry[1].enabled && entry[1].scene === program });
+        entry[1].look = { ...entry[1].look, ...look };
+        return {};
+      }
+      case 'SetInputSettings': return {};
       case 'SetInputMute': input(data.inputName).muted = data.inputMuted === true; sent.push(`${data.inputMuted === true ? '静音' : '出声'} ${decoder(String(data.inputName))}`); return {};
       case 'SetSceneItemEnabled': {
         const entry = [...inputs].find(([, candidate]) => candidate.scene === data.sceneName && candidate.item === data.sceneItemId);
@@ -132,6 +145,9 @@ function fakeObs() {
     const view = seen();
     const last = onAir.at(-1);
     if (!last || last.decoder !== view.decoder || last.state !== view.state || last.cursor !== view.cursor) onAir.push(view);
+    const top = [...inputs].filter(([, entry]) => entry.scene === program && entry.enabled).sort((a, b) => b[1].item - a[1].item)[0];
+    const now = { input: top?.[0] ?? null, look: JSON.stringify(top?.[1].look ?? null) }, previous = seenLooks.at(-1);
+    if (!previous || previous.input !== now.input || previous.look !== now.look) seenLooks.push(now);
   };
   const client = {
     call: (type: string, data: Record<string, unknown> = {}) => {
@@ -155,7 +171,7 @@ function fakeObs() {
     return (...values) => { if (used || !match(...values)) return false; used = true; return true; };
   };
   return {
-    client: client as unknown as OBSWebSocket, sent, onAir, view: seen, decoder: (name: string): FakeInput => input(name), position: (name: string): number => Math.round(cursor(input(name))),
+    client: client as unknown as OBSWebSocket, sent, onAir, lookWrites, seenLooks, view: seen, decoder: (name: string): FakeInput => input(name), position: (name: string): number => Math.round(cursor(input(name))),
     /** The scene on program. */
     program: (): string => program,
     request: <T>(operation: () => Promise<T>, label: string): Promise<T> => {
@@ -1921,4 +1937,92 @@ it('片段停止没成功、而它的解码器已经不在画面上：不再把�
   expect(t.preload.resolveSource(primary)).toBe(primary);
   await t.preload.execute(third!, path);
   expect(t.scenes.execute).toHaveBeenLastCalledWith({ ...third!, sourceName: primary }, path, undefined, 'stop');
+});
+
+/* 0.5.9 E16: how each clip looks in OBS. A clip edited in the editor has its look set on its decoder's scene item
+ * when the material is prepared (core media-obs-transform.ts); a clip never edited since leaves OBS's look alone. */
+
+/** `project` with these clips' looks decided by the project, as an edit in the editor leaves them. */
+function withLooks(project: LinkProject, looks: Readonly<Record<string, ReferenceCanvasTransform>>): LinkProject {
+  const item = project.rundown[0]!;
+  return parseLinkProject({ ...project, schemaVersion: 3, rundown: [{ ...item, referenceMediaClips: item.referenceMediaClips.map(clip => {
+    const look = looks[clip.id];
+    return look ? { ...clip, canvasTransform: look, obsTransform: 'project' as const } : clip;
+  }) }] });
+}
+const leftLook: ReferenceCanvasTransform = { x: 0.25, y: 0.3, scale: 0.5, scaleX: 1, scaleY: 1, rotation: 0 };
+const rightLook: ReferenceCanvasTransform = { x: 0.75, y: 0.7, scale: 0.8, scaleX: 1.2, scaleY: 1, rotation: 15 };
+/** What OBS gets for a look on the fake's 1080×1920 canvas. */
+const inObs = (look: ReferenceCanvasTransform) => obsMaterialPresentation(look, { width: 1080, height: 1920 }).sceneItemTransform;
+/** The look a material scene item is created with: fitted to the canvas, OBS's own look from then on. */
+const createdLook = { positionX: 540, positionY: 960, alignment: 0, boundsType: 'OBS_BOUNDS_SCALE_INNER', boundsWidth: 1080, boundsHeight: 1920 };
+/** Only scenes of ours, and only material pictures in them, get a look written. */
+const ownMaterial = (write: LookWrite): boolean => write.sceneName.startsWith('团播联动台·素材·') && /·来源(·预备)?$/u.test(write.input);
+
+it('E16 规则：准备素材时，主解码器和预备解码器各按自己那一段在工程里的样子设好；交接时各用各的，播出中不改样子', async () => {
+  const project = withLooks(song([[0, 12000, 100], [12, 12000, 12100]]), { 'clip-0': leftLook, 'clip-1': rightLook }), obs = fakeObs();
+  const t = await live(project, obs);
+  const primary = new SceneOutputTimeline(project, 'song').preloadEntries()[0]!.sourceName, standby = `${primary}·预备`;
+  // Both decoders are prepared before the clock starts: each has its clip's look already.
+  expect(obs.decoder(primary).look).toMatchObject(inObs(leftLook));
+  expect(obs.decoder(standby).look).toMatchObject(inObs(rightLook));
+  expect(obs.lookWrites.every(ownMaterial)).toBe(true);
+  obs.lookWrites.length = 0;
+  await t.play(0, 13000, true);
+  expect(t.reports).toEqual(expect.arrayContaining(['clip-0 start succeeded', 'clip-1 start succeeded']));
+  // Nothing about the look was written while the song played: the handover shows each decoder as it was prepared.
+  expect(obs.lookWrites).toEqual([]);
+  const shown = obs.seenLooks.filter(view => view.input !== null);
+  expect(shown.map(view => view.input)).toEqual([primary, standby]);
+  expect(JSON.parse(shown[0]!.look)).toMatchObject(inObs(leftLook));
+  expect(JSON.parse(shown[1]!.look)).toMatchObject(inObs(rightLook));
+  await t.session.stop();
+});
+
+it('E16 规则：没在编辑器里改过的素材，联动台不发任何素材样子；OBS 里是什么样就什么样', async () => {
+  const project = song([[0, 12000, 100], [12, 12000, 12100], [24, 12000, 24100]]), obs = fakeObs();
+  const t = await live(project, obs);
+  await t.play(0, 25000, true);
+  expect(t.reports).toEqual(expect.arrayContaining(['clip-0 start succeeded', 'clip-1 start succeeded', 'clip-2 start succeeded']));
+  // The only looks written are the one the scene item was created with and copies of it to the second decoder, as
+  // before 0.5.9: never a look of the project's, never while on air.
+  expect(obs.lookWrites.length).toBeGreaterThan(0);
+  for (const write of obs.lookWrites) {
+    expect(write.look).toMatchObject(createdLook);
+    expect(write.onAir).toBe(false);
+  }
+  expect(obs.lookWrites.some(write => write.look.boundsType === 'OBS_BOUNDS_NONE')).toBe(false);
+  await t.session.stop();
+});
+
+it('E16 规则：同一素材前一段有自己的样子、后一段没设：后一段换回这个素材在 OBS 里原来的样子，在它上屏之前换好', async () => {
+  const project = withLooks(song([[0, 12000, 100], [12, 12000, 12100], [24, 12000, 24100]]), { 'clip-0': leftLook, 'clip-2': rightLook }), obs = fakeObs();
+  const t = await live(project, obs);
+  const primary = new SceneOutputTimeline(project, 'song').preloadEntries()[0]!.sourceName, standby = `${primary}·预备`;
+  expect(obs.decoder(primary).look).toMatchObject(inObs(leftLook));
+  // clip-1 is prepared on the second decoder with the material's own look, not clip-0's.
+  expect(obs.decoder(standby).look).toMatchObject(createdLook);
+  await t.play(0, 25000, true);
+  expect(t.reports).toEqual(expect.arrayContaining(['clip-0 start succeeded', 'clip-1 start succeeded', 'clip-2 start succeeded']));
+  // clip-2 comes back on the first decoder with its own look, set while that decoder was off air.
+  expect(obs.decoder(primary).look).toMatchObject(inObs(rightLook));
+  expect(obs.lookWrites.every(write => !write.onAir && ownMaterial(write))).toBe(true);
+  const shown = obs.seenLooks.filter(view => view.input !== null);
+  expect(shown.map(view => view.input)).toEqual([primary, standby, primary]);
+  expect(JSON.parse(shown[1]!.look)).toMatchObject(createdLook);
+  expect(JSON.parse(shown[2]!.look)).toMatchObject(inObs(rightLook));
+  await t.session.stop();
+});
+
+it('E16 规则：图片片段的样子和显示同一批发给 OBS，排在显示前面；只写联动台自己的素材场景', async () => {
+  const project = withLooks(withLogo(song([[0, 4000, 100]]), [0, 4000]), { 'logo-clip': leftLook }), obs = fakeObs();
+  const logo = materialSceneNames(project.projectId, project.mediaAssets[1]!).sourceName;
+  const t = await live(project, obs);
+  expect(obs.decoder(logo).look).toMatchObject(createdLook);
+  await t.play(0, 1000, true);
+  expect(t.reports).toContain('logo-clip start succeeded');
+  expect(obs.decoder(logo).look).toMatchObject(inObs(leftLook));
+  expect(obs.lookWrites.filter(write => write.input === logo).at(-1)).toMatchObject({ look: inObs(leftLook), onAir: false });
+  expect(obs.lookWrites.every(ownMaterial)).toBe(true);
+  await t.session.stop();
 });

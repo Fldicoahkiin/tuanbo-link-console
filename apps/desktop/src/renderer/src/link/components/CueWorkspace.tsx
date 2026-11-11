@@ -32,6 +32,7 @@ import {
   renameMediaAssetCommand,
   renameMediaFolderCommand,
   TimelineStateIndex,
+  clipOfMaterialSource,
   LightingTempoMap,
   lightingEventTime,
   programTimeOrigin,
@@ -139,7 +140,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
   const scenePreviewOutput = sceneOutput.preview;
   const workspaceActions = useWorkspaceActions({ project, projectPath, documentId, item, cue, playhead, coordinator, execute, notify, setSelectedCueId, setSelectedClipId, setSelectedAssetId, setSelectedObsResource }), editRules = useContentEditRules(project, item);
   if (!project || !workspaceActions) return <div className="empty-panel full"><Clock3 /><h3>还没打开工程</h3><p>新建或打开工程后，就可以添加素材和 OBS 场景、来源。</p></div>;
-  const { importMedia, addAssetClip, addObsResource, moveClip, moveClipToTop, trim, splitClip, duplicateClip, duplicateCue, transformClip, moveCue, removeClip, removeCue, setClipEmbeddedAudioEnabled, refreshObs, testAction } = workspaceActions;
+  const { importMedia, addAssetClip, addObsResource, moveClip, moveClipToTop, trim, splitClip, duplicateClip, duplicateCue, transformClip, sendClipLookToObs, keepObsClipLook, moveCue, removeClip, removeCue, setClipEmbeddedAudioEnabled, refreshObs, testAction } = workspaceActions;
 
   return <div className={`cue-studio${lightingWorkspace ? ' lighting-workbench' : ''}${lowPower ? ' low-power-workspace' : ''}`} data-inspector={true}>
     {!lightingWorkspace && item && lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools key={item.id} tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null}
@@ -189,7 +190,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
             onSelectClip={(id) => { setSelectedClipId(id); setSelectedCueId(null); }}
             onSelectCue={(id) => { setSelectedCueId(id); setSelectedClipId(null); }}
             onSelectObsResource={setSelectedObsResource} onTransformClip={transformClip}
-            onMoveClipToTop={moveClipToTop}
+            materialClipOf={item ? (sourceName) => clipOfMaterialSource(project, item.id, sourceName, selectedClipId) : undefined} onMoveClipToTop={moveClipToTop}
             onRemoveClip={removeClip} onDropObsResource={addObsResource} />{<button className="workspace-splitter vertical" aria-label="调整属性面板宽度" {...ownKeys('ArrowLeft', 'ArrowRight')} onPointerDown={(event) => workspaceLayout.beginResize('inspector', event)} onKeyDown={event => workspaceLayout.resizeWithKeyboard('inspector', event)} />}</> : null}
 
       {lightingSelection && !lightingWorkspace ? <aside className="cue-inspector panel"><div className="panel-title"><span>灯光属性</span><Button variant="ghost" size="sm" onClick={showCommonProperties}>常用设置</Button></div><div className="lighting-inspector-host"><Switch className="lighting-audition-switch" label="选中 Cue 实时播放" aria-label="选中 Cue 实时播放" help={audition.enabled ? audition.status : '已关闭选中即播放'} checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />{lightingSelection ? <LightingTimelineInspector onOpenTools={openLightingTool} onError={(message) => notify(message, 'error')} preview={lightingPreview} onPreviewChange={setLightingPreview} document={lightingDocument} trackId={lightingSelection.trackId} selectedClipId={lightingSelection.clipId} selectedEventId={lightingSelection.eventId ?? null} selectedEventIds={lightingSelection.eventIds ?? []} onSelect={(trackId, clipId) => setLightingSelection({ trackId, clipId })} onChange={changeLighting} /> : null}</div></aside> : lightingWorkspace ? null : <aside className="cue-inspector panel" key={cue ? `cue:${cue.id}` : clip ? `clip:${clip.id}` : `empty:${currentItemId}`}>
@@ -197,7 +198,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
         {cue && item ? <CueInspector itemId={item.id} cue={cue} frameRate={project.timebase.frameRate} inventory={inventory} execute={execute} testAction={testAction} /> : clip && item && selectedAsset ? <ClipInspector
           clip={clip} asset={selectedAsset}
           itemId={item.id} notify={notify}
-          onTransform={(transform) => transformClip(clip.id, transform)}
+          onTransform={(transform) => transformClip(clip.id, transform)} onSendLookToObs={() => sendClipLookToObs(clip.id)} onUseObsLook={() => keepObsClipLook(clip.id)}
           onEmbeddedAudioEnabled={(embeddedAudioEnabled) => setClipEmbeddedAudioEnabled(clip.id, embeddedAudioEnabled)}
           onRemove={() => removeClip(clip.id)}
         /> : analysisOpen ? <div className="music-analysis-host" ref={setAnalysisHost} /> : audioEditor.selected ? <AudioInspector editor={audioEditor} playhead={playhead} onRecognise={openMusic} /> : item ? <CommonProperties key={item.id} item={item} document={lightingDocument} disabled={playing || runtimeState !== 'idle'} onChange={changeLighting} notify={notify} /> : <div className="inspector-empty"><FileVideo2 /><h3>先选择节目</h3></div>}

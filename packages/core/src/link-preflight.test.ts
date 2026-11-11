@@ -234,6 +234,23 @@ describe('团播联动台预检', () => {
     expect(runLinkPreflight(value).checks.find((check) => check.id === 'asset.media.clip')).toMatchObject({ status: 'passed' });
   });
 
+  it('素材放大的提醒只看会送到 OBS 的样子：只在编辑器预览里放大的片段不提醒（0.5.9 E16）', () => {
+    const value = context();
+    const item = value.project.rundown[0];
+    if (!item) throw new Error('测试节目不存在');
+    value.project.mediaAssets.push({ id: 'media', name: '开场视频', kind: 'video', folderId: null, relativePath: 'assets/reference-media/media.mp4',
+      sha256: 'b'.repeat(64), byteLength: 1_024, durationMs: 5_000, width: 1_920, height: 1_080 });
+    value.mediaAssets.media = { fileAvailable: true };
+    const clip = { id: 'clip', assetId: 'media', startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 5_000, label: '开场视频',
+      canvasTransform: { x: 0.5, y: 0.5, scale: 2, scaleX: 1, scaleY: 1, rotation: 0 } };
+    item.referenceMediaClips.push(clip);
+    expect(runLinkPreflight(value).checks.some((check) => check.id === 'quality.upscale.clip')).toBe(false);
+    item.referenceMediaClips[0] = { ...clip, obsTransform: 'project' };
+    value.project.schemaVersion = 3;
+    expect(runLinkPreflight(value).checks.find((check) => check.id === 'quality.upscale.clip')).toMatchObject({ status: 'warning',
+      detail: '原图 1920×1080，会放大到约 3840×2160；放大不会让画面更清晰' });
+  });
+
   it('工程帧率与 P1 档案不一致时阻断进入现场', () => {
     const value = context();
     value.project.timebase.frameRate = '25';

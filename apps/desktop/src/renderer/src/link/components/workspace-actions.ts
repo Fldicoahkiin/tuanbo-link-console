@@ -179,7 +179,29 @@ function createClipActions(input: WorkspaceActionsInput) {
     runMutation(input, () => {
       const clip = requireClip(item, clipId);
       assertClipUnlocked(input, clip);
-      input.execute(replaceReferenceMediaClipCommand(item.id, { ...clip, canvasTransform }));
+      // An edit in the editor is the look on air from now on: it goes to OBS when the material is prepared (E16).
+      input.execute(replaceReferenceMediaClipCommand(item.id, { ...clip, canvasTransform, obsTransform: 'project' }));
+    });
+  };
+  /** A clip adjusted before 0.5.9 sends that adjustment to OBS from now on. */
+  const sendClipLookToObs = (clipId: string): void => {
+    if (!input.item) return;
+    const item = input.item;
+    runMutation(input, () => {
+      const clip = requireClip(item, clipId);
+      assertClipUnlocked(input, clip);
+      input.execute(replaceReferenceMediaClipCommand(item.id, { ...clip, obsTransform: 'project' }));
+    });
+  };
+  /** The clip shows as OBS has it: the editor's own adjustment is dropped, and nothing about the look goes to OBS. */
+  const keepObsClipLook = (clipId: string): void => {
+    if (!input.item) return;
+    const item = input.item;
+    runMutation(input, () => {
+      const clip = { ...requireClip(item, clipId) };
+      delete clip.obsTransform;
+      assertClipUnlocked(input, clip);
+      input.execute(replaceReferenceMediaClipCommand(item.id, { ...clip, canvasTransform: DEFAULT_REFERENCE_CANVAS_TRANSFORM }));
     });
   };
   const setClipEmbeddedAudioEnabled = (clipId: string, embeddedAudioEnabled: boolean): void => {
@@ -196,7 +218,7 @@ function createClipActions(input: WorkspaceActionsInput) {
     const item = input.item;
     if (runMutation(input, () => input.execute(removeContentCommand(item.id, [{ kind: 'clip', id: clipId }])))) input.setSelectedClipId(null);
   };
-  return { moveClip, moveClipToTop, trim, splitClip, splitCue: (cueId: string, milliseconds: number) => split({ kind: 'cue', id: cueId }, milliseconds), duplicateClip, transformClip, setClipEmbeddedAudioEnabled, removeClip };
+  return { moveClip, moveClipToTop, trim, splitClip, splitCue: (cueId: string, milliseconds: number) => split({ kind: 'cue', id: cueId }, milliseconds), duplicateClip, transformClip, sendClipLookToObs, keepObsClipLook, setClipEmbeddedAudioEnabled, removeClip };
 }
 
 function createCueActions(input: WorkspaceActionsInput, addAssetClip: (assetId: string, startMs: number, layerId?: string | null) => boolean) {

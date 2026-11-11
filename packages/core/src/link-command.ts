@@ -545,7 +545,8 @@ export function createItemContentCommand(label: string, itemId: string, mutate: 
       mutate(draft, project);
       const item = commitItemContent(source, draft);
       const rundown = [...project.rundown]; rundown[index] = item;
-      const next = { ...project, rundown, updatedAt: linkProjectSchema.shape.updatedAt.parse(now()) };
+      // A clip whose look goes to OBS needs schema 3 (requiredSchemaVersion); the version only ever goes up.
+      const next = withSchemaVersion({ ...project, rundown, updatedAt: linkProjectSchema.shape.updatedAt.parse(now()) });
       validateItemRelations(next, item);
       return next;
     },

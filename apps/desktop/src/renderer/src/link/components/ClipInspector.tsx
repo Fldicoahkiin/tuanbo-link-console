@@ -1,7 +1,8 @@
-import { Button, IconButton, Switch } from '../ui';
+import { Button, IconButton, Notice, Switch } from '../ui';
 import { LayoutNumber } from './LayoutNumber';
+import { clipLookOnlyInPreview } from '@tb/core/link';
 import type { LinkMediaAsset, ReferenceCanvasTransform, ReferenceMediaClip } from '@tb/schema';
-import { Crosshair, Maximize, RotateCcw, Trash2 } from 'lucide-react';
+import { Crosshair, Maximize, MonitorUp, RotateCcw, Trash2, Undo2 } from 'lucide-react';
 import { formatBytes, formatMilliseconds, formatTimecode } from './media-utils';
 import { VideoAudioSource } from './VideoAudioSource';
 import { useDocumentStore } from '../stores/document-store';
@@ -13,6 +14,10 @@ export function ClipInspector(props: {
   clip: ReferenceMediaClip;
   asset: LinkMediaAsset;
   onTransform: (transform: ReferenceCanvasTransform) => void;
+  /** Sends the position adjusted before 0.5.9 to OBS from now on (E16). */
+  onSendLookToObs: () => void;
+  /** Leaves the clip as OBS has it, dropping the editor's own position. */
+  onUseObsLook: () => void;
   onEmbeddedAudioEnabled: (enabled: boolean) => void;
   onRemove: () => void;
 }): JSX.Element {
@@ -33,10 +38,18 @@ export function ClipInspector(props: {
       <span>时长 {formatMilliseconds(props.clip.durationMs)}</span>
     </div>
     {isVisual ? <section className="visual-layout-editor media-layout-editor">
+      {clipLookOnlyInPreview(props.clip) ? <Notice tone="warning" title="这个位置只在编辑器预览里，正式画面用的是 OBS 里的样子"
+        actions={<>
+          <Button variant="secondary" size="sm" icon={MonitorUp} onClick={props.onSendLookToObs}>送到 OBS</Button>
+          <Button variant="ghost" size="sm" icon={Undo2} onClick={props.onUseObsLook}>用 OBS 里的样子</Button>
+        </>}>
+        以前在这里调的位置和大小没有送到 OBS。要让正式画面也这样摆，点「送到 OBS」；想保持 OBS 里现在的样子，点「用 OBS 里的样子」。
+      </Notice> : null}
       <div className="layout-preset-row">
         <Button variant="secondary" size="sm" icon={RotateCcw} onClick={() => props.onTransform(originalMediaCanvasTransform())}>原始大小</Button>
         <Button variant="secondary" size="sm" icon={Crosshair} onClick={() => props.onTransform(centerMediaCanvasTransform(transform))}>画布居中</Button>
         <Button variant="secondary" size="sm" icon={Maximize} onClick={() => props.onTransform(fitMediaCanvasTransform(sourceWidth, sourceHeight))}>适应画布</Button>
+        {props.clip.obsTransform === 'project' ? <Button variant="secondary" size="sm" icon={Undo2} onClick={props.onUseObsLook}>用 OBS 里的样子</Button> : null}
       </div>
       <div className="visual-layout-grid">
         <LayoutNumber label="位置 X" unit="px" value={transform.x * REFERENCE_CANVAS_WIDTH} onCommit={(value) => patch({ x: clamp(value / REFERENCE_CANVAS_WIDTH, -1, 2) })} />

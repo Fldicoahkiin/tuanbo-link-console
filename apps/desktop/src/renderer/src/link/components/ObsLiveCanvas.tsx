@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { toUserErrorMessage } from '@tb/core/link';
-import { obsLiveSceneSchema, type ObsLiveEdit, type ObsLiveScene } from '@tb/schema';
+import { obsLiveSceneSchema, type ObsLiveEdit, type ObsLiveItem, type ObsLiveScene } from '@tb/schema';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 import { ObsLiveSelection } from './ObsLiveSelection';
 import { obsPreviewSession } from '../view-models/obs-preview-session';
@@ -8,11 +8,21 @@ import { LiveFramePainter, livePreviewRun, livePreviewWanted } from './obs-live-
 
 let liveSession: Promise<void> = Promise.resolve();
 
-export const ObsLiveCanvas = memo(function ObsLiveCanvas({ editable = true, onAspectChange }: { editable?: boolean; onAspectChange?: (ratio: number) => void }): JSX.Element {
+/** The editor's say over sources that are the picture of one of the song's materials (E16): `refuse` is asked before
+ * a move starts (a reason stops it before anything reaches OBS), and `released` keeps the move the pointer let go of
+ * in the project, so preparing the material sets it again from there. Other sources are edited in OBS as before. */
+export type ObsLiveMaterialEdits = {
+  refuse: (item: ObsLiveItem) => string | null;
+  released: (item: ObsLiveItem, transform: ObsLiveItem['sceneItemTransform'], scene: ObsLiveScene) => void;
+};
+
+export const ObsLiveCanvas = memo(function ObsLiveCanvas({ editable = true, onAspectChange, material }: { editable?: boolean; onAspectChange?: (ratio: number) => void; material?: ObsLiveMaterialEdits }): JSX.Element {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [scene, setScene] = useState<ObsLiveScene | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
+  /** Why a move of a material's picture was not kept (E16); its own line, so a refresh of the scene does not clear it. */
+  const [materialError, setMaterialError] = useState<string | null>(null);
   const sceneName = useRef<string | null>(null);
   const active = useRef(true);
   const [selected, setSelected] = useState<number | null>(null);
@@ -127,8 +137,11 @@ export const ObsLiveCanvas = memo(function ObsLiveCanvas({ editable = true, onAs
   return <div className="obs-live-container">
     <div className="obs-live-canvas" style={{ aspectRatio: scene ? `${scene.width} / ${scene.height}` : '16 / 9', width: `min(calc(100cqw - 40px), calc((100cqh - 40px) * ${scene ? scene.width / scene.height : 16 / 9}))` }}>
     <canvas ref={canvas} aria-label="OBS 实时画面" />
-    {editable && scene && !error ? <ObsLiveSelection key={scene.sceneName} scene={scene} selected={selected} onSelect={setSelected} onEdit={edit} /> : null}
-    {editError ? <div className="obs-edit-notice" role="status">{editError}<button onClick={() => { setEditError(null); setRestart(value => value + 1); }}>刷新编辑目标</button></div> : null}
+    {editable && scene && !error ? <ObsLiveSelection key={scene.sceneName} scene={scene} selected={selected} onSelect={setSelected} onEdit={edit}
+      refuse={material ? (item) => { const reason = material.refuse(item); setMaterialError(reason); return reason; } : undefined}
+      onReleased={material ? (item, transform) => { try { material.released(item, transform, scene); } catch (reason) { setMaterialError(toUserErrorMessage(reason)); } } : undefined} /> : null}
+    {editError ? <div className="obs-edit-notice" role="status">{editError}<button onClick={() => { setEditError(null); setRestart(value => value + 1); }}>刷新编辑目标</button></div>
+      : materialError ? <div className="obs-edit-notice" role="status">{materialError}<button onClick={() => setMaterialError(null)}>知道了</button></div> : null}
 
     {error || repairing ? <div className="stage-error" role="alert">{repairing ? '正在检查 OBS 组件。如果弹出 Windows 授权或重启 OBS 的提示，请按提示完成。' : error}<button disabled={repairing} onClick={() => { void repair(); }}>检查并修复组件</button><button disabled={repairing} onClick={() => { previewFailed.current = false; setSuspended(false); setRestart((value) => value + 1); }}>重新连接预览</button></div> : null}
     </div>

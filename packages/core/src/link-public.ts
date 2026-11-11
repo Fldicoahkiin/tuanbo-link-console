@@ -15,6 +15,7 @@ export * from './link-desktop-contract';
 export * from './project-asset-files';
 export * from './project-version-change';
 export * from './managed-media-timeline';
+export * from './media-obs-transform';
 export * from './content-timeline';
 export * from './lighting-shift';
 export * from './song-padding';

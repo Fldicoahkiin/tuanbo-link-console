@@ -3,7 +3,8 @@ import type { SchemaVersion3Reason } from '@tb/schema';
 /** One sentence for each thing that needs the new format, in the order `schemaVersion3Reasons` gives them. */
 const reasonSentences: Record<SchemaVersion3Reason, string> = {
   beats: '这个工程的节拍换成了新的存法。',
-  blank: '这个工程里有歌在音乐后面留了空白，旧版本存不下。'
+  blank: '这个工程里有歌在音乐后面留了空白，旧版本存不下。',
+  look: '这个工程里有素材的位置和大小要送到 OBS，旧版本存不下。'
 };
 
 /**

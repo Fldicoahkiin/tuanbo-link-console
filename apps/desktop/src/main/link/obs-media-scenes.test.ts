@@ -6,7 +6,7 @@ import { MediaOnAirError, MediaOutOfStepError, ObsMediaScenes, failureReason } f
 
 const asset: LinkMediaAsset = { id: 'clip', name: '舞蹈.mp4', kind: 'video', folderId: null, relativePath: 'assets/dance.mp4', sha256: 'a'.repeat(64), byteLength: 10 };
 const names = materialSceneNames('project', asset);
-const event: ManagedMediaEvent = { ...names, id: 'start', phase: 'start', frameNumber: 194, itemId: 'song', clipId: 'clip', layerId: 'layer', layerIndex: 0, layerCount: 1, assetId: asset.id, assetName: asset.name, assetKind: 'video', relativePath: asset.relativePath, sourceOffsetMs: 2300, embeddedAudioEnabled: false, transform: { x: 0.5, y: 0.5, scale: 1, scaleX: 1, scaleY: 1, rotation: 0 } };
+const event: ManagedMediaEvent = { ...names, id: 'start', phase: 'start', frameNumber: 194, itemId: 'song', clipId: 'clip', layerId: 'layer', layerIndex: 0, layerCount: 1, assetId: asset.id, assetName: asset.name, assetKind: 'video', relativePath: asset.relativePath, sourceOffsetMs: 2300, embeddedAudioEnabled: false };
 
 /** `aheadOnPlay`: OBS's transient cursor right after PLAY, reported ahead of the decoder. */
 function fixture(resetOnSceneSwitch = false, startsNearOrigin = false, aheadOnPlay = 0) {

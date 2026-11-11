@@ -35,3 +35,12 @@ it('保存前的检查把原因从工程线程带回来：只认节拍和空白�
   expect(checked({ backupName: 'a.tblink' })).toBe(false);
   expect(checked({ backupName: 'a.tblink', reasons: ['lighting'] })).toBe(false);
 });
+
+it('素材的样子要送 OBS 也说一句；三样都有时都带回来（0.5.9 E16）', () => {
+  const backup = '演出（旧版本可打开的备份）.tblink';
+  const look = olderFormatSavePrompt(backup, ['look']).detail;
+  expect(look).toContain('这个工程里有素材的位置和大小要送到 OBS，旧版本存不下。');
+  expect(look).toContain(`「${backup}」`);
+  expect(look).not.toMatch(/。。|schema|obsTransform/);
+  expect(projectDocumentResponseSchema.safeParse({ version: 1, id: 1, kind: 'save-checked', olderFormat: { backupName: 'a.tblink', reasons: ['beats', 'blank', 'look'] } }).success).toBe(true);
+});

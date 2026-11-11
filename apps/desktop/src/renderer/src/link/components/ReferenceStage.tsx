@@ -1,6 +1,7 @@
-import { ObsLiveCanvas } from './ObsLiveCanvas';
-import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent, type PointerEvent } from 'react';
-import type { LinkObsInventory, ResolvedTimelineClip, ResolvedTimelineState } from '@tb/core/link';
+import { ObsLiveCanvas, type ObsLiveMaterialEdits } from './ObsLiveCanvas';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent, type PointerEvent } from 'react';
+import { obsItemPicture } from './obs-live-geometry';
+import { canvasTransformFromObs, stagePlacement, type LinkObsInventory, type ResolvedTimelineClip, type ResolvedTimelineState } from '@tb/core/link';
 import type { LinkMediaAsset, OutputCanvas, ReferenceCanvasTransform, ReferenceMediaClip } from '@tb/schema';
 import { Boxes, MonitorPlay, RadioTower, Volume2 } from 'lucide-react';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
@@ -36,6 +37,8 @@ type Props = {
   onSelectCue: (cueId: string) => void;
   onSelectObsResource: (resource: ObsResource) => void;
   onTransformClip: (clipId: string, transform: ReferenceCanvasTransform) => void;
+  /** The clip an OBS source of ours shows (core `clipOfMaterialSource`): null for any other source; throws to refuse. */
+  materialClipOf?: ((sourceName: string) => string | null) | undefined;
   onMoveClipToTop: (clipId: string) => void;
   onRemoveClip: (clipId: string) => void;
   onDropObsResource: (resource: ObsResource, startMs?: number, layerId?: string) => void;
@@ -50,6 +53,22 @@ export function ReferenceStage(props: Props): JSX.Element {
   // Moving or resizing a layer on the stage (media and OBS layers) moves it as the pointer goes: while the pointer is
   // held the window's keys leave the show and the project alone (Escape, undo, delete); the gestures are as they were (K5).
   const keyDrag = useCapturedDrag();
+  // On the live canvas a material's own picture is moved like any source, and the move is kept on its clip: it then
+  // goes to OBS with the rest of the clip's look when the material is prepared (E16). Stable for the memoised canvas.
+  const latest = useRef(props);
+  latest.current = props;
+  const materialEdits = useMemo<ObsLiveMaterialEdits>(() => ({
+    refuse: (item) => {
+      try { latest.current.materialClipOf?.(item.sourceName); return null; }
+      catch (error) { return toMessage(error); }
+    },
+    released: (item, transform, scene) => {
+      const clipId = latest.current.materialClipOf?.(item.sourceName);
+      if (!clipId) return;
+      latest.current.onTransformClip(clipId, canvasTransformFromObs(obsItemPicture(transform),
+        { width: transform.sourceWidth, height: transform.sourceHeight }, { width: scene.width, height: scene.height }));
+    }
+  }), []);
   // Clips starting within 2 s are loaded ahead; the stage draws again only when that list changes.
   const upcoming = usePlayheadValue(props.playhead, positionMs => upcomingClipKey(props.timelineState, positionMs));
   // Clips under a camera stay loaded (hidden), so the camera's end reveals them without reloading.
@@ -71,7 +90,7 @@ export function ReferenceStage(props: Props): JSX.Element {
   };
 
   if (props.obsStatus === 'connected') return <section className="reference-stage panel">
-    <div className="stage-canvas"><ObsLiveCanvas /></div>
+    <div className="stage-canvas"><ObsLiveCanvas material={materialEdits} /></div>
     <footer className="stage-statusbar"><span><RadioTower />OBS 实时画布</span><span>直接编辑 OBS 当前场景来源</span></footer>
   </section>;
   return <section className="reference-stage panel">
@@ -297,15 +316,18 @@ function MediaCanvasLayer(props: {
     setPreview(current.origin);
     props.onSnapGuides({ x: null, y: null });
   };
+  // Drawn from the transform OBS gets (core media-obs-transform.ts), so the preview is what goes on air (E16).
+  const placement = stagePlacement(preview, { width: props.asset.width ?? props.canvasWidth, height: props.asset.height ?? props.canvasHeight },
+    { width: props.canvasWidth, height: props.canvasHeight });
   const style: CSSProperties = {
     zIndex: props.zIndex,
-    width: `${(props.asset.width ?? props.canvasWidth) / props.canvasWidth * preview.scale * preview.scaleX * 100}%`,
-    height: `${(props.asset.height ?? props.canvasHeight) / props.canvasHeight * preview.scale * preview.scaleY * 100}%`,
+    width: `${placement.width * 100}%`,
+    height: `${placement.height * 100}%`,
     visibility: props.hidden ? 'hidden' : 'visible',
     pointerEvents: props.hidden ? 'none' : undefined,
-    left: `${preview.x * 100}%`,
-    top: `${preview.y * 100}%`,
-    transform: `translate(-50%, -50%) rotate(${preview.rotation}deg)`
+    left: `${placement.left * 100}%`,
+    top: `${placement.top * 100}%`,
+    transform: `translate(-50%, -50%) rotate(${placement.rotation}deg)`
   };
   return <button className={`stage-media-layer ${props.selected ? 'is-selected' : ''} ${props.locked ? 'is-locked' : ''}`} style={style} onContextMenu={props.onContextMenu} onPointerDown={(event) => beginGesture(event, 'move')} onPointerMove={moveGesture} onPointerUp={endGesture} onPointerCancel={cancelGesture}>
     {url && props.asset.kind === 'video' ? <video

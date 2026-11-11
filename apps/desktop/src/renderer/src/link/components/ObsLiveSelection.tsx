@@ -8,7 +8,11 @@ type Direction = { x: number; y: number };
 type Gesture = { sceneName: string; pointerId: number; x: number; y: number; original: Transform; item: ObsLiveItem; direction: Direction | null; latest: Transform };
 const handles = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const;
 
-export function ObsLiveSelection(props: { scene: ObsLiveScene; selected: number | null; onSelect: (id: number | null) => void; onEdit: (edit: ObsLiveEdit, dragging: boolean) => void }): JSX.Element {
+export function ObsLiveSelection(props: { scene: ObsLiveScene; selected: number | null; onSelect: (id: number | null) => void; onEdit: (edit: ObsLiveEdit, dragging: boolean) => void;
+  /** Asked before a move or resize starts; a reason leaves the item where it is. */
+  refuse?: ((item: ObsLiveItem) => string | null) | undefined;
+  /** A move or resize the pointer let go of (not cancelled), with where the item ended up. */
+  onReleased?: ((item: ObsLiveItem, transform: Transform) => void) | undefined }): JSX.Element {
   const gesture = useRef<Gesture | null>(null);
   // Moving or resizing a source writes to OBS as it goes: while the pointer is held the window's keys leave the show
   // and the project alone (Escape, undo, delete), and the gesture itself is as it was (K5).
@@ -17,7 +21,7 @@ export function ObsLiveSelection(props: { scene: ObsLiveScene; selected: number 
   const begin = (event: PointerEvent<HTMLElement>, item: ObsLiveItem, direction: Direction | null): void => {
     if (event.button !== 0) return;
     event.preventDefault(); event.stopPropagation(); props.onSelect(item.sceneItemId);
-    if (item.sceneItemLocked) return;
+    if (item.sceneItemLocked || props.refuse?.(item)) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     gesture.current = { sceneName: props.scene.sceneName, pointerId: event.pointerId, x: event.clientX, y: event.clientY, original: item.sceneItemTransform, latest: item.sceneItemTransform, item, direction };
   };
@@ -43,6 +47,7 @@ export function ObsLiveSelection(props: { scene: ObsLiveScene; selected: number 
     if (cancel) current.latest = current.original;
     gesture.current = null; setDraft(null);
     props.onEdit(payload(current), false);
+    if (!cancel && current.latest !== current.original) props.onReleased?.(current.item, current.latest);
   };
   return <div className="obs-live-selection" {...keyDrag}>{props.scene.items.filter((item) => item.sceneItemEnabled && item.sceneItemTransform.sourceWidth > 0 && item.sceneItemTransform.sourceHeight > 0).map((item) => {
     const t = draft?.id === item.sceneItemId ? draft.transform : item.sceneItemTransform;

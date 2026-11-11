@@ -335,7 +335,12 @@ export const referenceMediaClipSchema = z.object({
   label: z.string().min(1),
   layerId: z.string().min(1).optional(),
   embeddedAudioEnabled: z.boolean().optional(),
-  canvasTransform: referenceCanvasTransformSchema.default(DEFAULT_REFERENCE_CANVAS_TRANSFORM)
+  canvasTransform: referenceCanvasTransformSchema.default(DEFAULT_REFERENCE_CANVAS_TRANSFORM),
+  /** Who decides how the clip looks in OBS (0.5.9 E16). 'project': `canvasTransform`, set on the clip's own scene
+   * item when the material is prepared (core `media-obs-transform.ts`). Absent: OBS keeps the look its scene item has,
+   * as every release before 0.5.9 did, and `canvasTransform` is only the editor's preview. Set by an edit in the
+   * editor, never by opening a file (schema 3). */
+  obsTransform: z.literal('project').optional()
 });
 
 export const rundownItemSchema = z.object({
@@ -500,9 +505,10 @@ export const latestSchemaVersion: LinkProjectSchemaVersion = 3;
 export const legacyReadableSchemaVersion: LinkProjectSchemaVersion = 2;
 
 /** What in a project only releases after 0.5.8 keep: a song's shared beats (`rundownItem.music`, 0.5.9 E9), a song
- * that lasts past its music (`referenceAudio.timeline.durationMs`, 0.5.9 E13). */
-export type SchemaVersion3Reason = 'beats' | 'blank';
-export const schemaVersion3ReasonSchema = z.enum(['beats', 'blank']);
+ * that lasts past its music (`referenceAudio.timeline.durationMs`, 0.5.9 E13), a clip whose look the project sends to
+ * OBS (`referenceMediaClip.obsTransform`, 0.5.9 E16). */
+export type SchemaVersion3Reason = 'beats' | 'blank' | 'look';
+export const schemaVersion3ReasonSchema = z.enum(['beats', 'blank', 'look']);
 
 /** Why this project needs schema 3, in a fixed order; empty when it does not. Read by `requiredSchemaVersion` and by
  * the question before a save, so both name the same things. */
@@ -510,6 +516,7 @@ export function schemaVersion3Reasons(project: Pick<LinkProject, 'rundown'>): Sc
   const reasons: SchemaVersion3Reason[] = [];
   if (project.rundown.some((item) => item.music !== undefined)) reasons.push('beats');
   if (project.rundown.some((item) => item.referenceAudio?.timeline?.durationMs !== undefined)) reasons.push('blank');
+  if (project.rundown.some((item) => item.referenceMediaClips.some((clip) => clip.obsTransform !== undefined))) reasons.push('look');
   return reasons;
 }
 
