@@ -74,6 +74,20 @@ export function LightingHeadings(props: LightingTimelineProps & { durationMs: nu
     {context ? <Menu x={context.x} y={context.y} label="灯光轨道菜单" title={context.track.name} onClose={() => setContext(null)}><MenuItem icon={Trash2} danger disabled={context.track.locked} onSelect={() => remove(context.track)}>删除灯光轨道</MenuItem></Menu> : null}
   </>;
 }
+/** The document with one more timeline marker at a time, named by how many there are. */
+function withMarker(document: LightingDocument, startMs: number): LightingDocument {
+  return { ...document, markers: [...document.markers, { id: crypto.randomUUID(), name: `标记 ${document.markers.length + 1}`, startMs, endMs: null }] };
+}
+
+/**
+ * The hint on an empty clip. It names the stamp key only where a key stamps: the lighting workbench, with the key set
+ * on this computer. In the editor M adds a marker since K7, so the hint names no key there.
+ */
+function stampCaption(keyStamps: boolean): string {
+  const key = keyStamps ? commandKeyLabel('lighting.stamp', 'lighting') : '';
+  return key ? `双击打点 · ${key}` : '双击打点';
+}
+
 export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: number; scrollLeft: number; viewportWidth: number; getPlaybackPosition?: () => number; playhead: EditorPlayhead; onSeek: (ms: number) => void; timeAtClientX: (x: number) => number }): JSX.Element {
   const map = useMemo(() => new LightingTempoMap(props.document.tempos), [props.document.tempos]);
   const clipboard = useLightingClipboardStore((state) => state.clipboard);
@@ -168,15 +182,8 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
       props.onSelect(removed.trackId, removed.clipId);
     } } : {})
   } : {});
-  // The empty clip's hint names the stamp key only where a key stamps: the lighting workbench (`onCreateCue` is its
-  // own), with the key set on this computer. In the editor M adds a marker since K7, so the hint names no key there.
-  const stampKey = props.onCreateCue ? commandKeyLabel('lighting.stamp', 'lighting') : '';
-  const stampCaption = stampKey ? `双击打点 · ${stampKey}` : '双击打点';
   // M in the editor adds a marker at the playhead, as in 剪映 (K7; it added a lighting point before 0.5.9).
-  useKeyCommands('editor', !context && !props.detailOpen ? { 'marker.add': () => {
-    const startMs = props.getPlaybackPosition?.() ?? props.playhead.read();
-    props.onChange({ ...props.document, markers: [...props.document.markers, { id: crypto.randomUUID(), name: `标记 ${props.document.markers.length + 1}`, startMs, endMs: null }] }, '时间线打标记');
-  } } : {});
+  useKeyCommands('editor', !context && !props.detailOpen ? { 'marker.add': () => props.onChange(withMarker(props.document, props.getPlaybackPosition?.() ?? props.playhead.read()), '时间线打标记') } : {});
   return <>
     {!props.document.tracks.length ? <div className="timeline-lane lighting-empty-lane" style={{ order: 50 + (props.document.laneIndex ?? 0) * 100 }} /> : null}
     {activeTrack ? <div className="timeline-lane lighting-lane lighting-combined-lane" aria-label="灯光时间线" style={{ order: 50 + (props.document.laneIndex ?? 0) * 100 }} onClick={(event) => { if (event.target === event.currentTarget) { props.onSeek(props.snapTime?.(props.timeAtClientX(event.clientX)) ?? props.timeAtClientX(event.clientX)); props.onSelect(activeTrack.id, null); } }} onDoubleClick={(event) => {
@@ -199,7 +206,7 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
           onPointerCancel={marquee.end}
           onClick={(event) => { event.stopPropagation(); if (suppressClick.current) { suppressClick.current = false; return; } props.onSelect(track.id, clip.id); props.onSeek(props.snapTime?.(props.timeAtClientX(event.clientX)) ?? props.timeAtClientX(event.clientX)); }}
           onDoubleClick={(event) => { event.stopPropagation(); add(track, clip, props.timeAtClientX(event.clientX)); }}>
-          {!clip.events.length && activeTrack.id === track.id ? <span className="lighting-clip-caption">{stampCaption}</span> : null}
+          {!clip.events.length && activeTrack.id === track.id ? <span className="lighting-clip-caption">{stampCaption(props.onCreateCue !== undefined)}</span> : null}
           {props.selectedClipId === clip.id ? <LightingMasterCurve clip={clip} map={map} pixelsPerSecond={props.pixelsPerSecond} scrollLeft={props.scrollLeft} viewportWidth={props.viewportWidth} previewEvent={movedEvent} /> : null}
           {range?.clipId === clip.id ? <span className="lighting-marquee" style={{ position: 'absolute', pointerEvents: 'none', top: 0, bottom: 0, left: (Math.min(range.start, range.end) - span.startMs) / 1000 * props.pixelsPerSecond, width: Math.abs(range.end - range.start) / 1000 * props.pixelsPerSecond, background: 'rgb(74 155 255 / 16%)', border: '1px solid var(--accent)' }} /> : null}
           {(visibleEvents.get(clip.id) ?? []).map((stored) => {
