@@ -240,10 +240,6 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   preparePlaybackMedia<T>(operation: () => Promise<T>): Promise<T> {
     return this.requests.run('background', operation);
   }
-  /** Reading back what OBS plays (and correcting it) is not a cut: the `control` tier. */
-  readPlayback<T>(operation: () => Promise<T>): Promise<T> {
-    return this.requests.run('control', operation);
-  }
 
   private async executeAction(action: LinkAction): Promise<void> {
     if (!this.supports(action)) throw new Error(`OBS 适配器不支持 ${action.kind}`);

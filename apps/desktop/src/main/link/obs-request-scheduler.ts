@@ -1,14 +1,14 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 /** OBS 请求谁先发（2026-11-10）. `program` is the song's picture going on air:
- * scene switches, material scenes, shown sources. `control` is the live canvas,
- * beauty, source management and read-backs; `background` prepares ahead and
- * reads inventories; `preview` takes screenshots. */
+ * scene switches, material scenes, shown sources, and the drift check the picture
+ * session waits for. `control` is the live canvas, beauty and source management;
+ * `background` prepares ahead and reads inventories; `preview` takes screenshots. */
 export type ObsRequestPriority = 'urgent' | 'program' | 'control' | 'background' | 'preview';
 export type ObsOperationRunner = <T>(operation: () => Promise<T>) => Promise<T>;
 type Context = { generation: number; priority?: ObsRequestPriority; canSend?: () => boolean; dispatched?: () => void };
 type Job = { priority: ObsRequestPriority; generation: number; started: boolean; settled: boolean;
-  timer: ReturnType<typeof setTimeout>; start: () => void; reject: (error: Error) => void };
+  timer: ReturnType<typeof setTimeout> | undefined; start: () => void; reject: (error: Error) => void };
 export type ObsRequestTiming = { label: string; priority: ObsRequestPriority; queuedAt: number;
   startedAt: number | null; finishedAt: number; queueMs: number; executionMs: number; failed: boolean };
 const priorities: ObsRequestPriority[] = ['urgent', 'program', 'control', 'background', 'preview'];
@@ -17,6 +17,10 @@ const priorities: ObsRequestPriority[] = ['urgent', 'program', 'control', 'backg
  * and `program`. */
 export const OBS_REQUEST_SLOTS = 4;
 export const OBS_SHARED_REQUEST_SLOTS = 2;
+/** How long after the last `program` request ended no new screenshot goes out.
+ * One cut is several requests sent one after the other; without this a screenshot
+ * would slip in between two of them and hold up the rest of the cut. */
+export const OBS_PROGRAM_QUIET_MS = 100;
 const shared = (priority: ObsRequestPriority): boolean => priority === 'control' || priority === 'background' || priority === 'preview';
 
 /** Deferred calls, bounded work and connection generations. A timeout never retries a write. */
@@ -30,6 +34,7 @@ export class ObsRequestScheduler {
   private maximumQueued = 0;
   private maximumActive = 0;
   private readonly timings: ObsRequestTiming[] = [];
+  private programQuiet: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly timeoutMs: number, private readonly onTimeout: (error: Error) => void) {}
 
@@ -37,6 +42,7 @@ export class ObsRequestScheduler {
 
   invalidate(error: Error): void {
     this.generation++; this.failure = error;
+    clearTimeout(this.programQuiet); this.programQuiet = undefined;
     const pending = [...this.queue, ...this.active]; this.queue.length = 0; this.active.clear();
     for (const job of pending) job.reject(error);
   }
@@ -85,15 +91,20 @@ export class ObsRequestScheduler {
         if (this.timings.length > 128) this.timings.shift();
         job.settled = true; clearTimeout(job.timer); this.active.delete(job);
         const index = this.queue.indexOf(job); if (index >= 0) this.queue.splice(index, 1);
+        if (job.priority === 'program' && job.started) this.holdScreenshots();
         if (error !== null) reject(error instanceof Error ? error : new Error(typeof error === 'string' ? error : 'OBS 返回了非标准错误', { cause: error }));
         else resolve(result!);
         this.pump();
       };
       // Waiting here only fails this request. The connection ends only when OBS
       // leaves a request that went out unanswered for the whole limit: a busy
-      // OBS that answers late is not a lost one.
+      // OBS that answers late is not a lost one. A screenshot has no time by which
+      // it must go out and is held back on purpose while the picture goes on air,
+      // so it waits its turn: failing it would blank the preview with an error
+      // every time a song is made ready.
       const job: Job = { ...context, started: false, settled: false, reject: error => finish(error),
-        timer: setTimeout(() => finish(new Error(`OBS ${label} 请求排队超时（${this.timeoutMs} ms）；还没发送`)), this.timeoutMs),
+        timer: context.priority === 'preview' ? undefined
+          : setTimeout(() => finish(new Error(`OBS ${label} 请求排队超时（${this.timeoutMs} ms）；还没发送`)), this.timeoutMs),
         start: () => {
           this.active.add(job);
           this.maximumActive = Math.max(this.maximumActive, this.active.size);
@@ -117,24 +128,26 @@ export class ObsRequestScheduler {
   }
 
   /** One place decides what goes out next. `urgent` and `program` may use every
-   * slot; the shared tiers together hold at most two, so a cut never waits behind
-   * a screenshot. While a `program` request is queued or in flight no new
-   * `background` or `preview` request goes out; one already sent keeps waiting
-   * for its answer. At most one screenshot is in flight. A nested operation runs
-   * at its outer tier (see `run`), so a `program` operation never waits for a
-   * `preview` request of its own. */
+   * slot; the shared tiers together hold at most two, so a cut never waits for a
+   * slot. A screenshot holds OBS's graphics thread, so no new one goes out while a
+   * `program` request is queued or in flight or has only just ended
+   * (`OBS_PROGRAM_QUIET_MS`), and at most one is in flight; one already sent
+   * keeps waiting for its answer. `background` is not held back that
+   * way: it prepares the playing song's next material, and held behind a long run
+   * of `program` requests (another song being made ready) it would miss its cut.
+   * A nested operation runs at its outer tier (see `run`), so a `program`
+   * operation never waits for a `preview` request of its own. */
   private pump(): void {
     if (this.failure) return;
     while (this.active.size < OBS_REQUEST_SLOTS) {
       const active = [...this.active];
       const sharedActive = active.filter(job => shared(job.priority)).length;
       const preview = active.some(job => job.priority === 'preview');
-      const program = active.some(job => job.priority === 'program') || this.queue.some(job => job.priority === 'program');
+      const program = this.programQuiet !== undefined || active.some(job => job.priority === 'program') || this.queue.some(job => job.priority === 'program');
       const admits = (value: ObsRequestPriority): boolean => {
         switch (value) {
           case 'urgent': case 'program': return true;
-          case 'control': return sharedActive < OBS_SHARED_REQUEST_SLOTS;
-          case 'background': return sharedActive < OBS_SHARED_REQUEST_SLOTS && !program;
+          case 'control': case 'background': return sharedActive < OBS_SHARED_REQUEST_SLOTS;
           case 'preview': return sharedActive < OBS_SHARED_REQUEST_SLOTS && !program && !preview;
         }
       };
@@ -144,5 +157,10 @@ export class ObsRequestScheduler {
       const job = this.queue.splice(index, 1)[0]!;
       if (!job.settled) job.start();
     }
+  }
+
+  private holdScreenshots(): void {
+    clearTimeout(this.programQuiet);
+    this.programQuiet = setTimeout(() => { this.programQuiet = undefined; this.pump(); }, OBS_PROGRAM_QUIET_MS);
   }
 }
