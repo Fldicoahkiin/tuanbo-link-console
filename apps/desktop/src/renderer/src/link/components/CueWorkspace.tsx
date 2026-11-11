@@ -109,7 +109,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
   useStoppedRuntimeRecovery(externalTransport, player, runtimeState, coordinator, notify);
   const [lightingTool, setLightingTool] = useState<LightingTool | null>(null);
   const [lightingPreview, setLightingPreview] = useState(false);
-  const [pointDetails, setPointDetails] = useState(false); const [analysisOpen, setAnalysisOpen] = useState(false); const [analysisHost, setAnalysisHost] = useState<HTMLDivElement | null>(null);
+  const [pointDetails, setPointDetails] = useState(false); const { open: analysisOpen, setOpen: setAnalysisOpen, host: analysisHost, setHost: setAnalysisHost, show: openMusic } = useMusicPanel(lightingWorkspace, Boolean(selectedCueId || selectedClipId), () => setLightingTool(null), () => { setLightingSelection(null); setSelectedCueId(null); setSelectedClipId(null); audioEditor.select(null); });
   const [cueSelectionVersion, setCueSelectionVersion] = useState(0);
   const showCommonProperties = (): void => { setAnalysisOpen(false); audioEditor.select(null); setLightingSelection(null); setSelectedCueId(null); setSelectedClipId(null); setLightingTool(null); setPointDetails(false); };
   const openLightingTool = (tool: LightingTool): void => { if (tool === 'tempo') showCommonProperties(); else { setPointDetails(false); setLightingTool(tool); } };
@@ -118,12 +118,12 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
   const runCommand = createCommandRunner(execute, notify);
   const lightingDocument = useLightingDocument(item);
   const audioEditor = useAudioEditor(item, projectPath, playing || runtimeState !== 'idle' && !(externalTransport && player.state.status === 'paused' && runtimeState === 'paused'), notify, stopForEdit);
-  const selectAudio = (id?: string): void => { setLightingSelection(null); setSelectedCueId(null); setSelectedClipId(null); audioEditor.select(id ?? audioEditor.selectedId ?? audioEditor.segments[0]?.id ?? null); };
+  const selectAudio = (id?: string): void => { setAnalysisOpen(false); setLightingSelection(null); setSelectedCueId(null); setSelectedClipId(null); audioEditor.select(id ?? audioEditor.selectedId ?? audioEditor.segments[0]?.id ?? null); };
   const audition = useLightingCueAudition(lightingDocument, project?.projectId, item, notify);
   const effectStamp = useLightingEffectStamp(item?.id ?? null, lightingDocument, item?.referenceAudio?.durationMs ?? 0, notify);
   const changeLighting = lightingEditHandler({ itemId: item?.id ?? null, project, notify });
   const selectCreatedCue = (document: LightingDocument, id: string): void => { const selection = cueSelection(document, id); if (!selection) return; showCommonProperties(); setLightingSelection(selection); setPointDetails(true); };
-  useEffect(() => { setAnalysisOpen(false); reset(); setSelectedCueId(null); setSelectedClipId(null); setLightingSelection(null); setLightingPreview(false); setLightingTool(null); }, [currentItemId, documentId, item?.referenceAudio?.relativePath, item?.referenceAudio?.sha256, reset]);
+  useEffect(() => { setAnalysisOpen(false); reset(); setSelectedCueId(null); setSelectedClipId(null); setLightingSelection(null); setLightingPreview(false); setLightingTool(null); }, [currentItemId, documentId, item?.referenceAudio?.relativePath, item?.referenceAudio?.sha256, reset, setAnalysisOpen]);
   const cue = item?.cues.find((candidate) => candidate.id === selectedCueId) ?? null;
   const clip = item?.referenceMediaClips.find((candidate) => candidate.id === selectedClipId) ?? null;
   const selectedAsset = project?.mediaAssets.find((asset) => asset.id === (clip?.assetId ?? selectedAssetId)) ?? null;
@@ -193,18 +193,18 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
             onRemoveClip={removeClip} onDropObsResource={addObsResource} />{<button className="workspace-splitter vertical" aria-label="调整属性面板宽度" {...ownKeys('ArrowLeft', 'ArrowRight')} onPointerDown={(event) => workspaceLayout.beginResize('inspector', event)} onKeyDown={event => workspaceLayout.resizeWithKeyboard('inspector', event)} />}</> : null}
 
       {lightingSelection && !lightingWorkspace ? <aside className="cue-inspector panel"><div className="panel-title"><span>灯光属性</span><Button variant="ghost" size="sm" onClick={showCommonProperties}>常用设置</Button></div><div className="lighting-inspector-host"><Switch className="lighting-audition-switch" label="选中 Cue 实时播放" aria-label="选中 Cue 实时播放" help={audition.enabled ? audition.status : '已关闭选中即播放'} checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />{lightingSelection ? <LightingTimelineInspector onOpenTools={openLightingTool} onError={(message) => notify(message, 'error')} preview={lightingPreview} onPreviewChange={setLightingPreview} document={lightingDocument} trackId={lightingSelection.trackId} selectedClipId={lightingSelection.clipId} selectedEventId={lightingSelection.eventId ?? null} selectedEventIds={lightingSelection.eventIds ?? []} onSelect={(trackId, clipId) => setLightingSelection({ trackId, clipId })} onChange={changeLighting} /> : null}</div></aside> : lightingWorkspace ? null : <aside className="cue-inspector panel" key={cue ? `cue:${cue.id}` : clip ? `clip:${clip.id}` : `empty:${currentItemId}`}>
-        <div className="panel-title"><span>{cue ? '画面与动作' : clip ? '媒体属性' : audioEditor.selected ? '音频属性' : '属性'}</span>{cue || clip || audioEditor.selected ? <Button variant="ghost" size="sm" onClick={showCommonProperties}>常用设置</Button> : null}</div>
+        <div className="panel-title"><span>{cue ? '画面与动作' : clip ? '媒体属性' : analysisOpen ? '音乐识别' : audioEditor.selected ? '音频属性' : '属性'}</span>{cue || clip || analysisOpen || audioEditor.selected ?<Button variant="ghost" size="sm" onClick={showCommonProperties}>常用设置</Button> : null}</div>
         {cue && item ? <CueInspector itemId={item.id} cue={cue} frameRate={project.timebase.frameRate} inventory={inventory} execute={execute} testAction={testAction} /> : clip && item && selectedAsset ? <ClipInspector
           clip={clip} asset={selectedAsset}
           itemId={item.id} notify={notify}
           onTransform={(transform) => transformClip(clip.id, transform)}
           onEmbeddedAudioEnabled={(embeddedAudioEnabled) => setClipEmbeddedAudioEnabled(clip.id, embeddedAudioEnabled)}
           onRemove={() => removeClip(clip.id)}
-        /> : lightingWorkspace || audioEditor.selected ? <AudioInspector editor={audioEditor} playhead={playhead} /> : item ? <CommonProperties key={item.id} item={item} document={lightingDocument} disabled={playing || runtimeState !== 'idle'} onChange={changeLighting} notify={notify} /> : <div className="inspector-empty"><FileVideo2 /><h3>先选择节目</h3></div>}
+        /> : analysisOpen ? <div className="music-analysis-host" ref={setAnalysisHost} /> : audioEditor.selected ? <AudioInspector editor={audioEditor} playhead={playhead} onRecognise={openMusic} /> : item ? <CommonProperties key={item.id} item={item} document={lightingDocument} disabled={playing || runtimeState !== 'idle'} onChange={changeLighting} notify={notify} /> : <div className="inspector-empty"><FileVideo2 /><h3>先选择节目</h3></div>}
       </aside>}
         </div>
         {!lowPower && !lightingWorkspace ? <button className="workspace-splitter horizontal" aria-label="调整时间线高度" {...ownKeys('ArrowUp', 'ArrowDown')} onPointerDown={(event) => workspaceLayout.beginResize('timeline', event)} onKeyDown={event => workspaceLayout.resizeWithKeyboard('timeline', event)} /> : null}
-        {item && timelineState && editRules ? <ReferenceTimeline analysisPanel={{ host: analysisHost, open: analysisOpen, onOpen: () => { setLightingTool(null); setAnalysisOpen(true); }, onClose: () => setAnalysisOpen(false) }} outputControl={lightingWorkspace ? <>{project ? <LightingOutputControl project={project} item={item} /> : null}{externalTransport && (player.state.notice || player.state.error || player.state.fault) ? <PlayerStatusDetails error={player.state.error} errorTitle={player.state.errorTitle} notice={player.state.notice} fault={player.state.fault ?? null} engine={player.engine} /> : null}</> : undefined} transportStatus={lightingWorkspace ? undefined : <PendingPictureNotice notice={sceneOutput.marks.notice} />} onEffectDrop={lightingWorkspace ? effectStamp.stamp : undefined} onConsoleCueDrop={lightingWorkspace ? effectStamp.stampConsoleCue : undefined} lightingWorkspace={lightingWorkspace}
+        {item && timelineState && editRules ? <ReferenceTimeline analysisPanel={{ host: analysisHost, open: analysisOpen, onOpen: openMusic, onClose: () => setAnalysisOpen(false) }} outputControl={lightingWorkspace ? <>{project ? <LightingOutputControl project={project} item={item} /> : null}{externalTransport && (player.state.notice || player.state.error || player.state.fault) ? <PlayerStatusDetails error={player.state.error} errorTitle={player.state.errorTitle} notice={player.state.notice} fault={player.state.fault ?? null} engine={player.engine} /> : null}</> : undefined} transportStatus={lightingWorkspace ? undefined : <PendingPictureNotice notice={sceneOutput.marks.notice} />} onEffectDrop={lightingWorkspace ? effectStamp.stamp : undefined} onConsoleCueDrop={lightingWorkspace ? effectStamp.stampConsoleCue : undefined} lightingWorkspace={lightingWorkspace}
           audioEditor={audioEditor} onSelectAudio={selectAudio} externalTransport={externalTransport} transportClock={clock} onStop={()=>{stop();void stopMa2Audition().catch((error:unknown)=>notify(error instanceof Error?error.message:String(error),'error'));}} onDeselect={() => { audioEditor.select(null); setLightingSelection(null); setSelectedCueId(null); setSelectedClipId(null); setPointDetails(false); }} onHint={message => notify(message, 'info')}
           lighting={{ onCreateCue: lightingWorkspace ? ms => { const id = crypto.randomUUID(); const next = placeEmptyLightingCue(lightingDocument, id, ms, item.referenceAudio?.durationMs ?? 0); if (!changeLighting(next, '添加空 Cue')) return; selectCreatedCue(next, id); } : undefined, onClearSelection: () => { setLightingSelection(null); setPointDetails(false); }, onAuditionEvent: audition.select, onOpenTools: openLightingTool, detailOpen: lightingTool !== null, onError: (message) => notify(message, 'error'), preview: lightingPreview, onPreviewChange: setLightingPreview, mtcOrigin: () => programTimeOrigin(item), document: lightingDocument, selectedClipId: lightingSelection?.clipId ?? null, selectedEventId: lightingSelection?.eventId ?? null, selectedEventIds: lightingSelection?.eventIds ?? [], onSelectEvent: (trackId, clipId, eventId, eventIds) => { setAnalysisOpen(false); setSelectedClipId(null); setSelectedCueId(null); setLightingSelection({ trackId, clipId, eventId, eventIds: eventIds ?? [eventId] }); if (lightingWorkspace && (!eventIds || eventIds.length <= 1)) { setPointDetails(true); setLightingTool(null); setCueSelectionVersion(value => value + 1); } }, onSelect: (trackId, clipId) => { setSelectedClipId(null); setSelectedCueId(null); setLightingSelection({ trackId, clipId }); }, onChange: changeLighting }}
           projectPath={projectPath}
@@ -293,4 +293,16 @@ function cueSelection(document: LightingDocument, id: string): { trackId: string
     if (clip.events.some(event => event.id === id)) return { trackId: track.id, clipId: clip.id, eventId: id };
   }
   return null;
+}
+
+/**
+ * The song's music panel (音乐识别, 0.5.9 E11): beside the library on the lighting workbench; in the editor in place of
+ * the properties, until a part of the timeline is chosen. `show` opens it; in the editor it also clears the selection.
+ */
+function useMusicPanel(lightingWorkspace: boolean, partSelected: boolean, closeTools: () => void, clearEditorSelection: () => void) {
+  const [open, setOpen] = useState(false);
+  const [host, setHost] = useState<HTMLDivElement | null>(null);
+  useEffect(() => { if (!lightingWorkspace && partSelected) setOpen(false); }, [lightingWorkspace, partSelected]);
+  const show = (): void => { closeTools(); if (!lightingWorkspace) clearEditorSelection(); setOpen(true); };
+  return { open, setOpen, host, setHost, show };
 }

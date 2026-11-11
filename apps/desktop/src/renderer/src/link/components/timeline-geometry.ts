@@ -93,10 +93,30 @@ export function fitTimelinePixelsPerSecond(durationMs: number, viewportWidth: nu
   return Math.min(MAX_TIMELINE_PIXELS_PER_SECOND, Math.max(MIN_TIMELINE_PIXELS_PER_SECOND, fitted));
 }
 
-/** Where a time is on the timeline's content, in px: the DOM parts and the canvas layer (TimelineCanvasLayer) both
- * place by this, so the two always agree. */
+/** Where a time is on the timeline's content, in px: every part of the timeline places by this. */
 export function timeToX(milliseconds: number, pixelsPerSecond: number): number {
   return milliseconds / 1_000 * pixelsPerSecond;
+}
+
+/** The fewest px between two beat marks drawn: closer ones are left out at this zoom, kept when zoomed in. */
+export const BEAT_MARK_GAP_PX = 8;
+
+/**
+ * The beat marks to draw (both pages, 0.5.9 E11): the ones in `view` (the scroll block's window, and `margin` px more on
+ * each side), at least `BEAT_MARK_GAP_PX` apart, so a song of many hundreds of beats draws at most one mark per 8 px of
+ * the window at any zoom. `times` are in time order.
+ */
+export function beatMarksInView<T>(times: readonly T[], at: (beat: T) => number, pixelsPerSecond: number, view: { left: number; width: number }, margin = 8): T[] {
+  const shown: T[] = [];
+  let previous = -Infinity;
+  for (const beat of times) {
+    const x = timeToX(at(beat), pixelsPerSecond);
+    if (x < view.left - margin) continue;
+    if (x > view.left + view.width + margin) break;
+    if (x - previous < BEAT_MARK_GAP_PX) continue;
+    shown.push(beat); previous = x;
+  }
+  return shown;
 }
 
 export function timelineTimeFromClientX(input: {

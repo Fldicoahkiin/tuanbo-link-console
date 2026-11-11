@@ -1,11 +1,16 @@
-import { AudioLines, Scissors, ScanLine, Trash2 } from 'lucide-react';
+import { AudioLines, Scissors, Trash2 } from 'lucide-react';
 import type { AudioBeatLevel } from '@tb/schema';
 import type { AudioEditor } from './useAudioEditor';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import { Button, Disclosure, WithUnit } from '../ui';
 import type { EditorPlayhead } from './editor-playhead';
 
-export function AudioInspector({ editor, playhead }: { editor: AudioEditor; playhead: EditorPlayhead }): JSX.Element {
+/**
+ * The song audio's properties in the editor. The beats are the song's one record (core songBeats), recognised by the
+ * 音乐识别 panel that the lighting workbench uses too (`onRecognise` opens it, 0.5.9 E11); here they are only shown at
+ * a chosen spacing and used to split the audio.
+ */
+export function AudioInspector({ editor, playhead, onRecognise }: { editor: AudioEditor; playhead: EditorPlayhead; onRecognise: () => void }): JSX.Element {
   const segment = editor.selected;
   return <div className="inspector-body audio-inspector">
     <header><AudioLines /><strong>{editor.title}</strong><span>{editor.tracks.length} 条音轨 · {editor.segments.length} 个片段</span></header>
@@ -18,15 +23,13 @@ export function AudioInspector({ editor, playhead }: { editor: AudioEditor; play
       </div> : <p>点击波形定位，拖动片段移动位置，拖动两端调整范围。</p>}
       <div className="audio-edit-actions"><Button variant="secondary" size="sm" icon={Scissors} onClick={() => void editor.split(playhead.read())}>播放头处分割</Button><Button variant="danger" size="sm" icon={Trash2} disabled={!segment} onClick={() => void editor.remove()}>删除片段</Button></div>
       </fieldset>
-      {editor.disabled && !editor.busy ? <p>停止播放后才能移动、裁剪或删除音频片段，节拍标记随时可以编辑。</p> : null}
+      {editor.disabled && !editor.busy ? <p>停止播放后才能移动、裁剪或删除音频片段。</p> : null}
       </Disclosure>
-    <fieldset disabled={editor.busy}>
-      <section className="audio-beat-properties"><h3>找到音乐的节拍</h3><p>先检测，再把节拍放到时间线上，方便对齐灯光。</p><Button variant="secondary" className="audio-detect-button" icon={ScanLine} loading={editor.busy} disabled={!editor.audio} onClick={() => void editor.analyze()}>{editor.busy ? '正在检测…' : '检测节拍'}</Button>
-        <div className="audio-beat-levels" role="group" aria-label="节拍密度">{([['sparse', '每四拍'], ['standard', '每两拍'], ['dense', '每拍']] as const).map(([value, label]) => <Button key={value} variant="secondary" size="sm" aria-pressed={editor.level === value} onClick={() => editor.setLevel(value satisfies AudioBeatLevel)}>{label}</Button>)}</div>
-        <p>{editor.pendingBeats ? `检测到 ${editor.points.length} 个节拍点，点“应用标记”后保存到这首歌，灯光工作台也用这份。` : editor.hasBeats ? `这首歌有 ${editor.points.length} 个节拍点，和灯光工作台共用。` : editor.beatsStale ?? '检测完成后可以选择标记间隔。'}</p>
-        <div className="audio-edit-actions"><Button variant="primary" size="sm" disabled={!editor.pendingBeats} onClick={() => void editor.mark()}>应用标记</Button><Button variant="secondary" size="sm" disabled={!editor.points.length} onClick={() => void editor.clearMarks()}>清除标记</Button></div>
-      </section>
-    </fieldset>
+    <section className="audio-beat-properties"><h3>音乐的节拍</h3>
+      <p>{editor.hasBeats ? `这首歌${editor.simpleBeats ? '用的是简易检测的节拍（准确度差一些），' : '的节拍'}和灯光工作台共用，按现在的间隔显示 ${editor.points.length} 个。` : editor.beatsStale ?? '这首歌还没有节拍。点“音乐识别”识别一次，灯光工作台也用这份。'}</p>
+      <Button variant="secondary" className="audio-detect-button" icon={AudioLines} disabled={!editor.audio} onClick={onRecognise}>音乐识别</Button>
+      <div className="audio-beat-levels" role="group" aria-label="节拍密度">{([['sparse', '每小节'], ['standard', '每两拍'], ['dense', '每拍']] as const).map(([value, label]) => <Button key={value} variant="secondary" size="sm" aria-pressed={editor.level === value} disabled={!editor.hasBeats} onClick={() => editor.setLevel(value satisfies AudioBeatLevel)}>{label}</Button>)}</div>
+    </section>
     {editor.busy ? <p role="status">正在处理音频，请稍候…</p> : null}
   </div>;
 }

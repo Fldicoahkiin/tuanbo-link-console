@@ -16,6 +16,12 @@
   .timeline-tool-error svg { width: 16px; height: 16px; }
   .timeline-panel-button[data-tone='warning'] { color: var(--color-warning); }
 
+  /* The editor's 音乐识别 button (0.5.9 E11): the icon and the BPM only, as tall as the other toolbar buttons. */
+  .music-analysis-button[data-compact='true'] { gap: var(--space-half); height: 32px; padding: 0 var(--space-half); border-color: transparent; background: transparent; white-space: nowrap; }
+  .music-analysis-button[data-compact='true'] > svg { flex: none; width: 16px; height: 16px; color: var(--color-text-secondary); }
+  .music-analysis-button[data-compact='true'] > .music-bpm { max-width: 64px; overflow: hidden; text-overflow: ellipsis; font-size: var(--type-caption); }
+  .music-analysis-button[data-compact='true']:is(:hover, :focus-visible) { background: var(--color-surface-hover); }
+  .music-analysis-button[data-compact='true'][aria-pressed='true'] { background: var(--color-accent-soft); }
   .timeline-panel { display: grid; gap: var(--space-2); width: 248px; padding: var(--space-2); }
   .timeline-display-panel { display: grid; gap: var(--space-half); }
   .timeline-panel-note { margin: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.8 var(--font-ui); overflow-wrap: anywhere; }

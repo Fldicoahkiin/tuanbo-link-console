@@ -13,6 +13,8 @@
 
   .music-beat-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
   .music-beat-actions > span { margin-left: var(--space-1); color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
+  .music-simple-detect { display: grid; justify-items: start; gap: var(--space-2); }
+  .music-simple-detect > p { max-width: 72ch; margin: 0; color: var(--color-text-secondary); font: 400 var(--type-body)/1.6 var(--font-ui); }
   .music-analysis-message { max-width: 72ch; margin: 0; color: var(--color-text-secondary); font: 400 var(--type-body)/1.6 var(--font-ui); overflow-wrap: anywhere; }
 
   .music-recognized-sections { display: flex; flex-wrap: wrap; gap: var(--space-1); }

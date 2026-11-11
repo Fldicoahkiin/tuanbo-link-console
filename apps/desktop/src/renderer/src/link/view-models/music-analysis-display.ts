@@ -15,3 +15,11 @@ export function musicAnalysisHeading(data: Pick<PlacedSongBeats, 'state' | 'task
   if (data.state === 'cleared') return '标记已清除';
   return musicSegmentTempoLabel(current);
 }
+
+/** The same, short enough for the editor's toolbar (0.5.9 E11): the tempo as “120 BPM” or “118→124”, else the state. */
+export function musicAnalysisShortHeading(data: Pick<PlacedSongBeats, 'state' | 'taskId'> | undefined, current: MusicStructureSegment | undefined, job: AutomaticMusicJob | null, submitting: boolean, error: string | null): string {
+  const heading = musicAnalysisHeading(data, current, job, submitting, error);
+  if (heading !== musicSegmentTempoLabel(current)) return heading;
+  if (!current || current.bpm === null) return '无 BPM';
+  return current.endBpm === null ? `${current.bpm} BPM` : `${current.bpm}→${current.endBpm}`;
+}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type MouseEvent, type RefObject, type ReactNode } from 'react';
 import './timeline-toolbar.css';
-import { Button, Field, IconButton, MenuButton, MenuItem, MenuNote, Select } from '../ui';
+import { Field, IconButton, MenuButton, MenuItem, MenuNote, Select } from '../ui';
 import { TimelinePanelButton } from './TimelinePanelButton';
 import {
   ArrowLeftToLine,
@@ -172,14 +172,11 @@ export function TimelineToolbar(props: Props): JSX.Element {
         <Field stacked label="滚轮移动速度">{(field) => <Select {...field} value={props.wheelSeek?.speed} onChange={event => props.wheelSeek?.setSpeed(Number(event.currentTarget.value))}>{[0.1, 0.25, 0.5, 1, 2].map(speed => <option key={speed} value={speed}>{speed}×</option>)}</Select>}</Field>
         <p className="timeline-panel-note">选中 Cue：滚轮移动 Cue<br />未选中：滚轮移动播放头<br />Shift + 滚轮：平移<br />Ctrl + 滚轮：缩放</p>
       </TimelinePanelButton> : null}
-      {props.compact
-        ? <IconButton className="timeline-snap-state" label={snapLabel} title={snapTitle} icon={Magnet} aria-pressed={props.snapEnabled} onClick={() => props.onSnapEnabledChange(!props.snapEnabled)} />
-        : <Button variant="ghost" className="timeline-snap-state" icon={Magnet} aria-pressed={props.snapEnabled} aria-label={snapLabel} title={snapTitle} onClick={() => props.onSnapEnabledChange(!props.snapEnabled)}>吸附</Button>}
+      {/* Icons only on both pages, so the editor's row keeps room for 音乐识别 at 1280×720 (0.5.9 E11). */}
+      <IconButton className="timeline-snap-state" label={snapLabel} title={snapTitle} icon={Magnet} aria-pressed={props.snapEnabled} onClick={() => props.onSnapEnabledChange(!props.snapEnabled)} />
       {!props.compact ? <Select width="auto" className="timeline-snap-distance" aria-label="吸附强度" title="片段两端、机位边缘和播放头之间的吸附距离" value={props.snapDistance} disabled={!props.snapEnabled} onChange={(event) => props.onSnapDistanceChange(Number(event.currentTarget.value))}><option value={8}>轻 · 8 px</option><option value={14}>标准 · 14 px</option><option value={22}>强 · 22 px</option></Select> : null}
       <IconButton label="缩小时间线" title={withKey('缩小时间线', 'view.zoomOut', 'timeline')} icon={ZoomOut} onClick={() => props.onZoomOut()} />
-      {props.compact
-        ? <IconButton className="timeline-fit-button" label="适合节目时长" title={withKey('缩放至全部节目内容', 'view.zoomFit', 'timeline')} icon={Maximize2} onClick={() => props.onFit()} />
-        : <Button variant="ghost" className="timeline-fit-button" icon={Maximize2} aria-label="适合节目时长" title={withKey('缩放至全部节目内容', 'view.zoomFit', 'timeline')} onClick={() => props.onFit()}>全部</Button>}
+      <IconButton className="timeline-fit-button" label="适合节目时长" title={withKey('缩放至全部节目内容', 'view.zoomFit', 'timeline')} icon={Maximize2} onClick={() => props.onFit()} />
       <IconButton label="放大时间线" title={withKey('放大时间线', 'view.zoomIn', 'timeline')} icon={ZoomIn} onClick={() => props.onZoomIn()} />
     </div>
 

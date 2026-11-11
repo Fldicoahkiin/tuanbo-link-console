@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { nextScrollBlocks, pinnedSpan, SCROLL_BLOCK_PX, scrollBlock, scrollWindow, segmentNameLeft, TimelineScroll } from './timeline-scroll';
-import { canvasX } from './TimelineCanvasLayer';
-import { timeToX } from './timeline-geometry';
+import { beatMarksInView, BEAT_MARK_GAP_PX, timeToX } from './timeline-geometry';
 
 describe('滚动只在跨过 512 px 时让 React 知道（0.5.9 E5）', () => {
   it('块号只在跨 512 px 时变', () => {
@@ -43,17 +42,26 @@ describe('滚动只在跨过 512 px 时让 React 知道（0.5.9 E5）', () => {
   });
 });
 
-describe('画布层和 DOM 用同一个 timeToX，缩放和滚动时位置一样', () => {
-  it('画布上的 x 加上画布的位置（滚动位置）就是 DOM 部件的 left', () => {
+describe('时间线上的部件都按同一个 timeToX 放，缩放和滚动时位置一样', () => {
+  it('timeToX 就是以前 DOM 部件算 left 的方法', () => {
     for (const pixelsPerSecond of [0.5, 32, 220, 480]) {
-      for (const scrollLeft of [0, 137, 4_096.5, 60_000]) {
-        for (const ms of [0, 1, 999, 30_000, 241_337]) {
-          const domLeft = ms / 1000 * pixelsPerSecond; // how the DOM parts placed it before 0.5.9
-          expect(timeToX(ms, pixelsPerSecond)).toBe(domLeft);
-          expect(canvasX(ms, { scrollLeft, pixelsPerSecond }) + scrollLeft).toBeCloseTo(domLeft, 9);
-        }
-      }
+      for (const ms of [0, 1, 999, 30_000, 241_337]) expect(timeToX(ms, pixelsPerSecond)).toBe(ms / 1000 * pixelsPerSecond); // how the DOM parts placed it before 0.5.9
     }
+  });
+
+  it('几百个节拍：只画这一格窗口里的，相邻的至少隔 8 px，放大后又都画出来（0.5.9 E11）', () => {
+    const beats = Array.from({ length: 600 }, (_, index) => index * 400); // 150 BPM, 4 minutes
+    const view = { left: 1_024, width: 2_048 };
+    for (const pixelsPerSecond of [2, 8, 32, 220]) {
+      const shown = beatMarksInView(beats, ms => ms, pixelsPerSecond, view);
+      const xs = shown.map(ms => timeToX(ms, pixelsPerSecond));
+      expect(xs.every(x => x >= view.left - 8 && x <= view.left + view.width + 8)).toBe(true);
+      expect(xs.slice(1).every((x, index) => x - xs[index]! >= BEAT_MARK_GAP_PX)).toBe(true);
+      expect(shown.length).toBeLessThanOrEqual(Math.ceil((view.width + 16) / BEAT_MARK_GAP_PX) + 1);
+    }
+    // Zoomed in far enough, every beat in the window is drawn.
+    const near = beatMarksInView(beats, ms => ms, 220, view);
+    expect(near).toEqual(beats.filter(ms => timeToX(ms, 220) >= view.left - 8 && timeToX(ms, 220) <= view.left + view.width + 8));
   });
 
   it('按住滚动位置贴边的字：和以前按 React 里的滚动位置算的一样', () => {

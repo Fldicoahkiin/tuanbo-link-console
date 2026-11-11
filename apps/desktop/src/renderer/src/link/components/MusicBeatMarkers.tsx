@@ -4,7 +4,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { Menu, MenuItem } from '../ui';
 import { ownKeys } from '../keys/key-owner';
-import { timeToX } from './timeline-geometry';
+import { beatMarksInView, timeToX } from './timeline-geometry';
 import { pinnedSpan, useScrollPaint, type ScrollPosition, type TimelineScroll } from './timeline-scroll';
 
 /**
@@ -16,12 +16,7 @@ export function MusicBeatMarkers({ beats, view, scroll, viewportWidth, pixelsPer
   const [menu, setMenu] = useState<{ id: string; kind: 'beat' | 'segment'; x: number; y: number } | null>(null);
   const open = (event: React.MouseEvent, id: string, kind: 'beat' | 'segment'): void => { event.preventDefault(); event.stopPropagation(); setMenu({ id, kind, x: event.clientX, y: event.clientY }); };
   const { left, width } = view;
-  let previous = -Infinity;
-  const visible = showBeats && beats.data?.state === 'ready' ? beats.data.beats.filter(beat => {
-    const x = timeToX(beat.atMs, pixelsPerSecond);
-    if (x < left - 8 || x > left + width || x - previous < 8) return false;
-    previous = x; return true;
-  }) : [];
+  const visible = showBeats && beats.data?.state === 'ready' ? beatMarksInView(beats.data.beats, beat => beat.atMs, pixelsPerSecond, view) : [];
   const points = beats.points;
   const segments = useMemo(() => showSegments ? points.filter(point => timeToX(point.endMs, pixelsPerSecond) >= left && timeToX(point.startMs, pixelsPerSecond) <= left + width) : [], [showSegments, points, pixelsPerSecond, left, width]);
   const segmentButtons = useRef(new Map<string, HTMLButtonElement>());

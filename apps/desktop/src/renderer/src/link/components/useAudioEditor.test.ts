@@ -41,7 +41,7 @@ it('内部暂停会话先正常停止，再删除独立音轨，视频片段保�
   expect(useRuntimeStore.getState().state).toBe('idle');
 });
 
-it('打开旧工程后，编辑器的节拍来自歌上的那一份；暂停时可以清除节拍，同时保留音频编辑保护', async () => {
+it('打开旧工程后，编辑器的节拍来自歌上的那一份；暂停时照样保留音频编辑保护', async () => {
   const project = createEmptyLinkProject('暂停节拍测试');
   project.rundown.push({ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [],
     referenceAudio: { assetId: 'audio', relativePath: 'audio.wav', durationMs: 5000, sha256: 'a'.repeat(64),
@@ -66,16 +66,9 @@ it('打开旧工程后，编辑器的节拍来自歌上的那一份；暂停时�
   const beats = songBeats(song());
   expect(beats.state === 'ready' ? songBeatsAtDensity(beats.beats, 'standard').map(beat => beat.atMs) : []).toEqual(editor().points);
   expect(editor().points).toEqual([500, 1500]);
-  // Nothing detected waits to be applied, so applying changes nothing.
-  const before = useDocumentStore.getState().revision;
-  await editor().mark();
-  expect(useDocumentStore.getState().revision).toBe(before);
-  await editor().clearMarks();
-  expect(notify).not.toHaveBeenCalled();
-  expect(useDocumentStore.getState().past.at(-1)?.command.label).toBe('清除音频节拍标记');
-  expect(song().music?.structure.state).toBe('cleared');
-  expect(editor().points).toEqual([]);
-  expect(useRuntimeStore.getState().state).toBe('paused');
+  // The editor has no beat detection of its own any more (0.5.9 E11): beats are recognised and cleared in the
+  // 音乐识别 panel, the same as the lighting workbench's.
+  expect(Object.keys(editor()).filter(key => ['analyze', 'mark', 'clearMarks', 'pendingBeats'].includes(key))).toEqual([]);
   const revision = useDocumentStore.getState().revision;
   await editor().split(2000);
   expect(notify).toHaveBeenCalledWith('请停止播放后编辑音频片段', 'error');

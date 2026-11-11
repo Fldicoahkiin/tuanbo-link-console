@@ -1,11 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { LinkWaveform, LinkWaveformResult, RundownItem } from '@tb/schema';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { drawWaveformCanvas, type WaveformDisplay } from '../view-models/waveform-draw';
 import { WaveformCache } from '../runtime/waveform-cache';
 import { runWhenNotPlaying } from '../runtime/when-not-playing';
-import { TimelineCanvasLayer, type CanvasPaint } from './TimelineCanvasLayer';
-import type { TimelineScroll } from './timeline-scroll';
 
 const waveformCache = new WaveformCache(source => linkDesktopViewModel.generateWaveform(source));
 
@@ -96,21 +94,6 @@ export function WaveformCanvas(props: {
     return () => observer.disconnect();
   }, [waveform, display, startSample, endSample, fill, normalize, color, maximumWidth]);
   return <canvas ref={canvasRef} className={props.className} style={props.style} data-waveform-engine="peaks" data-waveform-display={display} />;
-}
-
-/**
- * The song's waveform on the editor timeline's canvas layer (0.5.9 E5): the visible part of the song, drawn again
- * at each scroll without React, from the same levels as every other waveform (one `useSongWaveform`). The colour
- * comes from the CSS at each drawing.
- */
-export function TimelineWaveformLayer({ waveform, scroll, pixelsPerSecond, viewportWidth, contentWidth }: {
-  waveform: LinkWaveform; scroll: TimelineScroll; pixelsPerSecond: number; viewportWidth: number; contentWidth: number;
-}): JSX.Element {
-  const paint = useCallback<CanvasPaint>((canvas, view) => {
-    const style = getComputedStyle(canvas), span = Math.max(1, contentWidth);
-    drawWaveformCanvas(canvas, view, waveform, { display: 'waveform', startSample: view.scrollLeft / span * waveform.sampleCount, endSample: (view.scrollLeft + view.width) / span * waveform.sampleCount, fill: 0.88, normalize: true, color: style.color, labels: null, font: style.font });
-  }, [contentWidth, waveform]);
-  return <TimelineCanvasLayer className="timeline-waveform-canvas" scroll={scroll} pixelsPerSecond={pixelsPerSecond} viewportWidth={viewportWidth} paint={paint} />;
 }
 
 /** The home player's whole-song waveform (no scroll). */

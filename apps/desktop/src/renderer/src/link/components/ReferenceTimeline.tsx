@@ -1,6 +1,7 @@
 import { useAutomaticMusicAnalysis } from '../runtime/use-automatic-music-analysis';
 import { MusicBeatMarkers } from './MusicBeatMarkers';
-import { useMusicBeatSegments } from './useMusicBeatSegments';
+import { musicRecognitionKey, useMusicBeatSegments } from './useMusicBeatSegments';
+import { MusicAnalysisButton } from './MusicAnalysisButton';
 import { usePlayheadTimeLabel } from './usePlayheadTimeLabel';
 import { useAudioRowHeight } from './useAudioRowHeight';
 import { useTimelineStamp } from './useTimelineStamp';
@@ -8,7 +9,7 @@ import { TimelinePanelButton } from './TimelinePanelButton';
 import { Field, IconButton, MenuButton, MenuItem, Select } from '../ui';
 import { useTimelineWheelSeek } from './useTimelineWheelSeek';
 import { AudioRowResizeHandle } from './AudioRowResizeHandle';
-import { LightingTimelineControls, type LightingTimelineDisplay } from './LightingTimelineControls';
+import { LightingTimelineControls, MusicAnalysisPanelPortal, type LightingTimelineDisplay } from './LightingTimelineControls';
 import '../lighting-music.css';
 import '../lighting-timeline.css';
 import { LightingMusicSectionRow } from './LightingMusicSections';
@@ -30,7 +31,7 @@ import type { LinkCue, LinkMediaAsset, MtcFrameRate, ReferenceMediaClip, Rundown
 import { Music2, Trash2, MousePointer2, SquareDashedMousePointer, AudioLines, ArrowLeftRight, FolderInput, Gauge, type LucideIcon } from 'lucide-react';
 import type { LightingTool } from './LightingTimelineTools';
 import type { ObsResource } from './ResourceLibrary';
-import { TimelineWaveformLayer, useSongWaveform, type ReferenceWaveformSource } from './ReferenceWaveform';
+import { useSongWaveform, type ReferenceWaveformSource } from './ReferenceWaveform';
 import { useScrollPaint } from './timeline-scroll';
 import { waveformDisplay } from '../view-models/waveform-draw';
 import { formatTimelineTimecode, timelineInteractionTime } from './timeline-geometry';
@@ -144,10 +145,13 @@ type TimelineProps = Props & { readonly playheadMs: number };
 
 export function ReferenceTimeline(input: Props): JSX.Element {
   const { timelineRef, cueMouseMode, setCueMouseMode, props, layers, audioHeight, setAudioHeight, waveformGain, waveformMode, setWaveformMode } = useTimelineDisplay(input);
-  const musicSource = props.lightingWorkspace && props.musicItem ? songMusicSource(props.musicItem) : undefined;
-  const analysis = useAutomaticMusicAnalysis(props.lightingWorkspace ? props.projectPath : null, musicSource);
+  // The song's beats and their recognition, the same on the editor and the lighting workbench: one record per song
+  // (core songBeats) and one recognition task per song (musicRecognitionKey), 0.5.9 E11.
+  const musicSource = props.musicItem ? songMusicSource(props.musicItem) : undefined;
+  const analysis = useAutomaticMusicAnalysis(props.projectPath, musicSource);
   const [musicDisplay, setMusicDisplay] = useState<LightingTimelineDisplay>({ sections: true, markers: true, rawAnalysis: true });
-  const beatSegments = useMusicBeatSegments(props.lightingWorkspace ? props.musicItem : undefined, analysis, `${props.projectPath}:${props.timelineState.itemId}:${musicSource?.sha256}:${musicSource?.durationMs}`, props.projectPath, props.playing);
+  const beatSegments = useMusicBeatSegments(props.musicItem, analysis, musicRecognitionKey(props.projectPath, props.timelineState.itemId, musicSource), props.projectPath, props.playing);
+  const musicPanel = { beats: beatSegments, analysis, playhead: props.playhead, source: musicSource, projectPath: props.projectPath, analysisPanel: props.analysisPanel };
   const assets = useMemo(() => new Map(props.assets.map((asset) => [asset.id, asset])), [props.assets]);
   const waveform = useSongWaveform(props.referenceAudio);
 
@@ -171,7 +175,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   const snapThresholdMs = snapDistance / viewport.pixelsPerSecond * 1_000;
   const musicRow = musicDisplay.sections && beatSegments.points.length > 0;
   const { sectionRow, rulerHeight } = timelineMusicLayout({ ...props, musicRow }, musicDisplay);
-  const { contentStyle, headingStyle, waveformContentWidth, visualTracks } = timelineLayout({ ...props, sectionRow, musicRow }, viewport.contentWidth, viewport.pixelsPerSecond, viewport.gridSize);
+  const { contentStyle, headingStyle, visualTracks } = timelineLayout({ ...props, sectionRow, musicRow }, viewport.contentWidth, viewport.pixelsPerSecond, viewport.gridSize);
   // The playhead line, the time above it and the page turning while playing follow the playhead straight into the DOM.
   const playheadLine = useRef<HTMLSpanElement>(null);
   const playheadTime = useRef<HTMLElement>(null);
@@ -262,7 +266,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
     ref={timelineRef} data-playhead-time={showPlayheadTime}
     tabIndex={0}
   >
-    <div><TimelineToolbar displayControl={props.lightingWorkspace && props.lighting ? <LightingTimelineControls playhead={props.playhead} beats={beatSegments} analysisPanel={props.analysisPanel} analysis={analysis} onChange={props.lighting.onChange} onSeek={ms => { viewport.revealTime(ms); seekTo(ms, true, false); }} projectPath={props.projectPath} source={musicSource} playing={props.playing} document={props.lighting.document} display={musicDisplay} onDisplayChange={setMusicDisplay} /> : undefined} outputControl={props.outputControl} stampControls={stamping.controls} wheelSeek={props.lightingWorkspace ? wheelSeek : undefined} compact={props.lightingWorkspace === true} tools={props.lightingWorkspace ? <><div className="cue-mouse-modes" role="group" aria-label="鼠标模式"><IconButton label="定位" title="定位：点击或拖动波形、标尺" icon={MousePointer2} aria-pressed={cueMouseMode === 'seek'} onClick={() => setCueMouseMode('seek')} /><IconButton label="框选 Cue" title="框选 Cue：拖动框选，Delete 删除" icon={SquareDashedMousePointer} aria-pressed={cueMouseMode === 'select'} onClick={() => setCueMouseMode('select')} /></div><TimelinePanelButton label="波形显示方式" icon={AudioLines}><Field stacked label="波形显示方式">{(field) => <Select {...field} value={waveformMode} onChange={event => setWaveformMode(event.currentTarget.value)}><option value="rhythm">节奏波形</option><option value="waveform">原始波形</option><option value="spectrum">频谱</option></Select>}</Field></TimelinePanelButton></> : undefined} editPoints={seekSnapPointsMs} snapDistance={snapDistance} onSnapDistanceChange={setSnapDistance} externalTransport={props.externalTransport} onStop={props.onStop ? stopPlayback : undefined} recordingControl={props.lighting ? <><MenuButton label="灯光" menuLabel="灯光工具" className="timeline-lighting-tools">{(close) => lightingTools.filter(([tool]) => !props.lightingWorkspace || tool !== 'tempo').map(([tool, label, icon]) => <MenuItem key={tool} icon={icon} onSelect={() => { close(); props.lighting?.onOpenTools?.(tool); }}>{label}</MenuItem>)}</MenuButton><TimelineLightingRecording audioAvailable={Boolean(props.referenceAudio)} document={props.lighting.document} clipId={props.lighting.selectedClipId} clock={clock} onChange={props.lighting.onChange} onError={props.onPlaybackError} /></> : null} playbackReady={lightingPlayback.ready} frameRate={props.frameRate} durationMs={props.durationMs} playhead={props.playhead} playing={props.playing} referenceAudio={props.referenceAudio} snapEnabled={snapEnabled} audioRef={audioRef} onPlayheadChange={ms => { if (props.playing) props.onPlayheadChange(ms); else seekTo(ms, true, false); }} onPlayPause={playPause} onPlayingChange={props.onPlayingChange} onPlaybackError={props.onPlaybackError} onSnapEnabledChange={setSnapEnabled} onZoomOut={viewport.zoomOut} onFit={viewport.fit} onZoomIn={viewport.zoomIn} />
+    <div><TimelineToolbar displayControl={props.lightingWorkspace ? <LightingTimelineControls {...musicPanel} onSeek={ms => { viewport.revealTime(ms); seekTo(ms, true, false); }} display={musicDisplay} onDisplayChange={setMusicDisplay} /> : <><MusicAnalysisButton compact beats={beatSegments} analysis={analysis} playhead={props.playhead} open={props.analysisPanel?.open ?? false} onOpen={() => props.analysisPanel?.onOpen()} /><MusicAnalysisPanelPortal {...musicPanel} onSeek={ms => { viewport.revealTime(ms); seekTo(ms, true, false); }} /></>} outputControl={props.outputControl} stampControls={stamping.controls} wheelSeek={props.lightingWorkspace ? wheelSeek : undefined} compact={props.lightingWorkspace === true} tools={props.lightingWorkspace ? <><div className="cue-mouse-modes" role="group" aria-label="鼠标模式"><IconButton label="定位" title="定位：点击或拖动波形、标尺" icon={MousePointer2} aria-pressed={cueMouseMode === 'seek'} onClick={() => setCueMouseMode('seek')} /><IconButton label="框选 Cue" title="框选 Cue：拖动框选，Delete 删除" icon={SquareDashedMousePointer} aria-pressed={cueMouseMode === 'select'} onClick={() => setCueMouseMode('select')} /></div><TimelinePanelButton label="波形显示方式" icon={AudioLines}><Field stacked label="波形显示方式">{(field) => <Select {...field} value={waveformMode} onChange={event => setWaveformMode(event.currentTarget.value)}><option value="rhythm">节奏波形</option><option value="waveform">原始波形</option><option value="spectrum">频谱</option></Select>}</Field></TimelinePanelButton></> : undefined} editPoints={seekSnapPointsMs} snapDistance={snapDistance} onSnapDistanceChange={setSnapDistance} externalTransport={props.externalTransport} onStop={props.onStop ? stopPlayback : undefined} recordingControl={props.lighting ? <><MenuButton label="灯光" menuLabel="灯光工具" className="timeline-lighting-tools">{(close) => lightingTools.filter(([tool]) => !props.lightingWorkspace || tool !== 'tempo').map(([tool, label, icon]) => <MenuItem key={tool} icon={icon} onSelect={() => { close(); props.lighting?.onOpenTools?.(tool); }}>{label}</MenuItem>)}</MenuButton><TimelineLightingRecording audioAvailable={Boolean(props.referenceAudio)} document={props.lighting.document} clipId={props.lighting.selectedClipId} clock={clock} onChange={props.lighting.onChange} onError={props.onPlaybackError} /></> : null} playbackReady={lightingPlayback.ready} frameRate={props.frameRate} durationMs={props.durationMs} playhead={props.playhead} playing={props.playing} referenceAudio={props.referenceAudio} snapEnabled={snapEnabled} audioRef={audioRef} onPlayheadChange={ms => { if (props.playing) props.onPlayheadChange(ms); else seekTo(ms, true, false); }} onPlayPause={playPause} onPlayingChange={props.onPlayingChange} onPlaybackError={props.onPlaybackError} onSnapEnabledChange={setSnapEnabled} onZoomOut={viewport.zoomOut} onFit={viewport.fit} onZoomIn={viewport.zoomIn} />
 
     {props.transportStatus}</div><div className="timeline-shell">
       <div className="timeline-heading-viewport" ref={viewport.headingViewportRef} onWheel={viewport.onHeadingsWheel}><div className="timeline-track-headings" style={headingStyle}>
@@ -291,10 +295,6 @@ export function ReferenceTimeline(input: Props): JSX.Element {
             {props.lightingWorkspace ? <MusicBeatMarkers beats={beatSegments} view={viewport.view} scroll={scroll} viewportWidth={viewportWidth} pixelsPerSecond={viewport.pixelsPerSecond} top={sectionRow ? 24 : 0} rulerHeight={rulerHeight} showSegments={musicDisplay.sections} showBeats={musicDisplay.rawAnalysis} disabled={props.playing} onSeek={ms => seekTo(ms, true, false)} /> : null}
           </div>
           {props.audioEditor?.tracks.length ? props.audioEditor.tracks.map(track => <AudioTrackLane readOnly={props.lightingWorkspace === true} referencePointer={props.lightingWorkspace ? lanePointer : undefined} playhead={props.playhead} display={props.lightingWorkspace === true ? waveformDisplay(waveformMode) : 'waveform'} key={track.id} track={track} snapTime={ms => snap(props, ms, snapEnabled, seekSnapPointsMs, snapThresholdMs)} editor={props.audioEditor!} projectPath={props.projectPath} pixelsPerSecond={viewport.pixelsPerSecond} view={viewport.view} scroll={scroll} onSelect={id => props.onSelectAudio?.(id)} onSeek={ms => seekTo(ms, true)} />) : <div className="timeline-lane waveform-lane" {...lanePointer}>
-            {!props.audioEditor && waveform.waveform ? <TimelineWaveformLayer
-              waveform={waveform.waveform} scroll={scroll} pixelsPerSecond={pixelsPerSecond}
-              viewportWidth={viewportWidth} contentWidth={waveformContentWidth}
-            /> : null}
             {waveform.waveform && !waveform.error ? null : <span className={waveform.error ? 'timeline-lane-error' : 'timeline-lane-empty'}>{waveform.error ?? (props.referenceAudio ? '正在生成歌曲音频波形…' : '当前节目还没添加音频')}</span>}
             {props.audioEditor ? <AudioTimelineSegments readOnly={props.lightingWorkspace === true} playhead={props.playhead} editor={props.audioEditor} waveform={waveform.waveform} display="waveform" view={viewport.view} scroll={scroll} pixelsPerSecond={viewport.pixelsPerSecond} onSelect={(id) => props.onSelectAudio?.(id)} onSeek={(ms) => seekTo(ms, true)} /> : null}
           </div>}
