@@ -578,20 +578,27 @@ function validateItemSettings(playlistIds: Set<string>, item: RundownItem, index
   }
 }
 
-/** Every id in a song that must be unique in the project: the ones validateItemContent claims. Songs are never
- * changed in place (every change is a LinkCommand), so a song object's ids are worked out once. */
+/** Every id in a song that must be unique in the project, named in this one place: the whole-project check, the
+ * one-song check and the per-song cache below all go through it, so they cannot come to disagree about which ids count. */
+function claimItemIds(item: RundownItem, itemIndex: number, claim: IdClaim): void {
+  claim(item.id, ['rundown', itemIndex, 'id']);
+  if (item.p1Media) claim(`p1:${item.p1Media.sourceKey}`, ['rundown', itemIndex, 'p1Media', 'sourceKey']);
+  for (const [layerIndex, layer] of item.visualLayers.entries()) claim(layer.id, ['rundown', itemIndex, 'visualLayers', layerIndex, 'id']);
+  for (const [clipIndex, clip] of item.referenceMediaClips.entries()) claim(clip.id, ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'id']);
+  for (const [cueIndex, cue] of item.cues.entries()) {
+    claim(cue.id, ['rundown', itemIndex, 'cues', cueIndex, 'id']);
+    for (const [actionIndex, action] of cue.actions.entries()) claim(action.id, ['rundown', itemIndex, 'cues', cueIndex, 'actions', actionIndex, 'id']);
+  }
+}
+
+/** A song's ids (claimItemIds). Songs are never changed in place (every change is a LinkCommand), so a song object's
+ * ids are worked out once. */
 const itemIdCache = new WeakMap<RundownItem, ReadonlySet<string>>();
 function itemIds(item: RundownItem): ReadonlySet<string> {
   const cached = itemIdCache.get(item);
   if (cached) return cached;
-  const ids = new Set<string>([item.id]);
-  if (item.p1Media) ids.add(`p1:${item.p1Media.sourceKey}`);
-  for (const layer of item.visualLayers) ids.add(layer.id);
-  for (const clip of item.referenceMediaClips) ids.add(clip.id);
-  for (const cue of item.cues) {
-    ids.add(cue.id);
-    for (const action of cue.actions) ids.add(action.id);
-  }
+  const ids = new Set<string>();
+  claimItemIds(item, 0, (id) => { ids.add(id); });
   itemIdCache.set(item, ids);
   return ids;
 }
@@ -599,7 +606,7 @@ function itemIds(item: RundownItem): ReadonlySet<string> {
 /** A song's ids and P1 binding, and its tracks, clips and cues against the project's media assets and frame rate. */
 function validateItemContent(frameRate: MtcFrameRate, assetById: MediaAssetsById, p1PlaylistIds: Set<string> | null,
   item: RundownItem, itemIndex: number, claim: IdClaim, ctx: z.RefinementCtx): void {
-  claim(item.id, ['rundown', itemIndex, 'id']);
+  claimItemIds(item, itemIndex, claim);
   if (item.p1Media) {
     if (!p1PlaylistIds) {
       ctx.addIssue({
@@ -614,16 +621,11 @@ function validateItemContent(frameRate: MtcFrameRate, assetById: MediaAssetsById
         path: ['rundown', itemIndex, 'p1Media', 'playlistId']
       });
     }
-    claim(`p1:${item.p1Media.sourceKey}`, ['rundown', itemIndex, 'p1Media', 'sourceKey']);
   }
-  const visualLayerIds = new Set(item.visualLayers.map((layer, layerIndex) => {
-    claim(layer.id, ['rundown', itemIndex, 'visualLayers', layerIndex, 'id']);
-    return layer.id;
-  }));
+  const visualLayerIds = new Set(item.visualLayers.map((layer) => layer.id));
   const visualIntervalsByLayer = new Map<string, TimelineValidationInterval[]>();
   const obsIntervalsBySource = new Map<string, TimelineValidationInterval[]>();
   for (const [clipIndex, clip] of item.referenceMediaClips.entries()) {
-    claim(clip.id, ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'id']);
     if (!assetById.has(clip.assetId)) {
       ctx.addIssue({
         code: 'custom',
@@ -662,7 +664,6 @@ function validateItemContent(frameRate: MtcFrameRate, assetById: MediaAssetsById
     }
   }
   for (const [cueIndex, cue] of item.cues.entries()) {
-    claim(cue.id, ['rundown', itemIndex, 'cues', cueIndex, 'id']);
     if (cue.layerId && !visualLayerIds.has(cue.layerId)) {
       ctx.addIssue({ code: 'custom', message: `Cue 引用不存在的图层：${cue.layerId}`, path: ['rundown', itemIndex, 'cues', cueIndex, 'layerId'] });
     }
@@ -704,9 +705,6 @@ function validateItemContent(frameRate: MtcFrameRate, assetById: MediaAssetsById
       if (visualShowAction?.kind === 'obs.setSceneItemEnabled') {
         addTimelineValidationInterval(obsIntervalsBySource, visualShowAction.sourceName, interval);
       }
-    }
-    for (const [actionIndex, action] of cue.actions.entries()) {
-      claim(action.id, ['rundown', itemIndex, 'cues', cueIndex, 'actions', actionIndex, 'id']);
     }
   }
   validateTimelineIntervals(visualIntervalsByLayer, ctx);
