@@ -46,8 +46,11 @@ type Handlers = (id: CommandId, scope: KeyScope) => boolean;
 const only = (...pairs: string[]): Handlers => (id, scope) => pairs.includes(`${scope} ${id}`);
 /** The window's playback keys and the project's keys: 联动台播放 with a player, ↑↓ change songs. */
 const windowHandlers: Handlers = (_id, scope) => scope === 'global';
-/** The editor's or lighting workbench's timeline with a song open, no lighting point selected. */
-const timelineHandlers: Handlers = (_id, scope) => scope !== 'lighting-points';
+/**
+ * The editor's or lighting workbench's timeline with a song open, no lighting point selected, the focus not in the
+ * lighting workbench's Cue points (whose Delete and Escape take the key only there, K6).
+ */
+const timelineHandlers: Handlers = (id, scope) => scope !== 'lighting-points' && !(scope === 'lighting' && (id === 'edit.delete' || id === 'edit.deselect'));
 
 type Where = { page?: KeyPage; repeat?: boolean; modalOpen?: boolean; overlays?: RouteInput['overlays']; drag?: RouteInput['drag'];
   available?: Handlers; song?: RouteInput['song']; keymap?: RouteInput['keymap'] };
@@ -315,6 +318,44 @@ describe('时间线的键（timeline-keys.test.ts 的用例）', () => {
     expect(route(body, 'Delete', { ...points, repeat: true })).toEqual(SWALLOW);
     expect(route(body, 'Alt+Delete', points)).toEqual(IGNORE);
     expect(route({ tag: 'div', attributes: ownKeys('Delete'), parent: body }, 'Delete', points)).toEqual(NATIVE);
+  });
+});
+
+describe('时间线的键接到路由上（04 设计 K6）', () => {
+  const cuePoints: Node = { tag: 'div', attributes: { class: 'waveform-cue-points' }, parent: lanes };
+  const cuePoint: Node = { tag: 'button', attributes: { class: 'waveform-cue-point', ...ownKeys('Enter') }, parent: cuePoints };
+  /** The Cue points take Delete and Escape with the focus in them (WaveformCuePoints' `when`); everything else is there. */
+  const inCuePoints = { page: 'lighting' as const, available: () => true };
+
+  it('灯光工作台的 Cue 点上 Delete、Backspace 删 Cue 点，Esc 只清选择不停节目，都比时间线和灯光点先问；按住只算一次；Enter 归 Cue 点自己', () => {
+    for (const target of [cuePoint, cuePoints]) {
+      for (const chord of ['Delete', 'Backspace']) expect(route(target, chord, inCuePoints)).toEqual(run('edit.delete', 'lighting'));
+      expect(route(target, 'Escape', inCuePoints)).toEqual(run('edit.deselect', 'lighting'));
+      expect(route(target, 'Delete', { ...inCuePoints, repeat: true })).toEqual(SWALLOW);
+    }
+    expect(route(cuePoint, 'Enter', inCuePoints)).toEqual(NATIVE);
+    // No Cue point selected or focused: Delete goes on to the lighting points (the focus is on a button), Escape stops.
+    const without = { page: 'lighting' as const, available: (id: CommandId, scope: KeyScope) => !(scope === 'lighting' && id === 'edit.delete') };
+    expect(route(cuePoint, 'Delete', without)).toEqual(run('edit.delete', 'lighting-points'));
+    expect(route(cuePoints, 'Delete', without)).toEqual(run('edit.delete', 'timeline'));
+    expect(route(cuePoint, 'Backspace', without)).toEqual(run('edit.delete', 'lighting-points'));
+    expect(route(cuePoint, 'Escape', { page: 'lighting', available: timelineHandlers })).toEqual(run('transport.stop', 'timeline'));
+    // The editor has no Cue points: its Delete is the timeline's.
+    expect(route(clip, 'Delete', { page: 'cues', available: () => true })).toEqual(run('edit.delete', 'timeline'));
+  });
+
+  it('编辑器的音频片段：S 是时间线的分割（和片段、Cue 一样），←→ 逐帧；Enter、Delete、Backspace 归片段自己', () => {
+    const segment: Node = { tag: 'div', attributes: { class: 'audio-timeline-segment', role: 'button', ...ownKeys('Enter', 'Delete', 'Backspace') }, parent: lanes };
+    expect(route(segment, 'KeyS', editor)).toEqual(run('edit.split', 'timeline'));
+    expect(route(segment, 'ArrowLeft', editor)).toEqual(run('transport.prevFrame', 'editor'));
+    expect(route(segment, 'Ctrl+KeyC', editor)).toEqual(run('edit.copy', 'timeline'));
+    for (const chord of ['Enter', 'Delete', 'Backspace']) expect(route(segment, chord, editor)).toEqual(NATIVE);
+  });
+
+  it('灯光工作台的快捷键按这台电脑上改过的键走：改了以后原来的键不再是它', () => {
+    const keymap = KEYMAP.map(entry => entry.scope === 'lighting' && entry.id === 'lighting.stamp' ? { ...entry, keys: [{ chord: 'KeyK' }] } : entry);
+    expect(route(timeline, 'KeyK', { ...workbench, keymap })).toEqual(run('lighting.stamp', 'lighting'));
+    expect(untouched(route(timeline, 'KeyM', { ...workbench, keymap }))).toBe(true);
   });
 });
 

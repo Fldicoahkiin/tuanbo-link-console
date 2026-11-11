@@ -3,7 +3,7 @@ import type { KeyChord } from './key-chord';
 /*
  * Who a key belongs to before the page and the window get it: the focused field or control, an open dialog, or nobody.
  * DIALOGS, modalDialogOpen and OWN_KEYS came here from playback-keys.ts (keys7). The key router (key-router.ts) reads
- * them for every press; the timeline's and the panels' own listeners still call them through playback-keys.ts (K4–K6).
+ * them for every press; what is left of playback-keys.ts still calls them from there until K9.
  */
 
 /**
@@ -41,10 +41,13 @@ export const OWN_KEYS = `${FIELDS},${CONTROLS},${DIALOGS}`;
 
 /** Where Escape closes or cancels something open: a details element, a menu or panel button that is open. */
 const ESCAPE_CONTROLS = 'details[open],[aria-expanded="true"]';
-/** The lighting workbench's Cue pool, which moves between its cells with the keys and is left its keys (timeline-keys.ts). */
+/** The lighting workbench's Cue pool, which moves between its cells with the keys and is left its keys. */
 const KEY_GRIDS = '.cue-pool-grid';
-/** The timeline's own buttons, edited with the timeline's keys: clips, Cues and audio waveforms. */
-const TIMELINE_ITEMS = '.timeline-clip,.timeline-cue,.timeline-media-waveform';
+/**
+ * The timeline's own buttons, edited with the timeline's keys: clips, Cues, audio waveforms, and the editor's audio
+ * segments (a `role="button"`, which the timeline's keys have always edited: S splits the selected one, ← → step).
+ */
+const TIMELINE_ITEMS = '.timeline-clip,.timeline-cue,.timeline-media-waveform,.audio-timeline-segment';
 /** Buttons and the player: they keep Enter and the keys the page leaves to buttons. */
 const BUTTONS = 'button,[role="button"],audio';
 /** The editor's and the lighting workbench's timeline. */

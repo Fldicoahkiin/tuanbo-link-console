@@ -4,9 +4,8 @@ import { KEYMAP, PAGE_SCOPES, type CommandId, type KeyBinding, type KeyEntry, ty
 
 /*
  * Who acts on one key press, worked out in one place: 输入框 → 弹窗 → 拖动 → 页面 → 全局 (04 设计 4.3). A pure
- * function, so the rules are tested here alone. The key router (key-router.ts) asks it for every press and acts on the
- * window's keys (K3); the timeline's keys still act on their own listeners (K6), and what `routeKey` says of them is
- * what those listeners do.
+ * function, so the rules are tested here alone. The key router (key-router.ts) asks it for every press and does what
+ * it says, for the window's keys (K3) and the timeline's (K6) alike.
  */
 
 /** An open panel Escape closes (a Popover, a menu, a detail view, the settings or connection page); the router closes it. */
@@ -40,11 +39,6 @@ export type RouteInput = {
   windowKeeps?: boolean;
   /** `editsText(target)`: the focus types text, where undo and redo are the typing's. Left out: in a field. */
   editingText?: boolean;
-  /**
-   * A listener of the page that is not on the router yet takes the key: the lighting workbench's shortcut keys
-   * (useTimelineStamp) until K6. The window's keys give way to it, as they always did.
-   */
-  pageTakes?: boolean;
   /** `modalDialogOpen(document)`. */
   modalOpen: boolean;
   /** Bottom to top. */
@@ -167,7 +161,6 @@ export function routeKey(input: RouteInput): RouteDecision {
   if (top?.focusInside) return NATIVE;
   // The settings or connection page: no key of the page or the window reaches the show.
   if (input.overlays.some(overlay => overlay.blocks)) return NATIVE;
-  if (input.pageTakes === true) return NATIVE;
   // 页面: the page's scopes in order.
   for (const scope of PAGE_SCOPES[input.page]) {
     const decision = first(input, others.filter(candidate => candidate.entry.scope === scope));

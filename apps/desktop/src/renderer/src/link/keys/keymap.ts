@@ -3,20 +3,20 @@ import type { KeyChord } from './key-chord';
 /*
  * The one table of the app's keys: what each key does, on which page, and how it gets past the fields, dialogs and
  * buttons in its way. Written as the keys are today (0.5.9: Escape stops, S splits, Shift+←/→ moves a second); the
- * key router (key-router.ts) acts on the window's keys from it: playing, stopping, changing songs, a song's own
- * shortcut, saving, undo and redo (04 设计 K3). The timeline's keys (ReferenceTimeline, useTimelineStamp,
- * LightingTimeline) still act on their own listeners until K6; their rows here say what those do, the router does
- * not act on them yet.
+ * key router (key-router.ts) acts on every key in it: the window's (K3), and the timeline's, the lighting points' and
+ * the lighting workbench's shortcut keys (K6). The pages register what each command does there (useKeyCommands).
  */
 
 /**
  * Where a key works:
  * - `global`: the whole window (useInternalPlayer, useDocumentShortcuts);
  * - `editor`: the editor page (ReferenceTimeline's keys there, and LightingTimeline's M);
- * - `lighting`: the lighting workbench (its shortcut keys, useTimelineStamp; the user can change them);
+ * - `lighting`: the lighting workbench (its shortcut keys, useTimelineStamp, which the user can change; the Cue
+ *   points' Delete and Escape, WaveformCuePoints);
  * - `timeline`: the timeline of the editor and of the lighting workbench (ReferenceTimeline);
- * - `lighting-points`: the lighting points on both timelines (LightingTimeline's window keys). Today a second handler
- *   for copy, paste and delete beside the timeline's (04 设计 3.3 b, d); K6 makes them one;
+ * - `lighting-points`: the lighting points on both pages, wherever the focus is (LightingTimeline). Copy, paste and
+ *   delete are the timeline's in it and theirs elsewhere; which clipboard and which selection they take is decided in
+ *   one place (components/timeline-commands.ts, 04 设计 3.3 b, d);
  * - `home`: the home page. No key of its own in the table: its handlers act for the window's keys there (the player's
  *   play button for Space, the program list's Escape), see key-router.ts.
  */
@@ -35,7 +35,7 @@ export type CommandId =
   | 'transport.stop' | 'transport.playPause' | 'transport.prevFrame' | 'transport.nextFrame' | 'transport.backMany' | 'transport.forwardMany'
   | 'transport.start' | 'transport.end'
   | 'home.prevSong' | 'home.nextSong'
-  | 'edit.split' | 'edit.delete' | 'edit.copy' | 'edit.cut' | 'edit.paste' | 'edit.duplicate' | 'edit.selectAll'
+  | 'edit.split' | 'edit.delete' | 'edit.copy' | 'edit.cut' | 'edit.paste' | 'edit.duplicate' | 'edit.selectAll' | 'edit.deselect'
   | 'lighting.stamp' | 'lighting.addPoint'
   | 'document.save' | 'document.saveAs' | 'document.undo' | 'document.redo';
 
@@ -136,6 +136,13 @@ export const KEYMAP: readonly KeyEntry[] = [
     buttons: 'leave', jianying: { name: '跳到开头', keys: ['Home'] }, rebindable: true },
   { id: 'transport.end', scope: 'lighting', keys: [key('End')], label: '跳到结尾', group: '定位', kind: 'transport', repeat: 'once',
     buttons: 'leave', jianying: { name: '跳到结尾', keys: ['End'] }, rebindable: true },
+  // The lighting workbench's Cue points (WaveformCuePoints), asked before the timeline: with Cue points selected Delete
+  // and Backspace delete them, with none selected the focused one; Escape in the Cue points clears the selection and
+  // does not stop the show (2026-09-21). They take these keys only there (the registration's `when`).
+  { id: 'edit.delete', scope: 'lighting', keys: [key('Delete'), key('Backspace')], label: '删除选中的 Cue 点', group: '剪辑', kind: 'edit', repeat: 'once',
+    area: 'timeline', buttons: 'take', jianying: { name: '删除', keys: ['Delete', 'Backspace'] }, rebindable: false },
+  { id: 'edit.deselect', scope: 'lighting', keys: [key('Escape')], label: '取消选择 Cue 点', group: '剪辑', kind: 'edit', repeat: 'once',
+    area: 'timeline', buttons: 'take', jianying: null, rebindable: false },
 
   // The timeline on both pages (ReferenceTimeline): Escape stops and goes no further; the editing keys leave buttons other than clips and Cues.
   { id: 'transport.stop', scope: 'timeline', keys: [key('Escape', { switch: 'plainEscapeStops' })], label: '停止', group: '播放', kind: 'transport', repeat: 'once',
@@ -163,3 +170,17 @@ export const KEYMAP: readonly KeyEntry[] = [
   { id: 'edit.delete', scope: 'lighting-points', keys: [key('Delete'), key('Backspace')], label: '删除灯光点', group: '剪辑', kind: 'edit', repeat: 'once',
     buttons: 'take', jianying: { name: '删除', keys: ['Delete', 'Backspace'] }, rebindable: false }
 ];
+
+/** Keys the user changed on this computer, by scope and command; a command left out keeps its keys from the table. */
+export type KeyOverrides = Partial<Record<KeyScope, Partial<Record<CommandId, readonly KeyChord[]>>>>;
+
+/**
+ * The table with the user's keys (`overrides`) in place of the table's, for the commands the user can change
+ * (`rebindable`). A command overridden with no key has none: no key presses it.
+ */
+export function resolveKeymap(keymap: readonly KeyEntry[], overrides: KeyOverrides): readonly KeyEntry[] {
+  return keymap.map(entry => {
+    const chords = entry.rebindable ? overrides[entry.scope]?.[entry.id] : undefined;
+    return chords === undefined ? entry : { ...entry, keys: chords.map(chord => key(chord)) };
+  });
+}

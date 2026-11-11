@@ -15,9 +15,12 @@ describe('快捷键表的自检', () => {
     }
   });
 
-  it('页面自己的键（编辑器、灯光工作台）和两页共用的时间线不重复；灯光点和时间线重复的只有现在已知的两份实现（04 设计 3.3 b、d，K6 合并）', () => {
+  it('页面自己的键（编辑器、灯光工作台）和两页共用的时间线不重复，只有灯光工作台 Cue 点上的 Delete、Esc（只在 Cue 点里、比时间线先问）；灯光点和时间线重复的只有复制、粘贴、删除（04 设计 3.3 b、d，K6 由 timeline-commands 定归谁）', () => {
     const timeline = new Set(chordsOf('timeline'));
-    for (const scope of ['editor', 'lighting'] as const) expect(chordsOf(scope).filter(chord => timeline.has(chord))).toEqual([]);
+    expect(chordsOf('editor').filter(chord => timeline.has(chord))).toEqual([]);
+    // The Cue points' Delete and Escape (WaveformCuePoints, K6), asked before the timeline's and only with the focus in them.
+    expect(chordsOf('lighting').filter(chord => timeline.has(chord)).sort()).toEqual(['Delete', 'Escape']);
+    expect(KEYMAP.filter(entry => entry.scope === 'lighting' && entry.keys.some(binding => timeline.has(binding.chord))).map(entry => entry.id)).toEqual(['edit.delete', 'edit.deselect']);
     expect(chordsOf('lighting-points').filter(chord => timeline.has(chord)).sort()).toEqual(['Ctrl+KeyC', 'Ctrl+KeyV', 'Delete']);
   });
 

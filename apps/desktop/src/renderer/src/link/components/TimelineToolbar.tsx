@@ -23,7 +23,7 @@ import { playbackFramesPerSecond } from '@tb/core/link';
 import { clampTimelineTime, formatTimelineTimecode, snapTimelineTime } from './timeline-geometry';
 import type { ReferenceWaveformSource } from './ReferenceWaveform';
 import { usePreviewMediaLifecycle } from './usePreviewMediaLifecycle';
-import { keysBackToTimeline } from './timeline-keys';
+import { keysBackToTimeline, nextEditPoint, previousEditPoint } from './timeline-commands';
 import { usePlayheadEffect, usePlayheadPaint, type EditorPlayhead } from './editor-playhead';
 
 type Props = {
@@ -121,8 +121,6 @@ export function TimelineToolbar(props: Props): JSX.Element {
     }
   };
 
-  const previousEditPoint = (): number => [...props.editPoints].filter((point) => point < playhead.read() - frameDurationMs / 2).sort((a, b) => b - a)[0] ?? 0;
-  const nextEditPoint = (): number => [...props.editPoints].filter((point) => point > playhead.read() + frameDurationMs / 2).sort((a, b) => a - b)[0] ?? props.durationMs;
   const snapLabel = props.snapEnabled ? '关闭吸附' : '开启吸附';
 
   return <div className="timeline-toolbar" onClick={giveKeysBack}>
@@ -130,8 +128,8 @@ export function TimelineToolbar(props: Props): JSX.Element {
       {props.stampControls}
       {props.tools ?? <>{props.recordingControl}
         <MenuButton label="定位" menuLabel="跳到剪辑点" title="跳到上一个或下一个剪辑点">{(close) => <>
-          <MenuItem icon={ArrowLeftToLine} onSelect={() => { close(); seekTo(previousEditPoint()); }}>上一剪辑点</MenuItem>
-          <MenuItem icon={ArrowRightToLine} onSelect={() => { close(); seekTo(nextEditPoint()); }}>下一剪辑点</MenuItem>
+          <MenuItem icon={ArrowLeftToLine} onSelect={() => { close(); seekTo(previousEditPoint(props.editPoints, playhead.read(), props.frameRate)); }}>上一剪辑点</MenuItem>
+          <MenuItem icon={ArrowRightToLine} onSelect={() => { close(); seekTo(nextEditPoint(props.editPoints, playhead.read(), props.frameRate, props.durationMs)); }}>下一剪辑点</MenuItem>
           <MenuNote>Space 播放 / 暂停<br />← → 逐帧移动<br />S 在播放头切割<br />Ctrl+C / V 复制粘贴</MenuNote>
         </>}</MenuButton></>}
     </div>

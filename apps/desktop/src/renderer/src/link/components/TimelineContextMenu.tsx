@@ -3,8 +3,9 @@ import { resolveTimelineClipSpan, resolveTimelineCueSpan, timecodeToMilliseconds
 import type { LinkCue, MtcFrameRate, ReferenceMediaClip, VisualLayer } from '@tb/schema';
 import { Menu, MenuItem, MenuSeparator } from '../ui';
 import { usePlayheadMs, type EditorPlayhead } from './editor-playhead';
+import { trimToPlayhead, type TimelineTarget, type TrimSide } from './timeline-commands';
 
-export type TimelineTarget = { kind: 'clip' | 'cue'; id: string };
+export type { TimelineTarget };
 export type TimelineContext = { target: TimelineTarget | null; x: number; y: number };
 type Actions = {
   onDeleteClip: (id: string) => void;
@@ -35,7 +36,7 @@ export function TimelineContextMenu({ context, clipboard, clips, cues, layers, f
   const inside = span !== null && playheadMs > span.startMs && playheadMs < span.endMs;
   const run = (action: () => void): void => { onClose(); action(); };
   const duplicate = (item: TimelineTarget, at: number): void => { if (item.kind === 'clip') actions.onDuplicateClip(item.id, at); else actions.onDuplicateCue(item.id, at); };
-  const trim = (start: number, duration: number): void => { if (target) actions.onTrim(target, start, duration); };
+  const trim = (side: TrimSide): void => { if (!target || !span) return; const trimmed = trimToPlayhead(span, playheadMs, side); actions.onTrim(target, trimmed.startMs, trimmed.durationMs); };
   const name = clip?.label ?? cue?.actions.find((action) => action.kind === 'obs.setProgramScene')?.sceneName ?? cue?.name ?? '时间线';
   return <Menu x={context.x} y={context.y} label="时间线右键菜单" title={locked ? `${name} · 已锁定` : name} onClose={onClose}>
     {target && source ? <>
@@ -47,8 +48,8 @@ export function TimelineContextMenu({ context, clipboard, clips, cues, layers, f
       <MenuSeparator />
       {clip && span ? <MenuItem icon={Scissors} shortcut="S" disabled={locked || !inside} onSelect={() => run(() => actions.onSplitClip(clip.id, playheadMs))}>在播放头分割</MenuItem> : null}
       {span ? <>
-        <MenuItem icon={ChevronsRight} disabled={locked || !inside} onSelect={() => run(() => trim(playheadMs, span.endMs - playheadMs))}>将开头修剪至播放头</MenuItem>
-        <MenuItem icon={ChevronsLeft} disabled={locked || !inside} onSelect={() => run(() => trim(span.startMs, playheadMs - span.startMs))}>将结尾修剪至播放头</MenuItem>
+        <MenuItem icon={ChevronsRight} disabled={locked || !inside} onSelect={() => run(() => trim('start'))}>将开头修剪至播放头</MenuItem>
+        <MenuItem icon={ChevronsLeft} disabled={locked || !inside} onSelect={() => run(() => trim('end'))}>将结尾修剪至播放头</MenuItem>
       </> : null}
       <MenuItem icon={SkipBack} disabled={startMs === null} onSelect={() => { if (startMs !== null) run(() => onSeek(startMs)); }}>{span ? '定位到开头' : '定位到触发点'}</MenuItem>
       {span ? <MenuItem icon={SkipForward} onSelect={() => run(() => onSeek(span.endMs))}>定位到结尾</MenuItem> : null}

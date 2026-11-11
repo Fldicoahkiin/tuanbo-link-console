@@ -1,9 +1,12 @@
+import { createLightingDocument } from '@tb/schema';
 import { describe, expect, it } from 'vitest';
 import { DragSession } from '../components/drag-session';
 import { documentShortcut } from '../useDocumentShortcuts';
-import { modalDialogOpen } from './key-owner';
+import { editorTransportKeys, timelineEditKeys, type TimelineKeyProps } from '../components/timeline-commands';
+import { defaultShortcuts, lightingKeyOverrides, type ShortcutBinding } from '../stores/shortcut-store';
+import { keyInTimeline, modalDialogOpen } from './key-owner';
 import { KeyRouter, type KeyHandlers, type KeyOverlayEntry, type KeyWhen } from './key-router';
-import type { KeyPage, KeyScope } from './keymap';
+import { KEYMAP, resolveKeymap, type KeyPage, type KeyScope } from './keymap';
 
 /*
  * The window's one key listener (key-router.ts), pressed with a fake window, fake elements and fake key events. The
@@ -229,16 +232,17 @@ describe('路由本身', () => {
     settings();
   });
 
-  it('还没接到路由上的监听（灯光工作台的快捷键）说它要的键，窗口的键就留给它：单曲快捷键和它重了也不播歌', () => {
+  it('灯光工作台的快捷键（K6 起登记在路由上）拿了的键，窗口的键就不再管：单曲快捷键和它重了也不播歌，窗口的空格也不另按一次', () => {
     const { router, calls, handle } = routed('lighting');
     handle('global', { 'transport.playPause': '播放' });
     router.songShortcuts({ find: chord => chord === 'KeyM' ? '第三首' : undefined, play: itemId => { calls.push(`播放 ${itemId}`); } });
-    const leave = router.claim(event => event.code === 'KeyM' || event.code === 'Space');
+    const leave = handle('lighting', { 'lighting.stamp': '打点', 'transport.playPause': '灯光工作台播放' });
     const keys = [press('KeyM'), press('Space')].map(key => key.at(element(body)));
     for (const key of keys) router.dispatch(key);
-    expect(keys.map(touched)).toEqual([false, false]);
-    expect(calls).toEqual([]);
+    expect(keys.map(key => key.defaultPrevented)).toEqual([true, true]);
+    expect(calls).toEqual(['打点', '灯光工作台播放']);
     leave();
+    calls.length = 0;
     router.dispatch(press('KeyM').at(element(body)));
     expect(calls).toEqual(['播放 第三首']);
   });
@@ -620,5 +624,267 @@ describe('窗口的播放键（原 playback-keys.test.ts）', () => {
     expect(calls).toEqual(['停止']);
     for (const leave of done) leave();
     uninstall();
+  });
+});
+
+/*
+ * The cases of timeline-keys.test.ts, written for the timeline's and the lighting workbench's own key listeners
+ * (handleTimelineTransportKey, handleTimelineKey, handleLightingShortcut, lightingTimelineKeyActs) before K6 put those
+ * keys on the router. The keys are pressed through a router wired as ReferenceTimeline, useTimelineStamp and
+ * LightingTimeline wire it. A key the router acts on is taken from the browser and no longer stopped (K6): the old
+ * `propagationStopped` marks read `defaultPrevented` here.
+ */
+
+const timeline: Node = { tag: 'section', attributes: { class: 'reference-timeline' }, parent: body };
+const toolbar: Node = { tag: 'div', attributes: { class: 'timeline-toolbar' }, parent: timeline };
+const heading: Node = { tag: 'div', attributes: { class: 'track-heading' }, parent: timeline };
+const playButton: Node = { tag: 'button', attributes: { class: 'timeline-play-button' }, parent: toolbar };
+const dock: Node = { tag: 'aside', attributes: { class: 'lighting-effect-dock' }, parent: body };
+const lanes: Node = { tag: 'div', attributes: { class: 'timeline-lanes' }, parent: timeline };
+const clip: Node = { tag: 'button', attributes: { class: 'timeline-clip' }, parent: lanes };
+
+type Action = ShortcutBinding['action'];
+type TimelineSetup = {
+  /** The lighting workbench's timeline, else the editor's. */
+  lightingWorkspace?: boolean;
+  /** Whether the timeline has a stop key (it has none while P1 is followed). */
+  stop?: boolean;
+  /** A native modal dialog open on the page. */
+  modalOpen?: boolean;
+  /** A dialog or the settings page over the workbench (`KeyRouter.covered`). */
+  covered?: boolean;
+  /** The workbench's keys, as the settings page saved them. */
+  bindings?: readonly ShortcutBinding[];
+  /** A lighting clip selected (LightingTimeline). */
+  lightingClip?: boolean;
+};
+
+/**
+ * A router on the editor's or the lighting workbench's page with the timeline's registrations, writing down what the
+ * keys asked for: the timeline's edit keys on the selected clip 「片段」 at 1000 ms, 25 fps, with 「片段」 on the content
+ * clipboard; the editor's transport keys; the workbench's keys by their action names; the lighting points' keys.
+ */
+function timelineRouter(calls: string[], setup: TimelineSetup = {}): KeyRouter {
+  const lightingWorkspace = setup.lightingWorkspace === true;
+  const router = new KeyRouter(() => page(...(setup.modalOpen === true ? [{ tag: 'dialog', modal: true }] : [])),
+    () => resolveKeymap(KEYMAP, lightingKeyOverrides(setup.bindings ?? defaultShortcuts)));
+  router.setPage(lightingWorkspace ? 'lighting' : 'cues');
+  const props: TimelineKeyProps = {
+    lightingWorkspace, playheadMs: 1_000, frameRate: '25', clips: [], cues: [], selectedClipId: '片段', selectedCueId: null,
+    // A lighting clip selected: copy and paste are the lighting points' (timelineClipboard).
+    lighting: setup.lightingClip === true ? { document: createLightingDocument(), selectedClipId: '灯光片段', selectedEventId: null, selectedEventIds: [], onChange: () => undefined, onSelect: () => undefined } : undefined,
+    onPlayingChange: playing => { if (!playing) calls.push('暂停'); },
+    onDuplicateClip: (id, at) => { calls.push(`复制 ${id} 到 ${at}`); }, onDuplicateCue: (id, at) => { calls.push(`复制 ${id} 到 ${at}`); },
+    onSplitClip: (id, at) => { calls.push(`分割 ${id} 在 ${at}`); },
+    onDeleteClip: id => { calls.push(`删除 ${id}`); }, onDeleteCue: id => { calls.push(`删除 ${id}`); }
+  };
+  const playPause = (): void => { calls.push('播放/暂停'); };
+  router.register('timeline', () => ({ 'transport.playPause': playPause }));
+  router.register('timeline', () => timelineEditKeys(props, { kind: 'clip', id: '片段' }, target => { calls.push(`复制 ${target.id}`); },
+    setup.stop === false ? undefined : () => { calls.push('停止'); }), press => keyInTimeline(press.target));
+  if (!lightingWorkspace) router.register('editor', () => editorTransportKeys(props, playPause, milliseconds => { calls.push(`定位 ${milliseconds}`); }));
+  if (lightingWorkspace) {
+    const action = (name: Action) => (): void => { calls.push(name); };
+    router.register('lighting', () => ({ 'lighting.stamp': action('stamp'), 'transport.playPause': action('play'), 'transport.prevFrame': action('previous'),
+      'transport.nextFrame': action('next'), 'transport.start': action('start'), 'transport.end': action('end') }), () => setup.covered !== true);
+  }
+  if (setup.lightingClip === true) router.register('lighting-points', () => ({ 'edit.selectAll': () => { calls.push('灯光点 全选'); }, 'edit.copy': () => { calls.push('灯光点 复制'); },
+    'edit.cut': () => { calls.push('灯光点 剪切'); }, 'edit.paste': () => { calls.push('灯光点 粘贴'); }, 'edit.delete': () => { calls.push('灯光点 删除'); } }));
+  return router;
+}
+/** `key` pressed on `target` (null: no element has the focus). */
+function pressOn(router: KeyRouter, key: Press, target: Node | null): Press {
+  router.dispatch(key.at(target === null ? null : element(target)));
+  return key;
+}
+
+/** Every key the timeline edits with or moves the playhead with, and its transport keys. */
+const editingKeys = () => [press('Delete'), press('Backspace'), press('KeyS'), press('KeyM'), press('Enter'),
+  press('KeyV', { ctrlKey: true }), press('KeyD', { ctrlKey: true }), press('KeyC', { ctrlKey: true }), press('KeyX', { ctrlKey: true }), press('KeyZ', { ctrlKey: true }), press('KeyA', { ctrlKey: true }),
+  press('Home'), press('End'), press('ArrowLeft'), press('ArrowRight'), press('ArrowUp'), press('ArrowDown'), press('Escape'), press('Space')];
+
+describe('时间线的键（原 timeline-keys.test.ts，K6 起经路由）', () => {
+  it('编辑器时间线里焦点在工具栏、轨道标题或片段按钮上时，空格是播放/暂停，不再交给按钮；按住只算一次（0.5.9）', () => {
+    for (const target of [playButton, { tag: 'button', parent: heading }, clip, timeline]) {
+      const calls: string[] = [];
+      const router = timelineRouter(calls);
+      const key = pressOn(router, press('Space'), target), held = pressOn(router, press('Space', { repeat: true }), target);
+      expect([key.defaultPrevented, held.defaultPrevented]).toEqual([true, true]);
+      expect(calls).toEqual(['播放/暂停']);
+    }
+    // Fields, lists and the panels opened from the toolbar keep Space; the lighting workbench takes it with its shortcut keys first.
+    const calls: string[] = [];
+    const panel: Node = { tag: 'section', attributes: { role: 'dialog' }, parent: timeline };
+    for (const target of [{ tag: 'select', parent: toolbar }, { tag: 'input', parent: heading }, { tag: 'button', parent: panel }]) {
+      expect(touched(pressOn(timelineRouter(calls), press('Space'), target))).toBe(false);
+    }
+    expect(calls).toEqual([]);
+    pressOn(timelineRouter(calls, { lightingWorkspace: true }), press('Space'), playButton);
+    expect(calls).toEqual(['play']);
+  });
+
+  it('时间线里 Esc 停止节目，按住只停一次；打开的菜单、面板和输入框里的 Esc 留给它们（0.5.9）', () => {
+    const calls: string[] = [];
+    const router = timelineRouter(calls);
+    const key = pressOn(router, press('Escape'), playButton), held = pressOn(router, press('Escape', { repeat: true }), playButton);
+    expect([key.defaultPrevented, held.defaultPrevented]).toEqual([true, true]);
+    pressOn(timelineRouter(calls, { lightingWorkspace: true }), press('Escape'), timeline);
+    expect(calls).toEqual(['停止', '停止']);
+
+    const opened: Node = { tag: 'button', attributes: { 'aria-haspopup': 'menu', 'aria-expanded': 'true' }, parent: toolbar };
+    const details: Node = { tag: 'details', attributes: { open: '' }, parent: timeline };
+    for (const [target, stop] of [[opened, true], [{ tag: 'summary', parent: details }, true], [{ tag: 'input', parent: heading }, true], [{ tag: 'div', attributes: { role: 'dialog' }, parent: timeline }, true], [timeline, false]] as const) {
+      expect(touched(pressOn(timelineRouter(calls, { stop }), press('Escape'), target))).toBe(false);
+    }
+    expect(touched(pressOn(timelineRouter(calls), press('Escape'), null))).toBe(false);
+    expect(calls).toEqual(['停止', '停止']);
+  });
+
+  it('时间线里的原生对话框（<dialog>，不写 role：修改 Cue 卡点、编辑歌曲段落、编辑音频片段）：焦点在对话框本身、在「取消」「保存卡点」上按 Esc 都只关对话框，节目不停；空格也归对话框（演出中关「修改 Cue 卡点」停了节目）', () => {
+    const calls: string[] = [];
+    const dialog: Node = { tag: 'dialog', attributes: { class: 'modal-surface cue-point-dialog', 'aria-label': '修改 Cue 卡点', open: '' }, parent: timeline };
+    const footer: Node = { tag: 'footer', parent: { tag: 'form', attributes: { class: 'effect-binding-form' }, parent: dialog } };
+    const cancel: Node = { tag: 'button', attributes: { type: 'button' }, parent: footer }, save: Node = { tag: 'button', parent: footer };
+    // Mounted on the page body by a component in the timeline (createPortal).
+    const mounted: Node = { tag: 'dialog', attributes: { class: 'lighting-attribute-dialog', open: '' }, parent: body };
+    const alert: Node = { tag: 'div', attributes: { role: 'alertdialog' }, parent: timeline };
+    for (const target of [dialog, cancel, save, mounted, { tag: 'button', parent: mounted }, alert]) {
+      for (const lightingWorkspace of [true, false]) {
+        const router = timelineRouter(calls, { lightingWorkspace });
+        const escape = pressOn(router, press('Escape'), target), space = pressOn(router, press('Space'), target);
+        expect([escape.defaultPrevented, escape.propagationStopped, space.defaultPrevented]).toEqual([false, false, false]);
+      }
+    }
+    expect(calls).toEqual([]);
+    // Out of the dialog, Escape on the timeline stops the show as before.
+    pressOn(timelineRouter(calls, { lightingWorkspace: true }), press('Escape'), timeline);
+    pressOn(timelineRouter(calls), press('Escape'), playButton);
+    expect(calls).toEqual(['停止', '停止']);
+  });
+
+  it('灯光工作台的快捷键：播放键在按钮上也是播放/暂停，打点和逐帧让开按钮；按住只算一次（0.5.9）', () => {
+    const runs: string[] = [];
+    const workbench = timelineRouter(runs, { lightingWorkspace: true });
+    for (const target of [playButton, { tag: 'button', parent: dock }, timeline]) {
+      const key = pressOn(workbench, press('Space'), target), held = pressOn(workbench, press('Space', { repeat: true }), target);
+      expect([key.defaultPrevented, held.defaultPrevented]).toEqual([true, true]);
+    }
+    expect(runs).toEqual(['play', 'play', 'play']);
+
+    const onButton = pressOn(workbench, press('KeyM'), playButton), onTimeline = pressOn(workbench, press('KeyM'), timeline), heldStamp = pressOn(workbench, press('KeyM', { repeat: true }), timeline);
+    expect([onButton.defaultPrevented, onTimeline.defaultPrevented, heldStamp.defaultPrevented]).toEqual([false, true, true]);
+    expect(runs).toEqual(['play', 'play', 'play', 'stamp']);
+
+    // A dialog or the settings page over the workbench, a key without a shortcut, a field and the Cue pool keep their keys.
+    const pool: Node = { tag: 'div', attributes: { class: 'cue-pool-grid' }, parent: dock };
+    const rebound = defaultShortcuts.map(binding => binding.action === 'play' ? { ...binding, key: 'KeyP' } : binding);
+    const left = [pressOn(timelineRouter(runs, { lightingWorkspace: true, covered: true, stop: false }), press('Space'), body),
+      pressOn(timelineRouter(runs, { lightingWorkspace: true, bindings: rebound }), press('Space'), body),
+      pressOn(workbench, press('Space'), { tag: 'input', parent: dock }), pressOn(workbench, press('Space'), { tag: 'button', parent: pool })];
+    expect(left.map(touched)).toEqual([false, false, false, false]);
+    const handled = press('Space'); handled.preventDefault();
+    pressOn(workbench, handled, timeline);
+    expect(runs).toHaveLength(4);
+    // Rebound, the key the settings page saved plays.
+    pressOn(timelineRouter(runs, { lightingWorkspace: true, bindings: rebound }), press('KeyP'), body);
+    expect(runs).toEqual(['play', 'play', 'play', 'stamp', 'play']);
+  });
+
+  it('灯光工作台里 MA2 执行器的 Flash、Temp 键自己用空格：按住闪灯，不当播放/暂停（0.5.8 回归）', () => {
+    const flash: Node = { tag: 'button', attributes: { 'data-momentary': 'true' }, parent: dock };
+    const runs: string[] = [];
+    const workbench = timelineRouter(runs, { lightingWorkspace: true });
+    for (const key of [press('Space'), press('Space', { repeat: true })]) expect(touched(pressOn(workbench, key, flash))).toBe(false);
+    expect(runs).toEqual([]);
+  });
+
+  /** 修改 Cue 卡点 as ModalSurface renders it inside the timeline: a native <dialog> with no role. */
+  const cueDialog: Node = { tag: 'dialog', attributes: { class: 'modal-surface cue-point-dialog', open: '' }, parent: lanes };
+  const cueForm: Node = { tag: 'form', attributes: { class: 'effect-binding-form' }, parent: cueDialog };
+  const cueFooter: Node = { tag: 'footer', parent: cueForm };
+  const inDialog: Node[] = [cueDialog, cueForm, { tag: 'h3', parent: cueForm }, { tag: 'button', parent: cueFooter }, { tag: 'button', attributes: { type: 'submit' }, parent: cueFooter },
+    { tag: 'input', attributes: { name: 'time' }, parent: { tag: 'label', parent: cueForm } },
+    // A dialog drawn inside a clip still is a dialog.
+    { tag: 'button', parent: { tag: 'dialog', attributes: { open: '' }, parent: clip } },
+    // The panels beside a toolbar button (Popover) are portaled to the page.
+    { tag: 'section', attributes: { role: 'dialog', class: 'ui-popover' }, parent: body }, { tag: 'div', attributes: { role: 'alertdialog' }, parent: timeline }];
+
+  it('时间线里的原生对话框（<dialog>，不写 role）：焦点在对话框本身、它的按钮或输入框上，Delete、Backspace、s、Ctrl+V/D/C/X/Z、Home、End、方向键、M、Enter 都不碰对话框后面的时间线，键留给对话框', () => {
+    for (const lightingWorkspace of [false, true]) for (const target of inDialog) {
+      for (const modalOpen of [true, false]) {
+        const calls: string[] = [];
+        const router = timelineRouter(calls, { lightingWorkspace, modalOpen });
+        for (const key of editingKeys()) expect(touched(pressOn(router, key, target))).toBe(false);
+        expect(calls).toEqual([]);
+      }
+    }
+  });
+
+  it('模态对话框开着时，时间线不处理任何键；对话框一关，编辑键和 Esc、空格立刻照常可用', () => {
+    for (const target of [clip, timeline, heading]) {
+      const calls: string[] = [];
+      const router = timelineRouter(calls, { modalOpen: true });
+      for (const key of editingKeys()) expect(pressOn(router, key, target).defaultPrevented).toBe(false);
+      expect(calls).toEqual([]);
+    }
+    // Closed: on a clip each editing key does what the timeline's commands say (keymap.ts), Escape stops and Space plays.
+    const calls: string[] = [];
+    const router = timelineRouter(calls);
+    for (const key of editingKeys()) { calls.push(`· ${key.code}`); pressOn(router, key, clip); }
+    expect(calls).toEqual(['· Delete', '删除 片段', '· Backspace', '· KeyS', '分割 片段 在 1000', '· KeyM', '· Enter',
+      '· KeyV', '复制 片段 到 1000', '· KeyD', '· KeyC', '复制 片段', '· KeyX', '· KeyZ', '· KeyA',
+      '· Home', '暂停', '定位 0', '· End', '· ArrowLeft', '暂停', '定位 960', '· ArrowRight', '暂停', '定位 1040', '· ArrowUp', '· ArrowDown',
+      '· Escape', '停止', '· Space', '播放/暂停']);
+    const bare: string[] = [];
+    pressOn(timelineRouter(bare), press('Delete'), timeline);
+    expect(bare).toEqual(['删除 片段']);
+  });
+
+  it('时间线的编辑键让开工具栏按钮、输入框、下拉框和播放器，片段、Cue 和音频波形按钮上照常编辑（和原来一样）', () => {
+    for (const target of [playButton, { tag: 'input', parent: toolbar }, { tag: 'select', parent: toolbar }, { tag: 'textarea', parent: heading }, { tag: 'audio', parent: timeline }]) {
+      const calls: string[] = [];
+      pressOn(timelineRouter(calls), press('Delete'), target);
+      expect(calls.filter(call => call === '删除 片段')).toEqual([]);
+    }
+    for (const name of ['timeline-clip', 'timeline-cue', 'timeline-media-waveform', 'audio-timeline-segment']) {
+      const calls: string[] = [];
+      pressOn(timelineRouter(calls), press('Delete'), { tag: 'button', attributes: { class: name }, parent: lanes });
+      expect(calls).toEqual(['删除 片段']);
+    }
+  });
+
+  it('灯光点的键（Delete/Backspace 删灯光点、Ctrl+A/C/X/V）：对话框里、或者模态对话框开着焦点掉到页面上时都不动作；关掉后照常', () => {
+    const lightingKeys = () => [press('Backspace'), press('KeyA', { ctrlKey: true }), press('KeyC', { ctrlKey: true }), press('KeyX', { ctrlKey: true }), press('KeyV', { ctrlKey: true })];
+    const mtc: Node = { tag: 'dialog', attributes: { class: 'modal-surface ui-dialog', open: '' }, parent: body };
+    const close: Node = { tag: 'button', parent: { tag: 'header', parent: { tag: 'div', attributes: { class: 'ui-dialog-frame' }, parent: mtc } } };
+    const panel: Node = { tag: 'section', attributes: { role: 'dialog', class: 'ui-popover' }, parent: body };
+    for (const modalOpen of [false, true]) {
+      const calls: string[] = [];
+      const router = timelineRouter(calls, { lightingWorkspace: true, lightingClip: true, modalOpen });
+      for (const target of [mtc, close, { tag: 'p', parent: mtc }, panel, { tag: 'button', parent: panel }, cueDialog, { tag: 'button', parent: cueFooter }]) {
+        for (const key of lightingKeys()) pressOn(router, key, target);
+      }
+      expect(calls).toEqual([]);
+    }
+    const modal: string[] = [];
+    const behind = timelineRouter(modal, { lightingWorkspace: true, lightingClip: true, modalOpen: true });
+    for (const key of lightingKeys()) { pressOn(behind, key, body); pressOn(behind, press(key.code, key.modifiers), null); }
+    expect(modal).toEqual([]);
+    // Closed again.
+    for (const target of [body, clip, null]) {
+      const calls: string[] = [];
+      const router = timelineRouter(calls, { lightingWorkspace: true, lightingClip: true });
+      for (const key of lightingKeys()) pressOn(router, key, target);
+      expect(calls).toEqual(['灯光点 删除', '灯光点 全选', '灯光点 复制', '灯光点 剪切', '灯光点 粘贴']);
+    }
+    // As before: fields, held keys and Alt stay out.
+    const calls: string[] = [];
+    const router = timelineRouter(calls, { lightingWorkspace: true, lightingClip: true });
+    for (const target of [{ tag: 'input', parent: body }, { tag: 'textarea', parent: body }, { tag: 'select', parent: body }, { tag: 'div', attributes: { contenteditable: 'true' }, parent: body }]) {
+      pressOn(router, press('Backspace'), target);
+    }
+    pressOn(router, press('Backspace', { repeat: true }), body);
+    pressOn(router, press('Backspace', { altKey: true }), body);
+    expect(calls).toEqual([]);
   });
 });

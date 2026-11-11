@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react';
-import { keyRouter, type KeyClaim, type KeyHandlers, type KeyWhen, type SongShortcuts } from './key-router';
+import { keyRouter, type KeyHandlers, type KeyWhen, type SongShortcuts } from './key-router';
 import type { KeyPage, KeyScope } from './keymap';
 
 /*
@@ -74,18 +74,4 @@ export function useKeyOverlay(open: boolean, options: KeyOverlayOptions): void {
       blocks
     });
   }, [open, blocks]);
-}
-
-/**
- * A listener of the page that is not on the router yet says which keys it takes (`claim`), so the window's keys leave
- * them to it, as they did when it took them first (the lighting workbench's shortcut keys, until K6).
- */
-export function useKeyClaim(claim: KeyClaim | null): void {
-  const latest = useRef(claim);
-  latest.current = claim;
-  const active = claim !== null;
-  useEffect(() => {
-    if (!active) return;
-    return keyRouter.claim((event, target) => latest.current?.(event, target) ?? false);
-  }, [active]);
 }

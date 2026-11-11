@@ -1,7 +1,8 @@
 import { chordOf, type KeyChord } from './key-chord';
 import { editsText, keyInTimeline, keyOwner, modalDialogOpen, windowKeepsKey, type OwnerTarget } from './key-owner';
 import { routeKey, type KeyDrag, type RouteDecision } from './key-route';
-import { KEYMAP, PAGE_SCOPES, type CommandId, type KeyPage, type KeyScope } from './keymap';
+import { currentKeymap } from '../stores/shortcut-store';
+import { KEYMAP, PAGE_SCOPES, type CommandId, type KeyEntry, type KeyPage, type KeyScope } from './keymap';
 
 /*
  * The window's one key listener (04 设计 4.1, 4.2): a keydown listener on the window in the capture phase, before any
@@ -12,10 +13,11 @@ import { KEYMAP, PAGE_SCOPES, type CommandId, type KeyPage, type KeyScope } from
  * Escape closes (Popover, menus, the player's status details, the Cue menu, the connection and settings page): they
  * say they are open and how they close (`overlay`), and the router closes the top one. K5 the drags: a drag says it is
  * going on (`beginDrag`, DragSession and useCapturedDrag), the router cancels it on Escape and keeps that key, and the
- * keys that would change the project, from everything after it until the pointer is let go. The rest still has its
- * own listeners until the later steps, and the router leaves every key to them that they took before it:
- * - the lighting workbench's shortcut keys say which keys they take (`claim`) and act themselves (K6);
- * - the timeline's own keys act in the timeline, where the window's keys never did (K6).
+ * keys that would change the project, from everything after it until the pointer is let go. K6 the timeline's keys
+ * (ReferenceTimeline), the lighting points' (LightingTimeline), the Cue points' (WaveformCuePoints) and the lighting
+ * workbench's shortcut keys (useTimelineStamp, with the keys the user set for them, shortcut-store.ts): each registers
+ * its commands in its scope. No other key listener is left on the window or the page; what an element does with
+ * its own keys it declares (`ownKeys`).
  */
 
 /** A key press, as the router reads it. */
@@ -30,8 +32,6 @@ export type KeyHandlers = Partial<Record<CommandId, KeyHandler>>;
 export type KeyWhen = (press: Pick<KeyPress, 'target'>) => boolean;
 /** The songs' own shortcuts (`playback.shortcut`): the song a chord is the shortcut of, and playing it. */
 export type SongShortcuts = { find(chord: KeyChord): string | undefined; play(itemId: string): void };
-/** A listener not on the router yet that takes `event` itself; the window's keys leave such a key alone. */
-export type KeyClaim = (event: KeyEvent, target: OwnerTarget | null) => boolean;
 /**
  * A panel Escape closes, while `open` says so: `close` closes it, `contains` says the focus is in it (every key there
  * but Escape is its own), `blocks`: the page's and the window's keys wait while it is open (settings, connections).
@@ -69,12 +69,14 @@ export class KeyRouter {
   private page: KeyPage = 'project';
   private readonly registrations: Registration[] = [];
   private readonly songs: SongShortcuts[] = [];
-  private readonly claims: KeyClaim[] = [];
   private readonly overlays: KeyOverlayEntry[] = [];
   private readonly drags: KeyDragEntry[] = [];
 
-  /** `document`: the page modal dialogs are looked for in, read on every press (none in tests without a page). */
-  constructor(private readonly document: () => Page | null) {}
+  /**
+   * `document`: the page modal dialogs are looked for in, read on every press (none in tests without a page).
+   * `keymap`: the key table with the keys the user changed, read on every press (the table itself when left out).
+   */
+  constructor(private readonly document: () => Page | null, private readonly keymap: () => readonly KeyEntry[] = () => KEYMAP) {}
 
   /** Listens on `view` (the window) in the capture phase; the result stops. */
   install(view: View): () => void {
@@ -97,10 +99,6 @@ export class KeyRouter {
     return remover(this.songs, songs);
   }
 
-  claim(claim: KeyClaim): () => void {
-    return remover(this.claims, claim);
-  }
-
   overlay(entry: KeyOverlayEntry): () => void {
     return remover(this.overlays, entry);
   }
@@ -116,7 +114,7 @@ export class KeyRouter {
     const decision = routeKey({
       chord, repeat: event.repeat, composing: event.isComposing || event.key === 'Process',
       owner: keyOwner(target, chord), inTimeline: keyInTimeline(target), windowKeeps: windowKeepsKey(target, chord), editingText: editsText(target),
-      pageTakes: this.claims.some(claim => claim(event, target)),
+      keymap: this.keymap(),
       modalOpen: this.modalOpen(), overlays: this.openOverlays().map(overlay => ({ focusInside: target !== null && overlay.contains(target), blocks: overlay.blocks })),
       drag: this.drag(), page: this.page,
       available: (id, scope) => this.handler(id, [scope], target) !== undefined,
@@ -129,19 +127,18 @@ export class KeyRouter {
   }
 
   /*
-   * A key the router acts on is taken from the browser (`preventDefault`) and goes on to the page as it did: the
-   * window's keys, saving, undo and redo all acted last and never kept a key from a listener after them (0.5.9). The
-   * listeners still off the router see it as before, with `defaultPrevented` set: the timeline still splits a clip on
-   * Ctrl+S, and the counters on the window still hear Escape. Stopping the key there waits until every
-   * listener is on the router (K4–K6).
+   * A key the router acts on is taken from the browser (`preventDefault`) and goes on through the page: no listener is
+   * left there that acts on it (K6), and an element acts on its own keys only (`ownKeys`), which the router leaves to
+   * it (`native`). Only during a drag does the router stop the key as well (`drag-cancel`, `swallow`), see there.
    */
 
   private act(decision: RouteDecision, event: KeyEvent, target: OwnerTarget | null): void {
     switch (decision.kind) {
       // Left to the field, control, dialog or browser.
       case 'ignore': case 'native': return;
-      // Escape during a drag: it gives the drag up, and goes no further, so that the timeline's Escape does not stop
-      // the show (keys7, 0.5.9). The router stops this key itself, as the drag's own listener did before K5.
+      // Escape during a drag: it gives the drag up and goes no further. The drag layer comes before the elements' own
+      // keys (`routeKey`), and those do not look whether the router took the key: a field that puts its text back on
+      // Escape (ownKeys('Escape')), a timeline marker's Escape. Stopped here, they do not act on it too.
       case 'drag-cancel':
         event.preventDefault(); event.stopPropagation();
         for (const drag of this.cancellable()) drag.escape?.();
@@ -153,7 +150,8 @@ export class KeyRouter {
         return;
       case 'swallow':
         // During a drag a swallowed key (Escape after a cancel, a key that would change the project) goes no further
-        // either: the timeline's own keys do not look whether the router took it (K5).
+        // either, for the same reason: the elements that delete themselves with their own keys (a timeline marker, a
+        // music beat or section, an audio segment's Delete and Backspace) do not look whether the router took it.
         event.preventDefault();
         if (this.drag() !== 'none') event.stopPropagation();
         return;
@@ -189,7 +187,8 @@ export class KeyRouter {
 
   /**
    * Whether a dialog or a panel is over the page: a modal dialog, or any panel Escape closes. The lighting workbench's
-   * shortcut keys wait then (useTimelineStamp), as they did for every dialog and panel on screen.
+   * shortcut keys wait then (useTimelineStamp registers them only while nothing is), as they did for every dialog and
+   * panel on screen, while the page's other keys go on as the layers of `routeKey` say.
    */
   covered(): boolean {
     return this.modalOpen() || this.openOverlays().length > 0;
@@ -217,4 +216,4 @@ export class KeyRouter {
 }
 
 /** The app's router, installed on the window by LinkApp. */
-export const keyRouter = new KeyRouter(() => typeof document === 'undefined' ? null : document);
+export const keyRouter = new KeyRouter(() => typeof document === 'undefined' ? null : document, currentKeymap);

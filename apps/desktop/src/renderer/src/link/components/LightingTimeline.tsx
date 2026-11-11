@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { LightingTempoMap, nextLightingCue, nextLightingMaster, copyLightingEvents, copyLightingEventsAt, pasteLightingEvents, lightingClipSpan, lightingEventTime } from '@tb/core/link';
 import type { LightingClip, LightingDocument, LightingTrack, LightingEvent } from '@tb/schema';
 import { ClipboardPaste, Copy, CopyPlus, GripVertical, Lock, LockOpen, MapPin, MousePointerClick, Plus, Scissors, SlidersVertical, Trash2, Volume2, VolumeX } from 'lucide-react';
@@ -7,8 +7,8 @@ import { useLightingClipboardStore } from '../stores/lighting-clipboard-store';
 import { LightingMasterCurve } from './LightingMasterCurve';
 import { masterCurveY } from './lighting-master-curve';
 import { useDragSession } from './useDragSession';
-import { keyTarget, modalDialogOpen } from '../playback-keys';
-import { lightingTimelineKeyActs } from './timeline-keys';
+import { useKeyCommands } from '../keys/useKeyCommands';
+import { removeLightingPoints, timelineClipboard } from './timeline-commands';
 import { usePlayheadValue, type EditorPlayhead } from './editor-playhead';
 
 function groupStackedEvents(tracks: LightingTrack[], map: LightingTempoMap, pixelsPerSecond: number): Map<string, LightingEvent[]> {
@@ -145,24 +145,25 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
     changeClip(track, { ...clip, events: [...clip.events, added] }, '灯光时间线打点');
     props.onSelectEvent?.(track.id, clip.id, added.id);
   };
-  useEffect(() => {
-    const key = (event: KeyboardEvent): void => {
-      if (context || props.detailOpen || !lightingTimelineKeyActs(event, keyTarget(event), modalDialogOpen(document))) return;
-      const track = activeTrack; const clip = activeClip;
-      if (!track || !clip) return;
-      if (event.ctrlKey || event.metaKey) {
-        if (props.selectedClipId !== clip.id) return;
-        if (event.code === 'KeyA' && props.selectedClipId === clip.id && clip.events.length) { event.preventDefault(); props.onSelectEvent?.(track.id, clip.id, clip.events.at(-1)!.id, clip.events.map((entry) => entry.id)); }
-        if (event.code === 'KeyC' || event.code === 'KeyX') { event.preventDefault(); copy(track, clip, selectedIds, event.code === 'KeyX'); }
-        if (event.code === 'KeyV') { event.preventDefault(); paste(track, clip, props.playhead.read()); }
-        return;
-      }
-      if (track.locked) return;
-      if (!document.querySelector('.lighting-workbench') && event.code === 'KeyM') { event.preventDefault(); add(track, clip, props.getPlaybackPosition?.() ?? props.playhead.read()); }
-      if ((event.code === 'Delete' || event.code === 'Backspace') && props.selectedEventId) { event.preventDefault(); changeClip(track, { ...clip, events: clip.events.filter((entry) => !selectedIds.has(entry.id)) }, '删除灯光点'); props.onSelect(track.id, clip.id); }
-    };
-    window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
-  });
+  // The lighting points' keys on both pages, wherever the focus is but in fields and dialogs (keymap.ts, scope
+  // `lighting-points`; M only in the editor, scope `editor`). None while the point menu or a lighting tool is open.
+  const keyTrack = !context && !props.detailOpen ? activeTrack : undefined;
+  const keyClip = keyTrack ? activeClip : undefined;
+  const lightingClipboard = keyClip !== undefined && timelineClipboard({ lightingClipSelected: props.selectedClipId === keyClip.id }) === 'lighting';
+  useKeyCommands('lighting-points', keyTrack && keyClip ? {
+    ...(lightingClipboard ? {
+      ...(keyClip.events.length ? { 'edit.selectAll': () => props.onSelectEvent?.(keyTrack.id, keyClip.id, keyClip.events.at(-1)!.id, keyClip.events.map((entry) => entry.id)) } : {}),
+      'edit.copy': () => copy(keyTrack, keyClip, selectedIds), 'edit.cut': () => copy(keyTrack, keyClip, selectedIds, true),
+      'edit.paste': () => paste(keyTrack, keyClip, props.playhead.read())
+    } : {}),
+    ...(!keyTrack.locked && props.selectedEventId ? { 'edit.delete': () => {
+      const removed = removeLightingPoints(props.document, props.selectedClipId, [...selectedIds]);
+      if (!removed) return;
+      props.onChange(removed.document, '删除灯光点');
+      props.onSelect(removed.trackId, removed.clipId);
+    } } : {})
+  } : {});
+  useKeyCommands('editor', keyTrack && keyClip && !keyTrack.locked ? { 'lighting.addPoint': () => add(keyTrack, keyClip, props.getPlaybackPosition?.() ?? props.playhead.read()) } : {});
   return <>
     {!props.document.tracks.length ? <div className="timeline-lane lighting-empty-lane" style={{ order: 50 + (props.document.laneIndex ?? 0) * 100 }} /> : null}
     {activeTrack ? <div className="timeline-lane lighting-lane lighting-combined-lane" aria-label="灯光时间线" style={{ order: 50 + (props.document.laneIndex ?? 0) * 100 }} onClick={(event) => { if (event.target === event.currentTarget) { props.onSeek(props.snapTime?.(props.timeAtClientX(event.clientX)) ?? props.timeAtClientX(event.clientX)); props.onSelect(activeTrack.id, null); } }} onDoubleClick={(event) => {

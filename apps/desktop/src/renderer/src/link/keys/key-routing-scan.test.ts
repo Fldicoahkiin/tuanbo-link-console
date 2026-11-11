@@ -13,15 +13,13 @@ import { expect, it } from 'vitest';
 const LINK = fileURLToPath(new URL('..', import.meta.url));
 
 /**
- * Files whose key handlers need no `ownKeys`, each for its reason. Plain fields (input, textarea, contenteditable),
- * whose keys the window's keys leave alone anyway (`windowKeepsKey`), and the timeline, whose keys the window's never
- * reached.
+ * Files whose key handlers need no `ownKeys`, each for its reason: plain fields (input, textarea, contenteditable),
+ * whose keys the window's keys leave alone anyway (`windowKeepsKey`). The timeline's keys are the router's since K6.
  */
 const ALLOWED: Readonly<Record<string, string>> = {
   'components/ResourceLibrary.tsx': '搜索输入框',
   'components/LightingMidiSettings.tsx': '数字输入框：Enter 确认',
-  'components/BeautyControls.tsx': '数字输入框，在人像美颜里（整页 ownKeys("*")）',
-  'components/ReferenceTimeline.tsx': '时间线自己的键（handleTimelineKey），窗口的键在时间线里本来就不动（K6 接到路由上）'
+  'components/BeautyControls.tsx': '数字输入框，在人像美颜里（整页 ownKeys("*")）'
 };
 
 function sourceFiles(directory: string, extensions: readonly string[]): string[] {
@@ -34,14 +32,13 @@ function sourceFiles(directory: string, extensions: readonly string[]): string[]
 const tsxFiles = (directory: string): string[] => sourceFiles(directory, ['.tsx']);
 
 /**
- * The key listeners on the window or the page that are not the router's yet, each for the step that moves it onto the
- * router. No new one is added: a key a component handles is a command it registers (useKeyCommands), a panel Escape
- * closes registers itself (useKeyOverlay, K4), and an element's own keys are declared (`ownKeys`).
+ * The key listeners on the window or the page: the router's alone (K6 moved the timeline's and the lighting
+ * workbench's onto it). No new one is added: a key a component handles is a command it registers (useKeyCommands), a
+ * panel Escape closes registers itself (useKeyOverlay, K4), a drag registers itself (K5), and an element's own keys
+ * are declared (`ownKeys`).
  */
 const WINDOW_LISTENERS: Readonly<Record<string, string>> = {
-  'keys/key-router.ts': '窗口唯一的按键路由',
-  'components/useTimelineStamp.tsx': '灯光工作台的快捷键（K6 接到路由上）',
-  'components/LightingTimeline.tsx': '灯光时间线的键（K6 接到路由上）'
+  'keys/key-router.ts': '窗口唯一的按键路由'
 };
 
 it('每个自己处理按键（onKeyDown=）的界面文件都用 ownKeys 说明哪些键归它，或者在上面写明原因的名单里（04 设计 K3）', () => {

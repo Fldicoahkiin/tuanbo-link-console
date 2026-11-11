@@ -5,12 +5,10 @@ import { TimelinePanelButton } from './TimelinePanelButton';
 import { Field, IconButton, Select } from '../ui';
 import { playbackFramesPerSecond } from '@tb/core/link';
 import type { MtcFrameRate } from '@tb/schema';
-import { shortcutKey, shortcutLabel, useShortcutStore } from '../stores/shortcut-store';
+import { shortcutLabel, useShortcutStore } from '../stores/shortcut-store';
 import type { LightingTimelineProps } from './LightingTimeline';
 import { stampTimeline } from './timeline-stamp';
-import { keyTarget } from '../playback-keys';
-import { handleLightingShortcut, lightingShortcutTakes, type LightingShortcut } from './timeline-keys';
-import { useKeyClaim } from '../keys/useKeyCommands';
+import { useKeyCommands } from '../keys/useKeyCommands';
 import { keyRouter } from '../keys/key-router';
 
 /** `onPlayPause` is the timeline's play button, which the play key presses. */
@@ -40,24 +38,17 @@ export function useTimelineStamp(props: Props) {
       setMessage(null);
     } catch (reason) { const text = reason instanceof Error ? reason.message : String(reason); setMessage(text); lighting.onError?.(text); }
   };
-  const shortcutOf = (event: Pick<KeyboardEvent, 'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>): LightingShortcut => ({
-    action: bindings.find(binding => binding.key === shortcutKey(event))?.action,
-    // A modal dialog or a panel Escape closes is open (the key router's layers): the shortcut keys wait.
-    covered: () => keyRouter.covered()
-  });
-  // The window's key router comes first now; it leaves the keys this listener takes to it, as they were before (K6 moves them onto the router).
-  useKeyClaim(lighting ? (event, target) => lightingShortcutTakes(event, target, shortcutOf(event)) : null);
-  useEffect(() => {
-    if (!lighting) return;
-    const key = (event: KeyboardEvent): void => handleLightingShortcut(event, keyTarget(event), shortcutOf(event), action => {
-      if (action === 'stamp') { stamp(); return; }
-      if (action === 'play') { props.onPlayPause(); return; }
-      props.onPlayingChange(false);
-      const step = 1000 / playbackFramesPerSecond(props.frameRate);
-      props.onSeek(action === 'start' ? 0 : action === 'end' ? props.durationMs : Math.max(0, Math.min(props.durationMs, props.playheadMs + (action === 'previous' ? -step : step))));
-    });
-    window.addEventListener('keydown', key, true); return () => window.removeEventListener('keydown', key, true);
-  });
+  // The lighting workbench's shortcut keys (keymap.ts, scope `lighting`, with the keys set on this computer,
+  // shortcut-store.ts): on the whole page, but not while a dialog or any panel is open (`covered`), as before the key
+  // router took them (K6). Moving the playhead pauses first.
+  const seek = (ms: number): void => { props.onPlayingChange(false); props.onSeek(ms); };
+  const step = (direction: -1 | 1): void => seek(Math.max(0, Math.min(props.durationMs, props.playheadMs + direction * 1000 / playbackFramesPerSecond(props.frameRate))));
+  useKeyCommands('lighting', lighting ? {
+    'lighting.stamp': () => stamp(),
+    'transport.playPause': () => props.onPlayPause(),
+    'transport.prevFrame': () => step(-1), 'transport.nextFrame': () => step(1),
+    'transport.start': () => seek(0), 'transport.end': () => seek(props.durationMs)
+  } : null, () => !keyRouter.covered());
   const shortcut = bindings.find(binding => binding.action === 'stamp');
   const controls = lighting ? <div className="timeline-stamp-controls"><IconButton label="打点" title={`在播放头打点${shortcut ? `（${shortcutLabel(shortcut.key)}）` : ''}；波形右键可在鼠标位置打点`} icon={MapPinPlus} onClick={() => stamp()} />
     {!lighting.onCreateCue && lighting.document.tracks.length ? <TimelinePanelButton icon={Layers3} label={`打点轨道：${track?.name ?? '未选择'}`}><Field stacked label="打点轨道">{(field) => <Select {...field} value={track?.id ?? ''} onChange={event => setChosen(event.currentTarget.value)}>{lighting.document.tracks.map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.locked ? '（已锁定）' : ''}</option>)}</Select>}</Field></TimelinePanelButton> : null}
