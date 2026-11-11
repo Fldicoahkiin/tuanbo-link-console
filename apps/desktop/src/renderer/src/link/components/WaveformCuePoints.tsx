@@ -1,5 +1,5 @@
 import { ModalSurface } from '../ui/ModalSurface';
-import { Fragment, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Trash2 } from 'lucide-react';
 import { Menu, MenuItem } from '../ui';
 import { moveLightingEffect, removeLightingEffects } from '@tb/core/link';
@@ -15,9 +15,18 @@ import { ownKeys } from '../keys/key-owner';
 import { useKeyCommands } from '../keys/useKeyCommands';
 import type { KeyPress } from '../keys/key-router';
 import { cuePointsToDelete, timelineSelection } from './timeline-commands';
+import { useScrollPaint, type ScrollPosition, type TimelineScroll } from './timeline-scroll';
 type Entry = ReturnType<typeof cueEventEntries>[number];
 type CuePointDrag = { id: string; x: number; ms: number; target: number; snapped: boolean };
-export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPerSecond, top, scrollLeft, viewportWidth, durationMs, disabled }: { mode: 'seek' | 'select'; height: number; lighting: LightingTimelineProps; frameRate: MtcFrameRate; pixelsPerSecond: number; top: number; scrollLeft: number; viewportWidth: number; durationMs: number; disabled: boolean }): JSX.Element {
+export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPerSecond, top, view, scroll, viewportWidth, durationMs, disabled }: { mode: 'seek' | 'select'; height: number; lighting: LightingTimelineProps; frameRate: MtcFrameRate; pixelsPerSecond: number; top: number;
+  /** What is drawn: the scroll block's window (0.5.9 E5); the time readout follows the exact `scroll`. */
+  view: { left: number; width: number }; scroll: TimelineScroll; viewportWidth: number; durationMs: number; disabled: boolean }): JSX.Element {
+  // The time readout stays inside the visible part, following the scroll straight into the DOM.
+  const readout = useRef<HTMLOutputElement>(null);
+  useScrollPaint(scroll, useCallback((at: ScrollPosition) => {
+    const element = readout.current;
+    if (element) element.style.left = `${readoutLeft(Number(element.dataset.x), at.left, viewportWidth)}px`;
+  }, [viewportWidth]));
   // Escape, leaving the window and losing the dragged Cue point end the drag (DragSession).
   const session = useDragSession<CuePointDrag>();
   const drag = session.drag;
@@ -94,7 +103,7 @@ export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPer
       const ms = dragged ? drag.target : entry.ms;
       // Points well outside the view are left out, but never the dragged one: it holds the pointer, and left out of the
       // page the move it was dragged to was lost on release (0.5.9), as the lighting points and content tracks keep theirs.
-      if (!dragged && (ms * pixelsPerSecond / 1000 < scrollLeft - 50 || (ms - entry.preparationLeadMs) * pixelsPerSecond / 1000 > scrollLeft + viewportWidth + 50)) return null;
+      if (!dragged && (ms * pixelsPerSecond / 1000 < view.left - 50 || (ms - entry.preparationLeadMs) * pixelsPerSecond / 1000 > view.left + view.width + 50)) return null;
       const width = cueMarkerWidth(entry.cue);
       const markerTop = 6 + (rows.get(entry.id) ?? 0) * 28;
       return <Fragment key={entry.id}>{entry.preparationLeadMs > 0 ? <span className="waveform-cue-preparation" aria-label={`Cue ${entry.cue} 埋步提前 ${entry.preparationLeadMs / 1000} 秒`} style={{ left: Math.max(0, ms - entry.preparationLeadMs) * pixelsPerSecond / 1000, top: markerTop + 23, width: Math.min(ms, entry.preparationLeadMs) * pixelsPerSecond / 1000 }}><span>埋步</span></span> : null}<button className="waveform-cue-point" data-cue-id={entry.id} aria-label={`音频 Cue ${displayCueNumber(entry.cue)}`} aria-pressed={selection.includes(entry.id) || lighting.selectedEventId === entry.id} title={`Cue ${displayCueNumber(entry.cue)} · ${formatTimelineTimecode(ms, frameRate)} · 拖动定位，双击修改`} style={{ left: ms * pixelsPerSecond / 1000, top: markerTop, width, '--cue-guide-height': `${Math.max(0, contentHeight - markerTop - 32)}px` } as CSSProperties}
@@ -106,7 +115,12 @@ export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPer
         {...ownKeys('Enter')}
         onKeyDown={event => cuePointEnter(event, !disabled && !entry.track.locked, () => setEditing(entry))}><span className="cue-marker-number">{displayCueNumber(entry.cue)}</span></button></Fragment>;
     })}</div>
-    {entries.filter(entry => entry.id === (drag?.id ?? (timeVisible ? lighting.selectedEventId : null))).map(entry => <output className="cue-position-readout" aria-label="当前 Cue 时间" key={entry.id} style={{ top: top + 64, left: Math.max(scrollLeft + 8, Math.min((drag?.target ?? entry.ms) / 1000 * pixelsPerSecond, scrollLeft + viewportWidth - 330)) }}>{formatTimelineTimecode(drag?.target ?? entry.ms, frameRate)}{drag && drag.target !== drag.ms ? <><span>{drag.target >= drag.ms ? '+' : ''}{((drag.target - drag.ms) / 1000).toFixed(3)} s</span>{drag.snapped ? <em>已吸附</em> : null}</> : <span>Cue {entry.cue}</span>}</output>)}
+    {entries.filter(entry => entry.id === (drag?.id ?? (timeVisible ? lighting.selectedEventId : null))).map(entry => <output ref={readout} className="cue-position-readout" aria-label="当前 Cue 时间" key={entry.id} data-x={(drag?.target ?? entry.ms) / 1000 * pixelsPerSecond} style={{ top: top + 64, left: readoutLeft((drag?.target ?? entry.ms) / 1000 * pixelsPerSecond, scroll.read().left, viewportWidth) }}>{formatTimelineTimecode(drag?.target ?? entry.ms, frameRate)}{drag && drag.target !== drag.ms ? <><span>{drag.target >= drag.ms ? '+' : ''}{((drag.target - drag.ms) / 1000).toFixed(3)} s</span>{drag.snapped ? <em>已吸附</em> : null}</> : <span>Cue {entry.cue}</span>}</output>)}
     {editing ? <ModalSurface className="cue-point-dialog" label="修改 Cue 卡点" onClose={() => setEditing(null)}><form className="effect-binding-form" onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget); const time = data.get('time'); if (typeof time === 'string') change(editing, Number(time) * 1000); }}><h3>修改 Cue {editing.cue} 卡点</h3><label>时间（秒）<input name="time" type="number" min="0" step="0.001" defaultValue={(editing.ms / 1000).toFixed(3)} required /></label><footer><button type="button" onClick={() => setEditing(null)}>取消</button><button disabled={disabled}>保存卡点</button></footer></form></ModalSurface> : null}
   </>;
+}
+
+/** Where the Cue time readout goes: at the point, kept 8 px inside the left edge and 330 px inside the right one. */
+function readoutLeft(x: number, scrollLeft: number, viewportWidth: number): number {
+  return Math.max(scrollLeft + 8, Math.min(x, scrollLeft + viewportWidth - 330));
 }

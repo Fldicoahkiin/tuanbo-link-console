@@ -1,0 +1,9 @@
+/*
+ * The timeline's canvas layer (TimelineCanvasLayer, 0.5.9 E5): it sits over the visible part of the content, at
+ * the scroll, which it writes as `left` itself. Its `color` is what it draws in, read at each drawing, so the
+ * light and dark themes both come from the tokens.
+ */
+@layer components {
+  .timeline-canvas-layer { position: absolute; top: 0; display: block; height: 100%; pointer-events: none; }
+  .timeline-canvas-layer.timeline-waveform-canvas { color: var(--audio-wave, var(--color-beat-detected)); font: var(--type-caption) var(--font-ui); }
+}

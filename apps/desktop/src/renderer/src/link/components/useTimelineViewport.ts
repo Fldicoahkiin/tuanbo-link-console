@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type WheelEvent as ReactWheelEvent } from 'react';
 import { initialTimelineSize, useTimelineViewportSize } from './useTimelineViewportSize';
 import { timelineMotion } from './timeline-motion';
+import { nextScrollBlocks, scrollBlock, scrollWindow, TimelineScroll } from './timeline-scroll';
 import {
   buildVisibleTimelineTicks,
   chooseTimelineTickInterval,
@@ -18,10 +19,13 @@ export type TimelineViewport = {
   headingViewportRef: RefObject<HTMLDivElement>;
   onHeadingsWheel: (event: ReactWheelEvent) => void;
   pixelsPerSecond: number;
-  scrollLeft: number;
+  /** Where the viewport is scrolled to, exactly, outside React (timeline-scroll.ts): for what follows the scroll in the DOM. */
+  scroll: TimelineScroll;
+  /** What React draws and culls by: the window of the scroll's 512 px block, which changes only when the scroll
+   * crosses a block (0.5.9 E5). It always holds the visible part. */
+  view: { left: number; width: number; top: number; height: number };
   viewportWidth: number;
   viewportHeight: number;
-  scrollTop: number;
   contentWidth: number;
   gridSize: number;
   ticks: ReturnType<typeof buildVisibleTimelineTicks>;
@@ -47,13 +51,20 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
   const viewportRef = useRef<HTMLDivElement>(null);
   const headingViewportRef = useTimelineHeadings(viewportRef);
   const [zoom, setZoom] = useState({ key: fitKey, manual: false, pixelsPerSecond: initialPixelsPerSecond });
-  const [scrollLeft, setScrollLeft] = useState(() => initialScrollLeft(durationMs, initialPixelsPerSecond, initialPositionMs, fitKey));
-  const measuredScrollLeft = useRef(scrollLeft);
+  // The scroll position lives outside React; React hears only its block (0.5.9 E5).
+  const [scroll] = useState(() => new TimelineScroll(initialScrollLeft(durationMs, initialPixelsPerSecond, initialPositionMs, fitKey), 0));
+  const [block, setBlock] = useState(() => ({ x: scrollBlock(scroll.read().left), y: 0 }));
+  const measuredScrollLeft = useRef(scroll.read().left);
   const measuredScrollTop = useRef(0);
   const revealFrame = useRef<number | null>(null);
   const layoutMode = fitKey === undefined ? 'visual' : 'lighting';
-  const { width: viewportWidth, height: viewportHeight, observed: observedViewport } = useTimelineViewportSize(viewportRef, layoutMode, scrollLeft);
-  const [scrollTop, setScrollTop] = useState(0);
+  const { width: viewportWidth, height: viewportHeight, observed: observedViewport } = useTimelineViewportSize(viewportRef, layoutMode, scroll.read().left);
+  const scrolled = useCallback((left: number, top: number): void => {
+    scroll.set(left, top);
+    setBlock(previous => nextScrollBlocks(previous, left, top));
+  }, [scroll]);
+  const horizontal = scrollWindow(block.x, viewportWidth), vertical = scrollWindow(block.y, viewportHeight);
+  const view = useMemo(() => ({ left: horizontal.start, width: horizontal.size, top: vertical.start, height: vertical.size }), [horizontal.start, horizontal.size, vertical.start, vertical.size]);
   const autoFit = fitKey !== undefined && (!zoom.manual || zoom.key !== fitKey);
   // Width and fitted scale must enter the same render. Updating the scale from
   // an effect after ResizeObserver caused another full editor layout at mount.
@@ -65,9 +76,9 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
   const ticks = useMemo(() => buildVisibleTimelineTicks({
     durationMs,
     pixelsPerSecond,
-    scrollLeft,
-    viewportWidth
-  }), [durationMs, pixelsPerSecond, scrollLeft, viewportWidth]);
+    scrollLeft: view.left,
+    viewportWidth: view.width
+  }), [durationMs, pixelsPerSecond, view.left, view.width]);
   const gridSize = chooseTimelineTickInterval(pixelsPerSecond) / 1_000 * pixelsPerSecond;
 
   const setViewportScrollLeft = useCallback((nextScrollLeft: number): void => {
@@ -78,8 +89,8 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
     if (next === measuredScrollLeft.current) return;
     viewport.scrollLeft = next;
     measuredScrollLeft.current = next;
-    setScrollLeft(next);
-  }, []);
+    scrolled(next, measuredScrollTop.current);
+  }, [scrolled]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -174,10 +185,10 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
       area.scrollTop += event.deltaY * unit;
     },
     pixelsPerSecond,
-    scrollLeft,
+    scroll,
+    view,
     viewportWidth,
     viewportHeight,
-    scrollTop,
     contentWidth,
     gridSize,
     ticks,
@@ -188,8 +199,7 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
       if (Math.abs(left - measuredScrollLeft.current) >= 1 || Math.abs(top - measuredScrollTop.current) >= 1) timelineMotion.moved();
       measuredScrollLeft.current = left;
       measuredScrollTop.current = top;
-      setScrollLeft(left);
-      setScrollTop(top);
+      scrolled(left, top);
       if (headingViewportRef.current && viewportRef.current) headingViewportRef.current.scrollTop = viewportRef.current.scrollTop;
     },
     timeAtClientX: (clientX) => {

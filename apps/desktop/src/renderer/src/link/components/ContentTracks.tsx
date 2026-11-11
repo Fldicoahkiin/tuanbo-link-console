@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, type DragEvent, type HTMLAttributes, type MouseEvent, type PointerEvent } from 'react';
+import { useCallback, useMemo, useRef, type DragEvent, type HTMLAttributes, type MouseEvent, type PointerEvent } from 'react';
 import { contentPlaceTaken, contentTrimBounds, millisecondsToFrameNumber, resolveTimelineClipSpan, timecodeToMilliseconds, type ContentRef, type ResolvedTimelineState, type TimelineSpan } from '@tb/core/link';
 import type { LinkCue, LinkMediaAsset, LinkProject, MtcFrameRate, ReferenceMediaClip, RundownItem, VisualLayer } from '@tb/schema';
 import { MEDIA_DRAG_TYPE, OBS_DRAG_TYPE, type ObsResource } from './ResourceLibrary';
@@ -14,8 +14,9 @@ import { useTimelineItemDrag, type TimelineDrag } from './useTimelineItemDrag';
 import type { TimelineViewport } from './useTimelineViewport';
 import { usePlayheadValue, type EditorPlayhead } from './editor-playhead';
 import { TRACK_HEIGHT, snapshotTimeAt, trackLayout, type DragViewport, type ItemDragSnapshot } from './drag-preview';
+import { useScrollPaint, type ScrollPosition } from './timeline-scroll';
 
-/** Items this far outside the visible area stay drawn, so a fast scroll never shows a gap. */
+/** Items this far outside the drawn window stay drawn, so a fast scroll never shows a gap. */
 const CULL_MARGIN = 112;
 
 /** The timeline rules the tracks ask while a part is dragged or trimmed, so
@@ -71,7 +72,7 @@ export type ContentTracksProps = {
   /** Points the song audio adds to snapping (its cut points). */
   audioSnapPoints: readonly number[];
   rules: ContentEditRules;
-  viewport: Pick<TimelineViewport, 'viewportRef' | 'pixelsPerSecond' | 'scrollLeft' | 'scrollTop' | 'viewportWidth' | 'viewportHeight' | 'timeAtClientX'>;
+  viewport: Pick<TimelineViewport, 'viewportRef' | 'pixelsPerSecond' | 'scroll' | 'view' | 'timeAtClientX'>;
   /** Where the first track starts, where the lighting row sits between tracks, and how much of the top the ruler covers. */
   tracks: { start: number; lightingIndex: number; lightingHeight: number; coveredTop: number };
   snap: { enabled: boolean; thresholdMs: number };
@@ -138,12 +139,12 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
     focusTimeline: props.focusTimeline, bounds: props.rules.trimBounds, onSelect: select, onTrim: props.onTrim,
     label: (ref, startMs, durationMs) => partLabel(ref, startMs, durationMs, props)
   });
-  // Scrolled or zoomed while a part is held: it follows from there.
-  const { rebase: rebaseDrag } = itemDrag, { rebase: rebaseTrim } = trim;
-  useLayoutEffect(() => {
-    const at = { scrollLeft: viewport.scrollLeft, scrollTop: viewport.scrollTop, pixelsPerSecond: viewport.pixelsPerSecond };
+  // Scrolled or zoomed while a part is held: it follows from there, at the scroll event itself (0.5.9 E5).
+  const { rebase: rebaseDrag } = itemDrag, { rebase: rebaseTrim } = trim, { pixelsPerSecond } = viewport;
+  useScrollPaint(viewport.scroll, useCallback((scrolled: ScrollPosition) => {
+    const at = { scrollLeft: scrolled.left, scrollTop: scrolled.top, pixelsPerSecond };
     rebaseDrag(at); rebaseTrim(at);
-  }, [viewport.scrollLeft, viewport.scrollTop, viewport.pixelsPerSecond, rebaseDrag, rebaseTrim]);
+  }, [pixelsPerSecond, rebaseDrag, rebaseTrim]));
   const moving = itemDrag.drag?.target.moved === true ? itemDrag.drag : null;
   const snapGuide = moving?.target.snapMs;
   // Worked out every frame, but the tracks draw again only when what is on air changes, such as at a camera switch.
@@ -187,13 +188,15 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
       props.onOpenMenu(hit.ref, event.clientX, event.clientY);
     }
   });
-  const inView = (left: number, width: number): boolean => left + width >= viewport.scrollLeft - CULL_MARGIN && left <= viewport.scrollLeft + viewport.viewportWidth + CULL_MARGIN;
+  // Culled to the scroll block's window (useTimelineViewport `view`), so a scroll inside the block draws nothing again.
+  const { view } = viewport;
+  const inView = (left: number, width: number): boolean => left + width >= view.left - CULL_MARGIN && left <= view.left + view.width + CULL_MARGIN;
 
   return <>
     {snapGuide !== undefined ? <div className="timeline-snap-guide" style={{ left: snapGuide / 1000 * viewport.pixelsPerSecond }}><span>已吸附</span></div> : null}
     {props.layers.map((layer, index) => {
       const rowTop = props.tracks.start + index * TRACK_HEIGHT + (index >= props.tracks.lightingIndex ? props.tracks.lightingHeight : 0);
-      const rowInView = rowTop + TRACK_HEIGHT >= viewport.scrollTop - TRACK_HEIGHT && rowTop <= viewport.scrollTop + viewport.viewportHeight + TRACK_HEIGHT;
+      const rowInView = rowTop + TRACK_HEIGHT >= view.top - TRACK_HEIGHT && rowTop <= view.top + view.height + TRACK_HEIGHT;
       const dropTarget = moving?.target.layerId === layer.id;
       // Dropped here the part would overlap another, so it goes on a new track above this one (drag-preview.ts `taken`).
       const dropAbove = moving !== null && dropTarget && moving.target.taken;

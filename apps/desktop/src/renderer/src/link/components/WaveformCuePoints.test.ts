@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it, vi } from 'vitest';
 import { createLightingDocument, lightingTrackSchema } from '@tb/schema';
 import { WaveformCuePoints } from './WaveformCuePoints';
+import { TimelineScroll } from './timeline-scroll';
 
 // The renderer's TSX compiles to React.createElement here.
 vi.stubGlobal('React', React);
@@ -24,7 +25,7 @@ function lighting() {
 /** The Cue points drawn with the timeline scrolled to `scrollLeft` (100 px a second, 1000 px on screen): each one's left edge. */
 function drawn(scrollLeft: number): string[] {
   const html = renderToStaticMarkup(React.createElement(WaveformCuePoints, { mode: 'seek', height: 120, lighting: lighting(), frameRate: '25', pixelsPerSecond: 100, top: 0,
-    scrollLeft, viewportWidth: 1_000, durationMs: 60_000, disabled: false }));
+    view: { left: scrollLeft, width: 1_000 }, scroll: new TimelineScroll(scrollLeft), viewportWidth: 1_000, durationMs: 60_000, disabled: false }));
   return [...html.matchAll(/<button class="waveform-cue-point" data-cue-id="point"[^>]* style="left:([^;"]+)/g)].map(([, left]) => left!);
 }
 

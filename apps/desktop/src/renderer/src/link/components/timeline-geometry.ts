@@ -93,6 +93,12 @@ export function fitTimelinePixelsPerSecond(durationMs: number, viewportWidth: nu
   return Math.min(MAX_TIMELINE_PIXELS_PER_SECOND, Math.max(MIN_TIMELINE_PIXELS_PER_SECOND, fitted));
 }
 
+/** Where a time is on the timeline's content, in px: the DOM parts and the canvas layer (TimelineCanvasLayer) both
+ * place by this, so the two always agree. */
+export function timeToX(milliseconds: number, pixelsPerSecond: number): number {
+  return milliseconds / 1_000 * pixelsPerSecond;
+}
+
 export function timelineTimeFromClientX(input: {
   clientX: number;
   viewportLeft: number;
