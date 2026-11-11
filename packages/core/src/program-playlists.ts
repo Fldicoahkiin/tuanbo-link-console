@@ -11,10 +11,25 @@ export function programPlaylistId(project: LinkProject, item: RundownItem): stri
 export function playlistItems(project: LinkProject, playlistId: string): RundownItem[] {
   return project.rundown.filter((item) => playlistId === 'all' || (playlistId === 'unassigned' ? programPlaylistId(project, item) === null : programPlaylistId(project, item) === playlistId));
 }
+/**
+ * The playlists come straight from P1 while the project keeps no list of its own: their order is P1's then, and
+ * moving one would copy them into the project's own list, after which a playlist added in P1 no longer shows up
+ * (its songs land in 未分组). So they are moved in P1 only (2026-11-11).
+ */
+export function playlistOrderFromP1(project: LinkProject): boolean {
+  return project.playlists === undefined && (project.p1Sync?.playlists.length ?? 0) > 0;
+}
+/** The index a playlist dropped at `gap` (0 before the first list, `ids.length` after the last) moves to; null if it stays. */
+export function playlistDropIndex(ids: readonly string[], id: string, gap: number): number | null {
+  const index = ids.indexOf(id);
+  if (index < 0 || !Number.isInteger(gap) || gap < 0 || gap > ids.length) return null;
+  const target = gap > index ? gap - 1 : gap;
+  return target === index ? null : target;
+}
 type PlaylistEdit = { type: 'add'; id: string; name: string } | { type: 'rename'; id: string; name: string } | { type: 'remove'; id: string } | { type: 'move'; id: string; index: number } | { type: 'assign'; itemIds: string[]; playlistId: string | null };
 export function editProgramPlaylistCommand(edit: PlaylistEdit): LinkCommand {
   return {
-    id: crypto.randomUUID(), label: '编辑播放列表',
+    id: crypto.randomUUID(), label: edit.type === 'move' ? '移动播放列表' : '编辑播放列表',
     execute(project) {
       const next = structuredClone(project);
       next.playlists = structuredClone(programPlaylists(project));
@@ -35,6 +50,7 @@ export function editProgramPlaylistCommand(edit: PlaylistEdit): LinkCommand {
           for (const item of next.rundown) if (programPlaylistId(next, item) === edit.id) item.playlistId = null;
           lists.splice(index, 1);
         } else {
+          if (playlistOrderFromP1(project)) throw new Error('这些播放列表来自 P1，顺序跟 P1 一致，请在 P1 里调整');
           if (!Number.isInteger(edit.index) || edit.index < 0 || edit.index >= lists.length) throw new Error('列表排序位置无效');
           lists.splice(edit.index, 0, lists.splice(index, 1)[0]!);
         }

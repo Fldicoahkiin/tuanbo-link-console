@@ -1,10 +1,14 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp, ListMusic, Plus, Pencil, Trash2 } from 'lucide-react';
-import { editProgramPlaylistCommand, playlistItems, programPlaylists } from '@tb/core/link';
+import { editProgramPlaylistCommand, playlistDropIndex, playlistItems, playlistOrderFromP1, programPlaylists } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { Button, Dialog, IconButton, Menu, MenuItem, TextInput } from '../ui';
+import { useDragSession } from './useDragSession';
+import { dropPlacement } from './program-grid-geometry';
+
+type PlaylistDrag = { pointerId: number; id: string; target: { id: string; placement: 'before' | 'after' } | null };
 
 export const PROGRAM_DRAG_TYPE = 'application/x-tblink-program';
 export function ProgramPlaylistPane(props: { project: LinkProject; selectedId: string; locked: boolean; onSelect: (id: string) => void; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element {
@@ -13,6 +17,22 @@ export function ProgramPlaylistPane(props: { project: LinkProject; selectedId: s
   const [editing, setEditing] = useState<{ id: string | null; name: string } | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const formId = useId();
+  // Dragging a playlist to another place: the same drag as the song cards (DragSession, 4 px before it starts,
+  // Escape cancels, a bar marks the drop place). 全部节目 and 未分组 stay where they are.
+  const session = useDragSession<PlaylistDrag>();
+  const press = useRef<{ pointerId: number; id: string; x: number; y: number } | null>(null);
+  const suppressClick = useRef(false);
+  const [refused, setRefused] = useState(false);
+  const moveBlocked = props.locked ? '正在播放或处理中，停下后才能调整顺序'
+    : playlistOrderFromP1(props.project) ? '这些播放列表来自 P1，顺序跟 P1 一致，请在 P1 里调整' : null;
+  const drag = session.drag;
+  const listIds = lists.map(list => list.id);
+  const dropTarget = (clientX: number, clientY: number, previous: PlaylistDrag['target']): PlaylistDrag['target'] => {
+    const element = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('[data-playlist-id]');
+    const id = element?.dataset.playlistId;
+    if (!element || !id || !listIds.includes(id)) return previous;
+    return { id, placement: dropPlacement(clientX, clientY, element.getBoundingClientRect(), 'list') };
+  };
   useEffect(() => {
     const close = (): void => setMenu(null);
     window.addEventListener('pointerdown', close);
@@ -30,9 +50,39 @@ export function ProgramPlaylistPane(props: { project: LinkProject; selectedId: s
   };
   const current = lists.find((list) => list.id === menu?.id);
   const index = lists.findIndex((list) => list.id === menu?.id);
-  return <aside className="p1-playlist-pane">
+  return <aside className="p1-playlist-pane" data-reordering={drag !== null} data-refused={refused} title={refused ? moveBlocked ?? undefined : undefined}
+    onPointerDown={event => {
+      const id = event.button === 0 && event.target instanceof Element ? event.target.closest<HTMLElement>('[data-playlist-id]')?.dataset.playlistId : undefined;
+      press.current = id && listIds.includes(id) ? { pointerId: event.pointerId, id, x: event.clientX, y: event.clientY } : null;
+    }}
+    onPointerMove={event => {
+      const pressed = press.current;
+      if (pressed && (event.buttons & 1) === 0) press.current = null;
+      else if (pressed?.pointerId === event.pointerId && Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) >= 4) {
+        press.current = null; suppressClick.current = true;
+        if (moveBlocked) { event.currentTarget.setPointerCapture(event.pointerId); setRefused(true); return; }
+        session.begin(event, { pointerId: event.pointerId, id: pressed.id, target: dropTarget(event.clientX, event.clientY, null) });
+        return;
+      }
+      const current = session.current();
+      if (current?.pointerId !== event.pointerId) return;
+      const target = dropTarget(event.clientX, event.clientY, current.target);
+      if (target?.id !== current.target?.id || target?.placement !== current.target?.placement) session.update({ ...current, target });
+    }}
+    onPointerUp={event => {
+      if (press.current?.pointerId === event.pointerId) press.current = null;
+      if (refused) { setRefused(false); if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }
+      const current = session.current();
+      if (current?.pointerId !== event.pointerId) return;
+      session.end();
+      const index = current.target ? playlistDropIndex(listIds, current.id, listIds.indexOf(current.target.id) + (current.target.placement === 'after' ? 1 : 0)) : null;
+      if (index !== null && !moveBlocked) execute({ type: 'move', id: current.id, index });
+    }}
+    onPointerCancel={event => { press.current = null; setRefused(false); if (session.current()?.pointerId === event.pointerId) session.end(); }}
+    onClickCapture={event => { if (suppressClick.current) { suppressClick.current = false; event.preventDefault(); event.stopPropagation(); } }}>
     <div className="p1-pane-title"><strong>播放列表</strong><IconButton size="sm" label="新建播放列表" icon={Plus} disabled={props.locked} onClick={() => setEditing({ id: null, name: '' })} /></div>
-    {[{ id: 'all', name: '全部节目' }, ...lists, { id: 'unassigned', name: '未分组' }].map((list) => <button key={list.id} title={list.name} aria-pressed={props.selectedId === list.id} className={props.selectedId === list.id ? 'active' : ''} onClick={() => props.onSelect(list.id)}
+    {[{ id: 'all', name: '全部节目' }, ...lists, { id: 'unassigned', name: '未分组' }].map((list) => <button key={list.id} title={listIds.includes(list.id) ? `${list.name}\n${moveBlocked ?? '按住拖动可以调整顺序'}` : list.name} aria-pressed={props.selectedId === list.id} className={props.selectedId === list.id ? 'active' : ''} onClick={() => props.onSelect(list.id)}
+      data-playlist-id={list.id} data-moving={drag?.id === list.id} data-drop={drag?.target?.id === list.id && drag.id !== list.id ? drag.target.placement : undefined}
       onKeyDown={(event) => {
         if (!props.locked && !['all', 'unassigned'].includes(list.id) && (event.key === 'F2' || event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10')) {
           event.preventDefault();
@@ -48,8 +98,8 @@ export function ProgramPlaylistPane(props: { project: LinkProject; selectedId: s
     </button>)}
     {createPortal(<>{menu && current ? <Menu x={menu.x} y={menu.y} label={`${current.name} 菜单`} onClose={() => setMenu(null)}>
       <MenuItem icon={Pencil} onSelect={() => { setEditing({ id: current.id, name: current.name }); setMenu(null); }}>重命名列表</MenuItem>
-      <MenuItem icon={ArrowUp} disabled={index <= 0} onSelect={() => { execute({ type: 'move', id: current.id, index: index - 1 }); setMenu(null); }}>上移列表</MenuItem>
-      <MenuItem icon={ArrowDown} disabled={index >= lists.length - 1} onSelect={() => { execute({ type: 'move', id: current.id, index: index + 1 }); setMenu(null); }}>下移列表</MenuItem>
+      <MenuItem icon={ArrowUp} disabled={index <= 0 || moveBlocked !== null} {...moveBlocked ? { title: moveBlocked } : {}} onSelect={() => { execute({ type: 'move', id: current.id, index: index - 1 }); setMenu(null); }}>上移列表</MenuItem>
+      <MenuItem icon={ArrowDown} disabled={index >= lists.length - 1 || moveBlocked !== null} {...moveBlocked ? { title: moveBlocked } : {}} onSelect={() => { execute({ type: 'move', id: current.id, index: index + 1 }); setMenu(null); }}>下移列表</MenuItem>
       <MenuItem icon={Trash2} danger onSelect={() => { setRemoving(current.id); setMenu(null); }}>删除列表</MenuItem>
     </Menu> : null}
     {editing ? <Dialog size="sm" title={editing.id ? '重命名列表' : '新建播放列表'} closeLabel="取消" onClose={() => setEditing(null)}
