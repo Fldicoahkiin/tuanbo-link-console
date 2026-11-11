@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ListPlus, Trash2 } from 'lucide-react';
 import { useProgramViewport } from './useProgramViewport';
 import { useDragSession } from './useDragSession';
+import { useDragEdgeScroll } from './useDragEdgeScroll';
 import { contentPoint, contentRectangle, dropPlacement, intersects, scrollBoxOf, selectionRectangle, type Point, type Rectangle } from './program-grid-geometry';
 import { Menu, MenuItem } from '../ui';
 
@@ -34,6 +35,16 @@ export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAdd
     if (!card || index < 0) return previous;
     return moving.includes(itemIds[index]!) ? null : { index, placement: dropPlacement(clientX, clientY, card.getBoundingClientRect(), view) };
   };
+  const moveTo = (pointer: Point): void => {
+    const current = session.current();
+    if (current?.kind !== 'move') return;
+    const target = dropTarget(pointer.x, pointer.y, current.ids, current.target);
+    if (target?.index !== current.target?.index || target?.placement !== current.target?.placement) session.update({ ...current, target });
+  };
+  // Held near the top or bottom edge, the list scrolls and the marker follows the cards moving under the pointer.
+  const { follow: followEdge, stop: stopEdge } = useDragEdgeScroll(moveTo);
+  const moving = drag?.kind === 'move';
+  useEffect(() => { if (!moving) stopEdge(); }, [moving, stopEdge]);
   const [fileDrop, setFileDrop] = useState(false);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
@@ -68,13 +79,14 @@ export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAdd
         if (locked || reorder.blocked) { event.currentTarget.setPointerCapture(event.pointerId); setRefused(true); return; }
         const ids = selectedIds.length > 1 && selectedIds.includes(pressed.id) ? itemIds.filter(id => selectedIds.includes(id)) : [pressed.id];
         session.begin(event, { kind: 'move', pointerId: event.pointerId, ids, target: dropTarget(event.clientX, event.clientY, ids, null) });
+        followEdge(event.currentTarget, { x: event.clientX, y: event.clientY });
         return;
       }
       const current = session.current();
       if (!current || locked || current.pointerId !== event.pointerId) return;
       if (current.kind === 'move') {
-        const target = dropTarget(event.clientX, event.clientY, current.ids, current.target);
-        if (target?.index !== current.target?.index || target?.placement !== current.target?.placement) session.update({ ...current, target });
+        moveTo({ x: event.clientX, y: event.clientY });
+        followEdge(event.currentTarget, { x: event.clientX, y: event.clientY });
         return;
       }
       if (!current.rectangle && Math.hypot(event.clientX - current.client.x, event.clientY - current.client.y) < 4) return;
@@ -93,12 +105,12 @@ export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAdd
       const current = session.current();
       if (current?.pointerId !== event.pointerId) return;
       if (current.kind === 'select') suppressClick.current = current.rectangle !== null;
-      lasso.current = null; session.end();
+      lasso.current = null; stopEdge(); session.end();
       if (current.kind === 'move' && current.target && !locked && !reorder.blocked) reorder.onMove(current.ids, current.target.index + (current.target.placement === 'after' ? 1 : 0));
     }}
     onPointerCancel={event => {
       press.current = null; setRefused(false);
-      if (session.current()?.pointerId === event.pointerId) session.end();
+      if (session.current()?.pointerId === event.pointerId) { stopEdge(); session.end(); }
     }}
     onClickCapture={event => {
       if (event.target instanceof Element && event.target.closest('[role="menu"]')) return;

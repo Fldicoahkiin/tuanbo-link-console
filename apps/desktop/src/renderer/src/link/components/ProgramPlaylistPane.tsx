@@ -6,6 +6,7 @@ import type { LinkProject } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { Button, Dialog, IconButton, Menu, MenuItem, TextInput } from '../ui';
 import { useDragSession } from './useDragSession';
+import { useDragEdgeScroll, verticalScrollerOf } from './useDragEdgeScroll';
 import { dropPlacement } from './program-grid-geometry';
 
 type PlaylistDrag = { pointerId: number; id: string; target: { id: string; placement: 'before' | 'after' } | null };
@@ -33,6 +34,16 @@ export function ProgramPlaylistPane(props: { project: LinkProject; selectedId: s
     if (!element || !id || !listIds.includes(id)) return previous;
     return { id, placement: dropPlacement(clientX, clientY, element.getBoundingClientRect(), 'list') };
   };
+  const moveTo = (pointer: { x: number; y: number }): void => {
+    const current = session.current();
+    if (!current) return;
+    const target = dropTarget(pointer.x, pointer.y, current.target);
+    if (target?.id !== current.target?.id || target?.placement !== current.target?.placement) session.update({ ...current, target });
+  };
+  // The same edge scrolling as the song cards; the list scrolls in the sidebar, which may be the pane or its holder.
+  const { follow: followEdge, stop: stopEdge } = useDragEdgeScroll(moveTo);
+  const dragging = drag !== null;
+  useEffect(() => { if (!dragging) stopEdge(); }, [dragging, stopEdge]);
   useEffect(() => {
     const close = (): void => setMenu(null);
     window.addEventListener('pointerdown', close);
@@ -62,23 +73,24 @@ export function ProgramPlaylistPane(props: { project: LinkProject; selectedId: s
         press.current = null; suppressClick.current = true;
         if (moveBlocked) { event.currentTarget.setPointerCapture(event.pointerId); setRefused(true); return; }
         session.begin(event, { pointerId: event.pointerId, id: pressed.id, target: dropTarget(event.clientX, event.clientY, null) });
+        followEdge(verticalScrollerOf(event.currentTarget), { x: event.clientX, y: event.clientY });
         return;
       }
       const current = session.current();
       if (current?.pointerId !== event.pointerId) return;
-      const target = dropTarget(event.clientX, event.clientY, current.target);
-      if (target?.id !== current.target?.id || target?.placement !== current.target?.placement) session.update({ ...current, target });
+      moveTo({ x: event.clientX, y: event.clientY });
+      followEdge(verticalScrollerOf(event.currentTarget), { x: event.clientX, y: event.clientY });
     }}
     onPointerUp={event => {
       if (press.current?.pointerId === event.pointerId) press.current = null;
       if (refused) { setRefused(false); if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }
       const current = session.current();
       if (current?.pointerId !== event.pointerId) return;
-      session.end();
+      stopEdge(); session.end();
       const index = current.target ? playlistDropIndex(listIds, current.id, listIds.indexOf(current.target.id) + (current.target.placement === 'after' ? 1 : 0)) : null;
       if (index !== null && !moveBlocked) execute({ type: 'move', id: current.id, index });
     }}
-    onPointerCancel={event => { press.current = null; setRefused(false); if (session.current()?.pointerId === event.pointerId) session.end(); }}
+    onPointerCancel={event => { press.current = null; setRefused(false); if (session.current()?.pointerId === event.pointerId) { stopEdge(); session.end(); } }}
     onClickCapture={event => { if (suppressClick.current) { suppressClick.current = false; event.preventDefault(); event.stopPropagation(); } }}>
     <div className="p1-pane-title"><strong>播放列表</strong><IconButton size="sm" label="新建播放列表" icon={Plus} disabled={props.locked} onClick={() => setEditing({ id: null, name: '' })} /></div>
     {[{ id: 'all', name: '全部节目' }, ...lists, { id: 'unassigned', name: '未分组' }].map((list) => <button key={list.id} title={listIds.includes(list.id) ? `${list.name}\n${moveBlocked ?? '按住拖动可以调整顺序'}` : list.name} aria-pressed={props.selectedId === list.id} className={props.selectedId === list.id ? 'active' : ''} onClick={() => props.onSelect(list.id)}

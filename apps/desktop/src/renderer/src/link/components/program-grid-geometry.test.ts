@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { contentPoint, contentRectangle, dropPlacement, intersects, selectionRectangle, type ScrollBox } from './program-grid-geometry';
+import { contentPoint, contentRectangle, dropPlacement, EDGE_SCROLL_MAX_SPEED, EDGE_SCROLL_MIN_SPEED, EDGE_SCROLL_ZONE, edgeScrollSpeed, intersects, selectionRectangle, type ScrollBox } from './program-grid-geometry';
 
 // The rundown on a 1280×720 window: below the title bar and the player, right of the sidebar.
 const offset: ScrollBox = { left: 248, top: 312, clientLeft: 0, clientTop: 0, scrollLeft: 0, scrollTop: 0, scrollWidth: 760, scrollHeight: 900 };
@@ -37,5 +37,34 @@ describe('拖动排序的插入位置', () => {
     expect(dropPlacement(250, 110, card, 'cards')).toBe('after');
     expect(dropPlacement(290, 120, card, 'list')).toBe('before');
     expect(dropPlacement(110, 160, card, 'list')).toBe('after');
+  });
+});
+
+describe('拖到列表上下边缘时自动滚动', () => {
+  // The rundown on a 1280×720 window, 360 px high.
+  const list = { left: 248, top: 312, width: 760, height: 360 };
+  const at = (y: number, x = 500): number => edgeScrollSpeed({ x, y }, list);
+  it('中间不滚；进了边缘带开始滚，越靠边越快，上边往上、下边往下', () => {
+    expect(at(312 + 180)).toBe(0);
+    expect(at(312 + EDGE_SCROLL_ZONE)).toBe(0);
+    const entering = at(312 + EDGE_SCROLL_ZONE - 1), nearer = at(312 + 10), onEdge = at(312);
+    expect(entering).toBeLessThan(0); expect(entering).toBeGreaterThan(-EDGE_SCROLL_MIN_SPEED - 30);
+    expect(nearer).toBeLessThan(entering); expect(onEdge).toBe(-EDGE_SCROLL_MAX_SPEED);
+    expect(at(672 - EDGE_SCROLL_ZONE + 1)).toBeGreaterThan(0);
+    expect(at(672 - 10)).toBeGreaterThan(at(672 - 40));
+    expect(at(672)).toBe(EDGE_SCROLL_MAX_SPEED);
+  });
+  it('刚拖出列表上下边时照样最快，离远了或拖到列表左右以外就停', () => {
+    expect(at(312 - 20)).toBe(-EDGE_SCROLL_MAX_SPEED);
+    expect(at(672 + 20)).toBe(EDGE_SCROLL_MAX_SPEED);
+    expect(at(312 - EDGE_SCROLL_ZONE - 1)).toBe(0);
+    expect(at(672 + EDGE_SCROLL_ZONE + 1)).toBe(0);
+    expect(at(320, 100)).toBe(0); expect(at(660, 1100)).toBe(0);
+  });
+  it('很矮的列表两条边缘带各占一半，没有高度就不滚', () => {
+    const short = { ...list, height: 60 };
+    expect(edgeScrollSpeed({ x: 500, y: 312 + 29 }, short)).toBeLessThan(0);
+    expect(edgeScrollSpeed({ x: 500, y: 312 + 31 }, short)).toBeGreaterThan(0);
+    expect(edgeScrollSpeed({ x: 500, y: 312 }, { ...list, height: 0 })).toBe(0);
   });
 });
