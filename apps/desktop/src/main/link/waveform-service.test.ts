@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { decodeWaveform, WaveformAccumulator, WaveformService } from './waveform-service';
+import { decodeWaveform, WaveformAccumulator, WaveformService, waveformSourceMatches } from './waveform-service';
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -37,7 +37,7 @@ test('concurrent requests share work, independent jobs serialize and failures ne
   const cache = { loadWaveformCache: vi.fn((): Promise<number[] | null> => Promise.resolve(null)), saveWaveformCache: vi.fn(() => Promise.resolve()) };
   let fail: (error: Error) => void = () => { throw new Error('decoder not started'); };
   const decode = vi.fn().mockImplementationOnce(() => new Promise<number[]>((_resolve, reject) => { fail = reject; })).mockResolvedValue([0.5]);
-  const service = new WaveformService(cache, decode);
+  const service = new WaveformService(cache, decode, () => Promise.resolve(true));
   const first = service.ensure('show.tblink', 'one.wav', 'one', 1000);
   const failed = expect(first).rejects.toThrow('invalid audio');
   expect(service.ensure('show.tblink', 'one.wav', 'one', 1000)).toBe(first);
@@ -73,8 +73,26 @@ test('coarse waveform cache is regenerated for precise editing', async () => {
   const cache = { loadWaveformCache: vi.fn().mockResolvedValue(Array(2400).fill(0)), saveWaveformCache: vi.fn().mockResolvedValue(undefined) };
   const detailed = Array.from({ length: 30000 }, (_, index) => index === 12001 ? 1 : 0);
   const decode = vi.fn().mockResolvedValue(detailed);
-  const result = await new WaveformService(cache, decode).ensure('show.tblink', 'song.wav', 'song', 60000);
+  const result = await new WaveformService(cache, decode, () => Promise.resolve(true)).ensure('show.tblink', 'song.wav', 'song', 60000);
   expect(result[12001]).toBe(1);
   expect(decode).toHaveBeenCalledExactlyOnceWith('song.wav', 60000);
   expect(cache.saveWaveformCache).toHaveBeenCalledExactlyOnceWith('show.tblink', 'song', detailed);
+});
+
+test('another song\'s file never fills this song\'s waveform cache', async () => {
+  // 2026-11-11 the home player asked for song B with song A's link: A's peaks were saved as B's cache and
+  // B's waveform stopped where A ended. The file is checked against the sha256 before anything is decoded.
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-waveform-')); directories.push(directory);
+  const songA = 'a'.repeat(64), songB = 'b'.repeat(64);
+  const fileA = join(directory, `${songA}.wav`); await writeFile(fileA, 'song a');
+  const renamed = join(directory, 'natural.wav'); await writeFile(renamed, 'song a');
+  const cache = { loadWaveformCache: vi.fn((): Promise<number[] | null> => Promise.resolve(null)), saveWaveformCache: vi.fn(() => Promise.resolve()) };
+  const decode = vi.fn().mockResolvedValue([0.5]);
+  const service = new WaveformService(cache, decode);
+  await expect(service.ensure('show.tblink', fileA, songB, 59470)).rejects.toThrow('不是这首歌的音频');
+  await expect(service.ensure('show.tblink', renamed, songB, 59470)).rejects.toThrow('不是这首歌的音频');
+  expect(decode).not.toHaveBeenCalled(); expect(cache.saveWaveformCache).not.toHaveBeenCalled();
+  await expect(service.ensure('show.tblink', fileA, songA, 45000)).resolves.toEqual([0.5]);
+  const { createHash } = await import('node:crypto');
+  expect(await waveformSourceMatches(renamed, createHash('sha256').update('song a').digest('hex'))).toBe(true);
 });

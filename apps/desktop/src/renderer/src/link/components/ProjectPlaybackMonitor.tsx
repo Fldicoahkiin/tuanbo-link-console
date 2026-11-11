@@ -8,6 +8,7 @@ import { usePlayerClock } from '../usePlayerClock';
 import { AudioSpectrum } from './AudioSpectrum';
 import { P1TimeMonitor } from './P1TimeMonitor';
 import { PlayerWaveformTimeline } from './PlayerWaveformTimeline';
+import { useSongWaveformSource } from './ReferenceWaveform';
 import { ProjectPlayerTransport, type ProjectPlayer } from './ProjectPlayerControls';
 import { formatTimecode } from './media-utils';
 import { Button, IconButton } from '../ui';
@@ -37,7 +38,8 @@ export function ProjectPlaybackMonitor({ project, player, selectedItem, currentI
   const monitorDuration = internal && player.state.status !== 'stopped' ? player.state.durationMs : monitorItem?.referenceAudio?.durationMs ?? 0;
   const spectrum = useDisplayPreferences(state => state.homeSpectrum);
   const setSpectrum = useDisplayPreferences(state => state.setHomeSpectrum);
-  const waveform = <PlayerWaveformTimeline enabled={internal && !!player.controller && ['playing', 'paused'].includes(player.state.status)} onSeek={positionMs => void player.controller?.seek(positionMs)} source={projectPath && previewUrl && selectedItem?.referenceAudio ? { projectPath, url: previewUrl, sha256: selectedItem.referenceAudio.sha256, durationMs: selectedItem.referenceAudio.durationMs } : null} positionMs={selectedItem?.id === currentItemId ? currentMilliseconds : 0} />;
+  const waveformSource = useSongWaveformSource(selectedItem?.referenceAudio, projectPath, previewUrl);
+  const waveform = <PlayerWaveformTimeline enabled={internal && !!player.controller && ['playing', 'paused'].includes(player.state.status)} onSeek={positionMs => void player.controller?.seek(positionMs)} source={waveformSource} positionMs={selectedItem?.id === currentItemId ? currentMilliseconds : 0} />;
   const showSpectrum = internal && spectrum;
   return <section className="home-monitor" data-spectrum={showSpectrum} aria-label="播放与监看">
     {internal ? <ProjectPlayerTransport {...player} selectedItem={selectedItem} controller={player.controller} onScreen={visible} notify={notify}

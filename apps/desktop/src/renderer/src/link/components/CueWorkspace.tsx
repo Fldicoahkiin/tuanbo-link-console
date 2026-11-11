@@ -9,6 +9,7 @@ import { useStoppedRuntimeRecovery } from './useStoppedRuntimeRecovery';
 import { LightingEffectDock } from './LightingEffectDock';
 import { useLightingLibrarySplit } from './LightingLibrarySplitter';
 import { useLightingEffectStamp } from './useLightingEffectStamp';
+import { useSongWaveformSource } from './ReferenceWaveform';
 import '../lighting-workbench.css';
 import '../lighting-workbench-appearance.css';
 import { useAudioEditor } from './useAudioEditor';
@@ -81,12 +82,6 @@ type Props = {
   documentActions: DocumentActionProps;
 };
 
-function useTimelineReferenceAudio(audio: LinkProject['rundown'][number]['referenceAudio'], projectPath: string | null, url: string | null) {
-  return useMemo(() => audio && projectPath && url
-    ? { projectPath, url, sha256: audio.sha256, durationMs: audio.durationMs }
-    : null, [audio, projectPath, url]);
-}
-
 export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackProject, sidebarHost, toolbarHost, coordinator, notify, documentActions }: Props): JSX.Element {
   const lightingWorkspace = workspace === 'lighting';
   const librarySplit = useLightingLibrarySplit();
@@ -135,7 +130,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
 
   const durationMs = useWorkspaceDuration(project, item, lightingDocument);
   useTimelinePlaybackClock({ playing: playing && !item?.referenceAudio && !externalTransport, playheadMs, durationMs, frameRate: project?.timebase.frameRate ?? '30', itemId: item?.id ?? null, onPlayheadChange: setPlayheadMs, onPlayingChange: setPlaying });
-  const timelineReferenceAudio = useTimelineReferenceAudio(item?.referenceAudio, projectPath, audioUrl);
+  const timelineReferenceAudio = useSongWaveformSource(item?.referenceAudio, projectPath, audioUrl);
   const timelineIndex = useMemo(() => project && item ? new TimelineStateIndex(project, item) : null, [item, project]);
   const timelineState = useMemo(() => timelineIndex?.at(playheadMs) ?? null, [timelineIndex, playheadMs]);
   const sceneOutput = useSceneOutput(project, lightingWorkspace ? null : item?.id ?? null, playheadMs, obs.status === 'connected', player, playbackProject);

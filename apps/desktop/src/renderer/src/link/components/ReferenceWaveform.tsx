@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import type { TimelineSpan } from '@tb/core/link';
-import type { LinkMediaAsset, ReferenceMediaClip } from '@tb/schema';
+import type { LinkMediaAsset, ReferenceMediaClip, RundownItem } from '@tb/schema';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import type { TimelineDrag } from './TimelineItems';
 import { timelineSpanWidth } from './timeline-geometry';
@@ -15,6 +15,15 @@ export type ReferenceWaveformSource = {
   sha256: string;
   durationMs: number;
 };
+
+/** The one place a song's waveform source is put together (home player, editor, lighting workbench).
+ * `url` must come from useReferenceAudioUrl, which only hands out the link of this very song. */
+export function useSongWaveformSource(audio: Pick<NonNullable<RundownItem['referenceAudio']>, 'sha256' | 'durationMs'> | undefined | null, projectPath: string | null, url: string | null): ReferenceWaveformSource | null {
+  const sha256 = audio?.sha256; const durationMs = audio?.durationMs;
+  return useMemo(() => sha256 !== undefined && durationMs !== undefined && projectPath && url
+    ? { projectPath, url, sha256, durationMs }
+    : null, [durationMs, projectPath, sha256, url]);
+}
 
 export function useReferenceWaveformPeaks(source: ReferenceWaveformSource | null): {
   peaks: number[];

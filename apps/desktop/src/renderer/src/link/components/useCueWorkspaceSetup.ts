@@ -3,7 +3,9 @@ import { createLightingDocument, type LightingDocument, type RundownItem } from 
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { libraryTemplates, projectLightingLibrary } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
+import { matchedReferenceAudioUrl, type ResolvedReferenceAudioUrl } from './reference-audio-link';
 
+/** The only way a page gets the link of a song's audio (home player and editors). */
 export function useReferenceAudioUrl(input: {
   item: RundownItem | null;
   projectPath: string | null;
@@ -12,7 +14,7 @@ export function useReferenceAudioUrl(input: {
   const { item, notify, projectPath } = input;
   const relativePath = item?.referenceAudio?.relativePath;
   const sha256 = item?.referenceAudio?.sha256;
-  const [resolved, setResolved] = useState<{ projectPath: string; relativePath: string; sha256: string; url: string } | null>(null);
+  const [resolved, setResolved] = useState<ResolvedReferenceAudioUrl | null>(null);
   useEffect(() => {
     let cancelled = false;
     setResolved(null);
@@ -22,7 +24,7 @@ export function useReferenceAudioUrl(input: {
       .catch((error: unknown) => { if (!cancelled) notify(toMessage(error), 'error'); });
     return () => { cancelled = true; };
   }, [relativePath, sha256, notify, projectPath]);
-  return resolved?.projectPath === projectPath && resolved.relativePath === relativePath && resolved.sha256 === sha256 ? resolved.url : null;
+  return matchedReferenceAudioUrl(resolved, projectPath, item?.referenceAudio);
 }
 
 function toMessage(error: unknown): string {

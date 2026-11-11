@@ -17,6 +17,7 @@ import { ProjectWelcome } from './ProjectWelcome';
 import { type ProjectPlayer } from './ProjectPlayerControls';
 import { MissingAssetsDialog } from './MissingAssetsDialog';
 import { ProjectLibrary } from './ProjectLibrary';
+import { useReferenceAudioUrl } from './useCueWorkspaceSetup';
 import './home-page.css';
 
 type Props = {
@@ -53,7 +54,6 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
   const [selectedPlaylistId, setSelectedPlaylistId] = useState('all');
   const playProgram = usePlayProgram(player, busy, setBusy, selectedPlaylistId, setSelectedItemId, notify);
   const [search, setSearch] = useState('');
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   useEffect(() => { if (project && !['all', 'unassigned'].includes(selectedPlaylistId) && !programPlaylists(project).some((list) => list.id === selectedPlaylistId)) setSelectedPlaylistId('all'); }, [project, selectedPlaylistId]);
   useEffect(() => {
     setAudioTargetId(null);
@@ -63,21 +63,8 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
 
   useEffect(() => { if (player.state.playlistId) setSelectedPlaylistId(player.state.playlistId); }, [player.state.playlistId]);
   useEffect(() => { if (internal && currentItemId) setSelectedItemId(currentItemId); }, [internal, currentItemId, setSelectedItemId]);
-  const selectedItem = project?.rundown.find((item) => item.id === selectedItemId) ?? null; const selectedReferencePath = selectedItem?.referenceAudio?.relativePath ?? null;
-  useEffect(() => {
-    let cancelled = false;
-    setPreviewUrl(null);
-    if (!projectPath || !selectedReferencePath) return;
-    void linkDesktopViewModel.resolveReferenceAudioUrl({
-      projectPath,
-      relativePath: selectedReferencePath
-    }).then((url) => {
-      if (!cancelled) setPreviewUrl(url);
-    }).catch((error: unknown) => {
-      if (!cancelled) notify(error instanceof Error ? error.message : String(error), 'error');
-    });
-    return () => { cancelled = true; };
-  }, [notify, projectPath, selectedReferencePath]);
+  const selectedItem = project?.rundown.find((item) => item.id === selectedItemId) ?? null;
+  const previewUrl = useReferenceAudioUrl({ item: selectedItem, projectPath, notify });
 
   const filteredItems = useMemo(() => {
     if (!project) return [];
