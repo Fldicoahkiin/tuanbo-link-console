@@ -40,7 +40,6 @@ export function TimelineMarkers(props: LightingTimelineProps & { hideAnalysis?: 
           }} onPointerCancel={() => trimming.end()} />)}
         </> : null}
         {editing === marker.id ? <input className="timeline-marker-name" autoFocus aria-label="时间线标记名称" defaultValue={marker.name} {...ownKeys('*')} onKeyDown={(event) => {
-          event.stopPropagation();
           if (event.key === 'Enter') event.currentTarget.blur();
           if (event.key === 'Escape') { event.preventDefault(); setEditing(null); }
         }} onBlur={(event) => {
@@ -48,8 +47,8 @@ export function TimelineMarkers(props: LightingTimelineProps & { hideAnalysis?: 
           if (name && name !== marker.name) props.onChange({ ...props.document, markers: props.document.markers.map((entry) => entry.id === marker.id ? { ...entry, name } : entry) }, '重命名时间线标记');
           setEditing(null);
         }} /> : <button type="button" className={`timeline-marker${compact ? ' analysis-point-marker' : ''}`} style={{ borderColor: marker.color }} aria-label={`时间线标记 ${marker.name}`} title={`${marker.name}${marker.notes ? ` · ${marker.notes}` : ''} · ${(marker.startMs / 1000).toFixed(3)} 秒；拖动移动，双击改名，Delete 删除`} onDoubleClick={() => setEditing(marker.id)} {...ownKeys('Delete', 'Backspace', 'F2')} onKeyDown={(event) => {
-          if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); event.stopPropagation(); remove(marker.id); }
-          if (event.key === 'F2') { event.preventDefault(); event.stopPropagation(); setEditing(marker.id); }
+          if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); remove(marker.id); }
+          if (event.key === 'F2') { event.preventDefault(); setEditing(marker.id); }
         }} onPointerDown={(event) => {
           if (event.button !== 0) return;
           event.stopPropagation();

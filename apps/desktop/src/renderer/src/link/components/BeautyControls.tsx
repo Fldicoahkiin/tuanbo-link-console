@@ -35,7 +35,7 @@ export function BeautySlider({ control }: { control: BeautyControl }): JSX.Eleme
         onPointerUp={end} onPointerCancel={end} onKeyUp={end} onBlur={end} />
       <input className="beauty-number" type="number" disabled={!control.prototype} aria-label={`${control.name}数值`} min={minimum} max={100} step={1}
         value={text ?? value} onFocus={begin} onChange={event => setText(event.target.value)} onBlur={commitNumber}
-        onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { setText(null); end(); event.stopPropagation(); } }} />
+        onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { setText(null); end(); } }} />
     </div>
     <p id={`beauty-hint-${control.key}`}>{control.hint}</p>
   </div>;

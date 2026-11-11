@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { escapeClosesPanel, keyInDialog, spaceBelongsToControl } from './playback-keys';
+import { keyInDialog, spaceBelongsToControl } from './playback-keys';
 
 /*
  * The key helpers the panels, drags and timeline listeners still call. The window's playback keys moved onto the key
@@ -67,12 +67,4 @@ it('键归对话框只有一条规则（keyInDialog）：焦点在原生 <dialog
     expect(keyInDialog(target, true)).toBe(true);
     expect(keyInDialog(target, false)).toBe(false);
   }
-});
-
-it('页面自己用 Esc 关的面板、详情和连接页（escapeClosesPanel）：模态对话框开着时让给对话框，Esc 先关对话框；关掉后照常', () => {
-  const escape = () => ({ key: 'Escape', defaultPrevented: false });
-  expect(escapeClosesPanel(escape(), true)).toBe(false);
-  expect(escapeClosesPanel(escape(), false)).toBe(true);
-  expect(escapeClosesPanel({ key: 'Escape', defaultPrevented: true }, false)).toBe(false);
-  expect(escapeClosesPanel({ key: 'Enter', defaultPrevented: false }, false)).toBe(false);
 });

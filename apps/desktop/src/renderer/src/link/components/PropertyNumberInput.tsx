@@ -25,7 +25,7 @@ export function PropertyNumberInput(props: {
     onInput={(event) => event.currentTarget.setCustomValidity('')}
     onKeyDown={(event) => {
       if (event.key !== 'Enter' && event.key !== 'Escape') return;
-      event.preventDefault(); event.stopPropagation();
+      event.preventDefault();
       if (event.key === 'Escape') { event.currentTarget.value = displayed; event.currentTarget.setCustomValidity(''); }
       event.currentTarget.blur();
     }}

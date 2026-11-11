@@ -9,6 +9,6 @@ export function AudioRowResizeHandle({ height, rulerHeight, onChange }: { height
     onPointerMove={event => { if (drag.current) { event.stopPropagation(); resize(drag.current.height + event.clientY - drag.current.y); } }}
     onPointerUp={event => { event.stopPropagation(); drag.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
     onPointerCancel={() => { drag.current = null; }} onLostPointerCapture={() => { drag.current = null; }}
-    onKeyDown={event => { event.stopPropagation(); if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); resize(height + (event.key === 'ArrowUp' ? -10 : 10)); } if (event.key === 'Home') onChange(null); }}
+    onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); resize(height + (event.key === 'ArrowUp' ? -10 : 10)); } if (event.key === 'Home') onChange(null); }}
     onDoubleClick={event => { event.stopPropagation(); onChange(null); }} />;
 }

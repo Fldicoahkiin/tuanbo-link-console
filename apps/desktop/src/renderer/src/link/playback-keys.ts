@@ -24,14 +24,6 @@ export function keyInDialog(target: KeyTarget | null, modalOpen: boolean): boole
   return modalOpen || isInside(target, DIALOGS);
 }
 
-/**
- * Whether Escape closes a panel, a detail view or the connection page that the page closes with its own listener.
- * Not while a modal dialog is open: Escape closes the dialog first, and taken by the page it left the dialog open.
- */
-export function escapeClosesPanel(event: Pick<KeyboardEvent, 'key' | 'defaultPrevented'>, modalOpen: boolean): boolean {
-  return event.key === 'Escape' && !event.defaultPrevented && !modalOpen;
-}
-
 /** The focused element a key event came from, if any. */
 export function keyTarget(event: Pick<KeyboardEvent, 'target'>): Element | null {
   return event.target instanceof Element ? event.target : null;

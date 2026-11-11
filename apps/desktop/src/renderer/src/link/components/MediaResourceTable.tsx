@@ -241,7 +241,6 @@ function InlineNameEditor(props: { initialValue: string; onCommit: (name: string
     onClick={(event) => event.stopPropagation()}
     onBlur={() => { if (!cancelled.current) props.onCommit(value); }}
     onKeyDown={(event) => {
-      event.stopPropagation();
       if (event.key === 'Enter') event.currentTarget.blur();
       if (event.key === 'Escape') {
         cancelled.current = true;

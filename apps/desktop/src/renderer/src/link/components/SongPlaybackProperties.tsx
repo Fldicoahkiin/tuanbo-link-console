@@ -2,7 +2,7 @@ import type { InputHTMLAttributes } from 'react';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import { defaultItemPlayback, formatMtcOffset, parseMtcOffset, programTimeOrigin, savedSongVolume, setItemPlaybackCommand, setItemVolumeCommand } from '@tb/core/link';
 import type { RundownItem } from '@tb/schema';
-import { chordOf } from '../keys/key-chord';
+import { chordLabel, chordOf } from '../keys/key-chord';
 import { songKeyNote, songKeyProblem } from '../keys/key-settings';
 import { useDocumentStore } from '../stores/document-store';
 import { currentKeymap } from '../stores/shortcut-store';
@@ -43,7 +43,7 @@ export function SongMtcStartInput({ item, notify, ...props }: Omit<InputHTMLAttr
     onInput={(event) => event.currentTarget.setCustomValidity('')}
     onKeyDown={(event) => {
       if (event.key !== 'Enter' && event.key !== 'Escape') return;
-      event.preventDefault(); event.stopPropagation();
+      event.preventDefault();
       if (event.key === 'Escape') { event.currentTarget.value = offset; event.currentTarget.setCustomValidity(''); }
       event.currentTarget.blur();
     }}
@@ -72,9 +72,9 @@ export function SongPlaybackProperties({ item, notify, collapseAdvanced = false,
   const { frameRate, originError, value, commit, save } = useSongPlayback(item, notify);
   const timecode = <label className="mtc-offset-field" title={originError ?? `歌曲播放位置 + MTC 起始时间 = 输出时间码。${item.p1Media ? `P1 导入原值：${item.p1Media.midiStartTime}（秒或时:分:秒）。` : ''}修改后下次播放生效。`}><span>MTC 起始时间<small>时:分:秒:帧 · {frameRate}</small></span><SongMtcStartInput item={item} notify={notify} className="ui-input" aria-label="MTC 起始时间（时:分:秒:帧）" /></label>;
   const advanced = <>
-    <label><span>快捷键</span><input className="ui-input" aria-label="歌曲快捷键" {...ownKeys('*')} value={value.shortcut} readOnly placeholder="未设置" onKeyDown={(event) => {
+    <label><span>快捷键</span><input className="ui-input" aria-label="歌曲快捷键" {...ownKeys('*')} value={value.shortcut ? chordLabel(value.shortcut) : ''} readOnly placeholder="未设置" onKeyDown={(event) => {
       if (event.key === 'Tab') return;
-      event.preventDefault(); event.stopPropagation();
+      event.preventDefault();
       if (event.key === 'Backspace' || event.key === 'Delete') { save({ shortcut: '' }); return; }
       if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) return;
       // The stop keys, Windows' own and the project's keys are refused; a key of the editor or the lighting workbench
