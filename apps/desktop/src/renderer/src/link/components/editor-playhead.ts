@@ -83,13 +83,6 @@ export function segmentStartMs(boundaries: readonly number[], segment: number): 
   return first === undefined || first > 0 ? 0 : first - 1;
 }
 
-/** Where the timeline state can change: every clip's and camera's start and end
- * (`isTimelineSpanActive` holds from start, inclusive, to end, exclusive). */
-type Span = { startMs: number; endMs: number };
-export function timelineStateBoundaries(state: { clips: readonly Span[]; visualObsCues: readonly Span[] }): number[] {
-  return playheadBoundaries([...state.clips, ...state.visualObsCues].flatMap(entry => [entry.startMs, entry.endMs]));
-}
-
 /** A value worked out from the playhead; the component draws again only when it changes
  * (Object.is), so `select` must give a primitive or a reference it already had. */
 export function usePlayheadValue<T>(playhead: EditorPlayhead, select: (positionMs: number) => T): T {
@@ -109,9 +102,10 @@ export function usePlayheadSegment(playhead: EditorPlayhead, boundaries: readonl
 }
 
 /** The timeline state at the playhead, worked out again only when the playhead crosses a
- * clip's or camera's start or end. Its `playheadMs` is the start of that stretch. */
+ * clip's or camera's start or end (`TimelineStateIndex.boundariesMs`, start inclusive, end
+ * exclusive). Its `playheadMs` is the start of that stretch. */
 export function useTimelineSegment(playhead: EditorPlayhead, index: TimelineStateIndex | null): ResolvedTimelineState | null {
-  const boundaries = useMemo(() => index ? timelineStateBoundaries(index.at(0)) : [], [index]);
+  const boundaries = useMemo(() => index ? playheadBoundaries(index.boundariesMs()) : [], [index]);
   const segment = usePlayheadSegment(playhead, boundaries);
   return useMemo(() => index?.at(segmentStartMs(boundaries, segment)) ?? null, [boundaries, index, segment]);
 }

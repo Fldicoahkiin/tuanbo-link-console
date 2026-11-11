@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { EditorPlayhead, playheadBoundaries, segmentAt, segmentStartMs, timelineStateBoundaries } from './editor-playhead';
+import { EditorPlayhead, playheadBoundaries, segmentAt, segmentStartMs } from './editor-playhead';
 
 describe('编辑器播放头不经 React（0.5.9 E2）', () => {
   it('每次移动告诉订阅者一次，位置没变就不告诉', () => {
@@ -46,12 +46,5 @@ describe('编辑器播放头不经 React（0.5.9 E2）', () => {
     expect(segmentStartMs(boundaries, 1)).toBe(2_000);
     expect(segmentStartMs(boundaries, 2)).toBe(4_000);
     expect(segmentAt([], 1_000)).toBe(0);
-  });
-
-  it('时间线状态的边界是素材和机位的开始与结束', () => {
-    expect(timelineStateBoundaries({
-      clips: [{ startMs: 1_000, endMs: 3_000 }],
-      visualObsCues: [{ startMs: 3_000, endMs: 5_000 }]
-    })).toEqual([1_000, 3_000, 5_000]);
   });
 });

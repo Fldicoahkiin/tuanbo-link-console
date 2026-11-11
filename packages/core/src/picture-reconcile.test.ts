@@ -11,15 +11,15 @@ const clip = (clipId: string, sourceName: string, sceneName: string, offsetMs: n
  * c2 and c3, c4 continuing c3 on the same decoder after a cut, then camera A held. */
 function pictureAt(frame: number): OnAirPicture {
   const ms = (start: number): number => Math.round((frame - start) * 1000 / 30);
-  const base = { frame, covered: [], sounds: [] as PictureClip[] };
-  if (frame < 100) return { ...base, target: { kind: 'scene', sceneName: '机位甲', cueId: 'camA' }, clips: [],
+  const base = { frame, camera: null, covered: [], sounds: [] as PictureClip[] };
+  if (frame < 100) return { ...base, target: { kind: 'scene', sceneName: '机位甲', cueId: 'camA' }, camera: { cueId: 'camA', held: false }, clips: [],
     shows: frame >= 50 && frame < 80 ? [{ cueId: 'show1', actionId: 'show1:a', sceneName: '机位甲', sourceName: '字幕', layerId: 'L2' }] : [] };
   if (frame < 200) return { ...base, target: { kind: 'clip', sceneName: '素材一', clipId: 'c1' }, clips: [clip('c1', 'M1', '素材一', ms(100))], shows: [] };
   if (frame < 300) return { ...base, target: { kind: 'composition', sceneName: '团播联动台·叠加·p', layers: [{ sceneName: '素材二' }, { sceneName: '素材三' }] },
     clips: [clip('c2', 'M2', '素材二', ms(200)), clip('c3', 'M3', '素材三', ms(200))], shows: [],
     sounds: [clip('s1', 'S1', '音效', ms(200))] };
   if (frame < 400) return { ...base, target: { kind: 'clip', sceneName: '素材三', clipId: 'c4' }, clips: [clip('c4', 'M3', '素材三', ms(200), 'c3')], shows: [] };
-  return { ...base, target: { kind: 'hold', sceneName: '机位甲', cueId: 'camA' }, clips: [], shows: [] };
+  return { ...base, target: { kind: 'hold', sceneName: '机位甲', cueId: 'camA' }, camera: { cueId: 'camA', held: true }, clips: [], shows: [] };
 }
 
 function context(overrides: Partial<ReconcileContext> = {}): ReconcileContext {

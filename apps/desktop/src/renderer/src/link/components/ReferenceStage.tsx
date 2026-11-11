@@ -52,7 +52,8 @@ export function ReferenceStage(props: Props): JSX.Element {
   const keyDrag = useCapturedDrag();
   // Clips starting within 2 s are loaded ahead; the stage draws again only when that list changes.
   const upcoming = usePlayheadValue(props.playhead, positionMs => upcomingClipKey(props.timelineState, positionMs));
-  const visibleClips = props.timelineState?.clips.filter((entry) => entry.visual || upcoming.includes(`\n${entry.clip.id}\n`)) ?? [];
+  // Clips under a camera stay loaded (hidden), so the camera's end reveals them without reloading.
+  const visibleClips = props.timelineState?.clips.filter((entry) => entry.visual || entry.covered || upcoming.includes(`\n${entry.clip.id}\n`)) ?? [];
   const activeClipCount = props.timelineState?.activeClipIds.length ?? 0;
   const onAir = (clipId: string): boolean => props.activeMediaClipIds?.has(clipId) === true;
   const audibleClipIds = new Set(props.mutePreviewAudio ? [] : props.timelineState?.activeAudioClipIds.filter(onAir) ?? []);

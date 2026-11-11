@@ -32,10 +32,14 @@ export type PictureShow = { cueId: string; actionId: string; sceneName: string |
 /**
  * The picture at `frame`. `clips`: visible clips; `covered`: clips under a camera
  * whose decoders keep running so their reveal does not restart them; `sounds`:
- * sound clips, which no picture covers.
+ * sound clips, which no picture covers. `camera`: the camera cue in the picture, alone or
+ * under clips in a composition; `held` when its own span has ended and it stays because
+ * nothing else has a picture.
  */
-export type OnAirPicture = { frame: number; target: PictureTarget; clips: PictureClip[]; covered: PictureClip[];
+export type OnAirPicture = { frame: number; target: PictureTarget; camera: PictureCamera | null; clips: PictureClip[]; covered: PictureClip[];
   shows: PictureShow[]; sounds: PictureClip[] };
+
+export type PictureCamera = { cueId: string; held: boolean };
 
 /** The scene the target puts on program, or null when the program is left as it is. */
 export function pictureProgramScene(target: PictureTarget): string | null {
@@ -51,5 +55,5 @@ export function pictureProgramScene(target: PictureTarget): string | null {
 export function stoppedPicture(last: OnAirPicture): OnAirPicture {
   const target: PictureTarget = { kind: 'hold', sceneName: pictureProgramScene(last.target),
     cueId: last.target.kind === 'scene' || last.target.kind === 'hold' ? last.target.cueId : null };
-  return { frame: last.frame, target, clips: last.clips, covered: last.covered, shows: [], sounds: [] };
+  return { frame: last.frame, target, camera: last.camera && { cueId: last.camera.cueId, held: true }, clips: last.clips, covered: last.covered, shows: [], sounds: [] };
 }

@@ -1,4 +1,4 @@
-import { playbackFramesPerSecond, sceneOutputAt, type LinkDesktopApi } from '@tb/core/link';
+import { playbackFramesPerSecond, SceneOutputTimeline, type LinkDesktopApi } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
 import { internalSample } from './internal-timeline';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -36,7 +36,7 @@ export async function previewEditorScene(project: LinkProject, projectPath: stri
   positionMs: number, preciseSeeking: boolean, desktop: PreviewDesktop, current: () => boolean): Promise<void> {
   if (!Number.isFinite(positionMs) || positionMs < 0) throw new Error('画面定位时间无效');
   const frame = internalSample(project, positionMs).totalFrames;
-  const work = sceneOutputAt(project, itemId, frame);
+  const work = new SceneOutputTimeline(project, itemId).at(frame);
   const media = work.media.map(event => ({ ...event, embeddedAudioEnabled: false,
     sourceOffsetMs: event.sourceOffsetMs + (event.assetKind === 'image' ? 0
       : Math.round(Math.max(0, frame - event.frameNumber) * 1000 / playbackFramesPerSecond(project.timebase.frameRate))) }));

@@ -1,4 +1,5 @@
 import { audioContainsMediaSource } from './audio-edit';
+import { SceneOutputTimeline } from './scene-output-timeline';
 import type {
   LinkAction,
   LinkCue,
@@ -32,7 +33,10 @@ export type ResolvedTimelineClip = TimelineSpan & {
   layerIndex: number | null;
   active: boolean;
   visible: boolean;
+  /** In the picture: seen at the playhead. */
   visual: boolean;
+  /** Under a camera at the playhead: on the timeline but not seen; the output keeps its decoder running for the reveal. */
+  covered: boolean;
   audible: boolean;
 };
 
@@ -80,13 +84,21 @@ export function resolveTimelineState(
   return new TimelineStateIndex(project, item).at(playheadMs);
 }
 
-/** Compile immutable document spans once; playback queries only resolve activity. */
+/** Compile immutable document spans once; playback queries only resolve activity.
+ * What is in the picture (which clips are seen, which "show source" cues are open)
+ * comes from `SceneOutputTimeline.pictureAt`, the output's own rule: a clip under
+ * a camera is on the timeline (`active`) but not seen (`visual` false, `covered`). */
 export class TimelineStateIndex {
   private readonly clips: ResolvedTimelineClip[];
   private readonly visualObsCues: ResolvedTimelineObsCue[];
   private readonly clipOrder: number[];
+  private readonly output: SceneOutputTimeline;
+  private readonly frameRate: MtcFrameRate;
+  private readonly boundaries: number[];
+  private last: { stretch: number; state: ResolvedTimelineState } | null = null;
   constructor(project: LinkProject, private readonly item: RundownItem) {
     const frameRate = project.timebase.frameRate;
+    this.frameRate = frameRate;
     const assetById = new Map(project.mediaAssets.map((asset) => [asset.id, asset]));
     const layerById = new Map(item.visualLayers.map((layer, layerIndex) => [layer.id, { layer, layerIndex }]));
     const clips = item.referenceMediaClips.map((clip): ResolvedTimelineClip => {
@@ -111,6 +123,7 @@ export class TimelineStateIndex {
         active,
         visible,
         visual: active && layerVisible && isVisualAsset,
+        covered: false,
         audible: active && layerVisible && (asset.kind === 'audio' || (asset.kind === 'video' && clip.embeddedAudioEnabled !== false && !audioContainsMediaSource(item.referenceAudio, asset.id)))
       };
     });
@@ -136,17 +149,48 @@ export class TimelineStateIndex {
     this.visualObsCues = visualObsCues;
     this.clipOrder = clips.map((_, index) => index).sort((left, right) =>
       (clips[left]!.layerIndex ?? Number.MAX_SAFE_INTEGER) - (clips[right]!.layerIndex ?? Number.MAX_SAFE_INTEGER));
+    // The item may be an edited copy that is not in the project yet.
+    const scoped = project.rundown.includes(item) ? project
+      : { ...project, rundown: [...project.rundown.filter(entry => entry.id !== item.id), item] };
+    this.output = new SceneOutputTimeline(scoped, item.id);
+    const cutsMs = this.output.cutPoints().map(frame => frameToMilliseconds(frame, frameRate));
+    this.boundaries = [...new Set([...clips, ...visualObsCues].flatMap(entry => [entry.startMs, entry.endMs]).concat(cutsMs))]
+      .sort((left, right) => left - right);
   }
+  /** Every time the state can change, sorted: clip and show cue starts and ends, and
+   * where the picture changes (a camera's start and end, which covers or reveals clips). */
+  boundariesMs(): readonly number[] { return this.boundaries; }
+  /** The state at `playheadMs`. Between two boundaries nothing changes but `playheadMs`,
+   * so a query in the stretch last asked about reuses that answer. */
   at(playheadMs: number): ResolvedTimelineState {
     if (!Number.isFinite(playheadMs) || playheadMs < 0) throw new Error('播放头时间必须是非负有限毫秒数');
-    const clips = this.clips.map(entry => {
+    let low = 0, high = this.boundaries.length;
+    while (low < high) { const middle = (low + high) >>> 1; if (this.boundaries[middle]! <= playheadMs) low = middle + 1; else high = middle; }
+    const last = this.last;
+    if (last?.stretch === low) return last.state.playheadMs === playheadMs ? last.state : { ...last.state, playheadMs };
+    const state = this.resolve(playheadMs);
+    this.last = { stretch: low, state };
+    return state;
+  }
+  private resolve(playheadMs: number): ResolvedTimelineState {
+    const picture = this.output.pictureAt(frameAtMilliseconds(playheadMs, this.frameRate));
+    const seen = new Set(picture.clips.map(clip => clip.clipId));
+    const covered = new Set(picture.covered.map(clip => clip.clipId));
+    const shown = new Set(picture.shows.map(show => show.cueId));
+    // Written out field by field: this runs at every boundary the playhead crosses.
+    const clips = this.clips.map((entry): ResolvedTimelineClip => {
       const active = isTimelineSpanActive(entry, playheadMs);
-      return { ...entry, active, visible: active && entry.visible, visual: active && entry.visual, audible: active && entry.audible };
+      const visual = entry.visual && seen.has(entry.clip.id);
+      return { startMs: entry.startMs, endMs: entry.endMs, startFrame: entry.startFrame, endFrame: entry.endFrame, durationMs: entry.durationMs,
+        clip: entry.clip, asset: entry.asset, layer: entry.layer, layerIndex: entry.layerIndex, active,
+        // A picture clip is visible only when seen; sound follows its span.
+        visible: entry.visual ? visual : active && entry.visible, visual,
+        covered: covered.has(entry.clip.id), audible: active && entry.audible };
     });
-    const visualObsCues = this.visualObsCues.map(entry => {
-      const active = entry.active && isTimelineSpanActive(entry, playheadMs);
-      return { ...entry, active, visible: active && entry.visible };
-    });
+    const visualObsCues = this.visualObsCues.map((entry): ResolvedTimelineObsCue => ({
+      startMs: entry.startMs, endMs: entry.endMs, startFrame: entry.startFrame, endFrame: entry.endFrame, durationMs: entry.durationMs,
+      cue: entry.cue, showAction: entry.showAction, layer: entry.layer, layerIndex: entry.layerIndex,
+      active: entry.active && isTimelineSpanActive(entry, playheadMs), visible: shown.has(entry.cue.id) }));
     const layers = this.item.visualLayers.map((layer, layerIndex): ResolvedTimelineLayer => ({
       layer,
       layerIndex,
@@ -166,6 +210,15 @@ export class TimelineStateIndex {
       activeObsCueIds: visualObsCues.filter((entry) => entry.visible).map((entry) => entry.cue.id)
     };
   }
+}
+
+/** The frame that holds `milliseconds`: the last frame starting at or before it, so a
+ * span read in frames is the same half-open span `isTimelineSpanActive` reads in milliseconds. */
+export function frameAtMilliseconds(milliseconds: number, frameRate: MtcFrameRate): number {
+  let frame = Math.floor(milliseconds / 1_000 * playbackFramesPerSecond(frameRate));
+  while (frame > 0 && frameToMilliseconds(frame, frameRate) > milliseconds) frame -= 1;
+  while (frameToMilliseconds(frame + 1, frameRate) <= milliseconds) frame += 1;
+  return frame;
 }
 
 export function resolveTimelineClipSpan(clip: ReferenceMediaClip, frameRate: MtcFrameRate): TimelineSpan {

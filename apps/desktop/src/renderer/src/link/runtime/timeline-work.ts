@@ -2,7 +2,7 @@ import type { CueActionRunner, ManagedMediaEvent, PreflightMode, RuntimeUpdate }
 import type { LinkCue, LinkProject } from '@tb/schema';
 import { ManagedMediaExecutionError, type ManagedOutputRuntime } from '@tb/core/link';
 import { useRuntimeStore } from '../stores/runtime-store';
-import { sceneOutputAt } from '@tb/core/link';
+import { SceneOutputTimeline } from '@tb/core/link';
 import { appendCueReport, appendMediaReport, appendRetryActionReport } from './runtime-report-store';
 
 export async function executeTimelineMedia(event: ManagedMediaEvent, managed: ManagedOutputRuntime,
@@ -33,7 +33,7 @@ export async function synchronizeTimelineTransport(project: LinkProject, itemId:
   for (const result of failures.actions) appendRetryActionReport(result, mode);
   for (const report of failures.media) appendMediaReport(report);
   if (action !== 'start' || !itemId) return;
-  const work = sceneOutputAt(project, itemId, frame);
+  const work = new SceneOutputTimeline(project, itemId).at(frame);
   // Internal audio resumes the paused decoder; don't seek/restart it a second time.
   await execute(work.cues, project.playbackSource === 'internal' ? [] : work.media);
 }
