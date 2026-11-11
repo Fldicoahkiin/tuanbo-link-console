@@ -15,8 +15,8 @@ type Held = { preview: DragPreview<number, Span>; snapshot: TrimSnapshot; latest
 /** Drag either edge of a clip or camera. The edge follows the pointer from where it was grabbed, snaps, and stops
  * where the edit itself would stop; the part's left and width are written in a frame, the trim is one command. */
 export function useContentTrim(input: {
-  /** The timeline at the press: the viewport, the frame rate and the snap points (`before`/`after` the playhead). */
-  snapshot: () => Pick<TrimSnapshot, 'viewport' | 'frameRate' | 'snap'>;
+  /** The timeline at the press: the viewport, the frame rate and the snap points for this part (`before`/`after` the playhead; its own edges left out). */
+  snapshot: (ref: ContentRef) => Pick<TrimSnapshot, 'viewport' | 'frameRate' | 'snap'>;
   playhead: () => number;
   focusTimeline: () => void;
   bounds: (ref: ContentRef) => TrimBounds;
@@ -38,7 +38,7 @@ export function useContentTrim(input: {
     input.focusTimeline();
     input.onSelect(ref);
     held.current?.preview.stop();
-    const timeline = input.snapshot();
+    const timeline = input.snapshot(ref);
     const snapshot: TrimSnapshot = { ...timeline, edge, startClientX: event.clientX, originPointerMs: snapshotTimeAt(timeline.viewport, event.clientX),
       originStartMs: span.startMs, originDurationMs: span.durationMs, bounds: input.bounds(ref) };
     const { label, playhead } = input;

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type LinkCue, type LinkProject } from '@tb/schema';
-import { contentPlaceTaken, contentTrimBounds, resolveTimelineState, type ContentRef } from '@tb/core/link';
-import { DragPreview, dragTarget, trackLayout, trimTarget, type DragViewport, type FrameScheduler, type ItemDragSnapshot, type TrackLayout } from './drag-preview';
+import { contentPlaceTaken, contentTrimBounds, playbackFramesPerSecond, resolveTimelineState, type ContentRef } from '@tb/core/link';
+import { DragPreview, dragTarget, trackLayout, trimPreview, trimTarget, type DragViewport, type FrameScheduler, type ItemDragSnapshot, type TrackLayout } from './drag-preview';
 import { DragSession, type DragHandle } from './drag-session';
 import { timelineInteractionTime, timelineMoveSnapPoints } from './timeline-geometry';
 import { timelineLayout } from './timeline-layout';
-import { timelineItemDuration, timelineSnapPoints } from './timeline-snap-points';
+import { heldSnapPoints, timelineItemDuration, timelineSnapPoints } from './timeline-snap-points';
 import { timelineCueSpan } from './TimelineItems';
 
 // The scene of ContentTracks.test.ts: camera a at 2 s and b at 8 s on 轨道 2, the caption from 8 s on 轨道 1, and a
@@ -128,12 +128,40 @@ describe('拖动的落点：按帧算的和以前每次移动都算的一样', (
   it('修剪：按帧算的边和以前一样，3 像素以内不动', () => {
     const item = project.rundown[0]!;
     const state = resolveTimelineState(project, item, 0);
-    const trim = { viewport: VIEWPORT, frameRate: project.timebase.frameRate, snap: { ...SNAP, before: [0], after: timelineSnapPoints(state, item.cues, project.timebase.frameRate, undefined, ref).slice(1) },
+    const trim = { viewport: VIEWPORT, frameRate: project.timebase.frameRate, snap: { ...SNAP, ...heldSnapPoints(state, item.cues, project.timebase.frameRate, ref) },
       edge: 'end' as const, startClientX: 550, originPointerMs: (550 - 200 + 150) / 50 * 1000, originStartMs: 8_000, originDurationMs: 2_000,
       bounds: contentTrimBounds(project, 'song', ref) };
     const span = { startMs: 8_000, durationMs: 2_000 };
     expect(trimTarget(trim, 552, 0, span)).toBe(span);
     expect(trimTarget(trim, 650, 0, span)).toEqual({ startMs: 8_000, durationMs: 4_000 });
+  });
+
+  it('修剪的吸附：别的片段的边和播放头都吸，和以前每次移动都问一遍的一样', () => {
+    const item = project.rundown[0]!;
+    const state = resolveTimelineState(project, item, 0);
+    const frameRate = project.timebase.frameRate;
+    // Camera a (2 s to 4 s) trimmed at its end; camera b starts at 8 s on the same track, the caption at 8 s on the other.
+    const held = { kind: 'cue', id: 'a' } as const;
+    const timeAt = (x: number): number => Math.min(86_399_000, Math.max(0, (x - VIEWPORT.left + VIEWPORT.scrollLeft) / VIEWPORT.pixelsPerSecond * 1000));
+    const startClientX = 250; // a's end at 4 s: 200 + 4·50 − 150
+    // The snap points as ContentTracks takes them at the press (heldSnapPoints), the playhead put back in each frame.
+    const trim = { viewport: VIEWPORT, frameRate, snap: { ...SNAP, ...heldSnapPoints(state, item.cues, frameRate, held) }, edge: 'end' as const, startClientX,
+      originPointerMs: timeAt(startClientX), originStartMs: 2_000, originDurationMs: 2_000, bounds: contentTrimBounds(project, 'song', held) };
+    const span = { startMs: 2_000, durationMs: 2_000 };
+    let compared = 0;
+    for (let x = 200; x <= 520; x += 3) for (const playheadMs of [0, 6_120]) {
+      if (Math.abs(x - startClientX) < 3) continue;
+      // Before E3 every move asked for the whole list, the playhead in it (useContentTrim `resolve`).
+      const edgeMs = timelineInteractionTime(4_000 + timeAt(x) - timeAt(startClientX), 86_399_000, frameRate, SNAP.enabled,
+        timelineSnapPoints(state, item.cues, frameRate, playheadMs, held), SNAP.thresholdMs);
+      expect({ at: [x, playheadMs], ...trimTarget(trim, x, playheadMs, span) }).toEqual({ at: [x, playheadMs], ...trimPreview(trim, edgeMs, 1_000 / playbackFramesPerSecond(frameRate)) });
+      compared += 1;
+    }
+    expect(compared).toBeGreaterThan(150);
+    // 7.9 s is within the snap distance of camera b's start (8 s) and of nothing else: the edge lands on b's start.
+    expect(trimTarget(trim, 200 + 7.9 * 50 - 150, 0, span)).toEqual({ startMs: 2_000, durationMs: 6_000 });
+    // 6.05 s with the playhead at 6.12 s: the edge lands on the playhead.
+    expect(trimTarget(trim, 200 + 6.05 * 50 - 150, 6_120, span)).toEqual({ startMs: 2_000, durationMs: 4_120 });
   });
 });
 

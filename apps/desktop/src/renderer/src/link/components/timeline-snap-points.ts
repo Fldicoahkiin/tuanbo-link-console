@@ -25,6 +25,16 @@ export function timelineSnapPoints(
   ];
 }
 
+/**
+ * A held part's snap points apart from the playhead: the one `before` it and the ones `after` it, in the order
+ * timelineSnapPoints gives them (the earlier point wins a tie). A drag or trim reads the playhead in every frame and
+ * puts it back between the two, so it snaps to the same points as when every move asked for the whole list.
+ */
+export function heldSnapPoints(state: ResolvedTimelineState, cues: readonly LinkCue[], frameRate: MtcFrameRate, held: { kind: 'clip' | 'cue'; id: string }): { before: number[]; after: number[] } {
+  const [first = 0, ...after] = timelineSnapPoints(state, cues, frameRate, undefined, held);
+  return { before: [first], after };
+}
+
 /** The lighting workspace never receives visual clip or OBS cue boundaries. */
 export function lightingSnapPoints(document: LightingDocument | undefined, beats: readonly number[], durationMs: number, excludedEventId?: string): number[] {
   const points = [0, durationMs, ...beats];

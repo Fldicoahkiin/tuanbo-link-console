@@ -8,7 +8,7 @@ import { TimelineNewLayerDrop } from './TimelineNewLayerDrop';
 import type { TimelineTarget } from './TimelineContextMenu';
 import { markedOnAir, type Airtime } from './timeline-air';
 import { timelineInteractionTime } from './timeline-geometry';
-import { timelineItemDuration, timelineSnapPoints } from './timeline-snap-points';
+import { heldSnapPoints, timelineItemDuration, timelineSnapPoints } from './timeline-snap-points';
 import { useContentTrim, type ContentTrimDrag, type TrimBounds } from './useContentTrim';
 import { useTimelineItemDrag, type TimelineDrag } from './useTimelineItemDrag';
 import type { TimelineViewport } from './useTimelineViewport';
@@ -115,13 +115,13 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
     return { left: rect?.left ?? 0, top: rect?.top ?? 0, width: element?.clientWidth ?? 0, height: element?.clientHeight ?? 0,
       scrollLeft: element?.scrollLeft ?? 0, scrollTop: element?.scrollTop ?? 0, pixelsPerSecond: viewport.pixelsPerSecond };
   };
-  // The timeline's own points, apart from the playhead, which is read in each frame (timelineSnapPoints puts it second).
-  const ownPoints = (target: ContentRef): number[] => timelineSnapPoints(props.timelineState, props.cues, props.frameRate, undefined, target).slice(1);
+  // The timeline's own points for a held part, apart from the playhead, which is read in each frame.
+  const ownPoints = (target: ContentRef): { before: number[]; after: number[] } => heldSnapPoints(props.timelineState, props.cues, props.frameRate, target);
   const itemDrag = useTimelineItemDrag({
     layers: props.layers,
-    snapshot: (press): ItemDragSnapshot => { const viewport = measure(); return {
+    snapshot: (press): ItemDragSnapshot => { const viewport = measure(), own = ownPoints(press.ref); return {
       viewport, layout: trackLayout(props.layers, props.tracks), frameRate: props.frameRate, durationMs: props.durationMs,
-      snap: { enabled: snap.enabled, thresholdMs: snap.thresholdMs, before: [0, props.durationMs, 0], after: ownPoints(press.ref), audio: [...props.audioSnapPoints] },
+      snap: { enabled: snap.enabled, thresholdMs: snap.thresholdMs, before: [0, props.durationMs, ...own.before], after: own.after, audio: [...props.audioSnapPoints] },
       placeTaken: props.rules.placeTaken, ref: press.ref, originMs: press.originMs, itemDurationMs: timelineItemDuration(props, press.ref),
       grabOffsetMs: snapshotTimeAt(viewport, press.clientX) - press.originMs, startClientX: press.clientX, startClientY: press.clientY, originLayerId: press.originLayerId, layerMovable: press.layerMovable
     }; },
@@ -132,7 +132,8 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
     onSelectClip: props.onSelectClip, onSelectCue: props.onSelectCue, onMoveClip: props.onMoveClip, onMoveCue: props.onMoveCue
   });
   const trim = useContentTrim({
-    snapshot: () => ({ viewport: measure(), frameRate: props.frameRate, snap: { enabled: snap.enabled, thresholdMs: snap.thresholdMs, before: [0], after: [] } }),
+    // A trimmed edge snaps to every other part's edges and the playhead, as it did before the trim left React.
+    snapshot: (ref) => ({ viewport: measure(), frameRate: props.frameRate, snap: { enabled: snap.enabled, thresholdMs: snap.thresholdMs, ...ownPoints(ref) } }),
     playhead: () => props.playhead.read(),
     focusTimeline: props.focusTimeline, bounds: props.rules.trimBounds, onSelect: select, onTrim: props.onTrim,
     label: (ref, startMs, durationMs) => partLabel(ref, startMs, durationMs, props)
