@@ -39,12 +39,13 @@ describe('评审场景：界面重新加载后接回还在播的节目，后台�
       openNativeProgram: vi.fn<LinkDesktopApi['openNativeProgram']>(() => new Promise(resolve => { answerOpen = resolve; })),
       controlNativeProgram: vi.fn<LinkDesktopApi['controlNativeProgram']>(() => Promise.resolve()),
       onNativeProgramEvent: vi.fn<LinkDesktopApi['onNativeProgramEvent']>(() => vi.fn()),
+      onNativeProgramClosed: vi.fn<LinkDesktopApi['onNativeProgramClosed']>(() => vi.fn()),
       onNativePlaybackStatus: vi.fn<LinkDesktopApi['onNativePlaybackStatus']>(() => vi.fn())
     };
     let state: Pick<ProgramPlayerState, 'status' | 'itemId'> = emptyInternalPlayerState, answer: OpenAnswer<RemoteNativeProgramPlayer> | null = null;
     const controller: RemoteNativeProgramPlayer = new RemoteNativeProgramPlayer(project, 'C:/show/现场.tblink', 1, {
       configuration: () => ({ outputDeviceId: 'default', mtcPortName: null }), changed: next => { state = next; }, notice: vi.fn(),
-      attached: () => { answer = openAnswer(controller); } }, api, vi.fn());
+      attached: () => { answer = openAnswer(controller); }, closed: vi.fn() }, api, vi.fn());
     const ownerId = api.openNativeProgram.mock.calls[0]![0].ownerId;
     return {
       /** The program kept playing over the reload: it sends its state first. */

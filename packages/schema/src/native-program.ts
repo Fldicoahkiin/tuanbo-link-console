@@ -54,3 +54,7 @@ export const nativeProgramEventSchema = z.object({
   boundary: z.enum(['pause', 'seek', 'end']).optional(), currentCueId: z.string().nullable()
 }).strict();
 export type NativeProgramEvent = z.infer<typeof nativeProgramEventSchema>;
+/** The quit closed the program the window `ownerId` opened, and the operator went back to the app (返回软件, or a quit
+ * step that failed): the window opens a new program, as after a project change, so the next song plays. */
+export const nativeProgramClosedSchema = z.object({ version: z.literal(1), ownerId: z.string().uuid() }).strict();
+export type NativeProgramClosed = z.infer<typeof nativeProgramClosedSchema>;

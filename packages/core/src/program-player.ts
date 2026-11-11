@@ -18,8 +18,9 @@ export type InternalPlayerDependencies = {
   notice?: (message: string, itemId: string | null) => void;
   /** A failure no window sees in the player's state (2026-11-09: the Off a stop owed): after the player closed, or while
    * its program plays on without a window (setWatched). The host logs it as an error and shows it in red, in the window or
-   * in the next window that opens a program. */
-  closedFault: (message: string, itemId: string | null) => void;
+   * in the next window that opens a program. `leftOpen`: not an Off but something the close left open (2026-11-11: the
+   * action MIDI): it is shown and logged the same way, and the quit does not ask about it as it asks about an Off. */
+  closedFault: (message: string, itemId: string | null, kind?: 'leftOpen') => void;
   failed?: (message: string, itemId: string | null) => void;
   obsChanged?: (state: NativeObsStatus) => void;
   preciseSeeking?: () => boolean;

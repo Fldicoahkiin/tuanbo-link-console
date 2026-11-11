@@ -9,8 +9,10 @@ type Entry = { request: NativeProgramOpen; projectId: string; document: string; 
   cancellation: AbortController; ready: Promise<void> };
 type Factory = (project: LinkProject, request: NativeProgramOpen, callbacks: {
   configuration(): NativeProgramConfiguration; changed(state: InternalPlayerState): void; cueChanged(id: string | null): void;
-  /** A failure no player state shows (the player closed, or plays on without a window): logged and shown in red. */
-  closedFault(message: string, itemId: string | null): void;
+  /** A failure no player state shows (the player closed, or plays on without a window): logged and shown in red. Without
+   * `kind`, the lights-off a stop owed, which the quit asks about (ClosedProgramFaults.collect); `leftOpen`, the action
+   * MIDI the close left open, which it does not (2026-11-11). */
+  closedFault(message: string, itemId: string | null, kind?: 'leftOpen'): void;
 }) => Host;
 
 /** Owns the single formal program session. Old UI disposal cannot stop a new
@@ -64,7 +66,11 @@ export class NativeProgramService {
         configuration: () => entry.configuration,
         changed: state => { entry.state = state; this.reportRunning(); this.emit(entry); },
         cueChanged: id => { entry.currentCueId = id; this.emit(entry); },
-        closedFault: (message, itemId) => this.faults.report(message, { projectId: entry.projectId, itemId })
+        closedFault: (message, itemId, kind) => {
+          if (!kind) { this.faults.report(message, { projectId: entry.projectId, itemId }); return; }
+          this.faults.closeFailed(message, { level: 'error', category: 'device', device: '动作 MIDI', projectId: entry.projectId,
+            ...(itemId ? { itemId } : {}), message, result: 'failed' });
+        }
       });
       entry.host.controller.clock.subscribeBoundary(boundary => this.emit(entry, boundary));
       this.emit(entry);
@@ -74,11 +80,12 @@ export class NativeProgramService {
   }
 
   /** The owning window's page is gone: its renderer exited, or a new page replaced it (window-page.ts). A program that
-   * is preparing, playing or paused keeps its outputs running and is returned; anything else is closed, and then
-   * `teardown` runs (link-main: the audio engine, the picture and the runtime the gone page held). Only what that page
-   * held: a program the next page opened meanwhile stays open and keeps them, so `teardown` is left out; one it opens
-   * while `teardown` runs waits for it (2026-11-10). A failed `teardown` is returned here and does not hold up later
-   * programs. Until a window opens a program again, no window shows red text: what fails meanwhile waits for it. */
+   * is preparing, playing or paused keeps its outputs running and is returned, and `teardown` does not run; anything
+   * else is closed, and then `teardown` runs on the close chain (link-main's releaseGonePage: the audio engine, the
+   * picture and the runtime the gone page held). Only what that page held: a program the next page opened meanwhile
+   * stays open and keeps them, so `teardown` is left out; one it opens while `teardown` runs waits for it (2026-11-10).
+   * A failed `teardown` is returned here and does not hold up later programs. Until a window opens a program again, no
+   * window shows red text: what fails meanwhile waits for it. */
   async release(teardown: () => Promise<void> = () => Promise.resolve()): Promise<InternalPlayerState | null> {
     this.faults.windowExited();
     const entry = this.current;
@@ -99,7 +106,9 @@ export class NativeProgramService {
     const request = nativeProgramControlSchema.parse(value), entry = this.current;
     if (!entry || entry.request.ownerId !== request.ownerId) {
       if (request.operation.kind === 'close') return;
-      throw new Error('这个播放控制请求来自已关闭的界面');
+      // The program this window opened is closed (by the quit, a page reload or a newer program); a window the quit
+      // returned to opens a new one by itself (NativeProgramClosed).
+      throw new Error('这个窗口的节目已经关了，这次操作没有执行。请重新打开工程，再开始播放');
     }
     if (request.operation.kind === 'close') { await this.close(); return; }
     await entry.ready;
@@ -135,6 +144,11 @@ export class NativeProgramService {
   async close(): Promise<void> {
     if (this.current) this.retire(this.current);
     await this.cleanup;
+  }
+  /** The window whose program is open (the ownerId its controller opened it with); null when none is, and while the
+   * program plays on with no window (its page is gone). */
+  owner(): string | null {
+    return this.current && !this.current.orphaned ? this.current.request.ownerId : null;
   }
   /** The current program is closed: nothing reaches it any more, and a new one waits for its outputs. */
   private retire(entry: Entry): void {

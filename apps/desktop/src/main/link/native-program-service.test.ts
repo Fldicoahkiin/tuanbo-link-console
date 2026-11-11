@@ -7,6 +7,7 @@ import { closedProgramFaultReporter } from './main-process-errors';
 import type { LinkLogInput } from './run-logger';
 import { followWindowPage } from './window-page';
 import { windowPageEvents } from './fixtures/window-page-events';
+import { releaseGonePage } from './engine-shutdown';
 
 function deferred() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
 function request(): NativeProgramOpen { return { version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1,
@@ -33,6 +34,9 @@ function faults() {
   return { record, toWindow, reporter: closedProgramFaultReporter(record, toWindow) };
 }
 const quiet = () => faults().reporter;
+const midiLeftOpen = '关闭节目时动作 MIDI 没有正常关掉，之后的歌照常播放。原因：MIDI 驱动服务异常退出：3。如果之后的歌没有发出动作 MIDI，请检查 MIDI 接口和线。';
+/** What a control request from a window whose program is gone is refused with: what happened, and what to do. */
+const goneProgram = '这个窗口的节目已经关了，这次操作没有执行。请重新打开工程，再开始播放';
 
 it('关闭等待授权的会话立即完成；迟到授权不创建播放器', async () => {
   const gate = deferred(), create = vi.fn(host), service = new NativeProgramService(create, vi.fn(), () => gate.promise, unlicensed, quiet()), input = request();
@@ -48,7 +52,7 @@ it('替换等待旧输出关闭；旧界面的迟到关闭不停止新输出', a
   const replacing = service.open(b); await Promise.resolve(); expect(create).toHaveBeenCalledTimes(1);
   await service.control(command(a, { kind: 'close' })); expect(next.close).not.toHaveBeenCalled();
   gate.release(); await replacing; expect(create).toHaveBeenCalledTimes(2);
-  await expect(service.control(command(a, { kind: 'play', itemId: 'old' }))).rejects.toThrow('已关闭');
+  await expect(service.control(command(a, { kind: 'play', itemId: 'old' }))).rejects.toThrow(goneProgram);
   await service.control(command(b, { kind: 'play', itemId: 'next' })); expect(next.controller.play).toHaveBeenCalledWith('next', undefined, undefined);
 });
 
@@ -81,13 +85,16 @@ it('只发布当前会话的有序状态和边界；无效 DTO 不进入控制�
   expect(output.controller.seek).not.toHaveBeenCalled();
 });
 
-it('界面进程退出时播放中的节目不停；重新加载的同工程界面接管同一输出', async () => {
-  const output = host(), events: NativeProgramEvent[] = [];
+// 评审变异 Ml：保留的节目也跑 teardown（关音频引擎、画面和 runtime），后台照常播的歌就停了。
+it('界面进程退出时播放中的节目不停，音频引擎、画面和 runtime 也不关；重新加载的同工程界面接管同一输出', async () => {
+  const output = host(), events: NativeProgramEvent[] = [], teardown = vi.fn(() => Promise.resolve());
   const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(() => output);
   const service = new NativeProgramService(create, event => events.push(event), () => Promise.resolve(), unlicensed, quiet()), a = request();
   expect(await service.open(a)).toBe('opened'); const callbacks = create.mock.calls[0]![2];
   callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'playing', positionMs: 5000 });
-  expect(await service.release()).toMatchObject({ itemId: 'song', status: 'playing' }); expect(output.close).not.toHaveBeenCalled();
+  expect(await service.release(teardown)).toMatchObject({ itemId: 'song', status: 'playing' }); expect(output.close).not.toHaveBeenCalled();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(teardown).not.toHaveBeenCalled();
   const published = events.length; callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'playing', positionMs: 6000 });
   expect(events).toHaveLength(published);
   const other = request();
@@ -99,8 +106,19 @@ it('界面进程退出时播放中的节目不停；重新加载的同工程界�
   const reloaded = { ...a, ownerId: randomUUID(), revision: 0 };
   expect(await service.open(reloaded)).toBe('adopted'); expect(create).toHaveBeenCalledTimes(1);
   expect(events.at(-1)).toMatchObject({ ownerId: reloaded.ownerId, state: { positionMs: 6000, status: 'playing' } });
-  await expect(service.control(command(a, { kind: 'stop' }))).rejects.toThrow('已关闭');
+  await expect(service.control(command(a, { kind: 'stop' }))).rejects.toThrow(goneProgram);
   await service.control(command(reloaded, { kind: 'pause' })); expect(output.controller.pause).toHaveBeenCalledTimes(1);
+  expect(teardown).not.toHaveBeenCalled();
+});
+
+// 修复前：说“这个播放控制请求来自已关闭的界面”，操作员看不懂，也不知道该怎么办。
+it('窗口的节目已经关了还按播放：说节目关了、这次没执行，请重新打开工程再播放；关闭请求照常不算错', async () => {
+  const service = new NativeProgramService(vi.fn(host), vi.fn(), () => Promise.resolve(), unlicensed, quiet()), a = request();
+  await service.open(a); await service.close();
+  const refused = await service.control(command(a, { kind: 'play', itemId: 'song' })).then(() => '播了', (error: unknown) => error);
+  expect(refused).toBeInstanceOf(Error);
+  expect(toUserErrorMessage(refused)).toBe(goneProgram);
+  await expect(service.control(command(a, { kind: 'close' }))).resolves.toBeUndefined();
 });
 
 // 修复前：拒绝时说“请打开这个工程接回控制，或停止播放”，可这里没有能停后台节目的地方，操作员找不到“停止播放”。
@@ -220,13 +238,29 @@ it('退出时关节目，补发的关灯没发出去：退出流程拿到这首�
   expect(toWindow).toHaveBeenCalledExactlyOnceWith('link:main-process-error', lightsLeftOn);
 });
 
-/** The main window's page as link-main follows it (window-page.ts), over this service. `teardown`: what link-main's
- * releaseGonePage closes after the program (the audio engine, the picture, the runtime the page held). */
-function followedPage(service: NativeProgramService, teardown: () => Promise<void>) {
+// 修复前（R2 的半成品）：关节目时动作 MIDI 没关掉的那句话和关灯失败走同一条路，退出时被当成“灯光没能关闭”，弹出
+// “返回软件 / 仍然退出”；只有 MIDI 没关掉时也这样问。
+it('关节目时动作 MIDI 没关掉：按错误记一次、标红一次，退出时不当成灯光没关', async () => {
+  const output = host(), { record, toWindow, reporter } = faults();
+  const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(() => output);
+  const service = new NativeProgramService(create, vi.fn(), () => Promise.resolve(), unlicensed, reporter), a = request();
+  await service.open(a);
+  output.close.mockImplementationOnce(() => { create.mock.calls[0]![2].closedFault(midiLeftOpen, 'song', 'leftOpen'); return Promise.resolve(); });
+  expect(await reporter.collect(() => service.close())).toEqual([]);
+  expect(record).toHaveBeenCalledExactlyOnceWith({ level: 'error', category: 'device', device: '动作 MIDI', projectId: projectOf(a), itemId: 'song',
+    message: midiLeftOpen, result: 'failed' });
+  expect(toWindow).toHaveBeenCalledExactlyOnceWith('link:main-process-error', midiLeftOpen);
+});
+
+/** The main window's page as link-main follows it (window-page.ts), over this service, released by link-main's
+ * releaseGonePage (engine-shutdown.ts). `teardown`: what it closes after the program (the audio engine, the picture,
+ * the runtime the page held); `stopMonitor`: the editor's music monitor. */
+function followedPage(service: NativeProgramService, teardown: () => Promise<void>, stopMonitor = vi.fn(() => Promise.resolve()),
+  reporter: ReturnType<typeof faults> = faults()) {
   const page = windowPageEvents(), record = vi.fn<(entry: LinkLogInput) => Promise<unknown>>(() => Promise.resolve());
-  const releaseGonePage = () => service.release(teardown);
-  followWindowPage(page.page, { releaseMidi: () => Promise.resolve(), failSaves: () => undefined, releaseProgram: releaseGonePage, record });
-  return { page, record, releaseGonePage };
+  const release = () => releaseGonePage(service, { teardown, stopMonitor }, reporter.reporter);
+  followWindowPage(page.page, { releaseMidi: () => Promise.resolve(), failSaves: () => undefined, releaseProgram: release, record });
+  return { page, record, releaseGonePage: release, stopMonitor };
 }
 
 // 修复前：上一页停着的节目还在慢慢关（停歌补发的关灯最多要 7 秒），新页面已经打开了工程的节目；上一页的清理随后又把
@@ -236,7 +270,7 @@ for (const path of ['界面自己重新加载', '界面进程退出后由主进�
     const hosts: ReturnType<typeof host>[] = [];
     const create = vi.fn(() => { const made = host(); hosts.push(made); return made; });
     const service = new NativeProgramService(create, vi.fn(), () => Promise.resolve(), unlicensed, quiet());
-    const teardown = vi.fn(() => Promise.resolve()), { page, releaseGonePage } = followedPage(service, teardown);
+    const teardown = vi.fn(() => Promise.resolve()), { page, releaseGonePage, stopMonitor } = followedPage(service, teardown);
     await service.open(request());
     const slow = deferred(); hosts[0]!.close.mockReturnValue(slow.promise);
     if (path === '界面自己重新加载') expect(page.reloadItself()).toBe(true);
@@ -247,23 +281,43 @@ for (const path of ['界面自己重新加载', '界面进程退出后由主进�
     await expect(service.control(command(next, { kind: 'play', itemId: 'song' }))).resolves.toBeUndefined();
     expect(hosts[1]!.controller.play).toHaveBeenCalledOnce();
     expect(hosts[0]!.close).toHaveBeenCalledOnce(); expect(hosts[1]!.close).not.toHaveBeenCalled();
+    await new Promise(resolve => setTimeout(resolve, 0));
     // The new page's program plays with the audio engine and picture there are.
     expect(teardown).not.toHaveBeenCalled();
+    // 修复前：teardown 跳过时独立监听也跟着不停，上一页开着的监听接着响。它只属于上一页：页面没了就停。
+    expect(stopMonitor).toHaveBeenCalledOnce();
   });
 }
 
 it('界面重新加载、上一页的节目已经停了：关掉它，再关音频和画面；新页面之后打开节目照常播放', async () => {
   const hosts: ReturnType<typeof host>[] = [];
   const service = new NativeProgramService(() => { const made = host(); hosts.push(made); return made; }, vi.fn(), () => Promise.resolve(), unlicensed, quiet());
-  const teardown = vi.fn(() => Promise.resolve()), { page } = followedPage(service, teardown);
+  const teardown = vi.fn(() => Promise.resolve()), { page, stopMonitor } = followedPage(service, teardown);
   await service.open(request());
   expect(page.reloadItself()).toBe(true);
   await vi.waitFor(() => expect(teardown).toHaveBeenCalledOnce());
-  expect(hosts[0]!.close).toHaveBeenCalledOnce();
+  expect(hosts[0]!.close).toHaveBeenCalledOnce(); expect(stopMonitor).toHaveBeenCalledOnce();
   const next = request();
   expect(await service.open(next)).toBe('opened');
   await service.control(command(next, { kind: 'play', itemId: 'song' }));
-  expect(hosts[1]!.controller.play).toHaveBeenCalledOnce(); expect(teardown).toHaveBeenCalledOnce();
+  expect(hosts[1]!.controller.play).toHaveBeenCalledOnce(); expect(teardown).toHaveBeenCalledOnce(); expect(stopMonitor).toHaveBeenCalledOnce();
+});
+
+// 修复前：节目在后台接着放时，上一页编辑器里开着的独立监听也接着往监听设备放，新页面上却显示没在监听。
+it('界面重新加载时节目在播：节目、音频引擎和画面照常，上一页的独立监听停掉；监听停不掉时记一次、在下一个窗口说一次', async () => {
+  const output = host(), reporter = faults(), create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(() => output);
+  const service = new NativeProgramService(create, vi.fn(), () => Promise.resolve(), unlicensed, reporter.reporter), a = request();
+  const teardown = vi.fn(() => Promise.resolve()), stopMonitor = vi.fn(() => Promise.reject(new Error('监听进程没有退出')));
+  const { page, record } = followedPage(service, teardown, stopMonitor, reporter);
+  await service.open(a); create.mock.calls[0]![2].changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'playing', positionMs: 5000 });
+  expect(page.reloadItself()).toBe(true);
+  await vi.waitFor(() => expect(record).toHaveBeenCalledOnce());
+  expect(record).toHaveBeenCalledWith(expect.objectContaining({ level: 'warning', message: '界面重新加载了，节目在后台继续播放（5 秒），打开同一个工程就能接回控制' }));
+  expect(stopMonitor).toHaveBeenCalledOnce(); expect(teardown).not.toHaveBeenCalled(); expect(output.close).not.toHaveBeenCalled();
+  // The monitor logged its failure itself (MusicMonitorService); the gone page is not shown it, the next window is.
+  expect(reporter.record).not.toHaveBeenCalled(); expect(reporter.toWindow).not.toHaveBeenCalled();
+  expect(await service.open({ ...a, ownerId: randomUUID() })).toBe('adopted');
+  expect(reporter.toWindow).toHaveBeenCalledExactlyOnceWith('link:main-process-error', '独立监听没能完全关掉，不影响之后播放。原因：监听进程没有退出');
 });
 
 it('关音频和画面还没完时新页面打开节目：等它关完再建新节目；关不掉时记一次错误，不挡住之后打开节目', async () => {

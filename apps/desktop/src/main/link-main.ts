@@ -148,7 +148,7 @@ import { MusicAnalysisService } from './link/music-analysis-service';
 import { AutomaticMusicRuntime } from './link/automatic-music-runtime';
 import { automaticMusicRequestSchema, automaticMusicControlSchema, nativeDeviceQueryRequestSchema } from '@tb/schema';
 import { MusicMonitorService } from './link/music-monitor-service';
-import { musicMonitorRequestSchema } from '@tb/schema';
+import { musicMonitorRequestSchema, nativeProgramClosedSchema } from '@tb/schema';
 import { musicAnalysisRequestSchema, musicAnalysisControlSchema } from '@tb/schema';
 import { audioAnalysisRequestSchema, audioRenderRequestSchema } from '@tb/schema';
 import { ObsWebSocketAdapter } from './link/obs-websocket-adapter';
@@ -156,7 +156,8 @@ import { ObsEditorPreview, findLocalObsPid } from './link/obs-editor-preview';
 import { P1ProjectService } from './link/p1-project-service';
 import { LinkRunLogger, redactValue, type LinkLogEntry, type LinkLogFilter } from './link/run-logger';
 import { closedProgramFaultReporter, mainProcessErrorReporter, programLightsQuitPrompt, reportMainProcessErrors } from './link/main-process-errors';
-import { closeEngineOutputs } from './link/engine-shutdown';
+import { closeEngineOutputs, monitorStopped, releaseGonePage as releasePage } from './link/engine-shutdown';
+import { quitInOrder } from './link/quit-order';
 import { SecureProfileStore } from './link/secure-profile-store';
 import { WindowsIntegrationDetector } from './link/windows-integration-detector';
 import { LoopMidiService } from './link/loop-midi-service';
@@ -254,23 +255,23 @@ let midiPorts: MidiPortBroker | null = null;
 
 /** The audio engine and what plays with it, once no program is left. Only an engine that could not close fails this
  * (closeEngineOutputs): a failed close keeps the owned instance and blocks another engine from opening the same device.
- * Never claim stopped or spawn a replacement. The picture, the preselected pictures and the monitor that do not close
- * are reported once and hold up nothing (2026-11-10). */
+ * Never claim stopped or spawn a replacement. The picture and the preselected pictures that do not close are reported
+ * once and hold up nothing (2026-11-10). The editor's music monitor is not among them: it stops with its page
+ * (releaseGonePage) and at quit. */
 async function closeEngine(): Promise<void> {
   const player = nativePlayer;
-  nativePlayerShutdown ??= closeEngineOutputs({ engine: player?.close(), picture: nativeObs?.stop(), preload: nativeObsPreload?.close(),
-    monitor: musicMonitor?.stop() }, programFaults);
+  nativePlayerShutdown ??= closeEngineOutputs({ engine: player?.close(), picture: nativeObs?.stop(), preload: nativeObsPreload?.close() }, programFaults);
   await nativePlayerShutdown;
   if (nativePlayer === player) nativePlayer = null;
   nativePlayerShutdown = null;
 }
-/** What the page in the main window held, once the page is gone (its renderer exited, or a new page replaced it): a
- * program that is preparing, playing or paused keeps its outputs for the next page and is returned; otherwise that
- * program closes, then the audio and picture outputs and the runtime, unless the next page opened a program meanwhile:
- * that one keeps them (NativeProgramService.release, 2026-11-10). */
+/** What the page in the main window held, once the page is gone (its renderer exited, or a new page replaced it): its
+ * music monitor stops; a program that is preparing, playing or paused keeps its outputs for the next page and is
+ * returned; otherwise that program closes, then the audio and picture outputs and the runtime, unless the next page
+ * opened a program meanwhile: that one keeps them (engine-shutdown.ts, 2026-11-10, 2026-11-11). */
 function releaseGonePage(): Promise<InternalPlayerState | null> {
-  const teardown = async (): Promise<void> => { await closeEngine(); await releaseRendererRuntime(); };
-  return nativeProgram ? nativeProgram.release(teardown) : teardown().then(() => null);
+  return releasePage(nativeProgram, { stopMonitor: () => musicMonitor?.stop(),
+    teardown: async () => { await closeEngine(); await releaseRendererRuntime(); } }, programFaults);
 }
 function nativePlaybackActive(): boolean {
   return Boolean(nativePlayer?.status && ['preparing', 'playing', 'paused'].includes(nativePlayer.status.status));
@@ -1007,7 +1008,7 @@ function registerIpc(
           .catch((error: unknown) => console.error('动作 MIDI 恢复日志未能保存', error));
       },
       obsChanged: state => { if (state.state === 'running' || state.state === 'ready') callbacks.cueChanged(state.currentCueId); }, notice,
-      closedFault: (message, itemId) => callbacks.closedFault(message, itemId),
+      closedFault: (message, itemId, kind) => callbacks.closedFault(message, itemId, kind),
       api: {
         prepareNativePlayback: value => playbackRequests.prepare(value), controlNativePlayback: value => playbackRequests.control(value),
         getNativePlaybackDevices: scope => player().devices(scope), prepareNativeObs: value => obsRequests.prepare(value),
@@ -2230,95 +2231,104 @@ function registerAssetProtocol(access: Pick<ProjectAccess, 'assetPath'>): void {
   });
 }
 
-/** Resolves true once `finish` ran, false when the operator returned to the app. */
+/** Resolves true once `finish` ran, false when the operator returned to the app. The order is quitInOrder's. */
 async function runQuitFlow(profileStore: SecureProfileStore, processManager: ExternalProcessManager, finish: () => void): Promise<boolean> {
-  recordQuitStep('退出前停止灯光试听');
-  try { await stopAuditionForQuit?.(); }
-  catch (error) {
-    // Operator decision 2026-10-19: a console that cannot confirm Off (e.g. disconnected)
-    // must not keep the console app open for good; the operator chooses.
-    const reason = error instanceof Error ? error.message : String(error);
-    recordQuitStep('灯光试听停止未完成', { error: reason });
-    const options = { type: 'warning' as const, title: '灯光试听没能停止', message: '退出前没能确认控台已经关掉这次试听。',
-      detail: `${reason}\n\n如果仍然退出，控台上可能还保持着当前的灯光，请到控台手动处理。`, buttons: ['返回软件', '仍然退出'], defaultId: 0, cancelId: 0, noLink: true };
-    const choice = mainWindow && !mainWindow.isDestroyed() ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
-    if (choice.response !== 1) { recordQuitStep('返回软件处理灯光试听'); return false; }
-    recordQuitStep('操作员选择仍然退出', { error: reason });
-  }
-  recordQuitStep('退出前关闭音频和画面');
-  // The Off the program's stop owed goes out as it closes. One that did not is asked about like the audition's, before
-  // the audio engine closes (2026-11-10); it is logged and shown in red as well.
-  const lightsLeftOn = await programFaults.collect(() => nativeProgram?.close() ?? Promise.resolve());
-  if (lightsLeftOn.length > 0) {
-    recordQuitStep('节目的灯光没能关闭', { error: lightsLeftOn.join('\n') });
-    const options = programLightsQuitPrompt(lightsLeftOn);
-    const choice = mainWindow && !mainWindow.isDestroyed() ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
-    if (choice.response !== 1) { recordQuitStep('返回软件处理节目的灯光'); return false; }
-    recordQuitStep('操作员选择仍然退出', { error: lightsLeftOn.join('\n') });
-  }
-  await closeEngine();
-  const owned = (['p1', 'ma3d', 'ma2', 'obs'] as const)
-    .map((id) => processManager.getSnapshot(id))
-    .filter((snapshot) => snapshot.owned && snapshot.pid !== null);
-  if (owned.length === 0) {
-    recordQuitStep('退出前关闭音乐分析');
-    await automaticMusic?.close();
-    await midiPorts?.dispose();
-    if (discardOnQuit) await discardOpenDocumentRecovery();
-    allowWindowClose = true;
-    settleRepeatedLogs();
-    recordQuitStep('退出流程完成');
-    finish();
-    return true;
-  }
-  const closeIds: ExternalApplicationId[] = [];
-  for (const snapshot of owned) {
-    recordQuitStep('确认外部程序', { id: snapshot.id, pid: snapshot.pid });
-    const decision = await dialog.showMessageBox(mainWindow!, {
-      type: 'question',
-      title: '逐项确认外部程序',
-      message: `${snapshot.id} 是这次由联动台启动的`,
-      detail: `PID ${String(snapshot.pid)}\n${snapshot.executablePath ?? '路径未知'}\n\n退出联动台时要怎么处理这个程序？`,
-      buttons: ['取消退出', '保留它，继续', '正常关闭它'],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true
-    });
-    if (decision.response === 0) return false;
-    if (decision.response === 2) closeIds.push(snapshot.id);
-  }
-  if (closeIds.length > 0) {
-    const profile = await requireProfile(profileStore);
-    const failures: string[] = [];
-    for (const id of ['p1', 'ma3d', 'ma2', 'obs'] as const) {
-      if (!closeIds.includes(id)) continue;
-      const snapshot = processManager.getSnapshot(id);
-      if (!snapshot.owned || snapshot.pid === null) continue;
-      try {
-        await processManager.stop(id, processConfiguration(profile, id).shutdownTimeoutMs);
-      } catch (error) {
-        failures.push(`${id}: ${error instanceof Error ? error.message : String(error)}`);
+  const ask = (options: Electron.MessageBoxOptions) => mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options);
+  return quitInOrder({
+    stopAudition: async () => {
+      recordQuitStep('退出前停止灯光试听');
+      try { await stopAuditionForQuit?.(); return true; }
+      catch (error) {
+        // Operator decision 2026-10-19: a console that cannot confirm Off (e.g. disconnected)
+        // must not keep the console app open for good; the operator chooses.
+        const reason = error instanceof Error ? error.message : String(error);
+        recordQuitStep('灯光试听停止未完成', { error: reason });
+        const choice = await ask({ type: 'warning', title: '灯光试听没能停止', message: '退出前没能确认控台已经关掉这次试听。',
+          detail: `${reason}\n\n如果仍然退出，控台上可能还保持着当前的灯光，请到控台手动处理。`, buttons: ['返回软件', '仍然退出'], defaultId: 0, cancelId: 0, noLink: true });
+        if (choice.response !== 1) { recordQuitStep('返回软件处理灯光试听'); return false; }
+        recordQuitStep('操作员选择仍然退出', { error: reason });
+        return true;
       }
-    }
-    if (failures.length > 0) {
-      await dialog.showMessageBox(mainWindow!, {
-        type: 'warning',
-        title: '有些外部程序还在运行',
-        message: '以下程序没有关闭（联动台不会强制结束程序）：',
-        detail: failures.join('\n'),
-        buttons: ['确认并退出']
-      });
-    }
-  }
-  recordQuitStep('退出前关闭音乐分析');
-  await automaticMusic?.close();
-  await midiPorts?.dispose();
-  if (discardOnQuit) await discardOpenDocumentRecovery();
-  allowWindowClose = true;
-  settleRepeatedLogs();
-  recordQuitStep('退出流程完成');
-  finish();
-  return true;
+    },
+    askExternalPrograms: async () => {
+      const closeIds: ExternalApplicationId[] = [];
+      const owned = (['p1', 'ma3d', 'ma2', 'obs'] as const).map((id) => processManager.getSnapshot(id))
+        .filter((snapshot) => snapshot.owned && snapshot.pid !== null);
+      for (const snapshot of owned) {
+        recordQuitStep('确认外部程序', { id: snapshot.id, pid: snapshot.pid });
+        const decision = await dialog.showMessageBox(mainWindow!, {
+          type: 'question',
+          title: '逐项确认外部程序',
+          message: `${snapshot.id} 是这次由联动台启动的`,
+          detail: `PID ${String(snapshot.pid)}\n${snapshot.executablePath ?? '路径未知'}\n\n退出联动台时要怎么处理这个程序？`,
+          buttons: ['取消退出', '保留它，继续', '正常关闭它'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true
+        });
+        if (decision.response === 0) { recordQuitStep('取消退出', { id: snapshot.id }); return null; }
+        if (decision.response === 2) closeIds.push(snapshot.id);
+      }
+      return closeIds;
+    },
+    songStarted: () => {
+      if (!runtimeActive && !nativePlaybackActive()) return false;
+      showRuntimeActiveExitWarning();
+      return true;
+    },
+    program: nativeProgram,
+    faults: programFaults,
+    quitWithLightsOn: async lightsLeftOn => {
+      // Asked like the audition's (2026-11-10); it is logged and shown in red as well.
+      recordQuitStep('节目的灯光没能关闭', { error: lightsLeftOn.join('\n') });
+      const choice = await ask(programLightsQuitPrompt(lightsLeftOn));
+      if (choice.response !== 1) { recordQuitStep('返回软件处理节目的灯光'); return false; }
+      recordQuitStep('操作员选择仍然退出', { error: lightsLeftOn.join('\n') });
+      return true;
+    },
+    programClosed: closed => {
+      recordQuitStep('退出没有完成，窗口重新打开节目');
+      sendToRenderer('link:native-program-closed', nativeProgramClosedSchema.parse(closed));
+    },
+    closeOutputs: async () => {
+      const monitor = monitorStopped(() => musicMonitor?.stop(), programFaults);
+      try { await closeEngine(); } finally { await monitor; }
+    },
+    finish: async closeIds => {
+      if (closeIds.length > 0) {
+        const profile = await requireProfile(profileStore);
+        const failures: string[] = [];
+        for (const id of ['p1', 'ma3d', 'ma2', 'obs'] as const) {
+          if (!closeIds.includes(id)) continue;
+          const snapshot = processManager.getSnapshot(id);
+          if (!snapshot.owned || snapshot.pid === null) continue;
+          try {
+            await processManager.stop(id, processConfiguration(profile, id).shutdownTimeoutMs);
+          } catch (error) {
+            failures.push(`${id}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        if (failures.length > 0) {
+          await dialog.showMessageBox(mainWindow!, {
+            type: 'warning',
+            title: '有些外部程序还在运行',
+            message: '以下程序没有关闭（联动台不会强制结束程序）：',
+            detail: failures.join('\n'),
+            buttons: ['确认并退出']
+          });
+        }
+      }
+      recordQuitStep('退出前关闭音乐分析');
+      await automaticMusic?.close();
+      await midiPorts?.dispose();
+      if (discardOnQuit) await discardOpenDocumentRecovery();
+      allowWindowClose = true;
+      settleRepeatedLogs();
+      recordQuitStep('退出流程完成');
+      finish();
+    },
+    record: step => recordQuitStep(step)
+  });
 }
 
 /** After 不保存: the open document's recovery copy is removed. A failure is logged and never blocks

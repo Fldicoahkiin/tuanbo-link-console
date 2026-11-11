@@ -793,6 +793,18 @@ describe('上一首的画面没有清理干净（2026-11-09）', () => {
     await expect(h.player.dispose()).rejects.toThrow('音频引擎没有响应');
   });
 
+  // 修复前：节目在动作 MIDI 还开着时关掉（播放中跟着改了声卡、换了工程），MIDI 驱动服务之前又异常退出过：动作 MIDI 关不掉，
+  // 整个关闭就算失败，之后每次打开节目都失败，退出时也弹“退出流程失败”，要重启软件才行。
+  it('关闭节目时动作 MIDI 没能关掉：记一次、在窗口里说一次，关闭照常完成，不挡住之后再开节目', async () => {
+    const f = fixture();
+    await f.player.play('song-0'); f.deps.notice.mockClear();
+    f.deps.stop.mockRejectedValueOnce(new AggregateError([new Error('MIDI 驱动服务异常退出：3')], 'MIDI 驱动服务异常退出：3'));
+    await expect(f.player.dispose()).resolves.toBeUndefined();
+    expect(f.deps.closedFault.mock.calls).toEqual([
+      ['关闭节目时动作 MIDI 没有正常关掉，之后的歌照常播放。原因：MIDI 驱动服务异常退出：3。如果之后的歌没有发出动作 MIDI，请检查 MIDI 接口和线。', 'song-0', 'leftOpen']]);
+    expect(f.deps.notice).not.toHaveBeenCalled();
+  });
+
   it('按停止时收到：停下的播放器提示一次，不标红，也不再记一次；停不掉另有原因时照旧提示并记录', async () => {
     const f = fixture();
     await f.player.play('song-0');

@@ -2,13 +2,16 @@ import { emptyInternalPlayerState, nativeAudioAnalysis, toUserErrorMessage,
   type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type PlaybackBoundary, type PlaybackClock } from '@tb/core/link';
 import type { LinkProject, NativePlayerStatus, NativeProgramAttachment, NativeProgramEvent, NativeProgramOperation } from '@tb/schema';
 
-type Api = Pick<LinkDesktopApi, 'openNativeProgram' | 'controlNativeProgram' | 'onNativeProgramEvent' | 'onNativePlaybackStatus'>;
+type Api = Pick<LinkDesktopApi, 'openNativeProgram' | 'controlNativeProgram' | 'onNativeProgramEvent' | 'onNativeProgramClosed' | 'onNativePlaybackStatus'>;
 /** What the window supplies: settings to play with, and where to show and log what happens. */
 export type RemotePlayerDependencies = Pick<InternalPlayerDependencies, 'configuration' | 'changed' | 'preciseSeeking'> & {
   notice: (message: string, itemId: string | null) => void;
   /** The background program answered the open, so `outdated` is known now: it comes after the first state the
    * program sends, and that state does not say which version of the project it plays. */
   attached: () => void;
+  /** The quit closed the program this controller opened, and the operator went back to the app: nothing it sends is
+   * played any more. The window opens a new program, as after a project change (useInternalPlayer). */
+  closed: () => void;
 };
 
 /** UI controller is a remote for the main-process program host. It never
@@ -43,8 +46,9 @@ export class RemoteNativeProgramPlayer {
       this.dependencies.changed(this.state); this.observed(event);
       if (event.boundary) for (const listener of this.boundaries) listener(event.boundary);
     });
+    const closed = api.onNativeProgramClosed(event => { if (!this.disposed && event.ownerId === this.ownerId) this.dependencies.closed(); });
     const audio = api.onNativePlaybackStatus(status => { if (!this.disposed) this.native = status; });
-    this.unsubscribe = () => { program(); audio(); };
+    this.unsubscribe = () => { program(); closed(); audio(); };
     this.ready = api.openNativeProgram({ version: 1, ownerId: this.ownerId, projectPath, revision,
       document: JSON.stringify(project), configuration: this.configuration() }).then(attachment => {
       this.attachment = attachment;

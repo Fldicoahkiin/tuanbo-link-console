@@ -8,7 +8,7 @@ import { ma2RenameRequestSchema, ma2RenameResultSchema } from '@tb/schema';
 import { linkDocumentStateSchema, linkSaveRequestSchema, linkUnsavedChangesDecisionSchema } from '@tb/schema';
 import { ma2LayoutReadRequestSchema, ma2LayoutSnapshotSchema, ma2NewCueRequestSchema, ma2NewCueResultSchema } from '@tb/schema';
 import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema, ma2CueDeletePlanSchema, ma2CueDeleteResultSchema } from '@tb/schema';
-import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema } from '@tb/schema';
+import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema, nativeProgramClosedSchema } from '@tb/schema';
 import { ma2AuditionRequestSchema,ma2AuditionControlSchema,ma2AuditionStateSchema } from '@tb/schema';
 import { musicAnalysisRequestSchema, musicAnalysisProgressSchema, musicAnalysisControlSchema, musicAnalysisResultSchema } from '@tb/schema';
 import { automaticMusicRequestSchema, automaticMusicControlSchema, automaticMusicJobSchema, automaticMusicStatusSchema } from '@tb/schema';
@@ -50,6 +50,11 @@ const tbLink: LinkDesktopBridgeApi = {
     const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(nativeProgramEventSchema.parse(value));
     ipcRenderer.on('link:native-program-event', receive);
     return () => ipcRenderer.removeListener('link:native-program-event', receive);
+  },
+  onNativeProgramClosed: listener => {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(nativeProgramClosedSchema.parse(value));
+    ipcRenderer.on('link:native-program-closed', receive);
+    return () => ipcRenderer.removeListener('link:native-program-closed', receive);
   },
   projectArchives: async request => projectArchiveResultSchema.parse(await invoke('link:project-archives', projectArchiveRequestSchema.parse(request))),
   projectArchiveSettings: async request => projectArchiveSettingsStatusSchema.parse(await invoke('link:project-archive-settings', projectArchiveSettingsActionSchema.parse(request))),

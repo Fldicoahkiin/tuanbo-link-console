@@ -409,10 +409,13 @@ export class NativeProgramPlayer {
     const lighting = audio.then(() => this.releaseLighting(), () => this.releaseLighting());
     // A picture, or a preselected one, that is not cleaned up never keeps the next program from opening or the app from
     // quitting (2026-11-09, 2026-11-10): a picture left on air is handed back, and the next song to start shows it; any
-    // other failure is logged once here. The audio, MIDI or the queue that cannot stop still fail the close.
+    // other failure is logged once here. Nor does the action MIDI that does not close (2026-11-11): the host logs it as
+    // an error and shows it once in red (closedFault), and the quit does not take it for lights left on. The audio or
+    // the queue that cannot stop still fail the close.
     const preload = run(() => this.cancelPreload()).catch((error: unknown) => this.reportUnavailable(`关闭节目时提前准备的画面没清理干净：${toUserErrorMessage(error)}`));
     const picture = run(() => this.stopObs()).catch((error: unknown) => this.pictureNotStopped(error, '关闭节目时画面清理失败'));
-    const cleanup = [scheduled, audio, lighting, preload, picture, run(() => this.dependencies.stop()), run(() => this.tail)];
+    const midi = run(() => this.dependencies.stop()).catch((error: unknown) => this.dependencies.closedFault(actionMidiLeftOpen(error), this.state.itemId, 'leftOpen'));
+    const cleanup = [scheduled, audio, lighting, preload, picture, midi, run(() => this.tail)];
     this.closing = Promise.allSettled(cleanup).then(results => {
       const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : []);
       if (failures.length) throw new AggregateError(failures, failures.map(toUserErrorMessage).join('；'));
@@ -560,6 +563,12 @@ export class NativeProgramPlayer {
   private markPlayed(): void { if (this.state.itemId) this.update({ playedItemIds: [...new Set([...this.state.playedItemIds, this.state.itemId])] }); }
   private current(token: number): boolean { return !this.disposed && token === this.epoch; }
   private update(patch: Partial<InternalPlayerState>): void { if (this.disposed) return; this.state = { ...this.state, ...patch }; this.dependencies.changed(this.state); }
+}
+
+/** The action MIDI did not close as the program closed (2026-11-11): what happened, why, and what the operator does. */
+function actionMidiLeftOpen(error: unknown): string {
+  const reason = toUserErrorReason(error).replace(/[。.；;\s]+$/u, '') || '未知错误';
+  return `关闭节目时动作 MIDI 没有正常关掉，之后的歌照常播放。原因：${reason}。如果之后的歌没有发出动作 MIDI，请检查 MIDI 接口和线。`;
 }
 
 /** A stop's Off failed (2026-11-09): what happened, why, and what the operator does, in the player's notice or in red.

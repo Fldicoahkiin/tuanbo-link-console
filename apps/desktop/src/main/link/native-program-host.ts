@@ -26,8 +26,9 @@ type Dependencies = {
   notice(message: string, itemId: string | null): void;
   /** A failure no window sees in the player's state (the lights-off a stop owed): after the program closed, or while it
    * plays on without a window. NativeProgramService passes it to closedProgramFaultReporter, which logs it as an error
-   * and shows it in red, in the window or in the next window that opens a program. */
-  closedFault(message: string, itemId: string | null): void;
+   * and shows it in red, in the window or in the next window that opens a program. `leftOpen`: the action MIDI did not
+   * close as the program closed; the quit does not ask about it (InternalPlayerDependencies.closedFault). */
+  closedFault(message: string, itemId: string | null, kind?: 'leftOpen'): void;
 };
 
 /** Complete program transport owner. UI operations call this controller;
@@ -69,7 +70,7 @@ export class NativeProgramHost {
       resolveAudio: () => Promise.reject(new Error('后台节目宿主不使用浏览器音源地址')),
       configuration: () => dependencies.configuration(), preciseSeeking: () => dependencies.preciseSeeking(),
       changed: state => dependencies.changed(state), notice: (message, itemId) => dependencies.notice(message, itemId),
-      closedFault: (message, itemId) => dependencies.closedFault(message, itemId),
+      closedFault: (message, itemId, kind) => dependencies.closedFault(message, itemId, kind),
       obsChanged: state => dependencies.obsChanged?.(state)
     }, {
       ...dependencies.api,

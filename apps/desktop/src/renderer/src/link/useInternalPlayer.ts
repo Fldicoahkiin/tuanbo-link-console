@@ -81,7 +81,9 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
           .catch((error: unknown) => console.error('正式播放通道提示未能保存到日志', error));
       },
       preciseSeeking: () => useDisplayPreferences.getState().preciseSeeking,
-      attached: () => setAnswer(openAnswer(player))
+      attached: () => setAnswer(openAnswer(player)),
+      // The quit closed this program and the operator went back to the app: open a new one, so the next song plays.
+      closed: () => setGeneration(value => value + 1)
     };
     const player = new RemoteNativeProgramPlayer(project, path ?? '', useDocumentStore.getState().revision, dependencies, desktop, event => {
       const runtime = useRuntimeStore.getState();

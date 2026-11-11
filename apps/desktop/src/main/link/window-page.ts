@@ -13,10 +13,10 @@ export type WindowPageHoldings = {
   releaseMidi(): Promise<void>;
   /** The saves main asked the page for (RendererSaveRequests.failAll): the next page never answers them. */
   failSaves(message: string): void;
-  /** link-main's releaseGonePage, as when the renderer exits: a program that is preparing, playing or paused keeps
-   * running and is returned, for the next page to take over when it opens the same project; otherwise that program
-   * closes, then the audio and picture outputs and the runtime, unless the next page opened a program meanwhile, which
-   * keeps them (NativeProgramService.release). */
+  /** link-main's releaseGonePage (engine-shutdown.ts), as when the renderer exits: the page's music monitor stops; a
+   * program that is preparing, playing or paused keeps running and is returned, for the next page to take over when it
+   * opens the same project; otherwise that program closes, then the audio and picture outputs and the runtime, unless
+   * the next page opened a program meanwhile, which keeps them (NativeProgramService.release). */
   releaseProgram(): Promise<{ itemId: string | null; positionMs: number } | null>;
   record(entry: LinkLogInput): Promise<unknown>;
 };

@@ -9,21 +9,39 @@ function fixture(wait?: Promise<NativeProgramAttachment>, project: LinkProject =
     openNativeProgram: vi.fn<LinkDesktopApi['openNativeProgram']>(() => wait ?? Promise.resolve('opened')),
     controlNativeProgram: vi.fn<LinkDesktopApi['controlNativeProgram']>(() => Promise.resolve()),
     onNativeProgramEvent: vi.fn<LinkDesktopApi['onNativeProgramEvent']>(() => vi.fn()),
+    onNativeProgramClosed: vi.fn<LinkDesktopApi['onNativeProgramClosed']>(() => stopListening),
     onNativePlaybackStatus: vi.fn<LinkDesktopApi['onNativePlaybackStatus']>(() => vi.fn())
   };
+  const stopListening = vi.fn();
   /** What `outdated` said each time the window was told the open was answered. */
   const answered: boolean[] = [];
   const dependencies = { prepare: vi.fn(() => Promise.resolve()), ingest: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()), resolveAudio: vi.fn(() => Promise.reject(new Error('不能在界面播放原声'))),
     configuration: () => ({ outputDeviceId: 'default', mtcPortName: null }), changed: vi.fn<InternalPlayerDependencies['changed']>(), notice: vi.fn(),
-    attached: vi.fn(() => { answered.push(player.outdated); }) };
+    attached: vi.fn(() => { answered.push(player.outdated); }), closed: vi.fn() };
   const observed = vi.fn(), player: RemoteNativeProgramPlayer = new RemoteNativeProgramPlayer(project, 'C:/test/show.tblink', 1, dependencies, api, observed);
   const ownerId = api.openNativeProgram.mock.calls[0]![0].ownerId;
   const emit = (patch: Partial<NativeProgramEvent> = {}) => api.onNativeProgramEvent.mock.calls[0]![0]({ version: 1, ownerId, sequence: 1,
     state: { ...emptyInternalPlayerState, status: 'playing', itemId: 'song', positionMs: 1234 },
     clock: { positionMs: 1234, durationMs: 5000, ready: true, playing: true, seeking: false }, currentCueId: null, ...patch });
-  return { api, dependencies, player, observed, emit, ownerId, answered };
+  /** Main tells the windows that the quit closed the program `ownerId` opened, and the operator went back to the app. */
+  const closedByQuit = (id: string) => api.onNativeProgramClosed.mock.calls[0]![0]({ version: 1, ownerId: id });
+  return { api, dependencies, player, observed, emit, ownerId, answered, closedByQuit, stopListening };
 }
+
+// 修复前：退出时关掉了窗口的节目，操作员选“返回软件”以后窗口不知道，按播放只得到“这个播放控制请求来自已关闭的界面”。
+it('退出时这个窗口的节目被关掉、操作员回到软件：告诉窗口重新打开节目；别的窗口的节目、销毁以后都不算', async () => {
+  const f = fixture();
+  f.closedByQuit(crypto.randomUUID());
+  expect(f.dependencies.closed).not.toHaveBeenCalled();
+  f.closedByQuit(f.ownerId);
+  expect(f.dependencies.closed).toHaveBeenCalledOnce();
+  expect(f.api.controlNativeProgram).not.toHaveBeenCalled();
+  await f.player.dispose();
+  expect(f.stopListening).toHaveBeenCalledOnce();
+  f.closedByQuit(f.ownerId);
+  expect(f.dependencies.closed).toHaveBeenCalledOnce();
+});
 
 it('只显示当前会话递增序号；时钟与状态同步，旧界面事件不回写', async () => {
   const f = fixture(), boundary = vi.fn(); f.player.clock.subscribeBoundary(boundary);
