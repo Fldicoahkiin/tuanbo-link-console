@@ -58,6 +58,10 @@
   - 拖动中滚轮滚动、Ctrl 加滚轮缩放，片段跟着鼠标；修剪时照常吸到别的片段的边和播放头。
   - 拖动中按 Esc 回到原处；锁定的轨道拖不进去。
   - 拖音频片段、灯光点、框选灯光点和以前一样。e2e `held-keys-and-drags`、`timeline-on-air` 等没在 Windows 上跑过。
+- 时间线滚动不再每次都重画整条时间线（`apps/desktop/src/renderer/src/link/components/timeline-scroll.ts`）。只测过滚动位置和窗口的计算，真实界面没看过：
+  - 编辑器和灯光工作台放大后左右滚、上下滚：顺不顺，快速滚动时边上有没有露出空白再补上（应该最多一闪）。
+  - 滚动时播放头上的时间、音乐段落的名字、音频片段的名字、选中 Cue 的时间读数都留在看得见的范围里。
+  - 播放时自动翻页照常；拖着片段滚动，片段跟着鼠标。
 - OBS 实时画布按帧数上限取帧（`apps/desktop/src/renderer/src/link/components/obs-live-frames.ts`，规则在 [OBS 实时画布](OBS_REALTIME_CANVAS.md)）。只用假时钟和假画面测过：
   - 开着实时画布拖动、修剪片段，滚轮滚动和缩放时间线：画面变成约 10 帧，松手 0.3 秒后恢复，拖动不卡。
   - 在实时画布上拖、缩放 OBS 来源：和以前一样顺，OBS 那边照常同步。
