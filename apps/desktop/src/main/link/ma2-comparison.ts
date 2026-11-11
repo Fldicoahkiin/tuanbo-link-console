@@ -3,7 +3,7 @@ import { previewMa2BoundSync, type Ma2SyncPreview } from '@tb/core/link';
 import { lightingDocumentSchema, ma2TimecodePreviewSchema, type LightingDocument, type Ma2ConsoleChanges, type Ma2TimecodePreview } from '@tb/schema';
 import { inspectMa2TimecodeXml, validateMa2TimecodeWrite } from './ma2-timecode-xml';
 
-export function compareMa2LightingReadback(documentInput: LightingDocument, bindingId: string, readbackInput: Ma2TimecodePreview, choices: ReadonlyMap<string, string | null>, consoleChanges: Ma2ConsoleChanges = 'read-back'): Ma2SyncPreview {
+export function compareMa2LightingReadback(documentInput: LightingDocument, bindingId: string, readbackInput: Ma2TimecodePreview, consoleChanges: Ma2ConsoleChanges = 'read-back'): Ma2SyncPreview {
   const document = lightingDocumentSchema.parse(documentInput);
   const readback = ma2TimecodePreviewSchema.parse(readbackInput);
   const binding = document.ma2Bindings?.find((entry) => entry.id === bindingId);
@@ -13,7 +13,7 @@ export function compareMa2LightingReadback(documentInput: LightingDocument, bind
   if ((binding.timeOriginMs ?? 0) !== (readback.timeOriginMs ?? 0)) throw new Error('从控台读回的时间码起点和这首歌对不上');
   const baseline = verifySnapshotSource(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings, binding.trackMappings, binding.timeOriginMs ?? 0, binding.nativeEvents ?? []);
   const remote = verifySnapshotSource(readback.sourceXml, readback.target, readback.document.tracks, readback.mappings, readback.trackMappings, readback.timeOriginMs ?? 0, readback.unconverted);
-  return previewMa2BoundSync(document, bindingId, readback, choices, {
+  return previewMa2BoundSync(document, bindingId, readback, {
     baselineVersion: baseline.version, remoteVersion: remote.version,
     baselineRevision: baseline.sha256, remoteRevision: remote.sha256,
     localRevision: createHash('sha256').update(JSON.stringify(document)).digest('hex')

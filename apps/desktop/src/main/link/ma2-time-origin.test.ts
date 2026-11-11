@@ -25,7 +25,7 @@ it('一小时偏移导入为歌曲零点，编辑后写回保留原偏移并回�
   const preview = convertMa2Timecode(source, [sequence], 9902, 3600000);
   expect(preview.document.tracks[0]!.clips[0]!.events.map(event => event.at)).toEqual([0, 1500]);
   const document = bind(preview); document.tracks[0]!.clips[0]!.events[0]!.at = 500;
-  const prepared = prepareMa2MergedEvents(document, document.ma2Bindings![0]!.id, preview, new Map(), new Map(), [sequence]);
+  const prepared = prepareMa2MergedEvents(document, document.ma2Bindings![0]!.id, preview, new Map(), [sequence]);
   expect(inspectMa2TimecodeXml(prepared.desiredXml).timecodes[0]!.attributes.offset).toBe('108000');
   const confirmed = confirmMa2MergedEvents(prepared, prepared.desiredXml, [sequence]);
   expect(confirmed.document.tracks[0]!.clips[0]!.events[0]!.at).toBe(500);
@@ -44,7 +44,7 @@ it.skipIf(!process.env.MA2_ONPC_ORIGIN_ACCEPTANCE)('真实 onPC 一小时偏移�
     const snapshot = await bridge.request('SNAPSHOT', 9902);
     const preview = convertMa2Snapshot(snapshot, 9902, [], 3600000);
     const document = bind(preview); document.tracks[0]!.clips[0]!.events[0]!.at = 500;
-    const result = await new Ma2ApplyService(bridge, () => false).apply({ dataDirectory: process.env.MA2_ONPC_DATA_DIRECTORY ?? '', document, bindingId: document.ma2Bindings![0]!.id, readback: preview, choices: [], conflicts: [] });
+    const result = await new Ma2ApplyService(bridge, () => false).apply({ dataDirectory: process.env.MA2_ONPC_DATA_DIRECTORY ?? '', document, bindingId: document.ma2Bindings![0]!.id, readback: preview, conflicts: [] });
     if (result.status !== 'verified') throw new Error(result.message);
     expect(result.confirmed.document.tracks[0]!.clips[0]!.events[0]!.at).toBe(500);
     expect(inspectMa2TimecodeXml(result.confirmed.sourceXml).timecodes[0]?.attributes.offset).toBe('108000');

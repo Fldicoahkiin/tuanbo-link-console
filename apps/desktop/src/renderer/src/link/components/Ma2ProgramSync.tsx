@@ -1,7 +1,7 @@
 import { Button } from '../ui/Button';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ma2NetworkStatusSchema } from '@tb/schema';
-import { alignMa2SnapshotToFrames, applyMa2ReadbackCommand, bindMa2TrackCommand, importMa2TimecodeCommand, matchMa2Readback, resolveMa2Readback, resolveMa2Sync, setLightingCommand, type Ma2SyncPreview } from '@tb/core/link';
+import { alignMa2SnapshotToFrames, applyMa2ReadbackCommand, bindMa2TrackCommand, importMa2TimecodeCommand, matchMa2Readback, resolveMa2Sync, setLightingCommand, type Ma2SyncPreview } from '@tb/core/link';
 import { type Ma2NetworkTarget, ma2ExecutorPreviewSchema, type Ma2ExecutorPreview, ma2ApplyResultSchema, ma2TimecodePreviewSchema, ma2SyncPreviewSchema, type LightingDocument, type LightingEvent, type Ma2TimecodePreview } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { useSelectedProgram } from '../useSelectedProgram';
@@ -16,7 +16,7 @@ async function archiveBeforeSync(destination: number, programId: string, source:
   if (latest.documentId !== destination || latest.project?.rundown.find(entry => entry.id === programId)?.lighting !== source) throw new Error('存档时工程被修改了，请重新检查');
 }
 export function Ma2ProgramSync({ disabled, notify, method, network, directory, onBusy, initialTarget = 1 }: { initialTarget?: number; onBusy: (busy: boolean) => void; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void; method: 'local' | 'network'; network: Ma2NetworkTarget | null; directory: string }): JSX.Element {
-  const [difference, setDifference] = useState<{ result: Ma2SyncPreview; source: LightingDocument; readback: Ma2TimecodePreview; identities: ReadonlyMap<string, string | null> } | null>(null);
+  const [difference, setDifference] = useState<{ result: Ma2SyncPreview; source: LightingDocument; readback: Ma2TimecodePreview } | null>(null);
   const [conflictChoices, setConflictChoices] = useState<ReadonlyMap<string, 'local' | 'remote'>>(new Map());
   const endpoint = async () => {
     if (method === 'network' && !network) {
@@ -32,7 +32,6 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
   const setBusy = (value: boolean): void => { setWorking(value); onBusy(value); };
   const [status, setStatus] = useState('尚未检查');
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [identityChoices, setIdentityChoices] = useState<ReadonlyMap<string, string | null>>(new Map());
   const [page, setPage] = useState(0);
   const [mergePage, setMergePage] = useState(0);
   const project = useDocumentStore((state) => state.project);
@@ -40,10 +39,10 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
   const [itemId] = useSelectedProgram(notify);
   const item = project?.rundown.find((entry) => entry.id === itemId);
   const initialLighting = useLightingDocument(item ?? null);
-  useEffect(() => { setPreview(null); setDifference(null); setIdentityChoices(new Map()); setConflictChoices(new Map()); }, [itemId, documentId, method, directory, network]);
+  useEffect(() => { setPreview(null); setDifference(null); setConflictChoices(new Map()); }, [itemId, documentId, method, directory, network]);
   const readPreview = async (): Promise<void> => {
     if (busy || disabled) return;
-    setBusy(true); setStatus('正在通信…'); setPreview(null); setPage(0); setIdentityChoices(new Map());
+    setBusy(true); setStatus('正在通信…'); setPreview(null); setPage(0);
     try {
       const connection = await endpoint();
       if (!Number.isInteger(target) || target < 1 || target > 99999) throw new Error('Timecode 编号应为 1–99999');
@@ -66,7 +65,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
       const result = ma2TimecodePreviewSchema.parse(await window.tbLink.createMa2({ ...connection, target: number, name: item.title }));
       created = true;
       useDocumentStore.getState().executeForDocument(destination, importMa2TimecodeCommand(programId, result, initialLighting));
-      setPreview({ result, documentId: destination, itemId: programId }); setIdentityChoices(new Map());
+      setPreview({ result, documentId: destination, itemId: programId });
       setStatus(`Timecode ${number} 已创建并关联当前节目`);
     } catch (error) {
       setStatus(created ? `Timecode ${number} 已创建，但还没关联到节目，请重新读取` : '无法确认是否创建成功，请读取这个编号检查（不会自动重试）');
@@ -78,20 +77,17 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
   const comparison = useMemo(() => {
     if (!preview || !binding || stale) return null;
     try {
-      const initial = matchMa2Readback(binding, preview.result);
-      const candidates = new Map(initial.ambiguous.flatMap((group) => group.remoteEventIds.map((id) => [id, group.baselineEventIds] as const)));
-      const result = [...candidates.keys()].every((id) => identityChoices.has(id)) ? resolveMa2Readback(binding, preview.result, identityChoices) : initial;
-      const baseline = new Map(binding.baselineTracks.flatMap((track) => track.clips.flatMap((clip) => clip.events.map((event) => [event.id, `${((clip.start + event.at) / 1000).toFixed(3)} 秒 · ${event.kind === 'ma2' ? event.label : ma2EventLabel(event)}`] as const))));
+      // 2026-11-11: repeats of one Cue are paired automatically; nothing here waits for a choice.
+      const result = matchMa2Readback(binding, preview.result);
       const labels = new Map<string, string>();
       for (const match of result.matches) labels.set(match.remoteEventId, '已对应');
       for (const id of result.added) labels.set(id, '控台新增');
-      for (const group of result.ambiguous) for (const id of group.remoteEventIds) labels.set(id, '待确认');
       const deleted = new Set(result.deleted);
       const removed = binding.baselineTracks.flatMap((track) => track.clips.flatMap((clip) => clip.events.filter((event) => deleted.has(event.id)).map((event) => ({ event, time: clip.start + event.at }))));
-      return { result, labels, removed, candidates, baseline, error: null };
-    } catch (error) { return { result: null, labels: new Map<string, string>(), removed: [], candidates: new Map<string, string[]>(), baseline: new Map<string, string>(), error: error instanceof Error ? error.message : String(error) }; }
-  }, [preview, binding, stale, identityChoices]);
-  const activeDifference = difference && difference.source === item?.lighting && difference.readback === preview?.result && difference.identities === identityChoices && !stale ? difference.result : null;
+      return { result, labels, removed, error: null };
+    } catch (error) { return { result: null, labels: new Map<string, string>(), removed: [], error: error instanceof Error ? error.message : String(error) }; }
+  }, [preview, binding, stale]);
+  const activeDifference = difference && difference.source === item?.lighting && difference.readback === preview?.result && !stale ? difference.result : null;
   const resolution = useMemo(() => {
     if (!activeDifference || activeDifference.conflicts.some((entry) => !conflictChoices.has(entry.id))) return null;
     try { return { ...alignMa2SnapshotToFrames(resolveMa2Sync(activeDifference, conflictChoices), 30, preview?.result.timeOriginMs ?? 0), message: '合并检查通过 · 还没应用' }; }
@@ -106,7 +102,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
     let consoleConfirmed = false;
     setBusy(true); setStatus('正在检查、同步并确认…'); try {
       await archiveBeforeSync(destination, programId, source);
-      const result = ma2ApplyResultSchema.parse(await window.tbLink.applyMa2({ ...await endpoint(), document: source, bindingId: binding.id, readback: preview.result, choices: [...identityChoices], conflicts: [...conflictChoices], timeAlignment: 'nearest-frame' }));
+      const result = ma2ApplyResultSchema.parse(await window.tbLink.applyMa2({ ...await endpoint(), document: source, bindingId: binding.id, readback: preview.result, conflicts: [...conflictChoices], timeAlignment: 'nearest-frame' }));
       if (result.status === 'incomplete') {
         setStatus(result.mayHaveWritten ? '同步未完成 · 控台可能已写入，请重新读取' : '同步未完成 · 未写入控台');
         notify(`${result.message}${result.backupFile ? `；备份：${result.backupFile}` : ''}`, 'error');
@@ -123,11 +119,11 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
   };
   const compare = async (): Promise<void> => {
     if (!preview || !binding || !item?.lighting || stale || busy || disabled) return;
-    const source = item.lighting; const readback = preview.result; const identities = identityChoices;
+    const source = item.lighting; const readback = preview.result;
     setBusy(true); setDifference(null); setConflictChoices(new Map()); setMergePage(0);
     try {
-      const result = ma2SyncPreviewSchema.parse(await window.tbLink.compareMa2({ document: source, bindingId: binding.id, readback, choices: [...identities] }));
-      setDifference({ result, source, readback, identities });
+      const result = ma2SyncPreviewSchema.parse(await window.tbLink.compareMa2({ document: source, bindingId: binding.id, readback }));
+      setDifference({ result, source, readback });
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setBusy(false); }
   };
@@ -146,16 +142,12 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
     {preview ? <div className="ma2-read-preview" role="region" aria-label="MA2 灯光读取预览">
       <strong>{preview.result.name} · {events.length} 个灯光点</strong>
       {binding && item?.lighting && !stale ? <Ma2TrackBinding key={`${item.id}:${binding.id}:${directory}:${preview.result.readAt}`} directory={method === 'network' ? '' : directory} network={method === 'network' ? network ?? undefined : undefined} itemId={item.id} bindingId={binding.id} document={item.lighting} preview={preview.result} disabled={disabled || busy} notify={notify} /> : null}
-      {comparison?.result ? <p className="settings-note" role="status">已对应 {comparison.result.matches.length} 个点 · 控台新增 {comparison.result.added.length} 个 · 控台删除 {comparison.result.deleted.length} 个 · 待确认 {comparison.result.ambiguous.reduce((count, group) => count + group.remoteEventIds.length, 0)} 个</p> : null}
+      {comparison?.result ? <p className="settings-note" role="status">已对应 {comparison.result.matches.length} 个点 · 控台新增 {comparison.result.added.length} 个 · 控台删除 {comparison.result.deleted.length} 个</p> : null}
       {comparison?.error ? <p role="alert">比较未完成：{comparison.error}</p> : null}
-      {events.length ? <table className={comparison?.candidates.size ? 'ma2-match-table' : undefined}><thead><tr><th>时间（秒）</th><th>Cue / 动作</th><th>执行器</th><th>名称</th>{binding ? <th>对应情况</th> : null}</tr></thead><tbody>{events.slice(page * 100, (page + 1) * 100).map((event) => <tr key={event.id}><td>{(event.at / 1000).toFixed(3)}</td><td>{ma2EventLabel(event)}</td><td>{event.executor}</td><td title={event.label}>{event.label}</td>{binding ? <td>{comparison?.candidates.has(event.id) ? <select aria-label={`对应 ${ma2EventLabel(event, true)} · ${(event.at / 1000).toFixed(3)} 秒`} value={identityChoices.has(event.id) ? identityChoices.get(event.id) === null ? 'new' : `old:${identityChoices.get(event.id)}` : ''} onChange={(input) => {
-        const value = input.currentTarget.value; const next = new Map(identityChoices);
-        if (value === '') next.delete(event.id); else next.set(event.id, value === 'new' ? null : value.slice(4));
-        setIdentityChoices(next);
-      }}><option value="">请选择对应点</option><option value="new">控台新增点</option>{comparison.candidates.get(event.id)?.map((id) => <option key={id} value={`old:${id}`} disabled={[...identityChoices].some(([remote, selected]) => remote !== event.id && selected === id)}>{comparison.baseline.get(id)}</option>)}</select> : comparison?.labels.get(event.id) ?? '未比较'}</td> : null}</tr>)}</tbody></table> : null}
+      {events.length ? <table><thead><tr><th>时间（秒）</th><th>Cue / 动作</th><th>执行器</th><th>名称</th>{binding ? <th>对应情况</th> : null}</tr></thead><tbody>{events.slice(page * 100, (page + 1) * 100).map((event) => <tr key={event.id}><td>{(event.at / 1000).toFixed(3)}</td><td>{ma2EventLabel(event)}</td><td>{event.executor}</td><td title={event.label}>{event.label}</td>{binding ? <td>{comparison?.labels.get(event.id) ?? '未比较'}</td> : null}</tr>)}</tbody></table> : null}
       {comparison?.removed.length ? <details open><summary>控台已删除的点（{comparison.removed.length}）</summary>{comparison.removed.map(({ event, time }) => <p key={event.id}>{(time / 1000).toFixed(3)} 秒 · {ma2EventLabel(event, true)}{event.kind === 'ma2' ? ` · ${event.label}` : ''}</p>)}</details> : null}
       {comparison?.result ? <p className="settings-note">只读取 · 还没应用到节目或控台</p> : null}
-      {comparison?.result ? <Button className="secondary-button" disabled={busy || disabled || stale || comparison.result.ambiguous.length > 0} onClick={() => void compare()}>比较节目与控台修改</Button> : null}
+      {comparison?.result ? <Button className="secondary-button" disabled={busy || disabled || stale} onClick={() => void compare()}>比较节目与控台修改</Button> : null}
       {activeDifference ? <div className="ma2-difference" role="region" aria-label="节目与控台差异">
         <strong>{activeDifference.conflicts.length ? `${activeDifference.conflicts.length} 处冲突，请选择保留内容` : '没有冲突'}</strong>
         {activeDifference.conflicts.length ? <table className="ma2-conflict-table"><thead><tr><th>原来</th><th>当前节目</th><th>控台版本</th><th>保留</th></tr></thead><tbody>{activeDifference.conflicts.map((entry, index) => <tr key={entry.id}>

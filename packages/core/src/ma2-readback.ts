@@ -23,9 +23,9 @@ export function resolveMa2ReadbackTracks(binding: Binding, preview: Ma2TimecodeP
     const executors = new Set([...references, ...preview.trackMappings?.filter((entry) => entry.trackId === track.id) ?? []].map((entry) => entry.executor));
     if (executors.size !== 1) throw new Error('控台轨道执行器对应缺失或不明确');
     const candidates = anchors.size ? anchors : byExecutor.get([...executors][0]!) ?? new Set<string>();
-    if (candidates.size > 1) throw new Error('控台轨道对应不明确，需要确认轨道关系');
+    if (candidates.size > 1) throw new Error('控台上的一条轨道对不上联动台里的轨道：联动台里有几条轨道用同一个执行器，这次没有同步。可以在「同步状态详情」里点“用控台上的”');
     const id = [...candidates][0] ?? `remote-track:${track.id}`;
-    if (used.has(id)) throw new Error('多个控台轨道不能自动合并到同一个本地轨道');
+    if (used.has(id)) throw new Error('多个控台轨道对上了联动台里的同一条轨道，这次没有同步。可以在「同步状态详情」里点“用控台上的”');
     used.add(id); result.set(track.id, id);
   }
   return result;
@@ -34,10 +34,19 @@ export type Ma2ReadbackMatch = {
   matches: Array<{ baselineEventId: string; remoteEventId: string }>;
   added: string[];
   deleted: string[];
-  ambiguous: Array<{ reference: string; baselineEventIds: string[]; remoteEventIds: string[] }>;
 };
 
-/** Native event indices are positions, not stable identities. */
+/**
+ * Native event indices are positions, not stable identities, so the console's events are matched to
+ * the confirmed baseline by what they call: executor, Sequence, Cue and action. A group with one event
+ * on each side pairs even when it moved. In a group with repeats, events at an unchanged absolute time
+ * pair first; the rest pair automatically (2026-11-11, the user: "我要的是软件能实时同步控台做出的修改",
+ * nobody confirms which is which): both sides in time order, equal counts in order, unequal counts by the
+ * order-preserving pairing with the smallest total time distance, and what is left over was added on
+ * the console or deleted there. Every event of a group is the same Cue call, so the pairing only decides
+ * which local event keeps which identity; the console's times and the set of calls come out the same
+ * whichever way it pairs.
+ */
 export function matchMa2Readback(bindingInput: Binding, previewInput: Ma2TimecodePreview): Ma2ReadbackMatch {
   const binding = lightingMa2BindingSchema.parse(bindingInput);
   const preview = ma2TimecodePreviewSchema.parse(previewInput);
@@ -54,7 +63,7 @@ export function matchMa2Readback(bindingInput: Binding, previewInput: Ma2Timecod
     return result;
   };
   const baselineGroups = groups(before); const remoteGroups = groups(remote);
-  const result: Ma2ReadbackMatch = { matches: [], added: [], deleted: [], ambiguous: [] };
+  const result: Ma2ReadbackMatch = { matches: [], added: [], deleted: [] };
   for (const reference of new Set([...baselineGroups.keys(), ...remoteGroups.keys()])) {
     let ours = baselineGroups.get(reference) ?? []; let theirs = remoteGroups.get(reference) ?? [];
     const matchedBase = new Set<string>(); const matchedRemote = new Set<string>();
@@ -62,48 +71,53 @@ export function matchMa2Readback(bindingInput: Binding, previewInput: Ma2Timecod
       result.matches.push({ baselineEventId: a.mapping.eventId, remoteEventId: b.mapping.eventId });
       matchedBase.add(a.mapping.eventId); matchedRemote.add(b.mapping.eventId);
     };
-    // A unique Cue reference can move without changing its identity.
-    if (ours.length === 1 && theirs.length === 1) pair(ours[0]!, theirs[0]!);
-    else {
-      // Repeated Cues are anchored by unambiguous, unchanged absolute times.
+    // Repeated Cues are anchored first by unambiguous, unchanged absolute times.
+    if (ours.length > 1 || theirs.length > 1) {
       const byTime = (entries: Entry[]): Map<number, Entry[]> => {
         const index = new Map<number, Entry[]>();
         for (const entry of entries) { const group = index.get(entry.time) ?? []; group.push(entry); index.set(entry.time, group); }
         return index;
       };
-      const baseTimes = byTime(ours); const remoteTimes = byTime(theirs);
-      for (const [time, entries] of baseTimes) {
+      const remoteTimes = byTime(theirs);
+      for (const [time, entries] of byTime(ours)) {
         const candidates = remoteTimes.get(time);
         if (entries.length === 1 && candidates?.length === 1) pair(entries[0]!, candidates[0]!);
       }
     }
     ours = ours.filter((entry) => !matchedBase.has(entry.mapping.eventId));
     theirs = theirs.filter((entry) => !matchedRemote.has(entry.mapping.eventId));
-    if (!ours.length) result.added.push(...theirs.map((entry) => entry.mapping.eventId));
-    else if (!theirs.length) result.deleted.push(...ours.map((entry) => entry.mapping.eventId));
-    else result.ambiguous.push({ reference, baselineEventIds: ours.map((entry) => entry.mapping.eventId), remoteEventIds: theirs.map((entry) => entry.mapping.eventId) });
+    for (const [a, b] of pairInOrder(ours, theirs)) pair(a, b);
+    result.added.push(...theirs.filter((entry) => !matchedRemote.has(entry.mapping.eventId)).map((entry) => entry.mapping.eventId));
+    result.deleted.push(...ours.filter((entry) => !matchedBase.has(entry.mapping.eventId)).map((entry) => entry.mapping.eventId));
   }
   return result;
 }
 
-export function resolveMa2Readback(binding: Binding, preview: Ma2TimecodePreview, choices: ReadonlyMap<string, string | null>): Ma2ReadbackMatch {
-  const result = matchMa2Readback(binding, preview);
-  const pending = new Set(result.ambiguous.flatMap((group) => group.remoteEventIds));
-  for (const id of choices.keys()) if (!pending.has(id)) throw new Error('对应选择已过期，请重新读取');
-  const used = new Set(result.matches.map((match) => match.baselineEventId));
-  for (const group of result.ambiguous) {
-    for (const remoteEventId of group.remoteEventIds) {
-      if (!choices.has(remoteEventId)) throw new Error('请确认所有待对应的灯光点');
-      const baselineEventId = choices.get(remoteEventId);
-      if (baselineEventId === null) { result.added.push(remoteEventId); continue; }
-      if (!baselineEventId || !group.baselineEventIds.includes(baselineEventId)) throw new Error('所选旧点不属于当前 Cue 候选');
-      if (used.has(baselineEventId)) throw new Error('一个旧点不能对应多个控台点');
-      used.add(baselineEventId); result.matches.push({ baselineEventId, remoteEventId });
-    }
-    result.deleted.push(...group.baselineEventIds.filter((id) => !used.has(id)));
+/**
+ * The order-preserving pairing of two runs of the same Cue call with the smallest total time distance;
+ * equal counts pair in time order. Ties keep the earlier events together, so the result never depends on
+ * how the console happened to number its events.
+ */
+function pairInOrder(oursInput: readonly Entry[], theirsInput: readonly Entry[]): Array<[Entry, Entry]> {
+  const sorted = (entries: readonly Entry[]): Entry[] => entries.map((entry, position) => ({ entry, position })).sort((a, b) => a.entry.time - b.entry.time || a.position - b.position).map(({ entry }) => entry);
+  const ours = sorted(oursInput); const theirs = sorted(theirsInput);
+  if (ours.length === theirs.length) return ours.map((entry, index) => [entry, theirs[index]!]);
+  const swap = ours.length > theirs.length;
+  const short = swap ? theirs : ours; const long = swap ? ours : theirs;
+  // cost[i][j]: the best pairing of the first i short events within the first j long ones (j ≥ i).
+  const cost = Array.from({ length: short.length + 1 }, () => new Array<number>(long.length + 1).fill(Number.POSITIVE_INFINITY));
+  for (let j = 0; j <= long.length; j += 1) cost[0]![j] = 0;
+  const take = (i: number, k: number): number => cost[i - 1]![k - 1]! + Math.abs(short[i - 1]!.time - long[k - 1]!.time);
+  for (let i = 1; i <= short.length; i += 1) for (let k = i; k <= long.length; k += 1) cost[i]![k] = Math.min(take(i, k), cost[i]![k - 1]!);
+  const result: Array<[Entry, Entry]> = [];
+  let j = long.length;
+  for (let i = short.length; i > 0; i -= 1) {
+    // Walking back from the end, a later long event is left over whenever that is at least as good.
+    while (j > i && cost[i]![j - 1]! <= take(i, j)) j -= 1;
+    result.push(swap ? [long[j - 1]!, short[i - 1]!] : [short[i - 1]!, long[j - 1]!]);
+    j -= 1;
   }
-  result.ambiguous = [];
-  return result;
+  return result.reverse();
 }
 
 function mappedEntries(tracks: LightingTrack[], mappings: Mapping[]): Entry[] {

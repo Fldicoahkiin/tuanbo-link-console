@@ -541,7 +541,8 @@ test('MA2 读取预览加入节目、撤销和保存基线完整，列出未支�
   await expect.poll(displayedLightingEventCount).toBe(3);
 });
 
-test('MA2 重复 Cue 可逐点确认对应，重新读取清除旧选择', async ({}, testInfo) => {
+// 2026-11-11 用户：“我要的是软件能实时同步控台做出的修改”。重复的 Cue 自动按时间配对，不再逐点确认。
+test('MA2 重复 Cue 两次触发都挪了：自动按时间先后对上，不用确认', async ({}, testInfo) => {
   await beginNewProject();
   await page.getByLabel('工程名称').fill('MA2 对应验收');
   await page.getByRole('button', { name: '创建工程' }).click();
@@ -571,15 +572,8 @@ test('MA2 重复 Cue 可逐点确认对应，重新读取清除旧选择', async
   await application.evaluate(({ ipcMain }, result) => { ipcMain.removeHandler('link:ma2-preview'); ipcMain.handle('link:ma2-preview', () => result); }, remote);
   await page.getByRole('button', { name: '读取灯光编排', exact: true }).click();
   const region = page.getByRole('region', { name: 'MA2 灯光读取预览' });
-  await expect(region.getByRole('status')).toContainText('待确认 2 个');
-  await page.getByLabel('对应 Cue 1.250 · 0.500 秒').selectOption(`old:${clip.events[0]!.id}`);
-  await expect(page.getByLabel('对应 Cue 1.250 · 2.500 秒').locator(`option[value="old:${clip.events[0]!.id}"]`)).toBeDisabled();
-  await page.getByLabel('对应 Cue 1.250 · 2.500 秒').selectOption('new');
-  await expect(region.getByRole('status')).toContainText('已对应 2 个点 · 控台新增 1 个 · 控台删除 1 个 · 待确认 0 个');
-  await page.screenshot({ path: testInfo.outputPath('ma2-identity-choice.png') });
-  await page.getByRole('button', { name: '读取灯光编排', exact: true }).click();
-  await expect(region.getByRole('status')).toContainText('待确认 2 个');
-  await expect(page.getByLabel('对应 Cue 1.250 · 0.500 秒')).toHaveValue('');
+  await expect(region.getByRole('status')).toContainText('已对应 3 个点 · 控台新增 0 个 · 控台删除 0 个');
+  await page.screenshot({ path: testInfo.outputPath('ma2-identity-auto.png') });
 });
 
 for (const nativeFixture of ['reaper-native-6.05', 'reaper-native-ramp-6.05', 'reaper-native-loop-6.05', 'reaper-native-messages-6.05', 'reaper-native-takes-6.05']) test(`原生 REAPER 6.05 工程经文件选择导入、撤销、保存和重开 ${nativeFixture}`, async ({}, testInfo) => {

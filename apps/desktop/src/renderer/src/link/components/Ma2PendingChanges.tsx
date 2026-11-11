@@ -5,7 +5,8 @@ import { Check, ChevronRight, CircleAlert, CircleStop, FolderArchive, FolderOpen
 import type { Ma2ConsoleChanges, Ma2WriteMode, ProjectArchiveResult } from '@tb/schema';
 import { ma2PendingChanges } from '@tb/core/link';
 import { writeMa2NamesNow } from '../runtime/ma2-name-sync';
-import { useMa2SyncStore } from '../stores/ma2-sync-store';
+import { useMa2SyncStore, type SongSync } from '../stores/ma2-sync-store';
+import { takeMa2SongFromConsole, writeMa2SongFromSoftware } from '../runtime/ma2-song-sync';
 import { archiveMa2Project } from '../runtime/ma2-project-archive';
 import { useDocumentStore } from '../stores/document-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
@@ -28,6 +29,25 @@ const CONSOLE_CHANGES: readonly Choice<Ma2ConsoleChanges>[] = [
 ];
 const WRITE_LABEL: Record<Ma2WriteMode, string> = { merge: '合并', overwrite: '覆盖', direct: '直接写入' };
 const CHANGES_LABEL: Record<Ma2ConsoleChanges, string> = { 'read-back': '读回控台改动', software: '以联动台为准' };
+
+/**
+ * A song that does not match the console yet. A stopped way-1 song has two ways out (2026-11-11): each
+ * drops one side, so it is confirmed once.
+ */
+function UnsettledSong({ song, title, stopped, disabled, busy, choose }: { song: SongSync; title: string; stopped: boolean; disabled: boolean; busy: boolean; choose: (side: 'console' | 'software') => Promise<void> }): JSX.Element {
+  const [asking, setAsking] = useState<'console' | 'software' | null>(null);
+  return <div className="lighting-sync-song">
+    <p role={song.state === 'blocked' ? 'alert' : 'status'}>{title}：{song.progress?.detail ?? song.message}</p>
+    {stopped ? <div className="lighting-sync-song-actions">
+      <Button variant="secondary" size="sm" disabled={disabled} title="读控台上这首歌现在的时间线，换掉联动台里的；联动台没写到控台的改动先存档" onClick={() => setAsking('console')}>用控台上的</Button>
+      <Button variant="secondary" size="sm" disabled={disabled} title="按联动台的时间线写到控台，控台上的改动写回去；控台上的版本写入前会备份" onClick={() => setAsking('software')}>用联动台的</Button>
+    </div> : null}
+    {stopped && asking ? <Notice tone="warning" title={asking === 'console' ? `「${title}」换成控台上的版本？` : `「${title}」按联动台的写到控台？`} actions={<>
+      <Button variant="danger" size="sm" disabled={busy} onClick={() => { setAsking(null); void choose(asking); }}>{asking === 'console' ? '用控台上的' : '用联动台的'}</Button>
+      <Button variant="secondary" size="sm" onClick={() => setAsking(null)}>取消</Button>
+    </>}>{asking === 'console' ? '联动台里这首歌还没写到控台的灯光改动会去掉，换成控台上现在的。去掉之前先存档，可以在“存档”里找回。' : '控台上这首歌改过的点会按联动台的时间线写回去。写入前控台上会留一份备份。'}</Notice> : null}
+  </div>;
+}
 
 export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element | null {
   const project = useDocumentStore(state => state.project);
@@ -171,7 +191,8 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
       {archivingOff ? <p>已关闭存档，写入前不再备份。</p> : null}
       <p>同步方式：{WRITE_LABEL[writeMode]} · {CHANGES_LABEL[consoleChanges]}</p>
       <p role={session.status === 'blocked' ? 'alert' : 'status'}>{notice || (manual ? '实时同步已关，修改先留在联动台。点“同步一次”写到控台。' : once !== null ? '正在按现在的同步方式把每首歌同步一次，完成后实时同步保持关闭。' : !useDocumentStore.getState().path ? '请先保存工程，保存后自动同步。' : session.status !== 'ready' || !songs.length ? session.message : unsettled.length ? '这些歌和控台还对不上，或者正在同步：' : `${settled} 首歌都和控台一致。`)}</p>
-      {unsettled.map(song => <p key={song.itemId} role={song.state === 'blocked' ? 'alert' : 'status'}>{project.rundown.find(item => item.id === song.itemId)?.title ?? song.name}：{song.progress?.detail ?? song.message}</p>)}
+      {unsettled.map(song => <UnsettledSong key={song.itemId} song={song} title={project.rundown.find(item => item.id === song.itemId)?.title ?? song.name}
+        stopped={song.state === 'blocked' && imported(song.itemId)} disabled={busy || working || playing} busy={busy} choose={side => run(async () => setNotice(side === 'console' ? await takeMa2SongFromConsole(song.itemId) : writeMa2SongFromSoftware(song.itemId)))} />)}
       {unsettled.length && settled ? <p>其余 {settled} 首歌和控台一致。</p> : null}
       {playing ? <p>播放时先暂存在本地，停止后再同步。</p> : null}
       {names.state !== 'idle' && names.state !== 'verified' && names.message ? <p role={names.state === 'blocked' ? 'alert' : 'status'}>改名：{names.message}</p> : null}

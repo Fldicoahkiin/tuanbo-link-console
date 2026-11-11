@@ -30,7 +30,7 @@ it('截图重建的24个混合事件保留全部原文，11个已知Cue进入歌
   let console = withSequence(meiNanXml);
   const bridge = { request: vi.fn(() => Promise.resolve(console)), exchange: vi.fn((_operation: string, _target: number, _expected: string, desired: string) => { console = withSequence(desired); return Promise.resolve({ response: desired, requestId: 'b'.repeat(32) }); }) };
   const readback = convertMa2Snapshot(withSequence(meiNanXml), 2, [], 480000);
-  const result = await new Ma2ApplyService(bridge, () => false).apply({ dataDirectory: '', document: lighting, bindingId: lighting.ma2Bindings![0]!.id, readback, choices: [], conflicts: [] });
+  const result = await new Ma2ApplyService(bridge, () => false).apply({ dataDirectory: '', document: lighting, bindingId: lighting.ma2Bindings![0]!.id, readback, conflicts: [] });
   expect(result).toMatchObject({ status: 'verified' });
   expect(bridge.exchange).toHaveBeenCalledOnce();
   // Only the moved Cue changed: 3 → 6 frames (100 ms → 200 ms after the song start). Master faders, XFade and Learn stay as they were.
@@ -55,14 +55,14 @@ it('带控台专有参数的 Cue 在软件里可改时间（参数原样保留�
   const bindingId = lighting.ma2Bindings![0]!.id;
   const readback = convertMa2Snapshot(withSequence(xml), 2, [], 480000);
   const moved = structuredClone(lighting); moved.tracks[1]!.clips[0]!.events[0]!.at = 200;
-  const write = prepareMa2MergedEvents(moved, bindingId, readback, new Map(), new Map(), [withSequence(xml)]);
+  const write = prepareMa2MergedEvents(moved, bindingId, readback, new Map(), [withSequence(xml)]);
   expect(write.desiredXml).toMatch(/<Event index="0" time="6" unknown="keep-exactly" command="Goto" pressed="true">/);
   const recued = structuredClone(lighting); const event = recued.tracks[1]!.clips[0]!.events[0]!;
   if (event.kind !== 'ma2') throw new Error('测试数据应为 Cue');
   event.cue = '2.000';
-  expect(() => prepareMa2MergedEvents(recued, bindingId, readback, new Map(), new Map(), [withSequence(xml)])).toThrow('不转换的控台参数');
+  expect(() => prepareMa2MergedEvents(recued, bindingId, readback, new Map(), [withSequence(xml)])).toThrow('不转换的控台参数');
   const removed = structuredClone(lighting); removed.tracks.splice(2, 1);
-  expect(() => prepareMa2MergedEvents(removed, bindingId, readback, new Map(), new Map(), [withSequence(xml)])).toThrow('要删掉整条轨道，请在控台上删');
+  expect(() => prepareMa2MergedEvents(removed, bindingId, readback, new Map(), [withSequence(xml)])).toThrow('要删掉整条轨道，请在控台上删');
 });
 it('不推断未验证帧率，原始目录与XML仍保留', async () => {
   const xml = meiNanXml.replace('30 FPS', '25 FPS');

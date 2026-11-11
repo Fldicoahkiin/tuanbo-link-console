@@ -77,8 +77,7 @@ export const ma2ConsoleChangesSchema = z.enum(['read-back', 'software']);
 export type Ma2ConsoleChanges = z.infer<typeof ma2ConsoleChangesSchema>;
 export const ma2CompareRequestSchema = z.object({
   document: lightingDocumentSchema, bindingId: z.string().min(1), readback: ma2TimecodePreviewSchema,
-  consoleChanges: ma2ConsoleChangesSchema.optional(),
-  choices: z.array(z.tuple([z.string().min(1), z.string().min(1).nullable()])).refine((entries) => new Set(entries.map(([id]) => id)).size === entries.length, '重复的事件对应选择')
+  consoleChanges: ma2ConsoleChangesSchema.optional()
 }).strict();
 export type Ma2CompareRequest = z.infer<typeof ma2CompareRequestSchema>;
 export const ma2ApplyRequestSchema = ma2CompareRequestSchema.extend({

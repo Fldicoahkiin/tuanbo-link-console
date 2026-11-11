@@ -18,7 +18,7 @@ import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor'
 import { ma2SongCreationStages, recoverMa2SongCreation } from './ma2-song-recovery';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
 import { writeMa2SongTimecode } from './ma2-song-timecode';
-import { MA2_SONG_COLLISION } from '@tb/core/link';
+import { MA2_SONG_COLLISION, ma2LatestSide } from '@tb/core/link';
 import { hasMa2SongConsoleEdits, mergeMa2SongConsoleEdits } from './ma2-song-console-edits';
 
 type Connection = Pick<Ma2Telnet, 'command'>;
@@ -310,7 +310,9 @@ export class Ma2LayoutService {
           progress('connecting', 1, 1, `读取这首歌的时间码节目 ${show.number}`);
           showXml = await bridge.request('READ', show.number);
         }
-        const merged = mergeMa2SongConsoleEdits(request.binding, request.points, remoteXml, showXml);
+        // This sync is the first to see the console changed unless an earlier check saw it (2026-11-11).
+        const latest = ma2LatestSide({ localEditedAt: request.localEditedAt, consoleSeenAt: request.consoleSeenAt ?? Date.now() });
+        const merged = mergeMa2SongConsoleEdits(request.binding, request.points, remoteXml, showXml, latest);
         if (hasMa2SongConsoleEdits(merged.edits)) {
           request.points = merged.points; request.binding = merged.binding; originalPoints = structuredClone(merged.points);
           consoleEdits = merged.edits;

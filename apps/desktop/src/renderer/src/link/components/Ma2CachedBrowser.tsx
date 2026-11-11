@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { refreshMa2BindingCommand, detachMa2BindingCommand, pairSongWithMa2ShowCommand, restoreMa2BindingCommand, formatMtcOffset, ma2ShowStartTicks, ma2SongPairs, programTimeOrigin, readSongMtcStart } from '@tb/core/link';
 import type { LinkProject, Ma2ReadState } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
+import { readMa2ShowNow } from '../runtime/ma2-console-version';
 import { importCachedMa2, updateMa2ReadState } from '../stores/ma2-read-store';
 import { useSelectedProgram } from '../useSelectedProgram';
 import '../ma2-cached-browser.css';
@@ -92,9 +93,22 @@ export function Ma2CachedBrowser({ disabled, onClose, notify }: { disabled: bool
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setBusy(false); }
   };
-  const refresh = (itemId: string, target: number, archiveLocalEdits = false): void => {
-    try { useDocumentStore.getState().execute(refreshMa2BindingCommand(itemId, target, archiveLocalEdits)); setConflict(null); }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); if (message.includes('本地编排已有修改')) setConflict(target); notify(message, 'error'); }
+  /**
+   * 从控台刷新 (2026-11-11): connected, this one show is read from the console now; only while the console
+   * is not connected does the last read stand in, and the message says when that read was made.
+   */
+  const refresh = async (itemId: string, target: number, archiveLocalEdits = false): Promise<void> => {
+    setBusy(true);
+    try {
+      const song = useDocumentStore.getState().project?.rundown.find(item => item.id === itemId);
+      const fresh = await readMa2ShowNow(target, song?.lighting?.ma2Bindings?.find(binding => binding.timecode === target)?.timeOriginMs);
+      const cached = useDocumentStore.getState().project?.ma2ReadState;
+      const readAt = cached?.catalog.entries.find(value => value.target === target)?.readAt ?? cached?.catalog.readAt;
+      useDocumentStore.getState().execute(refreshMa2BindingCommand(itemId, target, archiveLocalEdits, fresh ?? undefined));
+      setConflict(null);
+      notify(fresh ? `已从控台重新读取 Timecode ${target}，放进了「${song?.title ?? ''}」` : `控台没连上，用的是 ${readAt ? new Date(readAt).toLocaleString() : '上次'} 读到的 Timecode ${target}`);
+    } catch (error) { const message = error instanceof Error ? error.message : String(error); if (message.includes('本地编排已有修改')) setConflict(target); notify(message, 'error'); }
+    finally { setBusy(false); }
   };
   const archive = (restore: boolean, itemId: string, target: number): void => {
     try { useDocumentStore.getState().execute((restore ? restoreMa2BindingCommand : detachMa2BindingCommand)(itemId, target)); }
@@ -112,8 +126,8 @@ export function Ma2CachedBrowser({ disabled, onClose, notify }: { disabled: bool
         {row.song && origin !== undefined && row.state !== 'matched' ? <p>「{row.song.title}」的起始码是 <strong className="ma2-browser-mtc">MTC {formatMtcOffset(origin, frameRate)}</strong></p> : null}
         <ShowSongPicker key={`${entry.target}:${row.song?.id ?? ''}`} project={project} row={row} disabled={disabled || busy} notify={notify} />
         {entry.conversionError || originError ? <p role="alert">{entry.conversionError ?? originError}</p> : null}
-        {row.bound && row.song ? <div className="ma2-browser-tools"><button onClick={() => { selectSong(row.song!.id); onClose(); }}>查看歌曲 Cue 与音频</button><button disabled={disabled || busy} onClick={() => refresh(row.song!.id, entry.target)}>用已读取的内容刷新</button><button disabled={disabled || busy} onClick={() => archive(false, row.song!.id, entry.target)}>解除关联并归档编排</button></div> : null}
-        {row.bound && row.song && conflict === entry.target ? <p role="alert">本地编排和控台上的版本不一致。<button onClick={() => setConflict(null)}>保留本地</button><button disabled={disabled || busy} onClick={() => refresh(row.song!.id, entry.target, true)}>归档本地，采用控台版本</button></p> : null}
+        {row.bound && row.song ? <div className="ma2-browser-tools"><button onClick={() => { selectSong(row.song!.id); onClose(); }}>查看歌曲 Cue 与音频</button><button disabled={disabled || busy} title="控台连着时重新读这条时间线；没连上时用上次读到的" onClick={() => void refresh(row.song!.id, entry.target)}>从控台刷新</button><button disabled={disabled || busy} onClick={() => archive(false, row.song!.id, entry.target)}>解除关联并归档编排</button></div> : null}
+        {row.bound && row.song && conflict === entry.target ? <p role="alert">本地编排和控台上的版本不一致。<button onClick={() => setConflict(null)}>保留本地</button><button disabled={disabled || busy} onClick={() => void refresh(row.song!.id, entry.target, true)}>归档本地，采用控台版本</button></p> : null}
         {!row.bound ? cache.detachedBindings?.filter(value => value.binding.timecode === entry.target).map(value => {
           const owner = project.rundown.find(item => item.id === value.itemId);
           const now = owner?.lighting?.ma2Bindings?.map(binding => `Timecode ${binding.timecode}`).join('、');

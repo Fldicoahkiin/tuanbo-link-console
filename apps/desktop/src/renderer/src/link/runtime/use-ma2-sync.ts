@@ -14,8 +14,9 @@ type Notify = (message: string, tone?: 'info' | 'error') => void;
 export function announceMa2Sync(notify: Notify, state: ReturnType<typeof useMa2SyncStore.getState>, previous: ReturnType<typeof useMa2SyncStore.getState>): void {
   if (state.names.state === 'verified' && previous.names.state !== 'verified' && state.names.message === '名称已写入控台并回读确认') notify(state.names.message);
   if (state.names.state === 'blocked' && previous.names.state !== 'blocked') notify(state.names.message, 'error');
+  // A stopped song is announced once per failure text (2026-11-11), not each time an edit tries it again.
   for (const song of Object.values(state.songs)) {
-    if (song.state !== 'blocked' || previous.songs[song.itemId]?.state === 'blocked') continue;
+    if (song.state !== 'blocked' || !song.announcedFailure || song.announcedFailure === previous.songs[song.itemId]?.announcedFailure) continue;
     const title = useDocumentStore.getState().project?.rundown.find(item => item.id === song.itemId)?.title ?? song.name;
     notify(`「${title}」：${song.message}`, 'error');
   }

@@ -1,5 +1,5 @@
 import { ma2ApplyRequestSchema, ma2ApplyResultSchema, type Ma2ApplyRequest, type Ma2ApplyResult, type Ma2TimecodePreview } from '@tb/schema';
-import { resolveMa2Sync } from '@tb/core/link';
+import { MA2_SONG_COLLISION, resolveMa2Sync } from '@tb/core/link';
 import { Ma2BridgeFailure, type Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { confirmMa2MergedEvents, prepareMa2MergedEvents } from './ma2-event-write';
 import { convertMa2Snapshot } from './ma2-timecode-conversion';
@@ -24,9 +24,9 @@ export class Ma2ApplyService {
       stage = 'read';
       let snapshot = await this.bridge.request('SNAPSHOT', binding.timecode);
       const current = convertMa2Snapshot(snapshot, binding.timecode, [], binding.timeOriginMs);
-      if (!sameMa2XmlObjects(request.readback.sourceXml, current.sourceXml) || previewContent(request.readback) !== previewContent(current)) throw new Error('预览之后控台的 Timecode 或序列变了，请重新读取后再比较');
+      if (!sameMa2XmlObjects(request.readback.sourceXml, current.sourceXml) || previewContent(request.readback) !== previewContent(current)) throw new Error(`${MA2_SONG_COLLISION}：预览之后控台的 Timecode ${binding.timecode} 或它用的序列变了，这次没有写入；重新读取控台后再同步`);
       stage = 'preflight';
-      const merged = resolveMa2Sync(compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map(request.choices), request.consoleChanges), new Map(request.conflicts));
+      const merged = resolveMa2Sync(compareMa2LightingReadback(request.document, request.bindingId, request.readback, request.consoleChanges), new Map(request.conflicts));
       const desiredSequences = new Set<number>();
       for (const event of merged.objects.filter((object) => object.kind === 'event' && object.properties.action === 'goto')) {
         const value = event.properties.sequence ?? '';
@@ -39,10 +39,10 @@ export class Ma2ApplyService {
         stage = 'read';
         snapshot = await this.bridge.request('SCOPE', binding.timecode, additional.join(','));
         const scoped = convertMa2Snapshot(snapshot, binding.timecode, additional, binding.timeOriginMs);
-        if (!sameMa2XmlObjects(current.sourceXml, scoped.sourceXml) || previewContent(current) !== previewContent(scoped)) throw new Error('读取新增 Cue 序列时控台有变化，请重新读取后再比较');
+        if (!sameMa2XmlObjects(current.sourceXml, scoped.sourceXml) || previewContent(current) !== previewContent(scoped)) throw new Error(`${MA2_SONG_COLLISION}：读取新加 Cue 的序列时控台有变化，这次没有写入；重新读取控台后再同步`);
         stage = 'preflight';
       }
-      const prepared = prepareMa2MergedEvents(request.document, request.bindingId, request.readback, new Map(request.choices), new Map(request.conflicts), [snapshot], request.timeAlignment ?? 'exact', request.consoleChanges);
+      const prepared = prepareMa2MergedEvents(request.document, request.bindingId, request.readback, new Map(request.conflicts), [snapshot], request.timeAlignment ?? 'exact', request.consoleChanges);
       this.requireStopped();
       if (sameMa2XmlObjects(prepared.desiredXml, current.sourceXml)) return ma2ApplyResultSchema.parse({ status: 'verified', confirmed: confirmMa2MergedEvents(prepared, current.sourceXml, [snapshot]), backupFile: null });
       stage = 'write'; mayHaveWritten = true;

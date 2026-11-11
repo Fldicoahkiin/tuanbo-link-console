@@ -21,7 +21,14 @@ export const ma2SongSyncRequestSchema = z.object({ network: ma2NetworkTargetSche
   timecodeLengthMs: z.number().int().positive().max(86400000).optional(),
   /** What the operator chose; without it the sync merges and reads console edits back. */
   writeMode: ma2WriteModeSchema.optional(),
-  consoleChanges: ma2ConsoleChangesSchema.optional()
+  consoleChanges: ma2ConsoleChangesSchema.optional(),
+  /**
+   * The latest wins when a point changed on both sides (2026-11-11): when the operator last edited the
+   * song in the software (left out when unknown) and when a pass first saw the console differ from the
+   * last confirmed sync (left out when this sync is the first to see it).
+   */
+  localEditedAt: z.number().finite().nonnegative().optional(),
+  consoleSeenAt: z.number().finite().nonnegative().optional()
 }).strict().superRefine((value, ctx) => {
   if (!value.points.length && !value.binding) ctx.addIssue({ code: 'custom', message: '新歌要先添加 Cue；已关联的歌确认后可以清空' });
   if (new Set(value.points.map(point => point.id)).size !== value.points.length) ctx.addIssue({ code: 'custom', message: '歌曲 Cue 身份重复' });
@@ -29,13 +36,14 @@ export const ma2SongSyncRequestSchema = z.object({ network: ma2NetworkTargetSche
 /**
  * Edits made on the console since the last confirmed sync that the sync took over (2026-10-26, both
  * ways): a point's time moved in the song's Timecode show, a point whose Cue or trigger was deleted,
- * a trigger added for a Cue of the song's Sequence. The software applies each to a point it has not
- * changed itself meanwhile.
+ * a trigger added for a Cue of the song's Sequence. A point the software changed meanwhile too takes
+ * the later change (2026-11-11); `conflicts` counts those points and says which side was later.
  */
 export const ma2SongConsoleEditsSchema = z.object({
   moved: z.array(z.object({ id: z.string().min(1), atMs: z.number().finite().nonnegative() }).strict()),
   removed: z.array(z.string().min(1)),
-  added: z.array(z.object({ id: z.string().min(1), name: z.string().max(512), atMs: z.number().finite().nonnegative(), cue: cueNumber }).strict())
+  added: z.array(z.object({ id: z.string().min(1), name: z.string().max(512), atMs: z.number().finite().nonnegative(), cue: cueNumber }).strict()),
+  conflicts: z.object({ count: z.number().int().positive(), winner: z.enum(['local', 'remote']) }).strict().optional()
 }).strict();
 export const ma2SongSyncResultSchema = z.object({ binding: ma2SongBindingSchema, library: ma2EffectLibrarySchema, layout: ma2LayoutSnapshotSchema.nullable(),
   backupFile: z.string(), changed: z.boolean(),

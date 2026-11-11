@@ -1,4 +1,4 @@
-import { parseLinkProject, type LinkProject, type Ma2Catalog, type Ma2ReadState } from '@tb/schema';
+import { parseLinkProject, ma2TimecodePreviewSchema, type LinkProject, type Ma2Catalog, type Ma2ReadState, type Ma2TimecodePreview } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { ma2ShowStartTicks, matchMa2Programs, sameMtcStart, type Ma2StartMatch, type Ma2TimelineSwitch } from './ma2-program-matching';
 import { importMa2TimecodeCommand } from './ma2-import';
@@ -221,18 +221,41 @@ export function restoreMa2BindingCommand(itemId: string, target: number): LinkCo
   }, undo: before => parseLinkProject(before) };
 }
 
-export function refreshMa2BindingCommand(itemId: string, target: number, archiveLocalEdits = false): LinkCommand {
-  return { id: crypto.randomUUID(), label: '从工程缓存刷新已绑定灯光', execute(project) {
+/**
+ * Takes the console's version of one of a song's Timecode shows as the song's Cues. `fresh` is that show
+ * as just read from the console (2026-11-11: 用控台上的, and the console timeline page's refresh while
+ * connected); without it, the project's last console read. The song's own Cues of that show, with its
+ * unsynced edits, go to the read state's archive first; a song bound by hand, without a console read
+ * in the project, has them in the project archive taken before.
+ */
+export function refreshMa2BindingCommand(itemId: string, target: number, archiveLocalEdits = false, fresh?: Ma2TimecodePreview): LinkCommand {
+  const read = fresh ? ma2TimecodePreviewSchema.parse(fresh) : undefined;
+  if (read && read.target !== target) throw new Error(`读到的是 Timecode ${read.target}，不是 Timecode ${target}`);
+  return { id: crypto.randomUUID(), label: read ? '用控台上的灯光' : '从工程缓存刷新已绑定灯光', execute(project) {
     const state = project.ma2ReadState;
     const entry = state?.catalog.entries.find(value => value.target === target);
     const lighting = project.rundown.find(item => item.id === itemId)?.lighting;
     const binding = lighting?.ma2Bindings?.find(value => value.timecode === target);
-    if (!state || !entry?.preview || entry.error || !binding || !lighting) throw new Error('此时间线没有完整的已读内容');
-    if (state.catalog.sourceUnverified) throw new Error('读取来源有变化，请重新确认后刷新');
+    if (!binding || !lighting) throw new Error(`这首歌已经不用 Timecode ${target}`);
+    const preview = read ?? (state && entry?.preview && !entry.error ? entry.preview : undefined);
+    if (!preview) throw new Error('此时间线没有完整的已读内容');
+    if (!read && state?.catalog.sourceUnverified) throw new Error('读取来源有变化，请重新确认后刷新');
     const ids = new Set(binding.baselineTracks.map(track => track.id));
     const tracks = lighting.tracks.filter(track => ids.has(track.id));
     if (!archiveLocalEdits && (binding.pendingTracks?.length || JSON.stringify(tracks) !== JSON.stringify(binding.baselineTracks))) throw new Error('本地编排已有修改：请选择保留本地，或归档本地后采用控台版本');
-    const archived = detachMa2BindingCommand(itemId, target).execute(project);
-    return withStoredPairs(importMa2TimecodeCommand(itemId, entry.preview).execute(archived));
+    const archived = state ? detachMa2BindingCommand(itemId, target).execute(project) : withoutBinding(project, itemId, target);
+    return withStoredPairs(importMa2TimecodeCommand(itemId, preview).execute(archived));
   }, undo: before => parseLinkProject(before) };
+}
+
+/** The song without one show's Cues, for a song whose show was bound by hand: there is no read state to archive them in. */
+function withoutBinding(project: LinkProject, itemId: string, target: number): LinkProject {
+  const next = structuredClone(project);
+  const lighting = next.rundown.find(item => item.id === itemId)?.lighting;
+  const binding = lighting?.ma2Bindings?.find(value => value.timecode === target);
+  if (!lighting || !binding) throw new Error('关联已不存在');
+  const ids = new Set([...binding.baselineTracks.map(track => track.id), ...(binding.pendingTracks ?? []).map(track => track.trackId)]);
+  lighting.tracks = lighting.tracks.filter(track => !ids.has(track.id));
+  lighting.ma2Bindings = lighting.ma2Bindings?.filter(value => value.id !== binding.id);
+  return next;
 }

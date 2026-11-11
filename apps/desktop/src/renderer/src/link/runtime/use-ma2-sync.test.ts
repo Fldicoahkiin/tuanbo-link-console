@@ -14,9 +14,9 @@ it('一首歌同步停下时，红字用「」写出歌名，按写好的样子�
   project.rundown = [{ id: 'song', title: 'HAPPY', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [] }];
   useDocumentStore.getState().setProject(project, 'test.tblink');
   const previous = useMa2SyncStore.getState();
-  const message = '同步失败，没有自动重试：控台上的时间线没有读回来。修改保留在本地，处理好后点“刷新同步”';
+  const message = '同步没成功：控台上的时间线没有读回来。改动还留在联动台，下次改动或点“刷新同步”时再试';
   const song: SongSync = { sessionId: 'session', itemId: 'song', documentId: useDocumentStore.getState().documentId, name: 'HAPPY',
-    settings: { layout: 1, name: '联动台', nextSequence: 1, columns: 8 }, state: 'blocked', message };
+    settings: { layout: 1, name: '联动台', nextSequence: 1, columns: 8 }, state: 'blocked', message, announcedFailure: '控台上的时间线没有读回来' };
   const shown: { text: string; tone: 'info' | 'error' }[] = [];
   // What LinkApp's notify puts on screen for a notice that is not written in main.
   const notify = (text: string, tone: 'info' | 'error' = 'info'): void => { shown.push({ text: noticeText(text, tone, false), tone }); };
@@ -25,4 +25,9 @@ it('一首歌同步停下时，红字用「」写出歌名，按写好的样子�
   // Said once: the song was blocked already the next time the store changes.
   announceMa2Sync(notify, { ...previous, songs: { song } }, { ...previous, songs: { song } });
   expect(shown).toHaveLength(1);
+  // 2026-11-10 现场：每次编辑重试又停下都弹一条红字，叠到“连续 15 次同步失败”。同样的原因再停下不再弹。
+  announceMa2Sync(notify, { ...previous, songs: { song } }, { ...previous, songs: { song: { ...song, state: 'syncing' } } });
+  expect(shown).toHaveLength(1);
+  announceMa2Sync(notify, { ...previous, songs: { song: { ...song, announcedFailure: '别的原因' } } }, { ...previous, songs: { song: { ...song, state: 'syncing' } } });
+  expect(shown).toHaveLength(2);
 });

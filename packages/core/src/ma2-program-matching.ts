@@ -87,7 +87,7 @@ export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog, fail
         ? `「${project.rundown.find(item => item.id === owner)?.title ?? owner}」还没有可用的 MTC 起始码，已放进歌曲的 Cue 都保留，先不往控台写`
         : !sameMtcStart(song.start, start)
           ? `控台 Timecode ${entry.target} 从 ${code} 开始，和「${song.item.title}」的 MTC 起始码 ${formatMtcOffset(song.start, frameRate)} 对不上。已放进歌曲的 Cue 都保留，这首歌先不往控台写`
-          : `「${song.item.title}」里 Timecode ${entry.target} 的 Cue 是按起点 ${formatMtcOffset(placed, frameRate)} 放的，和现在的 ${code} 对不上。Cue 都保留，这首歌先不往控台写；请在控台时间线里用已读取的内容刷新` });
+          : `「${song.item.title}」里 Timecode ${entry.target} 的 Cue 是按起点 ${formatMtcOffset(placed, frameRate)} 放的，和现在的 ${code} 对不上。Cue 都保留，这首歌先不往控台写；请在控台时间线里点“从控台刷新”` });
       continue;
     }
     const same = songs.filter(song => sameMtcStart(song.start, start));

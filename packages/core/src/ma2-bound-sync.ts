@@ -1,5 +1,5 @@
 import { lightingDocumentSchema, ma2SyncSnapshotSchema, ma2TimecodePreviewSchema, type LightingDocument, type Ma2ConsoleChanges, type Ma2SyncObject, type Ma2TimecodePreview } from '@tb/schema';
-import { resolveMa2Readback, resolveMa2ReadbackTracks } from './ma2-readback';
+import { matchMa2Readback, resolveMa2ReadbackTracks } from './ma2-readback';
 import { ma2EventSnapshotProperties, snapshotMa2LightingBinding } from './ma2-lighting-snapshot';
 import { previewMa2Sync, type Ma2SyncPreview } from './ma2-sync';
 
@@ -8,13 +8,13 @@ import { previewMa2Sync, type Ma2SyncPreview } from './ma2-sync';
  * the base, so every event moved, deleted or added there since the last sync is written back to what
  * the timeline holds instead of coming into it. Tracks and the show itself still merge both ways.
  */
-export function previewMa2BoundSync(documentInput: LightingDocument, bindingId: string, readbackInput: Ma2TimecodePreview, choices: ReadonlyMap<string, string | null>, metadata: { baselineVersion: string; remoteVersion: string; baselineRevision: string; localRevision: string; remoteRevision: string }, consoleChanges: Ma2ConsoleChanges = 'read-back'): Ma2SyncPreview {
+export function previewMa2BoundSync(documentInput: LightingDocument, bindingId: string, readbackInput: Ma2TimecodePreview, metadata: { baselineVersion: string; remoteVersion: string; baselineRevision: string; localRevision: string; remoteRevision: string }, consoleChanges: Ma2ConsoleChanges = 'read-back'): Ma2SyncPreview {
   const document = lightingDocumentSchema.parse(documentInput);
   const readback = ma2TimecodePreviewSchema.parse(readbackInput);
   const binding = document.ma2Bindings?.find((entry) => entry.id === bindingId);
   if (!binding) throw new Error('节目没有这个 MA2 对象绑定');
   // Console-only actions are kept in the XML and are not part of the comparison (2026-10-26).
-  const matched = resolveMa2Readback(binding, readback, choices);
+  const matched = matchMa2Readback(binding, readback);
   const identities = new Map(matched.matches.map((entry) => [entry.remoteEventId, entry.baselineEventId]));
   const trackIdentities = resolveMa2ReadbackTracks(binding, readback, matched);
   const snapshots = snapshotMa2LightingBinding(document, bindingId, { consoleVersion: metadata.baselineVersion, baselineRevision: metadata.baselineRevision, localRevision: metadata.localRevision });

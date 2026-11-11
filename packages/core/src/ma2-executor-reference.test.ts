@@ -46,7 +46,7 @@ it('移动迁移可编辑映射，继续打点和自动关联不产生新轨，�
   const remote = createLightingDocument(); remote.tracks = structuredClone(moved.tracks);
   const preview: Ma2TimecodePreview = { target: 99, name: 'Timecode', readAt: original.readAt, sourceXml: '<MA>moved</MA>', document: remote, warnings: [], unconverted: [], mappings: structuredClone(binding.mappings), trackMappings: structuredClone(binding.trackMappings) };
   const match = matchMa2Readback(binding, preview);
-  expect(match).toMatchObject({ added: [], deleted: [], ambiguous: [], matches: [{ baselineEventId: 'e', remoteEventId: 'e' }] });
+  expect(match).toMatchObject({ added: [], deleted: [], matches: [{ baselineEventId: 'e', remoteEventId: 'e' }] });
   expect(resolveMa2ReadbackTracks(binding, preview, match).get('t')).toBe('t');
 });
 it('当前工程中明确来自另一Show的歌曲和模板不会因同数字地址被修改', () => {

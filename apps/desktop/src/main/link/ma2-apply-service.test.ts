@@ -20,7 +20,7 @@ function setup(source = xml) {
   const readback = convertMa2Timecode(source, [sequence], 9902);
   const document = structuredClone(readback.document);
   document.ma2Bindings = [{ id: 'binding', timecode: 9902, name: readback.name, readAt: readback.readAt, sourceXml: source, baselineTracks: structuredClone(document.tracks), mappings: structuredClone(readback.mappings) }];
-  const request: Ma2ApplyRequest = { dataDirectory: 'C:/ma2', document, bindingId: 'binding', readback, choices: [], conflicts: [] };
+  const request: Ma2ApplyRequest = { dataDirectory: 'C:/ma2', document, bindingId: 'binding', readback, conflicts: [] };
   let native = source;
   const bridge = {
     request: vi.fn((): Promise<string> => Promise.resolve(snapshot(native))),
@@ -230,7 +230,7 @@ describe('本机 MA2 同步服务', () => {
       const result = await new Ma2ApplyService(bridge, () => false).apply(request);
       expect(result).toMatchObject({ status: 'incomplete', stage: 'read', mayHaveWritten: false });
       if (result.status !== 'incomplete') throw new Error('过期预览未拒绝');
-      expect(result.message).toContain('预览之后');
+      expect(result.message).toContain('控台同时在改：预览之后');
       expect(bridge.exchange).not.toHaveBeenCalled();
     }
   });

@@ -58,7 +58,7 @@ function setup(initial = xml) {
   const api = {
     getMa2NetworkStatus: vi.fn(() => Promise.resolve({ state: 'connected', settings: { ...network, autoConnect: false } })),
     previewMa2: vi.fn(() => Promise.resolve(convertMa2Snapshot(snapshot(native), 9902))),
-    compareMa2: vi.fn((request: Ma2CompareRequest) => Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map()))),
+    compareMa2: vi.fn((request: Ma2CompareRequest) => Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback))),
     applyMa2: vi.fn((request: Ma2ApplyRequest) => service.apply(request))
   };
   vi.stubGlobal('window', { tbLink: api });
@@ -113,12 +113,16 @@ it('停止后经过比较、写前快照与回读才清空待提交，回读更�
   expect(test.song()).toMatchObject({ state: 'verified', writing: false, message: 'Timecode 9902 已写入控台并回读确认' });
 });
 
-it('同一项两边都改过：以软件为准写入并回读，同步不停止，控台旧版本留在控台备份（2026-10-26）', async () => {
-  const test = setup(); test.edit(1000); test.remote(xml.replace('<Event index="0"', '<Event time="15" index="0"')); test.stop();
-  await test.tick(); await test.tick();
-  expect(test.bridge.exchange).toHaveBeenCalledOnce(); expect(position()).toBe(1000); expect(pending()).toEqual([]);
-  expect(consoleEvents(test.console())).toEqual(['time="30" command="Goto" pressed="true" step="1"', 'time="45" command="Goto" pressed="true" step="2"']);
-  expect(test.song().state).toBe('verified');
+// 2026-11-11 用户：“矛盾的时候采用最新的”，取代 2026-10-26 的“以联动台为准”。播放时改的点，停下后才第一次看到控台上也挪了：控台的更晚。
+it('同一项两边都改过：用后改的那一边，同步不停止；这里控台上的改动后看到，用控台的，控台不用再写（2026-11-11）', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(1_000_000);
+  try {
+    const test = setup(); test.edit(1000); test.remote(xml.replace('<Event index="0"', '<Event time="15" index="0"')); vi.setSystemTime(1_002_000); test.stop();
+    await test.tick(); await test.tick();
+    expect(test.bridge.exchange).not.toHaveBeenCalled(); expect(position()).toBe(500); expect(pending()).toEqual([]);
+    expect(consoleEvents(test.console())).toEqual(['time="15" command="Goto" pressed="true" step="1"', 'time="45" command="Goto" pressed="true" step="2"']);
+    expect(test.song()).toMatchObject({ state: 'verified' }); expect(test.song().message).toContain('按最新的用了控台上的');
+  } finally { vi.useRealTimers(); }
 });
 
 // A console-recorded show: the first press has its button release, and another action the software does not convert.
@@ -151,14 +155,21 @@ it('控台录的时间线：软件改 Cue 时间写回同一条时间线，按�
   expect(consoleEvents(test.console())).toEqual(['time="45" command="Goto" pressed="true" step="2"', 'time="60" command="Learn" pressed="true"']);
 });
 
-it('写前核对发现控台变动则拒绝写入并保留暂存；没有新的修改就不再自己重试', async () => {
-  const test = setup(); test.edit(1000); test.stop();
-  test.bridge.request.mockResolvedValue(snapshot(xml.replace('<Event index="0"', '<Event time="15" index="0"')));
-  await test.tick(); await test.tick();
-  expect(test.bridge.exchange).not.toHaveBeenCalled(); expect(pending()).toHaveLength(1);
-  expect(test.api.applyMa2).toHaveBeenCalledOnce();
-  expect(test.song().state).toBe('blocked'); expect(test.song().message).toContain('预览之后控台的');
-  expect(test.song().message).toContain('刷新同步');
+// 2026-11-11：读完到写入之间控台上又改了，和方式 2 的“控台同时在改”一样只是等一下再读，不当成失败停下（同步规则“写入中控台被改”）。
+it('写前核对发现控台变动则拒绝写入并保留暂存；隔 2 秒重新读取，控台一直在改才停下', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    const test = setup(); test.edit(1000); test.stop();
+    test.bridge.request.mockResolvedValue(snapshot(xml.replace('<Event index="0"', '<Event time="15" index="0"')));
+    await test.tick(); await test.tick();
+    expect(test.bridge.exchange).not.toHaveBeenCalled(); expect(pending()).toHaveLength(1);
+    expect(test.api.applyMa2).toHaveBeenCalledOnce();
+    expect(test.song()).toMatchObject({ state: 'pending', message: '控台上刚改过这首歌的灯光，这次没有写入；稍后重新读取控台再同步' });
+    for (let attempt = 0; attempt < 5; attempt += 1) { vi.setSystemTime(Date.now() + 2001); await test.tick(); }
+    expect(test.bridge.exchange).not.toHaveBeenCalled(); expect(test.api.applyMa2).toHaveBeenCalledTimes(6);
+    expect(test.song().state).toBe('blocked'); expect(test.song().message).toContain('预览之后控台的');
+    expect(test.song().message).toContain('刷新同步');
+  } finally { vi.useRealTimers(); }
 });
 
 it('回读失败或内容不一致不会清空暂存或重复写入', async () => {
@@ -191,7 +202,7 @@ it('已确认的写入在回读应用前暂停同步：回读照样进工程，�
 
 it('比较期间暂停同步，中断后不发写入且保留暂存', async () => {
   const test = setup(); test.edit(1000); test.stop();
-  test.api.compareMa2.mockImplementationOnce(request => { stopMa2SongSync('song'); return Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map())); });
+  test.api.compareMa2.mockImplementationOnce(request => { stopMa2SongSync('song'); return Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback)); });
   await test.tick(); await test.tick();
   expect(test.api.applyMa2).not.toHaveBeenCalled(); expect(pending()).toHaveLength(1);
   expect(test.song().state).toBe('paused');

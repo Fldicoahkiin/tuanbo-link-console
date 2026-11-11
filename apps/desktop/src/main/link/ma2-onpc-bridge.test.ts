@@ -29,13 +29,13 @@ it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('节目新增轨道经绑定�
   track.clips.push({ id: 'new-clip', name: '副歌', start: 0, duration: 2000, timeLock: 'time', muted: false, events: [{ id: 'added-cue', kind: 'ma2', action: 'goto', at: 500, ...cue }] });
   const service = new Ma2ApplyService(bridge, () => false);
   try {
-    const result = await service.apply({ dataDirectory: directory, document: source, bindingId: 'new-track-binding', readback: preview, choices: [], conflicts: [] });
+    const result = await service.apply({ dataDirectory: directory, document: source, bindingId: 'new-track-binding', readback: preview, conflicts: [] });
     if (result.status !== 'verified') throw new Error(JSON.stringify(result));
     expect(result.confirmed.document.tracks.at(-1)).toMatchObject({ id: local.id, clips: [{ events: [{ id: 'added-cue', at: 500, cue: '1.250' }] }] });
     const next = applyMa2ReadbackCommand('item', 'new-track-binding', source, result.confirmed).execute(bound).rundown[0]!.lighting!;
     expect(next.ma2Bindings![0]!.pendingTracks).toBeUndefined();
     expect(next.tracks.at(-1)?.name).toBe('新增副歌轨道');
-    expect(await service.apply({ dataDirectory: directory, document: next, bindingId: 'new-track-binding', readback: result.confirmed, choices: [], conflicts: [] })).toMatchObject({ status: 'verified', backupFile: null });
+    expect(await service.apply({ dataDirectory: directory, document: next, bindingId: 'new-track-binding', readback: result.confirmed, conflicts: [] })).toMatchObject({ status: 'verified', backupFile: null });
   } finally {
     const current = await bridge.request('READ', 9902);
     expect(inspectMa2TimecodeXml(current).timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');
@@ -108,7 +108,7 @@ it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('专用多轨 Timecode 排序�
     await bridge.request('APPLY', 9902, beforeMute, remoteMuted);
     preview = convertMa2Snapshot(await bridge.request('SNAPSHOT', 9902), 9902);
     const service = new Ma2ApplyService(bridge, () => false);
-    const sorted = await service.apply({ dataDirectory: directory, document, bindingId: 'multi-delete', readback: preview, choices: [], conflicts: [] });
+    const sorted = await service.apply({ dataDirectory: directory, document, bindingId: 'multi-delete', readback: preview, conflicts: [] });
     if (sorted.status !== 'verified') throw new Error(JSON.stringify(sorted));
     expect(sorted.confirmed.document.tracks.map((track) => track.id)).toEqual(document.tracks.map((track) => track.id));
     expect(sorted.confirmed.document.tracks.map((track) => track.muted)).toEqual([false, true]);
@@ -116,10 +116,10 @@ it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('专用多轨 Timecode 排序�
     project.rundown.push({ id: 'item', title: '验收', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting: document });
     document = applyMa2ReadbackCommand('item', 'multi-delete', document, sorted.confirmed).execute(project).rundown[0]!.lighting!;
     preview = sorted.confirmed;
-    expect(await service.apply({ dataDirectory: directory, document, bindingId: 'multi-delete', readback: preview, choices: [], conflicts: [] })).toMatchObject({ status: 'verified', backupFile: null });
+    expect(await service.apply({ dataDirectory: directory, document, bindingId: 'multi-delete', readback: preview, conflicts: [] })).toMatchObject({ status: 'verified', backupFile: null });
     const survivor = document.tracks[1]!;
     document.tracks = [survivor];
-    const result = await new Ma2ApplyService(bridge, () => false).apply({ dataDirectory: directory, document, bindingId: 'multi-delete', readback: preview, choices: [], conflicts: [] });
+    const result = await new Ma2ApplyService(bridge, () => false).apply({ dataDirectory: directory, document, bindingId: 'multi-delete', readback: preview, conflicts: [] });
     if (result.status !== 'verified') throw new Error(JSON.stringify(result));
     expect(result.confirmed.document.tracks).toHaveLength(1);
     expect(result.confirmed.document.tracks[0]!.id).toBe(survivor.id);
@@ -144,7 +144,7 @@ it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('专用 Timecode 删除全部�
   document.tracks = [];
   const service = new Ma2ApplyService(bridge, () => false);
   try {
-    const request = { dataDirectory: process.env.MA2_ONPC_DATA_DIRECTORY ?? '', document, bindingId: 'delete-track', readback: preview, choices: [], conflicts: [] };
+    const request = { dataDirectory: process.env.MA2_ONPC_DATA_DIRECTORY ?? '', document, bindingId: 'delete-track', readback: preview, conflicts: [] };
     const result = await service.apply(request);
     if (result.status !== 'verified') throw new Error(JSON.stringify(result));
     expect(inspectMa2TimecodeXml(result.confirmed.sourceXml).timecodes).toEqual(inspectMa2TimecodeXml(desired.xml).timecodes);
@@ -173,7 +173,7 @@ it.skipIf(!process.env.MA2_ONPC_EMPTY_ACCEPTANCE)('空灯光轨道完成清空�
   document.tracks[0]!.clips[0]!.events = [];
   document.tracks[0]!.name = '副歌灯光轨道';
   const service = new Ma2ApplyService(bridge, () => false);
-  const request = { dataDirectory: directory, document, bindingId: 'empty-binding', readback: preview, choices: [], conflicts: [] };
+  const request = { dataDirectory: directory, document, bindingId: 'empty-binding', readback: preview, conflicts: [] };
   const project = createEmptyLinkProject('空轨道验收'); project.schemaVersion = 2;
   project.rundown.push({ id: 'item', title: '验收', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting: document });
   try {
@@ -270,7 +270,7 @@ it.skipIf(!process.env.MA2_ONPC_WRITE_ACCEPTANCE)('本机同步服务完成写�
   document.tracks[0]!.muted = true;
   const service = new Ma2ApplyService(bridge, () => false);
   try {
-    const result = await service.apply({ dataDirectory: directory, document, bindingId: 'service-binding', readback, choices: [], conflicts: [], timeAlignment: 'nearest-frame' });
+    const result = await service.apply({ dataDirectory: directory, document, bindingId: 'service-binding', readback, conflicts: [], timeAlignment: 'nearest-frame' });
     if (result.status !== 'verified') throw new Error(JSON.stringify(result));
     expect(result.backupFile).toMatch(/^tblink_backup_[a-f0-9]{32}\.xml$/);
     const project = createEmptyLinkProject('同步服务验收'); project.schemaVersion = 2;
@@ -279,12 +279,12 @@ it.skipIf(!process.env.MA2_ONPC_WRITE_ACCEPTANCE)('本机同步服务完成写�
     const next = updated.rundown[0]!.lighting!;
     expect(next.tracks[0]!.clips[0]!.events[0]!.at).toBe(16000 / 30);
     expect(next.ma2Bindings![0]!.baselineTracks[0]!.clips[0]!.events[0]!.at).toBe(16000 / 30);
-    const unchanged = await service.apply({ dataDirectory: directory, document: next, bindingId: 'service-binding', readback: result.confirmed, choices: [], conflicts: [] });
+    const unchanged = await service.apply({ dataDirectory: directory, document: next, bindingId: 'service-binding', readback: result.confirmed, conflicts: [] });
     expect(unchanged).toMatchObject({ status: 'verified', backupFile: null });
     expect(next.tracks[0]!.muted).toBe(true);
     expect(inspectMa2TimecodeXml(await bridge.request('READ', 9902)).timecodes[0]!.tracks[0]!.attributes.active).toBeUndefined();
     next.tracks[0]!.muted = false;
-    const unmuted = await service.apply({ dataDirectory: directory, document: next, bindingId: 'service-binding', readback: result.confirmed, choices: [], conflicts: [] });
+    const unmuted = await service.apply({ dataDirectory: directory, document: next, bindingId: 'service-binding', readback: result.confirmed, conflicts: [] });
     if (unmuted.status !== 'verified') throw new Error(JSON.stringify(unmuted));
     expect(unmuted.confirmed.document.tracks[0]!.muted).toBe(false);
     expect(inspectMa2TimecodeXml(await bridge.request('READ', 9902)).timecodes[0]!.tracks[0]!.attributes.active).toBe('true');
@@ -326,7 +326,7 @@ it.skipIf(!process.env.MA2_ONPC_ACTION_ACCEPTANCE)('执行器动作完成服务�
   }
   const service = new Ma2ApplyService(bridge, () => false);
   try {
-    const request = { dataDirectory: directory, document, bindingId: 'action-binding', readback, choices: [], conflicts: [] };
+    const request = { dataDirectory: directory, document, bindingId: 'action-binding', readback, conflicts: [] };
     const result = await service.apply(request);
     if (result.status !== 'verified') throw new Error(JSON.stringify(result));
     expect(result.confirmed.mappings.map((mapping) => [mapping.action, mapping.sequence, mapping.cueIndex])).toEqual([['go', null, null], ['off', null, null]]);
@@ -459,7 +459,7 @@ it.skipIf(!process.env.MA2_ONPC_WRITE_ACCEPTANCE)('专属小数 Cue 测试对象
   clip.events = [{ ...first, id: second.id, at: 3000 }, { ...second, id: 'new-first', at: 0 }, { ...first, id: 'new-second', at: 1500 }];
   clip.duration = 4000;
   const expectedSnapshot = await bridge.request('SNAPSHOT', 9902);
-  const prepared = prepareMa2MergedEvents(document, 'native-binding', preview, new Map(), new Map(), [expectedSnapshot]);
+  const prepared = prepareMa2MergedEvents(document, 'native-binding', preview, new Map(), [expectedSnapshot]);
   const expectedTimecodes = inspectMa2TimecodeXml(desired).timecodes;
   if (!expectedTimecodes[0]) throw new Error('预期 Timecode 缺失');
   // 最后一个点移到第 90 帧时，编排末尾必须覆盖该帧（MA2 属性拼写为 lenght）。

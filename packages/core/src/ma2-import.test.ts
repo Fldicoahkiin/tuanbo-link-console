@@ -159,14 +159,14 @@ describe('MA2 预览应用命令', () => {
     event.label = '控台重命名';
     remote.mappings[0] = { ...remote.mappings[0]!, trackId: track.id, clipId: clip.id, eventId: event.id };
     const metadata = { baselineVersion: '3.3.4', remoteVersion: '3.3.4', baselineRevision: 'base', localRevision: 'local', remoteRevision: 'remote' };
-    const result = previewMa2BoundSync(document, binding.id, remote, new Map(), metadata);
+    const result = previewMa2BoundSync(document, binding.id, remote, metadata);
     expect(result.conflicts).toEqual([]);
     expect(resolveMa2Sync(result, new Map()).objects.find((entry) => entry.id === 'ma-event')?.properties).toMatchObject({ time: '1700', name: '控台重命名' });
     event.at = 1800;
-    const conflict = previewMa2BoundSync(document, binding.id, remote, new Map(), metadata);
+    const conflict = previewMa2BoundSync(document, binding.id, remote, metadata);
     expect(conflict.conflicts).toHaveLength(1);
     expect(resolveMa2Sync(conflict, new Map([['ma-event', 'remote']])).objects.find((entry) => entry.id === 'ma-event')?.properties.time).toBe('1800');
-    expect(() => previewMa2BoundSync(document, binding.id, remote, new Map(), { ...metadata, remoteVersion: 'other' })).toThrow('软件版本');
+    expect(() => previewMa2BoundSync(document, binding.id, remote, { ...metadata, remoteVersion: 'other' })).toThrow('软件版本');
   });
   it('已保存绑定生成真实节目差异，基线时间不随本地节拍图改变', () => {
     const imported = importMa2TimecodeCommand('item', preview()).execute(project());

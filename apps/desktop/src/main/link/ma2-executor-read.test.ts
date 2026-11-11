@@ -36,19 +36,19 @@ it.skipIf(!process.env.MA2_ONPC_NEW_BINDING_ACCEPTANCE)('空 Timecode 的新执�
   for (const time of [500, 1500]) track.clips[0]!.events.push({ id: `cue-${time}`, kind: 'ma2', action: 'goto', at: time, ...nextLightingCue(source, track, time) });
   const service = new Ma2ApplyService(bridge, () => false);
   try {
-    const result = await service.apply({ dataDirectory: directory, document: source, bindingId, readback: preview, choices: [], conflicts: [] });
+    const result = await service.apply({ dataDirectory: directory, document: source, bindingId, readback: preview, conflicts: [] });
     if (result.status !== 'verified') throw new Error(JSON.stringify(result));
     expect(result.confirmed.document.tracks[0]?.clips[0]?.events).toMatchObject([{ id: 'cue-500', at: 500, cue: '1.250' }, { id: 'cue-1500', at: 1500, cue: '7.500' }]);
     const accepted = applyMa2ReadbackCommand('item', bindingId, source, result.confirmed).execute(bound);
     const saved = parseLinkProject(JSON.parse(JSON.stringify(accepted))).rundown[0]!.lighting!;
     expect(saved.ma2Bindings![0]!.pendingTracks).toBeUndefined();
     expect(saved.tracks[0]?.name).toBe('节目灯光');
-    expect(await service.apply({ dataDirectory: directory, document: saved, bindingId, readback: result.confirmed, choices: [], conflicts: [] })).toMatchObject({ status: 'verified', backupFile: null });
+    expect(await service.apply({ dataDirectory: directory, document: saved, bindingId, readback: result.confirmed, conflicts: [] })).toMatchObject({ status: 'verified', backupFile: null });
     const beforeEdit = await bridge.request('READ', 9903); const editReport = inspectMa2TimecodeXml(beforeEdit);
     const eventPath = editReport.timecodes[0]!.tracks[0]!.subtracks[0]!.events[1]!.path;
     await bridge.request('APPLY', 9903, beforeEdit, editMa2TimecodeEvents(beforeEdit, editReport.sha256, 9903, [{ kind: 'update', path: eventPath, rawTime: '60' }]));
     const remote = convertMa2Snapshot(await bridge.request('SNAPSHOT', 9903), 9903);
-    const received = await service.apply({ dataDirectory: directory, document: saved, bindingId, readback: remote, choices: [], conflicts: [] });
+    const received = await service.apply({ dataDirectory: directory, document: saved, bindingId, readback: remote, conflicts: [] });
     if (received.status !== 'verified') throw new Error(JSON.stringify(received));
     const reopened = applyMa2ReadbackCommand('item', bindingId, saved, received.confirmed).execute(accepted);
     expect(reopened.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events).toMatchObject([{ id: 'cue-500', at: 500 }, { id: 'cue-1500', at: 2000 }]);

@@ -29,6 +29,7 @@ export * from './lighting-clipboard';
 export * from './lighting-import';
 export * from './ma2-lighting-snapshot';
 export * from './ma2-readback';
+export * from './ma2-latest-edit';
 export * from './ma2-bound-sync';
 export * from './ma2-import';
 export * from './ma2-program-import';

@@ -37,6 +37,9 @@
   .lighting-sync-details p { margin: 0; color: var(--color-text-secondary); font-size: var(--type-caption); line-height: 1.5; overflow-wrap: anywhere; user-select: text; }
   .lighting-sync-details p[role='alert'] { color: var(--color-danger); }
   .lighting-sync-details .ui-button { justify-self: start; }
+  /* A stopped way-1 song and its two ways out (2026-11-11). */
+  .lighting-sync-song { display: grid; gap: var(--space-1); }
+  .lighting-sync-song-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 
   .lighting-sync-archives { display: grid; gap: 2px; max-height: 50vh; margin: 0; padding: 0; overflow: auto; list-style: none; }
   .lighting-sync-archives li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-1); min-height: 36px; padding: 0 var(--space-1); border-radius: var(--radius-sm); }

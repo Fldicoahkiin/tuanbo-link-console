@@ -37,7 +37,7 @@ describe('MA2 本机实测小数 Cue 引用转换', () => {
     }
     const after = convertMa2Snapshot(xml.replace('time="45"', 'time="90"'), 9902);
     const result = matchMa2Readback({ id: 'binding', timecode: 9902, name: before.name, readAt: before.readAt, sourceXml: xml, baselineTracks: before.document.tracks, mappings: before.mappings }, after);
-    expect(result.ambiguous).toEqual([]);
+    expect(result.added).toEqual([]); expect(result.deleted).toEqual([]);
     expect(result.matches).toEqual(before.mappings.map((mapping, index) => ({ baselineEventId: mapping.eventId, remoteEventId: after.mappings[index]!.eventId })));
   });
   it('本机导出样例改变事件索引、时间及 Cue 编号后仍通过内部引用匹配', () => {
@@ -45,7 +45,6 @@ describe('MA2 本机实测小数 Cue 引用转换', () => {
     const changed = timecode.replace('<Event index="0"', '<Event index="5"').replace('<Event index="1" time="45"', '<Event index="3" time="90"');
     const after = convertMa2Timecode(changed, [sequence.replace('number="7" sub_number="500"', 'number="10" sub_number="125"')], 9902);
     const result = matchMa2Readback({ id: 'binding', timecode: before.target, name: before.name, readAt: before.readAt, sourceXml: before.sourceXml, baselineTracks: before.document.tracks, mappings: before.mappings }, after);
-    expect(result.ambiguous).toEqual([]);
     expect(result.added).toEqual([]); expect(result.deleted).toEqual([]);
     expect(result.matches).toEqual(before.mappings.map((mapping, index) => ({ baselineEventId: mapping.eventId, remoteEventId: after.mappings[index]!.eventId })));
     expect(after.document.tracks[0]!.clips[0]!.events[1]).toMatchObject({ at: 3000, cue: '10.125' });
@@ -118,7 +117,6 @@ describe('原生 Master 推杆导入与身份对应', () => {
     if (!binding) throw new Error('推杆导入没有保存绑定');
     const remote = convertMa2Timecode(xml.replace('fader_level="0.755"', 'fader_level="0.625"'), [sequence], 9902);
     const matches = matchMa2Readback(binding, remote);
-    expect(matches.ambiguous).toEqual([]);
     expect(matches.added).toEqual([]); expect(matches.deleted).toEqual([]);
     expect(matches.matches).toHaveLength(4);
     expect(binding.baselineTracks[0]?.clips[0]?.events.filter((event) => event.kind === 'ma2-fader').map((event) => event.level)).toEqual([0.25, 0.755]);

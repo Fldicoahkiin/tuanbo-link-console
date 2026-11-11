@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type LinkProject, type Ma2Catalog, type Ma2TimecodePreview } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { importMa2TimecodeCommand } from './ma2-import';
-import { ma2SongPairs, pairSongWithMa2ShowCommand, reconcileMa2ReadState, withMa2Pairings } from './ma2-pairing-state';
+import { ma2SongPairs, pairSongWithMa2ShowCommand, reconcileMa2ReadState, refreshMa2BindingCommand, withMa2Pairings } from './ma2-pairing-state';
 import { matchMa2Programs } from './ma2-program-matching';
 
 /** A console show starting at `startMs` with one Goto `atMs` after its start. */
@@ -109,5 +109,30 @@ describe('控台时间线页面里选「给哪首歌用」', () => {
     expect(() => pairSongWithMa2ShowCommand('A', 121).execute(shared)).toThrow('请先在那首歌上解除关联');
     const sameStart = edit(next => { next.rundown[1]!.playback!.mtcOffsetMs = 70_000; }).execute(project);
     expect(() => pairSongWithMa2ShowCommand('A', 121).execute(sameStart)).toThrow('两首歌同一个起点分不清');
+  });
+});
+
+// 2026-11-11 现场：控台上改了 Cue，联动台对不上又读不到最新的；“用已读取的内容刷新”只拿上次读的（那次读出错了）。
+// 用控台上的：刚从控台读到的这条时间线进歌曲，本地没写到控台的改动先归档。
+describe('用控台上的灯光（2026-11-11）', () => {
+  const at = (project: LinkProject) => song(project).tracks.flatMap(track => track.clips.flatMap(clip => clip.events.map(event => clip.start + event.at)));
+  it('刚读到的内容进歌曲，没写到控台的本地改动归档；上次读取出错也不挡', () => {
+    const failed = fixture([{ ...entry(112, 60_000, false), error: '扫描期间时间线发生变化，请重新扫描' }, entry(121, 70_000)]);
+    const edited = edit(next => { song(next).tracks[0]!.clips[0]!.events[0]!.at = 800; }).execute(failed);
+    expect(() => refreshMa2BindingCommand('A', 112, true).execute(edited)).toThrow('此时间线没有完整的已读内容');
+    expect(() => refreshMa2BindingCommand('A', 112, false, preview(112, 60_000, 1500)).execute(edited)).toThrow('本地编排已有修改');
+    const taken = refreshMa2BindingCommand('A', 112, true, preview(112, 60_000, 1500)).execute(edited);
+    expect(song(taken).ma2Bindings?.map(binding => binding.timecode)).toEqual([112]);
+    expect(at(taken)).toEqual([1500]);
+    expect(taken.ma2ReadState?.detachedBindings?.map(value => [value.itemId, value.binding.timecode, value.tracks[0]!.clips[0]!.events[0]!.at])).toEqual([['A', 112, 800]]);
+  });
+  it('手动关联、工程里没有控台读取结果的歌：也能换成控台上的', () => {
+    const bare = fixture(); delete bare.ma2ReadState;
+    const taken = refreshMa2BindingCommand('A', 112, true, preview(112, 60_000, 2000)).execute(bare);
+    expect(song(taken).ma2Bindings?.map(binding => binding.timecode)).toEqual([112]);
+    expect(at(taken)).toEqual([2000]);
+  });
+  it('读到的不是这条时间线：不换', () => {
+    expect(() => refreshMa2BindingCommand('A', 112, true, preview(121, 70_000, 1000))).toThrow('不是 Timecode 112');
   });
 });

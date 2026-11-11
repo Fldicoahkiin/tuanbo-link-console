@@ -1,4 +1,4 @@
-import { alignMa2SnapshotToFrames, resolveMa2Readback, resolveMa2ReadbackTracks, resolveMa2Sync, type Ma2SyncChoice } from '@tb/core/link';
+import { alignMa2SnapshotToFrames, matchMa2Readback, resolveMa2ReadbackTracks, resolveMa2Sync, type Ma2SyncChoice } from '@tb/core/link';
 import { lightingDocumentSchema, ma2TimecodePreviewSchema, type LightingDocument, type Ma2ConsoleChanges, type Ma2SyncSnapshot, type Ma2TimecodePreview } from '@tb/schema';
 import { z } from 'zod';
 import { compareMa2LightingReadback, recoverMa2TrackMappings } from './ma2-comparison';
@@ -27,14 +27,14 @@ export type Ma2PreparedEventWrite = {
 
 /** Compile a reviewed merge. No I/O occurs until every change has been represented. */
 export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingId: string, readbackInput: Ma2TimecodePreview,
-  identityChoices: ReadonlyMap<string, string | null>, conflictChoices: ReadonlyMap<string, Ma2SyncChoice>, sequenceXml: readonly string[], timeAlignment: 'exact' | 'nearest-frame' = 'exact', consoleChanges: Ma2ConsoleChanges = 'read-back'): Ma2PreparedEventWrite {
+  conflictChoices: ReadonlyMap<string, Ma2SyncChoice>, sequenceXml: readonly string[], timeAlignment: 'exact' | 'nearest-frame' = 'exact', consoleChanges: Ma2ConsoleChanges = 'read-back'): Ma2PreparedEventWrite {
   const document = lightingDocumentSchema.parse(documentInput);
   const readback = ma2TimecodePreviewSchema.parse(readbackInput);
   const binding = document.ma2Bindings?.find((entry) => entry.id === bindingId);
   if (!binding) throw new Error('节目没有这个 MA2 对象绑定');
   binding.trackMappings ??= recoverMa2TrackMappings(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings);
   readback.trackMappings ??= recoverMa2TrackMappings(readback.sourceXml, readback.target, readback.document.tracks, readback.mappings);
-  const comparison = compareMa2LightingReadback(document, bindingId, readback, identityChoices, consoleChanges);
+  const comparison = compareMa2LightingReadback(document, bindingId, readback, consoleChanges);
   const merged = resolveMa2Sync(comparison, conflictChoices);
   const desired = timeAlignment === 'nearest-frame' ? alignMa2SnapshotToFrames(merged, 30, readback.timeOriginMs ?? 0).snapshot : merged;
   const remoteObjects = new Map(comparison.remote.objects.map((object) => [object.id, object]));
@@ -48,10 +48,10 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
       Object.keys(next.properties).length === 2 && next.properties.name === pendingTracks.get(next.id)!.executorName && ['true', 'false'].includes(next.properties.muted ?? '')) continue;
     if (!remote || !next || remote.kind !== next.kind || remote.parentId !== next.parentId || (object.kind !== 'track' && remote.order !== next.order) ||
       Object.keys(remote.properties).length !== Object.keys(next.properties).length || Object.keys(remote.properties).some((key) => remote.properties[key] !== next.properties[key] && !(object.kind === 'track' && key === 'muted' && ['true', 'false'].includes(next.properties[key] ?? '')))) {
-      throw new Error('这次合并改动了轨道或 Timecode 本身，暂时不能写回');
+      throw new Error('这次合并改动了轨道或 Timecode 本身，暂时不能写回控台。可以在「同步状态详情」里点“用控台上的”');
     }
   }
-  const matches = resolveMa2Readback(binding, readback, identityChoices);
+  const matches = matchMa2Readback(binding, readback);
   const ids = new Map(matches.matches.map((entry) => [entry.remoteEventId, entry.baselineEventId]));
   const paths = new Map<string, string>();
   const subtracks = new Map<string, Set<string>>();
@@ -88,7 +88,7 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     const stableId = trackIdentities.get(track.id);
     const executor = readback.trackMappings?.find((mapping) => mapping.trackId === track.id)?.executor;
     if (!binding.baselineTracks.some((entry) => entry.id === stableId) && newTracks.some((entry) => pendingTracks.get(entry.id)?.executor === executor)) {
-      throw new Error('控台上新加的轨道和待同步的轨道用了同一个执行器。请先取消待同步的关联并重新读取控台，避免重复创建');
+      throw new Error('控台上新加的轨道和联动台里待同步的轨道用了同一个执行器，这次没有写入，避免重复创建。可以在「同步状态详情」里点“用控台上的”');
     }
   }
   const appended = appendMa2Tracks(readback.sourceXml, readback.target, newTracks.map((object) => {
@@ -141,7 +141,7 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     if (!subtrackPath) throw new Error('新增灯光点要放到控台哪条子轨道不明确');
     const original = path ? raw.get(path) : undefined;
     const executor = original?.executor ?? subtrackExecutors.get(subtrackPath);
-    if (executor !== value.executor) throw new Error('灯光点的执行器和控台轨道对不上，请先设置轨道对应关系');
+    if (executor !== value.executor) throw new Error('灯光点的执行器和它所在的控台轨道对不上，请在时间线上把这个点放到用这个执行器的轨道上');
     if (masterSubtracks.has(subtrackPath) !== (value.action === 'master')) throw new Error('不能把 Cue 点改成推杆点，或把推杆点改成 Cue 点');
     const ticks = (value.time + (readback.timeOriginMs ?? 0)) * 30 / 1000 - Number(report.timecodes[0]?.attributes.offset ?? 0);
     if (ticks < 0) throw new Error('事件比控台 Timecode 的起点还早，请调整时间，或在控台修改偏移');
@@ -196,7 +196,7 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     if ([...consoleOnly].some((entry) => entry === path || entry.startsWith(`${path}/`))) throw new Error('没有写入控台：这条轨道上有联动台不转换的控台动作。要删掉整条轨道，请在控台上删。');
   }
   const orderedTracks = desired.objects.filter((entry) => entry.kind === 'track').sort((a, b) => a.order - b.order);
-  if (orderedTracks.some((track, index) => track.order !== index)) throw new Error('合并后的轨道顺序有冲突，请重新比较');
+  if (orderedTracks.some((track, index) => track.order !== index)) throw new Error('合并后的轨道顺序两边对不上，这次没有写入。可以在「同步状态详情」里点“用控台上的”');
   const order = orderedTracks.map((track) => { const path = trackPaths.get(track.id); if (!path) throw new Error('轨道排序缺少控台映射'); return path; });
   const removed = removeMa2Tracks(editMa2TrackStates(write.xml, readback.target, trackEdits), readback.target, deletedPaths, order);
   for (const [id, previous] of trackPaths) {
