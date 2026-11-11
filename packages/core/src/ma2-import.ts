@@ -1,5 +1,6 @@
 import { createLightingDocument, lightingDocumentSchema, ma2ExecutorPreviewSchema, ma2TimecodePreviewSchema, parseLinkProject, type LightingDocument, type LightingTrack, type Ma2ExecutorPreview, type Ma2TimecodePreview } from '@tb/schema';
 import type { LinkCommand } from './link-command';
+import { withSchemaVersion } from './project-schema-version';
 import { LightingTempoMap } from './lighting-edit';
 import { MA2_FRAME_MS, programTimeOrigin, withMa2TimeOrigin } from './ma2-time-origin';
 
@@ -32,9 +33,8 @@ export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePrevi
       id: bindingId, timecode: preview.target, name: preview.name, readAt: preview.readAt, timeOriginMs: preview.timeOriginMs,
       sourceXml: preview.sourceXml, baselineTracks: structuredClone(tracks), mappings: structuredClone(preview.mappings), trackMappings: preview.trackMappings?.length === tracks.length ? structuredClone(preview.trackMappings) : undefined, cueCatalog: structuredClone(preview.cueCatalog)
     }] };
-    next.schemaVersion = 2;
     next.updatedAt = new Date().toISOString();
-    return parseLinkProject(next);
+    return parseLinkProject(withSchemaVersion(next));
   }, undo: (before) => parseLinkProject(before) };
 }
 
@@ -54,8 +54,8 @@ export function bindMa2TrackCommand(itemId: string, bindingId: string, trackId: 
     binding.pendingTracks = [...binding.pendingTracks ?? [], { trackId, executor, executorName, ...(preview ? { sequence: preview.cueCatalog[0]!.sequence } : {}) }];
     if (preview) binding.cueCatalog = [...new Map([...(binding.cueCatalog ?? []), ...structuredClone(preview.cueCatalog)].map((sequence) => [sequence.sequence, sequence])).values()];
     lightingDocumentSchema.parse(document);
-    next.schemaVersion = 2; next.updatedAt = new Date().toISOString();
-    return parseLinkProject(next);
+    next.updatedAt = new Date().toISOString();
+    return parseLinkProject(withSchemaVersion(next));
   }, undo: (before) => parseLinkProject(before) };
 }
 
@@ -142,7 +142,7 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
         ma2Bindings: latest.ma2Bindings?.map(entry => entry.id === bindingId ? confirmedBinding : entry)
       });
     }
-    next.schemaVersion = 2; next.updatedAt = new Date().toISOString();
-    return parseLinkProject(next);
+    next.updatedAt = new Date().toISOString();
+    return parseLinkProject(withSchemaVersion(next));
   }, undo: (before) => parseLinkProject(before) };
 }

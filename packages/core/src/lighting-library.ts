@@ -1,5 +1,6 @@
 import { createLightingUserLibrary, lightingLibraryViewSchema, lightingUserLibrarySchema, parseLinkProject, validateLinkProjectRelations, type LightingDocument, type LightingEvent, type LightingLibraryEntry, type LightingUserLibrary, type LinkProject } from '@tb/schema';
 import type { LinkCommand } from './link-command';
+import { withSchemaVersion } from './project-schema-version';
 import { LightingTempoMap, lightingEventTime } from './lighting-edit';
 import { assertMusicCueConflicts } from './lighting-music';
 const completedLibraries = new WeakMap<LightingUserLibrary,LightingUserLibrary>();
@@ -52,7 +53,7 @@ export function libraryReferenceIssue(project: LinkProject, entry: LightingLibra
 export function setLightingLibraryCommand(input: LightingUserLibrary, label = '修改灯光分类库'): LinkCommand {
   const library = lightingUserLibrarySchema.parse(input);
   return { id: crypto.randomUUID(), label, scope: 'lighting', historyGroup:label === '浏览灯光分类' ? 'lighting-library-view' : undefined, execute(project) {
-    const next:LinkProject = { ...project, schemaVersion: 2, updatedAt: new Date().toISOString(), ma2MaterialLibrary: { ...project.ma2MaterialLibrary, version: 2, source: project.ma2MaterialLibrary?.source ?? `project:${project.projectId}`, userLibrary: library } };
+    const next = withSchemaVersion({ ...project, updatedAt: new Date().toISOString(), ma2MaterialLibrary: { ...project.ma2MaterialLibrary, version: 2, source: project.ma2MaterialLibrary?.source ?? `project:${project.projectId}`, userLibrary: library } });
     validateLinkProjectRelations(next);return next;
   }, undo: before => before };
 }
@@ -60,7 +61,7 @@ export function setLightingLibraryCommand(input: LightingUserLibrary, label = '�
 /** Navigation does not become an undo step or clone the Cue library. */
 export function setLightingLibraryViewCommand(input: NonNullable<LightingUserLibrary['view']>): LinkCommand {
   const view=lightingLibraryViewSchema.parse(input);
-  const apply=(project:LinkProject):LinkProject=>({...project,schemaVersion:2,ma2MaterialLibrary:{...project.ma2MaterialLibrary,version:2,source:project.ma2MaterialLibrary?.source ?? `project:${project.projectId}`,userLibrary:{...projectLightingLibrary(project),view}}});
+  const apply=(project:LinkProject):LinkProject=>withSchemaVersion({...project,ma2MaterialLibrary:{...project.ma2MaterialLibrary,version:2,source:project.ma2MaterialLibrary?.source ?? `project:${project.projectId}`,userLibrary:{...projectLightingLibrary(project),view}}});
   return {id:crypto.randomUUID(),label:'浏览灯光分类',scope:'lighting',execute:apply,undo:before=>before,rebaseHistory:apply,historyRebaseKey:'lighting-library-view'};
 }
 

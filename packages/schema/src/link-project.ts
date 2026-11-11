@@ -350,7 +350,7 @@ export const rundownItemSchema = z.object({
 });
 
 export const linkProjectSchema = z.object({
-  schemaVersion: z.union([z.literal(1), z.literal(2)]),
+  schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   projectId: z.string().min(1),
   name: z.string().min(1),
   createdAt: z.string().datetime({ offset: true }),
@@ -442,9 +442,21 @@ function isSafeProjectPath(value: string): boolean {
   return !value.split(/[\\/]/).some((segment) => segment === '..');
 }
 
+export type LinkProjectSchemaVersion = 1 | 2 | 3;
+
+/** The lowest file version that keeps everything in this project, and the only place that decides it.
+ * 2: lighting, a console read state or a console material library, which releases before lighting would drop.
+ * 3: fields only releases after 0.5.8 understand; nothing writes one yet, so no project needs 3 today.
+ * 1: everything else. Pure, so a save can compare it with the version the file has now. */
+export function requiredSchemaVersion(project: Pick<LinkProject, 'ma2ReadState' | 'ma2MaterialLibrary' | 'rundown'>): LinkProjectSchemaVersion {
+  if (project.ma2ReadState || project.ma2MaterialLibrary || project.rundown.some((item) => item.lighting !== undefined)) return 2;
+  return 1;
+}
+
 function validateProjectInvariants(project: z.infer<typeof linkProjectSchema>, ctx: z.RefinementCtx): void {
-  if (project.schemaVersion === 1 && (project.ma2ReadState || project.ma2MaterialLibrary || project.rundown.some((item) => item.lighting !== undefined))) {
-    ctx.addIssue({ code: 'custom', message: '含灯光编排的工程必须使用 schema 2，防止旧版本丢失数据', path: ['schemaVersion'] });
+  const required = requiredSchemaVersion(project);
+  if (project.schemaVersion < required) {
+    ctx.addIssue({ code: 'custom', message: required === 2 ? '含灯光编排的工程必须使用 schema 2，防止旧版本丢失数据' : `工程用到了新版本的内容，必须使用 schema ${required}，防止旧版本丢失数据`, path: ['schemaVersion'] });
   }
   const playlistIds = new Set<string>();
   if (project.playlists === undefined) for (const list of project.p1Sync?.playlists ?? []) playlistIds.add(`p1:${list.id}`);

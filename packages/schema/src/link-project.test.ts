@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createEmptyLinkProject, linkActionSchema, p1StartTriggerSchema, parseLinkProject, serializeLinkProject } from './link-project';
+import { createEmptyLinkProject, linkActionSchema, linkProjectSchema, p1StartTriggerSchema, parseLinkProject, requiredSchemaVersion, serializeLinkProject } from './link-project';
 import { createLightingDocument, lightingEventSchema, lightingMa2EventMappingSchema } from './lighting';
 
 describe('link project schema', () => {
@@ -22,6 +22,20 @@ describe('link project schema', () => {
     expect(project.schemaVersion).toBe(1);
     expect(project.outputCanvas).toEqual({ width: 1080, height: 1920 });
     expect(parseLinkProject(JSON.parse(serializeLinkProject(project)))).toEqual(project);
+  });
+
+  it('认 1、2、3 三个版本，版本低于内容需要的就拒绝', () => {
+    const empty = createEmptyLinkProject('版本');
+    const lit = { ...empty, rundown: [{ id: 'item', title: '节目', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting: createLightingDocument() }] };
+    expect(requiredSchemaVersion(empty)).toBe(1);
+    expect(requiredSchemaVersion(lit)).toBe(2);
+    expect(parseLinkProject({ ...empty, schemaVersion: 3 }).schemaVersion).toBe(3);
+    expect(parseLinkProject({ ...lit, schemaVersion: 3 }).schemaVersion).toBe(3);
+    expect(linkProjectSchema.safeParse({ ...empty, schemaVersion: 4 }).success).toBe(false);
+    expect(linkProjectSchema.safeParse({ ...lit, schemaVersion: 1 }).success).toBe(false);
+    for (const schemaVersion of [1, 2, 3] as const) {
+      expect(parseLinkProject(JSON.parse(serializeLinkProject({ ...empty, schemaVersion }))).schemaVersion).toBe(schemaVersion);
+    }
   });
 
   it('rejects duplicate ids across rundown, cues and actions', () => {

@@ -1,5 +1,6 @@
 import { lightingDocumentSchema, parseLinkProject, validateLinkProjectRelations, type LightingClip, type LightingDocument, type LightingEvent, type LightingTempo } from '@tb/schema';
 import type { LinkCommand } from './link-command';
+import { withSchemaVersion } from './project-schema-version';
 import { libraryTemplates, projectLightingLibrary, updateLibraryTemplates } from './lighting-library';
 
 export function setLightingCommand(itemId: string, lighting: LightingDocument, label = '编辑灯光'): LinkCommand {
@@ -26,10 +27,9 @@ export function setLightingCommand(itemId: string, lighting: LightingDocument, l
         event.beatAnchor = map.msToBeat(ms - origin);
       }
     }
-    // Old releases reject schema 2 rather than silently dropping lighting data.
-    next.schemaVersion = 2;
-    next.updatedAt = new Date().toISOString();
-    validateLinkProjectRelations(next);return next;
+    // Old releases reject the raised version rather than silently dropping lighting data.
+    const saved = withSchemaVersion({ ...next, updatedAt: new Date().toISOString() });
+    validateLinkProjectRelations(saved);return saved;
   }, undo: (before) => parseLinkProject(before) };
 }
 

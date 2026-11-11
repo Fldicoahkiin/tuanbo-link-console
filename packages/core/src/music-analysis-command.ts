@@ -1,5 +1,6 @@
 import { createLightingDocument, musicStructureSchema, type LinkProject, type MusicStructure, type ReferenceAudio } from '@tb/schema';
 import type { LinkCommand } from './link-command';
+import { withSchemaVersion } from './project-schema-version';
 import { matchingMusicStructure } from './music-structure';
 
 /** Background analysis adds source-bound metadata without replacing user edits or undo history. */
@@ -13,7 +14,7 @@ export function setAutomaticMusicAnalysisCommand(itemId: string, source: Referen
       if (item.id !== itemId || !matches(item.referenceAudio) || matchingMusicStructure(item.lighting, fingerprint)) return item;
       return { ...item, lighting: { ...(item.lighting ?? createLightingDocument()), version: 2 as const, musicAnalysis: structuredClone(analysis) } };
     });
-    return rundown.every((item, index) => item === project.rundown[index]) ? project : { ...project, schemaVersion: 2, rundown };
+    return rundown.every((item, index) => item === project.rundown[index]) ? project : withSchemaVersion({ ...project, rundown });
   };
   return {
     id: crypto.randomUUID(), label: '自动识别音乐节拍与段落', scope: 'lighting',
