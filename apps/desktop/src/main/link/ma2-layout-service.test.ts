@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { Ma2LayoutService } from './ma2-layout-service';
 import type { Ma2NewCueRequest, Ma2SongSyncRequest, Ma2SongSyncResult } from '@tb/schema';
-import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { ma2StepGate, type Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
 import { editMa2SongSequence, emptyMa2SequenceXml, inspectMa2CueData, inspectMa2SequenceXml, inspectMa2TimecodeXml, emptyMa2LayoutXml, inspectMa2LayoutXml } from './ma2-timecode-xml';
@@ -12,7 +12,7 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { idleShow, runningShow, showPaused, showReader, showRunning, showStopped } from './fixtures/show-gates';
-import { SHOW_WAIT_CLOCK_MOVING, isShowWait, type ShowState } from '@tb/core/link';
+import { SHOW_WAIT_CLOCK_MOVING, holdForShow, isShowWait, type ShowState } from '@tb/core/link';
 
 const source={show:'test',generation:'one',version:'3.7.0.5'};
 const noBackups = { record: vi.fn<Ma2ConsoleBackups['record']>(() => Promise.resolve()) };
@@ -601,7 +601,7 @@ it('暂停时照常同步这首歌（2026-11-10 第 3 题）', async () => {
   await expect(new Ma2LayoutService(join(directory, 'layouts.json'), showPaused, noBackups).syncSong(fake.connection, fake.bridge, song)).resolves.toMatchObject({ changed: true });
 });
 
-it('同步到一半节目开始走：正在发的这条发完，下一条控台命令之前停住，抛等待（02 §4.4）', async () => {
+it('同步到一半节目开始走：正在发的这一步发完（分几段发的脚本发完最后一段），下一步之前停住，抛等待（02 §4.4、M3）', async () => {
   const { song, sequences } = boundSong();
   const fake = songConsole(sequences);
   let show: ShowState = idleShow;
@@ -619,6 +619,85 @@ it('同步到一半节目开始走：正在发的这条发完，下一条控台�
   const error = await sync.then(() => null, (cause: unknown) => cause);
   expect(isShowWait(error)).toBe(true);
   expect(error instanceof Error && error.message.startsWith(`${SHOW_WAIT_CLOCK_MOVING}暂停或停止后再同步控台。`)).toBe(true);
-  expect(sent.count).toBe(2);
-  expect(fake.lines).toHaveLength(2);
+  // The first step is a script sent in parts: the program started on its second part, and the parts that finish
+  // it still went out, its last line runs it. Nothing of the next step was sent, and no part is left waiting.
+  const ran = fake.lines.findIndex(line => line.includes('local s=table.concat('));
+  expect(ran).toBeGreaterThan(1);
+  expect(sent.count).toBe(ran + 1);
+  expect(fake.lines).toHaveLength(ran + 1);
 });
+
+it('分几段写的文件是一步：节目开始走时写完这个文件再停，不在控台上留半个文件（M3）', async () => {
+  const { song, sequences } = boundSong();
+  // A new Cue imported from the song's own snapshot: the Sequence XML is written in parts before the write.
+  const changed = { ...song, points: song.points.map((point, index) => index === 1 ? { ...point, cues: [] } : point) };
+  const straight = songConsole(new Map(sequences));
+  await new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), showStopped, noBackups).syncSong(straight.connection, straight.bridge, changed);
+  const writerLines = straight.lines.map((line, index) => [line, index] as const).filter(([line]) => /^Lua "if TBLINK_W_/.test(line)).map(([, index]) => index);
+  expect(writerLines.length).toBeGreaterThanOrEqual(2);
+  const fake = songConsole(new Map(sequences));
+  let show: ShowState = idleShow;
+  const connection: Pick<Ma2Telnet, 'command'> = { command: (line, match, beforeSend, priority) => {
+    beforeSend?.({ waitedMs: 0, runningKind: null, sentBefore: fake.lines.length });
+    // The program starts while the first part of the file is on the wire.
+    if (fake.lines.length === writerLines[0]) show = runningShow;
+    return fake.connection.command(line, match, undefined, priority);
+  } };
+  const error = await new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), showReader(() => show), noBackups).syncSong(connection, fake.bridge, changed).then(() => null, (cause: unknown) => cause);
+  expect(isShowWait(error)).toBe(true);
+  // Every part of the file went out and its writer is gone; the line after the last part was not sent.
+  expect(fake.writers.size).toBe(0);
+  expect(fake.lines).toHaveLength(writerLines.at(-1)! + 1);
+});
+
+it('停下再接着做和一口气做完，控台上最后一样：在任何一步之前节目开始走，暂停后从头核对再写，不重复写、不写坏（M3）', async () => {
+  // A bound song whose first Cue changes and whose own Timecode show is written for the first time: Telnet steps of
+  // its own (copy, labels) and plugin requests (reads, the show's CREATE and APPLY). Each plugin request asks the
+  // show before it goes out, as the bridge does before every plugin step (ma2StepGate).
+  const request = (): Ma2SongSyncRequest => ({ ...boundSong().song, timecodeStartMs: 480000, timecodeLengthMs: 20000 });
+  const run = async (stopAt: number | null) => {
+    const { sequences } = boundSong();
+    const fake = songConsole(sequences);
+    let show: ShowState = idleShow; let events = 0;
+    const counted = (): void => { events += 1; if (events === stopAt) show = runningShow; };
+    const gates = showReader(() => show);
+    const connection: Pick<Ma2Telnet, 'command'> = { command: (line, match, beforeSend, priority) => {
+      beforeSend?.({ waitedMs: 0, runningKind: null, sentBefore: events }); counted();
+      return fake.connection.command(line, match, undefined, priority);
+    } };
+    const exchange: Ma2OnpcBridge['exchange'] = async (operation, ...rest) => {
+      const gate = ma2StepGate(operation);
+      if (gate) holdForShow(gates, gate);
+      counted();
+      return fake.bridge.exchange(operation, ...rest);
+    };
+    const bridge = { exchange, request: async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await exchange(...args)).response };
+    const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), gates, noBackups);
+    const base = request();
+    let stopped = 0; let result: Ma2SongSyncResult | null = null;
+    // The window sends the song as it holds it, with the binding it had before: it never got the stopped pass's result.
+    for (let attempt = 0; attempt < 4 && !result; attempt++) {
+      result = await service.syncSong(connection, bridge, { ...base, requestId: randomUUID() }).catch((cause: unknown) => {
+        expect(isShowWait(cause)).toBe(true);
+        stopped += 1; show = idleShow; return null;
+      });
+    }
+    return { result, stopped, events, sequence: sequences.get(9000)!, timecode: fake.timecodes.get(9000), writers: fake.writers.size };
+  };
+  const straight = await run(null);
+  expect(straight.stopped).toBe(0);
+  expect(straight.timecode).toBeDefined();
+  let stops = 0;
+  for (let stopAt = 1; stopAt < straight.events; stopAt++) {
+    const resumed = await run(stopAt);
+    stops += resumed.stopped;
+    expect(resumed.result, `stopped after event ${stopAt}`).not.toBeNull();
+    expect(resumed.sequence, `stopped after event ${stopAt}`).toBe(straight.sequence);
+    expect(resumed.timecode, `stopped after event ${stopAt}`).toBe(straight.timecode);
+    expect(resumed.result!.binding.points, `stopped after event ${stopAt}`).toEqual(straight.result!.binding.points);
+    expect(resumed.result!.binding.timecode?.revision, `stopped after event ${stopAt}`).toBe(straight.result!.binding.timecode?.revision);
+    expect(resumed.writers).toBe(0);
+  }
+  // Nearly every event stops the pass: only the last has no step left after it to hold.
+  expect(stops).toBeGreaterThanOrEqual(straight.events - 2);
+}, 120000);

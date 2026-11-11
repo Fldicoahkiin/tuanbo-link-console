@@ -3,7 +3,7 @@ import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { inspectMa2SequenceXml, inspectMa2TimecodeXml, resolveMa2CueReference, type Ma2SequenceReport } from './ma2-timecode-xml';
 import { referencedMa2Sequences } from './ma2-timecode-xml';
 import { convertMa2TimecodeReferences } from './ma2-timecode-conversion';
-import { holdForShow, type ShowGateReader } from '@tb/core/link';
+import { holdForShow, isShowWait, type ShowGateReader } from '@tb/core/link';
 
 /**
  * Read-only inventory. Failed objects remain visible; no writes or retry. `show` is asked before each Timecode show: paused
@@ -72,7 +72,11 @@ export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, sho
       }
       try { entry.preview = convertMa2TimecodeReferences(xml, [sequences], object.target); }
       catch (error) { entry.conversionError = error instanceof Error ? error.message : String(error); }
-    } catch (error) { entry.error = error instanceof Error ? error.message : String(error); }
+    } catch (error) {
+      // The program started during this show's read (the bridge stops at a plugin step): a wait, not a broken show.
+      if (isShowWait(error)) throw error;
+      entry.error = error instanceof Error ? error.message : String(error);
+    }
     entries.push(entry);
     await options?.checkpoint?.(checkpointCatalog(), entry);
     onProgress?.({ phase: 'timecodes', completed: entries.length, total: objects.length + 1, detail: `已读取 Timecode ${object.target}`, ...(options?.checkpoint ? { checkpoint: { directory, readAt, entry } } : {}) });

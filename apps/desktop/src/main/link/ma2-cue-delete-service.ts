@@ -56,7 +56,11 @@ export class Ma2CueDeleteService {
             const reason = usage.join('；') || (!cue ? 'Cue 已不存在' : !empty ? '未完整确认为空：可能包含属性、命令或继承数据' : '已完整检查：这一步没有属性、效果或命令');
             items.push({ ...ref, cue: cue?.number ?? ref.cue, name: cue?.name || info.name || `Cue ${ref.cue}`, eligible: Boolean(cue && empty && !usage.length), reason });
           }
-        } catch (error) { for (const ref of refs.filter(value => value.sequence === sequence)) items.push({ ...ref, name: `Cue ${ref.cue}`, eligible: false, reason: message(error) }); }
+        } catch (error) {
+          // The program started during this read (the bridge stops at a plugin step): the whole check waits.
+          if (isShowWait(error)) throw error;
+          for (const ref of refs.filter(value => value.sequence === sequence)) items.push({ ...ref, name: `Cue ${ref.cue}`, eligible: false, reason: message(error) });
+        }
       }
       const timecodes = new Map<number,string>();
       const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));

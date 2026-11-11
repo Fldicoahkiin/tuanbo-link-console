@@ -42,6 +42,7 @@
 - 每条命令都给这次请求续期，停在半路的请求仍是 120 秒后才让别人开始，和以前一样。一步出错时整件请求结束，回答和以前一次做完时出错一样（`ERROR` 加原因），`release` 后下一次 `begin` 照常开始。没有在等的步时 `step` 报 `No step pending`，什么都不做。
 - 不带 `'steps'` 的 `run`（分步以前的联动台，以及联动台升级插件时对旧插件的核对）把所有步一次做完再回 `DONE`，和以前的插件完全一样；本机文件桥也一样一次做完。分步以前的插件不认 `'steps'`，`run` 直接回 `DONE`，新联动台照常走完。
 - `PING` 的回答是控台版本，分步的插件在后面另起一行 `steps=1`。
+- 节目开始走时联动台在两步之间停下（`apps/desktop/src/main/link/ma2-onpc-bridge.ts` 的 `ma2StepGate`，按 `showGate` 定）：不再发下一条 `step`，马上发 `release`，`release` 不等节目。写入那一步（APPLY、CREATE 是第 1 步，SYNC 是第 `2×序列数+3` 步，`ma2WriteStep`）和它后面的读回不停，所以停下的请求一定还没写入。`PING`、`DISCARD` 任何时候都发。插件本身没有改。
 - 每一步里执行的控台命令、先后顺序、核对和回答都和分步以前一样，由 `apps/desktop/src/main/link/ma2-bridge-lua.test.ts` 在 Lua 5.3 解释器里跑插件原文核对。**未在实体控台和 onPC 上验证。**
 - 已知：SYNC 的预检快照现在分成多步，一个 Sequence 在它自己的两次导出核对之后、写入那一步之前被改，写入那一步只再比对 Timecode，拦不住；以前整件事在一次 Lua 调用里做完，这段时间几乎为零。
 

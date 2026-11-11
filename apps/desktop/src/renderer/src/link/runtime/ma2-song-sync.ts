@@ -435,8 +435,9 @@ export async function tickMa2SongSync(): Promise<void> {
         try { disconnected = (await window.tbLink.getMa2NetworkStatus()).state !== 'connected'; }
         catch (statusError) { reportCoordinatorError(`读取连接状态失败：${String(statusError)}`, reason => update(entry, { message: reason })); }
         // The main process has the last word (S3a): it refuses with showGate's own text when the window's mirror of the
-        // show was one change late. Either way the song only waits.
-        const showWait = currentShowWait('ma2.sync.write') ?? (isShowWait(cause) ? toUserErrorMessage(cause) : null);
+        // show was one change late, and a sync stopped at a step boundary (M3) adds how far it got. Either way the song
+        // only waits; the next pass after the wait starts it again from reading the console.
+        const showWait = isShowWait(cause) ? toUserErrorMessage(cause) : currentShowWait('ma2.sync.write');
         // The console edited the song's Sequence while it was being written: nothing was written and the
         // next pass reads it again. A few in a row are a wait; an operator who keeps editing for longer
         // stops the retries like any failure, so the sync never keeps going round (2026-10-26).

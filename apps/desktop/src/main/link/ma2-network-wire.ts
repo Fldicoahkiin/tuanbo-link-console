@@ -28,8 +28,9 @@ export class Ma2NetworkWire implements Ma2Wire {
     }
     return result;
   }
-  /** `beforeStep` runs before every plugin step, the first included; throwing stops before that step and releases. */
-  async exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: () => void): Promise<string> {
+  /** `beforeStep` runs before every plugin step, the first included, with the number of steps done; throwing stops
+   * before that step and releases the request, whatever the show (the release is never held). */
+  async exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: (done: number) => void): Promise<string> {
     signal?.throwIfAborted();
     if (!/^[a-f0-9]{32}$/.test(id) || !Number.isInteger(target) || target < 1 || target > 99999) throw new Error('无效的 MA2 网络请求');
     let data = Buffer.from(body);
@@ -49,7 +50,7 @@ export class Ma2NetworkWire implements Ma2Wire {
         if (await this.call('chunk', id, `,${offset / 256 + 1},'${data.subarray(offset, offset + 256).toString('hex')}'`) !== 'ACK') throw new Error('MA2 未确认数据片段');
         progress?.();
       }
-      signal?.throwIfAborted(); beforeStep?.(); beforeSend(); sent = true;
+      signal?.throwIfAborted(); beforeStep?.(0); beforeSend(); sent = true;
       // The plugin does one console Export or Import per line and answers STEP:<steps done> until the
       // last, so stop and playback commands queued meanwhile go out between two steps. A plugin from
       // before steps ignores 'steps' and answers DONE at once, which is the same protocol.
@@ -58,7 +59,7 @@ export class Ma2NetworkWire implements Ma2Wire {
         if (Number(step[1]) !== done + 1) throw new Error('控台分步执行的回答对不上');
         done += 1;
         progress?.();
-        signal?.throwIfAborted(); beforeStep?.();
+        signal?.throwIfAborted(); beforeStep?.(done);
         reply = await this.call('step', id);
       }
       const receipt = /^DONE:(\d+)$/.exec(reply);

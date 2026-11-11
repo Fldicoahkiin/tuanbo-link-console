@@ -20,6 +20,7 @@ import type { Ma2ConsoleBackups } from './ma2-console-backups';
 import { writeMa2SongTimecode } from './ma2-song-timecode';
 import { holdForShow, isShowWait, MA2_SONG_COLLISION, ma2LatestSide, type ShowGateReader, type ShowOperation } from '@tb/core/link';
 import { hasMa2SongConsoleEdits, mergeMa2SongConsoleEdits } from './ma2-song-console-edits';
+import { ma2Step, ma2StepConnection, type Ma2StepConnection } from './ma2-lua-command';
 
 type Connection = Pick<Ma2Telnet, 'command'>;
 type Bridge = Pick<Ma2OnpcBridge, 'request'>;
@@ -59,14 +60,18 @@ export class Ma2LayoutService {
   constructor(private readonly ownershipFile: string, private readonly show: ShowGateReader, private readonly backups: Pick<Ma2ConsoleBackups, 'record'>) {}
 
   /**
-   * Every console command of `op` asks the show right before it goes out: a program that starts moving stops the
-   * operation before its next command, and the one already on the wire finishes (02 §4.4).
+   * Every console step of `op` asks the show right before its first line goes out: a program that starts moving stops
+   * the operation before its next step, and the step already on the wire finishes, its last line included (02 §4.4,
+   * M3). A step is one script (`call`) or one file written in parts (`prepareXml`).
    */
-  private held(connection: Connection, op: ShowOperation): Connection {
-    return { command: (line, match, beforeSend, priority) => connection.command(line, match, wait => { holdForShow(this.show, op); beforeSend?.(wait); }, priority) };
+  private held(connection: Connection, op: ShowOperation): Ma2StepConnection {
+    return ma2StepConnection(connection, () => { holdForShow(this.show, op); });
   }
 
-  private async call(connection: Connection, body: string): Promise<string> {
+  private call(connection: Connection | Ma2StepConnection, body: string): Promise<string> {
+    return ma2Step(connection, () => this.script(connection, body));
+  }
+  private async script(connection: Connection, body: string): Promise<string> {
     const prefix = `TBLINK_LAYOUT_${randomBytes(12).toString('hex')}:`;
     const script = `${decoder}local ok,r=pcall(function() ${body} end);if ok then gma.echo('${prefix}OK:'..tostring(r)) else gma.echo('${prefix}ERR:'..tostring(r)) end`;
     let command=script;
@@ -111,8 +116,12 @@ export class Ma2LayoutService {
     return Buffer.concat(parts).toString('utf8');
   }
 
-  /** With `backup`, the first export stays on the console as the write backup; otherwise both are removed once compared. */
-  private async snapshot(connection: Connection, request: Ma2LayoutReadRequest, backup = false): Promise<{ xml: string; file: string; value: Ma2LayoutSnapshot } | null> {
+  /** With `backup`, the first export stays on the console as the write backup; otherwise both are removed once compared.
+   * One step: the two exports and their cleanup belong together, so a stop leaves no export behind. */
+  private snapshot(connection: Connection | Ma2StepConnection, request: Ma2LayoutReadRequest, backup = false): Promise<{ xml: string; file: string; value: Ma2LayoutSnapshot } | null> {
+    return ma2Step(connection, () => this.compareExports(connection, request, backup));
+  }
+  private async compareExports(connection: Connection, request: Ma2LayoutReadRequest, backup: boolean): Promise<{ xml: string; file: string; value: Ma2LayoutSnapshot } | null> {
     const file = `tblink_layout_${randomBytes(16).toString('hex')}`;
     const xml = await this.exportLayout(connection, request, file);
     const verified = await this.exportLayout(connection, request, `${file}_verify`);
@@ -197,11 +206,12 @@ export class Ma2LayoutService {
     };
     received();
     const signal = externalSignal ? AbortSignal.any([externalSignal, deadline.signal]) : deadline.signal;
-    const connection: Connection = { command: (line, match, beforeSend, priority) => {
+    // A program that starts moving stops the sync before its next console step (第 3 题, 02 §4.4, M3); stopping the
+    // sync by hand or the watchdog stops it before its next line.
+    const connection = ma2StepConnection({ command: (line, match, beforeSend, priority) => {
       signal.throwIfAborted();
-      // A program that starts moving stops the sync before its next console command (第 3 题, 02 §4.4).
-      return rawConnection.command(line, match, wait => { signal.throwIfAborted(); holdForShow(this.show, 'ma2.sync.write'); beforeSend?.(wait); }, priority).then(result => { received(); return result; });
-    } };
+      return rawConnection.command(line, match, wait => { signal.throwIfAborted(); beforeSend?.(wait); }, priority).then(result => { received(); return result; });
+    } }, () => { holdForShow(this.show, 'ma2.sync.write'); });
     // Every acknowledged line of a long transfer counts as progress for the 90 s watchdog.
     const bridge: SongBridge = { request: (operation, target, expected, desired) => rawBridge.request(operation, target, expected, desired, signal, received).then(result => { received(); return result; }),
       exchange: (operation, target, expected, desired, _signal, transfer) => rawBridge.exchange(operation, target, expected, desired, signal, download => { received(); transfer?.(download); }).then(result => { received(); return result; }) };
@@ -566,7 +576,10 @@ export class Ma2LayoutService {
     try { return ownersSchema.parse(JSON.parse(await readFile(this.ownershipFile, 'utf8'))); }
     catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return []; throw error; }
   }
-  private async prepareXml(connection: Connection, request: Ma2LayoutReadRequest, file: string, xml: string, report?: (completed: number, total: number) => void): Promise<void> {
+  private prepareXml(connection: Connection | Ma2StepConnection, request: Ma2LayoutReadRequest, file: string, xml: string, report?: (completed: number, total: number) => void): Promise<void> {
+    return ma2Step(connection, () => this.writeXml(connection, request, file, xml, report));
+  }
+  private async writeXml(connection: Connection, request: Ma2LayoutReadRequest, file: string, xml: string, report?: (completed: number, total: number) => void): Promise<void> {
     // One guarded command creates the file and a writer bound to it. Each data line then only calls
     // that writer: 360 bytes per line instead of 128, and no Show name, so it stays under 900 bytes.
     const writer = `TBLINK_W_${randomBytes(12).toString('hex')}`;
@@ -617,11 +630,12 @@ export class Ma2LayoutService {
       const {x,y}=position(slot);
       const blankFile = `tblink_newcue_${request.requestId.replaceAll('-','')}`;
       const xml = emptyMa2SequenceXml(target, directory.version);
-      const prepareXml=async(file:string,text:string):Promise<void>=>{
+      // One file written in parts is one step.
+      const prepareXml=(file:string,text:string):Promise<void>=>connection.step(async()=>{
         await this.call(connection, `${this.guard(layoutRequest)}local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','wb'));f:close();return 'prepared'`);
         const bytes=Buffer.from(text);
         for(let offset=0;offset<bytes.length;offset+=128)await this.call(connection, `local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','ab'));f:write(unhex('${bytes.subarray(offset,offset+128).toString('hex')}'));f:close();return 'prepared'`);
-      };
+      });
       if(request.content.kind==='combine')await prepareXml(blankFile,xml);
       if(!old)await prepareXml(`${blankFile}_layout`,emptyMa2LayoutXml(request.settings.layout,directory.version));
       const setup = request.content.kind === 'combine'

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { holdForShow, type ShowGateReader } from '@tb/core/link';
+import { holdForShow, isShowWait, type ShowGateReader, type ShowOperation } from '@tb/core/link';
 import { ma2ExecutorPageDirectorySchema } from '@tb/schema';
 import { inspectMa2ExecutorPageXml } from './ma2-timecode-xml';
 import { ma2ObjectDirectorySchema, ma2SequenceAssignmentSchema, ma2RenameResultSchema, ma2LabelSchema, ma2TimecodeRangesSchema } from '@tb/schema';
@@ -10,14 +10,54 @@ export type Ma2Operation = 'PING' | 'PAGES' | 'PAGE' | 'LIST' | 'LISTSEQ' | 'SEQ
 /** Fires after every acknowledged line of a long transfer; response reads also say how many bytes have arrived. */
 export type Ma2TransferProgress = (download?: { completed: number; total: number }) => void;
 export type Ma2Wire = {
-  /** `beforeStep` runs before each plugin step (the first included); throwing stops there and releases the request. */
-  exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: () => void): Promise<string>;
+  /** `beforeStep` runs before each plugin step (the first included) with the steps done so far; throwing stops there
+   * and releases the request. */
+  exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: (done: number) => void): Promise<string>;
 };
+
+/**
+ * What the show must allow before each plugin step of `operation` (M3, 第 3 题): writing the console waits as a sync,
+ * a page refresh as one, every other read as reading the console. Null: at any time (the version check, removing
+ * rotated-out backups). The rules themselves are showGate's (show-state.ts); this only says which one a request is.
+ */
+export function ma2StepGate(operation: Ma2Operation): ShowOperation | null {
+  switch (operation) {
+    case 'APPLY': case 'SYNC': case 'CREATE': case 'ASSIGNSEQ': case 'LABEL': return 'ma2.sync.write';
+    case 'PAGE': case 'PAGES': return 'ma2.executorPage.refresh';
+    case 'LIST': case 'LISTSEQ': case 'SEQUENCE': case 'SEQCUES': case 'READ': case 'SNAPSHOT': case 'SCOPE': case 'EXECUTOR': case 'TCRANGES': return 'ma2.sync.read';
+    case 'PING': case 'DISCARD': return null;
+  }
+}
+
+/**
+ * The plugin step that writes the console, counted from 1, as tools/ma2/tblink_bridge.lua lays the request out:
+ * APPLY and CREATE write in their first step, SYNC after its preflight (the Timecode export, two exports for each
+ * Sequence it references or will reference, the Timecode check). The step after it reads the write back, and a
+ * program that starts moving never holds that one: a request either stops before its write or ends confirmed, so
+ * the console is never left written and unconfirmed by a stop. A miscount is safe: the plugin writes only when the
+ * Timecode is still the one `expected` holds, and then it references exactly these Sequences. Null: no write, one
+ * step only (LABEL), or a write at a step the program cannot know (ASSIGNSEQ's search, which finds its own
+ * assignment again when it runs once more).
+ */
+export function ma2WriteStep(operation: Ma2Operation, expected: string, desired: string): number | null {
+  switch (operation) {
+    case 'APPLY': case 'CREATE': return 1;
+    case 'SYNC': return 2 * new Set([...referencedMa2Sequences(expected), ...referencedMa2Sequences(desired)]).size + 3;
+    default: return null;
+  }
+}
 /** PING answers the console version; a plugin that works step by step adds a line `steps=1`. */
 export function parseMa2Ping(response: string): { version: string; steps: boolean } {
   const match = /^([^\n]+)(\nsteps=1)?$/.exec(response);
   if (!match) throw new Error('控台连接组件的版本回答无法识别');
   return { version: match[1]!, steps: match[2] !== undefined };
+}
+/** What a request stopped for the show leaves behind, after the wait's own words (they come first: isShowWait). */
+function ma2StepWaitDetail(operation: Ma2Operation, done: number, writeStep: number | null): string {
+  if (done === 0) return '这一步没有发给控台。';
+  if (writeStep !== null) return '控台上还没有写入，接着同步时会重新读取控台再写。';
+  if (operation === 'ASSIGNSEQ') return '执行器可能已经放好了，接着同步时会重新核对，不会放第二次。';
+  return '读到一半停下了，接着会重新读取。';
 }
 export class Ma2BridgeFailure extends Error {
   constructor(message: string, readonly requestId: string, readonly sent: boolean, options: ErrorOptions, readonly backupFile: string | null = null) { super(message, options); }
@@ -28,7 +68,8 @@ export class Ma2OnpcBridge {
   private exchangeTail: Promise<void> = Promise.resolve();
   private queuedExchanges = 0;
   private exchangeEpoch = 0;
-  /** `show`: asked again right before a write or an assignment goes on the wire; reads are not held. */
+  /** `show`: asked again right before a write or an assignment goes on the wire, and before every further plugin step
+   * of any request (ma2StepGate). The local file bridge runs a request in one go and has no step to stop at. */
   constructor(private readonly dataDirectory: string | Ma2Wire, private readonly show: ShowGateReader) {
     if (typeof dataDirectory === 'string' && !isAbsolute(dataDirectory)) throw new Error('MA2 数据目录必须是绝对路径');
   }
@@ -43,7 +84,11 @@ export class Ma2OnpcBridge {
     const result = this.exchangeTail.then(async () => {
       if (epoch !== this.exchangeEpoch) throw new Error('上一个控台操作没完成，排队的操作已取消');
       try { return await this.performExchange(operation, target, expected, desired, signal, progress); }
-      catch (error) { this.exchangeEpoch += 1; throw error; }
+      catch (error) {
+        // A request that stopped for the show is no uncertain outcome: what waits behind it meets the same gate itself.
+        if (!isShowWait(error)) this.exchangeEpoch += 1;
+        throw error;
+      }
     }).finally(() => { this.queuedExchanges -= 1; });
     // Serialize the entire transaction, including all chunks and response release.
     // Scheduling consumes rejection only internally; callers retain the original error.
@@ -110,12 +155,28 @@ export class Ma2OnpcBridge {
         return { response: result, requestId: id };
       };
       if (typeof this.dataDirectory !== 'string') {
-        return validate(await this.dataDirectory.exchange(id, operation, target, body, () => {
-          hold('这一步没有发给控台。');
-          sent = true;
-        }, signal, progress, () => {
-          // Every step may go ahead for now. M3 asks the show gate here and stops at a step boundary.
-        }));
+        // M3: a program that starts moving stops the request at the next step boundary. The step on the console
+        // finishes (a step cannot be cut short), the next one is not sent and the wire releases the request at once.
+        const gate = ma2StepGate(operation);
+        const writeStep = ma2WriteStep(operation, expected, desired);
+        const stopped: { at: number | null } = { at: null };
+        const beforeStep = (done: number): void => {
+          if (gate === null || done === writeStep) return;
+          try { holdForShow(this.show, gate, ma2StepWaitDetail(operation, done, writeStep)); }
+          catch (wait) { stopped.at = done; throw wait; }
+        };
+        try {
+          return validate(await this.dataDirectory.exchange(id, operation, target, body, () => {
+            hold('这一步没有发给控台。');
+            sent = true;
+          }, signal, progress, beforeStep));
+        } catch (error) {
+          // Stopped before its write step: the console holds what it held, so the write was never sent.
+          if (error instanceof Ma2BridgeFailure && stopped.at !== null && writeStep !== null && stopped.at < writeStep) {
+            throw new Ma2BridgeFailure(error.message, id, false, { cause: error.cause }, error.backupFile);
+          }
+          throw error;
+        }
       }
       const directory = join(this.dataDirectory, 'temp');
       for (const name of ['temp', 'plugins', 'importexport']) {
