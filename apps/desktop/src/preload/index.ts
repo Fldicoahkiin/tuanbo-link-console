@@ -1,6 +1,6 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutDirectorySchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
 import { ma2ExecutorPageDirectorySchema, ma2ExecutorPageSchema, ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorUpdateResultSchema, ma2ExecutorInputSchema, ma2ExecutorChannelSchema, ma2ExecutorChannelChoiceRequestSchema } from '@tb/schema';
-import { ma2ButtonLiveRequestSchema, ma2ButtonLiveSchema } from '@tb/schema';
+import { ma2ButtonLiveRequestSchema, ma2ButtonLiveSchema, ma2WebRemoteStateSchema } from '@tb/schema';
 import { ma2ExecutorObservationSchema, ma2ExecutorObserveRequestSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, ma2LiveSnapshotSchema } from '@tb/schema';
 import { ma2NetworkTargetSchema, ma2TimecodeRangesSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, ma2SongSyncResultSchema } from '@tb/schema';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
@@ -156,6 +156,7 @@ const tbLink: LinkDesktopBridgeApi = {
   inputMa2Live: async payload => { await invoke('link:ma2-live-input', ma2LiveInputSchema.parse(payload)); },
   releaseMa2Live: async () => { await invoke('link:ma2-live-release'); },
   readMa2ButtonLive: async payload => ma2ButtonLiveSchema.parse(await invoke('link:ma2-button-live', ma2ButtonLiveRequestSchema.parse(payload))),
+  readMa2WebRemoteState: async payload => ma2WebRemoteStateSchema.parse(await invoke('link:ma2-web-remote-state', ma2LayoutDirectoryRequestSchema.parse(payload))),
   observeMa2Executor: async payload => ma2ExecutorObservationSchema.parse(await invoke('link:ma2-observe-executor', ma2ExecutorObserveRequestSchema.parse(payload))),
   releaseMa2Observer: async () => { await invoke('link:ma2-observer-release'); },
   updateMa2Layout: async payload => ma2LayoutSnapshotSchema.parse(await invoke('link:ma2-layout-update', ma2LayoutUpdateRequestSchema.parse(payload))),

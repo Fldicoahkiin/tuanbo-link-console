@@ -33,17 +33,37 @@ export const ma2ButtonLiveRequestSchema = ma2ExecutorPageRequestSchema.extend({ 
 /**
  * What the Button session read for that row, or why there is nothing: `plugin`, the keys go on the console plugin (no
  * Button session, nothing read); `unverified`, the web remote was chosen but the console's Button area was not read back
- * (`reason`); `disconnected`, the Button session is not connected now (it logs in again on the next key, not for this).
+ * (`reason`); `disconnected`, the Button session is not connected now (it logs in again on the next key, not for this);
+ * `stopped`, it dropped and logging in again on its own stopped (`reason`; the next key still logs in). `relogin`: it
+ * dropped and logs in again on its own now (C2), attempt `attempt`.
  */
 export const ma2ButtonLiveSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('live'), page: z.number().int().min(1).max(9999), start: z.number().int().min(101).max(176), readAt: z.number().finite(),
     items: z.array(z.object({ slot: z.number().int().min(101).max(190), width: z.number().int().min(1).max(15), name: z.string().max(512), objectNumber: z.string().max(128), running: z.boolean(), cue: z.string().max(1024) }).strict()).max(15)
   }).strict(),
-  z.object({ kind: z.literal('off'), why: z.enum(['plugin', 'unverified', 'disconnected']), reason: z.string().max(512) }).strict()
+  z.object({ kind: z.literal('off'), why: z.enum(['plugin', 'unverified', 'disconnected', 'stopped']), reason: z.string().max(512) }).strict(),
+  z.object({ kind: z.literal('relogin'), attempt: z.number().int().min(1).max(10_000) }).strict()
 ]);
 export type Ma2ButtonLiveRequest = z.infer<typeof ma2ButtonLiveRequestSchema>;
 export type Ma2ButtonLive = z.infer<typeof ma2ButtonLiveSchema>;
+
+/**
+ * One web remote session the console page uses (C2), as the main process knows it: `idle`, not connected in this run for
+ * this console (nothing is logged in for it); `connected`; `relogin`, it dropped and logs in again on its own with the
+ * saved user, attempt `attempt` now or next (`since`: when it dropped); `stopped`, it stopped and waits for the operator
+ * (`limit`: the recovery table's limit was reached; otherwise `reason` says what needs a person).
+ */
+export const ma2WebRemoteSessionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('idle') }).strict(),
+  z.object({ kind: z.literal('connected') }).strict(),
+  z.object({ kind: z.literal('relogin'), attempt: z.number().int().min(1).max(10_000), since: z.number().finite(), reason: z.string().max(512) }).strict(),
+  z.object({ kind: z.literal('stopped'), reason: z.string().max(512), limit: z.boolean() }).strict()
+]);
+/** The fader view's session and the Button area's, for one console and Show. */
+export const ma2WebRemoteStateSchema = z.object({ fader: ma2WebRemoteSessionSchema, buttons: ma2WebRemoteSessionSchema }).strict();
+export type Ma2WebRemoteSession = z.infer<typeof ma2WebRemoteSessionSchema>;
+export type Ma2WebRemoteState = z.infer<typeof ma2WebRemoteStateSchema>;
 
 /** One executor read back during playback, to confirm the console runs with the timecode. Slots 1–90 are fader executors, 101–190 button executors. */
 export const ma2ExecutorObserveRequestSchema = z.object({ network: ma2NetworkTargetSchema, page: z.number().int().min(1).max(9999), slot: z.number().int().min(1).max(190) }).strict()

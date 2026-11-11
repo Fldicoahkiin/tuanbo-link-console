@@ -48,6 +48,7 @@
   }
   .ma2-console-footer-line { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ma2-console-footer-line[data-tone="warning"] { color: var(--color-warning); }
+  .ma2-console-footer-line[data-tone="danger"] { color: var(--color-danger); }
   .ma2-console-login { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-half) var(--space-1); }
   .ma2-console-login > form { display: flex; gap: var(--space-half); }
   .ma2-console-login input { width: calc(var(--space-6) * 3); }

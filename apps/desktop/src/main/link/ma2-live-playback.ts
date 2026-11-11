@@ -101,6 +101,9 @@ export function parseMa2LiveButtons(value: unknown, page: number, start: number)
   return { page, start, readAt: Date.now(), items };
 }
 
+/** The console refused this user (wrong password, an administrator user, logins off): logging in again cannot help (C2). */
+export class Ma2LoginRefused extends Error {}
+
 /**
  * One socket per selected console; failures stop the session and never replay controls.
  * Requests that wait for an answer (`read`, `observe`, `readButtons`, `peek`, `peekButtons`) take turns on one queue:
@@ -118,15 +121,20 @@ export class Ma2LivePlayback {
   private readonly reading = new Map<string, Promise<Ma2LiveSnapshot>>();
   /** The request queue: each waits for the one before it, whatever that one's answer. */
   private line: Promise<unknown> = Promise.resolve();
-  constructor(private readonly host: string, private readonly socketFactory = (url: string): WebSocket => new WebSocket(url)) {}
+  /** `dropped` is called once when this session, logged in, ends on its own (closed by the console or the network, a
+   * timeout, an answer it does not understand); never for `close()` or a login that did not get through (C2). */
+  constructor(private readonly host: string, private readonly socketFactory = (url: string): WebSocket => new WebSocket(url),
+    private readonly dropped?: (reason: string) => void) {}
   get connected(): boolean { return this.ready && this.socket?.readyState === WebSocket.OPEN; }
-  private fail(message: string): void {
+  private fail(message: string, by: 'self' | 'owner' = 'self'): void {
+    const was = this.ready;
     this.failure = message; this.ready = false;
     const waiter = this.waiter; this.waiter = null;
     if (waiter) { clearTimeout(waiter.timer); waiter.reject(new Error(message)); }
     this.socket?.close(); this.socket = null;
+    if (was && by === 'self') this.dropped?.(message);
   }
-  close(): void { this.fail('实时推杆连接已关闭'); }
+  close(): void { this.fail('实时推杆连接已关闭', 'owner'); }
   /** Runs `request` after every request queued before it. */
   private turn<T>(request: () => Promise<T>): Promise<T> {
     const result = this.line.then(request, request);
@@ -146,7 +154,7 @@ export class Ma2LivePlayback {
     this.socket.send(JSON.stringify({ ...value, session: this.session }));
   }
   async connect(username: string, password: string): Promise<void> {
-    if (username.trim().toLowerCase() === 'administrator') throw new Error('实时推杆需要普通控台用户，请在此填写 User & Profiles Setup 中的用户');
+    if (username.trim().toLowerCase() === 'administrator') throw new Ma2LoginRefused('实时推杆需要普通控台用户，请在此填写 User & Profiles Setup 中的用户');
     this.close(); this.failure = null; this.session = 0;
     const socket = this.socketFactory(`ws://${this.host}/?ma=1`); this.socket = socket;
     socket.addEventListener('error', () => { if (this.socket === socket) this.fail('无法连接实时推杆，请在控台开启 Remotes → Login Enabled'); });
@@ -167,7 +175,7 @@ export class Ma2LivePlayback {
     });
     await this.wait('session');
     const login = z.object({ result: z.boolean() }).parse(await this.wait('login', () => this.send({ requestType: 'login', username, password: createHash('md5').update(password).digest('hex') })));
-    if (!login.result) { this.fail('控台拒绝登录，请检查实时推杆用户名和密码'); throw new Error(this.failure!); }
+    if (!login.result) { this.fail('控台拒绝登录，请检查实时推杆用户名和密码'); throw new Ma2LoginRefused(this.failure!); }
     this.ready = true;
   }
   async read(page: number, start: number): Promise<Ma2LiveSnapshot> {

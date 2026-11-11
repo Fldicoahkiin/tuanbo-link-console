@@ -41,7 +41,7 @@ export function Ma2ConsoleFooter({ footer, connecting, onConnect }: { footer: Ma
   useEffect(() => { if (!footer.connect) setOpen(false); }, [footer.connect]);
   return <footer className="ma2-console-footer" aria-label="控台连接">
     <span className="ma2-console-footer-line" data-tone={footer.keysTone} title={footer.keys}>{footer.keys}</span>
-    <span className="ma2-console-footer-line" data-tone={footer.webRemoteTone} role="status" title={footer.webRemote}>{footer.webRemote}</span>
+    <span className="ma2-console-footer-line" data-tone={footer.webRemoteTone} role={footer.webRemoteTone === 'danger' ? 'alert' : 'status'} title={footer.webRemote}>{footer.webRemote}</span>
     {footer.connect && !open ? <Button size="sm" variant="secondary" onClick={() => { wantMa2WebRemote(); setOpen(true); }}>连接网页遥控</Button> : null}
     {footer.connect && open ? <div className="ma2-console-login"><Ma2WebRemoteLogin connecting={connecting} action="连接网页遥控" onConnect={onConnect}/></div> : null}
   </footer>;

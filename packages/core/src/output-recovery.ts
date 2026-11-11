@@ -27,6 +27,13 @@ export type RecoveryRule = { channel: OutputChannel; counts: 'attempts' | 'fault
 /** OBS reconnect waits: 1, 2, 4, 8 s, then 15 s each, ten attempts, about two minutes in all. */
 export const OBS_RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 15_000, 15_000, 15_000, 15_000, 15_000, 15_000] as const;
 
+/**
+ * MA2 relogin waits (design 03 §4.2.5): 1, 2, 4, 8, 15 s, then 30 s each, until the row's own limit (`ma2.webRemote.relogin`,
+ * C2; the Telnet line's `ma2.relogin` uses the same waits from M5). The limit is a duration, so the table ends with the
+ * wait that repeats.
+ */
+export const MA2_RELOGIN_DELAYS_MS = [1000, 2000, 4000, 8000, 15_000, 30_000] as const;
+
 export const OUTPUT_RECOVERY_RULES = {
   /** Each picture element once per wanted state; the key carries the state, so a cut point starts afresh. */
   'picture.element': { channel: 'obs', counts: 'attempts', limit: { kind: 'count', max: 1 }, reset: 'song', atLimit: 'no-more-repair',
@@ -117,6 +124,12 @@ export class OutputRecovery implements RecoveryBudgetView {
 /** The OBS reconnect wait before attempt `attempt` (1-based), or null past the limit. */
 export function obsReconnectDelayMs(attempt: number): number | null {
   return Number.isInteger(attempt) && attempt >= 1 ? OBS_RECONNECT_DELAYS_MS[attempt - 1] ?? null : null;
+}
+
+/** The MA2 relogin wait before attempt `attempt` (1-based): the table's last wait repeats; the row's duration ends it. */
+export function ma2ReloginDelayMs(attempt: number): number | null {
+  if (!Number.isInteger(attempt) || attempt < 1) return null;
+  return MA2_RELOGIN_DELAYS_MS[Math.min(attempt, MA2_RELOGIN_DELAYS_MS.length) - 1] ?? null;
 }
 
 /** A picture element may be sent once more against `target` while the song still has repairs left. */

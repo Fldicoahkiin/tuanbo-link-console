@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { SHOW_WAIT_CLOCK_MOVING, SHOW_WAIT_PREPARING, SHOW_WAIT_STOPPING, type ShowState } from '@tb/core/link';
+import { OUTPUT_RECOVERY_RULES, SHOW_WAIT_CLOCK_MOVING, SHOW_WAIT_PREPARING, SHOW_WAIT_STOPPING, type ShowState } from '@tb/core/link';
 import { createLightingDocument, type LightingDocument, type Ma2ExecutorPage, type Ma2LiveSnapshot } from '@tb/schema';
 import {
-  MA2_CONSOLE_CONNECT_NOTE, MA2_CONSOLE_LIVE_STALE_MS, MA2_FADER_LATE_MS, holdFader, ma2ButtonLiveRow, ma2ButtonRowStart, ma2ButtonRowsToRead, ma2ConsoleBand,
-  ma2ConsoleBanner, ma2ConsoleFooter, ma2ConsolePageActions, ma2ConsoleReadNote, ma2FaderLiveRow, ma2ReadsButtonLive, ma2TimecodeExecutors, settleFaders,
+  MA2_CONSOLE_CONNECT_NOTE, MA2_CONSOLE_LIVE_STALE_MS, MA2_FADER_LATE_MS, holdFader, ma2ButtonLiveRow, ma2ButtonRowAfter, ma2ButtonRowStart, ma2ButtonRowsToRead, ma2ConsoleBand,
+  ma2ConsoleBanner, ma2ConsoleFooter, ma2ConsolePageActions, ma2ConsoleReadNote, ma2ConsoleWebRemote, ma2FaderLiveRow, ma2ReadsButtonLive, ma2TimecodeExecutors, settleFaders,
   type Ma2ConsoleBandInput, type Ma2ConsoleLiveRow
 } from './ma2-console-page';
 
@@ -165,5 +165,57 @@ describe('页脚', () => {
     expect(footer.webRemote).toBe(`网页遥控没连上。${MA2_CONSOLE_CONNECT_NOTE}`); expect(footer.connect).toBe(true);
     expect(ma2ConsoleFooter({ kind: 'connected' }, { text: '按键：网页遥控', tone: 'normal' })).toMatchObject({ webRemote: '网页遥控已连上，推杆区显示控台当前值', connect: false });
     expect(ma2ConsoleFooter({ kind: 'failed', reason: '超时' }, { text: '按键：网页遥控', tone: 'normal' })).toMatchObject({ webRemote: '网页遥控停了，推杆区的实时状态没有更新。原因：超时', webRemoteTone: 'warning', connect: true });
+  });
+});
+
+describe('网页遥控断了自动重新登录时怎么显示（C2）', () => {
+  const LIMIT = OUTPUT_RECOVERY_RULES['ma2.webRemote.relogin'].limitText;
+  const keys = { text: '按键：网页遥控', tone: 'normal' as const };
+  const snapshot: Ma2LiveSnapshot = { page: 1, start: 1, readAt: 1000, items: [{ slot: 1, width: 1, name: '面光', objectType: 'Seq', objectNumber: '86', running: true, cue: '3 副歌',
+    blocks: [{ slot: 1, fader: { value: 0.5, min: 0, max: 1, name: 'Master', text: '50%' }, buttons: [] }] }] };
+  const faderBand = (row: Ma2ConsoleLiveRow, now: number) => ma2ConsoleBand({ page: 1, start: 1, end: 15, structure: { page: 1, name: '', items: [item(1, '面光', 86)] } as Ma2ExecutorPage,
+    rows: new Map([[1, row]]), rowStart: () => 1, timecode: new Set(), keys: { sending: {}, failed: {} }, pending: new Map(), now });
+
+  it('页脚第二行：正在重新登录写第几次，是等待不标红，照旧能手动连；到上限用表里的话标红；别的原因停下也标红、写原因', () => {
+    const relogin = ma2ConsoleWebRemote({ wanted: true, connecting: false, error: '断了', session: { kind: 'relogin', attempt: 3, since: 0, reason: '断了' }, snapshot: true });
+    expect(relogin).toEqual({ kind: 'relogin', attempt: 3 });
+    expect(ma2ConsoleFooter(relogin, keys)).toMatchObject({ webRemote: '网页遥控断了，正在自动重新登录（第 3 次）', webRemoteTone: 'normal', connect: true });
+    const limit = ma2ConsoleWebRemote({ wanted: true, connecting: false, error: '断了', session: { kind: 'stopped', reason: LIMIT, limit: true }, snapshot: true });
+    expect(ma2ConsoleFooter(limit, keys)).toMatchObject({ webRemote: LIMIT, webRemoteTone: 'danger', connect: true });
+    const refused = ma2ConsoleWebRemote({ wanted: true, connecting: false, error: '断了', session: { kind: 'stopped', reason: '控台拒绝登录，请检查实时推杆用户名和密码', limit: false }, snapshot: false });
+    expect(ma2ConsoleFooter(refused, keys)).toMatchObject({ webRemote: '网页遥控停了，需要手动连接。原因：控台拒绝登录，请检查实时推杆用户名和密码', webRemoteTone: 'danger', connect: true });
+    // Before the main process said more, a failed read is what C1 showed; connected again reads as connected.
+    expect(ma2ConsoleWebRemote({ wanted: true, connecting: false, error: '超时', session: null, snapshot: true })).toEqual({ kind: 'failed', reason: '超时' });
+    expect(ma2ConsoleWebRemote({ wanted: true, connecting: false, error: '', session: null, snapshot: true })).toEqual({ kind: 'connected' });
+    // Never connected in this run: nothing changes from C1.
+    expect(ma2ConsoleWebRemote({ wanted: false, connecting: false, error: '', session: { kind: 'relogin', attempt: 1, since: 0, reason: '' }, snapshot: false })).toEqual({ kind: 'off' });
+  });
+
+  it('推杆区：重新登录期间留着上一次读到的，3 秒后变灰，旁边写在重新登录，不算失败；没读到过就只写在重新登录', () => {
+    const row = ma2FaderLiveRow({ wanted: true, start: 1, snapshot, error: '断了', session: { kind: 'relogin', attempt: 2, since: 0, reason: '断了' } });
+    expect(row).toMatchObject({ kind: 'read', readAt: 1000, waiting: '网页遥控断了，正在自动重新登录（第 2 次）' });
+    expect(faderBand(row, 1500).cells[0]!.live).toEqual({ kind: 'live', running: true, cue: '3 副歌', stale: false });
+    const old = faderBand(row, 1000 + MA2_CONSOLE_LIVE_STALE_MS + 1);
+    expect(old.cells[0]!.live).toMatchObject({ stale: true });
+    expect(old.note).toEqual({ text: '网页遥控断了，正在自动重新登录（第 2 次）', tone: 'normal' });
+    expect(ma2FaderLiveRow({ wanted: true, start: 1, snapshot: null, error: '断了', session: { kind: 'relogin', attempt: 1, since: 0, reason: '' } }))
+      .toEqual({ kind: 'off', note: '网页遥控断了，正在自动重新登录（第 1 次）' });
+    // Stopped: a failure, as before.
+    expect(ma2FaderLiveRow({ wanted: true, start: 1, snapshot, error: '断了', session: { kind: 'stopped', reason: LIMIT, limit: true } })).toEqual({ kind: 'failed', reason: '断了' });
+  });
+
+  it('Button 区：重新登录时每行留着上一次读到的，变灰并写在重新登录；停下了写原因，按一次键会重新连上', () => {
+    const read = { kind: 'live' as const, page: 1000, start: 101, readAt: 1000, items: [{ slot: 101, width: 1, name: '面光', objectNumber: '9000', running: true, cue: '1 主歌' }] };
+    let row = ma2ButtonRowAfter(undefined, read);
+    row = ma2ButtonRowAfter(row, { kind: 'relogin', attempt: 1 });
+    row = ma2ButtonRowAfter(row, { kind: 'relogin', attempt: 2 });
+    expect(row).toEqual({ kind: 'relogin', attempt: 2, last: { readAt: 1000, items: read.items } });
+    const shown = band({ rows: new Map([[101, ma2ButtonLiveRow(row)]]), now: 1000 + MA2_CONSOLE_LIVE_STALE_MS + 1 });
+    expect(cell(shown, 101).live).toEqual({ kind: 'live', running: true, cue: '1 主歌', stale: true });
+    expect(shown.note).toEqual({ text: 'Button 区的网页遥控断了，正在自动重新登录（第 2 次）', tone: 'normal' });
+    expect(ma2ButtonLiveRow(ma2ButtonRowAfter(undefined, { kind: 'relogin', attempt: 1 }))).toEqual({ kind: 'off', note: 'Button 区的网页遥控断了，正在自动重新登录（第 1 次），这里先只显示页面结构' });
+    expect(ma2ButtonLiveRow({ kind: 'off', why: 'stopped', reason: LIMIT })).toEqual({ kind: 'off', note: `Button 区的网页遥控停了：${LIMIT}。按一次键会重新连上`, tone: 'warning' });
+    // Logged in again: the next read shows as usual.
+    expect(ma2ButtonRowAfter(row, { ...read, readAt: 9000 })).toEqual({ kind: 'live', readAt: 9000, items: read.items });
   });
 });

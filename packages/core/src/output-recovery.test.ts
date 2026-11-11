@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OBS_RECONNECT_DELAYS_MS, OUTPUT_RECOVERY_RULES, OutputRecovery, obsReconnectDelayMs, pictureRepairAllowed, recordPictureRepair, type RecoveryRow } from './output-recovery';
+import { OBS_RECONNECT_DELAYS_MS, OUTPUT_RECOVERY_RULES, OutputRecovery, ma2ReloginDelayMs, obsReconnectDelayMs, pictureRepairAllowed, recordPictureRepair, type RecoveryRow } from './output-recovery';
 
 const outcomes = (recovery: OutputRecovery, row: RecoveryRow, times: number[], key = 'k'): string[] =>
   times.map(time => recovery.record(row, key, time).outcome);
@@ -29,6 +29,22 @@ describe('自动恢复都有次数上限，全软件只有这一张表（2026-11
     expect([1, 2, 5, 10, 11, 0].map(obsReconnectDelayMs)).toEqual([1000, 2000, 15_000, 15_000, null, null]);
     const recovery = new OutputRecovery();
     expect(outcomes(recovery, 'obs.reconnect', Array.from({ length: 11 }, (_, index) => index))).toEqual([...Array<string>(10).fill('recover'), 'limit']);
+  });
+
+  it('MA2 重新登录退避 1、2、4、8、15 秒以后每次 30 秒；网页遥控一次断线最多 5 分钟（C2）', () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 20, 0, 1.5].map(ma2ReloginDelayMs)).toEqual([1000, 2000, 4000, 8000, 15_000, 30_000, 30_000, 30_000, null, null]);
+    const rule = OUTPUT_RECOVERY_RULES['ma2.webRemote.relogin'];
+    expect(rule.limit).toEqual({ kind: 'duration', maxMs: 300_000 });
+    expect(rule.reset).toBe('outage');
+    // Attempt times as the waits give them, from the first attempt at 1 s: every one inside 5 minutes recovers, then the limit.
+    const times: number[] = [];
+    for (let attempt = 1, at = 0; attempt <= 16; attempt += 1) { at += ma2ReloginDelayMs(attempt)!; times.push(at); }
+    const recovery = new OutputRecovery();
+    const results = outcomes(recovery, 'ma2.webRemote.relogin', times);
+    expect(results.filter(outcome => outcome === 'recover').length).toBe(times.filter(time => time - times[0]! < 300_000).length);
+    expect(results.at(-1)).toBe('limit');
+    recovery.endOutage('ma2.webRemote.relogin', 'k');
+    expect(recovery.allows('ma2.webRemote.relogin', 'k', 10_000_000)).toBe(true);
   });
 });
 

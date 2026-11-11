@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { ma2ExecutorFunctions, type LightingReadBack } from '@tb/core/link';
 import { ma2ExecutorInputSchema, type Ma2ExecutorChannel, type Ma2ExecutorInput, type Ma2LayoutDirectoryRequest, type Ma2NetworkTarget } from '@tb/schema';
-import { ma2ButtonLiveRequestSchema, type Ma2ButtonLive, type Ma2ButtonLiveRequest } from '@tb/schema';
+import { ma2ButtonLiveRequestSchema, type Ma2ButtonLive, type Ma2ButtonLiveRequest, type Ma2WebRemoteSession, type Ma2WebRemoteState } from '@tb/schema';
 import { ma2ExecutorObserveRequestSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, type Ma2ExecutorObservation, type Ma2ExecutorObserveRequest, type Ma2LiveConnect, type Ma2LiveInput, type Ma2LiveRequest, type Ma2LiveSnapshot } from '@tb/schema';
 import type { SecureProfileStore } from './secure-profile-store';
 import type { Ma2Telnet } from './ma2-telnet';
@@ -11,9 +11,14 @@ import { writeFileAtomically } from './atomic-file';
 import { verifyMa2ShowSource } from './ma2-show-probe';
 import { MA2_BUTTON_RANGES, Ma2LivePlayback, ma2ObservedRange, type Ma2ButtonSnapshot } from './ma2-live-playback';
 import { Ma2ExecutorChannels, type Ma2ButtonAreaAnswer } from './ma2-executor-channel';
+import { Ma2ReloginStop, Ma2WebRemoteRelogin, type Ma2ReloginLog } from './ma2-web-remote-relogin';
 
 const profilesSchema = z.array(z.object({ host: z.ipv4(), username: z.string().min(1).max(256) }).strict()).max(128);
 type ButtonSession = { client: Ma2LivePlayback; scope: string; verifiedAt: number; reads: Map<string, Ma2ButtonSnapshot>; reading: Promise<unknown> };
+/** The console, Show and page the fader view is connected to. */
+type FaderTarget = { network: Ma2LiveRequest['network']; expectedSource: Ma2LiveRequest['expectedSource']; page: number };
+/** Why no saved user can log the web remote in again. */
+const NO_SAVED_USER = '这台控台还没连过网页遥控（灯光工作台推杆页的“连接”）';
 /** How old a Button area read may be when a key is checked against it, and the Show check it relies on. */
 const BUTTON_READ_MS = 1000;
 const BUTTON_SHOW_MS = 2000;
@@ -42,6 +47,8 @@ export class Ma2LiveService {
   private verifiedAt = 0;
   private snapshot: Ma2LiveSnapshot | null = null;
   private failed = false;
+  /** Why the fader view stopped, for the console page. */
+  private faderFailure: string | null = null;
   private generation = 0;
   private pressed = new Map<string, { page: number; slot: number; id: number }>();
   private guard: ReturnType<typeof setTimeout> | null = null;
@@ -50,7 +57,11 @@ export class Ma2LiveService {
   private observerFailure: string | null = null;
   private readonly channels = new Ma2ExecutorChannels();
   /** The console and page the fader view is connected to now; a choice of the web remote reads that Button area. */
-  private faderRequest: { network: Ma2LiveRequest['network']; expectedSource: Ma2LiveRequest['expectedSource']; page: number } | null = null;
+  private faderRequest: FaderTarget | null = null;
+  private readonly reloginLogs = new Set<(entry: Ma2ReloginLog) => void>();
+  /** C2: the fader view's and the Button area's sessions, when they drop, log in again on their own with the saved user. */
+  private readonly faderRelogin = new Ma2WebRemoteRelogin<FaderTarget>('fader', target => this.reloginFaders(target), entry => this.reloginLog(entry));
+  private readonly buttonRelogin = new Ma2WebRemoteRelogin<Ma2LayoutDirectoryRequest>('buttons', target => this.reloginButtons(target), entry => this.reloginLog(entry));
   /** The Button area's own web remote session (M7): its failures never close the fader view. */
   private buttons: ButtonSession | null = null;
   private buttonOpening: { scope: string; session: Promise<ButtonSession> } | null = null;
@@ -63,11 +74,19 @@ export class Ma2LiveService {
   /** `telnet` is the logged-in Telnet line to the console this request names; it throws when that is not the one
    * connected. The Show check before a read is one short command on it, never a plugin transaction (M6). */
   constructor(private readonly path: string, private readonly secrets: Pick<SecureProfileStore, 'saveCredential' | 'loadCredential'>, private readonly telnet: (request: Pick<Ma2LiveRequest, 'network'>) => Pick<Ma2Telnet, 'command'>,
-    private readonly socket: (host: string) => Ma2LivePlayback = host => new Ma2LivePlayback(host),
-    private readonly faderSocket: (host: string) => Ma2LivePlayback = host => new Ma2LivePlayback(host)) {}
+    private readonly socket: (host: string, dropped?: (reason: string) => void) => Ma2LivePlayback = (host, dropped) => new Ma2LivePlayback(host, undefined, dropped),
+    private readonly faderSocket: (host: string, dropped?: (reason: string) => void) => Ma2LivePlayback = (host, dropped) => new Ma2LivePlayback(host, undefined, dropped)) {}
   private key(request: Pick<Ma2LiveRequest, 'network' | 'expectedSource'>): string { return JSON.stringify([request.network, request.expectedSource]); }
   private secret(host: string, username: string): string { return `ma2-web-${createHash('sha256').update(`${host}:${username}`).digest('hex')}`; }
-  private async profiles() {
+  /** The saved users, read from disk once: only this service writes the file, and it keeps this copy up to date. A read
+   * that fails is not kept, so the next asks the disk again. */
+  private saved: Promise<z.infer<typeof profilesSchema>> | null = null;
+  private profiles(): Promise<z.infer<typeof profilesSchema>> {
+    const saved = this.saved ??= this.readProfiles();
+    void saved.catch(() => { if (this.saved === saved) this.saved = null; });
+    return saved;
+  }
+  private async readProfiles(): Promise<z.infer<typeof profilesSchema>> {
     try { return profilesSchema.parse(JSON.parse(await readFile(this.path, 'utf8'))); }
     catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return []; throw error; }
   }
@@ -80,8 +99,34 @@ export class Ma2LiveService {
    */
   close(): void {
     this.generation += 1; this.releaseObserver();
-    this.release(); this.client?.close(); this.client = null; this.snapshot = null; this.scope = ''; this.failed = false; this.faderRequest = null;
+    this.faderRelogin.stop(); this.buttonRelogin.stop();
+    this.release(); this.client?.close(); this.client = null; this.snapshot = null; this.scope = ''; this.failed = false; this.faderFailure = null; this.faderRequest = null;
     this.releaseButtons(); this.buttons?.client.close(); this.buttons = null; this.buttonOpening = null;
+  }
+  /** Every line the logging in again writes for the run log (C2). */
+  onReloginLog(listener: (entry: Ma2ReloginLog) => void): () => void {
+    this.reloginLogs.add(listener);
+    return () => { this.reloginLogs.delete(listener); };
+  }
+  private reloginLog(entry: Ma2ReloginLog): void { for (const listener of this.reloginLogs) listener(entry); }
+  /**
+   * The console page's web remote sessions for this console and Show (C2): read from what is here, nothing is asked of the
+   * console. A session another console or Show uses reads as idle.
+   */
+  webRemoteState(request: Ma2LayoutDirectoryRequest): Ma2WebRemoteState {
+    const scope = this.key(request);
+    const buttons = this.buttonRelogin.view(scope);
+    return {
+      fader: this.faderState(scope),
+      buttons: buttons && buttons.kind !== 'connected' ? buttons : this.buttons?.scope === scope && this.buttons.client.connected ? { kind: 'connected' } : { kind: 'idle' }
+    };
+  }
+  private faderState(scope: string): Ma2WebRemoteSession {
+    const relogin = this.faderRelogin.view(scope);
+    if (relogin && relogin.kind !== 'connected') return relogin;
+    if (this.scope !== scope) return { kind: 'idle' };
+    if (this.failed) return { kind: 'stopped', reason: this.faderFailure ?? '实时推杆已停止，请重新连接', limit: false };
+    return this.client?.connected ? { kind: 'connected' } : { kind: 'idle' };
   }
   release(): void {
     if (this.guard) clearTimeout(this.guard); this.guard = null;
@@ -121,22 +166,69 @@ export class Ma2LiveService {
     const generation = this.generation;
     await verifyMa2ShowSource(this.telnet(request), request.expectedSource);
     if (generation !== this.generation) throw new Error('控台连接已改变');
-    const client = this.faderSocket(request.network.host); this.client = client;
+    const client: Ma2LivePlayback = this.faderSocket(request.network.host, reason => this.faderDropped(client, reason)); this.client = client;
     try {
       await client.connect(request.username, request.password);
       if (generation !== this.generation) throw new Error('控台连接已改变');
       const profiles = await this.profiles();
       await this.secrets.saveCredential(this.secret(request.network.host, request.username), request.password);
-      await writeFileAtomically(this.path, JSON.stringify([...profiles.filter(profile => profile.host !== request.network.host), { host: request.network.host, username: request.username }], null, 2));
+      const next = [...profiles.filter(profile => profile.host !== request.network.host), { host: request.network.host, username: request.username }];
+      this.saved = null;
+      await writeFileAtomically(this.path, JSON.stringify(next, null, 2));
+      this.saved = Promise.resolve(next);
       if (generation !== this.generation) throw new Error('控台连接已改变');
       this.scope = this.key(request); this.verifiedAt = Date.now(); this.failed = false;
-      this.faderRequest = { network: request.network, expectedSource: request.expectedSource, page: request.page };
-      return await this.read(ma2LiveRequestSchema.parse({ network: request.network, expectedSource: request.expectedSource, page: request.page, start: request.start }));
-    } catch (error) { client.close(); if (generation === this.generation && this.client === client) this.failed = true; throw error; }
+      const target: FaderTarget = { network: request.network, expectedSource: request.expectedSource, page: request.page }; this.faderRequest = target;
+      const snapshot = await this.read(ma2LiveRequestSchema.parse({ network: request.network, expectedSource: request.expectedSource, page: request.page, start: request.start }));
+      // Connected in this run: from now on a drop logs in again on its own, its counts from zero.
+      if (generation === this.generation && this.client === client) this.faderRelogin.connected(this.scope, target);
+      return snapshot;
+    } catch (error) { client.close(); if (generation === this.generation && this.client === client) { this.failed = true; this.faderFailure = message(error); } throw error; }
+  }
+  /** A fader session that drops on its own: held keys are let go (nothing is sent on a closed session) and logging in again starts. */
+  private faderDropped(client: Ma2LivePlayback, reason: string): void {
+    if (this.client !== client) return;
+    this.release(); this.failed = true; this.faderFailure = reason;
+    this.faderRelogin.dropped(reason);
+  }
+  /**
+   * The fader view logged in again on its own (C2): the saved user only, the same console and Show (a Show that changed
+   * stops it), never the operator's other sessions: the Button session and the "console follows" session stay as they are,
+   * and the key channel is not read again. Nothing is resent; the page's next read and move go as usual.
+   */
+  private async reloginFaders(target: FaderTarget): Promise<void> {
+    const generation = this.generation;
+    const login = await this.savedLogin(target.network.host);
+    await verifyMa2ShowSource(this.telnet(target), target.expectedSource);
+    if (generation !== this.generation) throw new Error('控台连接已改变');
+    const client: Ma2LivePlayback = this.faderSocket(target.network.host, reason => this.faderDropped(client, reason));
+    try { await client.connect(login.username, login.password); }
+    catch (error) { client.close(); throw error; }
+    if (generation !== this.generation) { client.close(); throw new Error('控台连接已改变'); }
+    this.client?.close(); this.client = client;
+    this.snapshot = null; this.failed = false; this.faderFailure = null; this.verifiedAt = Date.now();
+  }
+  /** The Button session logged in again on its own (C2): only while its keys still go on the web remote, after the same Show check. */
+  private async reloginButtons(target: Ma2LayoutDirectoryRequest): Promise<void> {
+    if (this.channels.forKey(this.key(target), 101) !== 'webRemote') throw new Ma2ReloginStop('Button 区的按键已经不走网页遥控');
+    await verifyMa2ShowSource(this.telnet(target), target.expectedSource);
+    await this.buttonSession(target);
+  }
+  /** The user saved for this console and its password from the secure store; neither there stops logging in again. */
+  private async savedLogin(host: string): Promise<{ username: string; password: string }> {
+    let profile: { host: string; username: string } | undefined;
+    try { profile = (await this.profiles()).find(value => value.host === host); }
+    catch (error) { throw new Ma2ReloginStop(message(error)); }
+    if (!profile) throw new Ma2ReloginStop(NO_SAVED_USER);
+    try { return { username: profile.username, password: await this.secrets.loadCredential(this.secret(profile.host, profile.username)) }; }
+    catch (error) { throw new Ma2ReloginStop(message(error)); }
   }
   async read(input: Ma2LiveRequest): Promise<Ma2LiveSnapshot> {
     const request = ma2LiveRequestSchema.parse(input); this.telnet(request);
-    if (this.failed) throw new Error('实时推杆已停止，请重新连接');
+    if (this.failed) {
+      const relogin = this.faderRelogin.view(this.key(request));
+      throw new Error(relogin?.kind === 'relogin' ? `网页遥控断了，正在自动重新登录（第 ${relogin.attempt} 次）` : '实时推杆已停止，请重新连接');
+    }
     if (!this.client) {
       const generation = this.generation;
       const profile = (await this.profiles()).find(value => value.host === request.network.host);
@@ -156,7 +248,7 @@ export class Ma2LiveService {
       this.snapshot = snapshot;
       if (this.pressed.size) this.armRelease();
       return snapshot;
-    } catch (error) { if (generation === this.generation && this.client === client) { this.release(); client.close(); this.failed = true; } throw error; }
+    } catch (error) { if (generation === this.generation && this.client === client) { this.release(); client.close(); this.failed = true; this.faderFailure ??= message(error); } throw error; }
   }
   /**
    * One executor's state for the "console follows the timecode" check, on a web remote session of its
@@ -248,7 +340,12 @@ export class Ma2LiveService {
     const scope = this.key(request);
     if (this.channels.forKey(scope, request.start) !== 'webRemote') return { kind: 'off', why: 'unverified', reason: this.channels.buttons(scope).webRemote.reason };
     const session = this.buttons?.scope === scope && this.buttons.client.connected ? this.buttons : null;
-    if (!session) return { kind: 'off', why: 'disconnected', reason: 'Button 区的网页遥控现在没连着' };
+    if (!session) {
+      const relogin = this.buttonRelogin.view(scope);
+      if (relogin?.kind === 'relogin') return { kind: 'relogin', attempt: relogin.attempt };
+      if (relogin?.kind === 'stopped') return { kind: 'off', why: 'stopped', reason: relogin.reason };
+      return { kind: 'off', why: 'disconnected', reason: 'Button 区的网页遥控现在没连着' };
+    }
     const read = await this.buttonRead(session, request.page, request.start, 'peek');
     return { kind: 'live', page: read.page, start: read.start, readAt: read.readAt, items: read.items.map(item => ({ slot: item.slot, width: item.width, name: item.name, objectNumber: item.objectNumber, running: item.running, cue: item.cue })) };
   }
@@ -279,6 +376,7 @@ export class Ma2LiveService {
     this.releaseButtons();
     this.channels.choose(choice);
     if (choice === 'plugin') {
+      this.buttonRelogin.stop();
       this.buttons?.client.close(); this.buttons = null; this.buttonOpening = null;
       this.channels.forget();
       return true;
@@ -303,7 +401,7 @@ export class Ma2LiveService {
    */
   private async probeButtonArea(request: Pick<Ma2LiveConnect, 'network' | 'expectedSource' | 'page'>, login: Pick<Ma2LiveConnect, 'username' | 'password'>, generation: number): Promise<void> {
     const scope = this.key(request);
-    const client = this.socket(request.network.host);
+    const client: Ma2LivePlayback = this.socket(request.network.host, reason => this.buttonsDropped(client, reason));
     const reads = new Map<string, Ma2ButtonSnapshot>();
     let start: number = MA2_BUTTON_RANGES[0];
     let answer: Ma2ButtonAreaAnswer | null = null;
@@ -321,8 +419,10 @@ export class Ma2LiveService {
     if (generation !== this.generation || this.channels.chosen() !== 'webRemote') { client.close(); return; }
     this.buttons?.client.close(); this.buttons = null;
     // Kept while the console can take Button keys on the web remote, so the first key does not wait for a login.
-    if (this.channels.decide(scope, answer).webRemote.ready) this.buttons = { client, scope, verifiedAt: this.verifiedAt, reads, reading: Promise.resolve() };
-    else client.close();
+    if (this.channels.decide(scope, answer).webRemote.ready) {
+      this.buttons = { client, scope, verifiedAt: this.verifiedAt, reads, reading: Promise.resolve() };
+      this.buttonRelogin.connected(scope, { network: request.network, expectedSource: request.expectedSource });
+    } else client.close();
   }
   /** The Button area session for this console, logged in again with the saved user when it was closed. */
   private async buttonSession(request: Ma2LayoutDirectoryRequest): Promise<ButtonSession> {
@@ -334,20 +434,26 @@ export class Ma2LiveService {
     this.buttons?.client.close(); this.buttons = null;
     const generation = this.generation;
     const session = (async (): Promise<ButtonSession> => {
-      const profile = (await this.profiles()).find(value => value.host === request.network.host);
-      if (!profile) throw new Error('这台控台还没连过网页遥控（灯光工作台推杆页的“连接”）');
-      const password = await this.secrets.loadCredential(this.secret(profile.host, profile.username));
-      const client = this.socket(request.network.host);
-      try { await client.connect(profile.username, password); }
+      const login = await this.savedLogin(request.network.host);
+      const client: Ma2LivePlayback = this.socket(request.network.host, reason => this.buttonsDropped(client, reason));
+      try { await client.connect(login.username, login.password); }
       catch (error) { client.close(); throw error; }
       if (generation !== this.generation) { client.close(); throw new Error('控台连接已改变'); }
       const opened: ButtonSession = { client, scope, verifiedAt: 0, reads: new Map(), reading: Promise.resolve() };
       this.buttons = opened;
+      this.buttonRelogin.connected(scope, { network: request.network, expectedSource: request.expectedSource });
       return opened;
     })();
     const opening = { scope, session }; this.buttonOpening = opening;
     try { return await session; }
     finally { if (this.buttonOpening === opening) this.buttonOpening = null; }
+  }
+  /** A Button session that drops on its own: its held keys are let go and presses on their way cancelled (nothing is
+   * sent on a closed session, nothing is sent again later), and logging in again starts. The channel stays. */
+  private buttonsDropped(client: Ma2LivePlayback, reason: string): void {
+    if (this.buttons?.client !== client) return;
+    this.releaseButtons();
+    this.buttonRelogin.dropped(reason);
   }
   /** The Show check a key relies on: the fader view's, when it checked this console within 2 s; otherwise one short
    * Telnet command, which waits for the plugin step on the line (a key then misses its deadline and says so). */
@@ -456,7 +562,7 @@ export class Ma2LiveService {
   }
   private armRelease(): void {
     if (this.guard) clearTimeout(this.guard);
-    this.guard = setTimeout(() => { this.release(); this.failed = true; this.client?.close(); }, 1500);
+    this.guard = setTimeout(() => { this.release(); this.failed = true; this.faderFailure = '推杆页按住的键 1.5 秒没有续上，已经松开，推杆页停下了'; this.client?.close(); }, 1500);
   }
   input(input: Ma2LiveInput): void {
     const request = ma2LiveInputSchema.parse(input); this.telnet(request);
@@ -477,3 +583,4 @@ export class Ma2LiveService {
     if (request.action.kind === 'button' && request.action.pressed) { this.pressed.set(key, { page: request.page, slot: request.slot, id: request.action.id }); this.armRelease(); }
   }
 }
+const message = (error: unknown): string => error instanceof Error ? error.message : String(error);

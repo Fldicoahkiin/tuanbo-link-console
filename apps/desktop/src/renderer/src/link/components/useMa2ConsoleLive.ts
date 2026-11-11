@@ -9,7 +9,7 @@ import { ma2KeyChannelLabel, type Ma2ExecutorChannelState } from '../runtime/use
 import { useMa2LivePlayback } from './useMa2LivePlayback';
 import {
   MA2_CONSOLE_LIVE_STALE_MS, ma2ButtonLiveRow, ma2ButtonRowKey, ma2ButtonRowStart, ma2ConsoleBand, ma2ConsoleBanner, ma2ConsoleFooter, ma2ConsolePageActions,
-  ma2FaderLiveRow, ma2ReadsButtonLive, ma2TimecodeExecutors, type Ma2ButtonRowInput, type Ma2ConsoleBand, type Ma2ConsoleLiveRow, type Ma2WebRemoteState
+  ma2ConsoleWebRemote, ma2FaderLiveRow, ma2ReadsButtonLive, ma2TimecodeExecutors, type Ma2ButtonRowInput, type Ma2ConsoleBand, type Ma2ConsoleLiveRow
 } from '../view-models/ma2-console-page';
 
 export type Ma2ConsoleBandRequest = { kind: 'fader' | 'button'; page: number | null; start: number; end: number; structure: Ma2ExecutorPage | undefined };
@@ -39,7 +39,7 @@ export function useMa2ConsoleLive({ scope, shown, fader, buttonRows, channel, op
     return () => clearInterval(timer);
   }, [shown]);
   const timecode = useMemo(() => ma2TimecodeExecutors(show, itemId => project?.rundown.find(item => item.id === itemId)?.lighting ?? null, open), [show, project, open]);
-  const faderRow = ma2FaderLiveRow({ wanted: wanted && fader.page !== null, start: fader.start, snapshot: faderLive.snapshot, error: faderLive.error });
+  const faderRow = ma2FaderLiveRow({ wanted: wanted && fader.page !== null, start: fader.start, snapshot: faderLive.snapshot, error: faderLive.error, session: faderLive.session });
   // What a Button row is without asking the console: keys on the plugin, not known yet, or slots the web remote cannot read.
   const buttonKnown = (start: number): Ma2ButtonRowInput | null => start > 176 ? { kind: 'not-asked', why: 'above-190' }
     : !channel || channel.kind === 'unknown' ? { kind: 'not-asked', why: 'unknown' }
@@ -55,11 +55,12 @@ export function useMa2ConsoleLive({ scope, shown, fader, buttonRows, channel, op
       rowStart: request.kind === 'fader' ? () => request.start : ma2ButtonRowStart,
       timecode, keys, pending: request.kind === 'fader' ? faderLive.pending : new Map(), now });
   };
-  const webRemote: Ma2WebRemoteState = !wanted ? { kind: 'off' } : faderLive.connecting ? { kind: 'connecting' } : faderLive.error ? { kind: 'failed', reason: faderLive.error } : faderLive.snapshot ? { kind: 'connected' } : { kind: 'connecting' };
+  const webRemote = ma2ConsoleWebRemote({ wanted, connecting: faderLive.connecting, error: faderLive.error, session: faderLive.session, snapshot: faderLive.snapshot !== null });
   const buttonKeys = channel ? ma2KeyChannelLabel(channel, 101) : { text: '按键：还不知道走哪条', tone: 'normal' as const };
   return {
     band, show, actions: ma2ConsolePageActions(show), banner: ma2ConsoleBanner(show), footer: ma2ConsoleFooter(webRemote, buttonKeys),
-    connecting: faderLive.connecting, faderReady: faderRow.kind === 'read',
+    // A read kept while the session logs in again shows, but moves wait until it is connected again (C2).
+    connecting: faderLive.connecting, faderReady: faderRow.kind === 'read' && !faderLive.error,
     setFader: faderLive.setFader,
     connect: async (username: string, password: string): Promise<void> => { wantMa2WebRemote(); await faderLive.connect(username, password); }
   };

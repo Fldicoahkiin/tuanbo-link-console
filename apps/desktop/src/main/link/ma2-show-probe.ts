@@ -22,10 +22,13 @@ export function parseMa2ShowSource(reply: string): Ma2ShowSource {
   return { show: text(match[1]), generation: text(match[2]), version: text(match[3]) };
 }
 
+/** The console answered, and it is not the Show (or bridge session) the page was read from: asking again cannot help. */
+export class Ma2ShowSourceChanged extends Error {}
+
 /** Same rule and message as the plugin directory check it replaces (`ma2-executor-page.ts`): a different Show,
  * a restarted bridge or another console version ends the live session. A bridge that is not running says so. */
 export async function verifyMa2ShowSource(connection: Pick<Ma2Telnet, 'command'>, expected: Ma2ShowSource): Promise<void> {
   const actual = await readMa2ShowSource(connection);
-  if (!actual.generation) throw new Error('控台上的联动台插件没在运行，请重新连接控台；实时状态没有使用旧数据');
-  if (actual.show !== expected.show || actual.version !== expected.version || actual.generation !== expected.generation) throw new Error('控台的 Show 或连接变了，请重新读取素材；这一页没有使用旧数据');
+  if (!actual.generation) throw new Ma2ShowSourceChanged('控台上的联动台插件没在运行，请重新连接控台；实时状态没有使用旧数据');
+  if (actual.show !== expected.show || actual.version !== expected.version || actual.generation !== expected.generation) throw new Ma2ShowSourceChanged('控台的 Show 或连接变了，请重新读取素材；这一页没有使用旧数据');
 }

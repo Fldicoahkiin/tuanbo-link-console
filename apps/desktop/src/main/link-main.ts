@@ -1268,6 +1268,10 @@ function registerIpc(
   // The console page asks every second for each row it shows (C1): read through the Button session's own one-second
   // cache, never logged in for; a read that fails is shown in its cells and not logged, as the fader reads before it.
   handle('link:ma2-button-live', (_event, value: unknown) => ma2Network.live().buttonLive(ma2ButtonLiveRequestSchema.parse(value)));
+  // The console page asks every second while a session is not connected (C2); it reads only what is here, so it is not logged.
+  handle('link:ma2-web-remote-state', (_event, value: unknown) => ma2Network.live().webRemoteState(ma2LayoutDirectoryRequestSchema.parse(value)));
+  // Logging in again on its own (C2): each attempt, the success and the stop are written here; waiting is never an error.
+  ma2Network.live().onReloginLog(entry => { void logger.record({ level: entry.level, category: 'device', device: 'MA2', message: entry.message, result: entry.result, details: entry.details }); });
   handle('link:ma2-observe-executor', async (_event, value: unknown) => {
     try { return await ma2Network.live().observe(ma2ExecutorObserveRequestSchema.parse(value)); }
     catch (error) { await logger.record({ level: 'warning', category: 'device', device: 'MA2', message: `读不到控台执行器状态，这首歌不再核对控台在不在跟：${String(error)}`, result: 'failed' }); throw error; }

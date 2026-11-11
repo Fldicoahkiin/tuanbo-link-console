@@ -1,5 +1,5 @@
 import { isShowWait, lightingExecutors, showGate, type ShowGate, type ShowState } from '@tb/core/link';
-import type { LightingDocument, Ma2ExecutorPage, Ma2LiveSnapshot } from '@tb/schema';
+import type { LightingDocument, Ma2ButtonLive, Ma2ExecutorPage, Ma2LiveSnapshot, Ma2WebRemoteSession } from '@tb/schema';
 
 /**
  * The console page (C1, design 03 §4.3): what each cell of the executor page shows and what the operator may do there,
@@ -15,6 +15,8 @@ export const MA2_CONSOLE_LIVE_STALE_MS = 3000;
 export const MA2_FADER_LATE_MS = 1500;
 /** Fader moves are sent at most this often while dragged, the newest value each time. */
 export const MA2_FADER_SEND_MS = 100;
+/** While a web remote session is not connected, the page asks the main process this often what became of it (C2); that asks nothing of the console. */
+export const MA2_WEB_REMOTE_WATCH_MS = 1000;
 
 /** Fader values sent and not shown by the console yet, by slot; `late`: not shown within MA2_FADER_LATE_MS. */
 export type Ma2PendingFaders = ReadonlyMap<number, { value: number; at: number; late: boolean }>;
@@ -47,10 +49,11 @@ export type Ma2ConsoleLiveItem = { slot: number; width: number; name: string; ob
 export type Ma2ConsoleFader = { slot: number; value: number; min: number; max: number; text: string };
 /** What is known of one row of 15 now. `off`: no live state for it, and the one sentence that says why and how to get it. */
 export type Ma2ConsoleLiveRow =
-  | { kind: 'off'; note: string }
+  | { kind: 'off'; note: string; tone?: 'normal' | 'warning' }
   | { kind: 'reading' }
   | { kind: 'failed'; reason: string }
-  | { kind: 'read'; readAt: number; items: readonly Ma2ConsoleLiveItem[]; faders: readonly Ma2ConsoleFader[] };
+  /** `waiting`: the last read, kept while the session logs in again on its own (C2); it turns old as any read does. */
+  | { kind: 'read'; readAt: number; items: readonly Ma2ConsoleLiveItem[]; faders: readonly Ma2ConsoleFader[]; waiting?: string };
 
 export type Ma2ConsoleCellLive =
   | { kind: 'none' }
@@ -141,21 +144,37 @@ function faderCell(item: PageItem | undefined, slot: number, row: Ma2ConsoleLive
 function bandNote(rows: readonly Ma2ConsoleLiveRow[], shown: boolean): Ma2ConsoleBand['note'] {
   if (!shown) return null;
   const off = rows.find((row): row is Extract<Ma2ConsoleLiveRow, { kind: 'off' }> => row.kind === 'off');
-  if (off) return { text: off.note, tone: 'normal' };
+  if (off) return { text: off.note, tone: off.tone ?? 'normal' };
   const failed = rows.find((row): row is Extract<Ma2ConsoleLiveRow, { kind: 'failed' }> => row.kind === 'failed');
-  return failed ? { text: `读不到控台上这几格现在的状态。原因：${failed.reason}`, tone: 'warning' } : null;
+  if (failed) return { text: `读不到控台上这几格现在的状态。原因：${failed.reason}`, tone: 'warning' };
+  const waiting = rows.find((row): row is Extract<Ma2ConsoleLiveRow, { kind: 'read' }> => row.kind === 'read' && row.waiting !== undefined);
+  return waiting?.waiting ? { text: waiting.waiting, tone: 'normal' } : null;
 }
 
-/** The fader band's row, from the fader session (`useMa2LivePlayback`): `wanted`, the operator connected the web remote in this run. */
-export function ma2FaderLiveRow(input: { wanted: boolean; start: number; snapshot: Ma2LiveSnapshot | null; error: string }): Ma2ConsoleLiveRow {
+/** The words while a session logs in again on its own (C2): a wait, never red. */
+export function ma2ReloginText(attempt: number): string { return `网页遥控断了，正在自动重新登录（第 ${attempt} 次）`; }
+
+/**
+ * The fader band's row, from the fader session (`useMa2LivePlayback`): `wanted`, the operator connected the web remote in
+ * this run. `session`: what the main process says of that session after a read failed. While it logs in again on its own
+ * (C2) the last read stays and turns old, with the wait beside it; it is never shown as a failure.
+ */
+export function ma2FaderLiveRow(input: { wanted: boolean; start: number; snapshot: Ma2LiveSnapshot | null; error: string; session?: Ma2WebRemoteSession | null }): Ma2ConsoleLiveRow {
   if (input.start > 76) return { kind: 'off', note: '91–100 格网页遥控读不了，这里只显示页面结构' };
   if (!input.wanted) return { kind: 'off', note: MA2_CONSOLE_CONNECT_NOTE };
+  if (input.error && input.session?.kind === 'relogin') {
+    const waiting = ma2ReloginText(input.session.attempt);
+    return input.snapshot ? { ...faderRead(input.snapshot), waiting } : { kind: 'off', note: waiting };
+  }
   if (input.error) return { kind: 'failed', reason: input.error };
   if (!input.snapshot) return { kind: 'reading' };
+  return faderRead(input.snapshot);
+}
+function faderRead(snapshot: Ma2LiveSnapshot): Extract<Ma2ConsoleLiveRow, { kind: 'read' }> {
   return {
-    kind: 'read', readAt: input.snapshot.readAt,
-    items: input.snapshot.items.map(item => ({ slot: item.slot, width: item.width, name: item.name, objectNumber: item.objectNumber, running: item.running, cue: item.cue })),
-    faders: input.snapshot.items.flatMap(item => item.blocks.flatMap(block => block.fader ? [{ slot: block.slot, value: block.fader.value, min: block.fader.min, max: block.fader.max, text: block.fader.text }] : []))
+    kind: 'read', readAt: snapshot.readAt,
+    items: snapshot.items.map(item => ({ slot: item.slot, width: item.width, name: item.name, objectNumber: item.objectNumber, running: item.running, cue: item.cue })),
+    faders: snapshot.items.flatMap(item => item.blocks.flatMap(block => block.fader ? [{ slot: block.slot, value: block.fader.value, min: block.fader.min, max: block.fader.max, text: block.fader.text }] : []))
   };
 }
 
@@ -163,8 +182,19 @@ export function ma2FaderLiveRow(input: { wanted: boolean; start: number; snapsho
 export type Ma2ButtonRowInput =
   | { kind: 'not-asked'; why: 'plugin' | 'unknown' | 'above-190' }
   | { kind: 'reading' } | { kind: 'failed'; reason: string }
-  | { kind: 'off'; why: 'plugin' | 'unverified' | 'disconnected'; reason: string }
-  | { kind: 'live'; readAt: number; items: readonly Ma2ConsoleLiveItem[] };
+  | { kind: 'off'; why: 'plugin' | 'unverified' | 'disconnected' | 'stopped'; reason: string }
+  | { kind: 'live'; readAt: number; items: readonly Ma2ConsoleLiveItem[] }
+  /** The Button session logs in again on its own (C2); `last`, the row's last read, kept to turn old. */
+  | { kind: 'relogin'; attempt: number; last: { readAt: number; items: readonly Ma2ConsoleLiveItem[] } | null };
+
+/** A row after the main process answered (`useMa2ButtonLive`): while the Button session logs in again, the last read is kept. */
+export function ma2ButtonRowAfter(previous: Ma2ButtonRowInput | undefined, answer: Ma2ButtonLive | { kind: 'failed'; reason: string }): Ma2ButtonRowInput {
+  switch (answer.kind) {
+    case 'live': return { kind: 'live', readAt: answer.readAt, items: answer.items };
+    case 'relogin': return { kind: 'relogin', attempt: answer.attempt, last: previous?.kind === 'live' ? { readAt: previous.readAt, items: previous.items } : previous?.kind === 'relogin' ? previous.last : null };
+    case 'off': case 'failed': return answer;
+  }
+}
 
 export function ma2ButtonLiveRow(input: Ma2ButtonRowInput | undefined): Ma2ConsoleLiveRow {
   if (!input) return { kind: 'reading' };
@@ -176,7 +206,12 @@ export function ma2ButtonLiveRow(input: Ma2ButtonRowInput | undefined): Ma2Conso
     case 'off':
       return input.why === 'plugin' ? ma2ButtonLiveRow({ kind: 'not-asked', why: 'plugin' })
         : input.why === 'unverified' ? { kind: 'off', note: `Button 区只显示页面结构：${input.reason}` }
+        : input.why === 'stopped' ? { kind: 'off', note: `Button 区的网页遥控停了：${input.reason}。按一次键会重新连上`, tone: 'warning' }
         : { kind: 'off', note: 'Button 区的网页遥控现在没连着，这里只显示页面结构。按一次键会重新连上' };
+    case 'relogin': {
+      const waiting = `Button 区的${ma2ReloginText(input.attempt)}`;
+      return input.last ? { kind: 'read', readAt: input.last.readAt, items: input.last.items, faders: [], waiting } : { kind: 'off', note: `${waiting}，这里先只显示页面结构` };
+    }
     case 'reading': return { kind: 'reading' };
     case 'failed': return { kind: 'failed', reason: input.reason };
     case 'live': return { kind: 'read', readAt: input.readAt, items: input.items, faders: [] };
@@ -220,14 +255,34 @@ export function ma2ConsoleBanner(show: ShowState): { title: string; text: string
   }
 }
 
-export type Ma2WebRemoteState = { kind: 'off' } | { kind: 'connecting' } | { kind: 'connected' } | { kind: 'failed'; reason: string };
+/**
+ * The fader view's web remote as the footer tells it: `relogin` and `stopped` come from the main process (C2) once a read
+ * failed; `failed` is a read that failed before the main process said more.
+ */
+export type Ma2ConsoleWebRemote = { kind: 'off' } | { kind: 'connecting' } | { kind: 'connected' } | { kind: 'failed'; reason: string }
+  | { kind: 'relogin'; attempt: number } | { kind: 'stopped'; reason: string; limit: boolean };
+export function ma2ConsoleWebRemote(input: { wanted: boolean; connecting: boolean; error: string; session: Ma2WebRemoteSession | null; snapshot: boolean }): Ma2ConsoleWebRemote {
+  if (!input.wanted) return { kind: 'off' };
+  if (input.connecting) return { kind: 'connecting' };
+  if (input.error) {
+    if (input.session?.kind === 'relogin') return { kind: 'relogin', attempt: input.session.attempt };
+    if (input.session?.kind === 'stopped') return { kind: 'stopped', reason: input.session.reason, limit: input.session.limit };
+    return { kind: 'failed', reason: input.error };
+  }
+  return input.snapshot ? { kind: 'connected' } : { kind: 'connecting' };
+}
+export type Ma2ConsoleTone = 'normal' | 'warning' | 'danger';
 /** The page's footer: how keys and faders reach the console, and the web remote's state. `connect`: offer “连接网页遥控”. */
-export function ma2ConsoleFooter(webRemote: Ma2WebRemoteState, buttonKeys: { text: string; tone: 'normal' | 'warning' }): { keys: string; keysTone: 'normal' | 'warning'; webRemote: string; webRemoteTone: 'normal' | 'warning'; connect: boolean } {
+export function ma2ConsoleFooter(webRemote: Ma2ConsoleWebRemote, buttonKeys: { text: string; tone: 'normal' | 'warning' }): { keys: string; keysTone: Ma2ConsoleTone; webRemote: string; webRemoteTone: Ma2ConsoleTone; connect: boolean } {
   const keys = `推杆区按键：控台插件 · 推杆：网页遥控 · Button 区${buttonKeys.text}。走控台插件的按键，同步时最多慢一步`;
+  const line = (text: string, tone: Ma2ConsoleTone, connect: boolean) => ({ keys, keysTone: buttonKeys.tone, webRemote: text, webRemoteTone: tone, connect });
   switch (webRemote.kind) {
-    case 'off': return { keys, keysTone: buttonKeys.tone, webRemote: `网页遥控没连上。${MA2_CONSOLE_CONNECT_NOTE}`, webRemoteTone: 'normal', connect: true };
-    case 'connecting': return { keys, keysTone: buttonKeys.tone, webRemote: '正在连接网页遥控…', webRemoteTone: 'normal', connect: false };
-    case 'connected': return { keys, keysTone: buttonKeys.tone, webRemote: '网页遥控已连上，推杆区显示控台当前值', webRemoteTone: 'normal', connect: false };
-    case 'failed': return { keys, keysTone: buttonKeys.tone, webRemote: `网页遥控停了，推杆区的实时状态没有更新。原因：${webRemote.reason}`, webRemoteTone: 'warning', connect: true };
+    case 'off': return line(`网页遥控没连上。${MA2_CONSOLE_CONNECT_NOTE}`, 'normal', true);
+    case 'connecting': return line('正在连接网页遥控…', 'normal', false);
+    case 'connected': return line('网页遥控已连上，推杆区显示控台当前值', 'normal', false);
+    case 'failed': return line(`网页遥控停了，推杆区的实时状态没有更新。原因：${webRemote.reason}`, 'warning', true);
+    // Waiting, never red; the operator may still connect by hand, and that takes over.
+    case 'relogin': return line(ma2ReloginText(webRemote.attempt), 'normal', true);
+    case 'stopped': return line(webRemote.limit ? webRemote.reason : `网页遥控停了，需要手动连接。原因：${webRemote.reason}`, 'danger', true);
   }
 }
