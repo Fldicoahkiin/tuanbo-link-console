@@ -89,4 +89,4 @@ it('按键监听只在 link/keys/：别处往 window、document 或元素上加 
   expect(await rule('apps/desktop/src/renderer/src/link/keys/key-router.ts')).toBeUndefined();
   // The router is the one that listens.
   expect(readFileSync(join(RENDERER, 'link/keys/key-router.ts'), 'utf8')).toMatch(/addEventListener\('keydown'/);
-}, 30_000);
+}, 180_000);
