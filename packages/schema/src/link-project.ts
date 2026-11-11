@@ -213,7 +213,12 @@ export const audioTracksSchema = z.array(audioTrackSchema).min(1).max(64).superR
 export const referenceAudioSchema = referenceAudioSourceSchema.extend({
   // Keep multitrack metadata inside the strict timeline object: old versions
   // reject the project instead of silently discarding independently edited tracks.
-  timeline: z.object({ source: referenceAudioSourceSchema, segments: z.array(audioSegmentSchema).min(1).max(10_000), tracks: audioTracksSchema.optional() }).strict().optional(),
+  // `durationMs`: the song's length when it ends in silence after its last segment (0.5.9 E13, schema 3). Without it
+  // the song ends where its last segment ends, as before.
+  timeline: z.object({
+    source: referenceAudioSourceSchema, segments: z.array(audioSegmentSchema).min(1).max(10_000), tracks: audioTracksSchema.optional(),
+    durationMs: z.number().int().positive().max(86_400_000).optional()
+  }).strict().optional(),
   /** Read-only format: beats saved before 0.5.9. Opening moves them to `rundownItem.music` (core song-music-migration);
    * a schema 3 file may not hold them. Kept here so they are not stripped before that move. */
   beats: audioBeatMapSchema.optional()
@@ -227,6 +232,12 @@ export const referenceAudioSchema = referenceAudioSourceSchema.extend({
       if (index && segment.startMs < sorted[index - 1]!.startMs + sorted[index - 1]!.durationMs) ctx.addIssue({ code: 'custom', message: '歌曲音频片段不能重叠' });
     }
     if (new Set(segments.map((segment) => segment.id)).size !== segments.length) ctx.addIssue({ code: 'custom', message: '音频片段 ID 不能重复' });
+  }
+  const songMs = audio.timeline?.durationMs;
+  if (songMs !== undefined && audio.timeline) {
+    const lastEndMs = Math.max(...(audio.timeline.tracks?.flatMap((track) => track.segments) ?? audio.timeline.segments).map((segment) => segment.startMs + segment.durationMs));
+    if (songMs < lastEndMs) ctx.addIssue({ code: 'custom', message: '歌曲总长比最后一段音频还短', path: ['timeline', 'durationMs'] });
+    if (songMs !== audio.durationMs) ctx.addIssue({ code: 'custom', message: '歌曲总长和渲染出的音频长度不一致', path: ['timeline', 'durationMs'] });
   }
   if (audio.beats && (audio.beats.sourceSha256 !== audio.sha256 || audio.beats.pointsMs.some((time) => time >= audio.durationMs))) ctx.addIssue({ code: 'custom', message: '节拍标记与当前音频不匹配' });
 });
@@ -488,12 +499,26 @@ export const latestSchemaVersion: LinkProjectSchemaVersion = 3;
  * keeps the file as it was beside it (main process link-project-service), because going back to 0.5.8 is the rollback. */
 export const legacyReadableSchemaVersion: LinkProjectSchemaVersion = 2;
 
+/** What in a project only releases after 0.5.8 keep: a song's shared beats (`rundownItem.music`, 0.5.9 E9), a song
+ * that lasts past its music (`referenceAudio.timeline.durationMs`, 0.5.9 E13). */
+export type SchemaVersion3Reason = 'beats' | 'blank';
+export const schemaVersion3ReasonSchema = z.enum(['beats', 'blank']);
+
+/** Why this project needs schema 3, in a fixed order; empty when it does not. Read by `requiredSchemaVersion` and by
+ * the question before a save, so both name the same things. */
+export function schemaVersion3Reasons(project: Pick<LinkProject, 'rundown'>): SchemaVersion3Reason[] {
+  const reasons: SchemaVersion3Reason[] = [];
+  if (project.rundown.some((item) => item.music !== undefined)) reasons.push('beats');
+  if (project.rundown.some((item) => item.referenceAudio?.timeline?.durationMs !== undefined)) reasons.push('blank');
+  return reasons;
+}
+
 /** The lowest file version that keeps everything in this project, and the only place that decides it.
- * 3: a song's shared beats (`rundownItem.music`), which only releases after 0.5.8 understand.
+ * 3: anything in `schemaVersion3Reasons`, which only releases after 0.5.8 understand.
  * 2: lighting, a console read state or a console material library, which releases before lighting would drop.
  * 1: everything else. Pure, so a save can compare it with the version the file has now. */
 export function requiredSchemaVersion(project: Pick<LinkProject, 'ma2ReadState' | 'ma2MaterialLibrary' | 'rundown'>): LinkProjectSchemaVersion {
-  if (project.rundown.some((item) => item.music !== undefined)) return 3;
+  if (schemaVersion3Reasons(project).length) return 3;
   if (project.ma2ReadState || project.ma2MaterialLibrary || project.rundown.some((item) => item.lighting !== undefined)) return 2;
   return 1;
 }

@@ -8,7 +8,9 @@ export const musicAnalysisRequestSchema = audioAnalysisRequestSchema.extend({ ve
 export type MusicAnalysisRequest = z.infer<typeof musicAnalysisRequestSchema>;
 export const automaticMusicRequestSchema = musicAnalysisRequestSchema.extend({ device: z.enum(['cpu', 'cuda']) }).strict();
 export type AutomaticMusicRequest = z.infer<typeof automaticMusicRequestSchema>;
-export const audioRenderRequestSchema = audioAnalysisRequestSchema.extend({ segments: z.array(audioSegmentSchema).min(1).max(10_000), tracks: audioTracksSchema.optional() });
+/** `durationMs`: the song's length when it lasts past its last segment (silence after the music); only with `tracks`. */
+export const audioRenderRequestSchema = audioAnalysisRequestSchema.extend({ segments: z.array(audioSegmentSchema).min(1).max(10_000), tracks: audioTracksSchema.optional(),
+  durationMs: z.number().int().positive().max(86_400_000).optional() });
 
 export const linkExternalApplicationIdSchema = z.enum(['obs', 'p1', 'ma2', 'ma3d']);
 

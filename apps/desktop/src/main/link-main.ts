@@ -1506,7 +1506,7 @@ function registerIpc(
     }
     // A file 0.5.8 and earlier open is never turned into one they cannot without this question; the save keeps it beside.
     const olderFormat = await projectDocuments.olderFormat(destination, content);
-    if (olderFormat && (await dialog.showMessageBox(mainWindow!, olderFormatSavePrompt(olderFormat.backupName))).response !== 0) return null;
+    if (olderFormat && (await dialog.showMessageBox(mainWindow!, olderFormatSavePrompt(olderFormat.backupName, olderFormat.reasons))).response !== 0) return null;
     let kept: string | null;
     try { kept = await projectDocuments.save(destination, content, { backupOriginal: options.backupOriginal === true, replaceOlderFormat: olderFormat !== null }); }
     catch (error) {
@@ -1718,7 +1718,8 @@ function registerIpc(
     const payload = audioRenderRequestSchema.parse(value);
     if (runtimeActive) throw new Error('请停止播放后编辑音频');
     await projectAccess.assetFiles(payload.projectPath, [payload.source, ...(payload.tracks ?? []).map(track => track.source)].map(source => source.relativePath));
-    return payload.tracks ? audioEditService.mix(payload.projectPath, payload.tracks) : audioEditService.render(payload.projectPath, payload.source, payload.segments);
+    if (payload.durationMs !== undefined && !payload.tracks) throw new Error('歌曲总长只能和音轨一起渲染');
+    return payload.tracks ? audioEditService.mix(payload.projectPath, payload.tracks, payload.durationMs) : audioEditService.render(payload.projectPath, payload.source, payload.segments);
   });
   handle('link:generate-waveform', (_event, payloadValue: unknown) => {
     const payload = linkWaveformGeneratePayloadSchema.parse(payloadValue);

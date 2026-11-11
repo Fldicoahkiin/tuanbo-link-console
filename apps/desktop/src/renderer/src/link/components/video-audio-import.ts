@@ -1,4 +1,4 @@
-import { audioTracks, editReferenceAudioCommand, type LinkCommand } from '@tb/core/link';
+import { audioTracks, editedSongDurationMs, editReferenceAudioCommand, type LinkCommand } from '@tb/core/link';
 import { referenceAudioSourceSchema, type LinkMediaAsset, type ReferenceMediaClip } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
@@ -36,7 +36,10 @@ export async function importVideoAudio(input: WorkspaceActionsInput, asset: Link
     if (useRuntimeStore.getState().state !== 'idle') throw new Error('已经开始播放，视频没有加入，请停止后重新拖入');
     const tracks = input.item.referenceAudio ? audioTracks(input.item.referenceAudio, input.item.title) : [];
     tracks.push({ id: crypto.randomUUID(), title: `${asset.name} · 原声`, source: referenceAudioSourceSchema.parse(source), segments: [{ id: crypto.randomUUID(), startMs: Math.round(startMs), sourceOffsetMs: 0, durationMs: Math.floor(Math.min(clip.durationMs ?? source.durationMs, source.durationMs)) }] });
-    const mixed = await linkDesktopViewModel.renderAudioSegments({ projectPath: input.projectPath, source, segments: tracks.at(-1)!.segments, tracks });
+    // The song keeps any silence after its music (editedSongDurationMs), or ends with the longer of the two tracks.
+    const songMs = input.item.referenceAudio ? editedSongDurationMs(input.item.referenceAudio, tracks) : undefined;
+    const mixed = await linkDesktopViewModel.renderAudioSegments({ projectPath: input.projectPath, source, segments: tracks.at(-1)!.segments, tracks,
+      ...(songMs === undefined ? {} : { durationMs: songMs }) });
     const current = useDocumentStore.getState();
     if (current.documentId !== before.documentId || current.revision !== before.revision) throw new Error('提取原声时工程被修改了，视频没有加入，请重新拖入');
     if (useRuntimeStore.getState().state !== 'idle') throw new Error('已经开始播放，视频没有加入，请停止后重新拖入');

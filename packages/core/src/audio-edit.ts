@@ -1,4 +1,5 @@
-import { referenceAudioSchema, referenceAudioSourceSchema, type AudioSegment, type AudioTrack, type ReferenceAudio } from '@tb/schema';
+import { referenceAudioSchema, referenceAudioSourceSchema, type AudioSegment, type AudioTrack, type MtcFrameRate, type ReferenceAudio } from '@tb/schema';
+import { playbackFramesPerSecond } from './mtc-timecode';
 
 export function audioTracks(audio: ReferenceAudio, title = '歌曲音频'): AudioTrack[] {
   return audio.timeline?.tracks ?? [{ id: `track-${audio.assetId}`, title, source: referenceAudioSourceSchema.parse(audio.timeline?.source ?? audio), segments: audioSegments(audio) }];
@@ -31,6 +32,55 @@ export function editedAudio(audio: ReferenceAudio, segments: AudioSegment[], ren
   return referenceAudioSchema.parse({ ...next, ...(audio.sourceMediaAssetId ? { sourceMediaAssetId: audio.sourceMediaAssetId } : {}), timeline: { source, segments } });
 }
 
+/** Where the last segment of any track ends: the song has music up to here. */
+export function audioTracksEndMs(tracks: readonly Pick<AudioTrack, 'segments'>[]): number {
+  return Math.max(...tracks.flatMap((track) => track.segments.map((segment) => segment.startMs + segment.durationMs)));
+}
+
+/** How long the song is, and the only place that decides it (0.5.9 E13): the saved length when the song ends in
+ * silence (`timeline.durationMs`), otherwise where its last segment ends, as before. */
+export function songDurationMs(audio: ReferenceAudio): number {
+  return audio.timeline?.durationMs ?? audioTracksEndMs(audioTracks(audio));
+}
+
+/** The silence before the music: where the earliest segment of any track starts. */
+export function songLeadBlankMs(audio: ReferenceAudio): number {
+  return Math.min(...audioTracks(audio).flatMap((track) => track.segments.map((segment) => segment.startMs)));
+}
+
+/** The silence after the music: the song's length past the last segment's end. */
+export function songTailBlankMs(audio: ReferenceAudio): number {
+  return songDurationMs(audio) - audioTracksEndMs(audioTracks(audio));
+}
+
+/** How long the song is once its tracks are edited to `tracks`. A song with no saved length ends with its music, as
+ * before (undefined); a saved length stays, so editing a segment keeps the silence after the music, and a segment
+ * moved or trimmed past it makes the song longer, up to that segment's end. */
+export function editedSongDurationMs(audio: ReferenceAudio, tracks: readonly Pick<AudioTrack, 'segments'>[]): number | undefined {
+  const saved = audio.timeline?.durationMs;
+  return saved === undefined ? undefined : Math.max(saved, audioTracksEndMs(tracks));
+}
+
+/** Whole frames at the project's frame rate, in whole milliseconds. */
+function frameAlignedMs(milliseconds: number, frameRate: MtcFrameRate): number {
+  const fps = playbackFramesPerSecond(frameRate);
+  return Math.round(Math.round(milliseconds / 1_000 * fps) * 1_000 / fps);
+}
+
+/** Blank time before and after the music: every track's segments move together by `leadDeltaMs` (rounded to whole
+ * frames, so every event on the console moves by the same frames), and the song lasts to the new last end plus
+ * `tailMs` (whole frames too). Returns the tracks and the song's length; rendering the WAV of that length is the
+ * main process's (audio-edit-service). The song's beats follow the segments by themselves (songBeats). */
+export function padAudioTimeline(audio: ReferenceAudio, leadDeltaMs: number, tailMs: number, frameRate: MtcFrameRate): { tracks: AudioTrack[]; durationMs: number } {
+  if (!Number.isFinite(leadDeltaMs) || !Number.isFinite(tailMs) || tailMs < 0) throw new Error('空白的长度无效');
+  const delta = Math.sign(leadDeltaMs) * frameAlignedMs(Math.abs(leadDeltaMs), frameRate);
+  if (songLeadBlankMs(audio) + delta < 0) throw new Error('前面的空白不能比 0 还短');
+  const tracks = audioTracks(audio).map((track) => ({ ...track, segments: track.segments.map((segment) => ({ ...segment, startMs: segment.startMs + delta })) }));
+  const durationMs = audioTracksEndMs(tracks) + frameAlignedMs(tailMs, frameRate);
+  if (durationMs > 86_400_000) throw new Error('歌曲不能超过 24 小时');
+  return { tracks, durationMs };
+}
+
 /** One mono music track: moves cannot overlap adjacent segments. */
 export function updateAudioSegment(audio: ReferenceAudio, id: string, patch: Partial<Pick<AudioSegment, 'startMs' | 'durationMs' | 'sourceOffsetMs'>>): AudioSegment[] {
   const segments = audioSegments(audio);
@@ -43,8 +93,9 @@ export function updateAudioSegment(audio: ReferenceAudio, id: string, patch: Par
     const previous = next[index - 1];
     if (previous && previous.startMs + previous.durationMs > segment.startMs) throw new Error('和同一音轨上的片段重叠了，请移到空白位置或另一条音轨');
   }
-  const durationMs = Math.max(...next.map((segment) => segment.startMs + segment.durationMs));
-  referenceAudioSchema.parse({ ...audio, durationMs, timeline: { source: audio.timeline?.source ?? audio, segments: next } });
+  const songMs = editedSongDurationMs(audio, [{ segments: next }]);
+  const durationMs = songMs ?? audioTracksEndMs([{ segments: next }]);
+  referenceAudioSchema.parse({ ...audio, durationMs, timeline: { source: audio.timeline?.source ?? audio, segments: next, ...(songMs === undefined ? {} : { durationMs: songMs }) } });
   return next;
 }
 

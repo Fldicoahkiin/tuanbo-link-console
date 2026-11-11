@@ -1,5 +1,6 @@
 import { Worker } from 'node:worker_threads';
 import { join } from 'node:path';
+import type { SchemaVersion3Reason } from '@tb/schema';
 import { projectDocumentRequestSchema, projectDocumentResponseSchema, type ProjectDocumentRequest, type ProjectDocumentResponse } from './project-document-contract';
 
 type Payload = ProjectDocumentRequest extends infer T ? T extends ProjectDocumentRequest ? Omit<T, 'version' | 'id'> : never : never;
@@ -36,7 +37,7 @@ export class ProjectDocumentService {
   }
   /** Saving `content` at `path` would turn a file 0.5.8 and earlier open into one they cannot: the name its backup
    * would get. Null when the save needs no question. */
-  async olderFormat(path: string, content: string): Promise<{ backupName: string } | null> {
+  async olderFormat(path: string, content: string): Promise<{ backupName: string; reasons: SchemaVersion3Reason[] } | null> {
     const response = await this.request({ kind: 'check-save', path, content });
     if (response.kind !== 'save-checked') throw new Error('工程保存检查返回类型不正确');
     return response.olderFormat;

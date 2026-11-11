@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createEmptyLinkProject, latestSchemaVersion, legacyReadableSchemaVersion, linkActionSchema, linkProjectSchema, p1StartTriggerSchema, parseLinkProject, requiredSchemaVersion, serializeLinkProject } from './link-project';
+import { createEmptyLinkProject, latestSchemaVersion, legacyReadableSchemaVersion, linkActionSchema, linkProjectSchema, p1StartTriggerSchema, parseLinkProject, requiredSchemaVersion, schemaVersion3Reasons, serializeLinkProject } from './link-project';
 import { createLightingDocument, lightingEventSchema, lightingMa2EventMappingSchema } from './lighting';
 
 describe('link project schema', () => {
@@ -54,6 +54,47 @@ describe('link project schema', () => {
     const old = { ...empty, rundown: [{ id: 'item', title: '节目', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], referenceAudio: audio }] };
     expect(parseLinkProject(old).rundown[0]?.referenceAudio?.beats?.pointsMs).toEqual([0, 500]);
     expect(() => parseLinkProject({ ...old, schemaVersion: 3 })).toThrow('节拍存了两份');
+  });
+
+  describe('音乐后面的空白：timeline.durationMs（0.5.9 E13）', () => {
+    const source = { assetId: 'source', relativePath: 'source.wav', sha256: 'b'.repeat(64), durationMs: 4000 };
+    const rendered = { assetId: 'mix', relativePath: 'mix.wav', sha256: 'c'.repeat(64) };
+    const tracks = [{ id: 'track', title: '歌曲音频', source, segments: [{ id: 'music', startMs: 1000, sourceOffsetMs: 0, durationMs: 3000 }] }];
+    const padded = (durationMs: number, songMs: number) => ({ ...rendered, durationMs,
+      timeline: { source: { ...rendered, durationMs }, segments: [{ id: 'mix', startMs: 0, sourceOffsetMs: 0, durationMs }], tracks, durationMs: songMs } });
+    const song = (referenceAudio: object, schemaVersion: 1 | 2 | 3) => ({ ...createEmptyLinkProject('空白'), schemaVersion,
+      rundown: [{ id: 'item', title: '节目', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], referenceAudio }] });
+
+    it('总长不小于最晚片段结尾，并且等于渲染出的音频长度', () => {
+      expect(parseLinkProject(song(padded(6000, 6000), 3)).rundown[0]?.referenceAudio?.timeline?.durationMs).toBe(6000);
+      expect(parseLinkProject(song(padded(4000, 4000), 3)).rundown[0]?.referenceAudio?.timeline?.durationMs).toBe(4000);
+      expect(() => parseLinkProject(song(padded(3500, 3500), 3))).toThrow('歌曲总长比最后一段音频还短');
+      expect(() => parseLinkProject(song(padded(6000, 5000), 3))).toThrow('歌曲总长和渲染出的音频长度不一致');
+    });
+
+    it('带它的工程要 3 版，2 版里有它不打开；不带的照旧按 1、2 版存', () => {
+      const project = parseLinkProject(song(padded(6000, 6000), 3));
+      expect(requiredSchemaVersion(project)).toBe(3);
+      expect(schemaVersion3Reasons(project)).toEqual(['blank']);
+      expect(() => parseLinkProject(song(padded(6000, 6000), 2))).toThrow('必须使用 schema 3');
+      const plain = { ...rendered, durationMs: 4000, timeline: { source: { ...rendered, durationMs: 4000 }, segments: [{ id: 'mix', startMs: 0, sourceOffsetMs: 0, durationMs: 4000 }], tracks } };
+      for (const schemaVersion of [1, 2] as const) {
+        const opened = parseLinkProject(song(plain, schemaVersion));
+        expect(opened.schemaVersion).toBe(schemaVersion);
+        expect(requiredSchemaVersion(opened)).toBe(1);
+        expect(schemaVersion3Reasons(opened)).toEqual([]);
+        expect(opened.rundown[0]?.referenceAudio?.timeline).not.toHaveProperty('durationMs');
+        expect(parseLinkProject(JSON.parse(serializeLinkProject(opened)))).toEqual(opened);
+      }
+    });
+
+    it('原因按固定顺序给：节拍在前、空白在后', () => {
+      const structure = { version: 1, algorithm: 'music-structure-1', sourceSha256: 'b'.repeat(64), durationMs: 4000, taskId: 'task', state: 'ready', bpm: 120, beatsPerBar: 4,
+        beats: [{ id: 'beat:0', atMs: 0, strong: true }], segments: [], removedBeatMs: [], removedRanges: [] } as const;
+      const music = { version: 1, sourceSha256: 'b'.repeat(64), sourceDurationMs: 4000, method: 'automatic', structure } as const;
+      const both = song(padded(6000, 6000), 3);
+      expect(schemaVersion3Reasons(parseLinkProject({ ...both, rundown: [{ ...both.rundown[0]!, music }] }))).toEqual(['beats', 'blank']);
+    });
   });
 
   it('rejects duplicate ids across rundown, cues and actions', () => {

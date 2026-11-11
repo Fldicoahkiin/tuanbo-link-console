@@ -6,6 +6,7 @@ import { dirname, join, relative } from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
 import { ffmpegDeadline } from './ffmpeg-deadline';
 import { analyzeIbtAudio } from './ibt-beat-service';
+import { audioTracksEndMs } from '@tb/core/link';
 import { audioTracksSchema, referenceAudioSchema, referenceAudioSourceSchema, type AudioBeatAnalysis, type AudioSegment, type AudioTrack, type ReferenceAudio } from '@tb/schema';
 import { hashFile, type LinkProjectService } from './link-project-service';
 import { referencePcmLayout } from './reference-audio-extractor';
@@ -20,28 +21,30 @@ export class AudioEditService {
   private readonly pendingMixes = new Map<string, Promise<ReferenceAudio>>();
   constructor(private readonly projects: LinkProjectService, private readonly beatExecutable?: string) {}
 
-  async mix(projectPath: string, input: AudioTrack[]): Promise<ReferenceAudio> {
+  /** `songMs`: the song's length when it lasts past its last segment (silence after the music, 0.5.9 E13); left out,
+   * the song ends with its music, as before. */
+  async mix(projectPath: string, input: AudioTrack[], songMs?: number): Promise<ReferenceAudio> {
     const tracks = audioTracksSchema.parse(input);
+    const expectedMs = songMs ?? audioTracksEndMs(tracks);
+    if (!Number.isSafeInteger(expectedMs) || expectedMs < audioTracksEndMs(tracks)) throw new Error('歌曲总长比最后一段音频还短');
     // Every referenced path is verified even when another asset with the same
     // content already prepared this mix. IDs and titles do not alter samples.
     for (const track of tracks) await this.sourcePath(projectPath, track.source);
-    const key = createHash('sha256').update(JSON.stringify(tracks.map(track => ({ source: track.source.sha256,
-      durationMs: track.source.durationMs, segments: track.segments.map(({ startMs, sourceOffsetMs, durationMs }) => ({ startMs, sourceOffsetMs, durationMs })) })))).digest('hex');
-    const manifest = join(dirname(projectPath), 'cache', 'audio-mixes', `${key}.json`);
+    const manifest = join(dirname(projectPath), 'cache', 'audio-mixes', `${mixCacheKey(tracks, songMs)}.json`);
     let operation = this.pendingMixes.get(manifest);
     if (!operation) {
-      operation = this.cachedMix(projectPath, tracks, manifest).finally(() => this.pendingMixes.delete(manifest));
+      operation = this.cachedMix(projectPath, tracks, manifest, songMs).finally(() => this.pendingMixes.delete(manifest));
       this.pendingMixes.set(manifest, operation);
     }
     const audio = referenceAudioSourceSchema.parse(await operation);
-    const expectedMs = Math.max(...tracks.flatMap(track => track.segments.map(segment => segment.startMs + segment.durationMs)));
     if (audio.durationMs !== expectedMs) throw new Error('音轨缓存的时长和当前编排对不上');
     const rendered = { ...audio, assetId: crypto.randomUUID() };
     return referenceAudioSchema.parse({ ...rendered, timeline: { source: rendered,
-      segments: [{ id: `mix-${rendered.assetId}`, startMs: 0, sourceOffsetMs: 0, durationMs: rendered.durationMs }], tracks } });
+      segments: [{ id: `mix-${rendered.assetId}`, startMs: 0, sourceOffsetMs: 0, durationMs: rendered.durationMs }], tracks,
+      ...(songMs === undefined ? {} : { durationMs: songMs }) } });
   }
 
-  private async cachedMix(projectPath: string, tracks: AudioTrack[], manifest: string): Promise<ReferenceAudio> {
+  private async cachedMix(projectPath: string, tracks: AudioTrack[], manifest: string, songMs: number | undefined): Promise<ReferenceAudio> {
     let content: string | null;
     try { content = await readFile(manifest, 'utf8'); }
     catch (error) {
@@ -53,24 +56,26 @@ export class AudioEditService {
       await this.sourcePath(projectPath, entry.audio);
       return entry.audio;
     }
-    const audio = await this.renderMix(projectPath, tracks);
+    const audio = await this.renderMix(projectPath, tracks, songMs);
     for (const track of tracks) await this.sourcePath(projectPath, track.source);
     await this.sourcePath(projectPath, audio);
     await writeFileAtomically(manifest, JSON.stringify(mixCacheSchema.parse({ version: 1, audio })));
     return audio;
   }
 
-  private async renderMix(projectPath: string, tracks: AudioTrack[]): Promise<ReferenceAudio> {
+  private async renderMix(projectPath: string, tracks: AudioTrack[], songMs: number | undefined): Promise<ReferenceAudio> {
     const track = tracks.length === 1 ? tracks[0] : undefined;
     const segment = track?.segments.length === 1 ? track.segments[0] : undefined;
+    // The song's length: its music, plus any silence after it, which the WAV holds as samples of 0.
+    const durationMs = songMs ?? audioTracksEndMs(tracks);
     if (track) {
       const path = await this.sourcePath(projectPath, track.source);
       const layout = await referencePcmLayout(path);
+      // The source file itself, as every song without edits plays it: one whole segment from 0 and no silence after it.
       if (layout && segment && segment.startMs === 0 && segment.sourceOffsetMs === 0 && segment.durationMs === track.source.durationMs
-        && Math.floor(layout.bytes / 192) === track.source.durationMs) {
+        && Math.floor(layout.bytes / 192) === track.source.durationMs && durationMs === track.source.durationMs) {
         return referenceAudioSchema.parse({ ...track.source, timeline: { source: track.source, segments: track.segments, tracks } });
       }
-      const durationMs = Math.max(...track.segments.map(value => value.startMs + value.durationMs));
       if (layout && durationMs * 192 + 36 <= 0xffffffff) {
         const directory = join(dirname(projectPath), 'cache', 'audio-edit');
         await mkdir(directory, { recursive: true });
@@ -91,7 +96,6 @@ export class AudioEditService {
     const token = crypto.randomUUID();
     const cleanup: string[] = [];
     const inputs: string[] = [];
-    const durationMs = Math.max(...tracks.flatMap(track => track.segments.map(segment => segment.startMs + segment.durationMs)));
     try {
       if (tracks.length > 1 && durationMs * 192 + 36 <= 0xffffffff) {
         const pcm = [];
@@ -115,11 +119,12 @@ export class AudioEditService {
         const edit = join(directory, `${token}-${index}-edit.pcm`);
         cleanup.push(edit);
         const layout = await referencePcmLayout(path);
-        if (layout) await composeAudioPcm(path, edit, track.segments, layout);
+        // Every track lasts the whole song, so the mix (amix, duration=longest) does too, silence after the music included.
+        if (layout) await composeAudioPcm(path, edit, track.segments, layout, durationMs);
         else {
           cleanup.push(raw);
           await ffmpeg(['-i', path, '-map', '0:a:0', '-vn', '-ac', '2', '-ar', '48000', '-f', 's16le', raw]);
-          await composeAudioPcm(raw, edit, track.segments);
+          await composeAudioPcm(raw, edit, track.segments, undefined, durationMs);
         }
         inputs.push('-f', 's16le', '-ar', '48000', '-ac', '2', '-i', edit);
       }
@@ -160,7 +165,7 @@ export class AudioEditService {
   }
 
   async render(projectPath: string, source: ReferenceAudio, segments: AudioSegment[]): Promise<ReferenceAudio> {
-    const durationMs = Math.max(...segments.map((segment) => segment.startMs + segment.durationMs));
+    const durationMs = audioTracksEndMs([{ segments }]);
     referenceAudioSchema.parse({ ...source, durationMs, beats: undefined, timeline: { source, segments } });
     const path = await this.sourcePath(projectPath, source);
     const directory = join(dirname(projectPath), 'cache', 'audio-edit');
@@ -184,9 +189,18 @@ export class AudioEditService {
   }
 }
 
-/** Copy sample-aligned ranges; intentional timeline gaps become actual PCM silence. */
+/** The cache name of a mix: the samples it is made of, and the song's length when it lasts past its music. A song
+ * without that length keeps the name it had before 0.5.9, so the mixes already rendered are found again. */
+export function mixCacheKey(tracks: readonly AudioTrack[], songMs: number | undefined): string {
+  const parts = tracks.map(track => ({ source: track.source.sha256,
+    durationMs: track.source.durationMs, segments: track.segments.map(({ startMs, sourceOffsetMs, durationMs }) => ({ startMs, sourceOffsetMs, durationMs })) }));
+  return createHash('sha256').update(JSON.stringify(songMs === undefined ? parts : { tracks: parts, durationMs: songMs })).digest('hex');
+}
+
+/** Copy sample-aligned ranges; intentional timeline gaps become actual PCM silence, and so does the time after the
+ * last segment up to `lengthMs` (the WAV header's length when there is one). */
 export async function composeAudioPcm(sourcePath: string, outputPath: string, segments: readonly AudioSegment[],
-  wav?: { offset: number; bytes: number; durationMs?: number }): Promise<void> {
+  wav?: { offset: number; bytes: number; durationMs?: number }, lengthMs = wav?.durationMs): Promise<void> {
   const source = await open(sourcePath, 'r');
   const output = await open(outputPath, 'wx');
   const bytesPerMs = 192; // stereo signed 16-bit at 48 kHz
@@ -213,6 +227,14 @@ export async function composeAudioPcm(sourcePath: string, outputPath: string, se
         if (bytesRead < count && position + count - sourceBytes > bytesPerMs) throw new Error('音频文件提前结束了，可能已损坏');
         await output.writeFile(buffer.subarray(0, count));
         position += count; remaining -= count; timelineBytes += count;
+      }
+    }
+    if (lengthMs !== undefined) {
+      const end = lengthMs * bytesPerMs;
+      if (timelineBytes > end) throw new Error('音频片段超出了歌曲总长');
+      while (timelineBytes < end) {
+        const count = Math.min(silence.length, end - timelineBytes);
+        await output.writeFile(silence.subarray(0, count)); timelineBytes += count;
       }
     }
   } finally { await source.close(); await output.close(); }

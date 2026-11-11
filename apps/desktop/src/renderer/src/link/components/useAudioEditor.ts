@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { audioTracks, editReferenceAudioCommand, setReferenceAudioCommand, songBeats, songBeatsAtDensity, splitAudioSegments, updateAudioSegment } from '@tb/core/link';
+import { audioTracks, audioTracksEndMs, editedSongDurationMs, editReferenceAudioCommand, setReferenceAudioCommand, songBeats, songBeatsAtDensity, splitAudioSegments, updateAudioSegment } from '@tb/core/link';
 import { referenceAudioSchema, type AudioBeatLevel, type AudioSegment, type AudioTrack, type RundownItem } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
@@ -48,13 +48,16 @@ export function useAudioEditor(item: RundownItem | null, projectPath: string | n
       useDocumentStore.getState().execute(setReferenceAudioCommand(item.id, null));
       return;
     }
-    const rendered = referenceAudioSchema.parse(await linkDesktopViewModel.renderAudioSegments({ projectPath, source: next[0]!.source, segments: next[0]!.segments, tracks: next }));
+    // A song that lasts past its music keeps that silence after an edit (editedSongDurationMs); others end with it.
+    const durationMs = editedSongDurationMs(audio, next);
+    const rendered = referenceAudioSchema.parse(await linkDesktopViewModel.renderAudioSegments({ projectPath, source: next[0]!.source, segments: next[0]!.segments, tracks: next,
+      ...(durationMs === undefined ? {} : { durationMs }) }));
     commit(rendered, label);
   };
   const selectTrack = (trackId: string, id: string | null): void => { setSelectedTrackId(trackId); setSelectedId(id); };
   const changeTrack = (trackId: string, next: AudioSegment[], label: string): Promise<void> => render(tracks.flatMap(track => track.id === trackId ? next.length ? [{ ...track, segments: next }] : [] : [track]), label);
   const update = (track: AudioTrack, id: string, patch: Partial<Pick<AudioSegment, 'startMs' | 'durationMs' | 'sourceOffsetMs'>>): Promise<void> => run(async () => {
-    const sourceAudio = { ...track.source, durationMs: Math.max(...track.segments.map(segment => segment.startMs + segment.durationMs)), timeline: { source: track.source, segments: track.segments } };
+    const sourceAudio = { ...track.source, durationMs: audioTracksEndMs([track]), timeline: { source: track.source, segments: track.segments } };
     await changeTrack(track.id, updateAudioSegment(sourceAudio, id, patch), '编辑音频片段');
   });
   const remove = (track: AudioTrack, id: string | null): Promise<void> => run(async () => { await changeTrack(track.id, track.segments.filter(segment => segment.id !== id), '删除音频片段'); setSelectedId(null); });

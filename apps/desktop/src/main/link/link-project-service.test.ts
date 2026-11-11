@@ -3,6 +3,7 @@ import { mkdir, readdir, readFile, rmdir, symlink, truncate, unlink, writeFile }
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { createEmptyLinkProject, createLightingUserLibrary, serializeLinkProject, type LinkProject } from '@tb/schema';
+import { editReferenceAudioCommand } from '@tb/core/link';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LinkProjectService } from './link-project-service';
 import { WaveformService } from './waveform-service';
@@ -569,6 +570,24 @@ describe('存成 0.5.8 打不开的格式之前（0.5.9 E9）', () => {
     await expect(service.save(old.path, { ...createEmptyLinkProject('还是旧格式'), schemaVersion: 2 })).resolves.toBeNull();
     expect(await readdir(directory)).toEqual(['新建.tblink']);
     expect(await readdir(old.directory)).toEqual(['旧版.tblink']);
+  });
+
+  it('歌在音乐后面留了空白也走同一条路：改音频的命令升到 3 版，存之前要确认并留备份（0.5.9 E13）', async () => {
+    const { path, original, backup } = await olderFile('空白');
+    const mix = { assetId: 'mix', relativePath: 'assets/reference-audio/mix.wav', sha256: 'c'.repeat(64), durationMs: 6000 };
+    const source = { assetId: 'source', relativePath: 'assets/reference-audio/source.wav', sha256: 'b'.repeat(64), durationMs: 4000 };
+    const old = { ...createEmptyLinkProject('空白'), schemaVersion: 2 as const };
+    old.rundown.push({ id: 'song', title: '歌', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], referenceAudio: { ...source } });
+    const padded = editReferenceAudioCommand('song', { ...mix, timeline: { source: mix, segments: [{ id: 'mix', startMs: 0, sourceOffsetMs: 0, durationMs: 6000 }],
+      tracks: [{ id: 'track', title: '歌曲音频', source, segments: [{ id: 'music', startMs: 0, sourceOffsetMs: 0, durationMs: 4000 }] }], durationMs: 6000 } }, '加空白').execute(old);
+    expect(padded.schemaVersion).toBe(3);
+    const service = new LinkProjectService();
+    expect(await service.olderFormatFile(path, padded.schemaVersion)).toEqual({ backupName: '空白（旧版本可打开的备份）.tblink' });
+    await expect(service.save(path, padded)).rejects.toThrow('要先确认');
+    expect(await readFile(path, 'utf8')).toBe(original);
+    expect(await service.save(path, padded, { replaceOlderFormat: true })).toBe(backup());
+    expect(await readFile(backup(), 'utf8')).toBe(original);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ schemaVersion: 3 });
   });
 });
 

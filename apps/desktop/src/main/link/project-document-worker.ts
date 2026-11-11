@@ -1,5 +1,5 @@
 import { parentPort } from 'node:worker_threads';
-import { parseLinkProject } from '@tb/schema';
+import { parseLinkProject, schemaVersion3Reasons } from '@tb/schema';
 import { LinkProjectService } from './link-project-service';
 import { projectDocumentRequestSchema, projectDocumentResponseSchema, type ProjectDocumentRequest, type ProjectDocumentResponse } from './project-document-contract';
 
@@ -21,9 +21,12 @@ async function execute(request: ProjectDocumentRequest): Promise<ProjectDocument
       const kept = await projects.save(request.path, project, { backupOriginal: request.backupOriginal, replaceOlderFormat: request.replaceOlderFormat });
       return { ...envelope, kind: 'saved', ...(kept ? { keptOlderFormat: kept } : {}) };
     }
-    case 'check-save':
-      // Only the version matters here: the save that follows parses and checks the whole content.
-      return { ...envelope, kind: 'save-checked', olderFormat: await projects.olderFormatFile(request.path, savedSchemaVersion(request.content)) };
+    case 'check-save': {
+      // Only the version decides whether to ask: the save that follows parses and checks the whole content. When it
+      // asks (once per file), the question names what needs the new format, so only then is the content read.
+      const file = await projects.olderFormatFile(request.path, savedSchemaVersion(request.content));
+      return { ...envelope, kind: 'save-checked', olderFormat: file && { ...file, reasons: schemaVersion3Reasons(parseLinkProject(JSON.parse(request.content))) } };
+    }
     case 'copy': {
       await projects.writeCopy(request.path, parseLinkProject(JSON.parse(request.content)));
       return { ...envelope, kind: 'saved' };

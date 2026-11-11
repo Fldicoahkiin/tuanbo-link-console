@@ -33,6 +33,7 @@ import {
   type RundownItemContent
 } from '@tb/schema';
 import { parseP1TimeOrigin, programTimeOrigin } from './ma2-time-origin';
+import { withSchemaVersion } from './project-schema-version';
 
 export type LinkCommand = {
   readonly id: string;
@@ -450,6 +451,8 @@ export function editReferenceAudioCommand(itemId: string, audio: ReferenceAudio,
     if (audio.timeline?.tracks) for (const clip of item.referenceMediaClips) if (clip.assetId === item.referenceAudio?.sourceMediaAssetId) clip.embeddedAudioEnabled = false;
     assertNoAudioBeats(audio);
     item.referenceAudio = referenceAudioSchema.parse(audio);
+    // A song that lasts past its music needs schema 3 (requiredSchemaVersion); the version only ever goes up.
+    project.schemaVersion = withSchemaVersion(project).schemaVersion;
     if (item.playback && (item.playback.startMs >= audio.durationMs || item.playback.endMs > audio.durationMs)) {
       item.playback = { ...item.playback, startMs: Math.min(item.playback.startMs, audio.durationMs - 1), endMs: Math.min(item.playback.endMs, audio.durationMs) };
     }

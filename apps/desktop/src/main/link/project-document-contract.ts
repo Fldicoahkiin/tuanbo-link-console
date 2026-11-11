@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { linkFilePathSchema, projectDocumentTextSchema } from '@tb/schema';
+import { linkFilePathSchema, projectDocumentTextSchema, schemaVersion3ReasonSchema } from '@tb/schema';
 
 const envelope = { version: z.literal(1), id: z.number().int().positive() };
 export const projectDocumentRequestSchema = z.discriminatedUnion('kind', [
@@ -16,8 +16,10 @@ export const projectDocumentResponseSchema = z.discriminatedUnion('kind', [
   z.object({ ...envelope, kind: z.literal('opened'), content: projectDocumentTextSchema, upgraded: z.boolean() }).strict(),
   /** `keptOlderFormat`: the backup of the older-format file this save kept beside it. */
   z.object({ ...envelope, kind: z.literal('saved'), keptOlderFormat: z.string().min(1).max(32768).optional() }).strict(),
-  /** `olderFormat`: the file is one older releases open and the content is not; its backup would get this name. */
-  z.object({ ...envelope, kind: z.literal('save-checked'), olderFormat: z.object({ backupName: z.string().min(1).max(4096) }).strict().nullable() }).strict(),
+  /** `olderFormat`: the file is one older releases open and the content is not; its backup would get this name, and
+   * `reasons` is what in the content needs the new format (`schemaVersion3Reasons`). */
+  z.object({ ...envelope, kind: z.literal('save-checked'), olderFormat: z.object({ backupName: z.string().min(1).max(4096),
+    reasons: z.array(schemaVersion3ReasonSchema).max(2) }).strict().nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal('inspected'), name: z.string().min(1) }).strict(),
   z.object({ ...envelope, kind: z.literal('error'), error: z.string().min(1).max(8192) }).strict()
 ]);
