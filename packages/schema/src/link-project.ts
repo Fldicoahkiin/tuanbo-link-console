@@ -349,6 +349,9 @@ export const rundownItemSchema = z.object({
   cues: z.array(linkCueSchema).default([])
 });
 
+/** What the content editor changes in a song: its tracks, clips and cues. A song's content command parses only this. */
+export const rundownItemContentSchema = rundownItemSchema.pick({ visualLayers: true, referenceMediaClips: true, cues: true });
+
 export const linkProjectSchema = z.object({
   schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   projectId: z.string().min(1),
@@ -403,6 +406,7 @@ export type LinkMediaAsset = z.infer<typeof linkMediaAssetSchema>;
 export type ReferenceMediaClip = z.infer<typeof referenceMediaClipSchema>;
 export type ReferenceCanvasTransform = z.infer<typeof referenceCanvasTransformSchema>;
 export type RundownItem = z.infer<typeof rundownItemSchema>;
+export type RundownItemContent = z.infer<typeof rundownItemContentSchema>;
 export type LinkProject = z.infer<typeof linkProjectSchema>;
 
 export function parseLinkProject(value: unknown): LinkProject {
@@ -415,6 +419,34 @@ export function parseLinkProject(value: unknown): LinkProject {
 const projectRelationsSchema = z.custom<LinkProject>().superRefine(validateProjectInvariants);
 export function validateLinkProjectRelations(project: LinkProject): void {
   projectRelationsSchema.parse(project);
+}
+
+/** The checks validateLinkProjectRelations makes on one song, for a project where only this song changed: its
+ * playlist and playback range, its shortcut against the other songs, its P1 binding, its ids against every other id in
+ * the project, and its tracks, clips and cues against the project's media assets and frame rate. The same code as the
+ * whole-project check, which runs it for each song. Callers parse the song's changed fields with their schema first. */
+const itemRelationsSchema = z.custom<{ project: LinkProject; item: RundownItem }>().superRefine(({ project, item }, ctx) => {
+  const itemIndex = project.rundown.indexOf(item);
+  if (itemIndex < 0) {
+    ctx.addIssue({ code: 'custom', message: `节目不在工程里：${item.id}` });
+    return;
+  }
+  const relations = projectItemRelations(project);
+  validateItemSettings(relations.playlistIds, item, itemIndex,
+    (shortcut) => project.rundown.some((other) => other !== item && other.playback?.shortcut.toLowerCase() === shortcut), ctx);
+  const own = new Set<string>();
+  const others = project.rundown.filter((other) => other !== item).map(itemIds);
+  const claim: IdClaim = (id, path) => {
+    if (own.has(id) || relations.ids.has(id) || others.some((ids) => ids.has(id))) {
+      ctx.addIssue({ code: 'custom', message: `ID 重复：${id}`, path });
+      return;
+    }
+    own.add(id);
+  };
+  validateItemContent(project.timebase.frameRate, relations.assetById, relations.p1PlaylistIds, item, itemIndex, claim, ctx);
+});
+export function validateItemRelations(project: LinkProject, item: RundownItem): void {
+  itemRelationsSchema.parse({ project, item });
 }
 
 export function serializeLinkProject(project: LinkProject): string {
@@ -465,180 +497,220 @@ function validateProjectInvariants(project: z.infer<typeof linkProjectSchema>, c
   if (project.schemaVersion < required) {
     ctx.addIssue({ code: 'custom', message: required === 2 ? '含灯光编排的工程必须使用 schema 2，防止旧版本丢失数据' : `工程用到了新版本的内容，必须使用 schema ${required}，防止旧版本丢失数据`, path: ['schemaVersion'] });
   }
+  const relations = projectItemRelations(project, ctx);
+  for (const [index, item] of project.rundown.entries()) {
+    validateItemSettings(relations.playlistIds, item, index,
+      (shortcut) => project.rundown.slice(0, index).some((previous) => previous.playback?.shortcut.toLowerCase() === shortcut), ctx);
+  }
+  const ids = relations.ids;
+  const claim: IdClaim = (id, path) => addUniqueId(ids, id, path, ctx);
+  for (const [itemIndex, item] of project.rundown.entries()) {
+    validateItemContent(project.timebase.frameRate, relations.assetById, relations.p1PlaylistIds, item, itemIndex, claim, ctx);
+  }
+}
+
+type IdClaim = (id: string, path: PropertyKey[]) => void;
+type MediaAssetsById = Map<string, z.infer<typeof linkMediaAssetSchema>>;
+type ProjectItemRelations = {
+  playlistIds: Set<string>;
+  /** The ids of the P1 playlists, media folders and media assets. */
+  ids: Set<string>;
+  assetById: MediaAssetsById;
+  p1PlaylistIds: Set<string> | null;
+};
+
+/** What songs refer to outside themselves. With `ctx` this also reports the project's own problems (playlists, P1
+ * sources, folders, assets); without it, for checking one song of a project that passed, it only collects. */
+function projectItemRelations(project: z.infer<typeof linkProjectSchema>, ctx?: z.RefinementCtx): ProjectItemRelations {
+  const report = (message: string, path: PropertyKey[]): void => { ctx?.addIssue({ code: 'custom', message, path }); };
   const playlistIds = new Set<string>();
   if (project.playlists === undefined) for (const list of project.p1Sync?.playlists ?? []) playlistIds.add(`p1:${list.id}`);
   for (const [index, list] of (project.playlists ?? []).entries()) {
-    if (playlistIds.has(list.id) || ['all', 'unassigned'].includes(list.id)) ctx.addIssue({ code: 'custom', message: '播放列表标识重复或保留', path: ['playlists', index, 'id'] });
+    if (playlistIds.has(list.id) || ['all', 'unassigned'].includes(list.id)) report('播放列表标识重复或保留', ['playlists', index, 'id']);
     playlistIds.add(list.id);
   }
-  for (const [index, item] of project.rundown.entries()) {
-    if (item.playlistId && !playlistIds.has(item.playlistId)) ctx.addIssue({ code: 'custom', message: '节目引用不存在的播放列表', path: ['rundown', index, 'playlistId'] });
-    if (item.playback) {
-      const end = item.playback.endMs || item.referenceAudio?.durationMs;
-      if (end !== undefined && (item.playback.startMs >= end || (item.referenceAudio && end > item.referenceAudio.durationMs))) {
-        ctx.addIssue({ code: 'custom', message: '歌曲裁剪范围无效', path: ['rundown', index, 'playback'] });
-      }
-      if (item.referenceAudio && item.playback.mtcOffsetMs + item.referenceAudio.durationMs >= 86_400_000) {
-        ctx.addIssue({ code: 'custom', message: '歌曲时间码超出 24 小时', path: ['rundown', index, 'playback', 'mtcOffsetMs'] });
-      }
-      if (item.playback.shortcut && project.rundown.slice(0, index).some((previous) => previous.playback?.shortcut.toLowerCase() === item.playback?.shortcut.toLowerCase())) {
-        ctx.addIssue({ code: 'custom', message: '歌曲快捷键重复', path: ['rundown', index, 'playback', 'shortcut'] });
-      }
-    }
-  }
   const ids = new Set<string>();
+  const claim = (id: string, path: PropertyKey[]): void => {
+    if (ids.has(id)) report(`ID 重复：${id}`, path);
+    else ids.add(id);
+  };
   const folderIds = new Set<string>();
-  const assetIds = new Set<string>();
-  const assetById = new Map<string, z.infer<typeof linkMediaAssetSchema>>();
+  const assetById: MediaAssetsById = new Map();
 
   if (project.p1Sync) {
     const sourceIndexes = new Set<number>();
     for (const [playlistIndex, playlist] of project.p1Sync.playlists.entries()) {
-      addUniqueId(ids, `p1-playlist:${playlist.id}`, ['p1Sync', 'playlists', playlistIndex, 'id'], ctx);
-      if (sourceIndexes.has(playlist.sourceIndex)) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `P1 播放列表来源位置重复：${playlist.sourceIndex}`,
-          path: ['p1Sync', 'playlists', playlistIndex, 'sourceIndex']
-        });
-      }
+      claim(`p1-playlist:${playlist.id}`, ['p1Sync', 'playlists', playlistIndex, 'id']);
+      if (sourceIndexes.has(playlist.sourceIndex)) report(`P1 播放列表来源位置重复：${playlist.sourceIndex}`, ['p1Sync', 'playlists', playlistIndex, 'sourceIndex']);
       sourceIndexes.add(playlist.sourceIndex);
     }
   }
 
   for (const [folderIndex, folder] of project.mediaFolders.entries()) {
-    addUniqueId(ids, folder.id, ['mediaFolders', folderIndex, 'id'], ctx);
+    claim(folder.id, ['mediaFolders', folderIndex, 'id']);
     folderIds.add(folder.id);
   }
-  validateMediaFolders(project.mediaFolders, folderIds, ctx);
+  if (ctx) validateMediaFolders(project.mediaFolders, folderIds, ctx);
 
   for (const [assetIndex, asset] of project.mediaAssets.entries()) {
-    addUniqueId(ids, asset.id, ['mediaAssets', assetIndex, 'id'], ctx);
-    assetIds.add(asset.id);
+    claim(asset.id, ['mediaAssets', assetIndex, 'id']);
     assetById.set(asset.id, asset);
-    if (asset.folderId !== null && !folderIds.has(asset.folderId)) {
+    if (asset.folderId !== null && !folderIds.has(asset.folderId)) report(`媒体素材引用不存在的文件夹：${asset.folderId}`, ['mediaAssets', assetIndex, 'folderId']);
+  }
+  return { playlistIds, ids, assetById, p1PlaylistIds: project.p1Sync ? new Set(project.p1Sync.playlists.map((playlist) => playlist.id)) : null };
+}
+
+/** A song's playlist and playback range. `shortcutTaken(lowercase)`: whether a song it is compared with has that shortcut. */
+function validateItemSettings(playlistIds: Set<string>, item: RundownItem, index: number,
+  shortcutTaken: (shortcut: string) => boolean, ctx: z.RefinementCtx): void {
+  if (item.playlistId && !playlistIds.has(item.playlistId)) ctx.addIssue({ code: 'custom', message: '节目引用不存在的播放列表', path: ['rundown', index, 'playlistId'] });
+  if (item.playback) {
+    const end = item.playback.endMs || item.referenceAudio?.durationMs;
+    if (end !== undefined && (item.playback.startMs >= end || (item.referenceAudio && end > item.referenceAudio.durationMs))) {
+      ctx.addIssue({ code: 'custom', message: '歌曲裁剪范围无效', path: ['rundown', index, 'playback'] });
+    }
+    if (item.referenceAudio && item.playback.mtcOffsetMs + item.referenceAudio.durationMs >= 86_400_000) {
+      ctx.addIssue({ code: 'custom', message: '歌曲时间码超出 24 小时', path: ['rundown', index, 'playback', 'mtcOffsetMs'] });
+    }
+    if (item.playback.shortcut && shortcutTaken(item.playback.shortcut.toLowerCase())) {
+      ctx.addIssue({ code: 'custom', message: '歌曲快捷键重复', path: ['rundown', index, 'playback', 'shortcut'] });
+    }
+  }
+}
+
+/** Every id in a song that must be unique in the project: the ones validateItemContent claims. Songs are never
+ * changed in place (every change is a LinkCommand), so a song object's ids are worked out once. */
+const itemIdCache = new WeakMap<RundownItem, ReadonlySet<string>>();
+function itemIds(item: RundownItem): ReadonlySet<string> {
+  const cached = itemIdCache.get(item);
+  if (cached) return cached;
+  const ids = new Set<string>([item.id]);
+  if (item.p1Media) ids.add(`p1:${item.p1Media.sourceKey}`);
+  for (const layer of item.visualLayers) ids.add(layer.id);
+  for (const clip of item.referenceMediaClips) ids.add(clip.id);
+  for (const cue of item.cues) {
+    ids.add(cue.id);
+    for (const action of cue.actions) ids.add(action.id);
+  }
+  itemIdCache.set(item, ids);
+  return ids;
+}
+
+/** A song's ids and P1 binding, and its tracks, clips and cues against the project's media assets and frame rate. */
+function validateItemContent(frameRate: MtcFrameRate, assetById: MediaAssetsById, p1PlaylistIds: Set<string> | null,
+  item: RundownItem, itemIndex: number, claim: IdClaim, ctx: z.RefinementCtx): void {
+  claim(item.id, ['rundown', itemIndex, 'id']);
+  if (item.p1Media) {
+    if (!p1PlaylistIds) {
       ctx.addIssue({
         code: 'custom',
-        message: `媒体素材引用不存在的文件夹：${asset.folderId}`,
-        path: ['mediaAssets', assetIndex, 'folderId']
+        message: '节目包含 P1 媒体绑定，但工程缺少 P1 同步来源',
+        path: ['rundown', itemIndex, 'p1Media']
+      });
+    } else if (!p1PlaylistIds.has(item.p1Media.playlistId)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `P1 媒体绑定引用不存在的播放列表：${item.p1Media.playlistId}`,
+        path: ['rundown', itemIndex, 'p1Media', 'playlistId']
+      });
+    }
+    claim(`p1:${item.p1Media.sourceKey}`, ['rundown', itemIndex, 'p1Media', 'sourceKey']);
+  }
+  const visualLayerIds = new Set(item.visualLayers.map((layer, layerIndex) => {
+    claim(layer.id, ['rundown', itemIndex, 'visualLayers', layerIndex, 'id']);
+    return layer.id;
+  }));
+  const visualIntervalsByLayer = new Map<string, TimelineValidationInterval[]>();
+  const obsIntervalsBySource = new Map<string, TimelineValidationInterval[]>();
+  for (const [clipIndex, clip] of item.referenceMediaClips.entries()) {
+    claim(clip.id, ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'id']);
+    if (!assetById.has(clip.assetId)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `参考素材片段引用不存在的素材：${clip.assetId}`,
+        path: ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'assetId']
+      });
+    }
+    if (clip.layerId && !visualLayerIds.has(clip.layerId)) {
+      ctx.addIssue({ code: 'custom', message: `参考素材片段引用不存在的图层：${clip.layerId}`, path: ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'layerId'] });
+    }
+    const asset = assetById.get(clip.assetId);
+    if (asset && asset.kind !== 'audio' && visualLayerIds.size > 0 && !clip.layerId) {
+      ctx.addIssue({ code: 'custom', message: `视觉素材片段“${clip.label}”还没分配视觉图层`, path: ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'layerId'] });
+    }
+    if (asset?.durationMs !== undefined && (clip.sourceOffsetMs ?? 0) + clip.durationMs > asset.durationMs) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `素材片段“${clip.label}”超出原素材可用时长`,
+        path: ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'durationMs']
+      });
+    }
+    validateFrameNumber(clip.startTimecode.frames, frameRate, [
+      'rundown', itemIndex, 'referenceMediaClips', clipIndex, 'startTimecode', 'frames'
+    ], ctx);
+    validateDropFrameBoundary(clip.startTimecode, frameRate, [
+      'rundown', itemIndex, 'referenceMediaClips', clipIndex, 'startTimecode', 'frames'
+    ], ctx);
+    if (clip.layerId && asset && asset.kind !== 'audio') {
+      addTimelineValidationInterval(visualIntervalsByLayer, clip.layerId, {
+        label: clip.label,
+        path: ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'durationMs'],
+        startFrame: validationTimecodeToFrameNumber(clip.startTimecode, frameRate),
+        endFrame: validationTimecodeToFrameNumber(clip.startTimecode, frameRate)
+          + validationDurationFrames(clip.durationMs, frameRate)
       });
     }
   }
-
-  for (const [itemIndex, item] of project.rundown.entries()) {
-    addUniqueId(ids, item.id, ['rundown', itemIndex, 'id'], ctx);
-    if (item.p1Media) {
-      if (!project.p1Sync) {
-        ctx.addIssue({
-          code: 'custom',
-          message: '节目包含 P1 媒体绑定，但工程缺少 P1 同步来源',
-          path: ['rundown', itemIndex, 'p1Media']
-        });
-      } else if (!project.p1Sync.playlists.some((playlist) => playlist.id === item.p1Media?.playlistId)) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `P1 媒体绑定引用不存在的播放列表：${item.p1Media.playlistId}`,
-          path: ['rundown', itemIndex, 'p1Media', 'playlistId']
-        });
-      }
-      addUniqueId(ids, `p1:${item.p1Media.sourceKey}`, ['rundown', itemIndex, 'p1Media', 'sourceKey'], ctx);
+  for (const [cueIndex, cue] of item.cues.entries()) {
+    claim(cue.id, ['rundown', itemIndex, 'cues', cueIndex, 'id']);
+    if (cue.layerId && !visualLayerIds.has(cue.layerId)) {
+      ctx.addIssue({ code: 'custom', message: `Cue 引用不存在的图层：${cue.layerId}`, path: ['rundown', itemIndex, 'cues', cueIndex, 'layerId'] });
     }
-    const visualLayerIds = new Set(item.visualLayers.map((layer, layerIndex) => {
-      addUniqueId(ids, layer.id, ['rundown', itemIndex, 'visualLayers', layerIndex, 'id'], ctx);
-      return layer.id;
-    }));
-    const visualIntervalsByLayer = new Map<string, TimelineValidationInterval[]>();
-    const obsIntervalsBySource = new Map<string, TimelineValidationInterval[]>();
-    for (const [clipIndex, clip] of item.referenceMediaClips.entries()) {
-      addUniqueId(ids, clip.id, ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'id'], ctx);
-      if (!assetIds.has(clip.assetId)) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `参考素材片段引用不存在的素材：${clip.assetId}`,
-          path: ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'assetId']
-        });
-      }
-      if (clip.layerId && !visualLayerIds.has(clip.layerId)) {
-        ctx.addIssue({ code: 'custom', message: `参考素材片段引用不存在的图层：${clip.layerId}`, path: ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'layerId'] });
-      }
-      const asset = assetById.get(clip.assetId);
-      if (asset && asset.kind !== 'audio' && visualLayerIds.size > 0 && !clip.layerId) {
-        ctx.addIssue({ code: 'custom', message: `视觉素材片段“${clip.label}”还没分配视觉图层`, path: ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'layerId'] });
-      }
-      if (asset?.durationMs !== undefined && (clip.sourceOffsetMs ?? 0) + clip.durationMs > asset.durationMs) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `素材片段“${clip.label}”超出原素材可用时长`,
-          path: ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'durationMs']
-        });
-      }
-      validateFrameNumber(clip.startTimecode.frames, project.timebase.frameRate, [
-        'rundown', itemIndex, 'referenceMediaClips', clipIndex, 'startTimecode', 'frames'
-      ], ctx);
-      validateDropFrameBoundary(clip.startTimecode, project.timebase.frameRate, [
-        'rundown', itemIndex, 'referenceMediaClips', clipIndex, 'startTimecode', 'frames'
-      ], ctx);
-      if (clip.layerId && asset && asset.kind !== 'audio') {
-        addTimelineValidationInterval(visualIntervalsByLayer, clip.layerId, {
-          label: clip.label,
-          path: ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'durationMs'],
-          startFrame: validationTimecodeToFrameNumber(clip.startTimecode, project.timebase.frameRate),
-          endFrame: validationTimecodeToFrameNumber(clip.startTimecode, project.timebase.frameRate)
-            + validationDurationFrames(clip.durationMs, project.timebase.frameRate)
-        });
+    validateFrameNumber(cue.timecode.frames, frameRate, [
+      'rundown', itemIndex, 'cues', cueIndex, 'timecode', 'frames'
+    ], ctx);
+    validateDropFrameBoundary(cue.timecode, frameRate, [
+      'rundown', itemIndex, 'cues', cueIndex, 'timecode', 'frames'
+    ], ctx);
+    const visualShowActions = cue.actions.filter((action) => action.kind === 'obs.setSceneItemEnabled' && action.enabled);
+    const visualShow = visualShowActions.length > 0;
+    if (visualShow && visualLayerIds.size > 0 && !cue.layerId) {
+      ctx.addIssue({ code: 'custom', message: `OBS 显示 Cue“${cue.name}”还没分配视觉图层`, path: ['rundown', itemIndex, 'cues', cueIndex, 'layerId'] });
+    }
+    if (visualShowActions.length > 1) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `OBS 显示 Cue“${cue.name}”只能包含一个启用的显示来源动作`,
+        path: ['rundown', itemIndex, 'cues', cueIndex, 'actions']
+      });
+    }
+    if (visualShow && cue.durationMs === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `OBS 显示 Cue“${cue.name}”缺少 durationMs，无法确定结束隐藏时间`,
+        path: ['rundown', itemIndex, 'cues', cueIndex, 'durationMs']
+      });
+    }
+    if (visualShow && cue.layerId && cue.durationMs !== undefined && cue.enabled) {
+      const startFrame = validationTimecodeToFrameNumber(cue.timecode, frameRate);
+      const interval = {
+        label: cue.name,
+        path: ['rundown', itemIndex, 'cues', cueIndex, 'durationMs'],
+        startFrame,
+        endFrame: startFrame + validationDurationFrames(cue.durationMs, frameRate)
+      };
+      addTimelineValidationInterval(visualIntervalsByLayer, cue.layerId, interval);
+      const visualShowAction = visualShowActions[0];
+      if (visualShowAction?.kind === 'obs.setSceneItemEnabled') {
+        addTimelineValidationInterval(obsIntervalsBySource, visualShowAction.sourceName, interval);
       }
     }
-    for (const [cueIndex, cue] of item.cues.entries()) {
-      addUniqueId(ids, cue.id, ['rundown', itemIndex, 'cues', cueIndex, 'id'], ctx);
-      if (cue.layerId && !visualLayerIds.has(cue.layerId)) {
-        ctx.addIssue({ code: 'custom', message: `Cue 引用不存在的图层：${cue.layerId}`, path: ['rundown', itemIndex, 'cues', cueIndex, 'layerId'] });
-      }
-      validateFrameNumber(cue.timecode.frames, project.timebase.frameRate, [
-        'rundown', itemIndex, 'cues', cueIndex, 'timecode', 'frames'
-      ], ctx);
-      validateDropFrameBoundary(cue.timecode, project.timebase.frameRate, [
-        'rundown', itemIndex, 'cues', cueIndex, 'timecode', 'frames'
-      ], ctx);
-      const visualShowActions = cue.actions.filter((action) => action.kind === 'obs.setSceneItemEnabled' && action.enabled);
-      const visualShow = visualShowActions.length > 0;
-      if (visualShow && visualLayerIds.size > 0 && !cue.layerId) {
-        ctx.addIssue({ code: 'custom', message: `OBS 显示 Cue“${cue.name}”还没分配视觉图层`, path: ['rundown', itemIndex, 'cues', cueIndex, 'layerId'] });
-      }
-      if (visualShowActions.length > 1) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `OBS 显示 Cue“${cue.name}”只能包含一个启用的显示来源动作`,
-          path: ['rundown', itemIndex, 'cues', cueIndex, 'actions']
-        });
-      }
-      if (visualShow && cue.durationMs === undefined) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `OBS 显示 Cue“${cue.name}”缺少 durationMs，无法确定结束隐藏时间`,
-          path: ['rundown', itemIndex, 'cues', cueIndex, 'durationMs']
-        });
-      }
-      if (visualShow && cue.layerId && cue.durationMs !== undefined && cue.enabled) {
-        const startFrame = validationTimecodeToFrameNumber(cue.timecode, project.timebase.frameRate);
-        const interval = {
-          label: cue.name,
-          path: ['rundown', itemIndex, 'cues', cueIndex, 'durationMs'],
-          startFrame,
-          endFrame: startFrame + validationDurationFrames(cue.durationMs, project.timebase.frameRate)
-        };
-        addTimelineValidationInterval(visualIntervalsByLayer, cue.layerId, interval);
-        const visualShowAction = visualShowActions[0];
-        if (visualShowAction?.kind === 'obs.setSceneItemEnabled') {
-          addTimelineValidationInterval(obsIntervalsBySource, visualShowAction.sourceName, interval);
-        }
-      }
-      for (const [actionIndex, action] of cue.actions.entries()) {
-        addUniqueId(ids, action.id, ['rundown', itemIndex, 'cues', cueIndex, 'actions', actionIndex, 'id'], ctx);
-      }
+    for (const [actionIndex, action] of cue.actions.entries()) {
+      claim(action.id, ['rundown', itemIndex, 'cues', cueIndex, 'actions', actionIndex, 'id']);
     }
-    validateTimelineIntervals(visualIntervalsByLayer, ctx);
-    validateObsSourceIntervals(obsIntervalsBySource, ctx);
   }
+  validateTimelineIntervals(visualIntervalsByLayer, ctx);
+  validateObsSourceIntervals(obsIntervalsBySource, ctx);
 }
 
 type TimelineValidationInterval = {

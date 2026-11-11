@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_REFERENCE_CANVAS_TRANSFORM, createEmptyLinkProject, type LinkAction, type LinkCue, type RundownItem } from '@tb/schema';
+import { DEFAULT_REFERENCE_CANVAS_TRANSFORM, createEmptyLinkProject, createLightingDocument, parseLinkProject, type LinkAction, type LinkCue, type LinkProject, type RundownItem } from '@tb/schema';
 import {
   addActionCommand,
   addMediaFolderCommand,
   addMediaAssetCommand,
   addRundownItemCommand,
   applyP1ProjectExportCommand,
+  createItemContentCommand,
   duplicateRundownItemCommand,
   moveActionCommand,
   moveMediaAssetCommand,
@@ -28,9 +29,10 @@ import {
   synchronizeP1ProjectCommand,
   updateVisualLayerCommand,
   updateRundownItemCommand,
+  type ItemContentDraft,
   type LinkCommand
 } from './link-command';
-import { placeContentCommand, removeContentCommand } from './content-timeline';
+import { moveContentCommand, normalizeContentTimeline, placeContentCommand, removeContentCommand, withContentTimeline } from './content-timeline';
 
 const timestamp = () => '2026-08-26T00:00:00.000Z';
 
@@ -63,6 +65,52 @@ describe('LinkProject Command', () => {
     expect(() => replaceCueCommand('b', { ...cue, layerId: 'missing-layer' }).execute(project)).toThrow();
     const fps24 = setProjectFrameRateCommand('24').execute(project);
     expect(() => replaceCueCommand('b', { ...cue, timecode: { ...cue.timecode, frames: 29 } }).execute(fps24)).toThrow('帧号超出');
+    expect(project).toEqual(before);
+  });
+  it('歌曲内容命令只换这首歌的内容：这首歌的灯光、音频和其他歌都是原来的对象，撤销回到原来那首歌', () => {
+    const project = lightingProject();
+    const [first, second] = project.rundown;
+    const command = withContentTimeline(moveContentCommand('first', { kind: 'cue', id: 'first-cue' }, 3_000, { track: 'first-layer' }));
+    const next = command.execute(project);
+    const moved = next.rundown[0]!;
+    expect(moved).not.toBe(first);
+    expect(moved.cues[0]!.timecode.seconds).toBe(3);
+    expect(moved.lighting).toBe(first!.lighting);
+    expect(moved.referenceAudio).toBe(first!.referenceAudio);
+    expect(next.rundown[1]).toBe(second);
+    expect(next.rundown[1]!.lighting).toBe(second!.lighting);
+    expect(next.mediaAssets).toBe(project.mediaAssets);
+    expect(first!.cues[0]!.timecode.seconds).toBe(1);
+    expect(command.undo(project).rundown[0]).toBe(first);
+    for (const edit of [
+      replaceActionCommand('first', 'first-cue', { ...programAction('first-action', 9) }),
+      updateVisualLayerCommand('first', { id: 'first-layer', name: '改名', visible: true, locked: false }),
+      removeContentCommand('first', [{ kind: 'clip', id: 'first-clip' }])
+    ]) {
+      const edited = withContentTimeline(edit).execute(project);
+      expect(edited.rundown[0]!.lighting).toBe(first!.lighting);
+      expect(edited.rundown[1]).toBe(second);
+    }
+  });
+  it('歌曲内容命令照样拒绝坏数据：跨歌和工程级的 ID、找不到的素材、超出素材时长、图层、重叠、帧率和格式', () => {
+    const project = lightingProject();
+    const before = structuredClone(project);
+    const edit = (mutate: (item: ItemContentDraft) => void) => () => createItemContentCommand('测试', 'first', mutate).execute(project);
+    const cue = project.rundown[0]!.cues[0]!;
+    const clip = project.rundown[0]!.referenceMediaClips[0]!;
+    expect(edit((item) => { item.cues.push({ ...linkCue('second-action', '撞上别的歌的动作'), layerId: 'first-layer' }); })).toThrow('ID 重复：second-action');
+    expect(edit((item) => { item.cues.push({ ...linkCue('second', '撞上别的歌'), layerId: 'first-layer' }); })).toThrow('ID 重复：second');
+    expect(edit((item) => { item.visualLayers.push({ id: 'video', name: '撞上素材', visible: true, locked: false }); })).toThrow('ID 重复：video');
+    expect(edit((item) => { item.cues.push({ ...linkCue('first-clip', '撞上自己的片段'), layerId: 'first-layer' }); })).toThrow('ID 重复：first-clip');
+    expect(edit((item) => { item.referenceMediaClips[0]!.assetId = 'missing'; })).toThrow('参考素材片段引用不存在的素材：missing');
+    expect(edit((item) => { item.referenceMediaClips[0]!.durationMs = 30_000; })).toThrow('超出原素材可用时长');
+    expect(edit((item) => { item.cues[0]!.layerId = 'missing-layer'; })).toThrow('Cue 引用不存在的图层');
+    expect(edit((item) => { item.referenceMediaClips.push({ ...clip, id: 'overlap' }); })).toThrow('同一视觉图层的时间片段不能重叠');
+    expect(edit((item) => { item.cues[0]!.timecode = { ...cue.timecode, frames: 30 }; })).toThrow();
+    const fps24 = setProjectFrameRateCommand('24').execute(project);
+    expect(() => createItemContentCommand('测试', 'first', (item) => { item.cues[0]!.timecode = { ...cue.timecode, frames: 29 }; }).execute(fps24)).toThrow('帧号超出');
+    expect(edit((item) => { item.cues[0]!.name = ''; })).toThrow();
+    expect(() => createItemContentCommand('测试', 'missing', () => undefined).execute(project)).toThrow('节目不存在：missing');
     expect(project).toEqual(before);
   });
   it('节目、Cue、动作的全部修改都返回经过校验的新工程', () => {
@@ -328,6 +376,23 @@ describe('LinkProject Command', () => {
 
 function rundownItem(id: string, title: string): RundownItem {
   return { id, title, enabled: true, notes: '', visualLayers: [], referenceMediaClips: [], cues: [] };
+}
+
+/** Two songs with lighting and audio; the first has a track holding a 5 s video clip and an instant cue. */
+function lightingProject(): LinkProject {
+  const song = (id: string, marker: string): RundownItem => ({
+    ...rundownItem(id, id), lighting: createLightingDocument(),
+    referenceAudio: { assetId: `audio-${id}`, relativePath: `assets/${id}.wav`, sha256: marker.repeat(64), durationMs: 60_000 },
+    cues: [{ ...linkCue(`${id}-cue`, `${id} Cue`), actions: [programAction(`${id}-action`, 1)] }]
+  });
+  const first = song('first', 'a');
+  first.visualLayers = [{ id: 'first-layer', name: '轨道', visible: true, locked: false }];
+  first.cues[0]!.layerId = 'first-layer';
+  first.referenceMediaClips = [{ id: 'first-clip', assetId: 'video', label: '视频', layerId: 'first-layer', startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 5_000, canvasTransform: DEFAULT_REFERENCE_CANVAS_TRANSFORM }];
+  // As opened: under the content timeline rules.
+  return normalizeContentTimeline(parseLinkProject({ ...createEmptyLinkProject('内容命令'), schemaVersion: 2, obsOutputMode: 'scenes',
+    mediaAssets: [{ id: 'video', name: '视频', kind: 'video', folderId: null, relativePath: 'assets/video.mp4', sha256: 'c'.repeat(64), byteLength: 1, durationMs: 20_000, width: 1080, height: 1920 }],
+    rundown: [first, song('second', 'b')] }));
 }
 
 function linkCue(id: string, name: string): LinkCue {

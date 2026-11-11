@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   addMediaAssetCommand,
   addRundownItemCommand,
+  moveContentCommand,
   placeContentCommand,
   removeContentCommand,
   renameProjectCommand,
@@ -9,7 +10,7 @@ import {
   resolveTimelineState
 } from '@tb/core/link';
 import { setLightingLibraryViewCommand } from '@tb/core/link';
-import { createEmptyLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type RundownItem } from '@tb/schema';
 import { useDocumentStore } from './document-store';
 
 beforeEach(() => {
@@ -40,6 +41,32 @@ describe('document store command history', () => {
     store.undo(); expect(useDocumentStore.getState().project).toBe(before);
     store.redo(); expect(useDocumentStore.getState().project!.rundown[0]!.cues[0]!.name).toBe('修改后');
     expect(useDocumentStore.getState().project!.rundown[1]).toBe(before.rundown[1]);
+  });
+  it('改一首歌的内容，别的歌和这首歌的灯光都是原来的对象；撤销重做各算一次修订，撤销回到原来那首歌', () => {
+    const song = (id: string): RundownItem => ({ id, title: id, enabled: true, notes: '', lighting: createLightingDocument(),
+      visualLayers: [{ id: `${id}-layer`, name: '轨道', visible: true, locked: false }], referenceMediaClips: [],
+      cues: [{ id: `${id}-cue`, name: 'Cue', enabled: true, notes: '', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 }, layerId: `${id}-layer`, actions: [] }] });
+    const store = useDocumentStore.getState();
+    store.setProject(parseLinkProject({ ...createEmptyLinkProject('三首歌'), schemaVersion: 2, obsOutputMode: 'scenes', rundown: ['a', 'b', 'c'].map(song) }), null);
+    const before = useDocumentStore.getState().project!;
+    const revision = useDocumentStore.getState().revision;
+    store.execute(moveContentCommand('b', { kind: 'cue', id: 'b-cue' }, 4_000, { track: 'b-layer' }));
+    const after = useDocumentStore.getState().project!;
+    expect(after.rundown[0]).toBe(before.rundown[0]);
+    expect(after.rundown[2]).toBe(before.rundown[2]);
+    expect(after.rundown[1]).not.toBe(before.rundown[1]);
+    expect(after.rundown[1]!.lighting).toBe(before.rundown[1]!.lighting);
+    expect(after.rundown[1]!.visualLayers).toBe(before.rundown[1]!.visualLayers);
+    expect(after.rundown[1]!.cues[0]!.timecode.seconds).toBe(4);
+    expect(useDocumentStore.getState().revision).toBe(revision + 1);
+    store.undo();
+    expect(useDocumentStore.getState().project).toBe(before);
+    expect(useDocumentStore.getState().project!.rundown[1]).toBe(before.rundown[1]);
+    expect(useDocumentStore.getState().revision).toBe(revision + 2);
+    store.redo();
+    expect(useDocumentStore.getState().project!.rundown[0]).toBe(before.rundown[0]);
+    expect(useDocumentStore.getState().project!.rundown[1]!.lighting).toBe(before.rundown[1]!.lighting);
+    expect(useDocumentStore.getState().revision).toBe(revision + 3);
   });
   it('旧工程以 OBS 场景作为打开基线，编辑撤销不会恢复软件编排模式', () => {
     const project = createEmptyLinkProject('旧画面工程'); project.obsOutputMode = 'managed';

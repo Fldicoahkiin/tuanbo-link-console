@@ -5,7 +5,7 @@ import {
   outputCanvasSchema,
   parseLinkProject,
   linkProjectSchema,
-  validateLinkProjectRelations,
+  validateItemRelations,
   p1StartTriggerSchema,
   p1MediaBindingSchema,
   p1PlaylistBindingSchema,
@@ -15,6 +15,7 @@ import {
   referenceMediaClipSchema,
   visualLayerSchema,
   rundownItemSchema,
+  rundownItemContentSchema,
   type LinkAction,
   type LinkCue,
   type LinkMediaFolder,
@@ -28,7 +29,8 @@ import {
   type ReferenceAudio,
   type ReferenceMediaClip,
   type VisualLayer,
-  type RundownItem
+  type RundownItem,
+  type RundownItemContent
 } from '@tb/schema';
 import { parseP1TimeOrigin, programTimeOrigin } from './ma2-time-origin';
 
@@ -448,8 +450,7 @@ export function editReferenceAudioCommand(itemId: string, audio: ReferenceAudio,
 }
 
 export function moveVisualLayerCommand(itemId: string, layerId: string, targetIndex: number, now?: TimestampProvider): LinkCommand {
-  return createCommand('调整视觉图层层序', (project) => {
-    const item = requireItem(project, itemId);
+  return createItemContentCommand('调整视觉图层层序', itemId, (item) => {
     const sourceIndex = item.visualLayers.findIndex((layer) => layer.id === layerId);
     if (sourceIndex < 0) throw new Error(`视觉图层不存在：${layerId}`);
     assertExistingIndex(targetIndex, item.visualLayers.length, '视觉图层');
@@ -461,8 +462,7 @@ export function moveVisualLayerCommand(itemId: string, layerId: string, targetIn
 
 export function updateVisualLayerCommand(itemId: string, layer: VisualLayer, now?: TimestampProvider): LinkCommand {
   const parsed = visualLayerSchema.parse(layer);
-  return createCommand('修改视觉图层', (project) => {
-    const item = requireItem(project, itemId);
+  return createItemContentCommand('修改视觉图层', itemId, (item) => {
     const index = item.visualLayers.findIndex((candidate) => candidate.id === parsed.id);
     if (index < 0) throw new Error(`视觉图层不存在：${parsed.id}`);
     item.visualLayers[index] = structuredClone(parsed);
@@ -470,8 +470,7 @@ export function updateVisualLayerCommand(itemId: string, layer: VisualLayer, now
 }
 
 export function removeVisualLayerCommand(itemId: string, layerId: string, now?: TimestampProvider): LinkCommand {
-  return createCommand('删除视觉图层', (project) => {
-    const item = requireItem(project, itemId);
+  return createItemContentCommand('删除视觉图层', itemId, (item) => {
     const index = item.visualLayers.findIndex((layer) => layer.id === layerId);
     if (index < 0) throw new Error(`视觉图层不存在：${layerId}`);
     if (item.visualLayers[index]!.locked) throw new Error('请先解锁轨道，再删除');
@@ -487,7 +486,7 @@ export function replaceReferenceMediaClipCommand(
   now?: TimestampProvider
 ): LinkCommand {
   const parsed = referenceMediaClipSchema.parse(clip);
-  return createItemCommand('修改参考素材片段', itemId, (item, project) => {
+  return createItemContentCommand('修改参考素材片段', itemId, (item, project) => {
     requireMediaAsset(project, parsed.assetId);
     const index = item.referenceMediaClips.findIndex((candidate) => candidate.id === parsed.id);
     if (index < 0) throw new Error(`参考素材片段不存在：${parsed.id}`);
@@ -497,27 +496,47 @@ export function replaceReferenceMediaClipCommand(
 
 export function replaceCueCommand(itemId: string, cue: LinkCue, now?: TimestampProvider): LinkCommand {
   const parsed = linkCueSchema.parse(cue);
-  return createItemCommand('修改 Cue', itemId, (item) => {
+  return createItemContentCommand('修改 Cue', itemId, (item) => {
     const index = item.cues.findIndex((candidate) => candidate.id === parsed.id);
     if (index < 0) throw new Error(`Cue 不存在：${parsed.id}`);
     item.cues[index] = structuredClone(parsed);
   }, now);
 }
 
-/** One programme's edit, validating only that programme and the project's links. */
-export function createItemCommand(label: string, itemId: string, mutate: (item: RundownItem, project: LinkProject) => void,
+type ItemContentKey = keyof RundownItemContent;
+/** A song as a content command may change it: its tracks, clips and cues are a fresh copy; everything else is the
+ * project's own object, shared and never to be changed. */
+export type ItemContentDraft = Readonly<Omit<RundownItem, ItemContentKey>> & RundownItemContent;
+
+/** `source` with its own copy of its content, to change. */
+export function draftItemContent(source: RundownItem): ItemContentDraft {
+  return { ...source, visualLayers: structuredClone(source.visualLayers),
+    referenceMediaClips: structuredClone(source.referenceMediaClips), cues: structuredClone(source.cues) };
+}
+
+/** `source` with the draft's content, parsed; every other field stays `source`'s object. */
+export function commitItemContent(source: RundownItem, draft: RundownItemContent): RundownItem {
+  return { ...source, ...rundownItemContentSchema.parse({ visualLayers: draft.visualLayers, referenceMediaClips: draft.referenceMediaClips, cues: draft.cues }) };
+}
+
+/** An edit of one song's content (tracks, clips, cues). Only that content is copied and parsed, and only that song's
+ * relations are checked (validateItemRelations: its ids against the whole project, its clips against the media
+ * assets, its times against the frame rate). The song's other fields, its lighting among them, and every other song
+ * keep their objects, so history, the recovery copy and the lighting caches see them unchanged. */
+export function createItemContentCommand(label: string, itemId: string, mutate: (item: ItemContentDraft, project: LinkProject) => void,
   now: TimestampProvider = () => new Date().toISOString()): LinkCommand {
   return {
     id: crypto.randomUUID(), label,
     execute(project) {
       const index = project.rundown.findIndex(item => item.id === itemId);
       if (index < 0) throw new Error(`节目不存在：${itemId}`);
-      const draft = structuredClone(project.rundown[index]!);
+      const source = project.rundown[index]!;
+      const draft = draftItemContent(source);
       mutate(draft, project);
-      const item = rundownItemSchema.parse(draft);
+      const item = commitItemContent(source, draft);
       const rundown = [...project.rundown]; rundown[index] = item;
       const next = { ...project, rundown, updatedAt: linkProjectSchema.shape.updatedAt.parse(now()) };
-      validateLinkProjectRelations(next);
+      validateItemRelations(next, item);
       return next;
     },
     undo: before => before
@@ -532,8 +551,8 @@ export function addActionCommand(
   now?: TimestampProvider
 ): LinkCommand {
   const parsed = linkActionSchema.parse(action);
-  return createCommand('添加 Cue 动作', (project) => {
-    const cue = requireCue(project, itemId, cueId);
+  return createItemContentCommand('添加 Cue 动作', itemId, (item) => {
+    const cue = requireCue(item, cueId);
     const target = index ?? cue.actions.length;
     assertInsertIndex(target, cue.actions.length, 'Cue 动作');
     cue.actions.splice(target, 0, structuredClone(parsed));
@@ -547,8 +566,8 @@ export function replaceActionCommand(
   now?: TimestampProvider
 ): LinkCommand {
   const parsed = linkActionSchema.parse(action);
-  return createCommand('修改 Cue 动作', (project) => {
-    const cue = requireCue(project, itemId, cueId);
+  return createItemContentCommand('修改 Cue 动作', itemId, (item) => {
+    const cue = requireCue(item, cueId);
     const index = cue.actions.findIndex((candidate) => candidate.id === parsed.id);
     if (index < 0) throw new Error(`Cue 动作不存在：${parsed.id}`);
     cue.actions[index] = structuredClone(parsed);
@@ -556,8 +575,8 @@ export function replaceActionCommand(
 }
 
 export function removeActionCommand(itemId: string, cueId: string, actionId: string, now?: TimestampProvider): LinkCommand {
-  return createCommand('删除 Cue 动作', (project) => {
-    const cue = requireCue(project, itemId, cueId);
+  return createItemContentCommand('删除 Cue 动作', itemId, (item) => {
+    const cue = requireCue(item, cueId);
     const index = cue.actions.findIndex((action) => action.id === actionId);
     if (index < 0) throw new Error(`Cue 动作不存在：${actionId}`);
     cue.actions.splice(index, 1);
@@ -571,8 +590,8 @@ export function moveActionCommand(
   targetIndex: number,
   now?: TimestampProvider
 ): LinkCommand {
-  return createCommand('移动 Cue 动作', (project) => {
-    const cue = requireCue(project, itemId, cueId);
+  return createItemContentCommand('移动 Cue 动作', itemId, (item) => {
+    const cue = requireCue(item, cueId);
     const sourceIndex = cue.actions.findIndex((action) => action.id === actionId);
     if (sourceIndex < 0) throw new Error(`Cue 动作不存在：${actionId}`);
     assertExistingIndex(targetIndex, cue.actions.length, 'Cue 动作');
@@ -647,8 +666,8 @@ function assertFolderNameAvailable(
   if (duplicate) throw new Error(`同一层级已存在文件夹“${name}”`);
 }
 
-function requireCue(project: LinkProject, itemId: string, cueId: string): LinkCue {
-  const cue = requireItem(project, itemId).cues.find((candidate) => candidate.id === cueId);
+function requireCue(item: RundownItemContent, cueId: string): LinkCue {
+  const cue = item.cues.find((candidate) => candidate.id === cueId);
   if (!cue) throw new Error(`Cue 不存在：${cueId}`);
   return cue;
 }

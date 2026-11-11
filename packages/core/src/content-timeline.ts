@@ -1,6 +1,6 @@
-import { linkCueSchema, referenceMediaClipSchema, rundownItemSchema, validateLinkProjectRelations, type LinkCue, type LinkProject, type MtcFrameRate, type ReferenceMediaClip, type RundownItem, type VisualLayer } from '@tb/schema';
+import { linkCueSchema, referenceMediaClipSchema, validateItemRelations, type LinkCue, type LinkProject, type MtcFrameRate, type ReferenceMediaClip, type RundownItem, type VisualLayer } from '@tb/schema';
 import { frameNumberToTimecode, millisecondsToFrameNumber, playbackFramesPerSecond, timecodeToFrameNumber } from './mtc-timecode';
-import { createItemCommand, type LinkCommand } from './link-command';
+import { commitItemContent, createItemContentCommand, draftItemContent, type LinkCommand } from './link-command';
 
 /*
  * The content timeline's rules, in one place:
@@ -147,7 +147,7 @@ function requireCue(item: RundownItem, id: string): LinkCue {
 export function placeContentCommand(itemId: string, entry: { clip: ReferenceMediaClip } | { cue: LinkCue }, target: ContentTrackTarget, label = '添加到时间线', now?: () => string): LinkCommand {
   const clip = 'clip' in entry ? referenceMediaClipSchema.parse(entry.clip) : null;
   const cue = 'cue' in entry ? linkCueSchema.parse(entry.cue) : null;
-  return createItemCommand(label, itemId, (item, project) => {
+  return createItemContentCommand(label, itemId, (item, project) => {
     const frameRate = project.timebase.frameRate;
     if (clip) {
       if (!project.mediaAssets.some(asset => asset.id === clip.assetId)) throw new Error('素材已经不在资源库里了');
@@ -169,7 +169,7 @@ export function placeContentCommand(itemId: string, entry: { clip: ReferenceMedi
 
 /** Move a clip or cue to start at `startMs`, keeping its length, onto `target`. */
 export function moveContentCommand(itemId: string, ref: ContentRef, startMs: number, target: ContentTrackTarget, now?: () => string): LinkCommand {
-  return createItemCommand(ref.kind === 'clip' ? '移动素材片段' : '移动 Cue', itemId, (item, project) => {
+  return createItemContentCommand(ref.kind === 'clip' ? '移动素材片段' : '移动 Cue', itemId, (item, project) => {
     const frameRate = project.timebase.frameRate;
     const timecode = frameNumberToTimecode(millisecondsToFrameNumber(Math.max(0, startMs), frameRate), frameRate);
     if (ref.kind === 'clip') {
@@ -227,7 +227,7 @@ export function contentTrimBounds(project: LinkProject, itemId: string, ref: Con
 
 /** Set a clip's or camera cue's range, held to contentTrimBounds and at least a frame. */
 export function trimContentCommand(itemId: string, ref: ContentRef, startMs: number, endMs: number, now?: () => string): LinkCommand {
-  return createItemCommand(ref.kind === 'clip' ? '修剪素材片段' : '修剪 Cue', itemId, (item, project) => {
+  return createItemContentCommand(ref.kind === 'clip' ? '修剪素材片段' : '修剪 Cue', itemId, (item, project) => {
     const frameRate = project.timebase.frameRate;
     const bounds = contentTrimBounds(project, itemId, ref);
     const minStart = millisecondsToFrameNumber(bounds.minStartMs, frameRate);
@@ -257,7 +257,7 @@ export function trimContentCommand(itemId: string, ref: ContentRef, startMs: num
 /** Cut a clip or camera cue in two at `atMs`; the right part gets `rightId`. */
 export function splitContentCommand(itemId: string, ref: ContentRef, atMs: number, rightId: string, createId: () => string = () => crypto.randomUUID(), now?: () => string): LinkCommand {
   const actionIds: string[] = [];
-  return createItemCommand(ref.kind === 'clip' ? '切割素材片段' : '切割 Cue', itemId, (item, project) => {
+  return createItemContentCommand(ref.kind === 'clip' ? '切割素材片段' : '切割 Cue', itemId, (item, project) => {
     const frameRate = project.timebase.frameRate;
     const at = millisecondsToFrameNumber(Math.max(0, atMs), frameRate);
     const own = ref.kind === 'clip' ? clipSpan(requireClip(item, ref.id), frameRate) : cueSpan(requireCue(item, ref.id), frameRate);
@@ -284,7 +284,7 @@ export function splitContentCommand(itemId: string, ref: ContentRef, atMs: numbe
 }
 
 export function removeContentCommand(itemId: string, refs: readonly ContentRef[], now?: () => string): LinkCommand {
-  return createItemCommand(refs.length > 1 ? `删除 ${refs.length} 个片段` : refs[0]?.kind === 'cue' ? '删除 Cue' : '删除素材片段', itemId, (item) => {
+  return createItemContentCommand(refs.length > 1 ? `删除 ${refs.length} 个片段` : refs[0]?.kind === 'cue' ? '删除 Cue' : '删除素材片段', itemId, (item) => {
     for (const ref of refs) {
       const entry = ref.kind === 'clip' ? requireClip(item, ref.id) : requireCue(item, ref.id);
       assertEditable(item, entry.layerId);
@@ -297,8 +297,22 @@ export function removeContentCommand(itemId: string, refs: readonly ContentRef[]
   }, now);
 }
 
+/** Whether each song object is under the rules, per frame rate. Songs are never changed in place (every change is a
+ * LinkCommand), so this is worked out once per song object: after an edit only the changed song is looked at again. */
+const tidiness = new WeakMap<RundownItem, Map<MtcFrameRate, boolean>>();
 function needsNormalizing(project: LinkProject, item: RundownItem): boolean {
   const frameRate = project.timebase.frameRate;
+  const known = tidiness.get(item) ?? new Map<MtcFrameRate, boolean>();
+  let untidy = known.get(frameRate);
+  if (untidy === undefined) {
+    untidy = breaksTimelineRules(item, frameRate);
+    known.set(frameRate, untidy);
+    tidiness.set(item, known);
+  }
+  return untidy;
+}
+
+function breaksTimelineRules(item: RundownItem, frameRate: MtcFrameRate): boolean {
   if (item.referenceMediaClips.some(clip => !clip.layerId) || item.cues.some(cue => !cue.layerId)) return true;
   if (item.cues.some(cue => cue.durationMs === undefined && cueTakesTime(cue))) return true;
   const used = new Set([...item.referenceMediaClips.map(clip => clip.layerId), ...item.cues.map(cue => cue.layerId)]);
@@ -321,7 +335,7 @@ function needsNormalizing(project: LinkProject, item: RundownItem): boolean {
  * 4. empty tracks are removed. */
 function normalizeItem(project: LinkProject, source: RundownItem): RundownItem {
   const frameRate = project.timebase.frameRate;
-  const item = structuredClone(source);
+  const item = draftItemContent(source);
   const ends = impliedSceneEnds(project, source);
   for (const cue of item.cues) {
     const end = ends.get(cue.id);
@@ -352,15 +366,22 @@ function normalizeItem(project: LinkProject, source: RundownItem): RundownItem {
     }
   }
   pruneEmptyTracks(item);
-  return item;
+  return commitItemContent(source, item);
 }
 
 /** The project with every programme under the content timeline rules; the same
- * object when nothing had to change. Applied on opening and after each edit. */
+ * object when nothing had to change. Applied on opening and after each edit.
+ * Only the songs it changes are checked again (validateItemRelations). */
 export function normalizeContentTimeline(project: LinkProject): LinkProject {
   if (!project.rundown.some(item => needsNormalizing(project, item))) return project;
-  const next = { ...project, rundown: project.rundown.map(item => needsNormalizing(project, item) ? rundownItemSchema.parse(normalizeItem(project, item)) : item) };
-  validateLinkProjectRelations(next);
+  const normalized = new Set<RundownItem>();
+  const next = { ...project, rundown: project.rundown.map((item) => {
+    if (!needsNormalizing(project, item)) return item;
+    const tidy = normalizeItem(project, item);
+    normalized.add(tidy);
+    return tidy;
+  }) };
+  for (const item of normalized) validateItemRelations(next, item);
   return next;
 }
 
