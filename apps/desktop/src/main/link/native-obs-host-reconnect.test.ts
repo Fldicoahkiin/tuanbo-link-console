@@ -3,7 +3,8 @@ import { createObsProgramSnapshot, type LinkDesktopApi } from '@tb/core/link';
 import { createEmptyLinkProject, parseLinkProject, type LinkAction, type NativePlayerStatus, type NativeObsPrepare } from '@tb/schema';
 import { NativeObsHost } from './native-obs-host';
 
-const tick = async (count = 6): Promise<void> => { for (let index = 0; index < count; index++) await new Promise(resolve => setTimeout(resolve, 0)); };
+// setImmediate, not setTimeout: Windows timers tick about every 16 ms, and some 280 of them took a test past its 5 s limit on CI.
+const tick = async (count = 6): Promise<void> => { for (let index = 0; index < count; index++) await new Promise(resolve => setImmediate(resolve)); };
 
 /** NativeObsHost with the real picture session. Two cameras, 机位0 at 0 s and 机位1 at 1 s.
  * The owned scenes are prepared again the way preloadResources does it: the host's

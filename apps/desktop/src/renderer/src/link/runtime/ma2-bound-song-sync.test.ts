@@ -268,7 +268,8 @@ it('断线时方式 1 的歌等待连接，不算一次失败；连上后接着�
 
 /** The fixture's show with its first Cue fired at each of `ticks` (30 FPS) and its second Cue at 45. */
 function repeated(ticks: readonly number[]): string {
-  const events = [...xml.matchAll(/\t*<Event [\s\S]*?<\/Event>\n/g)].map(match => match[0]);
+  // \r?\n: a Windows checkout gives the fixture CRLF line ends.
+  const events = [...xml.matchAll(/\t*<Event [\s\S]*?<\/Event>\r?\n/g)].map(match => match[0]);
   const first = events[0]!.replace(/<Event index="0"/, '<Event index="X" time="T"');
   const shows = [...ticks.map(time => ({ time, block: first.replace('time="T"', `time="${time}"`) })), { time: 45, block: events[1]! }].sort((a, b) => a.time - b.time);
   return xml.replace(events.join(''), shows.map((entry, index) => entry.block.replace(/<Event index="[^"]*"/, `<Event index="${index}"`)).join(''));
