@@ -83,3 +83,4 @@ export { setAutomaticMusicAnalysisCommand } from './music-analysis-command';
 export * from './ma2-song-sequence';
 export * from './ma2-executor-change';
 export { ma2ExecutorFunctions } from './ma2-executor-functions';
+export * from './show-state';
