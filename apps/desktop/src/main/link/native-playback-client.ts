@@ -47,6 +47,11 @@ export class NativePlaybackClient {
     private readonly failed: (error: Error) => void) {}
   get clock(): Extract<NativePlaybackEvent, { kind: 'clock' }> | null { return this.lastClock; }
   get identity(): Extract<NativePlaybackEvent, { kind: 'ready' }> | null { return this.ready; }
+  /** The engine process is still there: it has not exited (its close event clears this). */
+  get running(): boolean { return this.child !== null; }
+  /** The engine may be sounding now: its own last clock says playing (a playing clock older than a second fails the
+   * engine), or it failed and was told to quit but its process is still there. */
+  get sounding(): boolean { return this.child !== null && (this.terminalError !== null || this.lastClock?.state === 'playing'); }
 
   async start(): Promise<void> {
     if (this.child) throw new Error('播放引擎已经启动');

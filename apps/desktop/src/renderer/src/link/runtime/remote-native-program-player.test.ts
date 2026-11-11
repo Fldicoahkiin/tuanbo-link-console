@@ -105,3 +105,21 @@ it('随时可播放：灯光需要处理的歌也直接发给后台播放，不�
     expect(f.dependencies.notice).not.toHaveBeenCalled();
   }
 });
+
+// 0.5.9 S6：上一首没停下时打开被拒绝。原来界面之后什么都不发，按停止也到不了后台，只能等换工程。
+it('打开被拒绝、因为上一首还没停下：按停止照样发给后台，后台打开了以后播放照常发；别的原因被拒绝时停止不发', async () => {
+  const f = fixture(Promise.reject(new Error("Error invoking remote method 'link:native-program-open': Error: 上一首还没停下：设备拒绝关闭。再按一次停止")));
+  await vi.waitFor(() => expect(f.dependencies.notice).toHaveBeenCalledOnce());
+  await f.player.play('song');
+  expect(f.api.controlNativeProgram).not.toHaveBeenCalled();
+  await f.player.stop();
+  expect(f.api.controlNativeProgram.mock.calls.map(call => call[0].operation)).toEqual([{ kind: 'stop' }]);
+  expect(f.dependencies.attached).toHaveBeenCalledOnce();
+  await f.player.play('song');
+  expect(f.api.controlNativeProgram.mock.calls.map(call => call[0].operation)).toEqual([{ kind: 'stop' }, { kind: 'play', itemId: 'song', paused: false }]);
+
+  const other = fixture(Promise.reject(new Error('只能访问当前打开的工程')));
+  await vi.waitFor(() => expect(other.dependencies.notice).toHaveBeenCalledOnce());
+  await other.player.stop();
+  expect(other.api.controlNativeProgram).not.toHaveBeenCalled();
+});

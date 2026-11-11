@@ -1,4 +1,4 @@
-import { emptyInternalPlayerState, nativeAudioAnalysis, toUserErrorMessage,
+import { emptyInternalPlayerState, isPreviousNotStopped, nativeAudioAnalysis, toUserErrorMessage,
   type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type PlaybackBoundary, type PlaybackClock } from '@tb/core/link';
 import type { LinkProject, NativePlayerStatus, NativeProgramAttachment, NativeProgramEvent, NativeProgramOperation } from '@tb/schema';
 
@@ -18,7 +18,8 @@ export type RemotePlayerDependencies = Pick<InternalPlayerDependencies, 'configu
  * schedules playback, sends lighting, or invents time while the UI is busy. */
 export class RemoteNativeProgramPlayer {
   private readonly ownerId = crypto.randomUUID();
-  private readonly ready: Promise<void>;
+  /** The open; replaced once a stop pressed after a refused open has opened the program (send). */
+  private ready: Promise<void>;
   private readonly unsubscribe: () => void;
   private readonly boundaries = new Set<(boundary: PlaybackBoundary) => void>();
   private state: InternalPlayerState = { ...emptyInternalPlayerState };
@@ -95,6 +96,14 @@ export class RemoteNativeProgramPlayer {
   private configuration() { return { ...this.dependencies.configuration(), preciseSeeking: this.dependencies.preciseSeeking?.() ?? false }; }
   private async send(operation: NativeProgramOperation): Promise<void> {
     try {
+      // The open was refused because the song before had not stopped (0.5.9 S6): stop asks the program again, and once
+      // it opens, the other controls work again. Any other refused open stays as it was.
+      if (operation.kind === 'stop' && await this.ready.then(() => false, isPreviousNotStopped)) {
+        await this.api.controlNativeProgram({ version: 1, ownerId: this.ownerId, operation, configuration: this.configuration() });
+        this.ready = Promise.resolve(); this.attachment = 'opened';
+        if (!this.disposed) this.dependencies.attached();
+        return;
+      }
       await this.ready;
       if (this.disposed) return;
       await this.api.controlNativeProgram({ version: 1, ownerId: this.ownerId, operation, configuration: this.configuration() });

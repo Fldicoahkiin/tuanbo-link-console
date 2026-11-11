@@ -46,6 +46,16 @@ export type AudioAnalysis = {
   readPeaks: () => readonly [number, number];
 };
 
+const previousNotStoppedOpening = '上一首还没停下：';
+/** A program was not opened because the one before it closed with its audio engine still sounding (0.5.9 S6): what
+ * happened, then what to do. Pressing stop reads the engine again; it is not retried by itself. */
+export function previousNotStopped(reason: string): string { return `${previousNotStoppedOpening}${reason}。再按一次停止`; }
+/** The window tells that refusal from others by its opening, as it arrives over IPC. */
+export function isPreviousNotStopped(error: unknown): boolean {
+  const raw = typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string' ? error.message : String(error);
+  return raw.replace(/Error invoking remote method '[^']+':\s*/g, '').replace(/\bError:\s*/g, '').trim().startsWith(previousNotStoppedOpening);
+}
+
 /** The rundown song whose lighting a lights-off belongs to. */
 export type LightingReleaseSong = { itemId: string; title: string };
 

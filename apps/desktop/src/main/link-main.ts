@@ -2,7 +2,7 @@ import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@
 import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
 import { ma2NetworkTargetSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
-import { firstTimeWarning, holdForShow, materialSceneTargets, projectFileReferences, showGate, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
+import { firstTimeWarning, holdForShow, materialSceneTargets, projectFileReferences, showGate, toUserErrorReason, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
 import { assertMa2ConnectionOwner, isLocalMa2Address, waitForMa2Listener } from './link/ma2-connection-owner';
@@ -248,6 +248,8 @@ let nativePlayer: NativePlayerService | null = null;
 let musicMonitor: MusicMonitorService | null = null;
 const nativePlayerUi = new NativePlayerUiPublisher(status => sendToRenderer('link:native-player-status', status));
 let nativePlayerShutdown: Promise<void> | null = null;
+/** The audio engine whose close failed (0.5.9 S6): kept, never killed, and never replaced while its process is there. */
+let heldEngine: { player: NativePlayerService; reason: string } | null = null;
 let nativeObs: NativeObsHost | null = null;
 let nativeObsPreload: NativeObsPreloadPool | null = null;
 let nativeProgram: NativeProgramService | null = null;
@@ -260,16 +262,27 @@ let nativeProgramHost: NativeProgramHost | null = null;
 let midiPorts: MidiPortBroker | null = null;
 
 /** The audio engine and what plays with it, once no program is left. Only an engine that could not close fails this
- * (closeEngineOutputs): a failed close keeps the owned instance and blocks another engine from opening the same device.
+ * (closeEngineOutputs): a failed close keeps the owned instance (heldEngine), and no other engine opens on the same
+ * device while its process is there (player() reads it each time); the next close tries it once more.
  * Never claim stopped or spawn a replacement. The picture and the preselected pictures that do not close are reported
  * once and hold up nothing (2026-11-10). The editor's music monitor is not among them: it stops with its page
  * (releaseGonePage) and at quit. */
 async function closeEngine(): Promise<void> {
-  const player = nativePlayer;
-  nativePlayerShutdown ??= closeEngineOutputs({ engine: player?.close(), picture: nativeObs?.stop(), preload: nativeObsPreload?.close() }, programFaults);
-  await nativePlayerShutdown;
+  const player = nativePlayer, shutdown = nativePlayerShutdown ??= closeEngineOutputs({ engine: player?.close(), picture: nativeObs?.stop(), preload: nativeObsPreload?.close() }, programFaults);
+  try { await shutdown; }
+  catch (error) {
+    // 0.5.9 S6: logged and shown in red once, then the way is open again: the next quit or page release closes it once
+    // more, and player() reads the engine before anything opens beside it.
+    if (nativePlayerShutdown === shutdown) {
+      const reason = toUserErrorReason(error).replace(/[。.；;\s]+$/u, '') || '未知错误';
+      if (player) heldEngine = { player, reason };
+      programFaults.closeFailed(`音频引擎没能关掉：${reason}。联动台不会强制结束它，它退出之前不能开始播放`,
+        { level: 'error', category: 'device', device: '音频', message: `音频引擎没能关掉：${reason}`, result: 'failed' });
+    }
+    throw error;
+  } finally { if (nativePlayerShutdown === shutdown) nativePlayerShutdown = null; }
   if (nativePlayer === player) nativePlayer = null;
-  nativePlayerShutdown = null;
+  if (heldEngine?.player === player) heldEngine = null;
 }
 /** What the page in the main window held, once the page is gone (its renderer exited, or a new page replaced it): its
  * music monitor stops; a program that is preparing, playing or paused keeps its outputs for the next page and is
@@ -704,7 +717,14 @@ function registerIpc(
   handle('link:midi-send', (_event, value: unknown) => { const request = midiPortSendSchema.parse(value); return midiPortBroker.send(request.handle, request.bytes); }, 'listener');
   handle('link:midi-close', (_event, value: unknown) => midiPortBroker.close(midiPortHandleSchema.parse(value).handle), 'listener');
   const player = (): NativePlayerService => {
-    if (nativePlayerShutdown) throw new Error('音频引擎正在关闭或关闭失败，请查看运行日志');
+    if (nativePlayerShutdown) throw new Error('音频引擎正在关闭，这次操作没有执行。请等它关完再试');
+    if (heldEngine) {
+      // Read the engine process now: gone, a new engine may open; still there, none opens beside it (0.5.9 S6). This
+      // runs when the operator asks for playback, not on a timer.
+      if (heldEngine.player.engineRunning()) throw new Error(`上一首的音频引擎还没退出：${heldEngine.reason}。联动台不会强制结束它，等它退出后再按播放`);
+      if (nativePlayer === heldEngine.player) nativePlayer = null;
+      heldEngine = null;
+    }
     if (!nativePlayer) {
       if (!ffmpegPath) throw new Error('FFmpeg 音频解码组件未安装');
       let lastClockBoundary = '', lastReadyBoundary = '';
@@ -1047,7 +1067,9 @@ function registerIpc(
       lighting: lightsOff
     });
     nativeProgramHost = host;
-    return { controller: host.controller, close: async () => { await host.close(); if (nativeProgramHost === host) nativeProgramHost = null; } };
+    return { controller: host.controller, close: async () => { await host.close(); if (nativeProgramHost === host) nativeProgramHost = null; },
+      // Read from the engine itself after this close failed (0.5.9 S6): no engine left, or one that is not sounding.
+      engineStopped: () => !(nativePlayer?.engineSounding() ?? false) };
   }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput(), programOutputs.runningChanged, programFaults);
   showState = new ShowStateService(nativeProgram, show => sendToRenderer('link:show-state', show), lightsOff);
   handle('link:show-state-get', () => showState!.current());

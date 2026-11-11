@@ -96,6 +96,10 @@ export class NativePlayerService {
   }
 
   get status(): NativePlayerStatus | null { return this.state; }
+  /** Read from the engine now, not from `status` (0.5.9 S6): whether its process is still there, and whether it may be
+   * sounding. Asked after a close failed, before another program or engine opens. */
+  engineRunning(): boolean { return this.client?.running ?? false; }
+  engineSounding(): boolean { return this.client?.sounding ?? false; }
   get audioCaptureIdentity(): { executable: string; title: string; windowClass: string; audioDeviceId: string } {
     const identity = this.client?.identity;
     if (!identity || !this.source || !this.state || !['ready', 'playing', 'paused', 'ended'].includes(this.state.status)

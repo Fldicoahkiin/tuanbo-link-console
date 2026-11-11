@@ -63,13 +63,50 @@ it('停止不排在未完成的播放准备之后', async () => {
   await service.control(command(input, { kind: 'stop' })); expect(output.controller.stop).toHaveBeenCalledOnce(); gate.release(); await playing;
 });
 
-it('关闭失败阻止新宿主；授权失败未创建输出时允许重新打开', async () => {
-  const output = host(), create = vi.fn(() => output), authorize = vi.fn(() => Promise.resolve());
-  const service = new NativeProgramService(create, vi.fn(), authorize, unlicensed, quiet());
+// 0.5.9 S6：原来是一条“关闭失败阻止新宿主”。关闭失败一次以后，关闭链一直是失败状态，之后的打开都失败、之后的宿主也不再被关。
+// 现在拆成两条：引擎还在响时打开得到等待文案；引擎已经停了时照常打开，之后的宿主照样被关。
+it('上一个节目关闭失败、引擎还在响：打开得到“上一首还没停下”，不建新宿主；按停止再读一次引擎，停了才打开；授权失败未创建输出时允许重新打开', async () => {
+  const first = host(), sounding = { now: true }, held = { ...first, engineStopped: vi.fn(() => !sounding.now) }, later: ReturnType<typeof host>[] = [];
+  const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>().mockReturnValueOnce(held)
+    .mockImplementation(() => { const made = host(); later.push(made); return made; });
+  const authorize = vi.fn(() => Promise.resolve()), reporter = faults();
+  const service = new NativeProgramService(create, vi.fn(), authorize, unlicensed, reporter.reporter);
   authorize.mockRejectedValueOnce(new Error('授权失败'));
   await expect(service.open(request())).rejects.toThrow('授权失败'); expect(create).not.toHaveBeenCalled();
-  await service.open(request()); expect(create).toHaveBeenCalledOnce(); output.close.mockRejectedValue(new Error('设备拒绝关闭'));
-  await expect(service.open(request())).rejects.toThrow('设备拒绝关闭'); expect(create).toHaveBeenCalledOnce();
+  await service.open(request()); expect(create).toHaveBeenCalledOnce(); first.close.mockRejectedValue(new Error('设备拒绝关闭'));
+  const next = request();
+  const refused = await service.open(next).then(() => '打开了', (error: unknown) => error);
+  expect(toUserErrorMessage(refused)).toBe('上一首还没停下：设备拒绝关闭。再按一次停止');
+  expect(create).toHaveBeenCalledOnce();
+  // The close nobody waited for is logged and shown once.
+  expect(reporter.record).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ level: 'error', device: '播放器', message: '上一个节目没能正常关掉：设备拒绝关闭' }));
+  // Stop pressed while it still sounds: read again, the same answer; nothing opens beside it.
+  await expect(service.control(command(next, { kind: 'stop' }))).rejects.toThrow('上一首还没停下：设备拒绝关闭。再按一次停止');
+  expect(create).toHaveBeenCalledOnce(); expect(held.engineStopped).toHaveBeenCalledTimes(2);
+  // Stopped now: the next stop opens this window's program, and it plays.
+  sounding.now = false;
+  await service.control(command(next, { kind: 'stop' }));
+  expect(create).toHaveBeenCalledTimes(2);
+  await service.control(command(next, { kind: 'play', itemId: 'song' }));
+  expect(later[0]!.controller.play).toHaveBeenCalledOnce();
+});
+
+it('上一个节目关闭失败、引擎已经停了：照常打开；这次失败以后，后面的节目照样被关，关闭的人看到失败', async () => {
+  const first = host(), stopped = { ...first, engineStopped: vi.fn(() => true) }, later: ReturnType<typeof host>[] = [];
+  const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>().mockReturnValueOnce(stopped)
+    .mockImplementation(() => { const made = host(); later.push(made); return made; });
+  const service = new NativeProgramService(create, vi.fn(), () => Promise.resolve(), unlicensed, quiet());
+  await service.open(request()); first.close.mockRejectedValue(new Error('设备拒绝关闭'));
+  const next = request();
+  expect(await service.open(next)).toBe('opened'); expect(create).toHaveBeenCalledTimes(2);
+  await service.control(command(next, { kind: 'close' }));
+  expect(later[0]!.close).toHaveBeenCalledOnce();
+  // A close that fails is returned to whoever closed: in red there, and the chain stays open for the next program.
+  await service.open(request());
+  later[1]!.close.mockRejectedValueOnce(new Error('音频引擎没有确认停止'));
+  await expect(service.close()).rejects.toThrow('音频引擎没有确认停止');
+  // That host cannot tell whether its engine stopped: taken as still sounding, the next open waits.
+  await expect(service.open(request())).rejects.toThrow('上一首还没停下：音频引擎没有确认停止。再按一次停止');
 });
 
 it('只发布当前会话的有序状态和边界；无效 DTO 不进入控制器', async () => {

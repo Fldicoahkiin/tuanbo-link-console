@@ -1,12 +1,21 @@
-import { emptyInternalPlayerState, type InternalPlayerState, type NativeProgramPlayer, type PlaybackBoundary } from '@tb/core/link';
+import { emptyInternalPlayerState, previousNotStopped, toUserErrorReason, type InternalPlayerState, type NativeProgramPlayer, type PlaybackBoundary } from '@tb/core/link';
 import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema, parseLinkProject,
   type LinkProject, type NativeProgramAttachment, type NativeProgramOpen, type NativeProgramConfiguration, type NativeProgramEvent } from '@tb/schema';
 import type { ClosedProgramFaults } from './main-process-errors';
 
-type Host = { controller: Pick<NativeProgramPlayer, keyof NativeProgramPlayer>; close(): Promise<void> };
+type Host = { controller: Pick<NativeProgramPlayer, keyof NativeProgramPlayer>; close(): Promise<void>;
+  /** Reads the audio engine now, not a status kept from before (0.5.9 S6): true once it has stopped. Asked only after
+   * this host's close failed. A host that cannot tell is taken as still sounding. */
+  engineStopped?(): boolean };
 type Entry = { request: NativeProgramOpen; projectId: string; document: string; host: Host | null; configuration: NativeProgramConfiguration;
   state: InternalPlayerState; sequence: number; currentCueId: string | null; cancelled: boolean; orphaned: boolean;
-  cancellation: AbortController; ready: Promise<void> };
+  cancellation: AbortController; ready: Promise<void>;
+  /** Builds this entry's host on the close chain; again when the operator presses stop after `heldBack`. */
+  start: () => Promise<void>;
+  /** Its open was refused because the program before it had not stopped (`held`). */
+  heldBack: boolean };
+/** A program whose close failed with its audio engine not stopped: no new program opens while that engine still sounds. */
+type Held = { host: Host; reason: string };
 type Factory = (project: LinkProject, request: NativeProgramOpen, callbacks: {
   configuration(): NativeProgramConfiguration; changed(state: InternalPlayerState): void; cueChanged(id: string | null): void;
   /** A failure no player state shows (the player closed, or plays on without a window): logged and shown in red. Without
@@ -25,7 +34,10 @@ export type NativeProgramSnapshot = { state: InternalPlayerState; projectPath: s
 
 export class NativeProgramService {
   private current: Entry | null = null;
+  /** Closes and openings in turn. Never rejected (0.5.9 S6): one close that fails holds up no later close or open; what it
+   * leaves behind is `held`, and its caller still gets the failure. */
   private cleanup: Promise<void> = Promise.resolve();
+  private held: Held | null = null;
   private running = false;
   private readonly stateListeners = new Set<() => void>();
   /** Every argument is required, so link-main cannot leave one out:
@@ -61,10 +73,12 @@ export class NativeProgramService {
     }
     const entry: Entry = { request, projectId: project.projectId, document, host: null, configuration: request.configuration,
       state: { ...emptyInternalPlayerState }, sequence: 0, currentCueId: null, cancelled: false, orphaned: false,
-      cancellation: new AbortController(), ready: Promise.resolve() };
-    if (previous) { previous.cancelled = true; previous.cancellation.abort(); this.enqueueClose(previous); }
+      cancellation: new AbortController(), ready: Promise.resolve(), start: () => Promise.resolve(), heldBack: false };
+    // Nobody waits for this close: what fails in it is logged and shown here, and stays `held` if the engine went on.
+    if (previous) { previous.cancelled = true; previous.cancellation.abort(); void this.enqueueClose(previous).catch((error: unknown) => this.closeFailed(previous, error)); }
     this.current = entry; this.reportRunning();
-    entry.ready = this.cleanup.then(async () => {
+    entry.start = async () => {
+      this.letGo(entry);
       await this.authorized(entry.cancellation.signal);
       await checkProject?.(request.projectPath, project);
       if (this.current !== entry || entry.cancelled) return;
@@ -80,7 +94,8 @@ export class NativeProgramService {
       });
       entry.host.controller.clock.subscribeBoundary(boundary => this.emit(entry, boundary));
       this.emit(entry);
-    });
+    };
+    entry.ready = this.cleanup.then(entry.start);
     await entry.ready;
     return 'opened';
   }
@@ -96,12 +111,14 @@ export class NativeProgramService {
     this.faults.windowExited();
     const entry = this.current;
     if (entry && active(entry.state)) { entry.orphaned = true; entry.host?.controller.setWatched(false); this.stateChanged(); return entry.state; }
-    if (entry) this.retire(entry);
+    const closed = entry ? this.retire(entry).then(() => null, (error: unknown) => ({ failed: error })) : Promise.resolve(null);
     const released = this.cleanup.then(async (): Promise<{ failed: unknown } | null> => {
-      if (this.current) return null;
+      // A program that did not close is returned, and its outputs are left as they are; it is `held` for the next open.
+      const failure = await closed;
+      if (failure || this.current) return failure;
       try { await teardown(); return null; } catch (error) { return { failed: error }; }
     });
-    // A program that could not close keeps blocking new ones, as close() does.
+    // Never rejected: a failed close or teardown holds up no later close or open.
     this.cleanup = released.then(() => undefined);
     const result = await released;
     if (result) throw result.failed;
@@ -117,6 +134,9 @@ export class NativeProgramService {
       throw new Error('这个窗口的节目已经关了，这次操作没有执行。请重新打开工程，再开始播放');
     }
     if (request.operation.kind === 'close') { await this.close(); return; }
+    // Refused because the song before had not stopped: stop is the operator asking again (not a retry of ours). The
+    // engine is read once more; stopped now, this program opens and the next play plays, else the same refusal.
+    if (request.operation.kind === 'stop' && entry.heldBack) { entry.ready = this.cleanup.then(entry.start); await entry.ready; return; }
     await entry.ready;
     if (entry !== this.current || entry.cancelled || !entry.host) throw new Error('播放控制已取消');
     if (request.configuration) entry.configuration = request.configuration;
@@ -148,9 +168,11 @@ export class NativeProgramService {
     }
   }
 
+  /** Closes the current program; its caller sees a close that failed (in red, and in the log). */
   async close(): Promise<void> {
-    if (this.current) this.retire(this.current);
+    const closing = this.current ? this.retire(this.current) : null;
     await this.cleanup;
+    await closing;
   }
   /** The window whose program is open (the ownerId its controller opened it with); null when none is, and while the
    * program plays on with no window (its page is gone). */
@@ -169,8 +191,10 @@ export class NativeProgramService {
     return () => { this.stateListeners.delete(listener); };
   }
   /** The current program is closed: nothing reaches it any more, and a new one waits for its outputs. */
-  private retire(entry: Entry): void {
-    this.current = null; entry.cancelled = true; entry.cancellation.abort(); this.enqueueClose(entry); this.reportRunning();
+  private retire(entry: Entry): Promise<void> {
+    this.current = null; entry.cancelled = true; entry.cancellation.abort();
+    const closing = this.enqueueClose(entry); this.reportRunning();
+    return closing;
   }
   private stateChanged(): void {
     for (const listener of this.stateListeners) listener();
@@ -182,12 +206,31 @@ export class NativeProgramService {
     if (running === this.running) return;
     this.running = running; this.runningChanged(running);
   }
-  private enqueueClose(entry: Entry): void {
-    this.cleanup = this.cleanup.then(async () => {
-      // Failed authorization creates no output. Its error is returned to open(),
-      // while disposal still releases a host if construction succeeded.
-      await entry.ready.then(() => entry.host?.close(), () => entry.host?.close());
+  /** The close of `entry`, on the close chain. Its caller gets the failure; the chain does not (0.5.9 S6): a host that did
+   * not close is `held` until its engine is read as stopped, and later closes still run. */
+  private enqueueClose(entry: Entry): Promise<void> {
+    // Failed authorization creates no output. Its error is returned to open(),
+    // while disposal still releases a host if construction succeeded.
+    const closing = this.cleanup.then(() => entry.ready.then(() => entry.host?.close(), () => entry.host?.close()));
+    this.cleanup = closing.then(() => undefined, (error: unknown) => {
+      if (entry.host) this.held = { host: entry.host, reason: toUserErrorReason(error).replace(/[。.；;\s]+$/u, '') || '未知错误' };
     });
+    return closing;
+  }
+  /** Before a program opens: the one before it that did not close is read again now. Stopped, it is let go; still
+   * sounding, this open is refused, and pressing stop asks again (control). Never a second engine beside a sounding one. */
+  private letGo(entry: Entry): void {
+    const held = this.held;
+    entry.heldBack = false;
+    if (!held) return;
+    if (held.host.engineStopped?.() !== true) { entry.heldBack = true; throw new Error(previousNotStopped(held.reason)); }
+    this.held = null;
+  }
+  /** A close nobody waits for failed (a newer program replaced it): logged as an error and shown in red once. */
+  private closeFailed(entry: Entry, error: unknown): void {
+    const reason = toUserErrorReason(error).replace(/[。.；;\s]+$/u, '') || '未知错误';
+    this.faults.closeFailed(`上一个节目没能正常关掉：${reason}。如果还听得到上一首，请按停止`,
+      { level: 'error', category: 'device', device: '播放器', projectId: entry.projectId, message: `上一个节目没能正常关掉：${reason}`, result: 'failed' });
   }
   private async authorized(signal: AbortSignal): Promise<void> {
     let cancel: (() => void) | undefined;
