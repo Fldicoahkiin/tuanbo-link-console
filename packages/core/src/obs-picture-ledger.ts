@@ -22,7 +22,7 @@ export type DecoderMode = 'playing' | 'paused' | 'stopped';
 /** A decoder (an owned media input), keyed by source name. */
 export type DecoderState = { clipId: string; mode: DecoderMode; offsetMs: number };
 /** A shown source; the identity stays with the value so it can be hidden again. */
-export type ShowState = { enabled: boolean; sceneName: string | null; sourceName: string };
+export type ShownSourceState = { enabled: boolean; sceneName: string | null; sourceName: string };
 /** Someone switched program in OBS by hand (2026-11-10 decision 5); `target` is the
  * wanted program signature at that moment: no switch back until it changes. */
 export type PictureTakeover = { sceneName: string; since: number; target: string };
@@ -32,7 +32,7 @@ export type PictureLedgerState = {
   takenOver: PictureTakeover | null;
   compositions: ReadonlyMap<string, Known<string>>;
   decoders: ReadonlyMap<string, Known<DecoderState>>;
-  shows: ReadonlyMap<string, Known<ShowState>>;
+  shows: ReadonlyMap<string, Known<ShownSourceState>>;
 };
 
 /** One element's wanted value, as a reconcile op writes it. `target` names the wanted
@@ -41,12 +41,12 @@ export type LedgerWrite =
   | { element: 'program'; value: string; target: string }
   | { element: 'composition'; key: string; value: string; target: string }
   | { element: 'decoder'; key: string; value: DecoderState; target: string }
-  | { element: 'show'; key: string; value: ShowState; target: string };
+  | { element: 'show'; key: string; value: ShownSourceState; target: string };
 export type LedgerObservation =
   | { element: 'program'; value: string }
   | { element: 'composition'; key: string; value: string }
   | { element: 'decoder'; key: string; value: DecoderState }
-  | { element: 'show'; key: string; value: ShowState };
+  | { element: 'show'; key: string; value: ShownSourceState };
 
 /** Stable name of one element across ledger, planner, recovery budget and status items. */
 export function pictureElementKey(write: { element: LedgerWrite['element']; key?: string }): string {
@@ -66,7 +66,7 @@ export class ObsPictureLedger {
   private takenOver: PictureTakeover | null = null;
   private readonly compositions = new Map<string, Known<string>>();
   private readonly decoders = new Map<string, Known<DecoderState>>();
-  private readonly shows = new Map<string, Known<ShowState>>();
+  private readonly shows = new Map<string, Known<ShownSourceState>>();
   /** Failures in a row of one element against one target. */
   private readonly failures = new Map<string, { target: string; attempts: number }>();
 

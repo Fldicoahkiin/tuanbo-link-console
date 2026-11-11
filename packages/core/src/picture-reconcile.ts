@@ -1,4 +1,4 @@
-import { pictureElementKey, showKey, type DecoderState, type Known, type LedgerWrite, type PictureLedgerState, type ShowState } from './obs-picture-ledger';
+import { pictureElementKey, showKey, type DecoderState, type Known, type LedgerWrite, type PictureLedgerState, type ShownSourceState } from './obs-picture-ledger';
 import type { CompositionLayer, OnAirPicture, PictureClip } from './on-air-picture';
 import { pictureProgramScene } from './on-air-picture';
 import type { OutputMode } from './output-failure';
@@ -133,7 +133,7 @@ export function planPictureReconcile(desired: OnAirPicture, ledger: PictureLedge
     const key = showKey(show);
     if (wantedShows.has(key)) continue;
     wantedShows.add(key);
-    const value: ShowState = { enabled: true, sceneName: show.sceneName, sourceName: show.sourceName };
+    const value: ShownSourceState = { enabled: true, sceneName: show.sceneName, sourceName: show.sourceName };
     const write: LedgerWrite = { element: 'show', key, value, target: `on:${show.actionId}` };
     collect(decide(write, ledger.shows.get(key), state => state.enabled), shows,
       reason => ({ kind: 'show.set', sceneName: show.sceneName, sourceName: show.sourceName, enabled: true, reason, write }));
@@ -142,7 +142,7 @@ export function planPictureReconcile(desired: OnAirPicture, ledger: PictureLedge
     if (wantedShows.has(key)) continue;
     const last = knownValue(known);
     if (!last || (known.state === 'confirmed' && !known.value.enabled)) continue;
-    const value: ShowState = { ...last, enabled: false };
+    const value: ShownSourceState = { ...last, enabled: false };
     const write: LedgerWrite = { element: 'show', key, value, target: 'off' };
     collect(decide(write, known, state => !state.enabled), shows,
       reason => ({ kind: 'show.set', sceneName: last.sceneName, sourceName: last.sourceName, enabled: false, reason, write }));
