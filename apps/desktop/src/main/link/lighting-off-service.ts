@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { LightingOffLedger, lightingExecutors, lightingReleaseActions, lightsLeftOnAfterResendText, owedOffTexts, songChangeOffs, toUserErrorReason,
+import { LightingOffLedger, lightingExecutors, lightingReleaseActions, lightsLeftOnAfterResendText, lightsLeftOnText, owedOffTexts, songChangeOffs, toUserErrorReason,
   type LightingOffOutcome, type LightingReleaseSong, type LinkDesktopApi, type LitSong, type OffSend, type OwedOff, type ProgramLightingOutput } from '@tb/core/link';
 import { lightingOffRequestSchema, type LightingOffResult, type Ma2NetworkSettings, type Ma2NetworkStatus, type Ma2NetworkTarget } from '@tb/schema';
 
@@ -58,10 +58,27 @@ export class LightingOffService implements ProgramLightingOutput {
   async receive(value: unknown): Promise<LightingOffResult> {
     const request = lightingOffRequestSchema.parse(value);
     if (request.phase === 'start') { this.ledger.use('window', lightingExecutors(request.document)); this.changed(); return { failed: [] }; }
+    // The window's claim lasts only while its timecode runs: a paused preview must not hold back the Off of a program
+    // that stops a song on the same executors.
     this.ledger.use('window', []);
+    if (request.phase === 'pause') { this.changed(); return { failed: [] }; }
     const sends = this.ledger.owe(lightingReleaseActions(request.document), request.song, request.source === 'p1' ? 'stop' : 'preview', null);
     // Following P1, stop in the app is the operator's stop: it also sends what is still owed (00-order §8 item 4).
     return this.deliver([...sends, ...request.source === 'p1' ? this.ledger.resendOnStop() : []]);
+  }
+
+  /** The window's page is gone (its renderer exited, or it reloaded) and what it ran died with it: nothing there will
+   * say stop any more, so the executors its timecode was running are owed their Off here. One that does not go out is
+   * shown in red in the next window and stays owed. */
+  pageGone(): void {
+    const running = this.ledger.using('window');
+    this.ledger.use('window', []);
+    const sends = this.ledger.owe(running.map(executor => ({ target: 'executor', executor, action: 'off' })), null, 'preview', null);
+    if (!sends.length) { this.changed(); return; }
+    void this.deliver(sends).then(outcome => {
+      const reasons = [...new Set(outcome.failed.map(failure => failure.reason))];
+      if (reasons.length) this.dependencies.failed(lightsLeftOnText(null, reasons.join('；')), null);
+    });
   }
 
   /** Every Off not confirmed. */

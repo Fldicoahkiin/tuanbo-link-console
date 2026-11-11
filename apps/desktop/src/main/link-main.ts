@@ -278,6 +278,7 @@ async function closeEngine(): Promise<void> {
 function releaseGonePage(): Promise<InternalPlayerState | null> {
   // P1 following and the previews the page reported end with it; a program that plays on stays in the show.
   showState?.pageGone();
+  lightingOff?.pageGone();
   return releasePage(nativeProgram, { stopMonitor: () => musicMonitor?.stop(),
     teardown: async () => { await closeEngine(); await releaseRendererRuntime(); } }, programFaults);
 }

@@ -41,6 +41,8 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
     if (release) ownedRelease.current = release;
     let seekAudio: HTMLAudioElement | null = null;
     let cancelled = false; let timer: ReturnType<typeof setInterval> | null = null;
+    // The main process was told this preview's timecode runs the song's executors: it is told when that ends.
+    let claimed = false;
     const fail = (error: unknown): void => {
       const message = error instanceof Error ? error.message : String(error);
       latest.current.onError(message);
@@ -52,6 +54,11 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
       setReady(false); if (timer) clearInterval(timer); timer = null;
       seekAudio?.removeEventListener('seeking', located); seekAudio?.removeEventListener('seeked', located); seekAudio = null;
       mtc.close();
+      if (claimed) {
+        // Paused, replaced or failed: the executors are no longer in use here. No Off: only the operator's stop sends one.
+        claimed = false;
+        void window.tbLink.oweLightingOff({ version: 1, source: 'preview', phase: 'pause', document, song: null }).catch(fail);
+      }
     };
     const current = (): boolean => !cancelled && (!release || ownedRelease.current === release);
     const start = async (): Promise<void> => {
@@ -60,7 +67,7 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
       const audio = input.audioRef.current;
       if (!audio || !audio.getAttribute('src')) { if (input.enabled) throw new Error('请先给节目添加音乐，再开启灯光试听'); return; }
       // Its executors are in use now: an Off still owed for them (an earlier stop) is not sent.
-      if (release) await window.tbLink.oweLightingOff({ version: 1, source: 'preview', phase: 'start', document, song: null });
+      if (release) { claimed = true; await window.tbLink.oweLightingOff({ version: 1, source: 'preview', phase: 'start', document, song: null }); }
       if (!current()) { cleanup(); return; }
       if (sendsMtc) {
         // The same port and send mode as formal playback: the preview fires the lights the way the show will.

@@ -129,6 +129,36 @@ describe('试听和节目用同一张清单', () => {
     f.service.close();
   });
 
+  it('试听暂停以后不再占着执行器：节目停同一个执行器的歌，Off 照发；暂停本身不发 Off', async () => {
+    const f = fixture();
+    await f.service.receive({ version: 1, source: 'preview', phase: 'start', document: document(['1.101']), song: null });
+    await f.service.receive({ version: 1, source: 'preview', phase: 'pause', document: document(['1.101']), song: null });
+    expect(f.playMa2Cue).not.toHaveBeenCalled();
+    await f.service.stop(lit('a', '开场', ['1.101']), 'stop');
+    expect(f.executors()).toEqual(['1.101']);
+  });
+
+  it('界面没了（退出或重新加载）：它的试听正在用的执行器补上 Off；没发出去的标红、留在清单里；没在用的不发', async () => {
+    const f = fixture();
+    await f.service.receive({ version: 1, source: 'preview', phase: 'start', document: document(['1.101', '1.102']), song: null });
+    f.service.pageGone();
+    await f.service.settled();
+    expect(f.executors()).toEqual(['1.101', '1.102']);
+    expect(f.service.owed()).toEqual([]);
+    // Gone again with nothing running: nothing is sent.
+    f.service.pageGone();
+    await f.service.settled();
+    expect(f.playMa2Cue).toHaveBeenCalledTimes(2);
+    // A preview running while the console is away: owed, and said in red once.
+    f.status.state = 'disconnected';
+    await f.service.receive({ version: 1, source: 'preview', phase: 'start', document: document(['1.103']), song: null });
+    f.service.pageGone();
+    await f.service.settled();
+    await vi.waitFor(() => expect(f.failed).toHaveBeenCalledExactlyOnceWith('这首歌的灯光没能完全关闭，控台上可能还亮着。原因：没有连接控台，连上以后会自动补发一次。请在控台上关掉这首歌的执行器。', null));
+    expect(f.service.owed().map(entry => entry.executor)).toEqual(['1.103']);
+    f.service.close();
+  });
+
   it('Off 免授权：授权到期时，经后台节目的授权接法（program-license.ts）照发', async () => {
     const send = vi.fn<(request: Ma2PlaybackRequest) => Promise<void>>(() => Promise.resolve());
     const expired: LicenseStatus = { machineCode: `TB1-${'A'.repeat(64)}`, state: 'expired', message: '授权已到期；工程文件不受影响', enforcement: 'required', onlineAvailable: true, claims: null };

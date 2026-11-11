@@ -84,6 +84,8 @@ export class LightingOffLedger {
     this.users.set(user, using);
     for (const executor of using) if (this.entries.delete(executor)) this.recovery.forget(resendRow, executor);
   }
+  /** The executors `user`'s timecode runs now. */
+  using(user: LightingUser): string[] { return [...this.users.get(user) ?? []]; }
   /** Some timecode runs this executor now. */
   used(executor: string): boolean { return [...this.users.values()].some(using => using.has(executor)); }
 

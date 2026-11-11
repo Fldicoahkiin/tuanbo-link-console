@@ -9,14 +9,16 @@ export const lightingOffSongSchema = z.object({ itemId: z.string().min(1).max(20
  * window runs (link:lighting-off). Only the song's lighting document goes over IPC: which executors that means, and what
  * to switch off, is decided in the main process.
  * - `preview`: the editor's or the lighting workbench's own preview. `start`: its timecode runs the song's executors
- *   now, so nothing owed for them is sent. `stop`: it stopped, every executor of the song is owed an Off.
+ *   now, so nothing owed for them is sent. `pause`: its timecode no longer runs (paused, or it failed to start): the
+ *   executors are not in use by the window any more, and nothing is owed, the lights stay as they are until the
+ *   operator stops. `stop`: the operator stopped it, every executor of the song is owed an Off.
  * - `p1`: following P1, the operator pressed stop in the app (00-order §8 item 4): `stop` switches the song's executors
  *   off and sends every Off still owed once more, without stopping P1. `start` as for a preview.
  */
 export const lightingOffRequestSchema = z.object({
   version: z.literal(1),
   source: z.enum(['preview', 'p1']),
-  phase: z.enum(['start', 'stop']),
+  phase: z.enum(['start', 'pause', 'stop']),
   document: lightingDocumentSchema,
   song: lightingOffSongSchema.nullable()
 }).strict();
