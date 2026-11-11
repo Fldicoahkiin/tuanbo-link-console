@@ -443,6 +443,10 @@ function isSafeProjectPath(value: string): boolean {
 }
 
 export type LinkProjectSchemaVersion = 1 | 2 | 3;
+/** The newest file version this release opens and saves. A newer file is refused: unknown fields are stripped on parse,
+ * so opening it would drop them on the next save without a word. Raise this only in the commit that adds the first
+ * field needing the next version; until then 3 exists in the types alone. */
+export const latestSchemaVersion: LinkProjectSchemaVersion = 2;
 
 /** The lowest file version that keeps everything in this project, and the only place that decides it.
  * 2: lighting, a console read state or a console material library, which releases before lighting would drop.
@@ -454,6 +458,9 @@ export function requiredSchemaVersion(project: Pick<LinkProject, 'ma2ReadState' 
 }
 
 function validateProjectInvariants(project: z.infer<typeof linkProjectSchema>, ctx: z.RefinementCtx): void {
+  if (project.schemaVersion > latestSchemaVersion) {
+    ctx.addIssue({ code: 'custom', message: '这个工程是用更新版本的联动台保存的。请先更新联动台再打开，免得丢掉新版本才有的内容', path: ['schemaVersion'] });
+  }
   const required = requiredSchemaVersion(project);
   if (project.schemaVersion < required) {
     ctx.addIssue({ code: 'custom', message: required === 2 ? '含灯光编排的工程必须使用 schema 2，防止旧版本丢失数据' : `工程用到了新版本的内容，必须使用 schema ${required}，防止旧版本丢失数据`, path: ['schemaVersion'] });
