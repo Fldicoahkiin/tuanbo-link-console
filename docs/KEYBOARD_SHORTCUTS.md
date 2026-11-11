@@ -111,3 +111,13 @@
 - **从 0.5.8 搬过来**：第一次打开时，没有 `tblink.key-overrides` 就读一次 0.5.8 的 `tblink.timeline-shortcuts`（灯光工作台的 6 个键），和默认一样的不写，改过的写成灯光工作台的键。旧的键名只读不写，退回 0.5.8 时它原样还在。搬过来的键要是撞了 0.5.9 的新默认键（比如打点设成了 N、K），照旧留着，设置页那一行标出来，请自己改一个。
 - **读不出来**：设置页最上面写明原因，这时用默认键；在设置里改一次键或「全部恢复默认」后重新存好。
 - **歌曲自己的快捷键**：停止键（Esc 和随时停止的键）、系统组合、保存撤销这些工程键不收；是编辑器或灯光工作台页上的键时只提醒一句（“在编辑器和灯光工作台里，X 是「…」，在那两页按它不会播这首歌”）。时间线自己的键（比如 Ctrl+B）不提醒：焦点在时间线上时本来就不播歌。
+
+## 7. 守门：按键只有一个监听（K9）
+
+2026-11-11（0.5.9，04 设计 K9）。状态：已实现，自动化验证通过。
+
+- **ESLint**（`eslint.config.mjs` 的 `KEY_LISTENER_RESTRICTIONS`，`no-restricted-syntax`）：在渲染进程里、`link/keys/` 以外，不许 `addEventListener('keydown' | 'keyup' | 'keypress')`、`onkeydown =` 这类属性和 `onKeyDownCapture` / `onKeyUpCapture`。例外只有 `link/keys/`（路由自己）和测试文件（假窗口要挂监听），写在 `KEY_LISTENER_EXCEPTIONS` 一处。
+- **扫描测试**（`keys/key-routing-scan.test.ts`）：
+  - 用同一份选择器把渲染进程的源码扫一遍，没跑 lint 也拦得住；再查 lint 配置确实在用它。
+  - 查 lint 一行看不出来的事：文件里有 `onKeyDown=` / `onKeyUp=` 的，要用 `ownKeys` 说明哪些键归它，不然窗口的键先动手。不用 `ownKeys` 的只有文件里 `ALLOWED` 名单上的几个普通输入框，各写了原因。
+- 组件 `onKeyDown` 里不再需要 `stopPropagation`：路由在窗口的捕获阶段先拿到键，冒泡阶段没有别的按键监听。只有祖先元素自己也处理同一个键时才要留，比如菜单（`ui/Menu.tsx`）经 portal 冒泡回打开它的地方。
