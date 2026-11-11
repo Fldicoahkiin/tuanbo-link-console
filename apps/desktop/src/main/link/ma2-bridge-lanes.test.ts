@@ -61,7 +61,9 @@ async function straight(): Promise<{ object: string; files: string[]; page: stri
   return { object: object(), files: files(), page };
 }
 
-describe('前台只读道（M4）', () => {
+// Every case runs the real plugin in a Lua interpreter written in JavaScript, and the sweep below runs a whole sync
+// once per step. That is about half a second here and went past the default 5 s on the loaded Windows runner.
+describe('前台只读道（M4）', { timeout: 60000 }, () => {
   it('哪些走前台：只读、短、有人在界面上等；会写控台的一律在后台', () => {
     const foreground: Ma2Operation[] = ['PING', 'PAGES', 'PAGE', 'LIST', 'LISTSEQ', 'EXECUTOR'];
     const background: Ma2Operation[] = ['SEQUENCE', 'SEQCUES', 'READ', 'SNAPSHOT', 'SCOPE', 'TCRANGES', 'DISCARD', 'APPLY', 'SYNC', 'CREATE', 'ASSIGNSEQ', 'LABEL'];
