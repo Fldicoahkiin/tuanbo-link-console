@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ObsRequestScheduler } from './obs-request-scheduler';
+import { ObsRequestScheduler, type ObsRequestPriority } from './obs-request-scheduler';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -24,7 +24,8 @@ describe('OBS 有界请求调度', () => {
   it('动作在网络队列等待时被取消，不发送迟到指令，也不把它计为网络请求', async () => {
     const scheduler = new ObsRequestScheduler(2000, () => undefined); scheduler.connect();
     const gate = deferred<void>(), sent = vi.fn(() => Promise.resolve());
-    const busy = Array.from({ length: 4 }, () => scheduler.request(() => gate.promise, '占用通道'));
+    // Only `program` (or `urgent`) can hold all four slots (OBS 请求谁先发).
+    const busy = Array.from({ length: 4 }, () => scheduler.run('program', () => scheduler.request(() => gate.promise, '占用通道')));
     let current = true;
     const pending = scheduler.guarded(() => current, () => scheduler.run('urgent', () => scheduler.request(sent, '节目动作')));
     const rejected = expect(pending).rejects.toThrow('没有发送');
@@ -61,7 +62,7 @@ describe('OBS 有界请求调度', () => {
     expect(dispatched).toHaveBeenCalledTimes(2); expect(outer).toHaveBeenCalledTimes(2);
   });
 
-  it('预览最多一个在途，目录保留控制通路，停止优先于普通待发动作', async () => {
+  it('预览最多一个在途，控制、后台和预览合计最多两个，停止不等它们', async () => {
     const scheduler = new ObsRequestScheduler(2000, () => undefined); scheduler.connect();
     const calls: string[] = [];
     const first = deferred<void>(), second = deferred<void>(), third = deferred<void>(), control = deferred<void>();
@@ -73,20 +74,20 @@ describe('OBS 有界请求调度', () => {
       scheduler.run('control', () => add('cue', control.promise)),
       scheduler.run('control', () => add('next-cue', Promise.resolve())),
       scheduler.run('urgent', () => add('stop', Promise.resolve()))];
-    await Promise.resolve();
-    expect(calls).toEqual(['preview', 'directory-1', 'directory-2', 'cue']);
-    control.resolve(); await work[4];
-    await vi.waitFor(() => expect(calls.slice(4)).toEqual(['stop', 'next-cue']));
-    first.resolve(); second.resolve(); third.resolve(); await Promise.all(work);
+    await vi.waitFor(() => expect(calls).toEqual(['preview', 'directory-1', 'stop']));
+    second.resolve(); await vi.waitFor(() => expect(calls.slice(3)).toEqual(['cue']));
+    control.resolve(); await vi.waitFor(() => expect(calls.slice(4)).toEqual(['next-cue', 'directory-2']));
+    third.resolve(); await work[3]; expect(calls).toHaveLength(6);
+    first.resolve(); await Promise.all(work);
     expect(calls.at(-1)).toBe('next-preview');
-    expect(scheduler.getStats()).toMatchObject({ queued: 0, active: 0, maximumActive: 4 });
+    expect(scheduler.getStats()).toMatchObject({ queued: 0, active: 0, maximumActive: 3 });
   });
 
   it('失去响应后停止该连接，不发送已排队任务，迟到结果不能复活旧会话', async () => {
     vi.useFakeTimers();
     const timedOut = vi.fn(); const scheduler = new ObsRequestScheduler(2000, timedOut); scheduler.connect();
     const slow = deferred<string>(), sent = vi.fn(() => slow.promise);
-    const work = Array.from({ length: 7 }, () => scheduler.request(sent, '测试').catch((error: unknown) => error));
+    const work = Array.from({ length: 7 }, () => scheduler.run('program', () => scheduler.request(sent, '测试')).catch((error: unknown) => error));
     await Promise.resolve(); expect(sent).toHaveBeenCalledTimes(4);
     await vi.advanceTimersByTimeAsync(2000);
     const results = await Promise.all(work);
@@ -108,8 +109,8 @@ describe('OBS 有界请求调度', () => {
     vi.useFakeTimers();
     const timedOut = vi.fn(); const scheduler = new ObsRequestScheduler(2000, timedOut); scheduler.connect();
     const answer = (ms: number) => () => new Promise<string>(resolve => setTimeout(() => resolve(`${ms}`), ms));
-    const busy = Array.from({ length: 4 }, () => scheduler.request(answer(1500), '占用'));
-    const queued = scheduler.request(answer(1500), '切场景');
+    const busy = Array.from({ length: 4 }, () => scheduler.run('program', () => scheduler.request(answer(1500), '占用')));
+    const queued = scheduler.run('program', () => scheduler.request(answer(1500), '切场景'));
     await vi.advanceTimersByTimeAsync(3000);
     await expect(Promise.all([...busy, queued])).resolves.toEqual(['1500', '1500', '1500', '1500', '1500']);
     expect(timedOut).not.toHaveBeenCalled();
@@ -162,5 +163,86 @@ describe('OBS 有界请求调度', () => {
     const pending = isolated.request(never, '立即取消').catch((error: unknown) => error);
     isolated.invalidate(new Error('关闭')); await pending; await Promise.resolve();
     expect(never).not.toHaveBeenCalled();
+  });
+});
+
+describe('OBS 请求谁先发（2026-11-10）：播放画面的请求单独一档，不排在截图和实时画布后面', () => {
+  const setup = () => {
+    const scheduler = new ObsRequestScheduler(2000, () => undefined); scheduler.connect();
+    const calls: string[] = [];
+    const add = (priority: ObsRequestPriority, name: string, wait: Promise<unknown> = Promise.resolve()): Promise<unknown> =>
+      scheduler.run(priority, () => scheduler.request(() => { calls.push(name); return wait; }, name));
+    return { scheduler, calls, add };
+  };
+
+  it('控制、后台和预览再多，紧急和播放画面的请求始终有 2 个并发位', async () => {
+    const { scheduler, calls, add } = setup();
+    const gate = deferred<void>();
+    const shared = [add('control', 'canvas-1', gate.promise), add('control', 'canvas-2', gate.promise), add('control', 'canvas-3', gate.promise),
+      add('background', 'directory', gate.promise), add('preview', 'screenshot', gate.promise)];
+    await vi.waitFor(() => expect(calls).toEqual(['canvas-1', 'canvas-2']));
+    expect(scheduler.getStats()).toMatchObject({ active: 2, queued: 3 });
+    const cut = add('program', 'cut', gate.promise), stop = add('urgent', 'stop');
+    await vi.waitFor(() => expect(calls.slice(2)).toEqual(['cut', 'stop']));
+    await stop; expect(scheduler.getStats()).toMatchObject({ active: 3 });
+    gate.resolve(); await Promise.all([...shared, cut]);
+    expect(scheduler.getStats()).toMatchObject({ queued: 0, active: 0, maximumActive: 4 });
+  });
+
+  it('有播放画面的请求在排队或在跑时，不开新的后台和预览；已经发出的照常等回应，不撤回', async () => {
+    const { calls, add } = setup();
+    const screenshot = deferred<string>(), cut = deferred<void>(), canvas = deferred<void>();
+    const sent = add('preview', 'screenshot', screenshot.promise);
+    const cuts = [add('program', 'cut-1', cut.promise), add('program', 'cut-2', cut.promise)];
+    await vi.waitFor(() => expect(calls).toEqual(['screenshot', 'cut-1', 'cut-2']));
+    const later = [add('background', 'directory'), add('preview', 'next-screenshot')];
+    const live = add('control', 'canvas', canvas.promise);
+    // Four in flight now; a third cut waits for a slot, ahead of the directory read.
+    const queuedCut = add('program', 'cut-3');
+    await vi.waitFor(() => expect(calls).toEqual(['screenshot', 'cut-1', 'cut-2', 'canvas']));
+    screenshot.resolve('answered'); await expect(sent).resolves.toBe('answered');
+    await vi.waitFor(() => expect(calls.at(-1)).toBe('cut-3')); await queuedCut;
+    // A shared slot is free, but cuts are still in flight: no new background or preview request.
+    await new Promise(resolve => setImmediate(resolve));
+    expect(calls).toEqual(['screenshot', 'cut-1', 'cut-2', 'canvas', 'cut-3']);
+    cut.resolve(); await Promise.all(cuts);
+    await vi.waitFor(() => expect(calls.slice(5)).toEqual(['directory', 'next-screenshot']));
+    canvas.resolve(); await Promise.all([...later, live]);
+  });
+
+  it('排队太久只让这一条失败，播放画面的请求照常完成，连接不作废', async () => {
+    vi.useFakeTimers();
+    const timedOut = vi.fn(); const scheduler = new ObsRequestScheduler(2000, timedOut); scheduler.connect();
+    const answer = (ms: number) => () => new Promise<string>(resolve => setTimeout(() => resolve(`${ms}`), ms));
+    const cuts = [scheduler.run('program', () => scheduler.request(answer(1500), '切场景')),
+      scheduler.run('program', () => scheduler.request(answer(1500), '显示来源'))];
+    const directory = scheduler.run('background', () => scheduler.request(answer(10), '读取场景清单')).catch((error: unknown) => error);
+    const canvas = scheduler.run('control', () => scheduler.request(answer(10), '实时画布'));
+    await vi.advanceTimersByTimeAsync(20); await expect(canvas).resolves.toBe('10');
+    // The second cut is sent once the first is answered; together they keep the directory read waiting past its limit.
+    const followUp = cuts[0]!.then(() => scheduler.run('program', () => scheduler.request(answer(1500), '下一个机位')));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(String(await directory)).toContain('还没发送');
+    await vi.advanceTimersByTimeAsync(1500);
+    await expect(Promise.all([...cuts, followUp])).resolves.toEqual(['1500', '1500', '1500']);
+    expect(timedOut).not.toHaveBeenCalled();
+    expect(await scheduler.run('preview', () => scheduler.request(() => Promise.resolve('照常'), '截图'))).toBe('照常');
+    expect(scheduler.getTimings().find(timing => timing.label === '读取场景清单')).toMatchObject({ priority: 'background', startedAt: null, failed: true });
+  });
+
+  it('播放画面的操作里嵌套的后台或预览请求按播放画面这一档发，不会自己等自己；预览里嵌套的不升级', async () => {
+    const { scheduler, calls, add } = setup();
+    const gate = deferred<void>();
+    const busy = add('program', 'cut', gate.promise);
+    const prepared = scheduler.run('program', async () => {
+      await scheduler.request(() => { calls.push('compose'); return Promise.resolve(); }, '机位');
+      await scheduler.run('preview', () => scheduler.run('background', () => scheduler.request(() => { calls.push('inner'); return Promise.resolve(); }, '嵌套')));
+    });
+    const screenshot = scheduler.run('preview', () => scheduler.run('program', () => scheduler.request(() => { calls.push('screenshot'); return Promise.resolve(); }, '截图')));
+    await prepared;
+    expect(calls).toEqual(['cut', 'compose', 'inner']);
+    gate.resolve(); await Promise.all([busy, screenshot]);
+    const tiers = Object.fromEntries(scheduler.getTimings().map(timing => [timing.label, timing.priority]));
+    expect(tiers).toMatchObject({ cut: 'program', 机位: 'program', 嵌套: 'program', 截图: 'preview' });
   });
 });

@@ -115,6 +115,8 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
     ? { ...entry, details: { ...entry.details, obsRequests: obs.getRequestDiagnostics() } } : entry, services.logFailure);
   const pictureLog: PictureLog = { record: recordLog, projectId: project.projectId, itemId: request.snapshot.item.id };
   const upcoming = pictureUpcoming(preload, pictureLog);
+  // The drift check reads back what OBS plays: `control`, not `program` (OBS 请求谁先发).
+  const driftCheck = pictureDriftCheck(obs.mediaScenes, preload);
   const outputs: NativeObsOutputs = {
     outputNotice: () => captureNotice,
     now: () => performance.now(), executor: pictureExecutor(obs, preload, pictureLog),
@@ -313,7 +315,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
         throw error;
       }
     },
-    correctMediaDrift: pictureDriftCheck(obs.mediaScenes, preload),
+    correctMediaDrift: event => obs.readPlayback(() => driftCheck(event)),
     seekMedia: async event => {
       if (!address) throw new Error('画面连接还没准备好');
       const target = address;

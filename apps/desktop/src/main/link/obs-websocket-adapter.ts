@@ -101,7 +101,9 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     this.liveEditor = new ObsLiveEditor(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
     this.beauty = new ObsBeauty(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
     this.sources = new ObsSourceManager(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
-    this.mediaScenes = new ObsMediaScenes(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
+    // Material scenes put the song's picture on air: the `program` tier (OBS 请求谁先发).
+    // Prepared inside `preparePlaybackMedia` they stay in `background`.
+    this.mediaScenes = new ObsMediaScenes(client, (operation, label) => this.request(operation, label), operation => this.requests.run('program', operation));
     this.client.on('CurrentProgramSceneChanged', () => {
       for (const listener of this.programListeners) listener();
     });
@@ -229,7 +231,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
 
   execute(action: LinkAction): Promise<void> {
     const urgent = action.kind === 'obs.mediaAction' && (action.action === 'stop' || action.action === 'pause');
-    return this.requests.run(urgent ? 'urgent' : 'control', () => this.executeAction(action));
+    return this.requests.run(urgent ? 'urgent' : 'program', () => this.executeAction(action));
   }
 
   guardPlaybackOperation<T>(canSend: () => boolean, operation: () => Promise<T>, dispatched?: () => void): Promise<T> {
@@ -237,6 +239,10 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   }
   preparePlaybackMedia<T>(operation: () => Promise<T>): Promise<T> {
     return this.requests.run('background', operation);
+  }
+  /** Reading back what OBS plays (and correcting it) is not a cut: the `control` tier. */
+  readPlayback<T>(operation: () => Promise<T>): Promise<T> {
+    return this.requests.run('control', operation);
   }
 
   private async executeAction(action: LinkAction): Promise<void> {
@@ -343,7 +349,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   }
 
   executeManagedMediaEvent(event: ManagedMediaEvent, absolutePath: string): Promise<void> {
-    return this.requests.run(event.phase === 'stop' ? 'urgent' : 'control', () => {
+    return this.requests.run(event.phase === 'stop' ? 'urgent' : 'program', () => {
       this.assertConnected();
       return this.mediaScenes.execute(event, absolutePath);
     });
@@ -576,7 +582,11 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
    * shows that item, go there even after the program moved on or OBS reconnected,
    * so nothing is left shown. A hide that went out and did not succeed does not
    * count as hidden: the one sent again after a reconnect goes to that item too. */
-  async setSourceEnabledInProgramScene(sourceName: string, enabled: boolean): Promise<void> {
+  setSourceEnabledInProgramScene(sourceName: string, enabled: boolean): Promise<void> {
+    return this.requests.run('program', () => this.applySourceEnabledInProgramScene(sourceName, enabled));
+  }
+
+  private async applySourceEnabledInProgramScene(sourceName: string, enabled: boolean): Promise<void> {
     this.assertConnected();
     const connection = this.connection;
     const { sceneName, sceneItemId } = await this.shownItem(sourceName, enabled, connection) ?? await this.programSceneItem(sourceName);

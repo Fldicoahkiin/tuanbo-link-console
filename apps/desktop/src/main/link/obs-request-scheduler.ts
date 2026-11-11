@@ -1,13 +1,23 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-export type ObsRequestPriority = 'urgent' | 'control' | 'background' | 'preview';
+/** OBS 请求谁先发（2026-11-10）. `program` is the song's picture going on air:
+ * scene switches, material scenes, shown sources. `control` is the live canvas,
+ * beauty, source management and read-backs; `background` prepares ahead and
+ * reads inventories; `preview` takes screenshots. */
+export type ObsRequestPriority = 'urgent' | 'program' | 'control' | 'background' | 'preview';
 export type ObsOperationRunner = <T>(operation: () => Promise<T>) => Promise<T>;
 type Context = { generation: number; priority?: ObsRequestPriority; canSend?: () => boolean; dispatched?: () => void };
 type Job = { priority: ObsRequestPriority; generation: number; started: boolean; settled: boolean;
   timer: ReturnType<typeof setTimeout>; start: () => void; reject: (error: Error) => void };
 export type ObsRequestTiming = { label: string; priority: ObsRequestPriority; queuedAt: number;
   startedAt: number | null; finishedAt: number; queueMs: number; executionMs: number; failed: boolean };
-const priorities: ObsRequestPriority[] = ['urgent', 'control', 'background', 'preview'];
+const priorities: ObsRequestPriority[] = ['urgent', 'program', 'control', 'background', 'preview'];
+/** Requests in flight at once, and how many of them `control`, `background`
+ * and `preview` may hold together: the other two are always free for `urgent`
+ * and `program`. */
+export const OBS_REQUEST_SLOTS = 4;
+export const OBS_SHARED_REQUEST_SLOTS = 2;
+const shared = (priority: ObsRequestPriority): boolean => priority === 'control' || priority === 'background' || priority === 'preview';
 
 /** Deferred calls, bounded work and connection generations. A timeout never retries a write. */
 export class ObsRequestScheduler {
@@ -31,6 +41,9 @@ export class ObsRequestScheduler {
     for (const job of pending) job.reject(error);
   }
 
+  /** Runs `operation` at `priority`. Inside another operation it keeps the outer
+   * tier, except that `urgent` always wins: a screenshot's own sub-requests do not
+   * jump the queue, and a `program` operation's are never held back as background. */
   run<T>(priority: ObsRequestPriority, operation: () => Promise<T>): Promise<T> {
     const current = this.context.getStore();
     return this.context.run({ ...current, generation: current?.generation ?? this.generation,
@@ -103,14 +116,29 @@ export class ObsRequestScheduler {
     });
   }
 
+  /** One place decides what goes out next. `urgent` and `program` may use every
+   * slot; the shared tiers together hold at most two, so a cut never waits behind
+   * a screenshot. While a `program` request is queued or in flight no new
+   * `background` or `preview` request goes out; one already sent keeps waiting
+   * for its answer. At most one screenshot is in flight. A nested operation runs
+   * at its outer tier (see `run`), so a `program` operation never waits for a
+   * `preview` request of its own. */
   private pump(): void {
     if (this.failure) return;
-    while (this.active.size < 4) {
-      const background = [...this.active].filter(job => job.priority === 'background' || job.priority === 'preview').length;
-      const preview = [...this.active].some(job => job.priority === 'preview');
-      const priority = priorities.find(value => this.queue.some(job => job.priority === value)
-        && ((value !== 'background' && value !== 'preview') || background < 3)
-        && (value !== 'preview' || !preview));
+    while (this.active.size < OBS_REQUEST_SLOTS) {
+      const active = [...this.active];
+      const sharedActive = active.filter(job => shared(job.priority)).length;
+      const preview = active.some(job => job.priority === 'preview');
+      const program = active.some(job => job.priority === 'program') || this.queue.some(job => job.priority === 'program');
+      const admits = (value: ObsRequestPriority): boolean => {
+        switch (value) {
+          case 'urgent': case 'program': return true;
+          case 'control': return sharedActive < OBS_SHARED_REQUEST_SLOTS;
+          case 'background': return sharedActive < OBS_SHARED_REQUEST_SLOTS && !program;
+          case 'preview': return sharedActive < OBS_SHARED_REQUEST_SLOTS && !program && !preview;
+        }
+      };
+      const priority = priorities.find(value => admits(value) && this.queue.some(job => job.priority === value));
       if (!priority) break;
       const index = this.queue.findIndex(job => job.priority === priority);
       const job = this.queue.splice(index, 1)[0]!;
