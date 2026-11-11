@@ -103,6 +103,7 @@ docs/                           设计、实施、验收和服务器安装说明
 | OBS 请求谁先发 | `apps/desktop/src/main/link/obs-request-scheduler.ts` 的档位和 `pump`：切画面的请求单独一档，始终有位置；截图等画面发完再发 |
 | 自己恢复几次算到头 | `packages/core/src/output-recovery.ts` 一张表（2026-11-11）：声卡 1 分钟断流 5 次停这首歌，时间码一首歌失败 3 次这首歌不再发，等等。别处不写重试次数；每次恢复都标红、记日志 |
 | 节目现在在哪一步、这时能做什么 | 规则在 `packages/core/src/show-state.ts` 的 `showGate`，状态由主进程 `apps/desktop/src/main/link/show-state-service.ts` 算（2026-11-11），界面只照着显示（`stores/show-state-store.ts`）。新的“播放时不能做”都问它，不再各处自己判断“在不在播放” |
+| 按键谁来处理 | `apps/desktop/src/renderer/src/link/keys/`（2026-11-11）：窗口上只有 `key-router.ts` 一个按键监听，一次按键归谁由 `key-route.ts` 的 `routeKey` 按“输入框、弹窗、拖动、页面、全局”的顺序定，键位在 `keymap.ts` 一张表。组件自己用的键用 `ownKeys` 声明（`key-routing-scan.test.ts` 守着），不再往 window 或 document 上新加 keydown 监听；时间线、灯光快捷键和面板的 Esc 这几处旧监听还在，接完之前按 `key-router.ts` 开头写的方式让路 |
 
 同一次复盘定下的另外几条：
 

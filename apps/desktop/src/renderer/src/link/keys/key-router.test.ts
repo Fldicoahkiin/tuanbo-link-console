@@ -437,7 +437,7 @@ describe('窗口的播放键（原 playback-keys.test.ts）', () => {
     leave();
   });
 
-  it('窗口的播放键都经同一个处理：单曲快捷键播那首，空格按当前页面的播放按钮，Esc 停止，↑↓ 换歌，键不再往下传（0.5.9）', () => {
+  it('窗口的播放键都经同一个处理：单曲快捷键播那首，空格按当前页面的播放按钮，Esc 停止，↑↓ 换歌，键不再交给浏览器（0.5.9）', () => {
     const calls: string[] = [];
     const leave = registerPlayButton(() => calls.push('播放按钮'));
     const taken = [press('Digit3', { ctrlKey: true }), press('Space'), press('Escape'), press('ArrowUp'), press('ArrowDown')];
