@@ -264,6 +264,10 @@ export type LinkDesktopApi = {
   listMa2ExecutorPages(payload: import('@tb/schema').Ma2LayoutDirectoryRequest): Promise<import('@tb/schema').Ma2ExecutorPageDirectory>;
   readMa2ExecutorPage(payload: import('@tb/schema').Ma2ExecutorPageRequest): Promise<import('@tb/schema').Ma2ExecutorPage>;
   updateMa2Executor(payload: import('@tb/schema').Ma2ExecutorUpdateRequest): Promise<import('@tb/schema').Ma2ExecutorUpdateResult>;
+  /** Which channel Button area keys use on this console now, and why (M7). */
+  readMa2ExecutorChannel(payload: import('@tb/schema').Ma2LayoutDirectoryRequest): Promise<import('@tb/schema').Ma2ExecutorChannel>;
+  /** The operator's choice for Button area keys on this computer (M7); held keys are let go first. */
+  chooseMa2ExecutorChannel(payload: import('@tb/schema').Ma2ExecutorChannelChoiceRequest): Promise<void>;
   inputMa2Executor(payload: import('@tb/schema').Ma2ExecutorInput): Promise<void>;
   releaseMa2Executors(): Promise<void>;
   connectMa2Live(payload: import('@tb/schema').Ma2LiveConnect): Promise<import('@tb/schema').Ma2LiveSnapshot>;

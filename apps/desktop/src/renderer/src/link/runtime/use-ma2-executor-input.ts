@@ -2,8 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import type { Ma2ExecutorInput, Ma2ExecutorPage } from '@tb/schema';
 import { ma2ExecutorFunctions } from '@tb/core/link';
 import { currentMa2LayoutScope, ma2LayoutConnection } from '../stores/ma2-layout-store';
+import { syncMa2KeyChannel } from './use-ma2-executor-channel';
 
-type HeldKey = { sessionId: string; scope: string; address: string; released: boolean; timer?: ReturnType<typeof setInterval>; payload?: Ma2ExecutorInput; busy: boolean; releasePromise?: Promise<void> };
+type HeldKey = { sessionId: string; scope: string; address: string; released: boolean; timer?: ReturnType<typeof setInterval>; payload?: Ma2ExecutorInput; busy: boolean; releasePromise?: Promise<void>; deadlineMs: number };
+/** How long a key may take to reach the console (M7): the web remote 500 ms, the console plugin 1200 ms. */
+export const MA2_KEY_DEADLINE_MS = { webRemote: 500, plugin: 1200 } as const;
 type ExecutorInputController = {
   press: (item: Ma2ExecutorPage['items'][number], page: number, button: number) => void;
   release: (item: Ma2ExecutorPage['items'][number], page: number, button: number) => void;
@@ -16,7 +19,7 @@ export function createMa2ExecutorInput(onError: (message: string) => void): Exec
   const report = (cause: unknown): void => onError(cause instanceof Error ? cause.message : String(cause));
   const send = async (state: HeldKey, pressed: boolean): Promise<void> => {
     if (!state.payload) return;
-    await window.tbLink.inputMa2Executor({ ...state.payload, pressed, deadlineAt: Date.now() + 1200 });
+    await window.tbLink.inputMa2Executor({ ...state.payload, pressed, deadlineAt: Date.now() + state.deadlineMs });
   };
   const stop = (state: HeldKey): void => {
     state.released = true;
@@ -41,15 +44,19 @@ export function createMa2ExecutorInput(onError: (message: string) => void): Exec
     const code = item.buttons?.[button] ?? (button === 0 ? item.button : null);
     const momentary = code !== null && code !== undefined && ma2ExecutorFunctions[code]?.momentary === true;
     if (momentary && held.has(address)) return;
-    const state: HeldKey = { sessionId: crypto.randomUUID(), scope: currentMa2LayoutScope(), address, released: false, busy: true };
+    const state: HeldKey = { sessionId: crypto.randomUUID(), scope: currentMa2LayoutScope(), address, released: false, busy: true, deadlineMs: MA2_KEY_DEADLINE_MS.plugin };
     active.add(state);
     if (momentary) held.set(address, state);
-    const deadlineAt = Date.now() + 1200;
+    const pressedAt = Date.now();
     void (async () => {
       const connection = await ma2LayoutConnection();
+      // Fader area keys on the executor page stay on the plugin; the main process decides the Button area's line.
+      const channel = item.slot >= 101 && item.slot <= 190 ?(await window.tbLink.readMa2ExecutorChannel(connection)).kind : 'plugin';
+      state.deadlineMs = MA2_KEY_DEADLINE_MS[channel];
+      const deadlineAt = pressedAt + state.deadlineMs;
       if (state.released || state.scope !== currentMa2LayoutScope()) { stop(state); return; }
       if (Date.now() > deadlineAt) throw new Error('按键操作已过期，没有补发，请重新点一次');
-      state.payload = { ...connection, page, slot: item.slot, expectedItem: item, button, pressed: true, sessionId: state.sessionId, deadlineAt };
+      state.payload = { ...connection, page, slot: item.slot, expectedItem: item, button, pressed: true, sessionId: state.sessionId, deadlineAt, channel };
       await window.tbLink.inputMa2Executor(state.payload);
       if (!momentary || state.released || state.scope !== currentMa2LayoutScope()) { stop(state); return; }
       state.timer = setInterval(() => {
@@ -79,6 +86,8 @@ export function useMa2ExecutorInput(onError: (message: string) => void): Executo
   const error = useRef(onError); error.current = onError;
   const [controller] = useState(() => createMa2ExecutorInput(message => error.current(message)));
   const scope = currentMa2LayoutScope();
+  // The main process starts every run on the plugin; it learns this computer's choice before a key here is pressed.
+  useEffect(() => { void syncMa2KeyChannel().catch((cause: unknown) => error.current(cause instanceof Error ? cause.message : String(cause))); }, []);
   useEffect(() => {
     window.addEventListener('blur', controller.releaseAll);
     return () => { window.removeEventListener('blur', controller.releaseAll); controller.releaseAll(); };

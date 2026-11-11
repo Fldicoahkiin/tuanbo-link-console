@@ -2,15 +2,15 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { type Ma2LiveConnect, type Ma2LiveSnapshot } from '@tb/schema';
+import { type Ma2ExecutorInput, type Ma2LiveConnect, type Ma2LiveSnapshot } from '@tb/schema';
 import { Ma2LiveService } from './ma2-live-service';
-import type { Ma2LivePlayback } from './ma2-live-playback';
+import type { Ma2ButtonSnapshot, Ma2LivePlayback } from './ma2-live-playback';
 import { Ma2CommandQueue, type Ma2CommandPriority } from './ma2-command-queue';
 import { ma2CommandKind } from './ma2-telnet';
 
 const mock = vi.hoisted(() => ({ input: vi.fn(), close: vi.fn(), read: vi.fn(), connect: vi.fn(), pages: vi.fn() }));
 vi.mock('./ma2-executor-page', () => ({ listMa2ExecutorPages: mock.pages }));
-vi.mock('./ma2-live-playback', () => ({ Ma2LivePlayback: class {
+vi.mock('./ma2-live-playback', async importOriginal => ({ ...await importOriginal<typeof import('./ma2-live-playback')>(), Ma2LivePlayback: class {
   connected = true; input = mock.input; close = mock.close; read = mock.read; connect = mock.connect;
 } }));
 const source = { show: 'test', generation: 'one', version: '3.7.0.5' };
@@ -33,14 +33,49 @@ function fakeTelnet() {
   }, priority, ma2CommandKind(line)));
   return { telnet: { command }, console, sent, queue };
 }
-async function setup() {
+/** The channel's kind, and a part of the reason it gives. */
+function expectChannel(channel: { kind: string; reason: string }, kind: string, reason: string): void {
+  expect(channel.kind).toBe(kind);
+  expect(channel.reason).toContain(reason);
+}
+type ButtonItem = Ma2ButtonSnapshot['items'][number];
+const flashItem = (): ButtonItem => ({ slot: 101, width: 1, name: 'Flash', objectType: 'LT', objectNumber: '9000', running: false, cue: '', buttons: [{ id: 0, name: 'Flash', active: false }] });
+/** Web remote sessions of the Button area (M7); each login is a new one. `area` is what the console holds now. */
+function buttonSockets(area: (page: number, start: number) => ButtonItem[] | Error = (_page, start) => start === 101 ? [flashItem()] : []) {
+  const made: Array<{ connected: boolean; connect: ReturnType<typeof vi.fn>; readButtons: ReturnType<typeof vi.fn>; input: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }> = [];
+  const state: { area: typeof area; gate: Promise<void> | null } = { area, gate: null };
+  const socket = (): Ma2LivePlayback => {
+    const client = {
+      connected: true, connect: vi.fn(() => Promise.resolve()), input: vi.fn(),
+      readButtons: vi.fn(async (page: number, start: number): Promise<Ma2ButtonSnapshot> => {
+        // `gate`: the console answers only when the test lets it, as a slow Show check or login would.
+        if (state.gate) await state.gate;
+        const items = state.area(page, start);
+        if (items instanceof Error) { client.connected = false; throw items; }
+        return { page, start, readAt: Date.now(), items };
+      }),
+      close: vi.fn(() => { client.connected = false; })
+    };
+    made.push(client);
+    return client as unknown as Ma2LivePlayback;
+  };
+  return { made, socket, state };
+}
+/** `choice`: what the operator chose on this computer before connecting; the M7 cases below choose the web remote. */
+async function setup(buttons = buttonSockets(), choice: 'webRemote' | 'plugin' = 'webRemote') {
   const dir = await mkdtemp(join(tmpdir(), 'tblink-fader-test-'));
   const secrets = { saveCredential: vi.fn<(_key: string, value: string) => Promise<void>>().mockResolvedValue(undefined), loadCredential: vi.fn().mockResolvedValue('test-secret') };
   const line = fakeTelnet();
-  const service = new Ma2LiveService(join(dir, 'profiles.json'), secrets, () => line.telnet);
+  const service = new Ma2LiveService(join(dir, 'profiles.json'), secrets, () => line.telnet, buttons.socket);
+  await service.chooseKeys(choice);
   await service.connect(request);
-  return { service, secrets, ...line };
+  return { service, secrets, buttons, ...line };
 }
+const press = (change: Partial<Ma2ExecutorInput> = {}): Ma2ExecutorInput => ({
+  network: request.network, expectedSource: source, page: 1000, slot: 101, button: 0, pressed: true, channel: 'webRemote',
+  expectedItem: { slot: 101, width: 1, name: 'Flash', kind: 'sequence', sequence: 9000, button: 12302, buttons: [12302], reference: ['25', '1', '9000'] },
+  sessionId: '11111111-1111-4111-8111-111111111111', deadlineAt: Date.now() + 500, ...change
+});
 it('checks source, saves credentials separately and refuses empty, stale and unrelated targets', async () => {
   const { service, secrets } = await setup();
   try {
@@ -168,5 +203,167 @@ it('插件没在运行时说明原因并停下实时状态，不当成 Show 没�
     vi.setSystemTime(Date.now() + 1001);
     await expect(service.read(readRequest)).rejects.toThrow('插件没在运行');
     await expect(service.read(readRequest)).rejects.toThrow('已停止');
+  } finally { service.close(); }
+});
+
+it('连接网页遥控时读一次 Button 区：读回格号一致的执行器就走网页遥控，读不了走控台插件并写明原因；推杆连接不受影响', async () => {
+  const found = await setup(buttonSockets((_page, start) => start === 116 ? [{ ...flashItem(), slot: 117 }] : []));
+  try {
+    expectChannel(found.service.buttonChannel(readRequest), 'webRemote', '116–130');
+    expect(found.buttons.made[0]!.readButtons.mock.calls).toEqual([[1000, 101], [1000, 116]]);
+    expect(found.buttons.made[0]!.connect).toHaveBeenCalledWith('test', 'test-secret');
+  } finally { found.service.close(); }
+  const refused = await setup(buttonSockets(() => new Error('控台返回的 Button 区格号和请求的不一致（请求 1000.101–115，回来的是 1）')));
+  try {
+    expectChannel(refused.service.buttonChannel(readRequest), 'plugin', '不一致');
+    expect(refused.buttons.made[0]!.close).toHaveBeenCalled();
+    mock.close.mockClear();
+    await expect(refused.service.read(readRequest)).resolves.toMatchObject({ page: 1000 });
+    expect(mock.close).not.toHaveBeenCalled();
+  } finally { refused.service.close(); }
+  const empty = await setup(buttonSockets(() => []));
+  try {
+    expectChannel(empty.service.buttonChannel(readRequest), 'plugin', '没有执行器');
+    expect(empty.buttons.made[0]!.readButtons).toHaveBeenCalledTimes(6);
+  } finally { empty.service.close(); }
+});
+it('网页遥控按键：核对这一格再发，松开发松开；续按只续时间，停了 1.5 秒自己松开', async () => {
+  const { service, buttons } = await setup();
+  const client = buttons.made[0]!;
+  try {
+    await service.inputButton(press());
+    expect(client.input).toHaveBeenLastCalledWith(1000, 101, { kind: 'button', id: 0, pressed: true });
+    await service.inputButton(press());
+    expect(client.input).toHaveBeenCalledTimes(1);
+    await service.inputButton(press({ pressed: false }));
+    expect(client.input).toHaveBeenLastCalledWith(1000, 101, { kind: 'button', id: 0, pressed: false });
+    await service.inputButton(press({ pressed: false }));
+    expect(client.input).toHaveBeenCalledTimes(2);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    await service.inputButton(press({ sessionId: '22222222-2222-4222-8222-222222222222' }));
+    await vi.advanceTimersByTimeAsync(1501);
+    expect(client.input).toHaveBeenLastCalledWith(1000, 101, { kind: 'button', id: 0, pressed: false });
+    expect(client.input).toHaveBeenCalledTimes(4);
+  } finally { service.close(); }
+});
+it('网页遥控按键不发的情况：这一格变了、过了期限、页面以为走插件；错误记下来，通道不变', async () => {
+  const { service, buttons } = await setup();
+  const client = buttons.made[0]!;
+  try {
+    buttons.state.area = () => [{ ...flashItem(), name: 'Other' }];
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.now() + 1001);
+    await expect(service.inputButton(press())).rejects.toThrow('控台上这一格叫「Other」，页面上是「Flash」，按键没有发送');
+    buttons.state.area = () => [{ ...flashItem(), objectNumber: '9001' }];
+    vi.setSystemTime(Date.now() + 1001);
+    await expect(service.inputButton(press())).rejects.toThrow('序列 9001');
+    buttons.state.area = () => [];
+    vi.setSystemTime(Date.now() + 1001);
+    await expect(service.inputButton(press())).rejects.toThrow('这一格没有执行器');
+    await expect(service.inputButton(press({ deadlineAt: Date.now() - 1 }))).rejects.toThrow('过期');
+    await expect(service.inputButton(press({ channel: 'plugin' }))).rejects.toThrow('通道变了');
+    expect(client.input).not.toHaveBeenCalled();
+    expectChannel(service.buttonChannel(readRequest), 'webRemote', '通道不变');
+  } finally { service.close(); }
+});
+it('推杆页用存过的用户重新登录时不再读 Button 区，已选的通道不变；按键时网页遥控按键线路自己登录', async () => {
+  const { service, buttons } = await setup();
+  try {
+    service.close();
+    expect(service.buttonChannel(readRequest).kind).toBe('webRemote');
+    await service.read(readRequest);
+    expect(buttons.made).toHaveLength(2);
+    expect(buttons.made[1]!.readButtons).not.toHaveBeenCalled();
+    buttons.made[1]!.connected = false;
+    await service.inputButton(press());
+    expect(buttons.made).toHaveLength(3);
+    expect(buttons.made[2]!.input).toHaveBeenCalledWith(1000, 101, { kind: 'button', id: 0, pressed: true });
+    // Only the operator's "连接" reads the Button area again.
+    buttons.state.area = () => new Error('实时推杆读取超时，请重新连接');
+    await service.connect(request);
+    expectChannel(service.buttonChannel(readRequest), 'plugin', '读取超时');
+  } finally { service.close(); }
+});
+
+it('选的是控台插件时不开 Button 会话、不读 Button 区；连着时改选网页遥控当场读一次，读得回才走网页遥控', async () => {
+  const { service, buttons } = await setup(buttonSockets(), 'plugin');
+  try {
+    expect(buttons.made).toHaveLength(0);
+    expect(service.buttonChannel(readRequest)).toMatchObject({ kind: 'plugin', choice: 'plugin', webRemote: { ready: false, reason: '选了网页遥控才会去读 Button 区' } });
+    await expect(service.inputButton(press())).rejects.toThrow('通道变了');
+    expect(await service.chooseKeys('webRemote')).toBe(true);
+    // Read while choosing: the answer is known when the choice returns.
+    expect(buttons.made).toHaveLength(1);
+    expect(buttons.made[0]!.connect).toHaveBeenCalledWith('test', 'test-secret');
+    expect(buttons.made[0]!.readButtons).toHaveBeenCalledWith(1000, 101);
+    expect(service.keyChannel(readRequest, 101)).toBe('webRemote');
+    await service.inputButton(press({ sessionId: '22222222-2222-4222-8222-222222222222' }));
+    expect(buttons.made[0]!.input).toHaveBeenCalledWith(1000, 101, { kind: 'button', id: 0, pressed: true });
+    // Back to the plugin: the held key is let go first, then the Button session is closed.
+    expect(await service.chooseKeys('plugin')).toBe(true);
+    expect(buttons.made[0]!.input).toHaveBeenLastCalledWith(1000, 101, { kind: 'button', id: 0, pressed: false });
+    expect(buttons.made[0]!.close).toHaveBeenCalled();
+    expect(service.keyChannel(readRequest, 101)).toBe('plugin');
+    // Choosing the web remote again reads the console again; what it says now decides.
+    buttons.state.area = () => new Error('控台返回的 Button 区格号和请求的不一致（请求 1000.101–115，回来的是 1）');
+    expect(await service.chooseKeys('webRemote')).toBe(true);
+    expect(buttons.made).toHaveLength(2);
+    expect(buttons.made[1]!.readButtons).toHaveBeenCalledWith(1000, 101);
+    expect(service.buttonChannel(readRequest)).toMatchObject({ kind: 'plugin', choice: 'webRemote', webRemote: { ready: false } });
+    expect(service.buttonChannel(readRequest).reason).toContain('不一致');
+    // What was read is not kept across a choice of the plugin: chosen again while not connected, it says so.
+    buttons.state.area = () => [flashItem()];
+    await service.chooseKeys('plugin'); service.close();
+    expect(await service.chooseKeys('webRemote')).toBe(true);
+    expect(buttons.made).toHaveLength(2);
+    expect(service.buttonChannel(readRequest).reason).toContain('网页遥控没连上');
+  } finally { service.close(); }
+});
+it('没连着推杆页时改选网页遥控不读，标签写没连上；之后连接时读', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tblink-key-choice-test-'));
+  const secrets = { saveCredential: vi.fn<(_key: string, value: string) => Promise<void>>().mockResolvedValue(undefined), loadCredential: vi.fn().mockResolvedValue('test-secret') };
+  const buttons = buttonSockets();
+  const service = new Ma2LiveService(join(dir, 'profiles.json'), secrets, () => fakeTelnet().telnet, buttons.socket);
+  try {
+    expect(await service.chooseKeys('webRemote')).toBe(true);
+    expect(buttons.made).toHaveLength(0);
+    expect(service.buttonChannel(readRequest)).toMatchObject({ kind: 'plugin', choice: 'webRemote', webRemote: { ready: false } });
+    expect(service.buttonChannel(readRequest).reason).toContain('网页遥控没连上');
+    await service.connect(request);
+    expect(buttons.made).toHaveLength(1);
+    expect(buttons.made[0]!.readButtons).toHaveBeenCalledWith(1000, 101);
+    expect(service.keyChannel(readRequest, 101)).toBe('webRemote');
+  } finally { service.close(); }
+});
+it('轻点时松开比按下先到：这次按下取消，控台一条都收不到，也不当成错误', async () => {
+  const { service, buttons } = await setup();
+  const client = buttons.made[0]!;
+  try {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.now() + 1001);
+    let answer: () => void = () => { throw new Error('read has not started'); };
+    buttons.state.gate = new Promise<void>(resolve => { answer = resolve; });
+    const pressing = service.inputButton(press());
+    const refused = expect(pressing).rejects.toThrow('按键已松开，已取消排队的按下');
+    await service.inputButton(press({ pressed: false }));
+    answer(); await refused;
+    expect(client.input).not.toHaveBeenCalled();
+    // The released session is over: a late renew of it is not a new press either.
+    buttons.state.gate = null;
+    await expect(service.inputButton(press())).rejects.toThrow('已取消排队的按下');
+    expect(client.input).not.toHaveBeenCalled();
+    expect(service.buttonChannel(readRequest).reason).not.toContain('出错');
+  } finally { service.close(); }
+});
+it('窗口失焦、改执行器之前（releaseButtons）在途的按下也不发', async () => {
+  const { service, buttons } = await setup();
+  const client = buttons.made[0]!;
+  try {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.now() + 1001);
+    let answer: () => void = () => { throw new Error('read has not started'); };
+    buttons.state.gate = new Promise<void>(resolve => { answer = resolve; });
+    const pressing = service.inputButton(press());
+    const refused = expect(pressing).rejects.toThrow('已取消排队的按下');
+    service.releaseButtons();
+    answer(); await refused;
+    expect(client.input).not.toHaveBeenCalled();
   } finally { service.close(); }
 });

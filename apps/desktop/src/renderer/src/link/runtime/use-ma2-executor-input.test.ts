@@ -1,14 +1,18 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { Ma2ExecutorInput, Ma2ExecutorPage } from '@tb/schema';
+import type { Ma2ExecutorChannel, Ma2ExecutorInput, Ma2ExecutorPage } from '@tb/schema';
 import { createMa2ExecutorInput } from './use-ma2-executor-input';
 import { currentMa2LayoutScope, ma2LayoutConnection } from '../stores/ma2-layout-store';
 
 vi.mock('../stores/ma2-layout-store', () => ({ currentMa2LayoutScope: vi.fn(), ma2LayoutConnection: vi.fn() }));
+vi.mock('./use-ma2-executor-channel', () => ({ syncMa2KeyChannel: () => Promise.resolve() }));
 const connection = { network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, expectedSource: { show: 'Test', generation: 'session', version: '3.7.0.5' } };
 const flash: Ma2ExecutorPage['items'][number] = { slot: 101, width: 1, name: '面光', kind: 'sequence', sequence: 9000, button: 12302, buttons: [12302], reference: ['25', '1', '9000'] };
 const input = vi.fn<(request: Ma2ExecutorInput) => Promise<void>>();
 const releaseAll = vi.fn<() => Promise<void>>();
+const channel = vi.fn<(request: typeof connection) => Promise<Ma2ExecutorChannel>>();
 const error = vi.fn<(message: string) => void>();
+const plugin: Ma2ExecutorChannel = { kind: 'plugin', choice: 'plugin', reason: '选的是控台插件', webRemote: { ready: false, reason: '网页遥控没连上' } };
+const webRemote: Ma2ExecutorChannel = { kind: 'webRemote', choice: 'webRemote', reason: '网页遥控读回了 Button 区', webRemote: { ready: true, reason: '网页遥控读回了 Button 区' } };
 function deferred<T>() {
   let resolve: (value: T) => void = () => { throw new Error('Uninitialized promise'); };
   let reject: (reason: Error) => void = () => { throw new Error('Uninitialized promise'); };
@@ -21,7 +25,8 @@ beforeEach(() => {
   vi.mocked(currentMa2LayoutScope).mockReturnValue('scope-a');
   vi.mocked(ma2LayoutConnection).mockResolvedValue(connection);
   input.mockResolvedValue(undefined); releaseAll.mockResolvedValue(undefined);
-  vi.stubGlobal('window', { tbLink: { inputMa2Executor: input, releaseMa2Executors: releaseAll } });
+  channel.mockResolvedValue(plugin);
+  vi.stubGlobal('window', { tbLink: { inputMa2Executor: input, releaseMa2Executors: releaseAll, readMa2ExecutorChannel: channel } });
 });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -121,6 +126,32 @@ it('等待连接超过点击期限时不补发', async () => {
   const pending = deferred<typeof connection>(); vi.mocked(ma2LayoutConnection).mockReturnValueOnce(pending.promise);
   const controller = createMa2ExecutorInput(error);
   controller.press(flash, 1000, 0); await vi.advanceTimersByTimeAsync(1300);
+  pending.resolve(connection); await flush();
+  expect(input).not.toHaveBeenCalled(); expect(error).toHaveBeenCalledWith(expect.stringContaining('已过期'));
+});
+it('Button 区按键走主进程选的通道：网页遥控 500 ms 期限，控台插件 1200 ms；推杆区按键不问，走插件', async () => {
+  const controller = createMa2ExecutorInput(error);
+  controller.press({ ...flash, name: 'Go', button: 12299, buttons: [12299] }, 1000, 0); await flush();
+  expect(input.mock.calls[0]![0]).toMatchObject({ channel: 'plugin' });
+  expect(input.mock.calls[0]![0].deadlineAt - Date.now()).toBe(1200);
+  channel.mockResolvedValue(webRemote);
+  controller.press(flash, 1000, 0); await flush();
+  const web = input.mock.calls.find(([request]) => request.pressed && request.channel === 'webRemote')![0];
+  expect(web.deadlineAt - Date.now()).toBe(500);
+  await vi.advanceTimersByTimeAsync(500);
+  const renew = input.mock.calls.filter(([request]) => request.sessionId === web.sessionId).at(-1)![0];
+  expect(renew).toMatchObject({ channel: 'webRemote', pressed: true });
+  controller.releaseAll(); await flush();
+  channel.mockClear(); input.mockClear();
+  controller.press({ ...flash, slot: 1, name: 'Go', button: 12299, buttons: [12299] }, 1000, 0); await flush();
+  expect(channel).not.toHaveBeenCalled();
+  expect(input.mock.calls[0]![0]).toMatchObject({ channel: 'plugin', slot: 1 });
+});
+it('网页遥控期限内连接没回来时不补发', async () => {
+  channel.mockResolvedValue(webRemote);
+  const pending = deferred<typeof connection>(); vi.mocked(ma2LayoutConnection).mockReturnValueOnce(pending.promise);
+  const controller = createMa2ExecutorInput(error);
+  controller.press(flash, 1000, 0); await vi.advanceTimersByTimeAsync(600);
   pending.resolve(connection); await flush();
   expect(input).not.toHaveBeenCalled(); expect(error).toHaveBeenCalledWith(expect.stringContaining('已过期'));
 });

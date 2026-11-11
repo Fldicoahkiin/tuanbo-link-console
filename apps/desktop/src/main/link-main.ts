@@ -1,6 +1,6 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
 import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
-import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
+import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema, ma2ExecutorChannelChoiceRequestSchema } from '@tb/schema';
 import { ma2NetworkTargetSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
 import { firstTimeWarning, holdForShow, materialSceneTargets, projectFileReferences, showGate, toUserErrorReason, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
@@ -1219,9 +1219,15 @@ function registerIpc(
   });
   handle('link:ma2-live-connect', async (_event, value: unknown) => {
     const request = ma2LiveConnectSchema.parse(value); knownSecrets.add(request.password);
-    try { return await ma2Network.live().connect(request); }
-    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `连接实时推杆失败：${String(error)}`, result: 'failed' }); throw error; }
+    try {
+      const snapshot = await ma2Network.live().connect(request);
+      const channel = ma2Network.live().buttonChannel(request);
+      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `执行器 Button 区按键走${channel.kind === 'webRemote' ? '网页遥控' : '控台插件'}（这台电脑选的是${channel.choice === 'webRemote' ? '网页遥控' : '控台插件'}）：${channel.reason === channel.webRemote.reason ? channel.reason : `${channel.reason}；${channel.webRemote.reason}`}`, result: 'succeeded' });
+      return snapshot;
+    } catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `连接实时推杆失败：${String(error)}`, result: 'failed' }); throw error; }
   });
+  // Reads only what was chosen when the web remote was connected; the page asks every few seconds, so it is not logged.
+  handle('link:ma2-executor-channel', (_event, value: unknown) => ma2Network.executorChannel(ma2LayoutDirectoryRequestSchema.parse(value)));
   handle('link:ma2-live-read', async (_event, value: unknown) => {
     try { return await ma2Network.live().read(ma2LiveRequestSchema.parse(value)); }
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `实时推杆读取失败：${String(error)}`, result: 'failed' }); throw error; }
@@ -1248,8 +1254,18 @@ function registerIpc(
       return result;
     } catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `执行器修改需要确认：${String(error)}`, result: 'failed' }); throw error; }
   });
+  handle('link:ma2-executor-channel-choice', async (_event, value: unknown) => {
+    const { choice } = ma2ExecutorChannelChoiceRequestSchema.parse(value);
+    try {
+      if (await ma2Network.chooseExecutorChannel(choice)) await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `执行器 Button 区按键改选${choice === 'webRemote' ? '网页遥控' : '控台插件'}，按着的键已先松开`, result: 'succeeded' });
+    } catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `执行器按键通道没有改：${String(error)}`, result: 'failed' }); throw error; }
+  });
   handle('link:ma2-executor-input', async (_event, value: unknown) => {
-    try { await ma2Network.inputExecutor(ma2ExecutorInputSchema.parse(value)); }
+    try {
+      const press = await ma2Network.inputExecutor(ma2ExecutorInputSchema.parse(value));
+      // While the web remote for Button keys is on trial, every press it sent is logged for the on-site check; renews are not.
+      if (press) await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `网页遥控按下执行器 ${press.page}.${press.slot} 第 ${press.button + 1} 个键：网页遥控上叫「${press.name}」，页面上是 ${press.function}`, result: 'succeeded' });
+    }
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `执行器按键未完成：${String(error)}`, result: 'failed' }); throw error; }
   });
   handle('link:ma2-executor-release', async () => {

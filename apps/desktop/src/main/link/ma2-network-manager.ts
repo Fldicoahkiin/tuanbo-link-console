@@ -129,16 +129,39 @@ export class Ma2NetworkManager {
   private executorMutations: Ma2ExecutorMutationService | null = null;
   private executorInput = new Ma2ExecutorInputService();
   private executorMutationBusy = false;
-  async inputExecutor(request: import('@tb/schema').Ma2ExecutorInput): Promise<void> {
+  /** Which channel Button area keys use on this console now, and why (`ma2-executor-channel.ts`). Reads nothing. */
+  executorChannel(request: import('@tb/schema').Ma2LayoutDirectoryRequest): import('@tb/schema').Ma2ExecutorChannel {
+    this.get(request.network);
+    return this.live().buttonChannel(request);
+  }
+  /** The operator's choice for Button area keys on this computer. A change lets go of every key held first. */
+  async chooseExecutorChannel(choice: import('@tb/schema').Ma2ExecutorChannel['choice']): Promise<boolean> {
+    if (this.live().keyChoice() === choice) return false;
+    this.live().releaseButtons();
+    await this.executorInput.release();
+    return await this.live().chooseKeys(choice);
+  }
+  /** An executor key on the channel the press was made for; a press made for the other channel is not sent. A press
+   * sent on the web remote comes back for the log. */
+  async inputExecutor(request: import('@tb/schema').Ma2ExecutorInput): Promise<import('./ma2-live-service').Ma2ButtonPress | null> {
     this.get(request.network);
     const connection = this.connection; const generation = this.generation;
     if (!connection) throw new Error('请先连接控台');
+    if (request.channel === 'webRemote') {
+      if (request.pressed && this.executorMutationBusy) throw new Error('正在更新执行器位置，请等控台确认后再按');
+      return this.live().inputButton(request);
+    }
+    if (request.pressed && this.live().keyChannel(request, request.slot) !== 'plugin') throw new Error('按键通道变了（现在走网页遥控），这次没有发送，请再按一次');
     await this.executorInput.input(connection, request, () => {
       if (this.generation !== generation || connection.state !== 'connected') throw new Error('控台连接变了，按键没有发送');
       if (request.pressed && this.executorMutationBusy) throw new Error('正在更新执行器位置，请等控台确认后再按');
     });
+    return null;
   }
-  async releaseExecutors(): Promise<void> { await this.executorInput.release(); }
+  async releaseExecutors(): Promise<void> {
+    this.liveService?.releaseButtons();
+    await this.executorInput.release();
+  }
   async updateExecutor(request: import('@tb/schema').Ma2ExecutorUpdateRequest): Promise<import('@tb/schema').Ma2ExecutorUpdateResult> {
     const { bridge } = this.get(request.network);
     const connection = this.connection;
@@ -146,6 +169,7 @@ export class Ma2NetworkManager {
     if (this.executorMutationBusy) throw new Error('正在确认上一个执行器修改，请稍候');
     this.executorMutationBusy = true;
     try {
+      this.liveService?.releaseButtons();
       await this.executorInput.release();
       if (this.connection !== connection || connection.state !== 'connected') throw new Error('控台连接变了，没有修改执行器');
       this.executorMutations ??= new Ma2ExecutorMutationService(`${this.path}.executor-backups`, this.show);

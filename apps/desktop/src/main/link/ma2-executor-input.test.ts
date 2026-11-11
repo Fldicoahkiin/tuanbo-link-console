@@ -6,7 +6,7 @@ const request = (): Ma2ExecutorInput => ({
   network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' },
   expectedSource: { show: 'TEST', generation: '1', version: '3.7.0.5' }, page: 1000, slot: 101,
   expectedItem: { slot: 101, width: 1, name: 'Flash', sequence: 9000, kind: 'sequence', button: 12302, buttons: [12302, 0, 0, 0], reference: ['25', '1', '9000'] },
-  button: 0, pressed: true, sessionId: '11111111-1111-4111-8111-111111111111', deadlineAt: Date.now() + 3000
+  button: 0, pressed: true, sessionId: '11111111-1111-4111-8111-111111111111', deadlineAt: Date.now() + 3000, channel: 'plugin'
 });
 it('sends the exact native assigned function and releases on the stop queue', async () => {
   const connection = { command: vi.fn().mockResolvedValueOnce('SENT').mockResolvedValueOnce('HELD').mockResolvedValueOnce('RELEASED') };

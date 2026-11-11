@@ -1,0 +1,11 @@
+/*
+ * The line Button area keys go on (M7), in the band header of the executor page: the label opens the choice between
+ * 控台插件 and 网页遥控, with the reason as its tooltip. A choice that is not what is used, or a channel that cannot
+ * be confirmed, is shown as a warning.
+ */
+@layer pages {
+  .ma2-executor-band-channel { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.5 var(--font-ui); }
+  button.ma2-executor-band-channel { padding: 0 var(--space-1); border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
+  button.ma2-executor-band-channel:hover, button.ma2-executor-band-channel[aria-expanded="true"] { color: var(--color-text); }
+  .ma2-executor-band-channel[data-tone="warning"] { color: var(--color-warning); }
+}

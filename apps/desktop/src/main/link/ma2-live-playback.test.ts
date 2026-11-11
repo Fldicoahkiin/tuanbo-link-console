@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { expect, it, vi } from 'vitest';
-import { Ma2LivePlayback, parseMa2ExecutorObservation, parseMa2LivePlayback } from './ma2-live-playback';
+import { Ma2LivePlayback, parseMa2ExecutorObservation, parseMa2LiveButtons, parseMa2LivePlayback } from './ma2-live-playback';
 
 const native: unknown = JSON.parse(await readFile(new URL('./fixtures/ma2-live-faders-3.7.json', import.meta.url), 'utf8'));
 it('parses actual onPC values and functions without inventing empty fader levels', () => {
@@ -15,6 +15,8 @@ class Socket extends EventTarget {
   readyState = WebSocket.OPEN;
   sent: Array<Record<string, unknown>> = [];
   readResponse = true;
+  /** What a `playbacks` request is answered with; the fader fixture by default. */
+  answer: (request: Record<string, unknown>) => unknown = () => native;
   closed = false;
   message(value: unknown): void { this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(value) })); }
   send(raw: string): void {
@@ -22,7 +24,7 @@ class Socket extends EventTarget {
     queueMicrotask(() => {
       if (!data.requestType) this.message({ session: 7 });
       else if (data.requestType === 'login') this.message({ session: 7, responseType: 'login', result: true });
-      else if (data.requestType === 'playbacks' && this.readResponse) this.message(native);
+      else if (data.requestType === 'playbacks' && this.readResponse) this.message(this.answer(data));
     });
   }
   close(): void { this.closed = true; }
@@ -70,4 +72,33 @@ it('读回单个执行器：在不在跑、当前 Cue；返回的格号和请求
   await expect(client.observe(1000, 101)).rejects.toThrow('格号');
   expect(socket.sent.at(-1)).toMatchObject({ startIndex: [100], itemsType: [3], view: 3 });
   expect(socket.closed).toBe(true);
+});
+
+type NativeGroup = { itemsType: number; items: Array<Array<Record<string, unknown>>> };
+/** The fixture's first executor answered as a button executor at `slot`, the way the web remote groups them. */
+function buttonAnswer(page: number, slot: number, itemsType = 3): unknown {
+  const fader = (native as { itemGroups: NativeGroup[] }).itemGroups[0]!.items[0]![0]!;
+  const blocks = fader.executorBlocks as Array<Record<string, unknown>>;
+  const item = { ...fader, iExec: slot - 1, executorBlocks: [{ button1: blocks[0]!.button1 }] };
+  return { responseType: 'playbacks', responseSubType: 3, iPage: page, itemGroups: [{ itemsType, cntPages: 10000, items: [[item]] }] };
+}
+it('读 Button 区（M7）：按按钮执行器的方式要 15 格，格号和请求的一致才收下；格号不对、类型不对、页不对都算读不了', async () => {
+  expect(parseMa2LiveButtons(buttonAnswer(1000, 117), 1000, 116)).toMatchObject({ page: 1000, start: 116, items: [{ slot: 117, name: 'TBLINK_40_STEP_ACCEPTANCE', objectNumber: '9986', buttons: [{ id: 0, name: 'Go' }] }] });
+  expect(parseMa2LiveButtons({ responseType: 'playbacks', iPage: 1000, itemGroups: [{ itemsType: 3, items: [] }] }, 1000, 101).items).toEqual([]);
+  // The fader fixture answers slots 1–15: what 3.3.4.3 might send for a Button area it does not know is refused.
+  expect(() => parseMa2LiveButtons(buttonAnswer(1000, 1), 1000, 101)).toThrow('Button 区格号和请求的不一致（请求 1000.101–115，回来的是 1）');
+  expect(() => parseMa2LiveButtons(buttonAnswer(1000, 131), 1000, 101)).toThrow('不一致');
+  expect(() => parseMa2LiveButtons(buttonAnswer(1000, 101, 2), 1000, 101)).toThrow('不是按钮执行器');
+  expect(() => parseMa2LiveButtons(buttonAnswer(999, 101), 1000, 101)).toThrow('其他页面');
+  expect(() => parseMa2LiveButtons({ ...buttonAnswer(1000, 101) as object, accessDenied: true }, 1000, 101)).toThrow('没有执行器播放权限');
+  const { client, socket } = setup();
+  socket.answer = request => buttonAnswer(1000, (request.startIndex as number[])[0]! + 1);
+  await client.connect('test', 'test-secret');
+  expect(await client.readButtons(1000, 146)).toMatchObject({ start: 146, items: [{ slot: 146 }] });
+  expect(socket.sent.at(-1)).toMatchObject({ requestType: 'playbacks', startIndex: [145], itemsCount: [15], pageIndex: 999, itemsType: [3], view: 3 });
+  await expect(client.readButtons(1000, 102)).rejects.toThrow('范围无效');
+  socket.answer = () => buttonAnswer(1000, 1);
+  await expect(client.readButtons(1000, 101)).rejects.toThrow('不一致');
+  // A Button area answer that does not fit closes this session only; nothing is sent on it afterwards.
+  expect(socket.closed).toBe(true); expect(client.connected).toBe(false);
 });

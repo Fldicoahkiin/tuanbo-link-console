@@ -9,6 +9,8 @@ import { Ma2MaterialMenu } from './Ma2MaterialMenu';
 import { Ma2ConsoleName } from './Ma2ConsoleName';
 import { Button, Dialog, Field, Menu, MenuItem, MenuSeparator, Switch, TextInput } from '../ui';
 import { useKeyOverlay } from '../keys/useKeyCommands';
+import { useMa2ExecutorChannel } from '../runtime/use-ma2-executor-channel';
+import { Ma2KeyChannelMenu } from './Ma2KeyChannelMenu';
 import '../ma2-executor.css';
 
 const bands = [
@@ -56,6 +58,7 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
     directoryNextRead.current = 0;
   }, [scope]);
   useMa2ExecutorPages(scope, pageKey, live, selected, setNotice, directoryNextRead);
+  const keyChannel = useMa2ExecutorChannel(scope, !selected);
   const navigate = (band: Ma2ExecutorBand, page: number): void => {
     try { selectMa2ExecutorBandPage(band, page); setNotice(''); setPicker(null); onNavigate(); }
     catch (cause) { report(cause); }
@@ -108,6 +111,7 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
               {(band.id === 'fader' ? [1, 16, 31, 46, 61, 76, 91] : [101, 191]).map(value => <option key={value} value={value}>{value}–{band.id === 'fader' ? Math.min(100, value + 14) : value === 101 ? 190 : 240}</option>)}
             </select> : <span className="ma2-executor-band-caption">({start}…{end})</span>}
             <span className="ma2-executor-band-name" title={snapshot?.name}>{snapshot?.name}</span>
+            {band.id !== 'fader' && keyChannel.state ? <Ma2KeyChannelMenu state={keyChannel.state} start={start} onChoose={keyChannel.choose} onError={setNotice}/> : null}
             <button aria-label={`${band.input}目录`} title="选择页面" onClick={() => setPicker(picker === band.id ? null : band.id)}><List/></button>
             {error ? <button className="ma2-executor-read-state" title={error} onClick={refresh}>等待控台确认</button> : !snapshot ? <small role="status">读取中…</small> : null}
           </header>

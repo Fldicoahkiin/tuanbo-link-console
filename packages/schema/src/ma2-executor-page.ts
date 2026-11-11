@@ -41,14 +41,29 @@ export const ma2ExecutorUpdateResultSchema = z.object({
   pages: z.array(ma2ExecutorPageSchema).min(1).max(2),
   backupFile: z.string().min(1).max(4096)
 }).strict();
+/** The line an executor key goes on (M7): the console's web remote, or the console plugin over Telnet. Chosen in the
+ * main process (`ma2-executor-channel.ts`) from what the console answered; a press says which one it was sent for. */
+export const ma2ExecutorChannelKindSchema = z.enum(['webRemote', 'plugin']);
+/** The channel Button area keys (101–190) use on this console now and why (`reason`), what the operator chose on this
+ * computer (`choice`, the plugin unless chosen), and whether the web remote could take them (`webRemote`). */
+export const ma2ExecutorChannelSchema = z.object({
+  kind: ma2ExecutorChannelKindSchema, choice: ma2ExecutorChannelKindSchema, reason: z.string().min(1).max(1024),
+  webRemote: z.object({ ready: z.boolean(), reason: z.string().min(1).max(1024) }).strict()
+}).strict();
+export const ma2ExecutorChannelChoiceRequestSchema = z.object({ choice: ma2ExecutorChannelKindSchema }).strict();
 export const ma2ExecutorInputSchema = ma2LayoutDirectoryRequestSchema.extend({
   page: z.number().int().min(1).max(9999), slot: z.number().int().min(1).max(240),
   expectedItem: ma2ExecutorPageItemSchema, button: z.number().int().min(0).max(2),
-  pressed: z.boolean(), sessionId: z.string().uuid(), deadlineAt: z.number().int().positive()
-}).strict().refine(request => request.slot === request.expectedItem.slot, '执行器来源格子不一致');
+  pressed: z.boolean(), sessionId: z.string().uuid(), deadlineAt: z.number().int().positive(),
+  channel: ma2ExecutorChannelKindSchema
+}).strict().refine(request => request.slot === request.expectedItem.slot, '执行器来源格子不一致')
+  .refine(request => request.channel === 'plugin' || request.slot >= 101 && request.slot <= 190, '只有 Button 区（101–190）的按键走网页遥控');
 export type Ma2ExecutorPageRequest = z.infer<typeof ma2ExecutorPageRequestSchema>;
 export type Ma2ExecutorPageDirectory = z.infer<typeof ma2ExecutorPageDirectorySchema>;
 export type Ma2ExecutorPage = z.infer<typeof ma2ExecutorPageSchema>;
 export type Ma2ExecutorUpdateRequest = z.infer<typeof ma2ExecutorUpdateRequestSchema>;
 export type Ma2ExecutorUpdateResult = z.infer<typeof ma2ExecutorUpdateResultSchema>;
 export type Ma2ExecutorInput = z.infer<typeof ma2ExecutorInputSchema>;
+export type Ma2ExecutorChannelKind = z.infer<typeof ma2ExecutorChannelKindSchema>;
+export type Ma2ExecutorChannel = z.infer<typeof ma2ExecutorChannelSchema>;
+export type Ma2ExecutorChannelChoiceRequest = z.infer<typeof ma2ExecutorChannelChoiceRequestSchema>;

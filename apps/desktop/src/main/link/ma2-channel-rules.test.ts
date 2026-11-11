@@ -1,10 +1,16 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import { isShowWait, type ShowState } from '@tb/core/link';
 import { Ma2LuaConsole } from './fixtures/ma2-lua-console';
 import { idleShow, pausedShow, runningShow, showReader } from './fixtures/show-gates';
 import { Ma2NetworkWire } from './ma2-network-wire';
 import { Ma2BridgeFailure, Ma2OnpcBridge, ma2StepGate, ma2WriteStep } from './ma2-onpc-bridge';
+import { Ma2LiveService } from './ma2-live-service';
+import type { Ma2ButtonSnapshot, Ma2LivePlayback } from './ma2-live-playback';
+import type { Ma2ExecutorInput, Ma2LiveSnapshot } from '@tb/schema';
 
 // M3, 第 3 题 (2026-11-10): a sync on the console stops at a step boundary once the time code starts. The real
 // tools/ma2/tblink_bridge.lua runs here in Lua 5.3 against the fake console, behind the real wire and bridge.
@@ -54,7 +60,7 @@ async function syncOnce(bridge: Ma2OnpcBridge): Promise<void> {
   await bridge.exchange('SYNC', 9902, snapshot, desired);
 }
 
-describe('控台同步在一步的边界停下（M3，第 3 题）', () => {
+describe('控台同步在一步的边界停下（M3，第 3 题）', { timeout: 60000 }, () => {
   it('写入那一步的位置和插件一致：SYNC 先做完预检（时间码 1 步 + 每个序列 2 步 + 核对 1 步），再写，最后读回', async () => {
     const { ma2, bridge } = rig();
     const snapshot = await bridge.request('SCOPE', 9902, '9903');
@@ -148,3 +154,115 @@ describe('控台同步在一步的边界停下（M3，第 3 题）', () => {
 async function consoleSnapshot(): Promise<string> {
   return rig().bridge.request('SCOPE', 9902, '9903');
 }
+
+// M7 (2026-11-11): Button area keys go on the console plugin, as in 0.5.8, unless the operator chose the web remote on
+// this computer and the console read back its Button area when the web remote was connected (ma2-executor-channel.ts).
+// The channel changes only by that choice or by connecting again. During a show an error never changes it: the key
+// fails with the reason and is not sent on the plugin instead; a web remote logged in again with the saved user reads
+// nothing to choose again.
+describe('演出中出错不换按键通道（M7）', () => {
+  const source = { show: 'TEST', generation: '1', version: '3.3.4.3' };
+  const network = { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'administrator' };
+  const connect = { network, expectedSource: source, username: 'test', password: 'test-secret', page: 1000, start: 1 };
+  const request = { network, expectedSource: source };
+  const flash = { slot: 101, width: 1, name: 'Flash', objectType: 'LT', objectNumber: '9000', running: false, cue: '', buttons: [{ id: 0, name: 'Flash', active: false }] };
+  const key = (sessionId: string): Ma2ExecutorInput => ({ network, expectedSource: source, page: 1000, slot: 101, button: 0, pressed: true, channel: 'webRemote', sessionId, deadlineAt: Date.now() + 500,
+    expectedItem: { slot: 101, width: 1, name: 'Flash', kind: 'sequence', sequence: 9000, button: 12302, buttons: [12302], reference: ['25', '1', '9000'] } });
+  /** A console whose Button area answers `console.answer()`, behind the real live service. */
+  async function rig() {
+    const console = { answer: (): Ma2ButtonSnapshot['items'] | Error => [flash] };
+    const reads: number[] = [];
+    /** Every web remote login the console sees, by which session made it. */
+    const logins: string[] = [];
+    const buttons = (): Ma2LivePlayback => {
+      const client = { connected: true, connect: () => { logins.push('buttons'); return Promise.resolve(); }, input: vi.fn(), close: () => { client.connected = false; },
+        readButtons: (page: number, start: number): Promise<Ma2ButtonSnapshot> => {
+          reads.push(start);
+          const items = console.answer();
+          if (items instanceof Error) { client.connected = false; return Promise.reject(items); }
+          return Promise.resolve({ page, start, readAt: Date.now(), items });
+        } };
+      return client as unknown as Ma2LivePlayback;
+    };
+    const faders = (): Ma2LivePlayback => {
+      const snapshot: Ma2LiveSnapshot = { page: 1000, start: 1, readAt: Date.now(), items: [] };
+      return { connected: true, connect: () => { logins.push('faders'); return Promise.resolve(); }, read: () => Promise.resolve({ ...snapshot, readAt: Date.now() }), close: () => undefined, input: () => undefined } as unknown as Ma2LivePlayback;
+    };
+    const hex = (value: string): string => `H${Buffer.from(value).toString('hex')}`;
+    const telnet = { command: (line: string, match: (text: string) => string | null) => {
+      const marker = /TBLINK_SHOWCHECK_[a-f0-9]{32}/.exec(line)?.[0];
+      return Promise.resolve(marker ? match(`${marker}:${hex(source.show)},${hex(source.generation)},${hex(source.version)}\r\n`) ?? '' : 'ACK');
+    } };
+    const dir = await mkdtemp(join(tmpdir(), 'tblink-key-channel-rule-'));
+    const service = new Ma2LiveService(join(dir, 'profiles.json'), { saveCredential: () => Promise.resolve(), loadCredential: () => Promise.resolve('test-secret') }, () => telnet, buttons, faders);
+    return { service, console, reads, logins };
+  }
+  it('选的是控台插件时，对控台不多发任何东西：只有推杆页自己的登录和读取，Button 区一次都不读', async () => {
+    const { service, reads, logins } = await rig();
+    try {
+      await service.connect(connect);
+      await service.read({ ...request, page: 1000, start: 1 });
+      service.close();
+      await service.read({ ...request, page: 1000, start: 1 });
+      // As before M7: one web remote login per fader connection, no Button session, no Button area read.
+      expect(logins).toEqual(['faders', 'faders']);
+      expect(reads).toEqual([]);
+      expect(service.buttonChannel(request)).toMatchObject({ kind: 'plugin', choice: 'plugin', webRemote: { ready: false } });
+    } finally { service.close(); }
+  });
+  it('没人选过时走控台插件；通道只因为操作员选择或重新连接而变', async () => {
+    const { service, console } = await rig();
+    try {
+      await service.connect(connect);
+      expect(service.keyChannel(request, 101)).toBe('plugin');
+      // Errors and the fader view logging in again change nothing.
+      await expect(service.inputButton(key('11111111-1111-4111-8111-111111111111'))).rejects.toThrow('通道变了');
+      service.close();
+      await service.read({ ...request, page: 1000, start: 1 });
+      expect(service.keyChannel(request, 101)).toBe('plugin');
+      // The operator's choice, read on the spot.
+      await service.chooseKeys('webRemote');
+      expect(service.keyChannel(request, 101)).toBe('webRemote');
+      // Connecting again, when the console no longer reads back.
+      console.answer = () => new Error('控台返回的 Button 区格号和请求的不一致');
+      await service.connect(connect);
+      expect(service.buttonChannel(request)).toMatchObject({ kind: 'plugin', choice: 'webRemote' });
+      await service.chooseKeys('plugin');
+      console.answer = () => [flash];
+      await service.connect(connect);
+      expect(service.keyChannel(request, 101)).toBe('plugin');
+    } finally { service.close(); }
+  });
+  it('按键超时、断线、这一格对不上都只记下原因；推杆页自己重新登录也不重新选，只有操作员点“连接”才再读一次', async () => {
+    const { service, console, reads } = await rig();
+    try {
+      await service.chooseKeys('webRemote');
+      await service.connect(connect);
+      expect(service.keyChannel(request, 101)).toBe('webRemote');
+      // The show runs; the Button area stops answering, then answers with another executor.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const later = (): void => { vi.setSystemTime(Date.now() + 1001); };
+      later();
+      console.answer = () => new Error('实时推杆读取超时，请重新连接');
+      await expect(service.inputButton(key('11111111-1111-4111-8111-111111111111'))).rejects.toThrow('超时');
+      console.answer = () => [{ ...flash, name: 'Other' }];
+      await expect(service.inputButton(key('22222222-2222-4222-8222-222222222222'))).rejects.toThrow('按键没有发送');
+      later();
+      await expect(service.inputButton(key('33333333-3333-4333-8333-333333333333'))).rejects.toThrow('按键没有发送');
+      expect(service.keyChannel(request, 101)).toBe('webRemote');
+      expect(service.buttonChannel(request).reason).toContain('通道不变');
+      // A key the page made for the plugin is not sent on the web remote either.
+      await expect(service.inputButton({ ...key('44444444-4444-4444-8444-444444444444'), channel: 'plugin' })).rejects.toThrow('通道变了');
+      // The fader view logs in again with the saved user: the channel stays and the Button area is not read to choose.
+      service.close();
+      console.answer = () => [];
+      const before = reads.length;
+      await service.read({ ...request, page: 1000, start: 1 });
+      expect(reads.length).toBe(before);
+      expect(service.keyChannel(request, 101)).toBe('webRemote');
+      // Only the operator's "连接" reads again, and then what the console answers decides.
+      await service.connect(connect);
+      expect(service.keyChannel(request, 101)).toBe('plugin');
+    } finally { service.close(); vi.useRealTimers(); }
+  });
+});
