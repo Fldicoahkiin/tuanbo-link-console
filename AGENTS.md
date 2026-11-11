@@ -33,7 +33,7 @@
 - 不控制 OBS 推流/录像，不控制直播伴侣开播/关播，不自动点击第三方界面。
 - 不提权启动 OBS。OBS 以管理员身份运行时照常支持（2026-10-25 用户要求），组件修复后用普通方式重开 OBS。
 - OBS 里只在固定前缀的自有场景中创建、更新、移除联动台自己的场景项和媒体输入，再加上实时画布授权的“用户选中的来源”；不修改、不删除用户其他来源。视频解码与合成由 OBS 完成，联动台播放的音频经应用自有的 OBS 音频来源送入正式输出。
-- 不迁移旧 ShowPackage。普通工程用 `.tblink` schema v1；带灯光数据的工程用 schema v2，让旧程序拒绝覆盖保存，而不是悄悄丢掉灯光数据。歌里存了节拍的工程用 schema v3（2026-11-11，0.5.9 起）：0.5.8 和更早的版本打不开，所以第一次把旧文件存成 v3 前先问一次，并把原文件另存为工程旁边的「工程名（旧版本可打开的备份）.tblink」（`apps/desktop/src/main/link/link-project-service.ts`）；备份没存成就不保存。
+- 不迁移旧 ShowPackage。普通工程用 `.tblink` schema v1；带灯光数据的工程用 schema v2，让旧程序拒绝覆盖保存，而不是悄悄丢掉灯光数据。歌里存了节拍、或者歌的音乐后面留了空白的工程用 schema v3（2026-11-11，0.5.9 起；哪些东西要 v3 只在 `packages/schema/src/link-project.ts` 的 `schemaVersion3Reasons` 定，保存前那句话照它说）：0.5.8 和更早的版本打不开，所以第一次把旧文件存成 v3 前先问一次，并把原文件另存为工程旁边的「工程名（旧版本可打开的备份）.tblink」（`apps/desktop/src/main/link/link-project-service.ts`）；备份没存成就不保存。
 - 不发任何免激活、免授权的包。测试用用户给的激活码。
 
 ### 用户授权和定下的事（新的在前，新的取代旧的）
@@ -115,6 +115,7 @@ docs/                           设计、实施、验收和服务器安装说明
 | 用户改的键 | `apps/desktop/src/renderer/src/link/keys/key-settings.ts`（2026-11-11）：哪些键能改、撞键怎么算、随时停止的键能是什么、歌曲快捷键的检查都在这里。只存改过的，在这台电脑 `localStorage` 的 `tblink.key-overrides`；0.5.8 的 `tblink.timeline-shortcuts` 只读一次来搬，不再写，退回 0.5.8 时它还在。状态在 `stores/shortcut-store.ts`，由 `keymap.ts` 的 `resolveKeymap` 放进键位表，路由和界面上的键名都读 `currentKeymap`。新加一个能改的操作只要在键位表里标 `rebindable: true` |
 | 一首歌的节拍 | `packages/core/src/song-beats.ts` 的 `songBeats`（2026-11-11）：每首歌一份，按音乐的源文件存在 `rundownItem.music`，编辑器和灯光工作台都从它读，经音频片段换算到歌曲时间，剪切、移动音频不用重新识别。只用 `setSongMusicCommand` 改；旧工程的两种节拍只在 `document-store.setProject` 打开时搬一次（`song-music-migration.ts`）。显示疏密只在显示时定，不存进工程；包络分析（“分析音乐”）不出节拍。识别是编辑器和灯光工作台共用的一次（`components/useMusicBeatSegments.ts`，按歌记着，哪一页看到结果就写一次）；节拍的写入在播放中或运行时在忙时都等停了再写。没装识别组件的电脑才给“简易检测”（IBT），点了才跑，写入守同一条规矩；编辑器不再有自己的检测。编辑器吸附的节拍只在 `components/timeline-snap-points.ts` 的 `songBeatSnapPoints` 算：当前疏密下显示出来的节拍加段落的边，看得见的才吸，按下时放进拖动和修剪的快照；灯光工作台照旧吸全部节拍（`editor-rules.test.ts` 规则 7、8、9 守着） |
 | 波形 | 主进程 `apps/desktop/src/main/link/waveform-service.ts`（2026-11-11）：一次解码出多级峰值、45–180 Hz 节奏波形和频谱（`waveform-levels.ts`），按 sha256 存在工程的 `cache/waveforms/<sha>.levels.bin`；`<sha>.json` 照旧写成 0.5.8 能读的纯数组，不改它的格式。界面只用 `useSongWaveform` 拿、`WaveformCanvas`（`view-models/waveform-draw.ts`）画，不解码整首音频，不引入波形库（`editor-rules.test.ts` 规则 5 守着） |
+| 一首歌多长 | `packages/core/src/audio-edit.ts` 的 `songDurationMs`（2026-11-11）：存了总长（`referenceAudio.timeline.durationMs`，音乐后面留了空白）就用它，否则到最后一段音频的结尾。前后空白读 `songLeadBlankMs`、`songTailBlankMs`，改片段以后的总长用 `editedSongDurationMs`（空白不会被改片段吃掉，片段拖过总长歌就变长），加空白用 `padAudioTimeline`（按工程帧率取整到帧）。音频只由主进程 `audio-edit-service.ts` 的 `mix` 渲染到这个长度，尾空白是真的静音采样；`referenceAudio.durationMs` 等于歌曲总长，schema 守着。没存总长的歌，缓存名和渲染结果和 0.5.8 逐字节一样。别处不再自己取“最晚片段的结尾”当歌的长度 |
 
 同一次复盘定下的另外几条：
 
@@ -137,7 +138,7 @@ docs/                           设计、实施、验收和服务器安装说明
 
 ## 6. 测试与验证
 
-- 推 master 前跑 `pnpm typecheck`、`pnpm test`、`pnpm lint`。
+- 推 master 前跑 `pnpm typecheck`、`pnpm test`、`pnpm lint`。`pnpm lint` 自己带 4 GB 的内存上限（根目录 `package.json`）：整个仓库一起做带类型的检查要 2 GB 以上，Node 默认的上限在 GitHub 的 runner 和云端容器里不够。lint 报 exit 134、日志开头是 `Last few GCs` 就是内存用完了，不是代码问题，调大这个数，不删 lint 规则。
 - 规则测试守着用户定下的规则，例如 `packages/core/src/lighting-workflow-rules.test.ts` 对应灯光 10 条。改代码让它们失败就是违反了规则，不能靠改测试过关。
 - CI：推 master 后 Verify Desktop 跑类型、lint、正式模式构建和 Windows 单测（约 25 分钟）；Verify Licensing Server 跑服务端测试并自动部署授权服务、官网和后台。只改文档不触发。
 - Electron e2e 不在 CI 里，按需在本机跑；依赖真实设备的用例被跳过，不代表硬件通过。
