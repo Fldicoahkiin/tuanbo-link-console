@@ -316,3 +316,40 @@ describe('规则 9：编辑器的节拍吸附点只来自 songBeats，和灯光�
     expect(tracks.match(/beats: props\.beatSnapPoints/g)?.length).toBe(2); // the drag's and the trim's snapshot, at the press
   });
 });
+
+describe('规则 10：编辑器时间线照剪映吸附和提示（E12，05 设计第 5 节）', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.resetModules(); });
+
+  it('吸附开关记在这台电脑上，重开软件还在；N 和工具栏按钮都读写它', async () => {
+    const saved = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => { saved.set(key, value); } });
+    vi.resetModules();
+    const first = await import('./stores/timeline-view-store');
+    expect(first.useTimelineViewStore.getState().snapEnabled).toBe(true);
+    first.useTimelineViewStore.getState().toggleSnap();
+    vi.resetModules();
+    const reopened = await import('./stores/timeline-view-store');
+    expect(reopened.useTimelineViewStore.getState().snapEnabled).toBe(false);
+    expect(reopened.readSnapEnabled({ getItem: () => { throw new Error('blocked'); } })).toBe(true);
+    const timeline = readFileSync(join(LINK, 'components/ReferenceTimeline.tsx'), 'utf8');
+    expect(timeline).toMatch(/useTimelineSnap\(props\.lightingWorkspace === true\)/);
+    expect(timeline).toMatch(/'view\.snap': \(\) => setSnapEnabled\(!snapEnabled\)/);
+    expect(timeline).toMatch(/onSnapEnabledChange=\{setSnapEnabled\}/);
+    expect(timeline).not.toMatch(/useState\(true\);?\s*$/m);
+  });
+
+  it('拖动和修剪：Alt 从指针事件读，不听按键；播放中不给播放头；吸附线在帧里画，不经 React', () => {
+    for (const file of ['components/useTimelineItemDrag.ts', 'components/useContentTrim.ts']) {
+      const source = readFileSync(join(LINK, file), 'utf8');
+      expect(source).toMatch(/free: event\.altKey/);
+      expect(source).not.toMatch(/keydown|keyup|onKeyDown/i);
+      expect(source).toMatch(/paintGuide\(/);
+      expect(source).toMatch(/edgeScroll\.follow\(/);
+    }
+    expect(readFileSync(join(LINK, 'components/useTimelineItemDrag.ts'), 'utf8')).toMatch(/drawn: \(target\) => `\$\{target\.moved\}\|\$\{String\(target\.layerId\)\}\|\$\{target\.taken\}`/);
+    const tracks = readFileSync(join(LINK, 'components/ContentTracks.tsx'), 'utf8');
+    expect(tracks).toMatch(/playing\.current \? null : props\.playhead\.read\(\)/);
+    expect(tracks).toMatch(/showsNewTrackAbove\(moving\.target, layer\.id\)/);
+    expect(tracks).not.toMatch(/target\.snapMs|target\.guide/);
+  });
+});

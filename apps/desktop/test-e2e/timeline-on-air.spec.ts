@@ -49,7 +49,7 @@ test('被上层机位挡住的部分变暗；修剪停在旁边的片段；拖�
     await page.mouse.move(secondBox.x + secondBox.width / 2, secondBox.y + secondBox.height / 2); await page.mouse.down();
     await page.mouse.move(firstBox.x + 20, secondBox.y + secondBox.height / 2, { steps: 8 });
     await expect(page.locator('.cue-lane.is-drop-above')).toHaveCount(1);
-    await expect(page.locator('.visual-layer-drop-state > em')).toHaveText('这里有内容，松开放到上方新轨道');
+    await expect(page.locator('.visual-layer-drop-state > em')).toHaveText('放到新轨道');
     await page.mouse.up();
     await expect(page.locator('[data-visual-layer-id]')).toHaveCount(3);
     await expect(page.locator('.cue-lane.is-drop-above')).toHaveCount(0);

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, type PointerEvent } from 'react';
 import type { ContentRef } from '@tb/core/link';
 import type { VisualLayer } from '@tb/schema';
-import { DragPreview, animationFrames, dragTarget, pointerMoved, type DragViewport, type FrameScheduler, type ItemDragSnapshot, type ItemDragTarget } from './drag-preview';
+import { DragPreview, animationFrames, dragTarget, pointerMoved, type DragViewport, type EdgeScroll, type FrameScheduler, type ItemDragSnapshot, type ItemDragTarget, type SnapGuide } from './drag-preview';
 import { useDragSession } from './useDragSession';
 
 /**
@@ -17,11 +17,15 @@ type Options = {
   layers: readonly VisualLayer[];
   /** The snapshot of the timeline at the press (viewport, tracks, snap points, rules). */
   snapshot: (press: ItemPress) => ItemDragSnapshot;
-  /** The playhead now, read in the frame: the drag snaps to it. */
-  playhead: () => number;
+  /** The playhead now, read in the frame: the drag snaps to it; null while the song plays, when it does not. */
+  playhead: () => number | null;
+  /** Draws the snap guide in the frame (none: hidden); it follows the part without React (0.5.9 E12). */
+  paintGuide: (guide: SnapGuide | undefined) => void;
+  /** Scrolls the timeline while the part is held near its left or right edge. */
+  edgeScroll: Pick<EdgeScroll, 'follow' | 'stop'>;
   /** The small line on the part at `startMs` (its time), or null when it shows none. */
   label: (ref: ContentRef, startMs: number) => string | null;
-  /** The note “松开放到上方新轨道” on the target track, while drawn; it follows the part's end. */
+  /** The note 「放到新轨道」 on the target track, while drawn; it follows the part's end. */
   dropNote: () => HTMLElement | null;
   focusTimeline: () => void;
   onSelectClip: (clipId: string) => void;
@@ -52,7 +56,8 @@ export function useTimelineItemDrag(options: Options): {
   useEffect(() => () => held.current?.preview.stop(), []);
   const pointer = (current: Held, event: PointerEvent<HTMLElement>) => {
     current.moved ||= pointerMoved(current.snapshot, event.clientX, event.clientY);
-    return { clientX: event.clientX, clientY: event.clientY, moved: current.moved };
+    // Alt held: no snapping for this move; let go of Alt, the next move snaps again.
+    return { clientX: event.clientX, clientY: event.clientY, moved: current.moved, free: event.altKey };
   };
   const begin = (event: PointerEvent<HTMLElement>, press: Omit<ItemPress, 'clientX' | 'clientY' | 'layerMovable'>, element: HTMLElement): void => {
     if (event.button !== 0) return;
@@ -65,7 +70,7 @@ export function useTimelineItemDrag(options: Options): {
       layerMovable: press.originLayerId !== undefined && element.closest('[data-visual-layer-id]') !== null });
     const initial = dragTarget(snapshot, { clientX: event.clientX, clientY: event.clientY, moved: false, playheadMs: options.playhead() });
     const drag = (target: ItemDragTarget): TimelineDrag => ({ ...press.ref, pointerId: event.pointerId, originLayerId: press.originLayerId, target });
-    const { label, dropNote, playhead } = options;
+    const { label, dropNote, playhead, paintGuide, edgeScroll } = options;
     const current: Held = {
       snapshot, moved: false,
       preview: new DragPreview({
@@ -77,9 +82,11 @@ export function useTimelineItemDrag(options: Options): {
           writeLabel(element, label(press.ref, target.startMs));
           const note = target.taken ? dropNote() : null;
           if (note) note.style.left = `${(target.startMs + snapshot.itemDurationMs) * scale + 8}px`;
+          paintGuide(target.guide);
         },
-        restore: () => { element.style.translate = ''; writeLabel(element, label(press.ref, snapshot.originMs)); },
-        drawn: (target) => `${target.moved}|${String(target.layerId)}|${target.taken}|${String(target.snapMs)}`,
+        restore: () => { element.style.translate = ''; writeLabel(element, label(press.ref, snapshot.originMs)); paintGuide(undefined); edgeScroll.stop(); },
+        // The snap guide is painted in the frame, so React hears only the track and the new track above.
+        drawn: (target) => `${target.moved}|${String(target.layerId)}|${target.taken}`,
         changed: (target) => session.update(drag(target))
       }, initial, options.frames ?? animationFrames)
     };
@@ -90,6 +97,7 @@ export function useTimelineItemDrag(options: Options): {
     const current = held.current;
     if (!current || session.current()?.pointerId !== event.pointerId) return;
     current.preview.move(pointer(current, event));
+    if (current.moved) options.edgeScroll.follow(event.clientX, current.snapshot.viewport);
   };
   const end = (event: PointerEvent<HTMLElement>): void => {
     const current = held.current;

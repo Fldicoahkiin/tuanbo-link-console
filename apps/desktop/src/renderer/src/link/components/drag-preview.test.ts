@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type LinkCue, type LinkProject } from '@tb/schema';
 import { contentPlaceTaken, contentTrimBounds, playbackFramesPerSecond, resolveTimelineState, type ContentRef } from '@tb/core/link';
-import { DragPreview, dragTarget, trackLayout, trimPreview, trimTarget, type DragViewport, type FrameScheduler, type ItemDragSnapshot, type TrackLayout } from './drag-preview';
+import { DragPreview, EDGE_SCROLL_MAX_PX, EdgeScroll, dragTarget, edgeScrollLeft, edgeScrollStep, showsNewTrackAbove, trackLayout, trimFrame, trimPreview, trimTarget, type DragPointer, type DragViewport, type FrameScheduler, type ItemDragSnapshot, type TrackLayout, type TrimSnapshot } from './drag-preview';
 import { DragSession, type DragHandle } from './drag-session';
-import { timelineInteractionTime, timelineMoveSnapPoints } from './timeline-geometry';
+import { snapTimelineTime, timelineInteractionTime, timelineMoveSnapPoints } from './timeline-geometry';
 import { timelineLayout } from './timeline-layout';
 import { heldSnapPoints, timelineItemDuration, timelineSnapPoints } from './timeline-snap-points';
 import { timelineCueSpan } from './TimelineItems';
@@ -277,4 +277,119 @@ it('轨道的位置从布局算：灯光行插在中间，标尺盖住视口顶�
   const layout: TrackLayout = trackLayout([{ id: 'a', locked: false }, { id: 'b', locked: true }], { start: 104, lightingIndex: 1, lightingHeight: 72, coveredTop: 28 });
   expect(layout.bands).toEqual([{ layerId: 'a', top: 104, bottom: 154, locked: false }, { layerId: 'b', top: 226, bottom: 276, locked: true }]);
   expect(layout.newTrackTop).toBe(276);
+});
+
+describe('剪映式吸附和拖动提示（E12）', () => {
+  const project = song();
+  const ref = { kind: 'cue', id: 'b' } as const;
+  const originMs = timelineCueSpan(project.rundown[0]!.cues[1]!, project.timebase.frameRate)!.startMs;
+  const grab = { x: 460, y: 300 - 40 + 28 + 76 + 50 + 72 + 20 };
+  const frameRate = project.timebase.frameRate;
+  /** The pointer x that puts b's start at `seconds` (the grab is 0.2 s into b). */
+  const startAt = (seconds: number): number => 200 + (seconds + 0.2) * 50 - 150;
+  const at = (snapshot: ItemDragSnapshot, x: number, extra: Partial<DragPointer> = {}) => dragTarget(snapshot, { clientX: x, clientY: grab.y, moved: true, playheadMs: 0, ...extra });
+  /** Camera `held` (2 s to 4 s) trimmed at its end, pressed there. */
+  const trimSnapshot = (held: ContentRef, beats: readonly number[] = []): TrimSnapshot => {
+    const item = project.rundown[0]!, state = resolveTimelineState(project, item, 0);
+    const timeAt = (x: number): number => (x - VIEWPORT.left + VIEWPORT.scrollLeft) / VIEWPORT.pixelsPerSecond * 1000;
+    return { viewport: VIEWPORT, frameRate, snap: { ...SNAP, ...heldSnapPoints(state, item.cues, frameRate, held), beats }, edge: 'end', startClientX: 250,
+      originPointerMs: timeAt(250), originStartMs: 2_000, originDurationMs: 2_000, bounds: contentTrimBounds(project, 'song', held) };
+  };
+  const a = { kind: 'cue', id: 'a' } as const;
+
+  it('吸附关掉时只按帧取整，不吸片段边', () => {
+    const snapshot = snapshotFor(project, ref, originMs, grab);
+    const x = startAt(4.114); // near a's end (4 s), off a frame
+    expect(at(snapshot, x).startMs).toBe(4_000);
+    const off = at({ ...snapshot, snap: { ...snapshot.snap, enabled: false } }, x);
+    expect(off.startMs).toBe(snapTimelineTime(4_114, frameRate));
+    expect(off.startMs).not.toBe(4_114);
+    expect(off.guide).toBeUndefined();
+    const trim = trimSnapshot(a);
+    const edgeX = 200 + 7.914 * 50 - 150;
+    expect(trimFrame({ ...trim, snap: { ...trim.snap, enabled: false } }, { clientX: edgeX }, 0)?.durationMs).toBe(snapTimelineTime(7_914, frameRate) - 2_000);
+  });
+
+  it('按住 Alt 这一下不吸，只按帧取整；松开 Alt 下一下又吸', () => {
+    const snapshot = snapshotFor(project, ref, originMs, grab);
+    const x = startAt(4.114);
+    const free = at(snapshot, x, { free: true });
+    expect(free.startMs).toBe(snapTimelineTime(4_114, frameRate));
+    expect(free.guide).toBeUndefined();
+    expect(at(snapshot, x, { free: false }).startMs).toBe(4_000);
+    // The trim the same: a's end dragged to 7.9 s, near b's start (8 s).
+    const trim = trimSnapshot(a);
+    const edgeX = 200 + 7.914 * 50 - 150;
+    expect(trimFrame(trim, { clientX: edgeX, free: true }, 0)).toMatchObject({ durationMs: snapTimelineTime(7_914, frameRate) - 2_000, guide: undefined });
+    expect(trimFrame(trim, { clientX: edgeX, free: false }, 0)).toMatchObject({ durationMs: 6_000, guide: { atMs: 8_000, kind: 'edge' } });
+  });
+
+  it('播放中不吸播放头，停着吸', () => {
+    const snapshot = snapshotFor(project, ref, originMs, grab);
+    const x = startAt(11.9); // b would end at 13.9 s: nothing of the timeline's own near; the playhead at 12 s
+    expect(at(snapshot, x, { playheadMs: 12_000 })).toMatchObject({ startMs: 12_000, guide: { atMs: 12_000, kind: 'edge' } });
+    const playing = at(snapshot, x, { playheadMs: null });
+    expect(playing.startMs).toBe(snapTimelineTime(11_900, frameRate));
+    expect(playing.guide).toBeUndefined();
+    const trim = trimSnapshot(a);
+    const edgeX = 200 + 6.05 * 50 - 150;
+    expect(trimFrame(trim, { clientX: edgeX }, 6_120)?.durationMs).toBe(4_120);
+    expect(trimFrame(trim, { clientX: edgeX }, null)?.durationMs).not.toBe(4_120);
+  });
+
+  it('吸到节拍和吸到片段边，线的种类不同；修剪碰到旁边的片段停住', () => {
+    const snapshot = snapshotFor(project, ref, originMs, grab);
+    expect(at(snapshot, startAt(4.1)).guide).toEqual({ atMs: 4_000, kind: 'edge' });
+    const beats = { ...snapshot, snap: { ...snapshot.snap, beats: [13_500] } };
+    expect(at(beats, startAt(13.45))).toMatchObject({ startMs: 13_500, snapMs: undefined, guide: { atMs: 13_500, kind: 'beat' } });
+    const trim = trimSnapshot(a, [6_500]);
+    expect(trimFrame(trim, { clientX: 200 + 6.45 * 50 - 150 }, 0)).toEqual({ startMs: 2_000, durationMs: 4_500, guide: { atMs: 6_500, kind: 'beat' }, stopped: false });
+    // Dragged past b's start (8 s): the edge stops there and says so; no guide.
+    expect(trimFrame(trim, { clientX: 200 + 9.5 * 50 - 150 }, 0)).toEqual({ startMs: 2_000, durationMs: 6_000, guide: undefined, stopped: true });
+    expect(trimFrame(trim, { clientX: 251 }, 0)).toBeNull();
+  });
+
+  it('「放到新轨道」只在 dragTarget 给出被占、要放到上方新轨道的那条轨道上出现', () => {
+    const snapshot = snapshotFor(project, ref, originMs, grab);
+    const sourcesY = 300 - 40 + 28 + 76 + 20;
+    const onCaption = dragTarget(snapshot, { clientX: grab.x, clientY: sourcesY, moved: true, playheadMs: 0 });
+    expect(onCaption.taken).toBe(true);
+    expect(showsNewTrackAbove(onCaption, 'sources')).toBe(true);
+    expect(showsNewTrackAbove(onCaption, 'cameras')).toBe(false);
+    const clear = dragTarget(snapshot, { clientX: grab.x + 300, clientY: sourcesY, moved: true, playheadMs: 0 });
+    expect(clear.taken).toBe(false);
+    expect(showsNewTrackAbove(clear, 'sources')).toBe(false);
+    expect(showsNewTrackAbove({ ...onCaption, moved: false }, 'sources')).toBe(false);
+    expect(showsNewTrackAbove(undefined, 'sources')).toBe(false);
+  });
+
+  it('拖到边缘 48 像素以内自动滚动：越近越快，不超过时间线两端，滚的时候报告在动', () => {
+    const viewport = { left: 200, width: 1_000 };
+    expect(edgeScrollStep(viewport, 700)).toBe(0);
+    expect(edgeScrollStep(viewport, 200 + 48)).toBe(0);
+    expect(edgeScrollStep(viewport, 200 + 47)).toBe(-1);
+    expect(edgeScrollStep(viewport, 200 + 24)).toBe(-12);
+    expect(edgeScrollStep(viewport, 200)).toBe(-EDGE_SCROLL_MAX_PX);
+    expect(edgeScrollStep(viewport, 100)).toBe(-EDGE_SCROLL_MAX_PX); // past the edge, over the track headings
+    expect(edgeScrollStep(viewport, 1_200 - 10)).toBe(19);
+    expect(edgeScrollStep(viewport, 1_300)).toBe(EDGE_SCROLL_MAX_PX);
+    expect(edgeScrollLeft(10, -24, 500)).toBe(0);
+    expect(edgeScrollLeft(490, 24, 500)).toBe(500);
+
+    const frames = testFrames();
+    let left = 450, reports = 0;
+    const scroller = new EdgeScroll({ read: () => left, max: () => 500, to: next => { left = next; } }, frames, { moved: () => { reports += 1; } });
+    scroller.follow(1_200, viewport);
+    frames.run(); expect(left).toBe(474);
+    frames.run(); expect(left).toBe(498);
+    frames.run(); expect(left).toBe(500); // held at the end
+    frames.run(); expect(frames.waiting()).toBe(0);
+    expect(reports).toBe(3);
+    scroller.follow(700, viewport);
+    expect(frames.waiting()).toBe(0);
+    scroller.follow(200, viewport); frames.run();
+    expect(left).toBe(476);
+    scroller.stop();
+    expect(frames.waiting()).toBe(0);
+  });
 });

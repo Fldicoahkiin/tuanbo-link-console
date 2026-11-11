@@ -36,6 +36,10 @@ export type TimelineViewport = {
   zoomOut: () => void;
   fit: () => void;
   revealTime: (milliseconds: number) => void;
+  /** Scrolls to `left`, held to the timeline's two ends; the only way besides the user's own scroll (0.5.9 E12, the edge scroll of a drag). */
+  scrollLeftTo: (left: number) => void;
+  /** How far right the timeline can scroll now. */
+  maxScrollLeft: () => number;
 };
 
 function initialScrollLeft(durationMs: number, pixelsPerSecond: number, positionMs: number, fitKey?: string): number {
@@ -219,8 +223,7 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
     },
     zoomIn: () => zoomAt(pixelsPerSecond * 1.25),
     zoomOut: () => zoomAt(pixelsPerSecond / 1.25),
-    fit,
-    revealTime
+    fit, revealTime, scrollLeftTo: setViewportScrollLeft, maxScrollLeft: () => Math.max(0, viewportMetrics.current.contentWidth - viewportMetrics.current.viewportWidth)
   };
 }
 

@@ -19,7 +19,8 @@ import { useFrameValue } from './useFrameValue';
 import { AudioTimelineSegments } from './AudioTimelineSegments';
 import { AudioTrackLane } from './AudioTrackLane';
 import type { AudioEditor } from './useAudioEditor';
-import { lightingSnapPoints, timelineSnapPoints } from './timeline-snap-points';
+import { lightingSnapPoints, markerSnapPoints, timelineSnapPoints } from './timeline-snap-points';
+import { useTimelineSnap } from '../stores/timeline-view-store';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import { useTimelineAudio, type PlaybackClock } from './useTimelineAudio';
 import {
@@ -167,7 +168,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   const [playheadDrag] = useState(() => new DragSession<number>(globalThis, () => undefined, keyRouter));
   useEffect(() => () => playheadDrag.dispose(), [playheadDrag]);
   const [clipboard, setClipboard] = useState<TimelineTarget | null>(null);
-  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [snapEnabled, setSnapEnabled] = useTimelineSnap(props.lightingWorkspace === true);
   const [snapDistance, setSnapDistance] = useState(14);
   const [clipContext, setClipContext] = useState<TimelineContext | null>(null);
   const layerReorder = useLayerReorder(layers.length, (id, index) => { const target = layers[index]; if (target) input.onMoveLayer(id, input.layers.findIndex((layer) => layer.id === target.id)); });
@@ -300,7 +301,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
           </div>}
           {props.lightingWorkspace ? null : <ContentTracks layers={props.layers} clips={props.clips} cues={props.cues} assets={assets} frameRate={props.frameRate}
             durationMs={props.durationMs} playhead={props.playhead} timelineState={props.timelineState} airtime={props.airtime} onAirtime={props.onAirtime} pending={props.pending}
-            selectedClipId={props.selectedClipId} selectedCueId={props.selectedCueId} beatSnapPoints={props.audioEditor?.snapPoints ?? []}
+            selectedClipId={props.selectedClipId} selectedCueId={props.selectedCueId} beatSnapPoints={props.audioEditor?.snapPoints ?? []} markerSnapPoints={markerSnapPoints(props.lighting?.document.markers)} playing={props.playing}
             rules={props.editRules} viewport={viewport} tracks={visualTracks} snap={{ enabled: snapEnabled, thresholdMs: snapThresholdMs }}
             lanePointer={lanePointer} focusTimeline={() => timelineRef.current?.focus()}
             onOpenMenu={(target, x, y) => setClipContext({ target, x, y })} onSelectClip={props.onSelectClip} onSelectCue={props.onSelectCue}

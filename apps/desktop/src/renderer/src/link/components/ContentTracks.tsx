@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, type DragEvent, type HTMLAttributes, type MouseEvent, type PointerEvent } from 'react';
+import { useCallback, useMemo, useRef, useState, type DragEvent, type HTMLAttributes, type MouseEvent, type PointerEvent } from 'react';
 import { contentPlaceTaken, contentTrimBounds, millisecondsToFrameNumber, resolveTimelineClipSpan, timecodeToMilliseconds, type ContentRef, type ResolvedTimelineState, type TimelineSpan } from '@tb/core/link';
 import type { LinkCue, LinkMediaAsset, LinkProject, MtcFrameRate, ReferenceMediaClip, RundownItem, VisualLayer } from '@tb/schema';
 import { MEDIA_DRAG_TYPE, OBS_DRAG_TYPE, type ObsResource } from './ResourceLibrary';
@@ -13,7 +13,8 @@ import { useContentTrim, type ContentTrimDrag, type TrimBounds } from './useCont
 import { useTimelineItemDrag, type TimelineDrag } from './useTimelineItemDrag';
 import type { TimelineViewport } from './useTimelineViewport';
 import { usePlayheadValue, type EditorPlayhead } from './editor-playhead';
-import { TRACK_HEIGHT, snapshotTimeAt, trackLayout, type DragViewport, type ItemDragSnapshot } from './drag-preview';
+import { EdgeScroll, TRACK_HEIGHT, showsNewTrackAbove, snapshotTimeAt, trackLayout, type DragViewport, type ItemDragSnapshot, type SnapGuide } from './drag-preview';
+import './timeline-drag-hints.css';
 import { useScrollPaint, type ScrollPosition } from './timeline-scroll';
 
 /** Items this far outside the drawn window stay drawn, so a fast scroll never shows a gap. */
@@ -71,8 +72,12 @@ export type ContentTracksProps = {
   selectedCueId: string | null;
   /** The song's beat points snapping adds (`songBeatSnapPoints`, from `songBeats`); none for a song without beats. */
   beatSnapPoints: readonly number[];
+  /** The timeline markers' times; parts snap to them like to other parts' edges. */
+  markerSnapPoints: readonly number[];
+  /** While the song plays the playhead is no snap point (0.5.9 E12, as in 剪映). */
+  playing: boolean;
   rules: ContentEditRules;
-  viewport: Pick<TimelineViewport, 'viewportRef' | 'pixelsPerSecond' | 'scroll' | 'view' | 'timeAtClientX'>;
+  viewport: Pick<TimelineViewport, 'viewportRef' | 'pixelsPerSecond' | 'scroll' | 'view' | 'timeAtClientX' | 'scrollLeftTo' | 'maxScrollLeft'>;
   /** Where the first track starts, where the lighting row sits between tracks, and how much of the top the ruler covers. */
   tracks: { start: number; lightingIndex: number; lightingHeight: number; coveredTop: number };
   snap: { enabled: boolean; thresholdMs: number };
@@ -107,8 +112,27 @@ function partAt(event: { target: EventTarget | null; currentTarget: Element }): 
 export function ContentTracks(props: ContentTracksProps): JSX.Element {
   const { viewport, snap } = props;
   const select = (ref: ContentRef): void => { if (ref.kind === 'clip') props.onSelectClip(ref.id); else props.onSelectCue(ref.id); };
-  const snapPoints = (target?: ContentRef): number[] => [...timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playhead.read(), target), ...props.beatSnapPoints];
+  // The playhead to snap to, read when asked: none while the song plays.
+  const playing = useRef(props.playing);
+  playing.current = props.playing;
+  const snapPlayhead = (): number | null => playing.current ? null : props.playhead.read();
+  const snapPoints = (target?: ContentRef): number[] => [...timelineSnapPoints(props.timelineState, props.cues, props.frameRate, snapPlayhead() ?? undefined, target), ...props.markerSnapPoints, ...props.beatSnapPoints];
   const dropNote = useRef<HTMLElement>(null);
+  const guideLine = useRef<HTMLDivElement>(null);
+  const durationNote = useRef<HTMLElement>(null);
+  const latestViewport = useRef(viewport);
+  latestViewport.current = viewport;
+  /** The snap guide, drawn in the frame of a drag or trim (0.5.9 E12): at the snap point, coloured by what it is. A drag
+   * keeps the painter it took at the press, so the scale is read when it paints: a zoom while held does not misplace it. */
+  const paintGuide = (guide: SnapGuide | undefined): void => {
+    const line = guideLine.current;
+    if (!line) return;
+    line.hidden = guide === undefined;
+    if (!guide) return;
+    line.dataset.kind = guide.kind;
+    line.style.left = `${guide.atMs / 1000 * latestViewport.current.pixelsPerSecond}px`;
+  };
+  const [edgeScroll] = useState(() => new EdgeScroll({ read: () => latestViewport.current.scroll.read().left, max: () => latestViewport.current.maxScrollLeft(), to: left => latestViewport.current.scrollLeftTo(left) }));
   /** The viewport as it is on screen at a press: one read of the DOM for the whole drag. */
   const measure = (): DragViewport => {
     const element = viewport.viewportRef.current;
@@ -117,7 +141,10 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
       scrollLeft: element?.scrollLeft ?? 0, scrollTop: element?.scrollTop ?? 0, pixelsPerSecond: viewport.pixelsPerSecond };
   };
   // The timeline's own points for a held part, apart from the playhead, which is read in each frame.
-  const ownPoints = (target: ContentRef): { before: number[]; after: number[] } => heldSnapPoints(props.timelineState, props.cues, props.frameRate, target);
+  const ownPoints = (target: ContentRef): { before: number[]; after: number[] } => {
+    const own = heldSnapPoints(props.timelineState, props.cues, props.frameRate, target);
+    return { before: own.before, after: [...own.after, ...props.markerSnapPoints] };
+  };
   const itemDrag = useTimelineItemDrag({
     layers: props.layers,
     snapshot: (press): ItemDragSnapshot => { const viewport = measure(), own = ownPoints(press.ref); return {
@@ -126,7 +153,7 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
       placeTaken: props.rules.placeTaken, ref: press.ref, originMs: press.originMs, itemDurationMs: timelineItemDuration(props, press.ref),
       grabOffsetMs: snapshotTimeAt(viewport, press.clientX) - press.originMs, startClientX: press.clientX, startClientY: press.clientY, originLayerId: press.originLayerId, layerMovable: press.layerMovable
     }; },
-    playhead: () => props.playhead.read(),
+    playhead: snapPlayhead, paintGuide, edgeScroll,
     label: (ref, startMs) => partLabel(ref, startMs, undefined, props),
     dropNote: () => dropNote.current,
     focusTimeline: props.focusTimeline,
@@ -135,7 +162,7 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
   const trim = useContentTrim({
     // A trimmed edge snaps to every other part's edges, the playhead and the song's beats, fixed at the press.
     snapshot: (ref) => ({ viewport: measure(), frameRate: props.frameRate, snap: { enabled: snap.enabled, thresholdMs: snap.thresholdMs, ...ownPoints(ref), beats: props.beatSnapPoints } }),
-    playhead: () => props.playhead.read(),
+    playhead: snapPlayhead, paintGuide, edgeScroll, durationNote: () => durationNote.current,
     focusTimeline: props.focusTimeline, bounds: props.rules.trimBounds, onSelect: select, onTrim: props.onTrim,
     label: (ref, startMs, durationMs) => partLabel(ref, startMs, durationMs, props)
   });
@@ -146,7 +173,6 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
     rebaseDrag(at); rebaseTrim(at);
   }, [pixelsPerSecond, rebaseDrag, rebaseTrim]));
   const moving = itemDrag.drag?.target.moved === true ? itemDrag.drag : null;
-  const snapGuide = moving?.target.snapMs;
   // Worked out every frame, but the tracks draw again only when what is on air changes, such as at a camera switch.
   const onAirKey = usePlayheadValue(props.playhead, positionMs => [...markedOnAir(props.onAirtime, props.pending,
     millisecondsToFrameNumber(positionMs, props.frameRate), props.timelineState.activeObsCueIds)].sort().join('\n'));
@@ -193,13 +219,16 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
   const inView = (left: number, width: number): boolean => left + width >= view.left - CULL_MARGIN && left <= view.left + view.width + CULL_MARGIN;
 
   return <>
-    {snapGuide !== undefined ? <div className="timeline-snap-guide" style={{ left: snapGuide / 1000 * viewport.pixelsPerSecond }}><span>已吸附</span></div> : null}
+    {/* Painted in the frames of a drag or trim (paintGuide, the trim's length note), hidden otherwise. */}
+    <div ref={guideLine} className="timeline-snap-guide" hidden><span>已吸附</span></div>
+    <small ref={durationNote} className="timeline-trim-length" hidden />
+
     {props.layers.map((layer, index) => {
       const rowTop = props.tracks.start + index * TRACK_HEIGHT + (index >= props.tracks.lightingIndex ? props.tracks.lightingHeight : 0);
       const rowInView = rowTop + TRACK_HEIGHT >= view.top - TRACK_HEIGHT && rowTop <= view.top + view.height + TRACK_HEIGHT;
       const dropTarget = moving?.target.layerId === layer.id;
       // Dropped here the part would overlap another, so it goes on a new track above this one (drag-preview.ts `taken`).
-      const dropAbove = moving !== null && dropTarget && moving.target.taken;
+      const dropAbove = moving !== null && showsNewTrackAbove(moving.target, layer.id);
       // The row and drop target stay in the grid. Only offscreen contents are
       // left out; a held drag or trim and the selection stay drawn.
       const heldAs = (ref: ContentRef): TimelineItemHeld => partHeld(ref, itemDrag.drag, trim.drag);
@@ -210,7 +239,7 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
         data-visual-layer-id={layer.id} data-layer-locked={String(layer.locked)} {...lanePointer(layer)}
         onDragOver={(event) => event.preventDefault()} onDrop={(event) => drop(event, layer)}>
         <span className={`visual-layer-drop-state ${layer.locked ? 'is-locked' : ''}`}>
-          {dropAbove ? <em ref={dropNote} style={{ left: (moving.target.startMs + timelineItemDuration(props, moving)) / 1000 * viewport.pixelsPerSecond + 8 }}>这里有内容，松开放到上方新轨道</em> : null}
+          {dropAbove ? <em ref={dropNote} style={{ left: (moving.target.startMs + timelineItemDuration(props, moving)) / 1000 * viewport.pixelsPerSecond + 8 }}>放到新轨道</em> : null}
         </span>
         {props.clips.filter((clip) => clip.layerId === layer.id).map((clip) => {
           const ref = { kind: 'clip', id: clip.id } as const;

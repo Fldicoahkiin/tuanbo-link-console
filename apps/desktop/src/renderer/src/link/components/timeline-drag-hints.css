@@ -1,0 +1,24 @@
+/*
+ * What a drag or trim on the editor's tracks shows while the part is held (0.5.9 E12, 05 设计第 5 节): the snap guide,
+ * in the beat colour when it sits on a beat; the new length by the trimmed edge; the edge stopped at a neighbour. All
+ * painted in the drag's frames (drag-preview.ts), hidden otherwise.
+ */
+@layer pages {
+  .reference-timeline .timeline-snap-guide[hidden],
+  .reference-timeline .timeline-trim-length[hidden] { display: none; }
+
+  .reference-timeline .timeline-snap-guide[data-kind='beat'] { background: var(--color-beat); }
+  .reference-timeline .timeline-snap-guide[data-kind='beat'] > span { border-color: var(--color-beat); }
+
+  .reference-timeline .timeline-trim-length {
+    position: absolute; z-index: 36; margin-top: calc(-1 * var(--space-3)); padding: 0 var(--space-half);
+    border: 1px solid var(--color-accent); border-radius: var(--radius-sm); background: var(--color-surface-raised);
+    color: var(--color-text); font: 500 var(--type-caption)/18px var(--font-ui); white-space: nowrap; pointer-events: none;
+  }
+  .reference-timeline .timeline-trim-length[data-edge='start'] { translate: -100% 0; }
+  .reference-timeline .timeline-trim-length[data-stopped='true'] { border-color: var(--color-warning); }
+
+  /* The trimmed edge stopped at a neighbour or the source's end. */
+  .reference-timeline [data-trim-stopped='start'] { border-left-color: var(--color-warning); }
+  .reference-timeline [data-trim-stopped='end'] { border-right-color: var(--color-warning); }
+}

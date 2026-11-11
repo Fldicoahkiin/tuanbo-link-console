@@ -55,6 +55,15 @@ export function songBeatSnapPoints(beats: SongBeats | undefined, level: AudioBea
   return cache[level] = beats.editPointsMs.filter(at => shown.has(at) || edges.has(at));
 }
 
+const markerSnaps = new WeakMap<LightingDocument['markers'], readonly number[]>();
+/** The timeline markers' times (a ranged marker's start and end), which the editor's parts snap to (0.5.9 E12). */
+export function markerSnapPoints(markers: LightingDocument['markers'] | undefined): readonly number[] {
+  if (!markers?.length) return noBeatSnaps;
+  let points = markerSnaps.get(markers);
+  if (!points) { points = [...new Set(markers.flatMap(marker => marker.endMs === null ? [marker.startMs] : [marker.startMs, marker.endMs]))].sort((a, b) => a - b); markerSnaps.set(markers, points); }
+  return points;
+}
+
 /** The lighting workspace never receives visual clip or OBS cue boundaries. */
 export function lightingSnapPoints(document: LightingDocument | undefined, beats: readonly number[], durationMs: number, excludedEventId?: string): number[] {
   const points = [0, durationMs, ...beats];
