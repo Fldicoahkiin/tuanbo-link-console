@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type LinkCue, type LinkProject, type ProgramPlayerState } from '@tb/schema';
 import { moveContentCommand, SceneOutputTimeline, withContentTimeline } from '@tb/core/link';
 import { useSceneOutput } from './useSceneOutput';
+import { EditorPlayhead } from './editor-playhead';
 
 const at = (seconds: number) => ({ hours: 0, minutes: 0, seconds, frames: 0 });
 const camera = (id: string, seconds: number): LinkCue => ({
@@ -24,7 +25,7 @@ function sceneOutput(project: LinkProject, itemId: string | null, state: Pick<Pr
   { outdated = false, connected = true } = {}): Output {
   const result: Output[] = [];
   function Harness(): null {
-    result.push(useSceneOutput(project, itemId, 9_000, connected, { state, outdated }, playbackProject));
+    result.push(useSceneOutput(project, itemId, new EditorPlayhead(9_000), connected, { state, outdated }, playbackProject));
     return null;
   }
   renderToString(createElement(Harness));

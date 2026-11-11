@@ -1,5 +1,5 @@
 import { ObsLiveCanvas } from './ObsLiveCanvas';
-import { Fragment, useEffect, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent, type PointerEvent } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent, type PointerEvent } from 'react';
 import type { LinkObsInventory, ResolvedTimelineClip, ResolvedTimelineState } from '@tb/core/link';
 import type { LinkMediaAsset, OutputCanvas, ReferenceCanvasTransform, ReferenceMediaClip } from '@tb/schema';
 import { Boxes, MonitorPlay, RadioTower, Volume2 } from 'lucide-react';
@@ -10,6 +10,7 @@ import { resizeMediaCanvas } from './media-canvas-geometry';
 import { ObsPreviewLayer } from './ObsPreviewLayer';
 import { StageMediaContextMenu } from './StageMediaContextMenu';
 import { usePreviewMediaLifecycle } from './usePreviewMediaLifecycle';
+import { usePlayheadEffect, usePlayheadValue, type EditorPlayhead } from './editor-playhead';
 
 type Props = {
   /** The clips the output shows; the camera, if any, lies beneath them. */
@@ -27,7 +28,8 @@ type Props = {
   obsSceneCount: number;
   obsInputCount: number;
   obsInventory: LinkObsInventory | null;
-  playheadMs: number;
+  /** Read every frame by the preview media, not by this stage (0.5.9 E2). */
+  playhead: EditorPlayhead;
   playing: boolean;
   onSelectClip: (clipId: string) => void;
   onSelectCue: (cueId: string) => void;
@@ -44,7 +46,9 @@ export function ReferenceStage(props: Props): JSX.Element {
   const [snapGuides, setSnapGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
   const [mediaContext, setMediaContext] = useState<{ clip: ReferenceMediaClip; asset: LinkMediaAsset; x: number; y: number } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
-  const visibleClips = props.timelineState?.clips.filter((entry) => entry.visual || (entry.layer?.visible !== false && entry.asset.kind !== 'audio' && entry.startMs > props.playheadMs && entry.startMs <= props.playheadMs + 2000)) ?? [];
+  // Clips starting within 2 s are loaded ahead; the stage draws again only when that list changes.
+  const upcoming = usePlayheadValue(props.playhead, positionMs => upcomingClipKey(props.timelineState, positionMs));
+  const visibleClips = props.timelineState?.clips.filter((entry) => entry.visual || upcoming.includes(`\n${entry.clip.id}\n`)) ?? [];
   const activeClipCount = props.timelineState?.activeClipIds.length ?? 0;
   const onAir = (clipId: string): boolean => props.activeMediaClipIds?.has(clipId) === true;
   const audibleClipIds = new Set(props.mutePreviewAudio ? [] : props.timelineState?.activeAudioClipIds.filter(onAir) ?? []);
@@ -58,7 +62,7 @@ export function ReferenceStage(props: Props): JSX.Element {
     event.preventDefault();
     const resource = parseObsResource(value);
     props.onSelectObsResource(resource);
-    props.onDropObsResource(resource, props.playheadMs);
+    props.onDropObsResource(resource, props.playhead.read());
   };
 
   if (props.obsStatus === 'connected') return <section className="reference-stage panel">
@@ -96,7 +100,7 @@ export function ReferenceStage(props: Props): JSX.Element {
                 locked={layer.locked}
                 hidden={!entry.visual || !onAir(entry.clip.id)}
                 muted={!audibleClipIds.has(entry.clip.id)}
-                playheadMs={props.playheadMs}
+                playhead={props.playhead}
                 playing={props.playing}
                 projectPath={props.projectPath ?? ''}
                 selected={props.selectedClipId === entry.clip.id}
@@ -123,7 +127,7 @@ export function ReferenceStage(props: Props): JSX.Element {
         {playbackError ? <div className="stage-error">{playbackError}</div> : null}
       </div>
     </div>
-    {props.projectPath ? standaloneAudio.map((entry) => <StandaloneAudioPreview key={entry.clip.id} entry={entry} playheadMs={props.playheadMs} playing={props.playing} projectPath={props.projectPath ?? ''} onPlaybackError={setPlaybackError} />) : null}
+    {props.projectPath ? standaloneAudio.map((entry) => <StandaloneAudioPreview key={entry.clip.id} entry={entry} playhead={props.playhead} playing={props.playing} projectPath={props.projectPath ?? ''} onPlaybackError={setPlaybackError} />) : null}
     <footer className="stage-statusbar">
       <span><Boxes />活动素材 {activeClipCount}</span>
       <span><RadioTower />OBS {props.obsSceneCount} 场景 / {props.obsInputCount} 输入</span>
@@ -143,7 +147,7 @@ export function ReferenceStage(props: Props): JSX.Element {
 
 function StandaloneAudioPreview(props: {
   entry: ResolvedTimelineClip;
-  playheadMs: number;
+  playhead: EditorPlayhead;
   playing: boolean;
   projectPath: string;
   onPlaybackError: (message: string | null) => void;
@@ -152,7 +156,7 @@ function StandaloneAudioPreview(props: {
   const audioRef = useRef<HTMLAudioElement>(null);
   usePreviewMediaLifecycle(audioRef, url);
   const { asset, clip, startMs } = props.entry;
-  const { onPlaybackError, playheadMs, playing, projectPath } = props;
+  const { onPlaybackError, playhead, playing, projectPath } = props;
   useEffect(() => {
     let cancelled = false;
     setUrl(null);
@@ -161,9 +165,11 @@ function StandaloneAudioPreview(props: {
       .catch((error: unknown) => { if (!cancelled) onPlaybackError(toMessage(error)); });
     return () => { cancelled = true; };
   }, [asset.kind, asset.relativePath, asset.sha256, onPlaybackError, projectPath]);
-  useEffect(() => {
+  // Kept in step with the playhead on every move, not through a render (0.5.9 E2).
+  usePlayheadEffect(playhead, useCallback((playheadMs: number) => {
     const audio = audioRef.current;
-    if (!audio || audio.readyState === 0) return;
+    // No `url`, no audio element; a new `url` is a new file, put in step again.
+    if (!audio || !url || audio.readyState === 0) return;
     const desiredSeconds = ((clip.sourceOffsetMs ?? 0) + playheadMs - startMs) / 1_000;
     if (Math.abs(audio.currentTime - desiredSeconds) > (playing ? 0.75 : 0.04)) audio.currentTime = desiredSeconds;
     if (!playing) {
@@ -171,10 +177,10 @@ function StandaloneAudioPreview(props: {
       return;
     }
     if (audio.paused) void audio.play().catch((error: unknown) => onPlaybackError(toMessage(error)));
-  }, [clip.sourceOffsetMs, onPlaybackError, playheadMs, playing, startMs, url]);
+  }, [clip.sourceOffsetMs, onPlaybackError, playing, startMs, url]));
   if (!url) return null;
   return <audio className="timeline-audio-engine" data-asset-id={asset.id} ref={audioRef} src={url} preload={playing ? 'auto' : 'metadata'} onLoadedMetadata={(event) => {
-    event.currentTarget.currentTime = ((clip.sourceOffsetMs ?? 0) + playheadMs - startMs) / 1_000;
+    event.currentTarget.currentTime = ((clip.sourceOffsetMs ?? 0) + playhead.read() - startMs) / 1_000;
     if (playing) void event.currentTarget.play().catch((error: unknown) => onPlaybackError(toMessage(error)));
   }} onError={() => onPlaybackError(`音频无法解码：${asset.name}`)} />;
 }
@@ -186,7 +192,7 @@ function MediaCanvasLayer(props: {
   locked: boolean;
   hidden: boolean;
   muted: boolean;
-  playheadMs: number;
+  playhead: EditorPlayhead;
   playing: boolean;
   projectPath: string;
   selected: boolean;
@@ -209,7 +215,7 @@ function MediaCanvasLayer(props: {
   const assetKind = props.asset.kind;
   const assetSha256 = props.asset.sha256;
   const onPlaybackError = props.onPlaybackError;
-  const playheadMs = props.playheadMs;
+  const playhead = props.playhead;
   const playing = props.playing;
   const projectPath = props.projectPath;
   const sourceOffsetMs = props.clip.sourceOffsetMs ?? 0;
@@ -222,10 +228,13 @@ function MediaCanvasLayer(props: {
       .catch((error: unknown) => { if (!cancelled) onPlaybackError(toMessage(error)); });
     return () => { cancelled = true; };
   }, [assetKind, assetRelativePath, assetSha256, onPlaybackError, projectPath]);
-  useEffect(() => {
+  const hidden = props.hidden;
+  // Kept in step with the playhead on every move, not through a render (0.5.9 E2): while playing only a drift over
+  // 0.75 s is put right; stopped, dragging the playhead moves the video with it.
+  usePlayheadEffect(playhead, useCallback((playheadMs: number) => {
     const video = videoRef.current;
     if (!video || video.readyState === 0) return;
-    if (props.hidden) { video.pause(); return; }
+    if (hidden) { video.pause(); return; }
     const desiredSeconds = (sourceOffsetMs + Math.max(0, playheadMs - startMs)) / 1_000;
     const seekThreshold = playing ? 0.75 : 0.04;
     if (Math.abs(video.currentTime - desiredSeconds) > seekThreshold) video.currentTime = desiredSeconds;
@@ -234,7 +243,7 @@ function MediaCanvasLayer(props: {
       return;
     }
     if (video.paused) void video.play().catch((error: unknown) => onPlaybackError(toMessage(error)));
-  }, [onPlaybackError, playheadMs, playing, props.hidden, sourceOffsetMs, startMs]);
+  }, [hidden, onPlaybackError, playing, sourceOffsetMs, startMs]));
   const beginGesture = (event: PointerEvent<HTMLElement>, mode: CanvasGesture['mode'], handle?: CanvasHandle): void => {
     if (event.button !== 0 || props.locked) return;
     event.preventDefault();
@@ -301,7 +310,7 @@ function MediaCanvasLayer(props: {
       preload={props.hidden ? 'none' : playing ? 'auto' : 'metadata'}
       src={url}
       onLoadedMetadata={(event) => {
-        event.currentTarget.currentTime = (sourceOffsetMs + Math.max(0, playheadMs - startMs)) / 1_000;
+        event.currentTarget.currentTime = (sourceOffsetMs + Math.max(0, playhead.read() - startMs)) / 1_000;
         if (playing && !props.hidden) void event.currentTarget.play().catch((error: unknown) => onPlaybackError(toMessage(error)));
       }}
       onError={() => props.onPlaybackError(`视频无法解码：${props.asset.name}`)}
@@ -312,6 +321,13 @@ function MediaCanvasLayer(props: {
     <span className="stage-layer-name">{props.asset.name}</span>
     {props.selected && !props.locked ? CANVAS_HANDLES.map((handle) => <i key={handle} className={`stage-media-handle ${handle}`} onPointerDown={(event) => beginGesture(event, 'resize', handle)} />) : null}
   </button>;
+}
+
+/** The clips that start within the next 2 s, to load ahead, as one string (`\nid\n` each). */
+function upcomingClipKey(state: ResolvedTimelineState | null, playheadMs: number): string {
+  const ids = state?.clips.filter((entry) => !entry.visual && entry.layer?.visible !== false && entry.asset.kind !== 'audio'
+    && entry.startMs > playheadMs && entry.startMs <= playheadMs + 2000).map((entry) => entry.clip.id) ?? [];
+  return ids.length ? `\n${ids.join('\n\n')}\n` : '';
 }
 
 function StagePlaceholder(props: { itemTitle: string | null; selectedAsset: LinkMediaAsset | null }): JSX.Element {

@@ -3,8 +3,9 @@ import type { AudioBeatLevel } from '@tb/schema';
 import type { AudioEditor } from './useAudioEditor';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import { Button, Disclosure, WithUnit } from '../ui';
+import type { EditorPlayhead } from './editor-playhead';
 
-export function AudioInspector({ editor, playheadMs }: { editor: AudioEditor; playheadMs: number }): JSX.Element {
+export function AudioInspector({ editor, playhead }: { editor: AudioEditor; playhead: EditorPlayhead }): JSX.Element {
   const segment = editor.selected;
   return <div className="inspector-body audio-inspector">
     <header><AudioLines /><strong>{editor.title}</strong><span>{editor.tracks.length} 条音轨 · {editor.segments.length} 个片段</span></header>
@@ -15,7 +16,7 @@ export function AudioInspector({ editor, playheadMs }: { editor: AudioEditor; pl
         <label><span>素材入点</span><WithUnit unit="秒"><PropertyNumberInput className="ui-input" label="音频素材入点" min={0} step={0.001} value={segment.sourceOffsetMs / 1000} onCommit={(value) => { void editor.update(segment.id, { sourceOffsetMs: Math.round(value * 1000) }); }} /></WithUnit></label>
         <label><span>片段时长</span><WithUnit unit="秒"><PropertyNumberInput className="ui-input" label="音频片段时长" min={0.001} step={0.001} value={segment.durationMs / 1000} onCommit={(value) => { void editor.update(segment.id, { durationMs: Math.round(value * 1000) }); }} /></WithUnit></label>
       </div> : <p>点击波形定位，拖动片段移动位置，拖动两端调整范围。</p>}
-      <div className="audio-edit-actions"><Button variant="secondary" size="sm" icon={Scissors} onClick={() => void editor.split(playheadMs)}>播放头处分割</Button><Button variant="danger" size="sm" icon={Trash2} disabled={!segment} onClick={() => void editor.remove()}>删除片段</Button></div>
+      <div className="audio-edit-actions"><Button variant="secondary" size="sm" icon={Scissors} onClick={() => void editor.split(playhead.read())}>播放头处分割</Button><Button variant="danger" size="sm" icon={Trash2} disabled={!segment} onClick={() => void editor.remove()}>删除片段</Button></div>
       </fieldset>
       {editor.disabled && !editor.busy ? <p>停止播放后才能移动、裁剪或删除音频片段，节拍标记随时可以编辑。</p> : null}
       </Disclosure>

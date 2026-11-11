@@ -9,7 +9,6 @@ type LayoutInput = {
   audioEditor?: { tracks: readonly unknown[] };
   audioRowHeight?: number;
   layers: readonly unknown[];
-  playheadMs: number;
   referenceAudio: { durationMs: number } | null;
 };
 type TimelineStyle = CSSProperties & { '--timeline-grid-size': string };
@@ -32,7 +31,7 @@ export function timelineLayout(props: LayoutInput, contentWidth: number, pixelsP
   rows.push(props.lightingWorkspace ? 'minmax(0, 1fr)' : 'minmax(90px, 1fr)');
   const contentStyle: TimelineStyle = { width: contentWidth, gridTemplateRows: rows.join(' '), '--timeline-grid-size': `${gridSize}px` };
   return {
-    playheadLeft: props.playheadMs / 1_000 * pixelsPerSecond, contentStyle,
+    contentStyle,
     headingStyle: { gridTemplateRows: contentStyle.gridTemplateRows },
     visualTracks: { start: timelineRulerHeight(props) + audioRows * audioHeight, lightingIndex, lightingHeight: lightingRows * 72 },
     waveformContentWidth: props.referenceAudio ? Math.min(contentWidth, props.referenceAudio.durationMs / 1_000 * pixelsPerSecond) : contentWidth

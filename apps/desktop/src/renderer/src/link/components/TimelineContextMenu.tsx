@@ -2,6 +2,7 @@ import { ClipboardPaste, Copy, CopyPlus, Scissors, Trash2, SkipBack, SkipForward
 import { resolveTimelineClipSpan, resolveTimelineCueSpan, timecodeToMilliseconds } from '@tb/core/link';
 import type { LinkCue, MtcFrameRate, ReferenceMediaClip, VisualLayer } from '@tb/schema';
 import { Menu, MenuItem, MenuSeparator } from '../ui';
+import { usePlayheadMs, type EditorPlayhead } from './editor-playhead';
 
 export type TimelineTarget = { kind: 'clip' | 'cue'; id: string };
 export type TimelineContext = { target: TimelineTarget | null; x: number; y: number };
@@ -15,11 +16,13 @@ type Actions = {
   onSetClipEmbeddedAudioEnabled: (id: string, enabled: boolean) => void;
 };
 
-export function TimelineContextMenu({ context, clipboard, clips, cues, layers, frameRate, playheadMs, actions, onCopy, onSeek, onClose }: {
+export function TimelineContextMenu({ context, clipboard, clips, cues, layers, frameRate, playhead, actions, onCopy, onSeek, onClose }: {
   context: TimelineContext; clipboard: TimelineTarget | null; clips: ReferenceMediaClip[]; cues: LinkCue[]; layers: VisualLayer[];
-  frameRate: MtcFrameRate; playheadMs: number; actions: Actions;
+  frameRate: MtcFrameRate; playhead: EditorPlayhead; actions: Actions;
   onCopy: (target: TimelineTarget) => void; onSeek: (at: number) => void; onClose: () => void;
 }): JSX.Element {
+  // Open for a moment: it follows the playhead every frame, as it did before (0.5.9 E2).
+  const playheadMs = usePlayheadMs(playhead);
   const target = context.target;
   const clip = target?.kind === 'clip' ? clips.find((entry) => entry.id === target.id) : undefined;
   const cue = target?.kind === 'cue' ? cues.find((entry) => entry.id === target.id) : undefined;

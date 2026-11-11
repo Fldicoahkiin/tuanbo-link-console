@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ProjectPlayer } from './ProjectPlayerControls';
 import { useSelectedProgram } from '../useSelectedProgram';
 import { useDocumentStore } from '../stores/document-store';
@@ -6,7 +6,7 @@ import { LatestPosition } from '../runtime/latest-position';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
 import { useDisplayPreferences } from '../stores/display-preferences-store';
-import { usePlayerClock } from '../usePlayerClock';
+import { EditorPlayhead } from './editor-playhead';
 import { editorPlayRequest } from './play-buttons';
 import { songInPlayer } from '../view-models/picture-on-air';
 
@@ -16,10 +16,12 @@ export function useEditorProgram(player: ProjectPlayer, external: boolean, notif
   return songInPlayer(player.state, external) ?? selected;
 }
 
-/** The editor owns only its stopped cursor; the formal player owns audio and output. */
+/** The editor owns only its stopped cursor; the formal player owns audio and output.
+ * The playhead is an EditorPlayhead, outside React (0.5.9 E2): while 联动台播放 holds this
+ * song it follows the player's clock once a frame, otherwise the editor's own cursor. */
 export function useEditorTransport(player: ProjectPlayer, itemId: string | null, external: boolean,
   notify: (message: string, tone?: 'info' | 'error', key?: string) => void, previewCoordinator: LinkRuntimeCoordinator | null = null, localAudioReady = true) {
-  const [cursor, setCursor] = useState(0);
+  const [playhead] = useState(() => new EditorPlayhead());
   const cursorRef = useRef(0);
   const [localPlaying, setLocalPlaying] = useState(false);
   useEffect(() => { useMa2SyncStore.setState({ previewPlaying: localPlaying }); return () => { useMa2SyncStore.setState({ previewPlaying: false }); }; }, [localPlaying]);
@@ -29,20 +31,38 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
   useEffect(() => { setSeeking(false); return () => { seekQueue.current?.cancel(); seekQueue.current = null; }; }, [itemId, player.controller, previewCoordinator]);
   // The song 联动台播放 holds, as the picture marks see it (view-models/picture-on-air).
   const active = itemId !== null && songInPlayer(player.state, external) === itemId;
-  const playerClock = usePlayerClock(player.view, active);
-  const playheadMs = active && !seeking ? playerClock.positionMs : cursor;
+  // The player's clock shows while it holds this song and no seek is under way; the cursor otherwise.
+  const following = active && !seeking;
+  const view = player.view;
+  const followRef = useRef(following);
+  const activeRef = useRef(active);
+  // A render reads the playhead as it draws (a server render too); the effect then tells the subscribers.
+  playhead.place(following ? view.readClock().positionMs : cursorRef.current);
+  useLayoutEffect(() => {
+    followRef.current = following; activeRef.current = active;
+    if (!following) { playhead.set(cursorRef.current); return; }
+    const follow = (): void => { if (followRef.current) playhead.set(view.readClock().positionMs); };
+    follow();
+    return view.subscribeClock(follow);
+  }, [active, following, playhead, view]);
   const playing = external ? active && player.state.status === 'playing' : localPlaying;
   const clock = player.controller?.clock;
   useEffect(() => { if (external && player.state.error) notify(player.state.error, 'error'); }, [external, player.state.error, notify]);
   useEffect(() => { if (external) notify(player.state.status === 'preparing' ? '' : player.state.notice ?? '', 'info', 'player-notice'); }, [external, player.state.notice, player.state.status, notify]);
   const report = (error: unknown): void => notify(error instanceof Error ? error.message : String(error), 'error');
-  const reset = useCallback(() => { seekQueue.current?.cancel(); seekQueue.current = null; setSeeking(false); cursorRef.current = 0; setCursor(0); setLocalPlaying(false); }, []);
+  const reset = useCallback(() => {
+    seekQueue.current?.cancel(); seekQueue.current = null; setSeeking(false); cursorRef.current = 0; setLocalPlaying(false);
+    if (!activeRef.current) playhead.set(0);
+  }, [playhead]);
+  /** A seek starts: the cursor shows at once, before the render that stops following the clock. */
+  const showSeek = (position: number): void => { followRef.current = false; setSeeking(true); playhead.set(position); };
   const setPlayheadMs = (position: number): void => {
-    cursorRef.current = position; setCursor(position);
+    cursorRef.current = position;
+    if (!followRef.current) playhead.set(position);
     if (!external || !itemId) return;
     if (!active) {
       if (!previewCoordinator) return;
-      setSeeking(true);
+      showSeek(position);
       if (!seekQueue.current) {
         resumeAfterSeek.current = false;
         seekQueue.current = new LatestPosition(
@@ -59,7 +79,7 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
     const endMs = item?.playback?.endMs || item?.referenceAudio?.durationMs;
     if (!endMs) return;
     const target = Math.max(item?.playback?.startMs ?? 0, Math.min(position, endMs - 1));
-    setSeeking(true);
+    showSeek(position);
     if (!seekQueue.current) {
       resumeAfterSeek.current = playing;
       seekQueue.current = new LatestPosition(
@@ -86,10 +106,10 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
   const stopForEdit = async (): Promise<void> => {
     if (!external || player.state.status !== 'paused') return;
     if (seekQueue.current) throw new Error('正在定位，请等定位完成后再编辑音频');
-    cursorRef.current = playheadMs; setCursor(playheadMs);
+    cursorRef.current = playhead.read();
     await player.controller?.stop();
   };
   /** The show is being prepared: the play button and Space wait for it, so it never starts over (0.5.9). */
   const preparing = external && player.state.status === 'preparing';
-  return { playheadMs, playing, preparing, setPlayheadMs, setPlaying, reset, clock, stop, stopForEdit };
+  return { playhead, playing, preparing, setPlayheadMs, setPlaying, reset, clock, stop, stopForEdit };
 }

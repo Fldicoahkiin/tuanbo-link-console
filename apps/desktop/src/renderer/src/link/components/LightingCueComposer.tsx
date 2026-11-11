@@ -7,6 +7,7 @@ import { placeEffect } from './useLightingEffectStamp';
 import { CONSOLE_CUE_DRAG } from './lighting-material-drag';
 import { Ma2ConsoleName } from './Ma2ConsoleName';
 import { Button } from '../ui';
+import { usePlayheadValue, type EditorPlayhead } from './editor-playhead';
 import { ma2ConsoleCuePoolName, ma2ConsoleSequenceName, ma2SequenceLibrary, type LibrarySequence } from '../view-models/ma2-sequence-library';
 
 export type CueIngredient = { name: string; sequenceName?: string; sequence: number; cue: string; executor: string; delayMs: number; preparation?: Extract<LightingEvent, { kind: 'ma2' }>['preparation'] };
@@ -79,7 +80,7 @@ function retainCueLocations(before: LightingDocument, placed: LightingDocument, 
   return { ...placed, tracks };
 }
 
-export function LightingCueComposer({ templateId, document, eventId, ms, durationMs, ingredients, onIngredients, onChange, onNew, disabled, details, onDropMaterial }: { onDropMaterial?: (transfer: DataTransfer) => void; templateId?: string | undefined; details: boolean; document: LightingDocument; eventId?: string | undefined; ms: number; durationMs: number; ingredients: CueIngredient[]; onIngredients: (values: CueIngredient[]) => void; onChange: (document: LightingDocument, label: string) => boolean | void; onNew: () => void; disabled: boolean }): JSX.Element {
+export function LightingCueComposer({ templateId, document, eventId, playhead, durationMs, ingredients, onIngredients, onChange, onNew, disabled, details, onDropMaterial }: { onDropMaterial?: (transfer: DataTransfer) => void; templateId?: string | undefined; details: boolean; document: LightingDocument; eventId?: string | undefined; playhead: EditorPlayhead; durationMs: number; ingredients: CueIngredient[]; onIngredients: (values: CueIngredient[]) => void; onChange: (document: LightingDocument, label: string) => boolean | void; onNew: () => void; disabled: boolean }): JSX.Element {
   const [name, setName] = useState(() => document.templates.find(value=>value.id===templateId)?.name ?? document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.flatMap(event => (event.kind === 'ma2' || event.kind === 'empty-cue') && event.id === eventId ? [event.label] : [])))[0] ?? '');
   const [error, setError] = useState('');
   const [createdId, setCreatedId] = useState<string>();
@@ -88,7 +89,9 @@ export function LightingCueComposer({ templateId, document, eventId, ms, duratio
   const [editingName, setEditingName] = useState(false);
   const targetId = eventId ?? createdId;
   const tempoMap = new LightingTempoMap(document.tempos);
-  const cueTime = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => event.id === targetId).map(event => lightingEventTime(clip, event, tempoMap))))[0] ?? ms;
+  const eventTime = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => event.id === targetId).map(event => lightingEventTime(clip, event, tempoMap))))[0];
+  // A new Cue goes at the playhead and shows it as it moves; a placed one shows its own time (0.5.9 E2).
+  const cueTime = usePlayheadValue(playhead, positionMs => eventTime ?? positionMs);
   const signature = JSON.stringify({ ingredients, name, ms: cueTime });
   const stored = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === targetId);
   const storedName = stored && 'label' in stored ? stored.label : undefined;
@@ -100,11 +103,11 @@ export function LightingCueComposer({ templateId, document, eventId, ms, duratio
     onDragOver={event => { if (disabled || !event.dataTransfer.types.some(type => type === CONSOLE_CUE_DRAG || type === 'application/x-tblink-lighting-effect')) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy'; setDragOver(true); }}
     onDragLeave={event => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragOver(false); }}
     onDrop={event => { event.preventDefault(); event.stopPropagation(); setDragOver(false); if (!disabled) onDropMaterial?.(event.dataTransfer); }}>
-    <header className="cue-composer-heading"><strong>{targetId ? '编辑 Cue' : '组合 Cue'}</strong><span>{(cueTime / 1000).toFixed(3)} 秒</span><button className="cue-save" aria-label={eventId || createdId ? '保存 Cue' : '添加 Cue'} disabled={disabled || saved || durationMs <= 0} onClick={() => { try { const id = eventId ?? createdId ?? crypto.randomUUID(); const result = onChange(saveCueIngredients(document, ingredients, name, ms, durationMs, id), '保存 Cue 组合'); if (result === false) { setError('保存失败，请处理提示后重试'); return; } setCreatedId(id); setError(''); setSaved(true); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}>{saved ? <Check /> : <Save />}<span>{saved ? '已保存' : eventId || createdId ? '保存修改' : '添加到时间线'}</span></button><button title="关闭编辑" aria-label="关闭 Cue 编辑" onClick={onNew}><X /></button></header>
+    <header className="cue-composer-heading"><strong>{targetId ? '编辑 Cue' : '组合 Cue'}</strong><span>{(cueTime / 1000).toFixed(3)} 秒</span><button className="cue-save" aria-label={eventId || createdId ? '保存 Cue' : '添加 Cue'} disabled={disabled || saved || durationMs <= 0} onClick={() => { try { const id = eventId ?? createdId ?? crypto.randomUUID(); const result = onChange(saveCueIngredients(document, ingredients, name, playhead.read(), durationMs, id), '保存 Cue 组合'); if (result === false) { setError('保存失败，请处理提示后重试'); return; } setCreatedId(id); setError(''); setSaved(true); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}>{saved ? <Check /> : <Save />}<span>{saved ? '已保存' : eventId || createdId ? '保存修改' : '添加到时间线'}</span></button><button title="关闭编辑" aria-label="关闭 Cue 编辑" onClick={onNew}><X /></button></header>
     <input className="cue-name-input" aria-label="Cue 名称" placeholder="Cue 名称" value={name} disabled={disabled} onFocus={() => setEditingName(true)} onChange={event => { setName(event.target.value); setSaved(false); }} onBlur={() => {
       setEditingName(false);
       if (!targetId || disabled || name.trim() === storedName) return;
-      try { if (onChange(saveCueIngredients(document, ingredients, name, ms, durationMs, targetId), '重命名 Cue') === false) throw new Error('Cue 名称保存失败'); setError(''); }
+      try { if (onChange(saveCueIngredients(document, ingredients, name, playhead.read(), durationMs, targetId), '重命名 Cue') === false) throw new Error('Cue 名称保存失败'); setError(''); }
       catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     }} />
     {document.consoleSong?.points.some(point => point.id === targetId) ? <small className="cue-console-address">{document.consoleSong.executor ? `按钮第 ${document.consoleSong.executor.split('.')[0]} 页 · ${document.consoleSong.executor.split('.')[1]} 格` : `Layout ${document.consoleSong.layout}`} · 序列 {document.consoleSong.sequence} · Cue {Number(document.consoleSong.points.find(point => point.id === targetId)?.cue)}</small> : null}

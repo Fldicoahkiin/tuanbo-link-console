@@ -12,16 +12,17 @@ import { ma2SequenceLibrary } from '../view-models/ma2-sequence-library';
 import { useLightingCueSplit } from './LightingLibrarySplitter';
 import { LightingCueComposer, cueIngredients, saveCueIngredients, type CueIngredient } from './LightingCueComposer';
 import { CONSOLE_CUE_DRAG, consoleCueDragSchema } from './lighting-material-drag';
+import type { EditorPlayhead } from './editor-playhead';
 import '../lighting-cue-composer.css';
 import { LightingCustomCategories } from './LightingCustomCategories';
 import { Ma2LayoutPanel } from './Ma2LayoutPanel';
 
 export const EFFECT_DRAG = 'application/x-tblink-lighting-effect';
-export function LightingEffectDock({ itemId, onCreated, document, disabled, onChange, eventId, ms, durationMs, onNew, headerActions, externalPanel, onLibrary, pointDetails, cueSelectionVersion, sidebarHost, playbackSettings, onAuditionTemplate, onStamp, notify }: {
+export function LightingEffectDock({ itemId, onCreated, document, disabled, onChange, eventId, playhead, durationMs, onNew, headerActions, externalPanel, onLibrary, pointDetails, cueSelectionVersion, sidebarHost, playbackSettings, onAuditionTemplate, onStamp, notify }: {
   itemId: string;
   onCreated: (document: LightingDocument, id: string) => void;
   sidebarHost: HTMLDivElement | null; playbackSettings: ReactNode; onAuditionTemplate: (id: string) => void; auditionStatus: string;
-  pointDetails: boolean; cueSelectionVersion: number; externalPanel?: ReactNode; onLibrary: () => void; headerActions?: ReactNode; document: LightingDocument; disabled: boolean; eventId?: string | undefined; ms: number; durationMs: number; onNew: () => void;
+  pointDetails: boolean; cueSelectionVersion: number; externalPanel?: ReactNode; onLibrary: () => void; headerActions?: ReactNode; document: LightingDocument; disabled: boolean; eventId?: string | undefined; playhead: EditorPlayhead; durationMs: number; onNew: () => void;
   onStamp: (id: string) => void; onChange: (document: LightingDocument, label: string) => boolean | void;
   notify: (message: string, tone?: 'info' | 'error') => void;
 }): JSX.Element {
@@ -49,11 +50,11 @@ export function LightingEffectDock({ itemId, onCreated, document, disabled, onCh
       if (eventId) {
         const target = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === eventId);
         if (!target || !('label' in target)) throw new Error('当前 Cue 已不存在，请重新选择');
-        const next = saveCueIngredients(document, values, target.label, ms, durationMs, eventId);
+        const next = saveCueIngredients(document, values, target.label, playhead.read(), durationMs, eventId);
         if (onChange(next, '修改 Cue 素材') === false) { setError('保存失败，请处理提示后重试'); return; }
       } else if (!templateId) {
         const id = crypto.randomUUID();
-        const next = saveCueIngredients(document, values, '', ms, durationMs, id);
+        const next = saveCueIngredients(document, values, '', playhead.read(), durationMs, id);
         if (onChange(next, '添加 Cue 素材') === false) { setError('保存失败，请处理提示后重试'); return; }
         onCreated(next, id);
       }
@@ -87,7 +88,7 @@ export function LightingEffectDock({ itemId, onCreated, document, disabled, onCh
     {sidebarHost ? createPortal(sidebar, sidebarHost) : sidebar}
     {browserOpen ? <Ma2CachedBrowser disabled={disabled} notify={notify} onClose={() => useMa2ReadStore.setState({ browserOpen: false })} /> : externalPanel || <>
       <div className="cue-material-browser">{section === 'console' ? <Ma2SequencePreview document={document} onBrowseLayout={browseLayout} onLayoutSettings={()=>setLayoutOpen(true)} onClose={() => setSection('front')} onUse={addConsoleCue} onClassify={value => { setDraft(value); setSection('front'); }} composing={editorOpen || layoutOpen} /> : <LightingUserLibrary key={customCategory ?? section} customCategoryId={customCategory ?? undefined} section={section} document={document} draft={draft} onDraftClose={() => setDraft(null)} onBrowse={() => setSection('console')} onAudition={onAuditionTemplate} onCueUse={addConsoleCue} composing={editorOpen || layoutOpen} onStamp={id => editorOpen || layoutOpen ? addIngredient(id) : onStamp(id)} onCompose={id => { onNew(); setTemplateId(id); setDraftOpen(true); const entry = document.templates.find(value => value.id === id); const binding = entry?.track.cueStamp; setIngredients(entry?.members?.map(value => ({ ...value })) ?? (entry && binding?.mode === 'fixed' ? [{ name: entry.name, sequence: binding.sequence, cue: binding.cue, executor: binding.executor, delayMs: 0 }] : [])); }} />}</div>
-      {layoutOpen ? <>{split.separator}<Ma2LayoutPanel itemId={itemId} key={project?.projectId} document={document} ingredients={newCueIngredients} onIngredients={setNewCueIngredients} onClose={()=>setLayoutOpen(false)}/></> : editorOpen ? <>{split.separator}<LightingCueComposer key={eventId ?? templateId ?? 'draft'} details={pointDetails} templateId={templateId} document={document} eventId={eventId} ms={ms} durationMs={durationMs} ingredients={ingredients} onIngredients={commitIngredients} onChange={onChange} onNew={close} disabled={disabled} onDropMaterial={transfer => {
+      {layoutOpen ? <>{split.separator}<Ma2LayoutPanel itemId={itemId} key={project?.projectId} document={document} ingredients={newCueIngredients} onIngredients={setNewCueIngredients} onClose={()=>setLayoutOpen(false)}/></> : editorOpen ? <>{split.separator}<LightingCueComposer key={eventId ?? templateId ?? 'draft'} details={pointDetails} templateId={templateId} document={document} eventId={eventId} playhead={playhead} durationMs={durationMs} ingredients={ingredients} onIngredients={commitIngredients} onChange={onChange} onNew={close} disabled={disabled} onDropMaterial={transfer => {
         try {
           const effect = transfer.getData(EFFECT_DRAG);
           if (effect) { addIngredient(effect); return; }

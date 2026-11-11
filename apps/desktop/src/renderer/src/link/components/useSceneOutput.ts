@@ -3,6 +3,7 @@ import { millisecondsToFrameNumber, SceneOutputTimeline } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
 import type { Airtime } from './timeline-air';
 import { NO_PENDING_PICTURE_EDITS } from '../view-models/pending-picture-edits';
+import { usePlayheadValue, type EditorPlayhead } from './editor-playhead';
 import { pictureMarks, pictureOnAir, type PictureMarks, type PlayerVersion } from '../view-models/picture-on-air';
 
 const NO_AIRTIME: Airtime = new Map();
@@ -13,7 +14,7 @@ const NO_MARKS: PictureMarks = { onAirtime: NO_AIRTIME, pending: NO_PENDING_PICT
  * on air (`marks`, view-models/picture-on-air: while 联动台播放 holds the song, OBS plays the version it
  * started with), and the picture at the playhead for the preview drawn without OBS.
  * `playbackProject`: the project the player was opened with; LinkApp keeps it until 停止. */
-export function useSceneOutput(project: LinkProject | null, itemId: string | null, playheadMs: number, connected: boolean,
+export function useSceneOutput(project: LinkProject | null, itemId: string | null, playhead: EditorPlayhead, connected: boolean,
   player: Pick<PlayerVersion, 'state' | 'outdated'>, playbackProject: LinkProject | null) {
   const timeline = useMemo(() => project && itemId ? new SceneOutputTimeline(project, itemId) : null, [project, itemId]);
   const airtime = useMemo<Airtime>(() => timeline?.airtime() ?? NO_AIRTIME, [timeline]);
@@ -25,9 +26,17 @@ export function useSceneOutput(project: LinkProject | null, itemId: string | nul
   const onAir = useMemo(() => pictureOnAir(itemId, internal, { state: { status, itemId: playing }, project: playbackProject, outdated: player.outdated }),
     [itemId, internal, status, playing, playbackProject, player.outdated]);
   const marks = useMemo(() => item ? pictureMarks(onAir, { item, frameRate, airtime }) : NO_MARKS, [onAir, item, frameRate, airtime]);
-  const frame = millisecondsToFrameNumber(playheadMs, frameRate);
-  const preview = useMemo(() => timeline && !connected ? resolveScenePreviewOutput(timeline, frame) : null, [timeline, connected, frame]);
+  // The picture is worked out every frame (cheap), but the editor hears only when it changes (0.5.9 E2).
+  const picture = usePlayheadValue(playhead, positionMs => timeline && !connected ? pictureKey(timeline, millisecondsToFrameNumber(positionMs, frameRate)) : null);
+  const preview = useMemo(() => timeline && picture !== null ? resolveScenePreviewOutput(timeline, millisecondsToFrameNumber(playhead.read(), frameRate)) : null,
+    [timeline, picture, playhead, frameRate]);
   return { airtime, marks, preview };
+}
+
+/** The picture at `frame` as one string: the camera, then the clips in it. */
+function pictureKey(timeline: SceneOutputTimeline, frame: number): string {
+  const { camera, clipIds } = timeline.picture(frame);
+  return JSON.stringify([camera?.id ?? null, clipIds]);
 }
 
 /** What the output would show without OBS: every clip in the picture, with the

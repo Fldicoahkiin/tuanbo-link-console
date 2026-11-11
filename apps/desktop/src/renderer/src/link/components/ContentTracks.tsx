@@ -12,6 +12,7 @@ import { timelineItemDuration, timelineSnapGuide, timelineSnapPoints } from './t
 import { useContentTrim, type ContentTrimDrag, type TrimBounds } from './useContentTrim';
 import { useTimelineItemDrag } from './useTimelineItemDrag';
 import type { TimelineViewport } from './useTimelineViewport';
+import { usePlayheadValue, type EditorPlayhead } from './editor-playhead';
 
 const TRACK_HEIGHT = 50;
 /** Items this far outside the visible area stay drawn, so a fast scroll never shows a gap. */
@@ -40,7 +41,8 @@ export type ContentTracksProps = {
   assets: ReadonlyMap<string, LinkMediaAsset>;
   frameRate: MtcFrameRate;
   durationMs: number;
-  playheadMs: number;
+  /** Read when snapping; the on-air marks follow it, drawn again only when they change (0.5.9 E2). */
+  playhead: EditorPlayhead;
   timelineState: ResolvedTimelineState;
   /** The parts covered by upper cameras in this timeline, dimmed. */
   airtime: Airtime;
@@ -75,7 +77,7 @@ export type ContentTracksProps = {
 export function ContentTracks(props: ContentTracksProps): JSX.Element {
   const { viewport, snap } = props;
   const select = (ref: ContentRef): void => { if (ref.kind === 'clip') props.onSelectClip(ref.id); else props.onSelectCue(ref.id); };
-  const snapPoints = (target?: ContentRef): number[] => timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playheadMs, target);
+  const snapPoints = (target?: ContentRef): number[] => timelineSnapPoints(props.timelineState, props.cues, props.frameRate, props.playhead.read(), target);
   const itemDrag = useTimelineItemDrag({
     clips: props.clips, cues: props.cues, layers: props.layers,
     focusTimeline: props.focusTimeline, timeAtClientX: viewport.editTimeAtClientX,
@@ -85,10 +87,11 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
   });
   const trim = useContentTrim({ frameRate: props.frameRate, timeAtClientX: viewport.editTimeAtClientX, focusTimeline: props.focusTimeline,
     snapEnabled: snap.enabled, snapThresholdMs: snap.thresholdMs, snapPoints, bounds: props.rules.trimBounds, onSelect: select, onTrim: props.onTrim });
-  const snapGuide = timelineSnapGuide(props, snap.enabled, itemDrag.drag);
-  const frame = millisecondsToFrameNumber(props.playheadMs, props.frameRate);
-  const onAir = useMemo(() => markedOnAir(props.onAirtime, props.pending, frame, props.timelineState.activeObsCueIds),
-    [props.onAirtime, props.pending, frame, props.timelineState]);
+  const snapGuide = timelineSnapGuide({ ...props, playheadMs: props.playhead.read() }, snap.enabled, itemDrag.drag);
+  // Worked out every frame, but the tracks draw again only when what is on air changes, such as at a camera switch.
+  const onAirKey = usePlayheadValue(props.playhead, positionMs => [...markedOnAir(props.onAirtime, props.pending,
+    millisecondsToFrameNumber(positionMs, props.frameRate), props.timelineState.activeObsCueIds)].sort().join('\n'));
+  const onAir = useMemo(() => new Set(onAirKey ? onAirKey.split('\n') : []), [onAirKey]);
   const drop = (event: DragEvent<HTMLElement>, layer?: VisualLayer): void => {
     event.preventDefault();
     event.stopPropagation();

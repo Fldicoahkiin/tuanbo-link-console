@@ -7,16 +7,18 @@ import { musicSegmentAt, musicSegmentTempoLabel } from '../view-models/music-seg
 import { musicAnalysisHeading } from '../view-models/music-analysis-display';
 import { Button, Disclosure, Field, IconButton, Select, TextInput, WithUnit } from '../ui';
 import './music-analysis.css';
+import { usePlayheadValue, type EditorPlayhead } from './editor-playhead';
 
 export type MusicBeatPanelProps = {
   beats: MusicBeatSegments; analysis: ReturnType<typeof useAutomaticMusicAnalysis>;
-  document: LightingDocument; playheadMs: number; source: ReferenceAudio | undefined; projectPath: string | null; playing: boolean;
+  document: LightingDocument; playhead: EditorPlayhead; source: ReferenceAudio | undefined; projectPath: string | null; playing: boolean;
   onChange: (value: LightingDocument, label: string) => void; onSeek: (ms: number) => void; onClose: () => void;
 };
 const seconds = (ms: number): string => (ms / 1000).toFixed(2);
-export function MusicBeatPanel({ beats, analysis, source, projectPath, playheadMs, onSeek, onClose }: MusicBeatPanelProps): JSX.Element {
+export function MusicBeatPanel({ beats, analysis, source, projectPath, playhead, onSeek, onClose }: MusicBeatPanelProps): JSX.Element {
   const data = beats.data;
-  const current = musicSegmentAt(beats.points, playheadMs);
+  // The section at the playhead: drawn again only when the playhead enters another one (0.5.9 E2).
+  const current = usePlayheadValue(playhead, positionMs => musicSegmentAt(beats.points, positionMs));
   const dirty = useDocumentStore(state => state.dirty);
   const devices = analysis.status?.devices ?? [];
   const message = !source ? '先添加音乐' : !projectPath ? '先保存工程，保存后会自动分析' : beats.error || analysis.error || (beats.busy || analysis.job?.state === 'failed' || analysis.job?.state === 'cancelled' ? analysis.job?.message : !analysis.status?.available ? analysis.status?.reason : beats.blocked ? '识别在后台继续，停止播放后会写入分段结果。' : current?.bpm === null ? '这一段拍点太少，算不出 BPM，可以检查拍点或重新分析。' : null);

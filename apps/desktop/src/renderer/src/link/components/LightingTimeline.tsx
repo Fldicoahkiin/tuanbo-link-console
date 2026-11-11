@@ -9,6 +9,7 @@ import { masterCurveY } from './lighting-master-curve';
 import { useDragSession } from './useDragSession';
 import { keyTarget, modalDialogOpen } from '../playback-keys';
 import { lightingTimelineKeyActs } from './timeline-keys';
+import { usePlayheadValue, type EditorPlayhead } from './editor-playhead';
 
 function groupStackedEvents(tracks: LightingTrack[], map: LightingTempoMap, pixelsPerSecond: number): Map<string, LightingEvent[]> {
   const result = new Map<string, LightingEvent[]>();
@@ -71,15 +72,19 @@ export function LightingHeadings(props: LightingTimelineProps & { durationMs: nu
     {context ? <Menu x={context.x} y={context.y} label="灯光轨道菜单" title={context.track.name} onClose={() => setContext(null)}><MenuItem icon={Trash2} danger disabled={context.track.locked} onSelect={() => remove(context.track)}>删除灯光轨道</MenuItem></Menu> : null}
   </>;
 }
-export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: number; scrollLeft: number; viewportWidth: number; getPlaybackPosition?: () => number; playheadMs: number; onSeek: (ms: number) => void; timeAtClientX: (x: number) => number }): JSX.Element {
+export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: number; scrollLeft: number; viewportWidth: number; getPlaybackPosition?: () => number; playhead: EditorPlayhead; onSeek: (ms: number) => void; timeAtClientX: (x: number) => number }): JSX.Element {
   const map = useMemo(() => new LightingTempoMap(props.document.tempos), [props.document.tempos]);
   const clipboard = useLightingClipboardStore((state) => state.clipboard);
   const [context, setContext] = useState<{ trackId: string; clipId: string; eventId: string | null; ms: number; x: number; y: number } | null>(null);
   const activeTrack = props.document.tracks.find((entry) => entry.clips.some((clip) => clip.id === props.selectedClipId)) ?? props.document.tracks[0];
-  const activeClip = activeTrack?.clips.find((entry) => entry.id === props.selectedClipId) ?? activeTrack?.clips.find((entry) => { const span = lightingClipSpan(entry, map); return props.playheadMs >= span.startMs && props.playheadMs < span.endMs; });
+  // The clip under the playhead (when none is selected): drawn again only when the playhead enters another one (0.5.9 E2).
+  const playingClip = usePlayheadValue(props.playhead, positionMs => activeTrack?.clips.find((entry) => { const span = lightingClipSpan(entry, map); return positionMs >= span.startMs && positionMs < span.endMs; }));
+  const activeClip = activeTrack?.clips.find((entry) => entry.id === props.selectedClipId) ?? playingClip;
   const menuTrack = props.document.tracks.find((entry) => entry.id === context?.trackId);
   const menuClip = menuTrack?.clips.find((entry) => entry.id === context?.clipId);
   const menuEvent = menuClip?.events.find((entry) => entry.id === context?.eventId);
+  // While the point menu is open it follows the playhead every frame, as it did before.
+  const menuPlayheadMs = usePlayheadValue(props.playhead, positionMs => menuEvent ? positionMs : 0);
   const stackedEvents = useMemo(() => groupStackedEvents(props.document.tracks, map, props.pixelsPerSecond), [props.document.tracks, props.pixelsPerSecond, map]);
   const selectedStack = props.selectedEventId ? stackedEvents.get(props.selectedEventId) : undefined;
   const selectedIds = new Set(props.selectedEventIds ?? (props.selectedEventId ? [props.selectedEventId] : []));
@@ -149,11 +154,11 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
         if (props.selectedClipId !== clip.id) return;
         if (event.code === 'KeyA' && props.selectedClipId === clip.id && clip.events.length) { event.preventDefault(); props.onSelectEvent?.(track.id, clip.id, clip.events.at(-1)!.id, clip.events.map((entry) => entry.id)); }
         if (event.code === 'KeyC' || event.code === 'KeyX') { event.preventDefault(); copy(track, clip, selectedIds, event.code === 'KeyX'); }
-        if (event.code === 'KeyV') { event.preventDefault(); paste(track, clip, props.playheadMs); }
+        if (event.code === 'KeyV') { event.preventDefault(); paste(track, clip, props.playhead.read()); }
         return;
       }
       if (track.locked) return;
-      if (!document.querySelector('.lighting-workbench') && event.code === 'KeyM') { event.preventDefault(); add(track, clip, props.getPlaybackPosition?.() ?? props.playheadMs); }
+      if (!document.querySelector('.lighting-workbench') && event.code === 'KeyM') { event.preventDefault(); add(track, clip, props.getPlaybackPosition?.() ?? props.playhead.read()); }
       if ((event.code === 'Delete' || event.code === 'Backspace') && props.selectedEventId) { event.preventDefault(); changeClip(track, { ...clip, events: clip.events.filter((entry) => !selectedIds.has(entry.id)) }, '删除灯光点'); props.onSelect(track.id, clip.id); }
     };
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
@@ -215,8 +220,8 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
       <MenuSeparator />
       {menuEvent ? <><MenuItem icon={Copy} shortcut="Ctrl+C" onSelect={() => { copy(menuTrack, menuClip, menuIds); setContext(null); }}>复制灯光点</MenuItem><MenuItem icon={Scissors} shortcut="Ctrl+X" disabled={menuTrack.locked} onSelect={() => { copy(menuTrack, menuClip, menuIds, true); setContext(null); }}>剪切灯光点</MenuItem></> : null}
       <MenuItem icon={ClipboardPaste} shortcut="Ctrl+V" disabled={!clipboard || menuTrack.locked || context.ms < lightingClipSpan(menuClip, map).startMs} onSelect={() => { paste(menuTrack, menuClip, context.ms); setContext(null); }}>粘贴到这里</MenuItem>
-      {menuEvent ? <><MenuItem icon={CopyPlus} disabled={menuTrack.locked || props.playheadMs < lightingClipSpan(menuClip, map).startMs} onSelect={() => {
-        const at = (menuClip.timeLock === 'time' ? props.playheadMs : map.msToBeat(props.playheadMs)) - menuClip.start;
+      {menuEvent ? <><MenuItem icon={CopyPlus} disabled={menuTrack.locked || menuPlayheadMs < lightingClipSpan(menuClip, map).startMs} onSelect={() => {
+        const at = (menuClip.timeLock === 'time' ? menuPlayheadMs : map.msToBeat(menuPlayheadMs)) - menuClip.start;
         const copied = copyLightingEventsAt(menuClip, menuIds, at);
         changeClip(menuTrack, copied.clip, '复制灯光点');
         const primary = copied.copiedIds.at(-1);

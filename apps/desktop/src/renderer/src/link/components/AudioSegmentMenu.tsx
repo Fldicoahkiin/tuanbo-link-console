@@ -1,11 +1,14 @@
 import { Scissors, SlidersHorizontal, Trash2, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import type { AudioSegment } from '@tb/schema';
 import { Menu, MenuItem, MenuSeparator } from '../ui';
+import { usePlayheadMs, type EditorPlayhead } from './editor-playhead';
 
-export function AudioSegmentMenu({ x, y, segment, playheadMs, disabled, onClose, onEdit, onSplit, onTrim, onRemove }: {
-  x: number; y: number; segment: AudioSegment; playheadMs: number; disabled: boolean;
+export function AudioSegmentMenu({ x, y, segment, playhead, disabled, onClose, onEdit, onSplit, onTrim, onRemove }: {
+  x: number; y: number; segment: AudioSegment; playhead: EditorPlayhead; disabled: boolean;
   onClose: () => void; onEdit: () => void; onSplit: () => void; onTrim: (edge: 'start' | 'end') => void; onRemove: () => void;
 }): JSX.Element {
+  // Open for a moment: it follows the playhead every frame, as it did before (0.5.9 E2).
+  const playheadMs = usePlayheadMs(playhead);
   const inside = playheadMs > segment.startMs && playheadMs < segment.startMs + segment.durationMs;
   const run = (action: () => void): void => { onClose(); action(); };
   return <Menu x={x} y={y} label="音频片段菜单" onClose={onClose}>

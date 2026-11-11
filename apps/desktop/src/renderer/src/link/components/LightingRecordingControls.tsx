@@ -6,7 +6,7 @@ import type { LightingClip, LightingDocument, LightingTempo, LightingTrack } fro
 import { useIntegrationStore } from '../stores/integration-store';
 import { Button } from '../ui';
 
-export function LightingRecordingControls(props: { audioAvailable?: boolean; clip: LightingClip; track: LightingTrack; tempos: LightingTempo[]; playheadMs: number; clock: PlaybackClock; onRecorded: (take: LightingClip) => void; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element {
+export function LightingRecordingControls(props: { audioAvailable?: boolean; clip: LightingClip; track: LightingTrack; tempos: LightingTempo[]; clock: PlaybackClock; onRecorded: (take: LightingClip) => void; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element {
   const ports = useIntegrationStore((state) => state.profile?.midiPortProfiles);
   const initialized = useIntegrationStore((state) => state.initialized);
   const [recording, setRecording] = useState(false);
@@ -93,10 +93,10 @@ export function LightingRecordingControls(props: { audioAvailable?: boolean; cli
   return <Button variant="ghost" className="timeline-record-button" data-recording={recording || undefined} disabled={!initialized || connecting || (!recording && props.track.locked)} aria-pressed={recording} title="记录播放时收到的 MIDI 操作，输入端口在设置里选择" onClick={() => { if (recording) stop(); else void start(); }}>{connecting ? '连接中…' : recording ? '结束录制' : '录制灯光'}</Button>;
 }
 
-export function TimelineLightingRecording(props: { audioAvailable?: boolean; document: LightingDocument; clipId: string | null; clock: PlaybackClock; playheadMs: number; onChange: (document: LightingDocument, label: string) => void; onError: (message: string) => void }): JSX.Element | null {
+export function TimelineLightingRecording(props: { audioAvailable?: boolean; document: LightingDocument; clipId: string | null; clock: PlaybackClock; onChange: (document: LightingDocument, label: string) => void; onError: (message: string) => void }): JSX.Element | null {
   const track = props.document.tracks.find((entry) => entry.clips.some((clip) => clip.id === props.clipId)) ?? props.document.tracks[0];
   const clip = track?.clips.find((entry) => entry.id === props.clipId) ?? track?.clips[0];
   if (!track || !clip) return null;
-  return <LightingRecordingControls audioAvailable={props.audioAvailable === true} key={track.id + clip.id} clip={clip} track={track} tempos={props.document.tempos} clock={props.clock} playheadMs={props.playheadMs} notify={props.onError} onRecorded={(take) => props.onChange({ ...props.document, tracks: props.document.tracks.map((entry) => entry.id === track.id ? { ...entry, clips: [...entry.clips, take] } : entry) }, '录制灯光片段')} />;
+  return <LightingRecordingControls audioAvailable={props.audioAvailable === true} key={track.id + clip.id} clip={clip} track={track} tempos={props.document.tempos} clock={props.clock} notify={props.onError} onRecorded={(take) => props.onChange({ ...props.document, tracks: props.document.tracks.map((entry) => entry.id === track.id ? { ...entry, clips: [...entry.clips, take] } : entry) }, '录制灯光片段')} />;
 }
 

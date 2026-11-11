@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useRef, useState, type RefObject } from 'react';
 import { LightingTempoMap, lightingEventTime, moveLightingEffect } from '@tb/core/link';
 import type { LightingTimelineProps } from './LightingTimeline';
+import { usePlayheadEffect, type EditorPlayhead } from './editor-playhead';
 
 type Options = {
-  playheadMs: number;
+  playhead: EditorPlayhead;
   durationMs: number;
   externalTransport?: boolean;
   lightingWorkspace?: boolean;
@@ -15,16 +16,17 @@ type Options = {
 };
 
 export function useTimelineWheelSeek(options: Options, audioRef: RefObject<HTMLAudioElement>): { seek: (deltaMs: number) => number; speed: number; setSpeed: (speed: number) => void } {
-  const { playheadMs, durationMs, externalTransport, onPlayingChange, onPlayheadChange } = options;
+  const { playhead, durationMs, externalTransport, onPlayingChange, onPlayheadChange } = options;
   const [speed, setSpeed] = useState(0.1);
-  const position = useRef(playheadMs);
-  useEffect(() => { position.current = playheadMs; }, [playheadMs]);
+  const position = useRef(playhead.read());
+  // Wheel steps add up from where the playhead last moved to.
+  usePlayheadEffect(playhead, useCallback((playheadMs: number) => { position.current = playheadMs; }, []));
   const seek = useCallback((deltaMs: number) => {
     const lighting = options.lightingWorkspace ? options.lighting : undefined;
     if (lighting?.selectedEventId) {
       const map = new LightingTempoMap(lighting.document.tempos);
       const selected = lighting.document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.map(event => ({ clip, event })))).find(entry => entry.event.id === lighting.selectedEventId);
-      const currentMs = selected ? lightingEventTime(selected.clip, selected.event, map) : playheadMs;
+      const currentMs = selected ? lightingEventTime(selected.clip, selected.event, map) : playhead.read();
       try {
         if (options.playing) throw new Error('请暂停播放后用滚轮移动 Cue');
         const limit = options.referenceAudio?.durationMs ?? durationMs;
@@ -40,6 +42,6 @@ export function useTimelineWheelSeek(options: Options, audioRef: RefObject<HTMLA
     onPlayheadChange(next);
     if (!externalTransport && audioRef.current) audioRef.current.currentTime = next / 1_000;
     return next;
-  }, [durationMs, externalTransport, onPlayingChange, onPlayheadChange, audioRef, speed, options.lightingWorkspace, options.lighting, options.playing, options.referenceAudio?.durationMs, playheadMs]);
+  }, [durationMs, externalTransport, onPlayingChange, onPlayheadChange, audioRef, speed, options.lightingWorkspace, options.lighting, options.playing, options.referenceAudio?.durationMs, playhead]);
   return { seek, speed, setSpeed };
 }

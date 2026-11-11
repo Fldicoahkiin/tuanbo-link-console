@@ -5,6 +5,7 @@ import { createEmptyLinkProject, parseLinkProject, type LinkCue, type LinkProjec
 import { moveContentCommand, SceneOutputTimeline, TimelineStateIndex, withContentTimeline } from '@tb/core/link';
 import { ContentTracks, contentEditRules, type ContentTracksProps } from './ContentTracks';
 import type { Airtime } from './timeline-air';
+import { EditorPlayhead } from './editor-playhead';
 
 // The renderer's TSX compiles to React.createElement here; the desktop bridge needs a window.
 vi.stubGlobal('React', React);
@@ -30,7 +31,7 @@ function drawn(project: LinkProject, onAirtime: Airtime | null, pending: Readonl
   const item = project.rundown[0]!;
   const props: ContentTracksProps = {
     layers: item.visualLayers, clips: item.referenceMediaClips, cues: item.cues, assets: new Map(), frameRate: project.timebase.frameRate, durationMs: 20_000,
-    playheadMs: 9_000, timelineState: new TimelineStateIndex(project, item).at(9_000), airtime: new SceneOutputTimeline(project, 'song').airtime(), onAirtime, pending,
+    playhead: new EditorPlayhead(9_000), timelineState: new TimelineStateIndex(project, item).at(9_000), airtime: new SceneOutputTimeline(project, 'song').airtime(), onAirtime, pending,
     selectedClipId: null, selectedCueId: null, audioSnapPoints: [], rules: contentEditRules(project, 'song'),
     viewport: { pixelsPerSecond: 50, scrollLeft: 0, scrollTop: 0, viewportWidth: 2_000, viewportHeight: 600, timeAtClientX: () => 0, editTimeAtClientX: () => 0 },
     tracks: { start: 0, lightingIndex: item.visualLayers.length, lightingHeight: 0 }, snap: { enabled: false, thresholdMs: 0 }, lanePointer: {},

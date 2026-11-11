@@ -1,4 +1,4 @@
-import { useEffect, type MouseEvent, type RefObject, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, type MouseEvent, type RefObject, type ReactNode } from 'react';
 import './timeline-toolbar.css';
 import { Button, Field, IconButton, MenuButton, MenuItem, MenuNote, Select } from '../ui';
 import { TimelinePanelButton } from './TimelinePanelButton';
@@ -24,6 +24,7 @@ import { clampTimelineTime, formatTimelineTimecode, snapTimelineTime } from './t
 import type { ReferenceWaveformSource } from './ReferenceWaveform';
 import { usePreviewMediaLifecycle } from './usePreviewMediaLifecycle';
 import { keysBackToTimeline } from './timeline-keys';
+import { usePlayheadEffect, usePlayheadPaint, type EditorPlayhead } from './editor-playhead';
 
 type Props = {
   externalTransport?: boolean | undefined;
@@ -37,7 +38,8 @@ type Props = {
   wheelSeek?: { speed: number; setSpeed: (speed: number) => void } | undefined;
   frameRate: MtcFrameRate;
   durationMs: number;
-  playheadMs: number;
+  /** The readout and the local audio follow it every frame; the toolbar does not draw again (0.5.9 E2). */
+  playhead: EditorPlayhead;
   playing: boolean;
   playbackReady?: boolean;
   referenceAudio: ReferenceWaveformSource | null;
@@ -60,7 +62,7 @@ type Props = {
 export function TimelineToolbar(props: Props): JSX.Element {
   const audioUrl = props.referenceAudio?.url;
   usePreviewMediaLifecycle(props.audioRef, props.externalTransport ? null : audioUrl);
-  const { audioRef, onPlaybackError, onPlayingChange, onPlayheadChange, playheadMs, playing } = props;
+  const { audioRef, onPlaybackError, onPlayingChange, onPlayheadChange, playhead, playing } = props;
   useEffect(() => {
     const audio = audioRef.current;
     if (props.externalTransport || !audio || !audioUrl || !playing || props.playbackReady === false) return;
@@ -70,10 +72,11 @@ export function TimelineToolbar(props: Props): JSX.Element {
     }, 16);
     return () => window.clearInterval(timer);
   }, [audioRef, audioUrl, playing, onPlayheadChange, onPlayingChange, props.playbackReady, props.externalTransport]);
-  useEffect(() => {
+  const externalTransport = props.externalTransport, playbackReady = props.playbackReady;
+  usePlayheadEffect(playhead, useCallback((playheadMs: number) => {
     const audio = audioRef.current;
-    if (props.externalTransport || !audio || !audioUrl) return;
-    if (props.playbackReady === false) { audio.pause(); return; }
+    if (externalTransport || !audio || !audioUrl) return;
+    if (playbackReady === false) { audio.pause(); return; }
     const desiredSeconds = playheadMs / 1_000;
     // A render can run between the native pause-at-end and ended events.
     // Calling play() there restarts the media before lighting can flush its tail.
@@ -97,7 +100,12 @@ export function TimelineToolbar(props: Props): JSX.Element {
       onPlayingChange(false);
       onPlaybackError(error instanceof Error ? error.message : String(error));
     });
-  }, [audioRef, audioUrl, onPlaybackError, onPlayheadChange, onPlayingChange, playheadMs, playing, props.playbackReady, props.externalTransport]);
+  }, [audioRef, audioUrl, onPlaybackError, onPlayheadChange, onPlayingChange, playing, playbackReady, externalTransport]));
+  const readout = useRef<HTMLElement>(null);
+  const frameRate = props.frameRate;
+  usePlayheadPaint(playhead, useCallback((playheadMs: number) => {
+    if (readout.current) readout.current.textContent = formatTimelineTimecode(playheadMs, frameRate);
+  }, [frameRate]));
 
   const seekTo = (milliseconds: number): void => {
     props.onPlayingChange(false);
@@ -113,8 +121,8 @@ export function TimelineToolbar(props: Props): JSX.Element {
     }
   };
 
-  const previousEditPoint = (): number => [...props.editPoints].filter((point) => point < props.playheadMs - frameDurationMs / 2).sort((a, b) => b - a)[0] ?? 0;
-  const nextEditPoint = (): number => [...props.editPoints].filter((point) => point > props.playheadMs + frameDurationMs / 2).sort((a, b) => a - b)[0] ?? props.durationMs;
+  const previousEditPoint = (): number => [...props.editPoints].filter((point) => point < playhead.read() - frameDurationMs / 2).sort((a, b) => b - a)[0] ?? 0;
+  const nextEditPoint = (): number => [...props.editPoints].filter((point) => point > playhead.read() + frameDurationMs / 2).sort((a, b) => a - b)[0] ?? props.durationMs;
   const snapLabel = props.snapEnabled ? '关闭吸附' : '开启吸附';
 
   return <div className="timeline-toolbar" onClick={giveKeysBack}>
@@ -130,12 +138,12 @@ export function TimelineToolbar(props: Props): JSX.Element {
 
     <div className="timeline-transport" role="group" aria-label="时间线播放控制">
       <IconButton label="回到时间线开头" title="回到开头（Home）" icon={SkipBack} onClick={() => seekTo(0)} />
-      <IconButton label="上一帧" title="上一帧（←）" icon={StepBack} onClick={() => seekTo(props.playheadMs - frameDurationMs)} />
+      <IconButton label="上一帧" title="上一帧（←）" icon={StepBack} onClick={() => seekTo(playhead.read() - frameDurationMs)} />
       <IconButton className="timeline-play-button" variant="primary" label={props.playing ? '暂停时间线' : '播放时间线'} title={props.playing ? '暂停（Space）' : '播放（Space）'} icon={props.playing ? Pause : Play} onClick={() => props.onPlayPause()} />
-      <IconButton label="下一帧" title="下一帧（→）" icon={StepForward} onClick={() => seekTo(props.playheadMs + frameDurationMs)} />
+      <IconButton label="下一帧" title="下一帧（→）" icon={StepForward} onClick={() => seekTo(playhead.read() + frameDurationMs)} />
       <IconButton label="跳到时间线结尾" title="跳到结尾" icon={SkipForward} onClick={() => seekTo(props.durationMs)} />
       {props.onStop ? <IconButton label="停止时间线" title="停止播放（Esc）" icon={Square} onClick={() => props.onStop?.()} /> : null}
-      <code title="当前播放头时间码">{formatTimelineTimecode(props.playheadMs, props.frameRate)}</code>
+      <code ref={readout} title="当前播放头时间码">{formatTimelineTimecode(playhead.read(), props.frameRate)}</code>
       {props.outputControl}
     </div>
 
