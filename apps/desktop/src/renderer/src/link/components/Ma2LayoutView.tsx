@@ -1,7 +1,7 @@
 import { Ma2LayoutCanvas } from './Ma2LayoutCanvas';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { currentShowGate, useShowGate } from '../stores/show-state-store';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, ChevronLeft, ChevronRight, Plus, RefreshCw, List, Grid2X2, Map, MoreHorizontal, CornerDownLeft, Pencil, Move, ZoomIn, ZoomOut } from 'lucide-react';
 import type { Ma2LayoutSnapshot } from '@tb/schema';
@@ -10,6 +10,7 @@ import { CuePoolGrid } from './CuePoolGrid';
 import { Ma2MaterialMenu } from './Ma2MaterialMenu';
 import { Ma2ConsoleName } from './Ma2ConsoleName';
 import { Button, IconButton, Switch } from '../ui';
+import { useKeyOverlay } from '../keys/useKeyCommands';
 import '../ma2-layout.css';
 
 export function Ma2LayoutView({ selected, onBack, onNavigate, onSettings, renderItem, children, typeControl, toolbarHost }: {
@@ -41,6 +42,9 @@ export function Ma2LayoutView({ selected, onBack, onNavigate, onSettings, render
     return () => clearInterval(timer);
   }, [live, editing, state.busy, state.error, state.page, state.snapshot]);
   const [pagesOpen, setPagesOpen] = useState(false);
+  // The page list is a panel like the others: Escape closes it, and the lighting shortcut keys wait while it is open.
+  const pagesPanel = useRef<HTMLDivElement>(null);
+  useKeyOverlay(pagesOpen, { close: () => setPagesOpen(false), panel: pagesPanel });
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [renaming, setRenaming] = useState(false); const [layoutName, setLayoutName] = useState('');
   const [draft, setDraft] = useState(String(state.page));
@@ -78,7 +82,7 @@ export function Ma2LayoutView({ selected, onBack, onNavigate, onSettings, render
       {selected ? <button aria-label="返回页面" title="返回页面" onClick={onBack}><ArrowLeft/></button> : null}
       {onSettings ? <button aria-label="新建 Cue" title="新建 Cue 与本曲同步" disabled={state.busy} onClick={onSettings}><Plus/></button> : null}
     </div>, toolbarHost) : null}
-    {pagesOpen ? <div className="ma2-layout-page-picker" role="dialog" aria-label="选择控台页面"><header><strong>控台页面</strong><button onClick={() => setPagesOpen(false)}>关闭</button></header>{pages.length ? <select aria-label="控台所有页面" size={Math.min(8, pages.length)} value={pages.some(page => page.layout === state.page) ? state.page : ''} onChange={event => navigate(Number(event.target.value))}>{pages.map(page => <option key={page.layout} value={page.layout}>{page.layout} · {page.name}</option>)}</select> : <p>控台没有已建立的 Layout</p>}</div> : null}
+    {pagesOpen ? <div ref={pagesPanel} className="ma2-layout-page-picker" role="dialog" aria-label="选择控台页面"><header><strong>控台页面</strong><button onClick={() => setPagesOpen(false)}>关闭</button></header>{pages.length ? <select aria-label="控台所有页面" size={Math.min(8, pages.length)} value={pages.some(page => page.layout === state.page) ? state.page : ''} onChange={event => navigate(Number(event.target.value))}>{pages.map(page => <option key={page.layout} value={page.layout}>{page.layout} · {page.name}</option>)}</select> : <p>控台没有已建立的 Layout</p>}</div> : null}
     {renaming ? <form className="ma2-layout-rename" onSubmit={event => { event.preventDefault(); void updateMa2LayoutPage({ positions: [], name: layoutName }).then(() => setRenaming(false)).catch((cause: unknown) => setInputError(String(cause))); }}><input aria-label="控台页面名称" required maxLength={512} value={layoutName} onChange={event => setLayoutName(event.target.value)}/><Ma2ConsoleName name={layoutName}/><button disabled={state.busy || mutateWaits}>保存名称到控台</button><button type="button" onClick={() => setRenaming(false)}>取消</button></form> : null}
     {refreshGate.kind === 'wait' ? <p className="ma2-layout-note" role="status">{refreshGate.message}</p> : null}
     {state.busy && !state.snapshot ? <div className="ma2-layout-empty" role="status">正在读取第 {state.page} 页…</div> : inputError || state.error ? <div className="ma2-layout-empty" role="alert">{inputError || state.error}</div> : selected ? children : state.snapshot ? <>

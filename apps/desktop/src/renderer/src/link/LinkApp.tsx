@@ -4,7 +4,6 @@ import { useSettingsExit } from './useSettingsExit';
 import { toUserErrorMessage } from '@tb/core/link';
 import { useMa2ReadStore } from './stores/ma2-read-store';
 import { useDocumentShortcuts } from './useDocumentShortcuts';
-import { escapeClosesPanel, modalDialogOpen } from './playback-keys';
 import { useMidiPortMonitor } from './useMidiPortMonitor';
 import { initializeStartupDevices } from './startup-obs-connection';
 import { subscribeObsSceneSync } from './obs-scene-sync';
@@ -97,12 +96,10 @@ export function LinkApp(): JSX.Element {
   const previewPlaying = useMa2SyncStore(state => state.previewPlaying);
   const playbackLocked = editingLocked || previewPlaying || ['playing', 'paused'].includes(internalPlayer.state.status);
   useEffect(() => { if (!playbackLocked) setPlaybackProject(project); }, [playbackLocked, project]);
-  useConnectionsEscape(connectionsOpen && !settingsOpen, () => setConnectionsOpen(false));
   // The window's one key listener (keys/key-router.ts). While the connection and settings page is open, the window's
-  // playback keys wait and Escape there only closes the page (0.5.9).
+  // playback keys wait and Escape there only closes the page (0.5.9; useKeyOverlay below).
   useKeyRouter();
   usePageScope(page);
-  useKeyOverlay(connectionsOpen, true);
 
   /** `written`: the text is written for the operator already and is shown as it is (noticeText). */
   const notify = useCallback((message: string, tone: 'info' | 'error' = 'info', key?: string, written = false) => {
@@ -202,6 +199,11 @@ export function LinkApp(): JSX.Element {
     setSettingsLocation(null); setSettingsOpen(false); setConnectionsOpen(false);
   });
   const closeSettings = useCallback((): void => leaveSettings(), [leaveSettings]);
+  // Escape closes the settings page (asking first when a form there is not saved), or the connection page. On a
+  // drop-down list of the settings page it is left to the list.
+  const connectionsPanel = useRef<HTMLElement>(null);
+  const closePage = (): void => { if (!settingsOpen) setConnectionsOpen(false); else if (!(document.activeElement instanceof HTMLSelectElement)) closeSettings(); };
+  useKeyOverlay(connectionsOpen, { close: closePage, panel: connectionsPanel, blocks: true });
 
   useEffect(() => {
     if (!openLighting) return;
@@ -231,7 +233,7 @@ export function LinkApp(): JSX.Element {
       />
       <section className={`app-workspace${connectionsOpen ? ' settings-workspace' : ''}`}>
         <main className="app-main" id="workspace-content" tabIndex={-1} aria-label={connectionsOpen ? '设置' : NAVIGATION.find(item => item.id === page)?.label}>
-          <div className="content-scroll">{pageContent}<section hidden={!connectionsOpen} className="connections-dialog" role="dialog" aria-modal="false" aria-label={settingsOpen ? '设置' : '连接与设备'}><div className="connections-content" ref={settingsLocator.ref}><IntegrationWorkspace quickConnectHost={connectHost} midiMonitor={midiMonitor} category={settingsCategory} onCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }} coordinator={coordinator} notify={notify} settingsOpen={connectionsOpen && settingsOpen} onSettingsClose={closeSettings} onSettingsOpen={openSettings} onCreate={() => leaveSettings(beginCreateProject)} onOpen={() => leaveSettings(() => void openProject())} /></div></section>
+          <div className="content-scroll">{pageContent}<section ref={connectionsPanel} hidden={!connectionsOpen} className="connections-dialog" role="dialog" aria-modal="false" aria-label={settingsOpen ? '设置' : '连接与设备'}><div className="connections-content" ref={settingsLocator.ref}><IntegrationWorkspace quickConnectHost={connectHost} midiMonitor={midiMonitor} category={settingsCategory} onCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }} coordinator={coordinator} notify={notify} settingsOpen={connectionsOpen && settingsOpen} onSettingsOpen={openSettings} onCreate={() => leaveSettings(beginCreateProject)} onOpen={() => leaveSettings(() => void openProject())} /></div></section>
       <div className="toast-stack" role="region" aria-label="通知"><div role="status" aria-live="polite">{licenseNotices.map((message, index) => <div className="toast info" key={`license-${index}`}><span>{message}</span><button aria-label="关闭授权提醒" onClick={() => dismissLicenseNotice(index)}><X aria-hidden="true" /></button></div>)}{notices.filter(notice => notice.tone === 'info').map((notice) => <div className="toast info" key={notice.id}><span>{notice.message}</span><button aria-label="关闭通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div><div role="alert">{notices.filter(notice => notice.tone === 'error').map((notice) => <div className="toast error" key={notice.id}><span>{notice.message}</span><button aria-label="关闭错误通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div></div></div>
         </main>
       </section>
@@ -243,15 +245,6 @@ export function LinkApp(): JSX.Element {
       {newProjectOpen ? <ProjectDialog name={newProjectName} error={newProjectError} onNameChange={setNewProjectName} onClose={() => setNewProjectOpen(false)} onCreate={() => void createProject()} /> : null}
     </div>
   </RendererErrorBoundary>;
-}
-
-function useConnectionsEscape(open: boolean, onClose: () => void): void {
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: KeyboardEvent): void => { if (escapeClosesPanel(event, modalDialogOpen(document))) { event.preventDefault(); onClose(); } };
-    window.addEventListener('keydown', close);
-    return () => window.removeEventListener('keydown', close);
-  }, [open, onClose]);
 }
 
 function AppSidebar({ editorHostRef, syncHostRef, settingsCategory, onSettingsCategoryChange, playlistHostRef, page, internal, editingLocked, settingsOpen, onPageChange, onSettings, notify }: {

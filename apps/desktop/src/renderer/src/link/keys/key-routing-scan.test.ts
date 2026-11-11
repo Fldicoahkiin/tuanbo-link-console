@@ -18,22 +18,32 @@ const LINK = fileURLToPath(new URL('..', import.meta.url));
  * reached.
  */
 const ALLOWED: Readonly<Record<string, string>> = {
-  'components/PropertyNumberInput.tsx': '数字输入框：Enter、Esc 和上下键都在输入框里',
-  'components/LightingArrangementSettings.tsx': '数字输入框：Enter 确认',
-  'components/CueRundownHeader.tsx': '改名输入框：Enter、Esc',
   'components/ResourceLibrary.tsx': '搜索输入框',
   'components/LightingMidiSettings.tsx': '数字输入框：Enter 确认',
   'components/BeautyControls.tsx': '数字输入框，在人像美颜里（整页 ownKeys("*")）',
   'components/ReferenceTimeline.tsx': '时间线自己的键（handleTimelineKey），窗口的键在时间线里本来就不动（K6 接到路由上）'
 };
 
-function tsxFiles(directory: string): string[] {
+function sourceFiles(directory: string, extensions: readonly string[]): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) return tsxFiles(path);
-    return entry.name.endsWith('.tsx') ? [path] : [];
+    if (entry.isDirectory()) return sourceFiles(path, extensions);
+    return extensions.some(extension => entry.name.endsWith(extension)) ? [path] : [];
   });
 }
+const tsxFiles = (directory: string): string[] => sourceFiles(directory, ['.tsx']);
+
+/**
+ * The key listeners on the window or the page that are not the router's yet, each for the step that moves it onto the
+ * router. No new one is added: a key a component handles is a command it registers (useKeyCommands), a panel Escape
+ * closes registers itself (useKeyOverlay, K4), and an element's own keys are declared (`ownKeys`).
+ */
+const WINDOW_LISTENERS: Readonly<Record<string, string>> = {
+  'keys/key-router.ts': '窗口唯一的按键路由',
+  'components/drag-session.ts': '拖动中的 Esc（K5 接到路由上）',
+  'components/useTimelineStamp.tsx': '灯光工作台的快捷键（K6 接到路由上）',
+  'components/LightingTimeline.tsx': '灯光时间线的键（K6 接到路由上）'
+};
 
 it('每个自己处理按键（onKeyDown=）的界面文件都用 ownKeys 说明哪些键归它，或者在上面写明原因的名单里（04 设计 K3）', () => {
   const files = tsxFiles(LINK).map(path => ({ name: relative(LINK, path).split(sep).join('/'), source: readFileSync(path, 'utf8').replace(/\r\n/g, '\n') }));
@@ -47,4 +57,11 @@ it('每个自己处理按键（onKeyDown=）的界面文件都用 ownKeys 说明
     return file === undefined || !file.source.includes('onKeyDown=') || file.source.includes('ownKeys(');
   });
   expect(stale).toEqual([]);
+});
+
+it('窗口和页面上的按键监听只剩路由和名单里等着接到路由上的几处，浮层和弹窗不再自己听 Esc（04 设计 K4）', () => {
+  const files = sourceFiles(LINK, ['.ts', '.tsx']).filter(path => !path.includes('.test.')).map(path => ({ name: relative(LINK, path).split(sep).join('/'), source: readFileSync(path, 'utf8') }));
+  const listening = (source: string): boolean => /addEventListener\(\s*['"]key(?:down|up)['"]/.test(source);
+  expect(files.filter(file => listening(file.source) && WINDOW_LISTENERS[file.name] === undefined).map(file => file.name)).toEqual([]);
+  expect(Object.keys(WINDOW_LISTENERS).filter(name => !files.some(file => file.name === name && listening(file.source)))).toEqual([]);
 });

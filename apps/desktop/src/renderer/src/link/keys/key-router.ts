@@ -8,10 +8,10 @@ import { KEYMAP, PAGE_SCOPES, type CommandId, type KeyPage, type KeyScope } from
  * element or other listener sees the key. For every press it asks `routeKey` who acts, then does it. Components and
  * hooks hand it their handlers (`useKeyCommands`); it never changes the project or the show itself.
  *
- * K3 puts the window's keys on it: Space, Escape, ↑↓, a song's own shortcut, saving, undo and redo. The rest still has
- * its own listeners until the later steps, and the router leaves every key to them that they took before it:
- * - the panels that close on Escape (Popover, the player's status details, the Cue menu, the connection and settings
- *   page) say they are open (`overlay`) and close themselves (K4);
+ * K3 puts the window's keys on it: Space, Escape, ↑↓, a song's own shortcut, saving, undo and redo. K4 the panels
+ * Escape closes (Popover, menus, the player's status details, the Cue menu, the connection and settings page): they
+ * say they are open and how they close (`overlay`), and the router closes the top one. The rest still has its own
+ * listeners until the later steps, and the router leaves every key to them that they took before it:
  * - a drag (DragSession) says it is going on (`beginDrag`) and cancels itself on Escape (K5);
  * - the lighting workbench's shortcut keys say which keys they take (`claim`) and act themselves (K6);
  * - the timeline's own keys act in the timeline, where the window's keys never did (K6).
@@ -31,8 +31,11 @@ export type KeyWhen = (press: Pick<KeyPress, 'target'>) => boolean;
 export type SongShortcuts = { find(chord: KeyChord): string | undefined; play(itemId: string): void };
 /** A listener not on the router yet that takes `event` itself; the window's keys leave such a key alone. */
 export type KeyClaim = (event: KeyEvent, target: OwnerTarget | null) => boolean;
-/** An open panel that closes itself on Escape; `blocks`: the window's keys wait while it is open (settings, connections). */
-export type KeyOverlayEntry = { open: () => boolean; blocks: boolean };
+/**
+ * A panel Escape closes, while `open` says so: `close` closes it, `contains` says the focus is in it (every key there
+ * but Escape is its own), `blocks`: the page's and the window's keys wait while it is open (settings, connections).
+ */
+export type KeyOverlayEntry = { open: () => boolean; close: () => void; contains: (target: OwnerTarget) => boolean; blocks: boolean };
 /** A drag going on, `cancelled` once Escape gave it up and the pointer is still held. */
 export type KeyDragEntry = { cancelled: () => boolean };
 
@@ -110,7 +113,7 @@ export class KeyRouter {
       chord, repeat: event.repeat, composing: event.isComposing || event.key === 'Process',
       owner: keyOwner(target, chord), inTimeline: keyInTimeline(target), windowKeeps: windowKeepsKey(target, chord), editingText: editsText(target),
       pageTakes: this.claims.some(claim => claim(event, target)),
-      modalOpen: this.modalOpen(), overlays: this.overlays.filter(overlay => overlay.open()).map(overlay => ({ focusInside: false, blocks: overlay.blocks })),
+      modalOpen: this.modalOpen(), overlays: this.openOverlays().map(overlay => ({ focusInside: target !== null && overlay.contains(target), blocks: overlay.blocks })),
       drag: this.drag(), page: this.page,
       available: (id, scope) => this.handler(id, [scope], target) !== undefined,
       song: key => this.songs.at(-1)?.find(key)
@@ -125,14 +128,19 @@ export class KeyRouter {
    * A key the router acts on is taken from the browser (`preventDefault`) and goes on to the page as it did: the
    * window's keys, saving, undo and redo all acted last and never kept a key from a listener after them (0.5.9). The
    * listeners still off the router see it as before, with `defaultPrevented` set: the timeline still splits a clip on
-   * Ctrl+S, and the counters and panels on the window still hear Escape. Stopping the key there waits until every
+   * Ctrl+S, and the counters on the window still hear Escape. Stopping the key there waits until every
    * listener is on the router (K4–K6).
    */
 
   private act(decision: RouteDecision, event: KeyEvent, target: OwnerTarget | null, chord: KeyChord): void {
     switch (decision.kind) {
-      // Left to the field, control, dialog or browser; an open panel closes itself on Escape (K4) and a drag cancels itself (K5).
-      case 'ignore': case 'native': case 'overlay': case 'drag-cancel': return;
+      // Left to the field, control, dialog or browser; a drag cancels itself (K5).
+      case 'ignore': case 'native': case 'drag-cancel': return;
+      // The top panel, the one opened last (K4).
+      case 'overlay':
+        event.preventDefault();
+        this.openOverlays().at(-1)?.close();
+        return;
       case 'swallow':
         // Escape after a drag was cancelled: the drag takes it itself until the pointer is let go (K5).
         if (this.drag() !== 'none' && chord === 'Escape') return;
@@ -166,6 +174,19 @@ export class KeyRouter {
       }
     }
     return undefined;
+  }
+
+  /**
+   * Whether a dialog or a panel is over the page: a modal dialog, or any panel Escape closes. The lighting workbench's
+   * shortcut keys wait then (useTimelineStamp), as they did for every dialog and panel on screen.
+   */
+  covered(): boolean {
+    return this.modalOpen() || this.openOverlays().length > 0;
+  }
+
+  /** The open panels, the one opened last at the end. */
+  private openOverlays(): KeyOverlayEntry[] {
+    return this.overlays.filter(overlay => overlay.open());
   }
 
   private modalOpen(): boolean {

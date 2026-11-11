@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import { keyRouter, type KeyClaim, type KeyHandlers, type KeyWhen, type SongShortcuts } from './key-router';
 import type { KeyPage, KeyScope } from './keymap';
 
@@ -43,18 +43,37 @@ export function useSongShortcuts(songs: SongShortcuts | null): void {
   }, [active]);
 }
 
+/** How a panel Escape closes is told to the router (`useKeyOverlay`). */
+export type KeyOverlayOptions = {
+  /** Closes the panel: what Escape does while it is the top one. */
+  close: () => void;
+  /** The panel's element, where the focus counts as in it; left out when every key in it is its own anyway (a menu). */
+  panel?: RefObject<Element | null> | (() => Element | null);
+  /** The page's and the window's keys wait while it is open (the settings and connection page, 0.5.9). */
+  blocks?: boolean;
+};
+
 /**
- * A panel that closes itself on Escape, open while `open` says so (a getter for one the page opens without React, a
- * <details>). `blocks`: the window's keys wait while it is open (the settings and connection page, 0.5.9).
+ * A panel Escape closes, while `open` (K4): the router closes the top one, the one opened last, and the panel has no
+ * key listener of its own. Every key but Escape pressed in `panel` is the panel's.
  */
-export function useKeyOverlay(open: boolean | (() => boolean), blocks = false): void {
-  const latest = useRef(open);
-  latest.current = open;
-  const shown = open !== false;
+export function useKeyOverlay(open: boolean, options: KeyOverlayOptions): void {
+  const latest = useRef(options);
+  latest.current = options;
+  const blocks = options.blocks ?? false;
   useEffect(() => {
-    if (!shown) return;
-    return keyRouter.overlay({ open: () => { const value = latest.current; return typeof value === 'function' ? value() : value; }, blocks });
-  }, [shown, blocks]);
+    if (!open) return;
+    return keyRouter.overlay({
+      open: () => true,
+      close: () => latest.current.close(),
+      contains: target => {
+        const panel = latest.current.panel;
+        const element = typeof panel === 'function' ? panel() : panel?.current ?? null;
+        return element !== null && target instanceof Node && element.contains(target);
+      },
+      blocks
+    });
+  }, [open, blocks]);
 }
 
 /**

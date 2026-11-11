@@ -43,8 +43,8 @@ export function LightingCueContextMenu({x,y,title,categories,navigation,category
   // Moving between the actions and the categories replaces the buttons, so focus moves with them.
   useEffect(()=>{if(!renaming)root.current?.querySelector<HTMLButtonElement>('button')?.focus({preventScroll:true});},[classifying,renaming]);
   const close=useRef(onClose);close.current=onClose;
-  // Open while it is there: the window's keys leave Escape to it, and it closes itself (its own listener, until K4).
-  useKeyOverlay(true);
+  // Open while it is there: Escape closes it (the key router, while it is the top panel), from its fields too.
+  useKeyOverlay(true, { close: () => close.current(), panel: root });
   useLayoutEffect(()=>{
     const element=root.current;if(!element)return;
     const place=():void=>{const box=element.getBoundingClientRect();const left=Math.max(8,Math.min(x,window.innerWidth-box.width-8)),top=Math.max(8,Math.min(y,window.innerHeight-box.height-8));setPosition(current=>current.left===left&&current.top===top?current:{left,top});};
@@ -54,9 +54,8 @@ export function LightingCueContextMenu({x,y,title,categories,navigation,category
   useEffect(()=>{
     const previous=document.activeElement;
     const outside=(event:PointerEvent):void=>{if(event.target instanceof Node&&!root.current?.contains(event.target))close.current();};
-    const escape=(event:KeyboardEvent):void=>{if(event.key==='Escape'){event.preventDefault();close.current();}};
-    window.addEventListener('pointerdown',outside,true);window.addEventListener('keydown',escape,true);
-    return()=>{window.removeEventListener('pointerdown',outside,true);window.removeEventListener('keydown',escape,true);if(previous instanceof HTMLElement&&previous.isConnected)previous.focus({preventScroll:true});};
+    window.addEventListener('pointerdown',outside,true);
+    return()=>{window.removeEventListener('pointerdown',outside,true);if(previous instanceof HTMLElement&&previous.isConnected)previous.focus({preventScroll:true});};
   },[]);
   const apply=(action:()=>void):void=>{action();onClose();};
   const pressed=(category:LightingCategory):boolean|'mixed'=>changes[category.id]??(categoryIds.includes(category.id)?true:mixedCategoryIds.includes(category.id)?'mixed':false);

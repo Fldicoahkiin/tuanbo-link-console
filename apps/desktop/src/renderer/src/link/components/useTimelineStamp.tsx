@@ -11,6 +11,7 @@ import { stampTimeline } from './timeline-stamp';
 import { keyTarget } from '../playback-keys';
 import { handleLightingShortcut, lightingShortcutTakes, type LightingShortcut } from './timeline-keys';
 import { useKeyClaim } from '../keys/useKeyCommands';
+import { keyRouter } from '../keys/key-router';
 
 /** `onPlayPause` is the timeline's play button, which the play key presses. */
 type Props = { lighting: LightingTimelineProps | undefined; playheadMs: number; durationMs: number; playing: boolean; frameRate: MtcFrameRate; clock: PlaybackClock; onPlayPause: () => void; onPlayingChange: (playing: boolean) => void; onSeek: (ms: number) => void };
@@ -41,7 +42,8 @@ export function useTimelineStamp(props: Props) {
   };
   const shortcutOf = (event: Pick<KeyboardEvent, 'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>): LightingShortcut => ({
     action: bindings.find(binding => binding.key === shortcutKey(event))?.action,
-    covered: () => [...document.querySelectorAll('[role="dialog"],dialog[open],.settings-content-page,.effect-binding-backdrop')].some(element => element.getClientRects().length > 0)
+    // A modal dialog or a panel Escape closes is open (the key router's layers): the shortcut keys wait.
+    covered: () => keyRouter.covered()
   });
   // The window's key router comes first now; it leaves the keys this listener takes to it, as they were before (K6 moves them onto the router).
   useKeyClaim(lighting ? (event, target) => lightingShortcutTakes(event, target, shortcutOf(event)) : null);

@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { escapeClosesPanel, modalDialogOpen } from '../playback-keys';
 import { useKeyOverlay } from '../keys/useKeyCommands';
 
 /** Space kept between a panel and the window edge, and between a panel and its button. */
@@ -66,23 +65,16 @@ export function Popover({ anchor, label, placement = 'below-end', className, onC
     window.addEventListener('scroll', measure, true);
     return () => { observer.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure, true); };
   }, [anchor, placement]);
-  // Open while it is there: the window's keys leave Escape to it, and it closes itself (its own listener, until K4).
-  useKeyOverlay(true);
+  // Open while it is there: Escape closes it (the key router, while it is the top panel) and gives the focus back to its button.
+  useKeyOverlay(true, { close: () => { onClose(); anchor?.focus(); }, panel });
   useEffect(() => {
     const away = (event: PointerEvent): void => {
       const target = event.target;
       if (target instanceof Node && (panel.current?.contains(target) || anchor?.contains(target))) return;
       onClose();
     };
-    const escape = (event: KeyboardEvent): void => {
-      if (!escapeClosesPanel(event, modalDialogOpen(document))) return;
-      event.preventDefault();
-      onClose();
-      anchor?.focus();
-    };
     document.addEventListener('pointerdown', away, true);
-    document.addEventListener('keydown', escape);
-    return () => { document.removeEventListener('pointerdown', away, true); document.removeEventListener('keydown', escape); };
+    return () => document.removeEventListener('pointerdown', away, true);
   }, [anchor, onClose]);
   return createPortal(<section ref={panel} role="dialog" aria-modal="false" aria-label={label} className={className ? `ui-popover ${className}` : 'ui-popover'}
     style={place ? { left: place.left, top: place.top, maxHeight: place.maxHeight } : { visibility: 'hidden' }}>{children}</section>, document.body);

@@ -33,13 +33,12 @@ type Props = {
   coordinator: LinkRuntimeCoordinator | null;
   notify: (message: string, tone?: 'info' | 'error') => void;
   settingsOpen: boolean;
-  onSettingsClose: () => void;
   onSettingsOpen: () => void;
   onCreate: () => void;
   onOpen: () => void;
 };
 
-export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, coordinator, notify, settingsOpen, onSettingsClose, onCategoryChange, onCreate, onOpen }: Props): JSX.Element {
+export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, coordinator, notify, settingsOpen, onCategoryChange, onCreate, onOpen }: Props): JSX.Element {
   const revision = useSettingsSessionStore(state => state.revision);
   const storedProfile = useIntegrationStore((state) => state.profile);
   const securityAvailable = useIntegrationStore((state) => state.securityAvailable);
@@ -161,10 +160,9 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
   return (<div className="settings-content">
       {quickConnectHost ? createPortal(<Button variant="primary" icon={ScanSearch} aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '按顺序连接已启用的设备，某一步没通过就会停下，后面的步骤不再执行'} disabled={busy || runtimeActive} onClick={localIntegration.connect}>{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</Button>, quickConnectHost) : null}
       {settingsOpen ? <IntegrationSettingsDialog
-        key={revision} category={category} onNavigate={onCategoryChange} onCreate={onCreate} onOpen={onOpen} onBusy={setBusy} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable} nestedDialogOpen={false}
+        key={revision} category={category} onNavigate={onCategoryChange} onCreate={onCreate} onOpen={onOpen} onBusy={setBusy} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable}
         notify={notify}
         onRefresh={() => void refresh()} onSave={() => void save()} onRefreshMidi={async () => { await readAndStoreMidiPorts(midiMonitor); }}
-        onClose={onSettingsClose}
         songTools={<div className="settings-stack">
       {internal ? null : <IntegrationHero
         busy={busy} securityAvailable={securityAvailable} coordinatorAvailable={coordinator !== null}

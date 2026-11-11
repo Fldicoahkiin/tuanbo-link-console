@@ -351,3 +351,18 @@ it('输入法正在组字时什么都不碰；录键的输入框拿走所有键'
   expect(route(body, 'Ctrl+Shift+KeyS', { modalOpen: true })).toEqual(run('document.saveAs', 'global'));
   expect(route({ tag: 'input', parent: body }, 'Ctrl+KeyZ')).toEqual(NATIVE);
 });
+
+it('浮层开着时 Esc 关最上面那个，焦点在哪都一样（页面、输入框、面板里），除了自己用 Esc 的元素、模态对话框和拖动；焦点在浮层里时别的键归浮层（04 设计 K4）', () => {
+  const below = { focusInside: false, blocks: true }, top = { focusInside: false, blocks: false };
+  const panel: Node = { tag: 'section', attributes: { role: 'dialog' }, parent: body };
+  for (const node of [body, null, { tag: 'input', parent: body }, { tag: 'button', parent: panel }, { tag: 'input', parent: panel }, { tag: 'div', attributes: { role: 'slider' }, parent: body }]) {
+    expect(route(node, 'Escape', { overlays: [below, top] })).toEqual({ kind: 'overlay' });
+  }
+  expect(route({ tag: 'input', attributes: ownKeys('Escape'), parent: panel }, 'Escape', { overlays: [top] })).toEqual(NATIVE);
+  expect(route({ tag: 'input', attributes: ownKeys('*'), parent: body }, 'Escape', { overlays: [top] })).toEqual(NATIVE);
+  expect(route(body, 'Escape', { overlays: [top], modalOpen: true })).toEqual(NATIVE);
+  expect(route(body, 'Escape', { overlays: [top], drag: 'active' })).toEqual({ kind: 'drag-cancel' });
+  // The focus in a panel that is no dialog (the player's status details): its keys; outside it, Space plays.
+  expect(route({ tag: 'button', parent: body }, 'Space', { overlays: [{ focusInside: true, blocks: false }] })).toEqual(NATIVE);
+  expect(route({ tag: 'button', parent: body }, 'Space', { overlays: [top] })).toEqual(run('transport.playPause', 'global'));
+});

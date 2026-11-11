@@ -1,6 +1,7 @@
 import { Plus, Repeat2, Trash2 } from 'lucide-react';
 import { Button, IconButton, Switch, TextInput } from '../ui';
 import { LightingTempoSettings } from './LightingTempoSettings';
+import { ownKeys } from '../keys/key-owner';
 import type { LightingDocument } from '@tb/schema';
 import type { LightingTimelineProps } from './LightingTimeline';
 
@@ -31,7 +32,7 @@ export function LightingArrangementSettings({ document, onChange }: { document: 
 }
 
 function CommitNumber(props: { label: string; value: number; min: number; max?: number; step?: number; disabled?: boolean; validate?: (value: number) => string | null; onCommit: (value: number) => void }): JSX.Element {
-  return <TextInput aria-label={props.label} key={props.value} type="number" min={props.min} max={props.max} step={props.step ?? 'any'} disabled={props.disabled} defaultValue={props.value} onInput={(input) => input.currentTarget.setCustomValidity('')} onKeyDown={(input) => {
+  return <TextInput aria-label={props.label} key={props.value} type="number" min={props.min} max={props.max} step={props.step ?? 'any'} disabled={props.disabled} defaultValue={props.value} {...ownKeys('Escape')} onInput={(input) => input.currentTarget.setCustomValidity('')} onKeyDown={(input) => {
     if (input.key === 'Enter' || input.key === 'Escape') { input.preventDefault(); input.stopPropagation(); if (input.key === 'Escape') { input.currentTarget.value = String(props.value); input.currentTarget.setCustomValidity(''); } input.currentTarget.blur(); }
   }} onBlur={(input) => {
     const element = input.currentTarget; const value = element.valueAsNumber;
@@ -46,7 +47,7 @@ function CommitNumber(props: { label: string; value: number; min: number; max?: 
 
 function RegionEnd(props: { value: number | null; startMs: number; onCommit: (endMs: number | null) => void }): JSX.Element {
   const display = props.value === null ? '' : String(props.value / 1000);
-  return <TextInput aria-label="标记区域终点" key={props.value} type="number" min={0} step={0.001} defaultValue={display} placeholder="留空为单点" onInput={(input) => input.currentTarget.setCustomValidity('')} onKeyDown={(input) => {
+  return <TextInput aria-label="标记区域终点" key={props.value} type="number" min={0} step={0.001} defaultValue={display} placeholder="留空为单点" {...ownKeys('Escape')} onInput={(input) => input.currentTarget.setCustomValidity('')} onKeyDown={(input) => {
     if (input.key === 'Enter' || input.key === 'Escape') { input.preventDefault(); input.stopPropagation(); if (input.key === 'Escape') { input.currentTarget.value = display; input.currentTarget.setCustomValidity(''); } input.currentTarget.blur(); }
   }} onBlur={(input) => {
     const field = input.currentTarget;

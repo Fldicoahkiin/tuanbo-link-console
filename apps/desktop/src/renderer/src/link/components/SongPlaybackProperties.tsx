@@ -37,7 +37,7 @@ function useSongPlayback(item: RundownItem, notify: Notify) {
  */
 export function SongMtcStartInput({ item, notify, ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, 'defaultValue' | 'onBlur' | 'onKeyDown' | 'onInput'> & { item: RundownItem; notify: Notify }): JSX.Element {
   const { frameRate, originError, offset, save } = useSongPlayback(item, notify);
-  return <input {...props} key={`${item.id}:${frameRate}:${offset}`} aria-invalid={Boolean(originError)} defaultValue={offset} placeholder="00:00:00:00" spellCheck={false}
+  return <input {...props} key={`${item.id}:${frameRate}:${offset}`} aria-invalid={Boolean(originError)} defaultValue={offset} placeholder="00:00:00:00" spellCheck={false} {...ownKeys('Escape')}
     onInput={(event) => event.currentTarget.setCustomValidity('')}
     onKeyDown={(event) => {
       if (event.key !== 'Enter' && event.key !== 'Escape') return;

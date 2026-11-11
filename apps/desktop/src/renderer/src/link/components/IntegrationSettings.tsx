@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { AudioWaveform, MonitorUp, type LucideIcon } from 'lucide-react';
 import { useDocumentStore } from '../stores/document-store';
 import { diagnosticContext } from '../view-models/diagnostic-context';
@@ -54,7 +54,7 @@ const lockedWhilePlaying: ReadonlySet<SettingsCategory> = new Set<SettingsCatego
  * The settings window (2026-10-30 rework): one SettingsPage per entry of the navigation, all with the
  * same frame: title, what it is for, and whether it is saved on this computer or in the project.
  */
-export function IntegrationSettingsDialog({ category, busy, runtimeActive, securityAvailable, nestedDialogOpen, notify, onRefresh, onRefreshMidi, onSave, onClose, onBusy, onNavigate, onCreate, onOpen, maintenance, songTools, children }: {
+export function IntegrationSettingsDialog({ category, busy, runtimeActive, securityAvailable, notify, onRefresh, onRefreshMidi, onSave, onBusy, onNavigate, onCreate, onOpen, maintenance, songTools, children }: {
   category: SettingsCategory;
   onNavigate: (category: SettingsCategory) => void;
   onCreate: () => void;
@@ -62,12 +62,10 @@ export function IntegrationSettingsDialog({ category, busy, runtimeActive, secur
   busy: boolean;
   runtimeActive: boolean;
   securityAvailable: boolean;
-  nestedDialogOpen: boolean;
   notify: Notify;
   onRefresh: () => void;
   onRefreshMidi: () => Promise<void>;
   onSave: () => void;
-  onClose: () => void;
   onBusy: (busy: boolean) => void;
   /** The OBS page's form. */
   children: ReactNode;
@@ -76,7 +74,6 @@ export function IntegrationSettingsDialog({ category, busy, runtimeActive, secur
   /** The P1 follow tools, on 歌曲导入. */
   songTools: ReactNode;
 }): JSX.Element {
-  useSettingsEscape(nestedDialogOpen, onClose);
   const internal = useDocumentStore((state) => !state.project || state.project.playbackSource === 'internal');
   const hasMa2 = useDocumentStore((state) => Boolean(state.project?.ma2ReadState));
   const visited = useRef(new Set<SettingsCategory>());
@@ -129,21 +126,6 @@ export function IntegrationSettingsDialog({ category, busy, runtimeActive, secur
     {SETTINGS_SECTIONS.filter(entry => keptMounted.has(entry.id) || visited.current.has(entry.id)).map(section => <SettingsPage key={section.id} id={section.id} title={section.name} description={section.detail}
       scope={section.scope} hidden={category !== section.id} notices={notices(section.id)}>{content(section.id)}</SettingsPage>)}
   </div>;
-}
-
-function useSettingsEscape(nestedDialogOpen: boolean, onClose: () => void): void {
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      const nestedOverlay = document.querySelector('dialog[open], .device-maintenance-backdrop, .diagnostics-log-backdrop');
-      if (event.target instanceof HTMLSelectElement) return;
-      // Escape here only closes the page; the window's playback keys wait while it is open (0.5.9).
-      if (event.key === 'Escape' && !event.defaultPrevented && !nestedDialogOpen && !nestedOverlay) { event.preventDefault(); onClose(); }
-    };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => {
-      window.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [nestedDialogOpen, onClose]);
 }
 
 function statusLabel(state: string): string {

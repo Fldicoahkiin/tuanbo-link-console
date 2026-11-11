@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { lightingDocumentSchema, type LightingDocument } from '@tb/schema';
+import { ModalSurface } from '../ui/ModalSurface';
 
 export function LightingEffectCombination({ document, ids, onChange, onClose }: { document: LightingDocument; ids: string[]; onChange: (document: LightingDocument, label: string) => void; onClose: () => void }): JSX.Element {
   const effects = document.templates.filter(effect => ids.includes(effect.id));
@@ -21,5 +22,5 @@ export function LightingEffectCombination({ document, ids, onChange, onClose }: 
       onClose();
     } catch (cause) { setError(String(cause)); }
   };
-  return <div className="effect-binding-backdrop"><form className="effect-binding-form" onSubmit={event => { event.preventDefault(); save(); }}><label>名称<input required value={name} onChange={event => setName(event.target.value)} /></label><p>默认同时触发；延迟单位为秒。</p>{effects.map(effect => <label key={effect.id}>{effect.name}<input aria-label={`${effect.name} 延迟秒`} type="number" min="0" step="0.01" value={(delays[effect.id] ?? 0) / 1000} onChange={event => setDelays({ ...delays, [effect.id]: Number(event.target.value) * 1000 })} /></label>)}{error ? <p role="alert">{error}</p> : null}<footer><button type="button" onClick={onClose}>取消</button><button>保存组合</button></footer></form></div>;
+  return <ModalSurface label="组合效果" className="cue-point-dialog" onClose={onClose}><form className="effect-binding-form" onSubmit={event => { event.preventDefault(); save(); }}><label>名称<input required value={name} onChange={event => setName(event.target.value)} /></label><p>默认同时触发；延迟单位为秒。</p>{effects.map(effect => <label key={effect.id}>{effect.name}<input aria-label={`${effect.name} 延迟秒`} type="number" min="0" step="0.01" value={(delays[effect.id] ?? 0) / 1000} onChange={event => setDelays({ ...delays, [effect.id]: Number(event.target.value) * 1000 })} /></label>)}{error ? <p role="alert">{error}</p> : null}<footer><button type="button" onClick={onClose}>取消</button><button>保存组合</button></footer></form></ModalSurface>;
 }

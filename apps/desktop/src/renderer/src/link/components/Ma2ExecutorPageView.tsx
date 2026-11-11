@@ -8,6 +8,7 @@ import { useMa2ExecutorPages } from '../runtime/use-ma2-executor-pages';
 import { Ma2MaterialMenu } from './Ma2MaterialMenu';
 import { Ma2ConsoleName } from './Ma2ConsoleName';
 import { Button, Dialog, Field, Menu, MenuItem, MenuSeparator, Switch, TextInput } from '../ui';
+import { useKeyOverlay } from '../keys/useKeyCommands';
 import '../ma2-executor.css';
 
 const bands = [
@@ -27,6 +28,9 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
   const state = useMa2ExecutorPageStore();
   const scope = currentMa2LayoutScope();
   const [picker, setPicker] = useState<Ma2ExecutorBand | null>(null);
+  // The page list is a panel like the others: Escape closes it, and the lighting shortcut keys wait while it is open.
+  const pickerPanel = useRef<HTMLDivElement>(null);
+  useKeyOverlay(picker !== null, { close: () => setPicker(null), panel: pickerPanel });
   const [live, setLive] = useState(true);
   const [notice, setNotice] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -149,7 +153,7 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
         </section>;
       })}
     </div>}
-    {picker ? <div className="ma2-layout-page-picker" role="dialog" aria-label="选择控台页面"><header><strong>{bands.find(band => band.id === picker)?.input}</strong><button onClick={() => setPicker(null)}>关闭</button></header><select aria-label="控台所有页面" size={8} value={state.bandPages[picker] ?? 1} onChange={event => navigate(picker, Number(event.target.value))}>{state.directory?.pages.map(page => <option key={page.page} value={page.page}>{page.page}{page.name ? ` · ${page.name}` : ''}</option>)}</select></div> : null}
+    {picker ? <div ref={pickerPanel} className="ma2-layout-page-picker" role="dialog" aria-label="选择控台页面"><header><strong>{bands.find(band => band.id === picker)?.input}</strong><button onClick={() => setPicker(null)}>关闭</button></header><select aria-label="控台所有页面" size={8} value={state.bandPages[picker] ?? 1} onChange={event => navigate(picker, Number(event.target.value))}>{state.directory?.pages.map(page => <option key={page.page} value={page.page}>{page.page}{page.name ? ` · ${page.name}` : ''}</option>)}</select></div> : null}
     {menu ? <Menu x={menu.x} y={menu.y} label="执行器右键菜单" title={`${menu.item.name || '未命名'} · ${menu.page} 页 ${menu.item.slot} 格`} onClose={() => setMenu(null)}>
       <MenuItem icon={List} disabled={!menu.item.sequence} onSelect={() => { onEditItem(menu.item, menu.page); setMenu(null); }}>编辑步骤</MenuItem>
       <MenuItem icon={Pencil} disabled={state.mutating} onSelect={() => edit('rename')}>重命名</MenuItem>

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowUp, ArrowDown, Plus, Trash2, X, Search, Layers, Tags, Folder, LayoutGrid, List } from 'lucide-react';
 import type { LightingDocument } from '@tb/schema';
+import { ModalSurface } from '../ui/ModalSurface';
 
 export function LightingMaterialManager({ document, categories, onChange, onSave, onClose }: {
   document: LightingDocument; categories: string[]; onChange: (document: LightingDocument, label: string) => void;
@@ -18,7 +19,7 @@ export function LightingMaterialManager({ document, categories, onChange, onSave
     if (target < 0 || target >= values.length) return next;
     [next[index], next[target]] = [next[target]!, next[index]!]; return next;
   };
-  return <div className="effect-binding-backdrop"><form className="effect-binding-form material-preferences" onSubmit={event => {
+  return <ModalSurface label="素材管理" className="cue-point-dialog" onClose={onClose}><form className="effect-binding-form material-preferences" onSubmit={event => {
     event.preventDefault(); const values = names.map(name => name.trim());
     if (values.some(name => !name || name.length > 64 || ['全部', '组合', '收藏', '待分类'].includes(name)) || new Set(values).size !== values.length) { setError('分类名称不能重复，长度为 1–64 个字。'); return; }
     onSave(values);
@@ -41,5 +42,5 @@ export function LightingMaterialManager({ document, categories, onChange, onSave
     <div className="material-category-heading"><span>排序</span><span>分类名称</span><span>操作</span></div><div className="preference-rows">{names.map((name, index) => <div className="preference-row" key={index}><span className="material-row-index">{String(index + 1).padStart(2, '0')}</span><input aria-label={`分类名称 ${index + 1}`} value={name} onChange={event => setNames(names.map((value, i) => i === index ? event.target.value : value))} /><div className="row-actions"><button type="button" title="上移" aria-label={`上移分类 ${index + 1}`} disabled={!index} onClick={() => setNames(move(names, index, -1))}><ArrowUp /></button><button type="button" title="下移" aria-label={`下移分类 ${index + 1}`} disabled={index === names.length - 1} onClick={() => setNames(move(names, index, 1))}><ArrowDown /></button><button type="button" title="删除分类" aria-label={`删除分类 ${index + 1}`} onClick={() => setNames(names.filter((_, i) => i !== index))}><Trash2 /></button></div></div>)}
     </div></section>}
     </div>
-  </form></div>;
+  </form></ModalSurface>;
 }

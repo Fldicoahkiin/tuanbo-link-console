@@ -6,7 +6,7 @@ import { useDragEdgeScroll } from './useDragEdgeScroll';
 import { contentPoint, contentRectangle, dropPlacement, intersects, scrollBoxOf, selectionRectangle, type Point, type Rectangle } from './program-grid-geometry';
 import { Menu, MenuItem } from '../ui';
 import { HOME_OWN_KEYS, ownKeys } from '../keys/key-owner';
-import { useKeyCommands } from '../keys/useKeyCommands';
+import { useKeyCommands, useKeyOverlay } from '../keys/useKeyCommands';
 
 type DropTarget = { index: number; placement: 'before' | 'after' };
 type GridDrag =
@@ -53,14 +53,15 @@ export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAdd
     press => press.target !== null && press.target.closest('.home-grid') === virtual.viewport.current);
   const [fileDrop, setFileDrop] = useState(false);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  // The right-click menu: Escape closes it (the key router, while it is the top panel), only it and not the show.
+  // In the menu the keys are the menu's (ownKeys('*')), and it closes itself.
+  useKeyOverlay(position !== null && !locked, { close: () => setPosition(null) });
   useEffect(() => {
     if (!position) return;
     const close = (): void => setPosition(null);
-    const key = (event: KeyboardEvent): void => { if (event.key === 'Escape') close(); };
     window.addEventListener('pointerdown', close);
     window.addEventListener('blur', close);
-    window.addEventListener('keydown', key);
-    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('blur', close); window.removeEventListener('keydown', key); };
+    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('blur', close); };
   }, [position]);
   return <div ref={virtual.viewport} className="home-grid" data-view={view} data-total-programs={itemIds.length} data-file-drop={fileDrop} data-reordering={drag?.kind === 'move'} data-refused={refused} title={refused ? reorder.blocked ?? undefined : undefined} tabIndex={0} aria-label="节目列表" {...ownKeys(...HOME_OWN_KEYS.programGrid)}
     onScroll={event => virtual.scroll(event.currentTarget.scrollTop)}

@@ -9,7 +9,7 @@ import { KEYMAP, PAGE_SCOPES, type CommandId, type KeyBinding, type KeyEntry, ty
  * what those listeners do.
  */
 
-/** An open panel the page closes with Escape (a Popover, a detail view, the settings or connection page). */
+/** An open panel Escape closes (a Popover, a menu, a detail view, the settings or connection page); the router closes it. */
 export type KeyOverlay = {
   /** The focus is in it: every key but Escape is its own. */
   focusInside: boolean;
@@ -61,7 +61,7 @@ export type RouteInput = {
 /**
  * - `ignore`: nobody takes it; the browser does what it does.
  * - `native`: left to the field, control, dialog or panel that has it.
- * - `overlay`: closes the top panel.
+ * - `overlay`: closes the top panel (the router does, K4).
  * - `drag-cancel`: cancels the drag; `swallow`: taken, nothing done (a held key's repeat, Escape after a cancel).
  * - `run`: the command in that scope; `song`: plays that song.
  */
@@ -135,12 +135,16 @@ export function routeKey(input: RouteInput): RouteDecision {
     && (!editingText || throughFields(binding)) && (!inDialog || throughDialogs(binding)));
   if (project) return act(input, project.entry);
   const others = candidates.filter(candidate => candidate.entry.kind !== 'document');
+  // 弹窗: Escape closes the top panel, from wherever the focus is, as the panels' own listeners did (K4): in it, in a
+  // field, on the page. Not while a modal dialog is open, which closes first, nor on an element that keeps Escape
+  // itself (`ownKeys`: a field that puts its text back, a recording field), nor during a drag, which Escape cancels
+  // and nothing else (0.5.9).
+  const top = input.overlays.at(-1);
+  if (top && input.chord === 'Escape' && !input.modalOpen && input.owner !== 'own' && input.drag === 'none') return { kind: 'overlay' };
   // 输入框: the field's own keys, but for the commands that work in fields.
   if (input.owner === 'field' || input.owner === 'own') return first(input, others.filter(candidate => throughFields(candidate.binding))) ?? NATIVE;
   // 弹窗: every key pressed in an open dialog, or while a modal one is open, is the dialog's (keys7).
   if (inDialog) return first(input, others.filter(candidate => throughDialogs(candidate.binding))) ?? NATIVE;
-  const top = input.overlays.at(-1);
-  if (top && input.chord === 'Escape') return { kind: 'overlay' };
   if (top?.focusInside) return NATIVE;
   // The settings or connection page: no key of the page or the window reaches the show.
   if (input.overlays.some(overlay => overlay.blocks)) return NATIVE;

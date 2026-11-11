@@ -1,4 +1,5 @@
 import { useFieldDraft } from './useFieldDraft';
+import { ownKeys } from '../keys/key-owner';
 
 /** Commit a complete numeric edit; empty or invalid drafts never change the project.
  * While the field has focus it keeps what was typed; otherwise it shows `value` (useFieldDraft). */
@@ -19,6 +20,7 @@ export function PropertyNumberInput(props: {
   const displayed = props.precision === undefined ? String(props.value) : String(Number(props.value.toFixed(props.precision)));
   const draft = useFieldDraft(displayed);
   return <input id={props.id} className={props.className} aria-describedby={props['aria-describedby']} aria-label={props.label} type="number" min={props.min} max={props.max} step={props.step ?? 1} value={draft.shown} disabled={props.disabled}
+    {...ownKeys('Escape')}
     onChange={(event) => draft.type(event.currentTarget.value)}
     onInput={(event) => event.currentTarget.setCustomValidity('')}
     onKeyDown={(event) => {

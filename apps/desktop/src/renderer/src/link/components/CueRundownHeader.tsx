@@ -5,6 +5,7 @@ import { Pencil } from 'lucide-react';
 import { useDocumentStore } from '../stores/document-store';
 import { DocumentActions, type DocumentActionProps } from './DocumentActions';
 import { Button, TextInput } from '../ui';
+import { ownKeys } from '../keys/key-owner';
 
 export function CueRundownHeader({ item, documentActions, notify }: {
   item: RundownItem | null;
@@ -33,6 +34,6 @@ function ProgramName({ item, notify }: { item: RundownItem; notify: (message: st
     setEditing(false);
   };
   return <div className="titlebar-program"><span>正在编辑</span>{editing
-    ? <TextInput autoFocus aria-label="当前节目名称" value={name} onChange={(event) => setName(event.currentTarget.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { event.preventDefault(); setName(item.title); setEditing(false); } }} />
+    ? <TextInput autoFocus aria-label="当前节目名称" {...ownKeys('Escape')} value={name} onChange={(event) => setName(event.currentTarget.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { event.preventDefault(); setName(item.title); setEditing(false); } }} />
     : <Button variant="ghost" className="titlebar-program-name" onClick={() => setEditing(true)} title={item.title} aria-label={`修改节目名称：${item.title}`}><strong>{item.title}</strong><Pencil aria-hidden="true" /></Button>}</div>;
 }

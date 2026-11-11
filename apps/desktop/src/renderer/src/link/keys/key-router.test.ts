@@ -3,7 +3,7 @@ import { DragSession } from '../components/drag-session';
 import { cancelDragOnEscape } from '../playback-keys';
 import { documentShortcut } from '../useDocumentShortcuts';
 import { modalDialogOpen } from './key-owner';
-import { KeyRouter, type KeyHandlers, type KeyWhen } from './key-router';
+import { KeyRouter, type KeyHandlers, type KeyOverlayEntry, type KeyWhen } from './key-router';
 import type { KeyPage, KeyScope } from './keymap';
 
 /*
@@ -32,9 +32,11 @@ function matches(candidate: Node, selector: string): boolean {
     return actual !== undefined && (value === undefined || (word ? actual.split(' ').includes(value) : actual === value));
   });
 }
+/** The node each fake element stands for. */
+const nodes = new WeakMap<object, Node>();
 /** A focused element, with `closest` over its parent chain. */
 function element(node: Node): Fake {
-  return {
+  const fake: Fake = {
     closest: (selectors: string) => {
       for (let current: Node | undefined = node; current; current = current.parent) {
         const candidate = current;
@@ -44,6 +46,8 @@ function element(node: Node): Fake {
     },
     getAttribute: (name: string) => node.attributes?.[name] ?? null
   };
+  nodes.set(fake, node);
+  return fake;
 }
 /** The page as `querySelector` reads it: the first of `nodes` any of the selectors match (`dialog:modal` too). */
 const page = (...nodes: Node[]) => ({ querySelector: (selectors: string) => nodes.find(node => selectors.split(',')
@@ -99,6 +103,11 @@ function routed(onPage: KeyPage = 'project') {
   return { router, calls, handle, openModal: (open: boolean) => { modal = open ? [{ tag: 'dialog', modal: true }] : []; } };
 }
 
+/** A panel Escape closes, writing down its `name` in `closed` when it is closed; `inside`: the elements in it. */
+function panel(name: string, closed: string[], options: { blocks?: boolean; inside?: readonly Node[] } = {}): KeyOverlayEntry {
+  const inside = (node: Node | undefined): boolean => node !== undefined && (options.inside?.includes(node) === true || inside(node.parent));
+  return { open: () => true, close: () => { closed.push(name); }, contains: target => inside(nodes.get(target)), blocks: options.blocks ?? false };
+}
 describe('路由本身', () => {
   it('按一下只有一个处理执行：页面的处理先于窗口的，页面的处理可以再调窗口自己的；页面上没有这个处理时用窗口的', () => {
     const { router, calls, handle } = routed();
@@ -194,27 +203,29 @@ describe('路由本身', () => {
     }
   });
 
-  it('自己用 Esc 关的面板开着时 Esc 留给面板，空格照常播放；设置页和连接页开着时窗口的播放键都不碰节目，Ctrl+S 照常保存', () => {
+  it('Esc 关的面板开着时 Esc 由路由关掉它（K4），空格照常播放；设置页和连接页开着时窗口的播放键都不碰节目，Esc 只关页面，Ctrl+S 照常保存', () => {
     const { router, calls, handle } = routed();
     handle('global', { 'transport.stop': '停止', 'transport.playPause': '播放', 'document.save': '保存' });
-    let open = true;
-    const leave = router.overlay({ open: () => open, blocks: false });
+    const closed: string[] = [];
+    const leave = router.overlay(panel('面板', closed));
     const escape = press('Escape').at(element(body));
     router.dispatch(escape);
     router.dispatch(press('Space').at(element(body)));
-    expect(touched(escape)).toBe(false);
+    // Closed by the router, taken from the browser, and still heard by the listeners after it (K6 stops it there).
+    expect([escape.defaultPrevented, escape.propagationStopped]).toEqual([true, false]);
+    expect(closed).toEqual(['面板']);
     expect(calls).toEqual(['播放']);
-    open = false;
+    leave();
     router.dispatch(press('Escape').at(element(body)));
     expect(calls).toEqual(['播放', '停止']);
-    leave();
 
     calls.length = 0;
-    const settings = router.overlay({ open: () => true, blocks: true });
+    const settings = router.overlay(panel('设置页', closed, { blocks: true }));
     const left = [press('Escape'), press('Space'), press('ArrowDown')].map(key => key.at(element(body)));
     for (const key of left) router.dispatch(key);
     router.dispatch(press('KeyS', { ctrlKey: true }).at(element(body)));
-    expect(left.map(touched)).toEqual([false, false, false]);
+    expect(left.map(touched)).toEqual([true, false, false]);
+    expect(closed).toEqual(['面板', '设置页']);
     expect(calls).toEqual(['保存']);
     settings();
   });
@@ -262,6 +273,103 @@ describe('路由本身', () => {
   });
 });
 
+describe('浮层和弹窗层（04 设计 K4）', () => {
+  it('浮层叠着时 Esc 只关最上面那个（后打开的）；一个一个关完以后 Esc 才停节目；模态对话框开着时 Esc 留给对话框', () => {
+    const { router, calls, handle, openModal } = routed();
+    handle('global', { 'transport.stop': '停止' });
+    const closed: string[] = [];
+    const leaves = [router.overlay(panel('设置页', closed, { blocks: true })), router.overlay(panel('设置页里的面板', closed))];
+    const modal = press('Escape').at(element(body));
+    openModal(true);
+    router.dispatch(modal);
+    openModal(false);
+    expect([closed, touched(modal)]).toEqual([[], false]);
+    router.dispatch(press('Escape').at(element(body)));
+    expect(closed).toEqual(['设置页里的面板']);
+    leaves.pop()?.();
+    router.dispatch(press('Escape').at(element(body)));
+    expect(closed).toEqual(['设置页里的面板', '设置页']);
+    leaves.pop()?.();
+    router.dispatch(press('Escape').at(element(body)));
+    expect(calls).toEqual(['停止']);
+  });
+
+  it('焦点在面板的输入框或按钮上按 Esc 也关面板；自己用 Esc 的元素（ownKeys）留给它自己（输入框里 Esc 撤回输入）', () => {
+    const { router, calls, handle } = routed();
+    handle('global', { 'transport.stop': '停止' });
+    const closed: string[] = [];
+    const popover: Node = { tag: 'section', attributes: { role: 'dialog', class: 'ui-popover' }, parent: body };
+    const leave = router.overlay(panel('面板', closed, { inside: [popover] }));
+    router.dispatch(press('Escape').at(element({ tag: 'input', parent: popover })));
+    router.dispatch(press('Escape').at(element({ tag: 'button', parent: popover })));
+    const own = press('Escape').at(element({ tag: 'input', attributes: { 'data-own-keys': 'Escape' }, parent: popover }));
+    router.dispatch(own);
+    expect([closed, touched(own), calls]).toEqual([['面板', '面板'], false, []]);
+    leave();
+  });
+
+  it('设置页开着时页面键和全局键都不碰节目：编辑器的空格、Esc、方向键和单曲快捷键都不动，Esc 只关设置页，Ctrl+S 照常保存', () => {
+    const { router, calls, handle } = routed('cues');
+    handle('global', { 'transport.stop': '窗口停止', 'transport.playPause': '窗口播放', 'home.nextSong': '下一首', 'document.save': '保存' });
+    handle('timeline', { 'transport.playPause': '时间线播放' });
+    router.songShortcuts({ find: chord => chord === 'Ctrl+Digit3' ? '第三首' : undefined, play: itemId => { calls.push(`播放 ${itemId}`); } });
+    const closed: string[] = [];
+    const settings: Node = { tag: 'section', attributes: { role: 'dialog', class: 'connections-dialog' }, parent: body };
+    const leave = router.overlay(panel('设置页', closed, { blocks: true, inside: [settings] }));
+    for (const target of [body, { tag: 'button', parent: settings }, { tag: 'section', attributes: { class: 'reference-timeline' }, parent: body }]) {
+      for (const key of [press('Space'), press('ArrowDown'), press('Digit3', { ctrlKey: true })]) {
+        router.dispatch(key.at(element(target)));
+        expect(touched(key)).toBe(false);
+      }
+    }
+    router.dispatch(press('Escape').at(element(body)));
+    router.dispatch(press('KeyS', { ctrlKey: true }).at(element({ tag: 'input', parent: settings })));
+    expect([calls, closed]).toEqual([['保存'], ['设置页']]);
+    leave();
+  });
+
+  it('Popover 开着、焦点在外面时空格照样播放；焦点在不是对话框的面板里（播放状态详情）时空格归面板', () => {
+    const { router, calls, handle } = routed();
+    handle('global', { 'transport.playPause': '播放' });
+    const closed: string[] = [];
+    const details: Node = { tag: 'div', attributes: { class: 'player-diagnostics-popover' }, parent: body };
+    const leave = router.overlay(panel('播放状态详情', closed, { inside: [details] }));
+    router.dispatch(press('Space').at(element(body)));
+    router.dispatch(press('Space').at(element({ tag: 'button', parent: body })));
+    const inside = press('Space').at(element({ tag: 'button', parent: details }));
+    router.dispatch(inside);
+    expect([calls, touched(inside), closed]).toEqual([['播放', '播放'], false, []]);
+    leave();
+  });
+
+  it('有模态框开着时 Ctrl+Z、Ctrl+Y 不撤销重做工程，键留给对话框；Ctrl+S 照常保存', () => {
+    const { router, calls, handle, openModal } = routed();
+    handle('global', { 'document.undo': '撤销', 'document.redo': '重做', 'document.save': '保存' });
+    const dialog: Node = { tag: 'dialog', attributes: { class: 'modal-surface', open: '' }, parent: body, modal: true };
+    openModal(true);
+    const left = [press('KeyZ', { ctrlKey: true }), press('KeyY', { ctrlKey: true }), press('KeyZ', { ctrlKey: true, shiftKey: true })];
+    for (const target of [body, { tag: 'button', parent: dialog }, null]) for (const key of left) router.dispatch(press(key.code, key.modifiers).at(target === null ? null : element(target)));
+    for (const key of left) router.dispatch(key.at(element(body)));
+    router.dispatch(press('KeyS', { ctrlKey: true }).at(element({ tag: 'button', parent: dialog })));
+    expect([left.map(touched), calls]).toEqual([[false, false, false], ['保存']]);
+    openModal(false);
+    router.dispatch(press('KeyZ', { ctrlKey: true }).at(element(body)));
+    expect(calls).toEqual(['保存', '撤销']);
+  });
+
+  it('有弹窗或面板开着时页面就算被盖住了（灯光工作台的快捷键等着），都关了才不算', () => {
+    const { router, openModal } = routed('lighting');
+    expect(router.covered()).toBe(false);
+    const leave = router.overlay(panel('面板', []));
+    expect(router.covered()).toBe(true);
+    leave();
+    openModal(true);
+    expect(router.covered()).toBe(true);
+    openModal(false);
+    expect(router.covered()).toBe(false);
+  });
+});
+
 /* ---- playback-keys.test.ts, through the router ---- */
 
 /** What the window's playback keys are told of the page, as useInternalPlayer told them. */
@@ -288,7 +396,7 @@ function handlePlaybackKey(key: Press, target: Fake | null, context: PlaybackKey
     router.register('global', () => ({ 'transport.stop': () => player.stop(), 'transport.playPause': () => undefined })),
     router.register('global', () => ({ 'home.prevSong': () => player.skip(-1), 'home.nextSong': () => player.skip(1) }), () => context.arrowKeys),
     router.songShortcuts({ find: chord => context.song(chord), play: itemId => player.play(itemId) }),
-    ...(context.paused ? [router.overlay({ open: () => true, blocks: true })] : [])
+    ...(context.paused ? [router.overlay({ open: () => true, close: () => undefined, contains: () => false, blocks: true })] : [])
   ];
   router.dispatch(key.at(target));
   for (const leave of done) leave();
@@ -449,7 +557,8 @@ describe('窗口的播放键（原 playback-keys.test.ts）', () => {
     handlePlaybackKey(left[0]!, element(body), keys({ paused: true }), recorder(calls));
     handlePlaybackKey(left[1]!, element({ tag: 'input', parent: body }), keys(), recorder(calls));
     handlePlaybackKey(left[2]!, element({ tag: 'section', attributes: { class: 'reference-timeline' } }), keys(), recorder(calls));
-    expect(left.map(key => key.defaultPrevented)).toEqual([false, false, false]);
+    // Escape on the settings page closes the page (the router, K4), and only the page.
+    expect(left.map(key => key.defaultPrevented)).toEqual([true, false, false]);
     expect(calls).toHaveLength(5);
     leave();
   });
