@@ -18,6 +18,7 @@ export * from './scene-output-timeline';
 export * from './managed-output-runtime';
 export * from './timeline-state';
 export * from './program-playlists';
+export * from './program-order';
 export * from './ibc-project';
 export * from './ma2-sync';
 export * from './ma2-sync-session';

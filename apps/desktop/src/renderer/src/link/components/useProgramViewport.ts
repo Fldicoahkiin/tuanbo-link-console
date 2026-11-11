@@ -57,5 +57,12 @@ export function useProgramViewport(ids: string[], view: 'list' | 'cards', compac
   return { viewport, indices: [...indices].sort((a, b) => a - b), totalHeight, setFocused, keyDown,
     scroll: (top: number) => setSize(previous => previous.top === top ? previous : { ...previous, top }),
     style: (index: number) => ({ top: Math.floor(index / columns) * step, left: view === 'list' ? 0 : Math.round(index % columns * (cardWidth + CARD_GAP)),
-      height, width: view === 'list' ? '100%' : Math.floor(cardWidth) }) };
+      height, width: view === 'list' ? '100%' : Math.floor(cardWidth) }),
+    /** The insertion marker of a drag: a bar in the gap before or after the card at `index`, 2 px across. */
+    insertion: (index: number, placement: 'before' | 'after') => {
+      const top = Math.floor(index / columns) * step, left = Math.round(index % columns * (cardWidth + CARD_GAP));
+      return view === 'list'
+        ? { top: Math.round(placement === 'before' ? top - gap / 2 : top + height + gap / 2) - 1, left: 0, width: '100%', height: 2 }
+        : { top, left: Math.round(placement === 'before' ? left - CARD_GAP / 2 : left + cardWidth + CARD_GAP / 2) - 1, width: 2, height };
+    } };
 }

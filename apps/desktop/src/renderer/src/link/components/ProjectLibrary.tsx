@@ -4,11 +4,13 @@ import { ArrowDown, ArrowUp, Check, Copy, FileAudio, Film, LayoutGrid, List, Plu
 import {
   duplicateRundownItemCommand,
   editProgramPlaylistCommand,
-  moveRundownItemCommand,
+  moveVisibleProgramsCommand,
+  neighbourGap,
   programPlaylistId,
   programPlaylists,
   programTimeOrigin,
   removeRundownItemCommand,
+  reorderedVisibleIds,
   updateRundownItemCommand
 } from '@tb/core/link';
 import type { LinkProject, RundownItem } from '@tb/schema';
@@ -91,6 +93,20 @@ export function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
   const playlistName = selectedPlaylistId === 'all' ? '全部节目' : programPlaylists(project).find(list => list.id === selectedPlaylistId)?.name ?? '未分组';
   const playHint = props.playItem ? doubleClickPlayback ? '双击节目播放' : '单击节目播放' : '选择节目进行联动';
   const openProperties = (item: RundownItem): void => { props.onChooseItem(item); setInspectorOpen(true); };
+  // Order is changed among the songs on screen (the playlist shown), so a move never lands between hidden songs.
+  const visibleIds = filteredItems.map(item => item.id);
+  const reorderBlocked = props.locked ? '正在播放或处理中，停下后才能调整顺序'
+    : search.trim() ? '搜索结果里不能调整顺序，清空搜索后再拖动' : null;
+  const moveVisible = (ids: string[], gap: number | null): void => {
+    if (reorderBlocked || gap === null || !reorderedVisibleIds(visibleIds, ids, gap)) return;
+    try { execute(moveVisibleProgramsCommand(visibleIds, ids, gap)); }
+    catch (error) { props.notify(error instanceof Error ? error.message : String(error), 'error'); }
+  };
+  const step = (id: string, direction: -1 | 1): (() => void) | null => {
+    const gap = reorderBlocked ? null : neighbourGap(visibleIds, id, direction);
+    return gap === null ? null : () => moveVisible([id], gap);
+  };
+  const reorderHint = reorderBlocked ?? '按住拖动可以调整顺序';
   return <section className="home-library" data-inspector={inspectorOpen}>
     {props.playlistHost ? createPortal(<ProgramPlaylistPane project={project} selectedId={selectedPlaylistId} locked={props.locked} onSelect={props.onSelectPlaylist} notify={props.notify} />, props.playlistHost) : null}
 
@@ -110,14 +126,14 @@ export function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
         <IconButton label="节目属性" icon={SlidersHorizontal} aria-expanded={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)} />
       </header>
       {view === 'list' ? <div className="home-list-columns" aria-hidden="true"><span>顺序</span><span>节目名称</span><span>状态</span><span>MTC 起始码</span><span>时长 / 内容</span><span /></div> : null}
-      <ProgramGrid view={view} compact={inspectorOpen} itemIds={filteredItems.map(item => item.id)} locked={props.locked} onAddItem={props.onAddItem} onImportFiles={props.onImportFiles} selectedIds={visibleBatchIds} onSelectionChange={setBatchIds} onDeleteSelection={deleteSelection} onBlankClick={() => setInspectorOpen(false)}
+      <ProgramGrid view={view} compact={inspectorOpen} itemIds={visibleIds} locked={props.locked} reorder={{ blocked: reorderBlocked, onMove: moveVisible }} onAddItem={props.onAddItem} onImportFiles={props.onImportFiles} selectedIds={visibleBatchIds} onSelectionChange={setBatchIds} onDeleteSelection={deleteSelection} onBlankClick={() => setInspectorOpen(false)}
         empty={<div className="home-empty"><FileAudio aria-hidden="true" /><strong>{search ? '没有找到匹配的节目' : '添加第一个节目'}</strong><span>{search ? '换个名称试试，或清空搜索' : '点「导入歌曲 / P1」，或把音频文件拖到这里'}</span></div>}
         renderItem={visibleIndex => {
           const item = filteredItems[visibleIndex]!;
           const index = project.rundown.findIndex((candidate) => candidate.id === item.id);
           const current = item.id === currentItemId;
           const start = props.playItem ?? props.onSelectCurrentItem;
-          return <article className="home-card" data-program-id={item.id} data-selected={item.id === selectedItemId} data-current={current} data-disabled={!item.enabled} data-batch-selected={visibleBatchIds.includes(item.id)} data-runtime={current ? runtime : 'idle'} title={item.title} aria-label={`${item.title}，${props.playItem ? doubleClickPlayback ? '双击播放' : '单击播放' : '单击选中'}`} key={`${item.id}:${revision}`} tabIndex={0} draggable={false} onClick={() => props.playItem && !doubleClickPlayback ? props.playItem(item) : props.onChooseItem(item)} onDoubleClick={() => { if (doubleClickPlayback && props.playItem) props.playItem(item); else if (!props.playItem) props.onSelectCurrentItem(item); }} onContextMenu={(event) => { event.preventDefault(); if (props.locked) return; props.onChooseItem(item); setContext({ item, x: event.clientX, y: event.clientY }); }} onKeyDown={(event) => { if (event.key === 'Enter' && event.target === event.currentTarget) { event.preventDefault(); start(item); } }}>
+          return <article className="home-card" data-program-id={item.id} data-selected={item.id === selectedItemId} data-current={current} data-disabled={!item.enabled} data-batch-selected={visibleBatchIds.includes(item.id)} data-runtime={current ? runtime : 'idle'} title={`${item.title}\n${reorderHint}`} aria-label={`${item.title}，${props.playItem ? doubleClickPlayback ? '双击播放' : '单击播放' : '单击选中'}`} key={`${item.id}:${revision}`} tabIndex={0} draggable={false} onClick={() => props.playItem && !doubleClickPlayback ? props.playItem(item) : props.onChooseItem(item)} onDoubleClick={() => { if (doubleClickPlayback && props.playItem) props.playItem(item); else if (!props.playItem) props.onSelectCurrentItem(item); }} onContextMenu={(event) => { event.preventDefault(); if (props.locked) return; props.onChooseItem(item); setContext({ item, x: event.clientX, y: event.clientY }); }} onKeyDown={(event) => { if (event.key === 'Enter' && event.target === event.currentTarget) { event.preventDefault(); start(item); } }}>
             <button type="button" className="home-card-index" title={props.playItem ? '播放这首' : '设为当前节目'} disabled={!item.enabled} onClick={(event) => { event.stopPropagation(); start(item); }}>{index + 1}</button>
             <strong className="home-card-title">{item.title}</strong>
             <span className="home-card-state">{project.playbackSource === 'internal' && item.referenceAudio ? <Button variant="ghost" size="sm" className="home-card-volume" aria-label={`${item.title} 独立音量`} title="设置这首音频的独立音量，随工程保存" disabled={props.locked} onDoubleClick={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openProperties(item); }}>音量 {item.playback?.volume ?? 100}%</Button> : null}
@@ -149,8 +165,8 @@ export function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
             <Button variant="secondary" icon={FileAudio} onClick={() => props.onChooseReference(selectedItem.id)}>{selectedItem.referenceAudio ? '更换音频' : '添加音频'}</Button>
           </div>
           <div className="home-inspector-actions" role="group" aria-label="排序、复制和删除">
-            <IconButton label="上移" icon={ArrowUp} disabled={project.rundown[0]?.id === selectedItem.id} onClick={() => execute(moveRundownItemCommand(selectedItem.id, project.rundown.findIndex((item) => item.id === selectedItem.id) - 1))} />
-            <IconButton label="下移" icon={ArrowDown} disabled={project.rundown.at(-1)?.id === selectedItem.id} onClick={() => execute(moveRundownItemCommand(selectedItem.id, project.rundown.findIndex((item) => item.id === selectedItem.id) + 1))} />
+            <IconButton label="上移" title={reorderBlocked ?? '上移'} icon={ArrowUp} disabled={!step(selectedItem.id, -1)} onClick={() => step(selectedItem.id, -1)?.()} />
+            <IconButton label="下移" title={reorderBlocked ?? '下移'} icon={ArrowDown} disabled={!step(selectedItem.id, 1)} onClick={() => step(selectedItem.id, 1)?.()} />
             <IconButton label="复制" icon={Copy} onClick={() => execute(duplicateRundownItemCommand(selectedItem.id))} />
             <IconButton variant="danger" label="删除" icon={Trash2} onClick={() => { if (window.confirm(`确认删除节目“${selectedItem.title}”？`)) execute(removeRundownItemCommand(selectedItem.id)); }} />
           </div>
@@ -167,6 +183,9 @@ export function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
       onClose={() => setContext(null)}
       onOpenCueEditor={() => { props.onSelectCurrentItem(context.item); props.onOpenCueEditor(); }}
       onSelectCurrent={() => props.onSelectCurrentItem(context.item)}
+      onMoveUp={step(context.item.id, -1)}
+      onMoveDown={step(context.item.id, 1)}
+      moveBlocked={reorderBlocked}
       execute={execute}
     /> : null}
   </section>;
@@ -182,9 +201,13 @@ function ProgramContextMenu(props: {
   onClose: () => void;
   onOpenCueEditor: () => void;
   onSelectCurrent: () => void;
+  /** null when the song is first or last of the songs on screen, or the order cannot change now. */
+  onMoveUp: (() => void) | null;
+  onMoveDown: (() => void) | null;
+  moveBlocked: string | null;
   execute: ReturnType<typeof useDocumentStore.getState>['execute'];
 }): JSX.Element {
-  const index = props.project.rundown.findIndex((item) => item.id === props.item.id);
+  const { onMoveUp, onMoveDown } = props;
   const run = (action: () => void): void => { props.onClose(); action(); };
   return <Menu x={props.x} y={props.y} label={`${props.item.title} 菜单`} onClose={props.onClose}>
     <MenuItem icon={SlidersHorizontal} onSelect={() => run(props.onProperties)}>节目属性</MenuItem>
@@ -192,8 +215,8 @@ function ProgramContextMenu(props: {
     <MenuItem icon={Check} disabled={!props.item.enabled} onSelect={() => run(props.onSelectCurrent)}>设为当前节目</MenuItem>
     <MenuItem icon={FileAudio} onSelect={() => run(() => props.onChooseReference(props.item.id))}>{props.item.referenceAudio ? '更换参考音频' : '添加参考音频'}</MenuItem>
     <MenuSeparator />
-    <MenuItem icon={ArrowUp} disabled={index === 0} onSelect={() => run(() => props.execute(moveRundownItemCommand(props.item.id, index - 1)))}>上移</MenuItem>
-    <MenuItem icon={ArrowDown} disabled={index === props.project.rundown.length - 1} onSelect={() => run(() => props.execute(moveRundownItemCommand(props.item.id, index + 1)))}>下移</MenuItem>
+    <MenuItem icon={ArrowUp} disabled={!onMoveUp} {...props.moveBlocked ? { title: props.moveBlocked } : {}} onSelect={() => { if (onMoveUp) run(onMoveUp); }}>上移</MenuItem>
+    <MenuItem icon={ArrowDown} disabled={!onMoveDown} {...props.moveBlocked ? { title: props.moveBlocked } : {}} onSelect={() => { if (onMoveDown) run(onMoveDown); }}>下移</MenuItem>
     <MenuItem icon={Copy} onSelect={() => run(() => props.execute(duplicateRundownItemCommand(props.item.id)))}>复制节目</MenuItem>
     <MenuItem icon={Trash2} danger onSelect={() => run(() => { if (window.confirm(`确认删除节目“${props.item.title}”？`)) props.execute(removeRundownItemCommand(props.item.id)); })}>删除节目</MenuItem>
   </Menu>;
