@@ -90,14 +90,22 @@
   .settings-song-starts .settings-song-title { max-width: 0; width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-strong); }
   .settings-song-starts .ui-input { width: 132px; font-family: var(--font-numeric); }
 
-  /* 快捷键: one row per action, its keys side by side. */
-  .settings-shortcuts { display: grid; }
-  .settings-shortcut { display: grid; grid-template-columns: minmax(120px, 200px) minmax(0, 1fr); align-items: center; gap: var(--space-2); padding: var(--space-1) 0; border-top: 1px solid var(--color-separator); }
-  .settings-shortcut:first-child { border-top: 0; }
-  .settings-shortcut-name { color: var(--color-text); }
-  .settings-shortcut-keys { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; }
-  .settings-shortcut-key { display: inline-flex; align-items: center; gap: var(--space-half); }
-  .settings-shortcut-key > .ui-input { width: 140px; min-width: 0; font-family: var(--font-numeric); cursor: pointer; }
+  /* 快捷键: one row per command: what it does, our keys, 剪映's, 恢复默认; a refusal below on the whole width. */
+  .settings-keys { display: grid; }
+  .settings-key-row { display: grid; grid-template-columns: minmax(120px, 1.1fr) minmax(0, 1.3fr) minmax(0, 1fr) 96px; align-items: center; gap: var(--space-half) var(--space-2); padding: var(--space-1) 0; border-top: 1px solid var(--color-separator); }
+  .settings-key-row:first-child { border-top: 0; }
+  .settings-key-what { display: grid; gap: var(--space-half); min-width: 0; color: var(--color-text); }
+  .settings-key-mark { color: var(--color-warning); font: 400 var(--type-caption)/1.5 var(--font-ui); }
+  .settings-key-ours { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; }
+  .settings-key-edit { display: inline-flex; align-items: center; gap: var(--space-half); }
+  .settings-key-input.ui-input { width: 112px; min-width: 0; font-family: var(--font-numeric); cursor: pointer; }
+  .settings-key-chip { padding: 0 var(--space-1); border: 1px solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-text-strong); font: 400 var(--type-caption)/1.8 var(--font-numeric); white-space: nowrap; }
+  .settings-key-muted { color: var(--color-text-tertiary); font: 400 var(--type-caption)/1.5 var(--font-ui); }
+  .settings-key-jianying { display: grid; gap: var(--space-half); min-width: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.5 var(--font-ui); }
+  .settings-key-jianying > span:first-child { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-half); }
+  .settings-key-differs { color: var(--color-text-tertiary); }
+  .settings-key-actions { display: flex; justify-content: flex-end; }
+  .settings-key-problem { grid-column: 1 / -1; }
 
   /* 运行日志: the filters wrap into as many columns as fit, then one card per record. */
   .settings-log-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--space-1) var(--space-2); }
@@ -137,7 +145,8 @@
 
   @container (max-width: 560px) {
     .settings-page-heading { flex-wrap: wrap; }
-    .settings-shortcut { grid-template-columns: minmax(0, 1fr); gap: var(--space-half); }
+    .settings-key-row { grid-template-columns: minmax(0, 1fr) auto; }
+    .settings-key-what, .settings-key-ours, .settings-key-jianying { grid-column: 1 / -1; }
   }
   @media (max-width: 1250px) {
     .settings-page { padding: var(--space-3) var(--space-3) var(--space-4); }

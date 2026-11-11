@@ -16,7 +16,7 @@ import { keyRouter } from '../keys/key-router';
 type Props = { lighting: LightingTimelineProps | undefined; playheadMs: number; durationMs: number; playing: boolean; frameRate: MtcFrameRate; clock: PlaybackClock; onPlayPause: () => void; onPlayingChange: (playing: boolean) => void; seek: TimelineSeek };
 export function useTimelineStamp(props: Props) {
   const { lighting } = props;
-  const { bindings, load, error } = useShortcutStore();
+  const { load, error } = useShortcutStore();
   const [chosen, setChosen] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   useEffect(() => { load(); }, [load]);
@@ -51,7 +51,7 @@ export function useTimelineStamp(props: Props) {
     'transport.prevFrame': () => step(-1), 'transport.nextFrame': () => step(1),
     'transport.start': () => seek(0), 'transport.end': () => seek(props.durationMs)
   } : null, () => !keyRouter.covered());
-  const shortcut = bindings.length ? commandKeyLabel('lighting.stamp', 'lighting') : '';
+  const shortcut = commandKeyLabel('lighting.stamp', 'lighting');
   const controls = lighting ? <div className="timeline-stamp-controls"><IconButton label="打点" title={`在播放头打点${shortcut ? `（${shortcut}）` : ''}；波形右键可在鼠标位置打点`} icon={MapPinPlus} onClick={() => stamp()} />
     {!lighting.onCreateCue && lighting.document.tracks.length ? <TimelinePanelButton icon={Layers3} label={`打点轨道：${track?.name ?? '未选择'}`}><Field stacked label="打点轨道">{(field) => <Select {...field} value={track?.id ?? ''} onChange={event => setChosen(event.currentTarget.value)}>{lighting.document.tracks.map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.locked ? '（已锁定）' : ''}</option>)}</Select>}</Field></TimelinePanelButton> : null}
     {message || error ? <span role="alert" className="timeline-tool-error" tabIndex={0} aria-label={message ?? error ?? ''} title={message ?? error ?? ''}><TriangleAlert /></span> : null}

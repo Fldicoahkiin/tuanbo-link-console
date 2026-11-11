@@ -116,7 +116,7 @@ function first(input: RouteInput, candidates: readonly Candidate[]): RouteDecisi
  * The chord the project's keys are known by (useDocumentShortcuts, 0.5.9): with Ctrl held, Alt and the Windows key do
  * not count, nor does Shift with Y, so Ctrl+Alt+S saves and Ctrl+Shift+Y redoes, as they always did.
  */
-function documentChord(chord: KeyChord): KeyChord {
+export function documentChord(chord: KeyChord): KeyChord {
   const parsed = parseChord(chord);
   if (!parsed?.ctrl) return chord;
   return ['Ctrl', ...(parsed.shift && parsed.code !== 'KeyY' ? ['Shift'] : []), parsed.code].join('+');

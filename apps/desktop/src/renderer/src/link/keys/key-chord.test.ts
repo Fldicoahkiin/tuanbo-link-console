@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { defaultShortcuts, shortcutKey, shortcutLabel, validateShortcuts } from '../stores/shortcut-store';
+import { readV1, V1_DEFAULTS } from './key-settings';
 import { chordLabel, chordOf, isSystemChord, parseChord } from './key-chord';
 
 type Press = { code: string; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean };
@@ -7,7 +7,7 @@ const press = (code: string, modifiers: Partial<Omit<Press, 'code'>> = {}): Pres
 
 /** The three ways a chord was spelt before key-chord.ts, copied as they were (0.5.9). */
 const spelt = {
-  /** stores/shortcut-store.ts `shortcutKey`: the lighting shortcuts, with Meta. */
+  /** 0.5.8 stores/shortcut-store.ts `shortcutKey`: the lighting shortcuts, with Meta. */
   lighting: (event: Press) => [...(event.ctrlKey ? ['Ctrl'] : []), ...(event.altKey ? ['Alt'] : []), ...(event.shiftKey ? ['Shift'] : []), ...(event.metaKey ? ['Meta'] : []), event.code].join('+'),
   /** playback-keys.ts `playbackKeyAction`: a song's shortcut looked up, without Meta. */
   window: (event: Press) => [...(event.ctrlKey ? ['Ctrl'] : []), ...(event.altKey ? ['Alt'] : []), ...(event.shiftKey ? ['Shift'] : []), event.code].join('+'),
@@ -22,7 +22,6 @@ const presses = (): Press[] => ['KeyM', 'Digit3', 'Space', 'ArrowLeft', 'F5', 'E
 it('按键组合只有一种拼法：三种旧拼法得到的字符串都和 chordOf 一样（灯光快捷键带 Meta，歌曲快捷键不带 Meta）', () => {
   for (const event of presses()) {
     expect(chordOf(event)).toBe(spelt.lighting(event));
-    expect(shortcutKey(event)).toBe(spelt.lighting(event));
     expect(chordOf(event, { meta: false })).toBe(spelt.window(event));
     expect(chordOf(event, { meta: false })).toBe(spelt.song(event));
   }
@@ -30,7 +29,7 @@ it('按键组合只有一种拼法：三种旧拼法得到的字符串都和 cho
 
 it('已经存下的灯光快捷键和歌曲快捷键照样认：存的字符串就是 chordOf 的结果，能原样拆开', () => {
   // Saved by 0.5.8 and 0.5.9 in tblink.timeline-shortcuts.
-  const saved = validateShortcuts([...defaultShortcuts, { id: 'extra', action: 'stamp', key: 'Shift+KeyM' }]);
+  const saved = readV1([...V1_DEFAULTS, { id: 'extra', action: 'stamp', key: 'Shift+KeyM' }]);
   expect(saved.map(binding => binding.key)).toEqual(['KeyM', 'Space', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Shift+KeyM']);
   expect(saved.find(binding => binding.key === chordOf(press('KeyM', { shiftKey: true })))?.action).toBe('stamp');
   expect(saved.find(binding => binding.key === chordOf(press('ArrowLeft')))?.action).toBe('previous');
@@ -63,9 +62,7 @@ it('键名按人读的写：空格、方向键、F 键、Ctrl+=、Esc，字母�
   expect(chordLabel('Ctrl+KeyB')).toBe('Ctrl+B');
   expect(chordLabel('Ctrl+Digit3')).toBe('Ctrl+3');
   expect(chordLabel('Home')).toBe('Home');
-  // The settings page and the 打点 button read the lighting keys through shortcutLabel, which is chordLabel.
-  for (const key of ['KeyM', 'Space', 'ArrowLeft', 'Shift+KeyK', 'Digit7']) expect(shortcutLabel(key)).toBe(chordLabel(key));
-  expect(['KeyM', 'Space', 'Shift+KeyK', 'Digit7'].map(shortcutLabel)).toEqual(['M', '空格', 'Shift+K', '7']);
+  expect(['KeyM', 'Space', 'Shift+KeyK', 'Digit7'].map(chordLabel)).toEqual(['M', '空格', 'Shift+K', '7']);
 });
 
 it('Windows 和输入法自己用的组合不能当快捷键：开始菜单、切窗口、任务管理器、关窗口、中英文切换、带 Windows 键的', () => {

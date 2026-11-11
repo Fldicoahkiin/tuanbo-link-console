@@ -25,7 +25,7 @@ import type { ReferenceWaveformSource } from './ReferenceWaveform';
 import { usePreviewMediaLifecycle } from './usePreviewMediaLifecycle';
 import { keysBackToTimeline, nextEditPoint, previousEditPoint } from './timeline-commands';
 import { usePlayheadEffect, usePlayheadPaint, type EditorPlayhead } from './editor-playhead';
-import { commandKeyLabel } from '../stores/shortcut-store';
+import { commandKeyLabel, useKeyNames } from '../stores/shortcut-store';
 import type { CommandId, KeyScope } from '../keys/keymap';
 
 /** `text` with the keys that do it now, as the key table says (`（Esc 或 Shift+Esc）`); `text` alone without one. */
@@ -76,6 +76,7 @@ type Props = {
 };
 
 export function TimelineToolbar(props: Props): JSX.Element {
+  useKeyNames();
   const audioUrl = props.referenceAudio?.url;
   usePreviewMediaLifecycle(props.audioRef, props.externalTransport ? null : audioUrl);
   const { audioRef, onPlaybackError, onPlayingChange, onPlayheadChange, playhead, playing } = props;

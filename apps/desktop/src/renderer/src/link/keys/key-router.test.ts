@@ -3,10 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { DragSession } from '../components/drag-session';
 import { documentShortcut } from '../useDocumentShortcuts';
 import { editorEditKeys, editorTransportKeys, timelineEditKeys, timelineTransportKeys, type TimelineKeyProps } from '../components/timeline-commands';
-import { defaultShortcuts, lightingKeyOverrides, type ShortcutBinding } from '../stores/shortcut-store';
 import { keyInTimeline, modalDialogOpen } from './key-owner';
 import { KeyRouter, type KeyHandlers, type KeyOverlayEntry, type KeyWhen } from './key-router';
-import { KEYMAP, resolveKeymap, type KeyPage, type KeyScope } from './keymap';
+import { KEYMAP, resolveKeymap, type KeyOverrides, type KeyPage, type KeyScope } from './keymap';
 
 /*
  * The window's one key listener (key-router.ts), pressed with a fake window, fake elements and fake key events. The
@@ -643,7 +642,7 @@ const dock: Node = { tag: 'aside', attributes: { class: 'lighting-effect-dock' }
 const lanes: Node = { tag: 'div', attributes: { class: 'timeline-lanes' }, parent: timeline };
 const clip: Node = { tag: 'button', attributes: { class: 'timeline-clip' }, parent: lanes };
 
-type Action = ShortcutBinding['action'];
+type Action = 'stamp' | 'play' | 'previous' | 'next' | 'start' | 'end';
 type TimelineSetup = {
   /** The lighting workbench's timeline, else the editor's. */
   lightingWorkspace?: boolean;
@@ -653,8 +652,8 @@ type TimelineSetup = {
   modalOpen?: boolean;
   /** A dialog or the settings page over the workbench (`KeyRouter.covered`). */
   covered?: boolean;
-  /** The workbench's keys, as the settings page saved them. */
-  bindings?: readonly ShortcutBinding[];
+  /** The keys changed on this computer, as the settings page saves them. */
+  keys?: KeyOverrides;
   /** A lighting clip selected (LightingTimeline). */
   lightingClip?: boolean;
 };
@@ -667,7 +666,7 @@ type TimelineSetup = {
 function timelineRouter(calls: string[], setup: TimelineSetup = {}): KeyRouter {
   const lightingWorkspace = setup.lightingWorkspace === true;
   const router = new KeyRouter(() => page(...(setup.modalOpen === true ? [{ tag: 'dialog', modal: true }] : [])),
-    () => resolveKeymap(KEYMAP, lightingKeyOverrides(setup.bindings ?? defaultShortcuts)));
+    () => resolveKeymap(KEYMAP, setup.keys ?? {}));
   router.setPage(lightingWorkspace ? 'lighting' : 'cues');
   const props: TimelineKeyProps = {
     lightingWorkspace, playheadMs: 1_000, frameRate: '25', clips: [], cues: [], selectedClipId: '片段', selectedCueId: null,
@@ -786,16 +785,16 @@ describe('时间线的键（原 timeline-keys.test.ts，K6 起经路由）', () 
 
     // A dialog or the settings page over the workbench, a key without a shortcut, a field and the Cue pool keep their keys.
     const pool: Node = { tag: 'div', attributes: { class: 'cue-pool-grid' }, parent: dock };
-    const rebound = defaultShortcuts.map(binding => binding.action === 'play' ? { ...binding, key: 'KeyP' } : binding);
+    const rebound: KeyOverrides = { lighting: { 'transport.playPause': ['KeyP'] } };
     const left = [pressOn(timelineRouter(runs, { lightingWorkspace: true, covered: true, stop: false }), press('Space'), body),
-      pressOn(timelineRouter(runs, { lightingWorkspace: true, bindings: rebound }), press('Space'), body),
+      pressOn(timelineRouter(runs, { lightingWorkspace: true, keys: rebound }), press('Space'), body),
       pressOn(workbench, press('Space'), { tag: 'input', parent: dock }), pressOn(workbench, press('Space'), { tag: 'button', parent: pool })];
     expect(left.map(touched)).toEqual([false, false, false, false]);
     const handled = press('Space'); handled.preventDefault();
     pressOn(workbench, handled, timeline);
     expect(runs).toHaveLength(4);
     // Rebound, the key the settings page saved plays.
-    pressOn(timelineRouter(runs, { lightingWorkspace: true, bindings: rebound }), press('KeyP'), body);
+    pressOn(timelineRouter(runs, { lightingWorkspace: true, keys: rebound }), press('KeyP'), body);
     expect(runs).toEqual(['play', 'play', 'play', 'stamp', 'play']);
   });
 

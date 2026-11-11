@@ -10,6 +10,9 @@ import type { KeyChord } from './key-chord';
  * editor. The home page keeps its keys. Escape still stops the show, after fields, dialogs, drags and the page have had
  * their turn, and Shift+Escape stops it from anywhere (00-order 第 8 节第 1 题, which replaces 04 设计 4.10's “Escape no
  * longer stops”); the settings can turn the plain Escape off (`plainEscapeStops`).
+ *
+ * Since K8 the user can change the keys marked `rebindable` and the stop key that gets through everything; what a key
+ * may be and when two commands clash is decided in keys/key-settings.ts, and `resolveKeymap` puts the changes in.
  */
 
 /**
@@ -133,23 +136,23 @@ export const KEYMAP: readonly KeyEntry[] = [
   { id: 'transport.playPause', scope: 'editor', keys: [key('Space')], label: '播放 / 暂停', group: '播放', kind: 'transport', repeat: 'once',
     area: 'timeline', buttons: 'take', jianying: { name: '播放/暂停', keys: ['Space'] }, rebindable: false },
   { id: 'transport.start', scope: 'editor', keys: [key('Home')], label: '回到开头', group: '定位', kind: 'transport', repeat: 'once',
-    area: 'timeline', buttons: 'items', jianying: { name: '跳到开头', keys: ['Home'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '跳到开头', keys: ['Home'] }, rebindable: true },
   { id: 'transport.end', scope: 'editor', keys: [key('End')], label: '跳到结尾', group: '定位', kind: 'transport', repeat: 'once',
-    area: 'timeline', buttons: 'items', jianying: { name: '跳到结尾', keys: ['End'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '跳到结尾', keys: ['End'] }, rebindable: true },
   { id: 'transport.prevFrame', scope: 'editor', keys: [key('ArrowLeft')], label: '后退一帧', group: '定位', kind: 'transport', repeat: 'repeat',
-    area: 'timeline', buttons: 'items', jianying: { name: '上一帧', keys: ['ArrowLeft'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '上一帧', keys: ['ArrowLeft'] }, rebindable: true },
   { id: 'transport.nextFrame', scope: 'editor', keys: [key('ArrowRight')], label: '前进一帧', group: '定位', kind: 'transport', repeat: 'repeat',
-    area: 'timeline', buttons: 'items', jianying: { name: '下一帧', keys: ['ArrowRight'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '下一帧', keys: ['ArrowRight'] }, rebindable: true },
   { id: 'edit.splitAll', scope: 'editor', keys: [key('Ctrl+Shift+KeyB')], label: '在播放头分割所有片段', group: '剪辑', kind: 'edit', repeat: 'once',
-    area: 'timeline', buttons: 'items', jianying: { name: '全部分割（待核对）', keys: ['Ctrl+Shift+KeyB'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '全部分割（待核对）', keys: ['Ctrl+Shift+KeyB'] }, rebindable: true },
   { id: 'edit.trimLeft', scope: 'editor', keys: [key('KeyQ')], label: '向左裁剪（删掉播放头左边）', group: '剪辑', kind: 'edit', repeat: 'once',
-    area: 'timeline', buttons: 'items', jianying: { name: '向左裁剪', keys: ['KeyQ'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '向左裁剪', keys: ['KeyQ'] }, rebindable: true },
   { id: 'edit.trimRight', scope: 'editor', keys: [key('KeyW')], label: '向右裁剪（删掉播放头右边）', group: '剪辑', kind: 'edit', repeat: 'once',
-    area: 'timeline', buttons: 'items', jianying: { name: '向右裁剪', keys: ['KeyW'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '向右裁剪', keys: ['KeyW'] }, rebindable: true },
   // 04 设计问题 2: M in the editor adds a timeline marker, as in 剪映; the lighting workbench's M still stamps. On the
   // whole page, as M (which added a lighting point) did before.
   { id: 'marker.add', scope: 'editor', keys: [key('KeyM')], label: '在播放头加标记', group: '标记', kind: 'edit', repeat: 'once',
-    buttons: 'items', jianying: { name: '添加标记', keys: ['KeyM'] }, rebindable: false },
+    buttons: 'items', jianying: { name: '添加标记', keys: ['KeyM'] }, rebindable: true },
 
   // The lighting workbench's shortcut keys (useTimelineStamp): the whole page, the user can change them. The frame
   // steps go on while held, as in 剪映 (once per press before K7), one seek per frame drawn.
@@ -179,33 +182,33 @@ export const KEYMAP: readonly KeyEntry[] = [
   { id: 'edit.deselect', scope: 'timeline', keys: [key('Escape', { whileOff: 'plainEscapeStops' })], label: '取消选中（关掉「单按 Esc 停止」时）', group: '剪辑', kind: 'edit', repeat: 'once',
     area: 'timeline', buttons: 'take', jianying: null, rebindable: false },
   { id: 'transport.pause', scope: 'timeline', keys: [key('KeyK')], label: '暂停', group: '播放', kind: 'transport', repeat: 'once',
-    area: 'timeline', buttons: 'items', jianying: { name: '暂停', keys: ['KeyK'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '暂停', keys: ['KeyK'] }, rebindable: true },
   { id: 'transport.play', scope: 'timeline', keys: [key('KeyL')], label: '播放', group: '播放', kind: 'transport', repeat: 'once',
-    area: 'timeline', buttons: 'items', jianying: { name: '快进', keys: ['KeyL'] }, differsFromJianying: '键一样；剪映连按 L 会加速，联动台只播放', rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '快进', keys: ['KeyL'] }, differsFromJianying: '键一样；剪映连按 L 会加速，联动台只播放', rebindable: true },
   { id: 'transport.backMany', scope: 'timeline', keys: [key('Shift+ArrowLeft')], label: '后退 5 帧', group: '定位', kind: 'transport', repeat: 'repeat',
-    area: 'timeline', buttons: 'items', jianying: { name: '后退多帧（帧数待核对）', keys: ['Shift+ArrowLeft'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '后退多帧（帧数待核对）', keys: ['Shift+ArrowLeft'] }, rebindable: true },
   { id: 'transport.forwardMany', scope: 'timeline', keys: [key('Shift+ArrowRight')], label: '前进 5 帧', group: '定位', kind: 'transport', repeat: 'repeat',
-    area: 'timeline', buttons: 'items', jianying: { name: '前进多帧（帧数待核对）', keys: ['Shift+ArrowRight'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '前进多帧（帧数待核对）', keys: ['Shift+ArrowRight'] }, rebindable: true },
   { id: 'transport.prevEditPoint', scope: 'timeline', keys: [key('ArrowUp')], label: '上一个剪辑点', group: '定位', kind: 'transport', repeat: 'repeat',
-    area: 'timeline', buttons: 'items', jianying: { name: '上一个分割点', keys: ['ArrowUp'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '上一个分割点', keys: ['ArrowUp'] }, rebindable: true },
   { id: 'transport.nextEditPoint', scope: 'timeline', keys: [key('ArrowDown')], label: '下一个剪辑点', group: '定位', kind: 'transport', repeat: 'repeat',
-    area: 'timeline', buttons: 'items', jianying: { name: '下一个分割点', keys: ['ArrowDown'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '下一个分割点', keys: ['ArrowDown'] }, rebindable: true },
   { id: 'view.snap', scope: 'timeline', keys: [key('KeyN')], label: '吸附开关（吸附到片段边缘和歌曲节拍）', group: '视图', kind: 'view', repeat: 'once',
-    area: 'timeline', buttons: 'items', jianying: { name: '自动吸附', keys: ['KeyN'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '自动吸附', keys: ['KeyN'] }, rebindable: true },
   { id: 'view.zoomIn', scope: 'timeline', keys: [key('Ctrl+Equal')], label: '放大时间线', group: '视图', kind: 'view', repeat: 'repeat',
-    area: 'timeline', buttons: 'items', jianying: { name: '时间线放大', keys: ['Ctrl+Equal'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '时间线放大', keys: ['Ctrl+Equal'] }, rebindable: true },
   { id: 'view.zoomOut', scope: 'timeline', keys: [key('Ctrl+Minus')], label: '缩小时间线', group: '视图', kind: 'view', repeat: 'repeat',
-    area: 'timeline', buttons: 'items', jianying: { name: '时间线缩小', keys: ['Ctrl+Minus'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '时间线缩小', keys: ['Ctrl+Minus'] }, rebindable: true },
   { id: 'view.zoomFit', scope: 'timeline', keys: [key('Shift+KeyZ')], label: '缩放到合适（适合节目时长）', group: '视图', kind: 'view', repeat: 'once',
-    area: 'timeline', buttons: 'items', jianying: { name: '缩放到合适', keys: ['Shift+KeyZ'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '缩放到合适', keys: ['Shift+KeyZ'] }, rebindable: true },
   { id: 'edit.copy', scope: 'timeline', keys: [key('Ctrl+KeyC')], label: '复制片段或 Cue', group: '剪辑', kind: 'edit', repeat: 'once',
     area: 'timeline', buttons: 'items', jianying: { name: '复制', keys: ['Ctrl+KeyC'] }, rebindable: false },
   { id: 'edit.paste', scope: 'timeline', keys: [key('Ctrl+KeyV')], label: '粘贴到播放头', group: '剪辑', kind: 'edit', repeat: 'once',
     area: 'timeline', buttons: 'items', jianying: { name: '粘贴', keys: ['Ctrl+KeyV'] }, rebindable: false },
   { id: 'edit.duplicate', scope: 'timeline', keys: [key('Ctrl+KeyD')], label: '在后方创建副本', group: '剪辑', kind: 'edit', repeat: 'once',
-    area: 'timeline', buttons: 'items', jianying: { name: '复制片段（待核对）', keys: ['Ctrl+KeyD'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '复制片段（待核对）', keys: ['Ctrl+KeyD'] }, rebindable: true },
   { id: 'edit.split', scope: 'timeline', keys: [key('Ctrl+KeyB')], label: '在播放头分割', group: '剪辑', kind: 'edit', repeat: 'once',
-    area: 'timeline', buttons: 'items', jianying: { name: '分割', keys: ['Ctrl+KeyB'] }, rebindable: false },
+    area: 'timeline', buttons: 'items', jianying: { name: '分割', keys: ['Ctrl+KeyB'] }, rebindable: true },
   { id: 'edit.delete', scope: 'timeline', keys: [key('Delete'), key('Backspace')], label: '删除', group: '剪辑', kind: 'edit', repeat: 'once',
     area: 'timeline', buttons: 'items', jianying: { name: '删除', keys: ['Delete', 'Backspace'] }, rebindable: false },
   // S split before K7. Pressed on the timeline it now says once, on this computer, that splitting moved to Ctrl+B,
@@ -229,15 +232,23 @@ export const KEYMAP: readonly KeyEntry[] = [
 /** Keys the user changed on this computer, by scope and command; a command left out keeps its keys from the table. */
 export type KeyOverrides = Partial<Record<KeyScope, Partial<Record<CommandId, readonly KeyChord[]>>>>;
 
+/** The stop command's key that gets through everything (`through: 'all'`), as the table has it; the user can change it (K8). */
+export const STOP_ANYWHERE: KeyChord = 'Shift+Escape';
+
 /**
  * The table with the user's keys (`overrides`) in place of the table's, for the commands the user can change
- * (`rebindable`). A command overridden with no key has none: no key presses it.
+ * (`rebindable`). A command overridden with no key has none: no key presses it. `stop`: the stop command's key that
+ * gets through everything, in place of Shift+Escape, on every page. The hint that S moved (`edit.splitMoved`) gives
+ * way as soon as the user gives S to a command of the editor, the lighting workbench or the timeline (K8).
  */
-export function resolveKeymap(keymap: readonly KeyEntry[], overrides: KeyOverrides): readonly KeyEntry[] {
-  return keymap.map(entry => {
+export function resolveKeymap(keymap: readonly KeyEntry[], overrides: KeyOverrides, stop: KeyChord = STOP_ANYWHERE): readonly KeyEntry[] {
+  const resolved = keymap.map(entry => {
+    if (entry.id === 'transport.stop') return { ...entry, keys: entry.keys.map(binding => binding.through === 'all' ? { ...binding, chord: stop } : binding) };
     const chords = entry.rebindable ? overrides[entry.scope]?.[entry.id] : undefined;
     return chords === undefined ? entry : { ...entry, keys: chords.map(chord => key(chord)) };
   });
+  const takesS = resolved.some(entry => entry.id !== 'edit.splitMoved' && entry.rebindable && entry.keys.some(binding => binding.chord === 'KeyS'));
+  return takesS ? resolved.filter(entry => entry.id !== 'edit.splitMoved') : resolved;
 }
 
 /** The keys of `id` in `scope` that work now (without the ones a switch turned off), first the one shown. */

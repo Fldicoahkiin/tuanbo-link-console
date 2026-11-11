@@ -40,13 +40,19 @@ describe('快捷键表的自检', () => {
     }
   });
 
-  it('能改的项不是 Windows 或输入法的系统组合；现在能改的只有灯光工作台的 6 个键', () => {
+  it('能改的项不是 Windows 或输入法的系统组合；能改的是编辑器、灯光工作台和时间线的键（K8），空格、Esc、工程键、复制粘贴删除和首页的键不能改', () => {
     const rebindable = KEYMAP.filter(entry => entry.rebindable);
     for (const entry of rebindable) for (const binding of entry.keys) expect(isSystemChord(binding.chord), `${entry.id} 的 ${binding.chord}`).toBe(false);
-    expect(rebindable.map(entry => `${entry.scope} ${entry.id}`)).toEqual(['lighting lighting.stamp', 'lighting transport.playPause', 'lighting transport.prevFrame',
-      'lighting transport.nextFrame', 'lighting transport.start', 'lighting transport.end']);
-    // The keys the settings page has saved since 0.5.8 (stores/shortcut-store.ts defaultShortcuts).
-    expect(rebindable.map(entry => entry.keys[0]!.chord)).toEqual(['KeyM', 'Space', 'ArrowLeft', 'ArrowRight', 'Home', 'End']);
+    expect(new Set(rebindable.map(entry => entry.scope))).toEqual(new Set(['editor', 'lighting', 'timeline']));
+    expect(rebindable.filter(entry => entry.scope === 'lighting').map(entry => `${entry.id} ${entry.keys[0]!.chord}`)).toEqual(['lighting.stamp KeyM', 'transport.playPause Space',
+      'transport.prevFrame ArrowLeft', 'transport.nextFrame ArrowRight', 'transport.start Home', 'transport.end End']);
+    const fixed = KEYMAP.filter(entry => !entry.rebindable).map(entry => `${entry.scope} ${entry.id}`);
+    expect(fixed).toEqual(['global transport.playPause', 'global transport.stop', 'global home.prevSong', 'global home.nextSong', 'global document.save', 'global document.saveAs',
+      'global document.undo', 'global document.redo', 'editor transport.playPause', 'lighting edit.delete', 'lighting edit.deselect', 'timeline transport.stop', 'timeline edit.deselect',
+      'timeline edit.copy', 'timeline edit.paste', 'timeline edit.delete', 'timeline edit.splitMoved', 'lighting-points edit.selectAll', 'lighting-points edit.copy',
+      'lighting-points edit.cut', 'lighting-points edit.paste', 'lighting-points edit.delete']);
+    // No key that can be changed is Escape (the stop's, the panels', the drags').
+    expect(rebindable.flatMap(entry => entry.keys).filter(binding => binding.chord.endsWith('Escape'))).toEqual([]);
   });
 
   it('和剪映的键不一样的地方都写了原因', () => {

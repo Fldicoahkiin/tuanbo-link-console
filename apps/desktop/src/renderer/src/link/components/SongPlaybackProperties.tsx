@@ -3,7 +3,9 @@ import { PropertyNumberInput } from './PropertyNumberInput';
 import { defaultItemPlayback, formatMtcOffset, parseMtcOffset, programTimeOrigin, savedSongVolume, setItemPlaybackCommand, setItemVolumeCommand } from '@tb/core/link';
 import type { RundownItem } from '@tb/schema';
 import { chordOf } from '../keys/key-chord';
+import { songKeyNote, songKeyProblem } from '../keys/key-settings';
 import { useDocumentStore } from '../stores/document-store';
+import { currentKeymap } from '../stores/shortcut-store';
 import { Disclosure, Select, WithUnit } from '../ui';
 import { ownKeys } from '../keys/key-owner';
 
@@ -75,7 +77,13 @@ export function SongPlaybackProperties({ item, notify, collapseAdvanced = false,
       event.preventDefault(); event.stopPropagation();
       if (event.key === 'Backspace' || event.key === 'Delete') { save({ shortcut: '' }); return; }
       if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) return;
-      save({ shortcut: chordOf(event, { meta: false }) });
+      // The stop keys, Windows' own and the project's keys are refused; a key of the editor or the lighting workbench
+      // only gets a note: there the page's key comes first (keys/key-settings.ts, K8).
+      const shortcut = chordOf(event, { meta: false }), keymap = currentKeymap();
+      const problem = songKeyProblem(keymap, shortcut);
+      if (problem) { notify(problem, 'error'); return; }
+      const note = songKeyNote(keymap, shortcut);
+      if (save({ shortcut }) && note) notify(note, 'info');
     }} /></label>
   </>;
   return <>

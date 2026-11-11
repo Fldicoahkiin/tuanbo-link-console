@@ -8,7 +8,7 @@ import { LightingMasterCurve } from './LightingMasterCurve';
 import { masterCurveY } from './lighting-master-curve';
 import { useDragSession, useFramedDrag } from './useDragSession';
 import { useKeyCommands } from '../keys/useKeyCommands';
-import { commandKeyLabel } from '../stores/shortcut-store';
+import { commandKeyLabel, useKeyNames } from '../stores/shortcut-store';
 import { removeLightingPoints, timelineClipboard } from './timeline-commands';
 import { usePlayheadValue, type EditorPlayhead } from './editor-playhead';
 
@@ -79,15 +79,6 @@ function withMarker(document: LightingDocument, startMs: number): LightingDocume
   return { ...document, markers: [...document.markers, { id: crypto.randomUUID(), name: `标记 ${document.markers.length + 1}`, startMs, endMs: null }] };
 }
 
-/**
- * The hint on an empty clip. It names the stamp key only where a key stamps: the lighting workbench, with the key set
- * on this computer. In the editor M adds a marker since K7, so the hint names no key there.
- */
-function stampCaption(keyStamps: boolean): string {
-  const key = keyStamps ? commandKeyLabel('lighting.stamp', 'lighting') : '';
-  return key ? `双击打点 · ${key}` : '双击打点';
-}
-
 export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: number; scrollLeft: number; viewportWidth: number; getPlaybackPosition?: () => number; playhead: EditorPlayhead; onSeek: (ms: number) => void; timeAtClientX: (x: number) => number }): JSX.Element {
   const map = useMemo(() => new LightingTempoMap(props.document.tempos), [props.document.tempos]);
   const clipboard = useLightingClipboardStore((state) => state.clipboard);
@@ -147,20 +138,17 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
     props.onSeek(ms);
   };
   const add = (track: LightingTrack, clip: LightingClip, positionMs: number, master = false): void => {
-    const ms = props.snapTime?.(positionMs) ?? positionMs;     if (track.locked) return;
+    const ms = props.snapTime?.(positionMs) ?? positionMs;
+    if (track.locked) return;
     if (!master && track.kind === 'ma2' && track.cueStamp?.mode === 'marker') {
-      props.onChange({ ...props.document, markers: [...props.document.markers, { id: crypto.randomUUID(), name: `标记 ${props.document.markers.length + 1}`, startMs: ms, endMs: null }] }, '时间线打标记');
+      props.onChange(withMarker(props.document, ms), '时间线打标记');
       return;
     }
     const at = (clip.timeLock === 'time' ? ms : map.msToBeat(ms)) - clip.start;
     if (at < 0) return;
     let added: LightingEvent;
-    try {
-      added = makeTimelineEvent(props.document, track, clip, ms, at, master);
-    } catch (error) {
-      props.onError?.(error instanceof Error ? error.message : String(error));
-      return;
-    }
+    try { added = makeTimelineEvent(props.document, track, clip, ms, at, master); }
+    catch (error) { props.onError?.(error instanceof Error ? error.message : String(error)); return; }
     changeClip(track, { ...clip, events: [...clip.events, added] }, '灯光时间线打点');
     props.onSelectEvent?.(track.id, clip.id, added.id);
   };
@@ -182,6 +170,7 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
       props.onSelect(removed.trackId, removed.clipId);
     } } : {})
   } : {});
+  const stampCaption = useStampCaption(props.onCreateCue !== undefined);
   // M in the editor adds a marker at the playhead, as in 剪映 (K7; it added a lighting point before 0.5.9).
   useKeyCommands('editor', !context && !props.detailOpen ? { 'marker.add': () => props.onChange(withMarker(props.document, props.getPlaybackPosition?.() ?? props.playhead.read()), '时间线打标记') } : {});
   return <>
@@ -206,7 +195,7 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
           onPointerCancel={marquee.end}
           onClick={(event) => { event.stopPropagation(); if (suppressClick.current) { suppressClick.current = false; return; } props.onSelect(track.id, clip.id); props.onSeek(props.snapTime?.(props.timeAtClientX(event.clientX)) ?? props.timeAtClientX(event.clientX)); }}
           onDoubleClick={(event) => { event.stopPropagation(); add(track, clip, props.timeAtClientX(event.clientX)); }}>
-          {!clip.events.length && activeTrack.id === track.id ? <span className="lighting-clip-caption">{stampCaption(props.onCreateCue !== undefined)}</span> : null}
+          {!clip.events.length && activeTrack.id === track.id ? <span className="lighting-clip-caption">{stampCaption}</span> : null}
           {props.selectedClipId === clip.id ? <LightingMasterCurve clip={clip} map={map} pixelsPerSecond={props.pixelsPerSecond} scrollLeft={props.scrollLeft} viewportWidth={props.viewportWidth} previewEvent={movedEvent} /> : null}
           {range?.clipId === clip.id ? <span className="lighting-marquee" style={{ position: 'absolute', pointerEvents: 'none', top: 0, bottom: 0, left: (Math.min(range.start, range.end) - span.startMs) / 1000 * props.pixelsPerSecond, width: Math.abs(range.end - range.start) / 1000 * props.pixelsPerSecond, background: 'rgb(74 155 255 / 16%)', border: '1px solid var(--accent)' }} /> : null}
           {(visibleEvents.get(clip.id) ?? []).map((stored) => {
@@ -253,6 +242,17 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
       {!menuEvent ? <><MenuSeparator /><MenuItem icon={Trash2} danger disabled={menuTrack.locked} onSelect={() => { props.onChange({ ...props.document, tracks: props.document.tracks.map((track) => track.id === menuTrack.id ? { ...track, clips: track.clips.filter((clip) => clip.id !== menuClip.id) } : track) }, '删除灯光片段'); props.onSelect(menuTrack.id, null); setContext(null); }}>删除灯光片段</MenuItem></> : null}
     </Menu> : null}
   </>;
+}
+
+/**
+ * The empty clip's hint. It names the stamp key only where a key stamps: the lighting workbench (`stamps`, its own
+ * `onCreateCue`), with the key set on this computer, following a change at once. In the editor M adds a marker since
+ * K7, so the hint names no key there.
+ */
+function useStampCaption(stamps: boolean): string {
+  useKeyNames();
+  const key = stamps ? commandKeyLabel('lighting.stamp', 'lighting') : '';
+  return key ? `双击打点 · ${key}` : '双击打点';
 }
 
 function useVisibleLightingEvents(props: LightingTimelineProps & { scrollLeft: number; pixelsPerSecond: number; viewportWidth: number }, map: LightingTempoMap, drag: { ids: string[]; event: LightingEvent; clipId: string; deltaMs: number } | null): Map<string, LightingEvent[]> {
