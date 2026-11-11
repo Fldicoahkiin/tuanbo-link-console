@@ -1,26 +1,43 @@
+import type { LinkWaveformResult } from '@tb/schema';
+
 type Source = { projectPath: string; url: string; sha256: string; durationMs: number };
-type Entry = { users: number; bytes: number; result: Promise<number[]>; url: string; failed: boolean };
+type Entry = { users: number; bytes: number; result: Promise<LinkWaveformResult>; settled: Promise<LinkWaveformResult> | null; url: string; failed: boolean };
+export type WaveformLease = {
+  /** What the cache holds now; an old cache that was saved before its file was checked comes back `unverified`. */
+  result: Promise<LinkWaveformResult>;
+  /** The final peaks: for an `unverified` result the one rebuild from this song's file, shared by every page. */
+  settled: () => Promise<LinkWaveformResult>;
+  release: () => void;
+};
 
 /** Shared by the player and editor. Re-entering a page must not copy the same
  * 500,000 samples across the desktop bridge again. Live users pin their entry. */
 export class WaveformCache {
   private readonly entries = new Map<string, Entry>();
-  constructor(private readonly generate: (source: Source) => Promise<number[]>,
+  constructor(private readonly generate: (request: Source & { rebuild: boolean }) => Promise<LinkWaveformResult>,
     private readonly maximumBytes = 32 * 1024 * 1024, private readonly maximumEntries = 16) {}
-  acquire(source: Source): { result: Promise<number[]>; release: () => void } {
+  acquire(source: Source): WaveformLease {
     const key = JSON.stringify([source.projectPath, source.sha256, source.durationMs]);
     let entry = this.entries.get(key);
     // A failure stays for its own link, so more mounts never retry it. A newly issued link (the song or
     // project opened again) asks once more: 2026-11-09 a stale link kept the waveform failed until a restart.
     if (!entry || entry.failed && entry.url !== source.url) {
-      entry = { users: 0, bytes: 0, result: Promise.resolve([]), url: source.url, failed: false };
-      const created = entry;
-      entry.result = this.generate(source).then(peaks => { created.bytes = peaks.length * 8; this.evict(); return peaks; },
-        (error: unknown) => { created.failed = true; throw error; });
+      const created: Entry = { users: 0, bytes: 0, result: Promise.resolve({ state: 'verified', peaks: [] }), settled: null, url: source.url, failed: false };
+      created.result = this.request(created, source, false);
+      entry = created;
     }
     this.entries.delete(key); this.entries.set(key, entry); entry.users++;
+    const leased = entry;
     let released = false;
-    return { result: entry.result, release: () => { if (released) return; released = true; entry.users--; this.evict(); } };
+    return {
+      result: leased.result,
+      settled: () => leased.settled ??= leased.result.then(first => first.state === 'unverified' ? this.request(leased, source, true) : first),
+      release: () => { if (released) return; released = true; leased.users--; this.evict(); }
+    };
+  }
+  private request(entry: Entry, source: Source, rebuild: boolean): Promise<LinkWaveformResult> {
+    return this.generate({ ...source, rebuild }).then(value => { entry.bytes = value.peaks.length * 8; this.evict(); return value; },
+      (error: unknown) => { entry.failed = true; throw error; });
   }
   private evict(): void {
     let bytes = 0;

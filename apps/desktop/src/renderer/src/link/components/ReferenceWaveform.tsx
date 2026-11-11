@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import type { TimelineSpan } from '@tb/core/link';
-import type { LinkMediaAsset, ReferenceMediaClip, RundownItem } from '@tb/schema';
+import type { LinkMediaAsset, LinkWaveformResult, ReferenceMediaClip, RundownItem } from '@tb/schema';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import type { TimelineDrag } from './TimelineItems';
 import { timelineSpanWidth } from './timeline-geometry';
@@ -46,15 +46,20 @@ export function useReferenceWaveformPeaks(source: ReferenceWaveformSource | null
       return;
     }
     const lease = waveformCache.acquire({ projectPath, url, sha256, durationMs });
+    const show = (value: LinkWaveformResult): void => {
+      if (cancelled) return;
+      setPeaks(value.peaks);
+      setError(value.state === 'rebuild-failed' ? value.error : null);
+    };
+    const message = (reason: unknown): string => reason instanceof Error ? reason.message : String(reason);
     void lease.result.then((value) => {
-      if (!cancelled) {
-        setPeaks(value);
-        setError(null);
-      }
-    }).catch((reason: unknown) => {
+      show(value);
+      // An old cache is shown while it is rebuilt once from this song's file, then replaced.
+      if (value.state === 'unverified') return lease.settled().then(show, (reason: unknown) => { if (!cancelled) setError(message(reason)); });
+    }, (reason: unknown) => {
       if (!cancelled) {
         setPeaks([]);
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(message(reason));
       }
     });
     return () => { cancelled = true; lease.release(); };

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { decodeWaveform, WaveformAccumulator, WaveformService, waveformSourceMatches } from './waveform-service';
+import type { WaveformCacheEntry } from './link-project-service';
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -34,20 +35,20 @@ test('invalid or truncated PCM cannot become a successful cache', () => {
 });
 
 test('concurrent requests share work, independent jobs serialize and failures never write cache', async () => {
-  const cache = { loadWaveformCache: vi.fn((): Promise<number[] | null> => Promise.resolve(null)), saveWaveformCache: vi.fn(() => Promise.resolve()) };
+  const cache = { loadWaveformCache: vi.fn((): Promise<WaveformCacheEntry | null> => Promise.resolve(null)), saveWaveformCache: vi.fn(() => Promise.resolve()) };
   let fail: (error: Error) => void = () => { throw new Error('decoder not started'); };
   const decode = vi.fn().mockImplementationOnce(() => new Promise<number[]>((_resolve, reject) => { fail = reject; })).mockResolvedValue([0.5]);
   const service = new WaveformService(cache, decode, () => Promise.resolve(true));
-  const first = service.ensure('show.tblink', 'one.wav', 'one', 1000);
+  const first = service.ensure('show.tblink', 'one.wav', 'one', 1000, true);
   const failed = expect(first).rejects.toThrow('invalid audio');
-  expect(service.ensure('show.tblink', 'one.wav', 'one', 1000)).toBe(first);
-  const second = service.ensure('show.tblink', 'two.wav', 'two', 1000);
+  expect(service.ensure('show.tblink', 'one.wav', 'one', 1000, true)).toBe(first);
+  const second = service.ensure('show.tblink', 'two.wav', 'two', 1000, true);
   await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(1));
   fail(new Error('invalid audio')); await failed;
-  await expect(second).resolves.toEqual([0.5]);
-  expect(cache.saveWaveformCache).toHaveBeenCalledExactlyOnceWith('show.tblink', 'two', [0.5]);
-  cache.loadWaveformCache.mockResolvedValue(Array.from({ length: 4800 }, () => 0.25));
-  await expect(service.ensure('show.tblink', 'cached.wav', 'cached', 1000)).resolves.toHaveLength(4800);
+  await expect(second).resolves.toEqual({ state: 'verified', peaks: [0.5] });
+  expect(cache.saveWaveformCache).toHaveBeenCalledExactlyOnceWith('show.tblink', 'two', [0.5], true);
+  cache.loadWaveformCache.mockResolvedValue({ peaks: Array.from({ length: 4800 }, () => 0.25), sourceVerified: true });
+  expect((await service.ensure('show.tblink', 'cached.wav', 'cached', 1000, true)).peaks).toHaveLength(4800);
   expect(decode).toHaveBeenCalledTimes(2);
 });
 
@@ -70,13 +71,13 @@ test('real FFmpeg streams the first channel and reports invalid media', async ()
 });
 
 test('coarse waveform cache is regenerated for precise editing', async () => {
-  const cache = { loadWaveformCache: vi.fn().mockResolvedValue(Array(2400).fill(0)), saveWaveformCache: vi.fn().mockResolvedValue(undefined) };
+  const cache = { loadWaveformCache: vi.fn().mockResolvedValue({ peaks: Array(2400).fill(0), sourceVerified: true }), saveWaveformCache: vi.fn().mockResolvedValue(undefined) };
   const detailed = Array.from({ length: 30000 }, (_, index) => index === 12001 ? 1 : 0);
   const decode = vi.fn().mockResolvedValue(detailed);
-  const result = await new WaveformService(cache, decode, () => Promise.resolve(true)).ensure('show.tblink', 'song.wav', 'song', 60000);
-  expect(result[12001]).toBe(1);
+  const result = await new WaveformService(cache, decode, () => Promise.resolve(true)).ensure('show.tblink', 'song.wav', 'song', 60000, false);
+  expect(result.peaks[12001]).toBe(1);
   expect(decode).toHaveBeenCalledExactlyOnceWith('song.wav', 60000);
-  expect(cache.saveWaveformCache).toHaveBeenCalledExactlyOnceWith('show.tblink', 'song', detailed);
+  expect(cache.saveWaveformCache).toHaveBeenCalledExactlyOnceWith('show.tblink', 'song', detailed, true);
 });
 
 test('another song\'s file never fills this song\'s waveform cache', async () => {
@@ -86,13 +87,61 @@ test('another song\'s file never fills this song\'s waveform cache', async () =>
   const songA = 'a'.repeat(64), songB = 'b'.repeat(64);
   const fileA = join(directory, `${songA}.wav`); await writeFile(fileA, 'song a');
   const renamed = join(directory, 'natural.wav'); await writeFile(renamed, 'song a');
-  const cache = { loadWaveformCache: vi.fn((): Promise<number[] | null> => Promise.resolve(null)), saveWaveformCache: vi.fn(() => Promise.resolve()) };
+  const cache = { loadWaveformCache: vi.fn((): Promise<WaveformCacheEntry | null> => Promise.resolve(null)), saveWaveformCache: vi.fn(() => Promise.resolve()) };
   const decode = vi.fn().mockResolvedValue([0.5]);
   const service = new WaveformService(cache, decode);
-  await expect(service.ensure('show.tblink', fileA, songB, 59470)).rejects.toThrow('不是这首歌的音频');
-  await expect(service.ensure('show.tblink', renamed, songB, 59470)).rejects.toThrow('不是这首歌的音频');
+  await expect(service.ensure('show.tblink', fileA, songB, 59470, true)).rejects.toThrow('不是这首歌的音频');
+  await expect(service.ensure('show.tblink', renamed, songB, 59470, true)).rejects.toThrow('不是这首歌的音频');
   expect(decode).not.toHaveBeenCalled(); expect(cache.saveWaveformCache).not.toHaveBeenCalled();
-  await expect(service.ensure('show.tblink', fileA, songA, 45000)).resolves.toEqual([0.5]);
+  await expect(service.ensure('show.tblink', fileA, songA, 45000, true)).resolves.toEqual({ state: 'verified', peaks: [0.5] });
   const { createHash } = await import('node:crypto');
   expect(await waveformSourceMatches(renamed, createHash('sha256').update('song a').digest('hex'))).toBe(true);
+});
+
+test('an old cache is shown as it is, rebuilt once from this song\'s file and then marked', async () => {
+  // Caches saved before 2026-11-11 may hold another song's peaks (the home player asked with the previous
+  // song's link). They carry no mark, so they are rebuilt the next time the song's waveform is asked for.
+  const old = Array.from({ length: 4800 }, () => 0.1), rebuilt = Array.from({ length: 4800 }, () => 0.9);
+  let stored: WaveformCacheEntry = { peaks: old, sourceVerified: false };
+  const cache = { loadWaveformCache: vi.fn(() => Promise.resolve(stored)),
+    saveWaveformCache: vi.fn((_project: string, _sha: string, peaks: number[], sourceVerified: boolean) => { stored = { peaks, sourceVerified }; return Promise.resolve(); }) };
+  const decode = vi.fn().mockResolvedValue(rebuilt); const report = vi.fn();
+  const service = new WaveformService(cache, decode, () => Promise.resolve(true), report);
+  await expect(service.ensure('show.tblink', 'song.wav', 'song', 1000, false)).resolves.toEqual({ state: 'unverified', peaks: old });
+  expect(decode).not.toHaveBeenCalled();
+  await expect(service.ensure('show.tblink', 'song.wav', 'song', 1000, true)).resolves.toEqual({ state: 'verified', peaks: rebuilt });
+  expect(cache.saveWaveformCache).toHaveBeenCalledExactlyOnceWith('show.tblink', 'song', rebuilt, true);
+  // Marked now: neither request decodes again.
+  await expect(service.ensure('show.tblink', 'song.wav', 'song', 1000, false)).resolves.toEqual({ state: 'verified', peaks: rebuilt });
+  await expect(service.ensure('show.tblink', 'song.wav', 'song', 1000, true)).resolves.toEqual({ state: 'verified', peaks: rebuilt });
+  expect(decode).toHaveBeenCalledTimes(1); expect(report).not.toHaveBeenCalled();
+});
+
+test('a marked cache is never rebuilt', async () => {
+  const peaks = Array.from({ length: 4800 }, () => 0.3);
+  const cache = { loadWaveformCache: vi.fn().mockResolvedValue({ peaks, sourceVerified: true }), saveWaveformCache: vi.fn() };
+  const decode = vi.fn(), matches = vi.fn();
+  const service = new WaveformService(cache, decode, matches);
+  for (const rebuild of [false, true]) await expect(service.ensure('show.tblink', 'song.wav', 'song', 1000, rebuild)).resolves.toEqual({ state: 'verified', peaks });
+  expect(decode).not.toHaveBeenCalled(); expect(matches).not.toHaveBeenCalled(); expect(cache.saveWaveformCache).not.toHaveBeenCalled();
+});
+
+test('a failed rebuild keeps the old cache, is reported once and not tried again in this run', async () => {
+  const old = Array.from({ length: 4800 }, () => 0.1);
+  const cache = { loadWaveformCache: vi.fn().mockResolvedValue({ peaks: old, sourceVerified: false }), saveWaveformCache: vi.fn() };
+  const report = vi.fn();
+  for (const [decode, matches, reason] of [
+    [vi.fn().mockRejectedValue(new Error('波形解码失败：文件读不了')), () => Promise.resolve(true), '波形解码失败'],
+    [vi.fn(), () => Promise.resolve(false), '不是这首歌的音频']
+  ] as const) {
+    report.mockClear();
+    const service = new WaveformService(cache, decode, matches, report);
+    const failed = await service.ensure('show.tblink', 'song.wav', 'song', 1000, true);
+    expect(failed).toMatchObject({ state: 'rebuild-failed', peaks: old }); expect(failed.state === 'rebuild-failed' && failed.error).toContain(reason);
+    expect(report).toHaveBeenCalledExactlyOnceWith('song', expect.stringContaining(reason));
+    // Asked again by another page, or the page is opened again: the same answer, no decode, no new report.
+    for (const rebuild of [true, false]) await expect(service.ensure('show.tblink', 'song.wav', 'song', 1000, rebuild)).resolves.toEqual(failed);
+    expect(decode.mock.calls.length).toBeLessThanOrEqual(1); expect(report).toHaveBeenCalledTimes(1);
+  }
+  expect(cache.saveWaveformCache).not.toHaveBeenCalled();
 });

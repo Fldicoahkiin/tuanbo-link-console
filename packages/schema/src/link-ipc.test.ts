@@ -14,8 +14,9 @@ import {
 
 describe('联动台 IPC Zod 契约', () => {
   it('波形生成只接收应用素材令牌和有界时长', () => {
-    const payload = { projectPath: 'C:/Shows/show.tblink', sha256: 'a'.repeat(64), url: 'tblink-asset://local/12345678-abcd-4321-abcd-123456789abc', durationMs: 3605000 };
+    const payload = { projectPath: 'C:/Shows/show.tblink', sha256: 'a'.repeat(64), url: 'tblink-asset://local/12345678-abcd-4321-abcd-123456789abc', durationMs: 3605000, rebuild: false };
     expect(linkWaveformGeneratePayloadSchema.parse(payload)).toEqual(payload);
+    expect(linkWaveformGeneratePayloadSchema.safeParse({ ...payload, rebuild: undefined }).success).toBe(false);
     for (const url of ['https://example.com/audio.wav', 'file:///C:/audio.wav', 'tblink-asset://remote/abc']) expect(linkWaveformGeneratePayloadSchema.safeParse({ ...payload, url }).success).toBe(false);
     for (const durationMs of [0, -1, Infinity, 86400001]) expect(linkWaveformGeneratePayloadSchema.safeParse({ ...payload, durationMs }).success).toBe(false);
   });

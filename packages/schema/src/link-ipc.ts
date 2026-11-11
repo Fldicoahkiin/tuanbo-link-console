@@ -161,8 +161,18 @@ export const linkWaveformCacheSavePayloadSchema = linkWaveformCachePayloadSchema
 
 export const linkWaveformGeneratePayloadSchema = linkWaveformCachePayloadSchema.extend({
   url: z.string().regex(/^tblink-asset:\/\/local\/[a-f0-9-]+$/),
-  durationMs: z.number().finite().positive().max(86400000)
+  durationMs: z.number().finite().positive().max(86400000),
+  /** false: an old cache saved before its file was checked is returned as it is (state `unverified`), so the
+   * page can show it at once. true: such a cache is decoded again from this song's file. */
+  rebuild: z.boolean()
 });
+
+/** `rebuild-failed`: the old cache is kept and returned with the reason; it is not tried again until the app
+ * is started again or the song's audio changes. */
+export type LinkWaveformResult =
+  | { state: 'verified'; peaks: number[] }
+  | { state: 'unverified'; peaks: number[] }
+  | { state: 'rebuild-failed'; peaks: number[]; error: string };
 
 export const linkIntegrationProfileSavePayloadSchema = z.object({
   profile: integrationProfileSchema,

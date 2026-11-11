@@ -1563,7 +1563,10 @@ function registerIpc(
     await projectAccess.assetFiles(payload.projectPath, [payload.relativePath]);
     return projectAccess.assetUrl(payload.projectPath, await mediaPreviewService.ensureAudioPreview(payload.projectPath, payload.relativePath, payload.sha256));
   });
-  const waveformService = new WaveformService(projectService);
+  // Logged here once per song: the service remembers the failure and does not decode that song again in this run.
+  const waveformService = new WaveformService(projectService, undefined, undefined, (sha256, message) => {
+    void logger.record({ level: 'error', category: 'device', device: '波形', message, result: 'failed', details: { sha256 } }).catch((error: unknown) => console.error('波形日志保存失败', error));
+  });
   const audioEditService = new AudioEditService(projectService, ibtExecutable(app.isPackaged ? process.resourcesPath : undefined));
   const musicAnalysis = new MusicAnalysisService(projectService, progress => sendToRenderer('link:music-analysis-progress', progress));
   const analysisRoot = app.isPackaged ? join(process.resourcesPath, 'music-analysis') : join(__dirname, '../../../../output/music-analysis');
@@ -1618,17 +1621,18 @@ function registerIpc(
     projectAccess.requireShown(payload.projectPath);
     const sourcePath = projectAccess.assetPath(new URL(payload.url).pathname.slice(1));
     if (!sourcePath) throw new Error('波形素材链接已失效，请重新打开节目');
-    return waveformService.ensure(payload.projectPath, sourcePath, payload.sha256, payload.durationMs);
+    return waveformService.ensure(payload.projectPath, sourcePath, payload.sha256, payload.durationMs, payload.rebuild);
   });
   handle('link:load-waveform-cache', (_event, payloadValue: unknown) => {
     const payload = linkWaveformCachePayloadSchema.parse(payloadValue);
     projectAccess.requireShown(payload.projectPath);
-    return projectService.loadWaveformCache(payload.projectPath, payload.sha256);
+    return projectService.loadWaveformCache(payload.projectPath, payload.sha256).then(cache => cache?.peaks ?? null);
   });
   handle('link:save-waveform-cache', (_event, payloadValue: unknown) => {
     const payload = linkWaveformCacheSavePayloadSchema.parse(payloadValue);
     projectAccess.requireShown(payload.projectPath);
-    return projectService.saveWaveformCache(payload.projectPath, payload.sha256, payload.peaks);
+    // Peaks from the page come without a checked source file, so they are saved unverified.
+    return projectService.saveWaveformCache(payload.projectPath, payload.sha256, payload.peaks, false);
   });
   handle('link:inspect-project-assets', async (_event, pathValue: unknown, projectValue: unknown) => {
     const path = linkFilePathSchema.parse(pathValue); const project = parseLinkProject(projectValue);

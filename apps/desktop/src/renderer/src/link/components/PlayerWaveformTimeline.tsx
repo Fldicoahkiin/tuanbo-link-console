@@ -32,6 +32,8 @@ export function PlayerWaveformTimeline(props: { source: ReferenceWaveformSource 
       onKeyDown={(event) => { if (!props.enabled) return; const delta = event.shiftKey ? 10000 : 1000; const target = event.key === 'Home' ? 0 : event.key === 'End' ? maximum : event.key === 'ArrowLeft' ? position - delta : event.key === 'ArrowRight' ? position + delta : null; if (target !== null) { event.preventDefault(); props.onSeek(Math.max(0, Math.min(maximum, target))); } }}>
       {props.source && waveform.peaks.length ? <><TimelineWaveformCanvas peaks={waveform.peaks} scrollLeft={0} viewportWidth={width} contentWidth={width} /><i className="home-waveform-playhead" style={{ left: `${duration ? Math.min(100, position / duration * 100) : 0}%` }} /></> : <span className="home-waveform-empty">{waveform.error ?? (props.source ? '正在读取波形…' : '还没有音频')}</span>}
     </div>
+    {/* Old peaks stay on screen when rebuilding them failed, so the reason is shown beside them. */}
+    {props.source && waveform.peaks.length && waveform.error ? <p className="home-waveform-warning" role="status" title={waveform.error}>{waveform.error}</p> : null}
     {duration > 0 ? <div className="home-waveform-ruler" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <span key={index}>{formatPosition(duration * index / 4)}</span>)}</div> : null}
     {preview === null ? null : <small className="home-waveform-hint">定位到 {formatPosition(preview)}</small>}
   </section>;

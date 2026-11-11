@@ -99,7 +99,7 @@ test('五百音频片段仅为视口内片段创建波形', async ({}, info) => 
     await application.evaluate(({ ipcMain, dialog }, file) => {
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] });
       ipcMain.removeHandler('link:generate-waveform');
-      ipcMain.handle('link:generate-waveform', () => Array.from({ length: 4800 }, (_, i) => (i % 7 + 1) / 8));
+      ipcMain.handle('link:generate-waveform', () => ({ state: 'verified', peaks: Array.from({ length: 4800 }, (_, i) => (i % 7 + 1) / 8) }));
     }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();

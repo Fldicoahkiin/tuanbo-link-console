@@ -32,6 +32,7 @@
   .home-waveform-track .timeline-waveform-canvas { top: 0; height: 100%; }
   .home-waveform-playhead { position: absolute; top: 0; bottom: 0; z-index: 2; width: 2px; margin-left: -1px; background: var(--color-text-strong); pointer-events: none; }
   .home-waveform-empty { display: grid; place-items: center; height: 100%; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
+  .home-waveform-warning { margin: 0; overflow: hidden; color: var(--color-warning); font: 400 var(--type-caption)/1.4 var(--font-ui); white-space: nowrap; text-overflow: ellipsis; }
   .home-waveform-ruler { display: flex; justify-content: space-between; color: var(--color-text-tertiary); font: 400 11px/14px var(--font-numeric); font-variant-numeric: tabular-nums; pointer-events: none; }
   .home-waveform-hint { position: absolute; top: 4px; right: 6px; z-index: 3; padding: 0 8px; border-radius: var(--radius-sm); color: var(--color-text-strong); background: var(--color-glass-strong); font: 500 var(--type-caption)/20px var(--font-numeric); }
 

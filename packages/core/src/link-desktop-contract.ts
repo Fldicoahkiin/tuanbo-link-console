@@ -334,7 +334,7 @@ export type LinkDesktopApi = {
   ensureMediaPreviewUrl(payload: { projectPath: string; relativePath: string; sha256: string; kind: LinkMediaKind }): Promise<string>;
   ensureMediaAudioUrl(payload: { projectPath: string; relativePath: string; sha256: string; kind: LinkMediaKind }): Promise<string>;
   loadWaveformCache(payload: { projectPath: string; sha256: string }): Promise<number[] | null>;
-  generateWaveform(payload: { projectPath: string; sha256: string; url: string; durationMs: number }): Promise<number[]>;
+  generateWaveform(payload: { projectPath: string; sha256: string; url: string; durationMs: number; rebuild: boolean }): Promise<import('@tb/schema').LinkWaveformResult>;
   analyzeAudioBeats(payload: { projectPath: string; source: ReferenceAudio }): Promise<AudioBeatAnalysis>;
   analyzeMusic(payload: import('@tb/schema').MusicAnalysisRequest, onProgress?: (progress: import('@tb/schema').MusicAnalysisProgress) => void): Promise<import('@tb/schema').MusicAnalysisResult>;
   cancelMusicAnalysis(payload: { version: 1; taskId: string }): Promise<void>;

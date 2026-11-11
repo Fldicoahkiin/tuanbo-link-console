@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants, createReadStream } from 'node:fs';
 import { access, copyFile, mkdir, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { z } from 'zod';
 import {
   linkMediaAssetSchema,
   parseLinkProject,
@@ -28,6 +29,18 @@ export const REFERENCE_AUDIO_CONTAINER_EXTENSIONS: ReadonlySet<string> = new Set
 /** The waveform worker's output limit, and room for that many peaks as JSON. */
 const MAX_WAVEFORM_PEAKS = 500_000;
 const MAX_WAVEFORM_CACHE_BYTES = 16 * 1024 * 1024;
+const waveformPeaksSchema = z.array(z.number().finite().min(-1).max(1)).min(1).max(MAX_WAVEFORM_PEAKS);
+/** A bare array is the format before 2026-11-11, written without checking which file was decoded. Since then
+ * a cache names the sha256 its decoded file was verified against, so a cache built from another song's file
+ * (the home player once asked with the previous song's link) can be told apart and rebuilt. */
+const waveformCacheFileSchema = z.union([
+  waveformPeaksSchema,
+  z.object({ sourceSha256: z.string().regex(/^[a-f0-9]{64}$/), peaks: waveformPeaksSchema }).strict()
+]);
+type WaveformCacheFile = z.infer<typeof waveformCacheFileSchema>;
+
+/** `sourceVerified`: the peaks were decoded from a file verified to be this very song. */
+export type WaveformCacheEntry = { peaks: number[]; sourceVerified: boolean };
 
 export type ImportedReferenceAudio = {
   assetId: string;
@@ -133,24 +146,25 @@ export class LinkProjectService {
       await this.writeProject(absolutePath, content);
   }
 
-  async loadWaveformCache(projectPath: string, sha256: string): Promise<number[] | null> {
+  async loadWaveformCache(projectPath: string, sha256: string): Promise<WaveformCacheEntry | null> {
     assertSha256(sha256);
     try {
-      return await readWaveformCacheFile(waveformCachePath(projectPath, sha256));
+      return waveformCacheEntry(await readWaveformCacheFile(waveformCachePath(projectPath, sha256)), sha256);
     } catch (error) {
       if (isErrorWithCode(error, 'ENOENT')) return null;
       throw error;
     }
   }
 
-  async saveWaveformCache(projectPath: string, sha256: string, peaks: number[]): Promise<void> {
+  /** Only a caller that checked the decoded file against `sha256` may pass `sourceVerified: true`. */
+  async saveWaveformCache(projectPath: string, sha256: string, peaks: number[], sourceVerified: boolean): Promise<void> {
     assertSha256(sha256);
-    if (peaks.length === 0 || peaks.length > MAX_WAVEFORM_PEAKS || !peaks.every((peak) => Number.isFinite(peak) && peak >= -1 && peak <= 1)) {
+    if (!waveformPeaksSchema.safeParse(peaks).success) {
       throw new Error(`波形峰值必须是 1 到 ${MAX_WAVEFORM_PEAKS} 个 -1 到 1 之间的有限数值`);
     }
     const path = waveformCachePath(projectPath, sha256);
     await assertRealPathInside(dirname(resolve(projectPath)), dirname(path), '保存波形缓存已拒绝：工程文件夹中的 cache/waveforms 经符号链接或目录联接指向工程文件夹之外');
-    await writeFileAtomically(path, `${JSON.stringify(peaks)}\n`);
+    await writeFileAtomically(path, `${JSON.stringify(sourceVerified ? { sourceSha256: sha256, peaks } : peaks)}\n`);
   }
 
   async inspectAssets(projectPath: string, project: LinkProject): Promise<LinkProjectAssetInspection> {
@@ -351,15 +365,16 @@ export class LinkProjectService {
       await assertRealPathInside(projectDirectory, dirname(destination), `找回素材已拒绝：工程文件夹中 ${relativePath} 所在的文件夹经符号链接或目录联接指向工程文件夹之外`);
       // P1 follow preflight blocks on a missing waveform, so it moves with its audio.
       const waveform = join(sourceFolder, 'cache', 'waveforms', `${sha256}.json`); const waveformDestination = waveformCachePath(projectPath, sha256);
-      let peaks: number[] | null = null;
+      let cache: WaveformCacheFile | null = null;
       if (await pathExists(waveform) && !await pathExists(waveformDestination)) {
         await assertRealPathInside(sourceFolder, waveform, `找回波形缓存已拒绝：所选文件夹中的 cache/waveforms/${sha256}.json 经符号链接或目录联接指向该文件夹之外`);
         await assertRealPathInside(projectDirectory, dirname(waveformDestination), '找回波形缓存已拒绝：工程文件夹中的 cache/waveforms 经符号链接或目录联接指向工程文件夹之外');
-        peaks = await readWaveformCacheFile(waveform);
+        cache = await readWaveformCacheFile(waveform);
       }
       await mkdir(dirname(destination), { recursive: true });
       await copyIntoProject(source, destination, dirname(destination), '找回素材', sha256);
-      if (peaks) await writeFileAtomically(waveformDestination, `${JSON.stringify(peaks)}\n`);
+      // Copied as it is: an old cache stays unverified and is rebuilt when the song's waveform is next shown.
+      if (cache) await writeFileAtomically(waveformDestination, `${JSON.stringify(cache)}\n`);
       result.push({ relativePath, status: 'restored' });
     }
     return result;
@@ -482,7 +497,7 @@ function assertProjectExtension(projectPath: string): void {
 }
 
 /** Same shape as saveWaveformCache writes; a file from elsewhere is checked before it is read whole. */
-async function readWaveformCacheFile(path: string): Promise<number[]> {
+async function readWaveformCacheFile(path: string): Promise<WaveformCacheFile> {
   if ((await stat(path)).size > MAX_WAVEFORM_CACHE_BYTES) throw new Error(`波形缓存超过 16 MB：${path}`);
   let value: unknown;
   try {
@@ -490,11 +505,14 @@ async function readWaveformCacheFile(path: string): Promise<number[]> {
   } catch (error) {
     throw new Error(`波形缓存损坏：${path}`, { cause: error });
   }
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_WAVEFORM_PEAKS) throw new Error(`波形缓存结构无效：${path}`);
-  return value.map((peak: unknown) => {
-    if (typeof peak !== 'number' || !Number.isFinite(peak) || peak < -1 || peak > 1) throw new Error(`波形缓存结构无效：${path}`);
-    return peak;
-  });
+  const parsed = waveformCacheFileSchema.safeParse(value);
+  if (!parsed.success) throw new Error(`波形缓存结构无效：${path}`);
+  return parsed.data;
+}
+
+/** A cache verified against another sha256 than its file name is as unverified as an old one. */
+function waveformCacheEntry(file: WaveformCacheFile, sha256: string): WaveformCacheEntry {
+  return Array.isArray(file) ? { peaks: file, sourceVerified: false } : { peaks: file.peaks, sourceVerified: file.sourceSha256 === sha256 };
 }
 
 function waveformCachePath(projectPath: string, sha256: string): string {

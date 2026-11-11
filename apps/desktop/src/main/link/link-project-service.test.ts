@@ -238,7 +238,7 @@ describe('LinkProjectService', () => {
     const waveformPath = (root: string): string => join(root, 'cache', 'waveforms', `${audio.sha256}.json`);
     for (const root of [original, moved]) cleanupDirectories.push(join(root, 'cache'), join(root, 'cache', 'waveforms'));
     cleanupFiles.push(waveformPath(original), waveformPath(moved));
-    await service.saveWaveformCache(originalProject, audio.sha256, [0, 0.5, -0.5]);
+    await service.saveWaveformCache(originalProject, audio.sha256, [0, 0.5, -0.5], true);
     for (const relativePath of [audio.relativePath, video.relativePath, replaced.relativePath]) cleanupFiles.push(join(original, relativePath));
     for (const relativePath of [audio.relativePath, video.relativePath]) cleanupFiles.push(join(moved, relativePath));
     const files = [audio, video, replaced, absent].map(({ relativePath, sha256 }) => ({ relativePath, sha256 }));
@@ -253,10 +253,44 @@ describe('LinkProjectService', () => {
     await expect(readFile(join(moved, audio.relativePath), 'utf8')).resolves.toBe('song-audio');
     await expect(readFile(join(moved, video.relativePath), 'utf8')).resolves.toBe('opening-video');
     expect(await readdir(join(moved, 'assets', 'reference-media'))).toEqual([video.relativePath.split('/').at(-1)]);
-    expect(await service.loadWaveformCache(movedProject, audio.sha256)).toEqual([0, 0.5, -0.5]);
+    expect(await service.loadWaveformCache(movedProject, audio.sha256)).toEqual({ peaks: [0, 0.5, -0.5], sourceVerified: true });
     expect(await readdir(join(moved, 'cache', 'waveforms'))).toEqual([`${audio.sha256}.json`]);
     expect(await service.findMissingAssetFiles(movedProject, files)).toEqual([replaced.relativePath, absent.relativePath]);
     expect((await service.relinkAssetFiles(movedProject, original, files.slice(0, 1)))[0]?.status).toBe('present');
+  });
+
+  it('波形缓存记下核对过的歌曲；2026-11-11 以前没有记号的旧缓存照样读出，标成没核对过', async () => {
+    const directory = await createTestDirectory(); const project = join(directory, 'show.tblink'); const song = sha256('song');
+    const path = join(directory, 'cache', 'waveforms', `${song}.json`);
+    cleanupDirectories.push(join(directory, 'cache'), join(directory, 'cache', 'waveforms')); cleanupFiles.push(path);
+    const service = new LinkProjectService();
+    await service.saveWaveformCache(project, song, [0, 0.5], true);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ sourceSha256: song, peaks: [0, 0.5] });
+    expect(await service.loadWaveformCache(project, song)).toEqual({ peaks: [0, 0.5], sourceVerified: true });
+    await writeFile(path, '[0.1,0.2]\n');
+    expect(await service.loadWaveformCache(project, song)).toEqual({ peaks: [0.1, 0.2], sourceVerified: false });
+    await writeFile(path, JSON.stringify({ sourceSha256: sha256('other'), peaks: [0.1] }));
+    expect(await service.loadWaveformCache(project, song)).toEqual({ peaks: [0.1], sourceVerified: false });
+    await service.saveWaveformCache(project, song, [0.3], false);
+    expect(await service.loadWaveformCache(project, song)).toEqual({ peaks: [0.3], sourceVerified: false });
+    for (const content of ['{"peaks":[0]}', `{"sourceSha256":"${song}","peaks":[0],"extra":1}`, `{"sourceSha256":"${song}","peaks":[2]}`, '{"sourceSha256":"short","peaks":[0]}']) {
+      await writeFile(path, content);
+      await expect(service.loadWaveformCache(project, song)).rejects.toThrow('波形缓存结构无效');
+    }
+  });
+
+  it('没有记号的旧波形缓存在开播前检查里照样算有，P1 跟随不被挡住', async () => {
+    const directory = await createTestDirectory(); const projectPath = join(directory, 'show.tblink');
+    const service = new LinkProjectService(); const audioSource = join(directory, 'song.wav'); cleanupFiles.push(audioSource);
+    await writeFile(audioSource, Buffer.from('song-audio'));
+    cleanupDirectories.push(join(directory, 'assets'), join(directory, 'assets', 'reference-audio'), join(directory, 'cache'), join(directory, 'cache', 'waveforms'));
+    const audio = await service.importReferenceAudio(projectPath, audioSource, 1_000); cleanupFiles.push(join(directory, audio.relativePath));
+    const waveform = join(directory, 'cache', 'waveforms', `${audio.sha256}.json`); cleanupFiles.push(waveform);
+    await mkdir(join(directory, 'cache', 'waveforms'), { recursive: true }); await writeFile(waveform, '[0.1,0.2]\n');
+    const project = createEmptyLinkProject('旧缓存');
+    project.rundown.push({ id: 'song', title: '一首歌', enabled: true, notes: '', visualLayers: [], referenceAudio: audio, referenceMediaClips: [], cues: [] });
+    // The preflight passes on `waveformAvailable` (warning without it when the console plays, blocking when following P1).
+    expect((await service.inspectAssets(projectPath, project)).referenceAudio).toEqual({ song: { audioAvailable: true, waveformAvailable: true } });
   });
 
   it('找回素材不读写工程文件夹或所选文件夹以外的路径', async () => {
@@ -334,9 +368,9 @@ describe('LinkProjectService', () => {
     const service = new LinkProjectService(); const project = await createTestDirectory(); const outside = await createTestDirectory();
     await linkFolder(outside, join(project, 'cache'));
     cleanupDirectories.push(join(outside, 'waveforms')); cleanupFiles.push(join(outside, 'waveforms', `${sha256('a')}.json`));
-    await expect(service.saveWaveformCache(join(project, 'show.tblink'), sha256('a'), [0, 0.5])).rejects.toThrow('符号链接');
+    await expect(service.saveWaveformCache(join(project, 'show.tblink'), sha256('a'), [0, 0.5], true)).rejects.toThrow('符号链接');
     expect(await readdir(outside)).toEqual([]);
-    await expect(service.saveWaveformCache(join(await createTestDirectory(), 'show.tblink'), sha256('a'), Array.from({ length: 500_001 }, () => 0))).rejects.toThrow('500000');
+    await expect(service.saveWaveformCache(join(await createTestDirectory(), 'show.tblink'), sha256('a'), Array.from({ length: 500_001 }, () => 0), true)).rejects.toThrow('500000');
   });
 
   it('找回素材只接受 assets 素材子目录里的音视频和图片文件，有一个不符合就整批拒绝', async () => {
