@@ -432,8 +432,14 @@ export function setReferenceAudioCommand(
       delete item.referenceAudio;
       return;
     }
+    assertNoAudioBeats(referenceAudio);
     item.referenceAudio = structuredClone(referenceAudio);
   }, now);
+}
+
+/** Beats belong to the song (`rundownItem.music`, set by setSongMusicCommand); the old field on the audio is only read from older files. */
+function assertNoAudioBeats(audio: ReferenceAudio): void {
+  if (audio.beats) throw new Error('节拍已经改存在歌曲上，这次没有修改音频。请重新识别节拍');
 }
 
 export function editReferenceAudioCommand(itemId: string, audio: ReferenceAudio, label: string): LinkCommand {
@@ -442,6 +448,7 @@ export function editReferenceAudioCommand(itemId: string, audio: ReferenceAudio,
     // Once a legacy video's sound becomes independently editable, deleting its
     // audio track must not reactivate the video's former embedded sound.
     if (audio.timeline?.tracks) for (const clip of item.referenceMediaClips) if (clip.assetId === item.referenceAudio?.sourceMediaAssetId) clip.embeddedAudioEnabled = false;
+    assertNoAudioBeats(audio);
     item.referenceAudio = referenceAudioSchema.parse(audio);
     if (item.playback && (item.playback.startMs >= audio.durationMs || item.playback.endMs > audio.durationMs)) {
       item.playback = { ...item.playback, startMs: Math.min(item.playback.startMs, audio.durationMs - 1), endMs: Math.min(item.playback.endMs, audio.durationMs) };

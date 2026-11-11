@@ -83,8 +83,10 @@ export * from './music-analysis';
 export { automaticMusicCandidates, applyAutomaticMusicCandidates, removeAutomaticMusicAnnotations } from './automatic-music-candidates';
 export { musicBeatSegments, saveMusicBeatSegments, musicBeatPrefix, detectedBeatsPerBar, type MusicBeatInterval } from './music-beat-segments';
 
-export { recognizeMusicStructure, matchingMusicStructure, musicStructureSegments, acceptMusicStructure, editMusicStructure } from './music-structure';
-export { setAutomaticMusicAnalysisCommand } from './music-analysis-command';
+export { recognizeMusicStructure, matchingMusicStructure, musicStructureSegments, acceptMusicStructure, editMusicStructure, ibtSongMusic, clearedSongMusic } from './music-structure';
+export { setSongMusicCommand } from './music-analysis-command';
+export * from './song-beats';
+export * from './song-music-migration';
 
 export * from './ma2-song-sequence';
 export * from './ma2-executor-change';

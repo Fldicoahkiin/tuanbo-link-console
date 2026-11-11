@@ -12,8 +12,8 @@ export function TimelineAutoAnalyze({ editor, lighting }: { editor: AudioEditor;
   const count = lighting?.document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => event.kind === 'ma2' && (!event.effectGroupId || event.effectGroupId === event.id)))).length ?? 0;
   const generated = Boolean(lighting && editor.audio && hasAutomaticCueBatch(lighting.document, editor.audio.sha256, editor.audio.durationMs));
   return <div className="timeline-auto-analyze">
-    <button type="button" aria-label="自动打 Cue" aria-busy={editor.busy} disabled={editor.disabled || !editor.audio || !lighting || generated}
-      title={`${editor.busy ? '正在分析音乐节奏' : generated ? '本首音频已生成 Cue，保留你移动和删除后的结果' : '自动打 Cue：分析音乐节奏并生成卡点'}${count ? ` · ${count} 个 Cue` : ''}`} onClick={() => void editor.analyze(stamp)}>
+    <button type="button" aria-label="自动打 Cue" aria-busy={editor.busy} disabled={editor.disabled || !editor.audio || !lighting || generated || !editor.points.length}
+      title={`${editor.busy ? '正在分析音乐节奏' : generated ? '本首音频已生成 Cue，保留你移动和删除后的结果' : editor.points.length ? '自动打 Cue：按这首歌的节拍生成卡点' : '这首歌还没有节拍，先识别节拍'}${count ? ` · ${count} 个 Cue` : ''}`} onClick={() => stamp([...editor.points])}>
       {editor.busy ? <LoaderCircle className="analysis-spinner" /> : generated ? <CheckCheck /> : <WandSparkles />}
     </button>
   </div>;

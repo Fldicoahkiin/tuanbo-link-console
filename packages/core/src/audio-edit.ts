@@ -27,7 +27,8 @@ export function editedAudio(audio: ReferenceAudio, segments: AudioSegment[], ren
   const source = audio.timeline?.source ?? { assetId: audio.assetId, relativePath: audio.relativePath, sha256: audio.sha256, durationMs: audio.durationMs,
     ...(audio.sourceMediaAssetId ? { sourceMediaAssetId: audio.sourceMediaAssetId } : {}) };
   const next = rendered ?? audio;
-  return referenceAudioSchema.parse({ ...next, ...(audio.sourceMediaAssetId ? { sourceMediaAssetId: audio.sourceMediaAssetId } : {}), timeline: { source, segments }, ...(rendered ? { beats: undefined } : {}) });
+  // The song's beats live on the song (`rundownItem.music`, bound to the source file), so an edit keeps them.
+  return referenceAudioSchema.parse({ ...next, ...(audio.sourceMediaAssetId ? { sourceMediaAssetId: audio.sourceMediaAssetId } : {}), timeline: { source, segments } });
 }
 
 /** One mono music track: moves cannot overlap adjacent segments. */
@@ -43,7 +44,7 @@ export function updateAudioSegment(audio: ReferenceAudio, id: string, patch: Par
     if (previous && previous.startMs + previous.durationMs > segment.startMs) throw new Error('和同一音轨上的片段重叠了，请移到空白位置或另一条音轨');
   }
   const durationMs = Math.max(...next.map((segment) => segment.startMs + segment.durationMs));
-  referenceAudioSchema.parse({ ...audio, durationMs, beats: undefined, timeline: { source: audio.timeline?.source ?? audio, segments: next } });
+  referenceAudioSchema.parse({ ...audio, durationMs, timeline: { source: audio.timeline?.source ?? audio, segments: next } });
   return next;
 }
 

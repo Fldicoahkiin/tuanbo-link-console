@@ -1,5 +1,5 @@
 import { RefreshCw, X, Trash2, Square } from 'lucide-react';
-import type { LightingDocument, ReferenceAudio } from '@tb/schema';
+import type { LightingDocument, ReferenceAudioSource } from '@tb/schema';
 import type { useAutomaticMusicAnalysis } from '../runtime/use-automatic-music-analysis';
 import type { MusicBeatSegments } from './useMusicBeatSegments';
 import { useDocumentStore } from '../stores/document-store';
@@ -11,7 +11,7 @@ import { usePlayheadValue, type EditorPlayhead } from './editor-playhead';
 
 export type MusicBeatPanelProps = {
   beats: MusicBeatSegments; analysis: ReturnType<typeof useAutomaticMusicAnalysis>;
-  document: LightingDocument; playhead: EditorPlayhead; source: ReferenceAudio | undefined; projectPath: string | null; playing: boolean;
+  document: LightingDocument; playhead: EditorPlayhead; source: ReferenceAudioSource | undefined; projectPath: string | null; playing: boolean;
   onChange: (value: LightingDocument, label: string) => void; onSeek: (ms: number) => void; onClose: () => void;
 };
 const seconds = (ms: number): string => (ms / 1000).toFixed(2);
@@ -21,7 +21,7 @@ export function MusicBeatPanel({ beats, analysis, source, projectPath, playhead,
   const current = usePlayheadValue(playhead, positionMs => musicSegmentAt(beats.points, positionMs));
   const dirty = useDocumentStore(state => state.dirty);
   const devices = analysis.status?.devices ?? [];
-  const message = !source ? '先添加音乐' : !projectPath ? '先保存工程，保存后会自动分析' : beats.error || analysis.error || (beats.busy || analysis.job?.state === 'failed' || analysis.job?.state === 'cancelled' ? analysis.job?.message : !analysis.status?.available ? analysis.status?.reason : beats.blocked ? '识别在后台继续，停止播放后会写入分段结果。' : current?.bpm === null ? '这一段拍点太少，算不出 BPM，可以检查拍点或重新分析。' : null);
+  const message = !source ? '先添加音乐' : !projectPath ? '先保存工程，保存后会自动分析' : beats.error || analysis.error || (beats.busy || analysis.job?.state === 'failed' || analysis.job?.state === 'cancelled' ? analysis.job?.message : !analysis.status?.available ? analysis.status?.reason : beats.stale && !beats.busy ? beats.stale : beats.blocked ? '识别在后台继续，停止播放后会写入分段结果。' : current?.bpm === null ? '这一段拍点太少，算不出 BPM，可以检查拍点或重新分析。' : null);
   return <section className="music-analysis-panel" aria-label="音乐节拍分段">
     <header><strong className="music-bpm" title={current?.name}>{musicAnalysisHeading(data, current, analysis.job, analysis.submitting, analysis.error)}</strong><strong>音乐分段</strong><span>{data?.beatsPerBar ? `每小节 ${data.beatsPerBar} 拍` : '小节拍数未确定'}</span><IconButton label="关闭节拍分段" icon={X} onClick={onClose} /></header>
     <div className="music-beat-actions">

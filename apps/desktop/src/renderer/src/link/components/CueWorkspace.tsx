@@ -220,7 +220,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
           durationMs={durationMs}
           playhead={playhead}
           playing={playing} preparing={preparing}
-          referenceAudio={timelineReferenceAudio} analysisSource={item.referenceAudio}
+          referenceAudio={timelineReferenceAudio} musicItem={item}
           selectedClipId={selectedClipId} selectedCueId={selectedCueId}
           onPlayheadChange={setPlayheadMs}
           onPlayingChange={setPlaying}

@@ -1,7 +1,8 @@
 import type { MusicAnalysisResult } from '@tb/schema';
 import { estimateMusicBpm } from './lighting-music';
 
-/** 20 ms RMS envelopes. Results are hypotheses, never automatic Cue actions. */
+/** 20 ms RMS envelopes. Results are hypotheses, never automatic Cue actions: hits, rolls and pauses for the lighting
+ * workspace, and a BPM suggestion. No beats: a song's beats come only from `songBeats` (0.5.9 E9). */
 export function analyzeMusicEnvelope(values: readonly number[], durationMs: number): Pick<MusicAnalysisResult, 'bpm' | 'candidates'> {
   const candidates: MusicAnalysisResult['candidates'] = [];
   const onsets: number[] = []; let previous = -Infinity; let sum = 0; let silenceStart: number | null = null;
@@ -12,7 +13,6 @@ export function analyzeMusicEnvelope(values: readonly number[], durationMs: numb
     else if (silenceStart !== null) { if (at - silenceStart >= 250) candidates.push({ id: `silence:${silenceStart}`, kind: 'silence', startMs: silenceStart, endMs: at, strength: 1 }); silenceStart = null; }
     if (value > .008 && value > mean * 1.5 && value >= (values[index - 1] ?? 0) && value > (values[index + 1] ?? 0) && at - previous >= 70) {
       onsets.push(at); previous = at;
-      candidates.push({ id: `beat:${at}`, kind: 'beat', startMs: at, endMs: null, strength: Math.min(1, value / Math.max(.001, peak)) });
       if (value > mean * 2 && value >= peak * .35) candidates.push({ id: `hit:${at}`, kind: 'hit', startMs: at, endMs: null, strength: Math.min(1, value / Math.max(.001, peak)) });
     }
     sum += value; if (index >= 50) sum -= values[index - 50]!;

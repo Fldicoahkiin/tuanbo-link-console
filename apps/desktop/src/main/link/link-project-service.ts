@@ -4,6 +4,7 @@ import { access, copyFile, mkdir, readFile, realpath, rename, stat, unlink } fro
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import {
+  legacyReadableSchemaVersion,
   linkMediaAssetSchema,
   parseLinkProject,
   serializeLinkProject,
@@ -18,7 +19,7 @@ import { recoverMa2Read } from './ma2-read-recovery';
 import { recoverMa2Material } from './ma2-material-recovery';
 import { VerifiedMediaFiles } from './verified-media-files';
 import { ReferenceAudioCache } from './reference-audio-cache';
-import { ProjectWriteQueue } from './project-write-queue';
+import { ProjectWriteQueue, type ProjectSaveOptions } from './project-write-queue';
 import {
   extractReferenceAudioTrack,
   readExtractedAudioDuration,
@@ -43,6 +44,12 @@ const MAX_WAVEFORM_SOURCE_BYTES = 1024;
 /** `sourceVerified`: the peaks were decoded from a file verified to be this very song. */
 export type WaveformCacheEntry = { peaks: number[]; sourceVerified: boolean };
 
+/** Saving over a file that 0.5.8 and earlier still open, with content they cannot: the operator is asked first
+ * (main process link:save-project), and the file is kept beside it under this name. */
+export type OlderFormatFile = { backupName: string };
+const OLDER_FORMAT_BACKUP = '旧版本可打开的备份';
+const MAX_OLDER_FORMAT_BACKUPS = 99;
+
 export type ImportedReferenceAudio = {
   assetId: string;
   relativePath: string;
@@ -52,13 +59,14 @@ export type ImportedReferenceAudio = {
 
 export class LinkProjectService {
   private readonly fileAccess = new Map<string, Promise<void>>();
-  private readonly pendingSaves = new ProjectWriteQueue((path, project, backupOriginal) => this.withProjectFile(path, () => this.writeSavedProject(path, project, backupOriginal)));
+  private readonly pendingSaves = new ProjectWriteQueue((path, project, options) => this.withProjectFile(path, () => this.writeSavedProject(path, project, options)));
   private readonly verifiedMedia = new VerifiedMediaFiles(hashFile);
   private readonly referenceAudioCache = new ReferenceAudioCache(hashFile);
 
   constructor(
     private readonly extractAudioTrack: ReferenceAudioExtractor = extractReferenceAudioTrack,
-    private readonly writeProject: typeof writeFileAtomically = writeFileAtomically
+    private readonly writeProject: typeof writeFileAtomically = writeFileAtomically,
+    private readonly copyBackup: (source: string, destination: string, mode: number) => Promise<void> = copyFile
   ) {}
 
   async open(projectPath: string): Promise<LinkProject> {
@@ -96,10 +104,24 @@ export class LinkProjectService {
     return { project, upgraded: project !== parsed || JSON.stringify(value) !== JSON.stringify(parsed) };
   }
 
-  /** `backupOriginal`: the first save after an in-memory upgrade keeps the file as it was. */
-  async save(projectPath: string, project: LinkProject, backupOriginal = false): Promise<void> {
+  /** `backupOriginal`: the first save after an in-memory upgrade keeps the file as it was.
+   * `replaceOlderFormat`: the operator agreed to save over a file only older releases open (see `olderFormatFile`);
+   * without it such a save is refused, so a file never becomes unopenable for 0.5.8 without the question.
+   * Resolves to the backup kept of that older file, if one was made. */
+  async save(projectPath: string, project: LinkProject, options: ProjectSaveOptions = {}): Promise<string | null> {
     assertProjectExtension(projectPath);
-    return this.pendingSaves.enqueue(projectPath, project, backupOriginal);
+    return this.pendingSaves.enqueue(projectPath, project, options);
+  }
+
+  /**
+   * Whether saving content of `schemaVersion` at `projectPath` would turn a file 0.5.8 and earlier open into one they cannot (the
+   * rollback after a new release is installing 0.5.8 again), and the name its backup would get now. Null when the
+   * content needs no newer version, nothing is at that path, or the file there is newer already.
+   */
+  async olderFormatFile(projectPath: string, schemaVersion: number): Promise<OlderFormatFile | null> {
+    assertProjectExtension(projectPath);
+    if (schemaVersion <= legacyReadableSchemaVersion) return null;
+    return this.withProjectFile(projectPath, async () => await diskIsOlderFormat(projectPath) ? { backupName: basename(await freeBackupPath(projectPath)) } : null);
   }
 
   /** A copy outside any project file, e.g. a recovery copy: atomic, without upgrade backups. */
@@ -108,24 +130,19 @@ export class LinkProjectService {
     return this.withProjectFile(copyPath, () => this.writeProject(copyPath, serializeLinkProject(project)));
   }
 
-  private async writeSavedProject(absolutePath: string, project: LinkProject, backupOriginal: boolean): Promise<void> {
+  private async writeSavedProject(absolutePath: string, project: LinkProject, options: ProjectSaveOptions): Promise<string | null> {
     const content = serializeLinkProject(project);
-    if (backupOriginal) {
+    // Checked here, in the write queue, against the file as it is now: a save never makes a 0.5.8 file unopenable unasked.
+    const olderFormat = project.schemaVersion > legacyReadableSchemaVersion && await diskIsOlderFormat(absolutePath);
+    if (olderFormat && !options.replaceOlderFormat) throw new Error('这次没有保存：保存后 0.5.8 和更早的版本打不开这个工程，要先确认。请再保存一次，在提示里点“保存”');
+    const kept = olderFormat ? await this.keepOlderFormat(absolutePath) : null;
+    // The older-format backup is the file as it was; a second copy of it as .bak would add nothing.
+    if (options.backupOriginal && !kept) {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       try { await copyFile(absolutePath, `${absolutePath}.${stamp}.before-upgrade.bak`, constants.COPYFILE_EXCL); }
       // A file removed since it was opened has no original left to keep.
       catch (error) { if (!isErrorWithCode(error, 'ENOENT')) throw error; }
     }
-      if (project.rundown.some(item => item.lighting?.musicAnalysis)) {
-        try {
-          const original = await readFile(absolutePath, 'utf8');
-          const old = parseLinkProject(JSON.parse(original));
-          if (!old.rundown.some(item => item.lighting?.musicAnalysis)) {
-            try { await copyFile(absolutePath, `${absolutePath}.before-music-analysis.bak`, constants.COPYFILE_EXCL); }
-            catch (error) { if (!isErrorWithCode(error, 'EEXIST')) throw error; }
-          }
-        } catch (error) { if (!isErrorWithCode(error, 'ENOENT')) throw error; }
-      }
       if (project.ma2MaterialLibrary?.version === 2 || project.rundown.some(item => item.lighting?.version === 2)) {
         try {
           const old = parseLinkProject(JSON.parse(await readFile(absolutePath, 'utf8')));
@@ -145,6 +162,21 @@ export class LinkProjectService {
         } catch (error) { if (!isErrorWithCode(error, 'ENOENT')) throw error; }
       }
       await this.writeProject(absolutePath, content);
+      return kept;
+  }
+
+  /** Copies the file as it is beside it, under a name that says older releases open it; an existing backup is never
+   * replaced (the next number is used). Fails, and the save with it, when the copy cannot be made. */
+  private async keepOlderFormat(projectPath: string): Promise<string> {
+    for (let attempt = 0; attempt < MAX_OLDER_FORMAT_BACKUPS; attempt++) {
+      const backup = await freeBackupPath(projectPath);
+      try { await this.copyBackup(projectPath, backup, constants.COPYFILE_EXCL); return backup; }
+      catch (error) {
+        if (isErrorWithCode(error, 'EEXIST')) continue;
+        throw new Error(`这次没有保存，原来的工程文件没有动：保存前要先把它另存一份旧版本能打开的备份，但没有存成。请检查工程文件夹能不能写入、磁盘有没有空间。原因：${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      }
+    }
+    throw new Error(`这次没有保存，原来的工程文件没有动：工程文件旁边已经有 ${MAX_OLDER_FORMAT_BACKUPS} 份旧版本备份，请先挪走一些再保存`);
   }
 
   async loadWaveformCache(projectPath: string, sha256: string): Promise<WaveformCacheEntry | null> {
@@ -506,6 +538,28 @@ async function pathExists(filePath: string): Promise<boolean> {
     if (isErrorWithCode(error, 'ENOENT')) return false;
     throw error;
   }
+}
+
+/** The file at `path` is one 0.5.8 and earlier open, or one that cannot be read as a project at all (kept rather than
+ * overwritten unasked). False when nothing is there or the file is already newer. */
+async function diskIsOlderFormat(path: string): Promise<boolean> {
+  let content: string;
+  try { content = await readFile(path, 'utf8'); }
+  catch (error) { if (isErrorWithCode(error, 'ENOENT')) return false; throw error; }
+  let version: unknown;
+  try { version = (JSON.parse(content) as { schemaVersion?: unknown }).schemaVersion; }
+  catch (error) { if (error instanceof SyntaxError) return true; throw error; }
+  return !(typeof version === 'number' && version > legacyReadableSchemaVersion);
+}
+
+/** `演出（旧版本可打开的备份）.tblink`, then `演出（旧版本可打开的备份 2）.tblink` and on, beside the project. */
+async function freeBackupPath(projectPath: string): Promise<string> {
+  const stem = basename(projectPath, extname(projectPath)), directory = dirname(projectPath), extension = extname(projectPath);
+  for (let number = 1; number <= MAX_OLDER_FORMAT_BACKUPS; number++) {
+    const candidate = join(directory, `${stem}（${OLDER_FORMAT_BACKUP}${number === 1 ? '' : ` ${number}`}）${extension}`);
+    if (!await pathExists(candidate)) return candidate;
+  }
+  throw new Error(`这次没有保存，原来的工程文件没有动：工程文件旁边已经有 ${MAX_OLDER_FORMAT_BACKUPS} 份旧版本备份，请先挪走一些再保存`);
 }
 
 function assertProjectExtension(projectPath: string): void {

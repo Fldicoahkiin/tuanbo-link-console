@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject } from '@tb/schema';
+import { songBeats, songBeatsAtDensity } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { useAudioEditor, type AudioEditor } from './useAudioEditor';
@@ -40,28 +41,40 @@ it('内部暂停会话先正常停止，再删除独立音轨，视频片段保�
   expect(useRuntimeStore.getState().state).toBe('idle');
 });
 
-it('暂停状态允许应用和清除节拍标记，同时保留音频编辑保护', async () => {
+it('打开旧工程后，编辑器的节拍来自歌上的那一份；暂停时可以清除节拍，同时保留音频编辑保护', async () => {
   const project = createEmptyLinkProject('暂停节拍测试');
   project.rundown.push({ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [],
     referenceAudio: { assetId: 'audio', relativePath: 'audio.wav', durationMs: 5000, sha256: 'a'.repeat(64),
-      beats: { sourceSha256: 'a'.repeat(64), level: 'standard', pointsMs: [500, 1000] } } });
+      beats: { sourceSha256: 'a'.repeat(64), level: 'standard', pointsMs: [500, 1000, 1500, 2000] } } });
   useDocumentStore.getState().setProject(project, 'test.tblink');
+  const song = () => useDocumentStore.getState().project!.rundown[0]!;
+  // Opening moved the old beats to the song, the one copy the lighting workspace reads too.
+  expect(song().referenceAudio?.beats).toBeUndefined();
+  expect(song().music?.method).toBe('ibt');
+  expect(useDocumentStore.getState().dirty).toBe(true);
   useRuntimeStore.getState().setState({ state: 'paused' });
   const notify = vi.fn();
   const editor = (): AudioEditor => {
     const result: AudioEditor[] = [];
     function Harness() {
-      result.push(useAudioEditor(useDocumentStore.getState().project!.rundown[0]!, 'test.tblink', true, notify));
+      result.push(useAudioEditor(song(), 'test.tblink', true, notify));
       return null;
     }
     renderToString(createElement(Harness));
     return result[0]!;
   };
+  const beats = songBeats(song());
+  expect(beats.state === 'ready' ? songBeatsAtDensity(beats.beats, 'standard').map(beat => beat.atMs) : []).toEqual(editor().points);
+  expect(editor().points).toEqual([500, 1500]);
+  // Nothing detected waits to be applied, so applying changes nothing.
+  const before = useDocumentStore.getState().revision;
   await editor().mark();
-  expect(notify).not.toHaveBeenCalled();
-  expect(useDocumentStore.getState().past.at(-1)?.command.label).toBe('应用音频节拍标记');
+  expect(useDocumentStore.getState().revision).toBe(before);
   await editor().clearMarks();
-  expect(useDocumentStore.getState().project!.rundown[0]!.referenceAudio?.beats).toBeUndefined();
+  expect(notify).not.toHaveBeenCalled();
+  expect(useDocumentStore.getState().past.at(-1)?.command.label).toBe('清除音频节拍标记');
+  expect(song().music?.structure.state).toBe('cleared');
+  expect(editor().points).toEqual([]);
   expect(useRuntimeStore.getState().state).toBe('paused');
   const revision = useDocumentStore.getState().revision;
   await editor().split(2000);

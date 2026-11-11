@@ -88,7 +88,7 @@ it('超时后暂停新请求并说明原因；操作员确认重启后终止卡�
   expect(workers.instances).toHaveLength(2);
   old.emit('message', { version: 1, id: 1, kind: 'saved' });
   workers.instances[1]!.emit('message', { version: 1, id: 2, kind: 'saved' });
-  await expect(saving).resolves.toBeUndefined();
+  await expect(saving).resolves.toBeNull();
 });
 
 it('没有卡住时不需要也不允许重启', () => {

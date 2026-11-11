@@ -17,6 +17,26 @@ export async function answerSaveQuestions(application: ElectronApplication): Pro
 }
 
 /**
+ * Answers 保存后，0.5.8 和更早的版本打不开这个工程 with 保存 and counts how often it was asked,
+ * for a file 0.5.8 opens whose next save needs the newer format. Every other message box is untouched.
+ */
+export async function answerOlderFormatQuestion(application: ElectronApplication): Promise<() => Promise<number>> {
+  await application.evaluate(({ dialog }) => {
+    const original = dialog.showMessageBox.bind(dialog);
+    Reflect.set(globalThis, '__olderFormatQuestions', 0);
+    Reflect.set(dialog, 'showMessageBox', (...args: unknown[]) => {
+      const options = args.at(-1) as { message?: string };
+      if (options.message === '保存后，0.5.8 和更早的版本打不开这个工程') {
+        Reflect.set(globalThis, '__olderFormatQuestions', Number(Reflect.get(globalThis, '__olderFormatQuestions')) + 1);
+        return Promise.resolve({ response: 0, checkboxChecked: false });
+      }
+      return Reflect.apply(original, dialog, args) as unknown;
+    });
+  });
+  return () => application.evaluate(() => Number(Reflect.get(globalThis, '__olderFormatQuestions')));
+}
+
+/**
  * Edits are written to the .tblink only by an explicit save. Waits for this save's own
  * 工程已保存 notice, which shows on every page (the toolbar marker does not).
  */

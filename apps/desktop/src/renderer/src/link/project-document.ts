@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from 'react';
 import type { LinkProjectFile } from '@tb/core/link';
 import type { LinkDocumentState } from '@tb/schema';
-import { useDocumentStore, type DocumentStoreState } from './stores/document-store';
+import { useDocumentStore, type DocumentStoreState, type SongMusicOpening } from './stores/document-store';
 import { projectCodec } from './stores/project-codec';
 import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
 
@@ -102,8 +102,28 @@ export async function revertToSaved(): Promise<'reverted' | 'cancelled'> {
 export async function showOpenedProject(file: LinkProjectFile): Promise<string> {
   const restored = await linkDesktopViewModel.resolveRecoveryCopy({ version: 1, projectPath: file.path, projectId: file.project.projectId });
   useDocumentStore.getState().setProject(restored ?? file.project, file.path, { restored: restored !== null, upgraded: file.upgraded });
-  const upgraded = useDocumentStore.getState().upgradeBackupPending;
-  return [restored ? '已恢复未保存的改动' : '', upgraded ? '这个工程来自旧版本，已按新格式打开。第一次保存时会在原位置留一份 .bak 备份' : ''].filter(Boolean).join('；');
+  const { upgradeBackupPending: upgraded, songMusicOpening: music } = useDocumentStore.getState();
+  const logFailure = music ? await recordSongMusicOpening(file.path, music) : null;
+  return [restored ? '已恢复未保存的改动' : '',
+    music ? `${music.moved} 首歌的节拍换成了新的存法，编辑器和灯光工作台共用。保存时会先问一次：保存后 0.5.8 和更早的版本打不开这个工程，原来的文件会另存一份旧版本能打开的备份`
+      : upgraded ? '这个工程来自旧版本，已按新格式打开。第一次保存时会在原位置留一份 .bak 备份' : '',
+    music?.dropped.length ? `${music.dropped.map(entry => `「${entry.title}」`).join('、')}有两份节拍，用了音乐识别的那份，另一份记在运行日志里` : '',
+    logFailure ?? ''
+  ].filter(Boolean).join('；');
+}
+
+/** The moved beats are a format change, written to the log once; the simple detection beats a song no longer keeps
+ * (it had the music recognition's too) are kept there in full. A failed write comes back as a sentence for the opening
+ * notice: the project is open by then, and the opener still has to finish replacing the previous one. */
+async function recordSongMusicOpening(path: string, music: SongMusicOpening): Promise<string | null> {
+  try {
+    await linkDesktopViewModel.recordLog({ level: 'info', category: 'system', message: `打开工程时把 ${music.moved} 首歌的节拍换成了新的存法`, details: { path, moved: music.moved, dropped: music.dropped.length } });
+    for (const entry of music.dropped) await linkDesktopViewModel.recordLog({ level: 'warning', category: 'system',
+      message: `「${entry.title}」有两份节拍，用了音乐识别的那份；简易检测的那份没有留在工程里，记在这里`, details: { path, itemId: entry.itemId, beats: entry.beats } });
+    return null;
+  } catch (error) {
+    return `节拍换存法的记录没有写进运行日志，没保存前可以关掉工程不保存再打开一次。原因：${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 /** At startup, before reopening the last file: an unnamed project's unsaved edits, if the operator restores them. */

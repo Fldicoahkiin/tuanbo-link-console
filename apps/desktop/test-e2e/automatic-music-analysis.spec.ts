@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import { musicStructureSegments } from '@tb/core/link';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type MusicStructure } from '@tb/schema';
-import { closeDiscarding, savedValue } from './save-questions';
+import { answerOlderFormatQuestion, closeDiscarding, savedValue } from './save-questions';
 
 async function openProject(app: ElectronApplication, file: string, first: boolean) {
   const page = await app.firstWindow();
@@ -31,14 +31,20 @@ for (const device of ['cuda', 'cpu'] as const) test(`自动识别 ${device}：�
   const lighting = createLightingDocument();
   const project = parseLinkProject({ ...createEmptyLinkProject('静音自动分析'), schemaVersion: 2, rundown: [{ id: 'song', title: '静音', lighting, referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/静音.wav', durationMs: 3000, sha256: createHash('sha256').update(wav).digest('hex') } }] });
   const file = info.outputPath('silence.tblink'); await writeFile(file, JSON.stringify(project));
-  const saved = async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!;
+  const song = async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!;
+  const saved = async () => (await song()).lighting!;
+  // The recognized music belongs to the song, shared with the editor, not to the lighting document.
+  const music = async () => (await song()).music?.structure;
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   try {
+    const asked = await answerOlderFormatQuestion(app);
     const page = await openProject(app, file, true);
-    const savedAnalysis = () => savedValue(page, async () => (await saved()).musicAnalysis);
+    const savedAnalysis = () => savedValue(page, music);
     // No Analyze/Apply click: opening the workbench starts analysis; its result is a document edit written by the next save.
     await expect.poll(async () => (await savedAnalysis())?.state, { timeout: 45000 }).toBe('ready');
-    expect((await saved()).musicAnalysis).toMatchObject({ bpm: null, beats: [], segments: [] });
+    expect(await music()).toMatchObject({ bpm: null, beats: [], segments: [] });
+    expect(await asked()).toBe(1);
+    expect((await saved()).musicAnalysis).toBeUndefined();
     await page.getByRole('button', { name: '音乐分析', exact: true }).click();
     const panel = page.locator('.music-analysis-panel');
     await expect(panel).toContainText('未识别到稳定节拍');
@@ -66,24 +72,30 @@ test('真实短歌：自动识别分段、旧编号隐藏、纠错、保存恢�
   lighting.markers = Array.from({ length: 65 }, (_, index) => ({ id: `analysis:${hash}:beat:${index}`, name: `节拍 ${index + 1}`, startMs: index * durationMs / 65, endMs: null, kind: 'custom', color: '#68c9ed', notes: '旧版已应用结果' }));
   const project = parseLinkProject({ ...createEmptyLinkProject('自动音乐结构验收'), schemaVersion: 2, rundown: [{ id: 'song', title: '387 · 真实短歌', lighting, referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/真实音乐.wav', durationMs, sha256: hash } }] });
   const file = info.outputPath('actual.tblink'); await writeFile(file, JSON.stringify(project));
-  const saved = async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!;
+  const song = async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!;
+  const saved = async () => (await song()).lighting!;
+  // The recognized music belongs to the song, shared with the editor, not to the lighting document.
+  const music = async () => (await song()).music?.structure;
   const launch = () => electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   let app = await launch(); const errors: string[] = [];
+  const olderFile = await readFile(file, 'utf8');
   try {
+    let asked = await answerOlderFormatQuestion(app);
     let page = await openProject(app, file, true); page.on('pageerror', error => errors.push(error.message));
-    const savedAnalysis = () => savedValue(page, async () => (await saved()).musicAnalysis);
+    const savedAnalysis = () => savedValue(page, music);
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole('button', { name: '适合节目时长', exact: true }).click();
     await expect.poll(async () => (await savedAnalysis())?.state, { timeout: 90000 }).toBe('ready');
-    const original = (await saved()).musicAnalysis!;
+    const original = (await music())!;
     expect(original.bpm).toBeGreaterThan(60); expect(original.bpm).toBeLessThan(240);
     expect(original.beats.length).toBeGreaterThan(30); expect(original.segments.length).toBeGreaterThanOrEqual(2);
     await expect(page.locator('.analysis-point-marker')).toHaveCount(0);
     await expect(page.locator('.music-tempo-segment')).toHaveCount(original.segments.length);
     await expect(page.locator('.music-detected-beat').first()).toBeVisible();
     expect((await saved()).markers).toEqual(lighting.markers); expect((await saved()).tracks).toEqual(lighting.tracks);
-    const backup = parseLinkProject(JSON.parse(await readFile(`${file}.before-music-analysis.bak`, 'utf8')));
-    expect(backup.rundown[0]?.lighting).toEqual(lighting);
+    // The first save into the newer format asked once and kept the file 0.5.8 opens beside it.
+    expect(await asked()).toBe(1);
+    expect(await readFile(info.outputPath('actual（旧版本可打开的备份）.tblink'), 'utf8')).toBe(olderFile);
     await page.getByRole('button', { name: '音乐分析', exact: true }).click();
     let panel = page.locator('.music-analysis-panel');
     await expect(panel.locator('.music-bpm')).toHaveText(headingAtStart(original));
@@ -104,8 +116,8 @@ test('真实短歌：自动识别分段、旧编号隐藏、纠错、保存恢�
     await expect.poll(async () => (await savedAnalysis())?.segments.length).toBe(original.segments.length);
     await panel.getByRole('button', { name: '重新分析', exact: true }).click();
     await expect.poll(async () => (await savedAnalysis())?.taskId, { timeout: 60000 }).not.toBe(original.taskId);
-    expect((await saved()).musicAnalysis?.segments[0]?.name).toBe('核对段落');
-    expect((await saved()).musicAnalysis?.beats.length).toBe(original.beats.length - 1);
+    expect((await music())?.segments[0]?.name).toBe('核对段落');
+    expect((await music())?.beats.length).toBe(original.beats.length - 1);
     await page.setViewportSize({ width: 1060, height: 720 });
     await expect(panel.getByRole('button', { name: '清除标记', exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('automatic-structure-compact.png') });
@@ -113,11 +125,11 @@ test('真实短歌：自动识别分段、旧编号隐藏、纠错、保存恢�
     // Older short-section results stored null BPM. Resolve from their saved beat
     // evidence on reopening, without rerunning models or rewriting user edits.
     const oldProject = parseLinkProject(JSON.parse(await readFile(file, 'utf8')));
-    const oldAnalysis = oldProject.rundown[0]!.lighting!.musicAnalysis!;
+    const oldAnalysis = oldProject.rundown[0]!.music!.structure;
     const reopenedHeading = headingAtStart(oldAnalysis);
     oldAnalysis.segments.forEach(segment => { segment.bpm = null; segment.endBpm = null; });
     await writeFile(file, JSON.stringify(oldProject));
-    app = await launch(); page = await openProject(app, file, true);
+    app = await launch(); asked = await answerOlderFormatQuestion(app); page = await openProject(app, file, true);
     await expect(page.locator('.music-analysis-button .music-bpm')).toHaveText(reopenedHeading);
     expect((await page.evaluate(() => window.tbLink.getAutomaticMusicStatus())).jobs).toHaveLength(0);
     await page.getByRole('button', { name: '音乐分析', exact: true }).click(); panel = page.locator('.music-analysis-panel');
@@ -130,6 +142,7 @@ test('真实短歌：自动识别分段、旧编号隐藏、纠错、保存恢�
     await expect(panel.locator('.music-bpm')).toHaveText('标记已清除');
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect.poll(async () => (await savedAnalysis())?.state).toBe('ready');
+    expect(await asked()).toBe(0);
     await writeFile(info.outputPath('report.json'), JSON.stringify({ bpm: original.bpm, beatsPerBar: original.beatsPerBar, beats: original.beats.length, segments: original.segments, errors }, null, 2));
     expect(errors).toEqual([]);
   } finally { await closeDiscarding(app); }

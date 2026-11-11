@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { LightingTempoMap, nextLightingCue, nextLightingMaster, copyLightingEvents, copyLightingEventsAt, pasteLightingEvents, lightingClipSpan, lightingEventTime } from '@tb/core/link';
-import type { LightingClip, LightingDocument, LightingTrack, LightingEvent, ReferenceAudio } from '@tb/schema';
+import type { LightingClip, LightingDocument, LightingTrack, LightingEvent } from '@tb/schema';
 import { ClipboardPaste, Copy, CopyPlus, GripVertical, Lock, LockOpen, MapPin, MousePointerClick, Plus, Scissors, SlidersVertical, Trash2, Volume2, VolumeX } from 'lucide-react';
 import { Menu, MenuItem, MenuSeparator } from '../ui';
 import { useLightingClipboardStore } from '../stores/lighting-clipboard-store';
@@ -43,7 +43,7 @@ export type LightingTimelineProps = {
   /** The song's MTC start, the same one the program sends; throws when the song's start is invalid. */
   mtcOrigin?: () => number;
   onSelect: (trackId: string, clipId: string | null) => void;
-  onChange: (document: LightingDocument, label: string, automaticSource?: ReferenceAudio) => void;
+  onChange: (document: LightingDocument, label: string) => void;
 };
 export function LightingHeadings(props: LightingTimelineProps & { durationMs: number }): JSX.Element {
   // Escape, leaving the window and losing the heading end the move (DragSession).

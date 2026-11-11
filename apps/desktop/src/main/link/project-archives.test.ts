@@ -6,7 +6,7 @@ import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { DEFAULT_ARCHIVE_SETTINGS, ProjectArchiveSettingsStore, projectArchives } from './project-archives';
 
 const documents = { inspect: (text: string) => Promise.resolve(parseLinkProject(JSON.parse(text)).name),
-  save: async (path: string, text: string) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, text); } };
+  save: async (path: string, text: string) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, text); return null; } };
 async function setup(name = 'show') {
   const directory = await mkdtemp(join(tmpdir(), 'tblink-archive-'));
   const projectPath = join(directory, 'project', `${name}.tblink`);

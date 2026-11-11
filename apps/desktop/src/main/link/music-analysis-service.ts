@@ -49,6 +49,7 @@ export class MusicAnalysisService {
       });
       if (task.cancelled) throw new Error('分析已取消');
       progress('analyzing', .95, '整理候选标记');
+      // Hits, rolls and pauses only: beats come from the song's shared beats (core songBeats), never from this envelope.
       const result = musicAnalysisResultSchema.parse({ version: 1, taskId, sourceSha256: source.sha256, durationMs: source.durationMs, ...analyzeMusicEnvelope(envelope, source.durationMs) });
       progress('complete', 1, '等待确认'); return result;
     } catch (error) { progress(task.cancelled ? 'cancelled' : 'failed', 0, error instanceof Error ? error.message : String(error)); throw error; }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createEmptyLinkProject, latestSchemaVersion, linkActionSchema, linkProjectSchema, p1StartTriggerSchema, parseLinkProject, requiredSchemaVersion, serializeLinkProject } from './link-project';
+import { createEmptyLinkProject, latestSchemaVersion, legacyReadableSchemaVersion, linkActionSchema, linkProjectSchema, p1StartTriggerSchema, parseLinkProject, requiredSchemaVersion, serializeLinkProject } from './link-project';
 import { createLightingDocument, lightingEventSchema, lightingMa2EventMappingSchema } from './lighting';
 
 describe('link project schema', () => {
@@ -24,20 +24,36 @@ describe('link project schema', () => {
     expect(parseLinkProject(JSON.parse(serializeLinkProject(project)))).toEqual(project);
   });
 
-  it('认 1、2 两个版本；比这一版新的和低于内容需要的都拒绝', () => {
+  it('认 1、2、3 三个版本；比这一版新的和低于内容需要的都拒绝', () => {
     const empty = createEmptyLinkProject('版本');
     const lit = { ...empty, rundown: [{ id: 'item', title: '节目', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting: createLightingDocument() }] };
+    const structure = { version: 1, algorithm: 'music-structure-1', sourceSha256: 'a'.repeat(64), durationMs: 4000, taskId: 'task', state: 'ready', bpm: 120, beatsPerBar: 4,
+      beats: [{ id: 'beat:0', atMs: 0, strong: true }, { id: 'beat:500', atMs: 500, strong: false }], segments: [], removedBeatMs: [], removedRanges: [] } as const;
+    const music = { version: 1, sourceSha256: 'a'.repeat(64), sourceDurationMs: 4000, method: 'automatic', structure } as const;
+    const audio = { assetId: 'audio', relativePath: 'song.wav', sha256: 'a'.repeat(64), durationMs: 4000 };
+    const beat = parseLinkProject({ ...empty, schemaVersion: 3, rundown: [{ id: 'item', title: '节目', referenceAudio: audio, music }] });
     expect(requiredSchemaVersion(empty)).toBe(1);
     expect(requiredSchemaVersion(lit)).toBe(2);
-    // Unknown fields are stripped on parse: a v3 file opened before its fields exist here would lose them on the next save.
-    expect(latestSchemaVersion).toBe(2);
-    expect(() => parseLinkProject({ ...empty, schemaVersion: 3 })).toThrow('更新版本的联动台');
-    expect(() => parseLinkProject({ ...lit, schemaVersion: 3 })).toThrow('更新版本的联动台');
+    expect(requiredSchemaVersion(beat)).toBe(3);
+    // 3 since the shared song beats (0.5.9 E9); 0.5.8 and earlier open 1 and 2 only.
+    expect(latestSchemaVersion).toBe(3);
+    expect(legacyReadableSchemaVersion).toBe(2);
+    expect(parseLinkProject({ ...empty, schemaVersion: 3 }).schemaVersion).toBe(3);
+    expect(beat.rundown[0]?.music).toEqual(music);
+    expect(() => parseLinkProject({ ...beat, schemaVersion: 2 })).toThrow('必须使用 schema 3');
     expect(linkProjectSchema.safeParse({ ...empty, schemaVersion: 4 }).success).toBe(false);
     expect(linkProjectSchema.safeParse({ ...lit, schemaVersion: 1 }).success).toBe(false);
-    for (const schemaVersion of [1, 2] as const) {
+    for (const schemaVersion of [1, 2, 3] as const) {
       expect(parseLinkProject(JSON.parse(serializeLinkProject({ ...empty, schemaVersion }))).schemaVersion).toBe(schemaVersion);
     }
+  });
+
+  it('3 版里节拍只存一份：旧格式的节拍字段只在 1、2 版里认', () => {
+    const empty = createEmptyLinkProject('版本');
+    const audio = { assetId: 'audio', relativePath: 'song.wav', sha256: 'a'.repeat(64), durationMs: 4000, beats: { sourceSha256: 'a'.repeat(64), level: 'standard', pointsMs: [0, 500] } };
+    const old = { ...empty, rundown: [{ id: 'item', title: '节目', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], referenceAudio: audio }] };
+    expect(parseLinkProject(old).rundown[0]?.referenceAudio?.beats?.pointsMs).toEqual([0, 500]);
+    expect(() => parseLinkProject({ ...old, schemaVersion: 3 })).toThrow('节拍存了两份');
   });
 
   it('rejects duplicate ids across rundown, cues and actions', () => {

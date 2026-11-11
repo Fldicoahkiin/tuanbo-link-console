@@ -4,7 +4,8 @@ import { projectDocumentRequestSchema, projectDocumentResponseSchema, type Proje
 
 type Payload = ProjectDocumentRequest extends infer T ? T extends ProjectDocumentRequest ? Omit<T, 'version' | 'id'> : never : never;
 type Pending = { kind: Payload['kind']; resolve: (result: ProjectDocumentResponse) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
-const resultKinds = { open: 'opened', save: 'saved', copy: 'saved', inspect: 'inspected' } as const;
+const resultKinds = { open: 'opened', save: 'saved', copy: 'saved', inspect: 'inspected', 'check-save': 'save-checked' } as const;
+export type ProjectDocumentSaveOptions = { backupOriginal?: boolean; replaceOlderFormat?: boolean };
 
 export class ProjectDocumentService {
   private worker: Worker | null = null;
@@ -27,9 +28,18 @@ export class ProjectDocumentService {
     if (response.kind !== 'inspected') throw new Error('工程检查返回类型不正确');
     return response.name;
   }
-  async save(path: string, content: string, backupOriginal = false): Promise<void> {
-    const response = await this.request({ kind: 'save', path, content, backupOriginal });
+  /** Resolves to the backup kept of an older-format file (see `olderFormat`), or null. */
+  async save(path: string, content: string, options: ProjectDocumentSaveOptions = {}): Promise<string | null> {
+    const response = await this.request({ kind: 'save', path, content, backupOriginal: options.backupOriginal === true, replaceOlderFormat: options.replaceOlderFormat === true });
     if (response.kind !== 'saved') throw new Error('工程保存返回类型不正确');
+    return response.keptOlderFormat ?? null;
+  }
+  /** Saving `content` at `path` would turn a file 0.5.8 and earlier open into one they cannot: the name its backup
+   * would get. Null when the save needs no question. */
+  async olderFormat(path: string, content: string): Promise<{ backupName: string } | null> {
+    const response = await this.request({ kind: 'check-save', path, content });
+    if (response.kind !== 'save-checked') throw new Error('工程保存检查返回类型不正确');
+    return response.olderFormat;
   }
   async writeCopy(path: string, content: string): Promise<void> {
     const response = await this.request({ kind: 'copy', path, content });

@@ -6,7 +6,8 @@ import { musicMsToBeat } from './lighting-music';
 export function appendLightingDocument(current: LightingDocument, incoming: LightingDocument): LightingDocument {
   const source = lightingDocumentSchema.parse(incoming);
   const destination = lightingDocumentSchema.parse(current);
-  if (!destination.tracks.length) return structuredClone(source);
+  // An exported lighting file from before 0.5.9 may carry the beats of the song it came from; this song keeps its own (`rundownItem.music`).
+  if (!destination.tracks.length) { const copy = structuredClone(source); delete copy.musicAnalysis; return copy; }
   const existingTargets = new Set(destination.ma2Bindings?.map((binding) => binding.timecode));
   if (source.ma2Bindings?.some((binding) => existingTargets.has(binding.timecode))) throw new Error('当前节目已绑定导入文件中的 MA2 Timecode，不能重复导入');
   const map = new LightingTempoMap(source.tempos);

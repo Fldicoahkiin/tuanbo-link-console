@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, rmdir, symlink, truncate, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
-import { createEmptyLinkProject, createLightingUserLibrary, serializeLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, createLightingUserLibrary, serializeLinkProject, type LinkProject } from '@tb/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LinkProjectService } from './link-project-service';
 import { WaveformService } from './waveform-service';
@@ -54,7 +54,7 @@ describe('LinkProjectService', () => {
     await service.save(path,createEmptyLinkProject('保存一'));
     expect((await readdir(directory)).filter(name=>name.endsWith('.bak'))).toEqual([]);
     await writeFile(path,original);
-    await service.save(path,createEmptyLinkProject('升级保存'),true);
+    await service.save(path,createEmptyLinkProject('升级保存'),{ backupOriginal: true });
     const backups=(await readdir(directory)).filter(name=>name.startsWith('upgrade.tblink.')&&name.endsWith('.before-upgrade.bak'));cleanupFiles.push(...backups.map(name=>join(directory,name)));
     expect(backups).toHaveLength(1);
     expect(await readFile(join(directory,backups[0]!),'utf8')).toBe(original);
@@ -113,7 +113,7 @@ describe('LinkProjectService', () => {
     const first = service.save(join(tmpdir(), 'retry.tblink'), project);
     const second = service.save(join(tmpdir(), 'retry.tblink'), project);
     await expect(first).rejects.toThrow('磁盘写入失败');
-    await expect(second).resolves.toBeUndefined();
+    await expect(second).resolves.toBeNull();
     expect(writer).toHaveBeenCalledTimes(2);
   });
 
@@ -468,6 +468,73 @@ describe('LinkProjectService', () => {
 
     expect(() => new LinkProjectService().resolveMediaAsset(projectPath, `${otherDrive}:\\outside.mp4`))
       .toThrow('媒体素材路径必须位于工程目录内');
+  });
+});
+
+describe('存成 0.5.8 打不开的格式之前（0.5.9 E9）', () => {
+  /** A file 0.5.8 opens, and content that needs schema 3. */
+  async function olderFile(name: string): Promise<{ directory: string; path: string; original: string; backup: (suffix?: string) => string }> {
+    const directory = await createTestDirectory(), path = join(directory, `${name}.tblink`);
+    const original = serializeLinkProject({ ...createEmptyLinkProject('旧版本的工程'), schemaVersion: 2 });
+    await writeFile(path, original); cleanupFiles.push(path);
+    const backup = (suffix = ''): string => { const file = join(directory, `${name}（旧版本可打开的备份${suffix}）.tblink`); cleanupFiles.push(file); return file; };
+    return { directory, path, original, backup };
+  }
+  const newer = (): LinkProject => ({ ...createEmptyLinkProject('新格式'), schemaVersion: 3 });
+
+  it('没确认就不保存，原文件不动，也不留备份', async () => {
+    const { directory, path, original } = await olderFile('演出');
+    const service = new LinkProjectService();
+    expect(await service.olderFormatFile(path, 3)).toEqual({ backupName: '演出（旧版本可打开的备份）.tblink' });
+    await expect(service.save(path, newer())).rejects.toThrow('保存后 0.5.8 和更早的版本打不开这个工程，要先确认');
+    expect(await readFile(path, 'utf8')).toBe(original);
+    expect(await readdir(directory)).toEqual(['演出.tblink']);
+  });
+
+  it('确认后先把原文件另存一份旧版本能打开的备份，再保存；只留这一份，不再另留 .bak', async () => {
+    const { directory, path, original, backup } = await olderFile('演出');
+    const service = new LinkProjectService();
+    const kept = await service.save(path, newer(), { replaceOlderFormat: true, backupOriginal: true });
+    expect(kept).toBe(backup());
+    expect(await readFile(backup(), 'utf8')).toBe(original);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ schemaVersion: 3, name: '新格式' });
+    expect((await readdir(directory)).sort()).toEqual(['演出.tblink', '演出（旧版本可打开的备份）.tblink'].sort());
+    // Now the file is newer itself: no more question, no more backup.
+    expect(await service.olderFormatFile(path, 3)).toBeNull();
+    await expect(service.save(path, { ...newer(), name: '再存一次' })).resolves.toBeNull();
+  });
+
+  it('已有同名备份不覆盖，加序号', async () => {
+    const { path, original, backup } = await olderFile('演出');
+    await writeFile(backup(), '上一份备份');
+    const service = new LinkProjectService();
+    expect(await service.olderFormatFile(path, 3)).toEqual({ backupName: '演出（旧版本可打开的备份 2）.tblink' });
+    expect(await service.save(path, newer(), { replaceOlderFormat: true })).toBe(backup(' 2'));
+    expect(await readFile(backup(), 'utf8')).toBe('上一份备份');
+    expect(await readFile(backup(' 2'), 'utf8')).toBe(original);
+  });
+
+  it('备份写不出来就报错并写明原因，原文件不覆盖', async () => {
+    const { directory, path, original } = await olderFile('演出');
+    const writer = vi.fn<typeof writeFile>();
+    const copy = vi.fn(() => Promise.reject(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })));
+    const service = new LinkProjectService(undefined, writer, copy);
+    await expect(service.save(path, newer(), { replaceOlderFormat: true })).rejects.toThrow(/这次没有保存，原来的工程文件没有动.*原因：EACCES: permission denied/);
+    expect(writer).not.toHaveBeenCalled();
+    expect(await readFile(path, 'utf8')).toBe(original);
+    expect(await readdir(directory)).toEqual(['演出.tblink']);
+  });
+
+  it('不用问也不用备份：另存为、新建的工程没有旧文件；内容 0.5.8 能打开；旧文件本来就是新格式', async () => {
+    const directory = await createTestDirectory(), fresh = join(directory, '新建.tblink'); cleanupFiles.push(fresh);
+    const service = new LinkProjectService();
+    expect(await service.olderFormatFile(fresh, 3)).toBeNull();
+    await expect(service.save(fresh, newer())).resolves.toBeNull();
+    const old = await olderFile('旧版');
+    expect(await service.olderFormatFile(old.path, 2)).toBeNull();
+    await expect(service.save(old.path, { ...createEmptyLinkProject('还是旧格式'), schemaVersion: 2 })).resolves.toBeNull();
+    expect(await readdir(directory)).toEqual(['新建.tblink']);
+    expect(await readdir(old.directory)).toEqual(['旧版.tblink']);
   });
 });
 

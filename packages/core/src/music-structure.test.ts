@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
-import { createEmptyLinkProject, createLightingDocument, lightingDocumentSchema, musicStructureSchema, parseLinkProject, type AutomaticMusicCandidates, type AutomaticMusicRun } from '@tb/schema';
-import { acceptMusicStructure, editMusicStructure, matchingMusicStructure, musicStructureSegments, recognizeMusicStructure } from './music-structure';
+import { createEmptyLinkProject, createLightingDocument, lightingDocumentSchema, musicStructureSchema, parseLinkProject, serializeLinkProject, songMusicSchema, type AutomaticMusicCandidates, type AutomaticMusicRun } from '@tb/schema';
+import { acceptMusicStructure, editMusicStructure, ibtSongMusic, matchingMusicStructure, musicStructureSegments, recognizeMusicStructure } from './music-structure';
+import { setSongMusicCommand } from './music-analysis-command';
 import { fuseMusicBeats } from './music-beat-fusion';
 import { setLightingCommand } from './lighting-edit';
 
@@ -12,16 +13,15 @@ function candidates(step = 500): AutomaticMusicCandidates {
     { id: 'section:0', kind: 'section', name: '主歌', startMs: 0, endMs: 16000 }, { id: 'section:1', kind: 'section', name: '副歌', startMs: 16000, endMs: 32000 }
   ] };
 }
-it('相同 BPM 的音乐结构变化也分段，结果独立存储而不生成编号标记', () => {
-  const document = createLightingDocument();
-  const next = acceptMusicStructure(document, source, candidates(), 'task');
-  expect(next.musicAnalysis?.segments.map(segment => [segment.startMs, segment.endMs, segment.bpm])).toEqual([[0, 16000, 120], [16000, 32000, 120]]);
-  expect(next.musicAnalysis?.beatsPerBar).toBe(4);
-  expect(next.musicAnalysis?.segments.map(segment => segment.name)).toEqual(['段落 1', '段落 2']);
-  expect(next.tempos).toEqual(document.tempos); expect(next.tracks).toEqual(document.tracks); expect(next.markers).toEqual([]);
-  expect(matchingMusicStructure(next, { ...source, sha256: 'b'.repeat(64) })).toBeUndefined();
-  expect(matchingMusicStructure(next, { ...source, durationMs: 30000 })).toBeUndefined();
-  expect(() => acceptMusicStructure(document, { ...source, durationMs: 30000 }, candidates(), 'late')).toThrow('音源');
+it('相同 BPM 的音乐结构变化也分段，结果存在歌上而不改灯光文档', () => {
+  const music = acceptMusicStructure({}, source, candidates(), 'task');
+  expect(music).toMatchObject({ version: 1, method: 'automatic', sourceSha256: source.sha256, sourceDurationMs: source.durationMs });
+  expect(music.structure.segments.map(segment => [segment.startMs, segment.endMs, segment.bpm])).toEqual([[0, 16000, 120], [16000, 32000, 120]]);
+  expect(music.structure.beatsPerBar).toBe(4);
+  expect(music.structure.segments.map(segment => segment.name)).toEqual(['段落 1', '段落 2']);
+  expect(matchingMusicStructure({ music }, { ...source, sha256: 'b'.repeat(64) })).toBeUndefined();
+  expect(matchingMusicStructure({ music }, { ...source, durationMs: 30000 })).toBeUndefined();
+  expect(() => acceptMusicStructure({}, { ...source, durationMs: 30000 }, candidates(), 'late')).toThrow('音源');
 });
 it('refreshes cached automatic labels and tempo from beat evidence while retaining manual labels', () => {
   const data = recognizeMusicStructure(candidates(), 'cached');
@@ -32,27 +32,39 @@ it('refreshes cached automatic labels and tempo from beat evidence while retaini
   expect(data).toEqual(before);
 });
 it('清除保留 BPM、抑制重新出现；删除修正在重新分析后保留', () => {
-  let document = acceptMusicStructure(createLightingDocument(), source, candidates(), 'task');
-  document = editMusicStructure(document, { kind: 'remove-beat', id: document.musicAnalysis!.beats[5]!.id });
-  const segment = document.musicAnalysis!.segments[0]!;
-  document = editMusicStructure(document, { kind: 'segment', segment: { ...segment, name: '用户名称' } });
-  const next = acceptMusicStructure(document, source, candidates(), 'rerun');
-  expect(next.musicAnalysis?.beats).toHaveLength(63); expect(next.musicAnalysis?.segments[0]?.name).toBe('用户名称');
-  const cleared = editMusicStructure(next, { kind: 'clear' });
-  expect(cleared.musicAnalysis).toMatchObject({ state: 'cleared', bpm: 120, beats: [], segments: [] });
-  expect(matchingMusicStructure(cleared, source)?.state).toBe('cleared');
-  expect(acceptMusicStructure(cleared, source, candidates(), 'explicit').musicAnalysis?.beats).toHaveLength(64);
+  let music = acceptMusicStructure({}, source, candidates(), 'task');
+  music = editMusicStructure({ music }, { kind: 'remove-beat', id: music.structure.beats[5]!.id });
+  const segment = music.structure.segments[0]!;
+  music = editMusicStructure({ music }, { kind: 'segment', segment: { ...segment, name: '用户名称' } });
+  const next = acceptMusicStructure({ music }, source, candidates(), 'rerun');
+  expect(next.structure.beats).toHaveLength(63); expect(next.structure.segments[0]?.name).toBe('用户名称');
+  const cleared = editMusicStructure({ music: next }, { kind: 'clear' });
+  expect(cleared.structure).toMatchObject({ state: 'cleared', bpm: 120, beats: [], segments: [] });
+  expect(matchingMusicStructure({ music: cleared }, source)?.state).toBe('cleared');
+  expect(acceptMusicStructure({ music: cleared }, source, candidates(), 'explicit').structure.beats).toHaveLength(64);
 });
 it('保存重开、撤销整笔恢复；拒绝段落重叠及旧格式写入', () => {
-  const lighting = createLightingDocument();
-  const project = parseLinkProject({ ...createEmptyLinkProject('测试'), schemaVersion: 2, rundown: [{ id: 'song', title: '歌', referenceAudio: source, lighting }] });
-  const document = acceptMusicStructure(lighting, source, candidates(), 'task');
-  const command = setLightingCommand('song', document, '自动音乐识别');
-  expect(parseLinkProject(JSON.parse(JSON.stringify(command.execute(project)))).rundown[0]?.lighting?.musicAnalysis).toEqual(document.musicAnalysis);
+  const project = parseLinkProject({ ...createEmptyLinkProject('测试'), rundown: [{ id: 'song', title: '歌', referenceAudio: source }] });
+  const music = acceptMusicStructure({}, source, candidates(), 'task');
+  const command = setSongMusicCommand('song', source, music, { label: '自动音乐识别' });
+  const saved = parseLinkProject(JSON.parse(serializeLinkProject(command.execute(project))));
+  expect(saved.rundown[0]?.music).toEqual(music);
+  expect(saved.schemaVersion).toBe(3);
   expect(command.undo(project)).toEqual(project);
-  expect(() => editMusicStructure(document, { kind: 'segment', segment: { ...document.musicAnalysis!.segments[0]!, endMs: 17000 } })).toThrow();
-  expect(lightingDocumentSchema.safeParse({ ...document, version: 1 }).success).toBe(false);
-  expect(musicStructureSchema.safeParse({ ...document.musicAnalysis, segments: [{ ...document.musicAnalysis!.segments[0], endMs: 40000 }] }).success).toBe(false);
+  expect(() => editMusicStructure({ music }, { kind: 'segment', segment: { ...music.structure.segments[0]!, endMs: 17000 } })).toThrow();
+  expect(() => setLightingCommand('song', { ...createLightingDocument(), version: 2, musicAnalysis: music.structure })).toThrow('节拍已经改存在歌曲上');
+  expect(lightingDocumentSchema.safeParse({ ...createLightingDocument(), version: 1, musicAnalysis: music.structure }).success).toBe(false);
+  expect(musicStructureSchema.safeParse({ ...music.structure, segments: [{ ...music.structure.segments[0], endMs: 40000 }] }).success).toBe(false);
+  expect(songMusicSchema.safeParse({ ...music, sourceDurationMs: 30000 }).success).toBe(false);
+});
+it('简易检测的结果：每个拍点都留下，最稀那一档是强拍，速度和段落按同样的办法算', () => {
+  const dense = Array.from({ length: 64 }, (_, i) => i * 500);
+  const music = ibtSongMusic(source, { dense, sparse: dense.filter((_, i) => i % 4 === 0) });
+  expect(music.method).toBe('ibt');
+  expect(music.structure.beats.map(beat => beat.atMs)).toEqual(dense);
+  expect(music.structure.beats.filter(beat => beat.strong).map(beat => beat.atMs)).toEqual(dense.filter((_, i) => i % 4 === 0));
+  expect(music.structure.bpm).toBe(120);
+  expect(music.structure.beatsPerBar).toBe(4);
 });
 it('持续变速、渐变、静音、短段分别处理，不强行切固定拍数', () => {
   const base = candidates();

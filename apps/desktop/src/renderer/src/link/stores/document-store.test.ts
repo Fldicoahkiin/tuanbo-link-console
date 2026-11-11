@@ -344,3 +344,26 @@ function currentTimelineState() {
   if (!item) throw new Error('测试节目不存在');
   return resolveTimelineState(project, item, 1_000);
 }
+
+describe('打开带旧节拍的工程（0.5.9 E9）', () => {
+  const audio = { assetId: 'audio', relativePath: 'music.wav', sha256: 'a'.repeat(64), durationMs: 4000 };
+  const older = (beats: boolean) => parseLinkProject({ ...createEmptyLinkProject('旧工程'), schemaVersion: 2, obsOutputMode: 'scenes', rundown: [{ id: 'song', title: '歌',
+    referenceAudio: beats ? { ...audio, beats: { sourceSha256: audio.sha256, level: 'standard', pointsMs: [0, 1000, 2000] } } : audio, lighting: createLightingDocument() }] });
+
+  it('打开时节拍搬到歌上，工程标成有改动，不自动存盘，留下给打开提示的记录', () => {
+    useDocumentStore.getState().setProject(older(true), 'C:/shows/旧工程.tblink');
+    const state = useDocumentStore.getState();
+    expect(state.project?.schemaVersion).toBe(3);
+    expect(state.project?.rundown[0]?.referenceAudio).toEqual(audio);
+    expect(state.project?.rundown[0]?.music?.method).toBe('ibt');
+    expect([state.dirty, state.upgradeBackupPending, state.past.length]).toEqual([true, true, 0]);
+    expect(state.songMusicOpening).toEqual({ moved: 1, dropped: [] });
+  });
+
+  it('没有旧节拍的工程版本不变，也不算有改动', () => {
+    useDocumentStore.getState().setProject(older(false), 'C:/shows/普通.tblink');
+    const state = useDocumentStore.getState();
+    expect(state.project?.schemaVersion).toBe(2);
+    expect([state.dirty, state.upgradeBackupPending, state.songMusicOpening]).toEqual([false, false, null]);
+  });
+});

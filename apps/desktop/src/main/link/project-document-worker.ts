@@ -18,14 +18,23 @@ async function execute(request: ProjectDocumentRequest): Promise<ProjectDocument
       // Validate before admitting to the write queue. An invalid intermediate
       // request must fail even when a later valid revision supersedes it.
       const project = parseLinkProject(JSON.parse(request.content));
-      await projects.save(request.path, project, request.backupOriginal);
-      return { ...envelope, kind: 'saved' };
+      const kept = await projects.save(request.path, project, { backupOriginal: request.backupOriginal, replaceOlderFormat: request.replaceOlderFormat });
+      return { ...envelope, kind: 'saved', ...(kept ? { keptOlderFormat: kept } : {}) };
     }
+    case 'check-save':
+      // Only the version matters here: the save that follows parses and checks the whole content.
+      return { ...envelope, kind: 'save-checked', olderFormat: await projects.olderFormatFile(request.path, savedSchemaVersion(request.content)) };
     case 'copy': {
       await projects.writeCopy(request.path, parseLinkProject(JSON.parse(request.content)));
       return { ...envelope, kind: 'saved' };
     }
   }
+}
+/** The version a project text declares; anything else is left to the full parse of the save. */
+function savedSchemaVersion(content: string): number {
+  const version = (JSON.parse(content) as { schemaVersion?: unknown }).schemaVersion;
+  if (typeof version !== 'number') throw new Error('工程内容缺少格式版本，没有保存');
+  return version;
 }
 parentPort?.on('message', (value: unknown) => {
   const request = projectDocumentRequestSchema.parse(value);

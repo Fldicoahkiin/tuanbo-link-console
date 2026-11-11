@@ -67,6 +67,7 @@ import { convertMa2Snapshot } from './link/ma2-timecode-conversion';
 import { readFile, stat, statfs, mkdtemp, writeFile, mkdir } from 'node:fs/promises';
 import { assetResponse } from './link/asset-response';
 import { ProjectDocumentService } from './link/project-document-service';
+import { olderFormatSavePrompt } from './link/project-format-prompt';
 import { ProjectArchiveSettingsStore, projectArchives } from './link/project-archives';
 import { offerRecoveryCopy, RecoveryCopies, type RecoveryOffer } from './link/recovery-copies';
 import { RendererSaveRequests, UnsavedChangesGuard, unsavedChangesPrompt } from './link/unsaved-changes-guard';
@@ -1466,11 +1467,16 @@ function registerIpc(
       destination = result.filePath;
       projectAccess.approve(destination);
     }
-    try { await projectDocuments.save(destination, content, options.backupOriginal === true); }
+    // A file 0.5.8 and earlier open is never turned into one they cannot without this question; the save keeps it beside.
+    const olderFormat = await projectDocuments.olderFormat(destination, content);
+    if (olderFormat && (await dialog.showMessageBox(mainWindow!, olderFormatSavePrompt(olderFormat.backupName))).response !== 0) return null;
+    let kept: string | null;
+    try { kept = await projectDocuments.save(destination, content, { backupOriginal: options.backupOriginal === true, replaceOlderFormat: olderFormat !== null }); }
     catch (error) {
       await logger.record({ level:'error', category:'system', message:'工程保存失败，文件可能没有写入', result:'failed', details:{ path:destination, error:error instanceof Error ? error.message : String(error) } });
       throw error;
     }
+    if (kept) await logger.record({ level:'info', category:'system', message:'工程换成了新的存法，0.5.8 和更早的版本打不开；原来的文件另存在旁边，旧版本能打开', result:'succeeded', details:{ path:destination, backup:kept } });
     // A save to the dialog's answer is the project the window shows from now on.
     projectAccess.opened(destination);
     return destination;

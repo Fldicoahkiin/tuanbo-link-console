@@ -90,9 +90,10 @@ export async function projectArchives(input: unknown, documents: Pick<ProjectDoc
     if (!entry) throw new Error('这个存档不属于当前工程，或已被移动');
     const content = await readFile(entry.path, 'utf8');
     await documents.inspect(content);
-    // The current file is archived first, so a restore can itself be undone from the list.
+    // The current file is archived first, so a restore can itself be undone from the list. A restored archive newer
+    // than the file (schema 3 over a file 0.5.8 opens) also keeps that file beside the project, as any save over it does.
     await archive(await readFile(projectPath, 'utf8'), 'manual', '恢复前');
-    await documents.save(projectPath, content);
+    await documents.save(projectPath, content, { replaceOlderFormat: true });
   }
   return projectArchiveResultSchema.parse({ version: 1, entries: await entries(), ...(createdPath ? { createdPath } : {}) });
 }

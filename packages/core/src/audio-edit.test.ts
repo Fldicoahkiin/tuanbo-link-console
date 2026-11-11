@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, referenceAudioSchema, audioTracksSchema } from '@tb/schema';
 import { audioSegments, audioTracks, audioContainsMediaSource, dragAudioSegment, editedAudio, splitAudioSegments, updateAudioSegment } from './audio-edit';
-import { editReferenceAudioCommand } from './link-command';
+import { editReferenceAudioCommand, setReferenceAudioCommand } from './link-command';
 
 const audio = { assetId: 'song', relativePath: 'assets/music.wav', sha256: 'a'.repeat(64), durationMs: 5000 };
 describe('可编辑歌曲音频', () => {
@@ -43,13 +43,14 @@ describe('可编辑歌曲音频', () => {
     expect(() => updateAudioSegment(edit, edit.timeline!.segments[0]!.id, { sourceOffsetMs: -1 })).toThrow();
     expect(() => updateAudioSegment(edit, edit.timeline!.segments[1]!.id, { durationMs: 4000 })).toThrow();
   });
-  it('节拍保存不修改歌曲路径和时长，可以撤销', () => {
+  it('节拍不再写进歌曲音频：旧格式的节拍字段只在打开旧工程时读', () => {
     const project = createEmptyLinkProject('测试');
     project.rundown.push({ id: 'song', title: '歌曲', enabled: true, notes: '', referenceAudio: audio, visualLayers: [], referenceMediaClips: [], cues: [] });
-    const command = editReferenceAudioCommand('song', { ...audio, beats: { sourceSha256: audio.sha256, level: 'standard', pointsMs: [500, 1000] } }, '应用节拍');
-    const changed = command.execute(project);
-    expect(changed.rundown[0]!.referenceAudio).toMatchObject(audio);
-    expect(changed.rundown[0]!.referenceAudio?.beats?.pointsMs).toEqual([500, 1000]);
+    const withBeats = { ...audio, beats: { sourceSha256: audio.sha256, level: 'standard' as const, pointsMs: [500, 1000] } };
+    expect(() => editReferenceAudioCommand('song', withBeats, '应用节拍').execute(project)).toThrow('节拍已经改存在歌曲上');
+    expect(() => setReferenceAudioCommand('song', withBeats).execute(project)).toThrow('节拍已经改存在歌曲上');
+    const command = editReferenceAudioCommand('song', editedAudio(audio, splitAudioSegments(audioSegments(audio), [2000])), '分割');
+    expect(command.execute(project).rundown[0]!.referenceAudio?.timeline?.segments).toHaveLength(2);
     expect(command.undo(project)).toEqual(project);
   });
   it('拒绝其他歌曲的节拍缓存和无序标记', () => {

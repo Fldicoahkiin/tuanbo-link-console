@@ -37,6 +37,7 @@ export * from './music-monitor';
 export * from './native-program';
 
 export { musicStructureSchema, musicStructureSegmentSchema, type MusicStructure, type MusicStructureSegment } from './music-structure';
+export * from './song-music';
 
 export * from './ma2-song-sequence';
 export * from './ma2-song-binding';

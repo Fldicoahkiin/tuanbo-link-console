@@ -5,6 +5,8 @@ import { libraryTemplates, projectLightingLibrary, updateLibraryTemplates } from
 
 export function setLightingCommand(itemId: string, lighting: LightingDocument, label = '编辑灯光'): LinkCommand {
   const validated = lightingDocumentSchema.parse(lighting);
+  // Beats belong to the song (`rundownItem.music`, setSongMusicCommand); the old field is only read from older files.
+  if (validated.musicAnalysis) throw new Error('节拍已经改存在歌曲上，这次没有修改灯光。请重新识别节拍');
   return { id: crypto.randomUUID(), label, scope: 'lighting', execute(project) {
     const currentTemplates = libraryTemplates(projectLightingLibrary(project));
     const libraryChanged = JSON.stringify(validated.templates) !== JSON.stringify(currentTemplates) && JSON.stringify(validated.templates) !== JSON.stringify(project.rundown.find(entry => entry.id === itemId)?.lighting?.templates ?? []);

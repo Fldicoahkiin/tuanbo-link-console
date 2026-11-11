@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { audioSegmentSchema, audioBeatMapSchema } from './audio-edit';
 import { lightingDocumentSchema } from './lighting';
+import { songMusicSchema } from './song-music';
 import { ma2ReadStateSchema } from './ma2-catalog';
 import { ma2EffectLibrarySchema } from './ma2-effect-library';
 import { lightingUserLibrarySchema } from './lighting-library';
@@ -213,6 +214,8 @@ export const referenceAudioSchema = referenceAudioSourceSchema.extend({
   // Keep multitrack metadata inside the strict timeline object: old versions
   // reject the project instead of silently discarding independently edited tracks.
   timeline: z.object({ source: referenceAudioSourceSchema, segments: z.array(audioSegmentSchema).min(1).max(10_000), tracks: audioTracksSchema.optional() }).strict().optional(),
+  /** Read-only format: beats saved before 0.5.9. Opening moves them to `rundownItem.music` (core song-music-migration);
+   * a schema 3 file may not hold them. Kept here so they are not stripped before that move. */
   beats: audioBeatMapSchema.optional()
 }).superRefine((audio, ctx) => {
   const segments = audio.timeline?.segments;
@@ -327,6 +330,8 @@ export const referenceMediaClipSchema = z.object({
 export const rundownItemSchema = z.object({
   p1UnavailableSourceKey: z.string().optional(),
   lighting: lightingDocumentSchema.optional(),
+  /** The song's beats and sections, the only copy (schema 3). Read through core `songBeats(item)`. */
+  music: songMusicSchema.optional(),
   playback: z.object({
     volume: z.number().min(0).max(100),
     // Absent: the song follows the player's own end action.
@@ -396,6 +401,7 @@ export type P1StartTrigger = z.infer<typeof p1StartTriggerSchema>;
 export type LinkCue = z.infer<typeof linkCueSchema>;
 export type VisualLayer = z.infer<typeof visualLayerSchema>;
 export type ReferenceAudio = z.infer<typeof referenceAudioSchema>;
+export type ReferenceAudioSource = z.infer<typeof referenceAudioSourceSchema>;
 export type P1PlayEndAction = z.infer<typeof p1PlayEndActionSchema>;
 export type P1PlaylistBinding = z.infer<typeof p1PlaylistBindingSchema>;
 export type P1MediaBinding = z.infer<typeof p1MediaBindingSchema>;
@@ -476,15 +482,18 @@ function isSafeProjectPath(value: string): boolean {
 
 export type LinkProjectSchemaVersion = 1 | 2 | 3;
 /** The newest file version this release opens and saves. A newer file is refused: unknown fields are stripped on parse,
- * so opening it would drop them on the next save without a word. Raise this only in the commit that adds the first
- * field needing the next version; until then 3 exists in the types alone. */
-export const latestSchemaVersion: LinkProjectSchemaVersion = 2;
+ * so opening it would drop them on the next save without a word. 3 since the shared song beats (0.5.9 E9). */
+export const latestSchemaVersion: LinkProjectSchemaVersion = 3;
+/** The newest file version 0.5.8 and earlier open. Overwriting such a file with a newer version is asked first and
+ * keeps the file as it was beside it (main process link-project-service), because going back to 0.5.8 is the rollback. */
+export const legacyReadableSchemaVersion: LinkProjectSchemaVersion = 2;
 
 /** The lowest file version that keeps everything in this project, and the only place that decides it.
+ * 3: a song's shared beats (`rundownItem.music`), which only releases after 0.5.8 understand.
  * 2: lighting, a console read state or a console material library, which releases before lighting would drop.
- * 3: fields only releases after 0.5.8 understand; nothing writes one yet, so no project needs 3 today.
  * 1: everything else. Pure, so a save can compare it with the version the file has now. */
 export function requiredSchemaVersion(project: Pick<LinkProject, 'ma2ReadState' | 'ma2MaterialLibrary' | 'rundown'>): LinkProjectSchemaVersion {
+  if (project.rundown.some((item) => item.music !== undefined)) return 3;
   if (project.ma2ReadState || project.ma2MaterialLibrary || project.rundown.some((item) => item.lighting !== undefined)) return 2;
   return 1;
 }
@@ -496,6 +505,10 @@ function validateProjectInvariants(project: z.infer<typeof linkProjectSchema>, c
   const required = requiredSchemaVersion(project);
   if (project.schemaVersion < required) {
     ctx.addIssue({ code: 'custom', message: required === 2 ? '含灯光编排的工程必须使用 schema 2，防止旧版本丢失数据' : `工程用到了新版本的内容，必须使用 schema ${required}，防止旧版本丢失数据`, path: ['schemaVersion'] });
+  }
+  // Beats live in one place from schema 3 on: the older beat fields are only read from older files, and moved on open.
+  if (project.schemaVersion >= 3) for (const [index, item] of project.rundown.entries()) {
+    if (item.referenceAudio?.beats || item.lighting?.musicAnalysis) ctx.addIssue({ code: 'custom', message: '这首歌的节拍存了两份（新旧格式各一份），工程没有打开，免得用错。请导出诊断包发给售后', path: ['rundown', index] });
   }
   const relations = projectItemRelations(project, ctx);
   for (const [index, item] of project.rundown.entries()) {

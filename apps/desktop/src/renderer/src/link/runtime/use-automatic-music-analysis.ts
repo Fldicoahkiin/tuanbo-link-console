@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AutomaticMusicJob, AutomaticMusicStatus, ReferenceAudio } from '@tb/schema';
+import type { AutomaticMusicJob, AutomaticMusicStatus, ReferenceAudioSource } from '@tb/schema';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { reportCoordinatorError } from './runtime-action-log';
 
 // Preview dismissal survives tab/song remounts for this application session.
 const dismissedTasks = new Set<string>();
 
-export function useAutomaticMusicAnalysis(projectPath: string | null, source: ReferenceAudio | undefined) {
+/** `source`: the audio to analyse, `songMusicSource(item)` (the music track's source file, never the rendered song). */
+export function useAutomaticMusicAnalysis(projectPath: string | null, source: ReferenceAudioSource | undefined) {
   const [status, setStatus] = useState<AutomaticMusicStatus | null>(null);
   const [job, setJob] = useState<AutomaticMusicJob | null>(null);
   const [error, setError] = useState<string | null>(null);

@@ -3,8 +3,8 @@ import { create, type StateCreator } from 'zustand';
 import { shareProjectStructure } from './share-project-structure';
 import { isWorkerValidatedProject } from './project-codec';
 import { subscribeWithSelector } from 'zustand/middleware';
-import { parseLinkProject, type LinkProject } from '@tb/schema';
-import { normalizeContentTimeline, obsSceneOutputCommand, withContentTimeline, withMa2Pairings, type LinkCommand } from '@tb/core/link';
+import { parseLinkProject, validateLinkProjectRelations, type LinkProject } from '@tb/schema';
+import { migrateSongMusic, normalizeContentTimeline, obsSceneOutputCommand, withContentTimeline, withMa2Pairings, type DroppedSongBeats, type LinkCommand } from '@tb/core/link';
 
 type HistoryFrame = {
   command: LinkCommand;
@@ -23,6 +23,9 @@ function rebaseFrame(frame: HistoryFrame, project: LinkProject): LinkProject {
 
 /** How a project entered the editor: as read from disk, upgraded in memory, or restored unsaved content. */
 export type DocumentOpening = { upgraded?: boolean; restored?: boolean };
+/** What opening the project did to its songs' beats (core migrateSongMusic): how many songs had theirs moved to the
+ * new place, and the simple detection beats not kept where a song had two. Shown and logged once by the opener. */
+export type SongMusicOpening = { moved: number; dropped: DroppedSongBeats[] };
 
 export type DocumentStoreState = {
   project: LinkProject | null;
@@ -41,6 +44,8 @@ export type DocumentStoreState = {
   upgradeBackupPending: boolean;
   /** Unsaved edits have already been written to the MA2 console. */
   consoleSynced: boolean;
+  /** Set when opening moved old beats; the project is then unsaved and becomes schema 3 on its first save. */
+  songMusicOpening: SongMusicOpening | null;
   past: HistoryFrame[];
   future: HistoryFrame[];
   error: string | null;
@@ -69,14 +74,19 @@ const documentState: StateCreator<DocumentStoreState> = (set, get) => {
     sessionId: crypto.randomUUID(),
     upgradeBackupPending: false,
     consoleSynced: false,
+    songMusicOpening: null,
     past: [],
     future: [],
     error: null,
     setProject: (project, path, opening = {}) => {
       set((state) => {
         const parsed = project ? isWorkerValidatedProject(project) ? project : parseLinkProject(project) : null;
+        // Beats saved before 0.5.9 move to the song, the only place they are kept since (schema 3). Here only: it marks the
+        // project unsaved, and the first save over an older file asks first and keeps that file (project-document.ts, main process).
+        const music = parsed ? migrateSongMusic(parsed) : null;
+        if (music?.moved) validateLinkProjectRelations(music.project);
         // Older projects open under the content timeline rules, playing what they played.
-        let prepared = parsed && normalizeContentTimeline(parsed);
+        let prepared = music && normalizeContentTimeline(music.project);
         // Projects from before the single scene workflow open in it, before user edits.
         if (prepared && prepared.obsOutputMode !== 'scenes') prepared = withMa2Pairings(obsSceneOutputCommand()).execute(prepared);
         // Only a file can be upgraded; a new unnamed document has nothing on disk to differ from.
@@ -94,6 +104,7 @@ const documentState: StateCreator<DocumentStoreState> = (set, get) => {
           sessionId: crypto.randomUUID(),
           upgradeBackupPending: upgraded,
           consoleSynced: false,
+          songMusicOpening: music?.moved ? { moved: music.moved, dropped: music.dropped } : null,
           past: [],
           future: [],
           error: null
@@ -189,9 +200,9 @@ const hotData = import.meta.hot?.data as { documentStore?: ReturnType<typeof cre
 export const useDocumentStore = hotData?.documentStore ?? createDocumentStore();
 if (import.meta.hot && hotData) {
   if (hotData.documentStore) {
-    const { project, path, dirty, documentId, revision, stateId, savedStateId, sessionId, upgradeBackupPending, consoleSynced, past, future, error } = useDocumentStore.getState();
+    const { project, path, dirty, documentId, revision, stateId, savedStateId, sessionId, upgradeBackupPending, consoleSynced, songMusicOpening, past, future, error } = useDocumentStore.getState();
     const actions = documentState(useDocumentStore.setState, useDocumentStore.getState, useDocumentStore);
-    useDocumentStore.setState({ ...actions, project, path, dirty, documentId, revision, stateId, savedStateId, sessionId, upgradeBackupPending, consoleSynced, past, future, error }, true);
+    useDocumentStore.setState({ ...actions, project, path, dirty, documentId, revision, stateId, savedStateId, sessionId, upgradeBackupPending, consoleSynced, songMusicOpening, past, future, error }, true);
   }
   hotData.documentStore = useDocumentStore;
   import.meta.hot.accept();
