@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject, type Ma2Catalog, type Ma2RenameRequest, type Ma2RenameResult } from '@tb/schema';
-import { saveMa2MaterialLibraryCommand, renameConsoleCueCommand, renameLightingLibraryEntryCommand, setLightingLibraryViewCommand, pendingMa2Renames, toConsoleLabel } from '@tb/core/link';
+import { saveMa2MaterialLibraryCommand, renameConsoleCueCommand, renameLightingLibraryEntryCommand, setLightingLibraryViewCommand, pendingMa2Renames, toConsoleLabel, SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
 import { useDocumentStore as store } from '../stores/document-store';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
+import { useShowStateStore } from '../stores/show-state-store';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
 import { tickMa2SongSync } from './ma2-song-sync';
 import { MOVED_RENAMES } from './ma2-name-sync';
@@ -33,12 +34,18 @@ beforeEach(() => {
   renameMa2Object.mockImplementation(request => { if (request.change.confirmedName !== remote) return Promise.reject(new Error('控台名称冲突')); remote = toConsoleLabel(request.change.name); return Promise.resolve(result(request)); });
   archive.mockResolvedValue('C:/archive.tblink');
   useMa2RealtimePreference.setState({ enabled: true });
-  useMa2SyncStore.setState({ songs: {}, names: { state: 'idle', message: '' }, timelinePlaying: false, previewPlaying: false });
+  useMa2SyncStore.setState({ songs: {}, names: { state: 'idle', message: '' }, previewPlaying: false });
+  useShowStateStore.setState({ show: IDLE });
   load();
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-const tick = () => tickMa2SongSync(false);
+const tick = () => tickMa2SongSync();
+/** The show as main reports it (useShowStateStore): idle, the program moving, or paused (held). */
+const RUNNING = { phase: 'running', source: 'internal', itemId: 'song', program: null } as const;
+const HELD = { phase: 'held', source: 'internal', itemId: 'song', reason: 'paused', program: null } as const;
+const IDLE = { phase: 'idle', program: null } as const;
+
 const rename = (name: string) => store.getState().execute(renameConsoleCueCommand(ref, name, source));
 const names = () => useMa2SyncStore.getState().names;
 
@@ -65,9 +72,13 @@ it('同步暂停时不写入，打开后小数 Cue 中文改名；保存重开�
   expect(pendingMa2Renames(parseLinkProject(JSON.parse(JSON.stringify(store.getState().project))))).toEqual([]);
 });
 it('播放中暂存；停止后改名，无时间线或执行器也可同步', async () => {
-  useMa2SyncStore.setState({ timelinePlaying: true }); rename('Front'); await tickMa2SongSync(true);
-  expect(renameMa2Object).not.toHaveBeenCalled(); expect(names().state).toBe('pending'); expect(names().message).toContain('播放中');
-  useMa2SyncStore.setState({ timelinePlaying: false }); await tick(); expect(remote).toBe('Front');
+  useShowStateStore.setState({ show: RUNNING }); rename('Front'); await tick();
+  expect(renameMa2Object).not.toHaveBeenCalled(); expect(names().state).toBe('pending'); expect(names().message).toContain(SHOW_WAIT_CLOCK_MOVING);
+  useShowStateStore.setState({ show: IDLE }); await tick(); expect(remote).toBe('Front');
+});
+it('暂停时改名照常写到控台（第 3 题）', async () => {
+  useShowStateStore.setState({ show: HELD }); rename('Back'); await tick();
+  expect(remote).toBe('Back'); expect(names().state).toBe('verified');
 });
 it('分类页改名并保存浏览位置后，一次撤销仍恢复上一个名称', async () => {
   rename('First'); store.getState().undo(); store.getState().redo();

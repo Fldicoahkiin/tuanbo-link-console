@@ -4,7 +4,8 @@ import { prepareMa2RealtimeSession } from './ma2-realtime-session';
 import { ma2SyncActive, useMa2RealtimePreference } from './ma2-realtime-preference';
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
 import { useDocumentStore } from '../stores/document-store';
-import { ma2SyncPlaying, useMa2SyncStore } from '../stores/ma2-sync-store';
+import { useMa2SyncStore } from '../stores/ma2-sync-store';
+import { currentShowGate, useShowStateStore } from '../stores/show-state-store';
 
 type Notify = (message: string, tone?: 'info' | 'error') => void;
 
@@ -24,11 +25,10 @@ export function announceMa2Sync(notify: Notify, state: ReturnType<typeof useMa2S
 
 /**
  * The one console sync: the session check, then each song (either way it was lit) and the renamed
- * console objects. Edits made while playing are kept and synced after playback stops.
+ * console objects. Edits made while the program moves are kept and synced once it is paused or stopped
+ * (showGate's `ma2.sync.write`, 第 3 题); paused, paused at the end and P1 waiting for the next song sync at once.
  */
-export function useMa2Sync(playing: boolean, notify: Notify): void {
-  useEffect(() => { useMa2SyncStore.setState({ timelinePlaying: playing }); return () => { useMa2SyncStore.setState({ timelinePlaying: false }); }; }, [playing]);
-  const playingRef = useRef(playing); playingRef.current = playing;
+export function useMa2Sync(notify: Notify): void {
   const notifyRef = useRef(notify); notifyRef.current = notify;
   useEffect(() => {
     let active = true;
@@ -39,19 +39,24 @@ export function useMa2Sync(playing: boolean, notify: Notify): void {
       busy = true;
       try {
         const ready = await prepareMa2RealtimeSession();
-        if (ready && active && useMa2ModeStore.getState().method === 'network' && ma2SyncActive()) await tickMa2SongSync(playingRef.current || ma2SyncPlaying());
+        if (ready && active && useMa2ModeStore.getState().method === 'network' && ma2SyncActive()) await tickMa2SongSync();
       } finally { busy = false; }
     };
     const documents = useDocumentStore.subscribe((state, previous) => { if (state.project !== previous.project) { changedAt = performance.now(); markPendingMa2Songs(); } });
     const preferences = useMa2RealtimePreference.subscribe(() => { void tick(); });
     const modes = useMa2ModeStore.subscribe(() => { void prepareMa2RealtimeSession(); });
-    const sync = useMa2SyncStore.subscribe((state, previous) => {
-      announceMa2Sync(notifyRef.current, state, previous);
-      // Playback or a preview stopping syncs what was kept meanwhile without waiting for the next poll.
-      if (state.timelinePlaying !== previous.timelinePlaying || state.previewPlaying !== previous.previewPlaying) void tick();
+    const sync = useMa2SyncStore.subscribe((state, previous) => { announceMa2Sync(notifyRef.current, state, previous); });
+    // The program pausing or stopping carries on from the step a pass stopped at, without waiting for the next poll.
+    // That is no retry: nothing failed, the sync only waited (02 §4.4).
+    let gate = currentShowGate('ma2.sync.write').kind;
+    const show = useShowStateStore.subscribe(() => {
+      const next = currentShowGate('ma2.sync.write').kind;
+      if (next === gate) return;
+      gate = next;
+      if (next === 'allow') void tick();
     });
     const poll = setInterval(() => { void tick(); }, 500);
     void tick();
-    return () => { active = false; clearInterval(poll); documents(); preferences(); modes(); sync(); };
+    return () => { active = false; clearInterval(poll); documents(); preferences(); modes(); sync(); show(); };
   }, []);
 }

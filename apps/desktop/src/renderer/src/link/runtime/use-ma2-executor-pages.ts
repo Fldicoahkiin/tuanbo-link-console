@@ -1,14 +1,15 @@
 import { useEffect, type MutableRefObject } from 'react';
 import { currentMa2LayoutScope } from '../stores/ma2-layout-store';
 import { loadMa2ExecutorDirectory, loadMa2ExecutorPage, useMa2ExecutorPageStore } from '../stores/ma2-executor-page-store';
-import { ma2ConsoleWriting, ma2SyncPlaying, useMa2SyncStore } from '../stores/ma2-sync-store';
+import { ma2ConsoleWriting, useMa2SyncStore } from '../stores/ma2-sync-store';
+import { currentShowWait } from '../stores/show-state-store';
 import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 
-/** Page polling yields the single console channel to writes, material reads and playback. */
+/** Page polling yields the single console channel to writes, material reads and a moving program (showGate). */
 export function pageReadsPaused(): boolean {
   const current = useMa2ExecutorPageStore.getState();
   const sync = useMa2SyncStore.getState();
-  return current.mutating || current.scanning || ma2ConsoleWriting() || ma2SyncPlaying() || useMa2MaterialReadStore.getState().busy
+  return current.mutating || current.scanning || ma2ConsoleWriting() || currentShowWait('ma2.executorPage.refresh') !== null || useMa2MaterialReadStore.getState().busy
     || sync.names.state === 'syncing' || Object.values(sync.songs).some(song => song.state === 'syncing');
 }
 

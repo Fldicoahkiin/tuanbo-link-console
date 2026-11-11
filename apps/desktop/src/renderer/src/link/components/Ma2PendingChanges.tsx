@@ -6,6 +6,7 @@ import type { Ma2ConsoleChanges, Ma2WriteMode, ProjectArchiveResult } from '@tb/
 import { ma2PendingChanges } from '@tb/core/link';
 import { writeMa2NamesNow } from '../runtime/ma2-name-sync';
 import { useMa2SyncStore, type SongSync } from '../stores/ma2-sync-store';
+import { currentShowWait, useShowGate } from '../stores/show-state-store';
 import { takeMa2SongFromConsole, writeMa2SongFromSoftware } from '../runtime/ma2-song-sync';
 import { archiveMa2Project } from '../runtime/ma2-project-archive';
 import { useDocumentStore } from '../stores/document-store';
@@ -49,15 +50,17 @@ function UnsettledSong({ song, title, stopped, disabled, busy, choose }: { song:
   </div>;
 }
 
-export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element | null {
+/** 第 3 题 (S3b): the sync waits only while the program moves, prepares or stops; restoring an archive replaces the
+ * project, which waits until the show has stopped. Both say why in showGate's own words. */
+export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element | null {
+  const syncGate = useShowGate('ma2.sync.write'), replaceGate = useShowGate('document.replace');
   const project = useDocumentStore(state => state.project);
   const pending = useMemo(() => ma2PendingChanges(project), [project]);
   const unbound = useMemo(() => pendingSongSummary(project), [project]);
   const showless = useMemo(() => songsWithoutConsoleShow(project), [project]);
   const renames = useMemo(() => pendingMa2Renames(project), [project]);
   const legacy = useMemo(() => legacyMa2ConsoleNames(project), [project]);
-  const session = useMa2SyncStore(state => state.session);
-  const names = useMa2SyncStore(state => state.names);
+  const session = useMa2SyncStore(state => state.session), names = useMa2SyncStore(state => state.names);
   const active = useMa2RealtimePreference(state => state.enabled);
   const once = useMa2RealtimePreference(state => state.once);
   const writeMode = useMa2RealtimePreference(state => state.writeMode);
@@ -131,9 +134,8 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
     setArchives(result.entries); setArchiveOpen(true); setDetailOpen(false);
   };
   const restore = async (name: string): Promise<void> => {
-    const state = useDocumentStore.getState();
-    if (!state.path || !state.project) throw new Error('请先保存工程');
-    if (playing) throw new Error('播放中不能恢复存档，请停止后再恢复');
+    const state = useDocumentStore.getState(), wait = currentShowWait('document.replace');
+    if (wait !== null || !state.path || !state.project) throw new Error(wait ?? '请先保存工程');
     // 保存 puts the latest edits into the "恢复前" archive the restore makes; 不保存 drops them.
     const replaced = await confirmReplaceDocument('restore-archive');
     if (!replaced) return;
@@ -160,7 +162,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
       <IconButton ref={setModesAnchor} size="sm" className="lighting-sync-modes" icon={SlidersHorizontal} label="同步方式" title={`同步方式：${WRITE_LABEL[writeMode]} · ${CHANGES_LABEL[consoleChanges]}`}
         aria-expanded={modesOpen} aria-haspopup="dialog" onClick={() => { setModesOpen(value => !value); setDetailOpen(false); setConfirmOverwrite(false); }} />
       <Switch className="lighting-sync-switch" label="实时同步" aria-label="实时同步" aria-checked={active} checked={active} disabled={busy || (working && !active)}
-        title="编辑完成后自动检查、存档、写入控台并确认；播放时先暂存，停止后再同步" onChange={() => void run(toggle)} />
+        title="编辑完成后自动检查、存档、写入控台并确认；节目在走时先暂存，暂停或停止后再同步" onChange={() => void run(toggle)} />
     </header>
     <Button ref={setStatusAnchor} variant="ghost" className="lighting-sync-status" icon={blocked || count ? CircleAlert : Check} aria-label="同步状态详情" aria-expanded={detailOpen} aria-haspopup="dialog" data-state={state} onClick={openDetails}>
       <span>{status}</span><ChevronRight aria-hidden="true" />
@@ -192,13 +194,13 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
       <p>同步方式：{WRITE_LABEL[writeMode]} · {CHANGES_LABEL[consoleChanges]}</p>
       <p role={session.status === 'blocked' ? 'alert' : 'status'}>{notice || (manual ? '实时同步已关，修改先留在联动台。点“同步一次”写到控台。' : once !== null ? '正在按现在的同步方式把每首歌同步一次，完成后实时同步保持关闭。' : !useDocumentStore.getState().path ? '请先保存工程，保存后自动同步。' : session.status !== 'ready' || !songs.length ? session.message : unsettled.length ? '这些歌和控台还对不上，或者正在同步：' : `${settled} 首歌都和控台一致。`)}</p>
       {unsettled.map(song => <UnsettledSong key={song.itemId} song={song} title={project.rundown.find(item => item.id === song.itemId)?.title ?? song.name}
-        stopped={song.state === 'blocked' && imported(song.itemId)} disabled={busy || working || playing} busy={busy} choose={side => run(async () => setNotice(side === 'console' ? await takeMa2SongFromConsole(song.itemId) : writeMa2SongFromSoftware(song.itemId)))} />)}
+        stopped={song.state === 'blocked' && imported(song.itemId)} disabled={busy || working || syncGate.kind === 'wait'} busy={busy} choose={side => run(async () => setNotice(side === 'console' ? await takeMa2SongFromConsole(song.itemId) : writeMa2SongFromSoftware(song.itemId)))} />)}
       {unsettled.length && settled ? <p>其余 {settled} 首歌和控台一致。</p> : null}
-      {playing ? <p>播放时先暂存在本地，停止后再同步。</p> : null}
+      {syncGate.kind === 'wait' ? <p>{syncGate.message}</p> : null}
       {names.state !== 'idle' && names.state !== 'verified' && names.message ? <p role={names.state === 'blocked' ? 'alert' : 'status'}>改名：{names.message}</p> : null}
       {renames.map(change => <p key={ma2RenameKey(change)}>序列 {change.sequence}{change.kind === 'single' ? ` · Cue ${change.cue}` : ''}：{change.confirmedName} → {change.name}</p>)}
       {renames.length ? <Button variant="secondary" size="sm" disabled={busy || working} onClick={() => void run(() => writeMa2NamesNow(useDocumentStore.getState().documentId))}>同步名称</Button> : null}
-      {legacy.count ? <><p>控台上有 {legacy.count} 个以前写入的中文名称，控台只能显示英文和数字。</p><Button variant="secondary" size="sm" disabled={busy || working} onClick={() => void run(async () => { const count = await convertMa2LegacyNames(useDocumentStore.getState().documentId); setNotice(`已把 ${count} 个名称改成拼音，歌曲名称会在下次同步时写入`); })}>改为拼音</Button></> : null}
+      {legacy.count ? <><p>控台上有 {legacy.count} 个以前写入的中文名称，控台只能显示英文和数字。</p><Button variant="secondary" size="sm" disabled={busy || working || syncGate.kind === 'wait'} onClick={() => void run(async () => { const count = await convertMa2LegacyNames(useDocumentStore.getState().documentId); setNotice(`已把 ${count} 个名称改成拼音，歌曲名称会在下次同步时写入`); })}>改为拼音</Button></> : null}
       {pending.map(item => <p key={`${item.itemId}:${item.bindingId}`}>{item.title} · Timecode {item.target}：{item.error ?? `${item.changes.length} 处修改`}</p>)}
       {unbound.map(item => <p key={item.itemId}>{item.title} · {item.count} 个 Cue → 按钮第 {item.page} 页的空格。</p>)}
       {showless.length ? <><p>有 {showless.length} 首歌要同步到控台才能演出：{showless.map(item => item.title).join('、')}。同步会为每首歌在控台上建立自己的时间码节目。</p><Button variant="secondary" size="sm" disabled={busy || working} onClick={() => { setNotice(''); writeMissingConsoleShows(); }}>同步到控台</Button></> : null}
@@ -209,8 +211,8 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
         <span>{new Date(entry.createdAt).toLocaleString()} · {entry.reason === 'manual' ? '手动保存' : '同步前'}</span>
         <Button variant="ghost" size="sm" aria-label={`定位存档 ${entry.name}`} onClick={() => void run(() => reveal(entry.name))}>定位文件</Button>
         {confirmRestore === entry.name
-          ? <Button variant="danger" size="sm" aria-label={`确认恢复存档 ${entry.name}`} disabled={busy || playing} onClick={() => void run(() => restore(entry.name))}>确认恢复</Button>
-          : <Button variant="secondary" size="sm" aria-label={`恢复存档 ${entry.name}`} disabled={busy || playing} onClick={() => setConfirmRestore(entry.name)}>恢复</Button>}
+          ? <Button variant="danger" size="sm" aria-label={`确认恢复存档 ${entry.name}`} disabled={busy || replaceGate.kind === 'wait'} onClick={() => void run(() => restore(entry.name))}>确认恢复</Button>
+          : <Button variant="secondary" size="sm" aria-label={`恢复存档 ${entry.name}`} disabled={busy || replaceGate.kind === 'wait'} onClick={() => setConfirmRestore(entry.name)}>恢复</Button>}
       </li>)}</ul>}
     </Dialog> : null}
   </section>;

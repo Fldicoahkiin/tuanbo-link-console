@@ -39,8 +39,13 @@ export type NameSync = { state: 'idle' | 'pending' | 'syncing' | 'verified' | 'b
 /** The session check: the console the project last read is reachable and still the same console. */
 export type Ma2SessionCheck = { status: 'waiting' | 'ready' | 'blocked'; message: string };
 
-export const useMa2SyncStore = create<{ songs: Record<string, SongSync>; names: NameSync; session: Ma2SessionCheck; timelinePlaying: boolean; previewPlaying: boolean }>(() => ({
-  songs: {}, names: { state: 'idle', message: '' }, session: { status: 'waiting', message: '等待连接控台并打开工程' }, timelinePlaying: false, previewPlaying: false
+/**
+ * `previewPlaying`: the editor's or the lighting workbench's own preview plays. It is only this window's report to the
+ * show state (use-show-state-mirror.ts); whether the console sync waits is asked of showGate (show-state-store.ts),
+ * never read from here (S3b, 2026-11-11).
+ */
+export const useMa2SyncStore = create<{ songs: Record<string, SongSync>; names: NameSync; session: Ma2SessionCheck; previewPlaying: boolean }>(() => ({
+  songs: {}, names: { state: 'idle', message: '' }, session: { status: 'waiting', message: '等待连接控台并打开工程' }, previewPlaying: false
 }));
 
 /** Patches a song's sync state while the same session holds it; a paused song stays paused. */
@@ -50,11 +55,6 @@ export function updateMa2Song(entry: SongSync, patch: Partial<SongSync>): void {
     if (!current || current.sessionId !== entry.sessionId) return state;
     return { songs: { ...state.songs, [entry.itemId]: { ...current, ...patch, ...(current.state === 'paused' ? { state: 'paused' as const } : {}) } } };
   });
-}
-/** The programme or an editor preview is playing: nothing is written to the console. */
-export function ma2SyncPlaying(): boolean {
-  const state = useMa2SyncStore.getState();
-  return state.timelinePlaying || state.previewPlaying;
 }
 
 /** A write already sent to the console is still waiting for its confirmation. */

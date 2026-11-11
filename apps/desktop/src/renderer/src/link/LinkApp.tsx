@@ -114,7 +114,7 @@ export function LinkApp(): JSX.Element {
   }, []);
 
   const midiMonitor = useDesktopIntegrationEvents(notify); useEffect(() => { try { useDisplayPreferences.getState().load(); } catch (error) { notify(`显示设置读取失败：${String(error)}`, 'error'); } }, [notify]);
-  useMa2Sync(editingLocked || internalPlayer.state.status === 'playing', notify);
+  useMa2Sync(notify);
   useConsoleFollow(internalPlayer, playbackProject); useStatusSources(); useShowStateMirror(notify);
   useProjectPersistence(notify); useRecoveryCopyWriter(); useMediaAudioPreparation(playbackLocked, notify);
 

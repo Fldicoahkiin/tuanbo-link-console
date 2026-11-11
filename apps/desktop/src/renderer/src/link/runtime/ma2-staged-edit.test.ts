@@ -1,16 +1,17 @@
 import { readFile } from 'node:fs/promises';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, type Ma2ApplyRequest, type Ma2CompareRequest } from '@tb/schema';
-import { importMa2TimecodeCommand, ma2PendingChanges, setLightingCommand } from '@tb/core/link';
+import { importMa2TimecodeCommand, ma2PendingChanges, setLightingCommand, SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
 import { convertMa2Snapshot, convertMa2Timecode } from '../../../../main/link/ma2-timecode-conversion';
 import { compareMa2LightingReadback } from '../../../../main/link/ma2-comparison';
 import { Ma2ApplyService } from '../../../../main/link/ma2-apply-service';
 import { useDocumentStore } from '../stores/document-store';
-import { ma2SyncPlaying, useMa2SyncStore } from '../stores/ma2-sync-store';
+import { useMa2SyncStore } from '../stores/ma2-sync-store';
+import { currentShowGate, useShowStateStore } from '../stores/show-state-store';
 import { lightingEditHandler } from '../components/lighting-edit-handler';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
 import { markPendingMa2Songs, ma2SongSyncSettings, startMa2SongSync, stopMa2SongSync, tickMa2SongSync } from './ma2-song-sync';
-import { showMovingWhen, showStopped } from '../../../../main/link/fixtures/show-gates';
+import { showStopped } from '../../../../main/link/fixtures/show-gates';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
 const { archive } = vi.hoisted(() => ({ archive: vi.fn() }));
@@ -38,12 +39,19 @@ beforeEach(() => {
   vi.stubGlobal('localStorage', { getItem: (key: string) => key === 'tblink.ma2-connection-method.v1' ? 'network' : null, setItem: () => undefined });
   archive.mockResolvedValue('C:/archive.tblink');
   useMa2RealtimePreference.setState({ enabled: true });
-  useMa2SyncStore.setState({ songs: {}, names: { state: 'idle', message: '' }, timelinePlaying: false, previewPlaying: false });
+  useMa2SyncStore.setState({ songs: {}, names: { state: 'idle', message: '' }, previewPlaying: false });
+  useShowStateStore.setState({ show: IDLE });
   load();
   // As the app does: an edit marks a confirmed song as waiting for its sync.
   unsubscribe = useDocumentStore.subscribe((state, previous) => { if (state.project !== previous.project) markPendingMa2Songs(); });
 });
 afterEach(() => { unsubscribe(); vi.unstubAllGlobals(); });
+
+/** The show as main reports it (useShowStateStore): idle, the program moving, or paused (held). */
+const RUNNING = { phase: 'running', source: 'internal', itemId: 'song', program: null } as const;
+const HELD = { phase: 'held', source: 'internal', itemId: 'song', reason: 'paused', program: null } as const;
+const IDLE = { phase: 'idle', program: null } as const;
+
 
 /** The console at Timecode 9902 is `native`; the real apply service writes it, checks it before writing and reads it back. */
 function setup(initial = xml) {
@@ -55,7 +63,8 @@ function setup(initial = xml) {
       return Promise.resolve({ response: native, requestId: 'a'.repeat(32) });
     })
   };
-  const service = new Ma2ApplyService(bridge, showMovingWhen(() => ma2SyncPlaying()));
+  // The main-process service asks the same show the window mirrors, as ShowStateService.gate does.
+  const service = new Ma2ApplyService(bridge, op => currentShowGate(op));
   const api = {
     getMa2NetworkStatus: vi.fn(() => Promise.resolve({ state: 'connected', settings: { ...network, autoConnect: false } })),
     previewMa2: vi.fn(() => Promise.resolve(convertMa2Snapshot(snapshot(native), 9902))),
@@ -64,7 +73,7 @@ function setup(initial = xml) {
   };
   vi.stubGlobal('window', { tbLink: api });
   startMa2SongSync('song', '歌曲', ma2SongSyncSettings(useDocumentStore.getState().project!, 'song'));
-  useMa2SyncStore.setState({ timelinePlaying: true });
+  useShowStateStore.setState({ show: RUNNING });
   const edit = (at: number) => {
     const project = useDocumentStore.getState().project!;
     const document = structuredClone(project.rundown[0]!.lighting!);
@@ -73,8 +82,9 @@ function setup(initial = xml) {
     lightingEditHandler({ itemId: 'song', project, notify })(document, '修改灯光位置');
     expect(notify).not.toHaveBeenCalled();
   };
-  return { api, bridge, edit, tick: () => tickMa2SongSync(ma2SyncPlaying()), song: () => useMa2SyncStore.getState().songs.song!,
-    stop: () => { useMa2SyncStore.setState({ timelinePlaying: false }); }, play: () => { useMa2SyncStore.setState({ timelinePlaying: true }); },
+  return { api, bridge, edit, tick: () => tickMa2SongSync(), song: () => useMa2SyncStore.getState().songs.song!,
+    stop: () => { useShowStateStore.setState({ show: IDLE }); }, play: () => { useShowStateStore.setState({ show: RUNNING }); },
+    pause: () => { useShowStateStore.setState({ show: HELD }); },
     remote: (value: string) => { native = value; }, console: () => native };
 }
 const pending = () => ma2PendingChanges(useDocumentStore.getState().project);
@@ -92,7 +102,7 @@ it('播放中每次 Cue 编辑走命令，撤销重做即时更新待提交列�
   await test.tick(); await test.tick();
   expect(test.api.getMa2NetworkStatus).not.toHaveBeenCalled(); expect(test.api.previewMa2).not.toHaveBeenCalled();
   expect(test.api.applyMa2).not.toHaveBeenCalled(); expect(test.bridge.exchange).not.toHaveBeenCalled();
-  expect(test.song().state).toBe('pending'); expect(test.song().message).toContain('播放中');
+  expect(test.song().state).toBe('pending'); expect(test.song().message).toContain(SHOW_WAIT_CLOCK_MOVING);
 });
 
 it('播放中到了定期核对的时间，已确认的歌不读控台，也不变成待同步', async () => {
@@ -102,6 +112,17 @@ it('播放中到了定期核对的时间，已确认的歌不读控台，也不�
   useMa2SyncStore.setState(state => ({ songs: { ...state.songs, song: { ...state.songs.song!, nextCheckAt: 0 } } }));
   test.play(); await test.tick();
   expect(test.song().state).toBe('verified'); expect(test.api.previewMa2).toHaveBeenCalledTimes(reads);
+  // 第 3 题（S3b）：暂停时到了核对的时间照常读控台。
+  test.pause(); await test.tick();
+  expect(test.song().state).toBe('verified'); expect(test.api.previewMa2).toHaveBeenCalledTimes(reads + 1);
+});
+
+it('播放时改的点，暂停后就写到控台，不用等停止（第 3 题）', async () => {
+  const test = setup(); test.edit(1000); await test.tick();
+  expect(test.api.applyMa2).not.toHaveBeenCalled();
+  test.pause(); await test.tick();
+  expect(test.api.applyMa2).toHaveBeenCalledOnce(); expect(pending()).toEqual([]);
+  expect(test.song().state).toBe('verified');
 });
 
 it('停止后经过比较、写前快照与回读才清空待提交，回读更新基线但不增加撤销步骤', async () => {

@@ -1,11 +1,12 @@
-import { MA2_SONG_COLLISION, allocateSongMtcStart, applyMa2SongReadback, consoleLabelText, ma2LatestChoiceText, ma2PendingChanges, ma2SongPoints, mergeMa2AttributesCommand, pendingMa2Renames, projectLightingLibrary, setAllocatedMtcStartsCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
+import { MA2_SONG_COLLISION, allocateSongMtcStart, isShowWait, toUserErrorMessage, applyMa2SongReadback, consoleLabelText, ma2LatestChoiceText, ma2PendingChanges, ma2SongPoints, mergeMa2AttributesCommand, pendingMa2Renames, projectLightingLibrary, setAllocatedMtcStartsCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
 import type { Ma2LayoutSettings, Ma2NetworkTarget, Ma2SongBinding, Ma2SongConsoleEdits } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { requireSavedProjectPath } from '../project-document';
 import { acceptCreatedMa2Layout, currentMa2LayoutScope } from '../stores/ma2-layout-store';
 import { locateMa2Executor, ma2ExecutorLocationLabel, loadMa2ExecutorPage } from '../stores/ma2-executor-page-store';
 import { recordRuntimeOperator, reportCoordinatorError } from './runtime-action-log';
-import { ma2SyncPlaying, updateMa2Song as update, useMa2SyncStore, type NameSync, type SongSync } from '../stores/ma2-sync-store';
+import { updateMa2Song as update, useMa2SyncStore, type NameSync, type SongSync } from '../stores/ma2-sync-store';
+import { currentShowWait } from '../stores/show-state-store';
 import { confirmMa2Edit, consoleSeenAt, editTimes, noteMa2LocalEdits, songSignature, songStart } from './ma2-edit-times';
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { ma2SyncActive, useMa2RealtimePreference } from './ma2-realtime-preference';
@@ -20,8 +21,11 @@ import { readMa2SongFromConsole } from './ma2-console-version';
  * Failed attempts in a row before a sync stops and waits for an edit or 刷新同步. Way 2 (the song's
  * own Sequence) is retried as the lighting workflow's sync rules say. Way 1 (the console's own
  * Timecode show) and names are not retried on their own, as before both ways shared this driver
- * (project rule 4). Waiting for the connection, for playback to stop or for an edit to settle is
- * never a failed attempt.
+ * (project rule 4). Waiting for the connection, for the show or for an edit to settle is never a
+ * failed attempt. The show is asked of showGate (S3b, 2026-11-11, 第 3 题): writes wait as `ma2.sync.write`, the
+ * periodic check of a confirmed song as `ma2.sync.read`, only while the program moves, prepares or stops; paused,
+ * paused at the end and P1 waiting for the next song sync as when stopped. A pass checks before each step, so a song
+ * stops at the step it reached and the next pass after the wait carries on from there.
  */
 const MAX_ATTEMPTS = { own: 3, imported: 1 } as const;
 /** Console edits that collide with a write in a row before they count as a failed attempt. */
@@ -178,12 +182,13 @@ async function syncImportedSong(entry: SongSync): Promise<void> {
   if (!place) return;
   // A background tick never opens a dialog: the pre-sync archive needs the project's location.
   requireSavedProjectPath('同步控台');
-  if (ma2SyncPlaying()) { update(entry, { state: 'pending', checking: false, message: '播放中，修改先保留，停止后继续同步' }); return; }
+  const wait = currentShowWait('ma2.sync.write');
+  if (wait) { update(entry, { state: 'pending', checking: false, message: wait }); return; }
   update(entry, entry.state === 'verified' ? { checking: true } : { checking: true, state: 'syncing', message: '正在读取这首歌的控台时间码…' });
   const project = () => { const state = useDocumentStore.getState(); return state.documentId === entry.documentId ? state.project : null; };
   const outcome = await syncBoundSong({
     itemId: entry.itemId, connection: { dataDirectory: '', network: place.network }, project, consoleChanges: entry.consoleChangesOnce ?? useMa2RealtimePreference.getState().consoleChanges,
-    current: () => canContinue(entry) && !ma2SyncPlaying(),
+    current: () => canContinue(entry) && currentShowWait('ma2.sync.write') === null,
     read: request => window.tbLink.previewMa2(request),
     compare: request => window.tbLink.compareMa2(request),
     apply: request => window.tbLink.applyMa2(request),
@@ -196,7 +201,7 @@ async function syncImportedSong(entry: SongSync): Promise<void> {
     localEditedAt: () => useMa2SyncStore.getState().songs[entry.itemId]?.localEditedAt,
     consoleSeen: (timecode, revision) => consoleSeenAt(entry, `tc:${timecode}`, revision)
   });
-  if (outcome.kind === 'interrupted') { update(entry, { state: 'pending', checking: false, writing: false, nextCheckAt: 0, message: outcome.message }); return; }
+  if (outcome.kind === 'interrupted') { update(entry, { state: 'pending', checking: false, writing: false, nextCheckAt: 0, message: currentShowWait('ma2.sync.write') ?? outcome.message }); return; }
   const shows = outcome.timecodes.map(target => `Timecode ${target}`).join('、');
   const chosen = outcome.chosen.join('；');
   const latest = useDocumentStore.getState();
@@ -215,7 +220,7 @@ function setNames(patch: Partial<NameSync>): void {
   useMa2SyncStore.setState(state => ({ names: { ...state.names, ...patch } }));
 }
 /** Renamed console objects go first in each pass, under the same waits and the names' failure policy. */
-async function syncNames(playing: boolean): Promise<void> {
+async function syncNames(): Promise<void> {
   const names = useMa2SyncStore.getState().names;
   const document = useDocumentStore.getState();
   if (!pendingMa2Renames(document.project).length) {
@@ -226,7 +231,8 @@ async function syncNames(playing: boolean): Promise<void> {
   if (names.state === 'syncing') return;
   if (names.state === 'blocked' && names.blockedRevision === document.revision) return;
   if (names.state !== 'blocked' && names.nextCheckAt && Date.now() < names.nextCheckAt) return;
-  if (playing || ma2SyncPlaying()) { setNames({ state: 'pending', message: '播放中，改名停止后再同步' }); return; }
+  const wait = currentShowWait('ma2.sync.write');
+  if (wait) { setNames({ state: 'pending', message: wait }); return; }
   const status = await window.tbLink.getMa2NetworkStatus();
   if (status.state !== 'connected' || !status.settings) { setNames({ state: 'pending', nextCheckAt: Date.now() + 1000, message: '等待控台连接，连上后同步改名' }); return; }
   const { host, port, monitorPort, username } = status.settings;
@@ -235,11 +241,11 @@ async function syncNames(playing: boolean): Promise<void> {
 }
 
 /** Serialize console reconciliation; local editing and saving remain independent. */
-export async function tickMa2SongSync(playing: boolean): Promise<void> {
+export async function tickMa2SongSync(): Promise<void> {
   if (running || readMa2Method() !== 'network' || !ma2SyncActive()) return;
   running = true;
   try {
-    await syncNames(playing);
+    await syncNames();
     // Songs with unconfirmed local edits go first; periodic checks of confirmed songs follow. Within
     // each, the song open in the editor goes first.
     const order = { pending: 0, syncing: 0, blocked: 1, verified: 2, paused: 3 } as const;
@@ -254,8 +260,9 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
       if (entry.state === 'verified' && useDocumentStore.getState().revision !== startRevision) break;
       const due = dueAt(entry);
       if (due && Date.now() < due && (!entry.consecutiveFailures || entry.blockedRevision === useDocumentStore.getState().revision)) continue;
-      // A confirmed song's check waits for the stop too; it has nothing to send, so it stays confirmed.
-      if (playing) { if (entry.state !== 'verified') update(entry, { state: 'pending', message: '播放中，修改会在停止后同步' }); continue; }
+      // A confirmed song's check waits for the show too; it has nothing to send, so it stays confirmed.
+      const wait = currentShowWait(entry.state === 'verified' ? 'ma2.sync.read' : 'ma2.sync.write');
+      if (wait) { if (entry.state !== 'verified') update(entry, { state: 'pending', message: wait }); continue; }
       update(entry, { attemptedAt: Date.now() });
       const imported = Boolean(useDocumentStore.getState().project?.rundown.find(value => value.id === entry.itemId)?.lighting?.ma2Bindings?.length);
       try {
@@ -315,9 +322,8 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         // Retries of the same unconfirmed content reuse the archive taken before its first attempt.
         if (archived && entry.archivedSignature !== signature) { await archiveBeforeSync(entry.documentId, before.project); update(entry, { archivedSignature: signature }); }
         if (!canContinue(entry)) continue;
-        if (ma2SyncPlaying()) {
-          update(entry, { state: 'pending', message: '播放中，修改先保留，停止后继续同步' }); continue;
-        }
+        const waitBeforeWrite = currentShowWait('ma2.sync.write');
+        if (waitBeforeWrite) { update(entry, { state: 'pending', message: waitBeforeWrite }); continue; }
         const requestId = crypto.randomUUID();
         update(entry, { requestId, progress: null });
         const requestedName = item.lighting.consoleSong?.name ?? entry.name;
@@ -382,14 +388,16 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         let disconnected = false;
         try { disconnected = (await window.tbLink.getMa2NetworkStatus()).state !== 'connected'; }
         catch (statusError) { reportCoordinatorError(`读取连接状态失败：${String(statusError)}`, reason => update(entry, { message: reason })); }
-        const playingNow = ma2SyncPlaying();
+        // The main process has the last word (S3a): it refuses with showGate's own text when the window's mirror of the
+        // show was one change late. Either way the song only waits.
+        const showWait = currentShowWait('ma2.sync.write') ?? (isShowWait(cause) ? toUserErrorMessage(cause) : null);
         // The console edited the song's Sequence while it was being written: nothing was written and the
         // next pass reads it again. A few in a row are a wait; an operator who keeps editing for longer
         // stops the retries like any failure, so the sync never keeps going round (2026-10-26).
         const collisions = message.startsWith(MA2_SONG_COLLISION) ? (entry.consecutiveCollisions ?? 0) + 1 : 0;
         const collided = collisions > 0 && collisions <= MAX_COLLISIONS;
-        const waiting = disconnected || playingNow || collided;
-        // Waiting for the console or for playback to stop is not a failed attempt.
+        const waiting = disconnected || showWait !== null || collided;
+        // Waiting for the console or for the show is not a failed attempt.
         const consecutiveFailures = waiting ? entry.consecutiveFailures ?? 0 : (entry.consecutiveFailures ?? 0) + 1;
         const exhausted = !waiting && consecutiveFailures >= (imported ? MAX_ATTEMPTS.imported : MAX_ATTEMPTS.own);
         // A failure is a state, not one message per attempt (2026-11-11): the run log gets each text once
@@ -397,20 +405,21 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         // The text says what really happens next: an edit or 刷新同步 tries again, nothing gives up for good.
         const reason = message.replace(/[。；;.\s]+$/, '');
         const title = useDocumentStore.getState().project?.rundown.find(value => value.id === entry.itemId)?.title ?? entry.name;
-        const failure = playingNow ? '播放中，修改先保留，停止后继续同步'
+        const failure = showWait !== null ? showWait
           : disconnected ? `等待连接恢复后继续同步：${reason}`
           : collided ? '控台上刚改过这首歌的灯光，这次没有写入；稍后重新读取控台再同步'
           : exhausted ? `同步没成功：${reason}。改动还留在联动台，${useMa2RealtimePreference.getState().enabled ? '下次改动或点“刷新同步”时再试' : '点“同步一次”时再试'}${imported ? '；也可以在「同步状态详情」里选“用控台上的”或“用联动台的”' : ''}`
           : `同步没成功，${consecutiveFailures} 秒后再试：${reason}`;
         const latestEntry = useMa2SyncStore.getState().songs[entry.itemId];
         const reported = latestEntry?.sessionId === entry.sessionId ? latestEntry : entry;
-        const log = reason !== reported.loggedFailure;
+        // A wait for the show is no failure: it is neither logged nor counted as the text already reported.
+        const log = showWait === null && reason !== reported.loggedFailure;
         update(entry, { state: exhausted ? 'blocked' : 'pending', blockedRevision: useDocumentStore.getState().revision, consecutiveFailures, consecutiveCollisions: collisions,
           nextCheckAt: Date.now() + (collided ? FOCUSED_RECHECK_MS : waiting ? 1000 : 1000 * consecutiveFailures),
           waitingForConnection: disconnected, checking: false, writing: false, recheckRevision: undefined, requestId: null, progress: null,
-          // 用联动台的 chosen once holds through a wait (console away, playback, the console being edited); a real failure uses it up.
+          // 用联动台的 chosen once holds through a wait (console away, the show, the console being edited); a real failure uses it up.
           ...waiting ? {} : { consoleChangesOnce: undefined },
-          loggedFailure: reason, ...exhausted ? { announcedFailure: reason } : {},
+          ...showWait === null ? { loggedFailure: reason } : {}, ...exhausted ? { announcedFailure: reason } : {},
           message: failure });
         if (log) reportCoordinatorError(`「${title}」${failure}`, value => { update(entry, { message: value }); });
       }

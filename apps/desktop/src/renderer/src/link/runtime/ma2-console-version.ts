@@ -1,17 +1,18 @@
 import { refreshMa2BindingCommand, type LinkCommand } from '@tb/core/link';
 import { ma2TimecodePreviewSchema, type Ma2TimecodePreview } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
-import { ma2SyncPlaying } from '../stores/ma2-sync-store';
+import { currentShowWait } from '../stores/show-state-store';
 
 /**
  * One console Timecode show read right now (2026-11-11), the same read each sync pass makes. Null when
- * the console is not connected over the network; the caller says it uses the last read instead. Playback
- * is never interrupted by a read: it throws a text that says to stop first.
+ * the console is not connected over the network; the caller says it uses the last read instead. A moving
+ * program is never interrupted by a read: it throws showGate's text, which says to pause or stop first.
  */
 export async function readMa2ShowNow(target: number, timeOriginMs: number | undefined): Promise<Ma2TimecodePreview | null> {
   const status = await window.tbLink.getMa2NetworkStatus();
   if (status.state !== 'connected' || !status.settings) return null;
-  if (ma2SyncPlaying()) throw new Error('正在播放，现在不读控台；停止播放后再点一次');
+  const wait = currentShowWait('ma2.sync.read');
+  if (wait) throw new Error(wait);
   const { host, port, monitorPort, username } = status.settings;
   return ma2TimecodePreviewSchema.parse(await window.tbLink.previewMa2({ dataDirectory: '', network: { host, port, monitorPort, username }, target, timeOriginMs }));
 }

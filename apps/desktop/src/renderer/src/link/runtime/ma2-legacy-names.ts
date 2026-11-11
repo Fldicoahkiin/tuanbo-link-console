@@ -3,7 +3,8 @@ import { ma2RenameResultSchema, type LinkProject, type Ma2RenameRecord } from '@
 import { useDocumentStore } from '../stores/document-store';
 import { archiveMa2Project } from './ma2-project-archive';
 import { ma2SongSyncSettings, startMa2SongSync } from './ma2-song-sync';
-import { ma2SyncPlaying, useMa2SyncStore } from '../stores/ma2-sync-store';
+import { useMa2SyncStore } from '../stores/ma2-sync-store';
+import { currentShowWait } from '../stores/show-state-store';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
 
 /** Names an earlier version wrote to the console in Chinese and the console still holds. */
@@ -39,7 +40,8 @@ export async function convertMa2LegacyNames(documentId: number): Promise<number>
     if (!state.project || !state.path) throw new Error('请先保存工程，再把控台名称改为拼音');
     return state.project;
   };
-  if (ma2SyncPlaying()) throw new Error('播放中不能改控台名称，请停止后再转换');
+  const wait = currentShowWait('ma2.sync.write');
+  if (wait) throw new Error(wait);
   const project = current();
   const legacy = legacyMa2ConsoleNames(project);
   if (!legacy.count) return 0;

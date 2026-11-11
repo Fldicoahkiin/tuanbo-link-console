@@ -15,6 +15,12 @@ export function currentShowGate(op: ShowOperation, itemId?: string): ShowGate {
   return showGate(op, useShowStateStore.getState().show, itemId);
 }
 
+/** What `op` waits for now, in showGate's own words, or null when it may run (runtime code that shows the wait as text). */
+export function currentShowWait(op: ShowOperation, itemId?: string): string | null {
+  const gate = currentShowGate(op, itemId);
+  return gate.kind === 'wait' ? gate.message : null;
+}
+
 /** Whether `op` may run now, for a component; re-rendered when the answer changes. */
 export function useShowGate(op: ShowOperation, itemId?: string): ShowGate {
   const show = useShowStateStore(state => state.show);

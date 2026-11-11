@@ -141,7 +141,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
   return <div className={`cue-studio${lightingWorkspace ? ' lighting-workbench' : ''}${lowPower ? ' low-power-workspace' : ''}`} data-inspector={true}>
     {!lightingWorkspace && item && lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools key={item.id} tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null}
     {toolbarHost ? createPortal(<CueRundownHeader item={item} notify={notify} documentActions={documentActions} />, toolbarHost) : null}
-    {lightingWorkspace && syncHost ? createPortal(<Ma2PendingChanges playing={playing || runtimeState !== 'idle'} notify={notify} />, syncHost) : null}
+    {lightingWorkspace && syncHost ? createPortal(<Ma2PendingChanges notify={notify} />, syncHost) : null}
     <div className={`cue-studio-grid${lightingSelection ? ' has-lighting-editor' : ''}`} style={workspaceLayout.style}>
       {sidebarHost && !lightingWorkspace ? createPortal(<ResourceLibrary
         folders={project.mediaFolders} assets={project.mediaAssets}

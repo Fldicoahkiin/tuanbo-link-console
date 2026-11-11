@@ -1,7 +1,8 @@
-import { confirmMa2RenameCommand, ma2RenameKey, pendingMa2Renames, toConsoleLabel, type LinkCommand } from '@tb/core/link';
+import { confirmMa2RenameCommand, isShowWait, ma2RenameKey, pendingMa2Renames, toConsoleLabel, toUserErrorMessage, type LinkCommand } from '@tb/core/link';
 import { ma2CatalogSchema, ma2RenameResultSchema, type LinkProject, type Ma2Catalog, type Ma2CatalogRequest, type Ma2RenameRequest, type Ma2RenameResult } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
-import { ma2SyncPlaying, useMa2SyncStore, type NameSync } from '../stores/ma2-sync-store';
+import { useMa2SyncStore, type NameSync } from '../stores/ma2-sync-store';
+import { currentShowWait } from '../stores/show-state-store';
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { ma2MaterialConnection } from '../stores/ma2-material-read-store';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
@@ -60,7 +61,8 @@ function setNames(patch: Partial<NameSync>): void {
 
 /**
  * One pass over the renamed objects of a document, with the store state and failure policy every
- * sync shares: playback and a lost connection are waits; a failure stops until the next edit or
+ * sync shares: the show (showGate's `ma2.sync.write`: only while the program moves, prepares or stops) and a lost
+ * connection are waits; a failure stops until the next edit or
  * 刷新同步, because a rename is never retried on its own (project rule: no automatic retries).
  */
 export async function runMa2NameSync(connection: Ma2CatalogRequest, documentId: number, current: () => boolean): Promise<void> {
@@ -68,14 +70,14 @@ export async function runMa2NameSync(connection: Ma2CatalogRequest, documentId: 
   setNames({ state: 'syncing', message: '正在核对要同步的名称' });
   try {
     const outcome = await syncMa2Names({
-      connection, project, current: () => current() && project() !== null && !ma2SyncPlaying(),
+      connection, project, current: () => current() && project() !== null && currentShowWait('ma2.sync.write') === null,
       catalog: request => window.tbLink.readMa2Catalog(request), rename: request => window.tbLink.renameMa2Object(request),
       archive: async () => { const value = project(); if (!value) throw new Error('工程已切换，名称同步已取消'); await archiveBeforeSync(documentId, value); },
       confirm: command => { const state = useDocumentStore.getState(); state.executeForDocument(documentId, command); state.markConsoleSynced(documentId); },
       writing: message => setNames({ writing: true, message })
     });
     const outstanding = pendingMa2Renames(project()).length;
-    if (outcome.kind === 'interrupted') { setNames({ state: 'pending', writing: false, nextCheckAt: 0, message: '播放或同步状态有变化，停止播放后再同步名称' }); return; }
+    if (outcome.kind === 'interrupted') { setNames({ state: 'pending', writing: false, nextCheckAt: 0, message: currentShowWait('ma2.sync.write') ?? '同步状态有变化，稍后接着同步名称' }); return; }
     setNames({ state: outstanding ? 'pending' : 'verified', writing: false, blockedRevision: undefined, nextCheckAt: outcome.moved ? Date.now() + 1000 : 0,
       message: outcome.moved ? MOVED_RENAMES : outstanding ? '上一个名称已确认，继续同步后面的改名' : '名称已写入控台并回读确认' });
   } catch (cause) {
@@ -85,8 +87,10 @@ export async function runMa2NameSync(connection: Ma2CatalogRequest, documentId: 
       try { disconnected = (await window.tbLink.getMa2NetworkStatus()).state !== 'connected'; }
       catch (statusError) { reportCoordinatorError(`读取连接状态失败：${String(statusError)}`, reason => setNames({ message: reason })); }
     }
-    if (disconnected || ma2SyncPlaying()) {
-      setNames({ state: 'pending', writing: false, nextCheckAt: Date.now() + 1000, message: disconnected ? `等待连接恢复后继续同步名称：${message}` : '播放中，改名停止后再同步' });
+    // The main process refuses with showGate's own text when the window's mirror of the show was one change late.
+    const showWait = currentShowWait('ma2.sync.write') ?? (isShowWait(cause) ? toUserErrorMessage(cause) : null);
+    if (disconnected || showWait !== null) {
+      setNames({ state: 'pending', writing: false, nextCheckAt: Date.now() + 1000, message: disconnected ? `等待连接恢复后继续同步名称：${message}` : showWait ?? '' });
       return;
     }
     setNames({ state: 'blocked', writing: false, blockedRevision: useDocumentStore.getState().revision,

@@ -5,7 +5,8 @@ import { readMa2Method } from '../stores/ma2-mode-store';
 import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 import { ma2SongSyncSettings, startMa2SongSync, stopMa2SongSync } from './ma2-song-sync';
 import { ma2SyncActive, setMa2RealtimeEnabled, useMa2RealtimePreference } from './ma2-realtime-preference';
-import { ma2SyncPlaying, useMa2SyncStore, type Ma2SessionCheck } from '../stores/ma2-sync-store';
+import { useMa2SyncStore, type Ma2SessionCheck } from '../stores/ma2-sync-store';
+import { currentShowWait } from '../stores/show-state-store';
 import { useMtcStartAllocationStore } from '../stores/mtc-start-allocation-store';
 import { reportCoordinatorError } from './runtime-action-log';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
@@ -43,7 +44,8 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
   }
   // Off, each song keeps what its last pass found; turning sync off already stopped what was running.
   if (!ma2SyncActive()) return false;
-  if (ma2SyncPlaying()) return false;
+  // The session check reads the console: it waits only while the program moves, prepares or stops (showGate, S3b).
+  if (currentShowWait('ma2.sync.read') !== null) return false;
   if (!state.project || !state.path || useMa2MaterialReadStore.getState().busy) return false;
   const material = state.project.ma2MaterialLibrary;
   if (!material?.library || material.library.sourceUnverified) return false;
@@ -145,14 +147,14 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
  * Songs being lit get their MTC start as soon as the console is reachable, before their first Cue, so
  * each song shows the timecode its console show will run on. A failure is shown on those songs and
  * logged, and does not hold up the other songs; it is tried again on another console session or
- * after 30 s, not on every edit. Returns false when the session changed or playback started meanwhile.
+ * after 30 s, not on every edit. Returns false when the session changed or the show started moving meanwhile.
  */
 async function allocateMtcStarts(network: Parameters<typeof window.tbLink.ma2TimecodeRanges>[0], documentId: number, context: string, current: () => boolean): Promise<boolean> {
   const allocation = useMtcStartAllocationStore.getState();
   if (allocation.context === context && Date.now() < allocation.retryAt) return true;
   try {
     const ranges = await window.tbLink.ma2TimecodeRanges(network);
-    if (!current() || ma2SyncPlaying()) return false;
+    if (!current() || currentShowWait('ma2.sync.read') !== null) return false;
     const latest = useDocumentStore.getState();
     if (latest.project && songsNeedingMtcStart(latest.project).length) latest.executeForDocument(documentId, setAllocatedMtcStartsCommand(allocateMissingMtcStarts(latest.project, ranges)));
     useMtcStartAllocationStore.setState({ error: null, context: '', retryAt: 0 });
