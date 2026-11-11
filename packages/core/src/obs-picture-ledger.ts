@@ -21,8 +21,9 @@ export type Known<T> =
 export type DecoderMode = 'playing' | 'paused' | 'stopped';
 /** A decoder (an owned media input), keyed by source name. */
 export type DecoderState = { clipId: string; mode: DecoderMode; offsetMs: number };
-/** A shown source; the identity stays with the value so it can be hidden again. */
-export type ShownSourceState = { enabled: boolean; sceneName: string | null; sourceName: string };
+/** A shown source; the identity stays with the value so it can be hidden again. `span`:
+ * the show action whose span showed it (null when not known). */
+export type ShownSourceState = { enabled: boolean; sceneName: string | null; sourceName: string; span: string | null };
 /** Someone switched program in OBS by hand (2026-11-10 decision 5); `target` is the
  * wanted program signature at that moment: no switch back until it changes. */
 export type PictureTakeover = { sceneName: string; since: number; target: string };
@@ -69,6 +70,8 @@ export class ObsPictureLedger {
   private readonly shows = new Map<string, Known<ShownSourceState>>();
   /** Failures in a row of one element against one target. */
   private readonly failures = new Map<string, { target: string; attempts: number }>();
+  /** What each pending element was before its request went out, for `withdraw`. */
+  private readonly before = new Map<string, Known<unknown>>();
 
   state(): PictureLedgerState {
     return { program: this.program, takenOver: this.takenOver, compositions: new Map(this.compositions),
@@ -77,7 +80,29 @@ export class ObsPictureLedger {
 
   /** The request for `write` went out. */
   sent(write: LedgerWrite, now: number): void {
+    const known = this.current(write);
+    if (known) this.before.set(pictureElementKey(write), known);
+    else this.before.delete(pictureElementKey(write));
     this.put(write, value => ({ state: 'pending', value, target: write.target, since: now }));
+  }
+
+  /** The request for `write` was not sent after all (a pause or stop came before it went
+   * out): the element is as it was before. */
+  withdraw(write: LedgerWrite): void {
+    if (!this.isPending(write)) return;
+    const element = pictureElementKey(write), previous = this.before.get(element);
+    this.before.delete(element);
+    if (!previous) { this.remove(write); return; }
+    this.put(write, () => previous as Known<never>);
+  }
+
+  /** What OBS holds of this element is no longer known (its decoder was prepared again
+   * after a failed start, say): the next pass sends it as wanted. */
+  forget(write: LedgerWrite, reason: string): void {
+    const known = this.current(write);
+    if (!known || known.state === 'pending') return;
+    this.failures.delete(pictureElementKey(write));
+    this.put(write, () => forget(known, reason) as Known<never>);
   }
 
   /** OBS answered the request for `write`. An answer for a value no longer pending is stale and ignored. */
@@ -125,7 +150,7 @@ export class ObsPictureLedger {
     this.program = forget(this.program, reason);
     this.takenOver = null;
     forgetAll(this.compositions, reason); forgetAll(this.decoders, reason); forgetAll(this.shows, reason);
-    this.failures.clear();
+    this.failures.clear(); this.before.clear();
   }
 
   private current(write: LedgerWrite): Known<unknown> | undefined {
@@ -139,6 +164,14 @@ export class ObsPictureLedger {
   private isPending(write: LedgerWrite): boolean {
     const known = this.current(write);
     return known?.state === 'pending' && known.target === write.target && same(known.value, write.value);
+  }
+  private remove(write: LedgerWrite): void {
+    switch (write.element) {
+      case 'program': this.program = NEVER; return;
+      case 'composition': this.compositions.delete(write.key); return;
+      case 'decoder': this.decoders.delete(write.key); return;
+      case 'show': this.shows.delete(write.key); return;
+    }
   }
   private put(write: LedgerWrite | LedgerObservation, make: Make): void {
     switch (write.element) {

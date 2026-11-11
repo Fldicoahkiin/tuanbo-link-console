@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ObsPictureLedger, pictureElementKey, showKey, type PictureLedgerState } from './obs-picture-ledger';
+import { ObsPictureLedger, pictureElementKey, showKey, type LedgerWrite, type PictureLedgerState } from './obs-picture-ledger';
 import { stoppedPicture, type OnAirPicture, type PictureClip } from './on-air-picture';
 import { OutputRecovery, recordPictureRepair } from './output-recovery';
-import { groupPictureOps, planPictureReconcile, type PictureOp, type ReconcileContext, type ReconcilePlan } from './picture-reconcile';
+import { groupPictureOps, pictureOpWrites, planPictureReconcile, whilePaused, type PictureOp, type ReconcileContext, type ReconcilePlan } from './picture-reconcile';
 
 const clip = (clipId: string, sourceName: string, sceneName: string, offsetMs: number, continuesFrom?: string): PictureClip =>
   ({ clipId, sourceName, assetId: `asset-${clipId}`, layerId: 'L1', sceneName, offsetMs, continuesFrom });
@@ -29,9 +29,8 @@ function context(overrides: Partial<ReconcileContext> = {}): ReconcileContext {
 function settle(ledger: ObsPictureLedger, picture: OnAirPicture, ctx: ReconcileContext): ReconcilePlan {
   for (let pass = 0; pass < 10; pass++) {
     const plan = planPictureReconcile(picture, ledger.state(), ctx);
-    for (const entry of plan.adopted) ledger.adopt(entry.sourceName, entry.clipId);
     if (!plan.ops.length) return plan;
-    for (const op of plan.ops) { ledger.sent(op.write, ctx.now); ledger.ack(op.write, ctx.now); }
+    for (const op of plan.ops) for (const write of pictureOpWrites(op)) { ledger.sent(write, ctx.now); ledger.ack(write, ctx.now); }
   }
   throw new Error('对账没有收敛');
 }
@@ -63,7 +62,7 @@ describe('画面按此刻应有的样子对账（2026-11-10 第 1、2 题，01 �
   it('随机的帧序列和乱序回应下，账最终等于应有，之后一样的不再发（固定种子）', () => {
     for (const seed of [1, 7, 42, 2026, 1110]) {
       const next = random(seed), ledger = new ObsPictureLedger();
-      const inFlight: PictureOp[] = [];
+      const inFlight: LedgerWrite[] = [];
       let frame = 0, transport: 'running' | 'paused' = 'running';
       for (let step = 0; step < 400; step++) {
         const roll = next();
@@ -71,15 +70,14 @@ describe('画面按此刻应有的样子对账（2026-11-10 第 1、2 题，01 �
         if (next() < 0.05) transport = transport === 'running' ? 'paused' : 'running';
         if (next() < 0.02) { ledger.invalidate('OBS 重新连接'); inFlight.length = 0; }
         const plan = planPictureReconcile(pictureAt(frame), ledger.state(), context({ transport, now: step }));
-        for (const entry of plan.adopted) ledger.adopt(entry.sourceName, entry.clipId);
-        for (const op of plan.ops) { ledger.sent(op.write, step); inFlight.push(op); }
+        for (const write of plan.ops.flatMap(pictureOpWrites)) { ledger.sent(write, step); inFlight.push(write); }
         // Answers come back in any order; some never come.
         for (let answers = Math.floor(next() * (inFlight.length + 1)); answers > 0; answers--) {
-          const [op] = inFlight.splice(Math.floor(next() * inFlight.length), 1);
-          if (next() < 0.8) ledger.ack(op!.write, step); else ledger.unanswered(op!.write, '没有回应');
+          const [write] = inFlight.splice(Math.floor(next() * inFlight.length), 1);
+          if (next() < 0.8) ledger.ack(write!, step); else ledger.unanswered(write!, '没有回应');
         }
       }
-      for (const op of inFlight.splice(0)) ledger.ack(op.write, 999);
+      for (const write of inFlight.splice(0)) ledger.ack(write, 999);
       const ctx = context({ transport, now: 1000 });
       settle(ledger, pictureAt(frame), ctx);
       expectLedgerEquals(ledger.state(), pictureAt(frame), transport === 'running' ? 'playing' : 'paused');
@@ -94,7 +92,6 @@ describe('画面按此刻应有的样子对账（2026-11-10 第 1、2 题，01 �
       for (let step = 0; step < 600; step++) {
         frame = Math.min(479, frame + Math.floor(next() * 6));
         const plan = planPictureReconcile(pictureAt(frame), ledger.state(), context({ now: step, budget: recovery }));
-        for (const entry of plan.adopted) ledger.adopt(entry.sourceName, entry.clipId);
         for (const op of plan.ops) {
           if (op.reason === 'repair') {
             const key = `${pictureElementKey(op.write)}@${op.write.target}`;
@@ -114,7 +111,7 @@ describe('画面按此刻应有的样子对账（2026-11-10 第 1、2 题，01 �
   it('账上确认过且一样的不发', () => {
     const ledger = new ObsPictureLedger();
     settle(ledger, pictureAt(60), context());
-    expect(planPictureReconcile(pictureAt(61), ledger.state(), context())).toEqual({ ops: [], waiting: [], suppressed: [], adopted: [] });
+    expect(planPictureReconcile(pictureAt(61), ledger.state(), context())).toEqual({ ops: [], waiting: [], suppressed: [] });
   });
 
   it('顺序：先停不要的解码器，再更新叠加、切直播场景、开新素材，最后显示或隐藏来源', () => {
@@ -124,8 +121,17 @@ describe('画面按此刻应有的样子对账（2026-11-10 第 1、2 题，01 �
     const ops = planPictureReconcile(pictureAt(250), ledger.state(), context()).ops;
     expect(ops.map(op => op.kind)).toEqual(['decoder.stop', 'composition.update', 'program.switch', 'decoder.start', 'decoder.start', 'decoder.start']);
     expect(ops.every(op => op.reason === 'cut')).toBe(true);
+    // A show newly due at a cut goes before the switch (it acts on the scene that was live, as
+    // today); a restored one, or one in a merged backlog, after the switch and the starts.
     const shown = planPictureReconcile(pictureAt(60), new ObsPictureLedger().state(), context()).ops;
-    expect(shown.at(-1)).toMatchObject({ kind: 'show.set', sourceName: '字幕', enabled: true });
+    expect(shown.map(op => op.kind)).toEqual(['show.set', 'program.switch']);
+    expect(shown[0]).toMatchObject({ kind: 'show.set', sourceName: '字幕', enabled: true });
+    const merged = planPictureReconcile(pictureAt(60), new ObsPictureLedger().state(), context({ merged: true })).ops;
+    expect(merged.map(op => op.kind)).toEqual(['program.switch', 'show.set']);
+    const restoring = new ObsPictureLedger();
+    settle(restoring, pictureAt(60), context()); restoring.invalidate('OBS 重新连接');
+    expect(planPictureReconcile(pictureAt(60), restoring.state(), context()).ops.map(op => [op.kind, op.reason]))
+      .toEqual([['program.switch', 'restore'], ['show.set', 'restore']]);
   });
 
   it('等回应的元素不重发', () => {
@@ -203,27 +209,70 @@ describe('画面被手动接管：下一段之前不切回（2026-11-10 第 5 �
     const during = planPictureReconcile(pictureAt(60), ledger.state(), context());
     expect(during.ops.map(op => op.kind)).toEqual(['show.set']);
     expect(during.waiting).toEqual([{ element: 'program', kind: 'taken-over', detail: '画面被手动接管（手动场景），到下一段再照常切换' }]);
+    // A single material comes on program with its own start: the switch rides on it.
     const next = planPictureReconcile(pictureAt(150), ledger.state(), context());
-    const change = next.ops.find(op => op.kind === 'program.switch')!;
-    expect(change).toMatchObject({ sceneName: '素材一' });
-    for (const op of next.ops) { ledger.sent(op.write, 2); ledger.ack(op.write, 3); }
+    const change = next.ops.find(op => op.kind === 'decoder.start')!;
+    expect(change).toMatchObject({ program: { element: 'program', value: '素材一' } });
+    for (const write of next.ops.flatMap(pictureOpWrites)) { ledger.sent(write, 2); ledger.ack(write, 3); }
     expect(ledger.state().takenOver).toBeNull();
   });
 });
 
-describe('切开的同一素材接着播，不重启（media5b D1）', () => {
-  it('同一解码器接着放下一段：不发停止和开播，账上改成新片段', () => {
+describe('一个素材上画面：切场景和开播是一步（规则测试 obs-program-session L382）', () => {
+  it('解码器还不在这个素材上：不单独切场景，开播带着切；已经在播的素材被机位挡过再露出来：只切场景', () => {
+    const ledger = new ObsPictureLedger();
+    settle(ledger, pictureAt(60), context());
+    const ops = planPictureReconcile(pictureAt(150), ledger.state(), context()).ops;
+    expect(ops.map(op => op.kind)).toEqual(['show.set', 'decoder.start']);
+    expect(ops[1]).toMatchObject({ program: { value: '素材一' } });
+    settle(ledger, pictureAt(150), context());
+    ledger.observe({ element: 'program', value: '机位乙' }, 5);
+    expect(planPictureReconcile(pictureAt(160), ledger.state(), context()).ops).toMatchObject([{ kind: 'program.switch', sceneName: '素材一' }]);
+    // The start refused: the program does not switch to a scene whose material did not start.
+    const refused = new ObsPictureLedger();
+    settle(refused, pictureAt(60), context());
+    const start = planPictureReconcile(pictureAt(150), refused.state(), context({ mode: 'rehearsal' })).ops.find(op => op.kind === 'decoder.start')!;
+    for (const write of pictureOpWrites(start)) { refused.sent(write, 1); refused.fail(write, 'OBS 拒绝了'); }
+    expect(planPictureReconcile(pictureAt(160), refused.state(), context({ mode: 'rehearsal' })).ops.map(op => op.kind)).toEqual(['show.set']);
+  });
+
+  it('被机位挡住的素材：解码器已经在它上面就留着；还没开始的不在机位底下开播', () => {
+    const covered = { ...pictureAt(10), covered: [clip('c9', 'M9', '素材九', 500)] };
+    expect(planPictureReconcile(covered, new ObsPictureLedger().state(), context()).ops.map(op => op.kind)).toEqual(['program.switch']);
+    const ledger = new ObsPictureLedger();
+    ledger.observe({ element: 'decoder', key: 'M9', value: { clipId: 'c9', mode: 'playing', offsetMs: 400 } }, 1);
+    settle(ledger, covered, context());
+    expect(ledger.state().decoders.get('M9')).toMatchObject({ state: 'confirmed', value: { clipId: 'c9', mode: 'playing' } });
+  });
+});
+
+describe('切开的同一素材接着播，不重启（media5b D1，OBS_SCENE_WORKFLOW 2026-11-10）', () => {
+  it('后一段接手前一段在播的解码器：不发停止，发一次接手（输出照常做上画面这一步，不定位不重启）', () => {
     const ledger = new ObsPictureLedger();
     settle(ledger, pictureAt(250), context());
     const plan = planPictureReconcile(pictureAt(310), ledger.state(), context());
-    expect(plan.ops.some(op => op.write.element === 'decoder' && op.write.key === 'M3')).toBe(false);
-    expect(plan.adopted).toEqual([{ sourceName: 'M3', clipId: 'c4' }]);
-    expect(plan.ops.map(op => op.kind)).toEqual(['decoder.stop', 'decoder.stop', 'program.switch']);
+    expect(plan.ops.map(op => op.kind)).toEqual(['decoder.stop', 'decoder.stop', 'decoder.handover']);
+    expect(plan.ops.at(-1)).toMatchObject({ clip: { clipId: 'c4', sourceName: 'M3' }, program: { value: '素材三' } });
+    expect(plan.ops.some(op => op.kind === 'decoder.stop' && op.sourceName === 'M3')).toBe(false);
+    for (const write of plan.ops.flatMap(pictureOpWrites)) { ledger.sent(write, 1); ledger.ack(write, 1); }
+    expect(ledger.state().decoders.get('M3')).toMatchObject({ state: 'confirmed', value: { clipId: 'c4', mode: 'playing' } });
+    expect(planPictureReconcile(pictureAt(320), ledger.state(), context()).ops).toEqual([]);
+  });
+});
+
+describe('暂停时只暂停解码器（OBS_SCENE_WORKFLOW 2026-11-09）', () => {
+  it('暂停中别的画面变化都不发，继续时按那时的位置补上', () => {
+    const ledger = new ObsPictureLedger();
+    settle(ledger, pictureAt(150), context());
+    ledger.observe({ element: 'program', value: '别的场景' }, 2);
+    const plan = planPictureReconcile(pictureAt(150), ledger.state(), context({ transport: 'paused' }));
+    expect(plan.ops.map(op => op.kind)).toEqual(['decoder.pause', 'program.switch']);
+    expect(whilePaused(plan).ops).toMatchObject([{ kind: 'decoder.pause', sourceName: 'M1' }]);
   });
 });
 
 describe('暂停、准备中和停歌', () => {
-  it('暂停：在播的解码器暂停，不重新定位；继续时定位后播放', () => {
+  it('暂停：在播的解码器暂停，不重新定位；继续时只接着播，不重新定位；暂停中移了位置才定位', () => {
     const ledger = new ObsPictureLedger();
     settle(ledger, pictureAt(150), context());
     const paused = planPictureReconcile(pictureAt(150), ledger.state(), context({ transport: 'paused' })).ops;
@@ -232,7 +281,33 @@ describe('暂停、准备中和停歌', () => {
     expect(planPictureReconcile(pictureAt(150), ledger.state(), context({ transport: 'paused' })).ops).toEqual([]);
     // Moved while paused: positioned there, still paused.
     expect(planPictureReconcile(pictureAt(180), ledger.state(), context({ transport: 'paused' })).ops).toMatchObject([{ kind: 'decoder.start', mode: 'paused' }]);
-    expect(planPictureReconcile(pictureAt(150), ledger.state(), context()).ops).toMatchObject([{ kind: 'decoder.start', mode: 'playing' }]);
+    expect(planPictureReconcile(pictureAt(150), ledger.state(), context()).ops).toMatchObject([{ kind: 'decoder.resume', sourceName: 'M1', clipId: 'c1' }]);
+  });
+
+  it('OBS 拒绝过开播或暂停的解码器照样跟着暂停和继续，不重新定位；重连后可能还在播的跟着音乐暂停', () => {
+    const write = (mode: 'playing' | 'paused'): LedgerWrite => ({ element: 'decoder', key: 'M1', value: { clipId: 'c1', mode, offsetMs: 1667 }, target: `c1:${mode}` });
+    const refusedStart = new ObsPictureLedger();
+    refusedStart.sent(write('playing'), 0); refusedStart.fail(write('playing'), '拒绝');
+    expect(planPictureReconcile(pictureAt(150), refusedStart.state(), context({ transport: 'paused' })).ops).toMatchObject([{ kind: 'decoder.pause', clipId: 'c1' }]);
+    // Running, the same refused start is not sent again by itself.
+    expect(planPictureReconcile(pictureAt(150), refusedStart.state(), context({ budget: { allows: () => false } })).ops).toEqual([]);
+    const refusedPause = new ObsPictureLedger();
+    settle(refusedPause, pictureAt(150), context());
+    refusedPause.sent(write('paused'), 1); refusedPause.fail(write('paused'), '拒绝');
+    expect(planPictureReconcile(pictureAt(150), refusedPause.state(), context({ transport: 'paused', budget: { allows: () => false } })).ops).toEqual([]);
+    expect(planPictureReconcile(pictureAt(150), refusedPause.state(), context()).ops).toMatchObject([{ kind: 'decoder.resume', clipId: 'c1' }]);
+    const reconnected = new ObsPictureLedger();
+    settle(reconnected, pictureAt(150), context()); reconnected.invalidate('OBS 重新连接');
+    expect(whilePaused(planPictureReconcile(pictureAt(150), reconnected.state(), context({ transport: 'paused' }))).ops)
+      .toMatchObject([{ kind: 'decoder.pause', clipId: 'c1', reason: 'restore' }]);
+  });
+
+  it('同一个来源前后两段紧挨着：后一段开始时再显示一次，不先隐藏', () => {
+    const at = (actionId: string): OnAirPicture => ({ ...pictureAt(60), shows: [{ cueId: actionId, actionId, sceneName: '机位甲', sourceName: '字幕', layerId: 'L2' }] });
+    const ledger = new ObsPictureLedger();
+    settle(ledger, at('first'), context());
+    expect(planPictureReconcile(at('first'), ledger.state(), context()).ops).toEqual([]);
+    expect(planPictureReconcile(at('second'), ledger.state(), context()).ops).toMatchObject([{ kind: 'show.set', enabled: true, write: { target: 'on:second' } }]);
   });
 
   it('素材还在准备：画面先保持现状，写“还在准备”，不算失败', () => {
@@ -261,7 +336,7 @@ describe('暂停、准备中和停歌', () => {
 describe('同一个切点的请求一起发（沿用现在的分组）', () => {
   it('叠加、切到叠加和最多 8 个层的开播一组；其他开播最多 4 个一组；停止各自单发', () => {
     const start = (index: number, scene = '层'): PictureOp => ({ kind: 'decoder.start', clip: clip(`c${index}`, `M${index}`, scene, 0), mode: 'playing', reason: 'cut',
-      write: { element: 'decoder', key: `M${index}`, value: { clipId: `c${index}`, mode: 'playing', offsetMs: 0 }, target: `c${index}:playing` } });
+      write: { element: 'decoder', key: `M${index}`, value: { clipId: `c${index}`, mode: 'playing', offsetMs: 0 }, target: `c${index}:playing` }, program: null });
     const composition: PictureOp = { kind: 'composition.update', sceneName: '叠加', layers: [{ sceneName: '层' }], reason: 'cut', write: { element: 'composition', key: '叠加', value: 'x', target: 'x' } };
     const program: PictureOp = { kind: 'program.switch', sceneName: '叠加', reason: 'cut', write: { element: 'program', value: '叠加', target: '叠加' } };
     const stop: PictureOp = { kind: 'decoder.stop', sourceName: 'M0', reason: 'cut', write: { element: 'decoder', key: 'M0', value: { clipId: '', mode: 'stopped', offsetMs: 0 }, target: ':stopped' } };

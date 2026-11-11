@@ -29,6 +29,7 @@ type SceneIndex = {
   activeScenes: IntervalIndex<Scene>;
   activeMedia: IntervalIndex<ManagedMediaEvent>;
   activeShows: IntervalIndex<Show>;
+  showCues: ReadonlySet<string>;
 };
 
 /** Sorted starts plus prefix end bounds skip expired suffixes on arbitrary
@@ -110,7 +111,7 @@ export class SceneOutputTimeline {
         .filter(frame => frame >= 0).sort((a, b) => a - b),
       activeScenes: new IntervalIndex(scenes.map(scene => ({ start: scene.start, end: scene.end, value: scene }))),
       activeMedia: new IntervalIndex(media.map(entry => ({ start: entry.event.frameNumber, end: entry.end, value: entry.event }))),
-      activeShows: new IntervalIndex(shows) };
+      activeShows: new IntervalIndex(shows), showCues: new Set(shows.map(entry => entry.value.show.cueId)) };
   }
 
   /** The picture OBS should show at `frame`. Interval lookups only, so it can be asked every frame. */
@@ -138,6 +139,8 @@ export class SceneOutputTimeline {
 
   /** Every frame where the picture can change: clip, camera and show source starts and ends, in order. */
   cutPoints(): readonly number[] { return this.index.cuts; }
+  /** The "show source" Cues that are spans of the picture: their shows and hides are picture state, not point actions. */
+  showCueIds(): ReadonlySet<string> { return this.index.showCues; }
 
   /** The output work that puts the picture at `frame` on program, from `pictureAt`. */
   at(frame: number): SceneWork {

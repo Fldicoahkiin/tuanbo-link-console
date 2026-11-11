@@ -34,7 +34,7 @@ describe('OBS 已确认的账：只记 OBS 回应或报告过的', () => {
 
   it('重连后全部不确定，手动接管也作废', () => {
     const ledger = new ObsPictureLedger();
-    const show: LedgerWrite = { element: 'show', key: showKey({ sceneName: '机位甲', sourceName: '字幕' }), value: { enabled: true, sceneName: '机位甲', sourceName: '字幕' }, target: 'on:a' };
+    const show: LedgerWrite = { element: 'show', key: showKey({ sceneName: '机位甲', sourceName: '字幕' }), value: { enabled: true, sceneName: '机位甲', sourceName: '字幕', span: 'a' }, target: 'on:a' };
     for (const write of [program('机位甲'), decoder('c1'), show]) { ledger.sent(write, 1); ledger.ack(write, 2); }
     ledger.takeOver('手动场景', '机位甲', 3);
     ledger.invalidate('OBS 重新连接');
@@ -58,6 +58,18 @@ describe('OBS 已确认的账：只记 OBS 回应或报告过的', () => {
     ledger.sent(decoder('c3'), 1); ledger.ack(decoder('c3'), 2);
     ledger.adopt('M1', 'c4');
     expect(ledger.state().decoders.get('M1')).toEqual({ state: 'confirmed', value: { clipId: 'c4', mode: 'playing', offsetMs: 0 }, at: 2 });
+  });
+
+  it('没发出去的撤回：回到发之前的样子；素材重新准备好以后忘掉失败，下一遍照应有的发', () => {
+    const ledger = new ObsPictureLedger();
+    ledger.sent(program('A'), 0); ledger.ack(program('A'), 1);
+    ledger.sent(program('B'), 2); ledger.withdraw(program('B'));
+    expect(ledger.state().program).toMatchObject({ state: 'confirmed', value: 'A' });
+    ledger.sent(decoder('c1'), 3); ledger.withdraw(decoder('c1'));
+    expect(ledger.state().decoders.has('M1')).toBe(false);
+    ledger.sent(decoder('c1'), 4); ledger.fail(decoder('c1'), 'OBS 拒绝了');
+    ledger.forget(decoder('c1'), '素材准备好了');
+    expect(ledger.state().decoders.get('M1')).toMatchObject({ state: 'unknown', last: { clipId: 'c1' } });
   });
 
   it('元素名在账、规划和次数里是同一个', () => {
