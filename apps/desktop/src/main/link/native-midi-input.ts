@@ -16,7 +16,7 @@ export type NativeMidiMessage = { bytes: number[]; at100ns: bigint };
  * ends with an error instead of dropping any. Closing the pipe closes the port.
  * After 100 ms without a message the helper reports `idle`: the interface's "now" on the same clock
  * as message `at100ns`, so silence is measured at the port, not by when this process got around to
- * reading. Heartbeats never go backwards; a message read just after one may carry a slightly earlier
+ * reading. A heartbeat earlier than the last one is not passed on; a message read just after one may carry a slightly earlier
  * time (it reached the driver before the heartbeat was written). Only `receiveIdle` sees them. */
 export class NativeMidiInput {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -90,8 +90,9 @@ export class NativeMidiInput {
         else if (line.kind === 'message') this.receive({ bytes: line.bytes, at100ns: BigInt(line.at100ns) });
         else if (line.kind === 'idle') {
           const at100ns = BigInt(line.at100ns);
-          if (this.lastIdle !== null && at100ns < this.lastIdle) throw new Error('MIDI 输入的接口时间倒退');
-          this.lastIdle = at100ns; this.receiveIdle(at100ns);
+          // A heartbeat that goes backwards is no heartbeat: whoever listens then sees silence and freezes, the safe side.
+          // The port stays open, messages keep arriving; one bad heartbeat must not take the time code input down.
+          if (this.lastIdle === null || at100ns >= this.lastIdle) { this.lastIdle = at100ns; this.receiveIdle(at100ns); }
         } else this.reportInvalid(line.count);
       }
     } catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); }

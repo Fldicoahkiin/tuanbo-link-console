@@ -42,15 +42,17 @@ it('没有心跳回调的调用方看不到心跳；不发心跳的输入照常�
   expect(f.errors).toEqual([]); await f.close();
 });
 
-it('心跳的接口时间倒退就停止这个输入，不悄悄跳过', async () => {
+it('心跳的接口时间倒退：这一条不算心跳，端口照常开着，消息和之后的心跳照常', async () => {
   const f = fixture(); await f.open();
   f.line({ version: 1, kind: 'idle', at100ns: '3000000' });
   f.line({ version: 1, kind: 'idle', at100ns: '3000000' });
   f.line({ version: 1, kind: 'idle', at100ns: '2999999' });
   f.line({ version: 1, kind: 'message', bytes: [0xf1, 0x10], at100ns: '4000000' });
-  expect(f.idle).toEqual([3000000n, 3000000n]);
-  expect(f.errors.map(error => error.message)).toEqual(['MIDI 输入的接口时间倒退']);
-  expect(f.messages).toEqual([]); expect(f.child.stdin.writableEnded).toBe(true);
+  f.line({ version: 1, kind: 'idle', at100ns: '5000000' });
+  expect(f.idle).toEqual([3000000n, 3000000n, 5000000n]);
+  expect(f.errors).toEqual([]);
+  expect(f.messages).toEqual([{ bytes: [0xf1, 0x10], at100ns: 4000000n }]); expect(f.child.stdin.writableEnded).toBe(false);
+  await f.close();
 });
 
 it('心跳格式严格校验，打开前送来的心跳是协议错误', async () => {
