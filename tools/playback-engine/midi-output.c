@@ -143,7 +143,10 @@ int serve_midi_output(void) {
     if (fread(payload, 1, length, stdin) != length) { failed = 1; break; }
     int32_t code = operation == 1 ? open_output(payload, length) : send_message(payload, length, deadline);
     reply(request, code);
-    if (code) { failed = 1; break; }
+    // Only this message (2026-11-10): expired (-7), the previous SysEx still sending (-6) or invalid (-1) on an
+    // open port; the parent decides what follows and the next message is read. Anything else, a failed open
+    // or a send without an open port ends the process.
+    if (code && (operation == 1 || !output || (code != -7 && code != -6 && code != -1))) { failed = 1; break; }
   }
   if (close_output()) failed = 1;
   return failed ? 3 : 0;
