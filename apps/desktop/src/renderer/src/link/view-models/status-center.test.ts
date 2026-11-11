@@ -97,3 +97,18 @@ it('S11：节目在走时一键连接留下的等待，写节目此刻的阶段�
   expect(bridgeRow(live(input(consoleAt(0)), waiting, { phase: 'held', source: 'internal', itemId: 'a', reason: 'paused', program: null }))).toMatchObject({ value: '未检查' });
   expect(bridgeRow(live(input(consoleAt(0)), waiting))).toMatchObject({ value: '未检查' });
 });
+
+it('M8 关灯读回：还在运行的标黄（详情一行，停着时灯光一栏也黄）；无法确认只在详情里一句，不标黄红；什么都没有就不出现', () => {
+  const offRow = (value: StatusCenterInput) => statusCenter(value).rows.find(entry => entry.id === 'lighting-off');
+  expect(offRow(input())).toBeUndefined();
+  expect(offRow(input({ lightingOff: { running: [], unconfirmed: [] } }))).toBeUndefined();
+  const running = input({ lightingOff: { running: [{ executor: '1000.101', song: { itemId: 'a', title: '开场' } }], unconfirmed: [] } });
+  expect(offRow(running)).toMatchObject({ state: 'warning', value: '还在运行', name: '关灯读回',
+    detail: '关灯已发出，但控台读回「开场」的执行器 1000.101 还在运行（也可能是关灯的渐变还没走完）。再按一次停止会重发。' });
+  expect(lighting(running)).toMatchObject({ state: 'warning', value: '还在运行' });
+  // While a song plays the lighting column says whether the console follows it, as before.
+  expect(lighting({ ...running, player: { status: 'playing', mtcSending: true, mtcConnectionFailed: false } })).toMatchObject({ value: '时间码已发出' });
+  const unconfirmed = input({ lightingOff: { running: [], unconfirmed: [{ executor: '1000.1', song: null, reason: '实时推杆读取超时，请重新连接' }, { executor: '1000.2', song: null, reason: '实时推杆读取超时，请重新连接' }] } });
+  expect(offRow(unconfirmed)).toMatchObject({ state: 'idle', value: '无法确认', detail: '控台已收到关灯指令；执行器 1000.1、1000.2 有没有真的关掉无法确认。原因：实时推杆读取超时，请重新连接。' });
+  expect(lighting(unconfirmed)).toEqual(lighting(input()));
+});

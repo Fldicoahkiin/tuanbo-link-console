@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { expect, it, vi } from 'vitest';
 import { Ma2LivePlayback, parseMa2ExecutorObservation, parseMa2LiveButtons, parseMa2LivePlayback } from './ma2-live-playback';
+import { Ma2WebRemoteConsole } from './fixtures/ma2-web-remote-console';
 
 const native: unknown = JSON.parse(await readFile(new URL('./fixtures/ma2-live-faders-3.7.json', import.meta.url), 'utf8'));
 it('parses actual onPC values and functions without inventing empty fader levels', () => {
@@ -101,4 +102,39 @@ it('读 Button 区（M7）：按按钮执行器的方式要 15 格，格号和�
   await expect(client.readButtons(1000, 101)).rejects.toThrow('不一致');
   // A Button area answer that does not fit closes this session only; nothing is sent on it afterwards.
   expect(socket.closed).toBe(true); expect(client.connected).toBe(false);
+});
+
+// M8 review (2026-11-11): requests on one web remote session take turns; none is refused because another is reading.
+it('一条会话上三个以上同时读（不同页的推杆、单个执行器、关灯读回）都拿到各自的结果，没有“实时推杆正在读取”', async () => {
+  const console = new Ma2WebRemoteConsole();
+  for (const executor of ['1.1', '1.20', '2.5']) console.running.set(executor, executor === '1.20');
+  const client = console.playback('web');
+  try {
+    await client.connect('test', 'test-secret');
+    const [faders, other, observed, peeked, again] = await Promise.all([client.read(1, 1), client.read(2, 1), client.observe(1, 20), client.peek(1, 16), client.read(1, 1)]);
+    expect(faders.items.map(item => item.slot)).toEqual([1]);
+    expect(other.items.map(item => item.slot)).toEqual([5]);
+    expect(observed).toMatchObject({ running: true });
+    expect(peeked).toMatchObject([{ slot: 20, running: true }]);
+    expect(again).toEqual(faders);
+    // The same page on its way twice is asked once.
+    expect(console.requests).toEqual(['web 1.1', 'web 2.1', 'web 1.16', 'web 1.16']);
+    expect(client.connected).toBe(true);
+  } finally { client.close(); }
+});
+
+it('关灯读回读到看不懂的回答只报错，会话照旧；“在不在跟”自己的读取看不懂照旧关会话', async () => {
+  const console = new Ma2WebRemoteConsole();
+  console.running.set('1.1', false);
+  const client = console.playback('web');
+  try {
+    await client.connect('test', 'test-secret');
+    console.garble = { page: 1, count: 1 };
+    await expect(client.peek(1, 1)).rejects.toThrow('其他页面');
+    expect(client.connected).toBe(true);
+    expect(await client.observe(1, 1)).toMatchObject({ running: false });
+    console.garble = { page: 1, count: 1 };
+    await expect(client.observe(1, 1)).rejects.toThrow('其他页面');
+    expect(client.connected).toBe(false);
+  } finally { client.close(); }
 });

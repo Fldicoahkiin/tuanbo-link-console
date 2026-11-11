@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { showGate, type ShowGate, type ShowOperation, type ShowState } from '@tb/core/link';
+import { showGate, type LightingOffCheck, type ShowGate, type ShowOperation, type ShowState } from '@tb/core/link';
 
 /**
  * The show state, mirrored from the main process (ShowStateService, link:show-state); `useShowStateMirror` keeps it
@@ -8,7 +8,9 @@ import { showGate, type ShowGate, type ShowOperation, type ShowState } from '@tb
  * that decides (00-order §2.4). The main process asks again and has the last word, so a mirror one change late holds
  * nothing up for long.
  */
-export const useShowStateStore = create<{ show: ShowState }>(() => ({ show: { phase: 'idle', program: null } }));
+export const useShowStateStore = create<{ show: ShowState; lightingOff: LightingOffCheck }>(() => ({ show: { phase: 'idle', program: null },
+  /** The lights-off read-back (M8), as main's ledger last sent it: read by the status center only. */
+  lightingOff: { running: [], unconfirmed: [] } }));
 
 /** Whether `op` may run now, read once (runtime code, view-models). */
 export function currentShowGate(op: ShowOperation, itemId?: string): ShowGate {

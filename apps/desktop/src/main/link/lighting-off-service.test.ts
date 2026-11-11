@@ -1,7 +1,13 @@
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { lightingReadBackLogs, type LightingReadBackResult } from '@tb/core/link';
 import { createLightingDocument, lightingDocumentSchema, lightingMa2BindingSchema, lightingTrackSchema, type LicenseStatus, type LightingDocument, type Ma2NetworkStatus, type Ma2PlaybackRequest } from '@tb/schema';
 import { LightingOffService } from './lighting-off-service';
 import { LicenseAccess } from './license-access';
+import { Ma2LiveService } from './ma2-live-service';
+import { Ma2WebRemoteConsole } from './fixtures/ma2-web-remote-console';
 import { programLicense } from './program-license';
 
 const settings = { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false };
@@ -170,5 +176,296 @@ describe('试听和节目用同一张清单', () => {
     await expect(service.receive({ version: 1, source: 'preview', phase: 'stop', document: document(['1.102']), song: null })).resolves.toEqual({ failed: [] });
     expect(send.mock.calls.map(([request]) => request.action)).toEqual([off('1.101'), off('1.102')]);
     service.close();
+  });
+});
+
+// M8 (2026-11-11): the Offs one send confirmed are read back as one round on a web remote session already connected and
+// only borrowed (Ma2LiveService.readBack), behind the real live service and the real web remote client, on a fake
+// console. LIGHTING_OFF_READ_BACK: 1.5 s, then 3 s. The "console follows" check reads page 9 every second meanwhile.
+describe('关灯读回（M8）', () => {
+  const source = { show: 'TEST', generation: '1', version: '3.3.4.3' };
+  const network = { host: settings.host, port: settings.port, monitorPort: settings.monitorPort, username: settings.username };
+  const connect = (page: number) => ({ network, expectedSource: source, username: 'web', password: 'web-secret', page, start: 1 });
+  const opening = { itemId: 'a', title: '开场' };
+  /** `saved`: the web remote user was saved on this computer (the fader view connected once), as the "console follows"
+   * check needs; without it nothing is connected, the default. */
+  async function rig(saved = true) {
+    const ma2 = new Ma2WebRemoteConsole();
+    ma2.delayMs = 300;
+    ma2.running.set('9.1', true);
+    const hex = (value: string): string => `H${Buffer.from(value).toString('hex')}`;
+    const telnet = { command: (line: string, match: (text: string) => string | null) => {
+      const marker = /TBLINK_SHOWCHECK_[a-f0-9]{32}/.exec(line)?.[0];
+      return Promise.resolve(marker ? match(`${marker}:${hex(source.show)},${hex(source.generation)},${hex(source.version)}\r\n`) ?? '' : 'ACK');
+    } };
+    const dir = await mkdtemp(join(tmpdir(), 'tblink-lights-off-read-back-'));
+    if (saved) await writeFile(join(dir, 'profiles.json'), JSON.stringify([{ host: settings.host, username: 'web' }]));
+    const live = new Ma2LiveService(join(dir, 'profiles.json'), { saveCredential: () => Promise.resolve(), loadCredential: () => Promise.resolve('web-secret') }, () => telnet,
+      () => ma2.playback('web'), () => ma2.playback('faders'));
+    const status: Ma2NetworkStatus = { state: 'connected', settings: { ...settings }, passwordSaved: false, version: '3.3.4.3', error: null, connection: 1 };
+    const playMa2Cue = vi.fn<(request: Ma2PlaybackRequest) => Promise<void>>(() => Promise.resolve());
+    const failed = vi.fn<(message: string, song: { itemId: string; title: string } | null) => void>();
+    const verified = vi.fn<(results: readonly LightingReadBackResult[]) => void>();
+    const service = new LightingOffService({ console: { getMa2NetworkStatus: () => Promise.resolve(status), playMa2Cue }, failed, resending: () => undefined,
+      readBack: (target, executors) => live.readBack(target, executors), verified });
+    const follows: string[] = [];
+    let poll: ReturnType<typeof setInterval> | null = null;
+    return { ma2, live, status, service, playMa2Cue, failed, verified, follows,
+      /** The fader view on `page`, connected as the operator does, in real time. */
+      faders: (page = 1000) => live.connect(connect(page)),
+      /** The "console follows" session, opened as a playing song opens it (it reads page 9 here). */
+      observer: () => live.observe({ network, page: 9, slot: 1 }),
+      /** Fake time from here; with `follow`, the "console follows" check reads every second, as while a song plays. */
+      play: (follow = true) => {
+        vi.useFakeTimers();
+        if (follow) poll = setInterval(() => { void live.observe({ network, page: 9, slot: 1 }).then(found => follows.push(found.kind), (error: unknown) => follows.push(`失败：${String(error)}`)); }, 1000);
+      },
+      /** Every read-back of what was sent so far, with both waits run out. */
+      readBacks: async (): Promise<void> => { await vi.advanceTimersByTimeAsync(8000); await service.readBacksSettled(); },
+      /** The read-back's own requests: everything but the "console follows" check on page 9. */
+      reads: () => ma2.requests.filter(request => !request.endsWith(' 9.1')),
+      logs: () => verified.mock.calls.flatMap(([results]) => lightingReadBackLogs(results).map(log => log.message)),
+      close: () => { if (poll) clearInterval(poll); service.close(); live.close(); } };
+  }
+
+  it('一首歌跨两个范围、两页，停止和换歌各一次，“在不在跟”每秒在同一条会话上读：轮询一次不失败，会话一直连着，每轮每个范围一个请求，日志按歌一行', async () => {
+    const f = await rig();
+    try {
+      for (const executor of ['1.1', '1.20', '2.5', '3.1']) f.ma2.running.set(executor, false);
+      await f.observer();
+      f.play();
+      const song = lit('a', '开场', ['1.1', '1.20', '2.5']), next = lit('b', '返场', ['3.1']);
+      await f.service.stop(song, 'stop');
+      await f.readBacks();
+      expect(f.reads()).toEqual(['web 1.1', 'web 1.16', 'web 2.1']);
+      expect(f.logs()).toEqual(['控台读回已关：「开场」的执行器 1.1、1.20、2.5']);
+      // A song change: its read-back lands while the next song plays; 1.20 still runs at the first read only.
+      f.ma2.requests.length = 0; f.verified.mockClear();
+      await f.service.change(null, song);
+      f.ma2.running.set('1.20', true);
+      await f.service.change(song, next);
+      await vi.advanceTimersByTimeAsync(2500);
+      f.ma2.running.set('1.20', false);
+      await f.readBacks();
+      expect(f.reads()).toEqual(['web 1.1', 'web 1.16', 'web 2.1', 'web 1.16']);
+      expect(f.verified).toHaveBeenCalledOnce();
+      expect(f.verified.mock.calls[0]![0].map(result => [result.executor, result.verified, result.during])).toEqual([['1.1', 'off', true], ['2.5', 'off', true], ['1.20', 'off', true]]);
+      expect(f.follows.length).toBeGreaterThan(10);
+      expect(f.follows.every(kind => kind === 'executor')).toBe(true);
+      expect(f.ma2.logins).toEqual(['web']);
+      expect(f.service.owed()).toEqual([]);
+    } finally { f.close(); }
+  });
+
+  it('第一次读到还在跑的只再读它那个范围，第二次关了就划掉；两次都在跑就留着标黄、退出不问、再按停止重发；读回不重发 Off', async () => {
+    const f = await rig();
+    try {
+      for (const executor of ['1.1', '1.2', '1.20']) f.ma2.running.set(executor, executor !== '1.1');
+      await f.observer();
+      f.play();
+      await f.service.stop(lit('a', '开场', ['1.1', '1.2', '1.20']), 'stop');
+      await vi.advanceTimersByTimeAsync(2500);
+      f.ma2.running.set('1.2', false);
+      await f.readBacks();
+      expect(f.reads()).toEqual(['web 1.1', 'web 1.16', 'web 1.1', 'web 1.16']);
+      expect(f.logs()).toEqual(['控台读回已关：「开场」的执行器 1.1、1.2',
+        '关灯已发出，但控台读回「开场」的执行器 1.20 还在运行（也可能是关灯的渐变还没走完）。再按一次停止会重发。']);
+      expect(f.playMa2Cue).toHaveBeenCalledTimes(3);
+      expect(f.service.owed()).toMatchObject([{ executor: '1.20', state: 'running' }]);
+      expect(f.service.check()).toEqual({ running: [{ executor: '1.20', song: opening }], unconfirmed: [] });
+      expect(f.service.quitMessages()).toEqual([]);
+      expect(f.service.sending()).toBe(false);
+      expect(f.failed).not.toHaveBeenCalled();
+      // No third read; a new connection does not send it.
+      f.status.connection = 2;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(f.reads()).toHaveLength(4);
+      f.ma2.running.set('1.20', false);
+      await f.service.stop(null, 'stop');
+      expect(f.playMa2Cue).toHaveBeenCalledTimes(4);
+      await f.readBacks();
+      expect(f.service.owed()).toEqual([]);
+      expect(f.follows.every(kind => kind === 'executor')).toBe(true);
+    } finally { f.close(); }
+  });
+
+  it('读回读到看不懂的回答：借来的会话照旧连着，下一次“在不在跟”照常；算无法确认，状态详情一句、日志一行', async () => {
+    const f = await rig();
+    try {
+      f.ma2.running.set('1.1', false); f.ma2.running.set('1.2', false);
+      await f.observer();
+      f.play();
+      await f.service.stop(lit('a', '开场', ['1.1', '1.2']), 'stop');
+      f.ma2.garble = { page: 1, count: 1 };
+      await f.readBacks();
+      expect(f.reads()).toEqual(['web 1.1']);
+      expect(f.service.check()).toEqual({ running: [], unconfirmed: [{ executor: '1.1', song: opening, reason: '控台返回了其他页面的数据' }, { executor: '1.2', song: opening, reason: '控台返回了其他页面的数据' }] });
+      expect(f.logs()).toEqual(['关灯读回无法确认：「开场」的执行器 1.1、1.2。原因：控台返回了其他页面的数据']);
+      expect(f.failed).not.toHaveBeenCalled();
+      const before = f.follows.length;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(f.follows.length).toBeGreaterThan(before);
+      expect(f.follows.every(kind => kind === 'executor')).toBe(true);
+      expect(f.ma2.logins).toEqual(['web']);
+      // An empty slot is no answer either.
+      f.verified.mockClear();
+      await f.service.stop(lit('a', '开场', ['1.3']), 'stop');
+      await f.readBacks();
+      expect(f.logs()).toEqual(['关灯读回无法确认：「开场」的执行器 1.3。原因：控台上 1.3 这一格是空的']);
+    } finally { f.close(); }
+  });
+
+  it('只连着推杆页：读回对推杆页会话一个请求都不发，不写日志，界面照旧；推杆页自己的读取照常', async () => {
+    const f = await rig();
+    try {
+      f.ma2.running.set('1000.1', true);
+      await f.faders();
+      f.play(false);
+      f.ma2.requests.length = 0;
+      await f.service.stop(lit('a', '开场', ['1000.1', '1000.101']), 'stop');
+      await f.readBacks();
+      expect(f.ma2.requests).toEqual([]);
+      expect(f.verified).not.toHaveBeenCalled();
+      expect(f.service.check()).toEqual({ running: [], unconfirmed: [] });
+      const reading = f.live.read({ network, expectedSource: source, page: 1000, start: 1 });
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(reading).resolves.toMatchObject({ items: [{ slot: 1, running: true }] });
+      expect(f.ma2.requests).toEqual(['faders 1000.1']);
+    } finally { f.close(); }
+  });
+
+  it('默认配置（没连网页遥控）停一首 10 个执行器的歌：一个请求都不发，0 行读回日志，界面照旧', async () => {
+    const f = await rig(false);
+    try {
+      f.play(false);
+      const executors = Array.from({ length: 10 }, (_, index) => `1.${index + 1}`);
+      await f.service.stop(lit('a', '开场', executors), 'stop');
+      await f.readBacks();
+      expect(f.playMa2Cue).toHaveBeenCalledTimes(10);
+      expect(f.ma2.requests).toEqual([]);
+      expect(f.ma2.logins).toEqual([]);
+      expect(f.verified).not.toHaveBeenCalled();
+      expect(f.service.check()).toEqual({ running: [], unconfirmed: [] });
+    } finally { f.close(); }
+  });
+
+  it('Button 区：没选网页遥控就不读；选了、控台读回过 Button 区才在 Button 会话上读；191 以上不读', async () => {
+    const f = await rig();
+    try {
+      f.ma2.running.set('1000.101', false); f.ma2.running.set('1000.191', false);
+      await f.faders();
+      await f.live.observe({ network, page: 9, slot: 1 });
+      f.play();
+      f.ma2.requests.length = 0;
+      await f.service.stop(lit('a', '开场', ['1000.101', '1000.191']), 'stop');
+      await f.readBacks();
+      expect(f.reads()).toEqual([]);
+      vi.useRealTimers();
+      await f.live.chooseKeys('webRemote');
+      f.play();
+      f.ma2.requests.length = 0;
+      await f.service.stop(lit('a', '开场', ['1000.101', '1000.191']), 'stop');
+      await f.readBacks();
+      expect(f.reads()).toEqual(['web#2 1000.101']);
+      expect(f.logs()).toEqual(['控台读回已关：「开场」的执行器 1000.101']);
+      // A read that times out closes the Button session, as any request's timeout does; after that nothing is read on it.
+      f.ma2.delayMs = 5000; f.verified.mockClear();
+      await f.service.stop(lit('a', '开场', ['1000.101']), 'stop');
+      await f.readBacks();
+      expect(f.logs()).toEqual(['关灯读回无法确认：「开场」的执行器 1000.101。原因：实时推杆读取超时，请重新连接']);
+      f.ma2.delayMs = 5; f.verified.mockClear(); f.ma2.requests.length = 0;
+      await f.service.stop(lit('a', '开场', ['1000.101']), 'stop');
+      await f.readBacks();
+      expect(f.reads()).toEqual([]);
+      expect(f.verified).not.toHaveBeenCalled();
+    } finally { f.close(); }
+  });
+
+  it('Off 发去的是另一台控台：“在不在跟”和 Button 会话都连着这台，也不读', async () => {
+    const f = await rig();
+    try {
+      f.ma2.running.set('1000.1', false); f.ma2.running.set('1000.101', false);
+      await f.faders();
+      await f.live.chooseKeys('webRemote');
+      await f.live.observe({ network, page: 9, slot: 1 });
+      f.play(false);
+      f.ma2.requests.length = 0;
+      f.status.settings = { ...settings, host: '192.0.2.9' };
+      await f.service.stop(lit('a', '开场', ['1000.1', '1000.101']), 'stop');
+      await f.readBacks();
+      expect(f.playMa2Cue).toHaveBeenCalledTimes(2);
+      expect(f.ma2.requests).toEqual([]);
+      expect(f.verified).not.toHaveBeenCalled();
+    } finally { f.close(); }
+  });
+
+  it('读回期间又开始用、换歌或停止：旧的读回不串到新的上；这次没发出去的不会被改成“还在运行”', async () => {
+    const f = await rig();
+    try {
+      f.ma2.running.set('1.1', true);
+      await f.observer();
+      f.play();
+      const song = lit('a', '开场', ['1.1']);
+      // Started again before the first read: nothing is read for the old Off.
+      await f.service.stop(song, 'stop');
+      await f.service.change(null, song);
+      await f.readBacks();
+      expect(f.reads()).toEqual([]);
+      // Read once (running), then stopped again and this Off fails: the old round settles nothing.
+      await f.service.change(song, null);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(f.reads()).toEqual(['web 1.1']);
+      f.playMa2Cue.mockRejectedValueOnce(new Error('MA2 没有回应'));
+      await f.service.stop(song, 'stop');
+      await f.readBacks();
+      expect(f.reads()).toEqual(['web 1.1']);
+      expect(f.service.owed()).toMatchObject([{ executor: '1.1', state: 'failed', reason: 'MA2 没有回应' }]);
+      expect(f.service.check().running).toEqual([]);
+      expect(f.verified).not.toHaveBeenCalled();
+    } finally { f.close(); }
+  });
+
+  it('播放中读不到：只记日志，不在状态详情里提，也不再读', async () => {
+    const f = await rig();
+    try {
+      f.ma2.running.set('1.1', false);
+      await f.observer();
+      f.play();
+      const song = lit('a', '开场', ['1.1']);
+      await f.service.change(null, song);
+      await f.service.change(song, lit('b', '返场', ['3.1']));
+      f.ma2.garble = { page: 1, count: 1 };
+      await f.readBacks();
+      expect(f.reads()).toEqual(['web 1.1']);
+      expect(f.logs()).toEqual(['关灯读回无法确认：「开场」的执行器 1.1。原因：控台返回了其他页面的数据']);
+      expect(f.service.check()).toEqual({ running: [], unconfirmed: [] });
+    } finally { f.close(); }
+  });
+
+  it('无法确认的那句会过期：这个执行器又开始用、或又欠了新的 Off，就从状态详情里清掉，窗口收到这次变化', async () => {
+    const f = await rig();
+    try {
+      f.ma2.running.set('1.1', false); f.ma2.running.set('1.2', false);
+      await f.observer();
+      f.play();
+      const changes = vi.fn(); f.service.onChanged(changes);
+      f.ma2.garble = { page: 1, count: 1 };
+      await f.service.stop(lit('a', '开场', ['1.1', '1.2']), 'stop');
+      await f.readBacks();
+      expect(f.service.check().unconfirmed.map(entry => entry.executor)).toEqual(['1.1', '1.2']);
+      // In use again.
+      changes.mockClear();
+      await f.service.change(null, lit('b', '返场', ['1.1']));
+      expect(f.service.check().unconfirmed.map(entry => entry.executor)).toEqual(['1.2']);
+      expect(changes).toHaveBeenCalled();
+      await f.service.change(lit('b', '返场', ['1.1']), null);
+      await f.readBacks();
+      // Owed afresh: the console is gone, so this Off waits and nothing is read.
+      changes.mockClear();
+      f.status.state = 'disconnected';
+      await f.service.stop(lit('a', '开场', ['1.2']), 'stop');
+      expect(f.service.check().unconfirmed).toEqual([]);
+      expect(changes).toHaveBeenCalled();
+    } finally { f.close(); }
   });
 });

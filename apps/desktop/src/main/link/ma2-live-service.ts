@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { ma2ExecutorFunctions } from '@tb/core/link';
-import { ma2ExecutorInputSchema, type Ma2ExecutorChannel, type Ma2ExecutorInput, type Ma2LayoutDirectoryRequest } from '@tb/schema';
+import { ma2ExecutorFunctions, type LightingReadBack } from '@tb/core/link';
+import { ma2ExecutorInputSchema, type Ma2ExecutorChannel, type Ma2ExecutorInput, type Ma2LayoutDirectoryRequest, type Ma2NetworkTarget } from '@tb/schema';
 import { ma2ExecutorObserveRequestSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, type Ma2ExecutorObservation, type Ma2ExecutorObserveRequest, type Ma2LiveConnect, type Ma2LiveInput, type Ma2LiveRequest, type Ma2LiveSnapshot } from '@tb/schema';
 import type { SecureProfileStore } from './secure-profile-store';
 import type { Ma2Telnet } from './ma2-telnet';
@@ -26,6 +26,10 @@ function buttonMismatch(item: Ma2ButtonSnapshot['items'][number], expected: Ma2E
   const name = item.name.trim(), shown = expected.name.trim();
   if (name && shown && name !== shown) return `控台上这一格叫「${name}」，页面上是「${shown}」`;
   return null;
+}
+/** The same console, by every field the Off names it with. */
+function sameNetwork(left: Ma2NetworkTarget, right: Ma2NetworkTarget): boolean {
+  return left.host === right.host && left.port === right.port && left.monitorPort === right.monitorPort && left.username === right.username;
 }
 /** What a press on the web remote sent, for the log while it is on trial (M7). */
 export type Ma2ButtonPress = { page: number; slot: number; button: number; name: string; function: string };
@@ -180,6 +184,65 @@ export class Ma2LiveService {
     } catch (error) { this.observer?.client.close(); this.observer = null; throw this.observerFailed(error); }
   }
   releaseObserver(): void { this.observer?.client.close(); this.observer = null; this.observerFailure = null; }
+  /**
+   * Whether these executors ("page.slot") run now, for one round of the lights-off read-back (M8,
+   * lighting-off-service.ts). Read only on a web remote session that is connected already and that this read only
+   * borrows, never logging in for it, never sending a control, never on the fader view's own session (an error there lets
+   * go of held keys and stops the fader view):
+   * - 1–90: only on the "console follows" session for this console;
+   * - above 90: only where a key at that slot goes on the web remote (`forKey`, M7: the Button area 101–190 when chosen
+   *   and read back), on the Button session; 91–100 and 191 and up never do, so they are not read.
+   * One request per session, page and range of 15, one after another; its answer serves every executor in that range.
+   * An answer this software does not understand leaves the session as it is (`peek`); a timeout closes it, as any
+   * request's does. Not read: `read: false`. With the console plugin chosen and no web remote connected, nothing goes to
+   * the console. The Show is not checked: the Off went to the console that is connected, whatever its Show, and so does
+   * this read.
+   */
+  async readBack(network: Ma2NetworkTarget, executors: readonly string[]): Promise<Map<string, LightingReadBack>> {
+    const results = new Map<string, LightingReadBack>();
+    const fader = this.faderRequest && sameNetwork(this.faderRequest.network, network) ? this.faderRequest : null;
+    const scope = fader ? this.key(fader) : null;
+    const ranges = new Map<string, { page: number; start: number; buttons: boolean; slots: { executor: string; slot: number }[] }>();
+    for (const executor of executors) {
+      const match = /^([1-9]\d*)\.([1-9]\d*)$/.exec(executor);
+      if (!match) { results.set(executor, { verified: 'unknown', reason: '执行器编号读不了', read: false }); continue; }
+      const page = Number(match[1]), slot = Number(match[2]), buttons = slot > 90;
+      if (buttons && !(scope && this.channels.forKey(scope, slot) === 'webRemote')) {
+        results.set(executor, { verified: 'unknown', reason: 'Button 区的按键没有走网页遥控', read: false }); continue;
+      }
+      const { start } = ma2ObservedRange(slot), key = `${buttons ? 'b' : 'f'}:${page}:${start}`;
+      const range = ranges.get(key) ?? { page, start, buttons, slots: [] };
+      range.slots.push({ executor, slot }); ranges.set(key, range);
+    }
+    for (const { page, start, buttons, slots } of ranges.values()) {
+      const read = this.readBackRange(network, scope, buttons);
+      if (!read) {
+        for (const { executor } of slots) results.set(executor, { verified: 'unknown', reason: buttons ? 'Button 区的网页遥控没连着' : '“控台在不在跟”的网页遥控没连着', read: false });
+        continue;
+      }
+      let items: { slot: number; width: number; running: boolean }[];
+      try { items = await read(page, start); }
+      catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        for (const { executor } of slots) results.set(executor, { verified: 'unknown', reason, read: true });
+        continue;
+      }
+      for (const { executor, slot } of slots) {
+        const item = items.find(entry => entry.slot <= slot && slot < entry.slot + entry.width);
+        results.set(executor, item ? { verified: item.running ? 'running' : 'off' } : { verified: 'unknown', reason: `控台上 ${executor} 这一格是空的`, read: true });
+      }
+    }
+    return results;
+  }
+  /** The borrowed session a read-back range goes on now, or null when it is not connected (`readBack`). */
+  private readBackRange(network: Ma2NetworkTarget, scope: string | null, buttons: boolean): ((page: number, start: number) => Promise<{ slot: number; width: number; running: boolean }[]>) | null {
+    if (!buttons) {
+      const observer = this.observer?.host === network.host && this.observer.client.connected ? this.observer.client : null;
+      return observer ? (page, start) => observer.peek(page, start) : null;
+    }
+    const session = scope && this.buttons?.scope === scope && this.buttons.client.connected ? this.buttons : null;
+    return session ? async (page, start) => (await this.buttonRead(session, page, start, 'peek')).items : null;
+  }
   private observerFailed(error: unknown): Error {
     this.observerFailure = error instanceof Error ? error.message : String(error);
     return new Error(this.observerFailure);
@@ -276,8 +339,9 @@ export class Ma2LiveService {
     await verifyMa2ShowSource(this.telnet(request), request.expectedSource);
     session.verifiedAt = Date.now();
   }
-  /** 15 button executors from `start`, read again when the last read is older than 1 s; one read at a time. */
-  private async buttonRead(session: ButtonSession, page: number, start: number): Promise<Ma2ButtonSnapshot> {
+  /** 15 button executors from `start`, read again when the last read is older than 1 s; one read at a time. `peek`: the
+   * lights-off read-back's, which leaves the session as it is when the answer is not understood. */
+  private async buttonRead(session: ButtonSession, page: number, start: number, how: 'read' | 'peek' = 'read'): Promise<Ma2ButtonSnapshot> {
     const key = `${page}:${start}`;
     const fresh = (): Ma2ButtonSnapshot | null => {
       const read = session.reads.get(key);
@@ -285,7 +349,7 @@ export class Ma2LiveService {
     };
     const cached = fresh();
     if (cached) return cached;
-    const read = session.reading.then(() => fresh() ?? session.client.readButtons(page, start));
+    const read = session.reading.then(() => fresh() ?? (how === 'peek' ? session.client.peekButtons(page, start) : session.client.readButtons(page, start)));
     session.reading = read.then(() => undefined, () => undefined);
     const value = await read;
     session.reads.set(key, value);

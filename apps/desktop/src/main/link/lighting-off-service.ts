@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { LightingOffLedger, lightingExecutors, lightingReleaseActions, lightsLeftOnAfterResendText, lightsLeftOnText, owedOffTexts, songChangeOffs, toUserErrorReason,
-  type LightingOffOutcome, type LightingReleaseSong, type LinkDesktopApi, type LitSong, type OffSend, type OwedOff, type ProgramLightingOutput } from '@tb/core/link';
+import { LightingOffLedger, lightingExecutors, lightingReadBackDelays, lightingReleaseActions, lightsLeftOnAfterResendText, lightsLeftOnText, owedOffTexts, songChangeOffs, toUserErrorReason,
+  type LightingOffCheck, type LightingOffOutcome, type LightingReadBack, type LightingReadBackResult, type LightingReleaseSong, type LinkDesktopApi, type LitSong, type OffSend, type OwedOff,
+  type ProgramLightingOutput } from '@tb/core/link';
 import { lightingOffRequestSchema, type LightingOffResult, type Ma2NetworkSettings, type Ma2NetworkStatus, type Ma2NetworkTarget } from '@tb/schema';
 
 /** As long as an Off may wait: a sync job already on the wire finishes first. */
@@ -17,6 +18,11 @@ type Dependencies = {
   /** A resend after the console connected did not go out either: no one waits for its answer, so it is logged as an
    * error and shown in red here. It stays owed. */
   failed(message: string, song: LightingReleaseSong | null): void;
+  /** Reads executors back on web remote sessions that are connected already (Ma2LiveService.readBack, M8): it never
+   * logs in and never sends a control. Without it nothing is read back. */
+  readBack?: (network: Ma2NetworkTarget, executors: readonly string[]) => Promise<ReadonlyMap<string, LightingReadBack>>;
+  /** One read-back round settled these Offs, each read (one not read is left out): logged by song (lightingReadBackLogs). */
+  verified?: (results: readonly LightingReadBackResult[]) => void;
   now?: () => number;
 };
 
@@ -27,13 +33,17 @@ type Dependencies = {
  * lighting-off-ledger.ts); this sends the Offs it hands out, with the stop priority of the console queue, and watches the
  * console's connection number (Ma2NetworkStatus.connection, which every new login and every disconnect changes) while an
  * Off waits, to send it once more when the console is connected again. Logging in again on its own is not this service's.
+ * The one place that reads a confirmed Off back (M8): after the console's answer, never before it, so a read-back never
+ * slows an Off or changes its result; it never sends an Off and never counts as a resend.
  */
 export class LightingOffService implements ProgramLightingOutput {
   private readonly ledger = new LightingOffLedger();
   private readonly inFlight = new Set<Promise<unknown>>();
+  /** Read-backs still waiting or reading: not part of `settled`, so the quit never waits for them. */
+  private readonly reading = new Set<Promise<void>>();
   private readonly listeners = new Set<() => void>();
   private poll: ReturnType<typeof setInterval> | null = null;
-  private reading = false;
+  private checking = false;
   private readonly now: () => number;
 
   constructor(private readonly dependencies: Dependencies) { this.now = dependencies.now ?? Date.now; }
@@ -89,6 +99,10 @@ export class LightingOffService implements ProgramLightingOutput {
   quitMessages(): string[] { return owedOffTexts(this.ledger.owed()); }
   /** Every Off on its way has been answered. */
   async settled(): Promise<void> { while (this.inFlight.size) await Promise.allSettled([...this.inFlight]); }
+  /** Every read-back has settled (diagnostics and tests). */
+  async readBacksSettled(): Promise<void> { while (this.reading.size) await Promise.allSettled([...this.reading]); }
+  /** What the status details show of the read-back (link:lighting-off-check). */
+  check(): LightingOffCheck { return this.ledger.check(); }
   onChanged(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
 
   /** Stops watching the console. */
@@ -110,6 +124,7 @@ export class LightingOffService implements ProgramLightingOutput {
     const connected = status?.state === 'connected' && status.settings ? status.settings : null;
     const connection = connected ? status?.connection ?? null : null;
     const sessionId = randomUUID(), deadlineAt = this.now() + releaseDeadlineMs;
+    const confirmed: { off: OffSend; network: Ma2NetworkTarget }[] = [];
     const results = await Promise.all(sends.map(async (off): Promise<LightingOffOutcome['failed'][number] | null> => {
       const target = off.network ?? (status?.settings ? targetOf(status.settings) : null);
       const refused = unreadable ?? (!connected ? (off.resent ? '没有连接控台' : '没有连接控台，连上以后会自动补发一次')
@@ -117,11 +132,53 @@ export class LightingOffService implements ProgramLightingOutput {
       if (refused || !target) return this.fail(off, refused ?? '没有连接控台', connection, target);
       try {
         await this.dependencies.console.playMa2Cue({ network: target, action: off.action, sessionId, deadlineAt });
-        this.ledger.ack(off.executor, off.attempt);
+        if (this.ledger.ack(off.executor, off.attempt)) confirmed.push({ off, network: target });
         return null;
       } catch (error) { return this.fail(off, toUserErrorReason(error), connection, target); }
     }));
+    if (confirmed.length) this.readBack(confirmed);
     return { failed: results.flatMap(result => result ? [result] : []) };
+  }
+
+  /** Reads the Offs one send confirmed back, as one round (LIGHTING_OFF_READ_BACK): after each wait, all that still wait
+   * are read together, one request per session, page and range; the second read only for those the first found running,
+   * and the last read stands. A stop, a song change or a start of the same executor meanwhile takes that one out. */
+  private readBack(round: readonly { off: OffSend; network: Ma2NetworkTarget }[]): void {
+    const read = this.dependencies.readBack;
+    // Not read: settled as before M8, with nothing logged or shown.
+    const quiet: LightingReadBack = { verified: 'unknown', reason: '没有读回', read: false };
+    if (!read) { for (const { off } of round) this.ledger.readBack(off.executor, off.attempt, quiet); return; }
+    const job = (async (): Promise<void> => {
+      const settled: LightingReadBackResult[] = [];
+      let pending = round;
+      for (const [index, delay] of lightingReadBackDelays().entries()) {
+        await new Promise<void>(resolve => { setTimeout(resolve, delay).unref?.(); });
+        pending = pending.filter(({ off }) => this.ledger.awaitsReadBack(off.executor, off.attempt));
+        if (!pending.length) break;
+        const found = new Map<OffSend, LightingReadBack>();
+        for (const group of byNetwork(pending)) {
+          const executors = group.map(({ off }) => off.executor);
+          const answers = await read(group[0]!.network, executors).catch((error: unknown) =>
+            new Map(executors.map((executor): [string, LightingReadBack] => [executor, { verified: 'unknown', reason: toUserErrorReason(error), read: true }])));
+          for (const { off } of group) found.set(off, answers.get(off.executor) ?? quiet);
+        }
+        const last = index === lightingReadBackDelays().length - 1;
+        // Running is read once more; everything else, and running at the last read, stands now.
+        const next: { off: OffSend; network: Ma2NetworkTarget }[] = [];
+        for (const entry of pending) {
+          const answer = found.get(entry.off) ?? quiet;
+          if (answer.verified === 'running' && !last) { next.push(entry); continue; }
+          const result = this.ledger.readBack(entry.off.executor, entry.off.attempt, answer);
+          if (result) settled.push(result);
+        }
+        pending = next;
+        this.changed();
+        if (!pending.length) break;
+      }
+      const logged = settled.filter(result => result.verified !== 'unknown' || result.read);
+      if (logged.length) this.dependencies.verified?.(logged);
+    })().finally(() => { this.reading.delete(job); });
+    this.reading.add(job);
   }
 
   private fail(off: OffSend, reason: string, connection: number | null, network: Ma2NetworkTarget | null): LightingOffOutcome['failed'][number] | null {
@@ -134,13 +191,13 @@ export class LightingOffService implements ProgramLightingOutput {
     const waiting = this.ledger.owed().some(entry => entry.state === 'failed');
     if (!waiting) { this.close(); return; }
     if (this.poll) return;
-    this.poll = setInterval(() => { void this.check(); }, connectionPollMs);
+    this.poll = setInterval(() => { void this.checkConnection(); }, connectionPollMs);
     this.poll.unref?.();
   }
 
-  private async check(): Promise<void> {
-    if (this.reading) return;
-    this.reading = true;
+  private async checkConnection(): Promise<void> {
+    if (this.checking) return;
+    this.checking = true;
     try {
       const status = await this.dependencies.console.getMa2NetworkStatus().catch(() => null);
       if (status?.state !== 'connected' || !status.settings || status.connection === undefined) return;
@@ -153,12 +210,18 @@ export class LightingOffService implements ProgramLightingOutput {
         const message = lightsLeftOnAfterResendText(song, reason);
         if (!shown.has(message)) { shown.add(message); this.dependencies.failed(message, song); }
       }
-    } finally { this.reading = false; }
+    } finally { this.checking = false; }
   }
 
   private changed(): void { for (const listener of this.listeners) listener(); }
 }
 
+/** The confirmed Offs of a round, by the console they went to. */
+function byNetwork<T extends { network: Ma2NetworkTarget }>(entries: readonly T[]): T[][] {
+  const groups = new Map<string, T[]>();
+  for (const entry of entries) { const key = JSON.stringify(entry.network); groups.set(key, [...groups.get(key) ?? [], entry]); }
+  return [...groups.values()];
+}
 function targetOf(settings: Ma2NetworkSettings): Ma2NetworkTarget {
   const { host, port, monitorPort, username } = settings;
   return { host, port, monitorPort, username };

@@ -50,14 +50,19 @@ export function ma2ObservedRange(slot: number): { start: number; buttons: boolea
  * as "cannot check", never as "not running".
  */
 export function parseMa2ExecutorObservation(value: unknown, page: number, slot: number): { running: boolean; cue: string; name: string } | null {
+  const item = parseMa2ObservedRange(value, page, ma2ObservedRange(slot).start).find(item => item.slot <= slot && slot < item.slot + item.width);
+  return item ? { running: item.running, cue: item.cue, name: item.name } : null;
+}
+/** One executor this check reads, with the slots it covers. */
+export type Ma2ObservedItem = { slot: number; width: number; running: boolean; cue: string; name: string };
+/** The 15 executors from `start` the single-executor check reads (`ma2ObservedRange`), refused as above. */
+export function parseMa2ObservedRange(value: unknown, page: number, start: number): Ma2ObservedItem[] {
   const response = observedResponse.parse(value);
   if (response.accessDenied) throw new Error('控台用户没有推杆播放权限');
   if (response.iPage !== page) throw new Error('控台返回了其他页面的数据');
-  const { start } = ma2ObservedRange(slot);
   const items = response.itemGroups.flatMap(group => group.items.flat());
   if (items.some(item => item.iExec + 1 < start || item.iExec + 1 >= start + 15)) throw new Error(`控台返回的执行器格号和请求的不一致（请求 ${page}.${start}–${start + 14}）`);
-  const item = items.find(item => item.iExec + 1 <= slot && slot < item.iExec + 1 + (item.combinedItems ?? 1));
-  return item ? { running: item.isRun !== 0, cue: item.cues?.items?.[1]?.t?.trim() ?? '', name: item.tt?.t ?? '' } : null;
+  return items.map(item => ({ slot: item.iExec + 1, width: item.combinedItems ?? 1, running: item.isRun !== 0, cue: item.cues?.items?.[1]?.t?.trim() ?? '', name: item.tt?.t ?? '' }));
 }
 
 const buttonItem = z.object({ iExec: z.number().int().min(0).max(239), combinedItems: z.number().int().min(1).max(15).optional(), isRun: z.number().int(),
@@ -96,14 +101,23 @@ export function parseMa2LiveButtons(value: unknown, page: number, start: number)
   return { page, start, readAt: Date.now(), items };
 }
 
-/** One socket per selected console; failures stop the session and never replay controls. */
+/**
+ * One socket per selected console; failures stop the session and never replay controls.
+ * Requests that wait for an answer (`read`, `observe`, `readButtons`, `peek`, `peekButtons`) take turns on one queue:
+ * none is refused because another is reading. The protocol carries no request number, so a timeout closes the session
+ * (a late answer would be taken for the next request's); an answer this software does not understand closes it too,
+ * except for the `peek` reads, which only throw and leave the session as it is (M8: they read on a borrowed session).
+ */
 export class Ma2LivePlayback {
   private socket: WebSocket | null = null;
   private session = 0;
   private ready = false;
   private waiter: { type: string; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | null = null;
   private failure: string | null = null;
-  private reading: { key: string; promise: Promise<Ma2LiveSnapshot> } | null = null;
+  /** Fader pages on their way, by page and start: a second read of one shares its answer. */
+  private readonly reading = new Map<string, Promise<Ma2LiveSnapshot>>();
+  /** The request queue: each waits for the one before it, whatever that one's answer. */
+  private line: Promise<unknown> = Promise.resolve();
   constructor(private readonly host: string, private readonly socketFactory = (url: string): WebSocket => new WebSocket(url)) {}
   get connected(): boolean { return this.ready && this.socket?.readyState === WebSocket.OPEN; }
   private fail(message: string): void {
@@ -113,7 +127,14 @@ export class Ma2LivePlayback {
     this.socket?.close(); this.socket = null;
   }
   close(): void { this.fail('实时推杆连接已关闭'); }
+  /** Runs `request` after every request queued before it. */
+  private turn<T>(request: () => Promise<T>): Promise<T> {
+    const result = this.line.then(request, request);
+    this.line = result.then(() => undefined, () => undefined);
+    return result;
+  }
   private wait(type: string, send?: () => void): Promise<unknown> {
+    // Never reached through `turn`: kept as the guard that one request waits at a time.
     if (this.waiter) return Promise.reject(new Error('实时推杆正在读取'));
     return new Promise((resolve, reject) => {
       this.waiter = { type, resolve, reject, timer: setTimeout(() => this.fail('实时推杆读取超时，请重新连接'), 2500) };
@@ -151,10 +172,12 @@ export class Ma2LivePlayback {
   }
   async read(page: number, start: number): Promise<Ma2LiveSnapshot> {
     const key = `${page}:${start}`;
-    if (this.reading) { if (this.reading.key === key) return this.reading.promise; await this.reading.promise; }
-    const reading = { key, promise: this.readPage(page, start) }; this.reading = reading;
-    try { return await reading.promise; }
-    finally { if (this.reading === reading) this.reading = null; }
+    // The same page already on its way: its answer is shared.
+    const shared = this.reading.get(key);
+    if (shared) return shared;
+    const reading = this.turn(() => this.readPage(page, start)); this.reading.set(key, reading);
+    try { return await reading; }
+    finally { if (this.reading.get(key) === reading) this.reading.delete(key); }
   }
   private async readPage(page: number, start: number): Promise<Ma2LiveSnapshot> {
     if (!this.connected) throw new Error(this.failure ?? '实时推杆未连接');
@@ -163,22 +186,43 @@ export class Ma2LivePlayback {
     catch (cause) { this.fail(cause instanceof Error ? cause.message : String(cause)); throw cause; }
   }
   /** Read-only: one executor's state. Any failure closes this session; the caller decides what follows. */
-  async observe(page: number, slot: number): Promise<{ running: boolean; cue: string; name: string } | null> {
-    if (!this.connected) throw new Error(this.failure ?? '控台网页遥控未连接');
-    const { start, buttons } = ma2ObservedRange(slot);
-    const response = await this.wait('playbacks', () => this.send({ requestType: 'playbacks', startIndex: [start - 1], itemsCount: [15], pageIndex: page - 1,
+  /** The 15 executors from `start` as the single-executor check asks for them. */
+  private observed(page: number, start: number, buttons: boolean): Promise<unknown> {
+    if (!this.connected) return Promise.reject(new Error(this.failure ?? '控台网页遥控未连接'));
+    return this.wait('playbacks', () => this.send({ requestType: 'playbacks', startIndex: [start - 1], itemsCount: [15], pageIndex: page - 1,
       itemsType: [buttons ? 3 : 2], view: buttons ? 3 : 2, execButtonViewMode: 2, buttonsViewMode: 2 }));
-    try { return parseMa2ExecutorObservation(response, page, slot); }
-    catch (cause) { this.fail(cause instanceof Error ? cause.message : String(cause)); throw cause; }
+  }
+  /** Read-only: one executor's state. Any failure closes this session; the caller decides what follows. */
+  observe(page: number, slot: number): Promise<{ running: boolean; cue: string; name: string } | null> {
+    return this.turn(async () => {
+      const { start, buttons } = ma2ObservedRange(slot);
+      const response = await this.observed(page, start, buttons);
+      try { return parseMa2ExecutorObservation(response, page, slot); }
+      catch (cause) { this.fail(cause instanceof Error ? cause.message : String(cause)); throw cause; }
+    });
+  }
+  /** Read-only, on a session borrowed from its owner (M8): the 15 fader executors from `start`, asked as `observe` asks.
+   * An answer it does not understand only throws; the session stays as it is. A timeout still closes it. */
+  peek(page: number, start: number): Promise<Ma2ObservedItem[]> {
+    return this.turn(async () => parseMa2ObservedRange(await this.observed(page, start, false), page, start));
+  }
+  private buttonsAnswer(page: number, start: number): Promise<unknown> {
+    if (!this.connected) return Promise.reject(new Error(this.failure ?? '控台网页遥控未连接'));
+    if (!MA2_BUTTON_RANGES.some(value => value === start)) return Promise.reject(new Error('Button 区读取范围无效'));
+    return this.wait('playbacks', () => this.send({ requestType: 'playbacks', startIndex: [start - 1], itemsCount: [15], pageIndex: page - 1,
+      itemsType: [3], view: 3, execButtonViewMode: 2, buttonsViewMode: 2 }));
   }
   /** Button executors `start`–`start+14` (M7). Any failure closes this session: it is the Button area's own. */
-  async readButtons(page: number, start: number): Promise<Ma2ButtonSnapshot> {
-    if (!this.connected) throw new Error(this.failure ?? '控台网页遥控未连接');
-    if (!MA2_BUTTON_RANGES.some(value => value === start)) throw new Error('Button 区读取范围无效');
-    const response = await this.wait('playbacks', () => this.send({ requestType: 'playbacks', startIndex: [start - 1], itemsCount: [15], pageIndex: page - 1,
-      itemsType: [3], view: 3, execButtonViewMode: 2, buttonsViewMode: 2 }));
-    try { return parseMa2LiveButtons(response, page, start); }
-    catch (cause) { this.fail(cause instanceof Error ? cause.message : String(cause)); throw cause; }
+  readButtons(page: number, start: number): Promise<Ma2ButtonSnapshot> {
+    return this.turn(async () => {
+      const response = await this.buttonsAnswer(page, start);
+      try { return parseMa2LiveButtons(response, page, start); }
+      catch (cause) { this.fail(cause instanceof Error ? cause.message : String(cause)); throw cause; }
+    });
+  }
+  /** As `readButtons`, for the lights-off read-back (M8): an answer it does not understand only throws. */
+  peekButtons(page: number, start: number): Promise<Ma2ButtonSnapshot> {
+    return this.turn(async () => parseMa2LiveButtons(await this.buttonsAnswer(page, start), page, start));
   }
   input(page: number, slot: number, action: { kind: 'fader'; value: number } | { kind: 'button'; id: number; pressed: boolean }): void {
     if (!this.connected) throw new Error(this.failure ?? '实时推杆未连接');

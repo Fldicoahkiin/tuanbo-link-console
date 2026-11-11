@@ -60,6 +60,14 @@ export const OUTPUT_RECOVERY_RULES = {
 } as const satisfies Record<string, RecoveryRule>;
 export type RecoveryRow = keyof typeof OUTPUT_RECOVERY_RULES;
 
+/**
+ * Reading a confirmed lights-off back (M8, 2026-11-11): not a recovery (nothing is sent again), but its waits and its
+ * count live beside them so that no other place writes them. After the console confirmed an Off, the executor is read
+ * once after `delaysMs[0]`; when it still runs, once more after `delaysMs[1]`, and that read stands. `delaysMs` has one
+ * wait per read, `maxReads` of them. A read-back never sends an Off and never counts as `lighting.offResend`.
+ */
+export const LIGHTING_OFF_READ_BACK = { maxReads: 2, delaysMs: [1500, 3000] } as const satisfies { maxReads: number; delaysMs: readonly number[] };
+
 export type RecoveryResult = { row: RecoveryRow; key: string; channel: OutputChannel; outcome: 'recover' | 'limit';
   /** Attempts or faults so far, this one included. */
   count: number; limit: RecoveryLimit; atLimit: RecoveryStop; limitText: string };

@@ -311,6 +311,9 @@ export type LinkDesktopApi = {
   /** The show as the main process derives it (ShowStateService); the window mirrors it in useShowStateStore. */
   getShowState(): Promise<import('./show-state').ShowState>;
   onShowState(listener: (show: import('./show-state').ShowState) => void): () => void;
+  /** The lights-off read-back (M8) as the main process's ledger holds it; the window mirrors it beside the show state. */
+  getLightingOffCheck(): Promise<import('./lighting-off-ledger').LightingOffCheck>;
+  onLightingOffCheck(listener: (check: import('./lighting-off-ledger').LightingOffCheck) => void): () => void;
   /** What only the window knows about the show: P1 following and its own previews. */
   reportShowActivity(activity: import('@tb/schema').LinkShowActivity): Promise<void>;
   controlWindow(action: 'minimize' | 'toggleMaximize' | 'close'): Promise<void>;

@@ -27,6 +27,14 @@ export function useShowStateMirror(notify: (message: string, tone: 'info' | 'err
     return () => { alive = false; stop(); };
   }, [notify]);
   useEffect(() => {
+    // The lights-off read-back (M8): only the status details show it, so a first read that fails stays in the log.
+    let pushed = false, alive = true;
+    const stop = desktop.onLightingOffCheck(lightingOff => { pushed = true; useShowStateStore.setState({ lightingOff }); });
+    void desktop.getLightingOffCheck().then(lightingOff => { if (alive && !pushed) useShowStateStore.setState({ lightingOff }); },
+      (error: unknown) => { console.error('没读到关灯读回的状态', error); });
+    return () => { alive = false; stop(); };
+  }, []);
+  useEffect(() => {
     let last = '';
     const report = (): void => {
       const activity = showActivity(useRuntimeStore.getState(), useMa2SyncStore.getState().previewPlaying), text = JSON.stringify(activity);

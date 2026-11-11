@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { ma2RenameRequestSchema, ma2RenameResultSchema } from '@tb/schema';
 import { linkDocumentStateSchema, linkSaveRequestSchema, linkUnsavedChangesDecisionSchema } from '@tb/schema';
 import { linkShowActivitySchema, linkShowStateSchema } from '@tb/schema';
-import { lightingOffRequestSchema, lightingOffResultSchema } from '@tb/schema';
+import { lightingOffCheckSchema, lightingOffRequestSchema, lightingOffResultSchema } from '@tb/schema';
 import { ma2LayoutReadRequestSchema, ma2LayoutSnapshotSchema, ma2NewCueRequestSchema, ma2NewCueResultSchema } from '@tb/schema';
 import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema, ma2CueDeletePlanSchema, ma2CueDeleteResultSchema } from '@tb/schema';
 import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema, nativeProgramClosedSchema, nativeProgramDocumentSchema,
@@ -193,6 +193,12 @@ const tbLink: LinkDesktopBridgeApi = {
     const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(linkShowStateSchema.parse(value));
     ipcRenderer.on('link:show-state', receive);
     return () => ipcRenderer.removeListener('link:show-state', receive);
+  },
+  getLightingOffCheck: async () => lightingOffCheckSchema.parse(await invoke('link:lighting-off-check-get')),
+  onLightingOffCheck: listener => {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(lightingOffCheckSchema.parse(value));
+    ipcRenderer.on('link:lighting-off-check', receive);
+    return () => ipcRenderer.removeListener('link:lighting-off-check', receive);
   },
   reportShowActivity: activity => invoke('link:show-activity', linkShowActivitySchema.parse(activity)),
   controlWindow: (action) => invoke('link:window-control', action),

@@ -29,3 +29,13 @@ export const lightingOffResultSchema = z.object({
   failed: z.array(z.object({ song: lightingOffSongSchema.nullable(), reason: z.string().max(8192) }).strict()).max(512)
 }).strict();
 export type LightingOffResult = z.infer<typeof lightingOffResultSchema>;
+
+const executorSchema = z.string().regex(/^[1-9]\d{0,4}\.[1-9]\d{0,4}$/);
+/** What the status details show of the lights-off read-back (M8, packages/core lighting-off-ledger.ts `check`), sent on
+ * every change (link:lighting-off-check) and read once by a new page (link:lighting-off-check-get): the Offs the console
+ * confirmed but read back still running, and the ones read that could not be confirmed. */
+export const lightingOffCheckSchema = z.object({
+  running: z.array(z.object({ executor: executorSchema, song: lightingOffSongSchema.nullable() }).strict()).max(512),
+  unconfirmed: z.array(z.object({ executor: executorSchema, song: lightingOffSongSchema.nullable(), reason: z.string().max(8192) }).strict()).max(512)
+}).strict();
+export type LightingOffCheckState = z.infer<typeof lightingOffCheckSchema>;

@@ -1,4 +1,4 @@
-import type { ConsoleFollow, LinkObsSnapshot } from '@tb/core/link';
+import { lightsStillRunningText, lightsUnconfirmedText, type ConsoleFollow, type LightingOffCheck, type LinkObsSnapshot } from '@tb/core/link';
 import type { IntegrationProfile, LinkProject, Ma2NetworkStatus } from '@tb/schema';
 import type { ConnectionCheck } from '../stores/connection-check-store';
 import type { Ma2ConnectionMethod } from '../stores/ma2-mode-store';
@@ -28,6 +28,8 @@ export type StatusCenterInput = {
   player: { status: string; mtcSending: boolean; mtcConnectionFailed: boolean };
   /** Whether the console runs with the playing song, as last read back. */
   follow: ConsoleFollow;
+  /** The lights-off read-back (M8): absent or empty, nothing is shown. */
+  lightingOff?: LightingOffCheck;
 };
 export type StatusCenter = { rows: StatusRow[]; overview: StatusOverview[]; midiTargets: ReturnType<typeof midiConnectionTargets> };
 /** The details panel lists the rows by device, in the order of the top bar (音频, 视频, 灯光). */
@@ -71,6 +73,12 @@ export function statusCenter(input: StatusCenterInput): StatusCenter {
     checked(row('ma2', 'MA2 网络', { category: 'ma2' }, { value: method !== 'network' ? '未启用' : network?.state === 'connected' ? '已连接' : checks.ma2?.state === 'checking' ? '连接中' : '未连接', state: method !== 'network' ? 'skipped' : network?.state === 'connected' ? 'ready' : checks.ma2?.state === 'checking' ? 'checking' : networkError || network?.error || checks.ma2?.state === 'error' ? 'error' : 'idle', detail: method !== 'network' ? '当前使用 ' + (method === 'local' ? '本机 onPC' : 'MIDI') : networkError ?? network?.error ?? checks.ma2?.detail ?? '一键连接会连接已保存的控台；没保存过时，会自动找局域网里唯一的一台控台' }), method === 'network' && checks.ma2?.state !== 'ready' ? checks.ma2 : undefined),
     checked(row('bridge', 'MA2 工程通信', { category: 'ma2' }, { value: method === 'midi' ? '未启用' : method === 'local' && local.status === 'ready' ? '已响应' : method === 'network' && network?.state !== 'connected' ? '待网络连接' : '未检查', state: method === 'midi' ? 'skipped' : method === 'local' && local.status === 'ready' ? 'ready' : 'idle', detail: method === 'midi' ? '仅 MIDI 时不读写控台工程' : local.error ?? '另外检查能否读写控台，网络登录成功不代表这一项已就绪' }), method === 'midi' || method === 'network' && network?.state !== 'connected' ? undefined : checks.bridge)
   ];
+  // M8: an Off read back still running is yellow; one that could not be confirmed is one plain sentence, as before M8.
+  const offRunning: ConnectionStatus | null = input.lightingOff?.running.length
+    ? { state: 'warning', value: '还在运行', detail: lightsStillRunningText(input.lightingOff.running) } : null;
+  const offUnconfirmed = input.lightingOff?.unconfirmed;
+  if (offRunning) rows.push(row('lighting-off', '关灯读回', { category: 'ma2' }, offRunning));
+  else if (offUnconfirmed?.length) rows.push(row('lighting-off', '关灯读回', { category: 'ma2' }, { state: 'idle', value: '无法确认', detail: lightsUnconfirmedText(offUnconfirmed) }));
   for (const [id, name] of [['discovery', '程序识别'], ['profile', '连接配置'], ['obs-inventory', 'OBS 场景清单']] as const) {
     if (checks[id]?.state === 'error') rows.unshift(checked(row(id, name, { category: id === 'obs-inventory' ? 'obs' : 'maintenance' }, { value: '待处理', state: 'error', detail: '' }), checks[id]));
   }
@@ -90,6 +98,7 @@ export function statusCenter(input: StatusCenterInput): StatusCenter {
   const lightingPort = find(`port:${profile?.internalPlayer?.mtcOutputPortProfileId ?? 'internal-mtc-output'}`);
   const lighting: ConnectionStatus = playing && input.player.mtcSending ? consoleFollowStatus(input.follow)
     : playing && input.player.mtcConnectionFailed ? { state: 'error', value: '没发出', detail: '音乐照常播放，但灯光时间码没有发出去' }
+      : !playing && offRunning ? offRunning
       : lightingPort ?? { state: 'skipped', value: '未启用', detail: '当前工程没有设置灯光输出' };
   const audio = internal && playing ? { state: 'ready' as const, value: '播放中', detail: '联动台正在播放音乐' } : internal || !project ? find('audio') : find('p1');
   const overview: StatusOverview[] = [

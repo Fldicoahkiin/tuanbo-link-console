@@ -9,8 +9,8 @@ import { nativeProgramSnapshot } from './native-program-snapshot';
 import { programStart } from './program-start';
 import { parseP1TimeOrigin, programTimeOrigin } from './ma2-time-origin';
 import { encodeMediaTimecode } from './mtc-output';
-import { LightingOffLedger, lightingReleaseActions, songChangeOffs } from './lighting-off-ledger';
-import { OUTPUT_RECOVERY_RULES } from './output-recovery';
+import { LightingOffLedger, lightingReadBackDelays, lightingReleaseActions, owedOffTexts, songChangeOffs } from './lighting-off-ledger';
+import { LIGHTING_OFF_READ_BACK, OUTPUT_RECOVERY_RULES } from './output-recovery';
 
 /**
  * The ten lighting workflow rules the operator set on 2026-10-26 (docs/LIGHTING_WORKFLOW.md), one
@@ -204,5 +204,34 @@ describe('关灯清单：欠着的关灯只有一份（第 4 题，2026-11-11，
     expect(ledger.onConnected(3, 1)).toEqual([]);
     expect(ledger.owed()).toMatchObject([{ executor: '1.110', state: 'failed' }]);
     expect(ledger.resendOnStop().map(entry => entry.executor)).toEqual(['1.110']);
+  });
+  it('关灯读回（M8）：确认以后等一下读一次，还在跑再读一次，最多两次（次数和等待只在恢复上限表旁边）；读回不发 Off、不占补发次数；还在跑的标黄留着，再按停止重发', () => {
+    expect(LIGHTING_OFF_READ_BACK).toEqual({ maxReads: 2, delaysMs: [1500, 3000] });
+    expect(lightingReadBackDelays()).toEqual([1500, 3000]);
+    const ledger = new LightingOffLedger();
+    const song = { itemId: '甲', title: '歌曲甲' };
+    const [sent] = ledger.owe(lightingReleaseActions(litSong('1.110')), song, 'stop', null);
+    expect(ledger.ack('1.110', sent!.attempt)).toBe(true);
+    expect(ledger.owed()).toEqual([]);
+    expect(ledger.awaitsReadBack('1.110', sent!.attempt)).toBe(true);
+    expect(ledger.readBack('1.110', sent!.attempt, { verified: 'running' })).toMatchObject({ verified: 'running' });
+    // Yellow, not red: not waiting for the console, not sending, not asked about at quit, not resent on a connect.
+    expect(ledger.owed()).toMatchObject([{ executor: '1.110', state: 'running' }]);
+    expect(ledger.waiting()).toBe(false);
+    expect(ledger.sending()).toBe(false);
+    expect(owedOffTexts(ledger.owed())).toEqual([]);
+    expect(ledger.onConnected(2, 0)).toEqual([]);
+    expect(ledger.check().running).toEqual([{ executor: '1.110', song }]);
+    // Stop again resends it, as a fresh Off; the automatic resend is still there when that one fails.
+    const [again] = ledger.resendOnStop();
+    expect(again).toMatchObject({ executor: '1.110', resent: false });
+    ledger.fail('1.110', again!.attempt, '没有连接控台', null, null);
+    expect(ledger.onConnected(3, 1)).toMatchObject([{ executor: '1.110', resent: true }]);
+    // A read that fails is as before M8: done, with a note only when no timecode runs.
+    const [other] = ledger.owe([{ target: 'executor', executor: '1.120', action: 'off' }], song, 'stop', null);
+    ledger.ack('1.120', other!.attempt);
+    ledger.readBack('1.120', other!.attempt, { verified: 'unknown', reason: '实时推杆读取超时', read: true });
+    expect(ledger.owed().map(entry => entry.executor)).toEqual(['1.110']);
+    expect(ledger.check().unconfirmed).toEqual([{ executor: '1.120', song, reason: '实时推杆读取超时' }]);
   });
 });

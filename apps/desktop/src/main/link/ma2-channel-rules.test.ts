@@ -10,7 +10,8 @@ import { Ma2NetworkWire } from './ma2-network-wire';
 import { Ma2BridgeFailure, Ma2OnpcBridge, ma2StepGate, ma2WriteStep } from './ma2-onpc-bridge';
 import { Ma2LiveService } from './ma2-live-service';
 import type { Ma2ButtonSnapshot, Ma2LivePlayback } from './ma2-live-playback';
-import type { Ma2ExecutorInput, Ma2LiveSnapshot } from '@tb/schema';
+import { LightingOffService } from './lighting-off-service';
+import { createLightingDocument, type Ma2ExecutorInput, type Ma2LiveSnapshot } from '@tb/schema';
 
 // M3, 第 3 题 (2026-11-10): a sync on the console stops at a step boundary once the time code starts. The real
 // tools/ma2/tblink_bridge.lua runs here in Lua 5.3 against the fake console, behind the real wire and bridge.
@@ -209,6 +210,32 @@ describe('演出中出错不换按键通道（M7）', () => {
       expect(reads).toEqual([]);
       expect(service.buttonChannel(request)).toMatchObject({ kind: 'plugin', choice: 'plugin', webRemote: { ready: false } });
     } finally { service.close(); }
+  });
+  // M8 (2026-11-11): the lights-off read-back only reads on a web remote session already connected.
+  it('关灯读回：选的是控台插件、没连网页遥控时，对控台除了 Off 什么都不多发；连着推杆页也不读 Button 区', async () => {
+    vi.useFakeTimers();
+    const { service, reads, logins } = await rig();
+    const offs: string[] = [];
+    const lights = new LightingOffService({ resending: () => undefined, failed: () => undefined, readBack: (target, executors) => service.readBack(target, executors),
+      console: { getMa2NetworkStatus: () => Promise.resolve({ state: 'connected', settings: { ...network, autoConnect: false }, passwordSaved: false, version: '3.3.4.3', error: null, connection: 1 }),
+        playMa2Cue: request => { offs.push(request.action.target === 'executor' ? request.action.executor : ''); return Promise.resolve(); } } });
+    const song = { song: { itemId: 'a', title: '开场' }, document: { ...createLightingDocument(), consoleSong: undefined,
+      ma2Bindings: [{ id: 'b', timecode: 1, name: '歌曲', readAt: '2026-11-11T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [], mappings: [],
+        trackMappings: ['1000.1', '1000.101', '1000.191'].map((executor, index) => ({ trackId: `t${index}`, path: `T${index}`, executor, subtracks: [] })) }] } };
+    try {
+      await lights.stop(song, 'stop');
+      await vi.advanceTimersByTimeAsync(5000); await lights.readBacksSettled();
+      expect(offs).toEqual(['1000.1', '1000.101', '1000.191']);
+      expect(logins).toEqual([]);
+      expect(reads).toEqual([]);
+      // The fader view connected, the plugin still chosen: the Button area is still not read, nor logged in to.
+      await service.connect(connect);
+      await lights.stop(song, 'stop');
+      await vi.advanceTimersByTimeAsync(5000); await lights.readBacksSettled();
+      expect(logins).toEqual(['faders']);
+      expect(reads).toEqual([]);
+      expect(lights.owed()).toEqual([]);
+    } finally { lights.close(); service.close(); vi.useRealTimers(); }
   });
   it('没人选过时走控台插件；通道只因为操作员选择或重新连接而变', async () => {
     const { service, console } = await rig();

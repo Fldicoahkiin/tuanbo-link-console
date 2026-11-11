@@ -2,7 +2,7 @@ import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@
 import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema, ma2ExecutorChannelChoiceRequestSchema } from '@tb/schema';
 import { ma2NetworkTargetSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
-import { firstTimeWarning, holdForShow, materialSceneTargets, projectFileReferences, showGate, toUserErrorReason, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
+import { firstTimeWarning, holdForShow, lightingReadBackLogs, materialSceneTargets, projectFileReferences, showGate, toUserErrorReason, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
 import { assertMa2ConnectionOwner, isLocalMa2Address, waitForMa2Listener } from './link/ma2-connection-owner';
@@ -1037,8 +1037,25 @@ function registerIpc(
   const lightsOff = new LightingOffService({ console: programOutputs.network,
     resending: count => { void logger.record({ level: 'warning', category: 'device', device: 'MA2', message: `控台重新连上了，补发 ${count} 条还没确认的关灯指令` })
       .catch((error: unknown) => console.error('关灯补发日志未能保存', error)); },
-    failed: (message, song) => programFaults.closeFailed(message, { level: 'error', category: 'device', device: 'MA2', ...(song ? { itemId: song.itemId } : {}), message, result: 'failed' }) });
+    failed: (message, song) => programFaults.closeFailed(message, { level: 'error', category: 'device', device: 'MA2', ...(song ? { itemId: song.itemId } : {}), message, result: 'failed' }),
+    // M8: only on a web remote session already connected; nothing logs in for it.
+    readBack: (network, executors) => ma2Network.live().readBack(network, executors),
+    verified: results => {
+      for (const { level, message, song } of lightingReadBackLogs(results)) {
+        void logger.record({ level, category: 'device', device: 'MA2', ...(song ? { itemId: song.itemId } : {}), message })
+          .catch((error: unknown) => console.error('关灯读回日志未能保存', error));
+      }
+    } });
   lightingOff = lightsOff;
+  // What the read-back found, for the status details: sent when it changed.
+  let lightingOffCheck = JSON.stringify(lightsOff.check());
+  lightsOff.onChanged(() => {
+    const check = lightsOff.check(), text = JSON.stringify(check);
+    if (text === lightingOffCheck) return;
+    lightingOffCheck = text;
+    sendToRenderer('link:lighting-off-check', check);
+  });
+  handle('link:lighting-off-check-get', () => lightsOff.check());
   app.once('will-quit', () => lightsOff.close());
   // Off only: never refused for license (license-access.ts publicCalls).
   handle('link:lighting-off', (_event, value: unknown) => lightsOff.receive(value));
