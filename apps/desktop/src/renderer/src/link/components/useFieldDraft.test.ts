@@ -9,24 +9,24 @@ it('没在编辑时显示工程里的值：在别处撤销后检查器显示新�
   // Undo elsewhere hands the inspector the old name; it shows at once, no remount needed.
   expect(shownDraft(idle, '前奏')).toBe('前奏');
   // Edited and left: the field shows whatever the project now holds.
-  const left = run({ type: 'begin', text: '前奏' }, { type: 'type', text: '副歌' }, { type: 'end' });
+  const left = run({ type: 'type', text: '副歌' }, { type: 'end' });
   expect(shownDraft(left, '副歌')).toBe('副歌');
   expect(shownDraft(left, '前奏')).toBe('前奏');
 });
 
 it('正在输入时，播放或别处的改动不打断输入', () => {
-  const typing = run({ type: 'begin', text: '12.5' }, { type: 'type', text: '13' });
+  const typing = run({ type: 'type', text: '13' });
   // The project's value moves on (playback, a command elsewhere): the typed text stays.
   expect(shownDraft(typing, '12.5')).toBe('13');
   expect(shownDraft(typing, '99')).toBe('13');
-  // A second focus event while typing keeps the text too.
-  expect(shownDraft(fieldDraft(typing, { type: 'begin', text: '99' }), '99')).toBe('13');
 });
 
-it('刚获得焦点时从当前值开始，什么都没输就离开不留草稿', () => {
-  const focused = run({ type: 'begin', text: '4' });
+it('只是点进去、什么都没输：照样跟着工程里的值走，离开时没有旧值可以写回去', () => {
+  // Nothing typed means no draft, whether the field has the focus or not: a value the console or an undo changed
+  // meanwhile is what the field shows, so leaving it finds nothing to commit.
+  const focused = run();
   expect(shownDraft(focused, '4')).toBe('4');
-  expect(run({ type: 'begin', text: '4' }, { type: 'end' })).toEqual({ editing: false });
+  expect(shownDraft(focused, '7')).toBe('7');
   const idle: FieldDraft = { editing: false };
   expect(fieldDraft(idle, { type: 'end' })).toBe(idle);
 });

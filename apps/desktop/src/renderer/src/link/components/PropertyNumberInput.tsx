@@ -19,7 +19,6 @@ export function PropertyNumberInput(props: {
   const displayed = props.precision === undefined ? String(props.value) : String(Number(props.value.toFixed(props.precision)));
   const draft = useFieldDraft(displayed);
   return <input id={props.id} className={props.className} aria-describedby={props['aria-describedby']} aria-label={props.label} type="number" min={props.min} max={props.max} step={props.step ?? 1} value={draft.shown} disabled={props.disabled}
-    onFocus={draft.begin}
     onChange={(event) => draft.type(event.currentTarget.value)}
     onInput={(event) => event.currentTarget.setCustomValidity('')}
     onKeyDown={(event) => {
