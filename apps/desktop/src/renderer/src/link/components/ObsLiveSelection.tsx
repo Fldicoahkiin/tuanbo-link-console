@@ -1,6 +1,7 @@
 import { useRef, useState, type PointerEvent } from 'react';
 import type { ObsLiveEdit, ObsLiveItem, ObsLiveScene } from '@tb/schema';
 import { obsItemBoxSize, obsItemCenter, resizeObsLiveItem } from './obs-live-geometry';
+import { useCapturedDrag } from './useCapturedDrag';
 
 type Transform = ObsLiveItem['sceneItemTransform'];
 type Direction = { x: number; y: number };
@@ -9,6 +10,9 @@ const handles = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const;
 
 export function ObsLiveSelection(props: { scene: ObsLiveScene; selected: number | null; onSelect: (id: number | null) => void; onEdit: (edit: ObsLiveEdit, dragging: boolean) => void }): JSX.Element {
   const gesture = useRef<Gesture | null>(null);
+  // Moving or resizing a source writes to OBS as it goes: while the pointer is held the window's keys leave the show
+  // and the project alone (Escape, undo, delete), and the gesture itself is as it was (K5).
+  const keyDrag = useCapturedDrag();
   const [draft, setDraft] = useState<{ id: number; transform: Transform } | null>(null);
   const begin = (event: PointerEvent<HTMLElement>, item: ObsLiveItem, direction: Direction | null): void => {
     if (event.button !== 0) return;
@@ -40,7 +44,7 @@ export function ObsLiveSelection(props: { scene: ObsLiveScene; selected: number 
     gesture.current = null; setDraft(null);
     props.onEdit(payload(current), false);
   };
-  return <div className="obs-live-selection">{props.scene.items.filter((item) => item.sceneItemEnabled && item.sceneItemTransform.sourceWidth > 0 && item.sceneItemTransform.sourceHeight > 0).map((item) => {
+  return <div className="obs-live-selection" {...keyDrag}>{props.scene.items.filter((item) => item.sceneItemEnabled && item.sceneItemTransform.sourceWidth > 0 && item.sceneItemTransform.sourceHeight > 0).map((item) => {
     const t = draft?.id === item.sceneItemId ? draft.transform : item.sceneItemTransform;
     const center = obsItemCenter(t);
     const box = obsItemBoxSize(t);

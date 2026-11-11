@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { DragSession } from './drag-session';
+import { DragSession, type DragKeys } from './drag-session';
+import { KeyRouter } from '../keys/key-router';
 
 type Listener = (event: Event) => void;
 type Entry = { type: string; listener: Listener; capture: boolean };
@@ -18,11 +19,29 @@ function fakeWindow() {
   };
 }
 
-/** A key press; `stopPropagation` leaves a mark. */
+/** A key press, without modifiers; `stopPropagation` leaves a mark. */
 class Key extends Event {
   propagationStopped = false;
-  constructor(readonly key: string) { super('keydown', { cancelable: true }); }
+  readonly code: string;
+  readonly ctrlKey = false; readonly altKey = false; readonly shiftKey = false; readonly metaKey = false; readonly repeat = false; readonly isComposing = false;
+  constructor(readonly key: string) { super('keydown', { cancelable: true }); this.code = key; }
   override stopPropagation(): void { this.propagationStopped = true; super.stopPropagation(); }
+}
+
+/**
+ * The window's key router as a drag sees it (04 设计 4.6): while it is told a drag goes on, it hears the window's keys
+ * in the capture phase and routes them as the app's router does (`KeyRouter`), which cancels the drag on Escape.
+ */
+function keyRouter(view: ReturnType<typeof fakeWindow>): DragKeys {
+  const router = new KeyRouter(() => null);
+  return {
+    beginDrag(drag) {
+      const leave = router.beginDrag(drag);
+      const listener = (event: Event): void => { if (event instanceof Key) router.dispatch(event); };
+      view.addEventListener('keydown', listener, true);
+      return () => { leave(); view.removeEventListener('keydown', listener, true); };
+    }
+  };
 }
 /** A pointer let go over `at` (the element under it, when nothing holds the pointer). */
 class Release extends Event {
@@ -46,7 +65,7 @@ function pressed() {
 function session() {
   const view = fakeWindow();
   const drawn: Array<string | null> = [];
-  return { view, drawn, drag: new DragSession<string>(view, value => drawn.push(value)) };
+  return { view, drawn, drag: new DragSession<string>(view, value => drawn.push(value), keyRouter(view)) };
 }
 
 const WATCHING = ['blur', 'keydown（捕获）', 'pointercancel（捕获）', 'pointerup（捕获）'];

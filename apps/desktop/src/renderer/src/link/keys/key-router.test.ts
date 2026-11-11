@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { DragSession } from '../components/drag-session';
-import { cancelDragOnEscape } from '../playback-keys';
 import { documentShortcut } from '../useDocumentShortcuts';
 import { modalDialogOpen } from './key-owner';
 import { KeyRouter, type KeyHandlers, type KeyOverlayEntry, type KeyWhen } from './key-router';
@@ -576,20 +575,20 @@ describe('窗口的播放键（原 playback-keys.test.ts）', () => {
 
   it('拖动或修剪时按 Esc 只取消这次拖动，键不再往下传，节目不停（0.5.9）', () => {
     let cancelled = 0;
-    const escape = press('Escape');
-    cancelDragOnEscape(escape, true, () => { cancelled += 1; });
+    // A drag told to the router (DragSession does, K5), which cancels it on Escape.
+    const dragging = (): (() => void) => router.beginDrag({ escape: () => { cancelled += 1; }, cancelled: () => false });
+    const pressed = (key: Press, drag: boolean): Press => { const done = drag ? dragging() : null; router.dispatch(key); done?.(); return key; };
+    const escape = pressed(press('Escape').at(element(body)), true);
     expect(cancelled).toBe(1);
     expect(escape.propagationStopped).toBe(true);
     // Even a window listener the stop did not keep out leaves the show alone.
     expect(playbackKeyAction(escape, element(body), keys())).toBeNull();
 
     // Not dragging: Escape goes on and stops as before. Other keys never cancel a drag.
-    const idle = press('Escape');
-    cancelDragOnEscape(idle, false, () => { cancelled += 1; });
+    const idle = pressed(press('Escape').at(element(body)), false);
     expect(idle.defaultPrevented || idle.propagationStopped).toBe(false);
     expect(playbackKeyAction(idle, element(body), keys())).toEqual({ kind: 'stop' });
-    const enter = press('Enter');
-    cancelDragOnEscape(enter, true, () => { cancelled += 1; });
+    const enter = pressed(press('Enter').at(element(body)), true);
     expect(enter.defaultPrevented || enter.propagationStopped).toBe(false);
     expect(cancelled).toBe(1);
   });

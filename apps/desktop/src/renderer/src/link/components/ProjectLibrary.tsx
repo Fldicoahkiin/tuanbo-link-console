@@ -18,6 +18,7 @@ import type { LinkProject, RundownItem } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useRuntimeStore } from '../stores/runtime-store';
+import { useShowGate } from '../stores/show-state-store';
 import { Button, IconButton, Menu, MenuItem, MenuSeparator, Select, Switch, TextArea, TextInput } from '../ui';
 import { programContents } from '../view-models/program-contents';
 import { formatDuration } from './media-utils';
@@ -99,7 +100,10 @@ export function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
   const openProperties = (item: RundownItem): void => { props.onChooseItem(item); setInspectorOpen(true); };
   // Order is changed among the songs on screen (the playlist shown), so a move never lands between hidden songs.
   const visibleIds = filteredItems.map(item => item.id);
-  const reorderBlocked = props.locked ? '正在播放或处理中，停下后才能调整顺序'
+  // Whether the show lets the order change is showGate's to say, in its words (00-order §2.4); `locked` still covers
+  // the rest (an import running, the mirror one change late).
+  const reorderGate = useShowGate('rundown.reorder');
+  const reorderBlocked = reorderGate.kind === 'wait' ? reorderGate.message : props.locked ? '正在播放或处理中，停下后才能调整顺序'
     : search.trim() ? '搜索结果里不能调整顺序，清空搜索后再拖动' : null;
   const moveVisible = (ids: string[], gap: number | null): void => {
     if (reorderBlocked || gap === null || !reorderedVisibleIds(visibleIds, ids, gap)) return;

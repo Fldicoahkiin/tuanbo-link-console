@@ -40,7 +40,6 @@ const tsxFiles = (directory: string): string[] => sourceFiles(directory, ['.tsx'
  */
 const WINDOW_LISTENERS: Readonly<Record<string, string>> = {
   'keys/key-router.ts': '窗口唯一的按键路由',
-  'components/drag-session.ts': '拖动中的 Esc（K5 接到路由上）',
   'components/useTimelineStamp.tsx': '灯光工作台的快捷键（K6 接到路由上）',
   'components/LightingTimeline.tsx': '灯光时间线的键（K6 接到路由上）'
 };

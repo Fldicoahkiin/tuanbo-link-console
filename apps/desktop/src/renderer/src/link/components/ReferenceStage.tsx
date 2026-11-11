@@ -10,6 +10,7 @@ import { resizeMediaCanvas } from './media-canvas-geometry';
 import { ObsPreviewLayer } from './ObsPreviewLayer';
 import { StageMediaContextMenu } from './StageMediaContextMenu';
 import { usePreviewMediaLifecycle } from './usePreviewMediaLifecycle';
+import { useCapturedDrag } from './useCapturedDrag';
 import { usePlayheadEffect, usePlayheadValue, type EditorPlayhead } from './editor-playhead';
 
 type Props = {
@@ -46,6 +47,9 @@ export function ReferenceStage(props: Props): JSX.Element {
   const [snapGuides, setSnapGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
   const [mediaContext, setMediaContext] = useState<{ clip: ReferenceMediaClip; asset: LinkMediaAsset; x: number; y: number } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  // Moving or resizing a layer on the stage (media and OBS layers) moves it as the pointer goes: while the pointer is
+  // held the window's keys leave the show and the project alone (Escape, undo, delete); the gestures are as they were (K5).
+  const keyDrag = useCapturedDrag();
   // Clips starting within 2 s are loaded ahead; the stage draws again only when that list changes.
   const upcoming = usePlayheadValue(props.playhead, positionMs => upcomingClipKey(props.timelineState, positionMs));
   const visibleClips = props.timelineState?.clips.filter((entry) => entry.visual || upcoming.includes(`\n${entry.clip.id}\n`)) ?? [];
@@ -76,7 +80,7 @@ export function ReferenceStage(props: Props): JSX.Element {
       onDragOver={(event) => { if (event.dataTransfer.types.includes(OBS_DRAG_TYPE)) event.preventDefault(); }}
       onDrop={dropObs}
     >
-      <div className="stage-frame" style={{ aspectRatio: `${canvas.width} / ${canvas.height}` }}>
+      <div className="stage-frame" style={{ aspectRatio: `${canvas.width} / ${canvas.height}` }} {...keyDrag}>
         {props.scenePreview ? <ObsPreviewLayer key={props.scenePreview.sceneName}
           sourceName={props.scenePreview.sceneName} status={props.obsStatus} zIndex={1}
           selected={props.selectedCueId === props.scenePreview.cueId} locked

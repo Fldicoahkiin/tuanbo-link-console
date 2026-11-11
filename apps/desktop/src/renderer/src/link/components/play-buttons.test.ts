@@ -38,7 +38,7 @@ const registerHomePlayButton = (onScreen: boolean, press: () => void): (() => vo
 /** Space pressed with nothing focused. */
 function pressPlayButton(): void {
   router.dispatch({ code: 'Space', key: ' ', ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, repeat: false, isComposing: false,
-    defaultPrevented: false, preventDefault: () => undefined, target: null });
+    defaultPrevented: false, preventDefault: () => undefined, stopPropagation: () => undefined, target: null });
 }
 
 /** The home player, writing down what its play button asked for. */

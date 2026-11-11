@@ -50,6 +50,8 @@ import { keyTarget, modalDialogOpen } from '../playback-keys';
 import { useKeyCommands } from '../keys/useKeyCommands';
 import { handleTimelineKey } from './timeline-keys';
 import { usePlayheadPaint, type EditorPlayhead } from './editor-playhead';
+import { DragSession } from './drag-session';
+import { keyRouter } from '../keys/key-router';
 
 function seekTimelineAudio(audio: HTMLAudioElement, milliseconds: number): void {
   const seconds = Number.isFinite(audio.duration) ? Math.min(milliseconds / 1_000, audio.duration) : milliseconds / 1_000;
@@ -151,7 +153,10 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   const revealTimelineTime = viewport.revealTime;
   const lightingPlayback = useLightingPreview({ enabled: (props.lightingWorkspace === true || (props.lighting?.preview ?? false)) && !props.externalTransport, document: props.lighting?.document, mtcOrigin: props.lighting?.mtcOrigin, audioRef, playing: props.playing && !props.externalTransport, frameRate: props.frameRate, onError: (message) => { props.onPlayingChange(false); props.onPlaybackError(message); } });
   const stopPlayback = (): void => { props.onStop?.(); void lightingPlayback.stop().catch((error: unknown) => props.onPlaybackError(error instanceof Error ? error.message : String(error))); };
-  const playheadPointerId = useRef<number | null>(null);
+  // Dragging the playhead (DragSession, the pointer it follows): Escape only stops it following the pointer, and does
+  // not stop the show, until the pointer is let go (K5). Nothing is drawn for it, so the page does not draw again.
+  const [playheadDrag] = useState(() => new DragSession<number>(globalThis, () => undefined, keyRouter));
+  useEffect(() => () => playheadDrag.dispose(), [playheadDrag]);
   const [clipboard, setClipboard] = useState<TimelineTarget | null>(null);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [snapDistance, setSnapDistance] = useState(14);
@@ -203,25 +208,24 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   useKeyCommands('timeline', { 'transport.playPause': playPause });
   const playheadFrame = useFrameValue((clientX: number) => { seek(clientX, true); });
   const cancelPlayheadFrame = playheadFrame.cancel;
-  useEffect(() => { cancelPlayheadFrame(); playheadPointerId.current = null; setClipboard(null); setClipContext(null); }, [props.timelineState.itemId, cancelPlayheadFrame]);
+  useEffect(() => { cancelPlayheadFrame(); playheadDrag.end(); setClipboard(null); setClipContext(null); }, [props.timelineState.itemId, cancelPlayheadFrame, playheadDrag]);
   const beginPlayhead = (event: PointerEvent<HTMLElement>): void => {
     if (event.button !== 0) return;
     props.onPlayingChange(false);
     timelineRef.current?.focus();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    playheadPointerId.current = event.pointerId;
+    playheadDrag.begin(event.currentTarget, event.pointerId, event.pointerId);
     playheadFrame.flush(event.clientX);
   };
   const movePlayhead = (event: PointerEvent<HTMLElement>): void => {
-    if (playheadPointerId.current === event.pointerId) playheadFrame.push(event.clientX);
+    if (playheadDrag.current() === event.pointerId) playheadFrame.push(event.clientX);
   };
   const endPlayhead = (event: PointerEvent<HTMLElement>): void => {
-    if (playheadPointerId.current !== event.pointerId) return;
+    if (playheadDrag.current() !== event.pointerId) return;
     playheadFrame.flush(event.clientX);
-    playheadPointerId.current = null;
+    playheadDrag.end();
   };
   const cancelPlayhead = (event: PointerEvent<HTMLElement>): void => {
-    if (playheadPointerId.current === event.pointerId) { playheadFrame.cancel(); playheadPointerId.current = null; }
+    if (playheadDrag.current() === event.pointerId) { playheadFrame.cancel(); playheadDrag.end(); }
   };
   const lanePointer = { onPointerDown: beginPlayhead, onPointerMove: movePlayhead, onPointerUp: endPlayhead, onPointerCancel: cancelPlayhead };
 

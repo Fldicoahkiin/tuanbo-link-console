@@ -10,16 +10,17 @@ import { KEYMAP, PAGE_SCOPES, type CommandId, type KeyPage, type KeyScope } from
  *
  * K3 puts the window's keys on it: Space, Escape, ↑↓, a song's own shortcut, saving, undo and redo. K4 the panels
  * Escape closes (Popover, menus, the player's status details, the Cue menu, the connection and settings page): they
- * say they are open and how they close (`overlay`), and the router closes the top one. The rest still has its own
- * listeners until the later steps, and the router leaves every key to them that they took before it:
- * - a drag (DragSession) says it is going on (`beginDrag`) and cancels itself on Escape (K5);
+ * say they are open and how they close (`overlay`), and the router closes the top one. K5 the drags: a drag says it is
+ * going on (`beginDrag`, DragSession and useCapturedDrag), the router cancels it on Escape and keeps that key, and the
+ * keys that would change the project, from everything after it until the pointer is let go. The rest still has its
+ * own listeners until the later steps, and the router leaves every key to them that they took before it:
  * - the lighting workbench's shortcut keys say which keys they take (`claim`) and act themselves (K6);
  * - the timeline's own keys act in the timeline, where the window's keys never did (K6).
  */
 
 /** A key press, as the router reads it. */
 export type KeyEvent = Pick<KeyboardEvent, 'code' | 'key' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey' | 'repeat' | 'isComposing'
-  | 'defaultPrevented' | 'preventDefault'> & { readonly target: unknown };
+  | 'defaultPrevented' | 'preventDefault' | 'stopPropagation'> & { readonly target: unknown };
 
 /** What a handler is told of the press: where the focus was, and the window's own handler of the same command. */
 export type KeyPress = { target: OwnerTarget | null; global: () => void };
@@ -36,8 +37,11 @@ export type KeyClaim = (event: KeyEvent, target: OwnerTarget | null) => boolean;
  * but Escape is its own), `blocks`: the page's and the window's keys wait while it is open (settings, connections).
  */
 export type KeyOverlayEntry = { open: () => boolean; close: () => void; contains: (target: OwnerTarget) => boolean; blocks: boolean };
-/** A drag going on, `cancelled` once Escape gave it up and the pointer is still held. */
-export type KeyDragEntry = { cancelled: () => boolean };
+/**
+ * A drag going on while the pointer is held: `escape` gives it up, `cancelled` once it did. `escape` is null for a
+ * drag Escape cannot give up (the stage and OBS's live canvas, written as they go): Escape is only taken then.
+ */
+export type KeyDragEntry = { escape: (() => void) | null; cancelled: () => boolean };
 
 type Registration = { scope: KeyScope; handlers: () => KeyHandlers; when: KeyWhen };
 type View = Pick<Window, 'addEventListener' | 'removeEventListener'>;
@@ -121,7 +125,7 @@ export class KeyRouter {
     // A key a listener before the router already took (a panel closing on Escape) is left alone by the window's
     // playback keys, as it was (0.5.9); saving, undo and redo never looked (useDocumentShortcuts).
     if (event.defaultPrevented && !(decision.kind === 'run' && isDocumentCommand(decision.id))) return;
-    this.act(decision, event, target, chord);
+    this.act(decision, event, target);
   }
 
   /*
@@ -132,19 +136,26 @@ export class KeyRouter {
    * listener is on the router (K4–K6).
    */
 
-  private act(decision: RouteDecision, event: KeyEvent, target: OwnerTarget | null, chord: KeyChord): void {
+  private act(decision: RouteDecision, event: KeyEvent, target: OwnerTarget | null): void {
     switch (decision.kind) {
-      // Left to the field, control, dialog or browser; a drag cancels itself (K5).
-      case 'ignore': case 'native': case 'drag-cancel': return;
+      // Left to the field, control, dialog or browser.
+      case 'ignore': case 'native': return;
+      // Escape during a drag: it gives the drag up, and goes no further, so that the timeline's Escape does not stop
+      // the show (keys7, 0.5.9). The router stops this key itself, as the drag's own listener did before K5.
+      case 'drag-cancel':
+        event.preventDefault(); event.stopPropagation();
+        for (const drag of this.cancellable()) drag.escape?.();
+        return;
       // The top panel, the one opened last (K4).
       case 'overlay':
         event.preventDefault();
         this.openOverlays().at(-1)?.close();
         return;
       case 'swallow':
-        // Escape after a drag was cancelled: the drag takes it itself until the pointer is let go (K5).
-        if (this.drag() !== 'none' && chord === 'Escape') return;
+        // During a drag a swallowed key (Escape after a cancel, a key that would change the project) goes no further
+        // either: the timeline's own keys do not look whether the router took it (K5).
         event.preventDefault();
+        if (this.drag() !== 'none') event.stopPropagation();
         return;
       case 'song': {
         const songs = this.songs.at(-1);
@@ -196,7 +207,12 @@ export class KeyRouter {
 
   private drag(): KeyDrag {
     if (this.drags.length === 0) return 'none';
-    return this.drags.every(drag => drag.cancelled()) ? 'cancelled' : 'active';
+    return this.cancellable().length > 0 ? 'active' : 'cancelled';
+  }
+
+  /** The drags Escape still gives up. */
+  private cancellable(): KeyDragEntry[] {
+    return this.drags.filter(drag => drag.escape !== null && !drag.cancelled());
   }
 }
 

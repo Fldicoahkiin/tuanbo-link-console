@@ -47,14 +47,3 @@ export function takeKey(event: Pick<KeyboardEvent, 'repeat' | 'preventDefault'>,
   event.preventDefault();
   if (!event.repeat) act();
 }
-
-/**
- * Escape during a drag or a trim only cancels it and goes no further: the timeline and the window would otherwise take
- * the same press as "stop the show" (0.5.9). `dragging` holds until the pointer is let go, so Escape pressed again
- * after cancelling goes no further either. For listeners on window in the capture phase, which run first; drags use it
- * through `DragSession` (components/drag-session.ts).
- */
-export function cancelDragOnEscape(event: Pick<KeyboardEvent, 'key' | 'preventDefault' | 'stopPropagation'>, dragging: boolean, cancel: () => void): void {
-  if (event.key !== 'Escape' || !dragging) return;
-  event.preventDefault(); event.stopPropagation(); cancel();
-}

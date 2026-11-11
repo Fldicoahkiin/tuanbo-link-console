@@ -15,14 +15,15 @@ export function useDragSession<T>(): {
 } {
   const [drag, setDrag] = useState<T | null>(null);
   // The window in the app; the session only listens once a drag begins, so drawing without a window (tests) works.
-  // The key router leaves Escape to the session while it goes on.
+  // The key router cancels the drag on Escape while it goes on.
   const [session] = useState(() => new DragSession<T>(globalThis, value => setDrag(() => value), keyRouter));
   useEffect(() => () => session.dispose(), [session]);
-  return {
-    drag,
+  // The same functions on every drawing, so that effects can depend on them.
+  const [actions] = useState(() => ({
     current: () => session.current(),
-    begin: (event, value) => session.begin(event.currentTarget, event.pointerId, value),
-    update: value => session.update(value),
+    begin: (event: PointerEvent<Element>, value: T) => session.begin(event.currentTarget, event.pointerId, value),
+    update: (value: T) => session.update(value),
     end: () => session.end()
-  };
+  }));
+  return { drag, ...actions };
 }

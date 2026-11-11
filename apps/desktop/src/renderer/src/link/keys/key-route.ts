@@ -17,7 +17,10 @@ export type KeyOverlay = {
   blocks: boolean;
 };
 
-/** A drag going on (DragSession): `cancelled` once Escape gave it up and the pointer is still held. */
+/**
+ * A drag going on (DragSession), while the pointer is held: `active` until Escape gives it up, `cancelled` after that,
+ * and from the start for a drag Escape cannot give up (one written to OBS as it goes, useCapturedDrag).
+ */
 export type KeyDrag = 'none' | 'active' | 'cancelled';
 
 export type RouteInput = {
@@ -62,7 +65,8 @@ export type RouteInput = {
  * - `ignore`: nobody takes it; the browser does what it does.
  * - `native`: left to the field, control, dialog or panel that has it.
  * - `overlay`: closes the top panel (the router does, K4).
- * - `drag-cancel`: cancels the drag; `swallow`: taken, nothing done (a held key's repeat, Escape after a cancel).
+ * - `drag-cancel`: cancels the drag; `swallow`: taken, nothing done (a held key's repeat, Escape after a cancel, a key
+ *   that would change the project during a drag).
  * - `run`: the command in that scope; `song`: plays that song.
  */
 export type RouteDecision =
@@ -75,6 +79,11 @@ type Candidate = { entry: KeyEntry; binding: KeyBinding };
 const IGNORE: RouteDecision = { kind: 'ignore' }, NATIVE: RouteDecision = { kind: 'native' }, SWALLOW: RouteDecision = { kind: 'swallow' };
 
 const throughFields = (binding: KeyBinding): boolean => binding.through !== undefined;
+
+/** The keys that delete what is selected, wherever it is: the timeline's, the lighting points', the program list's. */
+const DELETE_KEYS: ReadonlySet<KeyChord> = new Set(['Delete', 'Backspace']);
+/** Whether `entry` changes the project: the editing commands (delete, split, paste…), undo and redo. */
+const changesProject = (entry: KeyEntry): boolean => entry.kind === 'edit' || entry.id === 'document.undo' || entry.id === 'document.redo';
 const throughDialogs = (binding: KeyBinding): boolean => binding.through === 'dialogs' || binding.through === 'all';
 
 /** Runs `entry`, once per press when it says so. */
@@ -126,21 +135,31 @@ export function routeKey(input: RouteInput): RouteDecision {
     .filter(binding => binding.chord === chord && (binding.switch === undefined || !switchedOff.has(binding.switch)))
     .map(binding => ({ entry, binding })));
   const candidates = matching(input.chord);
+  const inDialog = input.owner === 'dialog' || input.modalOpen;
+  const editingText = input.editingText ?? input.owner === 'field';
+  // 拖动 (04 设计 4.3 第 5 步, K5), before everything but a recording field: Escape only cancels the drag and is taken
+  // until the pointer is let go (keys7), wherever the focus is and whatever is open, as the drag's own listener did
+  // before the router took it over; the settings page open over a drag too. Nothing changes the project halfway
+  // through a drag either: the editing keys, undo and redo, Delete and Backspace are taken, but where text is typed
+  // and in a dialog. The rest (Space, the frame steps, the stop key) goes on as without a drag.
+  if (input.drag !== 'none') {
+    if (input.chord === 'Escape') return input.drag === 'active' ? { kind: 'drag-cancel' } : SWALLOW;
+    const scopes: readonly KeyScope[] = [...PAGE_SCOPES[input.page], 'global'];
+    const edits = [...candidates, ...matching(documentChord(input.chord))].some(({ entry }) => changesProject(entry) && scopes.includes(entry.scope));
+    if (!editingText && !inDialog && (edits || DELETE_KEYS.has(input.chord))) return SWALLOW;
+  }
   const throughAll = first(input, candidates.filter(candidate => candidate.binding.through === 'all'));
   if (throughAll) return throughAll;
-  const inDialog = input.owner === 'dialog' || input.modalOpen;
   // 工程: saving works everywhere, in fields and dialogs too; undo and redo but where text is typed or in a dialog.
-  const editingText = input.editingText ?? input.owner === 'field';
   const project = matching(documentChord(input.chord)).find(({ entry, binding }) => entry.kind === 'document' && input.available(entry.id, entry.scope)
     && (!editingText || throughFields(binding)) && (!inDialog || throughDialogs(binding)));
   if (project) return act(input, project.entry);
   const others = candidates.filter(candidate => candidate.entry.kind !== 'document');
   // 弹窗: Escape closes the top panel, from wherever the focus is, as the panels' own listeners did (K4): in it, in a
   // field, on the page. Not while a modal dialog is open, which closes first, nor on an element that keeps Escape
-  // itself (`ownKeys`: a field that puts its text back, a recording field), nor during a drag, which Escape cancels
-  // and nothing else (0.5.9).
+  // itself (`ownKeys`: a field that puts its text back, a recording field). During a drag Escape only cancels it (above).
   const top = input.overlays.at(-1);
-  if (top && input.chord === 'Escape' && !input.modalOpen && input.owner !== 'own' && input.drag === 'none') return { kind: 'overlay' };
+  if (top && input.chord === 'Escape' && !input.modalOpen && input.owner !== 'own') return { kind: 'overlay' };
   // 输入框: the field's own keys, but for the commands that work in fields.
   if (input.owner === 'field' || input.owner === 'own') return first(input, others.filter(candidate => throughFields(candidate.binding))) ?? NATIVE;
   // 弹窗: every key pressed in an open dialog, or while a modal one is open, is the dialog's (keys7).
@@ -148,8 +167,6 @@ export function routeKey(input: RouteInput): RouteDecision {
   if (top?.focusInside) return NATIVE;
   // The settings or connection page: no key of the page or the window reaches the show.
   if (input.overlays.some(overlay => overlay.blocks)) return NATIVE;
-  // 拖动: Escape only cancels the drag, and is taken until the pointer is let go (keys7).
-  if (input.drag !== 'none' && input.chord === 'Escape') return input.drag === 'active' ? { kind: 'drag-cancel' } : SWALLOW;
   if (input.pageTakes === true) return NATIVE;
   // 页面: the page's scopes in order.
   for (const scope of PAGE_SCOPES[input.page]) {

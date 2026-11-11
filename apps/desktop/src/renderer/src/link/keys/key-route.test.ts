@@ -366,3 +366,47 @@ it('浮层开着时 Esc 关最上面那个，焦点在哪都一样（页面、�
   expect(route({ tag: 'button', parent: body }, 'Space', { overlays: [{ focusInside: true, blocks: false }] })).toEqual(NATIVE);
   expect(route({ tag: 'button', parent: body }, 'Space', { overlays: [top] })).toEqual(run('transport.playPause', 'global'));
 });
+
+describe('拖动层（04 设计 K5）', () => {
+  const timeline: Node = { tag: 'section', attributes: { class: 'reference-timeline' }, parent: body };
+  const clip: Node = { tag: 'button', attributes: { class: 'timeline-clip' }, parent: timeline };
+  const field: Node = { tag: 'input', parent: body };
+
+  it('拖动中按 Delete、Backspace、Ctrl+Z、Ctrl+Y、Ctrl+Shift+Z、S、Ctrl+V、Ctrl+D 都不执行，工程不在拖到一半时变掉；三个页面都一样', () => {
+    for (const page of ['project', 'cues', 'lighting'] as const) {
+      for (const chord of ['Delete', 'Backspace', 'Ctrl+KeyZ', 'Ctrl+KeyY', 'Ctrl+Shift+KeyZ']) {
+        for (const node of [body, timeline, clip, null]) expect([page, chord, route(node, chord, { page, drag: 'active', available: timelineHandlers })]).toEqual([page, chord, SWALLOW]);
+        expect([page, chord, route(body, chord, { page, drag: 'cancelled', available: timelineHandlers })]).toEqual([page, chord, SWALLOW]);
+      }
+    }
+    for (const chord of ['KeyS', 'Ctrl+KeyV', 'Ctrl+KeyD', 'Ctrl+KeyC', 'KeyM']) expect([chord, route(clip, chord, { page: 'cues', drag: 'active', available: timelineHandlers })]).toEqual([chord, SWALLOW]);
+    // Without a drag undo runs as before.
+    expect(route(body, 'Ctrl+KeyZ', { page: 'cues' })).toEqual(run('document.undo', 'global'));
+  });
+
+  it('拖动中在输入框里打字、在对话框里按键照旧：Delete、Ctrl+Z 是文字自己的；保存照常', () => {
+    for (const chord of ['Delete', 'Backspace', 'Ctrl+KeyZ']) expect(untouched(route(field, chord, { page: 'cues', drag: 'active' }))).toBe(true);
+    expect(untouched(route(body, 'Delete', { page: 'cues', drag: 'active', modalOpen: true }))).toBe(true);
+    expect(route(body, 'Ctrl+KeyS', { page: 'cues', drag: 'active' })).toEqual(run('document.save', 'global'));
+  });
+
+  it('拖动中空格、↑↓、播放头的左右键和没拖动时一样（0.5.9 的行为不变）', () => {
+    for (const page of ['project', 'cues', 'lighting'] as const) {
+      for (const chord of ['Space', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'Home']) {
+        expect([page, chord, route(body, chord, { page, drag: 'active', available: timelineHandlers })]).toEqual([page, chord, route(body, chord, { page, available: timelineHandlers })]);
+      }
+    }
+  });
+
+  it('拖动中按 Esc 只取消拖动，焦点在哪、开着什么都一样：输入框、对话框、设置页和连接页（blocks）开着时也是；第 7 题之前 Esc 不停止', () => {
+    const settings = { focusInside: false, blocks: true };
+    for (const where of [{ overlays: [settings] }, { modalOpen: true }, { overlays: [{ focusInside: true, blocks: false }] }, {}]) {
+      for (const node of [body, field, clip, timeline, { tag: 'input', attributes: ownKeys('Escape'), parent: body }]) {
+        expect(route(node, 'Escape', { ...where, page: 'cues', drag: 'active', available: timelineHandlers })).toEqual({ kind: 'drag-cancel' });
+        expect(route(node, 'Escape', { ...where, page: 'cues', drag: 'cancelled', available: timelineHandlers })).toEqual(SWALLOW);
+      }
+    }
+    // With no drag, Escape on the timeline is not taken for one.
+    expect(route(timeline, 'Escape', { page: 'cues', available: timelineHandlers })).not.toEqual(SWALLOW);
+  });
+});

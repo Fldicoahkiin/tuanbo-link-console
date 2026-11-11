@@ -1,5 +1,3 @@
-import { cancelDragOnEscape } from '../playback-keys';
-
 /** The window, as far as a drag listens to it. */
 export type DragWindow = Pick<Window, 'addEventListener' | 'removeEventListener'>;
 /** The pressed element, which captures the pointer for the drag. */
@@ -10,10 +8,10 @@ export type DragHandle = {
 };
 
 /**
- * The window's key router (keys/key-router.ts), told while a drag goes on so that its keys leave Escape to the drag.
- * The result says the drag is over.
+ * The window's key router (keys/key-router.ts), told while a drag goes on: Escape cancels it there (`escape`), and is
+ * only taken once it is `cancelled`, until the pointer is let go. The result says the drag is over.
  */
-export type DragKeys = { beginDrag(drag: { cancelled: () => boolean }): () => void };
+export type DragKeys = { beginDrag(drag: { escape: () => void; cancelled: () => boolean }): () => void };
 
 /**
  * The drag going on; `drawn` until the component that holds it leaves; `cancelled` once Escape gave it up while the
@@ -28,8 +26,9 @@ type Active<T> = { element: DragHandle; pointerId: number; value: T; drawn: bool
  * and Escape pressed to give up the move stopped the show instead. A cancelled drag waits for the pointer to be let go
  * all the same, so Escape pressed again to make sure does nothing either: it stopped the show (0.5.9).
  *
- * The window watches the rest, in the capture phase so that it comes before the timeline's and the window's Escape
- * that stops the show. With 顺序连播 the editor moves on to the next song under the pointer, the element goes away,
+ * Escape is the window's key router's (04 设计 4.6, K5): told the drag is going on, it cancels it and keeps the key
+ * from everything after it, the timeline's and the window's Escape that stops the show included. The window watches
+ * the release, in the capture phase. With 顺序连播 the editor moves on to the next song under the pointer, the element goes away,
  * and its own pointerup never comes; a drag left over swallowed the first Escape after the release, so the show only
  * stopped on the second press (0.5.9). The release ends such a drag wherever it lands, and a cancelled one too, which
  * its element has nothing to drop for; so does leaving the window. The next Escape stops the show as usual.
@@ -38,19 +37,18 @@ export class DragSession<T> {
   private active: Active<T> | null = null;
   private keysDone: (() => void) | null = null;
 
-  /** `keys`: the window's key router, which runs before this session's own Escape (in the app; none in tests). */
-  constructor(private readonly view: DragWindow, private readonly changed: (value: T | null) => void, private readonly keys: DragKeys | null = null) {}
+  /** `keys`: the window's key router, which cancels the drag on Escape. */
+  constructor(private readonly view: DragWindow, private readonly changed: (value: T | null) => void, private readonly keys: DragKeys) {}
 
   /** Starts a drag from `element`, which takes the pointer; a drag still going is dropped without a word. */
   begin(element: DragHandle, pointerId: number, value: T): void {
     this.unwatch();
     element.setPointerCapture(pointerId);
     this.active = { element, pointerId, value, drawn: true, cancelled: false };
-    this.view.addEventListener('keydown', this.escape, true);
     this.view.addEventListener('pointerup', this.release, true);
     this.view.addEventListener('pointercancel', this.release, true);
     this.view.addEventListener('blur', this.leave);
-    this.keysDone = this.keys?.beginDrag({ cancelled: () => this.active?.cancelled === true }) ?? null;
+    this.keysDone = this.keys.beginDrag({ escape: () => this.cancel(), cancelled: () => this.active?.cancelled === true });
     this.changed(value);
   }
 
@@ -86,7 +84,6 @@ export class DragSession<T> {
 
   private unwatch(): void {
     this.active = null;
-    this.view.removeEventListener('keydown', this.escape, true);
     this.view.removeEventListener('pointerup', this.release, true);
     this.view.removeEventListener('pointercancel', this.release, true);
     this.view.removeEventListener('blur', this.leave);
@@ -94,9 +91,7 @@ export class DragSession<T> {
     this.keysDone = null;
   }
 
-  /** Escape while the pointer is held gives the drag up at once; pressed again before the release, it is only taken. */
-  private readonly escape = (event: KeyboardEvent): void => cancelDragOnEscape(event, this.active !== null, () => this.cancel());
-
+  /** Escape while the pointer is held gives the drag up at once (the key router); pressed again before the release, it is only taken. */
   private cancel(): void {
     const active = this.active;
     if (!active || active.cancelled) return;
