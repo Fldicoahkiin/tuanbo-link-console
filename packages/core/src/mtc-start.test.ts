@@ -59,10 +59,15 @@ it('读出每首歌的 MTC 起点：没设为未分配；两首歌的 MTC 范围
   expect(invalid.state === 'invalid' && invalid.reason).toContain('1:2');
   expect(songMtcOverlaps(value).size).toBe(0);
   value.rundown[0]!.playback = { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: 360_000, shortcut: '' };
-  expect(Object.fromEntries(songMtcOverlaps(value))).toEqual({ 新歌: ['旧歌'], 旧歌: ['新歌'] });
+  expect(Object.fromEntries([...songMtcOverlaps(value)].map(([id, others]) => [id, others.map(other => other.title)]))).toEqual({ 新歌: ['旧歌'], 旧歌: ['新歌'] });
   // Back to back is not an overlap: 旧歌 ends at 420 s.
   value.rundown[0]!.playback.mtcOffsetMs = 420_000;
   expect(songMtcOverlaps(value).size).toBe(0);
+  // The same audio from the same start is one song on the console (the song in two playlists), not an overlap.
+  value.rundown[0]!.playback.mtcOffsetMs = 300_000;
+  expect(songMtcOverlaps(value).size).toBe(0);
+  value.rundown[0]!.referenceAudio!.sha256 = 'b'.repeat(64);
+  expect(songMtcOverlaps(value).get('新歌')).toEqual([{ id: '旧歌', title: '旧歌', playlistId: null }]);
 });
 
 it('连上控台给正在编灯、还没有 MTC 起点的歌依次分配，一次撤销；没编灯、已放进控台 Cue 或已有起点的歌不动', () => {

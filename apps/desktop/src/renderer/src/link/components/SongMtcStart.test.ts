@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
-import { createEmptyLinkProject, createLightingDocument, type Ma2Catalog } from '@tb/schema';
-import { reconcileMa2ReadState } from '@tb/core/link';
+import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type Ma2Catalog } from '@tb/schema';
+import { reconcileMa2ReadState, setItemPlaybackCommand } from '@tb/core/link';
 import { songMtcView } from './SongMtcStart';
 
 function project() {
@@ -44,4 +44,52 @@ it('控台上有从同一起点开始的节目就是绿色（对上），没有�
   expect(songMtcView(value, value.rundown[1]!).state).toBe('set');
   const twice = structuredClone(value); twice.ma2ReadState = reconcileMa2ReadState(twice, 'console', { ...catalog, entries: [show(2, '14400'), show(5, '14400')] });
   expect(songMtcView(twice, twice.rundown[0]!)).toMatchObject({ state: 'warning', detail: expect.stringContaining('Timecode 2、5 的起点都是 00:08:00:00') as string });
+});
+
+// 2026-11-11 field report: drop.mp4 copied into a second playlist (two rundown items) warned that it overlapped
+// 「drop.mp4」, and the warning seemed to stay after the start was changed.
+function playlists() {
+  const value = createEmptyLinkProject('两个播放列表'); value.timebase.frameRate = '30';
+  value.playlists = [{ id: 'warm', name: '暖场' }, { id: 'show', name: '正式演出' }];
+  const song = (id: string, title: string, playlistId: string, sha: string, startMs: number) => ({
+    id, title, enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [], playlistId,
+    referenceAudio: { assetId: `${id}-asset`, relativePath: `${id}.wav`, sha256: sha.repeat(64), durationMs: 120_000 },
+    playback: { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: startMs, shortcut: '' } });
+  value.rundown = [song('drop', 'drop.mp4', 'warm', 'a', 18_000_000), song('copy', 'drop.mp4', 'show', 'a', 18_000_000)];
+  return value;
+}
+const detail = (value: ReturnType<typeof playlists>, id: string): string => songMtcView(value, value.rundown.find(item => item.id === id)!).detail;
+
+it('同一段音频从同一个起点开始，是控台上的同一首歌，放在两个播放列表里不算重叠', () => {
+  const value = playlists();
+  expect(detail(value, 'drop')).not.toContain('重叠');
+  expect(detail(value, 'copy')).not.toContain('重叠');
+  // A different file from the same start is a real overlap.
+  const other = structuredClone(value); other.rundown[1]!.referenceAudio!.sha256 = 'b'.repeat(64);
+  expect(detail(other, 'drop')).toContain('和播放列表「正式演出」里的「drop.mp4」的 MTC 范围重叠');
+  // The same audio from a start inside the song is a real overlap too.
+  const later = structuredClone(value); later.rundown[1]!.playback!.mtcOffsetMs = 18_060_000;
+  expect(detail(later, 'copy')).toContain('和播放列表「暖场」里的「drop.mp4」的 MTC 范围重叠');
+});
+
+it('重叠的歌和这首同名或在别的播放列表时，写出它在哪个播放列表；同一个列表里不同名的只写歌名', () => {
+  const value = playlists();
+  const first = value.rundown[0]!;
+  value.rundown.push({ ...structuredClone(first), id: 'jia', title: '甲', referenceAudio: { ...first.referenceAudio!, sha256: 'c'.repeat(64) }, playback: { ...first.playback!, mtcOffsetMs: 18_030_000 } });
+  value.rundown.push({ ...structuredClone(first), id: 'loose', title: '乙', playlistId: null, referenceAudio: { ...first.referenceAudio!, sha256: 'd'.repeat(64) }, playback: { ...first.playback!, mtcOffsetMs: 18_090_000 } });
+  expect(detail(value, 'drop')).toContain('和「甲」、未分组里的「乙」的 MTC 范围重叠');
+  expect(detail(value, 'copy')).toContain('和播放列表「暖场」里的「甲」、未分组里的「乙」的 MTC 范围重叠');
+  expect(detail(value, 'jia')).toContain('和「drop.mp4」、播放列表「正式演出」里的「drop.mp4」、未分组里的「乙」的 MTC 范围重叠');
+});
+
+it('改了任意一首的起点，两首歌的重叠提示都跟着重新算', () => {
+  const value = playlists(); value.rundown[1]!.referenceAudio!.sha256 = 'b'.repeat(64);
+  expect(detail(value, 'drop')).toContain('重叠'); expect(detail(value, 'copy')).toContain('重叠');
+  const playback = value.rundown[1]!.playback!;
+  const movedCopy = setItemPlaybackCommand('copy', { ...playback, mtcOffsetMs: 18_300_000 }).execute(parseLinkProject(value));
+  expect(detail(movedCopy, 'drop')).not.toContain('重叠'); expect(detail(movedCopy, 'copy')).not.toContain('重叠');
+  const back = setItemPlaybackCommand('drop', { ...playback, mtcOffsetMs: 18_250_000 }).execute(movedCopy);
+  expect(detail(back, 'drop')).toContain('重叠'); expect(detail(back, 'copy')).toContain('重叠');
+  // The older project keeps its own answer: the per-project cache never mixes versions.
+  expect(detail(movedCopy, 'copy')).not.toContain('重叠');
 });

@@ -1,6 +1,7 @@
-import { parseLinkProject, type LinkProject, type Ma2TimecodeRanges } from '@tb/schema';
+import { parseLinkProject, type LinkProject, type Ma2TimecodeRanges, type RundownItem } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { programTimeOrigin } from './ma2-time-origin';
+import { programPlaylistId, programPlaylists } from './program-playlists';
 
 /** Time a song's MTC must stay clear of the one before it, so a late stop never runs into the next show. */
 const GAP_MS = 10_000;
@@ -67,22 +68,43 @@ export function readSongMtcStart(item: Pick<LinkProject['rundown'][number], 'pla
   catch (error) { return { state: 'invalid', reason: error instanceof Error ? error.message : String(error) }; }
 }
 
+/** Another song whose MTC range runs into this one's. */
+export type SongMtcOverlap = { id: string; title: string; playlistId: string | null };
+
 /**
  * Songs whose MTC ranges overlap another song's: on the same timecode both songs' console shows
- * would fire. Each song lists the titles it overlaps. Songs without audio or a readable start are
- * not compared; their start reading says why.
+ * would fire. Each song lists the songs it overlaps. Songs without audio or a readable start are
+ * not compared; their start reading says why. The same audio (sha256) from the same start is one
+ * song on the console, not two: a song put into two playlists is two rundown items (2026-11-11
+ * field report: a copy of drop.mp4 in another playlist was reported as overlapping drop.mp4).
  */
-export function songMtcOverlaps(project: LinkProject): Map<string, string[]> {
+export function songMtcOverlaps(project: LinkProject): Map<string, SongMtcOverlap[]> {
   const ranges = project.rundown.flatMap(item => {
     const reading = readSongMtcStart(item);
-    return item.referenceAudio && reading.state === 'set' ? [{ item, start: reading.startMs, end: reading.startMs + item.referenceAudio.durationMs }] : [];
+    return item.referenceAudio && reading.state === 'set' ? [{ item, audio: item.referenceAudio.sha256, start: reading.startMs, end: reading.startMs + item.referenceAudio.durationMs }] : [];
   });
-  const overlaps = new Map<string, string[]>();
+  const overlaps = new Map<string, SongMtcOverlap[]>();
   for (const range of ranges) {
-    const others = ranges.filter(other => other.item.id !== range.item.id && other.start < range.end && range.start < other.end).map(other => other.item.title);
+    const others = ranges.filter(other => other.item.id !== range.item.id && other.start < range.end && range.start < other.end
+      && !(other.audio === range.audio && other.start === range.start))
+      .map(other => ({ id: other.item.id, title: other.item.title, playlistId: programPlaylistId(project, other.item) }));
     if (others.length) overlaps.set(range.item.id, others);
   }
   return overlaps;
+}
+
+/**
+ * How a warning names the songs it overlaps: by title, and with the playlist when the title alone
+ * would not tell which song is meant (the same title as this one, or a song of another playlist).
+ */
+export function songMtcOverlapNames(project: LinkProject, item: RundownItem, others: readonly SongMtcOverlap[]): string[] {
+  const own = programPlaylistId(project, item);
+  const lists = new Map(programPlaylists(project).map(list => [list.id, list.name]));
+  return others.map(other => {
+    if (other.title !== item.title && other.playlistId === own) return `「${other.title}」`;
+    const list = other.playlistId === null ? undefined : lists.get(other.playlistId);
+    return list === undefined ? `未分组里的「${other.title}」` : `播放列表「${list}」里的「${other.title}」`;
+  });
 }
 
 /**
