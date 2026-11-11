@@ -1146,3 +1146,114 @@ describe('准备中、拖动定位还没完时按播放键（2026-11-09）', () 
   });
 });
 
+describe('定位还在准备时按暂停、继续，和播完后（0.5.9 S5）', () => {
+  /** The next picture preparation answers only when the test says so. */
+  function holdPicture(f: ReturnType<typeof fixture>): () => void {
+    const ready = f.api.prepareNativeObs.getMockImplementation()!;
+    let finish: () => void = () => { throw new Error('还没开始准备画面'); };
+    f.api.prepareNativeObs.mockImplementationOnce(request => new Promise(resolve => { finish = () => resolve(ready(request)); }));
+    return () => finish();
+  }
+  const played = (f: ReturnType<typeof fixture>): boolean => f.api.controlNativePlayback.mock.calls.some(([command]) => command.kind === 'play');
+
+  // 修复前：暂停后按住 → 连续定位，第二次定位读到的是“准备中”，当成没暂停，就开始播了。
+  it('暂停时连续定位两次，第二次在第一次还在准备时到：停在第二次的位置，不播', async () => {
+    const f = fixture();
+    await f.player.play('song-0'); await f.player.pause();
+    const finish = holdPicture(f);
+    const first = f.player.seek(3000);
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledTimes(2));
+    f.api.controlNativePlayback.mockClear();
+    const second = f.player.seek(4000);
+    finish(); await first; await second;
+    expect(f.state()).toMatchObject({ status: 'paused', positionMs: 4000 });
+    expect(played(f)).toBe(false);
+    await f.player.dispose();
+  });
+
+  // 修复前：准备中按继续被丢掉，准备完还停着，要再按一次。
+  it('暂停时定位还在准备，按继续：准备完从新位置开始播放', async () => {
+    const f = fixture();
+    await f.player.play('song-0'); await f.player.pause();
+    const finish = holdPicture(f);
+    const seeking = f.player.seek(3000);
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledTimes(2));
+    const resuming = f.player.resume();
+    finish(); await seeking; await resuming;
+    expect(f.state()).toMatchObject({ status: 'playing', positionMs: 3000 });
+    expect(f.api.prepareNativePlayback.mock.calls.map(([request]) => request.snapshot.positionMs)).toEqual([500, 3000]);
+    await f.player.dispose();
+  });
+
+  it('播放中定位还在准备，按暂停：准备完停在新位置；先按暂停再按继续：以最后按的为准，播放', async () => {
+    const paused = fixture();
+    await paused.player.play('song-0');
+    const finishPaused = holdPicture(paused);
+    const seekingPaused = paused.player.seek(3000);
+    await vi.waitFor(() => expect(paused.api.prepareNativeObs).toHaveBeenCalledTimes(2));
+    paused.api.controlNativePlayback.mockClear();
+    const pausing = paused.player.pause();
+    finishPaused(); await seekingPaused; await pausing;
+    expect(paused.state()).toMatchObject({ status: 'paused', positionMs: 3000 });
+    expect(played(paused)).toBe(false);
+    await paused.player.dispose();
+
+    const f = fixture();
+    await f.player.play('song-0');
+    const finish = holdPicture(f);
+    const seeking = f.player.seek(3000);
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledTimes(2));
+    const pressed = [f.player.pause(), f.player.resume()];
+    finish(); await seeking; await Promise.all(pressed);
+    expect(f.state()).toMatchObject({ status: 'playing', positionMs: 3000 });
+    await f.player.dispose();
+  });
+
+  it('暂停时定位还在准备，先按继续又按暂停：停在新位置', async () => {
+    const f = fixture();
+    await f.player.play('song-0'); await f.player.pause();
+    const finish = holdPicture(f);
+    const seeking = f.player.seek(3000);
+    await vi.waitFor(() => expect(f.api.prepareNativeObs).toHaveBeenCalledTimes(2));
+    f.api.controlNativePlayback.mockClear();
+    const pressed = [f.player.resume(), f.player.pause()];
+    finish(); await seeking; await Promise.all(pressed);
+    expect(f.state()).toMatchObject({ status: 'paused', positionMs: 3000 });
+    expect(played(f)).toBe(false);
+    await f.player.dispose();
+  });
+
+  // 修复前：一首歌自己设了播完动作，一开播就把播放条上的“播完后”改成了它的；之后没设置的歌都跟着用上一首的。
+  it('一首有自己播完动作的歌放完后，下一首没设置的歌用播放条上的“播完后”', async () => {
+    const f = fixture();
+    f.project.rundown[0]!.playback!.endAction = 'next';
+    const { startMs, endMs, mtcOffsetMs, volume, shortcut } = f.project.rundown[1]!.playback!;
+    f.project.rundown[1]!.playback = { startMs, endMs, mtcOffsetMs, volume, shortcut };
+    f.player.setEndAction('pause');
+    await f.player.play('song-0');
+    expect(f.state()).toMatchObject({ endAction: 'next', defaultEndAction: 'pause' });
+    f.emit({ status: 'ended', positionMs: 9500 });
+    await vi.waitFor(() => expect(f.state()).toMatchObject({ itemId: 'song-1', status: 'playing' }));
+    expect(f.state()).toMatchObject({ endAction: 'pause', defaultEndAction: 'pause' });
+    f.emit({ status: 'ended', positionMs: 9500 });
+    await vi.waitFor(() => expect(f.state()).toMatchObject({ itemId: 'song-1', status: 'paused' }));
+    await f.player.dispose();
+  });
+
+  it('播放条改“播完后”：这一首和之后没设置的歌都这样；停下后播放条显示自己的设置，不是刚才那首歌的', async () => {
+    const f = fixture();
+    await f.player.play('song-0');
+    expect(f.state()).toMatchObject({ endAction: 'pause', defaultEndAction: 'pause' });
+    f.player.setEndAction('stop');
+    expect(f.state()).toMatchObject({ endAction: 'stop', defaultEndAction: 'stop' });
+    await f.player.stop();
+    expect(f.state()).toMatchObject({ endAction: 'stop', defaultEndAction: 'stop' });
+    // song-1 has its own 'pause': this run uses it; once stopped the bar shows its own 'stop' again.
+    await f.player.play('song-1');
+    expect(f.state()).toMatchObject({ endAction: 'pause', defaultEndAction: 'stop' });
+    await f.player.stop();
+    expect(f.state()).toMatchObject({ endAction: 'stop', defaultEndAction: 'stop' });
+    await f.player.dispose();
+  });
+});
+

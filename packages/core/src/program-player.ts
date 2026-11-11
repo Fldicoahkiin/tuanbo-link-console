@@ -2,7 +2,7 @@ import type { NativeObsStatus, LightingDocument } from '@tb/schema';
 
 export type InternalPlayerState = import('@tb/schema').ProgramPlayerState;
 export const emptyInternalPlayerState: InternalPlayerState = {
-  status: 'stopped', itemId: null, positionMs: 0, durationMs: 0, volume: 100, endAction: 'pause', error: null, errorTitle: null, notice: null, playedItemIds: [], mtcEnabled: true, mtcPositionMs: null, mtcConnectionFailed: false
+  status: 'stopped', itemId: null, positionMs: 0, durationMs: 0, volume: 100, endAction: 'pause', defaultEndAction: 'pause', error: null, errorTitle: null, notice: null, playedItemIds: [], mtcEnabled: true, mtcPositionMs: null, mtcConnectionFailed: false
 };
 export type InternalPlayerDependencies = {
   prepare: (itemId: string, positionMs: number, options: { reuseSession: boolean; mtcOutputEnabled: boolean; signal?: AbortSignal }) => Promise<void>;

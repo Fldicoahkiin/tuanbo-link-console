@@ -16,8 +16,11 @@ import { savedSongVolume } from './link-command';
 
 type NativeApi = Pick<LinkDesktopApi, 'prepareNativePlayback' | 'controlNativePlayback' | 'getNativePlaybackDevices' | 'onNativePlaybackStatus' | 'prepareNativeObs' | 'stopNativeObs' | 'onNativeObsStatus' | 'preloadNativeObs' | 'cancelNativeObsPreload'>;
 type NativeAction = NativePlayerControl extends infer T ? T extends NativePlayerControl ? Omit<T, 'version' | 'sessionId' | 'generation'> : never : never;
-/** A scrub still placing the song at `positionMs`, and the last play or pause pressed meanwhile. */
-type Scrub = { token: number; positionMs: number; pressed: 'play' | 'pause' | null };
+/** A scrub still placing the song at `positionMs`. `pressed`: play or pause was pressed meanwhile, and the last one
+ * pressed is the player's `transportIntent`; without a press the scrub leaves the song paused there. */
+type Scrub = { token: number; positionMs: number; pressed: boolean };
+/** How the song is to be once the placement in progress (a play, a seek, a scrub) is done. */
+type TransportIntent = 'playing' | 'paused';
 /** This start's red text: why the picture before it was not cleaned up, the picture host's own fault for this start
  * (which it repeats with each status), and the fault of this start shown next to the failed cleanup. */
 type StartFaults = { leftover: string | null; obs: string | null; fault: string | null };
@@ -105,6 +108,11 @@ export class NativeProgramPlayer {
    * cancel the picture it prepares at the new position: the last one pressed decides how the scrub ends, paused there
    * or playing on from there (2026-11-09). */
   private scrubbing: Scrub | null = null;
+  /** How this placement ends, as last asked for (0.5.9 S5): set by the play or seek that started it, and by a pause or
+   * resume pressed while it is prepared (or while a scrub places the song, after a press). Outside a placement it is
+   * how the song is: playing or paused; once stopped, the next placement plays, as before. A seek, the end of a
+   * preparation and the end of a scrub read it here. */
+  private transportIntent: TransportIntent = 'playing';
   /** In red at this start, together (2026-11-09): why the picture before it was not cleaned up, first, and next to it
    * what failed as the song started (the picture host, the picture, the lights' Off at stop, the timecode), so neither
    * replaces the other. A fault after the start replaces them, as any later fault replaces the one shown. Each play
@@ -154,6 +162,7 @@ export class NativeProgramPlayer {
   /** Every song starts with its timecode (2026-10-26); `programStart` decides what joins it. */
   play(itemId: string, positionMs?: number, paused = false): Promise<void> {
     const config = this.dependencies.configuration(), token = ++this.epoch;
+    this.transportIntent = paused ? 'paused' : 'playing';
     // The service discards another song's preselected picture for this play; that is not a failure.
     if (this.selectedPreload?.itemId !== itemId) this.selectedPreload = null;
     this.mtcSuppressed = !this.state.mtcEnabled;
@@ -186,8 +195,9 @@ export class NativeProgramPlayer {
       const loop = item.lighting?.loop;
       this.loopStart = loop?.enabled && loop.startMs < loop.endMs && loop.startMs >= snapshot.startMs && loop.endMs <= snapshot.endMs && snapshot.positionMs < loop.endMs ? loop.startMs : null;
       if (this.loopStart !== null && loop) snapshot.endMs = loop.endMs;
+      // This run's end action: the song's own, else the player bar's (播完后), which the song's own never replaces (0.5.9 S5).
       this.update({ positionMs: snapshot.positionMs, durationMs: snapshot.endMs, volume: level * 100,
-        endAction: item.playback?.endAction ?? this.state.endAction, mtcPositionMs: this.allowMtc ? snapshot.positionMs + snapshot.offsetMs : null });
+        endAction: item.playback?.endAction ?? this.defaultEndAction(), mtcPositionMs: this.allowMtc ? snapshot.positionMs + snapshot.offsetMs : null });
       let nextSnapshot: ProgramStart['snapshot'] | undefined;
       if (config.preload !== false) {
         const items = this.items();
@@ -210,18 +220,27 @@ export class NativeProgramPlayer {
       // The console runs the lighting from the timecode; nothing of it is prepared here.
       await Promise.all([this.prepareRuntime(itemId, snapshot.positionMs, reuseSession, token), this.prepareObs(itemId, token)]);
       if (!this.current(token)) return;
-      // The volume may have changed while the song was prepared: it starts at the volume it has now.
+      // The volume may have changed while the song was prepared: it starts at the volume it has now. A pause or resume
+      // pressed while it was prepared decides whether it plays (0.5.9 S5), also one pressed while this is sent.
       const target = this.outputVolume() / 100;
-      if (config.fadeInMs && !paused) await this.command({ kind: 'volume', volume: target, durationMs: config.fadeInMs });
+      if (config.fadeInMs && this.transportIntent === 'playing') await this.command({ kind: 'volume', volume: target, durationMs: config.fadeInMs });
       else if (target !== snapshot.volume) await this.command({ kind: 'volume', volume: target, durationMs: 0 });
       if (!this.current(token)) return;
       if (target !== level) this.update({ volume: target * 100 });
-      if (paused) { await this.command({ kind: 'pause' }); if (this.runtimePrepared) await this.optionalRuntime(() => this.dependencies.pause(), 'MIDI Cue 暂停失败'); this.update({ status: 'paused' }); return; }
-      if (!this.current(token)) return;
+      if (this.transportIntent === 'paused') {
+        await this.command({ kind: 'pause' }); if (this.runtimePrepared) await this.optionalRuntime(() => this.dependencies.pause(), 'MIDI Cue 暂停失败');
+        if (!this.current(token)) return;
+        this.update({ status: 'paused' });
+        // Resume pressed while the pause was sent: it plays on from there.
+        if (this.intends('playing')) await this.playOn(token);
+        return;
+      }
       await this.command({ kind: 'play' });
       if (!this.current(token)) return;
       this.startCompanionClock();
       this.update({ status: 'playing' }); this.consumeClock();
+      // Pause pressed while play was sent: it stays paused where it is.
+      if (this.intends('paused')) await this.pauseNow(token);
     });
   }
 
@@ -229,14 +248,18 @@ export class NativeProgramPlayer {
     const scrub = this.placing();
     // Pressed while a scrub is still placing the song: it stays paused there, with the picture it prepares for that
     // position, also when play was pressed before this during the same scrub (2026-11-09).
-    if (scrub) { if (this.scrubbedStatus(scrub) === 'playing') scrub.pressed = 'pause'; return this.tail; }
+    if (scrub) { scrub.pressed = true; this.transportIntent = 'paused'; return this.tail; }
+    // Pressed while the song is prepared (a play or a seek): it stays paused where it is placed, instead of the press
+    // being lost (0.5.9 S5).
+    if (this.state.status === 'preparing') { this.transportIntent = 'paused'; return this.tail; }
     if (this.state.status !== 'playing') return Promise.resolve();
-    const token = ++this.epoch; this.cancelScheduled();
-    return this.enqueue(token, async () => {
-      await this.command({ kind: 'pause' }); if (!this.current(token)) return;
-      this.boundary('pause'); this.update({ status: 'paused', positionMs: this.native!.positionMs });
-      if (this.runtimePrepared) await this.optionalRuntime(() => this.dependencies.pause(), '联动暂停失败');
-    });
+    const token = ++this.epoch; this.cancelScheduled(); this.transportIntent = 'paused';
+    return this.enqueue(token, () => this.pauseNow(token));
+  }
+  private async pauseNow(token: number): Promise<void> {
+    await this.command({ kind: 'pause' }); if (!this.current(token)) return;
+    this.boundary('pause'); this.update({ status: 'paused', positionMs: this.native!.positionMs });
+    if (this.runtimePrepared) await this.optionalRuntime(() => this.dependencies.pause(), '联动暂停失败');
   }
   resume(): Promise<void> {
     const scrub = this.placing();
@@ -247,11 +270,13 @@ export class NativeProgramPlayer {
       // Pressed while a scrub is still placing the song: it plays on from there once placed, with the picture the
       // scrub prepares, instead of cancelling that picture and playing the rest of the song without it. Pressed again,
       // it still plays on once; a pause pressed after it keeps the song paused there (2026-11-09).
-      scrub.pressed = 'play'; return this.tail;
+      scrub.pressed = true; this.transportIntent = 'playing'; return this.tail;
     }
+    // Pressed while the song is prepared (a play or a seek): it plays once placed, instead of the press being lost (0.5.9 S5).
+    if (this.state.status === 'preparing') { this.transportIntent = 'playing'; return this.tail; }
     if (this.state.status !== 'paused' || !this.state.itemId) return Promise.resolve();
     if ((this.native?.positionMs ?? 0) >= this.state.durationMs) return this.play(this.state.itemId);
-    const token = ++this.epoch;
+    const token = ++this.epoch; this.transportIntent = 'playing';
     return this.enqueue(token, () => this.playOn(token));
   }
   /** Plays on from where the song is paused. Pause cancels unsent MIDI and releases owned notes: the range ahead is
@@ -270,12 +295,19 @@ export class NativeProgramPlayer {
   }
   /** The scrub placing the song now, if one is: nothing newer was pressed or played since it began. */
   private placing(): Scrub | null { return this.scrubbing?.token === this.epoch ? this.scrubbing : null; }
+  /** The intent now: a press while a command was awaited may have changed it. */
+  private intends(intent: TransportIntent): boolean { return this.transportIntent === intent; }
   /** Playing or paused, as the operator last asked for while the scrub places the song. */
   private scrubbedStatus(scrub: Scrub): InternalPlayerState['status'] {
-    return scrub.pressed === 'play' ? 'playing' : scrub.pressed === 'pause' ? 'paused' : this.state.status;
+    return scrub.pressed ? this.transportIntent : this.state.status;
   }
+  /** The player bar's 播完后: what a song without its own end action does (0.5.9 S5). Events from before it was kept
+   * apart carry only `endAction`. */
+  private defaultEndAction(): InternalPlayerState['endAction'] { return this.state.defaultEndAction ?? this.state.endAction; }
   stop(): Promise<void> {
-    const token = ++this.epoch; this.cancelScheduled(); this.update({ status: 'stopped', notice: null, fault: null, volumeOverride: null });
+    const token = ++this.epoch; this.cancelScheduled(); this.transportIntent = 'playing';
+    // The run is over: the player bar shows its own 播完后 again, not the end action of the song that stopped.
+    this.update({ status: 'stopped', notice: null, fault: null, volumeOverride: null, endAction: this.defaultEndAction() });
     this.stopOwed = true;
     // Stop reaches the main service immediately if preparation has already
     // published its session; otherwise the queued prepare cannot start audio.
@@ -378,11 +410,13 @@ export class NativeProgramPlayer {
     const fault = this.startFaultShown();
     this.start.leftover = message; this.showFault(this.startRed(fault));
   }
-  seek(positionMs: number): Promise<void> { return this.state.itemId ? this.play(this.state.itemId, positionMs, this.state.status === 'paused') : Promise.resolve(); }
+  /** Placed paused or playing as the operator last asked for, also when a seek arrives while the one before it is still
+   * prepared (0.5.9 S5: holding ← after a pause no longer plays on). */
+  seek(positionMs: number): Promise<void> { return this.state.itemId ? this.play(this.state.itemId, positionMs, this.transportIntent === 'paused') : Promise.resolve(); }
   scrub(itemId: string, positionMs: number): Promise<void> {
     if (this.state.status === 'error') return Promise.resolve();
     if (itemId !== this.state.itemId || !['playing', 'paused'].includes(this.state.status)) return this.play(itemId, positionMs, true);
-    const token = ++this.epoch, scrub: Scrub = { token, positionMs, pressed: null };
+    const token = ++this.epoch, scrub: Scrub = { token, positionMs, pressed: false };
     this.scrubbing = scrub; this.cancelScheduled(); this.boundary('seek');
     // The scrub starts its own record; the red shown stays as it is, and what is in it can still clear its own part.
     this.carried = this.faultShown(this.start) !== null ? this.start : this.faultShown(this.carried) !== null ? this.carried : null;
@@ -395,15 +429,20 @@ export class NativeProgramPlayer {
         this.update({ status: 'paused', positionMs: this.native!.positionMs });
         if (this.runtimePrepared && this.dependencies.scrub) await this.optionalRuntime(() => this.dependencies.scrub!(positionMs), '联动定位失败');
       } finally { if (this.scrubbing === scrub) this.scrubbing = null; }
-      // Play was the last pressed while it placed the song: it plays on from there, with the picture it prepared.
-      if (scrub.pressed === 'play' && this.current(token)) await this.playOn(token);
+      if (!this.current(token)) return;
+      // Without a press the scrub leaves the song paused there. Play was the last pressed while it placed the song: it
+      // plays on from there, with the picture it prepared.
+      if (!scrub.pressed) this.transportIntent = 'paused';
+      if (this.transportIntent === 'playing') await this.playOn(token);
     });
   }
   skip(direction: -1 | 1): Promise<void> { const items = this.items(), index = items.findIndex(item => item.id === this.state.itemId); const next = items[(index + direction + items.length) % items.length]; return next ? this.play(next.id) : Promise.resolve(); }
-  setEndAction(endAction: InternalPlayerState['endAction']): void { this.update({ endAction }); }
+  /** The player bar's 播完后: what this song does when it ends, and every later song without its own end action. */
+  setEndAction(endAction: InternalPlayerState['endAction']): void { this.update({ endAction, defaultEndAction: endAction }); }
   setPlaylist(playlistId: string): void { this.update({ playlistId }); }
   /** The play/pause key (MIDI note 1). Nothing while a song is being prepared, like the play buttons and Space: pressing
    * it again would start the preparation over from the start of the song and lose the position it prepares (2026-11-09).
+   * Nor does it turn the placement's intent around: the song ends as it was before the seek, as those cases require.
    * While a scrub places the song it goes by what was last pressed meanwhile. */
   toggle(): Promise<void> {
     if (this.state.status === 'preparing') return Promise.resolve();
@@ -579,7 +618,7 @@ export class NativeProgramPlayer {
       if (!this.current(token)) return;
       if (this.loopStart !== null && this.state.itemId) { await this.play(this.state.itemId, this.loopStart); return; }
       this.boundary('end'); this.markPlayed(); this.cancelScheduled();
-      if (this.state.endAction === 'pause') { this.update({ status: 'paused' }); if (this.runtimePrepared) await this.optionalRuntime(() => this.dependencies.pause(), 'MIDI Cue 结束暂停失败'); }
+      if (this.state.endAction === 'pause') { this.transportIntent = 'paused'; this.update({ status: 'paused' }); if (this.runtimePrepared) await this.optionalRuntime(() => this.dependencies.pause(), 'MIDI Cue 结束暂停失败'); }
       else if (this.state.endAction === 'loop' && this.state.itemId) await this.play(this.state.itemId);
       else { const items = this.items(), next = items[items.findIndex(item => item.id === this.state.itemId) + 1]; if (this.state.endAction === 'next' && next) await this.play(next.id); else await this.stop(); }
     } catch (error) { if (this.current(token)) this.fail(error); }
@@ -617,7 +656,7 @@ export class NativeProgramPlayer {
     if (cancelObsPreparation && this.obsPreparing) void this.stopObs().catch((error: unknown) => this.pictureNotStopped(error, '取消画面准备失败'));
     this.finishing = false; this.lastPosition = -1; this.pendingPosition = null; this.volumePending = null; this.reflectGain = false;
   }
-  private fail(error: unknown): void { ++this.epoch; this.cancelScheduled(); this.update({ status: 'error', error: toUserErrorMessage(error), errorTitle: this.state.status === 'preparing' ? '没有开始播放：准备失败' : '播放操作失败' }); if (this.native?.status !== 'error' && this.native?.status !== 'stopped') void this.command({ kind: 'stop' }).catch(cleanup => this.reportUnavailable(`停止音频失败：${toUserErrorMessage(cleanup)}`)); void this.dependencies.stop().catch(cleanup => this.reportUnavailable(`停止联动失败：${toUserErrorMessage(cleanup)}`)); }
+  private fail(error: unknown): void { ++this.epoch; this.cancelScheduled(); this.transportIntent = 'playing'; this.update({ status: 'error', error: toUserErrorMessage(error), errorTitle: this.state.status === 'preparing' ? '没有开始播放：准备失败' : '播放操作失败' }); if (this.native?.status !== 'error' && this.native?.status !== 'stopped') void this.command({ kind: 'stop' }).catch(cleanup => this.reportUnavailable(`停止音频失败：${toUserErrorMessage(cleanup)}`)); void this.dependencies.stop().catch(cleanup => this.reportUnavailable(`停止联动失败：${toUserErrorMessage(cleanup)}`)); }
   private boundary(event: PlaybackBoundary): void { for (const listener of this.boundaries) listener(event); }
   private items() { return playlistItems(this.project, this.state.playlistId ?? 'all').filter(item => item.enabled && item.referenceAudio); }
   private markPlayed(): void { if (this.state.itemId) this.update({ playedItemIds: [...new Set([...this.state.playedItemIds, this.state.itemId])] }); }
