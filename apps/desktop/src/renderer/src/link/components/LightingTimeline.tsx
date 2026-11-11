@@ -6,7 +6,7 @@ import { Menu, MenuItem, MenuSeparator } from '../ui';
 import { useLightingClipboardStore } from '../stores/lighting-clipboard-store';
 import { LightingMasterCurve } from './LightingMasterCurve';
 import { masterCurveY } from './lighting-master-curve';
-import { useDragSession } from './useDragSession';
+import { useDragSession, useFramedDrag } from './useDragSession';
 import { useKeyCommands } from '../keys/useKeyCommands';
 import { removeLightingPoints, timelineClipboard } from './timeline-commands';
 import { usePlayheadValue, type EditorPlayhead } from './editor-playhead';
@@ -47,7 +47,8 @@ export type LightingTimelineProps = {
 };
 export function LightingHeadings(props: LightingTimelineProps & { durationMs: number }): JSX.Element {
   // Escape, leaving the window and losing the heading end the move (DragSession).
-  const reorder = useDragSession<{ y: number; target: number; moving: boolean }>();
+  // The rows' middles are read once at the press, not on every move (0.5.9 E3).
+  const reorder = useDragSession<{ y: number; target: number; moving: boolean; middles: number[] }>();
   const moving = reorder.drag?.moving === true;
   const [context, setContext] = useState<{ track: LightingTrack; x: number; y: number } | null>(null);
   const remove = (track: LightingTrack): void => { if (!track.locked) props.onChange({ ...props.document, tracks: props.document.tracks.filter((entry) => entry.id !== track.id) }, '删除灯光轨道'); setContext(null); };
@@ -59,8 +60,8 @@ export function LightingHeadings(props: LightingTimelineProps & { durationMs: nu
       props.onChange({ ...props.document, tracks: [...props.document.tracks, track] }, '添加灯光轨道'); props.onSelect(track.id, clip.id);
     }}><Plus />添加灯光轨道</button></div>
     {(props.document.tracks.length ? [props.document.tracks.find(track => track.clips.some(clip => clip.id === props.selectedClipId)) ?? props.document.tracks[0]!] : []).map((track) => <div className={`track-heading lighting-heading ${moving ? 'is-dragging' : ''}`} key="lighting" onContextMenu={(event) => { event.preventDefault(); setContext({ track, x: event.clientX, y: event.clientY }); }} style={{ borderLeft: '3px solid var(--accent)', order: 50 + (props.document.laneIndex ?? 0) * 100 }}
-      onPointerDown={(event) => { if (event.button !== 0 || track.locked || !(event.target as Element).closest('.lighting-track-name,.lighting-grip')) return; reorder.begin(event, { y: event.clientY, target: props.document.laneIndex ?? 0, moving: false }); }}
-      onPointerMove={(event) => { const current = reorder.current(); if (!current) return; const rows = [...(event.currentTarget.parentElement?.querySelectorAll('.visual-layer-heading') ?? [])]; const target = rows.filter((row) => { const rect = row.getBoundingClientRect(); return event.clientY > rect.top + rect.height / 2; }).length; const moved = current.moving || Math.abs(event.clientY - current.y) > 4; if (target !== current.target || moved !== current.moving) reorder.update({ ...current, target, moving: moved }); }}
+      onPointerDown={(event) => { if (event.button !== 0 || track.locked || !(event.target as Element).closest('.lighting-track-name,.lighting-grip')) return; reorder.begin(event, { y: event.clientY, target: props.document.laneIndex ?? 0, moving: false, middles: [...(event.currentTarget.parentElement?.querySelectorAll('.visual-layer-heading') ?? [])].map((row) => { const rect = row.getBoundingClientRect(); return rect.top + rect.height / 2; }) }); }}
+      onPointerMove={(event) => { const current = reorder.current(); if (!current) return; const target = current.middles.filter((middle) => event.clientY > middle).length; const moved = current.moving || Math.abs(event.clientY - current.y) > 4; if (target !== current.target || moved !== current.moving) reorder.update({ ...current, target, moving: moved }); }}
       onPointerUp={(event) => { const current = reorder.current(); reorder.end(); if (current && Math.abs(event.clientY - current.y) <= 4) props.onSelect(track.id, track.clips[0]?.id ?? null); if (current && Math.abs(event.clientY - current.y) > 4 && current.target !== (props.document.laneIndex ?? 0)) props.onChange({ ...props.document, laneIndex: current.target }, '移动灯光轨道位置'); }} onPointerCancel={reorder.end}>
       <button className="lighting-grip" aria-label="调整灯光轨道顺序" title="上下拖动调整位置"><GripVertical /></button>
       <button className="lighting-track-name" title={`当前来源：${track.name}`} onClick={() => props.onSelect(track.id, track.clips[0]?.id ?? null)}>{props.document.tracks.length === 1 ? track.name : '灯光'}</button>
@@ -90,10 +91,13 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
   const selectedIds = new Set(props.selectedEventIds ?? (props.selectedEventId ? [props.selectedEventId] : []));
   const menuIds = menuEvent && menuClip?.id === props.selectedClipId && selectedIds.has(menuEvent.id) ? selectedIds : new Set(menuEvent ? [menuEvent.id] : []);
   // A box selection draws its box once it moved; Escape, leaving the window and losing the clip end it (DragSession).
-  const marquee = useDragSession<{ clipId: string; start: number; x: number; ids: string[]; end: number | null }>();
+  // A move is worked out once a frame from the press (time there, and the scale), and drawn only when the box changed (0.5.9 E3).
+  const marquee = useFramedDrag<Marquee, { x: number; moved: boolean }>();
+  const marqueeMoved = useRef(false);
   const range = marquee.drag && marquee.drag.end !== null ? { clipId: marquee.drag.clipId, start: marquee.drag.start, end: marquee.drag.end } : null;
   const suppressClick = useRef(false);
-  const pointDrag = useDragSession<PointDrag>();
+  // A point moved is worked out once a frame from the press, and the points draw again only when it moved by a millisecond or a level step (0.5.9 E3).
+  const pointDrag = useFramedDrag<PointDrag, { x: number; y: number }>();
   const drag = pointDrag.drag;
   const visibleEvents = useVisibleLightingEvents(props, map, drag);
   const select = (track: LightingTrack, clip: LightingClip, event: LightingEvent, additive: boolean): string[] => {
@@ -180,9 +184,9 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
         const span = lightingClipSpan({ ...clip, duration: previewDuration }, map);
         return <div key={clip.id} role="group" aria-label={`${track.name}时间线片段`} data-active={activeClip?.id === clip.id} className={`lighting-clip ${props.selectedClipId === clip.id ? 'selected' : ''} ${track.muted || clip.muted ? 'is-muted' : ''}`} style={{ left: span.startMs / 1000 * props.pixelsPerSecond, width: Math.max(12, (span.endMs - span.startMs) / 1000 * props.pixelsPerSecond), '--lighting-color': track.color } as React.CSSProperties}
           onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); const id = (event.target as Element).closest<HTMLElement>('[data-lighting-event]')?.dataset.lightingEvent ?? null; if (id && (props.selectedClipId !== clip.id || !selectedIds.has(id))) props.onSelectEvent?.(track.id, clip.id, id, [id]); if (!id) props.onSelect(track.id, clip.id); setContext({ trackId: track.id, clipId: clip.id, eventId: id, ms: props.timeAtClientX(event.clientX), x: Math.min(event.clientX, window.innerWidth - 190), y: Math.min(event.clientY, window.innerHeight - 140) }); }}
-          onPointerDown={(input) => { if (input.button !== 0 || (input.target as Element).closest('[data-lighting-event]')) return; input.stopPropagation(); suppressClick.current = false; marquee.begin(input, { clipId: clip.id, start: props.timeAtClientX(input.clientX), x: input.clientX, ids: (input.ctrlKey || input.metaKey || input.shiftKey) && props.selectedClipId === clip.id ? [...selectedIds] : [], end: null }); }}
-          onPointerMove={(input) => { const current = marquee.current(); if (!current || current.clipId !== clip.id || Math.abs(input.clientX - current.x) < 4) return; marquee.update({ ...current, end: props.timeAtClientX(input.clientX) }); }}
-          onPointerUp={(input) => { const current = marquee.current(); if (!current || current.clipId !== clip.id) return; input.currentTarget.releasePointerCapture(input.pointerId); if (current.end !== null) { const end = props.timeAtClientX(input.clientX); const ids = new Set(current.ids); for (const entry of clip.events) { const ms = lightingEventTime(clip, entry, map); if (ms >= Math.min(current.start, end) && ms <= Math.max(current.start, end)) ids.add(entry.id); } const primary = [...ids].at(-1); if (primary) props.onSelectEvent?.(track.id, clip.id, primary, [...ids]); else props.onSelect(track.id, clip.id); suppressClick.current = true; } marquee.end(); }}
+          onPointerDown={(input) => { if (input.button !== 0 || (input.target as Element).closest('[data-lighting-event]')) return; input.stopPropagation(); suppressClick.current = false; marqueeMoved.current = false; const start = props.timeAtClientX(input.clientX); const pixelsPerSecond = props.pixelsPerSecond; marquee.begin(input, { clipId: clip.id, start, x: input.clientX, ids: (input.ctrlKey || input.metaKey || input.shiftKey) && props.selectedClipId === clip.id ? [...selectedIds] : [], end: null }, { target: (from, at) => at.moved ? { ...from, end: Math.min(86_399_000, Math.max(0, from.start + (at.x - from.x) / pixelsPerSecond * 1000)) } : from, drawn: (value) => String(value.end) }); }}
+          onPointerMove={(input) => { const current = marquee.current(); if (!current || current.clipId !== clip.id) return; marqueeMoved.current ||= Math.abs(input.clientX - current.x) >= 4; marquee.move({ x: input.clientX, moved: marqueeMoved.current }); }}
+          onPointerUp={(input) => { const pressed = marquee.current(); if (!pressed || pressed.clipId !== clip.id) return; input.currentTarget.releasePointerCapture(input.pointerId); marqueeMoved.current ||= Math.abs(input.clientX - pressed.x) >= 4; const current = marquee.release({ x: input.clientX, moved: marqueeMoved.current }); if (current && current.end !== null) { const end = props.timeAtClientX(input.clientX); const ids = new Set(current.ids); for (const entry of clip.events) { const ms = lightingEventTime(clip, entry, map); if (ms >= Math.min(current.start, end) && ms <= Math.max(current.start, end)) ids.add(entry.id); } const primary = [...ids].at(-1); if (primary) props.onSelectEvent?.(track.id, clip.id, primary, [...ids]); else props.onSelect(track.id, clip.id); suppressClick.current = true; } }}
           onPointerCancel={marquee.end}
           onClick={(event) => { event.stopPropagation(); if (suppressClick.current) { suppressClick.current = false; return; } props.onSelect(track.id, clip.id); props.onSeek(props.snapTime?.(props.timeAtClientX(event.clientX)) ?? props.timeAtClientX(event.clientX)); }}
           onDoubleClick={(event) => { event.stopPropagation(); add(track, clip, props.timeAtClientX(event.clientX)); }}>
@@ -198,16 +202,17 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
             if (covered) return null;
             return <button key={event.id} data-lighting-event={event.id} className={`lighting-timeline-point ${selectedIds.has(event.id) ? 'selected' : ''}`} aria-pressed={selectedIds.has(event.id)} aria-label={`灯光点 ${event.kind === 'ma2' ? event.label : event.kind === 'ma2-fader' ? `Master ${Number((event.level * 100).toFixed(6))}%` : event.kind}`} title={`${event.kind === 'ma2' ? `${event.label}${event.action === 'goto' ? ` · Cue ${event.cue}` : ''}` : event.kind === 'ma2-fader' ? `${event.label} · Alt 上下拖动调节百分比` : '灯光事件'} · ${(ms / 1000).toFixed(3)} 秒 · Ctrl 点击多选，拖动调整`} style={{ left: (ms - span.startMs) / 1000 * props.pixelsPerSecond }}
               onClick={(input) => { input.stopPropagation(); if (input.detail === 0) select(track, clip, stored, input.ctrlKey || input.metaKey || input.shiftKey); props.onSeek(ms); }} onDoubleClick={(input) => input.stopPropagation()}
-              onPointerDown={(input) => { input.stopPropagation(); if (input.button !== 0) return; const additive = input.ctrlKey || input.metaKey || input.shiftKey; if (track.locked) { select(track, clip, stored, additive); return; } const ids = !additive && selectedIds.has(event.id) ? [...selectedIds] : select(track, clip, stored, additive); if (!ids.includes(event.id)) return; pointDrag.begin(input, { trackId: track.id, clipId: clip.id, event: stored, at: stored.at, x: input.clientX, y: input.clientY, valueDrag: input.altKey && stored.kind === 'ma2-fader', deltaLevel: 0, ids, deltaMs: 0 }); }}
-              onPointerMove={(input) => {
-                const current = pointDrag.current();
-                if (!current || current.event.id !== event.id) return;
-                if (current.valueDrag) { pointDrag.update({ ...current, deltaLevel: masterDragDelta(clip, current.ids, current.y - input.clientY) }); return; }
-                const earliest = Math.min(...clip.events.filter((entry) => current.ids.includes(entry.id)).map((entry) => lightingEventTime(clip, entry, map)));
-                const originMs = lightingEventTime(clip, current.event, map);                 const targetMs = originMs + (input.clientX - current.x) / props.pixelsPerSecond * 1000;                 const deltaMs = Math.max(lightingClipSpan(clip, map).startMs - earliest, (props.snapTime?.(targetMs) ?? targetMs) - originMs);
-                pointDrag.update({ ...current, deltaMs, at: movedAt(clip, current.event, deltaMs) });
-              }}
-              onPointerUp={(input) => { const current = pointDrag.current(); pointDrag.end(); if (!current || current.event.id !== event.id) return; input.currentTarget.releasePointerCapture(input.pointerId); if (current.deltaMs !== 0 || current.deltaLevel !== 0) { changeClip(track, { ...clip, events: clip.events.map((entry) => movedEvent(clip, entry, current)) }, current.valueDrag ? '调整主推杆值' : '移动灯光点'); if (!current.valueDrag) props.onSeek(lightingEventTime(clip, { ...stored, at: current.at }, map)); } else if (!input.ctrlKey && !input.metaKey && !input.shiftKey) select(track, clip, stored, false); }} onPointerCancel={pointDrag.end} onLostPointerCapture={pointDrag.end}>
+              onPointerDown={(input) => { input.stopPropagation(); if (input.button !== 0) return; const additive = input.ctrlKey || input.metaKey || input.shiftKey; if (track.locked) { select(track, clip, stored, additive); return; } const ids = !additive && selectedIds.has(event.id) ? [...selectedIds] : select(track, clip, stored, additive); if (!ids.includes(event.id)) return; const { pixelsPerSecond, snapTime } = props; pointDrag.begin(input, { trackId: track.id, clipId: clip.id, event: stored, at: stored.at, x: input.clientX, y: input.clientY, valueDrag: input.altKey && stored.kind === 'ma2-fader', deltaLevel: 0, ids, deltaMs: 0 }, {
+                target: (start, at) => {
+                  if (start.valueDrag) return { ...start, deltaLevel: masterDragDelta(clip, start.ids, start.y - at.y) };
+                  const earliest = Math.min(...clip.events.filter((entry) => start.ids.includes(entry.id)).map((entry) => lightingEventTime(clip, entry, map)));
+                  const originMs = lightingEventTime(clip, start.event, map); const targetMs = originMs + (at.x - start.x) / pixelsPerSecond * 1000; const deltaMs = Math.max(lightingClipSpan(clip, map).startMs - earliest, (snapTime?.(targetMs) ?? targetMs) - originMs);
+                  return { ...start, deltaMs, at: movedAt(clip, start.event, deltaMs) };
+                },
+                drawn: (value) => `${value.deltaMs}|${value.deltaLevel}`
+              }); }}
+              onPointerMove={(input) => { if (pointDrag.current()?.event.id === event.id) pointDrag.move({ x: input.clientX, y: input.clientY }); }}
+              onPointerUp={(input) => { if (pointDrag.current()?.event.id !== event.id) { pointDrag.end(); return; } const current = pointDrag.release({ x: input.clientX, y: input.clientY }); if (!current) return; input.currentTarget.releasePointerCapture(input.pointerId); if (current.deltaMs !== 0 || current.deltaLevel !== 0) { changeClip(track, { ...clip, events: clip.events.map((entry) => movedEvent(clip, entry, current)) }, current.valueDrag ? '调整主推杆值' : '移动灯光点'); if (!current.valueDrag) props.onSeek(lightingEventTime(clip, { ...stored, at: current.at }, map)); } else if (!input.ctrlKey && !input.metaKey && !input.shiftKey) select(track, clip, stored, false); }} onPointerCancel={pointDrag.end} onLostPointerCapture={pointDrag.end}>
               <i />{event.kind === 'ma2-fader' ? <b className="lighting-master-handle" style={{ top: masterCurveY(event.level) - 8 }} /> : null}<span className="lighting-point-label">{event.kind === 'ma2' ? event.cue ?? String(clip.events.findIndex(entry => entry.id === event.id) + 1) : event.kind === 'ma2-fader' ? `Master ${Number((event.level * 100).toFixed(6))}%` : event.kind === 'note' ? String(event.note) : event.kind === 'point' || event.kind === 'cc' ? String(event.value) : '事件'}</span>{stack.length > 1 ? <small title="此处有多个灯光点，放大或右键选择">+{stack.length - 1}</small> : null}
             </button>;
           })}
@@ -271,5 +276,6 @@ function movedLightingTime(clip: LightingClip, event: LightingEvent, deltaMs: nu
   return Math.max(0, (clip.timeLock === 'time' ? ms : map.msToBeat(ms)) - clip.start);
 }
 
+type Marquee = { clipId: string; start: number; x: number; ids: string[]; end: number | null };
 type PointDrag = { trackId: string; clipId: string; event: LightingEvent; at: number; x: number; y: number; valueDrag: boolean; deltaLevel: number; ids: string[]; deltaMs: number };
 

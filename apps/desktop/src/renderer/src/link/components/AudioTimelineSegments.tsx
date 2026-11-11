@@ -6,36 +6,25 @@ import type { AudioEditor } from './useAudioEditor';
 import { AudioSegmentWaveform } from './AudioSegmentWaveform';
 import { AudioSegmentMenu } from './AudioSegmentMenu';
 import { ModalSurface } from '../ui/ModalSurface';
-import { useDragSession } from './useDragSession';
+import { useFramedDrag } from './useDragSession';
 import { ownKeys } from '../keys/key-owner';
 import type { EditorPlayhead } from './editor-playhead';
 import { trimAudioToPlayhead } from './timeline-commands';
 
-type Drag = { id: string; edge: 'seek' | 'move' | 'start' | 'end'; clientX: number; segment: AudioSegment; deltaMs: number };
+/** A segment held: what it was at the press, the segment's left edge on screen then (seeking), and how far it moved. */
+type Drag = { id: string; edge: 'seek' | 'move' | 'start' | 'end'; clientX: number; left: number; segment: AudioSegment; deltaMs: number };
 export function AudioTimelineSegments({ waveform, display, editor, pixelsPerSecond, onSelect, onSeek, scrollLeft, viewportWidth, sourceWaveform = false, snapTime, playhead, readOnly = false }: { waveform: LinkWaveform | null; display: WaveformDisplay; editor: Pick<AudioEditor, 'audio' | 'title' | 'segments' | 'selectedId' | 'disabled' | 'busy' | 'points' | 'select' | 'update' | 'remove' | 'split'>; sourceWaveform?: boolean; snapTime?: (ms: number) => number; pixelsPerSecond: number; onSelect: (id: string) => void; onSeek: (ms: number) => void; scrollLeft: number; viewportWidth: number;playhead: EditorPlayhead; readOnly?:boolean }): JSX.Element {
-  // Escape, leaving the window and losing the dragged segment end the drag (DragSession).
-  const session = useDragSession<Drag>();
+  // Escape, leaving the window and losing the dragged segment end the drag (DragSession); a move is worked out
+  // once a frame, and the segments draw again only when it changed by a millisecond (0.5.9 E3).
+  const session = useFramedDrag<Drag, number>();
   const drag = session.drag;
   const [context,setContext]=useState<{id:string;x:number;y:number}|null>(null);
   const [editing,setEditing]=useState<string|null>(null);
   const contextSegment=editor.segments.find(segment=>segment.id===context?.id);
   const editingSegment=editor.segments.find(segment=>segment.id===editing);
-  const seek = (event: PointerEvent<HTMLElement>, segment: AudioSegment): void => {
-    const rect=event.currentTarget.closest('.audio-timeline-segment')?.getBoundingClientRect()??event.currentTarget.getBoundingClientRect();
-    const position = segment.startMs + (event.clientX - rect.left) / pixelsPerSecond * 1000;
+  const seekAt = (clientX: number, left: number, segment: AudioSegment): void => {
+    const position = segment.startMs + (clientX - left) / pixelsPerSecond * 1000;
     onSeek(Math.max(segment.startMs, Math.min(segment.startMs + segment.durationMs, position)));
-  };
-  const begin = (event: PointerEvent<HTMLElement>, segment: AudioSegment, edge: Drag['edge']): void => {
-    if (readOnly || event.button !== 0) return;
-    event.stopPropagation(); event.currentTarget.closest<HTMLElement>('.audio-timeline-segment')?.focus({ preventScroll: true }); editor.select(segment.id); onSelect(segment.id);
-    if (edge === 'move' && editor.disabled) {
-      event.preventDefault();
-      session.begin(event, { id: segment.id, edge: 'seek', segment, clientX: event.clientX, deltaMs: 0 });
-      seek(event, segment);
-      return;
-    }
-    if (editor.disabled) return;
-    session.begin(event, { id: segment.id, edge, segment, clientX: event.clientX, deltaMs: 0 });
   };
   const moved=(state:Drag,clientX:number):AudioSegment=>{
     if(state.edge==='seek'||Math.abs(clientX-state.clientX)<4)return state.segment;
@@ -43,25 +32,44 @@ export function AudioTimelineSegments({ waveform, display, editor, pixelsPerSeco
     const anchor=state.edge==='end'?state.segment.startMs+state.segment.durationMs:state.segment.startMs;
     return dragAudioSegment(editor.segments,state.id,state.edge,(snapTime?.(anchor+delta)??anchor+delta)-anchor,editor.audio?.durationMs??0);
   };
+  const work = {
+    target: (start: Drag, clientX: number): Drag => {
+      const next = moved(start, clientX);
+      return { ...start, deltaMs: start.edge === 'end' ? next.durationMs - start.segment.durationMs : next.startMs - start.segment.startMs };
+    },
+    drawn: (value: Drag) => String(value.deltaMs)
+  };
+  const begin = (event: PointerEvent<HTMLElement>, segment: AudioSegment, edge: Drag['edge']): void => {
+    if (readOnly || event.button !== 0) return;
+    event.stopPropagation(); event.currentTarget.closest<HTMLElement>('.audio-timeline-segment')?.focus({ preventScroll: true }); editor.select(segment.id); onSelect(segment.id);
+    // The segment's left edge, read once at the press: it does not move while it is seeked in.
+    const left = (event.currentTarget.closest('.audio-timeline-segment') ?? event.currentTarget).getBoundingClientRect().left;
+    if (edge === 'move' && editor.disabled) {
+      event.preventDefault();
+      session.begin(event, { id: segment.id, edge: 'seek', segment, clientX: event.clientX, left, deltaMs: 0 }, work);
+      seekAt(event.clientX, left, segment);
+      return;
+    }
+    if (editor.disabled) return;
+    session.begin(event, { id: segment.id, edge, segment, clientX: event.clientX, left, deltaMs: 0 }, work);
+  };
   const move = (event: PointerEvent<HTMLElement>): void => {
     const current = session.current();
     if (!current) return;
     event.stopPropagation();
-    if (current.edge === 'seek') { seek(event, current.segment); return; }
-    const next=moved(current,event.clientX);
-    const deltaMs=current.edge==='end'?next.durationMs-current.segment.durationMs:next.startMs-current.segment.startMs;
-    session.update({ ...current, deltaMs });
+    if (current.edge === 'seek') { seekAt(event.clientX, current.left, current.segment); return; }
+    session.move(event.clientX);
   };
   const end = (event: PointerEvent<HTMLElement>): void => {
     const current = session.current();
     if (!current) return;
     event.stopPropagation();
     const segment = current.segment;
-    if (current.edge === 'seek') { seek(event, segment); session.end(); return; }
+    if (current.edge === 'seek') { seekAt(event.clientX, current.left, segment); session.end(); return; }
+    if (!session.release(event.clientX)) return;
     const next=moved(current,event.clientX);
     if(next.startMs!==segment.startMs||next.sourceOffsetMs!==segment.sourceOffsetMs||next.durationMs!==segment.durationMs)void editor.update(segment.id,{startMs:next.startMs,sourceOffsetMs:next.sourceOffsetMs,durationMs:next.durationMs});
-    else if(current.edge==='move'&&Math.abs(event.clientX-current.clientX)<4)seek(event,segment);
-    session.end();
+    else if(current.edge==='move'&&Math.abs(event.clientX-current.clientX)<4)seekAt(event.clientX,current.left,segment);
   };
   return <>
     {editor.segments.map((segment, index) => {
