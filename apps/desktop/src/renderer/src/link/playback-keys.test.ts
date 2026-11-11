@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { cancelDragOnEscape, handlePlaybackKey, modalDialogOpen, playbackKeyAction, pressPlayButton, registerPlayButton, spaceBelongsToControl, type PlaybackKeyContext } from './playback-keys';
+import { cancelDragOnEscape, escapeClosesPanel, handlePlaybackKey, keyInDialog, modalDialogOpen, playbackKeyAction, pressPlayButton, registerPlayButton, spaceBelongsToControl, type PlaybackKeyContext } from './playback-keys';
 
 /** An element; `modal` marks a native <dialog> opened with showModal(). */
 type Node = { tag: string; attributes?: Record<string, string>; parent?: Node; modal?: boolean };
@@ -228,4 +228,24 @@ it('拖动或修剪时按 Esc 只取消这次拖动，键不再往下传，节�
   cancelDragOnEscape(enter, true, () => { cancelled += 1; });
   expect(enter.defaultPrevented || enter.propagationStopped).toBe(false);
   expect(cancelled).toBe(1);
+});
+
+it('键归对话框只有一条规则（keyInDialog）：焦点在原生 <dialog>（不写 role）、role="dialog"、role="alertdialog" 里，或者有模态对话框开着；对话框一关就不再算', () => {
+  const body: Node = { tag: 'body' };
+  const native: Node = { tag: 'dialog', attributes: { class: 'modal-surface cue-point-dialog', open: '' }, parent: { tag: 'section', attributes: { class: 'reference-timeline' }, parent: body }, modal: true };
+  for (const node of [native, { tag: 'button', parent: { tag: 'footer', parent: native } }, { tag: 'div', attributes: { role: 'dialog' }, parent: body }, { tag: 'div', attributes: { role: 'alertdialog' }, parent: body }]) {
+    expect(keyInDialog(element(node), false)).toBe(true);
+  }
+  for (const target of [element(body), element({ tag: 'button', parent: body }), null]) {
+    expect(keyInDialog(target, true)).toBe(true);
+    expect(keyInDialog(target, false)).toBe(false);
+  }
+});
+
+it('页面自己用 Esc 关的面板、详情和连接页（escapeClosesPanel）：模态对话框开着时让给对话框，Esc 先关对话框；关掉后照常', () => {
+  const escape = () => ({ key: 'Escape', defaultPrevented: false });
+  expect(escapeClosesPanel(escape(), true)).toBe(false);
+  expect(escapeClosesPanel(escape(), false)).toBe(true);
+  expect(escapeClosesPanel({ key: 'Escape', defaultPrevented: true }, false)).toBe(false);
+  expect(escapeClosesPanel({ key: 'Enter', defaultPrevented: false }, false)).toBe(false);
 });

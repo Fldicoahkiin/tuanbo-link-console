@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { escapeClosesPanel, modalDialogOpen } from '../playback-keys';
 
 /** Space kept between a panel and the window edge, and between a panel and its button. */
 const MARGIN = 8;
@@ -71,7 +72,7 @@ export function Popover({ anchor, label, placement = 'below-end', className, onC
       onClose();
     };
     const escape = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (!escapeClosesPanel(event, modalDialogOpen(document))) return;
       event.preventDefault();
       onClose();
       anchor?.focus();

@@ -46,8 +46,8 @@ import { timelineLayout, timelineMusicLayout, timelineRulerHeight } from './time
 import { LightingHeadings, LightingLanes, type LightingTimelineProps } from './LightingTimeline';
 import { TimelineMarkers } from './TimelineMarkers';
 import { useLightingPreview } from '../runtime/use-lighting-preview';
-import { keyTarget, registerPlayButton } from '../playback-keys';
-import { handleTimelineTransportKey } from './timeline-keys';
+import { keyTarget, modalDialogOpen, registerPlayButton } from '../playback-keys';
+import { handleTimelineKey } from './timeline-keys';
 
 function seekTimelineAudio(audio: HTMLAudioElement, milliseconds: number): void {
   const seconds = Number.isFinite(audio.duration) ? Math.min(milliseconds / 1_000, audio.duration) : milliseconds / 1_000;
@@ -215,7 +215,8 @@ export function ReferenceTimeline(input: Props): JSX.Element {
     data-duration-ms={props.durationMs} data-waveform-mode={waveformMode}
     ref={timelineRef} data-playhead-time={showPlayheadTime}
     tabIndex={0}
-    onKeyDown={(event) => handleTimelineKeyDown(event, props, clipboard, setClipboard, (milliseconds) => seekTo(milliseconds, true, false), () => deleteTimelineSelection(props), stopPlayback, playPause)}
+    onKeyDown={(event) => handleTimelineKey(event, keyTarget(event), { lightingWorkspace: props.lightingWorkspace === true, modalOpen: modalDialogOpen(document), stop: props.onStop ? stopPlayback : undefined, playPause },
+      () => handleTimelineEditKey(event, props, clipboard, setClipboard, (milliseconds) => seekTo(milliseconds, true, false), () => deleteTimelineSelection(props)))}
   >
     <div><TimelineToolbar displayControl={props.lightingWorkspace && props.lighting ? <LightingTimelineControls playheadMs={props.playheadMs} beats={beatSegments} analysisPanel={props.analysisPanel} analysis={analysis} onChange={props.lighting.onChange} onSeek={ms => { viewport.revealTime(ms); seekTo(ms, true, false); }} projectPath={props.projectPath} source={props.analysisSource} playing={props.playing} document={props.lighting.document} display={musicDisplay} onDisplayChange={setMusicDisplay} /> : undefined} outputControl={props.outputControl} stampControls={stamping.controls} wheelSeek={props.lightingWorkspace ? wheelSeek : undefined} compact={props.lightingWorkspace === true} tools={props.lightingWorkspace ? <><div className="cue-mouse-modes" role="group" aria-label="鼠标模式"><IconButton label="定位" title="定位：点击或拖动波形、标尺" icon={MousePointer2} aria-pressed={cueMouseMode === 'seek'} onClick={() => setCueMouseMode('seek')} /><IconButton label="框选 Cue" title="框选 Cue：拖动框选，Delete 删除" icon={SquareDashedMousePointer} aria-pressed={cueMouseMode === 'select'} onClick={() => setCueMouseMode('select')} /></div><TimelinePanelButton label="波形显示方式" icon={AudioLines}><Field stacked label="波形显示方式">{(field) => <Select {...field} value={waveformMode} onChange={event => setWaveformMode(event.currentTarget.value)}><option value="rhythm">节奏波形</option><option value="waveform">原始波形</option><option value="spectrum">频谱</option></Select>}</Field></TimelinePanelButton></> : undefined} editPoints={seekSnapPointsMs} snapDistance={snapDistance} onSnapDistanceChange={setSnapDistance} externalTransport={props.externalTransport} onStop={props.onStop ? stopPlayback : undefined} recordingControl={props.lighting ? <><MenuButton label="灯光" menuLabel="灯光工具" className="timeline-lighting-tools">{(close) => lightingTools.filter(([tool]) => !props.lightingWorkspace || tool !== 'tempo').map(([tool, label, icon]) => <MenuItem key={tool} icon={icon} onSelect={() => { close(); props.lighting?.onOpenTools?.(tool); }}>{label}</MenuItem>)}</MenuButton><TimelineLightingRecording audioAvailable={Boolean(props.referenceAudio)} document={props.lighting.document} clipId={props.lighting.selectedClipId} clock={clock} playheadMs={props.playheadMs} onChange={props.lighting.onChange} onError={props.onPlaybackError} /></> : null} playbackReady={lightingPlayback.ready} frameRate={props.frameRate} durationMs={props.durationMs} playheadMs={props.playheadMs} playing={props.playing} referenceAudio={props.referenceAudio} snapEnabled={snapEnabled} audioRef={audioRef} onPlayheadChange={ms => { if (props.playing) props.onPlayheadChange(ms); else seekTo(ms, true, false); }} onPlayPause={playPause} onPlayingChange={props.onPlayingChange} onPlaybackError={props.onPlaybackError} onSnapEnabledChange={setSnapEnabled} onZoomOut={viewport.zoomOut} onFit={viewport.fit} onZoomIn={viewport.zoomIn} />
 
@@ -274,19 +275,15 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   </section>;
 }
 
-function handleTimelineKeyDown(
+/** The timeline's editing keys, for a key `handleTimelineKey` left to them: not in a dialog, a field or on a button other than a clip or Cue. */
+function handleTimelineEditKey(
   event: KeyboardEvent<HTMLElement>,
   props: Props,
   clipboard: TimelineTarget | null,
   setClipboard: (target: TimelineTarget | null) => void,
   seekTo: (milliseconds: number) => void,
-  deleteSelected: () => void,
-  stop: () => void,
-  playPause: () => void
+  deleteSelected: () => void
 ): void {
-  // Escape and Space first: a focused toolbar, track or clip button no longer takes Space as a second press (0.5.9).
-  if (handleTimelineTransportKey(event, keyTarget(event), { lightingWorkspace: props.lightingWorkspace === true, stop: props.onStop ? stop : undefined, playPause })) return;
-  if (isInteractiveTarget(event.target)) return;
   if (props.lightingWorkspace && ['Space', 'Home', 'End', 'ArrowLeft', 'ArrowRight'].includes(event.code)) return;
   const command = event.ctrlKey || event.metaKey;
   // Lighting owns its clipboard; selecting a lighting clip excludes media paste.
@@ -338,12 +335,6 @@ function handleTimelineKeyDown(
     event.preventDefault();
     deleteSelected();
   }
-}
-
-function isInteractiveTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.closest('.timeline-clip, .timeline-cue, .timeline-media-waveform')) return false;
-  return ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'AUDIO'].includes(target.tagName);
 }
 
 function snap(

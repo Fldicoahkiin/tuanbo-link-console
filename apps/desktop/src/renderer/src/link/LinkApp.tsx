@@ -4,6 +4,7 @@ import { useSettingsExit } from './useSettingsExit';
 import { toUserErrorMessage } from '@tb/core/link';
 import { useMa2ReadStore } from './stores/ma2-read-store';
 import { useDocumentShortcuts } from './useDocumentShortcuts';
+import { escapeClosesPanel, modalDialogOpen } from './playback-keys';
 import { useMidiPortMonitor } from './useMidiPortMonitor';
 import { initializeStartupDevices } from './startup-obs-connection';
 import { subscribeObsSceneSync } from './obs-scene-sync';
@@ -240,7 +241,7 @@ export function LinkApp(): JSX.Element {
 function useConnectionsEscape(open: boolean, onClose: () => void): void {
   useEffect(() => {
     if (!open) return;
-    const close = (event: KeyboardEvent): void => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); onClose(); } };
+    const close = (event: KeyboardEvent): void => { if (escapeClosesPanel(event, modalDialogOpen(document))) { event.preventDefault(); onClose(); } };
     window.addEventListener('keydown', close);
     return () => window.removeEventListener('keydown', close);
   }, [open, onClose]);

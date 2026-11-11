@@ -7,6 +7,8 @@ import { useLightingClipboardStore } from '../stores/lighting-clipboard-store';
 import { LightingMasterCurve } from './LightingMasterCurve';
 import { masterCurveY } from './lighting-master-curve';
 import { useDragSession } from './useDragSession';
+import { keyTarget, modalDialogOpen } from '../playback-keys';
+import { lightingTimelineKeyActs } from './timeline-keys';
 
 function groupStackedEvents(tracks: LightingTrack[], map: LightingTempoMap, pixelsPerSecond: number): Map<string, LightingEvent[]> {
   const result = new Map<string, LightingEvent[]>();
@@ -140,7 +142,7 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
   };
   useEffect(() => {
     const key = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented || context || props.detailOpen || event.repeat || event.altKey || event.target instanceof Element && event.target.closest('input,textarea,select,[contenteditable="true"]')) return;
+      if (context || props.detailOpen || !lightingTimelineKeyActs(event, keyTarget(event), modalDialogOpen(document))) return;
       const track = activeTrack; const clip = activeClip;
       if (!track || !clip) return;
       if (event.ctrlKey || event.metaKey) {

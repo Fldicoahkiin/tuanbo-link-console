@@ -1,5 +1,5 @@
 import type { ShortcutBinding } from '../stores/shortcut-store';
-import { DIALOGS, isInside, spaceBelongsToControl, takeKey, type KeyTarget } from '../playback-keys';
+import { DIALOGS, isInside, keyInDialog, spaceBelongsToControl, takeKey, type KeyTarget } from '../playback-keys';
 
 /*
  * The keys of the editor's and the lighting workbench's timeline (ReferenceTimeline, useTimelineStamp, TimelineToolbar):
@@ -30,6 +30,33 @@ export function handleTimelineTransportKey(event: Pick<KeyboardEvent, 'key' | 'c
   if (event.code !== 'Space' || page.lightingWorkspace || spaceBelongsToControl(target)) return false;
   takeKey(event, page.playPause);
   return true;
+}
+
+/** Controls that keep the timeline's editing keys: fields, lists, buttons and the player. */
+const EDITING_CONTROLS = 'input,textarea,select,button,audio';
+/** The timeline's own buttons, which are edited with those keys: clips, Cues and audio waveforms. */
+const TIMELINE_ITEMS = '.timeline-clip,.timeline-cue,.timeline-media-waveform';
+
+/**
+ * Every key pressed in the editor's or the lighting workbench's timeline (ReferenceTimeline): the transport keys first
+ * (`handleTimelineTransportKey`), then the editing keys (`edit`: Delete, s, Ctrl+C/V/D, Home, ← and →), which leave
+ * fields and buttons alone but not clips and Cues. Nothing at all while the key belongs to an open dialog
+ * (`keyInDialog`), so the dialogs drawn in the timeline (修改 Cue 卡点, 编辑歌曲段落, 编辑音频片段) keep every key.
+ */
+export function handleTimelineKey(event: Parameters<typeof handleTimelineTransportKey>[0], target: KeyTarget | null,
+  page: Parameters<typeof handleTimelineTransportKey>[2] & { modalOpen: boolean }, edit: () => void): void {
+  if (keyInDialog(target, page.modalOpen) || handleTimelineTransportKey(event, target, page)) return;
+  if (isInside(target, EDITING_CONTROLS) && !isInside(target, TIMELINE_ITEMS)) return;
+  edit();
+}
+
+/**
+ * Whether the lighting timeline's window keys (M stamps, Delete and Backspace remove the selected lighting points,
+ * Ctrl+A/C/X/V) act on a key: once per press, without Alt, outside fields, and never while the key belongs to an open
+ * dialog (`keyInDialog`).
+ */
+export function lightingTimelineKeyActs(event: Pick<KeyboardEvent, 'defaultPrevented' | 'repeat' | 'altKey'>, target: KeyTarget | null, modalOpen: boolean): boolean {
+  return !event.defaultPrevented && !event.repeat && !event.altKey && !isInside(target, 'input,textarea,select,[contenteditable="true"]') && !keyInDialog(target, modalOpen);
 }
 
 type ShortcutAction = ShortcutBinding['action'];

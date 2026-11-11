@@ -36,6 +36,25 @@ export function spaceBelongsToControl(target: KeyTarget | null): boolean {
   return isInside(target, OWN_KEYS);
 }
 
+/**
+ * Whether a key belongs to an open dialog and not to the page behind it: it was pressed in one (`DIALOGS`), or a modal
+ * one is open (`modalDialogOpen`) and the focus fell out of it onto the page. The one rule every key handler of the
+ * page asks, so no key there stops or plays the show, edits the timeline or the project (0.5.9). The timeline's
+ * editing keys knew dialogs only by their tag: with the focus on 「修改 Cue 卡点」 itself, Delete removed the selected
+ * Cue points behind it, and with it on a dialog's button, Delete removed the selected lighting points.
+ */
+export function keyInDialog(target: KeyTarget | null, modalOpen: boolean): boolean {
+  return modalOpen || isInside(target, DIALOGS);
+}
+
+/**
+ * Whether Escape closes a panel, a detail view or the connection page that the page closes with its own listener.
+ * Not while a modal dialog is open: Escape closes the dialog first, and taken by the page it left the dialog open.
+ */
+export function escapeClosesPanel(event: Pick<KeyboardEvent, 'key' | 'defaultPrevented'>, modalOpen: boolean): boolean {
+  return event.key === 'Escape' && !event.defaultPrevented && !modalOpen;
+}
+
 /** The focused element a key event came from, if any. */
 export function keyTarget(event: Pick<KeyboardEvent, 'target'>): Element | null {
   return event.target instanceof Element ? event.target : null;
@@ -70,7 +89,7 @@ export type PlaybackKeyContext = { paused: boolean; modalOpen: boolean; arrowKey
  */
 export function playbackKeyAction(event: PlaybackKeyEvent, target: KeyTarget | null, context: PlaybackKeyContext): PlaybackKeyAction | null {
   const plain = !event.ctrlKey && !event.altKey, space = plain && event.code === 'Space';
-  if (context.paused || context.modalOpen || event.metaKey || event.defaultPrevented || isInside(target, `.reference-timeline,${DIALOGS}`)
+  if (context.paused || keyInDialog(target, context.modalOpen) || event.metaKey || event.defaultPrevented || isInside(target, '.reference-timeline')
     || (space ? spaceBelongsToControl(target) : isInside(target, 'input,textarea,select,button,[contenteditable="true"],[role="slider"]'))) return null;
   const itemId = context.song([...(event.ctrlKey ? ['Ctrl'] : []), ...(event.altKey ? ['Alt'] : []), ...(event.shiftKey ? ['Shift'] : []), event.code].join('+'));
   if (itemId) return { kind: 'song', itemId };

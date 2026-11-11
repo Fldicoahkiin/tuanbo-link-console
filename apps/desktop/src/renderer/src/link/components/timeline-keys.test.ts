@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type { ShortcutBinding } from '../stores/shortcut-store';
-import { handleLightingShortcut, handleTimelineTransportKey, keysBackToTimeline } from './timeline-keys';
+import { handleLightingShortcut, handleTimelineKey, handleTimelineTransportKey, keysBackToTimeline, lightingTimelineKeyActs } from './timeline-keys';
 
 type Node = { tag: string; attributes?: Record<string, string>; parent?: Node };
 type Fake = { node: Node; closest(selectors: string): Fake | null; getAttribute(name: string): string | null };
@@ -178,4 +178,104 @@ it('鼠标点完时间线工具栏上的按钮，键交还给时间线，M、←
   // Clicks in a menu or panel the toolbar opened (mounted on the page body), and on what is not a button.
   const item: Node = { tag: 'button', attributes: { role: 'menuitem' }, parent: { tag: 'body' } };
   for (const target of [element(item), element({ tag: 'select', parent: toolbar }), null]) expect(keysBackToTimeline({ detail: 1, target }, bar)).toBe(false);
+});
+
+/** An editing key: `code`, the `key` it types, and Ctrl when given. */
+function edit(code: string, key: string, ctrlKey = false) {
+  return { ...press(code), key, ctrlKey, altKey: false, metaKey: false };
+}
+/** Every key the timeline edits with or moves the playhead with, and its transport keys. */
+const editingKeys = () => [edit('Delete', 'Delete'), edit('Backspace', 'Backspace'), edit('KeyS', 's'), edit('KeyM', 'm'), edit('Enter', 'Enter'),
+  edit('KeyV', 'v', true), edit('KeyD', 'd', true), edit('KeyC', 'c', true), edit('KeyX', 'x', true), edit('KeyZ', 'z', true), edit('KeyA', 'a', true),
+  edit('Home', 'Home'), edit('End', 'End'), edit('ArrowLeft', 'ArrowLeft'), edit('ArrowRight', 'ArrowRight'), edit('ArrowUp', 'ArrowUp'), edit('ArrowDown', 'ArrowDown'),
+  edit('Escape', 'Escape'), edit('Space', ' ')];
+
+/** 修改 Cue 卡点 as ModalSurface renders it inside the timeline: a native <dialog> with no role. */
+const lanes: Node = { tag: 'div', attributes: { class: 'timeline-lanes' }, parent: timeline };
+const cueDialog: Node = { tag: 'dialog', attributes: { class: 'modal-surface cue-point-dialog', open: '' }, parent: lanes };
+const cueForm: Node = { tag: 'form', attributes: { class: 'effect-binding-form' }, parent: cueDialog };
+const cueFooter: Node = { tag: 'footer', parent: cueForm };
+const inDialog: Node[] = [cueDialog, cueForm, { tag: 'h3', parent: cueForm }, { tag: 'button', parent: cueFooter }, { tag: 'button', attributes: { type: 'submit' }, parent: cueFooter },
+  { tag: 'input', attributes: { name: 'time' }, parent: { tag: 'label', parent: cueForm } },
+  // A dialog drawn inside a clip still is a dialog.
+  { tag: 'button', parent: { tag: 'dialog', attributes: { open: '' }, parent: { tag: 'button', attributes: { class: 'timeline-clip' }, parent: lanes } } },
+  // The panels beside a toolbar button (Popover) are portaled to the page, and React still brings their keys to the timeline.
+  { tag: 'section', attributes: { role: 'dialog', class: 'ui-popover' }, parent: { tag: 'body' } }, { tag: 'div', attributes: { role: 'alertdialog' }, parent: timeline }];
+const clip: Node = { tag: 'button', attributes: { class: 'timeline-clip' }, parent: lanes };
+
+/** The timeline writing down what its keys asked for; `modalOpen` as `modalDialogOpen` reads it. */
+function timelinePage(calls: string[], modalOpen: boolean, lightingWorkspace = false) {
+  return { ...page(calls, lightingWorkspace), modalOpen };
+}
+
+it('时间线里的原生对话框（<dialog>，不写 role）：焦点在对话框本身、它的按钮或输入框上，Delete、Backspace、s、Ctrl+V/D/C/X/Z、Home、End、方向键、M、Enter 都不碰对话框后面的时间线，键留给对话框', () => {
+  for (const lighting of [false, true]) for (const target of inDialog) {
+    for (const key of editingKeys()) {
+      const calls: string[] = [];
+      handleTimelineKey(key, element(target), timelinePage(calls, true, lighting), () => { calls.push(`编辑 ${key.key}`); });
+      // A Popover is not modal; its keys are its own all the same.
+      handleTimelineKey(key, element(target), timelinePage(calls, false, lighting), () => { calls.push(`编辑 ${key.key}`); });
+      expect(calls).toEqual([]);
+      expect([key.defaultPrevented, key.propagationStopped]).toEqual([false, false]);
+    }
+  }
+});
+
+it('模态对话框开着时，时间线不处理任何键；对话框一关，编辑键和 Esc、空格立刻照常可用', () => {
+  for (const target of [clip, timeline, { tag: 'div', attributes: { class: 'track-heading' }, parent: timeline }]) {
+    const calls: string[] = [];
+    for (const key of editingKeys()) {
+      handleTimelineKey(key, element(target), timelinePage(calls, true), () => { calls.push(`编辑 ${key.key}`); });
+      expect(key.defaultPrevented).toBe(false);
+    }
+    expect(calls).toEqual([]);
+  }
+  // Closed: on a clip every editing key goes to the timeline, Escape stops and Space plays.
+  const calls: string[] = [];
+  for (const key of editingKeys()) handleTimelineKey(key, element(clip), timelinePage(calls, false), () => { calls.push(`编辑 ${key.key}`); });
+  expect(calls).toEqual(['编辑 Delete', '编辑 Backspace', '编辑 s', '编辑 m', '编辑 Enter', '编辑 v', '编辑 d', '编辑 c', '编辑 x', '编辑 z', '编辑 a',
+    '编辑 Home', '编辑 End', '编辑 ArrowLeft', '编辑 ArrowRight', '编辑 ArrowUp', '编辑 ArrowDown', '停止', '播放/暂停']);
+  const bare: string[] = [];
+  handleTimelineKey(edit('Delete', 'Delete'), element(timeline), timelinePage(bare, false), () => { bare.push('删除'); });
+  handleTimelineKey(edit('Delete', 'Delete'), null, timelinePage(bare, false), () => { bare.push('删除'); });
+  expect(bare).toEqual(['删除', '删除']);
+});
+
+it('时间线的编辑键让开工具栏按钮、输入框、下拉框和播放器，片段、Cue 和音频波形按钮上照常编辑（和原来一样）', () => {
+  for (const target of [playButton, { tag: 'input', parent: toolbar }, { tag: 'select', parent: toolbar }, { tag: 'textarea', parent: heading }, { tag: 'audio', parent: timeline }]) {
+    const calls: string[] = [];
+    handleTimelineKey(edit('Delete', 'Delete'), element(target), timelinePage(calls, false), () => { calls.push('删除'); });
+    expect(calls).toEqual([]);
+  }
+  for (const name of ['timeline-clip', 'timeline-cue', 'timeline-media-waveform']) {
+    const calls: string[] = [];
+    handleTimelineKey(edit('Delete', 'Delete'), element({ tag: 'button', attributes: { class: name }, parent: lanes }), timelinePage(calls, false), () => { calls.push('删除'); });
+    expect(calls).toEqual(['删除']);
+  }
+});
+
+it('灯光时间线的窗口键（M 打点、Delete/Backspace 删灯光点、Ctrl+A/C/X/V）：对话框里、或者模态对话框开着焦点掉到页面上时都不动作；关掉后照常', () => {
+  const body: Node = { tag: 'body' };
+  const mtc: Node = { tag: 'dialog', attributes: { class: 'modal-surface ui-dialog', open: '' }, parent: body };
+  const close: Node = { tag: 'button', parent: { tag: 'header', parent: { tag: 'div', attributes: { class: 'ui-dialog-frame' }, parent: mtc } } };
+  const panel: Node = { tag: 'section', attributes: { role: 'dialog', class: 'ui-popover' }, parent: body };
+  for (const key of editingKeys()) {
+    for (const target of [mtc, close, { tag: 'p', parent: mtc }, panel, { tag: 'button', parent: panel }, cueDialog, { tag: 'button', parent: cueFooter }]) {
+      expect(lightingTimelineKeyActs(key, element(target), false)).toBe(false);
+      expect(lightingTimelineKeyActs(key, element(target), true)).toBe(false);
+    }
+    expect(lightingTimelineKeyActs(key, element(body), true)).toBe(false);
+    expect(lightingTimelineKeyActs(key, null, true)).toBe(false);
+    // Closed again.
+    expect(lightingTimelineKeyActs(key, element(body), false)).toBe(true);
+    expect(lightingTimelineKeyActs(key, element(clip), false)).toBe(true);
+    expect(lightingTimelineKeyActs(key, null, false)).toBe(true);
+  }
+  // As before: fields, held keys, Alt and keys already taken stay out.
+  for (const target of [{ tag: 'input', parent: body }, { tag: 'textarea', parent: body }, { tag: 'select', parent: body }, { tag: 'div', attributes: { contenteditable: 'true' }, parent: body }]) {
+    expect(lightingTimelineKeyActs(edit('Delete', 'Delete'), element(target), false)).toBe(false);
+  }
+  expect(lightingTimelineKeyActs({ ...edit('Delete', 'Delete'), repeat: true }, element(body), false)).toBe(false);
+  expect(lightingTimelineKeyActs({ ...edit('Delete', 'Delete'), altKey: true }, element(body), false)).toBe(false);
+  expect(lightingTimelineKeyActs({ ...edit('Delete', 'Delete'), defaultPrevented: true }, element(body), false)).toBe(false);
 });
