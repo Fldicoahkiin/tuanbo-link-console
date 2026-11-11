@@ -7,6 +7,8 @@ import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
 import { runMa2GuardedLua } from './ma2-lua-command';
 import { Ma2CueDeleteService } from './ma2-cue-delete-service';
+import { showMovingWhen } from './fixtures/show-gates';
+import { SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
 
 vi.mock('./ma2-lua-command', () => ({ ma2LuaString: (value: string) => JSON.stringify(value), runMa2GuardedLua: vi.fn() }));
 const source = { show: 'fixture', generation: 'g', version: '3.7.0.5' };
@@ -18,7 +20,7 @@ async function setup() {
   project.ma2MaterialLibrary = { version: 1, source: '192.0.2.1:30000', library: { directory: { ...source, entries: [{ target: 1, name: 'empty' }] }, readAt: new Date().toISOString(), sequences: [], errors: [], fixtureUsage: [] } };
   const input: Ma2CueDeletePrepare = { network: { host:'192.0.2.1',port:30000,monitorPort:30001,username:'test' }, expectedSource:source, projectId:project.projectId, projectPath:'fixture.tblink', refs:[{sequence:1,cue:'1.000'}] };
   const request = vi.fn<Ma2OnpcBridge['request']>((op) => Promise.resolve(op === 'SEQUENCE' ? current : JSON.stringify({ ...source, entries: op === 'LIST' ? [] : [{target:1,name:'empty'}] })));
-  const service = new Ma2CueDeleteService(await mkdtemp(join(tmpdir(),'tblink-delete-test-')), () => Promise.resolve(project), () => playing);
+  const service = new Ma2CueDeleteService(await mkdtemp(join(tmpdir(),'tblink-delete-test-')), () => Promise.resolve(project), showMovingWhen(() => playing));
   vi.mocked(runMa2GuardedLua).mockReset();
   return { service, input, bridge:{request}, connection:{command:vi.fn<Ma2Telnet['command']>()}, setXml:(value:string)=>{current=value;}, play:()=>{playing=true;} };
 }
@@ -38,7 +40,7 @@ it('refuses changed data or playback before any destructive command', async () =
   const context = { network:f.input.network, expectedSource:f.input.expectedSource, projectId:f.input.projectId, projectPath:f.input.projectPath };
   const result = await f.service.commit(f.connection,f.bridge,{...context,token:plan.token});
   expect(result.deleted).toEqual([]); expect(result.error).toContain('变化'); expect(runMa2GuardedLua).not.toHaveBeenCalled();
-  f.play(); await expect(f.service.prepare(f.bridge,f.input)).rejects.toThrow('停止播放');
+  f.play(); await expect(f.service.prepare(f.bridge,f.input)).rejects.toThrow(SHOW_WAIT_CLOCK_MOVING);
 });
 it('excludes commands, inherited-only steps and partial payloads from the deletion list', async () => {
   const f = await setup();

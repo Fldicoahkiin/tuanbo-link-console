@@ -2,9 +2,13 @@ import { randomBytes } from 'node:crypto';
 import { ma2EffectLibrarySchema, ma2ObjectDirectorySchema, type Ma2CatalogRequest, type Ma2EffectLibrary, type Ma2ObjectDirectory, type Ma2ReadProgressUpdate } from '@tb/schema';
 import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { holdForShow, isShowWait, type ShowGateReader } from '@tb/core/link';
 
-/** Read object metadata only. Never export fixture values merely to display a Cue list. */
-export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, isPlaying: () => boolean, onProgress?: (progress: Ma2ReadProgressUpdate) => void | Promise<void>, phase: 'library' | 'verification' = 'library', signal?: AbortSignal, targets?: readonly number[], measure?: (bytes: number) => void, sessionDirectory?: Ma2ObjectDirectory, expectedSource?: Ma2CatalogRequest['expectedSource']): Promise<Ma2EffectLibrary> {
+/**
+ * Read object metadata only. Never export fixture values merely to display a Cue list. `show` is asked before each console
+ * command: paused it reads (第 3 题); a program that starts moving stops it before the next command, with a wait.
+ */
+export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, show: ShowGateReader, onProgress?: (progress: Ma2ReadProgressUpdate) => void | Promise<void>, phase: 'library' | 'verification' = 'library', signal?: AbortSignal, targets?: readonly number[], measure?: (bytes: number) => void, sessionDirectory?: Ma2ObjectDirectory, expectedSource?: Ma2CatalogRequest['expectedSource']): Promise<Ma2EffectLibrary> {
   if (signal?.aborted) throw new Error('素材读取已取消');
   // A catalog session owns the final directory verification when reusing this snapshot.
   const directory = sessionDirectory ?? ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
@@ -15,7 +19,7 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
   const sequences: Ma2EffectLibrary['sequences'] = [];
   const errors: Ma2EffectLibrary['errors'] = [];
   const read = async (target: number, offset: number): Promise<string> => {
-    if (isPlaying()) throw new Error('播放已开始，素材读取已停止');
+    holdForShow(show, 'ma2.sync.read', `已读完 ${sequences.length + errors.length} 个序列，接着读会从没读的开始。`);
     const prefix = `TBLINK_CUES_${randomBytes(16).toString('hex')}:`;
     // The native monitor truncates long echo lines (observed on 3.7.0.5 with
     // 32 Chinese Cue names). Keep each line bounded without truncating names.
@@ -55,7 +59,7 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
       }
       sequences.push(ma2EffectLibrarySchema.shape.sequences.parse([{ sequence: entry.target, name: sequenceName, cues }])[0]!);
     } catch (cause) {
-      if (signal?.aborted || isPlaying()) throw cause;
+      if (signal?.aborted || isShowWait(cause)) throw cause;
       errors.push({ sequence: entry.target, message: cause instanceof Error ? cause.message : String(cause) });
     }
     await onProgress?.({ phase, completed: sequences.length + errors.length, total: directory.entries.length + 1, detail: `已检查序列 ${entry.target}`, sequences: sequences.at(-1)?.sequence === entry.target ? [sequences.at(-1)!] : [], ...(errors.at(-1)?.sequence === entry.target ? { libraryError: errors.at(-1)! } : {}) });
@@ -64,7 +68,7 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
   await onProgress?.({ phase, completed: sequences.length + errors.length, total: directory.entries.length + 1, detail: '检查控台序列目录' });
   const verified = sessionDirectory ?? ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
   if (signal?.aborted) throw new Error('素材读取已取消');
-  if (isPlaying()) throw new Error('已开始播放，素材检查已停止，停止播放后会重新检查');
+  holdForShow(show, 'ma2.sync.read', '序列都读完了，还没核对控台序列目录，停下后会重新检查。');
   if (JSON.stringify(directory) !== JSON.stringify(verified)) throw new Error('控台的 Show 或序列有变化，请重新读取');
   const result = ma2EffectLibrarySchema.parse({ directory, sequences, fixtureUsage: [], fixtureDetails: 'unavailable', errors, readAt });
   await onProgress?.({ phase, completed: directory.entries.length + 1, total: directory.entries.length + 1, detail: '序列目录检查完毕' });

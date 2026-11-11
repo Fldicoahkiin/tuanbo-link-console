@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ma2CueAttributeState, ma2CueDeletionUsage } from '@tb/core/link';
+import { holdForShow, isShowWait, ma2CueAttributeState, ma2CueDeletionUsage, type ShowGateReader } from '@tb/core/link';
 import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema, ma2CueDeletePlanSchema, ma2CueDeleteResultSchema, ma2ObjectDirectorySchema, type LinkProject, type Ma2CueDeletePrepare, type Ma2CueDeleteCommit, type Ma2CueDeletePlan, type Ma2CueDeleteResult, type Ma2ReadProgressUpdate } from '@tb/schema';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
@@ -16,8 +16,9 @@ const message = (error: unknown): string => error instanceof Error ? error.messa
 export class Ma2CueDeleteService {
   private busy = false;
   private readonly plans = new Map<string, Plan>();
-  constructor(private readonly backupDirectory: string, private readonly loadProject: (path: string) => Promise<LinkProject>, private readonly isPlaying: () => boolean) {}
-  private guard(): void { if (this.isPlaying()) throw new Error('请先停止播放，再检查或删除空 Cue'); }
+  constructor(private readonly backupDirectory: string, private readonly loadProject: (path: string) => Promise<LinkProject>, private readonly show: ShowGateReader) {}
+  /** Deleting Cues is changing the console: paused it runs, a moving program stops it before its next step (第 3 题). */
+  private guard(): void { holdForShow(this.show, 'ma2.executor.mutate'); }
   private async project(request: Ma2CueDeletePrepare | Ma2CueDeleteCommit): Promise<LinkProject> {
     this.guard();
     const project = await this.loadProject(request.projectPath);
@@ -127,7 +128,11 @@ export class Ma2CueDeleteService {
         deleted.push(...selected.map(({sequence,cue}) => ({sequence,cue})));
         attempted = false;
       }
-    } catch (cause) { error = `${attempted ? '这个序列可能已经删掉了一部分，请读取控台确认；' : ''}${message(cause)}。后续删除已停止，不会自动重试。`; }
+    } catch (cause) {
+      const partly = attempted ? '这个序列可能已经删掉了一部分，请读取控台确认；' : '';
+      // A wait keeps its opening first (isShowWait) and says how far the deletion got.
+      error = isShowWait(cause) ? `${message(cause)}已删除 ${deleted.length} 个空 Cue。${partly}后面的没有删。` : `${partly}${message(cause)}。后续删除已停止，不会自动重试。`;
+    }
     finally { this.busy = false; }
     let library: Ma2CueDeleteResult['library'];
     if (deleted.length) {

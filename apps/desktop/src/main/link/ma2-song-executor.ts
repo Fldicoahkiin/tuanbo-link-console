@@ -3,6 +3,7 @@ import type { Ma2Telnet } from './ma2-telnet';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { listMa2ExecutorPages, readMa2ExecutorPage } from './ma2-executor-page';
 import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
+import { holdForShow, type ShowGateReader } from '@tb/core/link';
 
 /**
  * Where the song's Sequence sits on its executor page. A bound song keeps its slot while that slot
@@ -12,8 +13,8 @@ import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
  * page 1000 full continues on 1001), up to nine pages on.
  */
 export type Ma2SongExecutorPlan = { address: string; slot: number; pageExists: boolean; assigned: boolean };
-export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, isPlaying: () => boolean): Promise<Ma2SongExecutorPlan> {
-  const stopped = (): void => { if (isPlaying()) throw new Error('已开始播放，没有修改执行器位置'); };
+export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, show: ShowGateReader): Promise<Ma2SongExecutorPlan> {
+  const stopped = (): void => { holdForShow(show, 'ma2.executor.mutate', '执行器位置没有改。'); };
   stopped();
   const request = { network: source.network, expectedSource: source.expectedSource };
   const directory = await listMa2ExecutorPages(bridge, request);
@@ -43,12 +44,12 @@ export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>
  * page again first: the assignment itself refuses a slot or page that changed since, and the page is
  * read once afterwards to confirm it.
  */
-export async function assignMa2SongExecutor(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, destination: Ma2SongExecutorPlan, isPlaying: () => boolean): Promise<string> {
+export async function assignMa2SongExecutor(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, destination: Ma2SongExecutorPlan, show: ShowGateReader): Promise<string> {
   const { address, slot, pageExists, assigned } = destination;
   if (assigned) return address;
   // The plan may have continued on a later page when the requested one was full.
   const page = Number(address.split('.')[0]);
-  const stopped = (): void => { if (isPlaying()) throw new Error('已开始播放，没有修改执行器位置'); };
+  const stopped = (): void => { holdForShow(show, 'ma2.executor.mutate', '执行器位置没有改。'); };
   stopped();
   const guard = `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(source.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(source.expectedSource.generation)},'Show or session changed');`;
   const createPage = pageExists ? '' : `assert(not gma.show.getobj.handle('Page ${page}'),'Page appeared during creation');gma.cmd('Store Page ${page} /nc');assert(gma.show.getobj.handle('Page ${page}'),'Page creation failed');`;

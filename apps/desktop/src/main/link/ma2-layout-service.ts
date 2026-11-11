@@ -18,7 +18,7 @@ import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor'
 import { ma2SongCreationStages, recoverMa2SongCreation } from './ma2-song-recovery';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
 import { writeMa2SongTimecode } from './ma2-song-timecode';
-import { MA2_SONG_COLLISION, ma2LatestSide } from '@tb/core/link';
+import { holdForShow, isShowWait, MA2_SONG_COLLISION, ma2LatestSide, type ShowGateReader, type ShowOperation } from '@tb/core/link';
 import { hasMa2SongConsoleEdits, mergeMa2SongConsoleEdits } from './ma2-song-console-edits';
 
 type Connection = Pick<Ma2Telnet, 'command'>;
@@ -54,18 +54,27 @@ const keepCueAttributes = (exportName: string, target: number, cue: string, scra
 export class Ma2LayoutService {
   private busy = false;
   private readonly attempted = new Set<string>();
-  constructor(private readonly ownershipFile: string, private readonly isPlaying: () => boolean, private readonly backups: Pick<Ma2ConsoleBackups, 'record'>) {}
+  /** `show`: what the show allows now (ShowStateService.gate). Paused, ended and P1 waiting read and write the console;
+   * a moving program waits (2026-11-10 第 3 题). */
+  constructor(private readonly ownershipFile: string, private readonly show: ShowGateReader, private readonly backups: Pick<Ma2ConsoleBackups, 'record'>) {}
+
+  /**
+   * Every console command of `op` asks the show right before it goes out: a program that starts moving stops the
+   * operation before its next command, and the one already on the wire finishes (02 §4.4).
+   */
+  private held(connection: Connection, op: ShowOperation): Connection {
+    return { command: (line, match, beforeSend, priority) => connection.command(line, match, wait => { holdForShow(this.show, op); beforeSend?.(wait); }, priority) };
+  }
 
   private async call(connection: Connection, body: string): Promise<string> {
     const prefix = `TBLINK_LAYOUT_${randomBytes(12).toString('hex')}:`;
     const script = `${decoder}local ok,r=pcall(function() ${body} end);if ok then gma.echo('${prefix}OK:'..tostring(r)) else gma.echo('${prefix}ERR:'..tostring(r)) end`;
-    const beforeSend=():void=>{if(this.isPlaying())throw new Error('请停止播放后读取或创建控台 Layout');};
     let command=script;
     // MA2's native command line truncates long Lua input; prepare app-owned code in bounded chunks.
     if(Buffer.byteLength(script)>900 || /["$|^\\\r\n]/.test(script)){
       const key=`TBLINK_LAYOUT_${randomBytes(12).toString('hex')}`;
       const prepare=async(code:string):Promise<void>=>{
-        const response=await connection.command(`Lua "${code};gma.echo('${prefix}READY')"`,text=>ma2ResponseLine(text,prefix),beforeSend);
+        const response=await connection.command(`Lua "${code};gma.echo('${prefix}READY')"`,text=>ma2ResponseLine(text,prefix));
         if(response!=='READY')throw new Error('Layout 操作没有准备好');
       };
       await prepare(`${key}={}`);
@@ -73,7 +82,7 @@ export class Ma2LayoutService {
       for(let offset=0;offset<bytes.length;offset+=128)await prepare(`${decoder}${key}[#${key}+1]=unhex('${bytes.subarray(offset,offset+128).toString('hex')}')`);
       command=`local s=table.concat(${key});${key}=nil;local f=assert(load(s,'tblink_layout','t'));f()`;
     }
-    const result = await connection.command(`Lua "${command}"`, text => ma2ResponseLine(text, prefix), beforeSend);
+    const result = await connection.command(`Lua "${command}"`, text => ma2ResponseLine(text, prefix));
     if (!result.startsWith('OK:')) throw new Error(`MA2 Layout：${result.slice(4)}`);
     return result.slice(3);
   }
@@ -113,8 +122,9 @@ export class Ma2LayoutService {
     return { xml, file, value: { ...inspectMa2LayoutXml(xml, request.layout), revision: createHash('sha256').update(canonical(xml)).digest('hex') } };
   }
 
-  async read(connection: Connection, bridge: Bridge, input: Ma2LayoutReadRequest): Promise<Ma2LayoutSnapshot> {
+  async read(rawConnection: Connection, bridge: Bridge, input: Ma2LayoutReadRequest): Promise<Ma2LayoutSnapshot> {
     const request = ma2LayoutReadRequestSchema.parse(input);
+    holdForShow(this.show, 'ma2.sync.read'); const connection = this.held(rawConnection, 'ma2.sync.read');
     await this.directory(bridge, request);
     const snapshot = await this.snapshot(connection, request);
     await this.directory(bridge, request);
@@ -122,8 +132,9 @@ export class Ma2LayoutService {
     return snapshot.value;
   }
 
-  async list(connection: Connection, bridge: Bridge, input: Ma2LayoutDirectoryRequest): Promise<Ma2LayoutDirectory> {
+  async list(rawConnection: Connection, bridge: Bridge, input: Ma2LayoutDirectoryRequest): Promise<Ma2LayoutDirectory> {
     const inputValue = ma2LayoutDirectoryRequestSchema.parse(input); const request = { ...inputValue, layout: 1 };
+    holdForShow(this.show, 'ma2.sync.read'); const connection = this.held(rawConnection, 'ma2.sync.read');
     await this.directory(bridge, request);
     const pages: Ma2LayoutDirectory = [];
     for (let start = 1; start <= 9999; start += 1000) {
@@ -133,10 +144,12 @@ export class Ma2LayoutService {
     await this.directory(bridge, request); return ma2LayoutDirectorySchema.parse(pages);
   }
 
-  async update(connection: Connection, bridge: Bridge, input: Ma2LayoutUpdateRequest): Promise<Ma2LayoutSnapshot> {
+  async update(rawConnection: Connection, bridge: Bridge, input: Ma2LayoutUpdateRequest): Promise<Ma2LayoutSnapshot> {
     const request = ma2LayoutUpdateRequestSchema.parse(input);
     if (request.name !== undefined) request.name = toConsoleLabel(request.name);
-    if (this.busy || this.isPlaying()) throw new Error('请先停止播放，并等当前的控台操作完成');
+    holdForShow(this.show, 'ma2.executor.mutate');
+    if (this.busy) throw new Error('请等当前的控台操作完成');
+    const connection = this.held(rawConnection, 'ma2.executor.mutate');
     this.busy = true; let backup = '';
     try {
       await this.directory(bridge, request); const before = await this.snapshot(connection, request, true);
@@ -172,7 +185,8 @@ export class Ma2LayoutService {
     // The plan converts the song and Cue names it writes; the Layout name is only ever written.
     request.settings.name = toConsoleLabel(request.settings.name);
     let originalPoints = structuredClone(request.points);
-    if (this.busy || this.isPlaying()) throw new Error('请先停止播放，并等当前的控台操作完成');
+    holdForShow(this.show, 'ma2.sync.write');
+    if (this.busy) throw new Error('请等当前的控台操作完成');
     if (this.attempted.has(request.requestId)) throw new Error('这个请求已经执行过了，请先读取控台确认');
     this.busy = true; let wrote = false;
     const deadline = new AbortController();
@@ -185,7 +199,8 @@ export class Ma2LayoutService {
     const signal = externalSignal ? AbortSignal.any([externalSignal, deadline.signal]) : deadline.signal;
     const connection: Connection = { command: (line, match, beforeSend, priority) => {
       signal.throwIfAborted();
-      return rawConnection.command(line, match, wait => { signal.throwIfAborted(); beforeSend?.(wait); }, priority).then(result => { received(); return result; });
+      // A program that starts moving stops the sync before its next console command (第 3 题, 02 §4.4).
+      return rawConnection.command(line, match, wait => { signal.throwIfAborted(); holdForShow(this.show, 'ma2.sync.write'); beforeSend?.(wait); }, priority).then(result => { received(); return result; });
     } };
     // Every acknowledged line of a long transfer counts as progress for the 90 s watchdog.
     const bridge: SongBridge = { request: (operation, target, expected, desired) => rawBridge.request(operation, target, expected, desired, signal, received).then(result => { received(); return result; }),
@@ -282,7 +297,7 @@ export class Ma2LayoutService {
       const key = `${endpoint}/${directory.show}/${target}`;
       if (request.binding && owners.some(value => value.key === key && (value.projectId !== request.projectId || value.itemId !== request.itemId))) throw new Error('这个位置已经关联了另一首歌，请检查歌曲绑定');
       // Confirm the destination before importing or renaming any song content.
-      const destination = executorPage ? await planMa2SongExecutor(bridge, request, target, executorPage, request.binding?.executor, this.isPlaying) : null;
+      const destination = executorPage ? await planMa2SongExecutor(bridge, request, target, executorPage, request.binding?.executor, this.show) : null;
       // With 'keep', SEQUENCE leaves its native export as importexport/tblink_library_<request id>.xml
       // on the console; the write guard and the backup use that file instead of uploading the XML again.
       // When the song check confirmed the console still equals the saved baseline, that check's export
@@ -380,7 +395,7 @@ export class Ma2LayoutService {
         const remote = inspectMa2SequenceXml(remoteXml).sequences[0]!;
         const names = [...(remote.name !== plan.name ? [{ kind: 'sequence' as const, cue: '0', confirmedName: remote.name ?? '', name: plan.name }] : []), ...changes.map(change => ({ kind: 'single' as const, cue: change.cue, confirmedName: remote.cues.find(cue => Number(cue.number) === Number(change.cue))?.name ?? '', name: change.name }))];
         for (const change of names) {
-          if (this.isPlaying()) throw new Error('已开始播放，后面的名称还没发送');
+          holdForShow(this.show, 'ma2.sync.write', `已经改好 ${names.indexOf(change)} 个名称，后面的名称还没发送。`);
           const result = await renameMa2Object(bridge, { dataDirectory: '', network: request.network, generation: request.expectedSource.generation, change: { endpoint, show: directory.show, sequence: target, ...change } });
           backupFile ||= result.backupFile; labelBackups.push(result.backupFile);
           progress('previews', names.indexOf(change) + 1, names.length, `已在控台确认${change.kind === 'sequence' ? '序列名称' : ` Cue ${change.cue} 名称`}`);
@@ -491,7 +506,7 @@ export class Ma2LayoutService {
       if (plan.deletions.some(number => actualHashes.has(number) && !changedNumbers.has(Number(number)))) throw new Error('歌曲 Cue 没有从控台删干净');
       // The show record the project holds, or the one recorded here when the project never received it.
       const previousTimecode = request.binding?.timecode ?? owners.find(owner => owner.key === key && owner.projectId === request.projectId && owner.itemId === request.itemId)?.binding?.timecode;
-      const executor = executorPage && destination ? await assignMa2SongExecutor(connection, bridge, request, target, destination, this.isPlaying) : undefined;
+      const executor = executorPage && destination ? await assignMa2SongExecutor(connection, bridge, request, target, destination, this.show) : undefined;
       const afterLayout = executorPage ? null : changed ? await this.snapshot(connection, layoutRequest) : beforeLayout;
       if (!executorPage && !afterLayout?.value.items.some(item => item.sequence === target)) throw new Error('Layout 里没有读到这首歌的序列');
       // Without a write the directory read at the start still lists this Sequence as it is.
@@ -540,7 +555,9 @@ export class Ma2LayoutService {
       // The guard runs before anything is written: the console changed the song's Sequence meanwhile.
       if (collision === 'changed') throw new Error(`${MA2_SONG_COLLISION}：序列 ${target} 在控台上刚被改过，这次没有写入`, { cause });
       if (collision === 'occupied') throw new Error(`${MA2_SONG_COLLISION}：序列 ${target} 在控台上刚被占用，这次没有写入，下次同步换一个空编号`, { cause });
-      throw new Error(`${wrote ? `序列 ${target} 的写入结果需要确认，原位置和备份 ${backupFile || '新建对象记录'} 已保留。` : ''}${message}`, { cause });
+      const unconfirmed = wrote ? `序列 ${target} 的写入结果需要确认，原位置和备份 ${backupFile || '新建对象记录'} 已保留。` : '';
+      // A wait keeps its own opening first, so the window knows it is only waiting (isShowWait).
+      throw new Error(isShowWait(cause) ? `${message}${unconfirmed}` : `${unconfirmed}${message}`, { cause });
     }
     finally { clearTimeout(timer!); this.busy = false; }
   }
@@ -553,22 +570,23 @@ export class Ma2LayoutService {
     // One guarded command creates the file and a writer bound to it. Each data line then only calls
     // that writer: 360 bytes per line instead of 128, and no Show name, so it stays under 900 bytes.
     const writer = `TBLINK_W_${randomBytes(12).toString('hex')}`;
-    const beforeSend = (): void => { if (this.isPlaying()) throw new Error('请停止播放后读取或创建控台 Layout'); };
     await this.call(connection, `${this.guard(request)}local p=gma.show.getvar('PATH')..'/importexport/${file}.xml';local f=assert(io.open(p,'wb'));f:close();${writer}=function(i,h,e)local ok,r=pcall(function()local f=assert(io.open(p,'ab'));f:write(unhex(h));f:close()end);if e then ${writer}=nil end;gma.echo('${writer}:'..i..':'..(ok and 'OK' or 'ERR:'..tostring(r)))end;return 'prepared'`);
     const bytes = Buffer.from(xml);
     report?.(0, bytes.length);
     for (let offset = 0, index = 0; offset < bytes.length; offset += 360, index++) {
       const prefix = `${writer}:${index}:`;
-      const result = await connection.command(`Lua "if ${writer} then ${writer}(${index},'${bytes.subarray(offset, offset + 360).toString('hex')}'${offset + 360 >= bytes.length ? ',1' : ''}) else gma.echo('${prefix}ERR:missing') end"`, text => ma2ResponseLine(text, prefix), beforeSend);
+      const result = await connection.command(`Lua "if ${writer} then ${writer}(${index},'${bytes.subarray(offset, offset + 360).toString('hex')}'${offset + 360 >= bytes.length ? ',1' : ''}) else gma.echo('${prefix}ERR:missing') end"`, text => ma2ResponseLine(text, prefix));
       if (result !== 'OK') throw new Error(`控台没有确认文件写入：${result.replace(/^ERR:/, '')}`);
       report?.(Math.min(offset + 360, bytes.length), bytes.length);
     }
   }
 
-  async create(connection: Connection, bridge: Bridge, input: Ma2NewCueRequest): Promise<Ma2NewCueResult> {
+  async create(rawConnection: Connection, bridge: Bridge, input: Ma2NewCueRequest): Promise<Ma2NewCueResult> {
     const request = ma2NewCueRequestSchema.parse(input);
     request.name = toConsoleLabel(request.name); request.settings.name = toConsoleLabel(request.settings.name);
-    if (this.busy || this.isPlaying()) throw new Error('请先停止播放，并等当前的控台操作完成');
+    holdForShow(this.show, 'ma2.sync.write');
+    if (this.busy) throw new Error('请等当前的控台操作完成');
+    const connection = this.held(rawConnection, 'ma2.sync.write');
     if (this.attempted.has(request.requestId)) throw new Error('这个新建请求已经执行过了，请读取控台确认结果');
     this.busy = true;
     let wrote = false;
@@ -620,7 +638,7 @@ export class Ma2LayoutService {
         const normalized=(value:Map<string,Record<string,string>>):string=>JSON.stringify([...value].sort(([a],[b])=>a.localeCompare(b)).map(([key,layers])=>[key,Object.entries(layers).sort(([a],[b])=>a.localeCompare(b))]));
         if(normalized(actual)!==normalized(combined))throw new Error('合成后的灯具属性和选的 Cue 不一致，没有加入 Layout；请检查 World、Filter 或 Cue Part');
       }
-      const library = await readMa2EffectLibrary(bridge, this.isPlaying, undefined, undefined, [target], request.expectedSource, 'attributes', connection);
+      const library = await readMa2EffectLibrary(bridge, this.show, undefined, undefined, [target], request.expectedSource, 'attributes', connection);
       const cue = library.sequences[0]?.cues[0];
       if (library.errors.length || !cue || cue.name !== request.name || !library.cueAttributes?.some(value => value.attributes.length)) throw new Error('新 Cue 里没有读到灯具属性，没有加入 Layout。请检查控台的 Programmer、World 和 Store Filter');
       await this.call(connection, `${this.guard(layoutRequest)}${old ? '' : `assert(not gma.show.getobj.handle('Layout ${request.settings.layout}'),'Layout occupied');gma.cmd(${decode(`Import "${blankFile}_layout.xml" At Layout ${request.settings.layout} /nc`)});gma.cmd(${decode(`Label Layout ${request.settings.layout} "${request.settings.name}"`)});${removeFiles(`${blankFile}_layout`)}`}gma.cmd('Assign Sequence ${target} At Layout ${request.settings.layout} /x=${x} /y=${y}');return 'assigned'`);
@@ -629,7 +647,9 @@ export class Ma2LayoutService {
       await writeFileAtomically(this.ownershipFile, JSON.stringify([...owners.filter(value=>value.key!==key),{key,projectId:request.projectId,name:after.value.name}]));
       return ma2NewCueResultSchema.parse({ layout: after.value, sequence: target, cue: '1.000', library, backupFile: old ? `${old.file}.xml` : '' });
     } catch (error) {
-      throw new Error(`${wrote ? `序列 ${target} 可能已经创建，控台上的结果已保留，请先读取控台确认，不会自动重试。` : ''}${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      const created = wrote ? `序列 ${target} 可能已经创建，控台上的结果已保留，请先读取控台确认，不会自动重试。` : '';
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(isShowWait(error) ? `${message}${created}` : `${created}${message}`, { cause: error });
     } finally { this.busy = false; }
   }
 }

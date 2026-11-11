@@ -7,11 +7,12 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { createEmptyLinkProject, parseLinkProject, ma2AuditionRequestSchema, type Ma2CatalogRequest } from '@tb/schema';
 import { readMa2Catalog } from '../src/main/link/ma2-catalog';
 import { meiNanXml, meiNanSequences } from '../src/main/link/fixtures/ma2-mei-nan-reconstruction';
+import { showStopped } from '../src/main/link/fixtures/show-gates';
 
 test('截图重建：混合事件读取中切页、缓存配对、Cue可见、重启恢复且不再读取控台', async ({}, info) => {
   test.setTimeout(120000);
   const directory = { show: '截图重建测试 Show', generation: 'reconstruction', version: '3.7.0.5', entries: [{ target: 2, name: 'mei-nan' }, { target: 3, name: '故障时间线' }] };
-  const catalog = await readMa2Catalog({ request: (operation, target) => operation === 'LIST' ? Promise.resolve(JSON.stringify(directory)) : target === 3 ? Promise.reject(new Error('读取超时样例')) : Promise.resolve(meiNanXml) }, () => false, meiNanSequences[0]);
+  const catalog = await readMa2Catalog({ request: (operation, target) => operation === 'LIST' ? Promise.resolve(JSON.stringify(directory)) : target === 3 ? Promise.reject(new Error('读取超时样例')) : Promise.resolve(meiNanXml) }, showStopped, meiNanSequences[0]);
   const project = createEmptyLinkProject('MA2 缓存流程软件验收'); project.obsOutputMode = 'scenes';
   const rate = 8000; const wav = Buffer.alloc(44 + rate * 2 * 40);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);

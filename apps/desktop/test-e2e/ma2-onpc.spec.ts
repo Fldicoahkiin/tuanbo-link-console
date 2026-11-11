@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
 import { Ma2OnpcBridge } from '../src/main/link/ma2-onpc-bridge';
 import { inspectMa2TimecodeXml, patchMa2EventTimes } from '../src/main/link/ma2-timecode-xml';
+import { showStopped } from '../src/main/link/fixtures/show-gates';
 
 async function openSync(page: Page): Promise<void> {
   await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
@@ -17,7 +18,7 @@ test('真实 onPC 经界面导入、修改、同步、冲突选择与保存重�
   test.skip(!process.env.TBLINK_MA2_ONPC_E2E || !directory, '需要明确启用真实 onPC 专属对象验收');
   if (!directory) throw new Error('缺少 onPC 数据目录');
   test.setTimeout(180_000);
-  const bridge = new Ma2OnpcBridge(directory, () => false);
+  const bridge = new Ma2OnpcBridge(directory, showStopped);
   const original = await bridge.request('READ', 9902);
   const baseline = inspectMa2TimecodeXml(original);
   expect(baseline.timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');

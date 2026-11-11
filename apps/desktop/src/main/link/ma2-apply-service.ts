@@ -1,5 +1,5 @@
 import { ma2ApplyRequestSchema, ma2ApplyResultSchema, type Ma2ApplyRequest, type Ma2ApplyResult, type Ma2TimecodePreview } from '@tb/schema';
-import { MA2_SONG_COLLISION, resolveMa2Sync } from '@tb/core/link';
+import { holdForShow, MA2_SONG_COLLISION, resolveMa2Sync, type ShowGateReader } from '@tb/core/link';
 import { Ma2BridgeFailure, type Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { confirmMa2MergedEvents, prepareMa2MergedEvents } from './ma2-event-write';
 import { convertMa2Snapshot } from './ma2-timecode-conversion';
@@ -9,7 +9,7 @@ import { compareMa2LightingReadback } from './ma2-comparison';
 /** One complete read/validate/write/verify session. No automatic retries. */
 export class Ma2ApplyService {
   private busy = false;
-  constructor(private readonly bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'>, private readonly isPlaying: () => boolean) {}
+  constructor(private readonly bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'>, private readonly show: ShowGateReader) {}
 
   async apply(input: Ma2ApplyRequest): Promise<Ma2ApplyResult> {
     if (this.busy) return { status: 'incomplete', stage: 'preflight', message: '已有 MA2 同步正在进行', mayHaveWritten: false, backupFile: null };
@@ -59,7 +59,8 @@ export class Ma2ApplyService {
     } finally { this.busy = false; }
   }
 
-  private requireStopped(): void { if (this.isPlaying()) throw new Error('播放期间不能同步 MA2 工程'); }
+  /** A paused or held show syncs; a moving program waits (2026-11-10 第 3 题). */
+  private requireStopped(): void { holdForShow(this.show, 'ma2.sync.write'); }
 }
 
 /** Console-only actions are part of the content: they stay as they are and are compared by path. */

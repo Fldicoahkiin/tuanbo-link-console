@@ -1,5 +1,6 @@
 import { ma2SyncSnapshotSchema, type Ma2SyncSnapshot } from '@tb/schema';
 import { resolveMa2Sync, sameMa2Content, type Ma2SyncChoice, type Ma2SyncPreview } from './ma2-sync';
+import { holdForShow, type ShowGateReader } from './show-state';
 
 // A real adapter must validate these guarantees against the target console version.
 // No production adapter is enabled until the MA2 protocol acceptance gate passes.
@@ -18,7 +19,8 @@ export class Ma2SyncSession {
 
   get isBusy(): boolean { return this.busy; }
 
-  constructor(private readonly port: Ma2SyncPort, private readonly isPlaying: () => boolean) {}
+  /** `show`: paused, ended and P1 waiting sync; a moving program waits (2026-11-10 第 3 题). */
+  constructor(private readonly port: Ma2SyncPort, private readonly show: ShowGateReader) {}
 
   async apply(preview: Ma2SyncPreview, choices: ReadonlyMap<string, Ma2SyncChoice>): Promise<Ma2SyncResult> {
     if (this.busy) return { status: 'incomplete', stage: 'preflight', message: '已有同步正在进行', backupId: null, mayHaveWritten: false };
@@ -57,6 +59,6 @@ export class Ma2SyncSession {
   }
 
   private requireStopped(): void {
-    if (this.isPlaying()) throw new Error('播放期间不能写入 MA2 工程');
+    holdForShow(this.show, 'ma2.sync.write');
   }
 }

@@ -22,14 +22,16 @@ describe('2026-11-10 第 3 题：只有节目在走才算在播放；暂停、�
     for (const state of heldStates) for (const op of openedWhileHeld) expect(showGate(op, state), `${op} @ ${state.phase}`).toEqual({ kind: 'allow' });
   });
 
-  it('节目在走、准备中、停止中时它们等，单击 Cue 试听也等', () => {
-    for (const state of busyStates) for (const op of [...openedWhileHeld, 'ma2.audition'] satisfies ShowOperation[]) {
+  it('节目在走、准备中、停止中时它们等', () => {
+    for (const state of busyStates) for (const op of openedWhileHeld) {
       expect(showGate(op, state), `${op} @ ${state.phase}`).toMatchObject({ kind: 'wait', until: 'clock-stopped' });
     }
   });
+});
 
-  it('暂停时单击 Cue 照旧直接试听', () => {
-    for (const state of heldStates) expect(showGate('ma2.audition', state)).toEqual({ kind: 'allow' });
+describe('2026-11-01 单击 Cue 试听仍直接发这一个 Cue（00-order §12：第 3 题没有给它加门槛）', () => {
+  it('ma2.audition 任何时候都可以，节目在走时也直接发', () => {
+    for (const state of allStates) expect(showGate('ma2.audition', state)).toEqual({ kind: 'allow' });
   });
 });
 

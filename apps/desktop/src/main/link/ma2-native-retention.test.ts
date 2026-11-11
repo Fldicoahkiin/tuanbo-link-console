@@ -6,6 +6,7 @@ import { Ma2ApplyService } from './ma2-apply-service';
 import { prepareMa2MergedEvents } from './ma2-event-write';
 import { readMa2Catalog } from './ma2-catalog';
 import { meiNanXml, meiNanSequences, meiNanCues } from './fixtures/ma2-mei-nan-reconstruction';
+import { showStopped } from './fixtures/show-gates';
 
 function songProject() {
   const project = createEmptyLinkProject('截图重建回归，非现场验收');
@@ -30,7 +31,7 @@ it('截图重建的24个混合事件保留全部原文，11个已知Cue进入歌
   let console = withSequence(meiNanXml);
   const bridge = { request: vi.fn(() => Promise.resolve(console)), exchange: vi.fn((_operation: string, _target: number, _expected: string, desired: string) => { console = withSequence(desired); return Promise.resolve({ response: desired, requestId: 'b'.repeat(32) }); }) };
   const readback = convertMa2Snapshot(withSequence(meiNanXml), 2, [], 480000);
-  const result = await new Ma2ApplyService(bridge, () => false).apply({ dataDirectory: '', document: lighting, bindingId: lighting.ma2Bindings![0]!.id, readback, conflicts: [] });
+  const result = await new Ma2ApplyService(bridge, showStopped).apply({ dataDirectory: '', document: lighting, bindingId: lighting.ma2Bindings![0]!.id, readback, conflicts: [] });
   expect(result).toMatchObject({ status: 'verified' });
   expect(bridge.exchange).toHaveBeenCalledOnce();
   // Only the moved Cue changed: 3 → 6 frames (100 ms → 200 ms after the song start). Master faders, XFade and Learn stay as they were.
@@ -67,7 +68,7 @@ it('带控台专有参数的 Cue 在软件里可改时间（参数原样保留�
 it('不推断未验证帧率，原始目录与XML仍保留', async () => {
   const xml = meiNanXml.replace('30 FPS', '25 FPS');
   const directory = { show: 'reconstruction', version: '3.7.0.5', generation: '1', entries: [{ target: 2, name: 'mei-nan' }] };
-  const catalog = await readMa2Catalog({ request: vi.fn().mockResolvedValueOnce(JSON.stringify(directory)).mockResolvedValueOnce(xml).mockResolvedValueOnce(xml).mockResolvedValueOnce(JSON.stringify(directory)) }, () => false, meiNanSequences[0]);
+  const catalog = await readMa2Catalog({ request: vi.fn().mockResolvedValueOnce(JSON.stringify(directory)).mockResolvedValueOnce(xml).mockResolvedValueOnce(xml).mockResolvedValueOnce(JSON.stringify(directory)) }, showStopped, meiNanSequences[0]);
   expect(catalog.entries[0]?.error).toBeNull();
   expect(catalog.entries[0]?.conversionError).toContain('30 FPS');
   expect(catalog.entries[0]?.sourceXml).toBe(xml);
@@ -76,10 +77,10 @@ it('取消保留已完成对象，按目标补读只请求失败项，复核使�
   const directory = { show: 'cancel', version: '3.7.0.5', generation: '1', entries: [{ target: 2, name: 'mei-nan' }, { target: 3, name: '待读取' }] };
   const signal = new AbortController();
   const request = vi.fn((operation: string) => Promise.resolve(operation === 'LIST' ? JSON.stringify(directory) : meiNanXml));
-  const partial = await readMa2Catalog({ request }, () => false, meiNanSequences[0], progress => { if (progress.completed === 1) signal.abort(); }, signal.signal);
+  const partial = await readMa2Catalog({ request }, showStopped, meiNanSequences[0], progress => { if (progress.completed === 1) signal.abort(); }, signal.signal);
   expect(partial.entries).toHaveLength(1); expect(partial.entries[0]?.preview?.unconverted).toHaveLength(13); expect(partial.incomplete).toBeTruthy();
   const retry = vi.fn((operation: string) => Promise.resolve(operation === 'LIST' ? JSON.stringify(directory) : meiNanXml.replace('Timecode index="1"', 'Timecode index="2"')));
-  const rest = await readMa2Catalog({ request: retry }, () => false, meiNanSequences[0], undefined, undefined, { targets: [3] });
+  const rest = await readMa2Catalog({ request: retry }, showStopped, meiNanSequences[0], undefined, undefined, { targets: [3] });
   expect(rest.entries.map(entry => entry.target)).toEqual([3]);
   expect(retry.mock.calls.map(call => call[0])).toEqual(['LIST', 'READ', 'READ', 'LIST']);
 });
@@ -90,7 +91,7 @@ it('100条混合时间线一次读取，缓存后配对与重新打开工程无�
     if (target === 99) return Promise.reject(new Error('读取超时样例'));
     return Promise.resolve(meiNanXml.replace('Timecode index="1"', `Timecode index="${target - 1}"`).replace('offset="14400"', `offset="${14400 + (target - 1) * 1200}"`));
   });
-  const catalog = await readMa2Catalog({ request }, () => false, meiNanSequences[0]);
+  const catalog = await readMa2Catalog({ request }, showStopped, meiNanSequences[0]);
   expect(catalog.entries).toHaveLength(100); expect(catalog.entries[98]?.error).toBe('读取超时样例');
   expect(catalog.metrics?.requests).toBe(201); // 2 LIST + 99*2 READ + 1 failed READ.
   const project = songProject();

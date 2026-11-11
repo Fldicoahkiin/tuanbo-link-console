@@ -2,7 +2,7 @@ import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@
 import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
 import { ma2NetworkTargetSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
-import { firstTimeWarning, materialSceneTargets, projectFileReferences, type InternalPlayerState } from '@tb/core/link';
+import { firstTimeWarning, holdForShow, materialSceneTargets, projectFileReferences, showGate, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
 import { assertMa2ConnectionOwner, isLocalMa2Address, waitForMa2Listener } from './link/ma2-connection-owner';
@@ -277,6 +277,11 @@ function releaseGonePage(): Promise<InternalPlayerState | null> {
   showState?.pageGone();
   return releasePage(nativeProgram, { stopMonitor: () => musicMonitor?.stop(),
     teardown: async () => { await closeEngine(); await releaseRendererRuntime(); } }, programFaults);
+}
+/** What the show allows `op` now (show-state-service.ts): what the MA2 services ask before each step. Before the service is
+ * built no program and no page report exist yet, so the show is idle then. */
+function showGateNow(op: ShowOperation): ShowGate {
+  return showState ? showState.gate(op) : showGate(op, { phase: 'idle', program: null });
 }
 function nativePlaybackActive(): boolean {
   return Boolean(nativePlayer?.status && ['preparing', 'playing', 'paused'].includes(nativePlayer.status.status));
@@ -864,7 +869,7 @@ function registerIpc(
   });
   // The local onPC data directory comes only from the folder dialog or the detection below.
   const ma2DataDirectory = new Ma2DataDirectory(join(app.getPath('userData'), 'link-integrations', 'ma2-data-directory.json'));
-  const ma2Connections = new Ma2Connections(() => runtimeActive, directory => ma2DataDirectory.require(directory));
+  const ma2Connections = new Ma2Connections(showGateNow, directory => ma2DataDirectory.require(directory));
   const recordMa2DataDirectory = async (directory: string, how: string): Promise<string> => {
     await ma2DataDirectory.choose(directory);
     await logger.record({ level: 'info', category: 'operator', device: 'MA2', message: `已${how}本机 onPC 数据目录：${directory}`, result: 'succeeded' });
@@ -893,7 +898,7 @@ function registerIpc(
       detail: `用于连接控台 ${change.host}。网卡：${change.adapterDescription}。Windows 可能还会请求管理员确认。` });
     return response === 0;
   });
-  const ma2Network = new Ma2NetworkManager(app.getPath('userData'), profileStore, () => runtimeActive || nativePlaybackActive(), ma2PluginLua, host => ma2NetworkSetup.connectionAddress(host), async (host, peers) => {
+  const ma2Network = new Ma2NetworkManager(app.getPath('userData'), profileStore, showGateNow, ma2PluginLua, host => ma2NetworkSetup.connectionAddress(host), async (host, peers) => {
     if (!isLocalMa2Address(host)) return;
     const profile = await profileStore.loadProfile();
     if (!profile?.ma2) return;
@@ -915,7 +920,7 @@ function registerIpc(
   });
   const ma2Reads = new Map<string, { senderId: number; controller: AbortController }>();
   ma2Network.setCueDeletionProjectReader(path => projectService.open(path));
-  const ma2ConsoleBackups = new Ma2ConsoleBackups(join(app.getPath('userData'), 'link-integrations', 'ma2-console-backups.json'), () => runtimeActive || nativePlaybackActive(),
+  const ma2ConsoleBackups = new Ma2ConsoleBackups(join(app.getPath('userData'), 'link-integrations', 'ma2-console-backups.json'), showGateNow,
     message => logger.record({ level: 'warning', category: 'device', device: 'MA2', message, result: 'failed' }));
   ma2Network.setConsoleBackups(ma2ConsoleBackups);
   const ma2ConsoleKey = (request: { dataDirectory: string; network?: import('@tb/schema').Ma2NetworkTarget | undefined }): string => request.network ? `${request.network.host}:${request.network.port}` : `onPC ${request.dataDirectory}`;
@@ -936,17 +941,17 @@ function registerIpc(
   const ma2Discovery = new Ma2DiscoveryService();
   handle('link:ma2-network-setup-state', () => ma2NetworkSetup.state());
   handle('link:ma2-network-setup-plan', (_event, value: unknown) => ma2NetworkSetup.plan(ma2NetworkSetupRequestSchema.parse(value)));
-  handle('link:ma2-network-setup-apply', async (_event, value: unknown) => { if (runtimeActive) throw new Error('请停止播放后配置网卡'); await ma2NetworkReady; ma2Network.disconnect(); return ma2NetworkSetup.apply(z.string().uuid().parse(value)); });
-  handle('link:ma2-network-setup-restore', async (_event, value: unknown) => { if (runtimeActive) throw new Error('请停止播放后恢复网卡'); await ma2NetworkReady; ma2Network.disconnect(); return ma2NetworkSetup.restore(z.string().uuid().parse(value)); });
+  handle('link:ma2-network-setup-apply', async (_event, value: unknown) => { holdForShow(showGateNow, 'ma2.networkSetup'); await ma2NetworkReady; ma2Network.disconnect(); return ma2NetworkSetup.apply(z.string().uuid().parse(value)); });
+  handle('link:ma2-network-setup-restore', async (_event, value: unknown) => { holdForShow(showGateNow, 'ma2.networkSetup'); await ma2NetworkReady; ma2Network.disconnect(); return ma2NetworkSetup.restore(z.string().uuid().parse(value)); });
   app.once('will-quit', () => ma2Discovery.cancel());
   handle('link:ma2-discover', async () => {
-    await ma2NetworkReady; if (runtimeActive) throw new Error('请停止播放后搜索控台');
+    await ma2NetworkReady; holdForShow(showGateNow, 'ma2.discover');
     const result = await ma2Discovery.search(ma2Network.status().profiles ?? []);
     await logger.record({ level: result.hosts.some(host => host.identity === 'ma2') ? 'info' : 'warning', category: 'device', device: 'MA2', message: `自动发现完成：找到 ${result.hosts.filter(host => host.identity === 'ma2').length} 台控台，另有 ${result.hosts.filter(host => host.identity === 'candidate').length} 个地址需要确认`, details: { hosts: result.hosts, ranges: result.ranges, warnings: result.warnings } });
     return result;
   });
   handle('link:ma2-discovery-cancel', () => ma2Discovery.cancel());
-  handle('link:ma2-capabilities', async () => { await ma2NetworkReady; return ma2Network.checkCapabilities(showState!.gate('ma2.check')); });
+  handle('link:ma2-capabilities', async () => { await ma2NetworkReady; return ma2Network.checkCapabilities(showGateNow('ma2.check')); });
   const ma2NetworkReady = ma2Network.initialize();
   const ma2Audition=new Ma2AuditionService(ma2Network,state=>sendToRenderer('link:ma2-audition-state',state));
   ma2Network.setBeforeConnectionChange(()=>ma2Audition.beforeConnectionChange());
@@ -1087,7 +1092,7 @@ function registerIpc(
   handle('link:ma2-catalog', async (event, value: unknown) => {
     const request = ma2CatalogRequestSchema.parse(value);
     if (request.projectPath) projectAccess.requireShown(request.projectPath);
-    if (runtimeActive) throw new Error('请停止播放后扫描控台');
+    holdForShow(showGateNow, 'ma2.sync.read');
     const task = beginMa2Read(event, request.progressId);
     try {
       await ma2NetworkReady;
@@ -1095,7 +1100,7 @@ function registerIpc(
       if (request.projectPath && (!request.projectId || (await projectService.open(request.projectPath)).projectId !== request.projectId)) throw new Error('读取进度记录和当前工程对不上');
       const recovery = request.projectPath && request.projectId ? new Ma2ReadRecovery(request.projectPath, request.projectId, request.network ? `${request.network.host}:${request.network.port}` : '本机 onPC') : undefined;
       const checkpoint = recovery?.checkpoint.bind(recovery);
-      const catalog = request.network ? await ma2Network.readCatalog(request.network, task.report, task.signal, request.targets, checkpoint, request.expectedSource) : await readMa2Catalog((await getMa2Connection(request)).bridge, () => runtimeActive, undefined, task.report, task.signal, { targets: request.targets, checkpoint, expectedSource: request.expectedSource });
+      const catalog = request.network ? await ma2Network.readCatalog(request.network, task.report, task.signal, request.targets, checkpoint, request.expectedSource) : await readMa2Catalog((await getMa2Connection(request)).bridge, showGateNow, undefined, task.report, task.signal, { targets: request.targets, checkpoint, expectedSource: request.expectedSource });
       for (const entry of catalog.entries) if (entry.error) await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `Timecode ${entry.target} 扫描失败：${entry.error}`, result: 'failed' });
       await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `已扫描 ${catalog.entries.length} 条 Timecode，其中 ${catalog.entries.filter(entry => entry.error).length} 条读取出错`, result: catalog.entries.some(entry => entry.error) ? 'failed' : 'succeeded' });
       return catalog;
@@ -1115,7 +1120,7 @@ function registerIpc(
       if (request.projectPath && (!request.projectId || (await projectService.open(request.projectPath)).projectId !== request.projectId)) throw new Error('素材读取进度和当前工程对不上');
       const recovery = request.projectPath && request.projectId ? new Ma2MaterialRecovery(request.projectPath, request.projectId, request.network ? `${request.network.host}:${request.network.port}` : '本机 onPC') : undefined;
       const report = async (update: import('@tb/schema').Ma2ReadProgressUpdate): Promise<void> => { await recovery?.record(update); task.report?.(update); };
-      const result = request.network ? await ma2Network.readLibrary(request.network, report, 'library', task.signal, request.targets, request.expectedSource, request.details) : await readMa2EffectLibrary((await getMa2Connection(request)).bridge, () => runtimeActive, report, task.signal, request.targets, request.expectedSource, request.details);
+      const result = request.network ? await ma2Network.readLibrary(request.network, report, 'library', task.signal, request.targets, request.expectedSource, request.details) : await readMa2EffectLibrary((await getMa2Connection(request)).bridge, showGateNow, report, task.signal, request.targets, request.expectedSource, request.details);
       await recovery?.complete(result);
       // With no targets this is the live session's check of the sequence directory, asked
       // every few seconds: it reads no sequence, so a success is not a line in the log.

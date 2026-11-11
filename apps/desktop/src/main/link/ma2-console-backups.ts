@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { writeFileAtomically } from './atomic-file';
+import type { ShowGateReader } from '@tb/core/link';
 
 const KEEP_PER_OBJECT = 10;
 const fileSchema = z.string().regex(/^tblink_(?:backup|label|library)_[a-f0-9]{32}$/);
@@ -17,12 +18,13 @@ type Ledger = z.infer<typeof ledgerSchema>;
  */
 export class Ma2ConsoleBackups {
   private queue: Promise<void> = Promise.resolve();
-  constructor(private readonly path: string, private readonly isPlaying: () => boolean, private readonly report: (message: string) => Promise<unknown>) {}
+  constructor(private readonly path: string, private readonly show: ShowGateReader, private readonly report: (message: string) => Promise<unknown>) {}
 
   /**
    * Records backups the console now holds and removes the object's oldest recorded ones beyond ten.
    * The write that made them already succeeded, so a failure here is reported instead of thrown:
-   * the files stay listed and are removed after a later write. Nothing is removed during playback.
+   * the files stay listed and are removed after a later write. Nothing is removed while the program moves (paused it is,
+   * 第 3 题: removing old backups is changing the console like an executor).
    */
   record(bridge: Pick<Ma2OnpcBridge, 'request'>, backup: { console: string; object: string; files: readonly string[] }): Promise<void> {
     const run = this.queue.then(async () => {
@@ -32,7 +34,7 @@ export class Ma2ConsoleBackups {
         const recordedAt = new Date().toISOString();
         for (const file of files) if (!ledger.entries.some(entry => entry.file === file)) ledger.entries.push({ console: backup.console, object: backup.object, file, recordedAt });
         await writeFileAtomically(this.path, JSON.stringify(ledger, null, 2));
-        if (this.isPlaying()) return;
+        if (this.show('ma2.executor.mutate').kind === 'wait') return;
         const own = ledger.entries.filter(entry => entry.console === backup.console && entry.object === backup.object);
         const expired = own.slice(0, Math.max(0, own.length - KEEP_PER_OBJECT)).map(entry => entry.file);
         if (!expired.length) return;

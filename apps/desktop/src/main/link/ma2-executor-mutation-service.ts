@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { toConsoleLabel } from '@tb/core/link';
+import { holdForShow, isShowWait, toConsoleLabel, type ShowGateReader } from '@tb/core/link';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ma2ExecutorUpdateRequestSchema, ma2ExecutorUpdateResultSchema, type Ma2ExecutorPage, type Ma2ExecutorUpdateRequest, type Ma2ExecutorUpdateResult } from '@tb/schema';
@@ -17,12 +17,13 @@ const occupied = (page: Ma2ExecutorPage, slot: number, width: number): boolean =
 /** Native operations retain all executor settings. No page is rebuilt from the UI's sorted list. */
 export class Ma2ExecutorMutationService {
   private busy = false;
-  constructor(private readonly backupDirectory: string, private readonly isPlaying: () => boolean) {}
+  /** `show`: paused, ended and P1 waiting change executors; a moving program waits (2026-11-10 第 3 题). */
+  constructor(private readonly backupDirectory: string, private readonly show: ShowGateReader) {}
 
   async update(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, input: Ma2ExecutorUpdateRequest): Promise<Ma2ExecutorUpdateResult> {
     const request = ma2ExecutorUpdateRequestSchema.parse(input);
     if (this.busy) throw new Error('正在确认上一个执行器修改，请稍候');
-    const stopped = (): void => { if (this.isPlaying()) throw new Error('请先停止播放再修改执行器；本地编辑可以继续'); };
+    const stopped = (): void => { holdForShow(this.show, 'ma2.executor.mutate'); };
     stopped(); this.busy = true;
     let attempted = false; let backupFile = '';
     const sourceAddress = `${request.page}.${request.slot}`;
@@ -85,7 +86,11 @@ export class Ma2ExecutorMutationService {
       }
       return ma2ExecutorUpdateResultSchema.parse({ pages, backupFile });
     } catch (error) {
-      throw new Error(`${attempted ? `执行器 ${sourceAddress} 的修改还没完全确认，请重新读取这一页检查（没有重复发送）。` : ''}${error instanceof Error ? error.message : String(error)}${backupFile ? `；备份：${backupFile}` : ''}`, { cause: error });
+      const unconfirmed = attempted ? `执行器 ${sourceAddress} 的修改还没完全确认，请重新读取这一页检查（没有重复发送）。` : '';
+      const message = error instanceof Error ? error.message : String(error);
+      const backup = backupFile ? `；备份：${backupFile}` : '';
+      // A wait keeps its opening first, so the window knows it is only waiting (isShowWait).
+      throw new Error(isShowWait(error) ? `${message}${unconfirmed}${backup}` : `${unconfirmed}${message}${backup}`, { cause: error });
     } finally { this.busy = false; }
   }
 }

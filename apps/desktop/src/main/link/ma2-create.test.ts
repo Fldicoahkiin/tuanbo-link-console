@@ -3,6 +3,7 @@ import { createMa2Timecode, createMa2TimecodeXml } from './ma2-create';
 import { convertMa2Timecode } from './ma2-timecode-conversion';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { inspectMa2TimecodeXml } from './ma2-timecode-xml';
+import { showStopped } from './fixtures/show-gates';
 
 it('生成空 Timecode，名称转义且拒绝未验证版本和目标；写入控台的中文名称为拼音', async () => {
   const xml = createMa2TimecodeXml(9903, 'TBLINK & <测试>', '3.3.4.3');
@@ -18,7 +19,7 @@ it('生成空 Timecode，名称转义且拒绝未验证版本和目标；写入�
 
 it.skipIf(!process.env.MA2_ONPC_CREATE_TARGET)('新建专用 Timecode 回读确认，重复创建拒绝覆盖', async () => {
   const target = Number(process.env.MA2_ONPC_CREATE_TARGET);
-  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);
+  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', showStopped);
   const name = `TBLINK_CREATE_ACCEPTANCE_${target}`;
   const result = await createMa2Timecode(bridge, target, name);
   expect(result).toMatchObject({ target, name, document: { tracks: [] }, unconverted: [] });

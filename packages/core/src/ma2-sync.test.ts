@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { ma2SyncSnapshotSchema, type Ma2SyncObject, type Ma2SyncSnapshot } from '@tb/schema';
 import { previewMa2Sync, resolveMa2Sync, sameMa2Content } from './ma2-sync';
 import { Ma2SyncSession, type Ma2SyncPort } from './ma2-sync-session';
+import { isShowWait, showGate, type ShowGateReader, type ShowState } from './show-state';
+
+const idle: ShowState = { phase: 'idle', program: null };
+const running: ShowState = { phase: 'running', source: 'internal', itemId: 'a', program: null };
+const paused: ShowState = { phase: 'held', source: 'internal', itemId: 'a', reason: 'paused', program: null };
+const showAs = (show: () => ShowState): ShowGateReader => op => showGate(op, show());
+const stopped = showAs(() => idle);
 
 function event(id: string, time = '1000'): Ma2SyncObject {
   return { id, kind: 'event', parentId: null, order: 0, properties: { time, cue: '1.5', name: '主歌' } };
@@ -120,56 +127,63 @@ describe('MA2 三方差异', () => {
 describe('MA2 同步事务（模拟端口，不代表控台验收）', () => {
   it('先备份，再写入，回读一致后才更新基线', async () => {
     const f = fixture();
-    const result = await new Ma2SyncSession(f.port, () => false).apply(f.preview, new Map());
+    const result = await new Ma2SyncSession(f.port, stopped).apply(f.preview, new Map());
     expect(f.calls).toEqual(['read', 'backup', 'write', 'read']);
     expect(result).toMatchObject({ status: 'verified', backupId: 'backup-1', baseline: { revision: 'r2' } });
   });
-  it('播放中不访问控台', async () => {
+  it('节目在走时不访问控台，只是在等', async () => {
     const f = fixture();
-    expect(await new Ma2SyncSession(f.port, () => true).apply(f.preview, new Map())).toMatchObject({ status: 'incomplete', mayHaveWritten: false });
+    const result = await new Ma2SyncSession(f.port, showAs(() => running)).apply(f.preview, new Map());
+    expect(result).toMatchObject({ status: 'incomplete', mayHaveWritten: false });
+    expect(result.status === 'incomplete' && isShowWait(new Error(result.message))).toBe(true);
     expect(f.calls).toEqual([]);
+  });
+  it('暂停时照常同步（2026-11-10 第 3 题）', async () => {
+    const f = fixture();
+    expect(await new Ma2SyncSession(f.port, showAs(() => paused)).apply(f.preview, new Map())).toMatchObject({ status: 'verified' });
+    expect(f.calls).toEqual(['read', 'backup', 'write', 'read']);
   });
   it('备份期间开始播放则阻止写入', async () => {
     const f = fixture();
     let playing = false;
     f.port.backup = () => { playing = true; return Promise.resolve({ backupId: 'backup-1', revision: 'r1' }); };
-    expect(await new Ma2SyncSession(f.port, () => playing).apply(f.preview, new Map())).toMatchObject({ status: 'incomplete', backupId: 'backup-1', mayHaveWritten: false });
+    expect(await new Ma2SyncSession(f.port, showAs(() => playing ? running : idle)).apply(f.preview, new Map())).toMatchObject({ status: 'incomplete', backupId: 'backup-1', mayHaveWritten: false });
     expect(f.calls).not.toContain('write');
   });
   it('预览后控台发生修改则要求重新预览', async () => {
     const f = fixture();
     f.port.read = () => Promise.resolve(snapshot([event('a', '9999')], 'r3'));
-    expect(await new Ma2SyncSession(f.port, () => false).apply(f.preview, new Map())).toMatchObject({ status: 'incomplete', stage: 'read', mayHaveWritten: false });
+    expect(await new Ma2SyncSession(f.port, stopped).apply(f.preview, new Map())).toMatchObject({ status: 'incomplete', stage: 'read', mayHaveWritten: false });
     expect(f.calls).toEqual([]);
   });
   it('备份失败不得写入', async () => {
     const f = fixture();
     f.port.backup = () => Promise.reject(new Error('磁盘已满'));
-    expect(await new Ma2SyncSession(f.port, () => false).apply(f.preview, new Map())).toMatchObject({ status: 'incomplete', stage: 'backup', message: '磁盘已满', mayHaveWritten: false });
+    expect(await new Ma2SyncSession(f.port, stopped).apply(f.preview, new Map())).toMatchObject({ status: 'incomplete', stage: 'backup', message: '磁盘已满', mayHaveWritten: false });
     expect(f.calls).not.toContain('write');
   });
   it('写入超时保留备份且不自动重试', async () => {
     const f = fixture();
     f.port.apply = () => { f.calls.push('write'); return Promise.reject(new Error('超时')); };
-    expect(await new Ma2SyncSession(f.port, () => false).apply(f.preview, new Map())).toMatchObject({ status: 'incomplete', stage: 'write', backupId: 'backup-1', mayHaveWritten: true });
+    expect(await new Ma2SyncSession(f.port, stopped).apply(f.preview, new Map())).toMatchObject({ status: 'incomplete', stage: 'write', backupId: 'backup-1', mayHaveWritten: true });
     expect(f.calls.filter((call) => call === 'write')).toHaveLength(1);
   });
   it('控台接受请求但未应用数据不得显示成功', async () => {
     const f = fixture();
     f.port.apply = () => Promise.resolve();
-    expect(await new Ma2SyncSession(f.port, () => false).apply(f.preview, new Map())).toMatchObject({ status: 'incomplete', stage: 'verify', mayHaveWritten: true });
+    expect(await new Ma2SyncSession(f.port, stopped).apply(f.preview, new Map())).toMatchObject({ status: 'incomplete', stage: 'verify', mayHaveWritten: true });
   });
   it('相同内容只读取，不做无意义写入', async () => {
     const f = fixture();
     const preview = previewMa2Sync(f.base, f.base, f.base);
-    expect(await new Ma2SyncSession(f.port, () => false).apply(preview, new Map())).toMatchObject({ status: 'verified', backupId: null });
+    expect(await new Ma2SyncSession(f.port, stopped).apply(preview, new Map())).toMatchObject({ status: 'verified', backupId: null });
     expect(f.calls).toEqual(['read']);
   });
   it('同一个会话拒绝并发同步并在完成后释放锁', async () => {
     const f = fixture();
     let unblock: (value: unknown) => void = () => { throw new Error('读取尚未开始'); };
     f.port.read = () => new Promise<unknown>((resolve) => { unblock = resolve; });
-    const session = new Ma2SyncSession(f.port, () => false);
+    const session = new Ma2SyncSession(f.port, stopped);
     const preview = previewMa2Sync(f.base, f.base, f.base);
     const first = session.apply(preview, new Map());
     expect(session.isBusy).toBe(true);

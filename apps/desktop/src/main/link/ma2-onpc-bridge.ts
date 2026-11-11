@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { holdForShow, type ShowGateReader } from '@tb/core/link';
 import { ma2ExecutorPageDirectorySchema } from '@tb/schema';
 import { inspectMa2ExecutorPageXml } from './ma2-timecode-xml';
 import { ma2ObjectDirectorySchema, ma2SequenceAssignmentSchema, ma2RenameResultSchema, ma2LabelSchema, ma2TimecodeRangesSchema } from '@tb/schema';
@@ -20,7 +21,8 @@ export class Ma2OnpcBridge {
   private exchangeTail: Promise<void> = Promise.resolve();
   private queuedExchanges = 0;
   private exchangeEpoch = 0;
-  constructor(private readonly dataDirectory: string | Ma2Wire, private readonly isPlaying: () => boolean) {
+  /** `show`: asked again right before a write or an assignment goes on the wire; reads are not held. */
+  constructor(private readonly dataDirectory: string | Ma2Wire, private readonly show: ShowGateReader) {
     if (typeof dataDirectory === 'string' && !isAbsolute(dataDirectory)) throw new Error('MA2 数据目录必须是绝对路径');
   }
   async request(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: Ma2TransferProgress): Promise<string> {
@@ -52,7 +54,9 @@ export class Ma2OnpcBridge {
       ma2LabelSchema.parse(Buffer.from(parts[5]!, 'hex').toString('utf8'));
     }
     if (operation === 'ASSIGNSEQ' && (!/^[a-f0-9]{24}\n(?:[a-f0-9]{2}){1,4096}\n(?:[a-f0-9]{2}){1,256}$/.test(expected) || desired)) throw new Error('自动关联请求格式无效');
-    if (assigning && this.isPlaying()) throw new Error('播放期间不能创建 MA2 关联');
+    // Writing the Timecode show, renaming and assigning a Sequence are all syncing the console (第 3 题).
+    const hold = (reached = ''): void => { if (writing || assigning) holdForShow(this.show, 'ma2.sync.write', reached); };
+    hold();
     if (operation === 'SEQUENCE' && (!['', 'keep'].includes(expected) || desired)) throw new Error('序列读取请求格式无效');
     if (operation === 'SEQCUES' && (!/^\d+\.\d{3}(?:,\d+\.\d{3})*$/.test(expected) || expected.length > 65536 || desired)) throw new Error('序列 Cue 读取范围无效');
     if (operation === 'TCRANGES' && (target !== 1 || expected || desired)) throw new Error('时间码范围读取请求格式无效');
@@ -61,7 +65,6 @@ export class Ma2OnpcBridge {
     const requestedSequences = operation === 'SCOPE' ? expected.split(',').map(Number) : [];
     if (operation === 'SCOPE' && (!/^[1-9]\d*(?:,[1-9]\d*)*$/.test(expected) || requestedSequences.some((number) => !Number.isInteger(number) || number > 99999) || new Set(requestedSequences).size !== requestedSequences.length)) throw new Error('额外序列读取范围无效');
     if (writing) {
-      if (this.isPlaying()) throw new Error('播放期间不能写入 MA2 工程');
       if (operation === 'CREATE' && expected !== '') throw new Error('新建 Timecode 不能包含旧对象快照');
       for (const [index, xml] of [expected, desired].entries()) {
         if (operation === 'CREATE' && index === 0) continue;
@@ -100,7 +103,7 @@ export class Ma2OnpcBridge {
       };
       if (typeof this.dataDirectory !== 'string') {
         return validate(await this.dataDirectory.exchange(id, operation, target, body, () => {
-          if ((writing || assigning) && this.isPlaying()) throw new Error('已开始播放，没有向 MA2 写入');
+          hold('这一步没有发给控台。');
           sent = true;
         }, signal, progress));
       }
@@ -111,7 +114,7 @@ export class Ma2OnpcBridge {
       const temporary = join(directory, `tblink_request_${id}.tmp`);
       signal?.throwIfAborted();
       await writeFile(temporary, `${id}\n${operation}\n${target}\n${Buffer.byteLength(body)}\n${body}`, 'utf8');
-      if ((writing || assigning) && this.isPlaying()) throw new Error('已开始播放，没有向 MA2 写入');
+      hold('这一步没有发给控台。');
       await rename(temporary, join(directory, 'tblink_bridge_request.txt'));
       sent = true;
       const deadline = Date.now() + 15000;

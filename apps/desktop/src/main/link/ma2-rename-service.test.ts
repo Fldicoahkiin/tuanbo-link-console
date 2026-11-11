@@ -2,6 +2,8 @@ import { expect, it, vi } from 'vitest';
 import type { Ma2RenameRequest } from '@tb/schema';
 import { renameMa2Object } from './ma2-rename-service';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { showMovingWhen } from './fixtures/show-gates';
+import { SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
 
 const request: Ma2RenameRequest = { dataDirectory: '', network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, generation: 'session',
   change: { endpoint: '192.0.2.1:30000', show: '测试', sequence: 2, cue: '1.100', kind: 'single', confirmedName: 'Old', name: '面光' } };
@@ -22,8 +24,8 @@ it('只发送类型化目标和 UTF-8 十六进制名称，中文写为拼音，
 it('排队期间开始播放，改名不会发送；响应身份错误会阻断', async () => {
   let playing = false;
   const wire = { exchange: vi.fn((_id: string, _op: string, _target: number, _body: string, beforeSend: () => void) => { playing = true; beforeSend(); return Promise.resolve(JSON.stringify(result)); }) };
-  const bridge = new Ma2OnpcBridge(wire, () => playing);
-  await expect(renameMa2Object(bridge, request)).rejects.toThrow('已开始播放');
+  const bridge = new Ma2OnpcBridge(wire, showMovingWhen(() => playing));
+  await expect(renameMa2Object(bridge, request)).rejects.toThrow(SHOW_WAIT_CLOCK_MOVING);
   playing = false;
   wire.exchange.mockImplementation(() => Promise.resolve(JSON.stringify({ ...result, sequence: 3 })));
   await expect(renameMa2Object(bridge, request)).rejects.toThrow('序列不一致');

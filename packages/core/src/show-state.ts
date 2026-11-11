@@ -119,7 +119,9 @@ export const showOperationRules = {
   'ma2.discover': clock('搜索控台'),
   'ma2.connect': stopped('换控台或改连接设置'),
   'ma2.reconnect': always,
-  'ma2.audition': clock('单击 Cue 试听'),
+  // 2026-11-01 用户定“单击 Cue 试听仍直接发这一个 Cue”: at any time, the program moving too (00-order §12: the gate
+  // 02 S3b put on it was never chosen, and would change how the room works). Add one only when the operator asks.
+  'ma2.audition': always,
   'ma2.networkSetup': stopped('设置网卡'),
   'connections.check': clock('检查连接'),
   'obs.connect': stopped('连接或更换 OBS'),
@@ -187,6 +189,19 @@ export function showGate(op: ShowOperation, show: ShowState, itemId?: string): S
       return show.phase === 'idle' || (itemId !== undefined && show.itemId !== null && show.itemId !== itemId) ? allow
         : { kind: 'wait', until: 'idle', message: `${SHOW_WAIT_SHOW_ON}这首歌还在台上，停下它以后再${rule.action}。` };
   }
+}
+
+/** How a main-process service reads the show for one operation: `ShowStateService.gate`. */
+export type ShowGateReader = (op: ShowOperation) => ShowGate;
+
+/**
+ * Throws the wait when `op` has to wait now, in `showGate`'s own words so the window knows it for a wait (`isShowWait`).
+ * A long operation asks before each step, so the step on the wire finishes and the next one is not sent (02 §4.4);
+ * `reached` says where it stopped, after the wait.
+ */
+export function holdForShow(read: ShowGateReader, op: ShowOperation, reached = ''): void {
+  const gate = read(op);
+  if (gate.kind === 'wait') throw new Error(`${gate.message}${reached}`);
 }
 
 /** A wait that came back as an error, across IPC too: Electron passes only the message, wrapped. */

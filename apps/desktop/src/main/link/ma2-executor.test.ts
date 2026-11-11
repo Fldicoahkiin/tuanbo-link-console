@@ -2,13 +2,14 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { inspectMa2ExecutorXml } from './ma2-timecode-xml';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { showStopped } from './fixtures/show-gates';
 
 // Native onPC 3.3.4.3 export of the owned Executor 99.219; only Info was removed.
 const xml = await readFile(new URL('./fixtures/ma2-executor-3.3.xml', import.meta.url), 'utf8');
 it.skipIf(!process.env.MA2_ONPC_DATA_DIRECTORY)('本机插件按地址读取已有测试执行器，不依赖 Timecode', async () => {
   const directory = process.env.MA2_ONPC_DATA_DIRECTORY;
   if (!directory) throw new Error('未指定本机 MA2 目录');
-  const bridge = new Ma2OnpcBridge(directory, () => false);
+  const bridge = new Ma2OnpcBridge(directory, showStopped);
   const first = inspectMa2ExecutorXml(await bridge.request('EXECUTOR', 99, '219'));
   expect(first).toMatchObject({ version: '3.3.4', sequence: 9901, assignmentName: 'TBLINK_CUE_REFERENCE_ACCEPTANCE 9901' });
   expect(inspectMa2ExecutorXml(await bridge.request('EXECUTOR', 99, '219'))).toEqual(first);

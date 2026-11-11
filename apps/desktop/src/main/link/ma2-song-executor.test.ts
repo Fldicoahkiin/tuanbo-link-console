@@ -3,6 +3,8 @@ import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
 import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor';
 import { readFile } from 'node:fs/promises';
+import { showRunning, showStopped } from './fixtures/show-gates';
+import { SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
 
 const source = { network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, expectedSource: { show: 'test-show', generation: 'test-session', version: '3.7.0.5' } };
 const native = await readFile(new URL('./fixtures/ma2-page-3.7.xml', import.meta.url), 'utf8');
@@ -18,32 +20,32 @@ function fixture(exists: boolean) {
 }
 it('creates a song executor at 1000.101 where the plan read the page, and verifies the assignment by reading that page once', async () => {
   const f = fixture(false);
-  const destination = await planMa2SongExecutor(f.bridge, source, 9907, 1000, undefined, () => false);
-  expect(await assignMa2SongExecutor(f.connection, f.bridge, source, 9907, destination, () => false)).toBe('1000.101');
+  const destination = await planMa2SongExecutor(f.bridge, source, 9907, 1000, undefined, showStopped);
+  expect(await assignMa2SongExecutor(f.connection, f.bridge, source, 9907, destination, showStopped)).toBe('1000.101');
   const script = f.connection.command.mock.calls.map(([command]) => command.match(/\[#\w+\+1\]=unhex\('([a-f0-9]+)'\)/)?.[1]).filter((value): value is string => !!value).map(value => Buffer.from(value, 'hex').toString()).join('') || f.connection.command.mock.calls[0]?.[0];
   expect(script).toContain('Store Page 1000 /nc'); expect(script).toContain('Assign Sequence 9907 At Executor 1000.101');
   expect(f.bridge.request.mock.calls.map(call => call.slice(0, 2))).toEqual([['PAGES', 1], ['PAGE', 1000]]);
 });
 it('keeps an existing song at its exact address without reassigning it or reading the page again', async () => {
   const f = fixture(true);
-  const destination = await planMa2SongExecutor(f.bridge, source, 9001, 1000, '1000.201', () => false);
+  const destination = await planMa2SongExecutor(f.bridge, source, 9001, 1000, '1000.201', showStopped);
   expect(destination.assigned).toBe(true);
   f.bridge.request.mockClear();
-  expect(await assignMa2SongExecutor(f.connection, f.bridge, source, 9001, destination, () => false)).toBe('1000.201');
+  expect(await assignMa2SongExecutor(f.connection, f.bridge, source, 9001, destination, showStopped)).toBe('1000.201');
   expect(f.connection.command).not.toHaveBeenCalled(); expect(f.bridge.request).not.toHaveBeenCalled();
 });
 it('原位置被别的序列占用时换到下一个空格，不覆盖；原位置空着时放回原位；本曲在同页挪过位置时跟到新位置', async () => {
   const f = fixture(true);
-  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.101', () => false)).toEqual({ address: '1000.102', slot: 102, pageExists: true, assigned: false });
-  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.150', () => false)).toEqual({ address: '1000.150', slot: 150, pageExists: true, assigned: false });
-  expect(await planMa2SongExecutor(f.bridge, source, 9001, 1000, '1000.150', () => false)).toEqual({ address: '1000.201', slot: 201, pageExists: true, assigned: true });
+  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.101', showStopped)).toEqual({ address: '1000.102', slot: 102, pageExists: true, assigned: false });
+  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.150', showStopped)).toEqual({ address: '1000.150', slot: 150, pageExists: true, assigned: false });
+  expect(await planMa2SongExecutor(f.bridge, source, 9001, 1000, '1000.150', showStopped)).toEqual({ address: '1000.201', slot: 201, pageExists: true, assigned: true });
   expect(f.connection.command).not.toHaveBeenCalled();
 });
 it('does not allocate anything after playback starts', async () => {
   const f = fixture(false);
-  await expect(planMa2SongExecutor(f.bridge, source, 9907, 1000, undefined, () => true)).rejects.toThrow('播放');
+  await expect(planMa2SongExecutor(f.bridge, source, 9907, 1000, undefined, showRunning)).rejects.toThrow(SHOW_WAIT_CLOCK_MOVING);
   expect(f.bridge.request).not.toHaveBeenCalled();
-  await expect(assignMa2SongExecutor(f.connection, f.bridge, source, 9907, { address: '1000.101', slot: 101, pageExists: false, assigned: false }, () => true)).rejects.toThrow('播放');
+  await expect(assignMa2SongExecutor(f.connection, f.bridge, source, 9907, { address: '1000.101', slot: 101, pageExists: false, assigned: false }, showRunning)).rejects.toThrow(SHOW_WAIT_CLOCK_MOVING);
   expect(f.bridge.request).not.toHaveBeenCalled(); expect(f.connection.command).not.toHaveBeenCalled();
 });
 const pageXml = (page: number, filled: number): string => `<?xml version="1.0" encoding="utf-8"?><MA tblink_show="test-show" tblink_generation="test-session" tblink_version="3.7.0.5" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.malighting.de/grandma2/xml/MA" major_vers="3" minor_vers="7" stream_vers="0"><Page index="${page - 1}">${Array.from({ length: 190 }, (_, index) => index >= 100 && index < 100 + filled ? `<Exec offset_from_first="0"><Assignment name="song ${index}"><No>25</No><No>1</No><No>${9000 + index}</No></Assignment></Exec>` : '<Exec xsi:nil="true" />').join('')}</Page></MA>`;
@@ -56,9 +58,9 @@ it('第 1000 页 101–190 放满时放到 1001 页，原有内容不覆盖（20
     throw new Error(`Unexpected ${op} ${target}`);
   }) };
   const command = vi.fn<Ma2Telnet['command']>().mockImplementation(text => { created = true; return Promise.resolve(text.includes("READY'") ? 'READY' : 'OK:assigned'); });
-  const destination = await planMa2SongExecutor(bridge, source, 9300, 1000, undefined, () => false);
+  const destination = await planMa2SongExecutor(bridge, source, 9300, 1000, undefined, showStopped);
   expect(destination).toEqual({ address: '1001.101', slot: 101, pageExists: false, assigned: false });
-  expect(await assignMa2SongExecutor({ command }, bridge, source, 9300, destination, () => false)).toBe('1001.101');
+  expect(await assignMa2SongExecutor({ command }, bridge, source, 9300, destination, showStopped)).toBe('1001.101');
   const script = command.mock.calls.map(([text]) => text.match(/\[#\w+\+1\]=unhex\('([a-f0-9]+)'\)/)?.[1]).filter((value): value is string => !!value).map(value => Buffer.from(value, 'hex').toString()).join('') || command.mock.calls[0]?.[0];
   expect(script).toContain('Store Page 1001 /nc'); expect(script).toContain('Assign Sequence 9300 At Executor 1001.101');
   expect(script).not.toContain('1000.');

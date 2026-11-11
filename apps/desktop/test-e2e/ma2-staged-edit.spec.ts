@@ -10,12 +10,13 @@ import { inspectMa2SequenceXml } from '../src/main/link/ma2-timecode-xml';
 import { savedValue } from './save-questions';
 import { stubMidiPorts } from './midi-ports';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
+import { showStopped } from '../src/main/link/fixtures/show-gates';
 
 test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提交列表', async ({}, info) => {
   const xml = await readFile(join(process.cwd(), 'src/main/link/fixtures/ma2-timecode-fractional-3.3.xml'), 'utf8');
   const sequence = await readFile(join(process.cwd(), 'src/main/link/fixtures/ma2-sequence-fractional-3.3.xml'), 'utf8');
   const directory = { show: '安全暂存桌面验收', generation: 'test', version: '3.3.4', entries: [{ target: 9902, name: '暂存歌曲' }] };
-  const catalog = await readMa2Catalog({ request: operation => Promise.resolve(operation === 'LIST' ? JSON.stringify(directory) : xml) }, () => false, inspectMa2SequenceXml(sequence));
+  const catalog = await readMa2Catalog({ request: operation => Promise.resolve(operation === 'LIST' ? JSON.stringify(directory) : xml) }, showStopped, inspectMa2SequenceXml(sequence));
   const library = { directory: { ...directory, entries: [] }, readAt: new Date().toISOString(), sequences: [], fixtureUsage: [], errors: [] };
   const wav = Buffer.alloc(44 + 8000 * 60, 128);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);

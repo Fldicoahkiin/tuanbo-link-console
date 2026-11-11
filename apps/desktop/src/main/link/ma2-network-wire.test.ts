@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import { Ma2NetworkWire } from './ma2-network-wire';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { showStopped } from './fixtures/show-gates';
 
 const id = '1234567890abcdef1234567890abcdef';
 function peer(options: { value?: string; wrongId?: boolean; truncate?: boolean; failRun?: boolean } = {}) {
@@ -99,7 +100,7 @@ it('清理失败保留原始错误和发送状态，不重试清理或写入', a
 });
 it('网络传输沿用本机桥的对象验证与播放保护', async () => {
   let calls = 0;
-  const bridge = new Ma2OnpcBridge({ exchange: () => { calls += 1; return Promise.resolve('<MA><Timecode index="4" /></MA>'); } }, () => false);
+  const bridge = new Ma2OnpcBridge({ exchange: () => { calls += 1; return Promise.resolve('<MA><Timecode index="4" /></MA>'); } }, showStopped);
   await expect(bridge.request('READ', 6)).rejects.toThrow();
   await expect(bridge.request('APPLY', 6, 'invalid', 'invalid')).rejects.toThrow();
   expect(calls).toBe(1);

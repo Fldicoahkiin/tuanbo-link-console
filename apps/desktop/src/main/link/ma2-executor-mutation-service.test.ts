@@ -6,6 +6,8 @@ import type { Ma2ExecutorUpdateRequest } from '@tb/schema';
 import { Ma2ExecutorMutationService } from './ma2-executor-mutation-service';
 import { inspectMa2ExecutorPageXml } from './ma2-timecode-xml';
 import { runMa2GuardedLua } from './ma2-lua-command';
+import { SHOW_WAIT_CLOCK_MOVING, type ShowGateReader } from '@tb/core/link';
+import { showPaused, showRunning, showStopped } from './fixtures/show-gates';
 
 vi.mock('./ma2-lua-command', async importOriginal => {
   const original = await importOriginal<typeof import('./ma2-lua-command')>();
@@ -24,7 +26,7 @@ function moveXml(target: number): string {
     return slot === 101 ? '<Exec xsi:nil="true" />' : slot === target ? blocks[100]! : blocks[slot - 1]!;
   });
 }
-async function service(isPlaying = () => false) { return new Ma2ExecutorMutationService(await mkdtemp(join(tmpdir(), 'tblink-executor-')), isPlaying); }
+async function service(show: ShowGateReader = showStopped) { return new Ma2ExecutorMutationService(await mkdtemp(join(tmpdir(), 'tblink-executor-')), show); }
 beforeEach(() => { vi.clearAllMocks(); invoke.mockResolvedValue('verified'); });
 
 it('moves the native executor without reconstructing its assignment and returns verified original positions', async () => {
@@ -62,13 +64,20 @@ it('renames through the original executor and confirms the assigned object name'
   expect(invoke.mock.calls[0]![1]).toContain(Buffer.from('Label Executor 99.101 "Renamed"').toString('hex'));
 });
 
+it('changes executors while paused, as when stopped (2026-11-10 第 3 题)', async () => {
+  const bridge = { request: vi.fn().mockResolvedValueOnce(xml).mockResolvedValueOnce(moveXml(102)) };
+  const result = await (await service(showPaused)).update(connection, bridge, { ...base, action: { kind: 'move', page: 99, slot: 102 } });
+  expect(result.pages[0]!.items).toMatchObject([{ slot: 102, sequence: 9907 }, { slot: 201, sequence: 9001 }]);
+  expect(invoke).toHaveBeenCalledTimes(1);
+});
+
 it('does not mark an unconfirmed move complete or resend it', async () => {
   await expect((await service()).update(connection, { request: vi.fn().mockResolvedValue(xml) }, { ...base, action: { kind: 'move', page: 99, slot: 102 } })).rejects.toThrow('还没完全确认');
   expect(invoke).toHaveBeenCalledTimes(1);
 });
 
 it('stops queued mutations if timeline playback starts, without blocking local editing APIs', async () => {
-  await expect((await service(() => true)).update(connection, { request: vi.fn() }, { ...base, action: { kind: 'delete' } })).rejects.toThrow('本地编辑可以继续');
+  await expect((await service(showRunning)).update(connection, { request: vi.fn() }, { ...base, action: { kind: 'delete' } })).rejects.toThrow(`${SHOW_WAIT_CLOCK_MOVING}暂停或停止后再修改执行器。`);
   expect(invoke).not.toHaveBeenCalled();
 });
 

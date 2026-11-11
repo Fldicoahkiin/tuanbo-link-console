@@ -7,6 +7,7 @@ import { prepareMa2MergedEvents, confirmMa2MergedEvents } from './ma2-event-writ
 import { inspectMa2TimecodeXml, sameMa2XmlObjects } from './ma2-timecode-xml';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2ApplyService } from './ma2-apply-service';
+import { showStopped } from './fixtures/show-gates';
 
 const xml = await readFile(new URL('./fixtures/ma2-timecode-fractional-3.3.xml', import.meta.url), 'utf8');
 const sequence = await readFile(new URL('./fixtures/ma2-sequence-fractional-3.3.xml', import.meta.url), 'utf8');
@@ -35,7 +36,7 @@ it('跨歌曲的早期事件不静默删除', () => {
   expect(() => convertMa2Timecode(xml, [sequence], 9902, 60000)).toThrow('起点还早');
 });
 it.skipIf(!process.env.MA2_ONPC_ORIGIN_ACCEPTANCE)('真实 onPC 一小时偏移修改及回读，最后恢复原测试对象', async () => {
-  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);
+  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', showStopped);
   const original = await bridge.request('READ', 9902);
   expect(inspectMa2TimecodeXml(original).timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');
   try {
@@ -44,7 +45,7 @@ it.skipIf(!process.env.MA2_ONPC_ORIGIN_ACCEPTANCE)('真实 onPC 一小时偏移�
     const snapshot = await bridge.request('SNAPSHOT', 9902);
     const preview = convertMa2Snapshot(snapshot, 9902, [], 3600000);
     const document = bind(preview); document.tracks[0]!.clips[0]!.events[0]!.at = 500;
-    const result = await new Ma2ApplyService(bridge, () => false).apply({ dataDirectory: process.env.MA2_ONPC_DATA_DIRECTORY ?? '', document, bindingId: document.ma2Bindings![0]!.id, readback: preview, conflicts: [] });
+    const result = await new Ma2ApplyService(bridge, showStopped).apply({ dataDirectory: process.env.MA2_ONPC_DATA_DIRECTORY ?? '', document, bindingId: document.ma2Bindings![0]!.id, readback: preview, conflicts: [] });
     if (result.status !== 'verified') throw new Error(result.message);
     expect(result.confirmed.document.tracks[0]!.clips[0]!.events[0]!.at).toBe(500);
     expect(inspectMa2TimecodeXml(result.confirmed.sourceXml).timecodes[0]?.attributes.offset).toBe('108000');

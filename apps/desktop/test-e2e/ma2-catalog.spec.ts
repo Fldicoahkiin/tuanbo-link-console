@@ -6,6 +6,7 @@ import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { Ma2OnpcBridge } from '../src/main/link/ma2-onpc-bridge';
 import { sameMa2XmlObjects } from '../src/main/link/ma2-timecode-xml';
 import { savedValue } from './save-questions';
+import { showStopped } from '../src/main/link/fixtures/show-gates';
 
 test('真实 P1 文件与音频一键匹配真实 onPC 时间线，保留无法配对的提示', async ({}, info) => {
   const directory = process.env.MA2_ONPC_DATA_DIRECTORY;
@@ -59,7 +60,7 @@ test('真实 onPC 设置扫描、小数 Cue、歌曲配对、批量导入与保�
   const executable = process.env.TBLINK_MA2_PACKAGED_EXE;
   const application = await electron.launch({ ...(executable ? { executablePath: executable } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...executable ? [] : [join(process.cwd(), process.env.TBLINK_E2E_BUILD_DIR ?? 'out', 'main/index.cjs')]] });
   const page = await application.firstWindow();
-  const bridge = new Ma2OnpcBridge(directory, () => false);
+  const bridge = new Ma2OnpcBridge(directory, showStopped);
   const original = await bridge.request('READ', 9902);
   try {
     await application.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, path);

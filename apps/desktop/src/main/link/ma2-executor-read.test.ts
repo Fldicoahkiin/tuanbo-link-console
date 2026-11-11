@@ -7,6 +7,7 @@ import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from
 import { convertMa2Snapshot, convertMa2Timecode } from './ma2-timecode-conversion';
 import { editMa2TimecodeEvents, inspectMa2TimecodeXml } from './ma2-timecode-xml';
 import { Ma2ApplyService } from './ma2-apply-service';
+import { showStopped } from './fixtures/show-gates';
 const execXml = (await readFile(new URL('./fixtures/ma2-executor-3.3.xml', import.meta.url), 'utf8')).replace('<Exec ', '<Exec tblink_executor_name="TBLINK_CUE_REFERENCE_ACCEPTANCE 99.219" ');
 const tcXml = await readFile(new URL('./fixtures/ma2-timecode-fractional-3.3.xml', import.meta.url), 'utf8');
 const seqXml = await readFile(new URL('./fixtures/ma2-sequence-fractional-3.3.xml', import.meta.url), 'utf8');
@@ -16,7 +17,7 @@ const snapshot = tcXml.replace('</MA>', `${object}</MA>`);
 const input = { dataDirectory: 'C:/ma2', target: 9902, executor: '99.219' };
 it.skipIf(!process.env.MA2_ONPC_NEW_BINDING_ACCEPTANCE)('空 Timecode 的新执行器关联完成打点、同步、控台修改回读与还原', async () => {
   const directory = process.env.MA2_ONPC_DATA_DIRECTORY ?? '';
-  const bridge = new Ma2OnpcBridge(directory, () => false);
+  const bridge = new Ma2OnpcBridge(directory, showStopped);
   const original = await bridge.request('READ', 9903);
   const report = inspectMa2TimecodeXml(original);
   expect(report.timecodes[0]?.attributes.name).toBe('TBLINK_CREATE_ACCEPTANCE_9903');
@@ -34,7 +35,7 @@ it.skipIf(!process.env.MA2_ONPC_NEW_BINDING_ACCEPTANCE)('空 Timecode 的新执�
   const source = bound.rundown[0]!.lighting!; const track = source.tracks[0]!;
   track.clips.push({ id: 'program-clip', name: '节目', start: 0, duration: 4000, timeLock: 'time', muted: false, events: [] });
   for (const time of [500, 1500]) track.clips[0]!.events.push({ id: `cue-${time}`, kind: 'ma2', action: 'goto', at: time, ...nextLightingCue(source, track, time) });
-  const service = new Ma2ApplyService(bridge, () => false);
+  const service = new Ma2ApplyService(bridge, showStopped);
   try {
     const result = await service.apply({ dataDirectory: directory, document: source, bindingId, readback: preview, conflicts: [] });
     if (result.status !== 'verified') throw new Error(JSON.stringify(result));
@@ -88,7 +89,7 @@ it('读取过程中换序列或序列缺失时不返回可关联的预览', asyn
 it.skipIf(!process.env.MA2_ONPC_DATA_DIRECTORY)('本机空 Timecode 可读取新执行器及小数 Cue 列表', async () => {
   const directory = process.env.MA2_ONPC_DATA_DIRECTORY;
   if (!directory) throw new Error('缺少本机 MA2 目录');
-  const bridge = new Ma2OnpcBridge(directory, () => false);
+  const bridge = new Ma2OnpcBridge(directory, showStopped);
   const result = await readMa2Executor(bridge, { dataDirectory: directory, target: 9903, executor: '99.219' });
   expect(result.cueCatalog[0]?.cues.map((cue) => cue.number)).toEqual(['1.250', '7.500']);
   expect(result.executor).toBe('99.219');

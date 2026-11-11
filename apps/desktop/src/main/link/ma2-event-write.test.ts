@@ -7,6 +7,7 @@ import { applyMa2ReadbackCommand, bindMa2TrackCommand, sameMa2Content, snapshotM
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { removeMa2Tracks } from './ma2-track-write';
+import { showStopped } from './fixtures/show-gates';
 
 const xml = await readFile(new URL('./fixtures/ma2-timecode-fractional-3.3.xml', import.meta.url), 'utf8');
 const sequence = await readFile(new URL('./fixtures/ma2-sequence-fractional-3.3.xml', import.meta.url), 'utf8');
@@ -51,7 +52,7 @@ describe('三方合并到 MA2 原生写入', () => {
     expect(prepareMa2MergedEvents(next, 'binding', confirmed, new Map(), [sequence]).desiredXml).toBe(prepared.desiredXml);
   });
   it.skipIf(!process.env.MA2_ONPC_FADER_SYNC_ACCEPTANCE)('Master 三方合并写入本机 onPC 并确认后还原专用测试对象', async () => {
-    const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);
+    const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', showStopped);
     const original = await bridge.request('READ', 9902);
     const before = inspectMa2TimecodeXml(original);
     expect(before.timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');

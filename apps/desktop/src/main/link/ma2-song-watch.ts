@@ -5,6 +5,7 @@ import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
 import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
 import { inspectMa2ExecutorXml } from './ma2-timecode-xml';
+import { holdForShow, type ShowGateReader } from '@tb/core/link';
 
 const canonical = (xml: string): string => xml.replace(/<Info\b[^>]*\/>/g, '').replace(/>\s+</g, '><').trim();
 /** `timecode`: the song's own Timecode show as exported next to the Sequence (`<file>_tc`), and its revision. */
@@ -14,11 +15,14 @@ type Snapshot = { file: string; revision: string; timecode?: { number: number; r
 export class Ma2SongWatch {
   private readonly snapshots = new Map<string, Snapshot>();
   private busy = false;
-  constructor(private readonly isPlaying: () => boolean) {}
+  /** `show`: checking a song is reading the console; asked before each console command (第 3 题: paused it reads). */
+  constructor(private readonly show: ShowGateReader) {}
+  private readonly stopped = (): void => { holdForShow(this.show, 'ma2.sync.read'); };
+  private waits(): boolean { return this.show('ma2.sync.read').kind === 'wait'; }
   async changed(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, input: Ma2SongCheckRequest): Promise<boolean> {
     const request = ma2SongCheckRequestSchema.parse(input);
     if (this.busy) throw new Error('歌曲检查还没结束');
-    const stopped = (): void => { if (this.isPlaying()) throw new Error('播放期间暂停检查歌曲'); };
+    const stopped = this.stopped;
     stopped(); this.busy = true;
     const key = this.key(request);
     const cached = this.snapshots.get(key);
@@ -82,8 +86,8 @@ export class Ma2SongWatch {
   async unchangedBaseline(connection: Pick<Ma2Telnet, 'command'>, input: Omit<Ma2SongCheckRequest, 'revision'>, baselineXml: string): Promise<string | null> {
     const request = ma2SongCheckRequestSchema.parse({ ...input, revision: createHash('sha256').update(canonical(baselineXml)).digest('hex') });
     const cached = this.snapshots.get(this.key(request));
-    if (this.busy || this.isPlaying() || !cached || cached.revision !== request.revision) return null;
-    const stopped = (): void => { if (this.isPlaying()) throw new Error('播放期间暂停检查歌曲'); };
+    if (this.busy || this.waits() || !cached || cached.revision !== request.revision) return null;
+    const stopped = this.stopped;
     stopped(); this.busy = true;
     try {
       if (await this.same(connection, request, cached.file, stopped)) return cached.file;
@@ -100,8 +104,8 @@ export class Ma2SongWatch {
   async adopt(connection: Pick<Ma2Telnet, 'command'>, input: Ma2SongCheckRequest, exportFile: string): Promise<boolean> {
     const request = ma2SongCheckRequestSchema.parse(input);
     if (!/^tblink_library_[a-f0-9]{32}$/.test(exportFile)) throw new Error('歌曲回读导出文件名无效');
-    if (this.busy || this.isPlaying()) return false;
-    const stopped = (): void => { if (this.isPlaying()) throw new Error('播放期间暂停检查歌曲'); };
+    if (this.busy || this.waits()) return false;
+    const stopped = this.stopped;
     this.busy = true;
     const key = this.key(request);
     const file = this.snapshots.get(key)?.file ?? this.file(request);

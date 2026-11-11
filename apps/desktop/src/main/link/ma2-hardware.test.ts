@@ -17,6 +17,7 @@ import { inspectMa2SequenceXml, inspectMa2TimecodeXml, sameMa2XmlObjects } from 
 import { readMa2NativeLibrary } from './ma2-native-library';
 import { ma2SongTimecodeXml } from './ma2-song-timecode';
 import { createMa2TimecodeXml } from './ma2-create';
+import { showStopped } from './fixtures/show-gates';
 
 it.runIf(Boolean(process.env.TBLINK_MA2_HARDWARE_LIBRARY))('实体控台素材结构只读诊断', async () => {
   const connection = new Ma2Telnet({ host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001 });
@@ -33,7 +34,7 @@ it.runIf(Boolean(process.env.TBLINK_MA2_HARDWARE_LIBRARY))('实体控台读取�
   try {
     await connection.connect('administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
     await ensureMa2NetworkBridge(connection, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
-    const library = await readMa2NativeLibrary(connection, new Ma2OnpcBridge(new Ma2NetworkWire(connection), () => false), () => false);
+    const library = await readMa2NativeLibrary(connection, new Ma2OnpcBridge(new Ma2NetworkWire(connection), showStopped), showStopped);
     await writeFile(resolve('artifacts/ma2-hardware-diagnostics/effect-library.json'), JSON.stringify(library, null, 2));
     console.info(JSON.stringify({ sequences: library.sequences.length, cues: library.sequences.reduce((count, sequence) => count + sequence.cues.length, 0), errors: library.errors }));
     expect(library.sequences.length).toBeGreaterThan(0);
@@ -68,7 +69,7 @@ it.runIf(process.env.TBLINK_MA2_HARDWARE_WRITE === '1')('实体控台专属空�
   try {
     await connection.connect(process.env.TBLINK_MA2_HARDWARE_USER ?? 'administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
     await ensureMa2NetworkBridge(connection, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
-    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(connection), () => false);
+    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(connection), showStopped);
     // CREATE refuses an occupied number. No existing user object is reused.
     await createMa2Timecode(bridge, 9905, 'TBLINK_HARDWARE_ACCEPTANCE');
     const original = await bridge.request('READ', 9905);
@@ -155,7 +156,7 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
   try {
     await raw.connect(process.env.TBLINK_MA2_HARDWARE_USER ?? 'administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
     await ensureMa2NetworkBridge(raw, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
-    const native = new Ma2OnpcBridge(new Ma2NetworkWire(connection), () => false);
+    const native = new Ma2OnpcBridge(new Ma2NetworkWire(connection), showStopped);
     const timed = async <T extends string | { response: string }>(label: string, run: () => Promise<T>): Promise<T> => {
       const before = { ...traffic }; const started = performance.now();
       try { const value = await run(); operations.push({ label, ms: Math.round(performance.now() - started), commands: traffic.commands - before.commands, received: Buffer.byteLength(typeof value === 'string' ? value : value.response) }); return value; }
@@ -167,7 +168,7 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     };
     const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
     const pages = await listMa2ExecutorPages(bridge, { network: { host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001, username: 'administrator' }, expectedSource: { show: directory.show, generation: directory.generation, version: directory.version } });
-    const library = await readMa2NativeLibrary(connection, bridge, () => false, undefined, 'library', undefined, directory.entries.filter(entry => entry.target < 9950).slice(0, 12).map(entry => entry.target));
+    const library = await readMa2NativeLibrary(connection, bridge, showStopped, undefined, 'library', undefined, directory.entries.filter(entry => entry.target < 9950).slice(0, 12).map(entry => entry.target));
     const source = library.sequences.find(value => value.cues.length >= 2);
     if (!source) throw new Error('测试 Show 前 12 个序列中没有至少 2 个 Cue 的序列');
     let sequence = 9950; while (directory.entries.some(entry => entry.target === sequence)) sequence += 1;
@@ -178,7 +179,7 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     const ref = (index: number) => [{ sequence: source.sequence, cue: source.cues[index]!.number, delayMs: 0 }];
     const points = [{ id: 'p1', name: '探针开场', atMs: 0, cues: ref(0) }, { id: 'p2', name: '探针副歌', atMs: 1000, cues: ref(1) }, { id: 'p3', name: '探针尾声', atMs: 2000, cues: [] }];
     const workspace = await mkdtemp(join(tmpdir(), 'tblink-song-probe-'));
-    const service = new Ma2LayoutService(resolve(workspace, 'layouts.json'), () => false, new Ma2ConsoleBackups(resolve(workspace, 'backups.json'), () => false, message => Promise.reject(new Error(message))));
+    const service = new Ma2LayoutService(resolve(workspace, 'layouts.json'), showStopped, new Ma2ConsoleBackups(resolve(workspace, 'backups.json'), showStopped, message => Promise.reject(new Error(message))));
     const base = { network, expectedSource, projectId: randomUUID(), itemId: 'probe', settings: { layout: 999, name: 'TBLINK', nextSequence: sequence, columns: 8, executorPage: page }, name: '联动探针歌曲', timecodeStartMs: 480000 };
     const first = await step('create', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), points }));
     created = { sequence, page, ...first.binding.timecode ? { timecode: first.binding.timecode.number } : {} };
@@ -187,7 +188,7 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     const marker = `TBLINK_FADE_${randomBytes(16).toString('hex')}:`;
     expect(await raw.command(`Lua "gma.cmd('Assign Sequence ${sequence} Cue ${tuned} /fade=7');gma.echo('${marker}ok')"`, text => ma2ResponseLine(text, marker))).toBe('ok');
     // Each sync hands its verified post-write export to the song check, as the network manager does.
-    const watch = new Ma2SongWatch(() => false);
+    const watch = new Ma2SongWatch(showStopped);
     const checkOf = (result: typeof first) => ({ network, expectedSource, sequence, executor: result.binding.executor!, revision: result.remoteRevision! });
     const adoptReadback = (exportFile: string, result: typeof first): Promise<boolean> => watch.adopt(connection, checkOf(result), exportFile);
     const second = await step('changeOneCue', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), binding: first.binding,
@@ -286,9 +287,9 @@ it.runIf(process.env.TBLINK_MA2_COPY_PROBE === '1' && Boolean(process.env.TBLINK
   try {
     await raw.connect(process.env.TBLINK_MA2_HARDWARE_USER ?? 'administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
     await ensureMa2NetworkBridge(raw, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
-    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), () => false);
+    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), showStopped);
     const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
-    const library = await readMa2NativeLibrary(raw, bridge, () => false, undefined, 'library', undefined, directory.entries.filter(entry => entry.target < 9950).slice(0, 12).map(entry => entry.target));
+    const library = await readMa2NativeLibrary(raw, bridge, showStopped, undefined, 'library', undefined, directory.entries.filter(entry => entry.target < 9950).slice(0, 12).map(entry => entry.target));
     const source = library.sequences.find(value => value.cues.length >= 2);
     if (!source) throw new Error('测试 Show 前 12 个序列中没有至少 2 个 Cue 的序列');
     const parts = (cue: string): string => { const [whole, fraction = ''] = cue.split('.'); return `'${Number(whole)}','${Number(fraction.padEnd(3, '0'))}'`; };
@@ -309,7 +310,7 @@ it.runIf(process.env.TBLINK_MA2_COPY_PROBE === '1' && Boolean(process.env.TBLINK
       while (pages.pages.some(value => value.page === page)) page += 1;
       created = { sequence: T, page };
       const workspace = await mkdtemp(join(tmpdir(), 'tblink-copy-probe-'));
-      const service = new Ma2LayoutService(resolve(workspace, 'layouts.json'), () => false, new Ma2ConsoleBackups(resolve(workspace, 'backups.json'), () => false, message => Promise.reject(new Error(message))));
+      const service = new Ma2LayoutService(resolve(workspace, 'layouts.json'), showStopped, new Ma2ConsoleBackups(resolve(workspace, 'backups.json'), showStopped, message => Promise.reject(new Error(message))));
       await service.syncSong(raw, bridge, { network: { host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001, username: 'administrator' }, expectedSource: { show: directory.show, generation: directory.generation, version: directory.version },
         projectId: randomUUID(), itemId: 'copy-probe', requestId: randomUUID(), settings: { layout: 999, name: 'TBLINK', nextSequence: T, columns: 8, executorPage: page }, name: 'CopyProbe',
         points: [{ id: 'p1', name: 'Probe', atMs: 0, cues: [{ sequence: S, cue: c1, delayMs: 0 }] }] });
@@ -368,10 +369,10 @@ it.runIf(process.env.TBLINK_MA2_BACKUP_ROTATION === '1' && Boolean(process.env.T
   try {
     await raw.connect(process.env.TBLINK_MA2_HARDWARE_USER ?? 'administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
     await ensureMa2NetworkBridge(raw, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
-    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), () => false);
+    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), showStopped);
     const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
     const sequence = directory.entries[0]!.target;
-    const backups = new Ma2ConsoleBackups(resolve(await mkdtemp(join(tmpdir(), 'tblink-rotation-')), 'backups.json'), () => false, message => Promise.reject(new Error(message)));
+    const backups = new Ma2ConsoleBackups(resolve(await mkdtemp(join(tmpdir(), 'tblink-rotation-')), 'backups.json'), showStopped, message => Promise.reject(new Error(message)));
     for (let index = 0; index < 12; index++) {
       const file = `tblink_library_${randomBytes(16).toString('hex')}`;
       expect(await lua(`gma.cmd('Export Sequence ${sequence} ${file} /o');local f=io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','rb');R=not (f==nil);if f then f:close() end`)).toBe('true');
@@ -383,7 +384,7 @@ it.runIf(process.env.TBLINK_MA2_BACKUP_ROTATION === '1' && Boolean(process.env.T
     expect(present).toEqual([...Array<string>(2).fill('false'), ...Array<string>(10).fill('true')]);
   } finally {
     if (created.length && raw.state === 'connected') {
-      const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), () => false);
+      const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), showStopped);
       await bridge.request('DISCARD', 1, created.join(','));
       expect((await Promise.all(created.map(exists))).every(value => value === 'false')).toBe(true);
     }
@@ -405,7 +406,7 @@ it.runIf(process.env.TBLINK_MA2_TIMECODE_PROBE === '1' && Boolean(process.env.TB
   try {
     await raw.connect(process.env.TBLINK_MA2_HARDWARE_USER ?? 'administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
     await ensureMa2NetworkBridge(raw, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
-    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), () => false);
+    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), showStopped);
     const timecodes = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
     const ranges = ma2TimecodeRangesSchema.parse(JSON.parse(await bridge.request('TCRANGES', 1)));
     expect(ranges.entries.map(entry => entry.target)).toEqual(timecodes.entries.map(entry => entry.target));

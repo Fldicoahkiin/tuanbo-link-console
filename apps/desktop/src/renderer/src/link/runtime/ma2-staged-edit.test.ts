@@ -10,6 +10,7 @@ import { ma2SyncPlaying, useMa2SyncStore } from '../stores/ma2-sync-store';
 import { lightingEditHandler } from '../components/lighting-edit-handler';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
 import { markPendingMa2Songs, ma2SongSyncSettings, startMa2SongSync, stopMa2SongSync, tickMa2SongSync } from './ma2-song-sync';
+import { showMovingWhen, showStopped } from '../../../../main/link/fixtures/show-gates';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
 const { archive } = vi.hoisted(() => ({ archive: vi.fn() }));
@@ -54,7 +55,7 @@ function setup(initial = xml) {
       return Promise.resolve({ response: native, requestId: 'a'.repeat(32) });
     })
   };
-  const service = new Ma2ApplyService(bridge, () => ma2SyncPlaying());
+  const service = new Ma2ApplyService(bridge, showMovingWhen(() => ma2SyncPlaying()));
   const api = {
     getMa2NetworkStatus: vi.fn(() => Promise.resolve({ state: 'connected', settings: { ...network, autoConnect: false } })),
     previewMa2: vi.fn(() => Promise.resolve(convertMa2Snapshot(snapshot(native), 9902))),
@@ -194,7 +195,7 @@ it.each(['读取', '写入', '回读'] as const)('%s异常保留暂存，后续�
 
 it('已确认的写入在回读应用前暂停同步：回读照样进工程，不停在写入中、不冒充仍在同步', async () => {
   const test = setup(); test.edit(1000); test.stop();
-  test.api.applyMa2.mockImplementationOnce(async request => { const result = await new Ma2ApplyService(test.bridge, () => false).apply(request); stopMa2SongSync('song'); return result; });
+  test.api.applyMa2.mockImplementationOnce(async request => { const result = await new Ma2ApplyService(test.bridge, showStopped).apply(request); stopMa2SongSync('song'); return result; });
   await test.tick();
   expect(pending()).toEqual([]);
   expect(test.song()).toMatchObject({ state: 'paused', writing: false });

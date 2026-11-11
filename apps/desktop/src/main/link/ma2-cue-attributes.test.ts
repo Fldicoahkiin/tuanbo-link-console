@@ -5,6 +5,7 @@ import { readMa2EffectLibrary } from './ma2-effect-library';
 import { ma2CueAttributeState } from '@tb/core/link';
 import type { Ma2Telnet } from './ma2-telnet';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { showStopped } from './fixtures/show-gates';
 const cue = readFileSync(new URL('./fixtures/ma2-cue-attributes-3.7.xml',import.meta.url),'utf8');
 const layout = readFileSync(new URL('./fixtures/ma2-layout-sequence-3.7.xml',import.meta.url),'utf8');
 const directory={show:'test',generation:'g',version:'3.7.0.5',entries:[{target:9918,name:'test'}]};
@@ -25,14 +26,14 @@ it('does not infer a missing attribute and preserves unknown channel information
 it('propagates failed native double-export verification without retrying or merging the sequence',async()=>{
   const request=vi.fn<Ma2OnpcBridge['request']>().mockResolvedValueOnce(JSON.stringify(directory)).mockRejectedValueOnce(new Error('Sequence changed during read')).mockResolvedValueOnce(JSON.stringify(directory));
   const connection={command:vi.fn<Ma2Telnet['command']>().mockResolvedValue('ok')};
-  const result=await readMa2EffectLibrary({request},()=>false,undefined,undefined,[9918],{show:directory.show,generation:directory.generation,version:directory.version},'attributes',connection);
+  const result=await readMa2EffectLibrary({request},showStopped,undefined,undefined,[9918],{show:directory.show,generation:directory.generation,version:directory.version},'attributes',connection);
   expect(result.cueAttributes).toEqual([]);expect(result.sequences).toEqual([]);expect(result.errors[0]?.message).toContain('Sequence changed');
   expect(request.mock.calls.filter(([operation])=>operation==='SEQUENCE')).toHaveLength(1);
 });
 it('transfers each verified native snapshot once while checking both directory and attribute-tree boundaries',async()=>{
   const request=vi.fn<Ma2OnpcBridge['request']>().mockResolvedValueOnce(JSON.stringify(directory)).mockResolvedValueOnce(cue).mockResolvedValueOnce(JSON.stringify(directory));
   const connection={command:vi.fn<Ma2Telnet['command']>().mockResolvedValue('ok')};
-  const result=await readMa2EffectLibrary({request},()=>false,undefined,undefined,[9918],undefined,'attributes',connection);
+  const result=await readMa2EffectLibrary({request},showStopped,undefined,undefined,[9918],undefined,'attributes',connection);
   expect(result.errors).toEqual([]);expect(result.sequences).toHaveLength(1);
   expect(request.mock.calls.filter(([operation])=>operation==='SEQUENCE')).toHaveLength(1);
   expect(connection.command).toHaveBeenCalledTimes(2);

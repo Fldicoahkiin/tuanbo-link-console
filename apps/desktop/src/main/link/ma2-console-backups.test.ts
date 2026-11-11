@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2ConsoleBackups } from './ma2-console-backups';
+import { showMovingWhen } from './fixtures/show-gates';
 
 const name = (index: number, prefix = 'library'): string => `tblink_${prefix}_${index.toString(16).padStart(32, '0')}`;
 async function setup(playing = false) {
@@ -11,7 +12,7 @@ async function setup(playing = false) {
   const report = vi.fn<(message: string) => Promise<void>>(() => Promise.resolve());
   const request = vi.fn<Ma2OnpcBridge['request']>((_operation, _target, expected) => Promise.resolve(expected ?? ''));
   const ledger = async (): Promise<string[]> => (JSON.parse(await readFile(path, 'utf8')) as { entries: Array<{ file: string }> }).entries.map(entry => entry.file);
-  return { backups: new Ma2ConsoleBackups(path, () => playing, report), bridge: { request }, request, report, ledger };
+  return { backups: new Ma2ConsoleBackups(path, showMovingWhen(() => playing), report), bridge: { request }, request, report, ledger };
 }
 
 it('每个控台对象只留最近 10 份：超出时删除最旧的，回执确认后才从记录里移除', async () => {

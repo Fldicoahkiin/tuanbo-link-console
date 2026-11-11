@@ -14,6 +14,7 @@ import { markPendingMa2Songs, ma2SongSyncSettings, startMa2SongSync, stopMa2Song
 import { readMa2ShowNow } from './ma2-console-version';
 import { syncBoundSong } from './ma2-bound-song-sync';
 import { confirmMa2MergedEvents, prepareMa2MergedEvents } from '../../../../main/link/ma2-event-write';
+import { showStopped } from '../../../../main/link/fixtures/show-gates';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
 const { archive } = vi.hoisted(() => ({ archive: vi.fn() }));
@@ -363,10 +364,10 @@ it('控台时间线页的刷新：控台连着就现读这一条，没连上才�
 it.skipIf(!process.env.MA2_ONPC_AUTO_SYNC_ACCEPTANCE)('真实 onPC 自动写回及反向修改进入工程，最后恢复测试对象', async () => {
   const target = process.env.MA2_ONPC_AUTO_SYNC_TARGET === '9907' ? 9907 : 9902;
   const connection = { dataDirectory: process.env.MA2_ONPC_DATA_DIRECTORY ?? '' };
-  const bridge = new Ma2OnpcBridge(connection.dataDirectory, () => false);
+  const bridge = new Ma2OnpcBridge(connection.dataDirectory, showStopped);
   const original = await bridge.request('READ', target);
   expect(inspectMa2TimecodeXml(original).timecodes[0]?.attributes.name).toBe(target === 9907 ? '100步灯光测试' : 'TBLINK_FRACTIONAL_TIMECODE');
-  const service = new Ma2ApplyService(bridge, () => false);
+  const service = new Ma2ApplyService(bridge, showStopped);
   let value = createEmptyLinkProject('自动同步真实验收');
   value.rundown = [{ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [] }];
   value = importMa2TimecodeCommand('song', convertMa2Snapshot(await bridge.request('SNAPSHOT', target), target)).execute(value);

@@ -5,12 +5,13 @@ import { convertMa2Snapshot, convertMa2Timecode } from './ma2-timecode-conversio
 import { confirmMa2MergedEvents, prepareMa2MergedEvents } from './ma2-event-write';
 import { Ma2ApplyService } from './ma2-apply-service';
 import { createEmptyLinkProject } from '@tb/schema';
-import { applyMa2ReadbackCommand, bindMa2TrackCommand, nextLightingCue } from '@tb/core/link';
+import { applyMa2ReadbackCommand, bindMa2TrackCommand, nextLightingCue, SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
 import { appendMa2Tracks, removeMa2Tracks } from './ma2-track-write';
+import { showRunning, showStopped } from './fixtures/show-gates';
 
 it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('节目新增轨道经绑定、完整同步与基线回读后不重复创建', async () => {
   const directory = process.env.MA2_ONPC_DATA_DIRECTORY ?? '';
-  const bridge = new Ma2OnpcBridge(directory, () => false);
+  const bridge = new Ma2OnpcBridge(directory, showStopped);
   const original = await bridge.request('READ', 9902);
   const report = inspectMa2TimecodeXml(original);
   expect(report.timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');
@@ -27,7 +28,7 @@ it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('节目新增轨道经绑定�
   const cue = nextLightingCue(source, track, 500);
   expect(cue).toMatchObject({ sequence: 9901, executor: '99.219', cue: '1.250' });
   track.clips.push({ id: 'new-clip', name: '副歌', start: 0, duration: 2000, timeLock: 'time', muted: false, events: [{ id: 'added-cue', kind: 'ma2', action: 'goto', at: 500, ...cue }] });
-  const service = new Ma2ApplyService(bridge, () => false);
+  const service = new Ma2ApplyService(bridge, showStopped);
   try {
     const result = await service.apply({ dataDirectory: directory, document: source, bindingId: 'new-track-binding', readback: preview, conflicts: [] });
     if (result.status !== 'verified') throw new Error(JSON.stringify(result));
@@ -44,7 +45,7 @@ it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('节目新增轨道经绑定�
 }, 60000);
 
 it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('专用 Timecode 新增执行器轨道与 Cue，空对象重新创建后还原', async () => {
-  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);
+  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', showStopped);
   const original = await bridge.request('READ', 9902);
   const report = inspectMa2TimecodeXml(original);
   expect(report.timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');
@@ -88,7 +89,7 @@ it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('专用 Timecode 新增执行�
 
 it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('专用多轨 Timecode 排序、删除后保留轨道身份并还原', async () => {
   const directory = process.env.MA2_ONPC_DATA_DIRECTORY ?? '';
-  const bridge = new Ma2OnpcBridge(directory, () => false);
+  const bridge = new Ma2OnpcBridge(directory, showStopped);
   const original = await bridge.request('READ', 9902);
   const report = inspectMa2TimecodeXml(original);
   expect(report.timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');
@@ -107,7 +108,7 @@ it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('专用多轨 Timecode 排序�
     const remoteMuted = editMa2TrackStates(beforeMute, 9902, [{ path: 'Timecode:9901/Track:0', muted: true }]);
     await bridge.request('APPLY', 9902, beforeMute, remoteMuted);
     preview = convertMa2Snapshot(await bridge.request('SNAPSHOT', 9902), 9902);
-    const service = new Ma2ApplyService(bridge, () => false);
+    const service = new Ma2ApplyService(bridge, showStopped);
     const sorted = await service.apply({ dataDirectory: directory, document, bindingId: 'multi-delete', readback: preview, conflicts: [] });
     if (sorted.status !== 'verified') throw new Error(JSON.stringify(sorted));
     expect(sorted.confirmed.document.tracks.map((track) => track.id)).toEqual(document.tracks.map((track) => track.id));
@@ -119,7 +120,7 @@ it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('专用多轨 Timecode 排序�
     expect(await service.apply({ dataDirectory: directory, document, bindingId: 'multi-delete', readback: preview, conflicts: [] })).toMatchObject({ status: 'verified', backupFile: null });
     const survivor = document.tracks[1]!;
     document.tracks = [survivor];
-    const result = await new Ma2ApplyService(bridge, () => false).apply({ dataDirectory: directory, document, bindingId: 'multi-delete', readback: preview, conflicts: [] });
+    const result = await new Ma2ApplyService(bridge, showStopped).apply({ dataDirectory: directory, document, bindingId: 'multi-delete', readback: preview, conflicts: [] });
     if (result.status !== 'verified') throw new Error(JSON.stringify(result));
     expect(result.confirmed.document.tracks).toHaveLength(1);
     expect(result.confirmed.document.tracks[0]!.id).toBe(survivor.id);
@@ -133,7 +134,7 @@ it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('专用多轨 Timecode 排序�
 }, 60000);
 
 it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('专用 Timecode 删除全部轨道后回读并还原', async () => {
-  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);
+  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', showStopped);
   const original = await bridge.request('READ', 9902);
   const report = inspectMa2TimecodeXml(original);
   expect(report.timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');
@@ -142,7 +143,7 @@ it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('专用 Timecode 删除全部�
   const document = structuredClone(preview.document);
   document.ma2Bindings = [{ id: 'delete-track', timecode: 9902, name: preview.name, readAt: preview.readAt, sourceXml: original, baselineTracks: structuredClone(document.tracks), mappings: preview.mappings, trackMappings: preview.trackMappings }];
   document.tracks = [];
-  const service = new Ma2ApplyService(bridge, () => false);
+  const service = new Ma2ApplyService(bridge, showStopped);
   try {
     const request = { dataDirectory: process.env.MA2_ONPC_DATA_DIRECTORY ?? '', document, bindingId: 'delete-track', readback: preview, conflicts: [] };
     const result = await service.apply(request);
@@ -163,7 +164,7 @@ it.skipIf(!process.env.MA2_ONPC_TRACK_ACCEPTANCE)('专用 Timecode 删除全部�
 
 it.skipIf(!process.env.MA2_ONPC_EMPTY_ACCEPTANCE)('空灯光轨道完成清空、节目基线更新、重新打点与还原', async () => {
   const directory = process.env.MA2_ONPC_DATA_DIRECTORY ?? '';
-  const bridge = new Ma2OnpcBridge(directory, () => false);
+  const bridge = new Ma2OnpcBridge(directory, showStopped);
   const original = await bridge.request('READ', 9902);
   const report = inspectMa2TimecodeXml(original);
   expect(report.timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');
@@ -172,7 +173,7 @@ it.skipIf(!process.env.MA2_ONPC_EMPTY_ACCEPTANCE)('空灯光轨道完成清空�
   document.ma2Bindings = [{ id: 'empty-binding', timecode: 9902, name: preview.name, readAt: preview.readAt, sourceXml: preview.sourceXml, baselineTracks: structuredClone(document.tracks), mappings: preview.mappings, trackMappings: preview.trackMappings, cueCatalog: preview.cueCatalog }];
   document.tracks[0]!.clips[0]!.events = [];
   document.tracks[0]!.name = '副歌灯光轨道';
-  const service = new Ma2ApplyService(bridge, () => false);
+  const service = new Ma2ApplyService(bridge, showStopped);
   const request = { dataDirectory: directory, document, bindingId: 'empty-binding', readback: preview, conflicts: [] };
   const project = createEmptyLinkProject('空轨道验收'); project.schemaVersion = 2;
   project.rundown.push({ id: 'item', title: '验收', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting: document });
@@ -213,16 +214,16 @@ it.skipIf(!process.env.MA2_ONPC_EMPTY_ACCEPTANCE)('空灯光轨道完成清空�
 }, 60000);
 
 it('拒绝相对目录与播放期间写入', async () => {
-  expect(() => new Ma2OnpcBridge('relative', () => false)).toThrow('绝对路径');
-  const bridge = new Ma2OnpcBridge(process.cwd(), () => true);
-  await expect(bridge.request('APPLY', 1)).rejects.toThrow('播放期间');
-  await expect(bridge.request('SYNC', 1)).rejects.toThrow('播放期间');
+  expect(() => new Ma2OnpcBridge('relative', showStopped)).toThrow('绝对路径');
+  const bridge = new Ma2OnpcBridge(process.cwd(), showRunning);
+  await expect(bridge.request('APPLY', 1)).rejects.toThrow(SHOW_WAIT_CLOCK_MOVING);
+  await expect(bridge.request('SYNC', 1)).rejects.toThrow(SHOW_WAIT_CLOCK_MOVING);
   await expect(bridge.request('READ', -1)).rejects.toThrow('编号');
   for (const scope of ['', '0', '-1', '1,1', '100000', '1,,2', '1;2']) await expect(bridge.request('SCOPE', 1, scope)).rejects.toThrow('范围');
 });
 
 it.skipIf(!process.env.MA2_ONPC_DATA_DIRECTORY)('本机 onPC 自动插件版本与 Timecode 回读', async () => {
-  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);
+  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', showStopped);
   expect(await bridge.request('PING', 9901)).toMatch(/^3\./);
   const xml = await bridge.request('READ', 9901);
   expect(inspectMa2TimecodeXml(xml).timecodes[0]?.index).toBe(9900);
@@ -231,12 +232,12 @@ it.skipIf(!process.env.MA2_ONPC_DATA_DIRECTORY)('本机 onPC 自动插件版本�
 }, 35000);
 
 it.skipIf(!process.env.MA2_ONPC_DATA_DIRECTORY)('本机插件连续交接请求不会因读取共享文件阻止下一个请求', async () => {
-  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);
+  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', showStopped);
   for (let index = 0; index < 40; index += 1) expect(await bridge.request('PING', 9902)).toMatch(/^3\./);
 }, 20000);
 
 it.skipIf(!process.env.MA2_ONPC_WRITE_ACCEPTANCE)('专属测试 Timecode 自动备份、修改、回读和还原', async () => {
-  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);
+  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', showStopped);
   const original = await bridge.request('READ', 9901);
   const report = inspectMa2TimecodeXml(original);
   expect(report.timecodes[0]?.attributes.name).toBe('TBLINK_ONPC_ACCEPTANCE');
@@ -259,7 +260,7 @@ it.skipIf(!process.env.MA2_ONPC_WRITE_ACCEPTANCE)('专属测试 Timecode 自动�
 
 it.skipIf(!process.env.MA2_ONPC_WRITE_ACCEPTANCE)('本机同步服务完成写入核对、节目更新与基线再比较', async () => {
   const directory = process.env.MA2_ONPC_DATA_DIRECTORY ?? '';
-  const bridge = new Ma2OnpcBridge(directory, () => false);
+  const bridge = new Ma2OnpcBridge(directory, showStopped);
   const original = await bridge.request('READ', 9902);
   const before = inspectMa2TimecodeXml(original);
   expect(before.timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');
@@ -268,7 +269,7 @@ it.skipIf(!process.env.MA2_ONPC_WRITE_ACCEPTANCE)('本机同步服务完成写�
   document.ma2Bindings = [{ id: 'service-binding', timecode: 9902, name: readback.name, readAt: readback.readAt, sourceXml: original, baselineTracks: structuredClone(document.tracks), mappings: structuredClone(readback.mappings) }];
   document.tracks[0]!.clips[0]!.events[0]!.at = 517;
   document.tracks[0]!.muted = true;
-  const service = new Ma2ApplyService(bridge, () => false);
+  const service = new Ma2ApplyService(bridge, showStopped);
   try {
     const result = await service.apply({ dataDirectory: directory, document, bindingId: 'service-binding', readback, conflicts: [], timeAlignment: 'nearest-frame' });
     if (result.status !== 'verified') throw new Error(JSON.stringify(result));
@@ -298,7 +299,7 @@ it.skipIf(!process.env.MA2_ONPC_WRITE_ACCEPTANCE)('本机同步服务完成写�
 
 it.skipIf(!process.env.MA2_ONPC_REFERENCE_ACCEPTANCE)('本机小数 Cue 实际引用转换与执行器、时间一致', async () => {
   const directory = process.env.MA2_ONPC_DATA_DIRECTORY ?? '';
-  const bridge = new Ma2OnpcBridge(directory, () => false);
+  const bridge = new Ma2OnpcBridge(directory, showStopped);
   const xml = await bridge.request('READ', 9902);
   expect(inspectMa2TimecodeXml(xml).timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');
   const snapshot = await bridge.request('SNAPSHOT', 9902);
@@ -312,7 +313,7 @@ it.skipIf(!process.env.MA2_ONPC_REFERENCE_ACCEPTANCE)('本机小数 Cue 实际�
 
 it.skipIf(!process.env.MA2_ONPC_ACTION_ACCEPTANCE)('执行器动作完成服务同步、节目保存、再次同步和控台移动回读', async () => {
   const directory = process.env.MA2_ONPC_DATA_DIRECTORY ?? '';
-  const bridge = new Ma2OnpcBridge(directory, () => false);
+  const bridge = new Ma2OnpcBridge(directory, showStopped);
   const original = await bridge.request('READ', 9902);
   const before = inspectMa2TimecodeXml(original);
   expect(before.timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');
@@ -324,7 +325,7 @@ it.skipIf(!process.env.MA2_ONPC_ACTION_ACCEPTANCE)('执行器动作完成服务�
     event.action = index === 0 ? 'go' : 'off'; event.label = `自定义动作 ${index}`;
     delete event.cue; delete event.sequence;
   }
-  const service = new Ma2ApplyService(bridge, () => false);
+  const service = new Ma2ApplyService(bridge, showStopped);
   try {
     const request = { dataDirectory: directory, document, bindingId: 'action-binding', readback, conflicts: [] };
     const result = await service.apply(request);
@@ -356,7 +357,7 @@ it.skipIf(!process.env.MA2_ONPC_ACTION_ACCEPTANCE)('执行器动作完成服务�
 }, 60000);
 
 it.skipIf(!process.env.MA2_ONPC_PRECISION_ACCEPTANCE)('本机 Timecode 子帧精度探针并还原', async () => {
-  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);
+  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', showStopped);
   const original = await bridge.request('READ', 9902);
   const before = inspectMa2TimecodeXml(original);
   expect(before.timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');
@@ -389,7 +390,7 @@ it.skipIf(!process.env.MA2_ONPC_PRECISION_ACCEPTANCE)('本机 Timecode 子帧精
 }, 60000);
 
 it.skipIf(!process.env.MA2_ONPC_ACTION_ACCEPTANCE)('本机执行器动作 XML 探针并还原', async () => {
-  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);
+  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', showStopped);
   const original = await bridge.request('READ', 9902);
   const before = inspectMa2TimecodeXml(original);
   expect(before.timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');
@@ -437,7 +438,7 @@ it.skipIf(!process.env.MA2_ONPC_ACTION_ACCEPTANCE)('本机执行器动作 XML �
 }, 60000);
 
 it.skipIf(!process.env.MA2_ONPC_WRITE_ACCEPTANCE)('专属小数 Cue 测试对象新增、删除、修改和回读后还原', async () => {
-  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);
+  const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', showStopped);
   const original = await bridge.request('READ', 9902);
   const report = inspectMa2TimecodeXml(original);
   expect(report.timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');

@@ -10,6 +10,7 @@ import { renameMa2Object } from '../../../../main/link/ma2-rename-service';
 import { inspectMa2SequenceXml } from '../../../../main/link/ma2-timecode-xml';
 import { syncMa2Names } from './ma2-name-sync';
 import { useDocumentStore as store } from '../stores/document-store';
+import { showStopped } from '../../../../main/link/fixtures/show-gates';
 
 // The connection method is read when its store loads; Node 25 has a localStorage without methods.
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
@@ -26,7 +27,7 @@ it.skipIf(!process.env.MA2_RENAME_ACCEPTANCE_HOST)('真实 onPC：中文英文 C
     const username = process.env.MA2_NETWORK_ACCEPTANCE_USER ?? 'administrator';
     await connection.connect(username, process.env.MA2_NETWORK_ACCEPTANCE_PASSWORD ?? 'admin');
     await ensureMa2NetworkBridge(connection, await readFile('tools/ma2/tblink_bridge.lua', 'utf8'));
-    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(connection), () => false);
+    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(connection), showStopped);
     const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
     expect(directory.show).toBe('tblink_ui100_20261007');
     const snapshot = await bridge.request('SNAPSHOT', 9907);

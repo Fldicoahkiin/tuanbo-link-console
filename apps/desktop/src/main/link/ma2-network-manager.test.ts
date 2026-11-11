@@ -1,6 +1,8 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { Ma2NetworkManager } from './ma2-network-manager';
 import { meiNanXml, meiNanCues } from './fixtures/ma2-mei-nan-reconstruction';
+import { SHOW_WAIT_SHOW_ON, type ShowState } from '@tb/core/link';
+import { idleShow, pausedShow, runningShow, showReader, showStopped } from './fixtures/show-gates';
 
 const memory = vi.hoisted(() => ({ file: null as string | null, localAddress: undefined as string | undefined, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true', show: '', pause: null as Promise<void> | null, drop: () => undefined, rpc: [] as string[], dropOnRun: false, priorities: [] as (string | undefined)[] }));
 vi.mock('node:fs/promises', () => ({ readFile: () => memory.file === null ? Promise.reject(Object.assign(new Error('Missing'), { code: 'ENOENT' })) : Promise.resolve(memory.file) }));
@@ -56,7 +58,7 @@ it('意外断线会恢复原控台连接，主动断开则停止恢复且不重�
 });
 it('请求中途断线后重连，先按原请求编号释放控台插件的占用，只发一次并记录结果', async () => {
   const notices: string[] = [];
-  const manager = new Ma2NetworkManager(process.cwd(), secretStore(), () => false, undefined, undefined, undefined, undefined, (_level, message) => notices.push(message));
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore(), showStopped, undefined, undefined, undefined, undefined, (_level, message) => notices.push(message));
   try {
     await manager.save({ settings }); await manager.connect();
     memory.dropOnRun = true;
@@ -96,7 +98,7 @@ it('100 条混合时间线共享序列只取一次元数据；最终只复核目
 });
 it('连接传入已校验的电脑地址，地址解析失败不建立 TCP 连接', async () => {
   const resolve = vi.fn().mockResolvedValue('2.0.0.97');
-  const manager = new Ma2NetworkManager(process.cwd(), secretStore(), () => false, undefined, resolve);
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore(), showStopped, undefined, resolve);
   await manager.save({ settings: { ...settings, host: '2.0.0.98' } });
   await manager.connect();
   expect(resolve).toHaveBeenCalledWith('2.0.0.98'); expect(memory.localAddress).toBe('2.0.0.97');
@@ -116,7 +118,7 @@ it('读取控台当前 show 原名，中文名不经 telnet 编码损坏；未�
 });
 it('本机 onPC 未就绪时不建立 TCP 连接、不发送登录，状态给出具体原因', async () => {
   const awaitListener = vi.fn().mockRejectedValue(new Error('本机 MA2 onPC 没有运行，没有尝试登录 127.0.0.1:30000'));
-  const manager = new Ma2NetworkManager(process.cwd(), secretStore(), () => false, undefined, undefined, undefined, awaitListener);
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore(), showStopped, undefined, undefined, undefined, awaitListener);
   await manager.save({ settings: { ...settings, host: '127.0.0.1' } });
   const connects = memory.connects;
   expect((await manager.connect()).error).toBe('本机 MA2 onPC 没有运行，没有尝试登录 127.0.0.1:30000');
@@ -205,12 +207,15 @@ it('单台旧配置迁移后保存多台，切换再启动仅连接当前控台�
   expect(memory.connects).toBe(2);
   expect(memory.file).not.toContain('first-secret'); expect(memory.file).not.toContain('second-secret');
 });
-it('播放中拒绝更换或连接控台，保留原配置', async () => {
-  let playing = false;
-  const manager = new Ma2NetworkManager(process.cwd(), secretStore(), () => playing);
-  await manager.save({ settings }); playing = true;
-  await expect(manager.save({ settings: { ...settings, host: '127.0.0.2' } })).rejects.toThrow('播放期间');
-  await expect(manager.connect()).rejects.toThrow('播放期间');
+it('演出没停时拒绝更换或连接控台，暂停也一样，保留原配置', async () => {
+  let show: ShowState = idleShow;
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore(), showReader(() => show));
+  await manager.save({ settings });
+  for (const state of [runningShow, pausedShow]) {
+    show = state;
+    await expect(manager.save({ settings: { ...settings, host: '127.0.0.2' } })).rejects.toThrow(SHOW_WAIT_SHOW_ON);
+    await expect(manager.connect()).rejects.toThrow(SHOW_WAIT_SHOW_ON);
+  }
   expect(manager.status().settings?.host).toBe(settings.host);
 });
 it('重复连接和保存相同目标复用会话，不制造旧连接试听记录',async()=>{

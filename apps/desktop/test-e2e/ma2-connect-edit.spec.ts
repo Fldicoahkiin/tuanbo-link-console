@@ -7,12 +7,13 @@ import { readMa2Catalog } from '../src/main/link/ma2-catalog';
 import { convertMa2Timecode } from '../src/main/link/ma2-timecode-conversion';
 import { inspectMa2SequenceXml } from '../src/main/link/ma2-timecode-xml';
 import { savedValue } from './save-questions';
+import { showStopped } from '../src/main/link/fixtures/show-gates';
 
 test('软件流程：连接后自动配对，编辑后自动发送并应用已确认回读', async ({}, info) => {
   const xml = await readFile(join(process.cwd(), 'src/main/link/fixtures/ma2-timecode-fractional-3.3.xml'), 'utf8');
   const sequence = await readFile(join(process.cwd(), 'src/main/link/fixtures/ma2-sequence-fractional-3.3.xml'), 'utf8');
   const directory = { show: '专用软件验收', generation: 'test', version: '3.3.4', entries: [{ target: 9902, name: '不同名称的控台时间线' }] };
-  const catalog = await readMa2Catalog({ request: operation => Promise.resolve(operation === 'LIST' ? JSON.stringify(directory) : xml) }, () => false, inspectMa2SequenceXml(sequence));
+  const catalog = await readMa2Catalog({ request: operation => Promise.resolve(operation === 'LIST' ? JSON.stringify(directory) : xml) }, showStopped, inspectMa2SequenceXml(sequence));
   const confirmed = convertMa2Timecode(xml.replace('<Event index="0"', '<Event time="21" index="0"'), [sequence], 9902);
   const project = createEmptyLinkProject('连接并编辑软件验收'); project.playbackSource = 'internal';
   const wav = Buffer.alloc(44 + 8000 * 2 * 3);

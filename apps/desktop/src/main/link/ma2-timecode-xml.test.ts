@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { editMa2SongSequence, editMa2TimecodeEvents, emptyMa2SequenceXml, extendMa2TimecodeLength, inspectMa2CueData, inspectMa2SequenceXml, inspectMa2TimecodeXml, patchMa2EventTimes, prepareMa2TimecodeEvents, resolveMa2CueNumber, sameMa2XmlObjects, validateMa2TimecodeSnapshot } from './ma2-timecode-xml';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { convertMa2Timecode } from './ma2-timecode-conversion';
+import { showStopped } from './fixtures/show-gates';
 
 const source = readFileSync(fileURLToPath(new URL('./fixtures/ma2-timecode-3.7.xml', import.meta.url)), 'utf8');
 const native = readFileSync(fileURLToPath(new URL('./fixtures/ma2-timecode-fractional-3.3.xml', import.meta.url)), 'utf8');
@@ -247,7 +248,7 @@ describe('本机 3.3.4 Master 推杆真实样例', () => {
     expect(() => prepareMa2TimecodeEvents(other, inspectMa2TimecodeXml(other).sha256, 9902, [{ kind: 'update', path: `${path}/Event:0`, faderLevel: '0.5' }])).toThrow('还没验证过');
   });
   it.skipIf(!process.env.MA2_ONPC_FADER_ACCEPTANCE)('本机 Master 点修改与新增经导入回读确认后还原测试对象', async () => {
-    const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);
+    const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', showStopped);
     const original = await bridge.request('READ', 9902);
     const before = inspectMa2TimecodeXml(original);
     expect(before.timecodes[0]?.attributes.name).toBe('TBLINK_FRACTIONAL_TIMECODE');

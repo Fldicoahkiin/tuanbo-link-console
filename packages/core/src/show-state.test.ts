@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveShowState, isShowWait, showGate, showOperationRules, SHOW_WAIT_CLOCK_MOVING, SHOW_WAIT_PREPARING, SHOW_WAIT_SHOW_ON, SHOW_WAIT_STOPPING,
+import { deriveShowState, holdForShow, isShowWait, showGate, showOperationRules, SHOW_WAIT_CLOCK_MOVING, SHOW_WAIT_PREPARING, SHOW_WAIT_SHOW_ON, SHOW_WAIT_STOPPING,
   type ShowInputs, type ShowState } from './show-state';
 
 const none: ShowInputs = { internal: null, p1: null, preview: false, program: null };
@@ -102,5 +102,22 @@ describe('isShowWait', () => {
     expect(isShowWait(new Error(wait.message))).toBe(true);
     expect(isShowWait({ message: `Error invoking remote method 'link:ma2-check': Error: ${wait.message}` })).toBe(true);
     expect(isShowWait(new Error('控台远程登录未开启'))).toBe(false);
+  });
+});
+
+describe('holdForShow', () => {
+  const running: ShowState = { phase: 'running', source: 'internal', itemId: 'a', program: null };
+  const paused: ShowState = { phase: 'held', source: 'internal', itemId: 'a', reason: 'paused', program: null };
+
+  it('节目在走时抛出 showGate 的等待文字，后面接上做到哪了，仍认得出是等待', () => {
+    let caught: unknown;
+    try { holdForShow(op => showGate(op, running), 'ma2.sync.read', '已读完 2/5 条时间线。'); } catch (error) { caught = error; }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe(`${SHOW_WAIT_CLOCK_MOVING}暂停或停止后再读取控台。已读完 2/5 条时间线。`);
+    expect(isShowWait(caught)).toBe(true);
+  });
+
+  it('暂停和空闲时不拦', () => {
+    for (const show of [paused, { phase: 'idle', program: null } satisfies ShowState]) expect(() => holdForShow(op => showGate(op, show), 'ma2.sync.write')).not.toThrow();
   });
 });
