@@ -69,7 +69,11 @@ local function references(xml)
   end
   return numbers
 end
-local function snapshot(tc, id, additional)
+-- A request is a table of steps. One step does at most one Export or Import on the console, so the
+-- program can send other commands (lights off, a Cue) between two steps. Writing is one step as a
+-- whole: backup export, compare, write the file, Import. Steps run one per 'step' call, or all at
+-- once for the local file bridge and for a 'run' without 'steps'. The state lives on the request.
+local function snapshot(step, tc, id, additional, done)
   local xml = export_scratch(tc, 'tblink_snapshot_' .. id)
   local numbers, seen = references(xml), {}
   for _, number in ipairs(numbers) do seen[number] = true end
@@ -80,33 +84,44 @@ local function snapshot(tc, id, additional)
   table.sort(numbers)
   local parts = {}
   for _, number in ipairs(numbers) do
-    assert(gma.show.getobj.handle('Sequence ' .. number), 'Referenced Sequence is missing')
     local name = 'tblink_sequence_' .. id .. '_' .. number
-    gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '" /o')
-    local full = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
-    local object = assert(full:match('(<Sequ%s.-</Sequ>)'), 'Sequence XML unavailable')
-    parts[#parts + 1] = object
-    -- Verify references were not edited while assembling the snapshot.
-    gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '_verify" /o')
-    local check = assert(read(root .. '/importexport/' .. name .. '_verify.xml'))
-    assert(canonical(full) == canonical(check), 'Sequence changed during snapshot')
-    discard(name); discard(name .. '_verify')
+    local full
+    step(function()
+      assert(gma.show.getobj.handle('Sequence ' .. number), 'Referenced Sequence is missing')
+      gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '" /o')
+      full = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
+      local object = assert(full:match('(<Sequ%s.-</Sequ>)'), 'Sequence XML unavailable')
+      parts[#parts + 1] = object
+    end)
+    step(function()
+      -- Verify references were not edited while assembling the snapshot.
+      gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '_verify" /o')
+      local check = assert(read(root .. '/importexport/' .. name .. '_verify.xml'))
+      assert(canonical(full) == canonical(check), 'Sequence changed during snapshot')
+      discard(name); discard(name .. '_verify')
+    end)
   end
-  assert(canonical(xml) == canonical(export(tc, 'tblink_snapshot_verify_' .. id)), 'Timecode changed during snapshot')
-  discard('tblink_snapshot_verify_' .. id)
-  local result, replaced = xml:gsub('</MA>%s*$', function() return table.concat(parts, '\n') .. '\n</MA>' end)
-  assert(replaced == 1 and #result <= 33554432, 'Snapshot XML invalid or too large')
-  return result
+  step(function()
+    assert(canonical(xml) == canonical(export(tc, 'tblink_snapshot_verify_' .. id)), 'Timecode changed during snapshot')
+    discard('tblink_snapshot_verify_' .. id)
+    local result, replaced = xml:gsub('</MA>%s*$', function() return table.concat(parts, '\n') .. '\n</MA>' end)
+    assert(replaced == 1 and #result <= 33554432, 'Snapshot XML invalid or too large')
+    done(result)
+  end)
 end
-local function process(data)
+local function start(data)
   local id, op, target, size, body = data:match('^([a-f0-9]+)\n([A-Z]+)\n(%d+)\n(%d+)\n(.*)$')
   assert(id and #id == 32 and id ~= last, 'Invalid or already processed request')
   last = id
-  local ok, result = pcall(function()
+  local job = { id = id, steps = {}, done = 0 }
+  local function step(fn) job.steps[#job.steps + 1] = fn end
+  local function answer(value) job.result = value end
+  step(function()
     local tc = tonumber(target)
     assert(tc and tc >= 1 and tc <= 99999 and tc == math.floor(tc), 'Invalid Timecode')
     assert(#body == tonumber(size), 'Request length mismatch')
-    if op == 'PING' then return gma.show.getvar('VERSION') or 'unknown' end
+    -- steps=1: this bridge answers 'run' with STEP:<k> when asked to, and takes 'step'.
+    if op == 'PING' then return answer((gma.show.getvar('VERSION') or 'unknown') .. '\nsteps=1') end
     -- Removes write-before backups the program's ledger rotated out; answers with the names now gone.
     if op == 'DISCARD' then
       assert(#body > 0 and #body <= 4096, 'Invalid backup list')
@@ -116,7 +131,7 @@ local function process(data)
         local removed, reason = os.remove(root .. '/importexport/' .. name .. '.xml')
         if removed or tostring(reason):find('No such file', 1, true) then gone[#gone + 1] = name end
       end
-      return table.concat(gone, ',')
+      return answer(table.concat(gone, ','))
     end
     if op == 'PAGES' then
       assert(body == '', 'Page directory request must be empty')
@@ -134,7 +149,7 @@ local function process(data)
           entries[#entries + 1] = '{"page":' .. number .. ',"name":' .. quote(obj.label(h) or '') .. '}'
         end
       end
-      return '{"show":' .. quote(gma.show.getvar('SHOWFILE')) .. ',"generation":' .. quote(generation) .. ',"version":' .. quote(gma.show.getvar('VERSION')) .. ',"buttonPage":' .. assert(tonumber(gma.show.getvar('BUTTONPAGE'))) .. ',"faderPage":' .. assert(tonumber(gma.show.getvar('FADERPAGE'))) .. ',"pages":[' .. table.concat(entries, ',') .. ']}'
+      return answer('{"show":' .. quote(gma.show.getvar('SHOWFILE')) .. ',"generation":' .. quote(generation) .. ',"version":' .. quote(gma.show.getvar('VERSION')) .. ',"buttonPage":' .. assert(tonumber(gma.show.getvar('BUTTONPAGE'))) .. ',"faderPage":' .. assert(tonumber(gma.show.getvar('FADERPAGE'))) .. ',"pages":[' .. table.concat(entries, ',') .. ']}')
     end
     if op == 'PAGE' then
       assert(body == '', 'Page request must be empty')
@@ -156,12 +171,22 @@ local function process(data)
         local escaped = label:gsub('&', '&amp;'):gsub('"', '&quot;'):gsub('<', '&lt;'):gsub('>', '&gt;'):gsub('\r', '&#13;'):gsub('\n', '&#10;')
         return '<Exec tblink_label="' .. escaped .. '" ' .. attributes .. '>'
       end)
-      local metadata, seen = {}, {}
+      local metadata, seen, sequences = {}, {}, {}
       for assignment in xml:gmatch('<Assignment%s[^>]*>(.-)</Assignment>') do
         local numbers = {}; for number in assignment:gmatch('<No>%s*(%d+)%s*</No>') do numbers[#numbers + 1] = tonumber(number) end
         local sequence = #numbers == 3 and numbers[1] == 25 and numbers[2] == 1 and numbers[3] or nil
         if sequence and not seen[sequence] then
           seen[sequence] = true
+          sequences[#sequences + 1] = sequence
+        end
+      end
+      local function collect()
+        answer((xml:gsub('</MA>%s*$', function() return '<tblink_sequences>' .. table.concat(metadata) .. '</tblink_sequences></MA>' end)))
+      end
+      if #sequences == 0 then return collect() end
+      -- One step per assigned Sequence: its appearance may need an export.
+      for position, sequence in ipairs(sequences) do
+        step(function()
           local h = assert(obj.handle('Sequence ' .. sequence), 'Assigned Sequence disappeared')
           local count = assert(obj.amount(h)); assert(count <= 100000, 'Sequence metadata exceeds limit')
           local cues = {}
@@ -173,9 +198,10 @@ local function process(data)
           end
           local color = sequence_appearance(sequence, h)
           metadata[#metadata + 1] = '<tblink_sequence number="' .. sequence .. '" name="' .. escape(obj.label(h) or '') .. '"' .. (color and ' color="#' .. color .. '"' or '') .. '>' .. table.concat(cues) .. '</tblink_sequence>'
-        end
+          if position == #sequences then collect() end
+        end)
       end
-      return xml:gsub('</MA>%s*$', function() return '<tblink_sequences>' .. table.concat(metadata) .. '</tblink_sequences></MA>' end)
+      return
     end
     if op == 'LABEL' then
       local kind, cue, show_hex, session_hex, old_hex, name_hex = body:match('^(%a+)\n([%d%.]+)\n([a-f0-9]+)\n([a-f0-9]+)\n([a-f0-9]*)\n([a-f0-9]+)$')
@@ -197,6 +223,7 @@ local function process(data)
         return obj.label(current) or ''
       end
       assert(label() == previous or label() == name, 'Console name changed; read console before retrying')
+      -- One step: the backup export, the checks and the Label belong together.
       local backup = 'tblink_label_' .. id
       gma.cmd('Export Sequence ' .. tc .. ' "' .. backup .. '" /o')
       assert(read(root .. '/importexport/' .. backup .. '.xml'), 'Name backup unavailable')
@@ -207,7 +234,7 @@ local function process(data)
       local function quote(value)
         return '"' .. value:gsub('[%z\1-\31\\"]', function(char) return string.format('\\u%04x', string.byte(char)) end) .. '"'
       end
-      return '{"sequence":' .. tc .. ',"kind":' .. quote(kind) .. ',"cue":' .. quote(cue) .. ',"show":' .. quote(show) .. ',"generation":' .. quote(session) .. ',"name":' .. quote(label()) .. ',"backupFile":' .. quote(backup .. '.xml') .. '}'
+      return answer('{"sequence":' .. tc .. ',"kind":' .. quote(kind) .. ',"cue":' .. quote(cue) .. ',"show":' .. quote(show) .. ',"generation":' .. quote(session) .. ',"name":' .. quote(label()) .. ',"backupFile":' .. quote(backup .. '.xml') .. '}')
     end
     if op == 'ASSIGNSEQ' then
       local owner, show_hex, session_hex = body:match('^([a-f0-9]+)\n([a-f0-9]+)\n([a-f0-9]+)$')
@@ -228,33 +255,51 @@ local function process(data)
         local values = {}; for number in assignment:gmatch('<No>%s*(%d+)%s*</No>') do values[#values + 1] = tonumber(number) end
         return #values == 3 and values[1] == 25 and values[2] == 1 and values[3] or nil
       end
+      local function confirm()
+        assert(obj.handle('Executor ' .. free_address) and assigned(free_address) == tc, 'Sequence assignment unconfirmed')
+        answer('{"sequence":' .. tc .. ',"executor":"' .. free_address .. '"}')
+      end
+      -- The write is one step: page creation, the checks and the Assign; the readback is the next.
+      local function assign()
+        if not free_address then
+          assert(free_page, 'No empty page available for automatic sync')
+          assert(not obj.handle('Page ' .. free_page), 'Page became occupied')
+          gma.cmd('Store Page ' .. free_page .. ' "' .. label .. '" /nc')
+          assert(obj.label(assert(obj.handle('Page ' .. free_page))) == label, 'Page creation unconfirmed')
+          free_exec = free_page; free_address = free_page .. '.101'
+        end
+        assert(obj.label(assert(obj.handle('Page ' .. free_exec))) == label, 'Page ownership changed')
+        assert(not obj.handle('Executor ' .. free_address), 'Executor became occupied')
+        gma.cmd('Assign Sequence ' .. tc .. ' At Executor ' .. free_address .. ' /nc')
+        step(confirm)
+      end
       -- A dedicated page avoids touching operators' physical faders and occupied slots.
-      for page = 999, 900, -1 do
-        local handle = obj.handle('Page ' .. page)
-        if not handle then free_page = free_page or page
-        elseif obj.label(handle) == label then
-          for number = 101, 120 do
+      -- The search goes on where the last step stopped; each occupied slot is one export, one step.
+      local page, number = 999, nil
+      local function search()
+        while page >= 900 do
+          if not number then
+            local handle = obj.handle('Page ' .. page)
+            if not handle then free_page = free_page or page
+            elseif obj.label(handle) == label then number = 101 end
+          end
+          while number and number <= 120 do
             local address = page .. '.' .. number
+            number = number + 1
             if not obj.handle('Executor ' .. address) then
               if not free_address then free_address = address; free_exec = page end
-            elseif assigned(address) == tc then
-              return '{"sequence":' .. tc .. ',"executor":"' .. address .. '"}'
+            else
+              if assigned(address) == tc then
+                return answer('{"sequence":' .. tc .. ',"executor":"' .. address .. '"}')
+              end
+              return step(search)
             end
           end
+          page = page - 1; number = nil
         end
+        step(assign)
       end
-      if not free_address then
-        assert(free_page, 'No empty page available for automatic sync')
-        assert(not obj.handle('Page ' .. free_page), 'Page became occupied')
-        gma.cmd('Store Page ' .. free_page .. ' "' .. label .. '" /nc')
-        assert(obj.label(assert(obj.handle('Page ' .. free_page))) == label, 'Page creation unconfirmed')
-        free_exec = free_page; free_address = free_page .. '.101'
-      end
-      assert(obj.label(assert(obj.handle('Page ' .. free_exec))) == label, 'Page ownership changed')
-      assert(not obj.handle('Executor ' .. free_address), 'Executor became occupied')
-      gma.cmd('Assign Sequence ' .. tc .. ' At Executor ' .. free_address .. ' /nc')
-      assert(obj.handle('Executor ' .. free_address) and assigned(free_address) == tc, 'Sequence assignment unconfirmed')
-      return '{"sequence":' .. tc .. ',"executor":"' .. free_address .. '"}'
+      return search()
     end
     if op == 'LIST' or op == 'LISTSEQ' then
       assert(body == '', 'Directory request must be empty')
@@ -280,43 +325,50 @@ local function process(data)
         end
       end
       assert(obj.amount(pool) == count, 'Timecode directory changed during read')
-      return '{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. ',"generation":' .. quote(generation) .. ',"version":' .. quote(assert(gma.show.getvar('VERSION'))) .. ',"entries":[' .. table.concat(entries, ',') .. ']}'
+      return answer('{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. ',"generation":' .. quote(generation) .. ',"version":' .. quote(assert(gma.show.getvar('VERSION'))) .. ',"entries":[' .. table.concat(entries, ',') .. ']}')
     end
     -- Where every Timecode show sits in time: offset, length, slot, frame format and the last event,
     -- read from an export made and removed on the console, so no event data crosses the network.
     if op == 'TCRANGES' then
       assert(body == '', 'Range request must be empty')
       local obj = gma.show.getobj
-      local pool = assert(obj.handle('Timecode'), 'Object pool unavailable')
-      local count = assert(obj.amount(pool), 'Timecode enumeration unavailable')
+      local count = assert(obj.amount(assert(obj.handle('Timecode'), 'Object pool unavailable')), 'Timecode enumeration unavailable')
       assert(count >= 0 and count <= 100000, 'Timecode directory exceeds limit')
       local function quote(value)
         return '"' .. tostring(value):gsub('[%z\1-\31\\"]', function(char) return string.format('\\u%04x', string.byte(char)) end) .. '"'
       end
       local entries = {}
-      for index = 0, count - 1 do
-        local child = obj.child(pool, index)
-        if child then
-          local number = tonumber(obj.number(child))
-          assert(number and number >= 1 and number <= 99999 and number == math.floor(number), 'Invalid Timecode directory number')
-          local name = 'tblink_tcrange_' .. id
-          gma.cmd('Export Timecode ' .. number .. ' "' .. name .. '" /o')
-          local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Timecode export unavailable')
-          discard(name)
-          local tag = xml:match('<Timecode%s[^>]*>') or ''
-          local function attribute(key) return tag:match('%s' .. key .. '="([^"]*)"') end
-          local last = nil
-          for value in xml:gmatch('<Event%s[^>]-time="([%d%.]+)"') do
-            local time = tonumber(value)
-            if time and (not last or time > last) then last = time end
+      -- One export per Timecode show, one step each; the pool is looked up again in every step.
+      local index = 0
+      local function ranges()
+        local pool = assert(obj.handle('Timecode'), 'Object pool unavailable')
+        while index <= count - 1 do
+          local child = obj.child(pool, index)
+          index = index + 1
+          if child then
+            local number = tonumber(obj.number(child))
+            assert(number and number >= 1 and number <= 99999 and number == math.floor(number), 'Invalid Timecode directory number')
+            local name = 'tblink_tcrange_' .. id
+            gma.cmd('Export Timecode ' .. number .. ' "' .. name .. '" /o')
+            local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Timecode export unavailable')
+            discard(name)
+            local tag = xml:match('<Timecode%s[^>]*>') or ''
+            local function attribute(key) return tag:match('%s' .. key .. '="([^"]*)"') end
+            local last = nil
+            for value in xml:gmatch('<Event%s[^>]-time="([%d%.]+)"') do
+              local time = tonumber(value)
+              if time and (not last or time > last) then last = time end
+            end
+            entries[#entries + 1] = '{"target":' .. number .. ',"name":' .. quote(attribute('name') or '') .. ',"offset":' .. quote(attribute('offset') or '0') .. ',"length":' .. quote(attribute('lenght') or '')
+              .. ',"slot":' .. quote(attribute('slot') or '') .. ',"frame":' .. quote(attribute('frame_format') or '') .. ',"last":' .. quote(last and tostring(last) or '') .. '}'
+            assert(#entries <= 10000, 'Occupied Timecode directory exceeds limit')
+            if index <= count - 1 then return step(ranges) end
           end
-          entries[#entries + 1] = '{"target":' .. number .. ',"name":' .. quote(attribute('name') or '') .. ',"offset":' .. quote(attribute('offset') or '0') .. ',"length":' .. quote(attribute('lenght') or '')
-            .. ',"slot":' .. quote(attribute('slot') or '') .. ',"frame":' .. quote(attribute('frame_format') or '') .. ',"last":' .. quote(last and tostring(last) or '') .. '}'
-          assert(#entries <= 10000, 'Occupied Timecode directory exceeds limit')
         end
+        assert(obj.amount(pool) == count, 'Timecode directory changed during read')
+        answer('{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. ',"entries":[' .. table.concat(entries, ',') .. ']}')
       end
-      assert(obj.amount(pool) == count, 'Timecode directory changed during read')
-      return '{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. ',"entries":[' .. table.concat(entries, ',') .. ']}'
+      return ranges()
     end
     if op == 'SEQUENCE' then
       assert(body == '' or body == 'keep', 'Sequence request must be empty or keep')
@@ -324,11 +376,13 @@ local function process(data)
       local name = 'tblink_library_' .. id
       gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
       local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
-      gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
-      assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
-      discard(name .. '_verify')
-      if body ~= 'keep' then discard(name) end
-      return xml
+      return step(function()
+        gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+        assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
+        discard(name .. '_verify')
+        if body ~= 'keep' then discard(name) end
+        answer(xml)
+      end)
     end
     if op == 'SEQCUES' then
       -- The complete export stays on the console; only the requested Cue elements cross the network.
@@ -343,30 +397,32 @@ local function process(data)
       local name = 'tblink_library_' .. id
       gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
       local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
-      gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
-      assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
-      discard(name .. '_verify')
-      local head = assert(xml:match('^(.-<Sequ%s[^>]*>)'), 'Sequence XML unavailable')
-      assert(head:sub(-2) ~= '/>', 'Sequence has no Cues')
-      local parts, position = { head }, 1
-      while true do
-        local first, last, attributes = xml:find('<Cue%s([^>]*)>', position)
-        if not first then break end
-        position = last + 1
-        if attributes:sub(-1) ~= '/' then
-          local _, close = xml:find('</Cue>', position, true)
-          assert(close, 'Sequence XML unavailable')
-          local cue = xml:sub(first, close)
-          local tag = cue:match('<Number%s[^>]*>') or ''
-          local whole = tonumber(tag:match('%snumber="(%d+)"'))
-          local fraction = tonumber(tag:match('sub_number="(%d+)"') or '0')
-          if whole and fraction and wanted[whole * 1000 + fraction] then parts[#parts + 1] = cue end
-          position = close + 1
+      return step(function()
+        gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+        assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
+        discard(name .. '_verify')
+        local head = assert(xml:match('^(.-<Sequ%s[^>]*>)'), 'Sequence XML unavailable')
+        assert(head:sub(-2) ~= '/>', 'Sequence has no Cues')
+        local parts, position = { head }, 1
+        while true do
+          local first, last, attributes = xml:find('<Cue%s([^>]*)>', position)
+          if not first then break end
+          position = last + 1
+          if attributes:sub(-1) ~= '/' then
+            local _, close = xml:find('</Cue>', position, true)
+            assert(close, 'Sequence XML unavailable')
+            local cue = xml:sub(first, close)
+            local tag = cue:match('<Number%s[^>]*>') or ''
+            local whole = tonumber(tag:match('%snumber="(%d+)"'))
+            local fraction = tonumber(tag:match('sub_number="(%d+)"') or '0')
+            if whole and fraction and wanted[whole * 1000 + fraction] then parts[#parts + 1] = cue end
+            position = close + 1
+          end
         end
-      end
-      parts[#parts + 1] = '</Sequ></MA>'
-      discard(name)
-      return table.concat(parts, '\n')
+        parts[#parts + 1] = '</Sequ></MA>'
+        discard(name)
+        answer(table.concat(parts, '\n'))
+      end)
     end
     if op == 'EXECUTOR' then
       assert(body:match('^[1-9]%d*$') and tonumber(body) <= 99999, 'Invalid Executor number')
@@ -377,15 +433,17 @@ local function process(data)
       gma.cmd('Export ' .. address .. ' "' .. name .. '" /o')
       local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Executor export unavailable')
       assert(gma.show.getobj.handle(address), 'Executor disappeared during read')
-      gma.cmd('Export ' .. address .. ' "' .. name .. '_verify" /o')
-      local check = assert(read(root .. '/importexport/' .. name .. '_verify.xml'), 'Executor verification unavailable')
-      assert(canonical(xml) == canonical(check), 'Executor changed during read')
-      discard(name); discard(name .. '_verify')
-      assert(gma.show.getobj.name(assert(gma.show.getobj.handle(address))) == executor_name, 'Executor name changed during read')
-      local escaped = executor_name:gsub('&', '&amp;'):gsub('"', '&quot;'):gsub('<', '&lt;'):gsub('>', '&gt;'):gsub('\r', '&#13;'):gsub('\n', '&#10;'):gsub('\t', '&#9;')
-      local result, count = xml:gsub('<Exec%s', function() return '<Exec tblink_executor_name="' .. escaped .. '" ' end)
-      assert(count == 1, 'Executor export must contain one object')
-      return result
+      return step(function()
+        gma.cmd('Export ' .. address .. ' "' .. name .. '_verify" /o')
+        local check = assert(read(root .. '/importexport/' .. name .. '_verify.xml'), 'Executor verification unavailable')
+        assert(canonical(xml) == canonical(check), 'Executor changed during read')
+        discard(name); discard(name .. '_verify')
+        assert(gma.show.getobj.name(assert(gma.show.getobj.handle(address))) == executor_name, 'Executor name changed during read')
+        local escaped = executor_name:gsub('&', '&amp;'):gsub('"', '&quot;'):gsub('<', '&lt;'):gsub('>', '&gt;'):gsub('\r', '&#13;'):gsub('\n', '&#10;'):gsub('\t', '&#9;')
+        local result, count = xml:gsub('<Exec%s', function() return '<Exec tblink_executor_name="' .. escaped .. '" ' end)
+        assert(count == 1, 'Executor export must contain one object')
+        answer(result)
+      end)
     end
     if op == 'CREATE' then
       assert(not gma.show.getobj.handle('Timecode ' .. tc), 'Timecode already exists; creation refused')
@@ -394,17 +452,18 @@ local function process(data)
       assert(not desired:find('<!DOCTYPE') and not desired:find('<!ENTITY') and not desired:find('<Track') and not desired:find('<Sequ'), 'New Timecode must be empty')
       local index = desired:match('<Timecode%s[^>]-index="(%d+)"')
       assert(tonumber(index) == tc - 1, 'Creation target mismatch')
+      -- The write is this step; the readback export is the next.
       local name = 'tblink_create_' .. id
       write(root .. '/importexport/' .. name .. '.xml', desired)
       assert(not gma.show.getobj.handle('Timecode ' .. tc), 'Timecode appeared before creation')
       gma.cmd('Import "' .. name .. '.xml" At Timecode ' .. tc .. ' /nc')
       assert(gma.show.getobj.handle('Timecode ' .. tc), 'Timecode creation unconfirmed')
       discard(name)
-      return export_scratch(tc, 'tblink_created_' .. id)
+      return step(function() answer(export_scratch(tc, 'tblink_created_' .. id)) end)
     end
     assert(gma.show.getobj.handle('Timecode ' .. tc), 'Timecode does not exist')
-    if op == 'READ' then return export_scratch(tc, 'tblink_read_' .. id) end
-    if op == 'SNAPSHOT' then return snapshot(tc, id) end
+    if op == 'READ' then return answer(export_scratch(tc, 'tblink_read_' .. id)) end
+    if op == 'SNAPSHOT' then return snapshot(step, tc, id, nil, answer) end
     if op == 'SCOPE' then
       assert(#body > 0 and not body:find('[^%d,]') and not body:find(',,') and body:sub(1, 1) ~= ',' and body:sub(-1) ~= ',', 'Invalid Sequence scope')
       local additional, seen = {}, {}
@@ -413,7 +472,7 @@ local function process(data)
         assert(number and number >= 1 and number <= 99999 and not seen[number], 'Invalid Sequence scope')
         seen[number] = true; additional[#additional + 1] = number
       end
-      return snapshot(tc, id, additional)
+      return snapshot(step, tc, id, additional, answer)
     end
     assert(op == 'APPLY' or op == 'SYNC', 'Unknown operation')
     local length, rest = body:match('^(%d+)\n(.*)$')
@@ -422,24 +481,48 @@ local function process(data)
     local expected = rest:sub(1, length)
     local desired = rest:sub(length + 1)
     assert(#desired > 0 and not desired:find('<!DOCTYPE') and not desired:find('<!ENTITY'), 'Invalid XML')
-    if op == 'SYNC' then
-      assert(canonical(snapshot(tc, id .. '_preflight', references(desired))) == canonical(expected), 'Timecode or Sequence changed after preview')
-    end
-    local backup = export(tc, 'tblink_backup_' .. id)
-    if op == 'SYNC' then
-      assert(backup:match('(<Timecode%s.-</Timecode>)') == expected:match('(<Timecode%s.-</Timecode>)'), 'Timecode changed before write')
-    else
-      assert(canonical(backup) == canonical(expected), 'Timecode changed after preview')
-    end
     local name = 'tblink_write_' .. id
-    write(root .. '/importexport/' .. name .. '.xml', desired)
-    gma.cmd('Import "' .. name .. '.xml" At Timecode ' .. tc .. ' /o /nc')
-    local verified = export_scratch(tc, 'tblink_verify_' .. id)
-    discard(name)
-    return verified
+    -- The write is one step, never split: backup export, compare, write the file, Import.
+    local function write_step()
+      local backup = export(tc, 'tblink_backup_' .. id)
+      if op == 'SYNC' then
+        assert(backup:match('(<Timecode%s.-</Timecode>)') == expected:match('(<Timecode%s.-</Timecode>)'), 'Timecode changed before write')
+      else
+        assert(canonical(backup) == canonical(expected), 'Timecode changed after preview')
+      end
+      write(root .. '/importexport/' .. name .. '.xml', desired)
+      gma.cmd('Import "' .. name .. '.xml" At Timecode ' .. tc .. ' /o /nc')
+      step(function()
+        local verified = export_scratch(tc, 'tblink_verify_' .. id)
+        discard(name)
+        answer(verified)
+      end)
+    end
+    if op == 'SYNC' then
+      -- The preflight snapshot is steps of its own; the write is the step after its last one.
+      return snapshot(step, tc, id .. '_preflight', references(desired), function(current)
+        assert(canonical(current) == canonical(expected), 'Timecode or Sequence changed after preview')
+        step(write_step)
+      end)
+    end
+    write_step()
   end)
-  local output = tostring(result)
-  return id .. '\n' .. (ok and 'OK' or 'ERROR') .. '\n' .. #output .. '\n' .. output
+  return job
+end
+-- Runs the next step. A failed step ends the request with the same ERROR answer as before steps.
+local function advance(job)
+  local ok, result = pcall(table.remove(job.steps, 1))
+  job.done = job.done + 1
+  if ok and #job.steps > 0 then return end
+  job.steps = {}
+  local output = tostring(ok and job.result or result)
+  job.response = job.id .. '\n' .. (ok and 'OK' or 'ERROR') .. '\n' .. #output .. '\n' .. output
+end
+-- The local file bridge answers a request file in one go.
+local function process(data)
+  local job = start(data)
+  repeat advance(job) until job.response
+  return job.response
 end
 local function poll()
   if not active or _G.TBLINK_BRIDGE_GENERATION ~= generation then return end
@@ -454,6 +537,30 @@ end
 local network = nil
 local snapshot_cache = nil
 local function hex(data) return (data:gsub('.', function(c) return string.format('%02x', string.byte(c)) end)) end
+-- The request's answer is ready: keep it for 'read' and say how long it is.
+local function finished()
+  local id = network.id
+  network.response = network.job.response; network.job = nil
+  assert(#network.response <= 33554500, 'Response exceeds limit')
+  if network.op == 'SNAPSHOT' or network.op == 'SCOPE' then
+    local content = network.response:match('^[a-f0-9]+\nOK\n%d+\n(.*)$')
+    snapshot_cache = content and { id = id, target = network.target, xml = content } or nil
+    if content then
+      -- Fixture values are never edited by this application. Keep the complete
+      -- export here for SYNC's exact preflight, but send only Cue metadata.
+      -- Cue/CuePart attributes and Number remain unchanged for reference checks.
+      local compact = content:gsub('<CueDatas%s*>.-</CueDatas>', '')
+      network.response = id .. '\nOK\n' .. #compact .. '\n' .. compact
+    end
+  end
+  return 'DONE:' .. #network.response
+end
+-- One step of the request: STEP:<steps done> while more remain, DONE:<size> after the last.
+local function proceed()
+  advance(network.job)
+  if network.job.response then return finished() end
+  return 'STEP:' .. network.job.done
+end
 _G.TBLINK_NET = function(token, action, id, a, b, c)
   if not token:match('^[a-f0-9]+$') or #token ~= 32 then return end
   local ok, result = pcall(function()
@@ -489,20 +596,16 @@ _G.TBLINK_NET = function(token, action, id, a, b, c)
       network.done = true
       local body = table.concat(network.chunks); network.chunks = nil
       if network.base then body = #network.base .. '\n' .. network.base .. body; network.base = nil end
-      network.response = process(id .. '\n' .. network.op .. '\n' .. network.target .. '\n' .. #body .. '\n' .. body)
-      assert(#network.response <= 33554500, 'Response exceeds limit')
-      if network.op == 'SNAPSHOT' or network.op == 'SCOPE' then
-        local content = network.response:match('^[a-f0-9]+\nOK\n%d+\n(.*)$')
-        snapshot_cache = content and { id = id, target = network.target, xml = content } or nil
-        if content then
-          -- Fixture values are never edited by this application. Keep the complete
-          -- export here for SYNC's exact preflight, but send only Cue metadata.
-          -- Cue/CuePart attributes and Number remain unchanged for reference checks.
-          local compact = content:gsub('<CueDatas%s*>.-</CueDatas>', '')
-          network.response = id .. '\nOK\n' .. #compact .. '\n' .. compact
-        end
-      end
-      return 'DONE:' .. #network.response
+      network.job = start(id .. '\n' .. network.op .. '\n' .. network.target .. '\n' .. #body .. '\n' .. body)
+      -- With 'steps' the first step runs now and the program sends 'step' for each next one.
+      -- Without it (an older program, or the bridge upgrade check) every step runs now, as before.
+      if a == 'steps' then return proceed() end
+      repeat advance(network.job) until network.job.response
+      return finished()
+    end
+    if action == 'step' then
+      assert(network.done and network.job and not network.response, 'No step pending')
+      return proceed()
     end
     if action == 'read' then
       assert(network.done and network.response, 'No response available')
