@@ -6,12 +6,15 @@
 // Separate non-realtime process for exactly one explicitly named MIDI input.
 // Input: the TBM1 header of the output helper with operation 1 (open, UTF-8 name);
 // end of stdin closes the port. Output: one reply line, then one line per message:
-// {"version":1,"kind":"message","bytes":[...],"at100ns":"..."}. Nothing is dropped
-// silently: a full queue or an oversized SysEx ends the process with an error.
+// {"version":1,"kind":"message","bytes":[...],"at100ns":"..."}. After IDLE_MS without a message
+// line it writes {"version":1,"kind":"idle","at100ns":"..."}: the interface's "now" on the same
+// clock as the messages. Nothing is dropped silently: a full queue or an oversized SysEx ends the
+// process with an error.
 #define INPUT_QUEUE 4096u
 #define SYSEX_BUFFERS 8u
 #define SYSEX_BYTES 4096u
 #define SYSEX_LIMIT 65536u
+#define IDLE_MS 100u
 
 typedef struct { UINT message; DWORD_PTR param1, param2; } InputEvent;
 static HMIDIIN input;
@@ -25,6 +28,8 @@ static unsigned char buffers[SYSEX_BUFFERS][SYSEX_BYTES];
 static unsigned char sysex[SYSEX_LIMIT];
 static UINT32 sysex_length;
 static UINT64 started_100ns;
+// Driver timestamps count milliseconds from midiInStart; the heartbeat counts from the same moment.
+static DWORD started_ms, last_line_ms;
 static UINT32 invalid_messages;
 static LARGE_INTEGER counter_frequency;
 
@@ -71,7 +76,7 @@ static int32_t open_input(const unsigned char *bytes, UINT32 length) {
     result = midiInPrepareHeader(input, &headers[i], sizeof(MIDIHDR));
     if (!result) result = midiInAddBuffer(input, &headers[i], sizeof(MIDIHDR));
   }
-  if (!result) { started_100ns = now_100ns(); result = midiInStart(input); }
+  if (!result) { started_100ns = now_100ns(); started_ms = last_line_ms = timeGetTime(); result = midiInStart(input); }
   return (int32_t)result;
 }
 
@@ -79,6 +84,11 @@ static void write_message(const unsigned char *bytes, UINT32 length, DWORD at_ms
   fputs("{\"version\":1,\"kind\":\"message\",\"bytes\":[", stdout);
   for (UINT32 i = 0; i < length; i++) printf(i ? ",%u" : "%u", bytes[i]);
   printf("],\"at100ns\":\"%llu\"}\n", (unsigned long long)(started_100ns + (UINT64)at_ms * 10000u));
+  last_line_ms = timeGetTime();
+}
+static void write_idle(DWORD now_ms) {
+  printf("{\"version\":1,\"kind\":\"idle\",\"at100ns\":\"%llu\"}\n", (unsigned long long)(started_100ns + (UINT64)(DWORD)(now_ms - started_ms) * 10000u));
+  last_line_ms = now_ms;
 }
 static UINT32 short_length(unsigned status) {
   if (status < 0x80 || status == 0xf0 || status == 0xf7) return 0;
@@ -168,7 +178,11 @@ int serve_midi_input(void) {
   if (!watcher) { close_input(); return 3; }
   int failed = 0;
   HANDLE events[] = { quit, queue_wake };
-  while (!failed && WaitForMultipleObjects(2, events, FALSE, INFINITE) == WAIT_OBJECT_0 + 1) {
+  while (!failed) {
+    // Filtered clock bytes also wake the loop, so the heartbeat counts from the last line written.
+    DWORD since = timeGetTime() - last_line_ms;
+    DWORD waited = WaitForMultipleObjects(2, events, FALSE, since >= IDLE_MS ? 0u : IDLE_MS - since);
+    if (waited != WAIT_OBJECT_0 + 1 && waited != WAIT_TIMEOUT) break;
     for (;;) {
       InputEvent event; BOOL available, overflow;
       EnterCriticalSection(&queue_lock);
@@ -180,6 +194,8 @@ int serve_midi_input(void) {
       failed = deliver(&event);
       if (failed) { fprintf(stderr, "MIDI input delivery failed: %d\n", failed); break; }
     }
+    DWORD now_ms = timeGetTime();
+    if (!failed && now_ms - last_line_ms >= IDLE_MS) write_idle(now_ms);
     if (invalid_messages) { printf("{\"version\":1,\"kind\":\"invalid\",\"count\":%u}\n", invalid_messages); invalid_messages = 0; }
     if (fflush(stdout)) failed = 6;
   }

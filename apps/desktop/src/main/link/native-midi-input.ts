@@ -6,13 +6,18 @@ const lineSchema = z.discriminatedUnion('kind', [
   z.object({ version: z.literal(1), kind: z.literal('opened'), requestId: z.literal(1), code: z.number().int() }).strict(),
   z.object({ version: z.literal(1), kind: z.literal('message'), bytes: z.array(z.number().int().min(0).max(255)).min(1).max(65536),
     at100ns: z.string().regex(/^\d{1,20}$/) }).strict(),
-  z.object({ version: z.literal(1), kind: z.literal('invalid'), count: z.number().int().min(1) }).strict()
+  z.object({ version: z.literal(1), kind: z.literal('invalid'), count: z.number().int().min(1) }).strict(),
+  z.object({ version: z.literal(1), kind: z.literal('idle'), at100ns: z.string().regex(/^\d{1,20}$/) }).strict()
 ]);
 
 export type NativeMidiMessage = { bytes: number[]; at100ns: bigint };
 
 /** One named Windows MIDI input in its own helper process. Messages arrive in order; the helper
- * ends with an error instead of dropping any. Closing the pipe closes the port. */
+ * ends with an error instead of dropping any. Closing the pipe closes the port.
+ * After 100 ms without a message the helper reports `idle`: the interface's "now" on the same clock
+ * as message `at100ns`, so silence is measured at the port, not by when this process got around to
+ * reading. Heartbeats never go backwards; a message read just after one may carry a slightly earlier
+ * time (it reached the driver before the heartbeat was written). Only `receiveIdle` sees them. */
 export class NativeMidiInput {
   private child: ChildProcessWithoutNullStreams | null = null;
   private state: 'new' | 'opening' | 'ready' | 'failed' | 'closing' = 'new';
@@ -23,9 +28,11 @@ export class NativeMidiInput {
   private closeTask: Promise<void> | null = null;
   private opened: { resolve: () => void; reject: (error: Error) => void } | null = null;
   private portName = '';
+  private lastIdle: bigint | null = null;
 
   constructor(private readonly executable: string, private readonly receive: (message: NativeMidiMessage) => void,
-    private readonly reportFailure: (error: Error) => void, private readonly reportInvalid: (count: number) => void = () => undefined) {}
+    private readonly reportFailure: (error: Error) => void, private readonly reportInvalid: (count: number) => void = () => undefined,
+    private readonly receiveIdle: (at100ns: bigint) => void = () => undefined) {}
 
   open(portName: string): Promise<void> {
     if (this.state !== 'new') return Promise.reject(new Error('MIDI 输入已打开、失败或关闭；必须重新打开'));
@@ -81,7 +88,11 @@ export class NativeMidiInput {
           this.state = 'ready'; this.opened?.resolve(); this.opened = null;
         } else if (this.state !== 'ready') throw new Error('MIDI 输入在打开前送来消息');
         else if (line.kind === 'message') this.receive({ bytes: line.bytes, at100ns: BigInt(line.at100ns) });
-        else this.reportInvalid(line.count);
+        else if (line.kind === 'idle') {
+          const at100ns = BigInt(line.at100ns);
+          if (this.lastIdle !== null && at100ns < this.lastIdle) throw new Error('MIDI 输入的接口时间倒退');
+          this.lastIdle = at100ns; this.receiveIdle(at100ns);
+        } else this.reportInvalid(line.count);
       }
     } catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); }
   }
