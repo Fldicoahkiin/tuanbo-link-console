@@ -259,6 +259,25 @@ describe('LinkMidiAdapter', () => {
     adapter.dispose();
   });
 
+  it('输出端口重名、打开后断开时，提示也把接口名放在「」里且不被改写', async () => {
+    const access = new FakeAccess(); installAccess(access);
+    access.outputs.set('a', new FakePort('a', 'USB MIDI INTERFACE', 'output', access));
+    access.outputs.set('b', new FakePort('b', 'USB MIDI INTERFACE', 'output', access));
+    const dropping = new FakePort('c', 'Drop Box', 'output', access);
+    dropping.open.mockImplementation(() => { dropping.state = 'disconnected'; return Promise.resolve(); });
+    access.outputs.set('c', dropping);
+    const profiles: Record<string, MidiPortProfile> = { twin: { id: 'twin', direction: 'output', portName: 'USB MIDI INTERFACE' },
+      drop: { id: 'drop', direction: 'output', portName: 'Drop Box' } };
+    const adapter = new LinkMidiAdapter(id => profiles[id] ?? null, vi.fn());
+    await adapter.initialize();
+    const duplicate = await adapter.execute({ id: 'pc', label: 'Program', kind: 'midi.programChange', portProfileId: 'twin', channel: 1, program: 1 })
+      .then(() => '', (error: unknown) => error instanceof Error ? error.message : String(error));
+    const texts = [duplicate, ...await adapter.openOutputs(['drop'])];
+    expect(texts).toEqual(['有多个同名的 MIDI 输出端口「USB MIDI INTERFACE」', 'MIDI 接口「Drop Box」已断开']);
+    expect(texts.map(text => toUserErrorMessage(new Error(text)))).toEqual(texts);
+    adapter.dispose();
+  });
+
   it('端口清单读取失败时明确上报一次，不当作端口仍在', async () => {
     const access = midiAccess([]); installAccess(access);
     const reportError = vi.fn();
