@@ -139,7 +139,8 @@ export type TimelineKeyProps = {
   onPlayingChange: (playing: boolean) => void;
   onDuplicateClip: (clipId: string, startMs: number) => void;
   onDuplicateCue: (cueId: string, startMs: number) => void;
-  onSplitClip: (clipId: string, timeMs: number) => void;
+  /** `group`: the splits of one key press that are undone together (Ctrl+Shift+B); they leave the selection alone. */
+  onSplitClip: (clipId: string, timeMs: number, group?: string) => void;
   onTrim: (ref: TimelineTarget, startMs: number, durationMs: number) => void;
   onDeleteClip: (clipId: string) => void;
   onDeleteCue: (cueId: string) => void;
@@ -228,9 +229,11 @@ export function editorEditKeys(props: TimelineKeyProps): KeyHandlers {
     'edit.trimLeft': () => trim('start'),
     'edit.trimRight': () => trim('end'),
     'edit.splitAll': () => {
-      const at = props.playheadMs;
+      // One press, one step back: every clip's split goes into the same undo step (the audio's is its own, it is
+      // saved through the audio editor).
+      const at = props.playheadMs, group = `split-all:${crypto.randomUUID()}`;
       for (const clip of props.clips) {
-        if (!onLockedTrack(props, { kind: 'clip', id: clip.id }) && inside(resolveTimelineClipSpan(clip, props.frameRate), at)) props.onSplitClip(clip.id, at);
+        if (!onLockedTrack(props, { kind: 'clip', id: clip.id }) && inside(resolveTimelineClipSpan(clip, props.frameRate), at)) props.onSplitClip(clip.id, at, group);
       }
       const audio = props.audioEditor;
       if (audio && !audio.disabled && audio.segments.some(segment => inside({ startMs: segment.startMs, endMs: segment.startMs + segment.durationMs }, at))) void audio.split(at);

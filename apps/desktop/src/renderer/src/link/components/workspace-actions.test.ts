@@ -24,11 +24,11 @@ function fixture(locked = false, withCue = false, withClip = false) {
   useDocumentStore.getState().setProject(project, 'C:/test/show.tblink');
   // The editor works on the opened project, where an empty track is already gone.
   const opened = useDocumentStore.getState().project!;
-  const notify = vi.fn();
+  const notify = vi.fn(), setSelectedClipId = vi.fn();
   const actions = createWorkspaceActions({ project: opened, projectPath: 'C:/test/show.tblink', documentId: useDocumentStore.getState().documentId, item: opened.rundown[0]!, cue: null,
     playheadMs: 3000, coordinator: null, execute: useDocumentStore.getState().execute, notify,
-    setSelectedCueId: vi.fn(), setSelectedClipId: vi.fn(), setSelectedAssetId: vi.fn(), setSelectedObsResource: vi.fn() });
-  return { actions, notify, sceneName: materialSceneNames(project.projectId, project.mediaAssets[0]!).sceneName };
+    setSelectedCueId: vi.fn(), setSelectedClipId, setSelectedAssetId: vi.fn(), setSelectedObsResource: vi.fn() });
+  return { actions, notify, setSelectedClipId, sceneName: materialSceneNames(project.projectId, project.mediaAssets[0]!).sceneName };
 }
 
 describe('拖入 OBS 场景', () => {
@@ -92,6 +92,26 @@ describe('拖入 OBS 场景', () => {
     const item = useDocumentStore.getState().project!.rundown[0]!;
     expect(item.visualLayers.map(layer => layer.id)).toEqual(['track-clip']);
     expect(item.referenceMediaClips[0]).toMatchObject({ id: 'clip', durationMs: 2000, layerId: 'track-clip', startTimecode: { seconds: 6 } });
+    useDocumentStore.getState().undo();
+    expect(useDocumentStore.getState().project).toEqual(before);
+  });
+  it('一次按键做的几次分割（Ctrl+Shift+B）一次撤销全部回去，选中不动；单独分割照旧一次一步、选中右半段', () => {
+    const { actions, setSelectedClipId } = fixture(false, false, true);
+    const before = useDocumentStore.getState().project;
+    const clips = () => useDocumentStore.getState().project!.rundown[0]!.referenceMediaClips;
+    actions.splitClip('clip', 2000, 'split-all:一次按键');
+    actions.splitClip('clip', 1500, 'split-all:一次按键');
+    expect(clips()).toHaveLength(3);
+    expect(setSelectedClipId).not.toHaveBeenCalled();
+    useDocumentStore.getState().undo();
+    expect(useDocumentStore.getState().project).toEqual(before);
+
+    actions.splitClip('clip', 2000);
+    const right = clips().find(clip => clip.id !== 'clip')!.id;
+    expect(setSelectedClipId).toHaveBeenLastCalledWith(right);
+    actions.splitClip('clip', 1500);
+    useDocumentStore.getState().undo();
+    expect(clips()).toHaveLength(2);
     useDocumentStore.getState().undo();
     expect(useDocumentStore.getState().project).toEqual(before);
   });

@@ -148,13 +148,16 @@ function createClipActions(input: WorkspaceActionsInput) {
     const item = input.item;
     runMutation(input, () => input.execute(trimContentCommand(item.id, ref, startMs, startMs + durationMs)));
   };
-  const splitClip = (clipId: string, milliseconds: number): void => split({ kind: 'clip', id: clipId }, milliseconds);
-  const split = (ref: ContentRef, milliseconds: number): void => {
+  /** `group`: one of several splits made by one key press (Ctrl+Shift+B): undone together, and the selection stays. */
+  const splitClip = (clipId: string, milliseconds: number, group?: string): void => split({ kind: 'clip', id: clipId }, milliseconds, group);
+  const split = (ref: ContentRef, milliseconds: number, group?: string): void => {
     if (!input.item) return;
     const item = input.item;
     runMutation(input, () => {
       const rightId = crypto.randomUUID();
-      input.execute(splitContentCommand(item.id, ref, milliseconds, rightId));
+      const command = splitContentCommand(item.id, ref, milliseconds, rightId);
+      input.execute(group === undefined ? command : { ...command, historyGroup: group });
+      if (group !== undefined) return;
       input.setSelectedClipId(ref.kind === 'clip' ? rightId : null);
       input.setSelectedCueId(ref.kind === 'cue' ? rightId : null);
     });

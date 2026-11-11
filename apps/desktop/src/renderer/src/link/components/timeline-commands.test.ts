@@ -154,6 +154,22 @@ describe('剪映的键（K7）', () => {
     expect(calls).toEqual(['分割 片段 在 1000', '分割音频 在 1000']);
   });
 
+  it('Ctrl+Shift+B 分的几个片段算同一次：给它们同一个撤销组，下一次按键换一个；单独分割不带组', () => {
+    const groups: Array<string | undefined> = [];
+    const clips = [clip('上面的', '轨道 1', 0), clip('下面的', '轨道 2', 0)];
+    const keyProps = props([], { clips, selectedClipId: '上面的', onSplitClip: (_id, _at, group) => { groups.push(group); } });
+    editorEditKeys(keyProps)['edit.splitAll']?.(press);
+    editorEditKeys(keyProps)['edit.splitAll']?.(press);
+    expect(groups).toHaveLength(4);
+    expect(groups[0]).toMatch(/^split-all:/);
+    expect(groups[1]).toBe(groups[0]);
+    expect(groups[3]).toBe(groups[2]);
+    expect(groups[2]).not.toBe(groups[0]);
+    timelineEditKeys(keyProps, null, () => undefined)['edit.split']?.(press);
+    expect(groups).toHaveLength(5);
+    expect(groups[4]).toBeUndefined();
+  });
+
   it('K 暂停、L 播放；Shift+←/→ 走 5 帧，↑↓ 到上一个、下一个剪辑点，先暂停，不出开头和结尾', () => {
     const log: string[] = [];
     let playhead = 1_000;

@@ -38,6 +38,7 @@
 
 ### 用户授权和定下的事（新的在前，新的取代旧的）
 
+- **2026-11-11 快捷键照剪映，停止加 Shift+Esc**：用户 11-10 定根因报告第 7 题按推荐做，编辑器和灯光工作台的键照剪映专业版默认（Ctrl+B 分割、Q/W 修剪到播放头、↑↓ 上一个/下一个剪辑点、N 吸附、编辑器的 M 加时间线标记）；首页的键不变，灯光工作台的 M 还是打点，用户改过的 6 个键照旧生效。停止键是 Claude 按 11-11 的授权定的：Esc 照旧停止；Shift+Esc 在哪儿都能停（对话框开着、拖动中、输入框里），是“对话框开着时按键不碰节目”的唯一例外；设置里可以关掉「单按 Esc 停止」，每台电脑记住。按住 Enter 在哪儿都只算一次。见 `docs/KEYBOARD_SHORTCUTS.md`。
 - **2026-11-04 内容编辑器重写**：用户授权删掉旧代码，按最佳实现重写，不换剪映或 OpenCut。规则在 `packages/core/src/content-timeline.ts`：机位和素材都是有长度的片段，同一轨道不重叠；拖到被占的位置就在上方新建一条轨道；修剪碰到相邻片段就停住；`visualLayers[0]` 是最上层，上层盖住下层；音效不算画面。OBS 播放、定位和预载按现场实测调过，不重写，只接新规则。
 - **2026-11-04 同步方式可选**：写入控台（合并/覆盖/直接写入）、控台上的改动（读回/以联动台为准）、实时同步开关都由用户选，每台电脑记住，见 LIGHTING_WORKFLOW.md「同步方式可选」。
 - **2026-11-01 灯光播放只发时间码**：正式播放、编辑器和灯光工作台试听、P1 跟随都只发 MIDI 时间码，由控台按时间码跑灯；“直接发 MIDI”“网络发命令”两种播放方式已删除。“单独运行”和“埋步”不能再新加（2026-11-03 再次确认）。单击 Cue 试听仍直接发这一个 Cue。
@@ -107,7 +108,7 @@ docs/                           设计、实施、验收和服务器安装说明
 | 自己恢复几次算到头 | `packages/core/src/output-recovery.ts` 一张表（2026-11-11）：声卡 1 分钟断流 5 次停这首歌，时间码一首歌失败 3 次这首歌不再发，等等。别处不写重试次数；每次恢复都标红、记日志 |
 | 欠着的关灯 | 规则在 `packages/core/src/lighting-off-ledger.ts`（2026-11-11）：停止关这首歌的执行器，换歌只关上一首独有的，正在用的绝不关。全应用一张清单，主人是主进程 `apps/desktop/src/main/link/lighting-off-service.ts`：节目、试听（`link:lighting-off`）、退出时的询问和演出状态都经它；没发出去的留着，控台重新连上后补发 1 次（次数在 `output-recovery.ts`），再按停止全部重发；关灯不过授权。别处不再自己发 Off、不另记“还欠着” |
 | 节目现在在哪一步、这时能做什么 | 规则在 `packages/core/src/show-state.ts` 的 `showGate`，状态由主进程 `apps/desktop/src/main/link/show-state-service.ts` 算（2026-11-11），界面只照着显示（`stores/show-state-store.ts`）。新的“播放时不能做”都问它，不再各处自己判断“在不在播放” |
-| 按键谁来处理 | `apps/desktop/src/renderer/src/link/keys/`（2026-11-11）：窗口上只有 `key-router.ts` 一个按键监听，一次按键归谁由 `key-route.ts` 的 `routeKey` 按“输入框、弹窗、拖动、页面、全局”的顺序定，键位在 `keymap.ts` 一张表。组件自己用的键用 `ownKeys` 声明；Esc 能关的面板、菜单和列表用 `useKeyOverlay` 登记，由路由关最上面那一个，自己不听 Esc；拖动用 `useDragSession`（Esc 能取消）或 `useCapturedDrag`（边拖边写、取消不了）登记，拖动中的 Esc 和会改工程的键由路由拦，拖动自己不听按键（都由 `key-routing-scan.test.ts` 守着）。不再往 window 或 document 上新加 keydown 监听。时间线的按键也在路由上（2026-11-11）：编辑器和灯光工作台的时间线键用 `useKeyCommands` 登记到各自的范围；编辑键作用在哪一样东西、剪辑点和修剪到播放头在 `components/timeline-commands.ts`；灯光工作台里用户改过的 6 个键是键位表 `lighting` 范围的覆盖（`stores/shortcut-store.ts` 的 `currentKeymap`） |
+| 按键谁来处理 | `apps/desktop/src/renderer/src/link/keys/`（2026-11-11）：窗口上只有 `key-router.ts` 一个按键监听，一次按键归谁由 `key-route.ts` 的 `routeKey` 按“输入框、弹窗、拖动、页面、全局”的顺序定，键位在 `keymap.ts` 一张表。组件自己用的键用 `ownKeys` 声明；Esc 能关的面板、菜单和列表用 `useKeyOverlay` 登记，由路由关最上面那一个，自己不听 Esc；拖动用 `useDragSession`（Esc 能取消）或 `useCapturedDrag`（边拖边写、取消不了）登记，拖动中的 Esc 和会改工程的键由路由拦，拖动自己不听按键（都由 `key-routing-scan.test.ts` 守着）。键位和规则见 `docs/KEYBOARD_SHORTCUTS.md`：Esc 照旧停止，Shift+Esc 在哪儿都能停，按住 Enter 只算一次，编辑器和灯光工作台照剪映（`key-routing-rules.test.ts` 守着这几条）。不再往 window 或 document 上新加 keydown 监听。时间线的按键也在路由上（2026-11-11）：编辑器和灯光工作台的时间线键用 `useKeyCommands` 登记到各自的范围；编辑键作用在哪一样东西、剪辑点和修剪到播放头在 `components/timeline-commands.ts`；灯光工作台里用户改过的 6 个键是键位表 `lighting` 范围的覆盖（`stores/shortcut-store.ts` 的 `currentKeymap`） |
 | 一首歌的节拍 | `packages/core/src/song-beats.ts` 的 `songBeats`（2026-11-11）：每首歌一份，按音乐的源文件存在 `rundownItem.music`，编辑器和灯光工作台都从它读，经音频片段换算到歌曲时间，剪切、移动音频不用重新识别。只用 `setSongMusicCommand` 改；旧工程的两种节拍只在 `document-store.setProject` 打开时搬一次（`song-music-migration.ts`）。显示疏密只在显示时定，不存进工程；包络分析（“分析音乐”）不出节拍 |
 | 波形 | 主进程 `apps/desktop/src/main/link/waveform-service.ts`（2026-11-11）：一次解码出多级峰值、45–180 Hz 节奏波形和频谱（`waveform-levels.ts`），按 sha256 存在工程的 `cache/waveforms/<sha>.levels.bin`；`<sha>.json` 照旧写成 0.5.8 能读的纯数组，不改它的格式。界面只用 `useSongWaveform` 拿、`WaveformCanvas`（`view-models/waveform-draw.ts`）画，不解码整首音频，不引入波形库（`editor-rules.test.ts` 规则 5 守着） |
 
@@ -209,6 +210,7 @@ docs/                           设计、实施、验收和服务器安装说明
 - [README.md](./README.md)：安装、使用、产品边界和「发布与部署链路」。
 - [docs/LIGHTING_WORKFLOW.md](./docs/LIGHTING_WORKFLOW.md)：灯光工作流 10 条、同步规则和在代码里的落点，灯光相关改动以此为准。
 - [docs/UI_COPY_GUIDE.md](./docs/UI_COPY_GUIDE.md)：界面文案规范。
+- [docs/KEYBOARD_SHORTCUTS.md](./docs/KEYBOARD_SHORTCUTS.md)：键位表、停止键和按住 Enter 的规则、和剪映不一样的地方。
 - [docs/RELEASE_CHAIN.md](./docs/RELEASE_CHAIN.md)：发版标准流程；[release-notes/README.md](./release-notes/README.md)：更新日志写法。
 - `docs/SERVER_INSTALL_*.md`：每次服务器改动的安装说明和安装结果。
 - [docs/OBS_SCENE_WORKFLOW.md](./docs/OBS_SCENE_WORKFLOW.md)、[docs/OBS_REALTIME_CANVAS.md](./docs/OBS_REALTIME_CANVAS.md)：OBS 画面规则。
