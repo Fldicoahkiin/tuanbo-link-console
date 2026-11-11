@@ -1,15 +1,18 @@
 import { ObsPictureLeftover, ObsProgramSession, obsRecoveryText, pictureCleanupReason, pictureErrorDetail, projectFromObsSnapshot, type ObsProgramSessionDependencies } from '@tb/core/link';
-import { nativeObsPrepareSchema, nativeObsStopSchema, nativeObsStatusSchema, type NativeObsPrepare, type NativeObsStop, type NativeObsStatus, type NativePlayerStatus, type NativePlayerControl } from '@tb/schema';
+import { nativeObsPrepareSchema, nativeObsStopSchema, nativeObsStatusSchema, type NativeObsPrepare, type NativeObsStop, type NativeObsStatus, type NativePlayerStatus, type NativePlayerControl, type ObsPictureItem } from '@tb/schema';
 import { ObsPreparationCancelled } from './native-obs-outputs';
 
-type Outputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault'> & {
+type Outputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault' | 'clearFault' | 'pictureItems'> & {
   /** Prepares this song's owned scenes again after OBS reconnects; starts no decoder. */
   restoreScenes?: (assertCurrent: () => void) => Promise<void>;
 };
 /** `cleanup`: this song's picture cleanup, run once. `leftover`: why it failed, until the program has heard it once
  * (a program that closed before it could show it hands it back, for the next song). */
+/** `connection`: the OBS connection, the one failure of the whole picture path (design 01 §4.5), listed with the
+ * session's own parts (`parts`). */
 type Entry = { request: NativeObsPrepare; session: ObsProgramSession; state: NativeObsStatus; awaitingPause: boolean; ended: boolean; filesStarted: boolean;
-  now: () => number; restoreScenes: Outputs['restoreScenes']; cleanup: Promise<void> | null; leftover: ObsPictureLeftover | null };
+  now: () => number; restoreScenes: Outputs['restoreScenes']; cleanup: Promise<void> | null; leftover: ObsPictureLeftover | null;
+  connection: ObsPictureItem | null; parts: ObsPictureItem[] };
 type Dependencies = {
   audio: () => NativePlayerStatus | null;
   outputs: (request: NativeObsPrepare, positionMs: number, assertCurrent: () => void) => Outputs | Promise<Outputs>;
@@ -54,6 +57,8 @@ export class NativeObsHost {
     if (this.entry.state.state !== 'preparing') {
       // Every connection-state update repeats the loss; record it once.
       const message = `OBS 连接中断：${reason}。重新连上 OBS 之前画面动作都不会执行，连上后从下一个画面动作继续`;
+      // The whole path, not one part of it: listed as the connection's, until OBS is back.
+      this.entry.connection = { id: 'obs.connection', scope: 'channel', state: 'failed', detail: message }; this.listItems(this.entry);
       if (this.entry.state.fault !== message) this.fault(message);
       return;
     }
@@ -69,6 +74,7 @@ export class NativeObsHost {
    * (2026-11-09: never a success over its own red text). */
   async reconnected(): Promise<void> {
     const entry = this.entry;
+    if (entry && entry.connection) { entry.connection = null; this.listItems(entry); }
     if (!entry || entry.state.state !== 'running') return;
     // A stop, pause or newer song meanwhile cancels the restore; that is not a material that failed to prepare.
     const current = (): void => { if (this.entry !== entry || entry.state.state !== 'running') throw new ObsPreparationCancelled('画面状态已变，没有恢复'); };
@@ -140,7 +146,7 @@ export class NativeObsHost {
     if (leftover) faults.unshift(leftover.next(request.snapshot.item.id));
     const state: NativeObsStatus = { version: 1, sessionId: request.sessionId, generation: request.generation,
       itemId: request.snapshot.item.id, revision: request.snapshot.revision, state: 'preparing', reason: null,
-      nextCueId: null, currentCueId: null, pendingCount: 0, positionMs: audio.positionMs, ...(faults.length ? { fault: faults.join('；') } : {}) };
+      nextCueId: null, currentCueId: null, pendingCount: 0, positionMs: audio.positionMs, items: [], recoveries: [], ...(faults.length ? { fault: faults.join('；') } : {}) };
     const session = new ObsProgramSession(project, request.projectPath, request.snapshot.item.id, {
       ...outputs,
       // A stop or a newer song cancels the preparation; that is not a material that failed to prepare.
@@ -163,9 +169,20 @@ export class NativeObsHost {
         if (this.entry?.request !== request) return;
         if (report.status === 'failed') this.patch({ fault: `素材播放失败：${report.event.assetName} · ${report.error ?? '未知错误'}` });
       },
-      fault: message => { if (this.entry?.request === request) this.fault(message); }
+      fault: message => { if (this.entry?.request === request) this.fault(message); },
+      // While the connection is lost nothing is repaired (R5): the reconnect restores the picture as a whole.
+      connected: () => this.entry?.request === request && !this.entry.connection && (outputs.connected?.() ?? true),
+      // A part that is right again takes its red text with it, if that is still the one shown.
+      clearFault: message => { if (this.entry?.request === request && this.entry.state.fault === message) this.patch({ fault: null }); },
+      // Each part on its own (design 01 §4.5): one failing never fails the song's picture.
+      pictureItems: (items, recoveries) => {
+        const current = this.entry;
+        if (current?.request !== request) return;
+        current.parts = items; this.listItems(current, recoveries);
+      }
     });
-    const entry: Entry = { request, session, state, awaitingPause: false, ended: false, filesStarted: false, now: outputs.now, restoreScenes: outputs.restoreScenes, cleanup: null, leftover: null };
+    const entry: Entry = { request, session, state, awaitingPause: false, ended: false, filesStarted: false, now: outputs.now, restoreScenes: outputs.restoreScenes, cleanup: null, leftover: null,
+      connection: null, parts: [] };
     this.entry = entry; this.publish();
     try {
       await session.prepare(audio.positionMs);
@@ -277,6 +294,11 @@ export class NativeObsHost {
     if (!audio || audio.sessionId !== request.sessionId || audio.generation !== request.generation || audio.itemId !== request.snapshot.item.id
       || !['ready', 'paused'].includes(audio.status) || audio.audioError) throw new Error('画面准备的不是当前这首歌，这一首不联动画面，也不会中途加入');
     return audio;
+  }
+  /** The connection, then the session's parts, as the status lists them. */
+  private listItems(entry: Entry, recoveries?: NativeObsStatus['recoveries']): void {
+    if (this.entry !== entry || ['stopped', 'failed'].includes(entry.state.state)) return;
+    this.patch({ items: [...entry.connection ? [entry.connection] : [], ...entry.parts].slice(0, 256), ...(recoveries ? { recoveries: recoveries.slice(0, 256) } : {}) });
   }
   private patch(patch: Partial<NativeObsStatus>): void {
     if (!this.entry) return;

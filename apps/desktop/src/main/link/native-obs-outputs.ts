@@ -68,12 +68,12 @@ export function pictureExecutor(obs: PictureObs, decoders: PictureDecoders, log:
 
 /** The drift check of a song's picture (recovery rule B), on the decoder of the
  * material's clip on air now; none when nothing of the material is on air. */
-export function pictureDriftCheck(scenes: Pick<ObsMediaScenes, 'correctDrift'>, decoders: Pick<ObsMediaPreload, 'onAirSource'>): (event: ManagedMediaEvent) => Promise<number | null> {
-  return event => {
+export function pictureDriftCheck(scenes: Pick<ObsMediaScenes, 'correctDrift'>, decoders: Pick<ObsMediaPreload, 'onAirSource'>): NonNullable<NativeObsOutputs['correctMediaDrift']> {
+  return (event, mayCorrect) => {
     const sourceName = decoders.onAirSource(event.sourceName);
     if (sourceName === null) return Promise.resolve(null);
     const received = performance.now();
-    return scenes.correctDrift({ ...event, sourceName }, () => event.sourceOffsetMs + performance.now() - received);
+    return scenes.correctDrift({ ...event, sourceName }, () => event.sourceOffsetMs + performance.now() - received, mayCorrect);
   };
 }
 
@@ -110,7 +110,7 @@ export function mediaStepOutcome(error: unknown, sent: boolean): Exclude<Managed
   if (!sent && (unanswered || chain.some(item => item instanceof ObsRequestNotSent))) return { kind: 'withdrawn', reason };
   if (unanswered) return { kind: 'unanswered', reason };
   const onAir = chain.find(item => item instanceof MediaOnAirError);
-  return { kind: 'failed', reason, onAir: onAir !== undefined, outOfStep: onAir instanceof MediaOutOfStepError };
+  return { kind: 'failed', reason, onAir: onAir !== undefined, outOfStep: onAir instanceof MediaOutOfStepError, sent };
 }
 
 /** The clip events of a song's picture, on the decoders its materials take turns on. Resolves with
@@ -119,7 +119,7 @@ export function mediaStepOutcome(error: unknown, sent: boolean): Exclude<Managed
 export function pictureMediaStep(obs: Pick<ObsWebSocketAdapter, 'guardPlaybackOperation' | 'getRequestDiagnostics'>, decoders: Pick<ObsMediaPreload, 'execute'>,
   projectPath: string, resolve: (relativePath: string) => string, log: { record: LinkRunLogger['record']; projectId: string; itemId: string }): NativeObsOutputs['executeManagedMediaEvent'] {
   return async (payload): Promise<ManagedMediaOutcome> => {
-    if (payload.projectPath !== projectPath) return { kind: 'failed', reason: '画面素材和当前工程对不上', onAir: false, outOfStep: false };
+    if (payload.projectPath !== projectPath) return { kind: 'failed', reason: '画面素材和当前工程对不上', onAir: false, outOfStep: false, sent: false };
     let sent = false;
     try {
       await obs.guardPlaybackOperation(() => true, () => decoders.execute(payload.event, resolve(payload.event.relativePath)), () => { sent = true; });
@@ -347,6 +347,9 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
     // The drift check runs inside the picture session's own queue, where the next cut waits for it: it stays at the
     // `program` tier of the material scenes, so a cut never ends up waiting behind a screenshot through it.
     correctMediaDrift: pictureDriftCheck(obs.mediaScenes, preload),
+    // The picture session decides, by the counts in output-recovery.ts, whether a failed preparation goes again.
+    prepareAgain: clipId => preload.prepareAgain(clipId),
+    connected: () => obs.getSnapshot().status === 'connected',
     seekMedia: async event => {
       if (!address) throw new Error('画面连接还没准备好');
       const target = address;

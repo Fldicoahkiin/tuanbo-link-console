@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, parseLinkProject, type LinkAction } from '@tb/schema';
+import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkProject } from '@tb/schema';
+import { ObsProgramSession, type ObsProgramSessionDependencies } from './obs-program-session';
 import { frameNumberToTimecode } from './mtc-timecode';
 import { MidiProgramSession } from './midi-program';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -148,5 +149,104 @@ describe('规则 1：某一帧该显示什么只有一处', () => {
     expect(files.filter(file => /\bfunction stackAt\b|\bstackAt\(/.test(file.text)).map(file => file.path)).toEqual(['packages/core/src/scene-output-timeline.ts']);
     // The editor's timeline state takes the picture from the output's timeline.
     expect(files.find(file => file.path === 'packages/core/src/timeline-state.ts')?.text).toContain('pictureAt(');
+  });
+});
+
+// ---- Picture reconcile and repairs (rules 2–4, 0.5.9 R5) ----
+
+/** Cameras on one track, one a second: `scenes[i]` from i s; `points` adds a filter (a point action) to the camera at that index. */
+function camerasShow(scenes: string[], points: number[] = []): LinkProject {
+  return parseLinkProject({ ...createEmptyLinkProject('画面规则'), playbackSource: 'internal', obsOutputMode: 'scenes',
+    rundown: [{ id: 'song', title: '歌', visualLayers: [{ id: 'cams', name: '机位' }], cues: scenes.map((sceneName, index) => ({
+      id: `cam-${index}`, name: sceneName, layerId: 'cams', durationMs: 1000, timecode: frameNumberToTimecode(index * 30, '30'),
+      actions: [{ id: `cam-${index}-scene`, kind: 'obs.setProgramScene' as const, label: '切机位', sceneName },
+        ...points.includes(index) ? [{ id: `cam-${index}-filter`, kind: 'obs.setSourceFilterEnabled' as const, label: '滤镜', sourceName: sceneName, filterName: '调色', enabled: true }] : []] })) }] });
+}
+function pictureSession(project: LinkProject, answer: (action: LinkAction) => Promise<void>, extra: Partial<ObsProgramSessionDependencies> = {}) {
+  let now = 0;
+  const sent: LinkAction[] = [], faults: string[] = [], states: string[] = [];
+  const dependencies: ObsProgramSessionDependencies = { now: () => now, fault: message => { faults.push(message); },
+    recordLog: entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'rules', timestamp: '2026-11-11T00:00:00Z', monotonicMs: now }),
+    executeManagedMediaEvent: () => Promise.resolve(), guardOutput: (_canSend, operation) => operation(),
+    prepareOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), seekMedia: () => Promise.resolve(),
+    cueReport: () => undefined, mediaReport: () => undefined, state: update => { states.push(update.state); },
+    executor: { id: 'obs', supports: entry => entry.kind.startsWith('obs.'), execute: entry => { sent.push(entry); return answer(entry); } }, ...extra };
+  const session = new ObsProgramSession(project, 'C:/shows/rules.tblink', 'song', dependencies);
+  const advance = async (from: number, through: number): Promise<void> => {
+    for (let time = from; time <= through; time += 100) { now = time; session.clock(time); await session.settled(); }
+  };
+  const scenes = (): string[] => sent.flatMap(entry => entry.kind === 'obs.setProgramScene' ? [entry.sceneName] : []);
+  return { session, sent, faults, states, advance, scenes };
+}
+/** Mulberry32, so that every machine sees the same sequence. */
+function seeded(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let value = Math.imul(state ^ (state >>> 15), 1 | state);
+    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+describe('规则 2：画面按此刻应有的样子对账', () => {
+  it('OBS 回应快慢不一、前半首随机拒绝：最后发出的就是此刻应有的画面，之后一样的不再发（固定种子）', async () => {
+    const names = ['全景', '特写', '中景'];
+    for (const seed of [5, 17, 2026]) {
+      const next = seeded(seed), project = camerasShow(Array.from({ length: 12 }, (_, index) => names[index % 3]!));
+      let late = true;
+      const show = pictureSession(project, async () => {
+        for (let wait = Math.floor(next() * 4); wait > 0; wait--) await Promise.resolve();
+        if (late && next() < 0.3) throw new Error('OBS 拒绝了');
+      });
+      await show.session.prepare(0); await show.advance(0, 6000);
+      late = false; await show.advance(6100, 11500);
+      expect(show.scenes().at(-1), `种子 ${seed}`).toBe(names[11 % 3]);
+      const count = show.sent.length;
+      await show.advance(11600, 11900);
+      expect(show.sent).toHaveLength(count); expect(show.session.error).toBeNull();
+    }
+  });
+});
+
+describe('规则 3：补的是现在该有的画面，不重放旧动作', () => {
+  it('机位和它的滤镜都被拒绝：只补切机位一次，滤镜（点 Cue）不重发；补了还不行不再补；过了切点作废，下一段照常切', async () => {
+    const show = pictureSession(camerasShow(['全景', '特写', '全景'], [1]), entry => entry.label === '滤镜' || entry.kind === 'obs.setProgramScene' && entry.sceneName === '特写'
+      ? Promise.reject(new Error('OBS 拒绝了')) : Promise.resolve());
+    await show.session.prepare(0); await show.advance(0, 1900);
+    expect(show.sent.map(entry => entry.id)).toEqual(['cam-0-scene', 'cam-1-filter', 'cam-1-scene', 'cam-1-scene']);
+    expect(show.faults.at(-1)).toBe('切换节目画面：这一项画面补发了一次还是没成功，到下一段会按时间线照常切换。请检查 OBS 里的这个场景或来源');
+    await show.advance(2000, 2900);
+    expect(show.sent.map(entry => entry.id).slice(4)).toEqual(['cam-2-scene']);
+    expect(show.session.error).toBeNull();
+  });
+});
+
+describe('规则 4：只有整条通道坏了才停整路', () => {
+  it('切机位、素材、准备、漂移校正、定位各自失败：只标红这一项，画面会话不失败，后面照常切', async () => {
+    const project = camerasShow(['全景', '特写', '中景', '全景']);
+    const show = pictureSession(project, entry => entry.kind === 'obs.setProgramScene' && entry.sceneName === '特写' ? Promise.reject(new Error('OBS 拒绝了')) : Promise.resolve(), {
+      prepareUpcoming: () => Promise.reject(new Error('下一视频不能解码')),
+      correctMediaDrift: () => Promise.reject(new Error('读不到素材位置')),
+      seekMedia: () => Promise.reject(new Error('定位没有确认')) });
+    await show.session.prepare(500); await show.advance(500, 3500);
+    expect(show.scenes()).toEqual(['全景', '特写', '特写', '中景', '全景']);
+    expect(show.session.error).toBeNull(); expect(show.states).not.toContain('error');
+    expect(show.faults.length).toBeGreaterThan(0);
+  });
+
+  it('源码：画面这条路自己不开定时器补发，补几次只看 output-recovery.ts 那一张表', () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+    const picture = ['packages/core/src/obs-program-session.ts', 'packages/core/src/picture-reconcile.ts', 'packages/core/src/obs-picture-ledger.ts',
+      'packages/core/src/managed-output-runtime.ts', 'apps/desktop/src/main/link/native-obs-host.ts', 'apps/desktop/src/main/link/native-obs-outputs.ts',
+      'apps/desktop/src/main/link/obs-media-preload.ts'].map(path => ({ path, text: readFileSync(join(root, path), 'utf8') }));
+    // Repairs go out with the next device clock observation, never from a timer of their own.
+    expect(picture.filter(file => /\bset(Timeout|Interval)\(/.test(file.text)).map(file => file.path)).toEqual([]);
+    // No count of its own: no retry or repair limit written as a number outside the table.
+    expect(picture.filter(file => /\b(max|limit)(Retries|Retry|Attempts|Repairs)\b|\bretries\b|attempts\s*[<>]=?\s*\d/i.test(file.text)).map(file => file.path)).toEqual([]);
+    const recovery = readFileSync(join(root, 'packages/core/src/output-recovery.ts'), 'utf8');
+    for (const row of ['picture.element', 'picture.song', 'picture.drift']) expect(recovery).toContain(`'${row}'`);
+    // The session and the lookahead name the rows; the counts are the table's.
+    expect(picture.find(file => file.path.endsWith('obs-program-session.ts'))?.text).toMatch(/recordPictureRepair\(|'picture\.drift'/);
   });
 });

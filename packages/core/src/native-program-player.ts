@@ -217,7 +217,7 @@ export class NativeProgramPlayer {
     this.start = { leftover: null, obs: null, fault: null }; this.carried = null;
     // A MIDI CC7 volume is for this run of the song only: another song plays at its own volume.
     const override = itemId === this.state.itemId ? this.state.volumeOverride ?? null : null;
-    this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, fault: null, mtcConnectionFailed: false, volumeOverride: override });
+    this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, fault: null, pictureItems: [], mtcConnectionFailed: false, volumeOverride: override });
     return this.enqueue(token, async () => {
       if (!this.projectPath) throw new Error('请先保存工程，再播放');
       // An engine in error has exited and rejects every command; prepare replaces it.
@@ -352,7 +352,7 @@ export class NativeProgramPlayer {
   stop(): Promise<void> {
     const token = ++this.epoch; this.cancelScheduled(); this.transportIntent = 'playing';
     // The run is over: the player bar shows its own 播完后 again, not the end action of the song that stopped.
-    this.update({ status: 'stopped', notice: null, fault: null, volumeOverride: null, endAction: this.defaultEndAction() });
+    this.update({ status: 'stopped', notice: null, fault: null, pictureItems: [], volumeOverride: null, endAction: this.defaultEndAction() });
     this.stopOwed = true;
     // Stop reaches the main service immediately if preparation has already
     // published its session; otherwise the queued prepare cannot start audio.
@@ -591,6 +591,11 @@ export class NativeProgramPlayer {
     const fault = (status.state === 'failed' && this.picture === 'wait' ? `画面联动已停止：${status.reason ?? '未知错误'}` : status.fault) ?? null;
     const heard = this.obsFault?.session === this.obsSession ? this.obsFault.text : null;
     this.obsFault = { session: this.obsSession, text: fault };
+    // The picture's parts, each on its own (R5): shown as the host lists them.
+    const items = status.items ?? [];
+    if (JSON.stringify(items) !== JSON.stringify(this.state.pictureItems ?? [])) this.update({ pictureItems: items });
+    // The host took its red text back (a part repaired, or back at the next cut): so does the song, if it still shows it.
+    if (!fault && heard) { this.clearFault(heard); return; }
     if (!fault || fault === heard) return;
     if (this.obsPreparing) this.start.obs = fault;
     // The host's fault for this start stays next to a failed cleanup shown there.

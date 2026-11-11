@@ -10,13 +10,14 @@ import { SceneOutputTimeline } from './scene-output-timeline';
  * its requests went out; `unanswered`: one went out and OBS never answered, so it may or may
  * not have been carried out; `failed`: OBS refused or the step stopped part way, `onAir` when
  * the clip is on the picture all the same, `outOfStep` when that clip is not in step with the
- * music. The report and its log keep the wording the step's error had; only the picture
- * session reads the kind. */
+ * music, `sent` when one of its requests went out (then a clip not known to be on air may be
+ * all the same: the session counts it as not known, 0.5.9 R5). The report and its log keep the
+ * wording the step's error had; only the picture session reads the kind. */
 export type ManagedMediaOutcome =
   | { kind: 'done' }
   | { kind: 'withdrawn'; reason: string }
   | { kind: 'unanswered'; reason: string }
-  | { kind: 'failed'; reason: string; onAir: boolean; outOfStep: boolean };
+  | { kind: 'failed'; reason: string; onAir: boolean; outOfStep: boolean; sent: boolean };
 
 /** `outcome`: the step's kind, when the output told it (the renderer's P1 following does not). */
 export type ManagedMediaExecutionReport = {

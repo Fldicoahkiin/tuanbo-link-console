@@ -1,4 +1,4 @@
-import { SceneOutputTimeline, compileManagedMediaTimeline, materialSceneNames, playbackFramesPerSecond, type ManagedMediaEvent } from '@tb/core/link';
+import { MediaPreparationFailed, SceneOutputTimeline, compileManagedMediaTimeline, materialSceneNames, playbackFramesPerSecond, type ManagedMediaEvent } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
 import { MediaOutOfStepError, failureReason, type ObsMediaScenes } from './obs-media-scenes';
 
@@ -45,14 +45,17 @@ export class ObsMediaPreload {
   private readonly starts: ManagedMediaEvent[];
   private readonly clips: ReadonlyMap<string, Clip>;
   private readonly frameMs: number;
-  /** Clips prepared after their boundary (recovery rule B); each at most once. */
+  /** Clips prepared after their boundary (recovery rule B): once, and once more each time the
+   * picture session allows it (`prepareAgain`). */
   private readonly late = new Set<string>();
-  /** Clips whose preparation failed: shown in red and never prepared again. */
+  /** Clips whose preparation failed: not prepared again until the picture session allows it
+   * (`prepareAgain`, within the limits of `output-recovery.ts`, 2026-11-10 decision 2). */
   private readonly failed = new Set<string>();
   /** Prepared clips that reached their end without starting; their slot went to the next clip. */
   private readonly expired = new Set<string>();
-  /** Decoders whose retirement already went out once, whatever OBS answered.
-   * Nothing retires them again by itself (no automatic retry). */
+  /** Decoders whose retirement already went out, whatever OBS answered: such a decoder is not
+   * continued and not retired again here. A retirement OBS did not carry out is repaired by the
+   * picture session, as a stop of that clip, within its limits. */
   private readonly retirementSent = new WeakSet<Slot>();
   private readonly lookaheadFrames: number;
   private readonly preparationSpacingFrames: number;
@@ -83,6 +86,8 @@ export class ObsMediaPreload {
     // a clip that failed to prepare while OBS was gone is prepared once more.
     if (previous) for (const event of this.starts) if (event.sourceName === sourceName) this.failed.delete(event.clipId);
   }
+  /** The picture session allows this clip's preparation once more after it failed (counted there). */
+  prepareAgain(clipId: string): void { this.failed.delete(clipId); this.late.delete(clipId); }
   /** After OBS reconnects, standby decoders this session already used are prepared
    * again (hidden and muted), so the rebuild starts from the primary decoder and
    * stop can still clean them up. */
@@ -141,7 +146,8 @@ export class ObsMediaPreload {
       assertCurrent(); if (this.closed || media.pending !== slot) throw new Error('素材准备结果已过期');
     } catch (error) {
       // The slot goes back, so later clips on this input still get prepared
-      // and played; this clip is not prepared again (no automatic retry).
+      // and played; this clip is prepared again only when the picture session
+      // allows it (`prepareAgain`).
       if (media.pending === slot) media.pending = null;
       this.failed.add(event.clipId);
       // Failed after the clip went on air on the decoder of the clip it continues
@@ -208,7 +214,11 @@ export class ObsMediaPreload {
     return this.prepared(target, assertCurrent);
   }
   private async prepared(event: ManagedMediaEvent, assertCurrent: () => void): Promise<ManagedMediaEvent | null> {
-    await this.prime(event, assertCurrent);
+    try { await this.prime(event, assertCurrent); }
+    catch (error) {
+      // Same words; the type names the clip, so that the picture session can prepare it once more.
+      throw error instanceof ObsPreparationNotNeeded || !(error instanceof Error) ? error : new MediaPreparationFailed(event, error.message, { cause: error });
+    }
     return this.require(event).pending?.event.clipId === event.clipId ? event : null;
   }
 

@@ -112,3 +112,21 @@ it('M8 关灯读回：还在运行的标黄（详情一行，停着时灯光一�
   expect(offRow(unconfirmed)).toMatchObject({ state: 'idle', value: '无法确认', detail: '控台已收到关灯指令；执行器 1000.1、1000.2 有没有真的关掉无法确认。原因：实时推杆读取超时，请重新连接。' });
   expect(lighting(unconfirmed)).toEqual(lighting(input()));
 });
+
+it('这首歌的画面按项列出：一项出错只标这一项，其余照常；补了一次的标黄；OBS 断了看 OBS 那一栏（2026-11-10 第 2 题，R5）', () => {
+  const video = (value: StatusCenterInput) => statusCenter(value).overview.find(entry => entry.name === '视频')!.status!;
+  const playing = (pictureItems: NonNullable<StatusCenterInput['player']['pictureItems']>) => ({ status: 'playing', mtcSending: false, mtcConnectionFailed: false, pictureItems });
+  const failed = { id: 'program', scope: 'item', state: 'limit', detail: '切换节目画面：这一项画面补发了一次还是没成功' } as const;
+  const repaired = { id: 'show:a', scope: 'item', state: 'repairing', detail: '显示来源 · 贴纸：OBS 没有执行，已按现在应有的画面补发一次（第 1 次，最多 1 次）' } as const;
+  const center = statusCenter(input({ player: playing([failed, repaired]) }));
+  expect(center.rows.find(row => row.id === 'picture')).toMatchObject({ state: 'error', value: '1 项出错', detail: `${failed.detail}；${repaired.detail}` });
+  expect(video(input({ player: playing([failed]) }))).toMatchObject({ state: 'error', value: '1 项出错' });
+  expect(video(input({ player: playing([repaired]) }))).toMatchObject({ state: 'warning', value: '补了一次' });
+  // Waiting parts and the connection item are not the song's parts; nothing in red, the OBS row stands.
+  expect(statusCenter(input({ player: playing([{ id: 'obs.connection', scope: 'channel', state: 'failed', detail: 'OBS 连接中断' }]) })).rows.some(row => row.id === 'picture')).toBe(false);
+  // A lost OBS is the OBS row's, not the picture's.
+  const lost = input({ obs: { status: 'disconnected', obsVersion: null, webSocketVersion: null, error: '连接断开' }, player: playing([failed]) });
+  expect(video(lost)).toEqual(statusCenter(lost).rows.find(row => row.id === 'obs'));
+  // Stopped: nothing listed.
+  expect(statusCenter(input({ player: { ...playing([failed]), status: 'stopped' } })).rows.some(row => row.id === 'picture')).toBe(false);
+});

@@ -183,6 +183,20 @@ describe('补的是现在该有的画面：失败补一次，过了切点作废�
     expect(held.suppressed.length).toBeGreaterThan(0);
     expect(held.suppressed.every(item => item.kind === 'rehearsal')).toBe(true);
   });
+
+  it('没回应的（不知道 OBS 做没做）和失败一样：同一个应有状态下补 1 次，再不知道就标红不再发；排练不补；重连以后是恢复不是补（0.5.9 R5）', () => {
+    const ledger = new ObsPictureLedger(), recovery = new OutputRecovery(), ctx = context({ budget: recovery });
+    const first = planPictureReconcile(pictureAt(120), ledger.state(), ctx).ops.find(op => op.kind === 'decoder.start')!;
+    ledger.sent(first.write, 0); ledger.unanswered(first.write, '2 秒没回应');
+    expect(planPictureReconcile(pictureAt(121), ledger.state(), context({ mode: 'rehearsal' })).suppressed).toMatchObject([{ element: 'decoder:M1', kind: 'rehearsal' }]);
+    const repair = planPictureReconcile(pictureAt(121), ledger.state(), ctx).ops.find(op => op.kind === 'decoder.start')!;
+    expect(repair.reason).toBe('repair');
+    recordPictureRepair(recovery, pictureElementKey(repair.write), repair.write.target, 1);
+    ledger.sent(repair.write, 1); ledger.unanswered(repair.write, '还是没回应');
+    expect(planPictureReconcile(pictureAt(122), ledger.state(), ctx).suppressed).toMatchObject([{ element: 'decoder:M1', kind: 'repair-limit' }]);
+    ledger.invalidate('OBS 重新连接');
+    expect(planPictureReconcile(pictureAt(123), ledger.state(), ctx).ops.find(op => op.kind === 'decoder.start')).toMatchObject({ reason: 'restore' });
+  });
 });
 
 describe('OBS 状态不确定时按此刻应有的全量恢复（01 设计 4.4、4.7）', () => {

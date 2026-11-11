@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { integrationProfileSchema } from './integration-profile';
+import { obsPictureItemSchema } from './obs-playback';
 
 const time = z.number().finite().nonnegative();
 export const programPlayerStateSchema = z.object({
@@ -16,6 +17,8 @@ export const programPlayerStateSchema = z.object({
   preparation: z.string().nullable().optional(),
   /** Latest live output failure of this song; playback continues. */
   fault: z.string().nullable().optional(),
+  /** The parts of this song's picture with something to report, as the picture host lists them (0.5.9 R5). */
+  pictureItems: z.array(obsPictureItemSchema).max(256).optional(),
   /** The temporary volume MIDI CC7 set for this run of the song (2026-11-09): not saved, gone when the song changes
    * or stops. Null or absent: the song plays at its own saved volume. */
   volumeOverride: z.number().min(0).max(100).nullable().optional()

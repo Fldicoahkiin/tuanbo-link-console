@@ -12,8 +12,8 @@ import { pictureRepairAllowed, type RecoveryBudgetView } from './output-recovery
  *
  * Per element:
  * - confirmed and equal: nothing; pending: wait for the answer;
- * - unknown: sent once as wanted (`restore`);
- * - failed against the same wanted state: live, once more within the recovery limits
+ * - unknown (a reconnect, a send cut short): sent once as wanted (`restore`);
+ * - failed, or sent for the same wanted state with no known result (not answered): live, once more within the recovery limits
  *   (`repair`), otherwise held and marked red; in a rehearsal never again (AGENTS §4.8);
  * - failed against an older wanted state (a cut point passed): sent fresh (`cut`).
  */
@@ -272,14 +272,19 @@ function judge<T>(element: string, target: string, known: Known<T> | undefined, 
   switch (known.state) {
     case 'confirmed': return matches(known.value) ? null : { send: fresh };
     case 'pending': return { wait: { element, kind: 'pending', detail: '等 OBS 回应' } };
-    // Never sent nor seen is a first send, not a restore.
-    case 'unknown': return { send: known.last === null ? fresh : 'restore' };
-    case 'failed':
-      if (known.target !== target) return { send: fresh };
-      if (context.mode === 'rehearsal') return { suppress: { element, target, kind: 'rehearsal', detail: '排练中失败的画面不再自动补发' } };
-      return pictureRepairAllowed(context.budget, element, target, context.now) ? { send: 'repair' }
-        : { suppress: { element, target, kind: 'repair-limit', detail: '自动补画面已到上限，到下一段会按时间线照常切换' } };
+    // Never sent nor seen is a first send, not a restore. Sent for this same wanted state with no
+    // known result: repaired like a failure, within the same limits (2026-11-10 decision 2).
+    case 'unknown':
+      if (known.last === null) return { send: fresh };
+      return known.target === target ? repair(element, target, context) : { send: 'restore' };
+    case 'failed': return known.target !== target ? { send: fresh } : repair(element, target, context);
   }
+}
+/** Once more against the same wanted state, live, within the recovery limits; never in a rehearsal (AGENTS §4.8). */
+function repair(element: string, target: string, context: ReconcileContext): Verdict {
+  if (context.mode === 'rehearsal') return { suppress: { element, target, kind: 'rehearsal', detail: '排练中失败的画面不再自动补发' } };
+  return pictureRepairAllowed(context.budget, element, target, context.now) ? { send: 'repair' }
+    : { suppress: { element, target, kind: 'repair-limit', detail: '自动补画面已到上限，到下一段会按时间线照常切换' } };
 }
 
 function knownValue<T>(known: Known<T>): T | null {

@@ -27,10 +27,13 @@ describe('OBS 已确认的账：只记 OBS 回应或报告过的', () => {
     expect(ledger.state().decoders.get('M1')).toMatchObject({ state: 'failed', attempts: 1, target: 'c2:playing' });
   });
 
-  it('没回应记成“不确定”，保留最后的值', () => {
+  it('没回应记成“不确定”，保留最后的值和当时要的状态（0.5.9 R5：同一个应有状态下按失败补一次）', () => {
     const ledger = new ObsPictureLedger();
     ledger.sent(decoder('c1'), 1); ledger.unanswered(decoder('c1'), '2 秒没回应');
-    expect(ledger.state().decoders.get('M1')).toEqual({ state: 'unknown', reason: '2 秒没回应', last: { clipId: 'c1', mode: 'playing', offsetMs: 0 } });
+    expect(ledger.state().decoders.get('M1')).toEqual({ state: 'unknown', reason: '2 秒没回应', last: { clipId: 'c1', mode: 'playing', offsetMs: 0 }, target: 'c1:playing' });
+    // A reconnect forgets what it was sent for: what follows is a restore, not a repair.
+    ledger.invalidate('OBS 重新连接');
+    expect(ledger.state().decoders.get('M1')).toEqual({ state: 'unknown', reason: 'OBS 重新连接', last: { clipId: 'c1', mode: 'playing', offsetMs: 0 } });
   });
 
   it('重连后全部不确定，手动接管也作废', () => {

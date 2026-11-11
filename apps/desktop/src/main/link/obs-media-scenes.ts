@@ -657,13 +657,15 @@ export class ObsMediaScenes {
    * from the music by more than the tolerance, reposition it in step. Returns
    * the drift that was corrected, or null when the clip was in step or is not
    * this decoder's playing clip. */
-  async correctDrift(event: ManagedMediaEvent, aligned: () => number): Promise<number | null> {
+  /** `mayCorrect` is asked with a drift beyond the tolerance before anything is corrected: false
+   * (the clip was corrected within the last minute, 0.5.9 R5) leaves the clip as it is. */
+  async correctDrift(event: ManagedMediaEvent, aligned: () => number, mayCorrect: (driftMs: number) => boolean = () => true): Promise<number | null> {
     return this.run(async () => {
       if (!this.active.has(event.sourceName) || this.startedClips.get(event.sourceName)?.clipId !== event.clipId) return null;
       const status = await this.request(() => this.client.call('GetMediaInputStatus', { inputName: event.sourceName }), '读取素材播放位置');
       if (status.mediaState !== 'OBS_MEDIA_STATE_PLAYING' || typeof status.mediaCursor !== 'number') return null;
       const drift = Math.round(status.mediaCursor - aligned());
-      if (Math.abs(drift) <= MEDIA_DRIFT_TOLERANCE_MS) return null;
+      if (Math.abs(drift) <= MEDIA_DRIFT_TOLERANCE_MS || !mayCorrect(drift)) return null;
       await this.positionMedia(event.sourceName, aligned, MEDIA_DRIFT_TOLERANCE_MS);
       return drift;
     });

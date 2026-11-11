@@ -1,6 +1,8 @@
-import { expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkProject } from '@tb/schema';
-import { ObsProgramSession, obsRecoveryText } from './obs-program-session';
+import { describe, expect, it, vi } from 'vitest';
+import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkProject, type ObsPictureItem } from '@tb/schema';
+import { MediaPreparationFailed, ObsProgramSession, obsRecoveryText, type ObsProgramSessionDependencies } from './obs-program-session';
+import { compileManagedMediaTimeline, type ManagedMediaEvent } from './managed-media-timeline';
+import type { ManagedMediaOutcome } from './managed-output-runtime';
 import type { CueExecutionReport } from './cue-action-runner';
 import type { RuntimeUpdate } from './cue-runtime';
 import type { LinkDesktopApi } from './link-desktop-contract';
@@ -12,7 +14,8 @@ function fixture(): LinkProject {
         { id: `action-${seconds}`, kind: 'obs.setProgramScene', label: '切机位', sceneName: `场景 ${seconds}` }
       ] })) }] });
 }
-function setup(project = fixture(), execute?: (action: LinkAction) => Promise<void>) {
+/** `online`: whether OBS is connected, for a test that takes OBS away (nothing is repaired then). */
+function setup(project = fixture(), execute?: (action: LinkAction) => Promise<void>, online?: () => boolean) {
   let now = 0;
   const actions: LinkAction[] = [], reports: CueExecutionReport[] = [], states: RuntimeUpdate[] = [], faults: string[] = [];
   const dependencies = { now: () => now, fault: (message: string) => faults.push(message), recordLog: vi.fn<LinkDesktopApi['recordLog']>(entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now })), executeManagedMediaEvent: vi.fn<LinkDesktopApi['executeManagedMediaEvent']>(() => Promise.resolve()),
@@ -20,7 +23,7 @@ function setup(project = fixture(), execute?: (action: LinkAction) => Promise<vo
     prepareOutputs: vi.fn(() => Promise.resolve()), releaseOutputs: vi.fn(() => Promise.resolve()),
     prepareUpcoming: vi.fn<NonNullable<import('./obs-program-session').ObsProgramSessionDependencies['prepareUpcoming']>>(() => Promise.resolve(null)),
     seekMedia: vi.fn<import('./obs-program-session').ObsProgramSessionDependencies['seekMedia']>(() => Promise.resolve()), mediaReport: vi.fn(), cueReport: (report: CueExecutionReport) => reports.push(report),
-    state: (state: RuntimeUpdate) => states.push(state),
+    state: (state: RuntimeUpdate) => states.push(state), ...(online ? { connected: online } : {}),
     executor: { id: 'obs-test', supports: (action: LinkAction) => action.kind.startsWith('obs.'),
       execute: async (action: LinkAction) => { actions.push(action); await execute?.(action); } } };
   const session = new ObsProgramSession(project, 'C:/shows/test.tblink', 'song', dependencies);
@@ -47,14 +50,32 @@ it('后台预备最多一个在途，停止使其失效并等待完成再清理'
   expect(test.dependencies.prepareUpcoming).toHaveBeenCalledTimes(1);
 });
 
-it('直播中后台预备失败标红，不重试，后续画面动作照常执行', async () => {
+// 2026-11-10 第 2 题：后台预备失败自动再准备一次，记进次数，到上限才停（以前是“不重试”）。
+it('直播中后台预备失败标红并自动再准备一次，再失败就不再准备，后续画面动作照常执行（2026-11-10 第 2 题）', async () => {
+  const test = setup(), clip = compileManagedMediaTimeline(videoFixture(), 'song').events[0]!, prepareAgain = vi.fn();
+  const session = new ObsProgramSession(fixture(), 'C:/shows/test.tblink', 'song', { ...test.dependencies, prepareAgain });
+  test.dependencies.prepareUpcoming.mockRejectedValueOnce(new MediaPreparationFailed(clip, '下一视频不能解码'))
+    .mockRejectedValueOnce(new MediaPreparationFailed(clip, '下一视频还是不能解码'));
+  await session.prepare(0);
+  for (let time = 0; time <= 3000; time += 100) { test.time(time); session.clock(time); await session.settled(); }
+  expect(session.error).toBeNull();
+  expect(prepareAgain.mock.calls).toEqual([[clip.clipId]]);
+  expect(test.faults).toEqual(['准备后面的素材没成功：视频。原因：下一视频不能解码。已自动再准备一次（这首歌第 1 次，最多 20 次），准备好了就不用处理',
+    '准备后面的素材没成功：视频。原因：下一视频还是不能解码。已经自动再准备过一次，不再准备，到时候这个素材可能播不出来。请检查这个素材文件和 OBS 是否卡顿']);
+  const logs = test.dependencies.recordLog.mock.calls.map(([entry]) => entry).filter(entry => entry.category === 'device');
+  expect(logs.map(entry => [entry.level, entry.details])).toEqual([
+    ['warning', { channel: 'obs', item: `preload:${clip.clipId}`, recoveries: [{ row: 'picture.element', key: `preload:${clip.clipId}@ready`, count: 1, max: 1 }, { row: 'picture.song', key: 'song', count: 1, max: 20 }] }],
+    ['error', { channel: 'obs', item: `preload:${clip.clipId}`, recoveries: [{ row: 'picture.element', key: `preload:${clip.clipId}@ready`, count: 1, max: 1 }] }]]);
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1', 'action-2', 'action-3']);
+  await session.stop(); expect(test.dependencies.releaseOutputs).toHaveBeenCalledOnce();
+});
+
+it('后台预备失败但说不出是哪个素材：照旧标红，不再准备', async () => {
   const test = setup(); test.dependencies.prepareUpcoming.mockRejectedValueOnce(new Error('下一视频不能解码'));
   await test.session.prepare(0); await test.advance(0, 3000);
   expect(test.session.error).toBeNull();
-  expect(test.faults[0]).toContain('下一视频不能解码');
-  expect(test.dependencies.prepareUpcoming.mock.calls.filter(call => call[0] === 0)).toHaveLength(1);
+  expect(test.faults).toEqual(['准备后面的素材失败：下一视频不能解码；不会重试，到时候这个素材可能播不出来']);
   expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1', 'action-2', 'action-3']);
-  await test.session.stop(); expect(test.dependencies.releaseOutputs).toHaveBeenCalledOnce();
 });
 
 it('原生时钟驱动节目顺序，不需要界面回调；重复设备位置不重复触发', async () => {
@@ -182,7 +203,8 @@ it('排队拖延超过 1 秒的画面动作仍然发出并标红，通道继续�
   expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1']);
 });
 
-it('直播中 OBS 动作失败标红并继续后续动作，失败动作不自动重试', async () => {
+// 2026-11-10 第 2 题：失败的机位按现在该有的画面补发一次（以前是“不自动重试”）；点 Cue（滤镜）发过就不再发。
+it('直播中 OBS 动作失败标红并继续后续动作：失败的机位补发一次，点 Cue 不重发（2026-11-10 第 2 题）', async () => {
   const project = fixture(); project.rundown[0]!.cues[0]!.actions.push({ id: 'next', label: '滤镜', kind: 'obs.setSourceFilterEnabled', sourceName: '机位', filterName: '调整', enabled: true });
   const test = setup(project, action => action.id === 'action-0' ? Promise.reject(new Error('OBS 无响应')) : Promise.resolve());
   await test.session.prepare(0); test.session.clock(0); await test.session.settled();
@@ -190,7 +212,7 @@ it('直播中 OBS 动作失败标红并继续后续动作，失败动作不自�
   expect(test.reports.flatMap(report => report.results).map(result => [result.actionId, result.status]).sort()).toEqual([['action-0', 'failed'], ['next', 'succeeded']]);
   expect(test.session.error).toBeNull();
   await test.advance(100, 2000);
-  expect(test.actions.map(action => action.id).slice(2)).toEqual(['action-1', 'action-2']);
+  expect(test.actions.map(action => action.id).slice(2)).toEqual(['action-0', 'action-1', 'action-2']);
 });
 
 it('无效或跳变的实际音频位置会冻结通道，不猜测补发', async () => {
@@ -567,13 +589,14 @@ it('OBS 回应慢的画面动作不按 2 秒报超时：等它真正结束再发
   } finally { vi.useRealTimers(); }
 });
 
-it('从中间开播时一个机位失败只标红这一个：画面照常准备，后面的机位照常切', async () => {
+// 2026-11-10 第 2 题：失败的机位在开播后补发一次。
+it('从中间开播时一个机位失败只标红这一个：画面照常准备，这个机位补发一次，后面的机位照常切（2026-11-10 第 2 题）', async () => {
   const test = setup(fixture(), action => action.id === 'action-1' ? Promise.reject(new Error('场景不存在')) : Promise.resolve());
   await test.session.prepare(1500);
   expect(results(test)).toEqual([['action-1', 'failed']]);
   test.time(20000); test.session.clock(1500); await test.session.settled();
   for (let at = 1600; at <= 3000; at += 100) { test.time(20000 + at - 1500); test.session.clock(at); await test.session.settled(); }
-  expect(test.actions.map(action => action.id)).toEqual(['action-1', 'action-2', 'action-3']);
+  expect(test.actions.map(action => action.id)).toEqual(['action-1', 'action-1', 'action-2', 'action-3']);
   expect(test.session.error).toBeNull();
 });
 
@@ -619,7 +642,8 @@ it('OBS 重连恢复画面定位素材时按了暂停：继续时重新定位再
   expect(test.session.error).toBeNull();
 });
 
-it('暂停前已经发出但失败的素材停止，继续时不再重发，也不让这段素材接着播', async () => {
+// 2026-11-10 第 2 题：停止失败的素材按现在该有的画面补发一次停止（以前是“继续时不再重发”）。
+it('暂停前已经发出但失败的素材停止，继续时补发一次停止，也不让这段素材接着播（2026-11-10 第 2 题）', async () => {
   const project = videoFixture(), item = project.rundown[0]!;
   item.referenceMediaClips[0]!.durationMs = 1000;
   item.visualLayers.push({ id: 'camera-layer', name: '机位', visible: true, locked: false });
@@ -637,12 +661,12 @@ it('暂停前已经发出但失败的素材停止，继续时不再重发，也�
   const pausing = test.session.pause(); stopping.release(); await pausing;
   test.time(5000); test.session.clock(1000); await test.session.settled();
   for (let at = 1100; at <= 2000; at += 100) { test.time(5000 + at - 1000); test.session.clock(at); await test.session.settled(); }
-  expect(phases()).toEqual(['start', 'stop']);
+  expect(phases()).toEqual(['start', 'stop', 'stop']);
   expect(scenes(test)).toEqual(['机位']);
   expect(outputs(test).filter(output => output === 'pause' || output === 'start')).toEqual(['pause']);
   expect(test.session.error).toBeNull();
   // The song's stop still cleans it up; that it fails again is reported.
-  await expect(test.session.stop()).rejects.toThrow('画面没有清理干净：OBS 拒绝'); expect(phases()).toEqual(['start', 'stop', 'stop']);
+  await expect(test.session.stop()).rejects.toThrow('画面没有清理干净：OBS 拒绝'); expect(phases()).toEqual(['start', 'stop', 'stop', 'stop']);
 });
 
 it('合并补发的晚到从第一步发出时算起，不把 OBS 回应的时间算进去', async () => {
@@ -868,15 +892,15 @@ it('显示来源的时长内停止或拖动进度：旧的画面停止时把它�
   const second = setup(stickerSpanFixture());
   await second.session.prepare(5000);
   expect(sticker(second)).toEqual([]);
-  // A show OBS refused is not hidden again at the stop.
+  // A show OBS refused is shown once more (2026-11-10 第 2 题), and not hidden at the stop.
   const refused = setup(stickerSpanFixture(), action => action.kind === 'obs.setSceneItemEnabled' ? Promise.reject(new Error('当前直播场景里没有“贴纸”来源')) : Promise.resolve());
   await refused.session.prepare(0); await refused.advance(0, 2000); await refused.session.stop();
-  expect(sticker(refused)).toEqual([true]); expect(refused.session.error).toBeNull();
+  expect(sticker(refused)).toEqual([true, true]); expect(refused.session.error).toBeNull();
 });
 
 it('OBS 断线期间到点的隐藏没发出去：重新连上恢复画面时一起补发，来源不会一直留在画面上（2026-11-09）', async () => {
   let connected = true;
-  const test = setup(stickerSpanFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')));
+  const test = setup(stickerSpanFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')), () => connected);
   await test.session.prepare(0); await test.advance(0, 2000);
   expect(sticker(test)).toEqual([true]);
   // The hide at 3 s goes out while OBS is gone and fails.
@@ -906,7 +930,7 @@ it('OBS 重连准备场景时到了隐藏的时间：隐藏随恢复的画面发
 
 it('OBS 断线又重连时显示来源还在时长里：恢复画面只把它再显示一次，不补发隐藏（画面上不闪一下），到点照常隐藏一次', async () => {
   let connected = true;
-  const test = setup(stickerSpanFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')));
+  const test = setup(stickerSpanFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')), () => connected);
   await test.session.prepare(0); await test.advance(0, 1500);
   connected = false; await test.advance(1600, 2000);
   connected = true;
@@ -929,7 +953,7 @@ function backToBackStickerFixture(): LinkProject {
 
 it('同一个来源前后两段紧挨着、OBS 断线跨过交界：恢复画面先补发前一段的隐藏，再显示后一段，后一段一直显示到 6 秒', async () => {
   let connected = true;
-  const test = setup(backToBackStickerFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')));
+  const test = setup(backToBackStickerFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')), () => connected);
   await test.session.prepare(0); await test.advance(0, 2000);
   // The first span's hide and the second span's show at 3 s both fail while OBS is gone.
   connected = false; await test.advance(2100, 4000);
@@ -955,7 +979,7 @@ function stickerOverVideoFixture(): LinkProject {
 
 it('OBS 重新连上时前一刻越过的画面动作还在排队：画面只按这次重连恢复一次（素材只对准一次），不另报“继续播放”的恢复；排队的滤镜随后发出，隐藏不再发第二次', async () => {
   let connected = true;
-  const test = setup(stickerOverVideoFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')));
+  const test = setup(stickerOverVideoFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')), () => connected);
   const restore = vi.fn(() => Promise.resolve());
   await test.session.prepare(0); await test.advance(0, 2000);
   connected = false; await test.advance(2100, 2900);
@@ -986,7 +1010,7 @@ function closeUpEndsWithStickerFixture(): LinkProject {
 
 it('OBS 重新连上时，3 秒切回全景和贴纸到点的隐藏还在排队：画面只按这次重连恢复一次，全景只再切一次、隐藏只发一次，不另报“继续播放”的恢复（2026-11-09）', async () => {
   let connected = true;
-  const test = setup(closeUpEndsWithStickerFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')));
+  const test = setup(closeUpEndsWithStickerFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')), () => connected);
   await test.session.prepare(0); await test.advance(0, 2000);
   expect(scenes(test)).toEqual(['全景', '特写']); expect(sticker(test)).toEqual([true]);
   connected = false; await test.advance(2100, 2900);
@@ -1007,7 +1031,7 @@ it('OBS 重连恢复的画面里有几项没完成：结果写明恢复了几项
     if (!connected) return Promise.reject(new Error('OBS 连接已断开'));
     if (action.kind === 'obs.setSceneItemEnabled' && !action.enabled) return Promise.reject(new Error('当前直播场景“特写”里没有“贴纸”来源。'));
     return action.kind === 'obs.mediaAction' ? Promise.reject(new Error('OBS 无响应')) : Promise.resolve();
-  });
+  }, () => connected);
   await test.session.prepare(0); await test.advance(0, 2000);
   connected = false; await test.advance(2100, 3500);
   connected = true; test.faults.length = 0;
@@ -1053,14 +1077,16 @@ it('OBS 暂停时重连、继续播放时才恢复画面：有一项没完成时
   const test = setup(stickerSpanFixture(), action => {
     if (!connected) return Promise.reject(new Error('OBS 连接已断开'));
     return action.kind === 'obs.setSceneItemEnabled' && !action.enabled ? Promise.reject(new Error('OBS 无响应')) : Promise.resolve();
-  });
+  }, () => connected);
   await test.session.prepare(0); await test.advance(0, 2000);
   connected = false; await test.advance(2100, 3500);
   await test.session.pause();
   connected = true;
   expect(await test.session.rebuild(() => Promise.resolve())).toBeNull();
   test.faults.length = 0; test.time(9000); test.session.clock(3500); await test.session.settled();
-  expect(test.faults).toEqual(['画面按继续播放的位置恢复了 1 项，隐藏来源 · 贴纸没有完成。原因：OBS 无响应。请在 OBS 里检查这一项，需要的话手动调好']);
+  // The hide that did not come back is sent once more right after (2026-11-10 第 2 题).
+  expect(test.faults).toEqual(['画面按继续播放的位置恢复了 1 项，隐藏来源 · 贴纸没有完成。原因：OBS 无响应。请在 OBS 里检查这一项，需要的话手动调好',
+    '隐藏来源 · 贴纸没有成功（OBS 无响应），已按现在该有的画面自动补发一次（这首歌第 1 次，最多 20 次）。补上了就不用处理']);
 });
 
 it('OBS 重连准备场景时暂停又继续，准备因那次暂停中断：照常重新准备一次再重建，不当成准备失败', async () => {
@@ -1149,10 +1175,11 @@ it('接连两个机位片段切到同一个场景：后一个照样发切换（�
     if (action.kind !== 'obs.setProgramScene' || action.sceneName !== '特写' || !refused) return Promise.resolve();
     refused = false; return Promise.reject(new Error('OBS 拒绝了'));
   });
+  // The refused switch is sent once more right after (2026-11-10 第 2 题); the next camera switches again all the same.
   await again.session.prepare(0); await again.advance(0, 1900);
-  expect(scenes(again)).toEqual(['全景', '特写']);
-  await again.advance(2000, 3500);
   expect(scenes(again)).toEqual(['全景', '特写', '特写']);
+  await again.advance(2000, 3500);
+  expect(scenes(again)).toEqual(['全景', '特写', '特写', '特写']);
   expect(results(again, 'switch-2')).toEqual([['switch-2', 'succeeded']]); expect(again.session.error).toBeNull();
 });
 
@@ -1162,15 +1189,16 @@ it('OBS 重连：确认隐藏过的来源，恢复画面和停歌时都不再隐
   await test.session.rebuild(() => Promise.resolve()); await test.advance(2100, 2500);
   await test.session.stop();
   expect(sticker(test)).toEqual([true, false]);
-  // OBS refuses every hide: the source may still be on air, so it is hidden again after the reconnect and at stop.
+  // OBS refuses every hide: the source may still be on air, so it is hidden once more (2026-11-10 第 2 题),
+  // again after the reconnect and at stop.
   const refusing = setup(stickerFixture(), action => action.kind === 'obs.setSceneItemEnabled' && !action.enabled ? Promise.reject(new Error('OBS 拒绝了')) : Promise.resolve());
   await refusing.session.prepare(0); await refusing.advance(0, 2000);
-  expect(sticker(refusing)).toEqual([true, false]);
-  await refusing.session.rebuild(() => Promise.resolve());
   expect(sticker(refusing)).toEqual([true, false, false]);
+  await refusing.session.rebuild(() => Promise.resolve());
+  expect(sticker(refusing)).toEqual([true, false, false, false]);
   await refusing.advance(2100, 2500);
   await refusing.session.stop().catch(() => undefined);
-  expect(sticker(refusing)).toEqual([true, false, false, false]);
+  expect(sticker(refusing)).toEqual([true, false, false, false, false]);
 });
 
 it('OBS 重连恢复画面让素材继续播放时按了暂停：继续以后素材照常播放，不会整首歌停着', async () => {
@@ -1277,7 +1305,8 @@ it('素材停止被 OBS 拒绝后 OBS 重连，恢复画面前停歌：停歌时
   await test.session.prepare(0); await test.advance(0, 1500);
   const restoring = deferred(), rebuilt = test.session.rebuild(() => restoring.promise);
   const stopping = test.session.stop(); restoring.release(); await rebuilt.catch(() => null); await stopping;
-  expect(mediaSent(test)).toEqual(['start a', 'stop a', 'stop a']);
+  // The refused stop was sent once more right after it (2026-11-10 第 2 题), then once at the song's stop.
+  expect(mediaSent(test)).toEqual(['start a', 'stop a', 'stop a', 'stop a']);
 });
 
 it('素材已经停好后 OBS 重连，恢复画面前停歌：不再停第二次（2026-11-11 R3c）', async () => {
@@ -1286,4 +1315,190 @@ it('素材已经停好后 OBS 重连，恢复画面前停歌：不再停第二�
   const restoring = deferred(), rebuilt = test.session.rebuild(() => restoring.promise);
   const stopping = test.session.stop(); restoring.release(); await rebuilt.catch(() => null); await stopping;
   expect(mediaSent(test)).toEqual(['start a', 'stop a']);
+});
+
+/** A session with what R5 reports: the parts listed each time they change, and the red texts cleared. */
+function repairing(project: LinkProject, execute?: (action: LinkAction) => Promise<void>, extra: Partial<ObsProgramSessionDependencies> = {}) {
+  const test = setup(project, execute), items: ObsPictureItem[][] = [], cleared: string[] = [];
+  const session = new ObsProgramSession(project, 'C:/shows/test.tblink', 'song', { ...test.dependencies,
+    pictureItems: list => items.push(list), clearFault: message => cleared.push(message), ...extra });
+  const advance = async (from: number, through: number): Promise<void> => {
+    for (let time = from; time <= through; time += 100) { test.time(time); session.clock(time); await session.settled(); }
+  };
+  const deviceLogs = (): { level: string; message: string; details: unknown }[] => test.dependencies.recordLog.mock.calls.map(([entry]) => entry)
+    .filter(entry => entry.category === 'device').map(entry => ({ level: entry.level, message: entry.message, details: entry.details }));
+  return { ...test, session, items, cleared, advance, deviceLogs, last: () => items.at(-1) ?? [] };
+}
+const REPAIRED = '切换节目画面没有成功（OBS 拒绝了），已按现在该有的画面自动补发一次（这首歌第 1 次，最多 20 次）。补上了就不用处理';
+const AT_LIMIT = '切换节目画面：这一项画面补发了一次还是没成功，到下一段会按时间线照常切换。请检查 OBS 里的这个场景或来源';
+
+describe('失败分级接线，自动补一次（2026-11-10 第 2 题，0.5.9 R5）', () => {
+  it('切换被拒绝一次：下一次时钟按现在该有的画面补发一次，补上了这一项就从列表里拿掉，红字收回；运行日志记通道、哪一项、第几次和上限', async () => {
+    let refused = false;
+    const test = repairing(camerasFixture([[0, 1000, '全景'], [1, 1000, '特写'], [2, 1000, '全景']]), action => {
+      if (action.kind !== 'obs.setProgramScene' || action.sceneName !== '特写' || refused) return Promise.resolve();
+      refused = true; return Promise.reject(new Error('OBS 拒绝了'));
+    });
+    await test.session.prepare(0); await test.advance(0, 1500);
+    expect(scenes(test)).toEqual(['全景', '特写', '特写']);
+    expect(test.faults).toEqual([REPAIRED]);
+    expect(test.items.map(list => list.map(item => item.state))).toEqual([['failed'], ['repairing'], []]);
+    expect(test.cleared).toEqual([REPAIRED]);
+    expect(test.deviceLogs()).toEqual([{ level: 'warning', message: REPAIRED, details: { channel: 'obs', item: 'program',
+      recoveries: [{ row: 'picture.element', key: `program@${JSON.stringify(['特写', 'camera-1'])}`, count: 1, max: 1 }, { row: 'picture.song', key: 'song', count: 1, max: 20 }] } }]);
+    expect(test.session.error).toBeNull();
+  });
+
+  it('补发一次还是不行：不再补，这一项标红写明到下一段照常切换；过了切点应有的状态变了，失败记录作废，自己就好', async () => {
+    const test = repairing(camerasFixture([[0, 1000, '全景'], [1, 1000, '特写'], [2, 1000, '全景']]),
+      action => action.kind === 'obs.setProgramScene' && action.sceneName === '特写' ? Promise.reject(new Error('OBS 拒绝了')) : Promise.resolve());
+    await test.session.prepare(0); await test.advance(0, 1900);
+    expect(scenes(test)).toEqual(['全景', '特写', '特写']);
+    expect(test.faults).toEqual([REPAIRED, AT_LIMIT]);
+    expect(test.last()).toEqual([{ id: 'program', scope: 'item', state: 'limit', detail: AT_LIMIT }]);
+    expect(test.deviceLogs().map(entry => entry.level)).toEqual(['warning', 'error']);
+    await test.advance(2000, 2500);
+    expect(scenes(test)).toEqual(['全景', '特写', '特写', '全景']);
+    expect(test.last()).toEqual([]); expect(test.cleared).toContain(AT_LIMIT);
+    expect(test.faults).toHaveLength(2); expect(test.session.error).toBeNull();
+  });
+
+  it('每首歌合计最多自动补 20 次：之后失败的只标红“这首歌自动补画面已到上限”，照常按时间线切', async () => {
+    const cameras = Array.from({ length: 24 }, (_, index): [number, number, string] => [index, 1000, `机位 ${index}`]);
+    const test = repairing(camerasFixture(cameras), action => action.kind === 'obs.setProgramScene' && action.sceneName !== '机位 0' ? Promise.reject(new Error('OBS 拒绝了')) : Promise.resolve());
+    await test.session.prepare(0); await test.advance(0, 23900);
+    // Each of 23 refused cameras: its own switch; the first 20 of them once more. From the 20th on (its own
+    // repair failed too, and the song has none left) each is in red with the song's limit.
+    expect(scenes(test)).toHaveLength(1 + 23 + 20);
+    expect(test.faults.filter(message => message.includes('自动补发一次'))).toHaveLength(20);
+    expect(test.faults.filter(message => message.includes('这首歌自动补画面已到上限'))).toEqual(
+      Array.from({ length: 4 }, () => '切换节目画面没有成功：这首歌自动补画面已到上限，后面只按时间线切换。请检查 OBS 是否卡顿'));
+    expect(test.session.error).toBeNull();
+  });
+
+  it('请求还在路上（OBS 回应慢）时不补，免得和慢回应叠在一起；回应是失败以后才补一次', async () => {
+    let refuse = (): void => undefined;
+    const answer = new Promise<void>((_resolve, reject) => { refuse = () => reject(new Error('OBS 拒绝了')); });
+    let first = true;
+    const test = repairing(camerasFixture([[0, 1000, '全景'], [1, 2000, '特写']]), action => {
+      if (action.kind !== 'obs.setProgramScene' || action.sceneName !== '特写' || !first) return Promise.resolve();
+      first = false; return answer;
+    });
+    await test.session.prepare(0); await test.advance(0, 900);
+    for (let time = 1000; time <= 1500; time += 100) { test.time(time); test.session.clock(time); await Promise.resolve(); }
+    expect(scenes(test)).toEqual(['全景', '特写']);
+    refuse(); await test.session.settled(); await test.advance(1600, 1900);
+    expect(scenes(test)).toEqual(['全景', '特写', '特写']);
+    expect(test.session.error).toBeNull();
+  });
+
+  it('素材开播没有回应：记成“不确定”，下一次时钟补发一次，回应了就从列表里拿掉', async () => {
+    const project = videoFixture(); project.rundown[0]!.referenceMediaClips[0]!.startTimecode.seconds = 1;
+    let answer: ManagedMediaOutcome = { kind: 'unanswered', reason: 'OBS 播放素材请求超时（2000 ms）；不确定是否已执行' };
+    const execute = vi.fn<(payload: { projectPath: string; event: ManagedMediaEvent }) => Promise<ManagedMediaOutcome>>(() => { const outcome = answer; answer = { kind: 'done' }; return Promise.resolve(outcome); });
+    const test = repairing(project, undefined, { executeManagedMediaEvent: execute });
+    await test.session.prepare(0); await test.advance(0, 1300);
+    expect(execute.mock.calls.map(([payload]) => `${payload.event.phase} ${payload.event.clipId}`)).toEqual(['start clip', 'start clip']);
+    expect(test.faults).toEqual(['素材“视频”没有成功（OBS 播放素材请求超时（2000 ms）；不确定是否已执行），已按现在该有的画面自动补发一次（这首歌第 1 次，最多 20 次）。补上了就不用处理']);
+    // The clip and the switch to its scene went out in one step: both are not known, the clip's start is repaired.
+    const listed = test.items[1] ?? [];
+    expect(listed.map(item => [item.scope, item.state])).toEqual([['item', 'uncertain'], ['item', 'uncertain']]);
+    expect(listed[0]?.id).toMatch(/^decoder:/); expect(listed[0]?.detail).toContain('素材“视频”不确定 OBS 有没有做到。原因：');
+    expect(listed[1]?.id).toBe('program'); expect(listed[1]?.detail).toContain('切换节目画面不确定 OBS 有没有做到');
+    expect(test.items.flat().filter(item => item.state === 'repairing').map(item => item.id)).toEqual([expect.stringMatching(/^decoder:/)]);
+    expect(test.last()).toEqual([]);
+    expect(test.session.error).toBeNull();
+  });
+
+  it('素材已经在画面上、只是和音乐没对齐：不重新开播，列为“没对齐”，交给漂移校正；对齐了就拿掉', async () => {
+    const execute = vi.fn<(payload: { projectPath: string; event: ManagedMediaEvent }) => Promise<ManagedMediaOutcome>>(() => Promise.resolve<ManagedMediaOutcome>({ kind: 'failed', reason: '切场景后素材位置对不上：视频', onAir: true, outOfStep: true, sent: true }));
+    const correct = vi.fn<(event: ManagedMediaEvent, mayCorrect: (driftMs: number) => boolean) => Promise<number | null>>(() => Promise.resolve(null));
+    const test = repairing(videoFixture(), undefined, { executeManagedMediaEvent: execute, correctMediaDrift: correct });
+    await test.session.prepare(0); await test.advance(0, 900);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(test.last()).toEqual([{ id: 'drift:clip', scope: 'item', state: 'not-aligned', detail: '素材“视频”已经在画面上，但和音乐没对齐。差得多时联动台过几秒会自动按音乐校正，不用处理' }]);
+    await test.advance(1000, 5200);
+    expect(correct).toHaveBeenCalled(); expect(test.last()).toEqual([]);
+    expect(execute).toHaveBeenCalledOnce(); expect(test.faults).toEqual([]);
+  });
+
+  it('漂移校正每段 60 秒内只校正 1 次：再对不上就标红“素材和音乐一直对不上”，不反复校正，过了 60 秒再校正', async () => {
+    const project = videoFixture();
+    project.mediaAssets[0]!.durationMs = 90000; project.rundown[0]!.referenceMediaClips[0]!.durationMs = 90000;
+    const corrected: number[] = [];
+    let now = (): number => 0;
+    const correct = vi.fn((_event: ManagedMediaEvent, mayCorrect: (driftMs: number) => boolean) => {
+      if (!mayCorrect(500)) return Promise.resolve(null);
+      corrected.push(now()); return Promise.resolve(500);
+    });
+    const test = repairing(parseLinkProject(project), undefined, { correctMediaDrift: correct });
+    now = test.dependencies.now;
+    await test.session.prepare(0); await test.advance(0, 66000);
+    // Checked every 5 s: corrected at 5 s, left as it is from 10 s to 60 s (said once), corrected again at 65 s.
+    expect(corrected).toEqual([5000, 65000]);
+    expect(test.faults).toEqual(['素材和音乐差了 500 ms，已按当前位置校正：视频',
+      '素材“视频”和音乐差了 500 ms，这一分钟里已经校正过，不再反复校正：素材和音乐一直对不上，请检查 OBS 是否卡顿',
+      '素材和音乐差了 500 ms，已按当前位置校正：视频']);
+    expect(test.deviceLogs().map(entry => entry.details)).toEqual(Array.from({ length: 3 }, () =>
+      ({ channel: 'obs', item: 'drift:clip', recoveries: [{ row: 'picture.drift', key: 'clip', count: 1, max: 1 }] })));
+    expect(test.session.error).toBeNull();
+  });
+
+  it('素材开播被拒绝：一个请求都没发出去的记“没有成功”，发出了一部分的记“不确定”（R3b 两条）；片段结束后这一项自己从列表里拿掉', async () => {
+    for (const sent of [false, true]) {
+      const project = videoFixture(); project.rundown[0]!.referenceMediaClips[0]!.durationMs = 2000;
+      let first = true;
+      const execute = vi.fn((payload: { projectPath: string; event: ManagedMediaEvent }): Promise<ManagedMediaOutcome> => {
+        if (payload.event.phase !== 'start' || !first) return Promise.resolve({ kind: 'done' });
+        first = false; return Promise.resolve({ kind: 'failed', reason: 'OBS 拒绝了', onAir: false, outOfStep: false, sent });
+      });
+      const test = repairing(project, undefined, { executeManagedMediaEvent: execute });
+      await test.session.prepare(0); await test.advance(0, 300);
+      expect(test.items.flat().find(item => item.id.startsWith('decoder:'))).toMatchObject(sent
+        ? { state: 'uncertain', detail: '素材“视频”不确定 OBS 有没有做到。原因：OBS 拒绝了' }
+        : { state: 'failed', detail: '素材“视频”没有成功。原因：OBS 拒绝了' });
+      await test.advance(400, 3000);
+      expect(test.last().filter(item => item.id.startsWith('decoder:'))).toEqual([]);
+      expect(test.session.error).toBeNull();
+    }
+  });
+
+  it('OBS 断着时别的画面动作照常排进来：断线前失败的也不补，不花次数，也不标“到上限”', async () => {
+    let connected = true;
+    const test = repairing(stickerSpanFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')), { connected: () => connected });
+    await test.session.prepare(0); await test.advance(0, 900);
+    // The sticker's show at 1 s fails offline; the close-up at 1.2 s and its end at 1.5 s come through the same pass that would repair it.
+    connected = false; await test.advance(1000, 2500);
+    expect(test.actions.filter(action => action.kind === 'obs.setSceneItemEnabled' && action.enabled)).toHaveLength(1);
+    expect(test.faults.filter(message => message.includes('自动补发') || message.includes('上限'))).toEqual([]);
+    expect(test.session.error).toBeNull();
+  });
+
+  it('同一步里两项都失败、这首歌只剩 1 次：只补先轮到的那一项，另一项标红“这首歌自动补画面已到上限”', async () => {
+    // 19 refused cameras use 19 of the song's 20; then a camera and a shown sticker start together, both refused.
+    const cameras = Array.from({ length: 21 }, (_, index) => ({ id: `camera-${index}`, name: `机位 ${index}`, layerId: 'layer-camera', durationMs: 1000,
+      timecode: { hours: 0, minutes: 0, seconds: index, frames: 0 }, actions: [{ id: `switch-${index}`, kind: 'obs.setProgramScene' as const, label: '切机位', sceneName: `机位 ${index}` }] }));
+    const project = parseLinkProject({ ...createEmptyLinkProject('机位'), playbackSource: 'internal', obsOutputMode: 'scenes',
+      rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'layer-sticker', name: '贴纸' }, { id: 'layer-camera', name: '机位' }], cues: [...cameras,
+        { id: 'show', name: '贴纸', layerId: 'layer-sticker', durationMs: 900, timecode: { hours: 0, minutes: 0, seconds: 20, frames: 0 },
+          actions: [{ id: 'sticker', kind: 'obs.setSceneItemEnabled' as const, label: '显示贴纸', sceneName: '机位 20', sourceName: '贴纸', enabled: true }] }] }] });
+    const test = repairing(project, action => action.kind === 'obs.setProgramScene' && action.sceneName === '机位 0' || action.kind === 'obs.setSceneItemEnabled' && !action.enabled
+      ? Promise.resolve() : Promise.reject(new Error('OBS 拒绝了')));
+    await test.session.prepare(0); await test.advance(0, 20500);
+    const repaired = test.faults.filter(message => message.includes('自动补发一次'));
+    expect(repaired).toHaveLength(20);
+    expect(repaired.at(-1)).toContain('这首歌第 20 次，最多 20 次');
+    expect(test.faults.filter(message => message.includes('这首歌自动补画面已到上限'))).toHaveLength(2);
+    expect(test.session.error).toBeNull();
+  });
+
+  it('OBS 没连上时不补：失败是连接的事，不花自动补的次数', async () => {
+    let connected = true;
+    const test = repairing(camerasFixture([[0, 1000, '全景'], [1, 1000, '特写'], [2, 1000, '全景']]),
+      () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')), { connected: () => connected });
+    await test.session.prepare(0); await test.advance(0, 900);
+    connected = false; await test.advance(1000, 1900);
+    expect(scenes(test)).toEqual(['全景', '特写']); expect(test.faults).toEqual([]);
+    expect(test.session.error).toBeNull();
+  });
 });

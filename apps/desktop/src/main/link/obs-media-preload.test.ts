@@ -1,7 +1,7 @@
 import type { OBSWebSocket } from 'obs-websocket-js';
 import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkProject } from '@tb/schema';
-import { ObsProgramSession, SceneOutputTimeline, materialSceneNames, type CueExecutionReport, type LinkDesktopApi } from '@tb/core/link';
+import { MediaPreparationFailed, ObsProgramSession, SceneOutputTimeline, materialSceneNames, type CueExecutionReport, type LinkDesktopApi } from '@tb/core/link';
 import { ObsMediaPreload, ObsPreparationNotNeeded } from './obs-media-preload';
 import { MediaOutOfStepError, ObsMediaScenes } from './obs-media-scenes';
 import { pictureDriftCheck, pictureExecutor, pictureUpcoming } from './native-obs-outputs';
@@ -505,6 +505,20 @@ it('预备失败放回预备槽：同一输入后面的片段照常准备和播�
   await t.preload.close();
 });
 
+it('预备失败的片段自己不再准备；画面会话允许（prepareAgain，次数记在会话那边）以后照常再准备一次，失败带着是哪一段（2026-11-10 第 2 题，R5）', async () => {
+  const t = setup(), [first, second] = t.events;
+  await t.preload.prime(first!, current); await t.preload.execute(first!, t.path);
+  t.native.prime.mockRejectedValueOnce(new Error('解码器无响应'));
+  const failure = await t.preload.upcoming(60, current).then(() => null, (error: unknown) => error);
+  expect(failure).toBeInstanceOf(MediaPreparationFailed);
+  expect(failure).toMatchObject({ message: '解码器无响应', event: { clipId: second!.clipId } });
+  expect(await t.preload.upcoming(100, current)).toBeNull();
+  t.preload.prepareAgain(second!.clipId);
+  expect(await t.preload.upcoming(120, current)).toMatchObject({ clipId: second!.clipId });
+  expect(t.scenes.prime.mock.calls.map(([event]) => event.clipId)).toEqual(['clip-0', 'clip-1', 'clip-1']);
+  await t.preload.close();
+});
+
 it('OBS 断开时预备失败的片段，重新连上 OBS 后照常准备一次', async () => {
   const t = setup(), [first, second] = t.events;
   await t.preload.prime(first!, current); await t.preload.execute(first!, t.path);
@@ -526,7 +540,9 @@ it('片段还在准备时被定位接管（从中间开播或重建画面，用�
   await t.preload.seek(second!, t.path);
   finish();
   const failure = await preparing.then(() => null, (error: unknown) => error);
-  expect(failure).toEqual(new Error('素材准备结果已过期'));
+  // R5: the failure names the clip it was for, so the session can prepare it once more.
+  expect(failure).toBeInstanceOf(MediaPreparationFailed);
+  expect(failure).toMatchObject({ message: '素材准备结果已过期', event: { clipId: 'clip-1' } });
   expect(failure).not.toBeInstanceOf(ObsPreparationNotNeeded);
 });
 
@@ -718,7 +734,7 @@ it('交接时 OBS 退下了旧解码器、却没能显示新解码器：这一�
     const before = t.obs.sent.length, received: LinkAction[] = [], logs = recorder();
     const executor = pictureExecutor(adapter(t.obs, t.scenes, () => Promise.resolve(), received), t.preload, { record: logs, projectId: t.project.projectId, itemId: 'song' });
     for (const action of ['pause', 'start'] as const) await executor.execute({ id: action, label: '同步', kind: 'obs.mediaAction', inputName: t.primary, action });
-    const drift = pictureDriftCheck(t.scenes, t.preload)({ ...second!, sourceOffsetMs: 9000 });
+    const drift = pictureDriftCheck(t.scenes, t.preload)({ ...second!, sourceOffsetMs: 9000 }, () => true);
     expect(await outcome(drift)).toBe('完成');
     expect(await drift).toBeNull();
     expect(t.obs.sent.slice(before)).toEqual([]);
@@ -884,7 +900,7 @@ it('晚到交接的定位晚 600 ms 才落定：片段已经在画面上，照�
     t.obs.seekDelay(0);
     // The session's drift check every 5 s, as production wires it (native-obs-outputs.ts).
     await vi.advanceTimersByTimeAsync(5000);
-    const correction = pictureDriftCheck(t.scenes, t.preload)({ ...late, sourceOffsetMs: Math.round(music()) });
+    const correction = pictureDriftCheck(t.scenes, t.preload)({ ...late, sourceOffsetMs: Math.round(music()) }, () => true);
     expect(await outcome(correction)).toBe('完成');
     const drift = await correction;
     expect(drift, '漂移检查没有校正画面上的片段').not.toBeNull();
@@ -1506,7 +1522,7 @@ it('交接一开头 OBS 就出错、旧解码器留在画面上算这一段的�
     t.obs.failOnce((type, data) => type === 'SetInputMute' && data.inputName === t.primary && data.inputMuted === true);
     expect(await outcome(t.preload.execute(second!, path))).toBe('SetInputMute：OBS 没能执行 SetInputMute');
     expect(t.preload.onAirSource(t.primary)).toBe(t.primary);
-    const before = t.obs.sent.length, drift = pictureDriftCheck(t.scenes, t.preload)({ ...second!, sourceOffsetMs: 9000 });
+    const before = t.obs.sent.length, drift = pictureDriftCheck(t.scenes, t.preload)({ ...second!, sourceOffsetMs: 9000 }, () => true);
     expect(await outcome(drift)).toBe('完成');
     expect(await drift).toBeNull();
     expect(t.obs.sent.slice(before)).toEqual([]);
@@ -1543,7 +1559,7 @@ it('同一视频切成首尾相接、入点接得上的两段，后一段预热�
     expect(await preparing).toMatchObject({ clipId: 'clip-2' });
     // The drift check, as production wires it, reaches it as clip-1's decoder.
     await vi.advanceTimersByTimeAsync(1000);
-    const correction = pictureDriftCheck(scenes, preload)({ ...second!, sourceOffsetMs: Math.round(file()) + 600 });
+    const correction = pictureDriftCheck(scenes, preload)({ ...second!, sourceOffsetMs: Math.round(file()) + 600 }, () => true);
     expect(await outcome(correction)).toBe('完成');
     expect(await correction).toBeLessThan(-300);
     // clip-1's end takes it off; clip-2 starts on time on the second decoder, which only then goes on air.
@@ -1668,7 +1684,7 @@ it('上一段的解码器接着往下播时，OBS 没能切到这一段的场景
     expect(scenes.isActive(primary)).toBe(true);
     expect(preload.onAirSource(primary)).toBe(primary);
     await vi.advanceTimersByTimeAsync(500);
-    const correction = pictureDriftCheck(scenes, preload)({ ...second!, sourceOffsetMs: Math.round(file()) + 600 });
+    const correction = pictureDriftCheck(scenes, preload)({ ...second!, sourceOffsetMs: Math.round(file()) + 600 }, () => true);
     expect(await outcome(correction)).toBe('完成');
     expect(await correction).toBeLessThan(-300);
     const received: LinkAction[] = [], executor = pictureExecutor(adapter(obs, scenes, () => Promise.resolve(), received), preload, { record: recorder(), projectId: project.projectId, itemId: 'song' });

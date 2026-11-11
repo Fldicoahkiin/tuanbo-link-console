@@ -1,5 +1,5 @@
 import { lightsStillRunningText, lightsUnconfirmedText, type ConsoleFollow, type LightingOffCheck, type LinkObsSnapshot } from '@tb/core/link';
-import type { IntegrationProfile, LinkProject, Ma2NetworkStatus } from '@tb/schema';
+import type { IntegrationProfile, LinkProject, Ma2NetworkStatus, ObsPictureItem } from '@tb/schema';
 import type { ConnectionCheck } from '../stores/connection-check-store';
 import type { Ma2ConnectionMethod } from '../stores/ma2-mode-store';
 import { midiConnectionTargets, usesNativeMidiOutput } from './connection-targets';
@@ -25,7 +25,8 @@ export type StatusCenterInput = {
   checks: Readonly<Record<string, ConnectionCheck>>;
   network: Ma2NetworkStatus | null;
   networkError: string | null;
-  player: { status: string; mtcSending: boolean; mtcConnectionFailed: boolean };
+  /** `pictureItems`: the playing song's picture, part by part, as the picture host lists them (R5). */
+  player: { status: string; mtcSending: boolean; mtcConnectionFailed: boolean; pictureItems?: readonly ObsPictureItem[] };
   /** Whether the console runs with the playing song, as last read back. */
   follow: ConsoleFollow;
   /** The lights-off read-back (M8): absent or empty, nothing is shown. */
@@ -93,6 +94,8 @@ export function statusCenter(input: StatusCenterInput): StatusCenter {
     rows.push(row(id, target.name, { category: 'audio' }, midiConnectionStatus({ required: target.required, portName: mapped?.portName, available, open, native, check: checks[id],
       inventoryPending: native && input.nativeDevices === null && input.nativeDeviceError === null, systemError: checks.midi?.state === 'error' ? checks.midi.detail : undefined })));
   }
+  const picture = pictureStatus(input.player);
+  if (picture) rows.push(row('picture', '这首歌的画面', { category: 'obs' }, picture));
   const find = (id: string): StatusRow | undefined => rows.find(entry => entry.id === id);
   const playing = input.player.status === 'playing';
   const lightingPort = find(`port:${profile?.internalPlayer?.mtcOutputPortProfileId ?? 'internal-mtc-output'}`);
@@ -103,11 +106,25 @@ export function statusCenter(input: StatusCenterInput): StatusCenter {
   const audio = internal && playing ? { state: 'ready' as const, value: '播放中', detail: '联动台正在播放音乐' } : internal || !project ? find('audio') : find('p1');
   const overview: StatusOverview[] = [
     { name: '音频', status: audio, destination: internal || !project ? { category: 'audio', focus: 'audio-output' } : { category: 'source' } },
-    { name: '视频', status: find('obs'), destination: { category: 'obs', focus: 'obs-connection' } },
+    // A connected OBS whose song picture has parts in red shows those; a lost connection is the OBS row's own.
+    { name: '视频', status: picture && find('obs')?.state === 'ready' ? picture : find('obs'), destination: { category: 'obs', focus: 'obs-connection' } },
     { name: '灯光', status: lighting, destination: lightingConnectionDestination },
     { name: '编辑灯光', status: ma2EditingConnectionStatus({ method, network, networkError, local, bridge: checks.bridge }), destination: { category: 'ma2', focus: 'ma2-connection' } }
   ];
   return { rows, overview, midiTargets };
+}
+
+/** The playing song's picture, from its parts (R5): each failed, unknown or used-up part is red on its own, one being
+ * repaired or out of step with the music is yellow; one failing part never fails the rest. None while nothing plays. */
+export function pictureStatus(player: StatusCenterInput['player']): ConnectionStatus | undefined {
+  if (!['playing', 'paused', 'preparing'].includes(player.status)) return undefined;
+  const parts = (player.pictureItems ?? []).filter(item => item.scope !== 'channel' && item.state !== 'waiting');
+  if (!parts.length) return undefined;
+  const red = parts.filter(item => item.state === 'failed' || item.state === 'uncertain' || item.state === 'limit');
+  const detail = parts.map(item => item.detail).join('；');
+  return red.length
+    ? { state: 'error', value: `${red.length} 项出错`, detail }
+    : { state: 'warning', value: parts.some(item => item.state === 'repairing') ? '补了一次' : '没对齐', detail };
 }
 
 function statusGroupOf(row: StatusRow): StatusGroup['id'] {

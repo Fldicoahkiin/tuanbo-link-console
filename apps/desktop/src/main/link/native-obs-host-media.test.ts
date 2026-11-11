@@ -163,19 +163,21 @@ it('开始素材的请求超时：会话收到“没回应”；发出的请求�
   await expectSteps([{ kind: 'unanswered', reason }], [{ kind: 'withdrawn', reason }]);
 });
 
-it('开始素材的请求还没发出就停了：会话收到“没发出去”；发出的请求、红字和日志和以前一样（2026-11-11 R3b）', async () => {
+it('开始素材的请求还没发出就停了：会话收到“没发出去”，账上撤回这次开始，停止时不再给这个素材发停止（2026-11-10 第 2 题，R5 改）', async () => {
   watchSteps(); const test = setup();
   // The operator stops while the clip's first request is on its way to the scheduler.
   let release: (() => void) | null = null;
   test.before(label => label === '检查预热素材' && !release ? new Promise<void>(resolve => { release = resolve; }) : null);
   await test.play(); await until(() => release !== null);
   const stopping = test.host.stop(); release!(); await stopping;
-  expect(test.obs.sent).toEqual([STOPPED]);
+  // Nothing of the start went out: the decoder is where the preparation left it, like a clip
+  // the song never reached, and the song's stop leaves it to the preparation as it does those.
+  expect(test.obs.sent).toEqual([]);
   const reason = 'OBS 动作已取消或已过时，没有发送：检查预热素材';
-  expect(test.logs).toEqual(['error 素材动作失败的请求耗时', `error 播放素材 · 视频 · failed：${reason}`, 'info 停止素材 · 视频 · succeeded']);
+  expect(test.logs).toEqual(['error 素材动作失败的请求耗时', `error 播放素材 · 视频 · failed：${reason}`]);
   expect(test.host.status?.fault).toBe(`素材播放失败：视频 · ${reason}`);
   expect(test.failures).toEqual([]);
-  await expectSteps([{ kind: 'withdrawn', reason }], [{ kind: 'done' }]);
+  await expectSteps([{ kind: 'withdrawn', reason }], []);
 });
 
 it('素材开始播放后和音乐没对齐：会话收到“失败、已上画面、没对齐”；发出的请求、红字和日志和以前一样（2026-11-11 R3b）', async () => {
@@ -187,7 +189,7 @@ it('素材开始播放后和音乐没对齐：会话收到“失败、已上画�
   expect(test.logs).toEqual(['error 素材动作失败的请求耗时', line, 'info 停止素材 · 视频 · succeeded']);
   expect(test.host.status?.fault).toBe(`素材播放失败：视频 · ${reason}`);
   expect(test.failures).toEqual([]);
-  await expectSteps([{ kind: 'failed', reason, onAir: true, outOfStep: true }], [{ kind: 'done' }]);
+  await expectSteps([{ kind: 'failed', reason, onAir: true, outOfStep: true, sent: true }], [{ kind: 'done' }]);
 });
 
 it('OBS 拒绝显示素材：会话收到“失败”，不在画面上；发出的请求、红字和日志和以前一样（2026-11-11 R3b）', async () => {
@@ -198,7 +200,7 @@ it('OBS 拒绝显示素材：会话收到“失败”，不在画面上；发出
   expect(test.logs).toEqual(['error 素材动作失败的请求耗时', `error 播放素材 · 视频 · failed：${reason}`, 'info 停止素材 · 视频 · succeeded']);
   expect(test.host.status?.fault).toBe(`素材播放失败：视频 · ${reason}`);
   expect(test.failures).toEqual([]);
-  await expectSteps([{ kind: 'failed', reason, onAir: false, outOfStep: false }], [{ kind: 'done' }]);
+  await expectSteps([{ kind: 'failed', reason, onAir: false, outOfStep: false, sent: true }], [{ kind: 'done' }]);
 });
 
 /** The kinds the session's output() got for the clip's events, in order; every one that is not
@@ -227,11 +229,13 @@ it('素材动作的结果只按错误的类型分，不看文案；包过一层�
   expect(mediaStepOutcome(notSent, true)).toEqual({ kind: 'unanswered', reason: text(notSent) });
   expect(mediaStepOutcome(cancelled, false)).toEqual({ kind: 'withdrawn', reason: text(cancelled) });
   // Part of the step went out before the rest was cancelled: OBS carried that part out.
-  expect(mediaStepOutcome(cancelled, true)).toEqual({ kind: 'failed', reason: text(cancelled), onAir: false, outOfStep: false });
+  expect(mediaStepOutcome(cancelled, true)).toEqual({ kind: 'failed', reason: text(cancelled), onAir: false, outOfStep: false, sent: true });
   const outOfStep = new MediaOutOfStepError('切场景后素材位置对不上');
   expect(mediaStepOutcome(new Error('画面接着上一段往下播，切到了这一段，但和音乐没对齐', { cause: outOfStep }), true))
-    .toEqual({ kind: 'failed', reason: '画面接着上一段往下播，切到了这一段，但和音乐没对齐', onAir: true, outOfStep: true });
-  expect(mediaStepOutcome(new MediaOnAirError('位置未知'), true)).toEqual({ kind: 'failed', reason: '位置未知', onAir: true, outOfStep: false });
+    .toEqual({ kind: 'failed', reason: '画面接着上一段往下播，切到了这一段，但和音乐没对齐', onAir: true, outOfStep: true, sent: true });
+  expect(mediaStepOutcome(new MediaOnAirError('位置未知'), true)).toEqual({ kind: 'failed', reason: '位置未知', onAir: true, outOfStep: false, sent: true });
   // The same words without the type are an ordinary failure.
-  expect(mediaStepOutcome(new Error(text(unanswered)), true)).toEqual({ kind: 'failed', reason: text(unanswered), onAir: false, outOfStep: false });
+  expect(mediaStepOutcome(new Error(text(unanswered)), true)).toEqual({ kind: 'failed', reason: text(unanswered), onAir: false, outOfStep: false, sent: true });
+  // Refused before any of it went out: OBS did nothing with it (R5 counts it as failed, not uncertain).
+  expect(mediaStepOutcome(new Error('OBS 没能显示这个来源'), false)).toEqual({ kind: 'failed', reason: 'OBS 没能显示这个来源', onAir: false, outOfStep: false, sent: false });
 });

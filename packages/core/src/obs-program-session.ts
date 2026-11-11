@@ -1,13 +1,13 @@
-import type { LinkCue, LinkProject } from '@tb/schema';
+import type { LinkCue, LinkProject, ObsPictureItem, ObsRecoveryCount } from '@tb/schema';
 import { actionResultLog, CueActionRunner, type CueExecutionReport, type LinkActionExecutor } from './cue-action-runner';
 import { CueRuntime, type DueCue, type RuntimeUpdate } from './cue-runtime';
 import { frameNumberToTimecode, millisecondsToFrameNumber, playbackFramesPerSecond, type MtcSample } from './mtc-timecode';
 import { alignManagedMediaEvent, ManagedOutputRuntime, MEDIA_NOT_STARTED, mediaTransportActions, type ManagedMediaExecutionReport, type ManagedMediaOutcome,
   type ManagedOutputRuntimeDependencies } from './managed-output-runtime';
 import { compileManagedMediaTimeline, MANAGED_OBS_SCENE_NAME, type ManagedMediaEvent } from './managed-media-timeline';
-import { ObsPictureLedger, showKey, showMayBeOn, type DecoderState, type Known, type LedgerWrite } from './obs-picture-ledger';
+import { ObsPictureLedger, pictureElementKey, showKey, showMayBeOn, type DecoderState, type Known, type LedgerWrite } from './obs-picture-ledger';
 import type { OnAirPicture } from './on-air-picture';
-import type { RecoveryBudgetView } from './output-recovery';
+import { OUTPUT_RECOVERY_RULES, OutputRecovery, pictureRepairAllowed, pictureRepairKey, recordPictureRepair, type RecoveryBudgetView, type RecoveryResult, type RecoveryRow } from './output-recovery';
 import { COMPOSITION_GROUP_STARTS, DECODER_GROUP_STARTS, pictureOpWrites, planPictureReconcile, whilePaused, type PictureOp, type ReconcilePlan } from './picture-reconcile';
 import type { SceneOutputTimeline } from './scene-output-timeline';
 
@@ -21,24 +21,45 @@ export type ObsProgramSessionDependencies = ManagedOutputRuntimeDependencies & {
   releaseOutputs: () => Promise<void>;
   executor: LinkActionExecutor;
   seekMedia: (event: ManagedMediaEvent) => Promise<void>;
-  /** Puts a playing clip back in step with the music; returns the drift corrected, or null. */
-  correctMediaDrift?: (event: ManagedMediaEvent) => Promise<number | null>;
+  /** Puts a playing clip back in step with the music; returns the drift corrected, or null. `mayCorrect`
+   * is asked with the drift found before anything is corrected: false leaves the clip as it is. */
+  correctMediaDrift?: (event: ManagedMediaEvent, mayCorrect: (driftMs: number) => boolean) => Promise<number | null>;
+  /** The lookahead may prepare this clip once more after its preparation failed (0.5.9 R5). */
+  prepareAgain?: (clipId: string) => void;
+  /** Whether OBS is connected now. Nothing is repaired while it is not: that is the connection's failure. */
+  connected?: () => boolean;
   cueReport: (report: CueExecutionReport) => void;
   mediaReport: (report: ManagedMediaExecutionReport) => void;
   state: (update: RuntimeUpdate) => void;
   /** A live output fault: shown in red while the channel keeps running. */
   fault: (message: string) => void;
+  /** The red text `message` no longer applies: the part of the picture it was about is right again. */
+  clearFault?: (message: string) => void;
+  /** Each part of the picture with something to report, and the song's recovery counts, whenever they change. */
+  pictureItems?: (items: ObsPictureItem[], recoveries: ObsRecoveryCount[]) => void;
   now: () => number;
 };
+
+/** A clip whose preparation did not succeed, from the output's lookahead: the session decides whether
+ * it is prepared once more (`prepareAgain`), within the recovery limits. The message is the failure's. */
+export class MediaPreparationFailed extends Error {
+  constructor(readonly event: ManagedMediaEvent, message: string, options?: ErrorOptions) { super(message, options); }
+}
 
 /** Lateness up to this is logged; beyond it the operator sees it in red. Either way the action is sent. */
 const LATE_LOG_MS = 100, LATE_FAULT_MS = 1000;
 const lateText = (label: string, lateMs: number): string => `画面动作晚了 ${lateMs} ms 才发出：${label}。电脑或 OBS 当时太忙，画面已经按时间线切过去了`;
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error);
+/** A reason to follow “原因：” or to sit in brackets: without its own closing punctuation. */
+const trimReason = (reason: string): string => reason.replace(/[。.；;\s]+$/u, '');
 const DURATION_END = ':duration-end';
-/** No repairs yet: a part OBS refused is not sent again for the same wanted picture
- * (AGENTS §4.4). Grading failures and the recovery limits come with R5. */
-const NO_REPAIRS: RecoveryBudgetView = { allows: () => false };
+/** While OBS is not connected nothing is repaired: the connection is what failed (design 01 §4.5). */
+const OFFLINE: RecoveryBudgetView = { allows: () => false };
+/** How many times `row` allows, for the texts; null for a limit in time. */
+const rowMax = (row: RecoveryRow): number | null => { const limit = OUTPUT_RECOVERY_RULES[row].limit; return limit.kind === 'duration' ? null : limit.max; };
+/** The item of a clip's preparation and of a clip not in step with the music. */
+const preparationItem = (clipId: string): string => `preload:${clipId}`;
+const driftItem = (clipId: string): string => `drift:${clipId}`;
 
 /** A clock step that crossed a cut point, had point actions due, or rebuilt after a
  * position gap; kept until a pass sent everything it stands for. `shift`: how long
@@ -50,14 +71,30 @@ type Slot = 'stop' | 'before' | 'program' | 'start' | 'after';
 /** One step a pass sends: a Cue (a camera, composition, shown source or point action) or
  * a clip event, with the ledger writes it stands for. `point`: the execution of a point
  * Cue, which is sent once whatever happens; `layers`: the composition it puts on program;
- * `lateMs`: a clip that became ready after its boundary and starts late. */
-type Entry = { frame: number; priority: number; slot: Slot; label: string; writes: LedgerWrite[] } & (
+ * `lateMs`: a clip that became ready after its boundary and starts late. `repairs`: the writes of the
+ * ops it carries that send a failed or unknown part once more (0.5.9 R5), counted when it goes out. */
+type Entry = { frame: number; priority: number; slot: Slot; label: string; writes: LedgerWrite[]; repairs?: LedgerWrite[] } & (
   | { kind: 'cue'; cue: LinkCue; point: string | null; layers: readonly string[] | null }
   | { kind: 'media'; event: ManagedMediaEvent; lateMs: number | null });
 type MediaEntry = Extract<Entry, { kind: 'media' }>;
-/** `step`: what a clip event came to, as the output told it (R3b). Every failed kind is still
- * written into the ledger as a failure; R5 decides by the kind whether to repair. */
+/** `step`: what a clip event came to, as the output told it (R3b); `settle` writes the ledger by it. */
 type Outcome = 'ok' | 'withdrawn' | { failed: string; step?: ManagedMediaOutcome };
+/** What a step's outcome means for the ledger (0.5.9 R5): carried out (also a clip on the picture all
+ * the same, `aligned` false when it is not in step with the music), not sent, refused with nothing of it
+ * sent, or sent and not known whether OBS carried it out (not answered, or stopped part way: a clip not
+ * known to be on air may be all the same, R3b). */
+type Verdict = { kind: 'ok'; aligned: boolean } | { kind: 'withdrawn' } | { kind: 'failed' | 'uncertain'; reason: string };
+function verdictOf(outcome: Outcome): Verdict {
+  if (outcome === 'ok') return { kind: 'ok', aligned: true };
+  if (outcome === 'withdrawn') return { kind: 'withdrawn' };
+  const step = outcome.step;
+  if (!step || step.kind === 'done') return { kind: 'failed', reason: outcome.failed };
+  switch (step.kind) {
+    case 'withdrawn': return { kind: 'withdrawn' };
+    case 'unanswered': return { kind: 'uncertain', reason: outcome.failed };
+    case 'failed': return step.onAir ? { kind: 'ok', aligned: !step.outOfStep } : { kind: step.sent ? 'uncertain' : 'failed', reason: outcome.failed };
+  }
+}
 type DecoderOp = Extract<PictureOp, { kind: 'decoder.pause' | 'decoder.resume' }>;
 /** `lateMs`: the most any step went out after it was due, or null if nothing went out. */
 type SendResult = { complete: boolean; lateMs: number | null };
@@ -141,6 +178,14 @@ export class ObsProgramSession {
   private readonly runner: CueActionRunner;
   private readonly timeline: SceneOutputTimeline;
   private readonly ledger = new ObsPictureLedger();
+  /** This song's automatic recoveries and their limits (2026-11-10 decision 2): the counts are the table's. */
+  private readonly recovery = new OutputRecovery();
+  /** Each part of the picture with something to report, by element (or `preload:`/`drift:` and the clip). */
+  private readonly items = new Map<string, ObsPictureItem>();
+  /** Limits already reported, by element and wanted state: each said once. */
+  private readonly limitsShown = new Set<string>();
+  /** A part failed or is not known: the next device clock observation runs a pass that may repair it. */
+  private repairDue = false;
   private readonly cueById: ReadonlyMap<string, LinkCue>;
   private readonly starts = new Map<string, ManagedMediaEvent>();
   private readonly stops = new Map<string, ManagedMediaEvent>();
@@ -316,7 +361,8 @@ export class ObsProgramSession {
       }
       // A resume with nothing newly crossed still plays the clips again and sends
       // what the pause held back, and rebuilds a picture a pause kept from being rebuilt.
-      if (this.ticks.length || this.lost || resumed) this.scheduleDrain();
+      // A part that failed or is not known is repaired by the pass after it, as the picture now.
+      if (this.ticks.length || this.lost || resumed || this.repairDue && this.online()) this.scheduleDrain();
     } catch (error) { this.fail(error); }
   }
   /** Whether a clip starts or ends in (from, to]. The position only moves forward here: a
@@ -378,9 +424,11 @@ export class ObsProgramSession {
     }
     const generation = this.generation, losses = this.losses;
     const current = (): boolean => generation === this.generation && !this.closed && !this.failure;
+    this.repairDue = false;
     try {
       const taken = this.ticks.slice(), only = taken.length === 1 && !this.partial && !taken[0]!.rebuild ? taken[0]! : null;
       const frame = this.frame, planned = this.plan(frame, 'running', !only);
+      this.review(planned.plan);
       // The clips play again with the music first, measured from the resume.
       const since = this.resumedAt ?? this.dependencies.now(); this.resumedAt = null;
       const resumes = planned.plan.ops.filter((op): op is DecoderOp => op.kind === 'decoder.resume');
@@ -418,16 +466,36 @@ export class ObsProgramSession {
    * cuts in one pass (or none, or a rebuild), so shown sources go after the switch. */
   private plan(frame: number, transport: 'running' | 'paused', merged: boolean): { picture: OnAirPicture; plan: ReconcilePlan } {
     const picture = this.timeline.pictureAt(frame);
+    // Live only: this session never runs a rehearsal, where the planner would hold everything after a failure instead.
     return { picture, plan: planPictureReconcile(picture, this.ledger.state(), { mode: 'live', transport, now: this.dependencies.now(),
-      ready: () => 'ready', budget: NO_REPAIRS, holding: false, merged }) };
+      ready: () => 'ready', budget: this.online() ? this.recovery : OFFLINE, holding: false, merged }) };
   }
+  private online(): boolean { return this.dependencies.connected?.() ?? true; }
+
+  /** What a pass's plan says about the parts with something to report: one the plan sends afresh (a cut
+   * passed, so its wanted state changed) or no longer mentions is right again, or no longer matters (one
+   * it repairs, restores, waits for or holds stays listed until OBS answers); one
+   * held at its limit is reported once, in red. Not while OBS is offline (nothing is repaired then). */
+  private review(plan: ReconcilePlan): void {
+    if (!this.online()) return;
+    const mentioned = new Set([...plan.waiting.map(entry => entry.element), ...plan.suppressed.map(entry => entry.element),
+      ...plan.ops.filter(op => op.reason === 'repair' || op.reason === 'restore').flatMap(op => pictureOpWrites(op).map(pictureElementKey))]);
+    for (const [id, item] of this.items) if (!this.special(id) && item.scope !== 'channel' && !mentioned.has(id)) this.clearItem(id);
+    for (const entry of plan.suppressed) if (entry.kind === 'repair-limit') this.repairLimit(entry.element, entry.target);
+  }
+  private special(id: string): boolean { return id.startsWith('preload:') || id.startsWith('drift:'); }
   /** The steps that carry out the planner's ops, through the same Cues and clip events
    * as before: a camera as its Cue's switch, a composition as the owned composition Cue,
    * a clip's start through the preloaded decoder (its own scene in the same step when it
    * is the whole picture), a shown source as its span's show or hide. Pauses and resumes
    * are sent apart, as one media action each. */
   private translate({ picture, plan }: { picture: OnAirPicture; plan: ReconcilePlan }, frame: number, merged: boolean): Entry[] {
-    const target = picture.target, entries: Entry[] = [];
+    const target = picture.target, steps: Entry[] = [];
+    // Each step knows which of its ops repair a part, so that it is counted when it goes out.
+    const entries = { push: (entry: Entry, ...ops: (PictureOp | undefined)[]): void => {
+      const repairs = ops.filter((op): op is PictureOp => op?.reason === 'repair').map(op => op.write);
+      steps.push(repairs.length ? { ...entry, repairs } : entry);
+    } };
     const composition = plan.ops.find(op => op.kind === 'composition.update');
     const compositionCue = (writes: LedgerWrite[]): Entry | null => target.kind !== 'composition' ? null : this.cueEntry('program', {
       id: `timeline-composition:${this.itemId}`, name: '更新时间线叠加', enabled: true, notes: '', timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
@@ -440,52 +508,54 @@ export class ObsProgramSession {
           const clipId = op.write.element === 'decoder' ? op.write.value.clipId : '';
           const start = this.starts.get(clipId), event = this.stops.get(clipId)
             ?? (start ? { ...start, id: `${start.id}:stop`, phase: 'stop' as const } : undefined);
-          if (event) entries.push({ kind: 'media', slot: 'stop', frame: 0, priority: 0, label: event.assetName, writes: [op.write], event, lateMs: null });
+          if (event) entries.push({ kind: 'media', slot: 'stop', frame: 0, priority: 0, label: event.assetName, writes: [op.write], event, lateMs: null }, op);
           break;
         }
         case 'composition.update': {
           const program = plan.ops.find(other => other.kind === 'program.switch' && other.sceneName === op.sceneName);
           const entry = compositionCue([op.write, ...program ? [program.write] : []]);
-          if (entry) entries.push(entry);
+          if (entry) entries.push(entry, op, program);
           break;
         }
         case 'program.switch': {
           if (target.kind === 'composition') {
             const entry = composition ? null : compositionCue([op.write]);
-            if (entry) entries.push(entry);
+            if (entry) entries.push(entry, op);
           } else if (target.kind === 'clip') {
             // The clip already plays on its decoder (a camera over it ended): only its scene comes back on program.
             entries.push(this.cueEntry('program', { id: `timeline-selection:${this.itemId}`, name: '显示持续播放的素材', enabled: true, notes: '',
               timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
-              actions: [{ id: `timeline-selection:${this.itemId}:scene`, label: '恢复底层画面', kind: 'obs.setProgramScene', sceneName: op.sceneName }] }, [op.write]));
+              actions: [{ id: `timeline-selection:${this.itemId}:scene`, label: '恢复底层画面', kind: 'obs.setProgramScene', sceneName: op.sceneName }] }, [op.write]), op);
           } else {
             // The camera's switch only; its other actions are point actions, sent once when crossed.
             const cue = target.cueId === null ? undefined : this.cueById.get(target.cueId);
-            if (cue) entries.push(this.cueEntry('program', { ...cue, actions: cue.actions.filter(action => action.kind === 'obs.setProgramScene') }, [op.write]));
+            if (cue) entries.push(this.cueEntry('program', { ...cue, actions: cue.actions.filter(action => action.kind === 'obs.setProgramScene') }, [op.write]), op);
           }
           break;
         }
         case 'decoder.start': case 'decoder.handover': {
           const start = this.starts.get(op.clip.clipId);
-          if (!start) break;
+          // A start OBS refused before any of it went out waits for its decoder to be ready: once it
+          // is, the clip starts late at the current position, which is its repair (`startLate`).
+          if (!start || op.reason === 'repair' && this.refusedStarts.has(start.clipId)) break;
           // A handover goes out as the later half's start: the output carries its predecessor's decoder on (no seek, no restart).
           // Only the clip that is the whole picture switches the program to its own scene; any
           // other start (a composition layer, a sound) leaves the program to the switch.
           const event = this.align({ ...start, deferSceneSwitch: !(target.kind === 'clip' && target.clipId === op.clip.clipId) }, frame);
           const lateMs = this.lateReady.has(start.clipId) ? Math.round(Math.max(0, frame - start.frameNumber) * 1000 / this.fps) : null;
-          entries.push({ kind: 'media', slot: 'start', frame: 0, priority: 0, label: start.assetName, writes: pictureOpWrites(op), event, lateMs });
+          entries.push({ kind: 'media', slot: 'start', frame: 0, priority: 0, label: start.assetName, writes: pictureOpWrites(op), event, lateMs }, op);
           break;
         }
         case 'show.set': {
           // As the planner ordered it: newly due before the switch, restored or merged after it.
           const slot: Slot = op.reason === 'restore' || merged ? 'after' : 'before';
           const entry = op.enabled ? this.showEntry(picture, op, slot) : this.hideEntry(op, slot);
-          if (entry) entries.push(entry);
+          if (entry) entries.push(entry, op);
           break;
         }
       }
     }
-    return entries;
+    return steps;
   }
   private cueEntry(slot: Slot, cue: LinkCue, writes: LedgerWrite[], layers: readonly string[] | null = null): Entry {
     return { kind: 'cue', slot, frame: 0, priority: 0, label: cue.name, writes, cue, point: null, layers };
@@ -590,7 +660,7 @@ export class ObsProgramSession {
     if (!current()) return null;
     const losses = this.losses;
     const cancelled = (): null => { this.ledger.invalidate('OBS 重新连接后恢复画面被打断'); return null; };
-    this.refusedStarts.clear(); this.lateReady.clear(); this.preloadFrame = -Infinity;
+    this.refusedStarts.clear(); this.lateReady.clear(); this.preloadFrame = -Infinity; this.limitsShown.clear();
     this.ledger.invalidate('OBS 重新连接');
     const frame = this.frame, entries = this.layout(this.translate(this.plan(frame, 'running', true), frame, true), [], frame, true);
     const targets = entries.filter((entry): entry is MediaEntry => entry.kind === 'media' && entry.event.phase === 'start');
@@ -701,6 +771,12 @@ export class ObsProgramSession {
    * the host as red reports; nothing here ends the channel. Resolves with the report
    * of the Cue it sent, or null for a clip event (reported to the host as a clip). */
   private async output(entry: Entry, canSend: () => boolean, current: () => boolean): Promise<CueExecutionReport | null> {
+    // A repair goes out only within the limits, and is counted, logged and shown as it does.
+    if (entry.repairs && !this.repair(entry.repairs)) {
+      // The step's other writes are not lost with it: the next pass leaves the part past its limit out and sends them.
+      if (entry.writes.length > entry.repairs.length) this.repairDue = true;
+      return null;
+    }
     // A clip this run never started (or OBS forgot since) has nothing to stop: as the ledger held it before this step.
     const absent = entry.kind === 'media' && entry.event.phase === 'stop' && !this.held(entry.event.sourceName, entry.event.clipId);
     for (const write of entry.writes) this.ledger.sent(write, this.dependencies.now());
@@ -720,7 +796,8 @@ export class ObsProgramSession {
       } else this.settle(entry.writes, report.status === 'succeeded' ? 'ok' : report.status === 'failed'
         ? { failed: report.error ?? '素材动作没有完成', ...(report.outcome ? { step: report.outcome } : {}) } : 'withdrawn');
       this.dependencies.mediaReport(report);
-      if (event.phase === 'start' && report.status === 'failed') this.refusedStarts.add(event.clipId);
+      // Refused before any of it went out: started late once its decoder is ready (`startLate`).
+      if (event.phase === 'start' && report.status === 'failed' && verdictOf({ failed: '', ...(report.outcome ? { step: report.outcome } : {}) }).kind === 'failed') this.refusedStarts.add(event.clipId);
       if (entry.lateMs !== null && report.status !== 'skipped') this.lateReady.delete(event.clipId);
       if (entry.lateMs !== null && report.status === 'succeeded') this.fault(`素材准备得晚了，已按当前位置开始播放：${event.assetName}（晚了 ${entry.lateMs} ms）`);
       return null;
@@ -729,13 +806,124 @@ export class ObsProgramSession {
       throw error;
     }
   }
+  /** Writes what a step came to into the ledger, by its kind (0.5.9 R5): carried out, also a clip on the
+   * picture all the same (one not in step with the music is left to the drift check, and listed); not sent;
+   * refused with nothing of it sent; sent and not known. Each failed or not known part is listed, and the
+   * pass after it may repair it once. */
   private settle(writes: readonly LedgerWrite[], outcome: Outcome): void {
-    const now = this.dependencies.now();
+    const now = this.dependencies.now(), verdict = verdictOf(outcome);
     for (const write of writes) {
-      if (outcome === 'ok') this.ledger.ack(write, now);
-      else if (outcome === 'withdrawn') this.ledger.withdraw(write);
-      else this.ledger.fail(write, outcome.failed);
+      const element = pictureElementKey(write);
+      switch (verdict.kind) {
+        case 'ok':
+          this.ledger.ack(write, now);
+          if (this.known(write)?.state === 'confirmed') this.clearItem(element);
+          break;
+        case 'withdrawn': this.ledger.withdraw(write); break;
+        case 'failed': case 'uncertain': {
+          if (verdict.kind === 'failed') this.ledger.fail(write, verdict.reason); else this.ledger.unanswered(write, verdict.reason);
+          const known = this.known(write);
+          if (known?.state !== 'failed' && !(known?.state === 'unknown' && known.target === write.target)) break;
+          this.setItem(element, 'item', verdict.kind, `${this.labelOf(element, write.target)}${verdict.kind === 'failed' ? '没有成功' : '不确定 OBS 有没有做到'}。原因：${trimReason(verdict.reason)}`);
+          this.repairDue = true;
+          break;
+        }
+      }
     }
+    if (verdict.kind === 'ok' && !verdict.aligned) for (const write of writes) {
+      if (write.element !== 'decoder') continue;
+      const name = this.starts.get(write.value.clipId)?.assetName ?? write.key;
+      this.setItem(driftItem(write.value.clipId), 'item', 'not-aligned', `素材“${name}”已经在画面上，但和音乐没对齐。差得多时联动台过几秒会自动按音乐校正，不用处理`);
+    }
+  }
+  private known(write: LedgerWrite): Known<unknown> | undefined {
+    const state = this.ledger.state();
+    switch (write.element) {
+      case 'program': return state.program;
+      case 'composition': return state.compositions.get(write.key);
+      case 'decoder': return state.decoders.get(write.key);
+      case 'show': return state.shows.get(write.key);
+    }
+  }
+
+  /** The operator's name for a part of the picture, as wanted by `target`: a hide, a stop or a pause says so. */
+  private labelOf(element: string, target: string): string {
+    const [kind, ...rest] = element.split(':'), key = rest.join(':');
+    switch (kind) {
+      case 'program': return '切换节目画面';
+      case 'composition': return '叠加画面';
+      case 'decoder': {
+        const start = [...this.starts.values()].find(event => event.sourceName === key);
+        const verb = target.endsWith(':stopped') ? '停止' : target.endsWith(':paused') ? '暂停' : '';
+        return `${verb}素材“${start?.assetName ?? key}”`;
+      }
+      case 'show': {
+        const parsed: unknown = JSON.parse(key);
+        return `${target === 'off' ? '隐藏' : '显示'}来源 · ${Array.isArray(parsed) && typeof parsed[1] === 'string' ? parsed[1] : key}`;
+      }
+      default: return element;
+    }
+  }
+
+  /** Counts, logs and shows the repair of these parts, as one step sends them once more (2026-11-10
+   * decision 2): false, and nothing is sent, when one of them is past its limit by now. */
+  private repair(writes: readonly LedgerWrite[]): boolean {
+    const now = this.dependencies.now();
+    const blocked = writes.find(write => !pictureRepairAllowed(this.recovery, pictureElementKey(write), write.target, now));
+    if (blocked) { this.repairLimit(pictureElementKey(blocked), blocked.target); return false; }
+    for (const write of writes) {
+      const element = pictureElementKey(write), known = this.known(write);
+      const reason = known?.state === 'failed' || known?.state === 'unknown' ? trimReason(known.reason) : '没有完成';
+      const results = recordPictureRepair(this.recovery, element, write.target, now);
+      const song = results[1]!;
+      const message = `${this.labelOf(element, write.target)}没有成功（${reason}），已按现在该有的画面自动补发一次（这首歌第 ${song.count} 次，最多 ${rowMax('picture.song') ?? song.count} 次）。补上了就不用处理`;
+      this.recovered(element, 'repairing', message, results, 'warning');
+    }
+    return true;
+  }
+  /** A part that may not be repaired again for its wanted state: shown in red once, until the timeline moves on. */
+  private repairLimit(element: string, target: string): void {
+    const key = pictureRepairKey(element, target);
+    if (this.limitsShown.has(key)) return;
+    this.limitsShown.add(key);
+    const now = this.dependencies.now(), song = !this.recovery.allows('picture.song', 'song', now);
+    const row: RecoveryRow = song ? 'picture.song' : 'picture.element';
+    const message = `${this.labelOf(element, target)}${song ? '没有成功：' : '：'}${OUTPUT_RECOVERY_RULES[row].limitText}`;
+    const count = this.recovery.counts().find(entry => entry.row === row && entry.key === (song ? 'song' : key))?.count ?? 0;
+    this.recovered(element, 'limit', message, [{ row, key: song ? 'song' : key, channel: 'obs', outcome: 'limit', count, limit: OUTPUT_RECOVERY_RULES[row].limit,
+      atLimit: OUTPUT_RECOVERY_RULES[row].atLimit, limitText: OUTPUT_RECOVERY_RULES[row].limitText }], 'error');
+  }
+  /** One recovery (or its limit) of `item`: in red on this song, in the run log with the channel, the item,
+   * the count and the limit, and in the counts (design 01 §4.6). */
+  private recovered(item: string, state: 'repairing' | 'limit', message: string, results: readonly RecoveryResult[], level: 'warning' | 'error'): void {
+    this.setItem(item, 'item', state, message);
+    this.fault(message);
+    void this.dependencies.recordLog({ level, category: 'device', device: 'obs', message, projectId: this.project.projectId, itemId: this.itemId,
+      result: state === 'limit' ? 'failed' : 'succeeded',
+      details: { channel: 'obs', item, recoveries: results.map(result => ({ row: result.row, key: result.key, count: result.count, max: rowMax(result.row) })) } })
+      .catch(error => this.fault(`记录画面自动补发失败：${errorText(error)}`));
+  }
+
+  private setItem(id: string, scope: ObsPictureItem['scope'], state: ObsPictureItem['state'], detail: string): void {
+    const previous = this.items.get(id);
+    if (previous?.state === state && previous.detail === detail && previous.scope === scope) return;
+    this.items.delete(id); this.items.set(id, { id, scope, state, detail });
+    this.publishItems();
+  }
+  /** The part is right again: off the list, and its red text cleared if it is still the one shown. */
+  private clearItem(id: string): void {
+    const item = this.items.get(id);
+    if (!item) return;
+    this.items.delete(id);
+    if (item.state === 'repairing' || item.state === 'limit') this.dependencies.clearFault?.(item.detail);
+    this.publishItems();
+  }
+  private publishItems(): void {
+    if (this.closed || this.failure) return;
+    this.dependencies.pictureItems?.([...this.items.values()], this.recovery.counts().map(entry => {
+      const max = rowMax(entry.row);
+      return { row: entry.row, key: entry.key, count: entry.count, exhausted: entry.exhausted, ...(max === null ? {} : { max }) };
+    }));
   }
 
   private preload(frame: number): void {
@@ -745,8 +933,38 @@ export class ObsProgramSession {
     const allowed = (): boolean => !this.closed && !this.failure;
     this.preloadWork = this.dependencies.guardOutput(allowed, () => prepare(frame, () => {
       if (!allowed()) throw new Error('后续素材准备已取消');
-    })).then(prepared => { if (prepared) this.startLate(prepared); }).catch(error => { if (!this.closed && !this.failure) this.fault(`准备后面的素材失败：${error instanceof Error ? error.message : String(error)}；不会重试，到时候这个素材可能播不出来`); })
+    })).then(prepared => { if (prepared) { this.clearItem(preparationItem(prepared.clipId)); this.startLate(prepared); } })
+      .catch(error => { if (!this.closed && !this.failure) this.preparationFailed(error); })
       .finally(() => { this.preloadWork = null; });
+  }
+  /** A clip's preparation failed: prepared once more, within the limits (2026-11-10 decision 2), with a
+   * red note and a log line each time. A failure that names no clip cannot be prepared again. */
+  private preparationFailed(error: unknown): void {
+    const reason = trimReason(errorText(error)), prepareAgain = this.dependencies.prepareAgain;
+    if (!(error instanceof MediaPreparationFailed) || !prepareAgain) {
+      this.fault(`准备后面的素材失败：${reason}；不会重试，到时候这个素材可能播不出来`);
+      return;
+    }
+    const event = error.event, item = preparationItem(event.clipId), now = this.dependencies.now();
+    if (!this.online()) {
+      // The connection failed, not the clip: OBS prepares the song's scenes again once it is back.
+      const message = `准备后面的素材没成功：${event.assetName}。原因：${reason}。OBS 没有连接，重新连上 OBS 后会再准备`;
+      this.setItem(item, 'item', 'failed', message); this.fault(message);
+      return;
+    }
+    if (!pictureRepairAllowed(this.recovery, item, 'ready', now)) {
+      const song = !this.recovery.allows('picture.song', 'song', now);
+      const message = `准备后面的素材没成功：${event.assetName}。原因：${reason}。${song ? '这首歌自动补画面已到上限' : '已经自动再准备过一次'}，不再准备，到时候这个素材可能播不出来。请检查这个素材文件和 OBS 是否卡顿`;
+      const row: RecoveryRow = song ? 'picture.song' : 'picture.element', key = song ? 'song' : pictureRepairKey(item, 'ready');
+      const count = this.recovery.counts().find(entry => entry.row === row && entry.key === key)?.count ?? 0;
+      this.recovered(item, 'limit', message, [{ row, key, channel: 'obs', outcome: 'limit', count, limit: OUTPUT_RECOVERY_RULES[row].limit,
+        atLimit: OUTPUT_RECOVERY_RULES[row].atLimit, limitText: OUTPUT_RECOVERY_RULES[row].limitText }], 'error');
+      return;
+    }
+    const results = recordPictureRepair(this.recovery, item, 'ready', now);
+    prepareAgain(event.clipId);
+    this.recovered(item, 'repairing', `准备后面的素材没成功：${event.assetName}。原因：${reason}。已自动再准备一次（这首歌第 ${results[1]!.count} 次，最多 ${rowMax('picture.song') ?? results[1]!.count} 次），准备好了就不用处理`,
+      results, 'warning');
   }
 
   /** Clips located at `frame`, from the middle or on a rebuild: OBS prepared the owned scenes
@@ -794,10 +1012,31 @@ export class ObsProgramSession {
       for (const event of this.onAir()) {
         const current = (): boolean => generation === this.generation && !this.closed && !this.failure && this.runtime.getState() === 'running';
         if (event.assetKind === 'image' || !current()) continue;
-        const drift = await this.dependencies.guardOutput(current, () => correct(this.align(event, this.frame)));
-        if (drift !== null) this.fault(`素材和音乐差了 ${drift} ms，已按当前位置校正：${event.assetName}`);
+        // One correction per clip a minute (2026-11-10 decision 2): past it the clip is left as it is, in red.
+        let refused = false;
+        const mayCorrect = (driftMs: number): boolean => {
+          if (this.recovery.allows('picture.drift', event.clipId, this.dependencies.now())) return true;
+          refused = true; this.driftLimit(event, driftMs);
+          return false;
+        };
+        const drift = await this.dependencies.guardOutput(current, () => correct(this.align(event, this.frame), mayCorrect));
+        if (drift === null) {
+          // In step: a clip listed as out of step (corrected, or left at the limit) is right again.
+          if (!refused) this.clearItem(driftItem(event.clipId));
+          continue;
+        }
+        const result = this.recovery.record('picture.drift', event.clipId, this.dependencies.now());
+        this.recovered(driftItem(event.clipId), 'repairing', `素材和音乐差了 ${drift} ms，已按当前位置校正：${event.assetName}`, [result], 'warning');
       }
     });
+  }
+  /** A clip found out of step again within the minute after its correction: not corrected again, in red once. */
+  private driftLimit(event: ManagedMediaEvent, driftMs: number): void {
+    if (this.items.get(driftItem(event.clipId))?.state === 'limit') return;
+    const rule = OUTPUT_RECOVERY_RULES['picture.drift'];
+    const count = this.recovery.counts().find(entry => entry.row === 'picture.drift' && entry.key === event.clipId)?.count ?? 0;
+    this.recovered(driftItem(event.clipId), 'limit', `素材“${event.assetName}”和音乐差了 ${driftMs} ms，这一分钟里已经校正过，不再反复校正：${rule.limitText}`,
+      [{ row: 'picture.drift', key: event.clipId, channel: 'obs', outcome: 'limit', count, limit: rule.limit, atLimit: rule.atLimit, limitText: rule.limitText }], 'error');
   }
 
   /** Recovery rule B for a decoder that missed its boundary: once it is ready, what
@@ -808,6 +1047,14 @@ export class ObsProgramSession {
     if (!known || known.state === 'pending' || !this.refusedStarts.delete(prepared.clipId)) return;
     const value = known.state === 'unknown' ? known.last : known.value;
     if (value?.clipId !== prepared.clipId) return;
+    // The late start is the refused start's repair: within the limits, counted and shown like any other.
+    if (known.state === 'failed') {
+      const element = pictureElementKey({ element: 'decoder', key: prepared.sourceName }), now = this.dependencies.now();
+      if (!this.online() || !pictureRepairAllowed(this.recovery, element, known.target, now)) { if (this.online()) this.repairLimit(element, known.target); return; }
+      const results = recordPictureRepair(this.recovery, element, known.target, now);
+      this.recovered(element, 'repairing', `素材“${prepared.assetName}”切换时没准备好，现在准备好了，按当前位置自动补播一次（这首歌第 ${results[1]!.count} 次，最多 ${rowMax('picture.song') ?? results[1]!.count} 次）。补上了就不用处理`,
+        results, 'warning');
+    }
     this.ledger.forget({ element: 'decoder', key: prepared.sourceName, value, target: '' }, '素材准备好了');
     this.lateReady.add(prepared.clipId); this.settleMedia(Math.max(0, this.frame));
     this.scheduleDrain();
@@ -906,10 +1153,13 @@ export class ObsProgramSession {
    * without a ledger write. Late is measured from `since`: logged, and shown in red
    * when the audience notices. A late resume is still sent: a clip left paused is
    * worse than one that starts late, and the drift check puts it back in step. */
-  private async transport(action: 'start' | 'pause', ops: readonly DecoderOp[], extra: readonly string[], generation: number, since: number): Promise<void> {
+  private async transport(action: 'start' | 'pause', wanted: readonly DecoderOp[], extra: readonly string[], generation: number, since: number): Promise<void> {
     const current = (): boolean => generation === this.generation && !this.closed && !this.failure;
+    if (!current() || this.runtime.getState() !== (action === 'pause' ? 'paused' : 'running')) return;
+    // A pause or resume sent once more goes out only within the limits, counted as it does.
+    const ops = wanted.filter(op => op.reason !== 'repair' || this.repair([op.write]));
     const sources = [...new Set([...ops.map(op => op.sourceName), ...extra])];
-    if (!sources.length || !current() || this.runtime.getState() !== (action === 'pause' ? 'paused' : 'running')) return;
+    if (!sources.length) return;
     const cue = { id: `transport-${action}`, name: '同步画面播放状态', notes: '', enabled: true,
       timecode: frameNumberToTimecode(Math.max(0, this.frame), this.project.timebase.frameRate), actions: mediaTransportActions(action, sources) };
     const lateMs = Math.round(this.dependencies.now() - since);

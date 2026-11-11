@@ -15,7 +15,10 @@
 export type Known<T> =
   | { state: 'confirmed'; value: T; at: number }
   | { state: 'pending'; value: T; target: string; since: number }
-  | { state: 'unknown'; reason: string; last: T | null }
+  | { state: 'unknown'; reason: string; last: T | null;
+    /** Set when a request for this wanted state went out and whether OBS carried it out is not known (not
+     * answered, or the step stopped part way after sending): like a failure, it is repaired once against it. */
+    target?: string }
   | { state: 'failed'; value: T; attempts: number; reason: string; target: string };
 
 export type DecoderMode = 'playing' | 'paused' | 'stopped';
@@ -128,11 +131,12 @@ export class ObsPictureLedger {
     this.put(write, value => ({ state: 'failed', value, attempts, reason, target: write.target }));
   }
 
-  /** No answer: whether OBS applied it is not known. */
+  /** No answer, or a step that stopped part way after its requests went out: whether OBS applied it is not
+   * known. The wanted state it was sent for is kept (`target`), so it is repaired as a failure would be. */
   unanswered(write: LedgerWrite, reason: string): void {
     if (!this.isPending(write)) return;
-    if (write.element === 'show') { this.shows.set(write.key, forgetShow(this.shows.get(write.key)!, reason)); return; }
-    this.put(write, value => ({ state: 'unknown', reason, last: value }));
+    if (write.element === 'show') { this.shows.set(write.key, forgetShow(this.shows.get(write.key)!, reason, write.target)); return; }
+    this.put(write, value => ({ state: 'unknown', reason, last: value, target: write.target }));
   }
 
   /** OBS reported the value itself (event or readback). */
@@ -201,9 +205,9 @@ export function showMayBeOn(known: Known<ShownSourceState>): boolean {
     case 'failed': return !known.value.enabled;
   }
 }
-function forgetShow(known: Known<ShownSourceState>, reason: string): Known<ShownSourceState> {
+function forgetShow(known: Known<ShownSourceState>, reason: string, target?: string): Known<ShownSourceState> {
   const last = known.state === 'unknown' ? known.last : known.value;
-  return { state: 'unknown', reason, last: last && { ...last, enabled: showMayBeOn(known) } };
+  return { state: 'unknown', reason, last: last && { ...last, enabled: showMayBeOn(known) }, ...(target === undefined ? {} : { target }) };
 }
 function forgetAll<T>(map: Map<string, Known<T>>, reason: string): void {
   for (const [key, known] of map) map.set(key, forget(known, reason));

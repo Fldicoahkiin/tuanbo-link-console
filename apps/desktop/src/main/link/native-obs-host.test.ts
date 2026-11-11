@@ -188,6 +188,34 @@ it('主进程音频观察推进画面；旧会话消息不能扰动当前会话'
   await test.host.stop();
 });
 
+it('画面按项列在状态里：一项补了还不行只标这一项，这首歌的画面照常；OBS 断了另列一项“连接”，连上就收回；断着时不补（2026-11-10 第 2 题，R5）', async () => {
+  const test = setup();
+  // 机位0 is refused every time; 机位1 goes through.
+  test.execute.mockImplementation(action => action.kind === 'obs.setProgramScene' && action.sceneName === '机位0' ? Promise.reject(new Error('OBS 拒绝了')) : Promise.resolve());
+  const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+  await test.host.prepare(test.request); test.observe({ status: 'playing', positionMs: 0 }, 0); await flush();
+  for (let time = 20; time <= 600; time += 20) { test.observe({ status: 'playing', positionMs: time }, time); await flush(); }
+  // Refused, then repaired once, refused again: the program item has used up its one repair.
+  expect(test.execute).toHaveBeenCalledTimes(2);
+  expect(test.host.status).toMatchObject({ state: 'running', fault: '切换节目画面：这一项画面补发了一次还是没成功，到下一段会按时间线照常切换。请检查 OBS 里的这个场景或来源' });
+  expect(test.host.status?.items).toEqual([{ id: 'program', scope: 'item', state: 'limit', detail: test.host.status?.fault }]);
+  // The counts as output-recovery.ts keeps them: this item's one, and the song's 1 of 20.
+  expect(test.host.status?.recoveries).toEqual([{ row: 'picture.element', key: 'program@["机位0","cue-0"]', count: 1, max: 1, exhausted: false },
+    { row: 'picture.song', key: 'song', count: 1, max: 20, exhausted: false }]);
+  // OBS drops: the connection is listed on its own, first; nothing is repaired while it is down.
+  test.host.disconnect('网络断开');
+  expect(test.host.status?.items?.[0]).toMatchObject({ id: 'obs.connection', scope: 'channel', state: 'failed' });
+  test.execute.mockImplementation(() => Promise.reject(new Error('OBS 连接已断开')));
+  for (let time = 620; time <= 1400; time += 20) { test.observe({ status: 'playing', positionMs: time }, time); await flush(); }
+  const calls = test.execute.mock.calls.length;
+  expect(calls).toBe(3);
+  expect(test.host.status?.state).toBe('running');
+  test.execute.mockImplementation(() => Promise.resolve());
+  await test.host.reconnected(); await flush();
+  expect(test.host.status?.items?.some(item => item.id === 'obs.connection')).toBe(false);
+  await test.host.stop();
+});
+
 it('新音频准备立即作废旧输出，不把切歌的时钟派给上一首', async () => {
   const test = setup(); await test.host.prepare(test.request);
   test.observe({ status: 'playing', positionMs: 0 }, 0);
@@ -205,14 +233,16 @@ it('准备已经迟到不能中途加入播放，旧请求仍明确失败', asyn
   expect(test.execute).not.toHaveBeenCalled();
 });
 
-it('直播中 OBS 拒绝动作标红，通道继续后续画面，音频的状态和偏移不被改写', async () => {
+it('直播中 OBS 拒绝动作标红，按当时应有的画面补一次，通道继续后续画面，音频的状态和偏移不被改写（补一次：2026-11-10 第 2 题，R5）', async () => {
   const test = setup(); test.execute.mockRejectedValueOnce(new Error('OBS 断开'));
   await test.host.prepare(test.request); test.observe({ status: 'playing', positionMs: 0 }, 0);
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(test.host.status).toMatchObject({ state: 'running', fault: '画面动作失败：切机位 · OBS 断开' });
   expect(test.audio()).toMatchObject({ status: 'playing', offsetMs: 480000 });
   for (let time = 100; time <= 1000; time += 100) { test.observe({ status: 'playing', positionMs: time }, time); await new Promise(resolve => setTimeout(resolve, 0)); }
-  expect(test.execute).toHaveBeenCalledTimes(2); expect(test.host.status?.currentCueId).toBe('cue-1');
+  // The refused switch once more, then the next camera; the song's picture keeps running.
+  expect(test.execute).toHaveBeenCalledTimes(3); expect(test.host.status?.currentCueId).toBe('cue-1');
+  expect(test.host.status?.state).toBe('running');
 });
 
 it('初始化在途时音频先启动，立即作废准备，迟到结果不能继续加入', async () => {

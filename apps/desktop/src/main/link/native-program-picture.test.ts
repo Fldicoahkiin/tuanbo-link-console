@@ -79,7 +79,8 @@ it('画面动作失败后动作 MIDI 断开或时间码没发出：红字换成�
   await player.play('song');
   expect(t.state().status).toBe('playing');
   await t.playTo(0, 1400);
-  expect(t.state().fault).toBe('画面动作失败：切机位 · OBS 无响应');
+  // 2026-11-10 第 2 题（R5）：OBS 拒绝的切换补一次；补了还不行，红字是到上限的那条。
+  expect(t.state().fault).toBe('切换节目画面：这一项画面补发了一次还是没成功，到下一段会按时间线照常切换。请检查 OBS 里的这个场景或来源');
   // NativeProgramHost: the action MIDI port went away (NativeMidiHost fault → controller.reportFault).
   const midi = '动作 MIDI 接口「MA2」断开了，灯光动作没有发出';
   player.reportFault(midi);
@@ -89,6 +90,24 @@ it('画面动作失败后动作 MIDI 断开或时间码没发出：红字换成�
   t.emit({ mtcError: lost });
   await t.playTo(1620, 1800);
   expect(t.state().fault).toBe(`时间码没有发出，音频照常播放。原因：${lost}`);
+  await player.dispose();
+});
+
+// 2026-11-10 第 2 题（R5）：OBS 拒绝的切换按当时应有的画面补一次；补成了，这首歌上的红字和这一项一起收回。
+it('画面切换被拒绝一次：补一次成功后，这首歌上的红字收回，画面按项的列表也清空；播放照常', async () => {
+  let switches = 0;
+  const t = rig(action => {
+    if (!('sceneName' in action) || action.sceneName !== '机位1') return Promise.resolve();
+    return ++switches === 1 ? Promise.reject(new Error('OBS 无响应')) : Promise.resolve();
+  });
+  const player = t.open();
+  await player.play('song');
+  const seen = new Set<string>();
+  for (let at = 0; at <= 1400; at += 20) { await t.playTo(at, at); for (const item of t.state().pictureItems ?? []) seen.add(`${item.id}:${item.state}`); }
+  expect(switches).toBe(2);
+  // Listed in red while it waits for its repair; the repair that went through takes it off (the host's status may skip the moment between).
+  expect(seen.has('program:failed')).toBe(true);
+  expect(t.state()).toMatchObject({ status: 'playing', fault: null, pictureItems: [] });
   await player.dispose();
 });
 
