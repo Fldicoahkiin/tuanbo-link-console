@@ -1,7 +1,7 @@
 import { createConnection, isIP, type Socket } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import { Ma2CommandQueue } from './ma2-command-queue';
+import { Ma2CommandQueue, type Ma2CommandPriority, type Ma2QueueWait } from './ma2-command-queue';
 
 export type Ma2NetworkAddress = { host: string; port: number; monitorPort: number; localAddress?: string };
 export type Ma2ConnectedPeer = { localAddress: string; localPort: number; remoteAddress: string; remotePort: number };
@@ -88,23 +88,24 @@ export class Ma2Telnet {
       throw error;
     } finally { this.connecting = false; }
   }
-  async command(line: string, match: (response: string) => string | null, beforeSend?: () => void, priority:'normal'|'playback'|'stop'='normal'): Promise<string> {
+  /** `beforeSend` runs just before the line goes out and gets how long it waited for the line (`Ma2QueueWait`). */
+  async command(line: string, match: (response: string) => string | null, beforeSend?: (wait: Ma2QueueWait) => void, priority: Ma2CommandPriority = 'normal'): Promise<string> {
     if (!this.socket || (this.current !== 'connected' && this.current !== 'authenticating')) throw new Error('MA2 还没连接');
     if (/[\r\n\u0000]/.test(line) || Buffer.byteLength(line) > 4096) throw new Error('MA2 网络命令格式或长度无效');
     if (this.queuedCommands >= (priority==='stop'?64:32)) throw new Error('控台请求太多，请等当前操作完成');
     const epoch = this.connectionEpoch;
     const queuedAt = performance.now();
     this.queuedCommands += 1;
-    const response = this.commands.schedule(async () => {
+    const response = this.commands.schedule(async (wait) => {
       this.traffic.queueMs += performance.now() - queuedAt;
       if (epoch !== this.connectionEpoch || !this.socket) throw new Error('控台连接已改变，待发送请求已取消');
-      beforeSend?.();
+      beforeSend?.(wait);
       for (const stream of this.streams) stream.buffer = '';
       const pending = this.waitFor(match);
       this.socket.write(`${line}\r\n`);
       this.traffic.wireCommands += 1; this.traffic.sentBytes += Buffer.byteLength(`${line}\r\n`, 'utf8');
       return pending;
-    },priority).finally(() => { this.queuedCommands -= 1; });
+    }, priority, ma2CommandKind(line)).finally(() => { this.queuedCommands -= 1; });
     return response;
   }
   disconnect(): void { this.fail(new Error('MA2 连接已关闭，没确认的操作不会自动重试')); }
@@ -161,6 +162,19 @@ export class Ma2Telnet {
     }
     this.check();
   }
+}
+
+/** What a command line does, for the wait of the commands queued behind it: a plugin step by its action, or the
+ * kind of short command. Diagnostics only; nothing decides on it. */
+export function ma2CommandKind(line: string): string {
+  const plugin = /TBLINK_NET\(.*?'(beginsync|begin|chunk|run|read|release)'/.exec(line)?.[1];
+  if (plugin) return `plugin:${plugin}`;
+  if (line.startsWith('Login ')) return 'login';
+  if (line.includes('TBLINK_EXEC_INPUT')) return 'executor-input';
+  if (line.includes('TBLINK_PLAY_')) return 'cue';
+  if (line.includes('TBLINK_SHOW')) return 'show-check';
+  if (line.includes('TBLINK_BOOT')) return 'plugin-install';
+  return line.startsWith('Lua ') ? 'lua' : 'command';
 }
 
 /** Native monitor lines have a timestamp; command echo must never match a result. */

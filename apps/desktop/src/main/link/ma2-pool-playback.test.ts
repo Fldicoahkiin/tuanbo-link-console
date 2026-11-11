@@ -1,16 +1,19 @@
 import { expect, it, vi } from 'vitest';
 import { ma2PlaybackCommand, playMa2Cue } from './ma2-pool-playback';
+import type { Ma2QueueWait } from './ma2-command-queue';
+
+const wait: Ma2QueueWait = { waitedMs: 12, runningKind: 'plugin:run', sentBefore: 0 };
 
 it('停止缺失目标仍发送精确 Off 并等待关联回执，不被存在性检查阻止', async () => {
   const guard = vi.fn();
-  const command = vi.fn((line: string, match: (response: string) => string | null, beforeSend?: () => void) => {
-    beforeSend?.();
+  const command = vi.fn((line: string, match: (response: string) => string | null, beforeSend?: (queued: Ma2QueueWait) => void) => {
+    beforeSend?.(wait);
     expect(line).toContain("gma.cmd('Off Sequence 19')");
     expect(line).not.toContain('getobj.handle');
     const marker = /TBLINK_PLAY_[a-f0-9]{32}/.exec(line)?.[0];
     return Promise.resolve(match(`${marker}:SENT\r\n`)!);
   });
-  await playMa2Cue({ command }, { target: 'sequence', sequence: 19, action: 'off' }, guard, 'stop');
+  await expect(playMa2Cue({ command }, { target: 'sequence', sequence: 19, action: 'off' }, guard, 'stop')).resolves.toEqual(wait);
   expect(guard).toHaveBeenCalledOnce();
   await expect(playMa2Cue({ command: () => Promise.reject(new Error('连接中断')) },
     { target: 'sequence', sequence: 19, action: 'off' }, guard, 'stop')).rejects.toThrow('连接中断');
@@ -29,8 +32,8 @@ it('序列池直接调用序列和小数 Cue，不制造执行器地址', () => 
 
 it('发送前验证会话，只接受关联回执，对象不存在明确失败', async () => {
   const beforeSend = vi.fn();
-  const command = vi.fn((line: string, match: (response: string) => string | null, guard?: () => void) => {
-    guard?.();
+  const command = vi.fn((line: string, match: (response: string) => string | null, guard?: (queued: Ma2QueueWait) => void) => {
+    guard?.(wait);
     expect(line).toContain("gma.show.getobj.handle('Sequence 168 Cue 1.250')");
     const marker = /TBLINK_PLAY_[a-f0-9]{32}/.exec(line)?.[0];
     expect(match(line)).toBeNull();

@@ -13,8 +13,8 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
     memory.drop = () => { this.state = 'disconnected'; onState('disconnected'); };
   }
   async connect(): Promise<string> { memory.connects += 1; await memory.pause; this.state = 'connected'; return memory.version; }
-  async command(line: string, match: (text: string) => string | null, beforeSend?: () => void, priority?: string): Promise<string> {
-    memory.priorities.push(priority); await memory.pause; beforeSend?.();
+  async command(line: string, match: (text: string) => string | null, beforeSend?: (wait: { waitedMs: number; runningKind: string | null; sentBefore: number }) => void, priority?: string): Promise<string> {
+    memory.priorities.push(priority); await memory.pause; beforeSend?.({ waitedMs: 2400, runningKind: 'plugin:run', sentBefore: 0 });
     const cuePrefix = /TBLINK_CUES_[a-f0-9]{32}:/.exec(line)?.[0];
     if (cuePrefix) {
       const row = `12;${Buffer.from('截图重建序列').toString('hex')};${meiNanCues.map((cue, index) => `${index + 1},${cue},${Buffer.from(`Cue ${cue}`).toString('hex')}`).join(';')}`;
@@ -127,7 +127,7 @@ it('网络播放拒绝过期、换目标和停止后排队的指令', async () =
   await manager.save({ settings }); await manager.connect();
   const { host, port, monitorPort, username } = settings;
   const request = { network: { host, port, monitorPort, username }, sessionId: crypto.randomUUID(), deadlineAt: Date.now() + 1000, action: { target: 'sequence' as const, sequence: 168, cue: '1.250', action: 'goto' as const } };
-  await expect(manager.playCue(request)).resolves.toBeUndefined();
+  await expect(manager.playCue(request)).resolves.toEqual({ waitedMs: 2400, runningKind: 'plugin:run', sentBefore: 0 });
   await expect(manager.playCue({ ...request, deadlineAt: Date.now() - 1 })).rejects.toThrow('控台正忙（比如在同步或读取歌曲），这条灯光指令等了 1 秒没发出去，已经取消，不会再发。请稍后再点一次');
   await expect(manager.playCue({ ...request, deadlineAt: Date.now() - 1, action: { target: 'executor', executor: '1.101', action: 'off' } })).rejects.toThrow('执行器可能还亮着');
   await expect(manager.playCue({ ...request, network: { ...request.network, host: '127.0.0.2' } })).rejects.toThrow('目标已改变');
@@ -143,7 +143,9 @@ it('关灯指令插到同步读写前面发，点 Cue 照常按播放顺序排�
   const { host, port, monitorPort, username } = settings;
   const network = { host, port, monitorPort, username };
   memory.priorities = [];
-  await manager.playCue({ network, sessionId: crypto.randomUUID(), deadlineAt: Date.now() + 1000, action: { target: 'executor', executor: '1.101', action: 'off' } });
+  // The Off reports how long it waited for the console line and what was on it, for the run log (M1).
+  await expect(manager.playCue({ network, sessionId: crypto.randomUUID(), deadlineAt: Date.now() + 1000, action: { target: 'executor', executor: '1.101', action: 'off' } }))
+    .resolves.toEqual({ waitedMs: 2400, runningKind: 'plugin:run', sentBefore: 0 });
   await manager.playCue({ network, sessionId: crypto.randomUUID(), deadlineAt: Date.now() + 1000, action: { target: 'sequence', sequence: 168, cue: '1', action: 'goto' } });
   expect(memory.priorities).toEqual(['stop', 'playback']);
   manager.disconnect();

@@ -19,6 +19,7 @@ import { Ma2ExecutorMutationService } from './ma2-executor-mutation-service';
 import { Ma2ExecutorInputService } from './ma2-executor-input';
 import { Ma2CueDeleteService } from './ma2-cue-delete-service';
 import { readMa2Catalog } from './ma2-catalog';
+import type { Ma2CommandPriority, Ma2QueueWait } from './ma2-command-queue';
 import { readMa2NetworkPreview } from './ma2-network-preview';
 import { Ma2LiveService } from './ma2-live-service';
 import { Ma2SongWatch } from './ma2-song-watch';
@@ -193,7 +194,8 @@ export class Ma2NetworkManager {
     this.cancelledPlayback.set(sessionId, now + 180000);
   }
   get connectionGeneration():number { return this.generation; }
-  async playCue(input: Ma2PlaybackRequest, options?:{beforeSend?:()=>void;priority?:'normal'|'playback'|'stop'}): Promise<void> {
+  /** Resolves with how long the command waited for the console line and what held it (M1: a lights-off's wait). */
+  async playCue(input: Ma2PlaybackRequest, options?:{beforeSend?:()=>void;priority?:Ma2CommandPriority}): Promise<Ma2QueueWait> {
     const request = ma2PlaybackRequestSchema.parse(input);
     const settings = this.settings; const connection = this.connection; const generation = this.generation;
     if (!settings || !connection || connection.state !== 'connected') throw new Error('序列池播放需要先在设备设置连接 MA2 网络');
@@ -205,7 +207,7 @@ export class Ma2NetworkManager {
     };
     current();
     // An Off passes queued sync reads and writes, so stopping a song switches its lights off first.
-    await playMa2Cue(connection, request.action, ()=>{current();options?.beforeSend?.();},options?.priority ?? (request.action.action === 'off' ? 'stop' : 'playback'));
+    return playMa2Cue(connection, request.action, ()=>{current();options?.beforeSend?.();},options?.priority ?? (request.action.action === 'off' ? 'stop' : 'playback'));
   }
   private credentialId(settings: Ma2NetworkSettings): string { return `ma2-${createHash('sha256').update(`${settings.host}:${settings.port}:${settings.username}`).digest('hex')}`; }
   async readCatalog(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal, targets?: readonly number[], checkpoint?: (catalog: Ma2Catalog, entry?: Ma2Catalog['entries'][number]) => Promise<void>, expectedSource?: Ma2CatalogRequest['expectedSource']): Promise<Ma2Catalog> {

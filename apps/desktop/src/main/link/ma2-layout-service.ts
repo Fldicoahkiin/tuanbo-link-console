@@ -185,7 +185,7 @@ export class Ma2LayoutService {
     const signal = externalSignal ? AbortSignal.any([externalSignal, deadline.signal]) : deadline.signal;
     const connection: Connection = { command: (line, match, beforeSend, priority) => {
       signal.throwIfAborted();
-      return rawConnection.command(line, match, () => { signal.throwIfAborted(); beforeSend?.(); }, priority).then(result => { received(); return result; });
+      return rawConnection.command(line, match, wait => { signal.throwIfAborted(); beforeSend?.(wait); }, priority).then(result => { received(); return result; });
     } };
     // Every acknowledged line of a long transfer counts as progress for the 90 s watchdog.
     const bridge: SongBridge = { request: (operation, target, expected, desired) => rawBridge.request(operation, target, expected, desired, signal, received).then(result => { received(); return result; }),

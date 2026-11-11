@@ -975,8 +975,8 @@ function registerIpc(
     await ma2NetworkReady;
     const request = ma2PlaybackRequestSchema.parse(payload);
     try {
-      await ma2Network.playCue(request);
-      await logger.record({ level: 'info', category: 'operator', device: 'MA2', message: 'MA2 Cue 网络指令已发送', result: 'succeeded', details: { action: request.action } });
+      const queue = await ma2Network.playCue(request);
+      await logger.record({ level: 'info', category: 'operator', device: 'MA2', message: request.action.action === 'off' ? 'MA2 关灯指令已发送' : 'MA2 Cue 网络指令已发送', result: 'succeeded', details: { action: request.action, queue } });
     } catch (error) {
       await logger.record({ level: 'error', category: 'device', device: 'MA2', message: String(error), result: 'failed' });
       throw error;

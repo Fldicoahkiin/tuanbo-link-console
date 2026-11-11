@@ -3,7 +3,7 @@ import { ma2AuditionRequestSchema, ma2AuditionStateSchema, type Ma2AuditionReque
 type Target=Ma2AuditionState['targets'][number]&{epoch:number;possiblySent:boolean;pending:number};
 /** Upper bound per Off, beyond the 7 s send deadline the transport already enforces. */
 const offTimeoutMs=8000;
-export type AuditionNetwork={readonly connectionGeneration:number;cancelPlayback:(id:string)=>void;playCue:(request:Ma2PlaybackRequest,options?:{beforeSend?:()=>void;priority?:'normal'|'stop'})=>Promise<void>};
+export type AuditionNetwork={readonly connectionGeneration:number;cancelPlayback:(id:string)=>void;playCue:(request:Ma2PlaybackRequest,options?:{beforeSend?:()=>void;priority?:'normal'|'stop'})=>Promise<unknown>};
 /** App-lifetime ownership of audition outputs. Component cancellation never forgets lit targets. */
 export class Ma2AuditionService {
   private targets=new Map<string,Target>();private sessions=new Map<string,number>();
