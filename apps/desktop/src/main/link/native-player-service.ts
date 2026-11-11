@@ -35,7 +35,8 @@ type Options = {
   recovered?: (report: PortRecoveryReport) => void;
   /** A dropout or a refused timecode send this song counted against its limit (output-recovery.ts), with the red text
    * shown for it: carried on from (`recover`), or the one that reached the limit. For the run log. */
-  recovery?: (entry: { result: RecoveryResult; message: string; itemId: string; positionMs: number }) => void;
+  recovery?: (entry: { result: RecoveryResult; message: string; itemId: string; positionMs: number;
+    /** The Windows code of a refused timecode send. */ code?: number }) => void;
   measured?: (phase: string, elapsedMs: number) => void;
   beforeControl?: (request: NativePlayerControl) => void;
   /** Takes the timecode output from the editor before the engine opens it. */
@@ -64,8 +65,9 @@ export class NativePlayerService {
   /** The engine's dropout and refused timecode send counts, from its latest telemetry; it restarts them on every prepare. */
   private engineUnderruns = 0;
   private engineTransient = 0;
-  /** Timecode sends refused in this song. */
+  /** Timecode send failures counted in this song, and when the last one was counted (MTC_REFUSAL_SPAN_MS). */
   private mtcRefused = 0;
+  private mtcRefusedAt: number | null = null;
   /** This song's dropouts and refused timecode sends against their limits (2026-11-10 decision 2); a new song starts over, a seek does not. */
   private recovery = new OutputRecovery();
   private readonly preload: NativeAudioPreload;
@@ -129,7 +131,7 @@ export class NativePlayerService {
       itemId: request.snapshot.itemId, status: 'preparing', positionMs: request.snapshot.positionMs, offsetMs: request.snapshot.offsetMs,
       sampleRate: request.snapshot.sampleRate, enginePid: null, engineTitle: null, mtcPortName: null, mtcSent: 0,
       audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, mtcRecovered: null, outputFault: null, gain: request.snapshot.volume, analysis: null };
-    this.recovery = new OutputRecovery(); this.mtcRefused = 0;
+    this.recovery = new OutputRecovery(); this.mtcRefused = 0; this.mtcRefusedAt = null;
     this.publish();
     const operation = this.pending.then(async () => {
       let measuredAt = performance.now();
@@ -409,8 +411,12 @@ export class NativePlayerService {
     const refused = newCount(clock.midiTransient, this.engineTransient); this.engineTransient = clock.midiTransient;
     const dropouts = this.carryOn('audio.underrun', underruns - this.state.underruns, underruns);
     // While the lost port is waited for and reopened, its refusals belong to that outage; a timecode already stopped counts no more.
-    const counted = this.mtcRecovery.watching || this.state.mtcError ? 0 : refused; this.mtcRefused += counted;
-    const timecode = this.carryOn('mtc.sendFailure', counted, this.mtcRefused);
+    // The refused sends of one busy moment are one failure (MTC_REFUSAL_SPAN_MS).
+    const now = Date.now();
+    const counted = refused && !this.mtcRecovery.watching && !this.state.mtcError
+      && (this.mtcRefusedAt === null || now - this.mtcRefusedAt >= MTC_REFUSAL_SPAN_MS) ? 1 : 0;
+    if (counted) { this.mtcRefused += 1; this.mtcRefusedAt = now; }
+    const timecode = this.carryOn('mtc.sendFailure', counted, this.mtcRefused, clock.midiTransientCode);
     if (dropouts.limit) { this.patch({ underruns }); this.stopForFault(new Error(dropouts.limit)); return; }
     const mtcError = midiError ? this.mtcFailure(midiError, unplugged) : timecode.limit ?? this.state.mtcError;
     if (timecode.limit) this.stopMtcForSong();
@@ -428,12 +434,12 @@ export class NativePlayerService {
   }
   /** Counts `added` new faults of `row` for this song, `total` being the song's count with them: the red text of the
    * last one carried on from, and the limit text once the limit is reached. Each is logged. */
-  private carryOn(row: 'audio.underrun' | 'mtc.sendFailure', added: number, total: number): { fault: string | null; limit: string | null } {
+  private carryOn(row: 'audio.underrun' | 'mtc.sendFailure', added: number, total: number, code?: number): { fault: string | null; limit: string | null } {
     let fault: string | null = null;
     for (let index = 0; index < added; index++) {
       const result = this.recovery.record(row, 'song', Date.now()), count = total - added + index + 1;
-      const message = result.outcome === 'limit' ? result.limitText : carriedOnText(row, count);
-      if (this.state) this.options.recovery?.({ result, message, itemId: this.state.itemId, positionMs: this.state.positionMs });
+      const message = result.outcome === 'limit' ? result.limitText : carriedOnText(row, count, code);
+      if (this.state) this.options.recovery?.({ result, message, itemId: this.state.itemId, positionMs: this.state.positionMs, ...(code === undefined ? {} : { code }) });
       if (result.outcome === 'limit') return { fault, limit: result.limitText };
       fault = message;
     }
@@ -471,11 +477,17 @@ export class NativePlayerService {
 /** How many the engine counted since `last`; it restarts its counts on every prepare. */
 function newCount(now: number, last: number): number { return now >= last ? now - last : now; }
 
+/** Refused timecode sends within this long of the one last counted are the same failure. The engine tries again every
+ * millisecond, so one busy moment of the interface is many refused sends: counted one by one, a few milliseconds would
+ * use up the song's whole limit. A port that keeps refusing is counted again each time this passes, so it still
+ * reaches the limit. This says what one failure is; how many a song may have is in output-recovery.ts. */
+const MTC_REFUSAL_SPAN_MS = 1000;
+
 /** The red text of a fault the song carried on from: what happened, then what to do. */
-function carriedOnText(row: 'audio.underrun' | 'mtc.sendFailure', count: number): string {
+function carriedOnText(row: 'audio.underrun' | 'mtc.sendFailure', count: number, code?: number): string {
   return row === 'audio.underrun'
     ? `声卡断了一下，音乐接着放（这首歌第 ${count} 次）。经常出现时请关掉占用电脑的程序，或换一个声卡输出`
-    : `有一条时间码没发出去，已从当前位置接着发（这首歌第 ${count} 次）。经常出现时请检查 MIDI 接口和线`;
+    : `时间码没发出去${code === undefined ? '' : `（Windows 错误码 ${code}）`}，已从当前位置接着发（这首歌第 ${count} 次）。经常出现时请检查 MIDI 接口和线`;
 }
 
 /** E_INVALIDARG on prepare means the engine refused the range it was given; say which range, for the log and the operator. */

@@ -745,9 +745,9 @@ function registerIpc(
           message: `时间码中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）：从当前播放位置继续发送，中断期间的时间码不补发`,
           result: 'succeeded', details: report }).catch((error: unknown) => console.error('正式音频日志写入失败', error)); },
         // A dropout or a refused timecode send this song carried on from, or the one that reached its limit (2026-11-10 decision 2).
-        recovery: ({ result, message, itemId, positionMs }) => { void logger.record({ level: result.outcome === 'limit' ? 'error' : 'warning', category: 'device',
+        recovery: ({ result, message, itemId, positionMs, code }) => { void logger.record({ level: result.outcome === 'limit' ? 'error' : 'warning', category: 'device',
           device: result.channel === 'mtc' ? '时间码' : '音频', itemId, message, result: result.outcome === 'limit' ? 'failed' : 'succeeded',
-          details: { channel: result.channel, row: result.row, count: result.count, limit: result.limit, atLimit: result.atLimit, positionMs } })
+          details: { channel: result.channel, row: result.row, count: result.count, limit: result.limit, atLimit: result.atLimit, positionMs, ...(code === undefined ? {} : { code }) } })
           .catch((error: unknown) => console.error('正式音频日志写入失败', error)); }
       });
     }

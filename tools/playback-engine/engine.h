@@ -42,12 +42,13 @@ typedef struct {
   unsigned char full_frame[10];
   UINT32 fps, midi_generation, midi_sent, midi_epoch, midi_interruptions;
   /* Timecode sends Windows refused while the port stayed (not 5/6): each relocates with a full frame on the next
-   * tick. The host counts them against its limit (output-recovery.ts mtc.sendFailure) and stops timecode there. */
+   * tick. The host counts them against its limit (output-recovery.ts mtc.sendFailure) and stops timecode there.
+   * midi_transient_code is the Windows code of the latest one, for the log. */
   UINT32 midi_transient;
   /* 29.97 drop-frame labels (fps is then 30), and the operator's choice to relocate receivers with
    * quarter frames alone, without the Full Frame SysEx some USB interfaces do not pass on. */
   BOOL drop_frame, quarter_frames_only;
-  int32_t midi_error, midi_worker_error, midi_interruption;
+  int32_t midi_error, midi_worker_error, midi_interruption, midi_transient_code;
   BOOL midi_suspended;
   /* Timecode port reopen (op 9): the command thread records it, the MIDI worker carries it out without
    * holding midi_lock, because opening a port Windows is still creating blocks for seconds. While

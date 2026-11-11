@@ -37,7 +37,7 @@ MMRESULT midi_prepare(UINT device, UINT fps, BOOL drop_frame, BOOL quarter_frame
   EnterCriticalSection(&engine.midi_lock);
   engine.fps = fps; engine.drop_frame = drop_frame; engine.quarter_frames_only = quarter_frames_only;
   engine.midi_error = 0; engine.midi_sent = 0; engine.max_late = 0;
-  engine.midi_interruptions = 0; engine.midi_interruption = 0; engine.midi_transient = 0;
+  engine.midi_interruptions = 0; engine.midi_interruption = 0; engine.midi_transient = 0; engine.midi_transient_code = 0;
   engine.midi_wake_gap_ms = engine.midi_lock_wait_ms = engine.midi_audio_lock_wait_ms = engine.midi_send_ms = 0;
   MMRESULT result = MMSYSERR_NOERROR;
   if (device != 0xffffffffu) {
@@ -123,7 +123,7 @@ static void midi_interrupt(int32_t reason, BOOL *running) {
  * receiver with a Full Frame at the current audio position; the host stops timecode at its limit. Caller holds midi_lock. */
 static void midi_send_failed(MMRESULT code, BOOL *running) {
   if (code == MMSYSERR_INVALHANDLE || code == MMSYSERR_NODRIVER) engine.midi_error = (int32_t)code;
-  else engine.midi_transient++;
+  else { engine.midi_transient++; engine.midi_transient_code = (int32_t)code; }
   *running = FALSE;
 }
 DWORD WINAPI midi_worker(void *unused) {

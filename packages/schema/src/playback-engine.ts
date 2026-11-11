@@ -49,8 +49,9 @@ export const nativePlaybackEventSchema = z.discriminatedUnion('kind', [
     midiSent: z.number().int().nonnegative(), midiError: z.number().int(),
     // Stale clock (-2) or late worker (-1): nothing sent late, then a Full Frame relocates.
     midiInterruptions: z.number().int().nonnegative(), midiInterruption: z.number().int(),
-    // Timecode sends Windows refused while the port stayed: each is relocated with a Full Frame; the host stops at its limit.
-    midiTransient: z.number().int().nonnegative(),
+    // Timecode sends Windows refused while the port stayed: each is relocated with a Full Frame; the host stops at its
+    // limit. midiTransientCode is the Windows code of the latest one, for the log.
+    midiTransient: z.number().int().nonnegative(), midiTransientCode: z.number().int(),
     // Timecode port reopens the engine has completed, and the result of the last one (0: opened).
     midiReopens: z.number().int().nonnegative(), midiReopenResult: z.number().int(), audioError: z.number().int(),
     maxMidiLatenessMs: z.number().finite().nonnegative(), bufferedFrames: z.number().int().nonnegative(),

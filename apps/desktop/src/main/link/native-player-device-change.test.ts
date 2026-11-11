@@ -32,7 +32,7 @@ vi.mock('./native-playback-client', () => ({
     readonly identity = { pid: 123, title: 'test', windowClass: 'Static' as const };
     private clock: Extract<NativePlaybackEvent, { kind: 'clock' }> = {
       protocol: 4, kind: 'clock', generation: 0, state: 'empty', positionMs: 0, qpc100ns: '1',
-      clockFrequency: 48000, sampleRate: 48000, underruns: 0, midiSent: 0, midiError: 0, midiInterruptions: 0, midiInterruption: 0, midiTransient: 0, midiReopens: 0, midiReopenResult: 0, audioError: 0,
+      clockFrequency: 48000, sampleRate: 48000, underruns: 0, midiSent: 0, midiError: 0, midiInterruptions: 0, midiInterruption: 0, midiTransient: 0, midiTransientCode: 0, midiReopens: 0, midiReopenResult: 0, audioError: 0,
       maxMidiLatenessMs: 0, bufferedFrames: 1000, gain: 1,
       analysis: { fftSize: 2048, peaks: [0, 0], spectrum: Array.from({ length: 1024 }, () => 0) }
     };
@@ -495,32 +495,40 @@ it('声卡断流一次接着播，标红带次数并记日志；1 分钟内第 5
   } finally { await lost.close(); }
 });
 
-it('一条时间码没发出去接着发，标红带次数；一首歌第 3 次停发时间码，音乐照常；换歌重新算', async () => {
+it('时间码没发出去接着发，标红带次数和错误码；同一阵被拒的只算一次；一首歌第 3 次停发时间码，音乐照常；换歌重新算', async () => {
   const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId };
-  const recovery = vi.fn<(entry: { result: RecoveryResult; message: string; itemId: string; positionMs: number }) => void>();
+  const recovery = vi.fn<(entry: { result: RecoveryResult; message: string; itemId: string; positionMs: number; code?: number }) => void>();
   const service = new NativePlayerService({ ...f.options, recovery });
+  let now = 1_000_000; const time = vi.spyOn(Date, 'now').mockImplementation(() => now);
   try {
     await service.prepare(f.request);
     await service.control({ ...envelope, generation: 2, kind: 'play' });
-    native.emit!({ midiTransient: 1, midiSent: 40, qpc100ns: '2' });
+    native.emit!({ midiTransient: 1, midiTransientCode: 67, midiSent: 40, qpc100ns: '2' });
     expect(service.status).toMatchObject({ status: 'playing', mtcError: null, mtcPortName: 'test-mtc' });
-    expect(service.status?.outputFault).toMatch(/^有一条时间码没发出去，已从当前位置接着发（这首歌第 1 次）/);
-    native.emit!({ midiTransient: 2, qpc100ns: '3' });
+    expect(service.status?.outputFault).toMatch(/^时间码没发出去（Windows 错误码 67），已从当前位置接着发（这首歌第 1 次）/);
+    expect(recovery.mock.calls[0]?.[0]).toMatchObject({ code: 67, result: { row: 'mtc.sendFailure', outcome: 'recover', count: 1 } });
+    // The engine tries again every millisecond: the refusals of one busy moment are this one failure.
+    now += 20; native.emit!({ midiTransient: 9, qpc100ns: '3' });
+    now += 900; native.emit!({ midiTransient: 12, qpc100ns: '4' });
+    expect(recovery).toHaveBeenCalledTimes(1);
+    expect(service.status?.outputFault).toContain('这首歌第 1 次');
+    // Still refusing a second after it was counted: counted again, so a port that keeps refusing reaches the limit.
+    now += 80; native.emit!({ midiTransient: 13, qpc100ns: '5' });
     expect(service.status?.outputFault).toContain('这首歌第 2 次');
     native.commands.mockClear();
-    native.emit!({ midiTransient: 3, qpc100ns: '4' });
+    now += 1000; native.emit!({ midiTransient: 14, qpc100ns: '6' });
     expect(service.status).toMatchObject({ status: 'playing', audioError: null, mtcError: OUTPUT_RECOVERY_RULES['mtc.sendFailure'].limitText, mtcPortName: null });
     await vi.waitFor(() => expect(native.commands.mock.calls.map(([command]) => command.kind)).toEqual(['stop-mtc']));
     // Already stopped: further refusals count no more.
-    native.emit!({ midiTransient: 9, qpc100ns: '5' });
+    now += 5000; native.emit!({ midiTransient: 20, qpc100ns: '7' });
     expect(recovery.mock.calls.map(([entry]) => entry.result.outcome)).toEqual(['recover', 'recover', 'limit']);
     expect(service.status?.status).toBe('playing');
-    // The next song starts its count over; the engine restarted its own count with the prepare.
+    // The next song starts its count over, however soon it comes; the engine restarted its own count with the prepare.
     native.emit!({ midiTransient: 0 });
     await service.prepare({ ...f.request, generation: 3 });
     await service.control({ ...envelope, generation: 4, kind: 'play' });
-    native.emit!({ midiTransient: 1, qpc100ns: '6' });
+    now += 10; native.emit!({ midiTransient: 1, qpc100ns: '8' });
     expect(service.status).toMatchObject({ mtcError: null, mtcPortName: 'test-mtc' });
     expect(service.status?.outputFault).toContain('这首歌第 1 次');
-  } finally { await service.close(); }
+  } finally { time.mockRestore(); await service.close(); }
 });
