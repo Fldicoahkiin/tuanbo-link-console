@@ -1,13 +1,22 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ListPlus, Trash2 } from 'lucide-react';
 import { useProgramViewport } from './useProgramViewport';
+import { useDragSession } from './useDragSession';
+import { contentPoint, contentRectangle, intersects, scrollBoxOf, selectionRectangle, type Point, type Rectangle } from './program-grid-geometry';
 import { Menu, MenuItem } from '../ui';
 
 export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAddItem, onBlankClick, onImportFiles, selectedIds, onSelectionChange, onDeleteSelection, view = 'cards' }: { itemIds: string[]; renderItem: (index: number) => ReactNode; empty: ReactNode; compact: boolean; locked: boolean; onAddItem: () => void; onBlankClick: () => void; onImportFiles: (files: File[]) => Promise<void>; selectedIds: string[]; onSelectionChange: (ids: string[]) => void; onDeleteSelection: () => void; view?: 'list' | 'cards' }): JSX.Element {
   const virtual = useProgramViewport(itemIds, view, compact);
-  const drag = useRef<{ x: number; y: number; base: string[]; moved: boolean } | null>(null);
+  // Box selection on empty space is a drag like the others (DragSession): Escape gives it up and puts the selection
+  // back, letting go anywhere ends it. Its corners are content positions of the scrolled list (program-grid-geometry).
+  const session = useDragSession<{ pointerId: number; client: Point; start: Point; base: string[]; rectangle: Rectangle | null }>();
+  const lasso = useRef<{ base: string[] } | null>(null);
   const suppressClick = useRef(false);
-  const [rectangle, setRectangle] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const rectangle = session.drag?.rectangle ?? null;
+  useEffect(() => {
+    // The drag went away without being let go on the list (Escape, the window lost focus): selection as before.
+    if (session.drag === null && lasso.current) { onSelectionChange(lasso.current.base); lasso.current = null; }
+  }, [session.drag, onSelectionChange]);
   const [fileDrop, setFileDrop] = useState(false);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
@@ -24,26 +33,29 @@ export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAdd
     onFocusCapture={event => virtual.setFocused(event.target.closest<HTMLElement>('[data-program-id]')?.dataset.programId ?? null)}
     onPointerDown={event => {
       if (locked || event.button !== 0 || (event.target instanceof Element && event.target.closest('button, input, article, [role="menu"]'))) return;
-      event.preventDefault(); event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId);
+      event.preventDefault(); event.currentTarget.focus();
       suppressClick.current = false;
-      drag.current = { x: event.clientX, y: event.clientY, base: event.ctrlKey || event.metaKey ? selectedIds : [], moved: false };
+      lasso.current = { base: selectedIds };
+      session.begin(event, { pointerId: event.pointerId, client: { x: event.clientX, y: event.clientY }, start: contentPoint(event.clientX, event.clientY, scrollBoxOf(event.currentTarget)), base: event.ctrlKey || event.metaKey ? selectedIds : [], rectangle: null });
     }}
     onPointerMove={event => {
-      const start = drag.current;
-      if (!start || locked || Math.hypot(event.clientX - start.x, event.clientY - start.y) < 4) return;
-      start.moved = true;
-      const left = Math.min(start.x, event.clientX), top = Math.min(start.y, event.clientY);
-      const right = Math.max(start.x, event.clientX), bottom = Math.max(start.y, event.clientY);
-      setRectangle({ left, top, width: right - left, height: bottom - top });
-      const ids = new Set(start.base);
+      const current = session.current();
+      if (!current || locked || current.pointerId !== event.pointerId || (!current.rectangle && Math.hypot(event.clientX - current.client.x, event.clientY - current.client.y) < 4)) return;
+      const box = scrollBoxOf(event.currentTarget);
+      const selection = selectionRectangle(current.start, contentPoint(event.clientX, event.clientY, box));
+      session.update({ ...current, rectangle: selection });
+      const ids = new Set(current.base);
       for (const card of event.currentTarget.querySelectorAll<HTMLElement>('[data-program-id]')) {
-        const box = card.getBoundingClientRect();
-        if (box.left < right && box.right > left && box.top < bottom && box.bottom > top && card.dataset.programId) ids.add(card.dataset.programId);
+        if (card.dataset.programId && intersects(selection, contentRectangle(card.getBoundingClientRect(), box))) ids.add(card.dataset.programId);
       }
       onSelectionChange([...ids]);
     }}
-    onPointerUp={event => { suppressClick.current = drag.current?.moved ?? false; drag.current = null; setRectangle(null); if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
-    onPointerCancel={() => { drag.current = null; setRectangle(null); suppressClick.current = false; }}
+    onPointerUp={event => {
+      const current = session.current();
+      if (current?.pointerId !== event.pointerId) return;
+      suppressClick.current = current.rectangle !== null; lasso.current = null; session.end();
+    }}
+    onPointerCancel={event => { if (session.current()?.pointerId === event.pointerId) session.end(); }}
     onClickCapture={event => {
       if (event.target instanceof Element && event.target.closest('[role="menu"]')) return;
       if (suppressClick.current) { suppressClick.current = false; event.preventDefault(); event.stopPropagation(); return; }
@@ -58,7 +70,7 @@ export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAdd
       if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
       virtual.keyDown(event);
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') { event.preventDefault(); if (!locked) onSelectionChange(itemIds); }
-      if (event.key === 'Escape') { onSelectionChange([]); drag.current = null; setRectangle(null); }
+      if (event.key === 'Escape') onSelectionChange([]);
       if (event.key === 'Delete' && selectedIds.length && !locked) { event.preventDefault(); onDeleteSelection(); }
     }}
     onDragOver={event => {
