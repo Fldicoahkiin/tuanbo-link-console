@@ -28,7 +28,8 @@ export class Ma2NetworkWire implements Ma2Wire {
     }
     return result;
   }
-  async exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress): Promise<string> {
+  /** `beforeStep` runs before every plugin step, the first included; throwing stops before that step and releases. */
+  async exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: () => void): Promise<string> {
     signal?.throwIfAborted();
     if (!/^[a-f0-9]{32}$/.test(id) || !Number.isInteger(target) || target < 1 || target > 99999) throw new Error('无效的 MA2 网络请求');
     let data = Buffer.from(body);
@@ -48,8 +49,19 @@ export class Ma2NetworkWire implements Ma2Wire {
         if (await this.call('chunk', id, `,${offset / 256 + 1},'${data.subarray(offset, offset + 256).toString('hex')}'`) !== 'ACK') throw new Error('MA2 未确认数据片段');
         progress?.();
       }
-      signal?.throwIfAborted(); beforeSend(); sent = true;
-      const receipt = /^DONE:(\d+)$/.exec(await this.call('run', id));
+      signal?.throwIfAborted(); beforeStep?.(); beforeSend(); sent = true;
+      // The plugin does one console Export or Import per line and answers STEP:<steps done> until the
+      // last, so stop and playback commands queued meanwhile go out between two steps. A plugin from
+      // before steps ignores 'steps' and answers DONE at once, which is the same protocol.
+      let reply = await this.call('run', id, ",'steps'");
+      for (let done = 0, step = /^STEP:(\d+)$/.exec(reply); step; step = /^STEP:(\d+)$/.exec(reply)) {
+        if (Number(step[1]) !== done + 1) throw new Error('控台分步执行的回答对不上');
+        done += 1;
+        progress?.();
+        signal?.throwIfAborted(); beforeStep?.();
+        reply = await this.call('step', id);
+      }
+      const receipt = /^DONE:(\d+)$/.exec(reply);
       const size = Number(receipt?.[1]);
       if (!Number.isInteger(size) || size < 1 || size > 33554500) throw new Error('MA2 响应长度无效');
       const chunks: Buffer[] = [];

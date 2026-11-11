@@ -10,8 +10,15 @@ export type Ma2Operation = 'PING' | 'PAGES' | 'PAGE' | 'LIST' | 'LISTSEQ' | 'SEQ
 /** Fires after every acknowledged line of a long transfer; response reads also say how many bytes have arrived. */
 export type Ma2TransferProgress = (download?: { completed: number; total: number }) => void;
 export type Ma2Wire = {
-  exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress): Promise<string>;
+  /** `beforeStep` runs before each plugin step (the first included); throwing stops there and releases the request. */
+  exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: () => void): Promise<string>;
 };
+/** PING answers the console version; a plugin that works step by step adds a line `steps=1`. */
+export function parseMa2Ping(response: string): { version: string; steps: boolean } {
+  const match = /^([^\n]+)(\nsteps=1)?$/.exec(response);
+  if (!match) throw new Error('控台连接组件的版本回答无法识别');
+  return { version: match[1]!, steps: match[2] !== undefined };
+}
 export class Ma2BridgeFailure extends Error {
   constructor(message: string, readonly requestId: string, readonly sent: boolean, options: ErrorOptions, readonly backupFile: string | null = null) { super(message, options); }
 }
@@ -80,6 +87,7 @@ export class Ma2OnpcBridge {
       const body = writing ? `${Buffer.byteLength(expected)}\n${expected}${desired}` : operation === 'EXECUTOR' || operation === 'SEQCUES' || operation === 'SEQUENCE' || operation === 'DISCARD' || assigning ? expected : operation === 'SCOPE' ? requestedSequences.sort((a, b) => a - b).join(',') : '';
       if (Buffer.byteLength(body) > 32 * 1024 * 1024) throw new Error('MA2 交换数据超过 32 MB');
       const validate = (result: string): { response: string; requestId: string } => {
+        if (operation === 'PING') return { response: parseMa2Ping(result).version, requestId: id };
         if (operation === 'LABEL') { const label = ma2RenameResultSchema.parse(JSON.parse(result)); if (label.sequence !== target) throw new Error('控台名称回读序列不一致'); }
         else if (assigning) { const assigned = ma2SequenceAssignmentSchema.parse(JSON.parse(result)); if (assigned.sequence !== target) throw new Error('控台自动关联序列不一致'); }
         else if (operation === 'PAGES') ma2ExecutorPageDirectorySchema.parse(JSON.parse(result));
@@ -92,7 +100,7 @@ export class Ma2OnpcBridge {
         else if (operation === 'EXECUTOR') inspectMa2ExecutorXml(result);
         else if (operation === 'TCRANGES') ma2TimecodeRangesSchema.parse(JSON.parse(result));
         else if (operation === 'DISCARD') { if (result.split(',').some(name => name && !expected.split(',').includes(name))) throw new Error('控台备份清理回执与请求不一致'); }
-        else if (operation !== 'PING') {
+        else {
           if (operation === 'SNAPSHOT' || operation === 'SCOPE') validateMa2TimecodeSnapshot(result, requestedSequences);
           else validateMa2TimecodeWrite(result);
           const report = inspectMa2TimecodeXml(result);
@@ -105,7 +113,9 @@ export class Ma2OnpcBridge {
         return validate(await this.dataDirectory.exchange(id, operation, target, body, () => {
           hold('这一步没有发给控台。');
           sent = true;
-        }, signal, progress));
+        }, signal, progress, () => {
+          // Every step may go ahead for now. M3 asks the show gate here and stops at a step boundary.
+        }));
       }
       const directory = join(this.dataDirectory, 'temp');
       for (const name of ['temp', 'plugins', 'importexport']) {

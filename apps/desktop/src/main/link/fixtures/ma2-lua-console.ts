@@ -19,10 +19,11 @@ export class Ma2LuaConsole {
   readonly perLine: Array<{ line: string; commands: string[] }> = [];
   /** Runs before each Telnet line executes, so a test can change the console between two lines. */
   beforeLine: ((line: string, index: number) => void) | null = null;
-  constructor(source = bridgeSource, mode: 'network' | 'file' = 'network') {
+  /** `source: null` is a console with no bridge running yet, for the installer. */
+  constructor(source: string | null = bridgeSource, mode: 'network' | 'file' = 'network') {
     lualib.luaL_openlibs(this.L);
     this.load(fake, '=ma2-fake-console');
-    this.lua(`FAKE.main = assert(load(SOURCE, 'tblink_bridge', 't'))(); FAKE.main(MODE)`, { SOURCE: source, MODE: mode === 'network' ? 'network' : 'local' });
+    if (source !== null) this.lua(`FAKE.main = assert(load(SOURCE, 'tblink_bridge', 't'))(); FAKE.main(MODE)`, { SOURCE: source, MODE: mode === 'network' ? 'network' : 'local' });
   }
   private load(code: Uint8Array, name: string): Buffer[] {
     const top = lua.lua_gettop(this.L);

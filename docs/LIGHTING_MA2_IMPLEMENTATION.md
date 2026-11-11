@@ -1111,3 +1111,11 @@ Electron 网络测试使用独立本地 TCP 模拟控台，穿过实际 preload�
 - 现场控台上已有 Timecode 节目的帧率和 Slot，尤其是否有节目挂在 MIDI 时间码所在的 Slot 上。
 - 现场控台 MA Network Configuration 里 MIDI TC 送到哪个 Slot；软件按 TC Slot 2 写节目。
 - 实体控台上按范围自动启动、换歌时关闭上一首执行器的行为，以及 30 分钟不丢锁。
+
+## 2026-11-11 插件一步一步做（0.5.9 M2）
+
+以前插件一次 `run` 把整件请求做完才回答，同步一首大歌时关灯这类命令要排在后面等。现在插件把请求排成步骤表（不用 Lua 协程、不用定时器，每一步仍是一次 Telnet 调用里跑完），每步最多一次 Export 或 Import，写入那一步（备份导出、比对、写文件、Import）不拆；联动台 `Ma2NetworkWire` 在 `run` 之后一条一条发 `step`，每步之前调 `beforeStep()`（现在恒放行，M3 用它在时间码开始走时停在步边界）。协议和新旧组合见 `tools/ma2/README.md`「网络协议：一步一步做」。
+
+- 步数：READ、目录、PING、改名、清备份 1 步；SEQUENCE、SEQCUES、EXECUTOR、CREATE、APPLY 2 步；PAGE 1 + 页上引用的序列数；TCRANGES 每条时间码节目 1 步；SNAPSHOT/SCOPE 2 + 2×序列数；SYNC 4 + 2×序列数；自动关联是“查过的已占用格子数（至少 1）+ 2”，找到已有关联时提前结束。
+- 测试：`ma2-bridge-lua.test.ts` 用 fengari（只在开发依赖里）跑插件原文，对比分步以前的插件（`fixtures/tblink_bridge.single-run.lua`）每种请求的回答、控台命令序列和留下的文件逐字节一致；步与步之间控台被改照样拦住；出错、过期、新旧组合、联动台装插件和升级。自动化验证通过，**未实机验证**。
+- 已知：SYNC 预检里一个 Sequence 在自己的核对之后、写入之前被改，写入那一步拦不住（只再比对 Timecode）；以前这段时间在一次 Lua 调用里，几乎为零。

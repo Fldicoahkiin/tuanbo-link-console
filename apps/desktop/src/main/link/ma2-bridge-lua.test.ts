@@ -1,8 +1,10 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { bridgeSource, Ma2LuaConsole, singleRunBridgeSource } from './fixtures/ma2-lua-console';
 import { Ma2NetworkWire } from './ma2-network-wire';
-import type { Ma2Operation } from './ma2-onpc-bridge';
+import { Ma2OnpcBridge, parseMa2Ping, type Ma2Operation } from './ma2-onpc-bridge';
+import { ensureMa2NetworkBridge } from './ma2-bridge-installer';
+import { showStopped } from './fixtures/show-gates';
 import { ma2ResponseLine } from './ma2-telnet';
 
 // The real tools/ma2/tblink_bridge.lua runs here in a Lua 5.3 interpreter against a fake console
@@ -163,6 +165,25 @@ const baseline: Record<string, string[]> = {
   'SYNC Timecode changed after preflight': ['OK', 'MA2：Timecode changed before write']
 };
 
+/** The stepping plugin does at most one Export or Import per Telnet line; the write is its backup
+ * export and Import together. A plugin from before steps answers the program's 'run' in one line. */
+function checkSteps(ma2: Ma2LuaConsole, stepped: boolean): void {
+  const lines = ma2.perLine.filter(entry => /','(?:run|step)','/.test(entry.line));
+  if (!stepped) { expect(lines.every(entry => entry.line.includes("','run','"))).toBe(true); return; }
+  for (const { commands } of lines) {
+    const exports = commands.filter(command => command.startsWith('Export '));
+    const imports = commands.filter(command => command.startsWith('Import '));
+    if (imports.length === 0) expect(exports.length).toBeLessThanOrEqual(1);
+    else {
+      expect(imports).toHaveLength(1);
+      // CREATE imports a new, empty Timecode with no backup; APPLY and SYNC back up first.
+      expect(exports.every(command => command.includes('"tblink_backup_'))).toBe(true);
+      expect(exports.length).toBeLessThanOrEqual(1);
+      expect(commands.at(-1)).toBe(imports[0]);
+    }
+  }
+}
+
 type Outcome = { results: string[]; commands: string[]; state: Buffer };
 // Positions in Lua's own error messages move with the source; the message itself must not.
 const normalize = (message: string): string => message.replace(/\[string "tblink_bridge"\]:\d+: /g, '');
@@ -179,6 +200,7 @@ async function record(source: string, setup: ((ma2: Ma2LuaConsole) => void) | un
     } catch (error) { results.push(`ERROR ${normalize(error instanceof Error ? error.message : String(error))}`); return ''; }
   };
   await run(exchange, ma2);
+  checkSteps(ma2, source === bridgeSource);
   // Every request released its transaction: the next one can begin.
   await expect(wire.exchange(requestId(999), 'LIST', 1, '', () => undefined)).resolves.toContain('"entries"');
   return { results, commands: ma2.commands(), state: ma2.state() };
@@ -395,5 +417,66 @@ describe('插件分步', () => {
     expect(rpcError(await rpc(ma2, 'step', id))).toContain('No step pending');
     expect(ma2.commands()).toHaveLength(1);
     await download(ma2, id, done);
+  });
+});
+
+describe('新旧联动台和新旧插件', () => {
+  it('新联动台配旧插件：旧插件不认 steps，run 直接回 DONE，结果照常', async () => {
+    const ma2 = new Ma2LuaConsole(singleRunBridgeSource); show(ma2);
+    const wire = new Ma2NetworkWire(ma2);
+    let asked = 0;
+    const snapshot = await wire.exchange(requestId(1), 'SNAPSHOT', 9910, '', () => undefined, undefined, undefined, () => { asked += 1; });
+    expect(snapshot).toContain('<Sequ index="9904"');
+    expect(asked).toBe(1);
+    await expect(wire.exchange(requestId(2), 'SYNC', 9910, syncBody(snapshot, timecodeXml(9910, [[9903, 1]])), () => undefined)).resolves.toContain('<Timecode index="9909"');
+    expect(ma2.lines.filter(line => line.includes("','step','"))).toEqual([]);
+    expect(await new Ma2OnpcBridge(wire, showStopped).request('PING', 1)).toBe('3.3.4.3');
+  });
+  it('新联动台配新插件：一步一步走，PING 只把版本交给调用方', async () => {
+    const ma2 = new Ma2LuaConsole(); show(ma2);
+    const wire = new Ma2NetworkWire(ma2);
+    let asked = 0;
+    await wire.exchange(requestId(1), 'SNAPSHOT', 9910, '', () => undefined, undefined, undefined, () => { asked += 1; });
+    expect(asked).toBe(8);
+    expect(ma2.lines.filter(line => line.includes("','step','"))).toHaveLength(7);
+    expect(parseMa2Ping(await wire.exchange(requestId(2), 'PING', 1, '', () => undefined))).toEqual({ version: '3.3.4.3', steps: true });
+    expect(await new Ma2OnpcBridge(wire, showStopped).request('PING', 1)).toBe('3.3.4.3');
+  });
+  // The program before steps: 'run' with no argument, expects DONE. Same requests as the wire above.
+  it('旧联动台配新插件：不带 steps 的 run 一次做完，和旧插件的回答一样', async () => {
+    for (const source of [singleRunBridgeSource, bridgeSource]) {
+      const ma2 = new Ma2LuaConsole(source); show(ma2);
+      const snapshot = responseBody(await runAtOnce(ma2, requestId(1), 'SNAPSHOT', 9910));
+      expect(snapshot).toContain('<Sequ index="9904"');
+      expect(responseBody(await runAtOnce(ma2, requestId(2), 'SYNC', 9910, timecodeXml(9910, [[9903, 1]]), requestId(1)))).toContain('<Timecode index="9909"');
+      expect(ma2.lines.filter(line => line.includes("','step','"))).toEqual([]);
+      // Old program's version text: the first line is still the console version, so `3.3.4` reads as before.
+      expect(responseBody(await runAtOnce(ma2, requestId(3), 'PING', 1)).split('\n')[0]!.split('.').slice(0, 3)).toEqual(['3', '3', '4']);
+    }
+  });
+});
+
+describe('联动台装插件', () => {
+  const digest = (source: string): string => createHash('sha256').update(Buffer.from(source, 'utf8')).digest('hex');
+  it('控台上没有插件：装上新插件，接着一步一步同步', async () => {
+    const ma2 = new Ma2LuaConsole(null); show(ma2);
+    await ensureMa2NetworkBridge(ma2, bridgeSource);
+    expect(ma2.lua('return TBLINK_BRIDGE_SOURCE')[0]?.toString()).toBe(digest(bridgeSource));
+    const wire = new Ma2NetworkWire(ma2);
+    expect(parseMa2Ping(await wire.exchange(requestId(1), 'PING', 1, '', () => undefined)).steps).toBe(true);
+    await expect(wire.exchange(requestId(2), 'SNAPSHOT', 9902, '', () => undefined)).resolves.toContain('<Sequ index="9900"');
+    expect(ma2.lines.filter(line => line.includes("','step','")).length).toBeGreaterThan(0);
+  });
+  it('控台上是分步以前的插件：用旧插件自己的锁核对后换成新插件', async () => {
+    const ma2 = new Ma2LuaConsole(singleRunBridgeSource); show(ma2);
+    ma2.lua(`TBLINK_BRIDGE_SOURCE = DIGEST`, { DIGEST: digest(singleRunBridgeSource) });
+    await ensureMa2NetworkBridge(ma2, bridgeSource);
+    expect(ma2.lua('return TBLINK_BRIDGE_SOURCE')[0]?.toString()).toBe(digest(bridgeSource));
+    // The upgrade check is a plain 'run' of PING on the old plugin: answered DONE in one line.
+    expect(ma2.lines.filter(line => line.includes("','run','"))).toHaveLength(1);
+    expect(parseMa2Ping(await new Ma2NetworkWire(ma2).exchange(requestId(1), 'PING', 1, '', () => undefined)).steps).toBe(true);
+    // And back: an older program installs its own plugin over the new one the same way.
+    await ensureMa2NetworkBridge(ma2, singleRunBridgeSource);
+    expect(parseMa2Ping(await new Ma2NetworkWire(ma2).exchange(requestId(2), 'PING', 1, '', () => undefined))).toEqual({ version: '3.3.4.3', steps: false });
   });
 });

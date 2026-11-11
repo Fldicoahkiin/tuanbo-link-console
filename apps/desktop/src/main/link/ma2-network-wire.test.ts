@@ -1,11 +1,13 @@
 import { expect, it } from 'vitest';
 import { Ma2NetworkWire } from './ma2-network-wire';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { Ma2CommandQueue } from './ma2-command-queue';
 import { showStopped } from './fixtures/show-gates';
 
 const id = '1234567890abcdef1234567890abcdef';
-function peer(options: { value?: string; wrongId?: boolean; truncate?: boolean; failRun?: boolean } = {}) {
+function peer(options: { value?: string; wrongId?: boolean; truncate?: boolean; failRun?: boolean; steps?: number; stepNumbers?: number[] } = {}) {
   const actions: string[] = [];
+  let step = 0;
   const received: Buffer[] = [];
   const value = options.value ?? '中文 Cue'.repeat(220);
   const response = Buffer.from(`${options.wrongId ? 'a'.repeat(32) : id}\nOK\n${Buffer.byteLength(value)}\n${value}`);
@@ -33,6 +35,11 @@ function peer(options: { value?: string; wrongId?: boolean; truncate?: boolean; 
         received.push(Buffer.from(chunk[2]!, 'hex'));
       }
       if (action === 'run') { if (options.failRun) throw new Error('Disconnected after write'); result = `DONE:${response.length}`; }
+      // A stepping plugin: 'run' with 'steps' does the first step, each 'step' one more.
+      if ((action === 'run' && args === ",'steps'" || action === 'step') && options.steps) {
+        step += 1;
+        result = step < options.steps ? `STEP:${options.stepNumbers?.[step - 1] ?? step}` : `DONE:${response.length}`;
+      }
       if (action === 'read') {
         const offset = Number(args.slice(1));
         result = `DATA:${response.subarray(offset, offset + (options.truncate ? 255 : 256)).toString('hex')}`;
@@ -138,4 +145,51 @@ it('精简 Cue 快照仍使用控台原始快照引用，不能上传精简数�
   await wire.exchange(id, 'SYNC', 9907, `${Buffer.byteLength(received)}\n${received}${desired}`, () => undefined);
   expect(server.actions).toContain('beginsync');
   expect(Buffer.concat(server.received).toString()).toBe(desired);
+});
+
+it('插件分步：run 之后一条一条发 step 到 DONE，每步之前问一次 beforeStep，每步算一次进度', async () => {
+  const server = peer({ steps: 4 });
+  let asked = 0; let progressed = 0;
+  await expect(new Ma2NetworkWire(server).exchange(id, 'SNAPSHOT', 9901, '', () => undefined, undefined, () => { progressed += 1; }, () => { asked += 1; })).resolves.toBe('中文 Cue'.repeat(220));
+  expect(server.actions).toEqual(['begin', 'run', 'step', 'step', 'step', 'read-batch', 'release']);
+  expect(asked).toBe(4);
+  expect(progressed).toBeGreaterThanOrEqual(3);
+});
+it('分步以前的插件：run 直接回 DONE，照常走完，beforeStep 只问一次', async () => {
+  const server = peer();
+  let asked = 0;
+  await expect(new Ma2NetworkWire(server).exchange(id, 'SNAPSHOT', 9901, '', () => undefined, undefined, undefined, () => { asked += 1; })).resolves.toBe('中文 Cue'.repeat(220));
+  expect(server.actions).toEqual(['begin', 'run', 'read-batch', 'release']);
+  expect(asked).toBe(1);
+});
+it('beforeStep 叫停：下一步不发，释放这次事务，算已发出，不重发', async () => {
+  const server = peer({ steps: 3 });
+  let asked = 0;
+  await expect(new Ma2NetworkWire(server).exchange(id, 'SYNC', 9901, 'data', () => undefined, undefined, undefined, () => { asked += 1; if (asked === 2) throw new Error('时间码开始走了'); })).rejects.toMatchObject({ sent: true, message: '时间码开始走了' });
+  expect(server.actions).toEqual(['begin', 'chunk', 'run', 'release']);
+});
+it('第一步之前叫停：什么都没执行，算没发出', async () => {
+  const server = peer({ steps: 3 });
+  await expect(new Ma2NetworkWire(server).exchange(id, 'SYNC', 9901, 'data', () => undefined, undefined, undefined, () => { throw new Error('时间码开始走了'); })).rejects.toMatchObject({ sent: false });
+  expect(server.actions).toEqual(['begin', 'chunk', 'release']);
+});
+it('插件报的步数对不上就停下释放，不接着发', async () => {
+  const server = peer({ steps: 4, stepNumbers: [1, 3] });
+  await expect(new Ma2NetworkWire(server).exchange(id, 'SNAPSHOT', 9901, '', () => undefined)).rejects.toMatchObject({ sent: true, message: '控台分步执行的回答对不上' });
+  expect(server.actions).toEqual(['begin', 'run', 'step', 'release']);
+});
+it('步与步之间排着的关灯先发，再发下一步', async () => {
+  const queue = new Ma2CommandQueue();
+  const order: string[] = [];
+  const server = peer({ steps: 3 });
+  const connection = { command: (line: string, match: (text: string) => string | null): Promise<string> => queue.schedule(async () => {
+    const result = await server.command(line, match);
+    const action = server.actions.at(-1)!;
+    order.push(action);
+    // Lights-off arrives while the first step is on the console.
+    if (action === 'run') void queue.schedule(() => { order.push('off'); return Promise.resolve(''); }, 'stop');
+    return result;
+  }, 'normal') };
+  await new Ma2NetworkWire(connection).exchange(id, 'SNAPSHOT', 9901, '', () => undefined);
+  expect(order).toEqual(['begin', 'run', 'off', 'step', 'step', 'read-batch', 'release']);
 });

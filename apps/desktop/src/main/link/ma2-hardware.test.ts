@@ -11,7 +11,7 @@ import { expect, it } from 'vitest';
 import { Ma2Telnet, ma2ResponseLine } from './ma2-telnet';
 import { ensureMa2NetworkBridge } from './ma2-bridge-installer';
 import { Ma2NetworkWire } from './ma2-network-wire';
-import { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { Ma2OnpcBridge, parseMa2Ping } from './ma2-onpc-bridge';
 import { createMa2Timecode } from './ma2-create';
 import { inspectMa2SequenceXml, inspectMa2TimecodeXml, sameMa2XmlObjects } from './ma2-timecode-xml';
 import { readMa2NativeLibrary } from './ma2-native-library';
@@ -53,7 +53,7 @@ it.runIf(Boolean(process.env.TBLINK_MA2_HARDWARE_HOST))('实体控台自动部�
     // Reconnecting to the same version must reuse the session, not restart it.
     await ensureMa2NetworkBridge(connection, source);
     const wire = new Ma2NetworkWire(connection);
-    expect(await wire.exchange(randomBytes(16).toString('hex'), 'PING', 1, '', () => undefined)).toBe(version);
+    expect(parseMa2Ping(await wire.exchange(randomBytes(16).toString('hex'), 'PING', 1, '', () => undefined))).toEqual({ version, steps: true });
     const timecodes = await wire.exchange(randomBytes(16).toString('hex'), 'LIST', 1, '', () => undefined);
     await writeFile(resolve(directory, 'timecode-directory.json'), timecodes);
     const sequences = await wire.exchange(randomBytes(16).toString('hex'), 'LISTSEQ', 1, '', () => undefined);
@@ -444,4 +444,37 @@ it.runIf(process.env.TBLINK_MA2_TIMECODE_PROBE === '1' && Boolean(process.env.TB
     }
     raw.disconnect();
   }
+}, 300000);
+
+// Read-only on the console; sends Off only to an executor address given by the tester (TBLINK_MA2_STEP_OFF,
+// e.g. 1000.101, one with nothing on it). Shows where lights-off goes while a big snapshot is read in steps.
+it.runIf(Boolean(process.env.TBLINK_MA2_STEP_PROBE && process.env.TBLINK_MA2_HARDWARE_HOST))('onPC 插件分步：PING 带 steps=1，快照一步一步做，步之间的关灯不用等整件事', async () => {
+  const raw = new Ma2Telnet({ host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001 });
+  const lines: Array<{ action: string; ms: number }> = [];
+  const connection: Pick<Ma2Telnet, 'command'> = { command: async (line, match, beforeSend, priority) => {
+    const started = performance.now();
+    try { return await raw.command(line, match, beforeSend, priority); }
+    finally { lines.push({ action: /TBLINK_NET\('[a-f0-9]+','(\w+)'/.exec(line)?.[1] ?? /^Lua "([^;(]{0,24})/.exec(line)?.[1] ?? line.slice(0, 24), ms: Math.round(performance.now() - started) }); }
+  } };
+  try {
+    await raw.connect(process.env.TBLINK_MA2_HARDWARE_USER ?? 'administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
+    await ensureMa2NetworkBridge(raw, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
+    const wire = new Ma2NetworkWire(connection);
+    expect(parseMa2Ping(await wire.exchange(randomBytes(16).toString('hex'), 'PING', 1, '', () => undefined)).steps).toBe(true);
+    const target = Number(process.env.TBLINK_MA2_STEP_PROBE);
+    let steps = 0; const offs: number[] = [];
+    const snapshot = wire.exchange(randomBytes(16).toString('hex'), 'SNAPSHOT', target, '', () => undefined, undefined, undefined, () => {
+      steps += 1;
+      // Queued while a step runs on the console: goes out before the next step, as lights-off does.
+      const off = process.env.TBLINK_MA2_STEP_OFF;
+      if (off && /^\d+\.\d+$/.test(off) && steps === 3) {
+        const marker = `TBLINK_STEP_OFF_${randomBytes(12).toString('hex')}:`; const queued = performance.now();
+        void raw.command(`Lua "gma.cmd('Off Executor ${off}');gma.echo('${marker}sent')"`, text => ma2ResponseLine(text, marker), undefined, 'stop').then(() => offs.push(Math.round(performance.now() - queued)));
+      }
+    });
+    const xml = await snapshot;
+    expect(inspectMa2TimecodeXml(xml).timecodes[0]?.index).toBe(target - 1);
+    console.info(JSON.stringify({ steps, offWaitedMs: offs, slowestSteps: lines.filter(line => line.action === 'run' || line.action === 'step').sort((a, b) => b.ms - a.ms).slice(0, 5) }));
+    expect(steps).toBeGreaterThan(2);
+  } finally { raw.disconnect(); }
 }, 300000);
