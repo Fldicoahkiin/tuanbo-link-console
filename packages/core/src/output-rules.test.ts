@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type LinkAction } from '@tb/schema';
 import { frameNumberToTimecode } from './mtc-timecode';
 import { MidiProgramSession } from './midi-program';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { SceneOutputTimeline } from './scene-output-timeline';
+import { TimelineStateIndex } from './timeline-state';
 
 /**
  * Output rules the operator set on 2026-11-10 (design 01 §7.1), one describe block per rule, in the operator's
@@ -74,5 +79,74 @@ describe('规则 7：同一时刻 100 条动作不会停整路', () => {
     await f.session.prepare(0); f.session.clock(0, 1000); await f.session.settled();
     expect(f.sent).toHaveLength(100); expect(f.missed).toEqual([]); expect(f.errors).toEqual([]);
     await f.session.close();
+  });
+});
+
+// ---- Picture (rule 1; the `:duration-end` part comes with R4) ----
+
+/** Three tracks: a camera over a video (covering 10–15 s), a shown caption, a clip above a camera, a sound under a camera, a camera with no length. */
+function pictureShow() {
+  const at = (seconds: number) => frameNumberToTimecode(seconds * 30, '30');
+  const asset = (id: string, kind: 'video' | 'image' | 'audio') => ({ id, name: id, kind, folderId: null, relativePath: `assets/${id}`, sha256: { video: 'a', logo: 'b', clap: 'c' }[id]!.repeat(64),
+    byteLength: 1, ...(kind === 'image' ? {} : { durationMs: 600_000 }), ...(kind === 'audio' ? {} : { width: 1080, height: 1920 }) });
+  const scene = (id: string, layerId: string, start: number, seconds?: number) => ({ id, name: id, layerId, timecode: at(start), ...(seconds === undefined ? {} : { durationMs: seconds * 1000 }),
+    actions: [{ id: `${id}-scene`, label: id, kind: 'obs.setProgramScene' as const, sceneName: `机位 ${id}` }] });
+  const clip = (id: string, assetId: string, layerId: string, start: number, seconds: number) =>
+    ({ id, assetId, label: id, layerId, startTimecode: at(start), durationMs: seconds * 1000, sourceOffsetMs: 0 });
+  return parseLinkProject({ ...createEmptyLinkProject('画面规则'), obsOutputMode: 'scenes', mediaAssets: [asset('video', 'video'), asset('logo', 'image'), asset('clap', 'audio')],
+    rundown: [{ id: 'song', title: '歌',
+      visualLayers: ['top', 'middle', 'bottom'].map(id => ({ id, name: id, visible: true, locked: false })),
+      referenceMediaClips: [clip('dance', 'video', 'bottom', 6, 24), clip('logo-clip', 'logo', 'top', 20, 4), clip('clap-clip', 'clap', 'bottom', 32, 4)],
+      cues: [scene('wide', 'middle', 10, 5), scene('close', 'middle', 18, 8), scene('open', 'middle', 30),
+        { id: 'caption', name: '字幕', layerId: 'top', timecode: at(12), durationMs: 3000,
+          actions: [{ id: 'caption-show', label: '字幕', kind: 'obs.setSceneItemEnabled' as const, sceneName: '机位 wide', sourceName: '字幕', enabled: true }] }],
+      referenceAudio: { assetId: 'song-audio', relativePath: 'assets/song.wav', sha256: 'e'.repeat(64), durationMs: 40_000 } }] });
+}
+
+describe('规则 1：某一帧该显示什么只有一处', () => {
+  it('编辑器舞台、离线预览、正式播出逐帧都照 pictureAt：机位盖住的视频哪儿都不算在播，音效不被盖', () => {
+    const project = pictureShow(), item = project.rundown[0]!;
+    const timeline = new SceneOutputTimeline(project, 'song'), stage = new TimelineStateIndex(project, item);
+    let covered = 0;
+    for (let frame = 0; frame < 40 * 30; frame++) {
+      const picture = timeline.pictureAt(frame), ms = frame / 30 * 1000;
+      const visible = picture.clips.map(clip => clip.clipId), heard = picture.sounds.map(clip => clip.clipId);
+      covered += picture.covered.length;
+      // The editor stage.
+      const state = stage.at(ms);
+      expect(state.activeVisualClipIds, `舞台 第 ${frame} 帧`).toEqual(visible);
+      expect(state.activeObsCueIds, `显示来源 第 ${frame} 帧`).toEqual([...new Set(picture.shows.map(show => show.cueId))]);
+      expect(state.clips.filter(entry => entry.covered).map(entry => entry.clip.id)).toEqual(picture.covered.map(clip => clip.clipId));
+      // The preview drawn without OBS.
+      const preview = timeline.picture(frame);
+      expect(preview.camera?.id ?? null, `离线预览 第 ${frame} 帧`).toBe(picture.camera?.cueId ?? null);
+      expect([...preview.clipIds].sort()).toEqual([...visible, ...heard].sort());
+      // The output.
+      const work = timeline.at(frame);
+      expect(work.media.map(event => event.clipId).sort(), `正式播出 第 ${frame} 帧`).toEqual([...visible, ...heard].sort());
+      const program = work.cues[0]?.cue.actions.find(entry => entry.kind === 'obs.setProgramScene');
+      expect(program?.kind === 'obs.setProgramScene' ? program.sceneLayers ?? [program.sceneName] : picture.target.kind === 'clip' ? [picture.target.sceneName] : [],
+        `正式播出的场景 第 ${frame} 帧`).toEqual(picture.target.kind === 'composition' ? picture.target.layers.map(layer => layer.sceneName) : picture.target.sceneName === null ? [] : [picture.target.sceneName]);
+    }
+    expect(covered).toBeGreaterThan(0);
+    expect(timeline.pictureAt(12 * 30)).toMatchObject({ target: { kind: 'scene', cueId: 'wide' }, clips: [], covered: [{ clipId: 'dance' }], shows: [{ cueId: 'caption' }] });
+    expect(timeline.pictureAt(33 * 30)).toMatchObject({ target: { kind: 'composition' }, camera: { cueId: 'open', held: false }, sounds: [{ clipId: 'clap-clip' }] });
+  });
+
+  it('源码里只有 scene-output-timeline.ts 推画面：别处不再有自己的盖住规则，也不用 impliedSceneEnds 推画面', () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+    const sources = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) return entry.name === 'node_modules' || entry.name === 'out' || entry.name === 'dist' ? [] : sources(path);
+      return /\.(ts|tsx)$/.test(entry.name) && !/\.test\.(ts|tsx)$/.test(entry.name) ? [path] : [];
+    });
+    const files = [...sources(join(root, 'packages')), ...sources(join(root, 'apps'))].map(path => ({ path: relative(root, path).replaceAll('\\', '/'), text: readFileSync(path, 'utf8') }));
+    expect(files.length).toBeGreaterThan(100);
+    // impliedSceneEnds: defined (and used to tidy old projects) in content-timeline.ts, read for the picture only here.
+    expect(files.filter(file => /\bimpliedSceneEnds\b/.test(file.text)).map(file => file.path).sort())
+      .toEqual(['packages/core/src/content-timeline.ts', 'packages/core/src/scene-output-timeline.ts']);
+    expect(files.filter(file => /\bfunction stackAt\b|\bstackAt\(/.test(file.text)).map(file => file.path)).toEqual(['packages/core/src/scene-output-timeline.ts']);
+    // The editor's timeline state takes the picture from the output's timeline.
+    expect(files.find(file => file.path === 'packages/core/src/timeline-state.ts')?.text).toContain('pictureAt(');
   });
 });

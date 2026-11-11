@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { SceneOutputTimeline } from './scene-output-timeline';
 import { DEFAULT_REFERENCE_CANVAS_TRANSFORM, parseLinkProject, type LinkProject, type MtcFrameRate } from '@tb/schema';
 import { frameNumberToTimecode } from './mtc-timecode';
 import {
@@ -171,6 +172,60 @@ describe('timeline state', () => {
     ]);
   });
 
+  it('被上层机位盖住的素材在编辑器里不算在播：还在时间线上、标成被盖住，机位一结束马上回来', () => {
+    const value = project({ includeObs: false });
+    value.rundown[0]!.cues = [{ id: 'camera', name: '机位', enabled: true, notes: '', layerId: 'top', timecode: frameNumberToTimecode(45, '30'), durationMs: 500,
+      actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: '近景' }] }];
+    const index = new TimelineStateIndex(value, value.rundown[0]!);
+    expect(index.at(1_000).activeVisualClipIds).toEqual(['video-clip']);
+    const covered = index.at(1_600);
+    expect(covered.activeVisualClipIds).toEqual([]);
+    expect(covered.activeClipIds).toEqual([]);
+    expect(covered.layers.flatMap(layer => layer.activeVisualClips)).toEqual([]);
+    expect(covered.clips[0]).toMatchObject({ active: true, visual: false, visible: false, covered: true });
+    expect(index.at(1_999.9).activeVisualClipIds).toEqual([]);
+    expect(index.at(2_000).activeVisualClipIds).toEqual(['video-clip']);
+    expect(index.at(2_000).clips[0]?.covered).toBe(false);
+    // The editor works its state out again where a camera starts or ends, not only at clip edges.
+    expect(index.boundariesMs()).toEqual([1_000, 1_500, 2_000, 3_000]);
+    value.rundown[0]!.visualLayers[0]!.visible = false;
+    expect(new TimelineStateIndex(value, value.rundown[0]!).at(1_600).activeVisualClipIds).toEqual(['video-clip']);
+  });
+
+  it('同一段里每帧都问只算一次画面，过了边界才重新算', () => {
+    const value = project({ includeObs: false, includeSecondClip: true });
+    const index = new TimelineStateIndex(value, value.rundown[0]!);
+    const pictureAt = vi.spyOn(SceneOutputTimeline.prototype, 'pictureAt');
+    try {
+      const states = Array.from({ length: 150 }, (_, frame) => index.at(frame / 30 * 1000));
+      // Stretches: before 1 s, 1–3 s, after 3 s.
+      expect(pictureAt).toHaveBeenCalledTimes(3);
+      expect(states[40]!.playheadMs).toBe(40 / 30 * 1000);
+      expect(states[40]!.clips).toBe(states[41]!.clips);
+    } finally { pictureAt.mockRestore(); }
+  });
+
+  it('大工程（几百段）逐帧查询：画面按区间查，开销不随工程变大而变大', () => {
+    const big = manyParts(600), small = manyParts(60);
+    const frames = (value: LinkProject): number => Math.max(...value.rundown[0]!.referenceMediaClips.map(clip => resolveTimelineClipSpan(clip, '30').endFrame));
+    const perPicture = (value: LinkProject): number => {
+      const timeline = new SceneOutputTimeline(value, 'item'), last = frames(value);
+      for (let frame = 0; frame < last; frame++) timeline.pictureAt(frame);
+      const started = performance.now();
+      for (let round = 0; round < 3; round++) for (let frame = 0; frame < last; frame++) timeline.pictureAt(frame);
+      return (performance.now() - started) / (3 * last);
+    };
+    // Measured on Linux, Node 25: about 1 µs a frame either way. Allow for a slow machine, not for a scan of every part.
+    expect(perPicture(big)).toBeLessThan(perPicture(small) * 4 + 0.005);
+    const index = new TimelineStateIndex(big, big.rundown[0]!), last = frames(big);
+    const pictureAt = vi.spyOn(SceneOutputTimeline.prototype, 'pictureAt');
+    try {
+      for (let frame = 0; frame < last; frame++) index.at(frame / 30 * 1000);
+      expect(pictureAt.mock.calls.length).toBeLessThanOrEqual(index.boundariesMs().length + 1);
+      expect(pictureAt.mock.calls.length).toBeLessThan(last / 4);
+    } finally { pictureAt.mockRestore(); }
+  });
+
   it('关闭吸附后的连续预览在提交时按工程帧率量化为合法区间', () => {
     expect(quantizeTimelineRange(1_016, 2_019, '30')).toMatchObject({
       startTimecode: frameNumberToTimecode(30, '30'),
@@ -200,6 +255,24 @@ function activeClipIds(value: LinkProject, playheadMs: number): string[] {
 
 function activeObsIds(value: LinkProject, playheadMs: number): string[] {
   return resolveTimelineState(value, value.rundown[0]!, playheadMs).activeObsCueIds;
+}
+
+/** `parts` clips and cameras on four tracks, each track filled left to right with short gaps. */
+function manyParts(parts: number): LinkProject {
+  const value = project({ includeObs: false });
+  const item = value.rundown[0]!;
+  item.visualLayers = Array.from({ length: 4 }, (_, index) => ({ id: `L${index}`, name: `轨道${index}`, visible: true, locked: false }));
+  item.referenceMediaClips = []; item.cues = [];
+  const cursor = [0, 7, 13, 29];
+  for (let part = 0; part < parts; part++) {
+    const layer = part % 4, start = cursor[layer]!, frames = 20 + (part * 37) % 90;
+    if (part % 3 === 0) item.cues.push({ id: `camera-${part}`, name: `机位${part}`, enabled: true, notes: '', layerId: `L${layer}`, timecode: frameNumberToTimecode(start, '30'),
+      durationMs: Math.round(frames / 30 * 1000), actions: [{ id: `scene-${part}`, label: '机位', kind: 'obs.setProgramScene', sceneName: `机位 ${part % 5}` }] });
+    else item.referenceMediaClips.push({ id: `clip-${part}`, assetId: part % 2 ? 'video' : 'image', label: `片段${part}`, layerId: `L${layer}`,
+      startTimecode: frameNumberToTimecode(start, '30'), sourceOffsetMs: 0, durationMs: Math.round(frames / 30 * 1000), canvasTransform: DEFAULT_REFERENCE_CANVAS_TRANSFORM });
+    cursor[layer] = start + frames + (part % 5);
+  }
+  return value;
 }
 
 function project(input: { frameRate?: MtcFrameRate; includeObs?: boolean; includeSecondClip?: boolean } = {}): LinkProject {

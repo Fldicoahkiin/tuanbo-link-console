@@ -236,3 +236,60 @@ describe('每段画面实际播出的帧', () => {
     expect(airtime.get('media:clap')).toEqual([{ start: 270, end: 330 }]);
   });
 });
+
+describe('pictureAt：这一帧该显示什么', () => {
+  const scene = (project: LinkProject) => compileManagedMediaTimeline(project, 'song').events.find(event => event.clipId === 'clip')!.sceneName;
+  it('素材、机位盖住素材、机位结束后留着、开头什么都没有', () => {
+    const project = projectFixture(), timeline = new SceneOutputTimeline(project, 'song');
+    expect(timeline.pictureAt(0)).toEqual({ frame: 0, target: { kind: 'hold', cueId: null, sceneName: null }, camera: null, clips: [], covered: [], sounds: [], shows: [] });
+    expect(timeline.pictureAt(210)).toMatchObject({ target: { kind: 'clip', clipId: 'clip', sceneName: scene(project) }, camera: null,
+      clips: [{ clipId: 'clip', offsetMs: 3000, layerId: 'media', sceneName: scene(project) }], covered: [] });
+    // 10–15 s the camera is the whole frame; the video under it keeps its place for the reveal.
+    expect(timeline.pictureAt(330)).toMatchObject({ target: { kind: 'scene', cueId: 'camera', sceneName: '拉腿机位' }, camera: { cueId: 'camera', held: false },
+      clips: [], covered: [{ clipId: 'clip', offsetMs: 7000 }] });
+    expect(timeline.pictureAt(450)).toMatchObject({ target: { kind: 'clip', clipId: 'clip' }, clips: [{ offsetMs: 11000 }], covered: [] });
+    // After the video ends nothing has a picture: the last camera stays on program.
+    expect(timeline.pictureAt(950)).toMatchObject({ target: { kind: 'hold', cueId: 'camera', sceneName: '拉腿机位' }, camera: { cueId: 'camera', held: true }, clips: [] });
+    expect(timeline.cutPoints()).toEqual([180, 300, 450, 900]);
+  });
+  it('没有时长的机位盖到下一个画面开始，没有下一个就到节目结尾', () => {
+    const project = projectFixture(); delete project.rundown[0]!.cues[0]!.durationMs;
+    const timeline = new SceneOutputTimeline(project, 'song');
+    expect(timeline.pictureAt(600)).toMatchObject({ target: { kind: 'scene', cueId: 'camera' }, covered: [{ clipId: 'clip' }] });
+    expect(timeline.cutPoints()).toEqual([180, 300, 900]);
+  });
+  it('显示来源按自己的区间开着（含开始帧、不含结束帧），停用或在隐藏轨道上的不开，切点里有它的起止', () => {
+    const project = projectFixture(), item = project.rundown[0]!;
+    item.cues.push({ id: 'caption', name: '字幕', enabled: true, notes: '', layerId: 'camera-layer', timecode: { hours: 0, minutes: 0, seconds: 2, frames: 0 }, durationMs: 1000,
+      actions: [{ id: 'caption-show', label: '字幕', kind: 'obs.setSceneItemEnabled', sceneName: '拉腿机位', sourceName: '字幕', enabled: true }] });
+    const timeline = new SceneOutputTimeline(project, 'song');
+    expect(timeline.pictureAt(59).shows).toEqual([]);
+    expect(timeline.pictureAt(60).shows).toEqual([{ cueId: 'caption', actionId: 'caption-show', sceneName: '拉腿机位', sourceName: '字幕', layerId: 'camera-layer' }]);
+    expect(timeline.pictureAt(89).shows).toHaveLength(1);
+    expect(timeline.pictureAt(90).shows).toEqual([]);
+    expect(timeline.cutPoints()).toEqual([60, 90, 180, 300, 450, 900]);
+    item.cues.at(-1)!.enabled = false;
+    expect(new SceneOutputTimeline(project, 'song').pictureAt(70).shows).toEqual([]);
+    item.cues.at(-1)!.enabled = true; item.visualLayers[0]!.visible = false;
+    expect(new SceneOutputTimeline(project, 'song').pictureAt(70).shows).toEqual([]);
+  });
+  it('切开的同一段视频接着播：同一个解码器、紧挨着、素材位置接得上才算', () => {
+    const project = projectFixture(), item = project.rundown[0]!;
+    item.cues = [];
+    item.referenceMediaClips.push({ ...item.referenceMediaClips[0]!, id: 'rest', startTimecode: { hours: 0, minutes: 0, seconds: 30, frames: 0 }, durationMs: 5000, sourceOffsetMs: 26000 });
+    expect(new SceneOutputTimeline(project, 'song').pictureAt(900).clips).toMatchObject([{ clipId: 'rest', offsetMs: 26000, continuesFrom: 'clip' }]);
+    item.referenceMediaClips[1]!.sourceOffsetMs = 0;
+    expect(new SceneOutputTimeline(project, 'song').pictureAt(900).clips[0]?.continuesFrom).toBeUndefined();
+  });
+  it('picture、airtime、at 都从 pictureAt 推出来：音效在机位下面也照常出声', () => {
+    const project = projectFixture();
+    project.mediaAssets.push({ id: 'sound', name: '掌声.wav', kind: 'audio', folderId: null, relativePath: 'assets/applause.wav', sha256: 'c'.repeat(64), byteLength: 10, durationMs: 40000 });
+    project.rundown[0]!.referenceMediaClips.push({ ...project.rundown[0]!.referenceMediaClips[0]!, id: 'applause', assetId: 'sound', label: '掌声', startTimecode: { hours: 0, minutes: 0, seconds: 11, frames: 0 }, durationMs: 2000, sourceOffsetMs: 0 });
+    const timeline = new SceneOutputTimeline(project, 'song');
+    expect(timeline.pictureAt(340)).toMatchObject({ target: { kind: 'composition', layers: [{ sceneName: '拉腿机位' }, {}] }, camera: { cueId: 'camera', held: false },
+      sounds: [{ clipId: 'applause' }], covered: [{ clipId: 'clip' }] });
+    expect(timeline.picture(340)).toMatchObject({ camera: { id: 'camera' }, clipIds: ['applause'] });
+    expect(timeline.at(340).media.map(event => event.clipId)).toEqual(['applause']);
+    expect(timeline.airtime().get('media:applause')).toEqual([{ start: 330, end: 390 }]);
+  });
+});
