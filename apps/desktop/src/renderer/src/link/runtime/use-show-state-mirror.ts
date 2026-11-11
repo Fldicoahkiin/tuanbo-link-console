@@ -23,7 +23,7 @@ export function useShowStateMirror(notify: (message: string, tone: 'info' | 'err
     const stop = desktop.onShowState(show => { pushed = true; useShowStateStore.setState({ show }); });
     // A change pushed before the first read answered is newer than that answer.
     void desktop.getShowState().then(show => { if (alive && !pushed) useShowStateStore.setState({ show }); },
-      (error: unknown) => { if (alive) notify(`没读到节目现在的状态，按钮可能慢一步变灰；主进程照样会挡住不能做的操作。原因：${toUserErrorMessage(error)}`, 'error'); });
+      (error: unknown) => { if (alive) notify(`没读到节目现在的状态，按钮可能慢一步变灰；这时不能做的操作照样会被挡住。再出现请重启联动台。原因：${toUserErrorMessage(error)}`, 'error'); });
     return () => { alive = false; stop(); };
   }, [notify]);
   useEffect(() => {
@@ -33,7 +33,7 @@ export function useShowStateMirror(notify: (message: string, tone: 'info' | 'err
       if (text === last) return;
       last = text;
       void desktop.reportShowActivity(activity).catch((error: unknown) => {
-        notify(`节目状态没送到主进程，跟 P1 或预览时控台操作可能不会等。原因：${toUserErrorMessage(error)}`, 'error');
+        notify(`跟 P1 或预览的状态没记上，这期间控台操作可能不会等它停下。再出现请重启联动台。原因：${toUserErrorMessage(error)}`, 'error');
       });
     };
     report();
