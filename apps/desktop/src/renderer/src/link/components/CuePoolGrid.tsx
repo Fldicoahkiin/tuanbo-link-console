@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { ownKeys } from '../keys/key-owner';
 
 /** Fixed-height compact cells; the DOM grows with the viewport, not the Show. */
 export function CuePoolGrid({ keys, label, render, cellWidth = 132, rowHeight = 34 }: { rowHeight?: number; cellWidth?: number; keys: string[]; label: string; render: (index: number) => ReactNode }): JSX.Element {
@@ -27,7 +28,7 @@ export function CuePoolGrid({ keys, label, render, cellWidth = 132, rowHeight = 
     if (top !== size.top) { element.scrollTop = top; setSize(current => ({ ...current, top })); }
     if (requested !== null) { element.querySelector<HTMLElement>(`[data-cue-cell="${requested}"] button`)?.focus({ preventScroll: true }); setRequested(null); }
   }, [height, size.top, size.height, requested]);
-  return <div className="cue-pool-grid" ref={viewport} aria-label={label} data-total-cues={keys.length}
+  return <div className="cue-pool-grid" ref={viewport} aria-label={label} data-total-cues={keys.length} {...ownKeys('ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End')}
     onScroll={event => { const top = event.currentTarget.scrollTop; setSize(current => ({ ...current, top })); }}
     onFocusCapture={event => { const index = event.target.closest<HTMLElement>('[data-cue-cell]')?.dataset.cueCell; if (index !== undefined) setFocused(keys[Number(index)] ?? null); }}
     onKeyDown={event => {

@@ -1,14 +1,13 @@
-import { useEffect } from 'react';
 import { useDocumentStore } from './stores/document-store';
-import { keyInDialog, keyTarget, modalDialogOpen } from './playback-keys';
+import { useKeyCommands } from './keys/useKeyCommands';
 
 type DocumentShortcut = 'save' | 'save-as' | 'undo' | 'redo';
-const nonTextInputs = new Set(['button', 'checkbox', 'color', 'file', 'radio', 'range', 'reset', 'submit']);
 
 /**
- * Ctrl+Z/Y inside a text field belongs to that field's own history, not to project commands. Nor does it undo the
- * project behind an open dialog (`inDialog`, see `keyInDialog`): with the focus on a dialog's button, Ctrl+Z took back
- * an edit the dialog hid (0.5.9). Ctrl+S saves everywhere.
+ * The project's keys and where they act, the rule the key router follows for them (keys/key-route.ts, checked against
+ * this in key-router.test.ts). Ctrl+Z/Y inside a text field belongs to that field's own history, not to project
+ * commands. Nor does it undo the project behind an open dialog (`inDialog`, see `keyInDialog`): with the focus on a
+ * dialog's button, Ctrl+Z took back an edit the dialog hid (0.5.9). Ctrl+S saves everywhere.
  */
 export function documentShortcut(event: Pick<KeyboardEvent, 'ctrlKey' | 'shiftKey' | 'key'>, editingText: boolean, inDialog: boolean): DocumentShortcut | null {
   if (!event.ctrlKey) return null;
@@ -30,23 +29,15 @@ export function runDocumentShortcut(action: DocumentShortcut, locked: boolean, h
   else if (!locked || history.redoScope === 'lighting') actions.redo();
 }
 
-function isTextEditing(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target instanceof HTMLInputElement) return !nonTextInputs.has(target.type);
-  return target instanceof HTMLTextAreaElement || target.isContentEditable;
-}
-
+/** Ctrl+S, Ctrl+Shift+S, Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z, handed to the window's key router. */
 export function useDocumentShortcuts(locked: boolean, save: () => Promise<void>, saveAs: () => Promise<void>): void {
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      const action = documentShortcut(event, isTextEditing(event.target), keyInDialog(keyTarget(event), modalDialogOpen(document)));
-      if (!action) return;
-      event.preventDefault();
-      const state = useDocumentStore.getState();
-      runDocumentShortcut(action, locked, { undoScope: state.past.at(-1)?.command.scope, redoScope: state.future.at(-1)?.command.scope },
-        { save: () => void save(), saveAs: () => void saveAs(), undo: () => state.undo(), redo: () => state.redo() });
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [locked, save, saveAs]);
+  const run = (action: DocumentShortcut): void => {
+    const state = useDocumentStore.getState();
+    runDocumentShortcut(action, locked, { undoScope: state.past.at(-1)?.command.scope, redoScope: state.future.at(-1)?.command.scope },
+      { save: () => void save(), saveAs: () => void saveAs(), undo: () => state.undo(), redo: () => state.redo() });
+  };
+  useKeyCommands('global', {
+    'document.save': () => run('save'), 'document.saveAs': () => run('save-as'),
+    'document.undo': () => run('undo'), 'document.redo': () => run('redo')
+  });
 }

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { ownKeys } from '../keys/key-owner';
 
 const ROW_HEIGHT = 78;
 const OVERSCAN = 3;
@@ -48,7 +49,7 @@ export function VirtualResourceList({ keys, renderRow, onContextMenu }: {
     const element = event.currentTarget;
     const top = element.scrollTop;
     setRange(current => current.top === top ? current : { ...current, top });
-  }} onContextMenu={event => { event.preventDefault(); onContextMenu(event.clientX, event.clientY); }}
+  }} {...ownKeys('ArrowUp', 'ArrowDown', 'Home', 'End')} onContextMenu={event => { event.preventDefault(); onContextMenu(event.clientX, event.clientY); }}
     onFocusCapture={event => {
       const index = event.target.closest<HTMLElement>('[data-resource-index]')?.dataset.resourceIndex;
       if (index !== undefined) setFocusedKey(keys[Number(index)] ?? null);

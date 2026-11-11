@@ -1,8 +1,8 @@
 import { expect, it } from 'vitest';
 import { emptyInternalPlayerState, type InternalPlayerState } from '@tb/core/link';
 import { createEmptyLinkProject, type RundownItem } from '@tb/schema';
-import { pressPlayButton } from '../playback-keys';
-import { editorPlayRequest, homePlayButton, homePlayPress, pressHomePlayButton, registerHomePlayButton } from './play-buttons';
+import { KeyRouter } from '../keys/key-router';
+import { editorPlayRequest, homePlayButton, homePlayPress, pressHomePlayButton } from './play-buttons';
 
 const song = (id: string, withAudio = true): RundownItem => ({ id, title: id, enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [],
   ...(withAudio ? { referenceAudio: { assetId: id, relativePath: `${id}.wav`, sha256: 'a'.repeat(64), durationMs: 120_000 } } : {}) });
@@ -29,6 +29,18 @@ it('首页停着时，空格播首页播放按钮上的那首：节目单里选�
   expect(homePlayPress(homePlayButton(project, stopped, null, true), stopped.status)).toEqual({ kind: 'play', itemId: '第一首' });
 });
 
+/** The window's key router, with the window's play key there (useInternalPlayer) and nothing focused. */
+const router = new KeyRouter(() => null);
+router.register('global', () => ({ 'transport.playPause': () => undefined }));
+/** The home player's play button handed to the router while the home page shows (ProjectPlayerTransport). */
+const registerHomePlayButton = (onScreen: boolean, press: () => void): (() => void) =>
+  router.register('home', () => ({ 'transport.playPause': () => press() }), () => onScreen);
+/** Space pressed with nothing focused. */
+function pressPlayButton(): void {
+  router.dispatch({ code: 'Space', key: ' ', ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, repeat: false, isComposing: false,
+    defaultPrevented: false, preventDefault: () => undefined, stopPropagation: () => undefined, target: null });
+}
+
 /** The home player, writing down what its play button asked for. */
 function recorder(calls: string[]) {
   return { pause: () => { calls.push('暂停'); }, resume: () => { calls.push('继续'); }, play: (itemId: string) => { calls.push(`播放 ${itemId}`); } };
@@ -45,7 +57,7 @@ it('首页选中的歌没有音频或已停用时，播放按钮变灰并写明�
     const calls: string[] = [];
     const leave = registerHomePlayButton(true, () => { pressHomePlayButton(button, stopped.status, recorder(calls), text => calls.push(`说明：${text}`)); });
     pressPlayButton();
-    leave?.();
+    leave();
     expect(calls).toEqual([`说明：${reason}`]);
   }
 });
@@ -59,11 +71,12 @@ it('首页播放按钮和空格是同一个按下：停着播按钮上那首，�
 
   // The editor, the lighting workbench or the settings page is open: Space leaves the home button alone.
   calls.length = 0;
-  expect(registerHomePlayButton(false, () => calls.push('首页'))).toBeUndefined();
+  const hidden = registerHomePlayButton(false, () => calls.push('首页'));
   pressPlayButton();
+  hidden();
   const leave = registerHomePlayButton(true, () => calls.push('首页'));
   pressPlayButton();
-  leave?.();
+  leave();
   pressPlayButton();
   expect(calls).toEqual(['首页']);
 });

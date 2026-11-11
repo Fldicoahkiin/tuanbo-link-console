@@ -3,6 +3,7 @@ import { lightingDocumentSchema, type AutomaticMusicCandidates, type LightingDoc
 import type { LightingTimelineDisplay } from './LightingTimelineControls';
 import { AutomaticMusicPreview } from './AutomaticMusicResults';
 import { ModalSurface } from '../ui/ModalSurface';
+import { ownKeys } from '../keys/key-owner';
 
 export function LightingMusicSections({ display, document, pixelsPerSecond, left, width, onSeek, onChange }: { display: LightingTimelineDisplay; document: LightingDocument; pixelsPerSecond: number; left: number; width: number; onSeek: (ms: number) => void; onChange: (next: LightingDocument, label: string) => void }): JSX.Element {
   const [editing, setEditing] = useState<string | null>(null);
@@ -12,7 +13,7 @@ export function LightingMusicSections({ display, document, pixelsPerSecond, left
     try { onChange(lightingDocumentSchema.parse(next), label); setEditing(null); setError(''); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
-  return <>{display.sections && document.music?.sections.filter(section => !section.id.startsWith('analysis:')).filter(section => section.endMs / 1000 * pixelsPerSecond >= left && section.startMs / 1000 * pixelsPerSecond <= left + width).map(section => <button key={section.id} className="music-section-strip" title={`${section.name} · 双击编辑`} style={{ left: section.startMs / 1000 * pixelsPerSecond, width: (section.endMs - section.startMs) / 1000 * pixelsPerSecond, borderColor: section.color, background: `${section.color}33` }} onClick={event => { event.stopPropagation(); onSeek(section.startMs); }} onDoubleClick={() => { setEditing(section.id); setError(''); }} onKeyDown={event => { if (event.key === 'F2') { event.preventDefault(); setEditing(section.id); setError(''); } }}>{section.name}</button>)}
+  return <>{display.sections && document.music?.sections.filter(section => !section.id.startsWith('analysis:')).filter(section => section.endMs / 1000 * pixelsPerSecond >= left && section.startMs / 1000 * pixelsPerSecond <= left + width).map(section => <button key={section.id} className="music-section-strip" title={`${section.name} · 双击编辑`} style={{ left: section.startMs / 1000 * pixelsPerSecond, width: (section.endMs - section.startMs) / 1000 * pixelsPerSecond, borderColor: section.color, background: `${section.color}33` }} onClick={event => { event.stopPropagation(); onSeek(section.startMs); }} onDoubleClick={() => { setEditing(section.id); setError(''); }} {...ownKeys('F2')} onKeyDown={event => { if (event.key === 'F2') { event.preventDefault(); setEditing(section.id); setError(''); } }}>{section.name}</button>)}
     {selected && document.music ? <ModalSurface label="编辑歌曲段落" className="music-section-dialog" onClose={() => setEditing(null)}><form onSubmit={event => {
       event.preventDefault(); const fields = new FormData(event.currentTarget);
       const name = fields.get('name');

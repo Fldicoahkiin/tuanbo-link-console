@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HOME_OWN_KEYS, keyInTimeline, keyOwner, ownKeys } from './key-owner';
+import { editsText, HOME_OWN_KEYS, keyInTimeline, keyOwner, ownKeys, windowKeepsKey } from './key-owner';
 import { routeKey, type RouteDecision, type RouteInput } from './key-route';
 import { KEYMAP, type CommandId, type KeyPage, type KeyScope } from './keymap';
 
@@ -12,16 +12,19 @@ import { KEYMAP, type CommandId, type KeyPage, type KeyScope } from './keymap';
 type Node = { tag: string; attributes?: Record<string, string>; parent?: Node };
 type Fake = { closest(selectors: string): Fake | null; getAttribute(name: string): string | null };
 
-/** One selector of the kinds the key helpers use: `tag`, `.class`, `[name]`, `[name="value"]`, and a tag with either. */
+/**
+ * One selector of the kinds the key helpers use: `tag`, `.class`, `[name]`, `[name="value"]`, `[name~="word"]` (one of
+ * the words of the value), and a tag with either.
+ */
 function matches(candidate: Node, selector: string): boolean {
-  const parts = /^([a-z]*)((?:\.[a-z-]+)*)((?:\[[a-z-]+(?:="[^"]*")?\])*)$/.exec(selector.trim());
+  const parts = /^([a-z]*)((?:\.[a-z-]+)*)((?:\[[a-z-]+(?:~?="[^"]*")?\])*)$/.exec(selector.trim());
   if (!parts) throw new Error(`测试里的元素不认识这个选择器：${selector}`);
   const [, tag = '', classes = '', attributes = ''] = parts;
   if (tag && candidate.tag !== tag) return false;
   if (classes.split('.').filter(Boolean).some(name => !candidate.attributes?.class?.split(' ').includes(name))) return false;
-  return [...attributes.matchAll(/\[([a-z-]+)(?:="([^"]*)")?\]/g)].every(([, name = '', value]) => {
+  return [...attributes.matchAll(/\[([a-z-]+)(?:(~?)="([^"]*)")?\]/g)].every(([, name = '', word, value]) => {
     const actual = candidate.attributes?.[name];
-    return actual !== undefined && (value === undefined || actual === value);
+    return actual !== undefined && (value === undefined || (word ? actual.split(' ').includes(value) : actual === value));
   });
 }
 /** A focused element, with `closest` over its parent chain. */
@@ -52,6 +55,7 @@ type Where = { page?: KeyPage; repeat?: boolean; modalOpen?: boolean; overlays?:
 function route(node: Node | null, chord: string, where: Where = {}): RouteDecision {
   const target = node === null ? null : element(node);
   return routeKey({ chord, repeat: where.repeat ?? false, composing: false, owner: keyOwner(target, chord), inTimeline: keyInTimeline(target),
+    windowKeeps: windowKeepsKey(target, chord), editingText: editsText(target),
     modalOpen: where.modalOpen ?? false, overlays: where.overlays ?? [], drag: where.drag ?? 'none', page: where.page ?? 'project',
     available: where.available ?? windowHandlers, song: where.song ?? (key => key === 'Ctrl+Digit3' ? '第三首' : undefined), ...(where.keymap ? { keymap: where.keymap } : {}) });
 }
@@ -236,7 +240,9 @@ describe('时间线的键（timeline-keys.test.ts 的用例）', () => {
     expect(untouched(route(timeline, 'Space', { ...workbench, keymap: unbound }))).toBe(true);
     expect(route({ tag: 'input', parent: dock }, 'Space', workbench)).toEqual(NATIVE);
     const pool: Node = { tag: 'div', attributes: { class: 'cue-pool-grid' }, parent: dock };
-    expect(route({ tag: 'button', parent: pool }, 'Space', workbench)).toEqual(NATIVE);
+    // The workbench's play key leaves the Cue pool alone; the window's Space then presses the page's play button there,
+    // as the window's listener always did (playbackKeyAction never kept the Cue pool; K3 wires the router, today wins).
+    expect(route({ tag: 'button', parent: pool }, 'Space', workbench)).toEqual(run('transport.playPause', 'global'));
     expect(route({ tag: 'div', attributes: ownKeys('Space'), parent: timeline }, 'Space', workbench)).toEqual(NATIVE);
   });
 

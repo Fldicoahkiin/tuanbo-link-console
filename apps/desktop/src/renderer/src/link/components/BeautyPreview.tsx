@@ -3,6 +3,7 @@ import { Columns2, Maximize, Minus, Plus } from 'lucide-react';
 import type { BeautyTarget } from '@tb/schema';
 import { ObsLiveCanvas } from './ObsLiveCanvas';
 import { BeautyCompareCanvas } from './BeautyCompareCanvas';
+import { ownKeys } from '../keys/key-owner';
 
 type View = { zoom: number; x: number; y: number };
 const fit: View = { zoom: 1, x: 0, y: 0 };
@@ -28,6 +29,7 @@ export function BeautyPreview({ onAspectChange, target, onComparingChange }: { o
   };
   return <div className="beauty-preview-viewer" style={{ '--beauty-zoom': view.zoom, '--beauty-pan-x': `${view.x * 100}%`, '--beauty-pan-y': `${view.y * 100}%` } as CSSProperties}
     data-zoomed={view.zoom > 1} role="group" aria-label="预览查看区域" tabIndex={0}
+    {...ownKeys('Equal', 'Shift+Equal', 'NumpadAdd', 'Minus', 'NumpadSubtract', 'Digit0', 'Numpad0', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown')}
     onKeyDown={event => {
       if (event.target !== event.currentTarget) return;
       if (event.key === '+' || event.key === '=') changeZoom(1);

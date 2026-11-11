@@ -1,6 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { Check, ChevronRight, type LucideIcon } from 'lucide-react';
 import { FloatingMenu } from './FloatingMenu';
+import { ownKeys } from '../keys/key-owner';
 
 /**
  * A right-click or button menu at a point. The first item takes focus; the arrow keys, Home and End
@@ -50,7 +51,7 @@ export function Menu({ x, y, label, title, anchor, onClose, children }: {
   };
   return <FloatingMenu x={x} y={y} className="ui-menu" label={label}>
     {title ? <div className="ui-menu-title" title={title}>{title}</div> : null}
-    <div ref={holder} className="ui-menu-items" onKeyDown={move}>{children}</div>
+    <div ref={holder} className="ui-menu-items" {...ownKeys('*')} onKeyDown={move}>{children}</div>
   </FloatingMenu>;
 }
 

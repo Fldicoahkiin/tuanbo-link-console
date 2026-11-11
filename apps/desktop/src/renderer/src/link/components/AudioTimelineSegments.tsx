@@ -6,6 +6,7 @@ import { AudioSegmentWaveform } from './AudioSegmentWaveform';
 import { AudioSegmentMenu } from './AudioSegmentMenu';
 import { ModalSurface } from '../ui/ModalSurface';
 import { useDragSession } from './useDragSession';
+import { ownKeys } from '../keys/key-owner';
 
 type Drag = { id: string; edge: 'seek' | 'move' | 'start' | 'end'; clientX: number; segment: AudioSegment; deltaMs: number };
 export function AudioTimelineSegments({ samples, editor, pixelsPerSecond, onSelect, onSeek, peaks, scrollLeft, viewportWidth, sourceWaveform = false, snapTime, playheadMs, readOnly = false }: { samples?: AudioBuffer | null; editor: Pick<AudioEditor, 'audio' | 'title' | 'segments' | 'selectedId' | 'disabled' | 'busy' | 'points' | 'select' | 'update' | 'remove' | 'split'>; sourceWaveform?: boolean; snapTime?: (ms: number) => number; pixelsPerSecond: number; onSelect: (id: string) => void; onSeek: (ms: number) => void; peaks: readonly number[]; scrollLeft: number; viewportWidth: number;playheadMs:number; readOnly?:boolean }): JSX.Element {
@@ -68,6 +69,7 @@ export function AudioTimelineSegments({ samples, editor, pixelsPerSecond, onSele
         onPointerDown={(event) => begin(event, segment, 'move')} onPointerMove={move} onPointerUp={end} onPointerCancel={session.end} onLostPointerCapture={session.end}
         onContextMenu={(event) => { if(readOnly)return; event.preventDefault(); event.stopPropagation(); event.currentTarget.focus();editor.select(segment.id); onSelect(segment.id);setContext({id:segment.id,x:event.clientX,y:event.clientY}); }}
         onDoubleClick={event=>{if(readOnly)return;event.stopPropagation();if(!editor.disabled)setEditing(segment.id);}}
+        {...(readOnly ? {} : ownKeys('Enter', 'Delete', 'Backspace', 'KeyS', 'Shift+KeyS'))}
         onKeyDown={(event) => { if(readOnly)return; if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); editor.select(segment.id); onSelect(segment.id); } if(editor.disabled||editor.selectedId!==segment.id)return; if (event.key === 'Delete'||event.key==='Backspace') { event.preventDefault(); event.stopPropagation(); void editor.remove(); }if(!event.ctrlKey&&!event.metaKey&&event.key.toLowerCase()==='s'){event.preventDefault();event.stopPropagation();void editor.split(playheadMs);} }}>
         <AudioSegmentWaveform samples={samples ?? null} peaks={peaks} sourceStartMs={(sourceWaveform ? segment.sourceOffsetMs : segment.startMs) + (active?.edge === 'start' ? active.deltaMs : 0)} sourceDurationMs={editor.audio?.durationMs ?? 1} durationMs={duration} startMs={start} pixelsPerSecond={pixelsPerSecond} scrollLeft={scrollLeft} viewportWidth={viewportWidth} />
         {duration / 1000 * pixelsPerSecond > 65 ? <span className="audio-segment-name" style={{ left: Math.max(8, scrollLeft - start / 1000 * pixelsPerSecond + 8) }}>{editor.title}{editor.busy ? <small role="status">处理中…</small> : null}<small>{(duration / 1000).toFixed(2)}s</small></span> : null}

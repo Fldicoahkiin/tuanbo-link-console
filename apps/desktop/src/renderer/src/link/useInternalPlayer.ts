@@ -14,14 +14,13 @@ import { linkDesktopViewModel as desktop } from './view-models/link-desktop-view
 import { useRuntimeStore } from './stores/runtime-store';
 import { useDisplayPreferences } from './stores/display-preferences-store';
 import { useSelectedProgram } from './useSelectedProgram';
-import { handlePlaybackKey, keyTarget, modalDialogOpen } from './playback-keys';
+import { useKeyCommands, useSongShortcuts } from './keys/useKeyCommands';
 import { followAudioConfiguration, openAnswer, playsOutdated, reopensShown, type OpenAnswer } from './program-attachment';
 
 /** Player notices already logged as warnings in this window. */
 const notedNotices = new Set<string>();
 
-/** `settingsOpen`: the settings or connection page is on screen, and the window's playback keys wait until it closes. */
-export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, ready: boolean, project: LinkProject | null, settingsOpen: boolean) {
+export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, ready: boolean, project: LinkProject | null) {
   const path = useDocumentStore((state) => state.path);
   const [controller, setController] = useState<RemoteNativeProgramPlayer | null>(null);
   const [view] = useState(() => new PlayerViewStore());
@@ -62,14 +61,22 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     sync(useDocumentStore.getState().project);
     return useDocumentStore.subscribe(state => sync(state.project));
   }, [controller, project]);
-  useEffect(() => {
-    if (!controller || !project) return;
-    const player = { play: (itemId: string) => void controller.play(itemId), stop: () => void controller.stop(), skip: (direction: -1 | 1) => void controller.skip(direction) };
-    const keyboard = (event: KeyboardEvent): void => handlePlaybackKey(event, keyTarget(event), { paused: settingsOpen, modalOpen: modalDialogOpen(document),
-      arrowKeys: useIntegrationStore.getState().profile?.internalPlayer?.arrowKeyPlayback === true,
-      song: key => project.rundown.find((entry) => entry.enabled && entry.playback?.shortcut === key)?.id }, player);
-    window.addEventListener('keydown', keyboard); return () => window.removeEventListener('keydown', keyboard);
-  }, [controller, project, settingsOpen]);
+  // The window's playback keys while 联动台播放 plays the show (keys/key-router.ts): Escape stops, Space presses the
+  // play button of the page on screen (its own registration; a page without one does nothing), ↑↓ go to the previous or
+  // next song when that is turned on, a song's own shortcut plays that song.
+  const keys = controller && project ? { controller, project } : null;
+  useKeyCommands('global', keys && {
+    'transport.stop': () => void keys.controller.stop(),
+    'transport.playPause': () => undefined
+  });
+  useKeyCommands('global', keys && {
+    'home.prevSong': () => void keys.controller.skip(-1),
+    'home.nextSong': () => void keys.controller.skip(1)
+  }, () => useIntegrationStore.getState().profile?.internalPlayer?.arrowKeyPlayback === true);
+  useSongShortcuts(keys && {
+    find: key => keys.project.rundown.find((entry) => entry.enabled && entry.playback?.shortcut === key)?.id,
+    play: itemId => void keys.controller.play(itemId)
+  });
   useEffect(() => {
     if (!coordinator || !project || project.playbackSource !== 'internal' || !ready) {
       setController(null); view.publish(emptyInternalPlayerState); return;

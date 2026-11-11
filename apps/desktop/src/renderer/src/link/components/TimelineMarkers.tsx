@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { LightingTimelineProps } from './LightingTimeline';
 import { MAX_TIMELINE_TIME_MS } from './timeline-geometry';
+import { ownKeys } from '../keys/key-owner';
 
 /** Programme annotations can extend the editable timeline; its current end is not a trim limit. */
 export function TimelineMarkers(props: LightingTimelineProps & { hideAnalysis?: boolean; pixelsPerSecond: number; timeAtClientX: (x: number) => number; onSeek: (ms: number) => void }): JSX.Element {
@@ -30,11 +31,11 @@ export function TimelineMarkers(props: LightingTimelineProps & { hideAnalysis?: 
             if (resize?.id !== marker.id || resize.edge !== edge) return;
             if (resize.startMs !== marker.startMs || resize.endMs !== marker.endMs) props.onChange({ ...props.document, markers: props.document.markers.map((entry) => entry.id === marker.id ? { ...entry, startMs: resize.startMs, endMs: resize.endMs } : entry) }, '调整时间线区域');
             setResize(null);
-          }} onPointerCancel={() => setResize(null)} onKeyDown={(event) => {
+          }} onPointerCancel={() => setResize(null)} {...ownKeys('Escape')} onKeyDown={(event) => {
             if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setResize(null); }
           }} />)}
         </> : null}
-        {editing === marker.id ? <input className="timeline-marker-name" autoFocus aria-label="时间线标记名称" defaultValue={marker.name} onKeyDown={(event) => {
+        {editing === marker.id ? <input className="timeline-marker-name" autoFocus aria-label="时间线标记名称" defaultValue={marker.name} {...ownKeys('*')} onKeyDown={(event) => {
           event.stopPropagation();
           if (event.key === 'Enter') event.currentTarget.blur();
           if (event.key === 'Escape') { event.preventDefault(); setEditing(null); }
@@ -42,7 +43,7 @@ export function TimelineMarkers(props: LightingTimelineProps & { hideAnalysis?: 
           const name = event.currentTarget.value.trim();
           if (name && name !== marker.name) props.onChange({ ...props.document, markers: props.document.markers.map((entry) => entry.id === marker.id ? { ...entry, name } : entry) }, '重命名时间线标记');
           setEditing(null);
-        }} /> : <button type="button" className={`timeline-marker${compact ? ' analysis-point-marker' : ''}`} style={{ borderColor: marker.color }} aria-label={`时间线标记 ${marker.name}`} title={`${marker.name}${marker.notes ? ` · ${marker.notes}` : ''} · ${(marker.startMs / 1000).toFixed(3)} 秒；拖动移动，双击改名，Delete 删除`} onDoubleClick={() => setEditing(marker.id)} onKeyDown={(event) => {
+        }} /> : <button type="button" className={`timeline-marker${compact ? ' analysis-point-marker' : ''}`} style={{ borderColor: marker.color }} aria-label={`时间线标记 ${marker.name}`} title={`${marker.name}${marker.notes ? ` · ${marker.notes}` : ''} · ${(marker.startMs / 1000).toFixed(3)} 秒；拖动移动，双击改名，Delete 删除`} onDoubleClick={() => setEditing(marker.id)} {...ownKeys('Delete', 'Backspace', 'F2', 'Escape')} onKeyDown={(event) => {
           if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); event.stopPropagation(); remove(marker.id); }
           if (event.key === 'F2') { event.preventDefault(); event.stopPropagation(); setEditing(marker.id); }
           if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDrag(null); }

@@ -8,6 +8,7 @@ import { Button, Dialog, IconButton, Menu, MenuItem, TextInput } from '../ui';
 import { useDragSession } from './useDragSession';
 import { useDragEdgeScroll, verticalScrollerOf } from './useDragEdgeScroll';
 import { dropPlacement } from './program-grid-geometry';
+import { HOME_OWN_KEYS, ownKeys } from '../keys/key-owner';
 
 type PlaylistDrag = { pointerId: number; id: string; target: { id: string; placement: 'before' | 'after' } | null };
 
@@ -94,7 +95,7 @@ export function ProgramPlaylistPane(props: { project: LinkProject; selectedId: s
     onClickCapture={event => { if (suppressClick.current) { suppressClick.current = false; event.preventDefault(); event.stopPropagation(); } }}>
     <div className="p1-pane-title"><strong>播放列表</strong><IconButton size="sm" label="新建播放列表" icon={Plus} disabled={props.locked} onClick={() => setEditing({ id: null, name: '' })} /></div>
     {[{ id: 'all', name: '全部节目' }, ...lists, { id: 'unassigned', name: '未分组' }].map((list) => <button key={list.id} title={listIds.includes(list.id) ? `${list.name}\n${moveBlocked ?? '按住拖动可以调整顺序'}` : list.name} aria-pressed={props.selectedId === list.id} className={props.selectedId === list.id ? 'active' : ''} onClick={() => props.onSelect(list.id)}
-      data-playlist-id={list.id} data-moving={drag?.id === list.id} data-drop={drag?.target?.id === list.id && drag.id !== list.id ? drag.target.placement : undefined}
+      data-playlist-id={list.id} data-moving={drag?.id === list.id} {...ownKeys(...HOME_OWN_KEYS.playlist)} data-drop={drag?.target?.id === list.id && drag.id !== list.id ? drag.target.placement : undefined}
       onKeyDown={(event) => {
         if (!props.locked && !['all', 'unassigned'].includes(list.id) && (event.key === 'F2' || event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10')) {
           event.preventDefault();

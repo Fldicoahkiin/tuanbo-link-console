@@ -6,6 +6,8 @@ import { lightingCategoryNavigation } from '@tb/core/link';
 import { Ma2ConsoleName } from './Ma2ConsoleName';
 import { Button, Disclosure, IconButton, MenuItem, MenuSeparator, TextInput } from '../ui';
 import '../lighting-cue-context-menu.css';
+import { ownKeys } from '../keys/key-owner';
+import { useKeyOverlay } from '../keys/useKeyCommands';
 
 const sections = [['front', '面光', Sun], ['rim', '轮廓', ScanLine], ['effect', '效果', Sparkles]] as const;
 
@@ -41,6 +43,8 @@ export function LightingCueContextMenu({x,y,title,categories,navigation,category
   // Moving between the actions and the categories replaces the buttons, so focus moves with them.
   useEffect(()=>{if(!renaming)root.current?.querySelector<HTMLButtonElement>('button')?.focus({preventScroll:true});},[classifying,renaming]);
   const close=useRef(onClose);close.current=onClose;
+  // Open while it is there: the window's keys leave Escape to it, and it closes itself (its own listener, until K4).
+  useKeyOverlay(true);
   useLayoutEffect(()=>{
     const element=root.current;if(!element)return;
     const place=():void=>{const box=element.getBoundingClientRect();const left=Math.max(8,Math.min(x,window.innerWidth-box.width-8)),top=Math.max(8,Math.min(y,window.innerHeight-box.height-8));setPosition(current=>current.left===left&&current.top===top?current:{left,top});};
@@ -65,7 +69,7 @@ export function LightingCueContextMenu({x,y,title,categories,navigation,category
   const common = customButtons(true);
   const more = customButtons(false);
   const choice = <Value extends string>(value: Value, label: string, current: Value | null, pick: (value: Value) => void): JSX.Element => <button type="button" key={value} className="cue-menu-choice" aria-pressed={current === value} onClick={() => pick(value)}>{label}</button>;
-  return createPortal(<div ref={root} className="ui-menu lighting-cue-context-menu" data-view={renaming ? 'rename' : classifying ? 'classify' : 'actions'} style={position} role="dialog" aria-label="Cue 右键菜单" onContextMenu={event=>event.preventDefault()} onKeyDown={event=>{
+  return createPortal(<div ref={root} className="ui-menu lighting-cue-context-menu" data-view={renaming ? 'rename' : classifying ? 'classify' : 'actions'} style={position} role="dialog" aria-label="Cue 右键菜单" {...ownKeys('ArrowDown','ArrowUp','Tab','Shift+Tab')} onContextMenu={event=>event.preventDefault()} onKeyDown={event=>{
     if(event.key!=='ArrowDown'&&event.key!=='ArrowUp'&&event.key!=='Tab')return;
     if(renaming&&event.key!=='Tab')return;
     const buttons=[...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),summary')].filter(element=>element.getClientRects().length>0);const index=buttons.indexOf(document.activeElement as HTMLElement);

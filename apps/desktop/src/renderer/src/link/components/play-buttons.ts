@@ -1,11 +1,11 @@
 import { playlistItems, type InternalPlayerState } from '@tb/core/link';
 import type { LinkProject, RundownItem } from '@tb/schema';
-import { registerPlayButton } from '../playback-keys';
 
 /*
- * What the play buttons do with 联动台播放. Space presses the play button of the page on screen (0.5.9,
- * playback-keys.ts), so the key and the button cannot pick different songs: the home page plays the song on its
- * button, the editor and the lighting workbench play the song open in them from the playhead.
+ * What the play buttons do with 联动台播放. Space presses the play button of the page on screen (0.5.9; each page
+ * hands its button to the key router, keys/key-router.ts), so the key and the button cannot pick different songs:
+ * the home page plays the song on its button, the editor and the lighting workbench play the song open in them from
+ * the playhead.
  */
 
 type Status = InternalPlayerState['status'];
@@ -67,11 +67,6 @@ export function pressHomePlayButton(button: Pick<HomePlayButton, 'target' | 'una
     case 'resume': player.resume(); return;
     case 'play': player.play(request.itemId); return;
   }
-}
-
-/** While the home page shows, Space presses its play button (0.5.9); the result takes the button back. */
-export function registerHomePlayButton(onScreen: boolean, press: () => void): (() => void) | undefined {
-  return onScreen ? registerPlayButton(press) : undefined;
 }
 
 /**

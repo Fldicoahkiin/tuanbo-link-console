@@ -3,8 +3,10 @@ import type { KeyChord } from './key-chord';
 /*
  * The one table of the app's keys: what each key does, on which page, and how it gets past the fields, dialogs and
  * buttons in its way. Written as the keys are today (0.5.9: Escape stops, S splits, Shift+←/→ moves a second); the
- * listeners in playback-keys.ts, timeline-keys.ts, ReferenceTimeline, useTimelineStamp, LightingTimeline and
- * useDocumentShortcuts still act on their own until the key router reads this table (04 设计 K3–K6).
+ * key router (key-router.ts) acts on the window's keys from it: playing, stopping, changing songs, a song's own
+ * shortcut, saving, undo and redo (04 设计 K3). The timeline's keys (ReferenceTimeline, useTimelineStamp,
+ * LightingTimeline) still act on their own listeners until K6; their rows here say what those do, the router does
+ * not act on them yet.
  */
 
 /**
@@ -14,9 +16,11 @@ import type { KeyChord } from './key-chord';
  * - `lighting`: the lighting workbench (its shortcut keys, useTimelineStamp; the user can change them);
  * - `timeline`: the timeline of the editor and of the lighting workbench (ReferenceTimeline);
  * - `lighting-points`: the lighting points on both timelines (LightingTimeline's window keys). Today a second handler
- *   for copy, paste and delete beside the timeline's (04 设计 3.3 b, d); K6 makes them one.
+ *   for copy, paste and delete beside the timeline's (04 设计 3.3 b, d); K6 makes them one;
+ * - `home`: the home page. No key of its own in the table: its handlers act for the window's keys there (the player's
+ *   play button for Space, the program list's Escape), see key-router.ts.
  */
-export type KeyScope = 'global' | 'editor' | 'lighting' | 'timeline' | 'lighting-points';
+export type KeyScope = 'global' | 'home' | 'editor' | 'lighting' | 'timeline' | 'lighting-points';
 /** The page on screen (LinkApp). */
 export type KeyPage = 'project' | 'cues' | 'lighting';
 
@@ -83,7 +87,7 @@ export type KeyEntry = {
 const key = (chord: KeyChord, more: Omit<KeyBinding, 'chord'> = {}): KeyBinding => ({ chord, ...more });
 
 export const KEYMAP: readonly KeyEntry[] = [
-  // The window (useInternalPlayer → playback-keys.ts): outside the timeline, which takes its own keys.
+  // The window (useInternalPlayer, the page's play button): outside the timeline, which takes its own keys.
   { id: 'transport.playPause', scope: 'global', keys: [key('Space')], label: '播放 / 暂停（按当前页面的播放按钮）', group: '播放', kind: 'transport', repeat: 'once',
     area: 'outside-timeline', buttons: 'take', jianying: { name: '播放/暂停', keys: ['Space'] }, rebindable: false },
   { id: 'transport.stop', scope: 'global', keys: [key('Escape', { switch: 'plainEscapeStops' })], label: '停止', group: '播放', kind: 'transport', repeat: 'once',

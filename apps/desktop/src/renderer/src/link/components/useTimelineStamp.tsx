@@ -9,7 +9,8 @@ import { shortcutKey, shortcutLabel, useShortcutStore } from '../stores/shortcut
 import type { LightingTimelineProps } from './LightingTimeline';
 import { stampTimeline } from './timeline-stamp';
 import { keyTarget } from '../playback-keys';
-import { handleLightingShortcut } from './timeline-keys';
+import { handleLightingShortcut, lightingShortcutTakes, type LightingShortcut } from './timeline-keys';
+import { useKeyClaim } from '../keys/useKeyCommands';
 
 /** `onPlayPause` is the timeline's play button, which the play key presses. */
 type Props = { lighting: LightingTimelineProps | undefined; playheadMs: number; durationMs: number; playing: boolean; frameRate: MtcFrameRate; clock: PlaybackClock; onPlayPause: () => void; onPlayingChange: (playing: boolean) => void; onSeek: (ms: number) => void };
@@ -38,12 +39,15 @@ export function useTimelineStamp(props: Props) {
       setMessage(null);
     } catch (reason) { const text = reason instanceof Error ? reason.message : String(reason); setMessage(text); lighting.onError?.(text); }
   };
+  const shortcutOf = (event: Pick<KeyboardEvent, 'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>): LightingShortcut => ({
+    action: bindings.find(binding => binding.key === shortcutKey(event))?.action,
+    covered: () => [...document.querySelectorAll('[role="dialog"],dialog[open],.settings-content-page,.effect-binding-backdrop')].some(element => element.getClientRects().length > 0)
+  });
+  // The window's key router comes first now; it leaves the keys this listener takes to it, as they were before (K6 moves them onto the router).
+  useKeyClaim(lighting ? (event, target) => lightingShortcutTakes(event, target, shortcutOf(event)) : null);
   useEffect(() => {
     if (!lighting) return;
-    const key = (event: KeyboardEvent): void => handleLightingShortcut(event, keyTarget(event), {
-      action: bindings.find(binding => binding.key === shortcutKey(event))?.action,
-      covered: () => [...document.querySelectorAll('[role="dialog"],dialog[open],.settings-content-page,.effect-binding-backdrop')].some(element => element.getClientRects().length > 0)
-    }, action => {
+    const key = (event: KeyboardEvent): void => handleLightingShortcut(event, keyTarget(event), shortcutOf(event), action => {
       if (action === 'stamp') { stamp(); return; }
       if (action === 'play') { props.onPlayPause(); return; }
       props.onPlayingChange(false);

@@ -10,6 +10,12 @@ export type DragHandle = {
 };
 
 /**
+ * The window's key router (keys/key-router.ts), told while a drag goes on so that its keys leave Escape to the drag.
+ * The result says the drag is over.
+ */
+export type DragKeys = { beginDrag(drag: { cancelled: () => boolean }): () => void };
+
+/**
  * The drag going on; `drawn` until the component that holds it leaves; `cancelled` once Escape gave it up while the
  * pointer is still held.
  */
@@ -30,8 +36,10 @@ type Active<T> = { element: DragHandle; pointerId: number; value: T; drawn: bool
  */
 export class DragSession<T> {
   private active: Active<T> | null = null;
+  private keysDone: (() => void) | null = null;
 
-  constructor(private readonly view: DragWindow, private readonly changed: (value: T | null) => void) {}
+  /** `keys`: the window's key router, which runs before this session's own Escape (in the app; none in tests). */
+  constructor(private readonly view: DragWindow, private readonly changed: (value: T | null) => void, private readonly keys: DragKeys | null = null) {}
 
   /** Starts a drag from `element`, which takes the pointer; a drag still going is dropped without a word. */
   begin(element: DragHandle, pointerId: number, value: T): void {
@@ -42,6 +50,7 @@ export class DragSession<T> {
     this.view.addEventListener('pointerup', this.release, true);
     this.view.addEventListener('pointercancel', this.release, true);
     this.view.addEventListener('blur', this.leave);
+    this.keysDone = this.keys?.beginDrag({ cancelled: () => this.active?.cancelled === true }) ?? null;
     this.changed(value);
   }
 
@@ -81,6 +90,8 @@ export class DragSession<T> {
     this.view.removeEventListener('pointerup', this.release, true);
     this.view.removeEventListener('pointercancel', this.release, true);
     this.view.removeEventListener('blur', this.leave);
+    this.keysDone?.();
+    this.keysDone = null;
   }
 
   /** Escape while the pointer is held gives the drag up at once; pressed again before the release, it is only taken. */

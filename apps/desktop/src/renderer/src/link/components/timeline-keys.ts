@@ -68,12 +68,24 @@ type ShortcutAction = ShortcutBinding['action'];
  * and the other keys leave buttons alone; fields, held-down controls and the Cue pool keep their keys.
  */
 export function handleLightingShortcut(event: Pick<KeyboardEvent, 'repeat' | 'defaultPrevented' | 'preventDefault' | 'stopImmediatePropagation'>, target: KeyTarget | null,
-  shortcut: { action: ShortcutAction | undefined; covered: () => boolean }, run: (action: ShortcutAction) => void): void {
+  shortcut: LightingShortcut, run: (action: ShortcutAction) => void): void {
   const { action } = shortcut;
-  if (!action || event.defaultPrevented || shortcut.covered() || isInside(target, '.cue-pool-grid')) return;
-  if (action === 'play' ? spaceBelongsToControl(target) : isInside(target, 'input,textarea,select,button,[role="button"],[role="menu"],[contenteditable="true"],[role="separator"]')) return;
+  if (!action || !lightingShortcutTakes(event, target, shortcut)) return;
   event.stopImmediatePropagation();
   takeKey(event, () => run(action));
+}
+
+/** A key's lighting shortcut, as `handleLightingShortcut` is told it. */
+export type LightingShortcut = { action: ShortcutAction | undefined; covered: () => boolean };
+
+/**
+ * Whether `handleLightingShortcut` takes the key; the window's key router leaves such a key to it (useTimelineStamp),
+ * as the window's keys did when this listener took the key before them (04 设计 K3, until K6).
+ */
+export function lightingShortcutTakes(event: Pick<KeyboardEvent, 'defaultPrevented'>, target: KeyTarget | null, shortcut: LightingShortcut): boolean {
+  const { action } = shortcut;
+  if (!action || event.defaultPrevented || shortcut.covered() || isInside(target, '.cue-pool-grid')) return false;
+  return !(action === 'play' ? spaceBelongsToControl(target) : isInside(target, 'input,textarea,select,button,[role="button"],[role="menu"],[contenteditable="true"],[role="separator"]'));
 }
 
 /**

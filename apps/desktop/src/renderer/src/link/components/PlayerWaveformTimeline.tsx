@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { TimelineWaveformCanvas, useReferenceWaveformPeaks, type ReferenceWaveformSource } from './ReferenceWaveform';
+import { ownKeys } from '../keys/key-owner';
 
 export function PlayerWaveformTimeline(props: { source: ReferenceWaveformSource | null; positionMs: number; enabled: boolean; onSeek: (positionMs: number) => void }): JSX.Element {
   const waveform = useReferenceWaveformPeaks(props.source);
@@ -23,7 +24,7 @@ export function PlayerWaveformTimeline(props: { source: ReferenceWaveformSource 
     return bounds ? Math.round(Math.max(0, Math.min(maximum, (clientX - bounds.left) / Math.max(1, bounds.width) * duration))) : 0;
   };
   return <section className="home-waveform" aria-label="歌曲波形">
-    <div ref={element} className="home-waveform-track" role="slider" tabIndex={props.enabled ? 0 : -1} aria-label="波形播放位置" aria-disabled={!props.enabled} aria-valuemin={0} aria-valuemax={maximum} aria-valuenow={Math.round(position)} aria-valuetext={formatPosition(position)}
+    <div ref={element} className="home-waveform-track" role="slider" tabIndex={props.enabled ? 0 : -1} aria-label="波形播放位置" aria-disabled={!props.enabled} aria-valuemin={0} aria-valuemax={maximum} aria-valuenow={Math.round(position)} aria-valuetext={formatPosition(position)} {...ownKeys('ArrowLeft', 'ArrowRight', 'Shift+ArrowLeft', 'Shift+ArrowRight', 'Home', 'End')}
       onPointerDown={(event) => { if (!props.enabled || event.button !== 0) return; event.preventDefault(); const positionMs = locate(event.clientX); drag.current = { pointerId: event.pointerId, positionMs }; setPreview(positionMs); event.currentTarget.setPointerCapture(event.pointerId); }}
       onPointerMove={(event) => { if (drag.current?.pointerId !== event.pointerId) return; const positionMs = locate(event.clientX); drag.current.positionMs = positionMs; setPreview(positionMs); }}
       onPointerUp={(event) => { if (drag.current?.pointerId !== event.pointerId) return; const target = locate(event.clientX); drag.current = null; setPreview(null); event.currentTarget.releasePointerCapture(event.pointerId); if (props.enabled) props.onSeek(target); }}

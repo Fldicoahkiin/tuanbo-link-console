@@ -11,6 +11,7 @@ import { useDragSession } from './useDragSession';
 import { cuePointEnter, editDialogEnter } from './cue-point-keys';
 
 import { cueMarkerWidth, displayCueNumber, layoutCueMarkers } from './cue-marker-layout';
+import { ownKeys } from '../keys/key-owner';
 type Entry = ReturnType<typeof cueEventEntries>[number];
 type CuePointDrag = { id: string; x: number; ms: number; target: number; snapped: boolean };
 export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPerSecond, top, scrollLeft, viewportWidth, durationMs, disabled }: { mode: 'seek' | 'select'; height: number; lighting: LightingTimelineProps; frameRate: MtcFrameRate; pixelsPerSecond: number; top: number; scrollLeft: number; viewportWidth: number; durationMs: number; disabled: boolean }): JSX.Element {
@@ -74,6 +75,7 @@ export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPer
         onPointerMove={event => { const current = session.current(); if (current?.id !== entry.id) return; const raw = current.ms + (event.clientX - current.x) / pixelsPerSecond * 1000; const target = Math.max(0, Math.min(durationMs - 1, lighting.snapTime?.(raw, entry.id) ?? raw)); session.update({ ...current, target, snapped: Math.abs(target - raw) > .1 }); }}
         onPointerUp={event => { const current = session.current(); if (current?.id !== entry.id) return; event.currentTarget.releasePointerCapture(event.pointerId); if (current.target !== current.ms) change(entry, current.target); session.end(); }} onPointerCancel={session.end} onLostPointerCapture={session.end}
         onDoubleClick={event => { event.stopPropagation(); if (!disabled && !entry.track.locked) setEditing(entry); }}
+        {...ownKeys('Enter', 'Delete', 'Backspace')}
         onKeyDown={event => { cuePointEnter(event, !disabled && !entry.track.locked, () => setEditing(entry)); if ((event.key === 'Delete' || event.key === 'Backspace') && !disabled && !entry.track.locked) { event.preventDefault(); event.stopPropagation(); try { lighting.onChange(removeLightingEffects(lighting.document, [entry.id]), '删除 Cue 卡点'); } catch (error) { lighting.onError?.(String(error)); } } }}><span className="cue-marker-number">{displayCueNumber(entry.cue)}</span></button></Fragment>;
     })}</div>
     {entries.filter(entry => entry.id === (drag?.id ?? (timeVisible ? lighting.selectedEventId : null))).map(entry => <output className="cue-position-readout" aria-label="当前 Cue 时间" key={entry.id} style={{ top: top + 64, left: Math.max(scrollLeft + 8, Math.min((drag?.target ?? entry.ms) / 1000 * pixelsPerSecond, scrollLeft + viewportWidth - 330)) }}>{formatTimelineTimecode(drag?.target ?? entry.ms, frameRate)}{drag && drag.target !== drag.ms ? <><span>{drag.target >= drag.ms ? '+' : ''}{((drag.target - drag.ms) / 1000).toFixed(3)} s</span>{drag.snapped ? <em>已吸附</em> : null}</> : <span>Cue {entry.cue}</span>}</output>)}

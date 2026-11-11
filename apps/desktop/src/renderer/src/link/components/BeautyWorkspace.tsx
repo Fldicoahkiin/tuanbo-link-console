@@ -7,6 +7,7 @@ import { BeautyOutput, BeautyStatus } from './BeautyOutput';
 import { beautyCategories, beautyControls, type BeautyCategory } from './beauty-catalog';
 import { BeautyPreview } from './BeautyPreview';
 import './beauty.css';
+import { ownKeys } from '../keys/key-owner';
 
 export function BeautyWorkspace({ connected }: { connected: boolean }): JSX.Element {
   const importer = useRef<HTMLInputElement>(null);
@@ -37,7 +38,7 @@ export function BeautyWorkspace({ connected }: { connected: boolean }): JSX.Elem
       if (!useBeautyStore.getState().error) setNotice('已导入预设，点“保存参数”后才会保存到本机');
     } catch (error) { setFileError(String(error)); }
   };
-  return <section className="beauty-workspace" style={{ '--beauty-aspect': aspect } as CSSProperties} aria-label="人像美颜" onKeyDown={event => event.stopPropagation()}>
+  return <section className="beauty-workspace" style={{ '--beauty-aspect': aspect } as CSSProperties} aria-label="人像美颜" {...ownKeys('*')} onKeyDown={event => event.stopPropagation()}>
     <div className="beauty-layout"><section className="beauty-preview-column" aria-label="美颜画面预览">
       <div className="beauty-preview-top"><span><MonitorPlay size={16} />{connected ? comparing ? '选中来源 · 美颜前后对比' : 'OBS 当前输出' : '画面预览'}</span><span>{connected ? '已连接 OBS' : '未连接 OBS'}</span></div>
       <div className="beauty-preview">{connected ? <BeautyPreview onAspectChange={setAspect} target={comparisonTarget} onComparingChange={setComparing} /> : <div className="beauty-empty-preview">

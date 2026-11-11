@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { Ma2ExecutorPage, Ma2LiveSnapshot } from '@tb/schema';
 import { useMa2LivePlayback } from './useMa2LivePlayback';
 import '../ma2-faders.css';
+import { ownKeys } from '../keys/key-owner';
 
 type LiveButton = Ma2LiveSnapshot['items'][number]['blocks'][number]['buttons'][number];
 function FaderButton({ value, slot, disabled, send }: { value: LiveButton; slot: number; disabled: boolean; send: (slot: number, id: number, pressed: boolean) => void }): JSX.Element {
@@ -10,7 +11,7 @@ function FaderButton({ value, slot, disabled, send }: { value: LiveButton; slot:
     if (event.button !== 0) return;
     event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); send(slot, value.id, true);
   };
-  return <button disabled={disabled || value.name === 'Empty'} className="ma2-fader-key" data-active={value.active} aria-label={`执行器 ${slot} ${value.name}`}
+  return <button disabled={disabled || value.name === 'Empty'} className="ma2-fader-key" data-active={value.active} aria-label={`执行器 ${slot} ${value.name}`} {...ownKeys('Space', 'Enter')}
     onPointerDown={press} onPointerUp={() => send(slot, value.id, false)} onPointerCancel={() => send(slot, value.id, false)} onLostPointerCapture={() => send(slot, value.id, false)}
     onKeyDown={event => { if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) { event.preventDefault(); send(slot, value.id, true); } }}
     onKeyUp={event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); send(slot, value.id, false); } }}

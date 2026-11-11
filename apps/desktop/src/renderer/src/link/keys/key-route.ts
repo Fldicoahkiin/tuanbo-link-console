@@ -1,11 +1,12 @@
-import type { KeyChord } from './key-chord';
+import { parseChord, type KeyChord } from './key-chord';
 import type { KeyOwner } from './key-owner';
 import { KEYMAP, PAGE_SCOPES, type CommandId, type KeyBinding, type KeyEntry, type KeyPage, type KeyScope, type KeySwitch } from './keymap';
 
 /*
  * Who acts on one key press, worked out in one place: 输入框 → 弹窗 → 拖动 → 页面 → 全局 (04 设计 4.3). A pure
- * function, so the rules are tested here alone. Not wired yet: the window's and the timeline's listeners still act on
- * their own (04 设计 K3–K6); `routeKey` gives what they do today for the keys in KEYMAP.
+ * function, so the rules are tested here alone. The key router (key-router.ts) asks it for every press and acts on the
+ * window's keys (K3); the timeline's keys still act on their own listeners (K6), and what `routeKey` says of them is
+ * what those listeners do.
  */
 
 /** An open panel the page closes with Escape (a Popover, a detail view, the settings or connection page). */
@@ -29,6 +30,18 @@ export type RouteInput = {
   owner: KeyOwner;
   /** `keyInTimeline(target)`. */
   inTimeline: boolean;
+  /**
+   * `windowKeepsKey(target, chord)`: the window's playback keys (stop, play, ↑↓, a song's own shortcut) leave the key
+   * to the focused field, button or slider. Left out: wherever anything on the page keeps the key (`owner`).
+   */
+  windowKeeps?: boolean;
+  /** `editsText(target)`: the focus types text, where undo and redo are the typing's. Left out: in a field. */
+  editingText?: boolean;
+  /**
+   * A listener of the page that is not on the router yet takes the key: the lighting workbench's shortcut keys
+   * (useTimelineStamp) until K6. The window's keys give way to it, as they always did.
+   */
+  pageTakes?: boolean;
   /** `modalDialogOpen(document)`. */
   modalOpen: boolean;
   /** Bottom to top. */
@@ -87,35 +100,64 @@ function first(input: RouteInput, candidates: readonly Candidate[]): RouteDecisi
   return found ? act(input, found.entry) : null;
 }
 
+/**
+ * The chord the project's keys are known by (useDocumentShortcuts, 0.5.9): with Ctrl held, Alt and the Windows key do
+ * not count, nor does Shift with Y, so Ctrl+Alt+S saves and Ctrl+Shift+Y redoes, as they always did.
+ */
+function documentChord(chord: KeyChord): KeyChord {
+  const parsed = parseChord(chord);
+  if (!parsed?.ctrl) return chord;
+  return ['Ctrl', ...(parsed.shift && parsed.code !== 'KeyY' ? ['Shift'] : []), parsed.code].join('+');
+}
+
+/** The chord the window's playback keys are known by (0.5.9): without Ctrl or Alt, Shift does not count, so Shift+Space plays. */
+function windowChord(chord: KeyChord): KeyChord {
+  const parsed = parseChord(chord);
+  if (!parsed?.shift || parsed.ctrl || parsed.alt) return chord;
+  return [...(parsed.meta ? ['Meta'] : []), parsed.code].join('+');
+}
+
 /** What the press does (see the file comment). */
 export function routeKey(input: RouteInput): RouteDecision {
   if (input.composing) return IGNORE;
   if (input.owner === 'capture') return NATIVE;
   const switchedOff = input.switchesOff ?? new Set<KeySwitch>();
-  const candidates: Candidate[] = (input.keymap ?? KEYMAP).flatMap(entry => entry.keys
-    .filter(binding => binding.chord === input.chord && (binding.switch === undefined || !switchedOff.has(binding.switch)))
+  const matching = (chord: KeyChord): Candidate[] => (input.keymap ?? KEYMAP).flatMap(entry => entry.keys
+    .filter(binding => binding.chord === chord && (binding.switch === undefined || !switchedOff.has(binding.switch)))
     .map(binding => ({ entry, binding })));
+  const candidates = matching(input.chord);
   const throughAll = first(input, candidates.filter(candidate => candidate.binding.through === 'all'));
   if (throughAll) return throughAll;
-  // 输入框: the field's own keys, but for the commands that work in fields (saving).
-  if (input.owner === 'field' || input.owner === 'own') return first(input, candidates.filter(candidate => throughFields(candidate.binding))) ?? NATIVE;
-  // 弹窗: every key pressed in an open dialog, or while a modal one is open, is the dialog's (keys7), saving aside.
-  if (input.owner === 'dialog' || input.modalOpen) return first(input, candidates.filter(candidate => throughDialogs(candidate.binding))) ?? NATIVE;
+  const inDialog = input.owner === 'dialog' || input.modalOpen;
+  // 工程: saving works everywhere, in fields and dialogs too; undo and redo but where text is typed or in a dialog.
+  const editingText = input.editingText ?? input.owner === 'field';
+  const project = matching(documentChord(input.chord)).find(({ entry, binding }) => entry.kind === 'document' && input.available(entry.id, entry.scope)
+    && (!editingText || throughFields(binding)) && (!inDialog || throughDialogs(binding)));
+  if (project) return act(input, project.entry);
+  const others = candidates.filter(candidate => candidate.entry.kind !== 'document');
+  // 输入框: the field's own keys, but for the commands that work in fields.
+  if (input.owner === 'field' || input.owner === 'own') return first(input, others.filter(candidate => throughFields(candidate.binding))) ?? NATIVE;
+  // 弹窗: every key pressed in an open dialog, or while a modal one is open, is the dialog's (keys7).
+  if (inDialog) return first(input, others.filter(candidate => throughDialogs(candidate.binding))) ?? NATIVE;
   const top = input.overlays.at(-1);
   if (top && input.chord === 'Escape') return { kind: 'overlay' };
   if (top?.focusInside) return NATIVE;
-  const blocked = input.overlays.some(overlay => overlay.blocks);
+  // The settings or connection page: no key of the page or the window reaches the show.
+  if (input.overlays.some(overlay => overlay.blocks)) return NATIVE;
   // 拖动: Escape only cancels the drag, and is taken until the pointer is let go (keys7).
   if (input.drag !== 'none' && input.chord === 'Escape') return input.drag === 'active' ? { kind: 'drag-cancel' } : SWALLOW;
-  const open = blocked ? candidates.filter(candidate => candidate.entry.kind === 'document') : candidates;
-  // 页面: the page's scopes in order, then 全局: a song's own shortcut before the window's keys.
+  if (input.pageTakes === true) return NATIVE;
+  // 页面: the page's scopes in order.
   for (const scope of PAGE_SCOPES[input.page]) {
-    const decision = first(input, open.filter(candidate => candidate.entry.scope === scope));
+    const decision = first(input, others.filter(candidate => candidate.entry.scope === scope));
     if (decision) return decision;
   }
-  const itemId = blocked ? undefined : input.song(input.chord);
-  if (itemId !== undefined && !input.inTimeline && input.owner === null) return input.repeat ? SWALLOW : { kind: 'song', itemId };
-  const global = first(input, open.filter(candidate => candidate.entry.scope === 'global'));
-  if (global) return global;
-  return input.owner === null && !blocked ? IGNORE : NATIVE;
+  // 全局: a song's own shortcut, then the window's keys, outside the timeline and what keeps them (`windowKeeps`).
+  const windowKeeps = input.windowKeeps ?? input.owner !== null;
+  const itemId = input.song(input.chord);
+  if (itemId !== undefined && !input.inTimeline && !windowKeeps) return input.repeat ? SWALLOW : { kind: 'song', itemId };
+  const window = matching(windowChord(input.chord)).find(({ entry }) => entry.scope === 'global' && entry.kind !== 'document'
+    && !(entry.area === 'outside-timeline' && input.inTimeline) && !windowKeeps && input.available(entry.id, entry.scope));
+  if (window) return act(input, window.entry);
+  return input.owner === null ? IGNORE : NATIVE;
 }

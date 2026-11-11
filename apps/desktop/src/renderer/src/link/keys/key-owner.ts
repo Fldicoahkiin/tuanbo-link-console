@@ -2,8 +2,8 @@ import type { KeyChord } from './key-chord';
 
 /*
  * Who a key belongs to before the page and the window get it: the focused field or control, an open dialog, or nobody.
- * DIALOGS, modalDialogOpen and OWN_KEYS came here from playback-keys.ts (keys7); playback-keys.ts calls them from here
- * until the key router takes its place (04 设计 K3).
+ * DIALOGS, modalDialogOpen and OWN_KEYS came here from playback-keys.ts (keys7). The key router (key-router.ts) reads
+ * them for every press; the timeline's and the panels' own listeners still call them through playback-keys.ts (K4–K6).
  */
 
 /**
@@ -72,18 +72,41 @@ export type OwnerTarget = { closest(selectors: string): { getAttribute(name: str
  */
 export type KeyOwner = 'capture' | 'own' | 'dialog' | 'field' | 'control' | 'item' | 'button' | null;
 
-/** Who `chord`, pressed on `target`, belongs to (see `KeyOwner`). */
+/**
+ * Who `chord`, pressed on `target`, belongs to (see `KeyOwner`). A key an element or any element around it declared
+ * (`ownKeys`) is theirs: a row of a list declares Enter, the list around it the arrows, and both are kept on the row.
+ */
 export function keyOwner(target: OwnerTarget | null, chord: KeyChord): KeyOwner {
   if (target === null) return null;
-  const declared = target.closest('[data-own-keys]')?.getAttribute('data-own-keys');
-  if (declared === '*') return 'capture';
-  if (declared?.split(' ').includes(chord)) return 'own';
+  if (target.closest('[data-own-keys="*"]') !== null) return 'capture';
+  if (target.closest(`[data-own-keys~="${chord}"]`) !== null) return 'own';
   if (isInside(target, DIALOGS)) return 'dialog';
   if (isInside(target, FIELDS)) return 'field';
   if (isInside(target, `${CONTROLS},${KEY_GRIDS}`) || chord === 'Escape' && isInside(target, ESCAPE_CONTROLS)) return 'control';
   if (isInside(target, TIMELINE_ITEMS)) return 'item';
   if (isInside(target, BUTTONS)) return 'button';
   return null;
+}
+
+/**
+ * Where the window's playback keys are left alone, as they have been since 0.5.9 (useInternalPlayer): Space, with or
+ * without Shift, wherever a control uses it (`OWN_KEYS`), so it still plays and pauses on a button; the other keys
+ * (Escape, ↑↓, a song's own shortcut) in a field, on a button or a slider. A key a control around the focus takes for
+ * itself is declared with `ownKeys` instead.
+ */
+const WINDOW_KEEPERS = 'input,textarea,select,button,[contenteditable="true"],[role="slider"]';
+
+/** Whether the window's playback keys leave `chord` pressed on `target` alone (`WINDOW_KEEPERS`). */
+export function windowKeepsKey(target: KeyTarget | null, chord: KeyChord): boolean {
+  return isInside(target, chord === 'Space' || chord === 'Shift+Space' ? OWN_KEYS : WINDOW_KEEPERS);
+}
+
+/** Inputs that do not type: Ctrl+Z there undoes the project, as on the page (useDocumentShortcuts). */
+const NON_TEXT_INPUTS = ['button', 'checkbox', 'color', 'file', 'radio', 'range', 'reset', 'submit'].map(type => `input[type="${type}"]`).join(',');
+
+/** Whether the focus types text, where Ctrl+Z and Ctrl+Y undo and redo the typing, not the project. */
+export function editsText(target: KeyTarget | null): boolean {
+  return isInside(target, 'textarea,[contenteditable="true"]') || isInside(target, 'input') && !isInside(target, NON_TEXT_INPUTS);
 }
 
 /** Whether a key went into the editor's or the lighting workbench's timeline. */
@@ -97,15 +120,16 @@ export function ownKeys(...chords: readonly KeyChord[]): { 'data-own-keys': stri
 }
 
 /**
- * The keys the home page's lists use themselves today, for them to declare with `ownKeys` once the router takes the
- * keys first (04 设计 K3). A song card moves the focus with the arrows, Home and End and takes them (useProgramViewport);
+ * The keys the home page's lists use themselves, declared with `ownKeys` since the router takes the keys first
+ * (04 设计 K3). A song card moves the focus with the arrows, Home and End and takes them (useProgramViewport), and
+ * plays its song with Enter (ProjectLibrary);
  * the program grid selects all with Ctrl+A and deletes the selected songs with Delete; a playlist renames with F2 and
- * opens its menu with the menu key or Shift+F10. The grid's Escape is not among them: it clears the selection and the
- * window still stops the show with it, as it does today. Moving cards and playlists are drags (DragSession), whose
+ * opens its menu with the menu key or Shift+F10. The grid's Escape is not among them: it clears the selection and
+ * stops the show, both through the home page's stop (ProgramGrid), as it did before the router. Moving cards and playlists are drags (DragSession), whose
  * Escape the drag layer of `routeKey` takes.
  */
 export const HOME_OWN_KEYS = {
-  programCard: ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'],
+  programCard: ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter'],
   programGrid: ['Ctrl+KeyA', 'Delete'],
   playlist: ['F2', 'ContextMenu', 'Shift+F10']
 } as const satisfies Record<string, readonly KeyChord[]>;

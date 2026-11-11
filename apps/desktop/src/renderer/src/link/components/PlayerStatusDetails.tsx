@@ -2,11 +2,14 @@ import { useEffect, useRef } from 'react';
 import { CircleAlert, Info, X } from 'lucide-react';
 import type { InternalPlayerState } from '@tb/core/link';
 import { escapeClosesPanel, modalDialogOpen } from '../playback-keys';
+import { useKeyOverlay } from '../keys/useKeyCommands';
 
 export function PlayerStatusDetails({ error, errorTitle, notice, fault, engine }: Pick<InternalPlayerState, 'error' | 'errorTitle' | 'notice'> & { fault: string | null; engine: string }): JSX.Element {
   const details = useRef<HTMLDetailsElement>(null);
   const summary = useRef<HTMLElement>(null);
   const close = (): void => { if (details.current) details.current.open = false; summary.current?.focus(); };
+  // While open, the window's keys leave Escape to it, and it closes itself (its own listener, until K4).
+  useKeyOverlay(() => details.current?.open === true);
   useEffect(() => {
     const outside = (event: PointerEvent): void => {
       if (details.current?.open && event.target instanceof Node && !details.current.contains(event.target)) details.current.open = false;

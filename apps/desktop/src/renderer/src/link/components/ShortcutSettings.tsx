@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { Button, Card, Dialog, IconButton, Notice, TextInput } from '../ui';
 import { defaultShortcuts, shortcutActions, shortcutKey, shortcutLabel, useShortcutStore, type ShortcutBinding } from '../stores/shortcut-store';
+import { ownKeys } from '../keys/key-owner';
 
 export function ShortcutSettings(): JSX.Element {
   const { bindings, load, save, error } = useShortcutStore();
@@ -29,7 +30,7 @@ export function ShortcutSettings(): JSX.Element {
         <span className="settings-shortcut-name">{name}</span>
         <div className="settings-shortcut-keys">
           {bindings.filter(binding => binding.action === action).map(binding => <span className="settings-shortcut-key" key={binding.id}>
-            <TextInput aria-label={`${name}快捷键`} width="auto" readOnly value={editing === binding.id ? '请按快捷键…' : shortcutLabel(binding.key)} onFocus={() => setEditing(binding.id)} onBlur={() => setEditing(null)} onKeyDown={event => {
+            <TextInput aria-label={`${name}快捷键`} width="auto" {...ownKeys('*')} readOnly value={editing === binding.id ? '请按快捷键…' : shortcutLabel(binding.key)} onFocus={() => setEditing(binding.id)} onBlur={() => setEditing(null)} onKeyDown={event => {
               if (event.code === 'Tab') { setEditing(null); return; }
               event.preventDefault(); event.stopPropagation();
               if (event.code === 'Escape') { setEditing(null); event.currentTarget.blur(); return; }

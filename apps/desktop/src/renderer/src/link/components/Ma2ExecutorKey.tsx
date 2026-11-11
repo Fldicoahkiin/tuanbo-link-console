@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { Ma2ExecutorPage } from '@tb/schema';
 import { ma2ExecutorFunctions } from '@tb/core/link';
 import { executorKeyDown, executorKeyUp } from './ma2-executor-keys';
+import { ownKeys } from '../keys/key-owner';
 
 export function Ma2ExecutorKey({ item, page, index, primary = false, matched = true, children, input }: {
   item: Ma2ExecutorPage['items'][number]; page: number; index: number; primary?: boolean; matched?: boolean; children?: ReactNode;
@@ -30,6 +31,7 @@ export function Ma2ExecutorKey({ item, page, index, primary = false, matched = t
     }}
     onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release} onBlur={release} onDragStart={release}
     onClick={event => { if (!momentary) { event.stopPropagation(); input.press(item, page, index); } }}
+    {...(momentary ? ownKeys('Space', 'Enter') : ownKeys('Enter'))}
     onKeyDown={event => executorKeyDown(event, momentary, press)}
     onKeyUp={event => executorKeyUp(event, momentary, release)}>
     {children ?? fn?.name ?? '—'}

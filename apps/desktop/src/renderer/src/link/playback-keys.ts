@@ -1,7 +1,8 @@
-import { chordOf } from './keys/key-chord';
 import { DIALOGS, isInside, OWN_KEYS, type KeyTarget } from './keys/key-owner';
 
-// DIALOGS, modalDialogOpen, OWN_KEYS and the target helpers live in keys/key-owner.ts (04 设计 K2).
+// DIALOGS, modalDialogOpen, OWN_KEYS and the target helpers live in keys/key-owner.ts (04 设计 K2). The window's playback
+// keys (Space, Escape, ↑↓, a song's own shortcut) are the key router's (keys/key-router.ts, K3); what is left here serves
+// the listeners not on it yet: the timeline's, the panels' and the drags' (K4–K6).
 export { DIALOGS, isInside, modalDialogOpen, type KeyTarget } from './keys/key-owner';
 
 /**
@@ -45,70 +46,6 @@ export function keyTarget(event: Pick<KeyboardEvent, 'target'>): Element | null 
 export function takeKey(event: Pick<KeyboardEvent, 'repeat' | 'preventDefault'>, act: () => void): void {
   event.preventDefault();
   if (!event.repeat) act();
-}
-
-/** What a key pressed anywhere in the window does while 联动台播放 plays the show. */
-export type PlaybackKeyAction = { kind: 'song'; itemId: string } | { kind: 'play-button' } | { kind: 'stop' } | { kind: 'skip'; direction: -1 | 1 };
-type PlaybackKeyEvent = Pick<KeyboardEvent, 'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey' | 'defaultPrevented'>;
-/**
- * `paused`: the settings or connection page is open. `modalOpen`: a native modal dialog is open (`modalDialogOpen`).
- * `arrowKeys`: ↑↓ change songs. `song`: the song a key is the shortcut of.
- */
-export type PlaybackKeyContext = { paused: boolean; modalOpen: boolean; arrowKeys: boolean; song: (key: string) => string | undefined };
-
-/**
- * The window's playback keys: a song's own shortcut plays that song, Space presses the play button of the page on
- * screen (see `registerPlayButton`), Escape stops, ↑↓ go to the previous or next song when that is turned on. The
- * timeline takes its own keys. While the settings or connection page is open (`paused`) none of these work, so Escape
- * there only closes the page (0.5.9); nor do they in an open dialog (`DIALOGS`) or while a modal one is open, so
- * Escape there only closes the dialog. A held key repeats the same action; `handlePlaybackKey` does it once per press.
- */
-export function playbackKeyAction(event: PlaybackKeyEvent, target: KeyTarget | null, context: PlaybackKeyContext): PlaybackKeyAction | null {
-  const plain = !event.ctrlKey && !event.altKey, space = plain && event.code === 'Space';
-  if (context.paused || keyInDialog(target, context.modalOpen) || event.metaKey || event.defaultPrevented || isInside(target, '.reference-timeline')
-    || (space ? spaceBelongsToControl(target) : isInside(target, 'input,textarea,select,button,[contenteditable="true"],[role="slider"]'))) return null;
-  const itemId = context.song(chordOf(event, { meta: false }));
-  if (itemId) return { kind: 'song', itemId };
-  if (space) return { kind: 'play-button' };
-  if (plain && event.code === 'Escape') return { kind: 'stop' };
-  if (plain && context.arrowKeys && (event.code === 'ArrowUp' || event.code === 'ArrowDown')) return { kind: 'skip', direction: event.code === 'ArrowUp' ? -1 : 1 };
-  return null;
-}
-
-/** The player the window's playback keys go to. */
-export type PlaybackKeyPlayer = { play(itemId: string): void; stop(): void; skip(direction: -1 | 1): void };
-
-/** The window's keydown listener: does what `playbackKeyAction` says, once per press, and takes the key (`takeKey`). */
-export function handlePlaybackKey(event: PlaybackKeyEvent & Pick<KeyboardEvent, 'repeat' | 'preventDefault'>, target: KeyTarget | null,
-  context: PlaybackKeyContext, player: PlaybackKeyPlayer): void {
-  const action = playbackKeyAction(event, target, context);
-  if (!action) return;
-  takeKey(event, () => {
-    switch (action.kind) {
-      case 'song': player.play(action.itemId); return;
-      // The page's play button, never "the song played last" (0.5.9).
-      case 'play-button': pressPlayButton(); return;
-      case 'stop': player.stop(); return;
-      case 'skip': player.skip(action.direction); return;
-    }
-  });
-}
-
-let playButton: (() => void) | null = null;
-
-/**
- * Space does what the play button of the page on screen does (0.5.9): on the home page the player's button, which
- * plays the song it shows; in the editor and the lighting workbench the timeline's, which plays this song from the
- * playhead. The page hands over its button's action while it is on screen and calls the result when it leaves.
- */
-export function registerPlayButton(press: () => void): () => void {
-  playButton = press;
-  return () => { if (playButton === press) playButton = null; };
-}
-
-/** Presses the play button of the page on screen; a page without one (no song open in the editor) does nothing. */
-export function pressPlayButton(): void {
-  playButton?.();
 }
 
 /**

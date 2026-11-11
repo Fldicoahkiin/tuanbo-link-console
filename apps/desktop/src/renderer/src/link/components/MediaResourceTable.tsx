@@ -16,6 +16,7 @@ import {
   Plus
 } from 'lucide-react';
 import { MEDIA_DRAG_TYPE, OBS_DRAG_TYPE, type ObsResource } from './resource-library-model';
+import { ownKeys } from '../keys/key-owner';
 
 export type MediaFilter = 'all' | 'folder' | LinkMediaAsset['kind'];
 export type MediaSort = 'name' | 'type' | 'status';
@@ -105,6 +106,7 @@ function ObsVisualRow(props: { resource: ObsResource; selected: boolean; onSelec
     className={`media-table-row obs-camera-row ${props.selected ? 'is-selected' : ''}`}
     draggable
     tabIndex={0}
+    {...ownKeys('Enter')}
     onClick={() => props.onSelect(resource)}
     onDoubleClick={() => { props.onSelect(resource); props.onAdd(resource); }}
     onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === 'Enter') { props.onSelect(resource); props.onAdd(resource); } }}
@@ -131,6 +133,7 @@ function FolderRow({ row, props }: { row: Extract<MediaRow, { kind: 'folder' }>;
     onClick={() => props.onSelectFolder(row.folder.id)}
     onDoubleClick={() => props.onToggleFolder(row.folder.id)}
     tabIndex={0}
+    {...ownKeys('Enter')}
     onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === 'Enter') { props.onSelectFolder(row.folder.id); props.onToggleFolder(row.folder.id); } }}
     onContextMenu={(event) => {
       event.preventDefault();
@@ -168,6 +171,7 @@ function AssetRow({ row, props }: { row: Extract<MediaRow, { kind: 'asset' }>; p
     className={`media-table-row asset-row ${props.selectedAssetId === row.asset.id ? 'is-selected' : ''}`}
     draggable={!editing}
     tabIndex={0}
+    {...ownKeys('Enter')}
     onClick={() => { props.onSelectAsset(row.asset.id); props.onSelectFolder(row.asset.folderId); }}
     onDoubleClick={() => { if (!editing) props.onAddAssetToTimeline(row.asset.id); }}
     onKeyDown={(event) => {
@@ -231,6 +235,7 @@ function InlineNameEditor(props: { initialValue: string; onCommit: (name: string
   return <input
     autoFocus
     className="media-inline-name"
+    {...ownKeys('*')}
     value={value}
     onChange={(event) => setValue(event.currentTarget.value)}
     onClick={(event) => event.stopPropagation()}

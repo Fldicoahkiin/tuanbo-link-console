@@ -9,7 +9,8 @@ import { useRuntimeStore } from '../stores/runtime-store';
 import { Button, IconButton, Select } from '../ui';
 import { PlayerStatusDetails } from './PlayerStatusDetails';
 import { songVolumeView } from '../view-models/song-volume';
-import { homePlayButton, pressHomePlayButton, registerHomePlayButton } from './play-buttons';
+import { homePlayButton, pressHomePlayButton } from './play-buttons';
+import { useKeyCommands } from '../keys/useKeyCommands';
 
 /** `engine` names the audio engine this player uses, for the operator. `outdated`: the background program plays
  * another version of the project than this window opened it with, taken over after a window reload; null until
@@ -40,7 +41,8 @@ export function ProjectPlayerTransport({ controller, state, engine, selectedItem
   const { items, selected, target, unavailable } = button;
   const press = (): void => pressHomePlayButton(button, state.status,
     { pause: () => void controller?.pause(), resume: () => void controller?.resume(), play: itemId => void controller?.play(itemId) }, notify);
-  useEffect(() => registerHomePlayButton(onScreen, press));
+  // While the home page shows, Space presses this button (0.5.9).
+  useKeyCommands('home', { 'transport.playPause': press }, () => onScreen);
   const next = state.endAction === 'loop' ? selected : state.endAction === 'next' ? items[items.findIndex((item) => item.id === state.itemId) + 1] : undefined;
   const stateText = state.status === 'preparing' && state.preparation ? `准备中 · ${state.preparation}` : statusLabel(state.status);
   return <section className="home-player" data-mode="internal" data-status={state.status} aria-label="节目播放控制">

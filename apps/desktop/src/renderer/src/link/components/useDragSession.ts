@@ -1,5 +1,6 @@
 import { useEffect, useState, type PointerEvent } from 'react';
 import { DragSession } from './drag-session';
+import { keyRouter } from '../keys/key-router';
 
 /**
  * A drag on the timeline (`DragSession`), drawn by the component that holds it. `begin` takes the pointer for the
@@ -14,7 +15,8 @@ export function useDragSession<T>(): {
 } {
   const [drag, setDrag] = useState<T | null>(null);
   // The window in the app; the session only listens once a drag begins, so drawing without a window (tests) works.
-  const [session] = useState(() => new DragSession<T>(globalThis, value => setDrag(() => value)));
+  // The key router leaves Escape to the session while it goes on.
+  const [session] = useState(() => new DragSession<T>(globalThis, value => setDrag(() => value), keyRouter));
   useEffect(() => () => session.dispose(), [session]);
   return {
     drag,

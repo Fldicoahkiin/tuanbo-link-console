@@ -50,6 +50,7 @@ import { useLicenseReminders } from './useLicenseReminders';
 import { TaskSidebarProgress } from './components/TaskSidebarProgress';
 import { recordErrorNotice } from './error-notice-log';
 import { noticeText, showMainProcessErrors } from './notice-text';
+import { useKeyOverlay, useKeyRouter, usePageScope } from './keys/useKeyCommands';
 
 type Page = 'project' | 'cues' | 'lighting';
 type Notice = { id: string; message: string; tone: 'info' | 'error'; key?: string };
@@ -91,12 +92,17 @@ export function LinkApp(): JSX.Element {
   const integrationInitialized = useIntegrationStore((state) => state.initialized);
   const runtimeState = useRuntimeStore((state) => state.state);
   const [playbackProject, setPlaybackProject] = useState(project);
-  const internalPlayer = useInternalPlayer(coordinator, integrationInitialized, playbackProject, connectionsOpen);
+  const internalPlayer = useInternalPlayer(coordinator, integrationInitialized, playbackProject);
   const editingLocked = internalPlayer.state.status === 'preparing' || ['preflight', 'armed', 'running', 'timecodeLost', 'paused', 'error', 'stopping'].includes(runtimeState);
   const previewPlaying = useMa2SyncStore(state => state.previewPlaying);
   const playbackLocked = editingLocked || previewPlaying || ['playing', 'paused'].includes(internalPlayer.state.status);
   useEffect(() => { if (!playbackLocked) setPlaybackProject(project); }, [playbackLocked, project]);
   useConnectionsEscape(connectionsOpen && !settingsOpen, () => setConnectionsOpen(false));
+  // The window's one key listener (keys/key-router.ts). While the connection and settings page is open, the window's
+  // playback keys wait and Escape there only closes the page (0.5.9).
+  useKeyRouter();
+  usePageScope(page);
+  useKeyOverlay(connectionsOpen, true);
 
   /** `written`: the text is written for the operator already and is shown as it is (noticeText). */
   const notify = useCallback((message: string, tone: 'info' | 'error' = 'info', key?: string, written = false) => {

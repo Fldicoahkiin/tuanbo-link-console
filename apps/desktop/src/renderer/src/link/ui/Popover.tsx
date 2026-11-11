@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { escapeClosesPanel, modalDialogOpen } from '../playback-keys';
+import { useKeyOverlay } from '../keys/useKeyCommands';
 
 /** Space kept between a panel and the window edge, and between a panel and its button. */
 const MARGIN = 8;
@@ -65,6 +66,8 @@ export function Popover({ anchor, label, placement = 'below-end', className, onC
     window.addEventListener('scroll', measure, true);
     return () => { observer.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure, true); };
   }, [anchor, placement]);
+  // Open while it is there: the window's keys leave Escape to it, and it closes itself (its own listener, until K4).
+  useKeyOverlay(true);
   useEffect(() => {
     const away = (event: PointerEvent): void => {
       const target = event.target;

@@ -46,7 +46,8 @@ import { timelineLayout, timelineMusicLayout, timelineRulerHeight } from './time
 import { LightingHeadings, LightingLanes, type LightingTimelineProps } from './LightingTimeline';
 import { TimelineMarkers } from './TimelineMarkers';
 import { useLightingPreview } from '../runtime/use-lighting-preview';
-import { keyTarget, modalDialogOpen, registerPlayButton } from '../playback-keys';
+import { keyTarget, modalDialogOpen } from '../playback-keys';
+import { useKeyCommands } from '../keys/useKeyCommands';
 import { handleTimelineKey } from './timeline-keys';
 
 function seekTimelineAudio(audio: HTMLAudioElement, milliseconds: number): void {
@@ -179,7 +180,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
     if (!props.playing && (props.playheadMs >= props.durationMs || (audioEndMs !== undefined && props.playheadMs >= audioEndMs) || audioRef.current?.ended)) seekTo(0, true, false);
     props.onPlayingChange(!props.playing);
   };
-  useEffect(() => registerPlayButton(playPause));
+  useKeyCommands('timeline', { 'transport.playPause': playPause });
   const playheadFrame = useFrameValue((clientX: number) => { seek(clientX, true); });
   const cancelPlayheadFrame = playheadFrame.cancel;
   useEffect(() => { cancelPlayheadFrame(); playheadPointerId.current = null; setClipboard(null); setClipContext(null); }, [props.timelineState.itemId, cancelPlayheadFrame]);
