@@ -33,7 +33,7 @@
 - 不控制 OBS 推流/录像，不控制直播伴侣开播/关播，不自动点击第三方界面。
 - 不提权启动 OBS。OBS 以管理员身份运行时照常支持（2026-10-25 用户要求），组件修复后用普通方式重开 OBS。
 - OBS 里只在固定前缀的自有场景中创建、更新、移除联动台自己的场景项和媒体输入，再加上实时画布授权的“用户选中的来源”；不修改、不删除用户其他来源。视频解码与合成由 OBS 完成，联动台播放的音频经应用自有的 OBS 音频来源送入正式输出。
-- 不迁移旧 ShowPackage。普通工程用 `.tblink` schema v1；带灯光数据的工程用 schema v2，让旧程序拒绝覆盖保存，而不是悄悄丢掉灯光数据。
+- 不迁移旧 ShowPackage。普通工程用 `.tblink` schema v1；带灯光数据的工程用 schema v2，让旧程序拒绝覆盖保存，而不是悄悄丢掉灯光数据。歌里存了节拍的工程用 schema v3（2026-11-11，0.5.9 起）：0.5.8 和更早的版本打不开，所以第一次把旧文件存成 v3 前先问一次，并把原文件另存为工程旁边的「工程名（旧版本可打开的备份）.tblink」（`apps/desktop/src/main/link/link-project-service.ts`）；备份没存成就不保存。
 - 不发任何免激活、免授权的包。测试用用户给的激活码。
 
 ### 用户授权和定下的事（新的在前，新的取代旧的）
@@ -105,6 +105,7 @@ docs/                           设计、实施、验收和服务器安装说明
 | 欠着的关灯 | 规则在 `packages/core/src/lighting-off-ledger.ts`（2026-11-11）：停止关这首歌的执行器，换歌只关上一首独有的，正在用的绝不关。全应用一张清单，主人是主进程 `apps/desktop/src/main/link/lighting-off-service.ts`：节目、试听（`link:lighting-off`）、退出时的询问和演出状态都经它；没发出去的留着，控台重新连上后补发 1 次（次数在 `output-recovery.ts`），再按停止全部重发；关灯不过授权。别处不再自己发 Off、不另记“还欠着” |
 | 节目现在在哪一步、这时能做什么 | 规则在 `packages/core/src/show-state.ts` 的 `showGate`，状态由主进程 `apps/desktop/src/main/link/show-state-service.ts` 算（2026-11-11），界面只照着显示（`stores/show-state-store.ts`）。新的“播放时不能做”都问它，不再各处自己判断“在不在播放” |
 | 按键谁来处理 | `apps/desktop/src/renderer/src/link/keys/`（2026-11-11）：窗口上只有 `key-router.ts` 一个按键监听，一次按键归谁由 `key-route.ts` 的 `routeKey` 按“输入框、弹窗、拖动、页面、全局”的顺序定，键位在 `keymap.ts` 一张表。组件自己用的键用 `ownKeys` 声明；Esc 能关的面板、菜单和列表用 `useKeyOverlay` 登记，由路由关最上面那一个，自己不听 Esc；拖动用 `useDragSession`（Esc 能取消）或 `useCapturedDrag`（边拖边写、取消不了）登记，拖动中的 Esc 和会改工程的键由路由拦，拖动自己不听按键（都由 `key-routing-scan.test.ts` 守着）。不再往 window 或 document 上新加 keydown 监听；时间线和灯光快捷键这两处旧监听还在，接完之前按 `key-router.ts` 开头写的方式让路 |
+| 一首歌的节拍 | `packages/core/src/song-beats.ts` 的 `songBeats`（2026-11-11）：每首歌一份，按音乐的源文件存在 `rundownItem.music`，编辑器和灯光工作台都从它读，经音频片段换算到歌曲时间，剪切、移动音频不用重新识别。只用 `setSongMusicCommand` 改；旧工程的两种节拍只在 `document-store.setProject` 打开时搬一次（`song-music-migration.ts`）。显示疏密只在显示时定，不存进工程；包络分析（“分析音乐”）不出节拍 |
 
 同一次复盘定下的另外几条：
 
