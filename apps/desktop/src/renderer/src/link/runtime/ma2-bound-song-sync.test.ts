@@ -334,6 +334,20 @@ it('用联动台的：下一次同步按以联动台为准写一次，之后照�
   edit(1100); await tick();
   expect(applyMa2.mock.calls.at(-1)?.[0]).toMatchObject({ consoleChanges: 'read-back' });
 });
+it('用联动台的：这一次碰上控台同时在改，选择留着，重读后照样按联动台的写', async () => {
+  previewMa2.mockResolvedValue(consoleMoved());
+  start(); edit(1000); await tick();
+  expect(song().state).toBe('blocked');
+  writeMa2SongFromSoftware('song');
+  applyMa2.mockResolvedValueOnce({ status: 'incomplete', stage: 'read', message: '控台同时在改：预览之后控台的 Timecode 9902 或它用的序列变了，这次没有写入', mayHaveWritten: false, backupFile: null });
+  await tick();
+  expect(song()).toMatchObject({ state: 'pending', consecutiveCollisions: 1, consoleChangesOnce: 'software' });
+  applyMa2.mockImplementation(confirmWrite);
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.now() + 2001);
+  await tick();
+  expect(applyMa2.mock.calls.at(-1)?.[0]).toMatchObject({ consoleChanges: 'software' });
+  expect(song()).toMatchObject({ state: 'verified', consoleChangesOnce: undefined });
+});
 it('控台时间线页的刷新：控台连着就现读这一条，没连上才用上次读的，播放中不读', async () => {
   expect(await readMa2ShowNow(9902, 0)).toEqual(preview);
   expect(previewMa2).toHaveBeenCalledWith(expect.objectContaining({ target: 9902, timeOriginMs: 0, network }));

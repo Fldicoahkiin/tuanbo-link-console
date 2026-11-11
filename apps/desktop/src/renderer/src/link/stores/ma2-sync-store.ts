@@ -43,7 +43,6 @@ export const useMa2SyncStore = create<{ songs: Record<string, SongSync>; names: 
   songs: {}, names: { state: 'idle', message: '' }, session: { status: 'waiting', message: '等待连接控台并打开工程' }, timelinePlaying: false, previewPlaying: false
 }));
 
-/** The programme or an editor preview is playing: nothing is written to the console. */
 /** Patches a song's sync state while the same session holds it; a paused song stays paused. */
 export function updateMa2Song(entry: SongSync, patch: Partial<SongSync>): void {
   useMa2SyncStore.setState(state => {
@@ -52,6 +51,7 @@ export function updateMa2Song(entry: SongSync, patch: Partial<SongSync>): void {
     return { songs: { ...state.songs, [entry.itemId]: { ...current, ...patch, ...(current.state === 'paused' ? { state: 'paused' as const } : {}) } } };
   });
 }
+/** The programme or an editor preview is playing: nothing is written to the console. */
 export function ma2SyncPlaying(): boolean {
   const state = useMa2SyncStore.getState();
   return state.timelinePlaying || state.previewPlaying;

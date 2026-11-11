@@ -407,7 +407,9 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         const log = reason !== reported.loggedFailure;
         update(entry, { state: exhausted ? 'blocked' : 'pending', blockedRevision: useDocumentStore.getState().revision, consecutiveFailures, consecutiveCollisions: collisions,
           nextCheckAt: Date.now() + (collided ? FOCUSED_RECHECK_MS : waiting ? 1000 : 1000 * consecutiveFailures),
-          waitingForConnection: disconnected, checking: false, writing: false, recheckRevision: undefined, requestId: null, progress: null, consoleChangesOnce: undefined,
+          waitingForConnection: disconnected, checking: false, writing: false, recheckRevision: undefined, requestId: null, progress: null,
+          // 用联动台的 chosen once holds through a wait (console away, playback, the console being edited); a real failure uses it up.
+          ...waiting ? {} : { consoleChangesOnce: undefined },
           loggedFailure: reason, ...exhausted ? { announcedFailure: reason } : {},
           message: failure });
         if (log) reportCoordinatorError(`「${title}」${failure}`, value => { update(entry, { message: value }); });
