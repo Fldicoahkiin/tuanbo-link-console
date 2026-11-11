@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Plus, RotateCcw, Trash2 } from 'lucide-react';
-import { Button, Card, Dialog, IconButton, Notice, TextInput } from '../ui';
+import { Button, Card, Dialog, IconButton, Notice, Switch, TextInput } from '../ui';
 import { defaultShortcuts, shortcutActions, shortcutKey, shortcutLabel, useShortcutStore, type ShortcutBinding } from '../stores/shortcut-store';
 import { ownKeys } from '../keys/key-owner';
 
 export function ShortcutSettings(): JSX.Element {
-  const { bindings, load, save, error } = useShortcutStore();
+  const { bindings, switchesOff, load, save, setSwitch, error } = useShortcutStore();
   const [editing, setEditing] = useState<string | null>(null);
   const [removed, setRemoved] = useState<ShortcutBinding | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -22,6 +22,13 @@ export function ShortcutSettings(): JSX.Element {
     update([...bindings, { id: crypto.randomUUID(), action: actionId, key }]);
   };
   return <>
+    <Card title="停止" description="保存在这台电脑上。">
+      <Switch label="单按 Esc 停止" help="关掉后，单按 Esc 只关闭面板、取消选中和取消拖动，不停止播放。Shift+Esc 在任何地方都能停止，开着对话框、正在拖动或在输入框里也行。"
+        checked={!switchesOff.has('plainEscapeStops')} onChange={event => {
+          try { setSwitch('plainEscapeStops', event.currentTarget.checked); setMessage(null); }
+          catch (reason) { setMessage(`「单按 Esc 停止」没有保存成功：${String(reason)}。请再试一次。`); }
+        }} />
+    </Card>
     <Card title="灯光时间线" description="改完立即生效，保存在这台电脑上。点一下按键框，再按新的组合键；正在输入文字或开着对话框时，快捷键不起作用。"
       actions={<Button variant="ghost" size="sm" icon={RotateCcw} onClick={() => setConfirmReset(true)}>恢复默认快捷键</Button>}>
       {error || message ? <Notice tone="error">{message ?? error}</Notice> : null}

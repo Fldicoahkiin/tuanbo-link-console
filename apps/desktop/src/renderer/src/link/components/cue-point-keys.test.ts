@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { cuePointEnter, editDialogEnter } from './cue-point-keys';
+import { cuePointEnter } from './cue-point-keys';
 
 /** A key going down; `preventDefault` takes it from the browser and leaves a mark. */
 function key(value: string, repeat = false) {
@@ -28,12 +28,4 @@ it('Cue 点改不了（时间线只读、轨道锁定）时 Enter 不开修改�
   expect(opened).toEqual([]);
 });
 
-it('修改框里按住的 Enter（从 Cue 点上一直按着的）重复时不当保存，不会自己改写 Cue；新按的一下 Enter 照常保存（0.5.9）', () => {
-  const held = [key('Enter', true), key('Enter', true)], fresh = key('Enter');
-  for (const event of [...held, fresh]) editDialogEnter(event);
-  expect([...held, fresh].map(event => event.taken)).toEqual([true, true, false]);
-  // Other keys, held or not, are the dialog's own: typing the time, Tab, Escape that closes it.
-  const others = [key('1', true), key('Tab', true), key('Escape'), key('Backspace', true)];
-  for (const event of others) editDialogEnter(event);
-  expect(others.map(event => event.taken)).toEqual([false, false, false, false]);
-});
+// 修改框里按住的 Enter 重复时不当保存：K7 起由按键路由拿走（keys/key-routing-rules.test.ts「按住 Enter 只算一次」）。

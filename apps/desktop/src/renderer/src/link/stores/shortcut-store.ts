@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { z } from 'zod';
 import { chordLabel, chordOf } from '../keys/key-chord';
-import { KEYMAP, resolveKeymap, type CommandId, type KeyEntry, type KeyOverrides } from '../keys/keymap';
+import { commandKeys, KEYMAP, resolveKeymap, type CommandId, type KeyEntry, type KeyOverrides, type KeyScope, type KeySwitch } from '../keys/keymap';
 
 export const shortcutActions = { stamp: '在播放头打点', play: '播放 / 暂停', previous: '后退一帧', next: '前进一帧', start: '回到开头', end: '跳到结尾' } as const;
 const actionSchema = z.enum(['stamp', 'play', 'previous', 'next', 'start', 'end']);
@@ -39,16 +39,72 @@ export function currentKeymap(): readonly KeyEntry[] {
   return resolved.keymap;
 }
 
-export const useShortcutStore = create<{ bindings: ShortcutBinding[]; loaded: boolean; error: string | null; load: () => void; save: (bindings: ShortcutBinding[]) => void }>((set, get) => ({
-  bindings: defaultShortcuts, loaded: false, error: null,
+/**
+ * The keys turned off on this computer (keys/keymap.ts `KeySwitch`), saved apart from the lighting keys so that 0.5.8
+ * still reads those (`tblink.timeline-shortcuts`): `{ "off": ["plainEscapeStops"] }`. Every key is on when nothing is saved.
+ */
+const switchesKey = 'tblink.key-switches';
+const switchesSchema = z.object({ off: z.array(z.enum(['plainEscapeStops'])) });
+
+/** The keys turned off on this computer (key-router.ts reads it for every press). */
+export function currentSwitchesOff(): ReadonlySet<KeySwitch> {
+  const store = useShortcutStore.getState();
+  if (!store.loaded) store.load();
+  return useShortcutStore.getState().switchesOff;
+}
+
+/** How a command's keys are written in the app (the toolbar, menus, hints): its keys that work now, 「或」 between them. */
+export function commandKeyLabel(id: CommandId, scope: KeyScope): string {
+  return commandKeys(currentKeymap(), id, scope, currentSwitchesOff()).map(chordLabel).join(' 或 ');
+}
+
+/** The first key of a command that works now, as a menu item shows it beside its name; '' without one. */
+export function commandShortcut(id: CommandId, scope: KeyScope): string {
+  const first = commandKeys(currentKeymap(), id, scope, currentSwitchesOff())[0];
+  return first === undefined ? '' : chordLabel(first);
+}
+
+/** Whether this computer was told once that S no longer splits (split is Ctrl+B since 0.5.9, as in 剪映). */
+const splitHintKey = 'tblink.split-key-hint';
+export function splitHintShown(): boolean {
+  return typeof localStorage !== 'undefined' && localStorage.getItem(splitHintKey) !== null;
+}
+/** Remembers the hint was shown; false when it already was. */
+export function markSplitHintShown(): boolean {
+  if (splitHintShown()) return false;
+  if (typeof localStorage !== 'undefined') localStorage.setItem(splitHintKey, 'shown');
+  return true;
+}
+
+type ShortcutState = {
+  bindings: ShortcutBinding[]; switchesOff: ReadonlySet<KeySwitch>; loaded: boolean; error: string | null;
+  load: () => void; save: (bindings: ShortcutBinding[]) => void; setSwitch: (name: KeySwitch, on: boolean) => void;
+};
+
+export const useShortcutStore = create<ShortcutState>((set, get) => ({
+  bindings: defaultShortcuts, switchesOff: new Set(), loaded: false, error: null,
   load: () => {
     if (get().loaded) return;
-    try { const saved = localStorage.getItem(storageKey); set({ bindings: saved === null ? defaultShortcuts : validateShortcuts(JSON.parse(saved)), loaded: true }); }
-    catch (error) { set({ bindings: [], loaded: true, error: `快捷键读取失败：${String(error)}。请在设置里恢复默认快捷键。` }); }
+    // No page storage (the unit tests): the table's own keys, every key on.
+    if (typeof localStorage === 'undefined') { set({ loaded: true }); return; }
+    const errors: string[] = [];
+    let bindings: ShortcutBinding[] = defaultShortcuts, switchesOff: ReadonlySet<KeySwitch> = new Set();
+    try { const saved = localStorage.getItem(storageKey); if (saved !== null) bindings = validateShortcuts(JSON.parse(saved)); }
+    catch (error) { bindings = []; errors.push(`快捷键读取失败：${String(error)}。请在设置里恢复默认快捷键。`); }
+    try { const saved = localStorage.getItem(switchesKey); if (saved !== null) switchesOff = new Set(switchesSchema.parse(JSON.parse(saved)).off); }
+    catch (error) { errors.push(`「单按 Esc 停止」的设置读取失败：${String(error)}。现在按打开处理，请在设置里重新选一次。`); }
+    set({ bindings, switchesOff, loaded: true, error: errors.length ? errors.join(' ') : null });
   },
   save: (bindings) => {
     const validated = validateShortcuts(bindings);
     localStorage.setItem(storageKey, JSON.stringify(validated));
     set({ bindings: validated, loaded: true, error: null });
+  },
+  setSwitch: (name, on) => {
+    get().load();
+    const next = new Set(get().switchesOff);
+    if (on) next.delete(name); else next.add(name);
+    localStorage.setItem(switchesKey, JSON.stringify({ off: [...next] }));
+    set({ switchesOff: next });
   }
 }));

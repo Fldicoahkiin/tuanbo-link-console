@@ -5,14 +5,15 @@ import { TimelinePanelButton } from './TimelinePanelButton';
 import { Field, IconButton, Select } from '../ui';
 import { playbackFramesPerSecond } from '@tb/core/link';
 import type { MtcFrameRate } from '@tb/schema';
-import { shortcutLabel, useShortcutStore } from '../stores/shortcut-store';
+import { commandKeyLabel, useShortcutStore } from '../stores/shortcut-store';
+import type { TimelineSeek } from './timeline-commands';
 import type { LightingTimelineProps } from './LightingTimeline';
 import { stampTimeline } from './timeline-stamp';
 import { useKeyCommands } from '../keys/useKeyCommands';
 import { keyRouter } from '../keys/key-router';
 
 /** `onPlayPause` is the timeline's play button, which the play key presses. */
-type Props = { lighting: LightingTimelineProps | undefined; playheadMs: number; durationMs: number; playing: boolean; frameRate: MtcFrameRate; clock: PlaybackClock; onPlayPause: () => void; onPlayingChange: (playing: boolean) => void; onSeek: (ms: number) => void };
+type Props = { lighting: LightingTimelineProps | undefined; playheadMs: number; durationMs: number; playing: boolean; frameRate: MtcFrameRate; clock: PlaybackClock; onPlayPause: () => void; onPlayingChange: (playing: boolean) => void; seek: TimelineSeek };
 export function useTimelineStamp(props: Props) {
   const { lighting } = props;
   const { bindings, load, error } = useShortcutStore();
@@ -41,16 +42,17 @@ export function useTimelineStamp(props: Props) {
   // The lighting workbench's shortcut keys (keymap.ts, scope `lighting`, with the keys set on this computer,
   // shortcut-store.ts): on the whole page, but not while a dialog or any panel is open (`covered`), as before the key
   // router took them (K6). Moving the playhead pauses first.
-  const seek = (ms: number): void => { props.onPlayingChange(false); props.onSeek(ms); };
-  const step = (direction: -1 | 1): void => seek(Math.max(0, Math.min(props.durationMs, props.playheadMs + direction * 1000 / playbackFramesPerSecond(props.frameRate))));
+  // A held ← or → moves a frame per repeat, its seeks merged into one per frame drawn (`seek`, 04 设计 4.9).
+  const seek = (ms: number): void => { props.onPlayingChange(false); props.seek.to(ms); };
+  const step = (direction: -1 | 1): void => seek(Math.max(0, Math.min(props.durationMs, props.seek.from() + direction * 1000 / playbackFramesPerSecond(props.frameRate))));
   useKeyCommands('lighting', lighting ? {
     'lighting.stamp': () => stamp(),
     'transport.playPause': () => props.onPlayPause(),
     'transport.prevFrame': () => step(-1), 'transport.nextFrame': () => step(1),
     'transport.start': () => seek(0), 'transport.end': () => seek(props.durationMs)
   } : null, () => !keyRouter.covered());
-  const shortcut = bindings.find(binding => binding.action === 'stamp');
-  const controls = lighting ? <div className="timeline-stamp-controls"><IconButton label="打点" title={`在播放头打点${shortcut ? `（${shortcutLabel(shortcut.key)}）` : ''}；波形右键可在鼠标位置打点`} icon={MapPinPlus} onClick={() => stamp()} />
+  const shortcut = bindings.length ? commandKeyLabel('lighting.stamp', 'lighting') : '';
+  const controls = lighting ? <div className="timeline-stamp-controls"><IconButton label="打点" title={`在播放头打点${shortcut ? `（${shortcut}）` : ''}；波形右键可在鼠标位置打点`} icon={MapPinPlus} onClick={() => stamp()} />
     {!lighting.onCreateCue && lighting.document.tracks.length ? <TimelinePanelButton icon={Layers3} label={`打点轨道：${track?.name ?? '未选择'}`}><Field stacked label="打点轨道">{(field) => <Select {...field} value={track?.id ?? ''} onChange={event => setChosen(event.currentTarget.value)}>{lighting.document.tracks.map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.locked ? '（已锁定）' : ''}</option>)}</Select>}</Field></TimelinePanelButton> : null}
     {message || error ? <span role="alert" className="timeline-tool-error" tabIndex={0} aria-label={message ?? error ?? ''} title={message ?? error ?? ''}><TriangleAlert /></span> : null}
   </div> : null;

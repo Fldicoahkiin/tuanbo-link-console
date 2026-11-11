@@ -2,7 +2,7 @@ import { createLightingDocument } from '@tb/schema';
 import { describe, expect, it } from 'vitest';
 import { DragSession } from '../components/drag-session';
 import { documentShortcut } from '../useDocumentShortcuts';
-import { editorTransportKeys, timelineEditKeys, type TimelineKeyProps } from '../components/timeline-commands';
+import { editorEditKeys, editorTransportKeys, timelineEditKeys, timelineTransportKeys, type TimelineKeyProps } from '../components/timeline-commands';
 import { defaultShortcuts, lightingKeyOverrides, type ShortcutBinding } from '../stores/shortcut-store';
 import { keyInTimeline, modalDialogOpen } from './key-owner';
 import { KeyRouter, type KeyHandlers, type KeyOverlayEntry, type KeyWhen } from './key-router';
@@ -676,13 +676,20 @@ function timelineRouter(calls: string[], setup: TimelineSetup = {}): KeyRouter {
     onPlayingChange: playing => { if (!playing) calls.push('暂停'); },
     onDuplicateClip: (id, at) => { calls.push(`复制 ${id} 到 ${at}`); }, onDuplicateCue: (id, at) => { calls.push(`复制 ${id} 到 ${at}`); },
     onSplitClip: (id, at) => { calls.push(`分割 ${id} 在 ${at}`); },
+    onTrim: (ref, startMs, durationMs) => { calls.push(`修剪 ${ref.id} 为 ${startMs}+${durationMs}`); },
     onDeleteClip: id => { calls.push(`删除 ${id}`); }, onDeleteCue: id => { calls.push(`删除 ${id}`); }
   };
   const playPause = (): void => { calls.push('播放/暂停'); };
-  router.register('timeline', () => ({ 'transport.playPause': playPause }));
-  router.register('timeline', () => timelineEditKeys(props, { kind: 'clip', id: '片段' }, target => { calls.push(`复制 ${target.id}`); },
-    setup.stop === false ? undefined : () => { calls.push('停止'); }), press => keyInTimeline(press.target));
-  if (!lightingWorkspace) router.register('editor', () => editorTransportKeys(props, playPause, milliseconds => { calls.push(`定位 ${milliseconds}`); }));
+  // As ReferenceTimeline registers them (K7): the play button and the page's stop wherever the focus is on the page,
+  // the timeline's own keys with the focus in it.
+  router.register('timeline', () => ({ 'transport.playPause': playPause, ...(setup.stop === false ? {} : { 'transport.stop': () => { calls.push('停止'); } }) }));
+  const seek = { from: () => props.playheadMs, to: (milliseconds: number) => { calls.push(`定位 ${milliseconds}`); } };
+  router.register('timeline', () => ({
+    ...timelineEditKeys(props, { kind: 'clip', id: '片段' }, target => { calls.push(`复制 ${target.id}`); }),
+    ...timelineTransportKeys({ frameRate: props.frameRate, durationMs: 9_000, editPoints: [500, 2_000], playing: false }, { playPause, onPlayingChange: props.onPlayingChange, seek }),
+    'edit.deselect': () => { calls.push('取消选中'); }
+  }), press => keyInTimeline(press.target));
+  if (!lightingWorkspace) router.register('editor', () => ({ ...editorTransportKeys({ ...props, durationMs: 9_000 }, playPause, seek), ...editorEditKeys(props) }));
   if (lightingWorkspace) {
     const action = (name: Action) => (): void => { calls.push(name); };
     router.register('lighting', () => ({ 'lighting.stamp': action('stamp'), 'transport.playPause': action('play'), 'transport.prevFrame': action('previous'),
@@ -701,7 +708,9 @@ function pressOn(router: KeyRouter, key: Press, target: Node | null): Press {
 /** Every key the timeline edits with or moves the playhead with, and its transport keys. */
 const editingKeys = () => [press('Delete'), press('Backspace'), press('KeyS'), press('KeyM'), press('Enter'),
   press('KeyV', { ctrlKey: true }), press('KeyD', { ctrlKey: true }), press('KeyC', { ctrlKey: true }), press('KeyX', { ctrlKey: true }), press('KeyZ', { ctrlKey: true }), press('KeyA', { ctrlKey: true }),
-  press('Home'), press('End'), press('ArrowLeft'), press('ArrowRight'), press('ArrowUp'), press('ArrowDown'), press('Escape'), press('Space')];
+  press('Home'), press('End'), press('ArrowLeft'), press('ArrowRight'), press('ArrowUp'), press('ArrowDown'), press('Escape'), press('Space'),
+  // 剪映's keys (K7).
+  press('KeyB', { ctrlKey: true }), press('KeyB', { ctrlKey: true, shiftKey: true }), press('KeyQ'), press('KeyW'), press('KeyK'), press('KeyL'), press('ArrowLeft', { shiftKey: true })];
 
 describe('时间线的键（原 timeline-keys.test.ts，K6 起经路由）', () => {
   it('编辑器时间线里焦点在工具栏、轨道标题或片段按钮上时，空格是播放/暂停，不再交给按钮；按住只算一次（0.5.9）', () => {
@@ -831,10 +840,14 @@ describe('时间线的键（原 timeline-keys.test.ts，K6 起经路由）', () 
     const calls: string[] = [];
     const router = timelineRouter(calls);
     for (const key of editingKeys()) { calls.push(`· ${key.code}`); pressOn(router, key, clip); }
-    expect(calls).toEqual(['· Delete', '删除 片段', '· Backspace', '· KeyS', '分割 片段 在 1000', '· KeyM', '· Enter',
+    // K7: Backspace deletes as Delete does, S no longer splits (Ctrl+B does), End goes to the end, ↑↓ go to the edit
+    // points (500 and 2000 here), L plays, Shift+← goes back 5 frames. K pauses only while playing; Q and W find no
+    // clip 「片段」 among the clips to trim, Ctrl+Shift+B nothing at the playhead to split.
+    expect(calls).toEqual(['· Delete', '删除 片段', '· Backspace', '删除 片段', '· KeyS', '· KeyM', '· Enter',
       '· KeyV', '复制 片段 到 1000', '· KeyD', '· KeyC', '复制 片段', '· KeyX', '· KeyZ', '· KeyA',
-      '· Home', '暂停', '定位 0', '· End', '· ArrowLeft', '暂停', '定位 960', '· ArrowRight', '暂停', '定位 1040', '· ArrowUp', '· ArrowDown',
-      '· Escape', '停止', '· Space', '播放/暂停']);
+      '· Home', '暂停', '定位 0', '· End', '暂停', '定位 9000', '· ArrowLeft', '暂停', '定位 960', '· ArrowRight', '暂停', '定位 1040',
+      '· ArrowUp', '暂停', '定位 500', '· ArrowDown', '暂停', '定位 2000', '· Escape', '停止', '· Space', '播放/暂停',
+      '· KeyB', '分割 片段 在 1000', '· KeyB', '· KeyQ', '· KeyW', '· KeyK', '· KeyL', '播放/暂停', '· ArrowLeft', '暂停', '定位 800']);
     const bare: string[] = [];
     pressOn(timelineRouter(bare), press('Delete'), timeline);
     expect(bare).toEqual(['删除 片段']);
@@ -875,7 +888,8 @@ describe('时间线的键（原 timeline-keys.test.ts，K6 起经路由）', () 
       const calls: string[] = [];
       const router = timelineRouter(calls, { lightingWorkspace: true, lightingClip: true });
       for (const key of lightingKeys()) pressOn(router, key, target);
-      expect(calls).toEqual(['灯光点 删除', '灯光点 全选', '灯光点 复制', '灯光点 剪切', '灯光点 粘贴']);
+      // In the timeline Backspace deletes as Delete does since K7 (剪映): what timelineSelection says, here the clip.
+      expect(calls).toEqual([target === clip ? '删除 片段' : '灯光点 删除', '灯光点 全选', '灯光点 复制', '灯光点 剪切', '灯光点 粘贴']);
     }
     // As before: fields, held keys and Alt stay out.
     const calls: string[] = [];

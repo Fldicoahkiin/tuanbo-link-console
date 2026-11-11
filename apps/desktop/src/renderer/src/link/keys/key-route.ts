@@ -1,6 +1,6 @@
 import { parseChord, type KeyChord } from './key-chord';
 import type { KeyOwner } from './key-owner';
-import { KEYMAP, PAGE_SCOPES, type CommandId, type KeyBinding, type KeyEntry, type KeyPage, type KeyScope, type KeySwitch } from './keymap';
+import { bindingWorks, KEYMAP, PAGE_SCOPES, type CommandId, type KeyBinding, type KeyEntry, type KeyPage, type KeyScope, type KeySwitch } from './keymap';
 
 /*
  * Who acts on one key press, worked out in one place: 输入框 → 弹窗 → 拖动 → 页面 → 全局 (04 设计 4.3). A pure
@@ -39,6 +39,8 @@ export type RouteInput = {
   windowKeeps?: boolean;
   /** `editsText(target)`: the focus types text, where undo and redo are the typing's. Left out: in a field. */
   editingText?: boolean;
+  /** `typesLines(target)`: a text box of several lines, where a held Enter adds lines. Left out: none. */
+  typesLines?: boolean;
   /** `modalDialogOpen(document)`. */
   modalOpen: boolean;
   /** Bottom to top. */
@@ -61,10 +63,11 @@ export type RouteInput = {
  * - `overlay`: closes the top panel (the router does, K4).
  * - `drag-cancel`: cancels the drag; `swallow`: taken, nothing done (a held key's repeat, Escape after a cancel, a key
  *   that would change the project during a drag).
+ * - `held`: a held Enter's repeat, taken before anything on the page sees it (04 设计 4.9).
  * - `run`: the command in that scope; `song`: plays that song.
  */
 export type RouteDecision =
-  | { kind: 'ignore' } | { kind: 'native' } | { kind: 'overlay' } | { kind: 'drag-cancel' } | { kind: 'swallow' }
+  | { kind: 'ignore' } | { kind: 'native' } | { kind: 'overlay' } | { kind: 'drag-cancel' } | { kind: 'swallow' } | { kind: 'held' }
   | { kind: 'run'; id: CommandId; scope: KeyScope }
   | { kind: 'song'; itemId: string };
 
@@ -80,6 +83,11 @@ const DELETE_KEYS: ReadonlySet<KeyChord> = new Set(['Delete', 'Backspace']);
 const changesProject = (entry: KeyEntry): boolean => entry.kind === 'edit' || entry.id === 'document.undo' || entry.id === 'document.redo';
 const throughDialogs = (binding: KeyBinding): boolean => binding.through === 'dialogs' || binding.through === 'all';
 
+/** Whether `entry` works on the page on screen (`pages`). */
+const onPage = (input: RouteInput, entry: KeyEntry): boolean => entry.pages === undefined || entry.pages.includes(input.page);
+/** Enter, on the main keys or the number pad, with no other key held. */
+const ENTER_KEYS: ReadonlySet<KeyChord> = new Set(['Enter', 'NumpadEnter']);
+
 /** Runs `entry`, once per press when it says so. */
 function act(input: RouteInput, entry: KeyEntry): RouteDecision {
   return entry.repeat === 'once' && input.repeat ? SWALLOW : { kind: 'run', id: entry.id, scope: entry.scope };
@@ -90,6 +98,7 @@ function act(input: RouteInput, entry: KeyEntry): RouteDecision {
  * that gets through everything (`through: 'all'`) is not kept by a control or a button either.
  */
 function reaches(input: RouteInput, { entry, binding }: Candidate): boolean {
+  if (!onPage(input, entry)) return false;
   if (entry.area === 'timeline' && !input.inTimeline || entry.area === 'outside-timeline' && input.inTimeline) return false;
   if (binding.through === 'all') return input.available(entry.id, entry.scope);
   if (input.owner === 'control' && entry.kind !== 'document') return false;
@@ -124,9 +133,13 @@ function windowChord(chord: KeyChord): KeyChord {
 export function routeKey(input: RouteInput): RouteDecision {
   if (input.composing) return IGNORE;
   if (input.owner === 'capture') return NATIVE;
+  // 按住 Enter 只算一次 (第 7 题, 04 设计 4.9): wherever the focus is but in a text box of several lines, a held Enter's
+  // repeats press no button, submit no form and open nothing again: an MA2 Go key went on by as many Cues, a Cue point
+  // opened its dialog again and the dialog saved again (0.5.9). One rule for every button, those to come too.
+  if (input.repeat && ENTER_KEYS.has(input.chord) && input.typesLines !== true) return { kind: 'held' };
   const switchedOff = input.switchesOff ?? new Set<KeySwitch>();
   const matching = (chord: KeyChord): Candidate[] => (input.keymap ?? KEYMAP).flatMap(entry => entry.keys
-    .filter(binding => binding.chord === chord && (binding.switch === undefined || !switchedOff.has(binding.switch)))
+    .filter(binding => binding.chord === chord && bindingWorks(binding, switchedOff))
     .map(binding => ({ entry, binding })));
   const candidates = matching(input.chord);
   const inDialog = input.owner === 'dialog' || input.modalOpen;
@@ -170,7 +183,7 @@ export function routeKey(input: RouteInput): RouteDecision {
   const windowKeeps = input.windowKeeps ?? input.owner !== null;
   const itemId = input.song(input.chord);
   if (itemId !== undefined && !input.inTimeline && !windowKeeps) return input.repeat ? SWALLOW : { kind: 'song', itemId };
-  const window = matching(windowChord(input.chord)).find(({ entry }) => entry.scope === 'global' && entry.kind !== 'document'
+  const window = matching(windowChord(input.chord)).find(({ entry }) => entry.scope === 'global' && entry.kind !== 'document' && onPage(input, entry)
     && !(entry.area === 'outside-timeline' && input.inTimeline) && !windowKeeps && input.available(entry.id, entry.scope));
   if (window) return act(input, window.entry);
   return input.owner === null ? IGNORE : NATIVE;

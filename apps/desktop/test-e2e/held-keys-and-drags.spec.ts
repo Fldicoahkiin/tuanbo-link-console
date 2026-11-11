@@ -396,6 +396,32 @@ test('首页「MTC 时间码状态」开着、点了对话框里的文字（焦�
   } finally { await closeDiscarding(app); }
 });
 
+test('首页「MTC 时间码状态」开着：Shift+Esc 在对话框里也停止节目，对话框不关；关掉「单按 Esc 停止」后单按 Esc 不停（00-order 第 8 节第 1 题，K7）', async ({}, info) => {
+  const { app, page } = await open(info, threeSongs, { arrowKeys: true });
+  try {
+    const transport = await recordTransport(app);
+    await mtcStatus(page);
+    await page.locator('dialog.ui-dialog[open] h2').click();
+    await page.keyboard.press('Shift+Escape');
+    await expect.poll(transport.asked).toEqual(['stop']);
+    await expect(page.locator('dialog.ui-dialog[open]')).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('dialog[open]')).toHaveCount(0);
+    // 「单按 Esc 停止」 off on this computer: Escape on the page no longer stops, Shift+Escape does.
+    await page.getByRole('button', { name: '设置', exact: true }).click();
+    await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '播放', exact: true }).click();
+    await page.getByRole('button', { name: '快捷键', exact: true }).click();
+    await page.getByRole('switch', { name: '单按 Esc 停止' }).click();
+    await page.keyboard.press('Escape');
+    await transport.clear();
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press('Escape'); await page.waitForTimeout(400);
+    expect(await transport.asked()).toEqual([]);
+    await page.keyboard.press('Shift+Escape');
+    await expect.poll(transport.asked).toEqual(['stop']);
+  } finally { await closeDiscarding(app); }
+});
+
 test('首页「MTC 时间码状态」开着、焦点掉到了页面上（有焦点的按钮被移除或变灰）：空格、↓、歌曲快捷键都不碰节目，Esc 只关对话框', async ({}, info) => {
   const { app, page } = await open(info, threeSongs, { arrowKeys: true });
   try {

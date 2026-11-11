@@ -7,12 +7,13 @@ function key(value: string, repeat = false) {
   return event;
 }
 
-it('普通执行器键（Go 等）：第一下留给按钮自己点一次，按住时重复的空格和 Enter 被拿走、什么也不按（0.5.9）', () => {
+// 按住 Enter 时重复的那些由按键路由先拿走，到不了执行器键（K7，keys/key-routing-rules.test.ts 的「按住 Enter 只算一次」）。
+it('普通执行器键（Go 等）：空格和 Enter 留给按钮自己点，执行器键自己不再管重复的', () => {
   const pressed: number[] = [];
   for (const value of [' ', 'Enter']) {
-    const first = key(value), repeats = [key(value, true), key(value, true), key(value, true)];
-    for (const event of [first, ...repeats]) executorKeyDown(event, false, () => pressed.push(1));
-    expect([first.taken, ...repeats.map(event => event.taken)]).toEqual([false, true, true, true]);
+    const first = key(value);
+    executorKeyDown(first, false, () => pressed.push(1));
+    expect(first.taken).toBe(false);
     const up = key(value); executorKeyUp(up, false, () => pressed.push(-1));
     expect(up.taken).toBe(false);
   }

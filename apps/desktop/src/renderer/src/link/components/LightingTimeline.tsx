@@ -167,7 +167,11 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
       props.onSelect(removed.trackId, removed.clipId);
     } } : {})
   } : {});
-  useKeyCommands('editor', keyTrack && keyClip && !keyTrack.locked ? { 'lighting.addPoint': () => add(keyTrack, keyClip, props.getPlaybackPosition?.() ?? props.playhead.read()) } : {});
+  // M in the editor adds a marker at the playhead, as in 剪映 (K7; it added a lighting point before 0.5.9).
+  useKeyCommands('editor', !context && !props.detailOpen ? { 'marker.add': () => {
+    const startMs = props.getPlaybackPosition?.() ?? props.playhead.read();
+    props.onChange({ ...props.document, markers: [...props.document.markers, { id: crypto.randomUUID(), name: `标记 ${props.document.markers.length + 1}`, startMs, endMs: null }] }, '时间线打标记');
+  } } : {});
   return <>
     {!props.document.tracks.length ? <div className="timeline-lane lighting-empty-lane" style={{ order: 50 + (props.document.laneIndex ?? 0) * 100 }} /> : null}
     {activeTrack ? <div className="timeline-lane lighting-lane lighting-combined-lane" aria-label="灯光时间线" style={{ order: 50 + (props.document.laneIndex ?? 0) * 100 }} onClick={(event) => { if (event.target === event.currentTarget) { props.onSeek(props.snapTime?.(props.timeAtClientX(event.clientX)) ?? props.timeAtClientX(event.clientX)); props.onSelect(activeTrack.id, null); } }} onDoubleClick={(event) => {

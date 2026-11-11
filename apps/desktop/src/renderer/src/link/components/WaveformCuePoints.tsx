@@ -8,7 +8,7 @@ import { cueEventEntries } from './cue-event-view';
 import { formatTimelineTimecode } from './timeline-geometry';
 import type { LightingTimelineProps } from './LightingTimeline';
 import { useDragSession } from './useDragSession';
-import { cuePointEnter, editDialogEnter } from './cue-point-keys';
+import { cuePointEnter } from './cue-point-keys';
 
 import { cueMarkerWidth, displayCueNumber, layoutCueMarkers } from './cue-marker-layout';
 import { ownKeys } from '../keys/key-owner';
@@ -36,8 +36,8 @@ export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPer
   const [context, setContext] = useState<{ x: number; y: number } | null>(null);
   const [range, setRange] = useState<{ start: number; end: number; additive: boolean } | null>(null);
   useEffect(() => { setSelection([]); setRange(null); }, [mode]);
-  // A held Enter repeats: the Cue point opens this dialog on the first keydown only, and the dialog does not take a
-  // repeat of that Enter as a submit, which would rewrite the Cue unchanged and open the dialog again (cue-point-keys, 0.5.9).
+  // A held Enter repeats: the Cue point opens this dialog on the first keydown only, and the key router takes the
+  // repeats before the dialog's form, which would save the Cue unchanged on each (keys/key-route.ts `held`, 0.5.9).
   const [editing, setEditing] = useState<Entry | null>(null);
   const entries = useMemo(() => cueEventEntries(lighting.document), [lighting.document]);
   const placements = useMemo(() => layoutCueMarkers(entries, pixelsPerSecond), [entries, pixelsPerSecond]);
@@ -107,6 +107,6 @@ export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPer
         onKeyDown={event => cuePointEnter(event, !disabled && !entry.track.locked, () => setEditing(entry))}><span className="cue-marker-number">{displayCueNumber(entry.cue)}</span></button></Fragment>;
     })}</div>
     {entries.filter(entry => entry.id === (drag?.id ?? (timeVisible ? lighting.selectedEventId : null))).map(entry => <output className="cue-position-readout" aria-label="当前 Cue 时间" key={entry.id} style={{ top: top + 64, left: Math.max(scrollLeft + 8, Math.min((drag?.target ?? entry.ms) / 1000 * pixelsPerSecond, scrollLeft + viewportWidth - 330)) }}>{formatTimelineTimecode(drag?.target ?? entry.ms, frameRate)}{drag && drag.target !== drag.ms ? <><span>{drag.target >= drag.ms ? '+' : ''}{((drag.target - drag.ms) / 1000).toFixed(3)} s</span>{drag.snapped ? <em>已吸附</em> : null}</> : <span>Cue {entry.cue}</span>}</output>)}
-    {editing ? <ModalSurface className="cue-point-dialog" label="修改 Cue 卡点" onClose={() => setEditing(null)}><form className="effect-binding-form" onKeyDown={editDialogEnter} onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget); const time = data.get('time'); if (typeof time === 'string') change(editing, Number(time) * 1000); }}><h3>修改 Cue {editing.cue} 卡点</h3><label>时间（秒）<input name="time" type="number" min="0" step="0.001" defaultValue={(editing.ms / 1000).toFixed(3)} required /></label><footer><button type="button" onClick={() => setEditing(null)}>取消</button><button disabled={disabled}>保存卡点</button></footer></form></ModalSurface> : null}
+    {editing ? <ModalSurface className="cue-point-dialog" label="修改 Cue 卡点" onClose={() => setEditing(null)}><form className="effect-binding-form" onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget); const time = data.get('time'); if (typeof time === 'string') change(editing, Number(time) * 1000); }}><h3>修改 Cue {editing.cue} 卡点</h3><label>时间（秒）<input name="time" type="number" min="0" step="0.001" defaultValue={(editing.ms / 1000).toFixed(3)} required /></label><footer><button type="button" onClick={() => setEditing(null)}>取消</button><button disabled={disabled}>保存卡点</button></footer></form></ModalSurface> : null}
   </>;
 }

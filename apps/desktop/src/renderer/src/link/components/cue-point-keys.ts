@@ -2,8 +2,8 @@ import { takeKey } from '../playback-keys';
 
 /*
  * The Enter key on the lighting workbench's Cue points (WaveformCuePoints): a Cue point opens its edit dialog, 修改
- * Cue 卡点, and Enter there saves it. Held down, Enter repeats its keydown, and the repeats go to the dialog once it is
- * open.
+ * Cue 卡点, and Enter there saves it. Held down, Enter repeats its keydown; the key router takes the repeats before the
+ * Cue point or the dialog sees them (keys/key-route.ts, `held`, K7), so a held Enter no longer saves the Cue again.
  */
 
 type EnterKey = Pick<KeyboardEvent, 'key' | 'repeat' | 'preventDefault'>;
@@ -16,13 +16,4 @@ type EnterKey = Pick<KeyboardEvent, 'key' | 'repeat' | 'preventDefault'>;
 export function cuePointEnter(event: EnterKey, editable: boolean, open: () => void): void {
   if (event.key !== 'Enter' || !editable) return;
   takeKey(event, open);
-}
-
-/**
- * Enter going down in the edit dialog: a fresh press saves it, as Enter does in a form; a repeat does not. The Enter
- * held down on the Cue point goes on repeating in the dialog, and every repeat saved the Cue unchanged: it was rewritten
- * and, with live sync on, written to the console each time (0.5.9).
- */
-export function editDialogEnter(event: EnterKey): void {
-  if (event.key === 'Enter' && event.repeat) event.preventDefault();
 }

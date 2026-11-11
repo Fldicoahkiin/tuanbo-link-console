@@ -47,10 +47,23 @@ import { TimelineMarkers } from './TimelineMarkers';
 import { useLightingPreview } from '../runtime/use-lighting-preview';
 import { useKeyCommands } from '../keys/useKeyCommands';
 import { keyInTimeline } from '../keys/key-owner';
-import { editorTransportKeys, timelineEditKeys } from './timeline-commands';
+import { editorEditKeys, editorTransportKeys, timelineEditKeys, timelineTransportKeys, type TimelineSeek } from './timeline-commands';
+import { commandKeyLabel, markSplitHintShown, splitHintShown } from '../stores/shortcut-store';
 import { usePlayheadPaint, type EditorPlayhead } from './editor-playhead';
 import { DragSession } from './drag-session';
 import { keyRouter } from '../keys/key-router';
+
+/**
+ * The playhead a key moves (the frame steps, Shift+←/→, ↑↓, Home, End): a held key's seeks merged into one per frame
+ * drawn (04 设计 4.9, K7); `from` is where the last key put it, drawn or not. A new song drops what is not drawn yet.
+ */
+function useKeySeek(playhead: EditorPlayhead, itemId: ResolvedTimelineState['itemId'], seek: (milliseconds: number) => void): TimelineSeek {
+  const target = useRef<number | null>(null);
+  const frame = useFrameValue((milliseconds: number) => { target.current = null; seek(milliseconds); });
+  const cancel = frame.cancel;
+  useEffect(() => { cancel(); target.current = null; }, [itemId, cancel]);
+  return { from: () => target.current ?? playhead.read(), to: milliseconds => { target.current = milliseconds; frame.push(milliseconds); } };
+}
 
 function seekTimelineAudio(audio: HTMLAudioElement, milliseconds: number): void {
   const seconds = Number.isFinite(audio.duration) ? Math.min(milliseconds / 1_000, audio.duration) : milliseconds / 1_000;
@@ -74,6 +87,10 @@ type Props = {
   externalTransport?: boolean;
   transportClock?: PlaybackClock | undefined;
   onStop?: () => void;
+  /** Esc in the timeline with 「单按 Esc 停止」 off: nothing selected any more (K7). */
+  onDeselect?: () => void;
+  /** A one-time hint for the operator (S, which split before 0.5.9, pressed in the timeline). */
+  onHint?: (message: string) => void;
   lighting?: LightingTimelineProps;
   projectPath: string | null;
   assets: LinkMediaAsset[];
@@ -192,11 +209,20 @@ export function ReferenceTimeline(input: Props): JSX.Element {
     if (!props.playing && (props.playheadMs >= props.durationMs || (audioEndMs !== undefined && props.playheadMs >= audioEndMs) || audioRef.current?.ended)) seekTo(0, true, false);
     props.onPlayingChange(!props.playing);
   };
-  // Space on this page outside the timeline presses this play button too (the window's Space, K3).
-  useKeyCommands('timeline', { 'transport.playPause': playPause });
-  // The timeline's own keys, with the focus in it (K6): the window's Escape outside it stops the show only, as before.
-  useKeyCommands('timeline', timelineEditKeys(props, clipboard, setClipboard, props.onStop ? stopPlayback : undefined), press => keyInTimeline(press.target));
-  useKeyCommands('editor', props.lightingWorkspace ? null : editorTransportKeys(props, playPause, milliseconds => seekTo(milliseconds, true, false)));
+  const keySeek = useKeySeek(props.playhead, props.timelineState.itemId, milliseconds => { seekTo(milliseconds, true, false); });
+  // Space on this page outside the timeline presses this play button too (the window's Space, K3); the stop keys stop
+  // the show and the lighting preview from anywhere on this page (K7: the window's stop finds this one first).
+  useKeyCommands('timeline', { 'transport.playPause': playPause, ...(props.onStop ? { 'transport.stop': stopPlayback } : {}) });
+  // The timeline's own keys, with the focus in it (K6, K7).
+  useKeyCommands('timeline', {
+    ...timelineEditKeys(props, clipboard, setClipboard),
+    ...timelineTransportKeys({ frameRate: props.frameRate, durationMs: props.lightingWorkspace ? props.referenceAudio?.durationMs ?? props.durationMs : props.durationMs, editPoints: seekSnapPointsMs, playing: props.playing }, { playPause, onPlayingChange: props.onPlayingChange, seek: keySeek }),
+    'view.snap': () => setSnapEnabled(!snapEnabled),
+    'view.zoomIn': viewport.zoomIn, 'view.zoomOut': viewport.zoomOut, 'view.zoomFit': viewport.fit,
+    ...(props.onDeselect ? { 'edit.deselect': props.onDeselect } : {}),
+    ...(props.onHint && !splitHintShown() ? { 'edit.splitMoved': () => { if (markSplitHintShown()) props.onHint?.(`分割改成了 ${commandKeyLabel('edit.split', 'timeline')}，和剪映一样。S 不再分割。`); } } : {})
+  }, press => keyInTimeline(press.target));
+  useKeyCommands('editor', props.lightingWorkspace ? null : { ...editorTransportKeys(props, playPause, keySeek), ...editorEditKeys(props) });
   const playheadFrame = useFrameValue((clientX: number) => { seek(clientX, true); });
   const cancelPlayheadFrame = playheadFrame.cancel;
   useEffect(() => { cancelPlayheadFrame(); playheadDrag.end(); setClipboard(null); setClipContext(null); }, [props.timelineState.itemId, cancelPlayheadFrame, playheadDrag]);
@@ -220,7 +246,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   };
   const lanePointer = { onPointerDown: beginPlayhead, onPointerMove: movePlayhead, onPointerUp: endPlayhead, onPointerCancel: cancelPlayhead };
 
-  const stamping = useTimelineStamp({ lighting: props.lightingWorkspace ? props.lighting : undefined, get playheadMs() { return props.playhead.read(); }, durationMs: props.referenceAudio?.durationMs ?? props.durationMs, playing: props.playing, frameRate: props.frameRate, clock, onPlayPause: playPause, onPlayingChange: props.onPlayingChange, onSeek: ms => seekTo(ms, true) });
+  const stamping = useTimelineStamp({ lighting: props.lightingWorkspace ? props.lighting : undefined, get playheadMs() { return props.playhead.read(); }, durationMs: props.referenceAudio?.durationMs ?? props.durationMs, playing: props.playing, frameRate: props.frameRate, clock, onPlayPause: playPause, onPlayingChange: props.onPlayingChange, seek: keySeek });
 
 
   return <section

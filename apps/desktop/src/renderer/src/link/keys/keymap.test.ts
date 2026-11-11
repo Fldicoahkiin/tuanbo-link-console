@@ -1,27 +1,35 @@
 import { describe, expect, it } from 'vitest';
 import { isSystemChord, parseChord } from './key-chord';
 import { routeKey, type RouteInput } from './key-route';
-import { KEYMAP, PAGE_SCOPES, type KeyEntry, type KeyScope } from './keymap';
+import { commandKeys, KEYMAP, PAGE_SCOPES, type KeyEntry, type KeyScope } from './keymap';
 
 const chordsOf = (scope: KeyScope): string[] => KEYMAP.filter(entry => entry.scope === scope).flatMap(entry => entry.keys.map(binding => binding.chord));
 
 describe('快捷键表的自检', () => {
-  it('同一范围里没有重复的键，同一条命令在同一范围只出现一次', () => {
+  it('同一范围里没有重复的键，同一条命令在同一范围只出现一次；只有时间线的 Esc 有两条：停止，和关掉「单按 Esc 停止」后的取消选中', () => {
     for (const scope of new Set(KEYMAP.map(entry => entry.scope))) {
       const chords = chordsOf(scope);
-      expect(new Set(chords).size, `${scope} 里有重复的键`).toBe(chords.length);
+      const repeated = chords.filter((chord, index) => chords.indexOf(chord) !== index);
+      expect(repeated, `${scope} 里有重复的键`).toEqual(scope === 'timeline' ? ['Escape'] : []);
       const ids = KEYMAP.filter(entry => entry.scope === scope).map(entry => entry.id);
       expect(new Set(ids).size, `${scope} 里有重复的命令`).toBe(ids.length);
     }
+    // The stop's Escape works unless 「单按 Esc 停止」 is off, the deselect's only while it is: never both at once.
+    const escapes = KEYMAP.filter(entry => entry.scope === 'timeline' && entry.keys.some(binding => binding.chord === 'Escape'));
+    expect(escapes.map(entry => { const binding = entry.keys.find(item => item.chord === 'Escape'); return [entry.id, binding?.switch, binding?.whileOff]; }))
+      .toEqual([['transport.stop', 'plainEscapeStops', undefined], ['edit.deselect', undefined, 'plainEscapeStops']]);
+    for (const switchesOff of [new Set<'plainEscapeStops'>(), new Set(['plainEscapeStops' as const])]) {
+      expect(escapes.filter(entry => commandKeys(KEYMAP, entry.id, 'timeline', switchesOff).includes('Escape'))).toHaveLength(1);
+    }
   });
 
-  it('页面自己的键（编辑器、灯光工作台）和两页共用的时间线不重复，只有灯光工作台 Cue 点上的 Delete、Esc（只在 Cue 点里、比时间线先问）；灯光点和时间线重复的只有复制、粘贴、删除（04 设计 3.3 b、d，K6 由 timeline-commands 定归谁）', () => {
+  it('页面自己的键（编辑器、灯光工作台）和两页共用的时间线不重复，只有灯光工作台 Cue 点上的 Delete、Backspace、Esc（只在 Cue 点里、比时间线先问）；灯光点和时间线重复的只有复制、粘贴、删除（04 设计 3.3 b、d，K6 由 timeline-commands 定归谁）', () => {
     const timeline = new Set(chordsOf('timeline'));
     expect(chordsOf('editor').filter(chord => timeline.has(chord))).toEqual([]);
-    // The Cue points' Delete and Escape (WaveformCuePoints, K6), asked before the timeline's and only with the focus in them.
-    expect(chordsOf('lighting').filter(chord => timeline.has(chord)).sort()).toEqual(['Delete', 'Escape']);
+    // The Cue points' Delete, Backspace and Escape (WaveformCuePoints, K6), asked before the timeline's and only with the focus in them.
+    expect(chordsOf('lighting').filter(chord => timeline.has(chord)).sort()).toEqual(['Backspace', 'Delete', 'Escape']);
     expect(KEYMAP.filter(entry => entry.scope === 'lighting' && entry.keys.some(binding => timeline.has(binding.chord))).map(entry => entry.id)).toEqual(['edit.delete', 'edit.deselect']);
-    expect(chordsOf('lighting-points').filter(chord => timeline.has(chord)).sort()).toEqual(['Ctrl+KeyC', 'Ctrl+KeyV', 'Delete']);
+    expect(chordsOf('lighting-points').filter(chord => timeline.has(chord)).sort()).toEqual(['Backspace', 'Ctrl+KeyC', 'Ctrl+KeyV', 'Delete']);
   });
 
   it('每一项都有名字，每个键都按一种拼法写（chordOf）', () => {
@@ -48,14 +56,26 @@ describe('快捷键表的自检', () => {
     }
   });
 
-  it('表按现在的键写：Esc 停止、S 分割、Shift+←/→ 一秒、↑↓ 换歌在所有页面（焦点不在时间线上时）', () => {
+  it('表按 K7 的键写：Esc 和 Shift+Esc 停止，Ctrl+B 分割，S 只提示一次，M 在编辑器加标记，Shift+←/→ 5 帧，↑↓ 换歌只在首页', () => {
     const find = (scope: KeyScope, id: KeyEntry['id']) => KEYMAP.find(entry => entry.scope === scope && entry.id === id);
-    expect(find('global', 'transport.stop')?.keys.map(binding => binding.chord)).toEqual(['Escape']);
-    expect(find('timeline', 'transport.stop')?.keys.map(binding => binding.chord)).toEqual(['Escape']);
-    expect(find('timeline', 'edit.split')?.keys.map(binding => binding.chord)).toEqual(['KeyS']);
-    expect(find('editor', 'transport.backMany')?.label).toBe('后退一秒');
-    expect(find('global', 'home.nextSong')?.area).toBe('outside-timeline');
+    const keys = (scope: KeyScope, id: KeyEntry['id']) => find(scope, id)?.keys.map(binding => binding.chord);
+    expect(keys('global', 'transport.stop')).toEqual(['Escape', 'Shift+Escape']);
+    expect(keys('timeline', 'transport.stop')).toEqual(['Escape', 'Shift+Escape']);
+    expect(keys('timeline', 'edit.split')).toEqual(['Ctrl+KeyB']);
+    expect(keys('timeline', 'edit.splitMoved')).toEqual(['KeyS']);
+    expect(keys('editor', 'marker.add')).toEqual(['KeyM']);
+    expect(keys('lighting', 'lighting.stamp')).toEqual(['KeyM']);
+    expect(find('timeline', 'transport.backMany')?.label).toBe('后退 5 帧');
+    expect(find('global', 'home.nextSong')?.pages).toEqual(['project']);
+    expect(find('global', 'home.prevSong')?.pages).toEqual(['project']);
     expect(PAGE_SCOPES.project).toEqual([]);
+  });
+
+  it('界面上写的键从表里读：关掉「单按 Esc 停止」后只写 Shift+Esc', () => {
+    expect(commandKeys(KEYMAP, 'transport.stop', 'global')).toEqual(['Escape', 'Shift+Escape']);
+    expect(commandKeys(KEYMAP, 'transport.stop', 'global', new Set(['plainEscapeStops']))).toEqual(['Shift+Escape']);
+    expect(commandKeys(KEYMAP, 'edit.split', 'timeline')).toEqual(['Ctrl+KeyB']);
+    expect(commandKeys(KEYMAP, 'marker.add', 'lighting')).toEqual([]);
   });
 });
 
@@ -65,26 +85,22 @@ function body(chord: string, overrides: Partial<RouteInput> = {}): RouteInput {
     available: () => true, song: () => undefined, ...overrides };
 }
 
-it('停止键的位置已经留好（00-order 第 8 节第 1 题，K7 才上线）：一条命令可以有两个键，Shift+Esc 穿过所有层，单按 Esc 可以被设置关掉；现在表里只有 Esc', () => {
-  // Today: Escape only, the one a switch can turn off, and nothing gets through every layer.
+it('停止键（00-order 第 8 节第 1 题，K7）：Esc 照旧按顺序停止，Shift+Esc 穿过所有层，单按 Esc 可以在设置里关掉', () => {
   for (const entry of KEYMAP.filter(item => item.id === 'transport.stop')) {
-    expect(entry.keys).toEqual([{ chord: 'Escape', switch: 'plainEscapeStops' }]);
+    expect(entry.keys).toEqual([{ chord: 'Escape', switch: 'plainEscapeStops' }, { chord: 'Shift+Escape', through: 'all' }]);
   }
-  expect(KEYMAP.flatMap(entry => entry.keys).filter(binding => binding.through === 'all')).toEqual([]);
-  expect(routeKey(body('Shift+Escape', { modalOpen: true }))).toEqual({ kind: 'native' });
-
-  // The same table with K7's stop key, as one place says it: Escape takes its turn, Shift+Escape gets through all.
-  const k7 = KEYMAP.map(entry => entry.id === 'transport.stop'
-    ? { ...entry, keys: [{ chord: 'Escape', switch: 'plainEscapeStops' as const }, { chord: 'Shift+Escape', through: 'all' as const }] } : entry);
+  // Shift+Escape is the only key that gets through every layer.
+  expect(KEYMAP.flatMap(entry => entry.keys.filter(binding => binding.through === 'all').map(binding => `${entry.scope} ${entry.id} ${binding.chord}`)))
+    .toEqual(['global transport.stop Shift+Escape', 'timeline transport.stop Shift+Escape']);
   const stop = { kind: 'run', id: 'transport.stop', scope: 'global' };
-  for (const where of [{ modalOpen: true }, { owner: 'dialog' as const }, { owner: 'field' as const }, { owner: 'control' as const }, { drag: 'active' as const },
+  for (const where of [{ modalOpen: true }, { owner: 'dialog' as const }, { owner: 'field' as const }, { owner: 'control' as const }, { owner: 'button' as const }, { drag: 'active' as const },
     { overlays: [{ focusInside: true, blocks: true }] }, {}]) {
-    expect(routeKey(body('Shift+Escape', { keymap: k7, ...where }))).toEqual(stop);
+    expect(routeKey(body('Shift+Escape', where))).toEqual(stop);
   }
   // A field that records keys still records Shift+Escape.
-  expect(routeKey(body('Shift+Escape', { keymap: k7, owner: 'capture' }))).toEqual({ kind: 'native' });
-  // Escape alone stops as today, until the switch 「单按 Esc 停止」 is turned off.
-  expect(routeKey(body('Escape', { keymap: k7 }))).toEqual(stop);
-  expect(routeKey(body('Escape', { keymap: k7, switchesOff: new Set(['plainEscapeStops']) }))).toEqual({ kind: 'ignore' });
-  expect(routeKey(body('Shift+Escape', { keymap: k7, switchesOff: new Set(['plainEscapeStops']) }))).toEqual(stop);
+  expect(routeKey(body('Shift+Escape', { owner: 'capture' }))).toEqual({ kind: 'native' });
+  // Escape alone stops as before, until the switch 「单按 Esc 停止」 is turned off.
+  expect(routeKey(body('Escape'))).toEqual(stop);
+  expect(routeKey(body('Escape', { switchesOff: new Set(['plainEscapeStops']) }))).toEqual({ kind: 'ignore' });
+  expect(routeKey(body('Shift+Escape', { switchesOff: new Set(['plainEscapeStops']) }))).toEqual(stop);
 });

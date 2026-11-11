@@ -3,6 +3,7 @@ import { resolveTimelineClipSpan, resolveTimelineCueSpan, timecodeToMilliseconds
 import type { LinkCue, MtcFrameRate, ReferenceMediaClip, VisualLayer } from '@tb/schema';
 import { Menu, MenuItem, MenuSeparator } from '../ui';
 import { usePlayheadMs, type EditorPlayhead } from './editor-playhead';
+import { commandShortcut } from '../stores/shortcut-store';
 import { trimToPlayhead, type TimelineTarget, type TrimSide } from './timeline-commands';
 
 export type { TimelineTarget };
@@ -40,22 +41,22 @@ export function TimelineContextMenu({ context, clipboard, clips, cues, layers, f
   const name = clip?.label ?? cue?.actions.find((action) => action.kind === 'obs.setProgramScene')?.sceneName ?? cue?.name ?? '时间线';
   return <Menu x={context.x} y={context.y} label="时间线右键菜单" title={locked ? `${name} · 已锁定` : name} onClose={onClose}>
     {target && source ? <>
-      <MenuItem icon={Copy} shortcut="Ctrl+C" onSelect={() => run(() => onCopy(target))}>复制</MenuItem>
-      <MenuItem icon={CopyPlus} shortcut="Ctrl+D" disabled={locked} onSelect={() => run(() => duplicate(target, span?.endMs ?? startMs ?? playheadMs))}>{span ? '在后方创建副本' : '在原位置创建副本'}</MenuItem>
+      <MenuItem icon={Copy} shortcut={commandShortcut('edit.copy', 'timeline')} onSelect={() => run(() => onCopy(target))}>复制</MenuItem>
+      <MenuItem icon={CopyPlus} shortcut={commandShortcut('edit.duplicate', 'timeline')} disabled={locked} onSelect={() => run(() => duplicate(target, span?.endMs ?? startMs ?? playheadMs))}>{span ? '在后方创建副本' : '在原位置创建副本'}</MenuItem>
     </> : null}
-    <MenuItem icon={ClipboardPaste} shortcut="Ctrl+V" disabled={!canPaste} onSelect={() => { if (clipboard) run(() => duplicate(clipboard, playheadMs)); }}>粘贴到播放头</MenuItem>
+    <MenuItem icon={ClipboardPaste} shortcut={commandShortcut('edit.paste', 'timeline')} disabled={!canPaste} onSelect={() => { if (clipboard) run(() => duplicate(clipboard, playheadMs)); }}>粘贴到播放头</MenuItem>
     {target && source ? <>
       <MenuSeparator />
-      {clip && span ? <MenuItem icon={Scissors} shortcut="S" disabled={locked || !inside} onSelect={() => run(() => actions.onSplitClip(clip.id, playheadMs))}>在播放头分割</MenuItem> : null}
+      {clip && span ? <MenuItem icon={Scissors} shortcut={commandShortcut('edit.split', 'timeline')} disabled={locked || !inside} onSelect={() => run(() => actions.onSplitClip(clip.id, playheadMs))}>在播放头分割</MenuItem> : null}
       {span ? <>
-        <MenuItem icon={ChevronsRight} disabled={locked || !inside} onSelect={() => run(() => trim('start'))}>将开头修剪至播放头</MenuItem>
-        <MenuItem icon={ChevronsLeft} disabled={locked || !inside} onSelect={() => run(() => trim('end'))}>将结尾修剪至播放头</MenuItem>
+        <MenuItem icon={ChevronsRight} shortcut={commandShortcut('edit.trimLeft', 'editor')} disabled={locked || !inside} onSelect={() => run(() => trim('start'))}>将开头修剪至播放头</MenuItem>
+        <MenuItem icon={ChevronsLeft} shortcut={commandShortcut('edit.trimRight', 'editor')} disabled={locked || !inside} onSelect={() => run(() => trim('end'))}>将结尾修剪至播放头</MenuItem>
       </> : null}
       <MenuItem icon={SkipBack} disabled={startMs === null} onSelect={() => { if (startMs !== null) run(() => onSeek(startMs)); }}>{span ? '定位到开头' : '定位到触发点'}</MenuItem>
       {span ? <MenuItem icon={SkipForward} onSelect={() => run(() => onSeek(span.endMs))}>定位到结尾</MenuItem> : null}
       {clip ? <MenuItem icon={clip.embeddedAudioEnabled === false ? Volume2 : VolumeX} disabled={locked} onSelect={() => run(() => actions.onSetClipEmbeddedAudioEnabled(clip.id, clip.embeddedAudioEnabled === false))}>{clip.embeddedAudioEnabled === false ? '开启素材原声' : '关闭素材原声'}</MenuItem> : null}
       <MenuSeparator />
-      <MenuItem icon={Trash2} danger shortcut="Delete" disabled={locked} onSelect={() => run(() => { if (clip) actions.onDeleteClip(clip.id); else if (cue) actions.onDeleteCue(cue.id); })}>删除</MenuItem>
+      <MenuItem icon={Trash2} danger shortcut={commandShortcut('edit.delete', 'timeline')} disabled={locked} onSelect={() => run(() => { if (clip) actions.onDeleteClip(clip.id); else if (cue) actions.onDeleteCue(cue.id); })}>删除</MenuItem>
     </> : null}
   </Menu>;
 }

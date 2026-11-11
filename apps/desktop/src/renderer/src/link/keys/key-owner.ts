@@ -112,6 +112,11 @@ export function editsText(target: KeyTarget | null): boolean {
   return isInside(target, 'textarea,[contenteditable="true"]') || isInside(target, 'input') && !isInside(target, NON_TEXT_INPUTS);
 }
 
+/** Whether the focus types lines, where a held Enter goes on adding lines (the one place it repeats, 04 设计 4.9). */
+export function typesLines(target: KeyTarget | null): boolean {
+  return isInside(target, 'textarea,[contenteditable="true"]');
+}
+
 /** Whether a key went into the editor's or the lighting workbench's timeline. */
 export function keyInTimeline(target: KeyTarget | null): boolean {
   return isInside(target, TIMELINE);

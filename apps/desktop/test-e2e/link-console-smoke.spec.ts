@@ -19,6 +19,17 @@ import { SETTINGS_GROUPS, SETTINGS_SECTIONS } from '../src/renderer/src/link/com
 const execFileAsync = promisify(execFile);
 const desktopEntry = join(process.cwd(), process.env.TBLINK_E2E_BUILD_DIR ?? 'out', 'main/index.cjs');
 
+/**
+ * Adds a lighting point in the editor near the playhead by double-clicking the first lighting clip there, `offset`
+ * pixels to its right. M did it before K7; in the editor M adds a timeline marker now, as in 剪映.
+ */
+async function addLightingPointAtPlayhead(offset = 0): Promise<void> {
+  const clip = page.locator('.lighting-clip').first();
+  const box = await clip.boundingBox(), playhead = await page.locator('.timeline-playhead').boundingBox();
+  if (!box || !playhead) throw new Error('找不到灯光片段或播放头');
+  await clip.dblclick({ position: { x: Math.max(4, Math.min(box.width - 4, playhead.x - box.x + 4 + offset)), y: box.height - 6 } });
+}
+
 async function displayedLightingEventCount(): Promise<number> {
   return page.locator('.lighting-timeline-point').evaluateAll((elements) => elements.reduce((total, element) => total + 1 + Number(element.querySelector('small')?.textContent?.replace('+', '') ?? 0), 0));
 }
@@ -310,7 +321,7 @@ test('新建 MA2 Timecode 关联当前节目并保存，失败不产生虚假绑
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]!.lighting!.ma2Bindings![0]!.pendingTracks).toMatchObject([{ executor: '99.219', sequence: 9901, executorName: '灯光执行器 99.219' }]);
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
   await page.locator('.lighting-track-name').first().click();
-  await page.keyboard.press('m');
+  await addLightingPointAtPlayhead();
   await expect(page.getByLabel('Cue 编号', { exact: true })).toHaveValue('1.250');
 });
 
@@ -367,7 +378,7 @@ test('节目轨道可明确关联 MA2、取消和撤销，并保存待同步绑�
   await expect(page.getByLabel('固定 Cue 执行器')).toHaveValue('99.219');
   await closeLightingTools(); await navigation.getByRole('button', { name: '编辑器', exact: true }).click();
   await page.locator('.lighting-track-name').first().click();
-  await page.keyboard.press('m');
+  await addLightingPointAtPlayhead();
   await expect(page.getByLabel('Cue 编号', { exact: true })).toHaveValue('1.250');
   await page.keyboard.press('Control+s');
   await saveWithShortcut();
@@ -432,7 +443,7 @@ test('MA2 读取预览加入节目、撤销和保存基线完整，列出未支�
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await expect.poll(displayedLightingEventCount).toBe(3);
   await page.getByRole('button', { name: '灯光点 Cue 1.25', exact: true }).click();
-  await page.keyboard.press('m');
+  await addLightingPointAtPlayhead();
   await expect.poll(displayedLightingEventCount).toBe(4);
   await expect(page.getByLabel('Cue 编号', { exact: true })).toHaveValue('7.500');
   await page.getByRole('button', { name: '撤销', exact: true }).click();
@@ -752,7 +763,7 @@ test('只做标记可在时间尺拖动改名删除并撤销保存', async ({}, 
   await page.getByLabel('灯光打点方式').selectOption('marker');
   await closeLightingTools(); await main.getByRole('button', { name: '编辑器', exact: true }).click();
   await page.locator('.lighting-track-name').first().click();
-  await page.keyboard.press('m');
+  await page.keyboard.press('m'); // M adds a timeline marker in the editor (K7), whatever the track's stamp mode.
   const marker = page.getByRole('button', { name: '时间线标记 标记 1', exact: true });
   await expect(marker).toBeVisible();
   await expect(page.locator('.lighting-timeline-point')).toHaveCount(0);
@@ -840,13 +851,13 @@ test('固定 Cue 设置控制时间线连续打点并可撤销', async () => {
   await page.getByLabel('固定 Cue 执行器').press('Tab');
   await closeLightingTools(); await main.getByRole('button', { name: '编辑器', exact: true }).click();
   await page.locator('.lighting-track-name').first().click();
-  await page.keyboard.press('m');
-  await page.keyboard.press('m');
+  await addLightingPointAtPlayhead();
+  await addLightingPointAtPlayhead(16);
   await expect.poll(displayedLightingEventCount).toBe(2);
   await expect(page.getByLabel('Cue 编号', { exact: true })).toHaveValue('7.500');
   await closeLightingTools(); await main.getByRole('button', { name: '设置', exact: true }).click();
   await openLightingTrack();
-  await page.keyboard.press('m');
+  await addLightingPointAtPlayhead(32);
   await expect.poll(displayedLightingEventCount).toBe(3);
   await page.keyboard.press('Control+z');
   await expect.poll(displayedLightingEventCount).toBe(2);
@@ -1104,7 +1115,7 @@ test('灯光直接在时间线打点拖动，歌曲时间一致，自动保存�
   await expect(cueNumber).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('lighting-executor-properties.png') });
   await point.click();
-  await page.keyboard.press('m');
+  await addLightingPointAtPlayhead(16);
   await expect.poll(displayedLightingEventCount).toBe(2);
   await expect(cueNumber).toHaveValue('1');
   await page.getByRole('button', { name: '撤销', exact: true }).click();
@@ -1131,7 +1142,7 @@ test('灯光直接在时间线打点拖动，歌曲时间一致，自动保存�
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await expect.poll(async () => Number(await timeInput.inputValue())).toBeCloseTo(initialSeconds + 2, 2);
   await point.click();
-  await page.keyboard.press('m');
+  await addLightingPointAtPlayhead(16);
   await expect.poll(displayedLightingEventCount).toBe(2);
   await saveWithShortcut();
   await expect.poll(async () => JSON.parse(await readFile(destination, 'utf8')) as unknown).toMatchObject({ schemaVersion: 2, rundown: [{ lighting: { tracks: [{ clips: [{ events: [expect.objectContaining({ kind: 'ma2', label: '主歌亮起' }), expect.objectContaining({ kind: 'ma2', cue: '2' })] }] }] } }] });
@@ -1768,7 +1779,7 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
   const clipBounds = (await clip.boundingBox())!;
   const ruler = (await page.locator('.timeline-ruler').boundingBox())!;
   await page.mouse.click(clipBounds.x + clipBounds.width / 2, ruler.y + ruler.height / 2);
-  await page.locator('.reference-timeline').press('s');
+  await page.locator('.reference-timeline').press('Control+b');
   await expect(page.locator('.timeline-clip')).toHaveCount(2);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect(page.locator('.timeline-clip')).toHaveCount(1);
@@ -2459,7 +2470,7 @@ test('Cue 时间线的统一图层、取消拖动、适配、滚动和播放键�
 
   const clipCount = await page.locator('.timeline-clip').count();
   await page.getByRole('button', { name: '回到时间线开头' }).click();
-  await page.locator('.reference-timeline').press('s');
+  await page.locator('.reference-timeline').press('Control+b');
   await expect(page.locator('.timeline-clip')).toHaveCount(clipCount);
   await page.getByRole('button', { name: '跳到时间线结尾' }).click();
   await page.locator('.reference-timeline').press('Space');

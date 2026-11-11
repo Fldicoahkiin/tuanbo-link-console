@@ -25,6 +25,22 @@ import type { ReferenceWaveformSource } from './ReferenceWaveform';
 import { usePreviewMediaLifecycle } from './usePreviewMediaLifecycle';
 import { keysBackToTimeline, nextEditPoint, previousEditPoint } from './timeline-commands';
 import { usePlayheadEffect, usePlayheadPaint, type EditorPlayhead } from './editor-playhead';
+import { commandKeyLabel } from '../stores/shortcut-store';
+import type { CommandId, KeyScope } from '../keys/keymap';
+
+/** `text` with the keys that do it now, as the key table says (`（Esc 或 Shift+Esc）`); `text` alone without one. */
+function withKey(text: string, id: CommandId, scope: KeyScope): string {
+  const keys = commandKeyLabel(id, scope);
+  return keys ? `${text}（${keys}）` : text;
+}
+
+/** The editor's main keys under the 「定位」 menu, from the key table. */
+function keyNote(transport: KeyScope): ReactNode {
+  const lines = ([['transport.playPause', transport, '播放 / 暂停'], ['transport.prevFrame', transport, '上一帧'], ['transport.nextFrame', transport, '下一帧'],
+    ['edit.split', 'timeline', '在播放头分割'], ['edit.copy', 'timeline', '复制'], ['edit.paste', 'timeline', '粘贴']] as const)
+    .map(([id, scope, text]) => [commandKeyLabel(id, scope), text] as const).filter(([keys]) => keys !== '');
+  return lines.map(([keys, text], index) => <span key={text}>{index > 0 ? <br /> : null}{keys} {text}</span>);
+}
 
 type Props = {
   externalTransport?: boolean | undefined;
@@ -121,26 +137,30 @@ export function TimelineToolbar(props: Props): JSX.Element {
     }
   };
 
+  // The keys named on the buttons come from the key table (keys/keymap.ts, with this computer's keys): the editor's
+  // play keys, or the lighting workbench's, which the user can change.
+  const transport: KeyScope = props.compact ? 'lighting' : 'editor';
   const snapLabel = props.snapEnabled ? '关闭吸附' : '开启吸附';
+  const snapTitle = withKey(snapLabel, 'view.snap', 'timeline');
 
   return <div className="timeline-toolbar" onClick={giveKeysBack}>
     <div className="timeline-edit-controls" role="group" aria-label="时间线剪辑工具">
       {props.stampControls}
       {props.tools ?? <>{props.recordingControl}
         <MenuButton label="定位" menuLabel="跳到剪辑点" title="跳到上一个或下一个剪辑点">{(close) => <>
-          <MenuItem icon={ArrowLeftToLine} onSelect={() => { close(); seekTo(previousEditPoint(props.editPoints, playhead.read(), props.frameRate)); }}>上一剪辑点</MenuItem>
-          <MenuItem icon={ArrowRightToLine} onSelect={() => { close(); seekTo(nextEditPoint(props.editPoints, playhead.read(), props.frameRate, props.durationMs)); }}>下一剪辑点</MenuItem>
-          <MenuNote>Space 播放 / 暂停<br />← → 逐帧移动<br />S 在播放头切割<br />Ctrl+C / V 复制粘贴</MenuNote>
+          <MenuItem icon={ArrowLeftToLine} shortcut={commandKeyLabel('transport.prevEditPoint', 'timeline')} onSelect={() => { close(); seekTo(previousEditPoint(props.editPoints, playhead.read(), props.frameRate)); }}>上一剪辑点</MenuItem>
+          <MenuItem icon={ArrowRightToLine} shortcut={commandKeyLabel('transport.nextEditPoint', 'timeline')} onSelect={() => { close(); seekTo(nextEditPoint(props.editPoints, playhead.read(), props.frameRate, props.durationMs)); }}>下一剪辑点</MenuItem>
+          <MenuNote>{keyNote(transport)}</MenuNote>
         </>}</MenuButton></>}
     </div>
 
     <div className="timeline-transport" role="group" aria-label="时间线播放控制">
-      <IconButton label="回到时间线开头" title="回到开头（Home）" icon={SkipBack} onClick={() => seekTo(0)} />
-      <IconButton label="上一帧" title="上一帧（←）" icon={StepBack} onClick={() => seekTo(playhead.read() - frameDurationMs)} />
-      <IconButton className="timeline-play-button" variant="primary" label={props.playing ? '暂停时间线' : '播放时间线'} title={props.playing ? '暂停（Space）' : '播放（Space）'} icon={props.playing ? Pause : Play} onClick={() => props.onPlayPause()} />
-      <IconButton label="下一帧" title="下一帧（→）" icon={StepForward} onClick={() => seekTo(playhead.read() + frameDurationMs)} />
-      <IconButton label="跳到时间线结尾" title="跳到结尾" icon={SkipForward} onClick={() => seekTo(props.durationMs)} />
-      {props.onStop ? <IconButton label="停止时间线" title="停止播放（Esc）" icon={Square} onClick={() => props.onStop?.()} /> : null}
+      <IconButton label="回到时间线开头" title={withKey('回到开头', 'transport.start', transport)} icon={SkipBack} onClick={() => seekTo(0)} />
+      <IconButton label="上一帧" title={withKey('上一帧', 'transport.prevFrame', transport)} icon={StepBack} onClick={() => seekTo(playhead.read() - frameDurationMs)} />
+      <IconButton className="timeline-play-button" variant="primary" label={props.playing ? '暂停时间线' : '播放时间线'} title={withKey(props.playing ? '暂停' : '播放', 'transport.playPause', transport)} icon={props.playing ? Pause : Play} onClick={() => props.onPlayPause()} />
+      <IconButton label="下一帧" title={withKey('下一帧', 'transport.nextFrame', transport)} icon={StepForward} onClick={() => seekTo(playhead.read() + frameDurationMs)} />
+      <IconButton label="跳到时间线结尾" title={withKey('跳到结尾', 'transport.end', transport)} icon={SkipForward} onClick={() => seekTo(props.durationMs)} />
+      {props.onStop ? <IconButton label="停止时间线" title={withKey('停止播放', 'transport.stop', 'global')} icon={Square} onClick={() => props.onStop?.()} /> : null}
       <code ref={readout} title="当前播放头时间码">{formatTimelineTimecode(playhead.read(), props.frameRate)}</code>
       {props.outputControl}
     </div>
@@ -152,14 +172,14 @@ export function TimelineToolbar(props: Props): JSX.Element {
         <p className="timeline-panel-note">选中 Cue：滚轮移动 Cue<br />未选中：滚轮移动播放头<br />Shift + 滚轮：平移<br />Ctrl + 滚轮：缩放</p>
       </TimelinePanelButton> : null}
       {props.compact
-        ? <IconButton className="timeline-snap-state" label={snapLabel} icon={Magnet} aria-pressed={props.snapEnabled} onClick={() => props.onSnapEnabledChange(!props.snapEnabled)} />
-        : <Button variant="ghost" className="timeline-snap-state" icon={Magnet} aria-pressed={props.snapEnabled} aria-label={snapLabel} title={snapLabel} onClick={() => props.onSnapEnabledChange(!props.snapEnabled)}>吸附</Button>}
+        ? <IconButton className="timeline-snap-state" label={snapLabel} title={snapTitle} icon={Magnet} aria-pressed={props.snapEnabled} onClick={() => props.onSnapEnabledChange(!props.snapEnabled)} />
+        : <Button variant="ghost" className="timeline-snap-state" icon={Magnet} aria-pressed={props.snapEnabled} aria-label={snapLabel} title={snapTitle} onClick={() => props.onSnapEnabledChange(!props.snapEnabled)}>吸附</Button>}
       {!props.compact ? <Select width="auto" className="timeline-snap-distance" aria-label="吸附强度" title="片段两端、机位边缘和播放头之间的吸附距离" value={props.snapDistance} disabled={!props.snapEnabled} onChange={(event) => props.onSnapDistanceChange(Number(event.currentTarget.value))}><option value={8}>轻 · 8 px</option><option value={14}>标准 · 14 px</option><option value={22}>强 · 22 px</option></Select> : null}
-      <IconButton label="缩小时间线" icon={ZoomOut} onClick={() => props.onZoomOut()} />
+      <IconButton label="缩小时间线" title={withKey('缩小时间线', 'view.zoomOut', 'timeline')} icon={ZoomOut} onClick={() => props.onZoomOut()} />
       {props.compact
-        ? <IconButton className="timeline-fit-button" label="适合节目时长" title="缩放至全部节目内容" icon={Maximize2} onClick={() => props.onFit()} />
-        : <Button variant="ghost" className="timeline-fit-button" icon={Maximize2} aria-label="适合节目时长" title="缩放至全部节目内容" onClick={() => props.onFit()}>全部</Button>}
-      <IconButton label="放大时间线" icon={ZoomIn} onClick={() => props.onZoomIn()} />
+        ? <IconButton className="timeline-fit-button" label="适合节目时长" title={withKey('缩放至全部节目内容', 'view.zoomFit', 'timeline')} icon={Maximize2} onClick={() => props.onFit()} />
+        : <Button variant="ghost" className="timeline-fit-button" icon={Maximize2} aria-label="适合节目时长" title={withKey('缩放至全部节目内容', 'view.zoomFit', 'timeline')} onClick={() => props.onFit()}>全部</Button>}
+      <IconButton label="放大时间线" title={withKey('放大时间线', 'view.zoomIn', 'timeline')} icon={ZoomIn} onClick={() => props.onZoomIn()} />
     </div>
 
     {!props.externalTransport && props.referenceAudio ? <audio

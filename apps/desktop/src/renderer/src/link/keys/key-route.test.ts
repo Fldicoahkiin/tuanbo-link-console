@@ -257,7 +257,8 @@ describe('时间线的键（timeline-keys.test.ts 的用例）', () => {
 
   /** Every key the timeline edits with or moves the playhead with, and its transport keys. */
   const editingKeys = ['Delete', 'Backspace', 'KeyS', 'KeyM', 'Enter', 'Ctrl+KeyV', 'Ctrl+KeyD', 'Ctrl+KeyC', 'Ctrl+KeyX', 'Ctrl+KeyZ', 'Ctrl+KeyA',
-    'Home', 'End', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Escape', 'Space'];
+    'Home', 'End', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Escape', 'Space',
+    'Ctrl+KeyB', 'Ctrl+Shift+KeyB', 'KeyQ', 'KeyW', 'KeyN', 'KeyK', 'KeyL', 'Shift+KeyZ', 'Ctrl+Equal', 'Ctrl+Minus', 'Shift+ArrowLeft', 'Shift+ArrowRight'];
   const cueDialog: Node = { tag: 'dialog', attributes: { class: 'modal-surface cue-point-dialog', open: '' }, parent: lanes };
   const cueForm: Node = { tag: 'form', attributes: { class: 'effect-binding-form' }, parent: cueDialog };
   const cueFooter: Node = { tag: 'footer', parent: cueForm };
@@ -279,11 +280,14 @@ describe('时间线的键（timeline-keys.test.ts 的用例）', () => {
     // Closed: on a clip every editing key the timeline knows goes to it, Escape stops and Space plays.
     const onClip = Object.fromEntries(editingKeys.map(chord => [chord, route(clip, chord, { page: 'cues', ...everything })]));
     expect(onClip).toEqual({
-      Delete: run('edit.delete', 'timeline'), Backspace: run('edit.delete', 'lighting-points'), KeyS: run('edit.split', 'timeline'), KeyM: run('lighting.addPoint', 'editor'),
+      Delete: run('edit.delete', 'timeline'), Backspace: run('edit.delete', 'timeline'), KeyS: run('edit.splitMoved', 'timeline'), KeyM: run('marker.add', 'editor'),
       Enter: NATIVE, 'Ctrl+KeyV': run('edit.paste', 'timeline'), 'Ctrl+KeyD': run('edit.duplicate', 'timeline'), 'Ctrl+KeyC': run('edit.copy', 'timeline'),
       'Ctrl+KeyX': run('edit.cut', 'lighting-points'), 'Ctrl+KeyZ': run('document.undo', 'global'), 'Ctrl+KeyA': run('edit.selectAll', 'lighting-points'),
-      Home: run('transport.start', 'editor'), End: NATIVE, ArrowLeft: run('transport.prevFrame', 'editor'), ArrowRight: run('transport.nextFrame', 'editor'),
-      ArrowUp: NATIVE, ArrowDown: NATIVE, Escape: run('transport.stop', 'timeline'), Space: run('transport.playPause', 'editor')
+      Home: run('transport.start', 'editor'), End: run('transport.end', 'editor'), ArrowLeft: run('transport.prevFrame', 'editor'), ArrowRight: run('transport.nextFrame', 'editor'),
+      ArrowUp: run('transport.prevEditPoint', 'timeline'), ArrowDown: run('transport.nextEditPoint', 'timeline'), Escape: run('transport.stop', 'timeline'), Space: run('transport.playPause', 'editor'),
+      'Ctrl+KeyB': run('edit.split', 'timeline'), 'Ctrl+Shift+KeyB': run('edit.splitAll', 'editor'), KeyQ: run('edit.trimLeft', 'editor'), KeyW: run('edit.trimRight', 'editor'),
+      KeyN: run('view.snap', 'timeline'), KeyK: run('transport.pause', 'timeline'), KeyL: run('transport.play', 'timeline'), 'Shift+KeyZ': run('view.zoomFit', 'timeline'),
+      'Ctrl+Equal': run('view.zoomIn', 'timeline'), 'Ctrl+Minus': run('view.zoomOut', 'timeline'), 'Shift+ArrowLeft': run('transport.backMany', 'timeline'), 'Shift+ArrowRight': run('transport.forwardMany', 'timeline')
     });
     for (const target of [timeline, null]) expect(route(target, 'Delete', { page: 'cues', available: only('timeline edit.delete', 'lighting-points edit.delete') }))
       .toEqual(run('edit.delete', target === null ? 'lighting-points' : 'timeline'));
@@ -298,7 +302,7 @@ describe('时间线的键（timeline-keys.test.ts 的用例）', () => {
     }
   });
 
-  it('灯光时间线的窗口键（M 加灯光点、Delete/Backspace 删灯光点、Ctrl+A/C/X/V）：对话框里、模态对话框开着时都不动作；关掉后照常；输入框、按住、Alt 都不动作', () => {
+  it('灯光时间线的窗口键（编辑器的 M 加标记、Delete/Backspace 删灯光点、Ctrl+A/C/X/V）：对话框里、模态对话框开着时都不动作；关掉后照常；输入框、按住、Alt 都不动作', () => {
     const points = { page: 'cues' as const, available: (_id: CommandId, scope: KeyScope) => scope === 'lighting-points' || scope === 'editor' };
     const keys = { Delete: 'edit.delete', Backspace: 'edit.delete', 'Ctrl+KeyA': 'edit.selectAll', 'Ctrl+KeyC': 'edit.copy', 'Ctrl+KeyX': 'edit.cut', 'Ctrl+KeyV': 'edit.paste' } as const;
     const mtc: Node = { tag: 'dialog', attributes: { class: 'modal-surface ui-dialog', open: '' }, parent: body };
@@ -311,7 +315,7 @@ describe('时间线的键（timeline-keys.test.ts 的用例）', () => {
       for (const target of [body, null]) expect(route(target, chord, { ...points, modalOpen: true })).toEqual(NATIVE);
       for (const target of [body, clip, null]) expect(route(target, chord, points)).toEqual(run(id, 'lighting-points'));
     }
-    expect(route(body, 'KeyM', points)).toEqual(run('lighting.addPoint', 'editor'));
+    expect(route(body, 'KeyM', points)).toEqual(run('marker.add', 'editor'));
     for (const target of [{ tag: 'input', parent: body }, { tag: 'textarea', parent: body }, { tag: 'select', parent: body }, { tag: 'div', attributes: { contenteditable: 'true' }, parent: body }]) {
       expect(route(target, 'Delete', points)).toEqual(NATIVE);
     }
@@ -344,9 +348,10 @@ describe('时间线的键接到路由上（04 设计 K6）', () => {
     expect(route(clip, 'Delete', { page: 'cues', available: () => true })).toEqual(run('edit.delete', 'timeline'));
   });
 
-  it('编辑器的音频片段：S 是时间线的分割（和片段、Cue 一样），←→ 逐帧；Enter、Delete、Backspace 归片段自己', () => {
+  it('编辑器的音频片段：Ctrl+B 是时间线的分割（K7 前是 S）（和片段、Cue 一样），←→ 逐帧；Enter、Delete、Backspace 归片段自己', () => {
     const segment: Node = { tag: 'div', attributes: { class: 'audio-timeline-segment', role: 'button', ...ownKeys('Enter', 'Delete', 'Backspace') }, parent: lanes };
-    expect(route(segment, 'KeyS', editor)).toEqual(run('edit.split', 'timeline'));
+    expect(route(segment, 'Ctrl+KeyB', editor)).toEqual(run('edit.split', 'timeline'));
+    expect(route(segment, 'KeyS', editor)).toEqual(run('edit.splitMoved', 'timeline'));
     expect(route(segment, 'ArrowLeft', editor)).toEqual(run('transport.prevFrame', 'editor'));
     expect(route(segment, 'Ctrl+KeyC', editor)).toEqual(run('edit.copy', 'timeline'));
     for (const chord of ['Enter', 'Delete', 'Backspace']) expect(route(segment, chord, editor)).toEqual(NATIVE);
@@ -413,14 +418,14 @@ describe('拖动层（04 设计 K5）', () => {
   const clip: Node = { tag: 'button', attributes: { class: 'timeline-clip' }, parent: timeline };
   const field: Node = { tag: 'input', parent: body };
 
-  it('拖动中按 Delete、Backspace、Ctrl+Z、Ctrl+Y、Ctrl+Shift+Z、S、Ctrl+V、Ctrl+D 都不执行，工程不在拖到一半时变掉；三个页面都一样', () => {
+  it('拖动中按 Delete、Backspace、Ctrl+Z、Ctrl+Y、Ctrl+Shift+Z、Ctrl+B、Q、W、M、Ctrl+V、Ctrl+D 都不执行，工程不在拖到一半时变掉；三个页面都一样', () => {
     for (const page of ['project', 'cues', 'lighting'] as const) {
       for (const chord of ['Delete', 'Backspace', 'Ctrl+KeyZ', 'Ctrl+KeyY', 'Ctrl+Shift+KeyZ']) {
         for (const node of [body, timeline, clip, null]) expect([page, chord, route(node, chord, { page, drag: 'active', available: timelineHandlers })]).toEqual([page, chord, SWALLOW]);
         expect([page, chord, route(body, chord, { page, drag: 'cancelled', available: timelineHandlers })]).toEqual([page, chord, SWALLOW]);
       }
     }
-    for (const chord of ['KeyS', 'Ctrl+KeyV', 'Ctrl+KeyD', 'Ctrl+KeyC', 'KeyM']) expect([chord, route(clip, chord, { page: 'cues', drag: 'active', available: timelineHandlers })]).toEqual([chord, SWALLOW]);
+    for (const chord of ['Ctrl+KeyB', 'Ctrl+Shift+KeyB', 'KeyQ', 'KeyW', 'Ctrl+KeyV', 'Ctrl+KeyD', 'Ctrl+KeyC', 'KeyM']) expect([chord, route(clip, chord, { page: 'cues', drag: 'active', available: timelineHandlers })]).toEqual([chord, SWALLOW]);
     // Without a drag undo runs as before.
     expect(route(body, 'Ctrl+KeyZ', { page: 'cues' })).toEqual(run('document.undo', 'global'));
   });

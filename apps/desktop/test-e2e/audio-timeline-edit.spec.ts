@@ -38,7 +38,7 @@ for (const workspace of ['编辑器', '灯光工作台']) test(workspace === '�
       await page.mouse.move(box.x + box.width * 2 / 3, box.y + box.height / 2, { steps: 8 }); await page.mouse.up();
       await expect(clip).not.toHaveClass(/selected/);
       expect(await clip.evaluate(element => getComputedStyle(element).borderColor)).toBe('rgba(0, 0, 0, 0)');
-      await page.keyboard.press('s'); await page.keyboard.press('Delete');
+      await page.keyboard.press('Control+b'); await page.keyboard.press('Delete');
       await clip.click({ button: 'right' });
       await expect(page.getByRole('menu', { name: '音频片段菜单' })).toHaveCount(0);
       await expect(page.getByRole('dialog', { name: '编辑音频片段' })).toHaveCount(0);

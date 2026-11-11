@@ -28,7 +28,7 @@ export function PlaybackPreferences({ disabled, notify }: { disabled: boolean; n
   return <>
     <Card title="操作方式">
       <Switch label="双击歌曲播放" help="打开后，单击只选中歌曲" disabled={locked} checked={player?.doubleClickPlayback ?? false} onChange={event => void save({ doubleClickPlayback: event.currentTarget.checked })} />
-      <Switch label="方向键切歌" aria-label="方向键立即播放上一首 / 下一首" help="按方向键立即播放上一首或下一首" disabled={locked} checked={player?.arrowKeyPlayback ?? false} onChange={event => void save({ arrowKeyPlayback: event.currentTarget.checked })} />
+      <Switch label="方向键切歌" aria-label="方向键立即播放上一首 / 下一首" help="在首页按 ↑ ↓ 立即播放上一首或下一首。编辑器和灯光工作台的时间线里，↑ ↓ 跳到上一个或下一个剪辑点" disabled={locked} checked={player?.arrowKeyPlayback ?? false} onChange={event => void save({ arrowKeyPlayback: event.currentTarget.checked })} />
       <Switch label="预加载音频" help="播放时提前准备下一首，切歌更快" disabled={locked} checked={player?.preload ?? true} onChange={event => void save({ preload: event.currentTarget.checked })} />
     </Card>
     <Card title="淡入淡出" description="点“淡入”“淡出”按钮时用的时长。">

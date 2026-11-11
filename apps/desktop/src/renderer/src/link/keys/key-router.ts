@@ -1,8 +1,8 @@
 import { chordOf, type KeyChord } from './key-chord';
-import { editsText, keyInTimeline, keyOwner, modalDialogOpen, windowKeepsKey, type OwnerTarget } from './key-owner';
+import { editsText, keyInTimeline, keyOwner, modalDialogOpen, typesLines, windowKeepsKey, type OwnerTarget } from './key-owner';
 import { routeKey, type KeyDrag, type RouteDecision } from './key-route';
-import { currentKeymap } from '../stores/shortcut-store';
-import { KEYMAP, PAGE_SCOPES, type CommandId, type KeyEntry, type KeyPage, type KeyScope } from './keymap';
+import { currentKeymap, currentSwitchesOff } from '../stores/shortcut-store';
+import { KEYMAP, PAGE_SCOPES, type CommandId, type KeyEntry, type KeyPage, type KeyScope, type KeySwitch } from './keymap';
 
 /*
  * The window's one key listener (04 设计 4.1, 4.2): a keydown listener on the window in the capture phase, before any
@@ -17,7 +17,8 @@ import { KEYMAP, PAGE_SCOPES, type CommandId, type KeyEntry, type KeyPage, type 
  * (ReferenceTimeline), the lighting points' (LightingTimeline), the Cue points' (WaveformCuePoints) and the lighting
  * workbench's shortcut keys (useTimelineStamp, with the keys the user set for them, shortcut-store.ts): each registers
  * its commands in its scope. No other key listener is left on the window or the page; what an element does with
- * its own keys it declares (`ownKeys`).
+ * its own keys it declares (`ownKeys`). K7 the 第 7 题 keys (keymap.ts): Shift+Escape stops from anywhere, the plain
+ * Escape can be switched off on this computer (`switchesOff`), and a held Enter acts once (`held`).
  */
 
 /** A key press, as the router reads it. */
@@ -75,8 +76,15 @@ export class KeyRouter {
   /**
    * `document`: the page modal dialogs are looked for in, read on every press (none in tests without a page).
    * `keymap`: the key table with the keys the user changed, read on every press (the table itself when left out).
+   * `switchesOff`: the keys turned off on this computer (「单按 Esc 停止」), read on every press (none when left out).
    */
-  constructor(private readonly document: () => Page | null, private readonly keymap: () => readonly KeyEntry[] = () => KEYMAP) {}
+  constructor(private readonly document: () => Page | null, private readonly keymap: () => readonly KeyEntry[] = () => KEYMAP,
+    private readonly switchesOff: () => ReadonlySet<KeySwitch> = () => new Set()) {}
+
+  /** The page on screen. */
+  currentPage(): KeyPage {
+    return this.page;
+  }
 
   /** Listens on `view` (the window) in the capture phase; the result stops. */
   install(view: View): () => void {
@@ -114,7 +122,7 @@ export class KeyRouter {
     const decision = routeKey({
       chord, repeat: event.repeat, composing: event.isComposing || event.key === 'Process',
       owner: keyOwner(target, chord), inTimeline: keyInTimeline(target), windowKeeps: windowKeepsKey(target, chord), editingText: editsText(target),
-      keymap: this.keymap(),
+      typesLines: typesLines(target), keymap: this.keymap(), switchesOff: this.switchesOff(),
       modalOpen: this.modalOpen(), overlays: this.openOverlays().map(overlay => ({ focusInside: target !== null && overlay.contains(target), blocks: overlay.blocks })),
       drag: this.drag(), page: this.page,
       available: (id, scope) => this.handler(id, [scope], target) !== undefined,
@@ -154,6 +162,11 @@ export class KeyRouter {
         // music beat or section, an audio segment's Delete and Backspace) do not look whether the router took it.
         event.preventDefault();
         if (this.drag() !== 'none') event.stopPropagation();
+        return;
+      // A held Enter's repeat (04 设计 4.9): no button, form or element's own Enter gets it, so none of them needs to
+      // look at `repeat` (the MA2 Go keys, the Cue points and their dialog did, 0.5.9).
+      case 'held':
+        event.preventDefault(); event.stopPropagation();
         return;
       case 'song': {
         const songs = this.songs.at(-1);
@@ -216,4 +229,4 @@ export class KeyRouter {
 }
 
 /** The app's router, installed on the window by LinkApp. */
-export const keyRouter = new KeyRouter(() => typeof document === 'undefined' ? null : document, currentKeymap);
+export const keyRouter = new KeyRouter(() => typeof document === 'undefined' ? null : document, currentKeymap, currentSwitchesOff);

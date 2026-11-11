@@ -1,7 +1,7 @@
 import { createLightingDocument, lightingTrackSchema, linkCueSchema, referenceMediaClipSchema, type LightingDocument } from '@tb/schema';
 import { describe, expect, it } from 'vitest';
 import {
-  copyTarget, cuePointsToDelete, deleteTimelineSelection, duplicateTarget, keysBackToTimeline, nextEditPoint, previousEditPoint, removeLightingPoints,
+  copyTarget, cuePointsToDelete, deleteTimelineSelection, duplicateTarget, editorEditKeys, editorTransportKeys, keysBackToTimeline, timelineTransportKeys, nextEditPoint, previousEditPoint, removeLightingPoints,
   splitTarget, timelineClipboard, timelineEditKeys, timelineSelection, trimAudioToPlayhead, trimToPlayhead, TIMELINE_SELECTION_ORDER, type TimelineKeyProps
 } from './timeline-commands';
 
@@ -21,13 +21,16 @@ function props(calls: string[], overrides: Partial<TimelineKeyProps> = {}): Time
     onPlayingChange: () => undefined,
     onDuplicateClip: (id, at) => { calls.push(`复制 ${id} 到 ${at}`); }, onDuplicateCue: (id, at) => { calls.push(`复制 ${id} 到 ${at}`); },
     onSplitClip: (id, at) => { calls.push(`分割 ${id} 在 ${at}`); },
+    onTrim: (ref, startMs, durationMs) => { calls.push(`修剪 ${ref.id} 为 ${startMs}+${durationMs}`); },
     onDeleteClip: id => { calls.push(`删除片段 ${id}`); }, onDeleteCue: id => { calls.push(`删除触发点 ${id}`); },
     ...overrides
   };
 }
+/** An audio track of one segment 「音频」 from 0.5 s to 2.5 s, selected. */
 const audioEditor = (calls: string[], disabled = false): NonNullable<TimelineKeyProps['audioEditor']> => ({
-  selected: { id: '音频' }, disabled,
-  split: at => { calls.push(`分割音频 在 ${at}`); return Promise.resolve(); }, remove: () => { calls.push('删除音频'); return Promise.resolve(); }
+  selected: { id: '音频', startMs: 500, durationMs: 2_000, sourceOffsetMs: 0 }, segments: [{ startMs: 500, durationMs: 2_000 }], disabled,
+  split: at => { calls.push(`分割音频 在 ${at}`); return Promise.resolve(); }, remove: () => { calls.push('删除音频'); return Promise.resolve(); },
+  update: (id, patch) => { calls.push(`改音频 ${id} ${JSON.stringify(patch)}`); return Promise.resolve(); }
 });
 
 describe('时间线选中的东西归谁（04 设计 3.3 d，K6）', () => {
@@ -89,15 +92,16 @@ describe('剪贴板和编辑键（04 设计 3.3 b）', () => {
     expect(timelineClipboard({ lightingClipSelected: false })).toBe('content');
     const calls: string[] = [];
     const lighting = { document: lightingDocument(), selectedClipId: '灯光片段', selectedEventId: null, selectedEventIds: [], onChange: () => undefined, onSelect: () => undefined };
-    const withLighting = timelineEditKeys(props(calls, { selectedClipId: '片段', lighting }), { kind: 'clip', id: '片段' }, () => undefined, undefined);
+    const withLighting = timelineEditKeys(props(calls, { selectedClipId: '片段', lighting }), { kind: 'clip', id: '片段' }, () => undefined);
     expect([withLighting['edit.copy'], withLighting['edit.paste']]).toEqual([undefined, undefined]);
     const copied: string[] = [];
-    const content = timelineEditKeys(props(calls, { selectedClipId: '片段' }), { kind: 'cue', id: '触发点' }, target => { copied.push(`${target.kind} ${target.id}`); }, undefined);
+    const content = timelineEditKeys(props(calls, { selectedClipId: '片段' }), { kind: 'cue', id: '触发点' }, target => { copied.push(`${target.kind} ${target.id}`); });
     content['edit.copy']?.({ target: null, global: () => undefined });
     content['edit.paste']?.({ target: null, global: () => undefined });
     expect([copied, calls]).toEqual([['clip 片段'], ['复制 触发点 到 1000']]);
     // Nothing on the clipboard, nothing selected: no paste, no copy, no split, no duplicate; Delete and stop stay.
-    expect(Object.keys(timelineEditKeys(props(calls), null, () => undefined, () => undefined)).sort()).toEqual(['edit.delete', 'transport.stop']);
+    // The stop keys are the page's own since K7 (ReferenceTimeline), not the editing keys'.
+    expect(Object.keys(timelineEditKeys(props(calls), null, () => undefined)).sort()).toEqual(['edit.delete']);
   });
 
   it('复制哪个、副本放在哪：片段放在它后面，触发点放在它和它的长度后面；找不到就不放', () => {
@@ -113,14 +117,68 @@ describe('剪贴板和编辑键（04 设计 3.3 b）', () => {
     expect(duplicateTarget({ clip: null, trigger: null }, [clip], [cue], '25')).toBeNull();
   });
 
-  it('S 分割：编辑器里选着能改的音频片段就分割音频，否则分割选中的片段；灯光工作台的音频不分割', () => {
+  it('Ctrl+B 分割（K7 前是 S）：编辑器里选着能改的音频片段就分割音频，否则分割选中的片段；灯光工作台的音频不分割', () => {
     expect(splitTarget({ workbench: false, audio: true, audioDisabled: false, clip: '片段' })).toBe('audio');
     expect(splitTarget({ workbench: false, audio: true, audioDisabled: true, clip: '片段' })).toBe('content-clip');
     expect(splitTarget({ workbench: true, audio: true, audioDisabled: false, clip: null })).toBeNull();
     expect(splitTarget({ workbench: false, audio: false, audioDisabled: false, clip: null })).toBeNull();
     const calls: string[] = [];
-    timelineEditKeys(props(calls, { audioEditor: audioEditor(calls), selectedClipId: '片段' }), null, () => undefined, undefined)['edit.split']?.({ target: null, global: () => undefined });
+    timelineEditKeys(props(calls, { audioEditor: audioEditor(calls), selectedClipId: '片段' }), null, () => undefined)['edit.split']?.({ target: null, global: () => undefined });
     expect(calls).toEqual(['分割音频 在 1000']);
+  });
+});
+
+describe('剪映的键（K7）', () => {
+  const press = { target: null, global: () => undefined };
+  const at = (seconds: number) => ({ hours: 0, minutes: 0, seconds, frames: 0 });
+  const clip = (id: string, layerId: string, start: number) => referenceMediaClipSchema.parse({ id, assetId: '素材', startTimecode: at(start), durationMs: 2_000, label: id, layerId });
+
+  it('Q、W 把选中的音频片段的开头、结尾修剪到播放头；没选音频就修剪选中的片段；播放头不在里面、轨道锁着时不动', () => {
+    const calls: string[] = [];
+    editorEditKeys(props(calls, { audioEditor: audioEditor(calls), selectedClipId: '片段' }))['edit.trimLeft']?.(press);
+    editorEditKeys(props(calls, { audioEditor: audioEditor(calls) }))['edit.trimRight']?.(press);
+    expect(calls).toEqual(['改音频 音频 {"startMs":1000,"sourceOffsetMs":500,"durationMs":1500}', '改音频 音频 {"durationMs":500}']);
+    calls.length = 0;
+    const clips = [clip('片段', '轨道 1', 0), clip('锁着的', '轨道 2', 0), clip('后面的', '轨道 1', 5)];
+    const layers = [{ id: '轨道 1', locked: false }, { id: '轨道 2', locked: true }];
+    editorEditKeys(props(calls, { clips, layers, selectedClipId: '片段' }))['edit.trimLeft']?.(press);
+    editorEditKeys(props(calls, { clips, layers, selectedClipId: '锁着的' }))['edit.trimRight']?.(press);
+    editorEditKeys(props(calls, { clips, layers, selectedClipId: '后面的' }))['edit.trimRight']?.(press);
+    expect(calls).toEqual(['修剪 片段 为 1000+1000']);
+  });
+
+  it('Ctrl+Shift+B 在播放头分割所有片段和音频，锁着的轨道、不经过播放头的片段不分', () => {
+    const calls: string[] = [];
+    const clips = [clip('片段', '轨道 1', 0), clip('锁着的', '轨道 2', 0), clip('后面的', '轨道 1', 5)];
+    editorEditKeys(props(calls, { clips, layers: [{ id: '轨道 1', locked: false }, { id: '轨道 2', locked: true }], audioEditor: audioEditor(calls) }))['edit.splitAll']?.(press);
+    expect(calls).toEqual(['分割 片段 在 1000', '分割音频 在 1000']);
+  });
+
+  it('K 暂停、L 播放；Shift+←/→ 走 5 帧，↑↓ 到上一个、下一个剪辑点，先暂停，不出开头和结尾', () => {
+    const log: string[] = [];
+    let playhead = 1_000;
+    const seek = { from: () => playhead, to: (ms: number) => { playhead = ms; log.push(`到 ${ms}`); } };
+    const keys = (playing: boolean) => timelineTransportKeys({ frameRate: '25', durationMs: 3_000, editPoints: [500, 2_000], playing },
+      { playPause: () => log.push('播放键'), onPlayingChange: next => log.push(next ? '播放' : '暂停'), seek });
+    keys(true)['transport.pause']?.(press); keys(false)['transport.pause']?.(press);
+    keys(false)['transport.play']?.(press); keys(true)['transport.play']?.(press);
+    expect(log).toEqual(['暂停', '播放键']);
+    log.length = 0;
+    keys(false)['transport.forwardMany']?.(press); keys(false)['transport.backMany']?.(press); keys(false)['transport.backMany']?.(press);
+    keys(false)['transport.nextEditPoint']?.(press); keys(false)['transport.nextEditPoint']?.(press); keys(false)['transport.prevEditPoint']?.(press);
+    expect(log).toEqual(['暂停', '到 1200', '暂停', '到 1000', '暂停', '到 800', '暂停', '到 2000', '暂停', '到 3000', '暂停', '到 2000']);
+    playhead = 50;
+    keys(false)['transport.backMany']?.(press);
+    expect(playhead).toBe(0);
+  });
+
+  it('按住 ← 时每一下从上一下要去的地方接着走，没画出来的也算（每帧只定位一次，04 设计 4.9）', () => {
+    const drawn = 1_000, targets: number[] = [];
+    let pending: number | null = null;
+    const seek = { from: () => pending ?? drawn, to: (ms: number) => { pending = ms; targets.push(ms); } };
+    const keys = editorTransportKeys({ frameRate: '25', onPlayingChange: () => undefined, durationMs: 3_000 }, () => undefined, seek);
+    for (let index = 0; index < 3; index += 1) keys['transport.prevFrame']?.(press);
+    expect(targets).toEqual([960, 920, 880]);
   });
 });
 

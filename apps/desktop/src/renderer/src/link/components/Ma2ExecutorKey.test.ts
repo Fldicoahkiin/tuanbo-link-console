@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it, vi } from 'vitest';
 import type { Ma2ExecutorPage } from '@tb/schema';
 import { Ma2ExecutorKey } from './Ma2ExecutorKey';
+import { KeyRouter } from '../keys/key-router';
 
 // The renderer's TSX compiles to React.createElement here.
 vi.stubGlobal('React', React);
@@ -36,19 +37,28 @@ function key(value: string, repeat: boolean): Key {
   return event;
 }
 
+/** The focused button, as the key router looks at it: a `<button>` on the page, with no keys of its own declared. */
+const focusedButton = { closest: (selectors: string) => selectors.split(',').some(selector => selector.trim() === 'button') ? { getAttribute: () => null } : null };
+
 /**
- * Holds Space or Enter on the focused button: one keydown, `repeats` repeated keydowns, then the keyup. What Chromium
- * does with what the button leaves to it: every Enter keydown clicks the button; a Space keydown arms it and the keyup
- * clicks it. Returns which keydowns the button took.
+ * Holds Space or Enter on the focused button: one keydown, `repeats` repeated keydowns, then the keyup. Each keydown
+ * goes to the window's key router first (K7: it takes a held Enter's repeats, `held`), then, unless the router stopped
+ * it, to the button. What Chromium does with what is left to it: every Enter keydown clicks the button; a Space keydown
+ * arms it and the keyup clicks it. Returns which keydowns were taken from the browser.
  */
 function hold(button: Button, value: ' ' | 'Enter', repeats: number): boolean[] {
   const click = (): void => button.props.onClick?.({ stopPropagation: () => undefined } as unknown as React.MouseEvent<HTMLButtonElement>);
+  const router = new KeyRouter(() => null);
   const taken: boolean[] = [];
   let armed = false;
   for (let index = 0; index <= repeats; index++) {
     const down = key(value, index > 0);
-    button.props.onKeyDown?.(down as unknown as React.KeyboardEvent<HTMLButtonElement>);
+    let stopped = false;
+    router.dispatch({ code: value === ' ' ? 'Space' : 'Enter', key: value, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, repeat: down.repeat,
+      isComposing: false, get defaultPrevented() { return down.taken; }, preventDefault: down.preventDefault, stopPropagation: () => { stopped = true; }, target: focusedButton });
+    if (!stopped) button.props.onKeyDown?.(down as unknown as React.KeyboardEvent<HTMLButtonElement>);
     taken.push(down.taken);
+    if (stopped) continue;
     if (!down.taken && value === 'Enter') click();
     if (!down.taken && value === ' ') armed = true;
   }
@@ -58,16 +68,17 @@ function hold(button: Button, value: ' ' | 'Enter', repeats: number): boolean[] 
   return taken;
 }
 
-it('Go 这类普通执行器键有焦点时按住 Enter：控台只收到一次按下，重复的按键被拿走，不会一下跳过好几个 Cue（0.5.9）', () => {
+it('Go 这类普通执行器键有焦点时按住 Enter：控台只收到一次按下，重复的按键由按键路由拿走（K7），不会一下跳过好几个 Cue（0.5.9）', () => {
   const go = draw(0);
   expect(go.html).not.toContain('data-momentary');
   const taken = hold(go.button, 'Enter', 3);
   expect(go.sent).toEqual(['按下 100.1 第 1 键']);
-  // The first keydown is left to the button, whose click presses the key once; the repeats would click it again.
+  // The first keydown is left to the button, whose click presses the key once; the router takes the repeats.
   expect(taken).toEqual([false, true, true, true]);
 
+  // Space clicks a button when let go, once however long it is held.
   const space = draw(0);
-  expect(hold(space.button, ' ', 3)).toEqual([false, true, true, true]);
+  hold(space.button, ' ', 3);
   expect(space.sent).toEqual(['按下 100.1 第 1 键']);
 });
 

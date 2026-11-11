@@ -1,5 +1,5 @@
 import { playbackFramesPerSecond, resolveTimelineClipSpan, timecodeToMilliseconds } from '@tb/core/link';
-import type { AudioSegment, LightingDocument, LinkCue, MtcFrameRate, ReferenceMediaClip } from '@tb/schema';
+import type { AudioSegment, LightingDocument, LinkCue, MtcFrameRate, ReferenceMediaClip, VisualLayer } from '@tb/schema';
 import type { KeyHandlers } from '../keys/key-router';
 import type { LightingTimelineProps } from './LightingTimeline';
 
@@ -128,12 +128,19 @@ export type TimelineKeyProps = {
   cues: readonly LinkCue[];
   selectedClipId: string | null;
   selectedCueId: string | null;
-  audioEditor?: { selected: unknown; disabled: boolean; split: (timeMs: number) => Promise<void>; remove: () => Promise<void> } | undefined;
+  /** The editor's tracks: a clip or trigger point on a locked one is not split or trimmed by the keys. Left out: none locked. */
+  layers?: readonly Pick<VisualLayer, 'id' | 'locked'>[] | undefined;
+  audioEditor?: {
+    selected: Pick<AudioSegment, 'id' | 'startMs' | 'durationMs' | 'sourceOffsetMs'> | null | undefined; segments: readonly Pick<AudioSegment, 'startMs' | 'durationMs'>[];
+    disabled: boolean; split: (timeMs: number) => Promise<void>; remove: () => Promise<void>;
+    update: (id: string, patch: Partial<Pick<AudioSegment, 'startMs' | 'durationMs' | 'sourceOffsetMs'>>) => Promise<void>;
+  } | undefined;
   lighting?: Pick<LightingTimelineProps, 'document' | 'selectedClipId' | 'selectedEventId' | 'selectedEventIds' | 'onChange' | 'onSelect'> | undefined;
   onPlayingChange: (playing: boolean) => void;
   onDuplicateClip: (clipId: string, startMs: number) => void;
   onDuplicateCue: (cueId: string, startMs: number) => void;
   onSplitClip: (clipId: string, timeMs: number) => void;
+  onTrim: (ref: TimelineTarget, startMs: number, durationMs: number) => void;
   onDeleteClip: (clipId: string) => void;
   onDeleteCue: (cueId: string) => void;
 };
@@ -162,9 +169,9 @@ export function deleteTimelineSelection(props: TimelineKeyProps): void {
 /**
  * The timeline's editing keys (keymap.ts, scope `timeline`), each there only while it has something to act on, as the
  * timeline's own listener did before the key router (K6): copy and paste leave the lighting points' clipboard to them
- * (`timelineClipboard`), split and duplicate need something selected; Delete and the stop key are always there.
+ * (`timelineClipboard`), split and duplicate need something selected; Delete is always there.
  */
-export function timelineEditKeys(props: TimelineKeyProps, clipboard: TimelineTarget | null, setClipboard: (target: TimelineTarget) => void, stop: (() => void) | undefined): KeyHandlers {
+export function timelineEditKeys(props: TimelineKeyProps, clipboard: TimelineTarget | null, setClipboard: (target: TimelineTarget) => void): KeyHandlers {
   const content = timelineClipboard({ lightingClipSelected: Boolean(props.lighting?.selectedClipId) }) === 'content';
   const selection = { clip: props.selectedClipId, trigger: props.selectedCueId };
   const copied = copyTarget(selection);
@@ -172,7 +179,6 @@ export function timelineEditKeys(props: TimelineKeyProps, clipboard: TimelineTar
   const split = splitTarget({ workbench: props.lightingWorkspace === true, audio: Boolean(props.audioEditor?.selected), audioDisabled: props.audioEditor?.disabled ?? true, clip: props.selectedClipId });
   const copyTo = (target: TimelineTarget, at: number): void => { if (target.kind === 'clip') props.onDuplicateClip(target.id, at); else props.onDuplicateCue(target.id, at); };
   return {
-    ...(stop ? { 'transport.stop': stop } : {}),
     ...(content && copied ? { 'edit.copy': () => setClipboard(copied) } : {}),
     ...(content && clipboard ? { 'edit.paste': () => copyTo(clipboard, props.playheadMs) } : {}),
     ...(duplicate ? { 'edit.duplicate': () => { if (duplicate.at !== null) copyTo(duplicate, duplicate.at); } } : {}),
@@ -181,19 +187,98 @@ export function timelineEditKeys(props: TimelineKeyProps, clipboard: TimelineTar
   };
 }
 
+/** Whether the clip or trigger point `id` is on a locked track. */
+function onLockedTrack(props: TimelineKeyProps, target: TimelineTarget): boolean {
+  const layerId = target.kind === 'clip' ? props.clips.find(clip => clip.id === target.id)?.layerId : props.cues.find(cue => cue.id === target.id)?.layerId;
+  return layerId !== undefined && (props.layers ?? []).some(layer => layer.id === layerId && layer.locked);
+}
+
+/** Where the selected clip or trigger point (with a length) starts and ends, or null without one. */
+function selectedSpan(props: TimelineKeyProps): { target: TimelineTarget; span: { startMs: number; endMs: number } } | null {
+  const clip = props.selectedClipId ? props.clips.find(entry => entry.id === props.selectedClipId) : undefined;
+  if (clip) return { target: { kind: 'clip', id: clip.id }, span: resolveTimelineClipSpan(clip, props.frameRate) };
+  const cue = props.selectedCueId ? props.cues.find(entry => entry.id === props.selectedCueId) : undefined;
+  if (!cue || cue.durationMs === undefined) return null;
+  const startMs = timecodeToMilliseconds(cue.timecode, props.frameRate);
+  return { target: { kind: 'cue', id: cue.id }, span: { startMs, endMs: startMs + cue.durationMs } };
+}
+
+const inside = (span: { startMs: number; endMs: number }, ms: number): boolean => ms > span.startMs && ms < span.endMs;
+
+/**
+ * The editor's keys that cut at the playhead (scope `editor`, 剪映's Q, W and Ctrl+Shift+B): Q and W trim the selected
+ * audio segment, else the selected clip or trigger point, to the playhead, the same trims as the right-click menus'
+ * 「将开头/结尾修剪至播放头」 (`trimToPlayhead`, `trimAudioToPlayhead`); Ctrl+Shift+B splits every clip the playhead is
+ * in, and the audio there. Nothing on a locked track or with the playhead outside; the key is taken all the same.
+ */
+export function editorEditKeys(props: TimelineKeyProps): KeyHandlers {
+  const trim = (side: TrimSide): void => {
+    const at = props.playheadMs, audio = props.audioEditor;
+    if (audio?.selected && !audio.disabled && timelineSelection({ workbench: false, audio: true, clip: props.selectedClipId, trigger: props.selectedCueId }) === 'audio') {
+      const segment = audio.selected;
+      if (inside({ startMs: segment.startMs, endMs: segment.startMs + segment.durationMs }, at)) void audio.update(segment.id, trimAudioToPlayhead(segment, at, side));
+      return;
+    }
+    const selected = selectedSpan(props);
+    if (!selected || onLockedTrack(props, selected.target) || !inside(selected.span, at)) return;
+    const trimmed = trimToPlayhead(selected.span, at, side);
+    props.onTrim(selected.target, trimmed.startMs, trimmed.durationMs);
+  };
+  return {
+    'edit.trimLeft': () => trim('start'),
+    'edit.trimRight': () => trim('end'),
+    'edit.splitAll': () => {
+      const at = props.playheadMs;
+      for (const clip of props.clips) {
+        if (!onLockedTrack(props, { kind: 'clip', id: clip.id }) && inside(resolveTimelineClipSpan(clip, props.frameRate), at)) props.onSplitClip(clip.id, at);
+      }
+      const audio = props.audioEditor;
+      if (audio && !audio.disabled && audio.segments.some(segment => inside({ startMs: segment.startMs, endMs: segment.startMs + segment.durationMs }, at))) void audio.split(at);
+    }
+  };
+}
+
+/**
+ * Where a key moves the playhead to: `from` is where the last key put it (a seek not drawn yet included), `to` puts it
+ * there. ReferenceTimeline merges the seeks of a held key into one per frame drawn (`useFrameValue`, 04 设计 4.9), so
+ * holding → does not ask OBS to seek thirty times a second.
+ */
+export type TimelineSeek = { from: () => number; to: (milliseconds: number) => void };
+
+/** How many frames Shift+← and Shift+→ move (剪映's 多帧, to be checked at the venue). */
+export const MANY_FRAMES = 5;
+
 /**
  * The editor's keys that play and move the playhead (scope `editor`); the lighting workbench has its own, which the
- * user can change (useTimelineStamp). Moving the playhead pauses first. `seekTo` puts the playhead there, without
- * snapping to the edges.
+ * user can change (useTimelineStamp). Moving the playhead pauses first. The playhead is put there without snapping to
+ * the edges.
  */
-export function editorTransportKeys(props: Pick<TimelineKeyProps, 'playheadMs' | 'frameRate' | 'onPlayingChange'>, playPause: () => void, seekTo: (milliseconds: number) => void): KeyHandlers {
-  const step = (milliseconds: number): void => { props.onPlayingChange(false); seekTo(props.playheadMs + milliseconds); };
+export function editorTransportKeys(props: Pick<TimelineKeyProps, 'frameRate' | 'onPlayingChange'> & { durationMs: number }, playPause: () => void, seek: TimelineSeek): KeyHandlers {
+  const go = (milliseconds: number): void => { props.onPlayingChange(false); seek.to(milliseconds); };
   const frameMs = 1_000 / playbackFramesPerSecond(props.frameRate);
   return {
     'transport.playPause': playPause,
-    'transport.start': () => { props.onPlayingChange(false); seekTo(0); },
-    'transport.prevFrame': () => step(-frameMs), 'transport.nextFrame': () => step(frameMs),
-    'transport.backMany': () => step(-1_000), 'transport.forwardMany': () => step(1_000)
+    'transport.start': () => go(0), 'transport.end': () => go(props.durationMs),
+    'transport.prevFrame': () => go(seek.from() - frameMs), 'transport.nextFrame': () => go(seek.from() + frameMs)
+  };
+}
+
+/**
+ * The keys both timelines share that play, pause and move the playhead (scope `timeline`): K pauses and L plays
+ * (剪映's J/K/L, without the reverse play or the speeding up), Shift+←/→ move `MANY_FRAMES` frames, ↑↓ go to the
+ * previous or next edit point (the toolbar's 「定位」 menu). Moving pauses first.
+ */
+export function timelineTransportKeys(facts: { frameRate: MtcFrameRate; durationMs: number; editPoints: readonly number[]; playing: boolean },
+  controls: { playPause: () => void; onPlayingChange: (playing: boolean) => void; seek: TimelineSeek }): KeyHandlers {
+  const go = (milliseconds: number): void => { controls.onPlayingChange(false); controls.seek.to(Math.max(0, Math.min(facts.durationMs, milliseconds))); };
+  const frameMs = 1_000 / playbackFramesPerSecond(facts.frameRate);
+  return {
+    'transport.pause': () => { if (facts.playing) controls.onPlayingChange(false); },
+    'transport.play': () => { if (!facts.playing) controls.playPause(); },
+    'transport.backMany': () => go(controls.seek.from() - MANY_FRAMES * frameMs),
+    'transport.forwardMany': () => go(controls.seek.from() + MANY_FRAMES * frameMs),
+    'transport.prevEditPoint': () => go(previousEditPoint(facts.editPoints, controls.seek.from(), facts.frameRate)),
+    'transport.nextEditPoint': () => go(nextEditPoint(facts.editPoints, controls.seek.from(), facts.frameRate, facts.durationMs))
   };
 }
 
