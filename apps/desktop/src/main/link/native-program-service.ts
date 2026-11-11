@@ -1,5 +1,6 @@
-import { emptyInternalPlayerState, previousNotStopped, toUserErrorReason, type InternalPlayerState, type NativeProgramPlayer, type PlaybackBoundary } from '@tb/core/link';
-import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramDocumentSchema, nativeProgramEventSchema, parseLinkProject,
+import { applyProjectItemsChange, emptyInternalPlayerState, previousNotStopped, projectFileReferences, toUserErrorReason, type InternalPlayerState, type NativeProgramPlayer, type PlaybackBoundary } from '@tb/core/link';
+import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramDocumentSchema, nativeProgramEventSchema, nativeProgramStartsSong, parseLinkProject,
+  type NativeProgramDocument,
   type LinkProject, type NativeProgramAttachment, type NativeProgramDocumentAnswer, type NativeProgramDocumentVersion, type NativeProgramOpen,
   type NativeProgramConfiguration, type NativeProgramEvent } from '@tb/schema';
 import type { ClosedProgramFaults } from './main-process-errors';
@@ -16,6 +17,14 @@ type Entry = { request: NativeProgramOpen; projectId: string; project: LinkProje
   pending: Version | null; host: Host | null; configuration: NativeProgramConfiguration;
   state: InternalPlayerState; currentCueId: string | null; cancelled: boolean; orphaned: boolean;
   cancellation: AbortController; ready: Promise<void>;
+  /** The page's versions in the order it sent them (0.5.9 S9): each is checked (its files too) before the next, and a
+   * control that starts a song waits for them. Never rejected. */
+  documents: Promise<void>;
+  /** Controls other than stop and reset, in the order the page sent them: each is dispatched after the one before it,
+   * and one that starts a song after the versions sent before it. Never rejected. */
+  turn: Promise<void>;
+  /** Stops and resets so far: a song start still waiting when one came is not played (the stop came after it). */
+  stops: number;
   /** Builds this entry's host on the close chain; again when the operator presses stop after `heldBack`. */
   start: () => Promise<void>;
   /** Its open was refused because the program before it had not stopped (`held`). */
@@ -90,7 +99,7 @@ export class NativeProgramService {
     }
     const entry: Entry = { request, projectId: project.projectId, project, version, pending: null, host: null, configuration: request.configuration,
       state: { ...emptyInternalPlayerState }, currentCueId: null, cancelled: false, orphaned: false,
-      cancellation: new AbortController(), ready: Promise.resolve(), start: () => Promise.resolve(), heldBack: false };
+      cancellation: new AbortController(), ready: Promise.resolve(), documents: Promise.resolve(), turn: Promise.resolve(), stops: 0, start: () => Promise.resolve(), heldBack: false };
     // Nobody waits for this close: what fails in it is logged and shown here, and stays `held` if the engine went on.
     if (previous) { previous.cancelled = true; previous.cancellation.abort(); void this.enqueueClose(previous).catch((error: unknown) => this.closeFailed(previous, error)); }
     this.current = entry; this.reportRunning();
@@ -124,25 +133,52 @@ export class NativeProgramService {
     return 'opened';
   }
 
-  /** A newer version of the page's project (0.5.9 S7, design 02 §3.3–§3.4), needing no license: it only changes what the
-   * program holds in memory. With no song held it plays from the next song on; with one held it waits for 停止. A page
-   * whose program closed, another page, and another project or path are refused: those open again. Applied in the order
-   * the page sent them, before any later control of the page. */
-  document(value: unknown): NativeProgramDocumentAnswer {
+  /** A newer version of the page's project (0.5.9 S7, S9; design 02 §3.3–§3.4, §3.7), needing no license: it only
+   * changes what the program holds in memory. With no song held it plays from the next song on; with one held it waits
+   * for 停止. A page whose program closed, another page, and another project or path are refused: those open again.
+   * Applied in the order the page sent them, before any later control of the page that starts a song.
+   * A version is the whole document or an increment on the newest version the program has (`base`: the pending one if
+   * a song is held); an increment on any other version is answered `resync`, and the page sends the whole document. Both
+   * pass the same checks: the whole project as `parseLinkProject` checks it, and the files it references inside the
+   * project's folder (`checkFiles`, as an open checks them; an increment, the files the version before did not have). */
+  async document(value: unknown, checkFiles: (projectPath: string, relativePaths: string[]) => Promise<void>): Promise<NativeProgramDocumentAnswer> {
     const request = nativeProgramDocumentSchema.parse(value), entry = this.current;
     if (!entry || entry.cancelled || entry.orphaned || entry.request.ownerId !== request.ownerId) throw new Error(PROGRAM_CLOSED);
-    // Only whole documents for now: an increment has nothing here to build on.
-    if (request.base !== null) return { kind: 'resync', reason: '节目这边没有这次修改所基于的版本' };
+    const received = entry.documents.then(() => this.receive(entry, request, checkFiles));
+    entry.documents = received.then(() => undefined, () => undefined);
+    return received;
+  }
+
+  private async receive(entry: Entry, request: NativeProgramDocument,
+    checkFiles: (projectPath: string, relativePaths: string[]) => Promise<void>): Promise<NativeProgramDocumentAnswer> {
+    if (!this.receiving(entry, request.ownerId)) throw new Error(PROGRAM_CLOSED);
     if (request.key.projectId !== entry.projectId || request.key.projectPath !== entry.request.projectPath) {
       throw new Error('这一版属于另一个工程，节目没有换工程。请重新打开工程');
     }
-    const project = parseLinkProject(JSON.parse(request.change.document));
+    // The newest version this program has: the one waiting for 停止, else the one it plays.
+    const latest: Version = entry.pending ?? { project: entry.project, version: entry.version };
+    let project: LinkProject, known: ReadonlySet<string>;
+    if (request.change.kind === 'full') {
+      project = parseLinkProject(JSON.parse(request.change.document)); known = new Set();
+    } else {
+      if (request.base !== latest.version.revision || request.key.sessionId !== latest.version.sessionId) {
+        return { kind: 'resync', reason: '节目这边没有这次修改所基于的版本' };
+      }
+      project = applyProjectItemsChange(latest.project, request.change);
+      known = new Set(projectFileReferences(latest.project).map(file => file.relativePath));
+    }
     if (project.projectId !== entry.projectId) throw new Error('这一版属于另一个工程，节目没有换工程。请重新打开工程');
     if (project.playbackSource !== 'internal') throw new Error('只有“联动台播放”的工程才能在后台播放');
+    await checkFiles(entry.request.projectPath, projectFileReferences(project).map(file => file.relativePath).filter(path => !known.has(path)));
+    if (!this.receiving(entry, request.ownerId)) throw new Error(PROGRAM_CLOSED);
     const next: Version = { project, version: { sessionId: request.key.sessionId, revision: request.revision } };
     if (active(entry.state)) { entry.pending = next; return { kind: 'applied', revision: request.revision, effect: 'next-pass' }; }
     this.apply(entry, next); this.emit(entry);
     return { kind: 'applied', revision: request.revision, effect: 'stopped' };
+  }
+  /** `entry` is the open program of the page `ownerId`, shown in its window. */
+  private receiving(entry: Entry, ownerId: string): boolean {
+    return entry === this.current && !entry.cancelled && !entry.orphaned && entry.request.ownerId === ownerId;
   }
 
   /** The owning window's page is gone: its renderer exited, or a new page replaced it (window-page.ts). A program that
@@ -179,13 +215,25 @@ export class NativeProgramService {
       throw new Error(PROGRAM_CLOSED);
     }
     if (request.operation.kind === 'close') { await this.close(); return; }
+    // A song starts with every version the page sent before it (0.5.9 S9). Stop never waits: a song start still waiting
+    // for its versions is not played, as it would have been stopped; the other controls keep their order behind it.
+    const kind = request.operation.kind, starts = nativeProgramStartsSong(kind), stops = entry.stops;
+    let turn: Promise<void> | null = null;
+    if (kind === 'stop' || kind === 'reset') entry.stops += 1;
+    else {
+      const documents = entry.documents;
+      turn = entry.turn.then(() => starts ? documents : undefined);
+      entry.turn = turn;
+    }
     // Refused because the song before had not stopped: stop is the operator asking again (not a retry of ours). The
     // engine is read once more; stopped now, this program opens and the next play plays, else the same refusal.
     // One start at a time: `heldBack` is cleared as this one begins (letGo sets it again on a refusal), so a stop pressed
     // meanwhile waits for the same `ready` below and gets the same answer: the refusal, or a normal stop once open.
     if (request.operation.kind === 'stop' && entry.heldBack) { entry.heldBack = false; entry.ready = this.cleanup.then(entry.start); await entry.ready; return; }
     await entry.ready;
+    if (turn) await turn;
     if (entry !== this.current || entry.cancelled || !entry.host) throw new Error('播放控制已取消');
+    if (starts && entry.stops !== stops) return;
     if (request.configuration) entry.configuration = request.configuration;
     const player = entry.host.controller, operation = request.operation;
     // Do not serialize transport here: stop must invalidate an in-flight play.

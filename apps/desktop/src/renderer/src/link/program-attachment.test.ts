@@ -25,7 +25,7 @@ describe('评审场景：界面重新加载后接回还在播的节目，后台�
   const session = crypto.randomUUID();
 
   /** The real controller, wired as useInternalPlayer wires it; the program has not answered the open yet. */
-  function reopenedWindow() {
+  async function reopenedWindow() {
     let answerOpen!: (attachment: NativeProgramAttachment) => void;
     const api = {
       openNativeProgram: vi.fn<LinkDesktopApi['openNativeProgram']>(() => new Promise(resolve => { answerOpen = resolve; })),
@@ -38,8 +38,11 @@ describe('评审场景：界面重新加载后接回还在播的节目，后台�
     let state: Pick<ProgramPlayerState, 'status' | 'itemId'> = emptyInternalPlayerState, version: string | null = null, attachments = 0;
     const controller = new RemoteNativeProgramPlayer({
       configuration: () => ({ outputDeviceId: 'default', mtcPortName: null }), changed: next => { state = next; }, notice: vi.fn(),
-      document: () => ({ project, path: 'C:/show/现场.tblink', sessionId: session, revision: 3 }), attached: () => { attachments += 1; } },
+      document: () => ({ project, path: 'C:/show/现场.tblink', sessionId: session, revision: 3 }), attached: () => { attachments += 1; },
+      encode: value => Promise.resolve(JSON.stringify(value)) },
     api, event => { version = programVersionKey(event.documentVersion); }, crypto.randomUUID());
+    // The open goes once the project is encoded (0.5.9 S9).
+    await new Promise(resolve => setTimeout(resolve, 0));
     const ownerId = api.openNativeProgram.mock.calls[0]![0].ownerId;
     return {
       /** The program kept playing over the reload: it sends its state first, naming the version it plays. */
@@ -55,7 +58,7 @@ describe('评审场景：界面重新加载后接回还在播的节目，后台�
   }
 
   it('答复前写正在确认；播的是重新加载前那一页的版本写界面重新加载过；是这一页的版本才按这版标', async () => {
-    const outdated = reopenedWindow(), adopted = reopenedWindow();
+    const outdated = await reopenedWindow(), adopted = await reopenedWindow();
     outdated.playing({ sessionId: crypto.randomUUID(), revision: 9 });
     adopted.playing({ sessionId: session, revision: 3 });
     for (const window of [outdated, adopted]) expect(window.onAir()).toEqual({ kind: 'unconfirmed', reason: '正在确认联动台播放在播哪一版', waiting: true });

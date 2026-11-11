@@ -13,6 +13,7 @@ export * from './run-log-entries';
 export * from './ma2-show-identity';
 export * from './link-desktop-contract';
 export * from './project-asset-files';
+export * from './project-version-change';
 export * from './managed-media-timeline';
 export * from './content-timeline';
 export * from './scene-output-timeline';

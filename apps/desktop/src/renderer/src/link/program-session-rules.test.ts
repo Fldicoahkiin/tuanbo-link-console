@@ -74,9 +74,14 @@ vi.mock('../../../main/link/native-midi-host', () => ({
   }
 }));
 
+/** The program's encoding worker (project-codec): this test has no Worker, so it encodes as the worker does, in place. */
+vi.mock('./stores/project-codec', async importOriginal => ({ ...await importOriginal<typeof import('./stores/project-codec')>(),
+  programDocumentCodec: { failureReason: () => null, restart: () => undefined,
+    encode: (project: LinkProject) => Promise.resolve(JSON.stringify(parseLinkProject(project))) } }));
+
 const { createRoot } = await import('react-dom/client');
 const { useDocumentStore } = await import('./stores/document-store');
-const { useInternalPlayer, programConfiguration, programDocument } = await import('./useInternalPlayer');
+const { useInternalPlayer, programConfiguration, programDocument, encodeProgramDocument } = await import('./useInternalPlayer');
 const { RemoteNativeProgramPlayer, PROGRAM_PAGE_OWNER } = await import('./runtime/remote-native-program-player');
 const { ProgramDocumentFeed } = await import('./runtime/program-document-feed');
 const { NativeProgramService } = await import('../../../main/link/native-program-service');
@@ -141,8 +146,8 @@ function mainProcess() {
     const api = {
       openNativeProgram: vi.fn<Page['openNativeProgram']>(request => service.open(structuredClone(request))),
       controlNativeProgram: vi.fn<Page['controlNativeProgram']>(request => Promise.resolve().then(() => service.control(structuredClone(request)))),
-      documentNativeProgram: vi.fn<Page['documentNativeProgram']>(request => Promise.resolve().then((): NativeProgramDocumentAnswer => {
-        documents.push(structuredClone(request)); return service.document(structuredClone(request));
+      documentNativeProgram: vi.fn<Page['documentNativeProgram']>(request => Promise.resolve().then((): Promise<NativeProgramDocumentAnswer> => {
+        documents.push(structuredClone(request)); return service.document(structuredClone(request), () => Promise.resolve());
       })),
       onNativeProgramEvent: (listener: (event: NativeProgramEvent) => void) => { listeners.event.add(listener); return () => { listeners.event.delete(listener); }; },
       onNativeProgramClosed: (listener: (closed: NativeProgramClosed) => void) => { listeners.closed.add(listener); return () => { listeners.closed.delete(listener); }; },
@@ -204,7 +209,8 @@ describe('一个窗口页面一个长期的节目（0.5.9 S7）', () => {
     expect(w.main.hosts).toHaveLength(1); expect(w.main.closes()).toBe(0);
     expect(w.page.api.controlNativeProgram.mock.calls.map(call => call[0].operation.kind)).not.toContain('close');
     expect(w.main.player().currentProject().rundown[0]!.title).toBe('第 10 版');
-    expect(w.main.documents.at(-1)).toMatchObject({ revision: useDocumentStore.getState().revision, change: { kind: 'full' } });
+    // 0.5.9 S9: what changed, on the version before it.
+    expect(w.main.documents.at(-1)).toMatchObject({ revision: useDocumentStore.getState().revision, change: { kind: 'items' } });
     // The window knows the version on air exactly.
     expect(w.seen.player).toMatchObject({ outdated: false });
     expect(w.seen.player?.programProject?.rundown[0]!.title).toBe('第 10 版');
@@ -311,12 +317,14 @@ describe('节目要求整份重送时', () => {
     const answers: NativeProgramDocumentAnswer[] = [{ kind: 'resync', reason: '节目这边没有这一版' }, { kind: 'applied', revision: 2, effect: 'stopped' }];
     const send = vi.fn((request: NativeProgramDocument): Promise<NativeProgramDocumentAnswer> => Promise.resolve(answers.shift() ?? { kind: 'resync', reason: `第 ${request.revision} 版还是不行` }));
     const failed = vi.fn();
-    const feed = new ProgramDocumentFeed(randomUUID(), () => current, send, failed);
+    const feed = new ProgramDocumentFeed(randomUUID(), () => current, send, failed, value => Promise.resolve(JSON.stringify(value)));
     feed.attached(current);
     current = { ...current, revision: 2 }; feed.changed();
     await new Promise(resolve => setTimeout(resolve, 0));
+    // 0.5.9 S9: the first goes as an increment on the version before it; the one sent again is whole.
+    const increment: unknown = expect.objectContaining({ revision: 2, base: 1, change: { kind: 'items', items: [], removed: [] } });
     const whole: unknown = expect.objectContaining({ revision: 2, base: null, change: { kind: 'full', document: JSON.stringify(project) } });
-    expect(send.mock.calls.map(call => call[0])).toEqual([whole, whole]);
+    expect(send.mock.calls.map(call => call[0])).toEqual([increment, whole]);
     expect(failed).not.toHaveBeenCalled();
     current = { ...current, revision: 3 }; feed.changed();
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -355,7 +363,7 @@ describe('退出取消、重新进入工作区以后照常接回', () => {
     const page = w.main.page(), states: string[] = [];
     let attached = 0;
     const reloaded = new RemoteNativeProgramPlayer({ configuration: programConfiguration, document: programDocument, preciseSeeking: () => false,
-      changed: state => states.push(state.status), notice: vi.fn(), attached: () => { attached += 1; } }, page.api, vi.fn(), randomUUID());
+      changed: state => states.push(state.status), notice: vi.fn(), attached: () => { attached += 1; }, encode: encodeProgramDocument }, page.api, vi.fn(), randomUUID());
     await settle();
     expect(reloaded.attached).toBe(true); expect(attached).toBe(1);
     expect(reloaded.project).toBe(useDocumentStore.getState().project);

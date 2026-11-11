@@ -408,7 +408,7 @@ describe('修改送进后台节目不过授权，也不发出任何输出', () =
   for (const [reason, status] of Object.entries(lapsed)) it(`${reason}：停着时送来的新一版照样换上，不检查授权，不准备音频、不发灯光`, async () => {
     const f = await programHost();
     f.lapse(status);
-    expect(f.service.document(version(f, 2, '改名的开场'))).toEqual({ kind: 'applied', revision: 2, effect: 'stopped' });
+    expect(await f.service.document(version(f, 2, '改名的开场'), () => Promise.resolve())).toEqual({ kind: 'applied', revision: 2, effect: 'stopped' });
     expect(f.player().currentProject().rundown[0]!.title).toBe('改名的开场');
     expect(f.audio()).toBeNull(); expect(f.controls).toEqual([]); expect(f.send).not.toHaveBeenCalled();
   });
@@ -418,7 +418,7 @@ describe('修改送进后台节目不过授权，也不发出任何输出', () =
     await f.play('song');
     const audio = f.audio(), controls = [...f.controls], sent = f.send.mock.calls.length;
     f.lapse(lapsed.到期!);
-    expect(f.service.document(version(f, 2, '改名的开场'))).toEqual({ kind: 'applied', revision: 2, effect: 'next-pass' });
+    expect(await f.service.document(version(f, 2, '改名的开场'), () => Promise.resolve())).toEqual({ kind: 'applied', revision: 2, effect: 'next-pass' });
     expect(f.audio()).toBe(audio); expect(f.controls).toEqual(controls); expect(f.send).toHaveBeenCalledTimes(sent);
     expect(f.player().currentProject().rundown[0]!.title).toBe('开场');
     await f.player().stop();

@@ -39,18 +39,33 @@ export const nativeProgramOpenSchema = z.object({
   document: z.string().min(1).max(128 * 1024 * 1024), configuration: nativeProgramConfigurationSchema
 }).strict();
 export type NativeProgramOpen = z.infer<typeof nativeProgramOpenSchema>;
+/** Only what changed since `base` (0.5.9 S9, design 02 §3.3): the songs that changed (whole, as JSON), the ids of the
+ * songs removed, the order of the songs when it changed or songs came or went, and the project without its songs
+ * (`shell`) when any of it changed. */
+/** What one increment may carry; more goes as the whole document (core projectItemsChange). */
+export const ITEMS_CHANGE_LIMITS = { songs: 512, songLength: 16 * 1024 * 1024, order: 4096, shellLength: 32 * 1024 * 1024 } as const;
+export const nativeProgramItemsChangeSchema = z.object({
+  kind: z.literal('items'),
+  items: z.array(z.string().min(1).max(ITEMS_CHANGE_LIMITS.songLength)).max(ITEMS_CHANGE_LIMITS.songs),
+  removed: z.array(z.string().min(1)).max(ITEMS_CHANGE_LIMITS.songs),
+  order: z.array(z.string().min(1)).max(ITEMS_CHANGE_LIMITS.order).optional(),
+  shell: z.string().min(1).max(ITEMS_CHANGE_LIMITS.shellLength).optional()
+}).strict();
+export type NativeProgramItemsChange = z.infer<typeof nativeProgramItemsChangeSchema>;
 /** The window's project changed (0.5.9 S7, design 02 §3.3): the attached page sends the new version to the program.
- * `key` names the project; a different project or path is a new open, never a document. `base` is the version an
- * increment builds on; a whole document has none (only whole documents are sent for now). */
+ * `key` names the project; a different project or path is a new open, never a document. `base` is the revision of the
+ * same session an increment builds on (S9); a whole document has none. */
 export const nativeProgramDocumentSchema = z.object({
   version: z.literal(1), ownerId: z.string().uuid(),
   key: z.object({ sessionId: z.string().uuid(), projectId: z.string().min(1), projectPath: z.string() }).strict(),
   revision: z.number().int().nonnegative(),
   base: z.number().int().nonnegative().nullable(),
   change: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('full'), document: z.string().min(1).max(128 * 1024 * 1024) }).strict()
+    z.object({ kind: z.literal('full'), document: z.string().min(1).max(128 * 1024 * 1024) }).strict(),
+    nativeProgramItemsChangeSchema
   ])
-}).strict();
+}).strict().refine(request => (request.change.kind === 'full') === (request.base === null),
+  { message: '整份工程不带基准版本，增量必须带基准版本', path: ['base'] });
 export type NativeProgramDocument = z.infer<typeof nativeProgramDocumentSchema>;
 /** `applied`: the program took the version; `stopped`, it plays it from the next song on; `next-pass`, a song is held
  * and it plays it once the song stops; `live` is for a later step (this pass). `resync`: the program has no `base`
@@ -86,6 +101,10 @@ export const nativeProgramControlSchema = z.object({ version: z.literal(1), owne
   configuration: nativeProgramConfigurationSchema.optional() }).strict();
 export type NativeProgramControl = z.infer<typeof nativeProgramControlSchema>;
 export type NativeProgramOperation = NativeProgramControl['operation'];
+/** Controls that may start a song (0.5.9 S7): the window sends its newest version before each, and the program takes the
+ * versions sent before one before it acts on it. */
+const SONG_STARTS: ReadonlySet<NativeProgramOperation['kind']> = new Set(['play', 'seek', 'scrub', 'skip', 'toggle', 'resume', 'midi', 'preload']);
+export function nativeProgramStartsSong(kind: NativeProgramOperation['kind']): boolean { return SONG_STARTS.has(kind); }
 export const nativeProgramEventSchema = z.object({
   version: z.literal(1), ownerId: z.string().uuid(), sequence: z.number().int().nonnegative(), state: programPlayerStateSchema,
   clock: z.object({ positionMs: time, durationMs: time, ready: z.boolean(), playing: z.boolean(), seeking: z.boolean() }).strict(),

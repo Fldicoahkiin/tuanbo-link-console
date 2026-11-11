@@ -21,7 +21,7 @@ function fixture(wait?: Promise<NativeProgramAttachment>, project: LinkProject =
   const dependencies = { prepare: vi.fn(() => Promise.resolve()), ingest: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()), resolveAudio: vi.fn(() => Promise.reject(new Error('不能在界面播放原声'))),
     configuration: () => ({ outputDeviceId: 'default', mtcPortName: null }), changed: vi.fn<InternalPlayerDependencies['changed']>(), notice: vi.fn(),
-    document: () => document, attached: vi.fn() };
+    document: () => document, attached: vi.fn(), encode: vi.fn((value: LinkProject) => Promise.resolve(JSON.stringify(value))) };
   const observed = vi.fn(), ownerId = crypto.randomUUID(), player = new RemoteNativeProgramPlayer(dependencies, api, observed, ownerId);
   let sequence = 1;
   const emit = (patch: Partial<NativeProgramEvent> = {}) => api.onNativeProgramEvent.mock.calls[0]![0]({ version: 1, ownerId, sequence: sequence++,
@@ -44,13 +44,13 @@ it('退出时这个窗口的节目被关掉、操作员回到软件：页面重�
   const f = fixture(); await settle();
   f.closedByQuit(crypto.randomUUID());
   expect(f.api.openNativeProgram).toHaveBeenCalledOnce();
-  f.closedByQuit(f.ownerId);
+  f.closedByQuit(f.ownerId); await settle();
   expect(f.api.openNativeProgram).toHaveBeenCalledTimes(2);
   expect(f.api.openNativeProgram.mock.calls[1]![0]).toMatchObject({ ownerId: f.ownerId, revision: 1, sessionId: SESSION });
   expect(f.api.controlNativeProgram).not.toHaveBeenCalled();
   await f.player.dispose();
   expect(f.stopListening).toHaveBeenCalledOnce();
-  f.closedByQuit(f.ownerId);
+  f.closedByQuit(f.ownerId); await settle();
   expect(f.api.openNativeProgram).toHaveBeenCalledTimes(2);
 });
 
@@ -128,14 +128,14 @@ it('打开被拒绝、因为上一首还没停下：按停止照样发给后台�
 });
 
 // 0.5.9 S7：原来每次修改都关掉节目再打开一个。
-it('同一个工程的修改只送新的一版，不重新打开；送的是整份工程', async () => {
+it('同一个工程的修改只送新的一版，不重新打开；送的是改了的部分（0.5.9 S9）', async () => {
   const f = fixture(); await settle();
   f.edit(); await settle();
   expect(f.api.openNativeProgram).toHaveBeenCalledOnce();
   expect(f.api.controlNativeProgram).not.toHaveBeenCalled();
   expect(f.api.documentNativeProgram).toHaveBeenCalledOnce();
-  expect(f.api.documentNativeProgram.mock.calls[0]![0]).toMatchObject({ ownerId: f.ownerId, revision: 2, base: null,
-    key: { sessionId: SESSION, projectId: song.projectId, projectPath: 'C:/test/show.tblink' }, change: { kind: 'full', document: JSON.stringify(song) } });
+  expect(f.api.documentNativeProgram.mock.calls[0]![0]).toMatchObject({ ownerId: f.ownerId, revision: 2, base: 1,
+    key: { sessionId: SESSION, projectId: song.projectId, projectPath: 'C:/test/show.tblink' }, change: { kind: 'items', items: [], removed: [] } });
 });
 
 it('上一版还在路上时，开始播放之前先把最新的一版送过去，播放跟在它后面', async () => {
@@ -143,7 +143,7 @@ it('上一版还在路上时，开始播放之前先把最新的一版送过去�
   let answer!: () => void;
   f.api.documentNativeProgram.mockImplementationOnce(request => new Promise(resolve => { answer = () => resolve({ kind: 'applied', revision: request.revision, effect: 'stopped' }); }));
   f.edit(); f.edit();
-  expect(f.api.documentNativeProgram).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(f.api.documentNativeProgram).toHaveBeenCalledOnce());
   await f.player.play('song');
   expect(f.api.documentNativeProgram.mock.calls.map(call => call[0].revision)).toEqual([2, 3]);
   const order = [...f.api.documentNativeProgram.mock.invocationCallOrder, ...f.api.controlNativeProgram.mock.invocationCallOrder];
@@ -158,7 +158,7 @@ it('换了工程：拿着歌时不换，停下以后打开另一个；没有工�
   const other = { ...song, projectId: crypto.randomUUID() };
   f.edit({ project: other });
   expect(f.api.openNativeProgram).toHaveBeenCalledOnce();
-  f.emit({ state: { ...emptyInternalPlayerState, status: 'stopped' } });
+  f.emit({ state: { ...emptyInternalPlayerState, status: 'stopped' } }); await settle();
   expect(f.api.openNativeProgram).toHaveBeenCalledTimes(2);
   expect(f.api.openNativeProgram.mock.calls[1]![0]).toMatchObject({ document: JSON.stringify(other), revision: 2 });
   await settle();
@@ -180,4 +180,39 @@ it('改了设备设置：发 configure，带上现在的设置', async () => {
   const f = fixture(); await settle();
   f.player.configure(); await settle();
   expect(f.api.controlNativeProgram.mock.calls[0]![0].operation).toEqual({ kind: 'configure', configuration: { outputDeviceId: 'default', mtcPortName: null, preciseSeeking: false } });
+});
+
+// 0.5.9 S9：整份在 worker 里编码，开歌要等它；停止不等，等着的开歌就不发了（它本来也会被这次停止停掉）。
+it('开歌在等最新一版编好时按了停止：停止马上发出去，等着的开歌不再发；其他控制照顺序跟在后面', async () => {
+  const f = fixture(); await settle();
+  f.api.documentNativeProgram.mockRejectedValueOnce(new Error('IPC 断了'));
+  f.edit(); await settle();
+  let finish!: () => void;
+  const encoding = new Promise<void>(resolve => { finish = resolve; });
+  f.dependencies.encode.mockImplementation(value => encoding.then(() => JSON.stringify(value)));
+  const play = f.player.play('song');
+  f.player.previewVolume(30);
+  await f.player.stop();
+  expect(f.api.controlNativeProgram.mock.calls.map(call => call[0].operation.kind)).toEqual(['stop']);
+  finish(); await play; await settle();
+  expect(f.api.controlNativeProgram.mock.calls.map(call => call[0].operation.kind)).toEqual(['stop', 'volume']);
+  expect(f.api.documentNativeProgram.mock.calls.map(call => call[0].change.kind)).toEqual(['items', 'full']);
+  await f.player.play('song');
+  expect(f.api.controlNativeProgram.mock.calls.map(call => call[0].operation.kind)).toEqual(['stop', 'volume', 'play']);
+});
+
+it('开歌等最新一版编好、交给节目以后才发；打开时的整份也在 worker 里编', async () => {
+  const f = fixture(); await settle();
+  expect(f.dependencies.encode).toHaveBeenCalledExactlyOnceWith(song);
+  f.api.documentNativeProgram.mockRejectedValueOnce(new Error('IPC 断了'));
+  f.edit(); await settle();
+  let finish!: () => void;
+  const encoding = new Promise<void>(resolve => { finish = resolve; });
+  f.dependencies.encode.mockImplementationOnce(value => encoding.then(() => JSON.stringify(value)));
+  const play = f.player.play('song');
+  await settle();
+  expect(f.api.controlNativeProgram).not.toHaveBeenCalled();
+  finish(); await play;
+  expect(f.api.documentNativeProgram.mock.calls.map(call => call[0].change.kind)).toEqual(['items', 'full']);
+  expect(f.api.documentNativeProgram.mock.invocationCallOrder[1]!).toBeLessThan(f.api.controlNativeProgram.mock.invocationCallOrder[0]!);
 });

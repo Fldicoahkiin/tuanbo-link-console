@@ -1,13 +1,18 @@
 import { expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { createEmptyLinkProject, type NativeProgramOpen, type NativeProgramOperation, type NativeProgramEvent } from '@tb/schema';
-import { emptyInternalPlayerState, toUserErrorMessage, type InternalPlayerState, type PlaybackBoundary } from '@tb/core/link';
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createEmptyLinkProject, parseLinkProject, type LinkProject, type NativeProgramDocument, type NativeProgramItemsChange, type NativeProgramOpen,
+  type NativeProgramOperation, type NativeProgramEvent } from '@tb/schema';
+import { emptyInternalPlayerState, projectItemsChange, toUserErrorMessage, type InternalPlayerState, type PlaybackBoundary } from '@tb/core/link';
 import { NativeProgramService } from './native-program-service';
 import { closedProgramFaultReporter } from './main-process-errors';
 import type { LinkLogInput } from './run-logger';
 import { followWindowPage } from './window-page';
 import { windowPageEvents } from './fixtures/window-page-events';
 import { releaseGonePage } from './engine-shutdown';
+import { resolveProjectAssetFiles } from './link-project-service';
 
 function deferred() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
 function request(): NativeProgramOpen { return { version: 1, ownerId: randomUUID(), projectPath: 'C:/test/show.tblink', revision: 1, sessionId: randomUUID(),
@@ -409,6 +414,7 @@ it('播放条拖动只试听，保存的歌曲音量单独送到节目；没标�
 });
 
 // 0.5.9 S7：一个页面一个长期的节目，修改只送新的一版（design 02 §3.3、§3.4）。
+const noFiles = (): Promise<void> => Promise.resolve();
 function documentOf(input: NativeProgramOpen, revision: number, patch: Record<string, unknown> = {}) {
   const project = { ...JSON.parse(input.document) as Record<string, unknown>, ...patch };
   return { version: 1, ownerId: input.ownerId, key: { sessionId: input.sessionId, projectId: projectOf(input), projectPath: input.projectPath },
@@ -421,7 +427,7 @@ it('同一个工程的新一版只换节目手里的工程：不关、不重建�
   const service = new NativeProgramService(create, event => events.push(event), authorize, unlicensed, quiet()), a = request();
   await service.open(a);
   expect(events.at(-1)?.documentVersion).toEqual({ sessionId: a.sessionId, revision: 1 });
-  expect(service.document(documentOf(a, 2, { name: '改了名字' }))).toEqual({ kind: 'applied', revision: 2, effect: 'stopped' });
+  expect(await service.document(documentOf(a, 2, { name: '改了名字' }), noFiles)).toEqual({ kind: 'applied', revision: 2, effect: 'stopped' });
   expect(create).toHaveBeenCalledOnce(); expect(output.close).not.toHaveBeenCalled(); expect(authorize).toHaveBeenCalledOnce();
   expect(output.controller.updateProject).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: '改了名字' }), 2, a.projectPath);
   expect(events.at(-1)?.documentVersion).toEqual({ sessionId: a.sessionId, revision: 2 });
@@ -433,8 +439,8 @@ it('拿着歌时送来的新一版等停止：先不换，停下那一刻换上�
   const service = new NativeProgramService(create, event => events.push(event), () => Promise.resolve(), unlicensed, quiet()), a = request();
   await service.open(a); const callbacks = create.mock.calls[0]![2];
   callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'playing' });
-  expect(service.document(documentOf(a, 2))).toEqual({ kind: 'applied', revision: 2, effect: 'next-pass' });
-  expect(service.document(documentOf(a, 3, { name: '第三版' }))).toMatchObject({ effect: 'next-pass' });
+  expect(await service.document(documentOf(a, 2), noFiles)).toEqual({ kind: 'applied', revision: 2, effect: 'next-pass' });
+  expect(await service.document(documentOf(a, 3, { name: '第三版' }), noFiles)).toMatchObject({ effect: 'next-pass' });
   callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'paused' });
   expect(output.controller.updateProject).not.toHaveBeenCalled();
   expect(events.at(-1)?.documentVersion).toEqual({ sessionId: a.sessionId, revision: 1 });
@@ -446,16 +452,18 @@ it('拿着歌时送来的新一版等停止：先不换，停下那一刻换上�
 it('别的页面、关了的节目、另一个工程送来的版本都不收；增量版本要整份重送', async () => {
   const output = host(), service = new NativeProgramService(vi.fn(() => output), vi.fn(), () => Promise.resolve(), unlicensed, quiet()), a = request();
   await service.open(a);
-  expect(() => service.document({ ...documentOf(a, 2), ownerId: randomUUID() })).toThrow(goneProgram);
-  expect(() => service.document({ ...documentOf(a, 2), key: { sessionId: a.sessionId, projectId: randomUUID(), projectPath: a.projectPath } }))
+  await expect(service.document({ ...documentOf(a, 2), ownerId: randomUUID() }, noFiles)).rejects.toThrow(goneProgram);
+  await expect(service.document({ ...documentOf(a, 2), key: { sessionId: a.sessionId, projectId: randomUUID(), projectPath: a.projectPath } }, noFiles)).rejects
     .toThrow('这一版属于另一个工程');
-  expect(() => service.document({ ...documentOf(a, 2), key: { sessionId: a.sessionId, projectId: projectOf(a), projectPath: 'C:/test/另一个.tblink' } }))
+  await expect(service.document({ ...documentOf(a, 2), key: { sessionId: a.sessionId, projectId: projectOf(a), projectPath: 'C:/test/另一个.tblink' } }, noFiles)).rejects
     .toThrow('这一版属于另一个工程');
-  expect(() => service.document({ ...documentOf(a, 2), extra: true })).toThrow();
-  expect(service.document({ ...documentOf(a, 2), base: 1 })).toEqual({ kind: 'resync', reason: '节目这边没有这次修改所基于的版本' });
+  await expect(service.document({ ...documentOf(a, 2), extra: true }, noFiles)).rejects.toThrow();
+  // 整份不带基准，增量必须带（0.5.9 S9）。
+  await expect(service.document({ ...documentOf(a, 2), base: 1 }, noFiles)).rejects.toThrow();
+  await expect(service.document({ ...documentOf(a, 2), change: { kind: 'items', items: [], removed: [] } }, noFiles)).rejects.toThrow();
   expect(output.controller.updateProject).not.toHaveBeenCalled();
   await service.close();
-  expect(() => service.document(documentOf(a, 3))).toThrow(goneProgram);
+  await expect(service.document(documentOf(a, 3), noFiles)).rejects.toThrow(goneProgram);
 });
 
 it('同一个页面拿着歌时不能换工程：打开被拒绝，节目照常播；停下以后再打开就换', async () => {
@@ -500,4 +508,125 @@ it('重新加载后接回、答复是同一版：节目播的就是这一页的�
   expect(events.at(-1)?.documentVersion).toEqual({ sessionId: reloaded.sessionId, revision: 0 });
   callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'stopped' });
   expect(output.controller.updateProject).not.toHaveBeenCalled();
+});
+
+// 0.5.9 S9：增量只拼在节目手里的那一版上，检查和整份发送、和打开工程走同一套（design 02 §3.3、§3.7）。
+const SHA = 'a'.repeat(64);
+const tc = (seconds: number) => ({ hours: 0, minutes: 0, seconds, frames: 0 });
+function song(id: string, relativePath = `assets/reference-audio/${id}.wav`) {
+  return { id, title: id, enabled: true, notes: '', visualLayers: [], referenceMediaClips: [],
+    referenceAudio: { assetId: `audio-${id}`, relativePath, sha256: SHA, durationMs: 60000 },
+    cues: [{ id: `cue-${id}`, name: '开场', timecode: tc(1), enabled: true, notes: '', actions: [] }] };
+}
+/** A program opened on a project in a real folder, its files checked as link-main checks them (projectAccess.assetFiles). */
+async function increments() {
+  const folder = await mkdtemp(join(tmpdir(), 'tblink-s9-'));
+  await mkdir(join(folder, 'assets', 'reference-audio'), { recursive: true });
+  const projectPath = join(folder, 'show.tblink');
+  const project = parseLinkProject({ ...createEmptyLinkProject('增量'), playbackSource: 'internal', rundown: [song('a'), song('b')] });
+  const input: NativeProgramOpen = { ...request(), projectPath, document: JSON.stringify(project) };
+  const output = host(), events: NativeProgramEvent[] = [];
+  const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(() => output);
+  const service = new NativeProgramService(create, event => events.push(event), () => Promise.resolve(), unlicensed, quiet());
+  await service.open(input);
+  const checked: string[][] = [];
+  const checkFiles = async (path: string, files: string[]): Promise<void> => { checked.push(files); await resolveProjectAssetFiles(path, files); };
+  const send = (revision: number, base: number | null, change: NativeProgramDocument['change'], sessionId = input.sessionId) =>
+    service.document({ version: 1, ownerId: input.ownerId, key: { sessionId, projectId: project.projectId, projectPath }, revision, base, change }, checkFiles);
+  const items = (before: LinkProject, after: LinkProject): NativeProgramItemsChange => {
+    const change = projectItemsChange(before, after);
+    if (!change) throw new Error('这一步应该送增量');
+    return change;
+  };
+  /** The project the program plays now, as updateProject last got it. */
+  const playing = (): LinkProject => output.controller.updateProject.mock.lastCall?.[0] as LinkProject ?? project;
+  return { folder, projectPath, project, input, output, events, create, service, checked, send, items, playing,
+    hold: () => create.mock.calls[0]![2].changed({ ...emptyInternalPlayerState, itemId: 'a', status: 'playing' }),
+    release: () => create.mock.calls[0]![2].changed({ ...emptyInternalPlayerState, itemId: 'a', status: 'stopped' }) };
+}
+const whole = (project: LinkProject): LinkProject => parseLinkProject(JSON.parse(JSON.stringify(project)));
+
+it('增量拼在节目手里的那一版上，和整份发送的结果逐字段相等；文件只查这一版新引用的，整份查全部', async () => {
+  const f = await increments();
+  const renamed: LinkProject = { ...f.project, name: '改名', rundown: [{ ...f.project.rundown[1]!, title: '第二首' }, parseLinkProject({ ...f.project, rundown: [song('c')] }).rundown[0]!] };
+  expect(await f.send(2, 1, f.items(f.project, renamed))).toEqual({ kind: 'applied', revision: 2, effect: 'stopped' });
+  expect(f.playing()).toEqual(whole(renamed));
+  expect(JSON.stringify(f.playing())).toBe(JSON.stringify(whole(renamed)));
+  expect(f.checked).toEqual([['assets/reference-audio/c.wav']]);
+  expect(f.events.at(-1)?.documentVersion).toEqual({ sessionId: f.input.sessionId, revision: 2 });
+  expect(await f.send(3, null, { kind: 'full', document: JSON.stringify(renamed) })).toMatchObject({ kind: 'applied', revision: 3 });
+  expect(f.checked.at(-1)).toEqual(['assets/reference-audio/b.wav', 'assets/reference-audio/c.wav']);
+  expect(f.playing()).toEqual(whole(renamed));
+});
+
+it('base 不是节目手里的那一版：答复 resync，节目手里的不变；拿着歌时手里的是等停止的那一版', async () => {
+  const f = await increments();
+  const renamed: LinkProject = { ...f.project, name: '改名' };
+  expect(await f.send(3, 2, f.items(f.project, renamed))).toEqual({ kind: 'resync', reason: '节目这边没有这次修改所基于的版本' });
+  expect(await f.send(3, 1, f.items(f.project, renamed), randomUUID())).toMatchObject({ kind: 'resync' });
+  expect(f.output.controller.updateProject).not.toHaveBeenCalled();
+  f.hold();
+  expect(await f.send(2, 1, f.items(f.project, renamed))).toMatchObject({ kind: 'applied', revision: 2, effect: 'next-pass' });
+  const again: LinkProject = { ...renamed, name: '再改' };
+  // The newest version the program has is 2, waiting for 停止: an increment on 1 does not fit it.
+  expect(await f.send(3, 1, f.items(f.project, again))).toMatchObject({ kind: 'resync' });
+  expect(await f.send(3, 2, f.items(renamed, again))).toMatchObject({ kind: 'applied', revision: 3, effect: 'next-pass' });
+  expect(f.output.controller.updateProject).not.toHaveBeenCalled();
+  f.release();
+  expect(f.playing()).toEqual(whole(again));
+});
+
+it('改动的歌引用了工程外的文件（不在素材文件夹、经链接指到工程外）：拒绝，节目手里的版本不变；整份发送一样拒绝', async () => {
+  const f = await increments();
+  const outside = await mkdtemp(join(tmpdir(), 'tblink-s9-outside-'));
+  await writeFile(join(outside, 'x.wav'), 'x');
+  // A junction: Windows makes one without administrator rights.
+  await symlink(outside, join(f.folder, 'assets', 'reference-media'), 'junction');
+  for (const relativePath of ['notes/x.wav', 'assets/reference-media/x.wav']) {
+    const after: LinkProject = { ...f.project, rundown: [f.project.rundown[0]!, { ...f.project.rundown[1]!, referenceAudio: { ...f.project.rundown[1]!.referenceAudio!, relativePath } }] };
+    await expect(f.send(2, 1, f.items(f.project, after))).rejects.toThrow(relativePath);
+    await expect(f.send(2, null, { kind: 'full', document: JSON.stringify(after) })).rejects.toThrow(relativePath);
+  }
+  expect(f.output.controller.updateProject).not.toHaveBeenCalled();
+  expect(f.events.at(-1)?.documentVersion).toEqual({ sessionId: f.input.sessionId, revision: 1 });
+  // The program still has version 1: the next increment on it is taken.
+  expect(await f.send(2, 1, f.items(f.project, { ...f.project, name: '改名' }))).toMatchObject({ kind: 'applied', revision: 2 });
+});
+
+it('跨歌的关系在增量里坏了（和另一首歌的 Cue 重了 ID）：整个工程的关系检查拦住，节目手里的不变', async () => {
+  const f = await increments();
+  const first = f.project.rundown[0]!;
+  const after: LinkProject = { ...f.project, rundown: [{ ...first, cues: [{ ...first.cues[0]!, id: 'cue-b' }] }, f.project.rundown[1]!] };
+  await expect(f.send(2, 1, f.items(f.project, after))).rejects.toThrow('ID 重复：cue-b');
+  expect(f.output.controller.updateProject).not.toHaveBeenCalled();
+  expect(await f.send(2, 1, f.items(f.project, { ...f.project, name: '改名' }))).toMatchObject({ kind: 'applied', revision: 2 });
+});
+
+it('开歌的控制等它前面送来的版本查完再播；停止不等，等着的开歌就不播了', async () => {
+  const f = await increments();
+  let release!: () => void;
+  const checking = new Promise<void>(resolve => { release = resolve; });
+  const slow = (path: string, files: string[]) => checking.then(() => resolveProjectAssetFiles(path, files)).then(() => undefined);
+  const document = (revision: number, name: string) => f.service.document({ version: 1, ownerId: f.input.ownerId,
+    key: { sessionId: f.input.sessionId, projectId: f.project.projectId, projectPath: f.projectPath }, revision, base: null,
+    change: { kind: 'full', document: JSON.stringify({ ...f.project, name }) } }, slow);
+  const answered = document(2, '第二版');
+  const played = f.service.control(command(f.input, { kind: 'play', itemId: 'a', paused: false }));
+  const volume = f.service.control(command(f.input, { kind: 'volume', volume: 40, preview: true }));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(f.output.controller.play).not.toHaveBeenCalled(); expect(f.output.controller.previewVolume).not.toHaveBeenCalled();
+  release(); await answered; await played; await volume;
+  expect(f.output.controller.updateProject.mock.invocationCallOrder[0]!).toBeLessThan(f.output.controller.play.mock.invocationCallOrder[0]!);
+  expect(f.output.controller.play.mock.invocationCallOrder[0]!).toBeLessThan(f.output.controller.previewVolume.mock.invocationCallOrder[0]!);
+
+  let releaseNext!: () => void;
+  const next = new Promise<void>(resolve => { releaseNext = resolve; });
+  const pending = f.service.document({ version: 1, ownerId: f.input.ownerId,
+    key: { sessionId: f.input.sessionId, projectId: f.project.projectId, projectPath: f.projectPath }, revision: 3, base: null,
+    change: { kind: 'full', document: JSON.stringify({ ...f.project, name: '第三版' }) } }, () => next);
+  const waiting = f.service.control(command(f.input, { kind: 'play', itemId: 'b', paused: false }));
+  await f.service.control(command(f.input, { kind: 'stop' }));
+  expect(f.output.controller.stop).toHaveBeenCalledOnce();
+  releaseNext(); await pending; await waiting;
+  expect(f.output.controller.play).toHaveBeenCalledOnce();
 });

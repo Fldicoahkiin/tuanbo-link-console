@@ -62,3 +62,6 @@ class ProjectCodec {
   }
 }
 export const projectCodec = new ProjectCodec();
+/** The whole project as the background program gets it (0.5.9 S9): its own worker, so the versions sent while editing
+ * never queue behind or ahead of opening and saving the file. */
+export const programDocumentCodec = new ProjectCodec();

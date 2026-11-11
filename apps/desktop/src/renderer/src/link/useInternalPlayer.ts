@@ -5,6 +5,7 @@ import { PlaybackMidiInput } from '../registry/playback-midi-input';
 import { emptyInternalPlayerState, firstTimeWarning, mtcOutputSettings, toUserErrorMessage } from '@tb/core/link';
 import { RemoteNativeProgramPlayer, type RemotePlayerDependencies } from './runtime/remote-native-program-player';
 import { programVersionKey, type ProgramDocument } from './runtime/program-document-feed';
+import { programDocumentCodec } from './stores/project-codec';
 import { songVolumeSync } from './runtime/song-volume-sync';
 import { playerEngineLabel } from './view-models/internal-audio-engine';
 import type { LinkRuntimeCoordinator } from './runtime/link-runtime-coordinator';
@@ -34,6 +35,13 @@ export function programConfiguration(): ReturnType<RemotePlayerDependencies['con
 export function programDocument(): ProgramDocument | null {
   const { project, path, sessionId, revision } = useDocumentStore.getState();
   return project?.playbackSource === 'internal' ? { project, path: path ?? '', sessionId, revision } : null;
+}
+
+/** The whole project for the program, off the window's thread (0.5.9 S9). A worker that stopped (it failed or took too
+ * long, said in red with that send) starts again at the next send, which the operator's next edit or play makes. */
+export function encodeProgramDocument(project: LinkProject): Promise<string> {
+  if (programDocumentCodec.failureReason() !== null) programDocumentCodec.restart();
+  return programDocumentCodec.encode(project);
 }
 
 /** `project`: the project the window shows the player with (LinkApp keeps it until 停止); the program itself gets every
@@ -102,7 +110,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     }
     // The main-process program host prepares audio, OBS, MIDI and lighting; this window only configures and observes it.
     const dependencies: RemotePlayerDependencies = {
-      configuration: programConfiguration, changed: view.publish, document: programDocument,
+      configuration: programConfiguration, changed: view.publish, document: programDocument, encode: encodeProgramDocument,
       // A channel that cannot join repeats song after song until fixed: a warning the first time, then info.
       notice: (message, itemId) => {
         const projectId = useDocumentStore.getState().project?.projectId;

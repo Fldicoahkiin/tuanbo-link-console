@@ -1,6 +1,6 @@
 import { emptyInternalPlayerState, isPreviousNotStopped, nativeAudioAnalysis, toUserErrorMessage,
   type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type PlaybackBoundary, type PlaybackClock } from '@tb/core/link';
-import type { LinkProject, NativePlayerStatus, NativeProgramEvent, NativeProgramOperation } from '@tb/schema';
+import { nativeProgramStartsSong, type LinkProject, type NativePlayerStatus, type NativeProgramEvent, type NativeProgramOperation } from '@tb/schema';
 import { ProgramDocumentFeed, programVersionKey, type ProgramDocument } from './program-document-feed';
 
 type Api = Pick<LinkDesktopApi, 'openNativeProgram' | 'controlNativeProgram' | 'documentNativeProgram' | 'onNativeProgramEvent' | 'onNativeProgramClosed' | 'onNativePlaybackStatus'>;
@@ -11,6 +11,8 @@ export type RemotePlayerDependencies = Pick<InternalPlayerDependencies, 'configu
    * when it has none for 联动台播放 (none open, or it follows P1: the window closes this program then). */
   document: () => ProgramDocument | null;
   notice: (message: string, itemId: string | null) => void;
+  /** The whole project as the program reads it, encoded off the window's thread and apart from saving (0.5.9 S9). */
+  encode: (project: LinkProject) => Promise<string>;
   /** The background program answered an open of this page: which version it plays is known from now on (`project`). */
   attached: () => void;
 };
@@ -18,9 +20,6 @@ export type RemotePlayerDependencies = Pick<InternalPlayerDependencies, 'configu
 /** The page's own name for the program it opens (0.5.9 S7, design 02 §3.2): made once as the page loads, so a page
  * that opens the program again (another project, after the quit was cancelled) is still the same page to main. */
 export const PROGRAM_PAGE_OWNER = crypto.randomUUID();
-
-/** Controls that may start a song: the newest version of the project goes before them (ProgramDocumentFeed.flush). */
-const STARTS_SONG = new Set<NativeProgramOperation['kind']>(['play', 'seek', 'scrub', 'skip', 'toggle', 'resume', 'midi', 'preload']);
 
 /** UI controller is a remote for the main-process program host. It never schedules playback, sends lighting, or
  * invents time while the UI is busy. One per window page (0.5.9 S7): it opens the program once and sends each newer
@@ -37,6 +36,11 @@ export class RemoteNativeProgramPlayer {
   private native: NativePlayerStatus | null = null;
   private sequence = -1;
   private disposed = false;
+  /** Controls other than stop and reset, in the order they were pressed: one that may start a song goes after the
+   * newest version of the project (ProgramDocumentFeed.flush), and the others after it. */
+  private turn: Promise<void> = Promise.resolve();
+  /** Stops and resets so far: a song start still waiting for its version when one was pressed is not sent. */
+  private stops = 0;
   /** Where the page's program is: `opening` (the version it opens with), `open`, `refused` (its open waits for the
    * song before to stop: send), `failed` (the next edit opens again). */
   private link: { kind: 'opening' | 'open' | 'refused'; document: ProgramDocument } | { kind: 'failed' } = { kind: 'failed' };
@@ -52,7 +56,8 @@ export class RemoteNativeProgramPlayer {
   constructor(private readonly dependencies: RemotePlayerDependencies, private readonly api: Api,
     private readonly observed: (event: NativeProgramEvent) => void, private readonly ownerId: string = PROGRAM_PAGE_OWNER) {
     this.feed = new ProgramDocumentFeed(ownerId, () => this.disposed ? null : this.dependencies.document(),
-      request => this.api.documentNativeProgram(request), message => this.dependencies.notice(message, this.state.itemId));
+      request => this.api.documentNativeProgram(request), message => this.dependencies.notice(message, this.state.itemId),
+      project => this.dependencies.encode(project));
     const program = api.onNativeProgramEvent(event => {
       if (this.disposed || event.ownerId !== this.ownerId || event.sequence <= this.sequence) return;
       this.sequence = event.sequence;
@@ -134,12 +139,14 @@ export class RemoteNativeProgramPlayer {
     if (!document) { this.link = { kind: 'failed' }; return; }
     this.link = { kind: 'opening', document };
     const link = this.link;
-    const opening = this.api.openNativeProgram({ version: 1, ownerId: this.ownerId, projectPath: document.path, revision: document.revision,
-      sessionId: document.sessionId, document: JSON.stringify(document.project), configuration: this.configuration() })
-      .then(() => {
-        if (this.disposed || this.link !== link) return;
-        this.attach(document);
-      });
+    // Encoded off this thread (0.5.9 S9). A page that closed or opened again meanwhile sends nothing.
+    const opening = this.dependencies.encode(document.project).then(async content => {
+      if (this.disposed || this.link !== link) return;
+      await this.api.openNativeProgram({ version: 1, ownerId: this.ownerId, projectPath: document.path, revision: document.revision,
+        sessionId: document.sessionId, document: content, configuration: this.configuration() });
+      if (this.disposed || this.link !== link) return;
+      this.attach(document);
+    });
     this.ready = opening;
     void opening.catch(error => {
       if (this.disposed || this.link !== link) return;
@@ -169,7 +176,15 @@ export class RemoteNativeProgramPlayer {
       }
       await this.ready;
       if (this.disposed) return;
-      if (STARTS_SONG.has(operation.kind)) this.feed.flush();
+      // Stop never waits: a song start still waiting for its version is not sent, as it would have been stopped.
+      if (operation.kind === 'stop' || operation.kind === 'reset') this.stops += 1;
+      else {
+        const starts = nativeProgramStartsSong(operation.kind), stops = this.stops;
+        const turn = this.turn.then(() => starts ? this.feed.flush() : undefined);
+        this.turn = turn;
+        await turn;
+        if (this.disposed || (starts && stops !== this.stops)) return;
+      }
       await this.api.controlNativeProgram({ version: 1, ownerId: this.ownerId, operation, configuration: this.configuration() });
     } catch (error) { this.failed(error); }
   }
