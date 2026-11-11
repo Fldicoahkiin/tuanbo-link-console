@@ -777,7 +777,9 @@ it('暂停时开播的一步还没发完就继续了：不再补暂停，素材�
   test.time(1050); void test.session.pause();
   test.time(1200); test.session.clock(1050, 1200);
   starting.release(); await test.session.settled();
-  expect(outputs(test)).toEqual(['start']);
+  // OBS answered the start: the clip plays, so the resume sends no second play.
+  expect(outputs(test)).toEqual([]);
+  expect(test.dependencies.executeManagedMediaEvent).toHaveBeenCalledOnce();
   expect(test.session.error).toBeNull();
 });
 
@@ -925,19 +927,20 @@ function backToBackStickerFixture(): LinkProject {
         actions: [{ id: `sticker-${seconds}`, kind: 'obs.setSceneItemEnabled' as const, label: '显示贴纸', sceneName: '全景', sourceName: '贴纸', enabled: true }] }))] }] });
 }
 
-it('同一个来源前后两段紧挨着、OBS 断线跨过交界：恢复画面先补发前一段的隐藏，再显示后一段，后一段一直显示到 6 秒', async () => {
+it('同一个来源前后两段紧挨着：交界处只再显示一次、不先隐藏；OBS 断线跨过交界，恢复画面只把它再显示一次，后一段一直显示到 6 秒', async () => {
   let connected = true;
   const test = setup(backToBackStickerFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')));
   await test.session.prepare(0); await test.advance(0, 2000);
-  // The first span's hide and the second span's show at 3 s both fail while OBS is gone.
+  // The second span's show at 3 s fails while OBS is gone; the source stays shown, so nothing hides it first.
   connected = false; await test.advance(2100, 4000);
+  expect(sticker(test)).toEqual([true, true]);
   connected = true;
-  expect(await test.session.rebuild(() => Promise.resolve())).toEqual({ sent: 3, succeeded: 3, failed: [], failure: null });
-  expect(sticker(test)).toEqual([true, false, true, false, true]);
+  expect(await test.session.rebuild(() => Promise.resolve())).toEqual({ sent: 2, succeeded: 2, failed: [], failure: null });
+  expect(sticker(test)).toEqual([true, true, true]);
   await test.advance(4100, 5900);
   expect(sticker(test).at(-1)).toBe(true);
   await test.advance(6000, 7000);
-  expect(sticker(test)).toEqual([true, false, true, false, true, false]); expect(test.session.error).toBeNull();
+  expect(sticker(test)).toEqual([true, true, true, false]); expect(test.session.error).toBeNull();
 });
 
 /** A video all song, a sticker shown over it from 1 s for 2 s, and a filter turned on at 3 s. */
@@ -1075,4 +1078,56 @@ it('OBS 重连准备场景时暂停又继续，准备因那次暂停中断：照
   restoring.release(); expect(await rebuilding).toEqual({ sent: 1, succeeded: 1, failed: [], failure: null }); await test.session.settled();
   expect(order).toEqual(['restore', 'restore', 'seek 1500', 'start']);
   expect(test.faults).toEqual([]); expect(test.session.error).toBeNull();
+});
+
+const mediaCalls = (test: ReturnType<typeof setup>): string[] => test.dependencies.executeManagedMediaEvent.mock.calls
+  .map(call => `${call[0].event.phase} ${call[0].event.clipId}`);
+
+it('OBS 回应慢时只发最新的画面：积压期间开始又结束的素材不再开播，只切到此刻的机位', async () => {
+  const project = videoFixture(), item = project.rundown[0]!;
+  // The video on top from 1.5 s to 2.5 s, over the fixture's cameras, which switch every second.
+  Object.assign(item.referenceMediaClips[0]!, { startTimecode: { hours: 0, minutes: 0, seconds: 1, frames: 15 }, durationMs: 1000 });
+  item.visualLayers.push({ id: 'cameras', name: '机位', visible: true, locked: false });
+  item.cues.push(...fixture().rundown[0]!.cues.map(cue => ({ ...cue, layerId: 'cameras' })));
+  const answering = deferred();
+  const test = setup(parseLinkProject(project), action => action.id === 'action-1' ? answering.promise : Promise.resolve());
+  await test.session.prepare(0); await test.advance(0, 900);
+  for (let at = 1000; at <= 3200; at += 100) { test.time(at); test.session.clock(at); await Promise.resolve(); }
+  answering.release(); await test.session.settled();
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1', 'action-3']);
+  expect(mediaCalls(test)).toEqual([]);
+  expect(test.session.error).toBeNull();
+});
+
+it('暂停立刻生效：视频马上跟着音乐暂停，没发的切换等继续时按当时的位置补上', async () => {
+  const test = setup(coveredVideoFixture()); await test.session.prepare(0); await test.advance(0, 900);
+  test.time(1000); test.session.clock(1000); const pausing = test.session.pause();
+  // The switch crossed at 1 s has not gone out; the video pauses before it, not after it.
+  await vi.waitFor(() => expect(outputs(test)).toEqual(['pause']));
+  await pausing; expect(outputs(test)).toEqual(['pause']);
+  test.time(6000); test.session.clock(1000, 6000); await test.session.settled();
+  expect(outputs(test)).toEqual(['pause', 'start', '特写']);
+  expect(lateLogs(test)).toEqual([]); expect(test.session.error).toBeNull();
+});
+
+it('播放位置跳了一下（按 Cue 定位、电脑卡顿）：已经在播的素材不重播，只按当前位置补上画面', async () => {
+  const test = setup(coveredVideoFixture()); await test.session.prepare(0); await test.advance(0, 700);
+  test.time(1500); test.session.clock(1500); await test.session.settled();
+  expect(test.faults).toEqual(['播放位置更新中断了 800 ms，画面已按当前位置恢复']);
+  expect(outputs(test)).toEqual(['特写']);
+  await test.advance(1600, 4500);
+  expect(mediaCalls(test)).toEqual(['start clip']); expect(test.dependencies.seekMedia).not.toHaveBeenCalled();
+  expect(scenes(test)).toEqual(['特写', test.dependencies.executeManagedMediaEvent.mock.calls[0]![0].event.sceneName]);
+  expect(test.session.error).toBeNull();
+});
+
+it('同一个素材切成两段接着播：后一段在切点照常上画面（交给同一个解码器，不停、不定位），前一段不停', async () => {
+  const project = videoFixture(), item = project.rundown[0]!;
+  item.referenceMediaClips[0]!.durationMs = 1000;
+  item.referenceMediaClips.push({ ...item.referenceMediaClips[0]!, id: 'clip-b', startTimecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 }, sourceOffsetMs: 1000, durationMs: 1000 });
+  const test = setup(parseLinkProject(project)); await test.session.prepare(0); await test.advance(0, 2500);
+  expect(mediaCalls(test)).toEqual(['start clip', 'start clip-b', 'stop clip-b']);
+  const later = test.dependencies.executeManagedMediaEvent.mock.calls[1]![0].event;
+  expect(later).toMatchObject({ sourceOffsetMs: 1000, deferSceneSwitch: false });
+  expect(test.dependencies.seekMedia).not.toHaveBeenCalled(); expect(test.session.error).toBeNull();
 });
