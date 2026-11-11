@@ -7,6 +7,7 @@ import { Crosshair, Maximize, Play, RotateCcw, Trash2 } from 'lucide-react';
 import { useDocumentStore } from '../stores/document-store';
 import { ActionEditor } from './ActionEditor';
 import { resolveObsSourceSize } from './obs-source-geometry';
+import { useFieldDraft } from './useFieldDraft';
 
 export function CueInspector(props: {
   itemId: string;
@@ -17,18 +18,20 @@ export function CueInspector(props: {
   testAction: (action: LinkAction) => Promise<void>;
 }): JSX.Element {
   const { itemId, cue, frameRate, execute, testAction } = props;
+  // The inspector stays mounted while the cue is selected: an undo elsewhere shows here, typing is never cut off.
+  const name = useFieldDraft(cue.name), notes = useFieldDraft(cue.notes);
   const visual = resolveVisualCue(cue, props.inventory);
   const visibleActions = cue.actions
     .map((action, index) => ({ action, index }))
     .filter(({ action }) => !visual || (action.id !== visual.showAction.id && action.id !== visual.transformAction?.id));
   return <div className="inspector-body cue-property-form">
     <div className="cue-detail-header">
-      <TextInput className="title-input" aria-label="Cue 名称" defaultValue={cue.name} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitCueText(event.currentTarget, cue.name, (name) => execute(replaceCueCommand(itemId, { ...cue, name })), true)} />
+      <TextInput className="title-input" aria-label="Cue 名称" value={name.shown} onFocus={name.begin} onChange={(event) => name.type(event.currentTarget.value)} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => { name.end(); commitCueText(event.currentTarget, cue.name, (value) => execute(replaceCueCommand(itemId, { ...cue, name: value })), true); }} />
       <Switch className="cue-enabled" label="启用" checked={cue.enabled} onChange={(event) => execute(replaceCueCommand(itemId, { ...cue, enabled: event.currentTarget.checked }))} />
       <IconButton variant="danger" label="删除 Cue" icon={Trash2} onClick={() => execute(removeContentCommand(itemId, [{ kind: 'cue', id: cue.id }]))} />
     </div>
     <TimecodeEditor cue={cue} frameRate={frameRate} onChange={(next) => execute(moveContentCommand(itemId, { kind: 'cue', id: cue.id }, timecodeToMilliseconds(next.timecode, frameRate), cue.layerId ? { track: cue.layerId } : 'top'))} />
-    <TextArea key={`${cue.id}:${cue.notes}`} aria-label="备注" rows={1} className="cue-notes" placeholder="备注（选填）" defaultValue={cue.notes} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitCueText(event.currentTarget, cue.notes, (notes) => execute(replaceCueCommand(itemId, { ...cue, notes })))} />
+    <TextArea aria-label="备注" rows={1} className="cue-notes" placeholder="备注（选填）" value={notes.shown} onFocus={notes.begin} onChange={(event) => notes.type(event.currentTarget.value)} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => { notes.end(); commitCueText(event.currentTarget, cue.notes, (value) => execute(replaceCueCommand(itemId, { ...cue, notes: value }))); }} />
     {visual ? <VisualCueLayoutEditor itemId={itemId} cueId={cue.id} visual={visual} testAction={testAction} /> : null}
     <div className="action-list">{visibleActions.map(({ action, index }) => <ActionEditor key={action.id} itemId={itemId} cueId={cue.id} action={action} index={index} actionCount={cue.actions.length} onTest={testAction} />)}</div>
   </div>;

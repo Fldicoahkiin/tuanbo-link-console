@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renameProjectCommand } from '@tb/core/link';
-import { createEmptyLinkProject, type RecoveryCopyDiscard, type RecoveryCopyWrite } from '@tb/schema';
+import { addRundownItemCommand, renameProjectCommand, updateRundownItemCommand } from '@tb/core/link';
+import { createEmptyLinkProject, type LinkProject, type RecoveryCopyDiscard, type RecoveryCopyWrite, type RundownItem } from '@tb/schema';
 import { useDocumentStore } from './stores/document-store';
-import { RecoveryCopyWriter, useRecoveryCopyStore } from './recovery-copy-writer';
+import { ProjectJsonEncoder, RecoveryCopyWriter, useRecoveryCopyStore } from './recovery-copy-writer';
 
 vi.mock('./view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: {} }));
 vi.mock('./stores/project-codec', () => ({ projectCodec: {}, isWorkerValidatedProject: () => false }));
@@ -144,5 +144,43 @@ describe('RecoveryCopyWriter', () => {
     expect(writes).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(5000);
     expect(writes).toHaveLength(1);
+  });
+});
+
+describe('ProjectJsonEncoder', () => {
+  const song = (id: string, title: string): RundownItem => ({ id, title, enabled: true, notes: '第一行\r\n第二行 "引号" \\  ', visualLayers: [], referenceMediaClips: [], cues: [] });
+  const execute = (...commands: ReturnType<typeof addRundownItemCommand>[]): void => { for (const command of commands) useDocumentStore.getState().execute(command); };
+  const project = (): LinkProject => useDocumentStore.getState().project!;
+
+  it('拼出的内容和 JSON.stringify(project) 逐字节一样，撤销、改歌、加歌后也一样', () => {
+    const encoder = new ProjectJsonEncoder();
+    expect(encoder.encode(project())).toBe(JSON.stringify(project()));
+    execute(addRundownItemCommand(song('a', '第一首')), addRundownItemCommand(song('b', '第二首')), addRundownItemCommand(song('c', '第三首')));
+    expect(encoder.encode(project())).toBe(JSON.stringify(project()));
+    execute(updateRundownItemCommand('b', { title: '第二首改名', enabled: false, notes: '' }));
+    expect(encoder.encode(project())).toBe(JSON.stringify(project()));
+    useDocumentStore.getState().undo();
+    expect(encoder.encode(project())).toBe(JSON.stringify(project()));
+    rename('换个工程名');
+    expect(encoder.encode(project())).toBe(JSON.stringify(project()));
+    // Fields without a JSON form are left out and an empty rundown is [], as JSON.stringify does.
+    const odd = { ...project(), rundown: [], name: undefined } as unknown as LinkProject;
+    expect(encoder.encode(odd)).toBe(JSON.stringify(odd));
+  });
+
+  it('改一首歌只重新序列化这一首，别的歌沿用上次的文字', () => {
+    execute(addRundownItemCommand(song('a', '第一首')), addRundownItemCommand(song('b', '第二首')));
+    const encoder = new ProjectJsonEncoder();
+    encoder.encode(project());
+    execute(updateRundownItemCommand('b', { title: '第二首改名', enabled: true, notes: '' }));
+    const [first, second] = project().rundown;
+    const stringify = vi.spyOn(JSON, 'stringify');
+    let text = '';
+    try {
+      text = encoder.encode(project());
+      const values = stringify.mock.calls.map((call): unknown => call[0]);
+      expect(values).toContain(second); expect(values).not.toContain(first);
+    } finally { stringify.mockRestore(); }
+    expect(text).toBe(JSON.stringify(project()));
   });
 });

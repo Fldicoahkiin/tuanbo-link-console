@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import { create } from 'zustand';
 import type { LinkProject, RecoveryCopyDiscard, RecoveryCopyWrite } from '@tb/schema';
 import { useDocumentStore, type DocumentStoreState } from './stores/document-store';
-import { projectCodec } from './stores/project-codec';
 import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
 import { reportCoordinatorError } from './runtime/runtime-action-log';
 
@@ -15,6 +14,34 @@ export type RecoveryCopyDependencies = {
   discard(payload: RecoveryCopyDiscard): Promise<boolean>;
   report(message: string): void;
 };
+
+/**
+ * `JSON.stringify(project)`, byte for byte, without copying the whole project
+ * each time. Commands share what they did not change (shareProjectStructure),
+ * so a song or a top-level part that kept its reference keeps its text and only
+ * what changed is stringified again. The copy is checked when it is restored,
+ * like any project file.
+ */
+export class ProjectJsonEncoder {
+  private readonly texts = new WeakMap<object, string>();
+  encode(project: LinkProject): string {
+    const fields: string[] = [];
+    for (const [key, value] of Object.entries(project)) {
+      const text = key === 'rundown' && Array.isArray(value) ? `[${value.map(item => this.text(item) ?? 'null').join(',')}]` : this.text(value);
+      // JSON.stringify leaves out a field whose value has no JSON form (undefined).
+      if (text !== undefined) fields.push(`${JSON.stringify(key)}:${text}`);
+    }
+    return `{${fields.join(',')}}`;
+  }
+  private text(value: unknown): string | undefined {
+    if (typeof value !== 'object' || value === null) return JSON.stringify(value);
+    const known = this.texts.get(value);
+    if (known !== undefined) return known;
+    const text = JSON.stringify(value);
+    this.texts.set(value, text);
+    return text;
+  }
+}
 
 const ownerKey = (owner: Owner): string => `${owner.sessionId}\u0000${owner.projectPath ?? ''}\u0000${owner.projectId}`;
 
@@ -138,8 +165,9 @@ export async function flushRecoveryCopy(): Promise<void> {
 
 export function useRecoveryCopyWriter(): void {
   useEffect(() => {
+    const encoder = new ProjectJsonEncoder();
     const writer = new RecoveryCopyWriter({
-      encode: project => projectCodec.encode(project),
+      encode: project => Promise.resolve(encoder.encode(project)),
       write: payload => linkDesktopViewModel.writeRecoveryCopy(payload),
       discard: payload => linkDesktopViewModel.discardRecoveryCopy(payload),
       report: message => reportCoordinatorError(message, reason => useRecoveryCopyStore.setState({ error: reason }))
