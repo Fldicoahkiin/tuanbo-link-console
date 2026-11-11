@@ -346,7 +346,7 @@ function portCheck(
   if (!profile) return blocking(id, label, '端口设置不存在');
   const matches = ports.filter((port) => port.direction === profile.direction && port.name === profile.portName && port.connected);
   if (matches.length === 1) return passed(id, label, profile.portName);
-  return blocking(id, label, matches.length === 0 ? `端口不存在：${profile.portName}` : `端口名称不唯一：${profile.portName}`);
+  return blocking(id, label, matches.length === 0 ? `端口不存在：「${profile.portName}」` : `端口名称不唯一：「${profile.portName}」`);
 }
 
 function versionCheck(

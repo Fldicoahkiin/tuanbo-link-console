@@ -96,7 +96,7 @@ export class LightingCueAudition {
         const name = profile?.midiPortProfiles.find(port => port.id === id && port.direction === 'output')?.portName;
         const matches = [...access.outputs.values()].filter(port => port.name === name && port.state === 'connected');
         const port = matches[0];
-        if (!port || matches.length !== 1) throw new Error(`Cue 的 MIDI 输出不可用，或有多个同名端口：${name || '请先一键连接或配置灯光动作输出'}`);
+        if (!port || matches.length !== 1) throw new Error(`Cue 的 MIDI 输出不可用，或有多个同名端口：${name ? `「${name}」` : '请先一键连接或配置灯光动作输出'}`);
         this.ports.add(port);
         await deadline(port.open(), 'Cue MIDI 端口打开超时');
         if (generation !== this.generation) return 0;

@@ -39,7 +39,9 @@ describe('团播联动台预检', () => {
     value.midi.ports = [];
     expect(runLinkPreflight(value).passed).toBe(true);
     value.project.rundown[0]!.cues[0]!.actions.push({ id: 'light-action', label: '灯光', kind: 'midi.noteOn', portProfileId: 'lights', channel: 1, note: 60, velocity: 100 });
-    expect(runLinkPreflight(value).checks.find(check => check.id === 'midi.output.lights')?.status).toBe('blocking');
+    expect(runLinkPreflight(value).checks.find(check => check.id === 'midi.output.lights')).toMatchObject({ status: 'blocking', detail: '端口不存在：「Missing MA2」' });
+    value.midi.ports = [{ name: 'Missing MA2', direction: 'output', connected: true }, { name: 'Missing MA2', direction: 'output', connected: true }];
+    expect(runLinkPreflight(value).checks.find(check => check.id === 'midi.output.lights')?.detail).toBe('端口名称不唯一：「Missing MA2」');
   });
 
   it('OBS 目标、MTC 和 P1 缺失时均形成阻断项', () => {

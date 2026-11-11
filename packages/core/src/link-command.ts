@@ -388,7 +388,7 @@ export function removeMediaAssetCommand(assetId: string, now?: TimestampProvider
     const index = project.mediaAssets.findIndex((asset) => asset.id === assetId);
     if (index < 0) throw new Error(`媒体素材不存在：${assetId}`);
     const referencedBy = project.rundown.find((item) => item.referenceMediaClips.some((clip) => clip.assetId === assetId));
-    if (referencedBy) throw new Error(`素材还在被节目“${referencedBy.title}”的时间线使用`);
+    if (referencedBy) throw new Error(`素材还在被节目「${referencedBy.title}」的时间线使用`);
     project.mediaAssets.splice(index, 1);
   }, now);
 }

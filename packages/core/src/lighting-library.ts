@@ -102,13 +102,13 @@ export function updateLibraryPlacementsCommand(entryId: string, revision: number
     const members = entry.members ?? [{ name: entry.name, sequence: binding.sequence, cue: binding.cue, executor: binding.executor, delayMs: 0 }];
     return parseLinkProject({ ...project, updatedAt: new Date().toISOString(), rundown: project.rundown.map(item => {
       if (!itemIds.includes(item.id) || !item.lighting) return item;
-      if (expected && JSON.stringify(expected[item.id]) !== JSON.stringify(item.lighting)) throw new Error(`“${item.title}”已改变，请重新生成更新预览`);
+      if (expected && JSON.stringify(expected[item.id]) !== JSON.stringify(item.lighting)) throw new Error(`「${item.title}」已改变，请重新生成更新预览`);
       const lighting = item.lighting; const map = new LightingTempoMap(lighting.tempos);
       const groups = new Map<string, { at: number; ids: Set<string>; originals: LightingEvent[]; trackId: string; clipId: string }>();
       for (const track of lighting.tracks) for (const clip of track.clips) for (const event of clip.events) {
         if (event.librarySource?.id !== entryId || event.librarySource.revision >= revision) continue;
-        if (track.locked) throw new Error(`“${item.title}”的轨道已锁定`);
-        if (clip.timeLock !== 'time') throw new Error(`“${item.title}”需要先把素材片段转成固定时间，再更新`);
+        if (track.locked) throw new Error(`「${item.title}」的轨道已锁定`);
+        if (clip.timeLock !== 'time') throw new Error(`「${item.title}」需要先把素材片段转成固定时间，再更新`);
         const id = event.effectGroupId ?? event.id; const at = lightingEventTime(clip, event, map);
         const group = groups.get(id) ?? { at, ids: new Set<string>(), originals: [], trackId: track.id, clipId: clip.id };
         group.at = Math.min(group.at, at); group.ids.add(event.id); group.originals.push(event); groups.set(id, group);
@@ -120,7 +120,7 @@ export function updateLibraryPlacementsCommand(entryId: string, revision: number
           if (group.trackId !== track.id || group.clipId !== clip.id) continue;
           members.forEach((member, index) => {
             const at = group.at + member.delayMs;
-            if (item.referenceAudio && at >= item.referenceAudio.durationMs) throw new Error(`“${item.title}”更新后超出歌曲范围`);
+            if (item.referenceAudio && at >= item.referenceAudio.durationMs) throw new Error(`「${item.title}」更新后超出歌曲范围`);
             const original = group.originals[index];
             const beatAnchor = original?.beatAnchor === undefined ? undefined : map.msToBeat(at - (lighting.music?.firstBeatMs ?? 0));
             events.push({ id: [...group.ids][index] ?? crypto.randomUUID(), kind: 'ma2', runMode: group.originals.find(value => value.kind === 'ma2')?.runMode, action: 'goto', label: member.name, at: at - clip.start, sequence: member.sequence, cue: member.cue, executor: member.executor, librarySource: { id: entryId, revision }, ...(beatAnchor === undefined ? {} : {beatAnchor}), ...(members.length > 1 ? { effectGroupId: groupId } : {}) });

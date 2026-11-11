@@ -108,3 +108,10 @@ it('权限挂起明确超时，不会在超时后补发', async () => {
   await vi.advanceTimersByTimeAsync(5000); await rejected; finish(); await Promise.resolve();
   expect(f.send).not.toHaveBeenCalled();
 });
+it('输出端口重名时，端口名放在「」里；没有设置输出时只说明怎么办（2026-11-11）', async () => {
+  const f = fixture();
+  f.access.outputs.set('usb2', { name: 'USB', state: 'connected', open: f.open, send: f.send, close: () => Promise.resolve(), connection: 'open' });
+  await expect(f.audition.play(f.document, 'b', f.profile, false)).rejects.toThrow('Cue 的 MIDI 输出不可用，或有多个同名端口：「USB」');
+  const unset = fixture(); unset.profile.midiPortProfiles = [];
+  await expect(unset.audition.play(unset.document, 'b', unset.profile, false)).rejects.toThrow('Cue 的 MIDI 输出不可用，或有多个同名端口：请先一键连接或配置灯光动作输出');
+});

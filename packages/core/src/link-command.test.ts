@@ -289,7 +289,7 @@ describe('LinkProject Command', () => {
 
     expect(project.mediaAssets).toEqual([{ ...asset, folderId: null }]);
     expect(project.rundown[0]?.referenceMediaClips).toHaveLength(1);
-    expect(() => removeMediaAssetCommand(asset.id, timestamp).execute(project)).toThrow(/还在被节目/);
+    expect(() => removeMediaAssetCommand(asset.id, timestamp).execute(project)).toThrow('素材还在被节目「A」的时间线使用');
     project = removeContentCommand('a', [{ kind: 'clip', id: 'clip' }], timestamp).execute(project);
     expect(project.rundown[0]?.visualLayers).toEqual([]);
     project = removeMediaAssetCommand(asset.id, timestamp).execute(project);

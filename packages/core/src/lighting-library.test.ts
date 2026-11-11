@@ -46,7 +46,7 @@ it('更换绑定只更新明确选中的歌曲，一次撤销还原；来源相�
   expect(command.undo(project)).toEqual(project);
   expect(() => updateLibraryPlacementsCommand(entry.id,1,['a']).execute(project)).toThrow('重新生成');
   const baseline={a:project.rundown[0]!.lighting!};
-  expect(() => updateLibraryPlacementsCommand(entry.id,2,['a'],baseline).execute(updated)).toThrow('重新生成');
+  expect(() => updateLibraryPlacementsCommand(entry.id,2,['a'],baseline).execute(updated)).toThrow('「a」已改变，请重新生成更新预览');
   const otherShow = saveMa2MaterialLibraryCommand('console', {directory:{show:'another',generation:'g',version:'3.7.0.5',entries:[]},readAt:new Date().toISOString(),sequences:[],fixtureUsage:[],errors:[]}).execute(project);
   expect(libraryReferenceIssue(otherShow,entry)).toContain('另一个 Show');
   expect(projectLightingLibrary(otherShow).entries[0]).toEqual(revised);
@@ -64,4 +64,19 @@ it('adds the eight beat-lighting containers to existing libraries without changi
   expect(projectLightingLibrary(project)).toBe(next);
   const saved=setLightingLibraryCommand(next).execute(project);
   expect(parseLinkProject(JSON.parse(JSON.stringify(saved))).ma2MaterialLibrary!.userLibrary!.categories.filter(category=>category.view==='beat')).toHaveLength(8);
+});
+it('更新素材位置被拒绝时，歌名放在「」里（2026-11-11）', () => {
+  const build = (change: (document: ReturnType<typeof createLightingDocument>, item: { referenceAudio?: unknown; title: string }) => void) => {
+    const base = createEmptyLinkProject('更新'); const document = createLightingDocument(); document.version = 2;
+    document.tracks = [{ ...entry.track, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 30000, timeLock: 'time', muted: false, events: [{ id: 'event', kind: 'ma2', at: 1500, sequence: 36, cue: '1.100', executor: '', action: 'goto', label: '旧', librarySource: { id: entry.id, revision: 1 } }] }] }];
+    const item = { id: 'a', title: 'HAPPY 歌', enabled: true, notes: '', visualLayers: [], referenceMediaClips: [], cues: [], lighting: document };
+    change(document, item); base.rundown.push(item as never);
+    const revised = { ...entry, revision: 2 };
+    return setLightingLibraryCommand({ ...createLightingUserLibrary(), entries: [revised] }).execute(base);
+  };
+  const update = (project: ReturnType<typeof build>): string => { try { updateLibraryPlacementsCommand(entry.id, 2, ['a']).execute(project); return ''; } catch (error) { return error instanceof Error ? error.message : String(error); } };
+  const locked = build(document => { document.tracks[0]!.locked = true; });
+  const beat = build(document => { document.tracks[0]!.clips[0]!.timeLock = 'beat'; });
+  const short = build((_document, item) => { item.referenceAudio = { assetId: 'x', relativePath: 'audio/a.wav', sha256: 'a'.repeat(64), durationMs: 1000 }; });
+  expect([update(locked), update(beat), update(short)]).toEqual(['「HAPPY 歌」的轨道已锁定', '「HAPPY 歌」需要先把素材片段转成固定时间，再更新', '「HAPPY 歌」更新后超出歌曲范围']);
 });
