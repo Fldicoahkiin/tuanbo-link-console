@@ -21,6 +21,11 @@ export const OBS_SHARED_REQUEST_SLOTS = 2;
  * One cut is several requests sent one after the other; without this a screenshot
  * would slip in between two of them and hold up the rest of the cut. */
 export const OBS_PROGRAM_QUIET_MS = 100;
+/** A request that went out and was not answered within the limit: OBS may or may not have
+ * carried it out. Its connection is ended (see `request`). */
+export class ObsRequestUnanswered extends Error {}
+/** A request that never went out: cancelled, out of date, or held in the queue past the limit. */
+export class ObsRequestNotSent extends Error {}
 const shared = (priority: ObsRequestPriority): boolean => priority === 'control' || priority === 'background' || priority === 'preview';
 
 /** Deferred calls, bounded work and connection generations. A timeout never retries a write. */
@@ -44,7 +49,8 @@ export class ObsRequestScheduler {
     this.generation++; this.failure = error;
     clearTimeout(this.programQuiet); this.programQuiet = undefined;
     const pending = [...this.queue, ...this.active]; this.queue.length = 0; this.active.clear();
-    for (const job of pending) job.reject(error);
+    // Same words; one that never went out says so by its type.
+    for (const job of pending) job.reject(job.started ? error : new ObsRequestNotSent(error.message, { cause: error }));
   }
 
   /** Runs `operation` at `priority`. Inside another operation it keeps the outer
@@ -77,10 +83,10 @@ export class ObsRequestScheduler {
   request<T>(operation: () => Promise<T>, label: string): Promise<T> {
     const inherited = this.context.getStore();
     const context = { ...inherited, generation: inherited?.generation ?? this.generation, priority: inherited?.priority ?? 'control' };
-    if (context.generation !== this.generation) return Promise.reject(new Error('OBS 旧连接的请求已取消'));
-    if (this.failure) return Promise.reject(this.failure);
-    if (context.canSend && !context.canSend()) return Promise.reject(new Error(`OBS 动作已取消或已过时，没有发送：${label}`));
-    if (this.queue.length >= 128) return Promise.reject(new Error(`OBS 请求排队已满：${label}`));
+    if (context.generation !== this.generation) return Promise.reject(new ObsRequestNotSent('OBS 旧连接的请求已取消'));
+    if (this.failure) return Promise.reject(new ObsRequestNotSent(this.failure.message, { cause: this.failure }));
+    if (context.canSend && !context.canSend()) return Promise.reject(new ObsRequestNotSent(`OBS 动作已取消或已过时，没有发送：${label}`));
+    if (this.queue.length >= 128) return Promise.reject(new ObsRequestNotSent(`OBS 请求排队已满：${label}`));
     return new Promise<T>((resolve, reject) => {
       const queuedAt = performance.now(); let startedAt: number | null = null;
       const finish = (error: unknown, result?: T): void => {
@@ -104,18 +110,18 @@ export class ObsRequestScheduler {
       // every time a song is made ready.
       const job: Job = { ...context, started: false, settled: false, reject: error => finish(error),
         timer: context.priority === 'preview' ? undefined
-          : setTimeout(() => finish(new Error(`OBS ${label} 请求排队超时（${this.timeoutMs} ms）；还没发送`)), this.timeoutMs),
+          : setTimeout(() => finish(new ObsRequestNotSent(`OBS ${label} 请求排队超时（${this.timeoutMs} ms）；还没发送`)), this.timeoutMs),
         start: () => {
           this.active.add(job);
           this.maximumActive = Math.max(this.maximumActive, this.active.size);
           // Preserve the operation's original generation through its continuation.
           Promise.resolve().then(() => {
-            if (job.settled || job.generation !== this.generation) throw new Error('OBS 请求在发送前已取消');
-            if (context.canSend && !context.canSend()) throw new Error(`OBS 动作已取消或已过时，没有发送：${label}`);
+            if (job.settled || job.generation !== this.generation) throw new ObsRequestNotSent('OBS 请求在发送前已取消');
+            if (context.canSend && !context.canSend()) throw new ObsRequestNotSent(`OBS 动作已取消或已过时，没有发送：${label}`);
             job.started = true; startedAt = performance.now(); this.requestCount++;
             clearTimeout(job.timer);
             job.timer = setTimeout(() => {
-              const error = new Error(`OBS ${label} 请求超时（${this.timeoutMs} ms）；不确定是否已执行，请检查 OBS 后重新连接`);
+              const error = new ObsRequestUnanswered(`OBS ${label} 请求超时（${this.timeoutMs} ms）；不确定是否已执行，请检查 OBS 后重新连接`);
               this.invalidate(error); this.onTimeout(error);
             }, this.timeoutMs);
             context.dispatched?.();

@@ -45,10 +45,15 @@ class MediaBatchError extends Error {
   constructor(message: string, readonly executed: number) { super(message); }
 }
 
-/** A start OBS carried out whole, found out of step with the music afterwards:
- * the clip is on air (shown, its sound, its scene) and counts as started, and the
- * drift check puts it back in step once it is off by more than its tolerance. */
-export class MediaOutOfStepError extends Error {}
+/** A start OBS carried out whole whose check afterwards failed: the clip is on air
+ * (shown, its sound, its scene) and counts as started. Thrown as before; the type only
+ * tells the output layer that the clip is on the picture. */
+export class MediaOnAirError extends Error {
+  readonly onAir = true;
+}
+/** Found out of step with the music after the start: the drift check puts it back in
+ * step once it is off by more than its tolerance. */
+export class MediaOutOfStepError extends MediaOnAirError {}
 
 /** Why a picture step failed, to follow "原因：" in a red text and to end before
  * the next sentence there. */
@@ -392,7 +397,7 @@ export class ObsMediaScenes {
           const message = `切场景后素材位置对不上：${event.assetName}，按音乐应该在 ${expected} ms，OBS 实际在 ${status.mediaCursor ?? '未知'} ms`;
           // A position OBS did not report is not known to be out of step, and the
           // drift check cannot correct it either.
-          throw typeof status.mediaCursor === 'number' ? new MediaOutOfStepError(message) : new Error(message);
+          throw typeof status.mediaCursor === 'number' ? new MediaOutOfStepError(message) : new MediaOnAirError(message);
         }
       }
     });

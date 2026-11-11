@@ -284,7 +284,7 @@ export class ObsMediaPreload {
         && this.scenes.continueClip(previous.sourceName, previous.event.clipId, event)) {
         media.current = { event, sourceName: previous.sourceName, ready: true };
         try { await this.answered(media, () => this.scenes.execute({ ...event, sourceName: previous.sourceName }, path, undefined, retirement)); }
-        catch (error) { throw new Error(continuationFailure(event, error)); }
+        catch (error) { throw new Error(continuationFailure(event, error), { cause: error }); }
         return;
       }
       // Otherwise nothing of this clip goes on air, but the timeline still ends

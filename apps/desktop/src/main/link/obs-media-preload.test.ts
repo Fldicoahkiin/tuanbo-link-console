@@ -1629,6 +1629,20 @@ it('同一段音频切成首尾相接、入点接得上的两段，接着往下�
   expect(t.preload.onAirSource(primary)).toBe(primary);
 });
 
+it('接着往下播时没对齐：重新写的红字带着原来的错误（cause），它自己不算“没对齐”的类型，文案和分支都不变（2026-11-11 R3b）', async () => {
+  const cut = song([[0, 2000, 5000], [2, 2000, 7000]]);
+  const t = mocked(cut), [first, second] = t.events;
+  t.scenes.continueClip.mockReturnValue(true);
+  await t.preload.prime(first!, current); await t.preload.execute(first!, path);
+  const original = new MediaOutOfStepError('切场景后素材位置对不上：视频，按音乐应该在 7000 ms，OBS 实际在 7400 ms');
+  t.scenes.execute.mockRejectedValueOnce(original);
+  const error = await t.preload.execute(second!, path).catch((failure: unknown) => failure);
+  expect(error).toBeInstanceOf(Error); expect(error).not.toBeInstanceOf(MediaOutOfStepError);
+  expect((error as Error).message).toBe('画面接着上一段往下播，切到了这一段，但和音乐没对齐。原因：切场景后素材位置对不上：视频，按音乐应该在 7000 ms，OBS 实际在 7400 ms。'
+    + '差得多时联动台过几秒会自动按音乐校正，不用处理；后面的素材照常播');
+  expect((error as Error).cause).toBe(original);
+});
+
 it('上一段的解码器接着往下播时，OBS 没能切到这一段的场景：红字写明画面接着往下播、原因和怎么办，不重发；它仍算这一段的解码器，漂移检查、暂停和停止照常送到它', async () => {
   vi.useFakeTimers();
   try {
