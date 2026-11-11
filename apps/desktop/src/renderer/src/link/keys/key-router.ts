@@ -19,7 +19,7 @@ import { KEYMAP, PAGE_SCOPES, type CommandId, type KeyPage, type KeyScope } from
 
 /** A key press, as the router reads it. */
 export type KeyEvent = Pick<KeyboardEvent, 'code' | 'key' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey' | 'repeat' | 'isComposing'
-  | 'defaultPrevented' | 'preventDefault' | 'stopPropagation'> & { readonly target: unknown };
+  | 'defaultPrevented' | 'preventDefault'> & { readonly target: unknown };
 
 /** What a handler is told of the press: where the focus was, and the window's own handler of the same command. */
 export type KeyPress = { target: OwnerTarget | null; global: () => void };
@@ -121,6 +121,14 @@ export class KeyRouter {
     this.act(decision, event, target, chord);
   }
 
+  /*
+   * A key the router acts on is taken from the browser (`preventDefault`) and goes on to the page as it did: the
+   * window's keys, saving, undo and redo all acted last and never kept a key from a listener after them (0.5.9). The
+   * listeners still off the router see it as before, with `defaultPrevented` set: the timeline still splits a clip on
+   * Ctrl+S, and the counters and panels on the window still hear Escape. Stopping the key there waits until every
+   * listener is on the router (K4–K6).
+   */
+
   private act(decision: RouteDecision, event: KeyEvent, target: OwnerTarget | null, chord: KeyChord): void {
     switch (decision.kind) {
       // Left to the field, control, dialog or browser; an open panel closes itself on Escape (K4) and a drag cancels itself (K5).
@@ -128,11 +136,11 @@ export class KeyRouter {
       case 'swallow':
         // Escape after a drag was cancelled: the drag takes it itself until the pointer is let go (K5).
         if (this.drag() !== 'none' && chord === 'Escape') return;
-        take(event, true);
+        event.preventDefault();
         return;
       case 'song': {
         const songs = this.songs.at(-1);
-        take(event, true);
+        event.preventDefault();
         songs?.play(decision.itemId);
         return;
       }
@@ -140,9 +148,7 @@ export class KeyRouter {
         const scopes = decision.scope === 'global' ? [...HANDLER_SCOPES[this.page], 'global' as const] : [decision.scope];
         const handler = this.handler(decision.id, scopes, target);
         const own = this.handler(decision.id, ['global'], target);
-        // Saving, undo and redo act beside the page's keys: their listener on the window never kept a key from the
-        // page, and the timeline still does what it does with Ctrl+S (K6). The window's other keys stop there.
-        take(event, !isDocumentCommand(decision.id));
+        event.preventDefault();
         handler?.({ target, global: () => { if (own !== handler) own?.({ target, global: () => undefined }); } });
         return;
       }
@@ -171,12 +177,6 @@ export class KeyRouter {
     if (this.drags.length === 0) return 'none';
     return this.drags.every(drag => drag.cancelled()) ? 'cancelled' : 'active';
   }
-}
-
-/** Takes the press: the browser does nothing with it, and with `stop` no element or listener after the router sees it. */
-function take(event: KeyEvent, stop: boolean): void {
-  event.preventDefault();
-  if (stop) event.stopPropagation();
 }
 
 /** The app's router, installed on the window by LinkApp. */

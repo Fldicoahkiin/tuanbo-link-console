@@ -107,7 +107,8 @@ describe('路由本身', () => {
     const escape = press('Escape').at(element(body));
     router.dispatch(escape);
     expect(calls).toEqual(['首页停止']);
-    expect([escape.defaultPrevented, escape.propagationStopped]).toEqual([true, true]);
+    // Taken from the browser, and still heard by the page and the window after the router, as before it (0.5.9).
+    expect([escape.defaultPrevented, escape.propagationStopped]).toEqual([true, false]);
     leave();
     router.dispatch(press('Escape').at(element(body)));
     expect(calls).toEqual(['首页停止', '窗口停止']);
@@ -149,7 +150,7 @@ describe('路由本身', () => {
     handle('global', { 'transport.playPause': '播放', 'transport.stop': '停止', 'document.undo': '撤销' });
     const held = [press('Space', { repeat: true }), press('Escape', { repeat: true })];
     for (const key of held) router.dispatch(key.at(element(body)));
-    expect(held.map(key => [key.defaultPrevented, key.propagationStopped])).toEqual([[true, true], [true, true]]);
+    expect(held.map(key => [key.defaultPrevented, key.propagationStopped])).toEqual([[true, false], [true, false]]);
     expect(calls).toEqual([]);
     router.dispatch(press('KeyZ', { ctrlKey: true, repeat: true }).at(element(body)));
     expect(calls).toEqual(['撤销']);
