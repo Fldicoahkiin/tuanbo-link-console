@@ -30,7 +30,8 @@ import type { LinkCue, LinkMediaAsset, MtcFrameRate, ReferenceMediaClip, Rundown
 import { Music2, Trash2, MousePointer2, SquareDashedMousePointer, AudioLines, ArrowLeftRight, FolderInput, Gauge, type LucideIcon } from 'lucide-react';
 import type { LightingTool } from './LightingTimelineTools';
 import type { ObsResource } from './ResourceLibrary';
-import { TimelineWaveformCanvas, useReferenceWaveformPeaks, type ReferenceWaveformSource } from './ReferenceWaveform';
+import { TimelineWaveformCanvas, useSongWaveform, type ReferenceWaveformSource } from './ReferenceWaveform';
+import { waveformDisplay } from '../view-models/waveform-draw';
 import { formatTimelineTimecode, timelineInteractionTime } from './timeline-geometry';
 import { TimelineContextMenu, type TimelineContext, type TimelineTarget } from './TimelineContextMenu';
 import { TimelineToolbar } from './TimelineToolbar';
@@ -130,7 +131,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   const [musicDisplay, setMusicDisplay] = useState<LightingTimelineDisplay>({ sections: true, markers: true, rawAnalysis: true });
   const beatSegments = useMusicBeatSegments(props.lightingWorkspace ? props.musicItem : undefined, analysis, `${props.projectPath}:${props.timelineState.itemId}:${musicSource?.sha256}:${musicSource?.durationMs}`, props.projectPath, props.playing);
   const assets = useMemo(() => new Map(props.assets.map((asset) => [asset.id, asset])), [props.assets]);
-  const waveform = useReferenceWaveformPeaks(props.referenceAudio);
+  const waveform = useSongWaveform(props.referenceAudio);
 
   const { audioRef, clock } = useTimelineAudio(props.externalTransport, props.transportClock);
   const wheelSeek = useTimelineWheelSeek(props, audioRef);
@@ -259,15 +260,15 @@ export function ReferenceTimeline(input: Props): JSX.Element {
             {props.lighting && (!props.lightingWorkspace || musicDisplay.markers) ? <TimelineMarkers {...props.lighting} hideAnalysis={props.lightingWorkspace === true} pixelsPerSecond={viewport.pixelsPerSecond} timeAtClientX={viewport.editTimeAtClientX} onSeek={(ms) => { props.onPlayheadChange(ms); if (!props.externalTransport && audioRef.current) audioRef.current.currentTime = ms / 1000; }} /> : null}
             {props.lightingWorkspace ? <MusicBeatMarkers beats={beatSegments} left={viewport.scrollLeft} width={viewport.viewportWidth} pixelsPerSecond={viewport.pixelsPerSecond} top={sectionRow ? 24 : 0} rulerHeight={rulerHeight} showSegments={musicDisplay.sections} showBeats={musicDisplay.rawAnalysis} disabled={props.playing} onSeek={ms => seekTo(ms, true, false)} /> : null}
           </div>
-          {props.audioEditor?.tracks.length ? props.audioEditor.tracks.map(track => <AudioTrackLane readOnly={props.lightingWorkspace === true} referencePointer={props.lightingWorkspace ? lanePointer : undefined} playhead={props.playhead} detailed={props.lightingWorkspace === true} rhythm={props.lightingWorkspace === true && waveformMode === 'rhythm'} key={track.id} track={track} snapTime={ms => snap(props, ms, snapEnabled, seekSnapPointsMs, snapThresholdMs)} editor={props.audioEditor!} projectPath={props.projectPath} pixelsPerSecond={viewport.pixelsPerSecond} scrollLeft={viewport.scrollLeft} viewportWidth={viewport.viewportWidth} onSelect={id => props.onSelectAudio?.(id)} onSeek={ms => seekTo(ms, true)} />) : <div className="timeline-lane waveform-lane" {...lanePointer}>
-            {!props.audioEditor && waveform.peaks.length > 0 ? <TimelineWaveformCanvas
-              peaks={waveform.peaks}
+          {props.audioEditor?.tracks.length ? props.audioEditor.tracks.map(track => <AudioTrackLane readOnly={props.lightingWorkspace === true} referencePointer={props.lightingWorkspace ? lanePointer : undefined} playhead={props.playhead} display={props.lightingWorkspace === true ? waveformDisplay(waveformMode) : 'waveform'} key={track.id} track={track} snapTime={ms => snap(props, ms, snapEnabled, seekSnapPointsMs, snapThresholdMs)} editor={props.audioEditor!} projectPath={props.projectPath} pixelsPerSecond={viewport.pixelsPerSecond} scrollLeft={viewport.scrollLeft} viewportWidth={viewport.viewportWidth} onSelect={id => props.onSelectAudio?.(id)} onSeek={ms => seekTo(ms, true)} />) : <div className="timeline-lane waveform-lane" {...lanePointer}>
+            {!props.audioEditor && waveform.waveform ? <TimelineWaveformCanvas
+              waveform={waveform.waveform}
               scrollLeft={viewport.scrollLeft}
               viewportWidth={viewport.viewportWidth}
               contentWidth={waveformContentWidth}
             /> : null}
-            {waveform.peaks.length && !waveform.error ? null : <span className={waveform.error ? 'timeline-lane-error' : 'timeline-lane-empty'}>{waveform.error ?? (props.referenceAudio ? '正在生成歌曲音频波形…' : '当前节目还没添加音频')}</span>}
-            {props.audioEditor ? <AudioTimelineSegments readOnly={props.lightingWorkspace === true} playhead={props.playhead} editor={props.audioEditor} peaks={waveform.peaks} scrollLeft={viewport.scrollLeft} viewportWidth={viewport.viewportWidth} pixelsPerSecond={viewport.pixelsPerSecond} onSelect={(id) => props.onSelectAudio?.(id)} onSeek={(ms) => seekTo(ms, true)} /> : null}
+            {waveform.waveform && !waveform.error ? null : <span className={waveform.error ? 'timeline-lane-error' : 'timeline-lane-empty'}>{waveform.error ?? (props.referenceAudio ? '正在生成歌曲音频波形…' : '当前节目还没添加音频')}</span>}
+            {props.audioEditor ? <AudioTimelineSegments readOnly={props.lightingWorkspace === true} playhead={props.playhead} editor={props.audioEditor} waveform={waveform.waveform} display="waveform" scrollLeft={viewport.scrollLeft} viewportWidth={viewport.viewportWidth} pixelsPerSecond={viewport.pixelsPerSecond} onSelect={(id) => props.onSelectAudio?.(id)} onSeek={(ms) => seekTo(ms, true)} /> : null}
           </div>}
           {props.lightingWorkspace ? null : <ContentTracks layers={props.layers} clips={props.clips} cues={props.cues} assets={assets} frameRate={props.frameRate}
             durationMs={props.durationMs} playhead={props.playhead} timelineState={props.timelineState} airtime={props.airtime} onAirtime={props.onAirtime} pending={props.pending}

@@ -59,7 +59,7 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
     await page.reload();
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
-    await expect(page.locator('[data-waveform-engine="wavesurfer"][data-ready="true"]').first()).toBeVisible();
+    await expect(page.locator('.audio-segment-canvas[data-ready="true"]').first()).toBeVisible();
     const realtime = page.getByRole('switch', { name: '实时同步', exact: true });
     await expect(realtime).toHaveAttribute('aria-checked', 'true');
     await page.getByRole('button', { name: '播放时间线', exact: true }).click();

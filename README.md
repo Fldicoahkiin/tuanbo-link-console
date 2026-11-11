@@ -279,6 +279,6 @@ OBS、外部程序路径、MIDI 端口等机器相关设置保存在本机集成
 
 ## 第三方组件
 
-本项目使用 OBS 相关接口、FFmpeg、WaveSurfer.js、IBT/Marsyas 等组件。各组件的许可与分发材料见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+本项目使用 OBS 相关接口、FFmpeg、IBT/Marsyas 等组件。各组件的许可与分发材料见 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
 商业销售不免除第三方许可证义务；正式分发前需按实际打包内容完成许可审核。仓库访问权限不等于软件再分发或商业使用授权。

@@ -99,12 +99,13 @@ test('五百音频片段仅为视口内片段创建波形', async ({}, info) => 
     await application.evaluate(({ ipcMain, dialog }, file) => {
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] });
       ipcMain.removeHandler('link:generate-waveform');
-      ipcMain.handle('link:generate-waveform', () => ({ state: 'verified', peaks: Array.from({ length: 4800 }, (_, i) => (i % 7 + 1) / 8) }));
+      ipcMain.handle('link:generate-waveform', () => ({ state: 'verified', waveform: { sampleRate: 48_000, sampleCount: 4800 * 96, spectrum: null,
+        levels: [{ samplesPerBucket: 96, wave: Int16Array.from({ length: 9600 }, (_, i) => (i % 2 ? 1 : -1) * Math.round(((i >> 1) % 7 + 1) / 8 * 32767)), rhythm: null }] } }));
     }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
     await expect(page.locator('.audio-timeline-segment')).toHaveCount(500);
-    const waves = page.locator('[data-waveform-engine="wavesurfer"]');
+    const waves = page.locator('.audio-segment-canvas');
     await expect.poll(() => waves.count()).toBeGreaterThan(0);
     const initial = await waves.count();
     await page.locator('.timeline-viewport').evaluate(element => { element.scrollLeft = 16000; });

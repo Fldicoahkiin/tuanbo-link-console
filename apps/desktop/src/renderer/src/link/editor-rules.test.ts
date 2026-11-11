@@ -111,6 +111,24 @@ describe('规则 4：重新识别节拍不产生 MA2 待同步改动', () => {
   });
 });
 
+describe('规则 5：界面不解码整首音频，波形只有主进程那一套（E10）', () => {
+  it('界面代码里没有 OfflineAudioContext、decodeAudioData 和 wavesurfer', () => {
+    const offenders = sourceFiles(LINK).flatMap(file => readFileSync(file, 'utf8').split(/\r?\n/).flatMap((line, index) =>
+      /\bOfflineAudioContext\b|\bdecodeAudioData\b|wavesurfer/i.test(line) ? [`${relative(LINK, file).replaceAll('\\', '/')}:${index + 1}`] : []));
+    expect(offenders).toEqual([]);
+    const desktop = JSON.parse(readFileSync(join(LINK, '../../../../package.json'), 'utf8')) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+    expect(Object.keys({ ...desktop.dependencies, ...desktop.devDependencies }).filter(name => /wavesurfer/i.test(name))).toEqual([]);
+  });
+
+  it('首页、编辑器和灯光工作台的波形都经同一个 useSongWaveform 拿，都用 WaveformCanvas 画', () => {
+    for (const file of ['components/PlayerWaveformTimeline.tsx', 'components/ReferenceTimeline.tsx', 'components/AudioTrackLane.tsx']) expect(readFileSync(join(LINK, file), 'utf8')).toMatch(/\buseSongWaveform\(/);
+    const hooks = sourceFiles(LINK).filter(file => /export function useSongWaveform\b/.test(readFileSync(file, 'utf8')));
+    expect(hooks.map(file => relative(LINK, file).replaceAll('\\', '/'))).toEqual(['components/ReferenceWaveform.tsx']);
+    const canvases = sourceFiles(LINK).filter(file => /\bdrawWaveformCanvas\(/.test(readFileSync(file, 'utf8')));
+    expect(canvases.map(file => relative(LINK, file).replaceAll('\\', '/')).sort()).toEqual(['components/ReferenceWaveform.tsx', 'view-models/waveform-draw.ts']);
+  });
+});
+
 describe('规则 6：版本只按用到的内容决定', () => {
   it('第一次存下节拍，工程才升到 3；没有节拍的工程打开后版本不变', () => {
     const plain = parseLinkProject({ ...createEmptyLinkProject('普通'), obsOutputMode: 'scenes', rundown: [{ id: 'song', title: '歌', referenceAudio: SOURCE }] });

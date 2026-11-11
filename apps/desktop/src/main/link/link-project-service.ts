@@ -40,6 +40,8 @@ const waveformPeaksSchema = z.array(z.number().finite().min(-1).max(1)).min(1).m
  */
 const waveformSourceFileSchema = z.object({ sourceSha256: z.string().regex(/^[a-f0-9]{64}$/), peaksSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const MAX_WAVEFORM_SOURCE_BYTES = 1024;
+/** The finest level of a long song (1,000,000 buckets twice) and its spectrum fit well inside this. */
+const MAX_WAVEFORM_LEVELS_BYTES = 24 * 1024 * 1024;
 
 /** `sourceVerified`: the peaks were decoded from a file verified to be this very song. */
 export type WaveformCacheEntry = { peaks: number[]; sourceVerified: boolean };
@@ -203,6 +205,28 @@ export class LinkProjectService {
     // The cache first: a stop between the two writes leaves it without a matching record, so unverified.
     await writeFileAtomically(path, content);
     if (sourceVerified) await writeFileAtomically(waveformSourcePath(path), `${JSON.stringify({ sourceSha256: sha256, peaksSha256: sha256Of(content) })}\n`);
+  }
+
+  /** The bytes of `<sha>.levels.bin` (waveform-levels.ts reads them), or null when there is none. */
+  async loadWaveformLevels(projectPath: string, sha256: string): Promise<Buffer | null> {
+    assertSha256(sha256);
+    const path = waveformLevelsPath(projectPath, sha256);
+    try {
+      if ((await stat(path)).size > MAX_WAVEFORM_LEVELS_BYTES) throw new Error(`波形缓存超过 24 MB：${path}`);
+      return await readFile(path);
+    } catch (error) {
+      if (isErrorWithCode(error, 'ENOENT')) return null;
+      throw error;
+    }
+  }
+
+  /** Only a caller that decoded a file checked against `sha256` saves levels; 0.5.8 never reads this file. */
+  async saveWaveformLevels(projectPath: string, sha256: string, bytes: Uint8Array): Promise<void> {
+    assertSha256(sha256);
+    if (bytes.length > MAX_WAVEFORM_LEVELS_BYTES) throw new Error('波形缓存超过 24 MB，没有保存');
+    const path = waveformLevelsPath(projectPath, sha256);
+    await assertRealPathInside(dirname(resolve(projectPath)), dirname(path), '保存波形缓存已拒绝：工程文件夹中的 cache/waveforms 经符号链接或目录联接指向工程文件夹之外');
+    await writeFileAtomically(path, bytes);
   }
 
   async inspectAssets(projectPath: string, project: LinkProject): Promise<LinkProjectAssetInspection> {
@@ -611,6 +635,11 @@ function sha256Of(content: string | Buffer): string {
 
 function waveformCachePath(projectPath: string, sha256: string): string {
   return join(dirname(resolve(projectPath)), 'cache', 'waveforms', `${sha256}.json`);
+}
+
+/** The multi-level waveform (E10), beside the 0.5.8 cache and in a name 0.5.8 never opens. */
+function waveformLevelsPath(projectPath: string, sha256: string): string {
+  return join(dirname(resolve(projectPath)), 'cache', 'waveforms', `${sha256}.levels.bin`);
 }
 
 function assertSha256(value: string): void {

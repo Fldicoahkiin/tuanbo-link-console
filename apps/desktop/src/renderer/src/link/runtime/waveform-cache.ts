@@ -1,4 +1,5 @@
 import type { LinkWaveformResult } from '@tb/schema';
+import { waveformBytes } from '../view-models/waveform-draw';
 
 type Source = { projectPath: string; url: string; sha256: string; durationMs: number };
 type Entry = { users: number; bytes: number; result: Promise<LinkWaveformResult>; settled: Promise<LinkWaveformResult> | null; url: string; failed: boolean };
@@ -10,8 +11,10 @@ export type WaveformLease = {
   release: () => void;
 };
 
-/** Shared by the player and editor. Re-entering a page must not copy the same
- * 500,000 samples across the desktop bridge again. Live users pin their entry. */
+const EMPTY: LinkWaveformResult = { state: 'verified', waveform: { sampleRate: 48_000, sampleCount: 1, levels: [], spectrum: null } };
+
+/** Shared by the home player, the editor and the lighting workbench. Re-entering a page must not copy the
+ * same levels and spectrum across the desktop bridge again. Live users pin their entry. */
 export class WaveformCache {
   private readonly entries = new Map<string, Entry>();
   constructor(private readonly generate: (request: Source & { rebuild: boolean }) => Promise<LinkWaveformResult>,
@@ -22,7 +25,7 @@ export class WaveformCache {
     // A failure stays for its own link, so more mounts never retry it. A newly issued link (the song or
     // project opened again) asks once more: 2026-11-09 a stale link kept the waveform failed until a restart.
     if (!entry || entry.failed && entry.url !== source.url) {
-      const created: Entry = { users: 0, bytes: 0, result: Promise.resolve({ state: 'verified', peaks: [] }), settled: null, url: source.url, failed: false };
+      const created: Entry = { users: 0, bytes: 0, result: Promise.resolve(EMPTY), settled: null, url: source.url, failed: false };
       created.result = this.request(created, source, false);
       entry = created;
     }
@@ -36,7 +39,7 @@ export class WaveformCache {
     };
   }
   private request(entry: Entry, source: Source, rebuild: boolean): Promise<LinkWaveformResult> {
-    return this.generate({ ...source, rebuild }).then(value => { entry.bytes = value.peaks.length * 8; this.evict(); return value; },
+    return this.generate({ ...source, rebuild }).then(value => { entry.bytes = waveformBytes(value.waveform); this.evict(); return value; },
       (error: unknown) => { entry.failed = true; throw error; });
   }
   private evict(): void {

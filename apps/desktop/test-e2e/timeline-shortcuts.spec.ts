@@ -73,8 +73,8 @@ test('灯光打点按钮、M 与快捷键修改', async ({}, info) => {
     expect(transportBox.x).toBeGreaterThanOrEqual(toolbarBox.x);
     expect(transportBox.x + transportBox.width).toBeLessThanOrEqual(toolbarBox.x + toolbarBox.width);
     await rightClickCue.click();
-    await expect(page.locator('.wavesurfer-surface').first()).toHaveAttribute('data-ready', 'true');
-    expect(await page.locator('.wavesurfer-surface').first().evaluate(element => element.clientHeight)).toBeGreaterThan(1);
+    await expect(page.locator('.audio-segment-canvas').first()).toHaveAttribute('data-ready', 'true');
+    expect(await page.locator('.audio-segment-canvas').first().evaluate(element => element.clientHeight)).toBeGreaterThan(1);
     await page.locator('.reference-timeline').screenshot({ path: info.outputPath('cue-editor.png') });
     await page.screenshot({ path: info.outputPath('shortcuts.png') });
   } finally { await closeDiscarding(app); }

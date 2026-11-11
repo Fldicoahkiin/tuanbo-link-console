@@ -6,6 +6,7 @@ import { createEmptyLinkProject, createLightingUserLibrary, serializeLinkProject
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LinkProjectService } from './link-project-service';
 import { WaveformService } from './waveform-service';
+import { decodedWaveform, loudest } from './fixtures/decoded-waveform';
 
 const cleanupFiles: string[] = [];
 const cleanupDirectories: string[] = [];
@@ -296,19 +297,52 @@ describe('LinkProjectService', () => {
     }
   });
 
-  it('核对记录过期的缓存经波形服务重建一次，之后带上新记录', async () => {
+  it('核对记录过期的缓存经波形服务重建一次，之后带上新记录和多级波形', async () => {
     const directory = await createTestDirectory(); const project = join(directory, 'show.tblink'); const song = sha256('song');
     const path = join(directory, 'cache', 'waveforms', `${song}.json`); const record = join(directory, 'cache', 'waveforms', `${song}.source.json`);
-    cleanupDirectories.push(join(directory, 'cache'), join(directory, 'cache', 'waveforms')); cleanupFiles.push(path, record);
-    const service = new LinkProjectService(); const old = Array.from({ length: 4800 }, () => 0.1), rebuilt = Array.from({ length: 4800 }, () => 0.9);
+    const levels = join(directory, 'cache', 'waveforms', `${song}.levels.bin`);
+    cleanupDirectories.push(join(directory, 'cache'), join(directory, 'cache', 'waveforms')); cleanupFiles.push(path, record, levels);
+    const service = new LinkProjectService(); const old = Array.from({ length: 4800 }, () => 0.1);
     await service.saveWaveformCache(project, song, Array.from({ length: 4800 }, () => 0.5), true);
     await writeFile(path, `${JSON.stringify(old)}\n`);
-    const decode = vi.fn().mockResolvedValue(rebuilt); const waveforms = new WaveformService(service, decode, () => Promise.resolve(true));
-    await expect(waveforms.ensure(project, 'song.wav', song, 1000, false)).resolves.toEqual({ state: 'unverified', peaks: old });
-    await expect(waveforms.ensure(project, 'song.wav', song, 1000, true)).resolves.toEqual({ state: 'verified', peaks: rebuilt });
-    await expect(waveforms.ensure(project, 'song.wav', song, 1000, true)).resolves.toEqual({ state: 'verified', peaks: rebuilt });
+    const decode = vi.fn().mockResolvedValue(decodedWaveform(1000, 0.9)); const waveforms = new WaveformService(service, decode, () => Promise.resolve(true));
+    const shown = await waveforms.ensure(project, 'song.wav', song, 1000, false);
+    expect([shown.state, loudest(shown.waveform)]).toEqual(['unverified', expect.closeTo(0.1, 3)]);
+    for (let round = 0; round < 2; round++) {
+      const rebuilt = await waveforms.ensure(project, 'song.wav', song, 1000, true);
+      expect([rebuilt.state, loudest(rebuilt.waveform)]).toEqual(['verified', expect.closeTo(0.9, 3)]);
+    }
     expect(decode).toHaveBeenCalledTimes(1);
+    expect((await service.loadWaveformCache(project, song))?.sourceVerified).toBe(true);
   });
+
+  it('多级波形存在 0.5.8 不打开的新文件里，<sha>.json 照旧是 0.5.8 能读的纯数组（E10）', async () => {
+    // 0.5.8 is the rollback installer. It opens only cache/waveforms/<sha>.json and refuses anything but a bare
+    // array of peaks there (波形缓存结构无效). The levels, rhythm band and spectrum go to <sha>.levels.bin.
+    const directory = await createTestDirectory(); const project = join(directory, 'show.tblink'); const song = sha256('levels song');
+    const folder = join(directory, 'cache', 'waveforms');
+    cleanupDirectories.push(join(directory, 'cache'), folder);
+    cleanupFiles.push(join(folder, `${song}.json`), join(folder, `${song}.source.json`), join(folder, `${song}.levels.bin`));
+    const service = new LinkProjectService();
+    const waveforms = new WaveformService(service, vi.fn().mockResolvedValue(decodedWaveform(1000, 0.25)), () => Promise.resolve(true));
+    const result = await waveforms.ensure(project, 'song.wav', song, 1000, true);
+    expect(result.state).toBe('verified'); expect(result.waveform.levels.length).toBeGreaterThan(1); expect(result.waveform.spectrum).not.toBeNull();
+    expect((await readdir(folder)).sort()).toEqual([`${song}.json`, `${song}.levels.bin`, `${song}.source.json`]);
+    const reader058 = (text: string): number[] => {
+      const value: unknown = JSON.parse(text);
+      if (!Array.isArray(value) || value.length === 0 || value.length > 500_000) throw new Error('波形缓存结构无效');
+      return value.map((peak: unknown) => { if (typeof peak !== 'number' || !Number.isFinite(peak) || peak < -1 || peak > 1) throw new Error('波形缓存结构无效'); return peak; });
+    };
+    // 0.5.8 checks the count against the song's length (one peak per 2 ms) before it trusts the cache.
+    expect(reader058(await readFile(join(folder, `${song}.json`), 'utf8'))).toEqual(Array.from({ length: 4800 }, () => 0.25));
+    // The new file is binary and not JSON, so no JSON reader can take it for a cache.
+    expect((await readFile(join(folder, `${song}.levels.bin`))).subarray(0, 4).toString('latin1')).toBe('TBWL');
+    // After 0.5.8 rewrote its cache (a rollback and back), the levels still serve without a decode.
+    await writeFile(join(folder, `${song}.json`), `${JSON.stringify(Array.from({ length: 4800 }, () => 0.7))}\n`);
+    const decode = vi.fn(); const again = await new WaveformService(service, decode, () => Promise.resolve(true)).ensure(project, 'song.wav', song, 1000, false);
+    expect([again.state, loudest(again.waveform)]).toEqual(['verified', expect.closeTo(0.25, 3)]); expect(decode).not.toHaveBeenCalled();
+  });
+
 
   it('找回素材时核对记录跟缓存对不上就不带过去，缓存照样复制', async () => {
     const service = new LinkProjectService(); const audio = await originalAudio();

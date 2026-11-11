@@ -31,7 +31,7 @@ test('灯光工作台在 1280×720 和 1180×720 下：不横向滚动，时间�
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
-    await expect(page.locator('[data-waveform-engine="wavesurfer"][data-ready="true"]').first()).toBeVisible();
+    await expect(page.locator('.audio-segment-canvas[data-ready="true"]').first()).toBeVisible();
     const menu = page.getByRole('navigation', { name: '灯光素材主菜单' });
     const timeline = page.locator('.lighting-workbench .reference-timeline');
     for (const [width, height] of [[1280, 720], [1180, 720]] as const) {

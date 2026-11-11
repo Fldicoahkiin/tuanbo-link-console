@@ -1,5 +1,6 @@
 import { useState, type PointerEvent } from 'react';
-import type { AudioSegment } from '@tb/schema';
+import type { AudioSegment, LinkWaveform } from '@tb/schema';
+import type { WaveformDisplay } from '../view-models/waveform-draw';
 import { dragAudioSegment } from '@tb/core/link';
 import type { AudioEditor } from './useAudioEditor';
 import { AudioSegmentWaveform } from './AudioSegmentWaveform';
@@ -11,7 +12,7 @@ import type { EditorPlayhead } from './editor-playhead';
 import { trimAudioToPlayhead } from './timeline-commands';
 
 type Drag = { id: string; edge: 'seek' | 'move' | 'start' | 'end'; clientX: number; segment: AudioSegment; deltaMs: number };
-export function AudioTimelineSegments({ samples, editor, pixelsPerSecond, onSelect, onSeek, peaks, scrollLeft, viewportWidth, sourceWaveform = false, snapTime, playhead, readOnly = false }: { samples?: AudioBuffer | null; editor: Pick<AudioEditor, 'audio' | 'title' | 'segments' | 'selectedId' | 'disabled' | 'busy' | 'points' | 'select' | 'update' | 'remove' | 'split'>; sourceWaveform?: boolean; snapTime?: (ms: number) => number; pixelsPerSecond: number; onSelect: (id: string) => void; onSeek: (ms: number) => void; peaks: readonly number[]; scrollLeft: number; viewportWidth: number;playhead: EditorPlayhead; readOnly?:boolean }): JSX.Element {
+export function AudioTimelineSegments({ waveform, display, editor, pixelsPerSecond, onSelect, onSeek, scrollLeft, viewportWidth, sourceWaveform = false, snapTime, playhead, readOnly = false }: { waveform: LinkWaveform | null; display: WaveformDisplay; editor: Pick<AudioEditor, 'audio' | 'title' | 'segments' | 'selectedId' | 'disabled' | 'busy' | 'points' | 'select' | 'update' | 'remove' | 'split'>; sourceWaveform?: boolean; snapTime?: (ms: number) => number; pixelsPerSecond: number; onSelect: (id: string) => void; onSeek: (ms: number) => void; scrollLeft: number; viewportWidth: number;playhead: EditorPlayhead; readOnly?:boolean }): JSX.Element {
   // Escape, leaving the window and losing the dragged segment end the drag (DragSession).
   const session = useDragSession<Drag>();
   const drag = session.drag;
@@ -75,7 +76,7 @@ export function AudioTimelineSegments({ samples, editor, pixelsPerSecond, onSele
         // at the playhead with the timeline's other editing keys (keymap.ts `edit.split`, ReferenceTimeline).
         {...(readOnly ? {} : ownKeys('Enter', 'Delete', 'Backspace'))}
         onKeyDown={(event) => { if(readOnly)return; if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); editor.select(segment.id); onSelect(segment.id); } if(editor.disabled||editor.selectedId!==segment.id)return; if (event.key === 'Delete'||event.key==='Backspace') { event.preventDefault(); event.stopPropagation(); void editor.remove(); } }}>
-        <AudioSegmentWaveform samples={samples ?? null} peaks={peaks} sourceStartMs={(sourceWaveform ? segment.sourceOffsetMs : segment.startMs) + (active?.edge === 'start' ? active.deltaMs : 0)} sourceDurationMs={editor.audio?.durationMs ?? 1} durationMs={duration} startMs={start} pixelsPerSecond={pixelsPerSecond} scrollLeft={scrollLeft} viewportWidth={viewportWidth} />
+        <AudioSegmentWaveform waveform={waveform} display={display} sourceStartMs={(sourceWaveform ? segment.sourceOffsetMs : segment.startMs) + (active?.edge === 'start' ? active.deltaMs : 0)} durationMs={duration} startMs={start} pixelsPerSecond={pixelsPerSecond} scrollLeft={scrollLeft} viewportWidth={viewportWidth} />
         {duration / 1000 * pixelsPerSecond > 65 ? <span className="audio-segment-name" style={{ left: Math.max(8, scrollLeft - start / 1000 * pixelsPerSecond + 8) }}>{editor.title}{editor.busy ? <small role="status">处理中…</small> : null}<small>{(duration / 1000).toFixed(2)}s</small></span> : null}
         {!readOnly ? <><span className="audio-trim-handle start" title="调整音频起点" onPointerDown={(event) => begin(event, segment, 'start')} />
         <span className="audio-trim-handle end" title="调整音频终点" onPointerDown={(event) => begin(event, segment, 'end')} /></> : null}

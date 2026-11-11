@@ -62,7 +62,7 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
           await nav.getByRole('button', { name, exact: true }).click();
           if (name === '灯光工作台') {
             await expect(page.getByLabel('选中 Cue 实时播放', { exact: true })).toBeHidden();
-            await expect(page.locator('[data-waveform-engine="wavesurfer"][data-ready="true"]').first()).toBeVisible();
+            await expect(page.locator('.audio-segment-canvas[data-ready="true"]').first()).toBeVisible();
             await page.getByRole('navigation', { name: '灯光素材主菜单' }).getByRole('button', { name: '效果', exact: true }).click();
             await page.getByLabel('分类搜索范围', { exact: true }).selectOption('all');
             for (const template of templates) await expect(page.locator('.classification-cell>button').filter({ hasText: template.name })).toBeVisible();

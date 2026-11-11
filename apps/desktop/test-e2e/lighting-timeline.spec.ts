@@ -41,7 +41,7 @@ for (const dense of [false, true]) test(`底部时间线：${dense ? '密集' : 
     await expect(timeline.locator('.music-grid-line')).toHaveCount(0);
     expect(await timeline.locator('.timeline-ruler > span').count()).toBeGreaterThan(0);
     await page.getByRole('button', { name: '适合节目时长', exact: true }).click();
-    await expect(page.locator('.wavesurfer-surface[data-ready=true]').first()).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('.audio-segment-canvas[data-ready=true]').first()).toBeVisible({ timeout: 20000 });
     for (const close of await page.getByRole('button', { name: '关闭通知', exact: true }).all()) await close.click();
     await timeline.screenshot({ path: info.outputPath('timeline.png') });
     await page.screenshot({ path: info.outputPath('workspace.png') });

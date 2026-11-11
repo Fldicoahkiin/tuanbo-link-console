@@ -191,12 +191,28 @@ export const linkWaveformGeneratePayloadSchema = linkWaveformCachePayloadSchema.
   rebuild: z.boolean()
 });
 
-/** `rebuild-failed`: the old cache is kept and returned with the reason; it is not tried again until the app
- * is started again or the song's audio changes. */
+/**
+ * One zoom level of a song's waveform, from the main process (waveform-service). `wave` holds the lowest and
+ * highest sample of each bucket as int16 pairs ([min0, max0, min1, max1, …], ±32767 = full scale); `rhythm`
+ * the same for the 45–180 Hz band (kick and bass), or null when it was not generated yet. Each level merges
+ * four buckets of the level before it, so every level agrees with the finest one.
+ */
+export type LinkWaveformLevel = { samplesPerBucket: number; wave: Int16Array; rhythm: Int16Array | null };
+/** Log-frequency spectrum: `frames` × `bands` bytes, band 0 at `minHz`; 0 is `floorDb` and 255 is `floorDb + rangeDb`. */
+export type LinkWaveformSpectrum = {
+  hopSamples: number; windowSamples: number; frames: number; bands: number;
+  minHz: number; maxHz: number; floorDb: number; rangeDb: number; data: Uint8Array;
+};
+/** `levels[0]` is the finest. Times are samples at `sampleRate` from the start of the source file. */
+export type LinkWaveform = { sampleRate: number; sampleCount: number; levels: LinkWaveformLevel[]; spectrum: LinkWaveformSpectrum | null };
+
+/** `unverified`: an older cache shown as it is until it is generated again (it may lack the rhythm band and
+ * the spectrum). `rebuild-failed`: that older cache is kept and returned with the reason; it is not tried again
+ * until the app is started again or the song's audio changes. */
 export type LinkWaveformResult =
-  | { state: 'verified'; peaks: number[] }
-  | { state: 'unverified'; peaks: number[] }
-  | { state: 'rebuild-failed'; peaks: number[]; error: string };
+  | { state: 'verified'; waveform: LinkWaveform }
+  | { state: 'unverified'; waveform: LinkWaveform }
+  | { state: 'rebuild-failed'; waveform: LinkWaveform; error: string };
 
 export const linkIntegrationProfileSavePayloadSchema = z.object({
   profile: integrationProfileSchema,

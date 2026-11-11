@@ -1,0 +1,8 @@
+/*
+ * The canvas of an audio segment's waveform (E10, 0.5.9): drawn from the main process's levels in the
+ * three lighting displays and in the editor. Its `color` is the waveform's (`--audio-wave` from the lane)
+ * and its `font` the spectrum labels'.
+ */
+@layer pages {
+  .audio-segment-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; pointer-events: none; font: var(--type-caption) var(--font-ui); }
+}

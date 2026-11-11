@@ -1908,8 +1908,8 @@ test('没有联动工程时可直接选择 P1 音频并自动建档', async ({},
   await expect(page.locator('.home-card').getByText('测试音乐', { exact: true })).toBeVisible();
   await page.locator('.home-card-index').click();
   await page.getByRole('button', { name: /编辑器/ }).click();
-  await expect(page.locator('.wavesurfer-surface:visible').first()).toBeVisible({ timeout: 10_000 });
-  await expect.poll(() => page.locator('.wavesurfer-surface:visible').first().evaluate((canvas) => canvas.getBoundingClientRect().height)).toBeGreaterThanOrEqual(30);
+  await expect(page.locator('.audio-segment-canvas:visible').first()).toBeVisible({ timeout: 10_000 });
+  await expect.poll(() => page.locator('.audio-segment-canvas:visible').first().evaluate((canvas) => canvas.getBoundingClientRect().height)).toBeGreaterThanOrEqual(30);
   await expect(page.locator('.reference-timeline')).toHaveAttribute('data-duration-ms', '4000');
   await page.locator('.lighting-clip').dblclick({ position: { x: 64, y: 20 } });
   const lightingPoint = (await page.locator('.lighting-timeline-point').boundingBox())!;

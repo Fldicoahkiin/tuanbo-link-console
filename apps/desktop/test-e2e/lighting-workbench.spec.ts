@@ -33,7 +33,7 @@ test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, a
     await expect(page.getByRole('region', { name: '灯光效果库' })).toBeVisible();
     await expect(page.getByRole('button', { name: '切开音频', exact: true })).toHaveCount(0);
     await expect(page.getByRole('tab', { name: '2 · 划段落' })).toHaveCount(0);
-    await expect(page.locator('[data-waveform-engine="wavesurfer"][data-ready="true"]').first()).toBeVisible();
+    await expect(page.locator('.audio-segment-canvas[data-ready="true"]').first()).toBeVisible();
     await expect(page.locator('.lighting-effect-placeholder')).toHaveCount(0);
     await page.locator('.lighting-effect-dock').screenshot({ path: info.outputPath('empty-workbench.png') });
     await expect(page.getByRole('region', { name: '灯光节目列表' })).toHaveCount(0);
@@ -140,7 +140,7 @@ test('序列池素材无需执行器，编辑与重开保留编号，点击 Cue 
     });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
-    await expect(page.locator('.wavesurfer-surface[data-ready=true]').first()).toBeVisible();
+    await expect(page.locator('.audio-segment-canvas[data-ready=true]').first()).toBeVisible();
     await page.getByRole('button', { name: '试听序列 168 灯光步 1.250', exact: true }).dragTo(page.locator('.waveform-lane'), { targetPosition: { x: 230, y: 80 } });
     await page.locator('.waveform-cue-point').click();
     await expect(page.getByRole('columnheader', { name: '执行器（可选）' })).toHaveCount(0);

@@ -148,9 +148,6 @@
 
 .editor-preview-row .cue-inspector dl > div { display: flex; min-height: 24px; justify-content: space-between; gap: 8px; padding: 0; border: 0; background: transparent; }
 
-.wavesurfer-surface { position: relative; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
-.wavesurfer-wave, .wavesurfer-spectrum { position: absolute; inset: 0; }
-
 .mtc-output-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 12px; font-size: var(--text-caption); border-bottom: 1px solid var(--border); }
 .mtc-output-status small { opacity: .75; }
 .mtc-output-status strong { font-variant-numeric: tabular-nums; }

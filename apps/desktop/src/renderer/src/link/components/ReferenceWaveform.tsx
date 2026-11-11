@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import type { TimelineSpan } from '@tb/core/link';
-import type { LinkMediaAsset, LinkWaveformResult, ReferenceMediaClip, RundownItem } from '@tb/schema';
+import type { LinkMediaAsset, LinkWaveform, LinkWaveformResult, ReferenceMediaClip, RundownItem } from '@tb/schema';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import type { TimelineDrag } from './TimelineItems';
 import { timelineSpanWidth } from './timeline-geometry';
-import { waveformColumns, waveformNormalization } from '../view-models/waveform-viewport';
+import { drawWaveformCanvas, type WaveformDisplay } from '../view-models/waveform-draw';
 import { WaveformCache } from '../runtime/waveform-cache';
 import { runWhenNotPlaying } from '../runtime/when-not-playing';
 
@@ -26,11 +26,13 @@ export function useSongWaveformSource(audio: Pick<NonNullable<RundownItem['refer
     : null, [durationMs, projectPath, sha256, url]);
 }
 
-export function useReferenceWaveformPeaks(source: ReferenceWaveformSource | null): {
-  peaks: number[];
+/** The one hook for a song's waveform (home player, editor, lighting workbench): the main process's levels,
+ * shared through one cache. An older cache is shown at once and replaced after its one rebuild. */
+export function useSongWaveform(source: ReferenceWaveformSource | null): {
+  waveform: LinkWaveform | null;
   error: string | null;
 } {
-  const [peaks, setPeaks] = useState<number[]>([]);
+  const [waveform, setWaveform] = useState<LinkWaveform | null>(null);
   const [error, setError] = useState<string | null>(null);
   const projectPath = source?.projectPath;
   const url = source?.url;
@@ -39,17 +41,13 @@ export function useReferenceWaveformPeaks(source: ReferenceWaveformSource | null
 
   useEffect(() => {
     let cancelled = false;
-    setPeaks([]);
+    setWaveform(null);
     setError(null);
-    if (!projectPath || !url || !sha256 || durationMs === undefined) {
-      setPeaks([]);
-      setError(null);
-      return;
-    }
+    if (!projectPath || !url || !sha256 || durationMs === undefined) return;
     const lease = waveformCache.acquire({ projectPath, url, sha256, durationMs });
     const show = (value: LinkWaveformResult): void => {
       if (cancelled) return;
-      setPeaks(value.peaks);
+      setWaveform(value.waveform);
       setError(value.state === 'rebuild-failed' ? value.error : null);
     };
     const message = (reason: unknown): string => reason instanceof Error ? reason.message : String(reason);
@@ -62,41 +60,57 @@ export function useReferenceWaveformPeaks(source: ReferenceWaveformSource | null
       dropRebuild = runWhenNotPlaying(() => { void lease.settled().then(show, (reason: unknown) => { if (!cancelled) setError(message(reason)); }); });
     }, (reason: unknown) => {
       if (!cancelled) {
-        setPeaks([]);
+        setWaveform(null);
         setError(message(reason));
       }
     });
     return () => { cancelled = true; dropRebuild(); lease.release(); };
   }, [durationMs, projectPath, sha256, url]);
 
-  return { peaks, error };
+  return { waveform, error };
 }
 
-export function TimelineWaveformCanvas(props: {
-  peaks: readonly number[];
-  scrollLeft: number;
-  viewportWidth: number;
-  contentWidth: number;
+/**
+ * One canvas showing `[startSample, endSample)` of the source. Colour and label font come from the canvas's
+ * own CSS (`color`, `font`) unless `color` is given. `data-ready` is set once a drawing is on it.
+ */
+export function WaveformCanvas(props: {
+  waveform: LinkWaveform; display: WaveformDisplay; startSample: number; endSample: number; fill: number; normalize: boolean;
+  color?: string; maximumWidth?: number; className?: string; style?: CSSProperties;
 }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { contentWidth, peaks, scrollLeft, viewportWidth } = props;
-  const normalizationLevel = useMemo(() => waveformNormalization(peaks), [peaks]);
+  const { waveform, display, startSample, endSample, fill, normalize, color, maximumWidth } = props;
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || peaks.length === 0) return;
+    if (!canvas) return;
+    delete canvas.dataset.ready;
     // ResizeObserver supplies post-layout geometry. Reading the canvas bounds
     // here forces another full editor layout while a page is being mounted.
     const observer = new ResizeObserver(entries => {
       const bounds = entries[0]?.contentRect;
-      if (bounds) drawVisibleWaveform(canvas, bounds, { contentWidth, peaks, scrollLeft, viewportWidth, normalizationLevel });
+      if (!bounds || bounds.height <= 0) return;
+      const style = getComputedStyle(canvas);
+      drawWaveformCanvas(canvas, bounds, waveform, { display, startSample, endSample, fill, normalize, color: color ?? style.color, labels: display === 'spectrum' ? style.color : null, font: style.font, ...(maximumWidth === undefined ? {} : { maximumWidth }) });
+      canvas.dataset.ready = 'true';
     });
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [contentWidth, peaks, scrollLeft, viewportWidth, normalizationLevel]);
+  }, [waveform, display, startSample, endSample, fill, normalize, color, maximumWidth]);
+  return <canvas ref={canvasRef} className={props.className} style={props.style} data-waveform-engine="peaks" data-waveform-display={display} />;
+}
 
-  return <canvas
+export function TimelineWaveformCanvas(props: {
+  waveform: LinkWaveform;
+  scrollLeft: number;
+  viewportWidth: number;
+  contentWidth: number;
+}): JSX.Element {
+  const { contentWidth, waveform, scrollLeft, viewportWidth } = props;
+  const visibleStart = scrollLeft / Math.max(1, contentWidth) * waveform.sampleCount;
+  const visibleEnd = (scrollLeft + viewportWidth) / Math.max(1, contentWidth) * waveform.sampleCount;
+  return <WaveformCanvas
     className="timeline-waveform-canvas"
-    ref={canvasRef}
+    waveform={waveform} display="waveform" startSample={visibleStart} endSample={visibleEnd} fill={0.88} normalize color="#63d8c1"
     style={{ left: scrollLeft, width: viewportWidth }}
   />;
 }
@@ -180,9 +194,7 @@ function TimelineMediaWaveform(props: {
     return () => { cancelled = true; };
   }, [asset.kind, asset.relativePath, asset.sha256, projectPath]);
   const durationMs = asset.durationMs ?? (props.clip.sourceOffsetMs ?? 0) + props.clip.durationMs;
-  const waveform = useReferenceWaveformPeaks(projectPath && url
-    ? { projectPath, url, sha256: asset.sha256, durationMs }
-    : null);
+  const waveform = useSongWaveform(projectPath && url ? { projectPath, url, sha256: asset.sha256, durationMs } : null);
   const originMs = props.resolvedStartMs;
   const startMs = props.resizeDrag?.id === props.clip.id
     ? props.resizeDrag.previewStartMs
@@ -195,89 +207,12 @@ function TimelineMediaWaveform(props: {
   const error = sourceError ?? waveform.error;
   return <button type="button" className={`timeline-media-waveform ${props.selectedAudioClipId === props.clip.id ? 'is-selected' : ''} ${props.activeClipIds.has(props.clip.id) ? 'is-active' : ''} ${error ? 'has-error' : ''}`} style={style} title={error ?? `${asset.name} · 单击选中，Delete 或顶部垃圾桶关闭音频`} onPointerDown={(event) => props.onBeginDrag(event, 'clip', props.clip.id, originMs)} onPointerMove={props.onMoveDrag} onPointerUp={props.onEndDrag} onPointerCancel={props.onCancelDrag}>
     <i className="timeline-trim-handle start" title="拖动同步修剪音频与画面" onPointerDown={(event) => props.onTrimBegin(event, props.clip, 'start', asset.durationMs)} onPointerMove={props.onTrimMove} onPointerUp={props.onTrimEnd} onPointerCancel={props.onTrimCancel} />
-    {waveform.peaks.length > 0 ? <ClippedWaveformCanvas
-      peaks={waveform.peaks}
-      sourceDurationMs={durationMs}
-      sourceOffsetMs={props.clip.sourceOffsetMs ?? 0}
-      clipDurationMs={clipDurationMs}
+    {waveform.waveform ? <WaveformCanvas
+      waveform={waveform.waveform} display="waveform" fill={0.82} normalize color="#8be7d4" maximumWidth={4096}
+      startSample={(props.clip.sourceOffsetMs ?? 0) * waveform.waveform.sampleRate / 1000}
+      endSample={((props.clip.sourceOffsetMs ?? 0) + clipDurationMs) * waveform.waveform.sampleRate / 1000}
     /> : null}
     <span className="timeline-media-audio-label">{error ? (error === '素材不包含音频轨道' ? '无音轨' : '音轨读取失败') : `${asset.name} · 内嵌音频`}</span>
     <i className="timeline-trim-handle end" title="拖动同步修剪音频与画面" onPointerDown={(event) => props.onTrimBegin(event, props.clip, 'end', asset.durationMs)} onPointerMove={props.onTrimMove} onPointerUp={props.onTrimEnd} onPointerCancel={props.onTrimCancel} />
   </button>;
-}
-
-function ClippedWaveformCanvas(props: {
-  peaks: readonly number[];
-  sourceDurationMs: number;
-  sourceOffsetMs: number;
-  clipDurationMs: number;
-}): JSX.Element {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { peaks, sourceDurationMs, sourceOffsetMs, clipDurationMs } = props;
-  const visiblePeaks = useMemo(() => {
-    const start = Math.max(0, Math.floor(sourceOffsetMs / sourceDurationMs * peaks.length));
-    const end = Math.min(peaks.length, Math.ceil((sourceOffsetMs + clipDurationMs) / sourceDurationMs * peaks.length));
-    return peaks.slice(start, Math.max(start + 1, end));
-  }, [peaks, sourceDurationMs, sourceOffsetMs, clipDurationMs]);
-  const normalizationLevel = useMemo(() => waveformNormalization(visiblePeaks), [visiblePeaks]);
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const observer = new ResizeObserver(entries => {
-      const bounds = entries[0]?.contentRect;
-      if (bounds) drawClippedWaveform(canvas, bounds, visiblePeaks, normalizationLevel);
-    });
-    observer.observe(canvas);
-    return () => observer.disconnect();
-  }, [visiblePeaks, normalizationLevel]);
-  return <canvas ref={canvasRef} />;
-}
-
-function drawVisibleWaveform(
-  canvas: HTMLCanvasElement,
-  bounds: { width: number; height: number },
-  props: { peaks: readonly number[]; scrollLeft: number; viewportWidth: number; contentWidth: number; normalizationLevel: number }
-): void {
-  const scale = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.floor(bounds.width * scale));
-  canvas.height = Math.max(1, Math.floor(bounds.height * scale));
-  const context = canvas.getContext('2d');
-  if (!context) throw new Error('无法绘制波形');
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.strokeStyle = '#63d8c1';
-  context.lineWidth = Math.max(1, scale);
-  const center = canvas.height / 2;
-  const visibleStart = props.scrollLeft / Math.max(1, props.contentWidth);
-  const visibleEnd = (props.scrollLeft + props.viewportWidth) / Math.max(1, props.contentWidth);
-  const startIndex = Math.min(props.peaks.length, Math.max(0, Math.floor(visibleStart * props.peaks.length)));
-  const endIndex = Math.min(props.peaks.length, Math.ceil(visibleEnd * props.peaks.length));
-  const columns = waveformColumns(props.peaks, startIndex, endIndex, canvas.width);
-  context.beginPath();
-  for (let x = 0; x < columns.length; x += 1) {
-    const normalizedPeak = Math.min(1, columns[x]! / props.normalizationLevel);
-    const height = normalizedPeak * center * 0.88;
-    context.moveTo(x, center - height);
-    context.lineTo(x, center + height);
-  }
-  context.stroke();
-}
-
-function drawClippedWaveform(canvas: HTMLCanvasElement, bounds: { width: number; height: number }, visiblePeaks: readonly number[], normalizationLevel: number): void {
-  const scale = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.min(4096, Math.floor(bounds.width * scale)));
-  canvas.height = Math.max(1, Math.floor(bounds.height * scale));
-  const context = canvas.getContext('2d');
-  if (!context) throw new Error('无法绘制波形');
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.strokeStyle = '#8be7d4';
-  context.lineWidth = Math.max(1, scale);
-  const center = canvas.height / 2;
-  const columns = waveformColumns(visiblePeaks, 0, visiblePeaks.length, canvas.width);
-  context.beginPath();
-  for (let x = 0; x < columns.length; x += 1) {
-    const height = Math.min(1, columns[x]! / normalizationLevel) * center * 0.82;
-    context.moveTo(x, center - height);
-    context.lineTo(x, center + height);
-  }
-  context.stroke();
 }

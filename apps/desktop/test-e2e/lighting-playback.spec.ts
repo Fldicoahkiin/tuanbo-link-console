@@ -48,7 +48,7 @@ for (const scenario of ['timecode', 'no-port', 'empty'] as const) test(`灯光�
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
-    await expect(page.locator('.wavesurfer-surface[data-ready=true]').first()).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.audio-segment-canvas[data-ready=true]').first()).toBeVisible({ timeout: 15000 });
     const audio = page.locator('.timeline-audio-engine');
     if (empty) {
       await page.locator('.waveform-cue-point').click();
