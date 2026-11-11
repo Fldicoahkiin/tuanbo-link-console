@@ -1,3 +1,5 @@
+import { chordOf } from './keys/key-chord';
+
 /**
  * An open dialog, which keeps every key pressed in it: Escape closes it, and no key there stops, plays or changes the
  * song. The app's modal dialogs are native <dialog> elements without a role (ModalSurface and Dialog, the lighting
@@ -91,7 +93,7 @@ export function playbackKeyAction(event: PlaybackKeyEvent, target: KeyTarget | n
   const plain = !event.ctrlKey && !event.altKey, space = plain && event.code === 'Space';
   if (context.paused || keyInDialog(target, context.modalOpen) || event.metaKey || event.defaultPrevented || isInside(target, '.reference-timeline')
     || (space ? spaceBelongsToControl(target) : isInside(target, 'input,textarea,select,button,[contenteditable="true"],[role="slider"]'))) return null;
-  const itemId = context.song([...(event.ctrlKey ? ['Ctrl'] : []), ...(event.altKey ? ['Alt'] : []), ...(event.shiftKey ? ['Shift'] : []), event.code].join('+'));
+  const itemId = context.song(chordOf(event, { meta: false }));
   if (itemId) return { kind: 'song', itemId };
   if (space) return { kind: 'play-button' };
   if (plain && event.code === 'Escape') return { kind: 'stop' };

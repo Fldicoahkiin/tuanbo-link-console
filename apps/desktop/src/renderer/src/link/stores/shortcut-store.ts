@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { z } from 'zod';
+import { chordLabel, chordOf } from '../keys/key-chord';
 
 export const shortcutActions = { stamp: '在播放头打点', play: '播放 / 暂停', previous: '后退一帧', next: '前进一帧', start: '回到开头', end: '跳到结尾' } as const;
 const actionSchema = z.enum(['stamp', 'play', 'previous', 'next', 'start', 'end']);
@@ -7,10 +8,10 @@ const bindingSchema = z.object({ id: z.string(), action: actionSchema, key: z.st
 export type ShortcutBinding = z.infer<typeof bindingSchema>;
 export const defaultShortcuts: ShortcutBinding[] = (['KeyM', 'Space', 'ArrowLeft', 'ArrowRight', 'Home', 'End'] as const).map((key, index) => ({ id: key, action: actionSchema.options[index]!, key }));
 const storageKey = 'tblink.timeline-shortcuts';
-export function shortcutKey(event: Pick<KeyboardEvent, 'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>): string {
-  return [...(event.ctrlKey ? ['Ctrl'] : []), ...(event.altKey ? ['Alt'] : []), ...(event.shiftKey ? ['Shift'] : []), ...(event.metaKey ? ['Meta'] : []), event.code].join('+');
-}
-export function shortcutLabel(key: string): string { return key.replace(/Key([A-Z])/g, '$1').replace(/Digit(\d)/g, '$1').replace('Space', '空格'); }
+/** The chord a key press is saved and looked up as (`chordOf`, Meta included). */
+export function shortcutKey(event: Pick<KeyboardEvent, 'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>): string { return chordOf(event); }
+/** The name of a saved key as people read it (`chordLabel`). */
+export function shortcutLabel(key: string): string { return chordLabel(key); }
 export function validateShortcuts(value: unknown): ShortcutBinding[] {
   const bindings = z.array(bindingSchema).parse(value);
   if (new Set(bindings.map(binding => binding.key)).size !== bindings.length) throw new Error('快捷键重复，请为每个操作使用不同的按键');

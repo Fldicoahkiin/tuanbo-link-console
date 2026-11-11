@@ -2,6 +2,7 @@ import type { InputHTMLAttributes } from 'react';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import { defaultItemPlayback, formatMtcOffset, parseMtcOffset, programTimeOrigin, savedSongVolume, setItemPlaybackCommand, setItemVolumeCommand } from '@tb/core/link';
 import type { RundownItem } from '@tb/schema';
+import { chordOf } from '../keys/key-chord';
 import { useDocumentStore } from '../stores/document-store';
 import { Disclosure, Select, WithUnit } from '../ui';
 
@@ -73,7 +74,7 @@ export function SongPlaybackProperties({ item, notify, collapseAdvanced = false,
       event.preventDefault(); event.stopPropagation();
       if (event.key === 'Backspace' || event.key === 'Delete') { save({ shortcut: '' }); return; }
       if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) return;
-      save({ shortcut: [...(event.ctrlKey ? ['Ctrl'] : []), ...(event.altKey ? ['Alt'] : []), ...(event.shiftKey ? ['Shift'] : []), event.code].join('+') });
+      save({ shortcut: chordOf(event, { meta: false }) });
     }} /></label>
   </>;
   return <>
