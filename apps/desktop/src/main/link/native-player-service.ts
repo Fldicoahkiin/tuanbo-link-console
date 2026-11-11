@@ -9,6 +9,7 @@ import { NativeAudioPreload } from './native-audio-preload';
 import { MidiPortRecovery, type PortRecoveryReport } from './midi-port-recovery';
 import { midiPortBusy, sharedPortMessage } from './midi-error';
 import { audioErrorMessage } from './audio-error';
+import { OutputRecovery, type RecoveryResult } from '@tb/core/link';
 import type { MidiClaim } from './midi-port-broker';
 
 type Clock = Extract<NativePlaybackEvent, { kind: 'clock' }>;
@@ -32,6 +33,9 @@ type Options = {
   preloadError: (message: string) => void;
   /** The timecode port came back and timecode resumed. */
   recovered?: (report: PortRecoveryReport) => void;
+  /** A dropout or a refused timecode send this song counted against its limit (output-recovery.ts), with the red text
+   * shown for it: carried on from (`recover`), or the one that reached the limit. For the run log. */
+  recovery?: (entry: { result: RecoveryResult; message: string; itemId: string; positionMs: number }) => void;
   measured?: (phase: string, elapsedMs: number) => void;
   beforeControl?: (request: NativePlayerControl) => void;
   /** Takes the timecode output from the editor before the engine opens it. */
@@ -57,6 +61,13 @@ export class NativePlayerService {
   private closing = false;
   private volume = 1;
   private engineInterruptions = 0;
+  /** The engine's dropout and refused timecode send counts, from its latest telemetry; it restarts them on every prepare. */
+  private engineUnderruns = 0;
+  private engineTransient = 0;
+  /** Timecode sends refused in this song. */
+  private mtcRefused = 0;
+  /** This song's dropouts and refused timecode sends against their limits (2026-11-10 decision 2); a new song starts over, a seek does not. */
+  private recovery = new OutputRecovery();
   private readonly preload: NativeAudioPreload;
   private readonly deviceQuery: NativeDeviceQuery;
   private readonly audioDeviceQuery: NativeDeviceQuery;
@@ -117,7 +128,8 @@ export class NativePlayerService {
     this.state = { version: 1, sessionId: request.sessionId, generation: request.generation,
       itemId: request.snapshot.itemId, status: 'preparing', positionMs: request.snapshot.positionMs, offsetMs: request.snapshot.offsetMs,
       sampleRate: request.snapshot.sampleRate, enginePid: null, engineTitle: null, mtcPortName: null, mtcSent: 0,
-      audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, mtcRecovered: null, gain: request.snapshot.volume, analysis: null };
+      audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, mtcRecovered: null, outputFault: null, gain: request.snapshot.volume, analysis: null };
+    this.recovery = new OutputRecovery(); this.mtcRefused = 0;
     this.publish();
     const operation = this.pending.then(async () => {
       let measuredAt = performance.now();
@@ -289,15 +301,8 @@ export class NativePlayerService {
     this.lease = lease;
     void lease.completion.then(result => {
       if (result.ok || this.lease !== lease || this.closing) return;
-      // Decoder failure is an audio-clock failure. Stop MIDI/audio and invalidate
-      // any in-flight prepare before reporting a usable next session.
-      ++this.epoch; this.abort?.abort(); this.fail(result.error);
-      const cleanup = this.pending.then(async () => {
-        if (this.lease !== lease) return;
-        if (this.client) await this.send({ kind: 'stop' });
-        await this.releaseLease();
-      });
-      this.pending = cleanup.catch(error => this.fail(error instanceof Error ? error : new Error(String(error))));
+      // Decoder failure is an audio-clock failure.
+      this.stopForFault(result.error, () => this.lease === lease);
     });
   }
   private async resolveMidi(epoch: number): Promise<{ id: number; name: string } | null> {
@@ -320,13 +325,13 @@ export class NativePlayerService {
    * cancels it and the watch tries again. */
   private async reopenMtc(device: number, name: string): Promise<void> {
     const epoch = this.epoch;
-    let before = 0;
+    let before = 0, refusedBefore = 0;
     const operation = this.pending.then(async () => {
       this.requireEpoch(epoch);
       if (!this.client) throw new Error('音频引擎还没准备好');
       (await this.holdMtc(name))?.claim?.release();
       this.requireEpoch(epoch);
-      before = this.engineReopens;
+      before = this.engineReopens; refusedBefore = this.engineTransient;
       await this.client.command({ protocol: 4, requestId: ++this.requestId, generation: this.nativeGeneration, kind: 'reopen-mtc', midiDevice: device, midiPortName: name });
       this.requireEpoch(epoch);
     });
@@ -344,12 +349,24 @@ export class NativePlayerService {
         else if (clock.midiReopens <= before) return;
         else if (clock.midiReopenResult) settle(new Error(`Windows 没能打开这个端口（错误码 ${clock.midiReopenResult}）`));
         else if (clock.midiError) settle(new Error(`端口已打开但发送失败（错误码 ${clock.midiError}）`));
+        else if (clock.midiTransient > refusedBefore) settle(new Error('端口已打开，但 Windows 拒绝了发出的时间码'));
         else if (clock.state !== 'playing') settle(new Error('播放已暂停或停止，继续播放后再恢复'));
         else if (sentAt === null) sentAt = clock.midiSent;
         else if (clock.midiSent >= sentAt + 8) settle(null);
       } };
       this.reopening = entry;
     });
+  }
+  /** A fault that ends the song: stop MIDI/audio and invalidate any in-flight prepare before reporting a usable next
+   * session. The engine is stopped while `still()` holds. */
+  private stopForFault(error: Error, still: () => boolean = () => true): void {
+    ++this.epoch; this.abort?.abort(); this.fail(error);
+    const cleanup = this.pending.then(async () => {
+      if (!still()) return;
+      if (this.client) await this.send({ kind: 'stop' });
+      await this.releaseLease();
+    });
+    this.pending = cleanup.catch(failure => this.fail(failure instanceof Error ? failure : new Error(String(failure))));
   }
   private stopRecovery(): void { this.mtcRecovery.cancel(); this.reopening?.cancel(); }
   /** Holds `name` for the engine before it opens it; null: the engine will hold no timecode port.
@@ -387,7 +404,16 @@ export class NativePlayerService {
     this.reopening?.check(clock);
     // 5/6: the interface is gone; the same port is opened again once it is back. 4/7 (held by another program) is left to the operator.
     const unplugged = midiError === 5 || midiError === 6;
-    const mtcError = midiError ? this.mtcFailure(midiError, unplugged) : this.state.mtcError;
+    // A dropout, or a timecode send Windows refused while the port stayed, is carried on from up to the limit (2026-11-10 decision 2).
+    const underruns = this.state.underruns + newCount(clock.underruns, this.engineUnderruns); this.engineUnderruns = clock.underruns;
+    const refused = newCount(clock.midiTransient, this.engineTransient); this.engineTransient = clock.midiTransient;
+    const dropouts = this.carryOn('audio.underrun', underruns - this.state.underruns, underruns);
+    // While the lost port is waited for and reopened, its refusals belong to that outage; a timecode already stopped counts no more.
+    const counted = this.mtcRecovery.watching || this.state.mtcError ? 0 : refused; this.mtcRefused += counted;
+    const timecode = this.carryOn('mtc.sendFailure', counted, this.mtcRefused);
+    if (dropouts.limit) { this.patch({ underruns }); this.stopForFault(new Error(dropouts.limit)); return; }
+    const mtcError = midiError ? this.mtcFailure(midiError, unplugged) : timecode.limit ?? this.state.mtcError;
+    if (timecode.limit) this.stopMtcForSong();
     if (audioError && audioError !== this.state.audioError) this.options.error(audioError);
     if (mtcError && mtcError !== this.state.mtcError) this.options.error(mtcError);
     if (unplugged && this.state.mtcPortName) this.mtcRecovery.lost(this.state.mtcPortName);
@@ -397,8 +423,31 @@ export class NativePlayerService {
     const mtcInterruptions = this.state.mtcInterruptions + added;
     if (added) this.options.error(`时间码输出中断（${clock.midiInterruption === -2 ? '音频时钟超过一帧没有更新' : '发送线程迟到超过一帧'}）：迟到的时间码没有补发，已按实际音频位置重新对齐；这首歌共中断 ${mtcInterruptions} 次`);
     this.patch({ status: clock.state === 'empty' ? 'stopped' : clock.state, positionMs: clock.positionMs,
-      mtcSent: clock.midiSent, underruns: clock.underruns, mtcInterruptions,
-      audioError, mtcError, gain: clock.gain, analysis: clock.analysis }, clock.qpc100ns);
+      mtcSent: clock.midiSent, underruns, mtcInterruptions, outputFault: timecode.fault ?? dropouts.fault ?? this.state.outputFault ?? null,
+      audioError, mtcError, ...(timecode.limit ? { mtcPortName: null } : {}), gain: clock.gain, analysis: clock.analysis }, clock.qpc100ns);
+  }
+  /** Counts `added` new faults of `row` for this song, `total` being the song's count with them: the red text of the
+   * last one carried on from, and the limit text once the limit is reached. Each is logged. */
+  private carryOn(row: 'audio.underrun' | 'mtc.sendFailure', added: number, total: number): { fault: string | null; limit: string | null } {
+    let fault: string | null = null;
+    for (let index = 0; index < added; index++) {
+      const result = this.recovery.record(row, 'song', Date.now()), count = total - added + index + 1;
+      const message = result.outcome === 'limit' ? result.limitText : carriedOnText(row, count);
+      if (this.state) this.options.recovery?.({ result, message, itemId: this.state.itemId, positionMs: this.state.positionMs });
+      if (result.outcome === 'limit') return { fault, limit: result.limitText };
+      fault = message;
+    }
+    return { fault, limit: null };
+  }
+  /** The timecode reached its limit: the engine lets the port go, this song sends no more timecode, music and picture go on. */
+  private stopMtcForSong(): void {
+    // A pause or seek meanwhile does not cancel it (a seek prepares without timecode, as mtcError says); a new song does.
+    const source = this.source;
+    const operation = this.pending.then(async () => {
+      if (source !== this.source || this.closing || !this.client) return;
+      await this.send({ kind: 'stop-mtc' }); this.releaseMtc();
+    });
+    this.pending = operation.catch((error: unknown) => this.options.error(`停止时间码失败：${error instanceof Error ? error.message : String(error)}`));
   }
   private mtcFailure(code: number, unplugged: boolean): string {
     const port = this.state?.mtcPortName ? `MIDI 接口「${this.state.mtcPortName}」` : 'MIDI 时间码接口';
@@ -417,6 +466,16 @@ export class NativePlayerService {
   }
   private patch(patch: Partial<NativePlayerStatus>, qpc100ns: string | null = null): void { if (this.state) { this.state = { ...this.state, ...patch }; this.publish(qpc100ns); } }
   private publish(qpc100ns: string | null = null): void { if (this.state) this.options.changed(nativePlayerStatusSchema.parse(this.state), qpc100ns); }
+}
+
+/** How many the engine counted since `last`; it restarts its counts on every prepare. */
+function newCount(now: number, last: number): number { return now >= last ? now - last : now; }
+
+/** The red text of a fault the song carried on from: what happened, then what to do. */
+function carriedOnText(row: 'audio.underrun' | 'mtc.sendFailure', count: number): string {
+  return row === 'audio.underrun'
+    ? `声卡断了一下，音乐接着放（这首歌第 ${count} 次）。经常出现时请关掉占用电脑的程序，或换一个声卡输出`
+    : `有一条时间码没发出去，已从当前位置接着发（这首歌第 ${count} 次）。经常出现时请检查 MIDI 接口和线`;
 }
 
 /** E_INVALIDARG on prepare means the engine refused the range it was given; say which range, for the log and the operator. */

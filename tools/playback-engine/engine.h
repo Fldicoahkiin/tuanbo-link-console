@@ -27,6 +27,9 @@ typedef struct {
   UINT32 buffer_frames, rate, generation, epoch, state, underruns;
   UINT64 clock_frequency, clock_qpc, start, origin, end, submitted, loaded, consumed, pcm_base;
   BOOL streaming;
+  /* The sound card is starving now (2026-11-10 decision 2): one dropout counts once in underruns, however many
+   * wake-ups it lasts; the next full fill ends it. */
+  BOOL starved;
   double position_ms, offset_ms, volume;
   PlaybackEnvelope envelope;
   int16_t monitor[ANALYSIS_FRAMES * 2];
@@ -38,6 +41,9 @@ typedef struct {
   MIDIHDR midi_header;
   unsigned char full_frame[10];
   UINT32 fps, midi_generation, midi_sent, midi_epoch, midi_interruptions;
+  /* Timecode sends Windows refused while the port stayed (not 5/6): each relocates with a full frame on the next
+   * tick. The host counts them against its limit (output-recovery.ts mtc.sendFailure) and stops timecode there. */
+  UINT32 midi_transient;
   /* 29.97 drop-frame labels (fps is then 30), and the operator's choice to relocate receivers with
    * quarter frames alone, without the Full Frame SysEx some USB interfaces do not pass on. */
   BOOL drop_frame, quarter_frames_only;

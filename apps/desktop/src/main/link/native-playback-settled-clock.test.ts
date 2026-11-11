@@ -17,7 +17,7 @@ function fixture() {
   const client = new NativePlaybackClient('test-engine.exe', () => undefined, failed);
   const emit = (event: NativePlaybackEvent) => child.stdout.write(`${JSON.stringify(event)}\n`);
   const clock = (generation: number, state: State, positionMs: number) => emit({ protocol: 4, kind: 'clock', generation, state,
-    positionMs, qpc100ns: '1000000', clockFrequency: 48000, sampleRate: 48000, underruns: 0, midiSent: 0, midiError: 0, midiInterruptions: 0, midiInterruption: 0, midiReopens: 0, midiReopenResult: 0,
+    positionMs, qpc100ns: '1000000', clockFrequency: 48000, sampleRate: 48000, underruns: 0, midiSent: 0, midiError: 0, midiInterruptions: 0, midiInterruption: 0, midiTransient: 0, midiReopens: 0, midiReopenResult: 0,
     audioError: 0, maxMidiLatenessMs: 0, bufferedFrames: 1000, gain: 1, analysis: { fftSize: 2048, peaks: [0, 0], spectrum: Array.from({ length: 1024 }, () => 0) } });
   const start = async () => {
     const pending = client.start(); emit({ protocol: 4, kind: 'ready', pid: 123, title: 'test', windowClass: 'Static' });

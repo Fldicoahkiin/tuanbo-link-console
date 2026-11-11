@@ -6,7 +6,7 @@
 static void seek_locked(UINT64 frame) {
   engine.origin = frame; engine.loaded = engine.consumed = engine.submitted = 0;
   engine.position_ms = (double)frame * 1000.0 / engine.rate;
-  engine.clock_qpc = 0;
+  engine.clock_qpc = 0; engine.starved = FALSE;
   engine.envelope.from = engine.envelope.to; engine.envelope.frames = 0;
   memset(engine.monitor, 0, sizeof(engine.monitor)); engine.monitor_at = 0;
   engine.epoch++; SetEvent(engine.data_wake);
@@ -88,6 +88,8 @@ HRESULT audio_seek(double ms) {
   if (SUCCEEDED(hr)) { seek_locked(frame); engine.state = PAUSED; }
   LeaveCriticalSection(&engine.lock); return hr;
 }
+/* One dropout (2026-11-10 decision 2): counted once, however many wake-ups it lasts, and playback goes on. */
+static void starve_locked(void) { if (!engine.starved) { engine.starved = TRUE; engine.underruns++; } }
 static HRESULT fill_locked(void) {
   UINT32 padding = 0;
   HRESULT hr = IAudioClient_GetCurrentPadding(engine.client, &padding);
@@ -95,16 +97,17 @@ static HRESULT fill_locked(void) {
   UINT64 remaining = engine.end - engine.origin - engine.submitted;
   // An empty endpoint mid-stream is a real output starvation, even if the disk
   // ring still contains data. Do not report only disk-buffer shortages.
-  if (engine.state == PLAYING && engine.submitted && remaining && !padding) {
-    engine.underruns++; return AUDCLNT_E_BUFFER_ERROR;
-  }
+  BOOL short_fill = engine.state == PLAYING && engine.submitted && remaining && !padding;
   UINT32 needed = engine.buffer_frames - padding;
   if (needed > remaining) needed = (UINT32)remaining;
-  if (!needed) return S_OK;
-  if (engine.loaded - engine.consumed < needed) {
-    if (engine.state == PLAYING) { engine.underruns++; return AUDCLNT_E_BUFFER_ERROR; }
-    return S_FALSE;
+  UINT64 available = engine.loaded - engine.consumed;
+  if (needed && available < needed) {
+    if (engine.state != PLAYING) return S_FALSE;
+    // The disk ring ran dry: send what it has; the device plays silence for the rest of this period.
+    short_fill = TRUE; needed = (UINT32)available;
   }
+  if (short_fill) starve_locked();
+  if (!needed) return S_OK;
   BYTE *bytes = NULL; hr = IAudioRenderClient_GetBuffer(engine.render, needed, &bytes);
   if (FAILED(hr)) return hr;
   int16_t *target = (int16_t *)bytes;
@@ -118,7 +121,7 @@ static HRESULT fill_locked(void) {
     engine.monitor_at = (engine.monitor_at + 1) % ANALYSIS_FRAMES;
   }
   hr = IAudioRenderClient_ReleaseBuffer(engine.render, needed, 0);
-  if (SUCCEEDED(hr)) { engine.consumed += needed; engine.submitted += needed; SetEvent(engine.data_wake); }
+  if (SUCCEEDED(hr)) { engine.consumed += needed; engine.submitted += needed; if (!short_fill) engine.starved = FALSE; SetEvent(engine.data_wake); }
   return hr;
 }
 HRESULT audio_play(void) {
@@ -138,15 +141,25 @@ DWORD WINAPI audio_worker(void *unused) {
   (void)unused; CoInitializeEx(NULL, COINIT_MULTITHREADED);
   DWORD task = 0; HANDLE priority = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task);
   HANDLE events[] = { engine.quit, engine.audio_wake };
+  ULONGLONG skewed_since = 0;
   while (WaitForMultipleObjects(2, events, FALSE, 2) != WAIT_OBJECT_0) {
     EnterCriticalSection(&engine.lock);
-    if (engine.state == PLAYING) {
+    if (engine.state != PLAYING) skewed_since = 0;
+    else {
       UINT64 position = 0, qpc = 0;
       HRESULT hr = IAudioClock_GetPosition(engine.clock, &position, &qpc);
       // S_FALSE explicitly means the device reading lost accuracy. Never promote
-      // it to a reliable clock or silently fall back to a wall-clock estimate.
-      if (hr == S_FALSE) hr = HRESULT_FROM_WIN32(ERROR_TIME_SKEW);
-      if (SUCCEEDED(hr)) {
+      // it to a reliable clock or silently fall back to a wall-clock estimate:
+      // drop this reading and keep the last one, so the timecode, which reads its
+      // age, stops after a frame and relocates once a good reading is back. The
+      // sound goes on (2026-11-10 decision 2). A clock that stays inaccurate for a
+      // second is a broken device: the song stops.
+      if (hr == S_FALSE) {
+        ULONGLONG now = GetTickCount64();
+        if (!skewed_since) skewed_since = now;
+        hr = now - skewed_since >= 1000 ? HRESULT_FROM_WIN32(ERROR_TIME_SKEW) : fill_locked();
+      } else if (SUCCEEDED(hr)) {
+        skewed_since = 0;
         engine.clock_qpc = qpc;
         double frames = (double)position * engine.rate / engine.clock_frequency;
         engine.position_ms = ((double)engine.origin + fmin(frames, (double)(engine.end - engine.origin))) * 1000.0 / engine.rate;
@@ -163,6 +176,8 @@ DWORD WINAPI audio_worker(void *unused) {
 DWORD WINAPI reader_worker(void *unused) {
   (void)unused;
   HANDLE file = INVALID_HANDLE_VALUE; UINT32 epoch = 0;
+  /* When the reads of this epoch started failing (0: they do not). */
+  ULONGLONG failing_since = 0;
   int16_t block[8192 * 2];
   while (WaitForSingleObject(engine.quit, 0) != WAIT_OBJECT_0) {
     wchar_t path[4096]; UINT64 frame = 0; UINT32 count = 0, next_epoch; BOOL streaming = FALSE;
@@ -176,6 +191,7 @@ DWORD WINAPI reader_worker(void *unused) {
     }
     LeaveCriticalSection(&engine.lock);
     if (epoch != next_epoch && file != INVALID_HANDLE_VALUE) { CloseHandle(file); file = INVALID_HANDLE_VALUE; }
+    if (epoch != next_epoch) failing_since = 0;
     epoch = next_epoch;
     if (!count) { WaitForSingleObject(engine.data_wake, 10); continue; }
     if (file == INVALID_HANDLE_VALUE) file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -186,16 +202,23 @@ DWORD WINAPI reader_worker(void *unused) {
     // complete stereo frames; the next read resumes at this aligned position.
     count = read / 4;
     DWORD error = ok ? 0 : GetLastError();
+    // One failed read is tried again on the next round with the file opened afresh; meanwhile the ring
+    // runs dry and the sound card counts it as a dropout (2026-11-10 decision 2). Reads that keep failing
+    // for a second mean the file is gone: the song stops.
+    ULONGLONG now = GetTickCount64();
+    if (ok) failing_since = 0;
+    else if (!failing_since) failing_since = now;
     EnterCriticalSection(&engine.lock);
     if (epoch == engine.epoch) {
-      if (!ok) { engine.audio_error = (int32_t)HRESULT_FROM_WIN32(error ? error : ERROR_READ_FAULT); engine.state = FAILED; if (engine.client) IAudioClient_Stop(engine.client); }
-      else for (UINT32 i = 0; i < count; i++) {
+      if (!ok && now - failing_since >= 1000) { engine.audio_error = (int32_t)HRESULT_FROM_WIN32(error ? error : ERROR_READ_FAULT); engine.state = FAILED; if (engine.client) IAudioClient_Stop(engine.client); }
+      else if (ok) for (UINT32 i = 0; i < count; i++) {
         UINT32 at = (UINT32)(engine.loaded++ % RING_FRAMES) * 2;
         engine.ring[at] = block[i * 2]; engine.ring[at + 1] = block[i * 2 + 1];
       }
     }
     LeaveCriticalSection(&engine.lock);
-    if (ok && !count) WaitForSingleObject(engine.data_wake, 10);
+    if (!ok && file != INVALID_HANDLE_VALUE) { CloseHandle(file); file = INVALID_HANDLE_VALUE; }
+    if (!ok || !count) WaitForSingleObject(engine.data_wake, 10);
   }
   if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
   return 0;

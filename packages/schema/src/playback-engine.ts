@@ -49,6 +49,8 @@ export const nativePlaybackEventSchema = z.discriminatedUnion('kind', [
     midiSent: z.number().int().nonnegative(), midiError: z.number().int(),
     // Stale clock (-2) or late worker (-1): nothing sent late, then a Full Frame relocates.
     midiInterruptions: z.number().int().nonnegative(), midiInterruption: z.number().int(),
+    // Timecode sends Windows refused while the port stayed: each is relocated with a Full Frame; the host stops at its limit.
+    midiTransient: z.number().int().nonnegative(),
     // Timecode port reopens the engine has completed, and the result of the last one (0: opened).
     midiReopens: z.number().int().nonnegative(), midiReopenResult: z.number().int(), audioError: z.number().int(),
     maxMidiLatenessMs: z.number().finite().nonnegative(), bufferedFrames: z.number().int().nonnegative(),
@@ -111,6 +113,9 @@ export const nativePlayerStatusSchema = z.object({ ...playerSession, itemId: z.s
   audioError: z.string().nullable(), mtcError: z.string().nullable(), underruns: z.number().int().nonnegative(),
   /** Timecode interruptions in this song, each followed by a Full Frame relocation. */
   mtcInterruptions: z.number().int().nonnegative(),
+  /** The latest dropout or timecode send failure this song carried on from, in red with its count (2026-11-10
+   * decision 2); null when there is none. A failure that stops the song or its timecode is in audioError or mtcError. */
+  outputFault: z.string().max(512).nullable().optional(),
   /** The latest time the timecode port was lost and opened again in this song. */
   mtcRecovered: z.object({ portName: z.string().min(1).max(256), interruptedAt: z.string().datetime(), recoveredAt: z.string().datetime(),
     durationMs: z.number().int().nonnegative() }).strict().nullable().optional(),

@@ -10,7 +10,7 @@ export class NativePlayerUiPublisher {
     const changed = !previous || previous.sessionId !== status.sessionId || previous.generation !== status.generation
       || previous.status !== status.status || previous.itemId !== status.itemId || previous.enginePid !== status.enginePid
       || previous.audioError !== status.audioError || previous.mtcError !== status.mtcError
-      || previous.mtcPortName !== status.mtcPortName || previous.underruns !== status.underruns;
+      || previous.mtcPortName !== status.mtcPortName || previous.underruns !== status.underruns || previous.outputFault !== status.outputFault;
     if (!changed && now - this.publishedAt < 50) return;
     this.previous = status; this.publishedAt = now; this.send(status);
   }

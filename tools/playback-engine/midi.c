@@ -37,7 +37,7 @@ MMRESULT midi_prepare(UINT device, UINT fps, BOOL drop_frame, BOOL quarter_frame
   EnterCriticalSection(&engine.midi_lock);
   engine.fps = fps; engine.drop_frame = drop_frame; engine.quarter_frames_only = quarter_frames_only;
   engine.midi_error = 0; engine.midi_sent = 0; engine.max_late = 0;
-  engine.midi_interruptions = 0; engine.midi_interruption = 0;
+  engine.midi_interruptions = 0; engine.midi_interruption = 0; engine.midi_transient = 0;
   engine.midi_wake_gap_ms = engine.midi_lock_wait_ms = engine.midi_audio_lock_wait_ms = engine.midi_send_ms = 0;
   MMRESULT result = MMSYSERR_NOERROR;
   if (device != 0xffffffffu) {
@@ -118,6 +118,14 @@ static void midi_interrupt(int32_t reason, BOOL *running) {
   if (*running) { engine.midi_interruptions++; engine.midi_interruption = reason; }
   *running = FALSE;
 }
+/* A send Windows refused. The interface gone (5/6) stops timecode, and the port recovery of 2026-10-24 takes
+ * over. Any other refusal is this send only (2026-11-10 decision 2): counted, and the next tick relocates the
+ * receiver with a Full Frame at the current audio position; the host stops timecode at its limit. Caller holds midi_lock. */
+static void midi_send_failed(MMRESULT code, BOOL *running) {
+  if (code == MMSYSERR_INVALHANDLE || code == MMSYSERR_NODRIVER) engine.midi_error = (int32_t)code;
+  else engine.midi_transient++;
+  *running = FALSE;
+}
 DWORD WINAPI midi_worker(void *unused) {
   (void)unused;
   DWORD task = 0; HANDLE priority = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task);
@@ -167,8 +175,8 @@ DWORD WINAPI midi_worker(void *unused) {
         timecode_parts((UINT64)floor(position / frame_ms), engine.fps, engine.drop_frame, time);
         const unsigned char begin[] = { 0xf0, 0x7f, 0x7f, 1, 1 };
         memcpy(engine.full_frame, begin, 5); memcpy(engine.full_frame + 5, time, 4); engine.full_frame[9] = 0xf7;
-        engine.midi_error = (int32_t)midiOutLongMsg(engine.midi, &engine.midi_header, sizeof(MIDIHDR));
-        if (engine.midi_error) { LeaveCriticalSection(&engine.midi_lock); continue; }
+        MMRESULT relocated = midiOutLongMsg(engine.midi, &engine.midi_header, sizeof(MIDIHDR));
+        if (relocated != MMSYSERR_NOERROR) { midi_send_failed(relocated, &running); LeaveCriticalSection(&engine.midi_lock); continue; }
         engine.midi_sent++;
       }
       generation = current_generation; epoch = current_epoch; running = TRUE; piece = 0;
@@ -183,10 +191,10 @@ DWORD WINAPI midi_worker(void *unused) {
         time[1] & 15, (time[1] >> 4) & 3, time[0] & 15, (time[0] >> 4) & 7 };
       DWORD message = 0xf1u | ((DWORD)((piece << 4) | nibbles[piece]) << 8);
       LARGE_INTEGER send_started, send_finished; QueryPerformanceCounter(&send_started);
-      engine.midi_error = (int32_t)midiOutShortMsg(engine.midi, message);
+      MMRESULT sent = midiOutShortMsg(engine.midi, message);
       QueryPerformanceCounter(&send_finished);
       engine.midi_send_ms = fmax(engine.midi_send_ms, (double)(send_finished.QuadPart - send_started.QuadPart) * 1000.0 / frequency.QuadPart);
-      if (engine.midi_error) break;
+      if (sent != MMSYSERR_NOERROR) { midi_send_failed(sent, &running); break; }
       engine.midi_sent++; quarter++; piece = (piece + 1) % 8;
     }
     LeaveCriticalSection(&engine.midi_lock);

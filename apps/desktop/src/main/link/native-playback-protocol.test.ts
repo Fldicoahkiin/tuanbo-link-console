@@ -58,7 +58,7 @@ it('主线程延迟后的合法响应批次不会触发单条容量限制，分�
 it('MIDI 调度分阶段诊断保留实测数据，拒绝负数与额外字段', () => {
   const midiTiming = { wakeGapMs: 33.5, midiLockWaitMs: 0.2, audioLockWaitMs: 1.1, sendMs: 0.4 };
   const clock = { protocol: 4, kind: 'clock', generation: 2, state: 'playing', positionMs: 1234, qpc100ns: '100000',
-    clockFrequency: 48000, sampleRate: 48000, underruns: 0, midiSent: 10, midiError: -1, midiInterruptions: 0, midiInterruption: 0, midiReopens: 0, midiReopenResult: 0, audioError: 0,
+    clockFrequency: 48000, sampleRate: 48000, underruns: 0, midiSent: 10, midiError: -1, midiInterruptions: 0, midiInterruption: 0, midiTransient: 0, midiReopens: 0, midiReopenResult: 0, audioError: 0,
     maxMidiLatenessMs: 33.5, bufferedFrames: 1000, gain: 1, midiTiming,
     analysis: { fftSize: 2048, peaks: [0, 0], spectrum: Array.from({ length: 1024 }, () => 0) } };
   const events = new NativePlaybackEventDecoder().push(`${JSON.stringify(clock)}\n`);

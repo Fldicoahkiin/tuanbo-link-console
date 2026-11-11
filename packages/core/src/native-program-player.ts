@@ -472,7 +472,7 @@ export class NativeProgramPlayer {
   private receive(status: NativePlayerStatus): void {
     if (this.disposed || status.sessionId !== this.sessionId || status.generation !== this.nativeGeneration) return;
     // Like P1, an interrupted timecode resumes with a full frame; the service logs it, nothing turns red.
-    this.native = status;
+    const heard = this.native?.outputFault ?? null; this.native = status;
     // The timecode's red text may stand next to a failed cleanup shown at this start; its recovery clears only its own.
     const shown = this.shownFault(), timecode = timecodeOutputChange(this.timecodeOutput, status, shown); this.timecodeOutput = timecode.memory;
     if (timecode.fault) this.startFault(timecode.fault);
@@ -481,6 +481,8 @@ export class NativeProgramPlayer {
     this.update({ mtcConnectionFailed: Boolean(status.mtcError), mtcPortName: status.mtcError ? null : status.mtcPortName,
       mtcSentPositionMs: status.mtcPortName && !status.mtcError && status.mtcSent ? status.offsetMs + status.positionMs : null });
     if (status.audioError || status.status === 'error') { if (this.state.status !== 'error') this.fail(new Error(status.audioError ?? '音频服务已失效，请重新播放')); return; }
+    // A dropout or a refused timecode send the song carried on from (2026-11-10 decision 2): red, playback goes on.
+    if (status.outputFault && status.outputFault !== heard) this.reportFault(status.outputFault);
     if (this.state.status === 'playing') this.consumeClock();
   }
   private receiveObs(status: NativeObsStatus): void {

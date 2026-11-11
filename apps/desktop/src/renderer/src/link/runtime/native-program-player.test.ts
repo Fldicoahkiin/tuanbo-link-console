@@ -624,6 +624,18 @@ describe('原生正式播放器的操作与会话', () => {
     f.emit({ status: 'error', audioError: '设备失效' }); f.emit({ status: 'error', audioError: '设备失效' });
     expect(f.state().status).toBe('error'); expect(f.deps.stop).toHaveBeenCalledOnce();
   });
+  it('声卡断一下、时间码一条没发出去：接着播并标红，次数在红字里，不停歌（2026-11-10 第 2 题）', async () => {
+    const f = fixture(); await f.player.play('song-0'); f.deps.stop.mockClear();
+    f.emit({ underruns: 1, outputFault: '声卡断了一下，音乐接着放（这首歌第 1 次）' });
+    expect(f.state()).toMatchObject({ status: 'playing', error: null, fault: '声卡断了一下，音乐接着放（这首歌第 1 次）' });
+    f.player.clearFault('声卡断了一下，音乐接着放（这首歌第 1 次）');
+    f.emit({ positionMs: 1200 });
+    expect(f.state().fault).toBeNull();
+    f.emit({ outputFault: '有一条时间码没发出去，已从当前位置接着发（这首歌第 1 次）' });
+    expect(f.state()).toMatchObject({ status: 'playing', fault: '有一条时间码没发出去，已从当前位置接着发（这首歌第 1 次）' });
+    expect(f.deps.stop).not.toHaveBeenCalled();
+    await f.player.dispose();
+  });
   // 这一处也给停止的关灯提示用（reportNotice）。
   it('同一句提示还显示着时再报一次：不重复显示，也不重复记日志', async () => {
     const f = fixture(); await f.player.play('song-0'); f.deps.notice.mockClear();
