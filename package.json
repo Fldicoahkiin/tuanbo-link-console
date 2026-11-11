@@ -8,7 +8,7 @@
     "start:built": "node apps/desktop/scripts/start-built.mjs",
     "build": "pnpm --filter @tb/desktop build",
     "typecheck": "pnpm -r typecheck",
-    "lint": "eslint . --ignore-pattern eslint.config.mjs",
+    "lint": "node --max-old-space-size=4096 node_modules/eslint/bin/eslint.js . --ignore-pattern eslint.config.mjs",
     "test": "pnpm test:release && node tools/ibt/build.mjs && vitest run",
     "release:relay": "node --use-env-proxy scripts/relay-release.mjs",
     "changelog": "node scripts/write-changelog.mjs",
