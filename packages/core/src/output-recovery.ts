@@ -20,7 +20,7 @@ export type RecoveryLimit =
 /** When the counters start again: each song, each outage (a successful reconnect), or each item when it is done. */
 export type RecoveryReset = 'song' | 'outage' | 'item';
 /** What happens at the limit. */
-export type RecoveryStop = 'no-more-repair' | 'stop-song' | 'stop-timecode-for-song' | 'stop-reconnecting' | 'leave-owed';
+export type RecoveryStop = 'no-more-repair' | 'stop-song' | 'stop-timecode-for-song' | 'stop-reconnecting' | 'leave-owed' | 'stop-channel';
 export type RecoveryRule = { channel: OutputChannel; counts: 'attempts' | 'faults'; limit: RecoveryLimit; reset: RecoveryReset;
   atLimit: RecoveryStop; limitText: string };
 
@@ -49,6 +49,11 @@ export const OUTPUT_RECOVERY_RULES = {
     limitText: '声卡 1 分钟内断流 5 次，这首歌已停下。请检查声卡后重新播放' },
   'mtc.sendFailure': { channel: 'mtc', counts: 'faults', limit: { kind: 'count', max: 3 }, reset: 'song', atLimit: 'stop-timecode-for-song',
     limitText: '时间码多次发送失败，这首歌不再发时间码。请检查接口' },
+  /** Action MIDI replies that the previous SysEx is still sending (-6), one after another: each skips its own message;
+   * at the limit the driver counts as stuck and the port stops. The key is the run of -6 replies: any other reply
+   * forgets it (design 00 §10). */
+  'actionMidi.stuckSysex': { channel: 'actionMidi', counts: 'faults', limit: { kind: 'count', max: 3 }, reset: 'item', atLimit: 'stop-channel',
+    limitText: 'MIDI 输出失败：上一条 SysEx 连续 3 次没有发完，接口的驱动可能卡住了。这个输出已停止，请检查接口后重新播放' },
   /** An unconfirmed lights-off is sent once more after MA2 connects; the key is the owed off. */
   'lighting.offResend': { channel: 'ma2', counts: 'attempts', limit: { kind: 'count', max: 1 }, reset: 'item', atLimit: 'leave-owed',
     limitText: '关灯补发了一次控台还是没确认，已留在还欠着的关灯里。请检查控台后再按一次停止' }

@@ -16,6 +16,8 @@ describe('自动恢复都有次数上限，全软件只有这一张表（2026-11
     expect(OUTPUT_RECOVERY_RULES['mtc.sendFailure'].limit).toEqual({ kind: 'count', max: 3 });
     expect(OUTPUT_RECOVERY_RULES['mtc.sendFailure'].atLimit).toBe('stop-timecode-for-song');
     expect(OUTPUT_RECOVERY_RULES['lighting.offResend'].limit).toEqual({ kind: 'count', max: 1 });
+    expect(OUTPUT_RECOVERY_RULES['actionMidi.stuckSysex'].limit).toEqual({ kind: 'count', max: 3 });
+    expect(OUTPUT_RECOVERY_RULES['actionMidi.stuckSysex'].atLimit).toBe('stop-channel');
   });
 
   it('每一行到上限都有红字：先说发生了什么，再说怎么办', () => {

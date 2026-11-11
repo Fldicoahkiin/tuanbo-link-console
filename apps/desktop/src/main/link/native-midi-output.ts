@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { classifyMidiCode, MidiMessageSkipped } from '@tb/core/link';
+import { classifyMidiCode, MidiMessageSkipped, OUTPUT_RECOVERY_RULES, OutputRecovery } from '@tb/core/link';
 import { z } from 'zod';
 import { midiPortBusy } from './midi-error';
 
@@ -16,8 +16,8 @@ export class MidiOutputFailure extends Error {
   get portGone(): boolean { return this.code === 5 || this.code === 6 || this.code === -2; }
 }
 
-/** -6 (the previous SysEx still sending) this many times in a row: the driver is stuck, the port stops. */
-const STUCK_SYSEX_REPLIES = 3;
+/** The run of -6 replies (the previous SysEx still sending) counted against output-recovery.ts actionMidi.stuckSysex. */
+const STUCK_SYSEX = 'sysex';
 /** How long past a message's deadline the helper has to answer before the port is judged unresponsive. */
 const ANSWER_GRACE_MS = 1000;
 
@@ -39,7 +39,8 @@ export class NativeMidiOutput {
   private exitError: Error | null = null;
   private closeTask: Promise<void> | null = null;
   private portName = '';
-  private stuckSysex = 0;
+  /** -6 replies in a row; at the table's limit the driver is stuck and the port stops. */
+  private readonly stuckSysex = new OutputRecovery();
 
   /** `queueLimit`: messages waiting behind the one in flight. A show's actions keep it short; the editor's
    * previews send a whole lighting state at once. */
@@ -148,7 +149,7 @@ export class NativeMidiOutput {
         const pending = this.active;
         if (!pending || pending.id !== response.requestId) throw new Error('MIDI 响应不属于当前请求，停止输出');
         if (response.code !== 0) { this.refused(pending, response.code); continue; }
-        this.stuckSysex = 0;
+        this.stuckSysex.forget('actionMidi.stuckSysex', STUCK_SYSEX);
         const accepted = BigInt(response.acceptedAt100ns);
         if (accepted === 0n || accepted > now100ns() + 10_000n) throw new Error('MIDI 驱动确认时间无效');
         if (pending.deadline && accepted >= pending.deadline) {
@@ -164,10 +165,10 @@ export class NativeMidiOutput {
   private refused(pending: Pending, code: number): void {
     const failure = new MidiOutputFailure(nativeError(code), code, this.portName);
     if (pending.operation !== 2 || classifyMidiCode(code) !== 'message') throw failure;
-    if (code === -6 && ++this.stuckSysex >= STUCK_SYSEX_REPLIES) {
-      throw new MidiOutputFailure(`MIDI 输出失败：上一条 SysEx 连续 ${STUCK_SYSEX_REPLIES} 次没有发完，接口的驱动可能卡住了。这个输出已停止，请检查接口后重新播放`, code, this.portName);
+    if (code === -6 && this.stuckSysex.record('actionMidi.stuckSysex', STUCK_SYSEX, Date.now()).outcome === 'limit') {
+      throw new MidiOutputFailure(OUTPUT_RECOVERY_RULES['actionMidi.stuckSysex'].limitText, code, this.portName);
     }
-    if (code !== -6) this.stuckSysex = 0;
+    if (code !== -6) this.stuckSysex.forget('actionMidi.stuckSysex', STUCK_SYSEX);
     this.settle(pending, () => pending.reject(new MidiMessageSkipped(nativeReason(code), code)));
   }
 
