@@ -89,23 +89,25 @@ function p1Show(p1: ShowInputs['p1'], program: ShowProgram | null): Busy | null 
  * - `clock`: waits while the program moves, prepares or stops; allowed when stopped and when held (第 3 题).
  * - `stopped`: only when stopped. Everything 第 3 题 and 第 1 题 did not open keeps today's rule, which counts a pause in.
  * - `song`: only while the song it touches is not on stage (preparing, playing, paused, stopping); 第 5 题 (2026-11-11).
- * - `confirm`: the operator is asked first while the show is on.
  */
 type ShowRule =
   | { kind: 'always' }
   | { kind: 'clock'; action: string }
   | { kind: 'stopped'; action: string }
-  | { kind: 'song'; action: string }
-  | { kind: 'confirm'; message: string };
+  | { kind: 'song'; action: string };
 
 const always = { kind: 'always' } as const;
 const clock = (action: string) => ({ kind: 'clock', action }) as const;
 const stopped = (action: string) => ({ kind: 'stopped', action }) as const;
 const song = (action: string) => ({ kind: 'song', action }) as const;
 
-/** The waits' fixed openings: a text that starts with one of them is a wait, across IPC too (`isShowWait`). */
+/** The waits' fixed openings: a text that starts with one of them is a wait, across IPC too (`isShowWait`). A wait for
+ * the clock says the phase the program is in (00-order §9): moving, preparing or stopping. */
 export const SHOW_WAIT_CLOCK_MOVING = '节目在走，';
+export const SHOW_WAIT_PREPARING = '节目在准备，';
+export const SHOW_WAIT_STOPPING = '节目在停止，';
 export const SHOW_WAIT_SHOW_ON = '演出还没停止，';
+const SHOW_WAIT_OPENINGS = [SHOW_WAIT_CLOCK_MOVING, SHOW_WAIT_PREPARING, SHOW_WAIT_STOPPING, SHOW_WAIT_SHOW_ON] as const;
 
 export const showOperationRules = {
   'ma2.sync.write': clock('同步控台'),
@@ -148,7 +150,9 @@ export const showOperationRules = {
   'program.recover': stopped('恢复节目音频'),
   'program.maintenance': stopped('维护节目组件'),
   'app.devReload': stopped('重新加载页面'),
-  'app.quit': { kind: 'confirm', message: `${SHOW_WAIT_SHOW_ON}现在退出会停掉正在进行的节目。请先回到播放器停止播放，再退出。` }
+  // The main process keeps the app open while the show is on and says why (showRuntimeActiveExitWarning); the quit
+  // flow's own questions (unsaved work, lights left on) come after it. Aligned in S2: a wait, not a question.
+  'app.quit': stopped('退出')
 } as const satisfies Record<string, ShowRule>;
 
 export type ShowOperation = keyof typeof showOperationRules;
@@ -157,8 +161,7 @@ export type ShowSongOperation = { [Op in ShowOperation]: (typeof showOperationRu
 
 export type ShowGate =
   | { kind: 'allow' }
-  | { kind: 'wait'; until: 'clock-stopped' | 'idle'; message: string }
-  | { kind: 'confirm'; message: string };
+  | { kind: 'wait'; until: 'clock-stopped' | 'idle'; message: string };
 
 const allow: ShowGate = { kind: 'allow' };
 
@@ -171,15 +174,18 @@ export function showGate(op: ShowOperation, show: ShowState, itemId?: string): S
   switch (rule.kind) {
     case 'always': return allow;
     case 'clock':
-      return show.phase === 'idle' || show.phase === 'held' ? allow
-        : { kind: 'wait', until: 'clock-stopped', message: `${SHOW_WAIT_CLOCK_MOVING}暂停或停止后再${rule.action}。` };
+      switch (show.phase) {
+        case 'idle': case 'held': return allow;
+        case 'running': return { kind: 'wait', until: 'clock-stopped', message: `${SHOW_WAIT_CLOCK_MOVING}暂停或停止后再${rule.action}。` };
+        case 'preparing': return { kind: 'wait', until: 'clock-stopped', message: `${SHOW_WAIT_PREPARING}暂停或停止后再${rule.action}。` };
+        case 'stopping': return { kind: 'wait', until: 'clock-stopped', message: `${SHOW_WAIT_STOPPING}停下以后再${rule.action}。` };
+      }
     case 'stopped':
       return show.phase === 'idle' ? allow : { kind: 'wait', until: 'idle', message: `${SHOW_WAIT_SHOW_ON}停止后再${rule.action}。` };
     case 'song':
       // P1 may not say which song it plays: then every song counts as on stage.
       return show.phase === 'idle' || (itemId !== undefined && show.itemId !== null && show.itemId !== itemId) ? allow
         : { kind: 'wait', until: 'idle', message: `${SHOW_WAIT_SHOW_ON}这首歌还在台上，停下它以后再${rule.action}。` };
-    case 'confirm': return show.phase === 'idle' ? allow : { kind: 'confirm', message: rule.message };
   }
 }
 
@@ -187,5 +193,5 @@ export function showGate(op: ShowOperation, show: ShowState, itemId?: string): S
 export function isShowWait(error: unknown): boolean {
   const raw = typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string' ? error.message : String(error);
   const text = raw.replace(/Error invoking remote method '[^']+':\s*/g, '').replace(/\bError:\s*/g, '').trim();
-  return text.startsWith(SHOW_WAIT_CLOCK_MOVING) || text.startsWith(SHOW_WAIT_SHOW_ON);
+  return SHOW_WAIT_OPENINGS.some(opening => text.startsWith(opening));
 }

@@ -178,6 +178,7 @@ import { midiPortHandleSchema, midiPortListRequestSchema, midiPortOpenSchema, mi
 import { NativePlayerUiPublisher } from './link/native-player-ui-publisher';
 import { NativeProgramHost } from './link/native-program-host';
 import { NativeProgramService } from './link/native-program-service';
+import { ShowStateService } from './link/show-state-service';
 import { followWindowPage } from './link/window-page';
 import { NativePlaybackRequests } from './link/native-playback-requests';
 import { NativeObsHost } from './link/native-obs-host';
@@ -249,6 +250,8 @@ let nativePlayerShutdown: Promise<void> | null = null;
 let nativeObs: NativeObsHost | null = null;
 let nativeObsPreload: NativeObsPreloadPool | null = null;
 let nativeProgram: NativeProgramService | null = null;
+/** The show state's one live source (show-state-service.ts); built with the program it follows. */
+let showState: ShowStateService | null = null;
 let nativeProgramHost: NativeProgramHost | null = null;
 /** Every MIDI port the window uses is opened here, in main, and only while it is in use. */
 let midiPorts: MidiPortBroker | null = null;
@@ -270,6 +273,8 @@ async function closeEngine(): Promise<void> {
  * returned; otherwise that program closes, then the audio and picture outputs and the runtime, unless the next page
  * opened a program meanwhile: that one keeps them (engine-shutdown.ts, 2026-11-10, 2026-11-11). */
 function releaseGonePage(): Promise<InternalPlayerState | null> {
+  // P1 following and the previews the page reported end with it; a program that plays on stays in the show.
+  showState?.pageGone();
   return releasePage(nativeProgram, { stopMonitor: () => musicMonitor?.stop(),
     teardown: async () => { await closeEngine(); await releaseRendererRuntime(); } }, programFaults);
 }
@@ -1027,6 +1032,9 @@ function registerIpc(
     nativeProgramHost = host;
     return { controller: host.controller, close: async () => { await host.close(); if (nativeProgramHost === host) nativeProgramHost = null; } };
   }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput(), programOutputs.runningChanged, programFaults);
+  showState = new ShowStateService(nativeProgram, show => sendToRenderer('link:show-state', show));
+  handle('link:show-state-get', () => showState!.current());
+  handle('link:show-activity', (_event, value: unknown) => { showState!.report(value); });
   // Session registration captures cancellation synchronously; output adapters
   // validate and authorize every actual audio, OBS, MIDI and lighting request.
   handle('link:native-program-open', async (_event, value: unknown) => {

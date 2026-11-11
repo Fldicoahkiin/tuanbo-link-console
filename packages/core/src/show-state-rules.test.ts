@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { toUserErrorMessage } from './link-user-error';
-import { deriveShowState, isShowWait, showGate, showOperationRules, SHOW_WAIT_CLOCK_MOVING, SHOW_WAIT_SHOW_ON, type ShowOperation, type ShowState } from './show-state';
+import { deriveShowState, isShowWait, showGate, showOperationRules, SHOW_WAIT_CLOCK_MOVING, SHOW_WAIT_PREPARING, SHOW_WAIT_SHOW_ON, SHOW_WAIT_STOPPING,
+  type ShowOperation, type ShowState } from './show-state';
 
 /**
  * The operator's rules on when the show holds an operation back, one describe block per rule. A change that breaks a
@@ -67,12 +68,18 @@ describe('2026-11-11 第 5 题：在台上的歌（准备中、播放中、暂�
 });
 
 describe('AGENTS §4 等待不算失败：等待文案固定开头，报错转换时原样保留', () => {
-  const waits = operations.flatMap(op => allStates.map(state => showGate(op, state, 'a'))).filter(gate => gate.kind === 'wait');
+  const gated = operations.flatMap(op => allStates.map(state => ({ state, gate: showGate(op, state, 'a') })));
+  const waits = gated.map(entry => entry.gate).filter(gate => gate.kind === 'wait');
+  /** 00-order §9: a wait for the clock says the phase the program is actually in. */
+  const clockOpening = { preparing: SHOW_WAIT_PREPARING, running: SHOW_WAIT_CLOCK_MOVING, stopping: SHOW_WAIT_STOPPING } as const;
 
-  it('所有等待都以固定开头开始，认得出是等待', () => {
+  it('所有等待都以固定开头开始，认得出是等待；等节目停走的写明节目此刻在准备、在走还是在停止', () => {
     expect(waits.length).toBeGreaterThan(0);
-    for (const gate of waits) {
-      expect(gate.message.startsWith(gate.until === 'clock-stopped' ? SHOW_WAIT_CLOCK_MOVING : SHOW_WAIT_SHOW_ON), gate.message).toBe(true);
+    for (const { state, gate } of gated) {
+      if (gate.kind !== 'wait') continue;
+      const opening = gate.until === 'idle' ? SHOW_WAIT_SHOW_ON : state.phase === 'idle' || state.phase === 'held' ? null : clockOpening[state.phase];
+      expect(opening, `${state.phase} 不该等节目停走`).not.toBeNull();
+      expect(gate.message.startsWith(opening ?? ''), gate.message).toBe(true);
       expect(isShowWait(new Error(gate.message))).toBe(true);
     }
   });

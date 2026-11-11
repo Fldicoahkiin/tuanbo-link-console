@@ -43,6 +43,7 @@ import { useInternalPlayer } from './useInternalPlayer';
 import { useMa2Sync } from './runtime/use-ma2-sync';
 import { useConsoleFollow } from './runtime/use-console-follow';
 import { useStatusSources } from './runtime/use-status-sources';
+import { useShowStateMirror } from './runtime/use-show-state-mirror';
 import { useMa2SyncStore } from './stores/ma2-sync-store';
 import { useMediaAudioPreparation } from './runtime/use-media-audio-preparation';
 import { useLicenseReminders } from './useLicenseReminders';
@@ -108,7 +109,7 @@ export function LinkApp(): JSX.Element {
 
   const midiMonitor = useDesktopIntegrationEvents(notify); useEffect(() => { try { useDisplayPreferences.getState().load(); } catch (error) { notify(`显示设置读取失败：${String(error)}`, 'error'); } }, [notify]);
   useMa2Sync(editingLocked || internalPlayer.state.status === 'playing', notify);
-  useConsoleFollow(internalPlayer, playbackProject); useStatusSources();
+  useConsoleFollow(internalPlayer, playbackProject); useStatusSources(); useShowStateMirror(notify);
   useProjectPersistence(notify); useRecoveryCopyWriter(); useMediaAudioPreparation(playbackLocked, notify);
 
   useDocumentStateReport(notify);

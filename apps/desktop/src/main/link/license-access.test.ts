@@ -50,6 +50,13 @@ it('仅授权入口和安全停止豁免，新接口默认需要付费', () => {
   expect(needsProductLicense('link:obs-execute', { id: 'start', label: '开始', kind: 'obs.mediaAction', inputName: 'media', action: 'start' })).toBe(true);
   for (const channel of ['link:unknown-feature', 'link:load-profile', 'link:obs-inventory', 'link:ma2-preview', 'link:obs-live-edit']) expect(needsProductLicense(channel, undefined)).toBe(true);
 });
+it('演出状态只读和上报，不要授权：没激活的电脑也能知道节目在不在走', async () => {
+  const access = new LicenseAccess(() => Promise.resolve({ ...valid, state: 'inactive', message: 'inactive' }));
+  for (const channel of ['link:show-state-get', 'link:show-activity']) {
+    expect(needsProductLicense(channel, undefined)).toBe(false);
+    await expect(access.authorize(channel, { version: 1, p1: null, preview: false })).resolves.toBeUndefined();
+  }
+});
 it('授权读取期间停止，迟到结果不能重新授予运行会话', async () => {
   let finish: (value: LicenseStatus) => void = () => { throw new Error('未开始读取'); };
   const access = new LicenseAccess(() => new Promise<LicenseStatus>(resolve => { finish = resolve; }));

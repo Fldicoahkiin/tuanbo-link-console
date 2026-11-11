@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { deriveShowState, isShowWait, showGate, showOperationRules, SHOW_WAIT_CLOCK_MOVING, type ShowInputs, type ShowState } from './show-state';
+import { deriveShowState, isShowWait, showGate, showOperationRules, SHOW_WAIT_CLOCK_MOVING, SHOW_WAIT_PREPARING, SHOW_WAIT_SHOW_ON, SHOW_WAIT_STOPPING,
+  type ShowInputs, type ShowState } from './show-state';
 
 const none: ShowInputs = { internal: null, p1: null, preview: false, program: null };
 const internal = (status: NonNullable<ShowInputs['internal']>['status'], extra: Partial<NonNullable<ShowInputs['internal']>> = {}): ShowInputs =>
@@ -67,9 +68,10 @@ describe('showGate', () => {
     expect(showGate('rundown.reorder', idle)).toEqual({ kind: 'allow' });
   });
 
-  it('退出在演出中先确认', () => {
+  it('退出和主进程今天的做法一样：演出没停止时等停止，暂停也算', () => {
     expect(showGate('app.quit', idle)).toEqual({ kind: 'allow' });
-    expect(showGate('app.quit', held)).toMatchObject({ kind: 'confirm' });
+    expect(showGate('app.quit', held)).toEqual({ kind: 'wait', until: 'idle', message: `${SHOW_WAIT_SHOW_ON}停止后再退出。` });
+    expect(showGate('app.quit', running)).toMatchObject({ kind: 'wait', until: 'idle' });
   });
 
   it('改歌的音频只挡在台上的那首；不知道是哪首时都挡', () => {
@@ -81,13 +83,15 @@ describe('showGate', () => {
     expect(showGate('song.audio.edit', idle, 'a')).toEqual({ kind: 'allow' });
   });
 
-  it('等待文案说明要做的事', () => {
+  it('等待文案说明要做的事，并写明节目此刻在准备、在走还是在停止', () => {
     expect(showGate('ma2.sync.write', running)).toEqual({ kind: 'wait', until: 'clock-stopped', message: `${SHOW_WAIT_CLOCK_MOVING}暂停或停止后再同步控台。` });
+    expect(showGate('ma2.sync.write', { ...running, phase: 'preparing' })).toEqual({ kind: 'wait', until: 'clock-stopped', message: `${SHOW_WAIT_PREPARING}暂停或停止后再同步控台。` });
+    expect(showGate('ma2.sync.write', { ...running, phase: 'stopping' })).toEqual({ kind: 'wait', until: 'clock-stopped', message: `${SHOW_WAIT_STOPPING}停下以后再同步控台。` });
   });
 
   it('每个操作都在表里，查询不会抛错', () => {
     const shows: ShowState[] = [idle, running, held, { phase: 'preparing', source: 'p1', itemId: null, program: null }, { phase: 'stopping', source: 'internal', itemId: 'a', program: null }];
-    for (const op of Object.keys(showOperationRules) as Array<keyof typeof showOperationRules>) for (const show of shows) expect(showGate(op, show, 'a').kind).toMatch(/^(allow|wait|confirm)$/);
+    for (const op of Object.keys(showOperationRules) as Array<keyof typeof showOperationRules>) for (const show of shows) expect(showGate(op, show, 'a').kind).toMatch(/^(allow|wait)$/);
   });
 });
 

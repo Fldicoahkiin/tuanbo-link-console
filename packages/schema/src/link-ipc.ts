@@ -30,6 +30,30 @@ export const linkSaveResultSchema = z.discriminatedUnion('status', [
 ]);
 export const linkSaveResponseSchema = linkSaveRequestSchema.extend({ result: linkSaveResultSchema }).strict();
 export const linkRuntimeActiveSchema = z.boolean();
+/** The window's runtime (P1 following) as packages/core LinkRuntimeState names it. */
+export const linkRuntimeStateSchema = z.enum(['idle', 'preflight', 'armed', 'running', 'timecodeLost', 'paused', 'error', 'stopping']);
+/** What only the window knows about the show, reported on every change (link:show-activity): P1 following while its
+ * runtime is not idle, and the editor's or the lighting workbench's own preview playing. Cleared when the page is gone. */
+export const linkShowActivitySchema = z.object({
+  version: z.literal(1),
+  p1: z.object({ state: linkRuntimeStateSchema, itemId: z.string().min(1).max(200).nullable() }).strict().nullable(),
+  preview: z.boolean()
+}).strict();
+export type LinkShowActivity = z.infer<typeof linkShowActivitySchema>;
+const showSourceSchema = z.enum(['internal', 'p1', 'preview']);
+const showProgramSchema = z.object({ projectPath: z.string().max(4096), projectId: z.string().min(1).max(200), watched: z.boolean() }).strict().nullable();
+const showItemSchema = z.string().min(1).max(200).nullable();
+/** The show as the main process derives it (packages/core show-state.ts, main ShowStateService), sent on every change
+ * (link:show-state) and read once by a new page (link:show-state-get). */
+export const linkShowStateSchema = z.discriminatedUnion('phase', [
+  z.object({ phase: z.literal('idle'), program: showProgramSchema }).strict(),
+  z.object({ phase: z.literal('preparing'), source: showSourceSchema, itemId: showItemSchema, program: showProgramSchema }).strict(),
+  z.object({ phase: z.literal('running'), source: showSourceSchema, itemId: showItemSchema, program: showProgramSchema }).strict(),
+  z.object({ phase: z.literal('stopping'), source: showSourceSchema, itemId: showItemSchema, program: showProgramSchema }).strict(),
+  z.object({ phase: z.literal('held'), source: showSourceSchema, itemId: showItemSchema,
+    reason: z.enum(['paused', 'ended', 'p1-waiting', 'timecode-lost', 'error']), program: showProgramSchema }).strict()
+]);
+export type LinkShowState = z.infer<typeof linkShowStateSchema>;
 export const linkWindowControlActionSchema = z.enum(['minimize', 'toggleMaximize', 'close']);
 
 export const linkManagedMediaEventSchema = z.object({

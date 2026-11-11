@@ -15,7 +15,9 @@ const publicCalls = new Set([
   'link:obs-source-cancel', 'link:obs-live-close', 'link:ma2-read-cancel',
   'link:ma2-discovery-cancel', 'link:p1-import-cancel',
   // Protecting unsaved work never waits for a license: the save itself follows the save rule.
-  'link:set-document-state', 'link:resolve-unsaved-changes', 'link:save-response'
+  'link:set-document-state', 'link:resolve-unsaved-changes', 'link:save-response',
+  // The show state is read and reported only; whether an output may start stays licensed where it starts.
+  'link:show-state-get', 'link:show-activity'
 ]);
 
 const workspaceSaveCalls = new Set(['link:save-project', 'link:write-recovery-copy', 'link:discard-recovery-copy',

@@ -6,6 +6,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { z } from 'zod';
 import { ma2RenameRequestSchema, ma2RenameResultSchema } from '@tb/schema';
 import { linkDocumentStateSchema, linkSaveRequestSchema, linkUnsavedChangesDecisionSchema } from '@tb/schema';
+import { linkShowActivitySchema, linkShowStateSchema } from '@tb/schema';
 import { ma2LayoutReadRequestSchema, ma2LayoutSnapshotSchema, ma2NewCueRequestSchema, ma2NewCueResultSchema } from '@tb/schema';
 import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema, ma2CueDeletePlanSchema, ma2CueDeleteResultSchema } from '@tb/schema';
 import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema, nativeProgramClosedSchema } from '@tb/schema';
@@ -181,6 +182,13 @@ const tbLink: LinkDesktopBridgeApi = {
     return () => { ipcRenderer.removeListener('link:save-request', receive); };
   },
   setRuntimeActive: (active) => invoke('link:set-runtime-active', active),
+  getShowState: async () => linkShowStateSchema.parse(await invoke('link:show-state-get')),
+  onShowState: listener => {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(linkShowStateSchema.parse(value));
+    ipcRenderer.on('link:show-state', receive);
+    return () => ipcRenderer.removeListener('link:show-state', receive);
+  },
+  reportShowActivity: activity => invoke('link:show-activity', linkShowActivitySchema.parse(activity)),
   controlWindow: (action) => invoke('link:window-control', action),
   detectLocalIntegrations: () => invoke('link:detect-local-integrations'),
   loopMidi: (action) => invoke('link:loop-midi', action),

@@ -1,0 +1,43 @@
+import { useEffect } from 'react';
+import { toUserErrorMessage, type LinkRuntimeState } from '@tb/core/link';
+import type { LinkShowActivity } from '@tb/schema';
+import { useRuntimeStore } from '../stores/runtime-store';
+import { useMa2SyncStore } from '../stores/ma2-sync-store';
+import { useShowStateStore } from '../stores/show-state-store';
+import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
+
+/** What this window knows about the show and main does not: P1 following while its runtime is not idle, and the
+ * editor's or the lighting workbench's own preview playing. */
+export function showActivity(runtime: { state: LinkRuntimeState; currentItemId: string | null }, previewPlaying: boolean): LinkShowActivity {
+  return { version: 1, p1: runtime.state === 'idle' ? null : { state: runtime.state, itemId: runtime.currentItemId }, preview: previewPlaying };
+}
+
+/**
+ * Keeps useShowStateStore equal to the main process's show state, and reports this window's part of it on every
+ * change. Once for the whole window (LinkApp). A report that does not arrive is shown in red once per cause and logged
+ * by main; nothing retries it, the next change sends the whole activity again.
+ */
+export function useShowStateMirror(notify: (message: string, tone: 'info' | 'error') => void): void {
+  useEffect(() => {
+    let pushed = false, alive = true;
+    const stop = desktop.onShowState(show => { pushed = true; useShowStateStore.setState({ show }); });
+    // A change pushed before the first read answered is newer than that answer.
+    void desktop.getShowState().then(show => { if (alive && !pushed) useShowStateStore.setState({ show }); },
+      (error: unknown) => { if (alive) notify(`没读到节目现在的状态，按钮可能慢一步变灰；主进程照样会挡住不能做的操作。原因：${toUserErrorMessage(error)}`, 'error'); });
+    return () => { alive = false; stop(); };
+  }, [notify]);
+  useEffect(() => {
+    let last = '';
+    const report = (): void => {
+      const activity = showActivity(useRuntimeStore.getState(), useMa2SyncStore.getState().previewPlaying), text = JSON.stringify(activity);
+      if (text === last) return;
+      last = text;
+      void desktop.reportShowActivity(activity).catch((error: unknown) => {
+        notify(`节目状态没送到主进程，跟 P1 或预览时控台操作可能不会等。原因：${toUserErrorMessage(error)}`, 'error');
+      });
+    };
+    report();
+    const stopRuntime = useRuntimeStore.subscribe(report), stopPreview = useMa2SyncStore.subscribe(report);
+    return () => { stopRuntime(); stopPreview(); };
+  }, [notify]);
+}

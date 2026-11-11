@@ -19,10 +19,15 @@ type Factory = (project: LinkProject, request: NativeProgramOpen, callbacks: {
  * program; replacement waits for acknowledged cleanup, never starts a second output.
  * A program keeps running when its window's renderer exits or its page reloads, until
  * the next page of the same project takes it over. */
+/** The program as the show state reads it (ShowStateService): the player's state, the project it plays and whether a
+ * window shows it (false while it plays on after its page is gone). */
+export type NativeProgramSnapshot = { state: InternalPlayerState; projectPath: string; projectId: string; watched: boolean };
+
 export class NativeProgramService {
   private current: Entry | null = null;
   private cleanup: Promise<void> = Promise.resolve();
   private running = false;
+  private readonly stateListeners = new Set<() => void>();
   /** Every argument is required, so link-main cannot leave one out:
    * - `runningChanged`: the program started or stopped preparing, playing or paused, attached to a window or not; the
    *   license session of the show follows it (link-main passes `programLicense(...).runningChanged`, which reaches
@@ -50,6 +55,7 @@ export class NativeProgramService {
       }
       previous.orphaned = false; previous.request = request; previous.configuration = request.configuration;
       previous.host?.controller.setWatched(true);
+      this.stateChanged();
       this.emit(previous);
       return previous.document === document ? 'adopted' : 'outdated';
     }
@@ -89,7 +95,7 @@ export class NativeProgramService {
   async release(teardown: () => Promise<void> = () => Promise.resolve()): Promise<InternalPlayerState | null> {
     this.faults.windowExited();
     const entry = this.current;
-    if (entry && active(entry.state)) { entry.orphaned = true; entry.host?.controller.setWatched(false); return entry.state; }
+    if (entry && active(entry.state)) { entry.orphaned = true; entry.host?.controller.setWatched(false); this.stateChanged(); return entry.state; }
     if (entry) this.retire(entry);
     const released = this.cleanup.then(async (): Promise<{ failed: unknown } | null> => {
       if (this.current) return null;
@@ -151,11 +157,27 @@ export class NativeProgramService {
   owner(): string | null {
     return this.current && !this.current.orphaned ? this.current.request.ownerId : null;
   }
+  /** The open program, also while it plays on with no window; null when none is open. */
+  snapshot(): NativeProgramSnapshot | null {
+    const entry = this.current;
+    return entry ? { state: entry.state, projectPath: entry.request.projectPath, projectId: entry.projectId, watched: !entry.orphaned } : null;
+  }
+  /** Called after every change `snapshot()` shows: a program opened, taken over, left without a window or closed, and
+   * every player state. */
+  onStateChanged(listener: () => void): () => void {
+    this.stateListeners.add(listener);
+    return () => { this.stateListeners.delete(listener); };
+  }
   /** The current program is closed: nothing reaches it any more, and a new one waits for its outputs. */
   private retire(entry: Entry): void {
     this.current = null; entry.cancelled = true; entry.cancellation.abort(); this.enqueueClose(entry); this.reportRunning();
   }
+  private stateChanged(): void {
+    for (const listener of this.stateListeners) listener();
+  }
+  /** The license session follows whether the program runs; the show state follows every change. */
   private reportRunning(): void {
+    this.stateChanged();
     const running = this.current !== null && active(this.current.state);
     if (running === this.running) return;
     this.running = running; this.runningChanged(running);

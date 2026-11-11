@@ -297,6 +297,11 @@ export type LinkDesktopApi = {
   /** The main process asks the window to save (quit, reload, update); the handler's result is sent back. */
   onSaveRequest(handler: () => Promise<{ status: 'saved' } | { status: 'canceled' } | { status: 'failed'; message: string }>): () => void;
   setRuntimeActive(active: boolean): Promise<void>;
+  /** The show as the main process derives it (ShowStateService); the window mirrors it in useShowStateStore. */
+  getShowState(): Promise<import('./show-state').ShowState>;
+  onShowState(listener: (show: import('./show-state').ShowState) => void): () => void;
+  /** What only the window knows about the show: P1 following and its own previews. */
+  reportShowActivity(activity: import('@tb/schema').LinkShowActivity): Promise<void>;
   controlWindow(action: 'minimize' | 'toggleMaximize' | 'close'): Promise<void>;
   detectLocalIntegrations(): Promise<LinkLocalIntegrationDetection>;
   loopMidi(action: 'detect' | 'start' | 'download'): Promise<import('@tb/schema').LoopMidiStatus>;
