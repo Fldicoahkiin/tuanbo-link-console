@@ -6,6 +6,7 @@ import type { TimelineDrag } from './TimelineItems';
 import { timelineSpanWidth } from './timeline-geometry';
 import { waveformColumns, waveformNormalization } from '../view-models/waveform-viewport';
 import { WaveformCache } from '../runtime/waveform-cache';
+import { runWhenNotPlaying } from '../runtime/when-not-playing';
 
 const waveformCache = new WaveformCache(source => linkDesktopViewModel.generateWaveform(source));
 
@@ -52,17 +53,20 @@ export function useReferenceWaveformPeaks(source: ReferenceWaveformSource | null
       setError(value.state === 'rebuild-failed' ? value.error : null);
     };
     const message = (reason: unknown): string => reason instanceof Error ? reason.message : String(reason);
+    let dropRebuild = (): void => undefined;
     void lease.result.then((value) => {
       show(value);
-      // An old cache is shown while it is rebuilt once from this song's file, then replaced.
-      if (value.state === 'unverified') return lease.settled().then(show, (reason: unknown) => { if (!cancelled) setError(message(reason)); });
+      if (cancelled || value.state !== 'unverified') return;
+      // An old cache is shown while it is rebuilt once from this song's file, then replaced. The rebuild
+      // decodes the whole song, so it waits until nothing is playing.
+      dropRebuild = runWhenNotPlaying(() => { void lease.settled().then(show, (reason: unknown) => { if (!cancelled) setError(message(reason)); }); });
     }, (reason: unknown) => {
       if (!cancelled) {
         setPeaks([]);
         setError(message(reason));
       }
     });
-    return () => { cancelled = true; lease.release(); };
+    return () => { cancelled = true; dropRebuild(); lease.release(); };
   }, [durationMs, projectPath, sha256, url]);
 
   return { peaks, error };
