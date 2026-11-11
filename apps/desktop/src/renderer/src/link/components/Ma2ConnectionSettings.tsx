@@ -6,7 +6,7 @@ import { connectLocalMa2, useLocalMa2Store } from '../stores/ma2-connection-stor
 import { useEffect, useRef, useState } from 'react';
 import { Ma2NetworkSettings, type Ma2NetworkView } from './Ma2NetworkSettings';
 import { ma2EditingConnectionStatus } from '../view-models/connection-status';
-import { useConnectionCheckStore } from '../stores/connection-check-store';
+import { useLiveConnectionChecks } from '../useStatusCenter';
 import { Ma2CatalogSettings } from './Ma2CatalogSettings';
 import { prepareMa2Editing } from '../runtime/ma2-editing-session';
 import { useDocumentStore } from '../stores/document-store';
@@ -31,7 +31,7 @@ export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMai
   const [networkBusy, setNetworkBusy] = useState(false);
   const [network, setNetwork] = useState<Ma2NetworkView | null>(null);
   const networkConnected = network?.state === 'connected';
-  const bridge = useConnectionCheckStore(state => state.checks.bridge);
+  const bridge = useLiveConnectionChecks().bridge;
   const exportPlugin = async (): Promise<void> => {
     setBusy(true);
     try { const path = await window.tbLink.exportMa2Plugin(); if (path) notify(`插件与安装说明已导出：${path}`); }

@@ -5,7 +5,8 @@ import { useIntegrationStore } from '../stores/integration-store';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
 import { checkNetworkMa2, connectDiscoveredMa2, connectLocalMa2 } from '../stores/ma2-connection-store';
 import { readMa2Method } from '../stores/ma2-mode-store';
-import { useRuntimeStore } from '../stores/runtime-store';
+import { currentShowGate } from '../stores/show-state-store';
+import { useMa2NetworkStatusStore } from '../stores/ma2-network-status-store';
 import { linkDesktopViewModel as desktop } from './link-desktop-view-model';
 import { applyDetectedLightingMidiPorts, applyDetectedP1MidiPorts } from './local-integration-midi';
 import { midiConnectionTargets, usesNativeMidiOutput } from './connection-targets';
@@ -28,7 +29,6 @@ export type DeviceConnectionOptions = {
 // lighting so a lighting fault does not hide whether video is usable.
 const tasks = ['discovery', 'loop', 'midi', 'profile', 'obs', 'obs-inventory', 'preview', 'audio', 'p1', 'ma2-app', 'ma2', 'bridge', 'ma3d'];
 const stepDeadlineMs = 60_000;
-export const ma2BridgeWaitsForStop = '正在播放或联动还开着，这时不检查控台读写，免得耽误灯光指令。停止播放和联动后，点“一键连接”再检查一次';
 /** A dead saved address is followed by a search of up to 45 s and one more login. */
 const ma2StepDeadlineMs = 100_000;
 type ConnectionStep = <T>(id: string, label: string, operation: () => Promise<T>, detail?: string, deadlineMs?: number) => Promise<{ value: T } | null>;
@@ -107,10 +107,14 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
     await run('ma2', 'MA2 网络', async () => {
       const status = ma2NetworkStatusSchema.parse(await connectDiscoveredMa2(undefined, undefined, notice => { moved = notice; }));
       if (status.state !== 'connected') throw new Error(status.error ?? '控台没有登录成功');
+      // The connection this result stands on, as main just read it back (check-basis.ts).
+      useMa2NetworkStatusStore.setState({ status, error: null });
       return status;
     }, status => moved || `控台 ${status.settings?.host ?? ''} 登录成功`, ma2StepDeadlineMs);
-    // 2026-11-09: a check refused during a show stayed as 读写异常 for good; it is only not run yet.
-    if (!stoppedBy && useRuntimeStore.getState().state !== 'idle') { checks.finish('bridge', 'blocked', ma2BridgeWaitsForStop); return; }
+    // 2026-11-09: a check refused during a show stayed as 读写异常 for good; it is only not run yet. 2026-11-10 第 3 题: it
+    // waits only while the program moves; paused, paused at the end or P1 waiting for the next song, it checks.
+    const show = currentShowGate('connections.check');
+    if (!stoppedBy && show.kind === 'wait') { checks.waitForShow('bridge', show.message); return; }
     await run('bridge', 'MA2 工程通信', async () => { await checkNetworkMa2(); return projectMa2ShowNote(options.project); }, note => note ? `控台读写通信正常。${note}` : '控台读写通信正常');
   };
   try {

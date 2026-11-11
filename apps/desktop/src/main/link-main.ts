@@ -946,7 +946,7 @@ function registerIpc(
     return result;
   });
   handle('link:ma2-discovery-cancel', () => ma2Discovery.cancel());
-  handle('link:ma2-capabilities', async () => { await ma2NetworkReady; return ma2Network.checkCapabilities(); });
+  handle('link:ma2-capabilities', async () => { await ma2NetworkReady; return ma2Network.checkCapabilities(showState!.gate('ma2.check')); });
   const ma2NetworkReady = ma2Network.initialize();
   const ma2Audition=new Ma2AuditionService(ma2Network,state=>sendToRenderer('link:ma2-audition-state',state));
   ma2Network.setBeforeConnectionChange(()=>ma2Audition.beforeConnectionChange());

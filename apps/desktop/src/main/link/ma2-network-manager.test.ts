@@ -242,9 +242,22 @@ it.each(['2.9.1', '3.0.0.5', '3.1.2.5', '3.3.4.3', '3.9.60.74'])('版本 %s 不�
   memory.version = version;
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
   await manager.save({ settings }); await manager.connect();
-  expect((await manager.checkCapabilities()).capabilities).toMatchObject({ version, objects: true, files: true, plugin: true });
+  expect((await manager.checkCapabilities({ kind: 'allow' })).capabilities).toMatchObject({ version, objects: true, files: true, plugin: true });
   memory.capabilities = 'Lua 5.1:false:false:true';
-  expect((await manager.checkCapabilities()).capabilities?.objects).toBe(false);
+  expect((await manager.checkCapabilities({ kind: 'allow' })).capabilities?.objects).toBe(false);
   expect(() => manager.get(settings)).toThrow();
   manager.disconnect(); expect(manager.status().capabilities).toBeNull();
+});
+
+it('检查控台连接听演出状态：节目在走时等，写明原因，不发命令；每次重新连接换一个连接编号', async () => {
+  memory.version = '3.3.4.3';
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore());
+  await manager.save({ settings }); await manager.connect();
+  const first = manager.status().connection;
+  await expect(manager.checkCapabilities({ kind: 'wait', until: 'clock-stopped', message: '节目在走，暂停或停止后再检查控台连接。' }))
+    .rejects.toThrow('节目在走，暂停或停止后再检查控台连接。');
+  expect(manager.status().capabilities).toBeNull();
+  manager.disconnect(); await manager.connect();
+  expect(manager.status()).toMatchObject({ state: 'connected' });
+  expect(manager.status().connection).not.toBe(first);
 });

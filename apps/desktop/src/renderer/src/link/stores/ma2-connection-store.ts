@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { useIntegrationStore } from './integration-store';
 import { ma2LocalDirectoryMismatch } from '../view-models/ma2-local-directory';
 import { useConnectionCheckStore } from './connection-check-store';
+import { useMa2NetworkStatusStore } from './ma2-network-status-store';
 import { ma2DiscoverySchema, ma2NetworkStatusSchema, type Ma2Discovery, type Ma2NetworkStatus } from '@tb/schema';
 import { prepareMa2ComputerNetwork } from '../view-models/ma2-computer-network';
 
@@ -66,6 +67,8 @@ export function checkNetworkMa2(): Promise<Ma2NetworkStatus> {
   if (networkCheck) return networkCheck;
   networkCheck = (async () => {
     const checked = ma2NetworkStatusSchema.parse(await window.tbLink.checkMa2Capabilities());
+    // The connection the check stands on, as main just read it back (check-basis.ts).
+    useMa2NetworkStatusStore.setState({ status: checked, error: null });
     if (checked.state !== 'connected' || !checked.settings) throw new Error(checked.error ?? '控台未连接');
     const { host, port, monitorPort, username } = checked.settings;
     await window.tbLink.exchangeMa2({ dataDirectory: '', network: { host, port, monitorPort, username }, target: 1, operation: 'PING', expected: '', desired: '' });

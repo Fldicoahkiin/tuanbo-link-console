@@ -24,10 +24,10 @@ import { readMa2NetworkPreview } from './ma2-network-preview';
 import { Ma2LiveService } from './ma2-live-service';
 import { Ma2SongWatch } from './ma2-song-watch';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
+import type { ShowGate } from '@tb/core/link';
 
 /** One chosen console, machine settings only. Auto-connect never replays writes. */
 /** Reading the console during a show could hold back its lighting: the check waits until playback stops. */
-export const ma2CheckWhilePlaying = '正在播放或联动还开着，这时不检查控台读写，免得耽误灯光指令。停止播放和联动后，点“一键连接”再检查一次';
 /** A command that waited behind another console job past its deadline is dropped, never sent late. */
 export function ma2BusyMessage(off: boolean, waitedMs: number): string {
   const seconds = Math.max(1, Math.round(waitedMs / 1000));
@@ -278,7 +278,9 @@ export class Ma2NetworkManager {
     catch { this.error = '读取保存的 MA2 密码失败，请重新保存密码'; return; }
     if (this.settings.autoConnect) await this.connect();
   }
-  status(): Ma2NetworkStatus { return { profiles: this.profiles, capabilities: this.capabilities, settings: this.settings, passwordSaved: this.passwordSaved, state: this.connection?.state === 'connected' && !this.services ? 'connecting' : this.connection?.state ?? 'disconnected', version: this.version, error: this.error, ...this.error && this.unreachable ? { unreachable: true } : {} }; }
+  /** `connection` names this connection: every new login, and every disconnect, gives a new one, so a result read on an
+   * earlier connection is not shown for this one (status-center, check-basis.ts). */
+  status(): Ma2NetworkStatus { return { profiles: this.profiles, capabilities: this.capabilities, settings: this.settings, passwordSaved: this.passwordSaved, connection: this.generation, state: this.connection?.state === 'connected' && !this.services ? 'connecting' : this.connection?.state ?? 'disconnected', version: this.version, error: this.error, ...this.error && this.unreachable ? { unreachable: true } : {} }; }
   async save(payload: Ma2NetworkSave): Promise<Ma2NetworkStatus> {
     if (this.isPlaying()) throw new Error('播放期间不能更换控台连接');
     if (this.busy) throw new Error('MA2 正在连接，请稍后保存');
@@ -357,8 +359,10 @@ export class Ma2NetworkManager {
     if (!show) throw new Error('控台没有加载 Show');
     return show;
   }
-  async checkCapabilities(): Promise<Ma2NetworkStatus> {
-    if (this.isPlaying()) throw new Error(ma2CheckWhilePlaying);
+  /** `gate`: what the show says about checking the console now (ShowStateService, 'ma2.check'): held and stopped check,
+   * a moving program waits (2026-11-10 第 3 题). */
+  async checkCapabilities(gate: ShowGate): Promise<Ma2NetworkStatus> {
+    if (gate.kind === 'wait') throw new Error(gate.message);
     if (this.busy) throw new Error('MA2 正在处理连接请求');
     const connection = this.connection;
     if (!connection || connection.state !== 'connected' || !this.version) throw new Error('请先登录控台');

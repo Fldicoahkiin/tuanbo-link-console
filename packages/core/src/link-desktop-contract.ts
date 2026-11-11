@@ -116,6 +116,8 @@ export type LinkObsSnapshot = {
   obsVersion: string | null;
   webSocketVersion: string | null;
   error: string | null;
+  /** Which connection this is (main's adapter counts each time OBS becomes connected). */
+  connection?: number;
 };
 
 export type LinkObsInventory = {

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
 import type { LinkDesktopApi, LinkProcessSnapshot } from '@tb/core/link';
-import { connectDevices, ma2BridgeWaitsForStop, type DeviceConnectionOptions } from './connect-devices';
-import { useRuntimeStore } from '../stores/runtime-store';
+import { connectDevices, type DeviceConnectionOptions } from './connect-devices';
+import { useShowStateStore } from '../stores/show-state-store';
+import { liveChecks, type LiveCheckInput } from './check-basis';
+import { showGate, type ShowState } from '@tb/core/link';
 import { createDefaultIntegrationProfile } from './local-integration-profile';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -135,6 +137,7 @@ beforeEach(() => {
   api.getNativePlaybackDevices.mockResolvedValue({ protocol: 4, audio: [{ id: 'native-default', name: '默认播放设备', isDefault: true }], midiOutputs: [], midiInputs: [] });
   useIntegrationStore.getState().setNativeDevices(null, null);
   useConnectionCheckStore.setState({ running: false, checks: {}, pending: [], completed: 0, total: 0 });
+  useShowStateStore.setState({ show: { phase: 'idle', program: null } });
   useIntegrationStore.getState().setObs({ status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null });
   vi.stubGlobal('navigator', { mediaDevices: { enumerateDevices: () => Promise.resolve([{ kind: 'audiooutput', deviceId: 'default' }]) } });
   api.detectLocalIntegrations.mockResolvedValue(nothingDetected());
@@ -271,16 +274,33 @@ it('控台当前 Show 名和上次读取的不一样：工程通信照样通过�
   await connectDevices(config);
   expect(useConnectionCheckStore.getState().checks.bridge).toMatchObject({ state: 'ready', detail: '控台读写通信正常' });
 });
-it('联动开着时不检查控台读写，标成没执行而不是读写异常，停下后再点一键连接照常检查', async () => {
-  useRuntimeStore.getState().setState({ state: 'running' });
-  try {
-    await connectDevices(options());
-    expect(api.checkNetwork).not.toHaveBeenCalled();
-    expect(useConnectionCheckStore.getState().checks.bridge).toMatchObject({ state: 'blocked', detail: ma2BridgeWaitsForStop });
-    expect(useConnectionCheckStore.getState().checks.ma2?.state).toBe('ready');
-  } finally { useRuntimeStore.getState().setState({ state: 'idle' }); }
+/** What the top bar shows for the one-click results under `show`, from the live sources the store reads. */
+function shown(show: ShowState) {
+  const integration = useIntegrationStore.getState();
+  const live: LiveCheckInput = { processes: integration.processes, obs: integration.obs,
+    network: { state: 'connected', connection: 0 }, connectionsCheck: showGate('connections.check', show) };
+  return liveChecks(useConnectionCheckStore.getState().checks, live);
+}
+const moving: ShowState = { phase: 'running', source: 'internal', itemId: 'song', program: null };
+const paused: ShowState = { phase: 'held', source: 'internal', itemId: 'song', reason: 'paused', program: null };
+
+it('节目在走时不检查控台读写，写成等待而不是读写异常；停下后等待消失，再点一键连接照常检查', async () => {
+  useShowStateStore.setState({ show: moving });
   await connectDevices(options());
-  expect(api.checkNetwork).toHaveBeenCalledOnce(); expect(useConnectionCheckStore.getState().checks.bridge?.state).toBe('ready');
+  expect(api.checkNetwork).not.toHaveBeenCalled();
+  expect(useConnectionCheckStore.getState().checks.ma2?.state).toBe('ready');
+  expect(shown(moving).bridge).toMatchObject({ state: 'waiting', detail: '节目在走，暂停或停止后再检查连接。' });
+  // Stopped: the wait is gone with the show, the live row shows until the next 一键连接 checks it.
+  expect(shown({ phase: 'idle', program: null }).bridge).toBeUndefined();
+  useShowStateStore.setState({ show: { phase: 'idle', program: null } });
+  await connectDevices(options());
+  expect(api.checkNetwork).toHaveBeenCalledOnce(); expect(shown({ phase: 'idle', program: null }).bridge?.state).toBe('ready');
+});
+it('2026-11-10 第 3 题：暂停时一键连接真的检查控台读写', async () => {
+  useShowStateStore.setState({ show: paused });
+  await connectDevices(options());
+  expect(api.checkNetwork).toHaveBeenCalledOnce();
+  expect(shown(paused).bridge).toMatchObject({ state: 'ready', detail: '控台读写通信正常' });
 });
 it('程序识别未通过即停止，不再保存配置或连接设备', async () => {
   api.detectLocalIntegrations.mockRejectedValueOnce(new Error('系统命令组件暂不可用'));

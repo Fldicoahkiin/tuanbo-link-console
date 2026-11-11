@@ -23,6 +23,9 @@ export type ObsConnectionSnapshot = {
   obsVersion: string | null;
   webSocketVersion: string | null;
   error: string | null;
+  /** Which connection this is: every time OBS becomes connected it gets a new number, so a check made on an earlier
+   * connection is not shown for this one (status-center, check-basis.ts). */
+  connection: number;
 };
 
 export type ObsInventory = {
@@ -84,7 +87,8 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     status: 'disconnected',
     obsVersion: null,
     webSocketVersion: null,
-    error: null
+    error: null,
+    connection: 0
   };
 
   constructor(
@@ -710,8 +714,9 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     if (this.snapshot.status !== 'connected') throw new Error('OBS WebSocket 还没连接');
   }
 
-  private updateSnapshot(update: Partial<ObsConnectionSnapshot>): void {
-    this.snapshot = { ...this.snapshot, ...update };
+  private updateSnapshot(update: Partial<Omit<ObsConnectionSnapshot, 'connection'>>): void {
+    const connection = update.status === 'connected' && this.snapshot.status !== 'connected' ? this.snapshot.connection + 1 : this.snapshot.connection;
+    this.snapshot = { ...this.snapshot, ...update, connection };
     const snapshot = this.getSnapshot();
     for (const listener of this.listeners) listener(snapshot);
   }

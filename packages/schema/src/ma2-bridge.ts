@@ -27,6 +27,8 @@ export const ma2NetworkStatusSchema = z.object({
   settings: ma2NetworkSettingsSchema.nullable(), passwordSaved: z.boolean(),
   profiles: z.array(ma2NetworkSettingsSchema).optional(), capabilities: ma2CapabilitiesSchema.nullable().optional(),
   state: z.enum(['disconnected', 'connecting', 'authenticating', 'connected']), version: z.string().nullable(), error: z.string().nullable(),
+  /** Which connection this is: a new login gets a new number. A check made on an earlier connection does not stand for this one. */
+  connection: z.number().int().nonnegative().optional(),
   /** The last connect reached nothing at the saved address: the console is off, unplugged or at another IP. */
   unreachable: z.literal(true).optional()
 }).strict();

@@ -7,7 +7,25 @@ import { useLocalMa2Store } from './stores/ma2-connection-store';
 import { useConnectionCheckStore } from './stores/connection-check-store';
 import { useMa2NetworkStatusStore } from './stores/ma2-network-status-store';
 import { useConsoleFollowStore } from './stores/console-follow-store';
+import { showGate } from '@tb/core/link';
+import { useShowStateStore } from './stores/show-state-store';
 import { statusCenter, type StatusCenter } from './view-models/status-center';
+import { liveChecks } from './view-models/check-basis';
+import type { ConnectionCheck } from './stores/connection-check-store';
+
+/** The one-click results that still stand on the live connections and the show (check-basis.ts), computed again on
+ * every change. Every view that shows a result reads it here, not from useConnectionCheckStore. */
+export function useLiveConnectionChecks(): Record<string, ConnectionCheck> {
+  const checks = useConnectionCheckStore(state => state.checks);
+  const obs = useIntegrationStore(state => state.obs);
+  const p1 = useIntegrationStore(state => state.processes.p1);
+  const ma2 = useIntegrationStore(state => state.processes.ma2);
+  const ma3d = useIntegrationStore(state => state.processes.ma3d);
+  const network = useMa2NetworkStatusStore(state => state.status);
+  const show = useShowStateStore(state => state.show);
+  return useMemo(() => liveChecks(checks, { obs, network, processes: { p1, ma2, ma3d }, connectionsCheck: showGate('connections.check', show) }),
+    [checks, obs, network, p1, ma2, ma3d, show]);
+}
 
 /** The status center for the open project and the playing song. */
 export function useStatusCenter(player: ProjectPlayer): StatusCenter {
@@ -23,7 +41,7 @@ export function useStatusCenter(player: ProjectPlayer): StatusCenter {
   const midiPorts = useIntegrationStore(state => state.midiPorts);
   const nativeDevices = useIntegrationStore(state => state.nativeDevices);
   const nativeDeviceError = useIntegrationStore(state => state.nativeDeviceError);
-  const checks = useConnectionCheckStore(state => state.checks);
+  const checks = useLiveConnectionChecks();
   const network = useMa2NetworkStatusStore(state => state.status);
   const networkError = useMa2NetworkStatusStore(state => state.error);
   const follow = useConsoleFollowStore(state => state.follow);

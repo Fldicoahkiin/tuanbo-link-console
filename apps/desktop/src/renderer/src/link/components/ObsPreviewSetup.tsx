@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Wrench } from 'lucide-react';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
+import { useLiveConnectionChecks } from '../useStatusCenter';
 
 export function ObsPreviewSetup({ disabled, notify, beforeRepair }: {
   disabled: boolean;
@@ -10,7 +11,7 @@ export function ObsPreviewSetup({ disabled, notify, beforeRepair }: {
   beforeRepair: () => Promise<void>;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
-  const status = useConnectionCheckStore(state => state.checks.preview);
+  const status = useLiveConnectionChecks().preview;
   const prepare = async (): Promise<void> => {
     if (busy || disabled) return;
     setBusy(true); useConnectionCheckStore.getState().checking('preview');
