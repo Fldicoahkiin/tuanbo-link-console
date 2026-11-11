@@ -99,6 +99,8 @@ docs/                           设计、实施、验收和服务器安装说明
 | 顶栏和各处显示的状态 | `view-models/status-center.ts` |
 | 内容时间线的放置、移动、修剪 | `packages/core/src/content-timeline.ts` |
 | MIDI 端口的开关 | 主进程 `midi-port-broker.ts`。界面不用 Web MIDI：`navigator.requestMIDIAccess` 会占住电脑上全部 MIDI 端口，Windows 报错误 7 或 4 |
+| 动作 MIDI 晚到怎么办 | `packages/core/src/midi-late-rule.ts`（2026-11-10）：Program Change、Control Change 照发并标红，Note On、MSC Go 晚 100 ms 以上只跳过这一条，Note Off、MSC Stop 总是发；一条失败不停整路 |
+| OBS 请求谁先发 | `apps/desktop/src/main/link/obs-request-scheduler.ts` 的档位和 `pump`：切画面的请求单独一档，始终有位置；截图等画面发完再发 |
 
 同一次复盘定下的另外几条：
 
