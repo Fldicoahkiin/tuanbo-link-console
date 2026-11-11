@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ObsPictureLedger, pictureElementKey, showKey, type LedgerWrite } from './obs-picture-ledger';
 
-const program = (scene: string): LedgerWrite => ({ element: 'program', value: scene, target: scene });
+const program = (scene: string): LedgerWrite => ({ element: 'program', value: { sceneName: scene, cueId: null }, target: scene });
+const scene = (sceneName: string) => ({ sceneName, cueId: null });
 const decoder = (clipId: string, mode: 'playing' | 'paused' | 'stopped' = 'playing'): LedgerWrite =>
   ({ element: 'decoder', key: 'M1', value: { clipId, mode, offsetMs: 0 }, target: `${clipId}:${mode}` });
 
@@ -9,12 +10,12 @@ describe('OBS 已确认的账：只记 OBS 回应或报告过的', () => {
   it('发出去是“等回应”，回应了才算确认；过时的回应不改账', () => {
     const ledger = new ObsPictureLedger();
     ledger.sent(program('机位甲'), 1);
-    expect(ledger.state().program).toEqual({ state: 'pending', value: '机位甲', target: '机位甲', since: 1 });
+    expect(ledger.state().program).toEqual({ state: 'pending', value: scene('机位甲'), target: '机位甲', since: 1 });
     ledger.sent(program('机位乙'), 2);
     ledger.ack(program('机位甲'), 3);
     expect(ledger.state().program.state).toBe('pending');
     ledger.ack(program('机位乙'), 4);
-    expect(ledger.state().program).toEqual({ state: 'confirmed', value: '机位乙', at: 4 });
+    expect(ledger.state().program).toEqual({ state: 'confirmed', value: scene('机位乙'), at: 4 });
   });
 
   it('同一个应有状态连续失败会累计次数，换了应有状态重新算', () => {
@@ -34,13 +35,13 @@ describe('OBS 已确认的账：只记 OBS 回应或报告过的', () => {
 
   it('重连后全部不确定，手动接管也作废', () => {
     const ledger = new ObsPictureLedger();
-    const show: LedgerWrite = { element: 'show', key: showKey({ sceneName: '机位甲', sourceName: '字幕' }), value: { enabled: true, sceneName: '机位甲', sourceName: '字幕', span: 'a' }, target: 'on:a' };
+    const show: LedgerWrite = { element: 'show', key: showKey({ sceneName: '机位甲', sourceName: '字幕', actionId: 'a' }), value: { enabled: true, sceneName: '机位甲', sourceName: '字幕', span: 'a' }, target: 'on:a' };
     for (const write of [program('机位甲'), decoder('c1'), show]) { ledger.sent(write, 1); ledger.ack(write, 2); }
     ledger.takeOver('手动场景', '机位甲', 3);
     ledger.invalidate('OBS 重新连接');
     const state = ledger.state();
     expect(state.takenOver).toBeNull();
-    expect(state.program).toEqual({ state: 'unknown', reason: 'OBS 重新连接', last: '手动场景' });
+    expect(state.program).toEqual({ state: 'unknown', reason: 'OBS 重新连接', last: scene('手动场景') });
     expect(state.decoders.get('M1')).toMatchObject({ state: 'unknown', last: { clipId: 'c1' } });
     expect(state.shows.get(show.key)).toMatchObject({ state: 'unknown', last: { enabled: true, sourceName: '字幕' } });
   });
@@ -53,18 +54,11 @@ describe('OBS 已确认的账：只记 OBS 回应或报告过的', () => {
     expect(ledger.state().takenOver).toBeNull();
   });
 
-  it('切开的同一素材接着播：只换片段编号，解码器状态不变', () => {
-    const ledger = new ObsPictureLedger();
-    ledger.sent(decoder('c3'), 1); ledger.ack(decoder('c3'), 2);
-    ledger.adopt('M1', 'c4');
-    expect(ledger.state().decoders.get('M1')).toEqual({ state: 'confirmed', value: { clipId: 'c4', mode: 'playing', offsetMs: 0 }, at: 2 });
-  });
-
   it('没发出去的撤回：回到发之前的样子；素材重新准备好以后忘掉失败，下一遍照应有的发', () => {
     const ledger = new ObsPictureLedger();
     ledger.sent(program('A'), 0); ledger.ack(program('A'), 1);
     ledger.sent(program('B'), 2); ledger.withdraw(program('B'));
-    expect(ledger.state().program).toMatchObject({ state: 'confirmed', value: 'A' });
+    expect(ledger.state().program).toMatchObject({ state: 'confirmed', value: scene('A') });
     ledger.sent(decoder('c1'), 3); ledger.withdraw(decoder('c1'));
     expect(ledger.state().decoders.has('M1')).toBe(false);
     ledger.sent(decoder('c1'), 4); ledger.fail(decoder('c1'), 'OBS 拒绝了');

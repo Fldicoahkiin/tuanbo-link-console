@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ObsPictureLedger, pictureElementKey, showKey, type LedgerWrite, type PictureLedgerState } from './obs-picture-ledger';
+import { ObsPictureLedger, pictureElementKey, showKey, showMayBeOn, type LedgerWrite, type PictureLedgerState } from './obs-picture-ledger';
 import { stoppedPicture, type OnAirPicture, type PictureClip } from './on-air-picture';
 import { OutputRecovery, recordPictureRepair } from './output-recovery';
-import { groupPictureOps, pictureOpWrites, planPictureReconcile, whilePaused, type PictureOp, type ReconcileContext, type ReconcilePlan } from './picture-reconcile';
+import { groupPictureOps, pictureOpWrites, pictureProgram, planPictureReconcile, programSignature, whilePaused, type PictureOp, type ReconcileContext, type ReconcilePlan } from './picture-reconcile';
 
 const clip = (clipId: string, sourceName: string, sceneName: string, offsetMs: number, continuesFrom?: string): PictureClip =>
   ({ clipId, sourceName, assetId: `asset-${clipId}`, layerId: 'L1', sceneName, offsetMs, continuesFrom });
@@ -46,7 +46,7 @@ function random(seed: number): () => number {
 }
 /** The ledger equals the wanted picture: program, compositions, every wanted decoder and show, nothing else running or shown. */
 function expectLedgerEquals(state: PictureLedgerState, picture: OnAirPicture, mode: 'playing' | 'paused'): void {
-  expect(state.program).toMatchObject({ state: 'confirmed', value: picture.target.sceneName });
+  expect(state.program).toMatchObject({ state: 'confirmed', value: { sceneName: picture.target.sceneName } });
   if (picture.target.kind === 'composition')
     expect(state.compositions.get(picture.target.sceneName)).toMatchObject({ state: 'confirmed', value: JSON.stringify(picture.target.layers.map(layer => layer.sceneName)) });
   const wanted = [...picture.clips, ...picture.covered, ...picture.sounds];
@@ -54,7 +54,10 @@ function expectLedgerEquals(state: PictureLedgerState, picture: OnAirPicture, mo
   for (const [source, known] of state.decoders)
     if (!wanted.some(entry => entry.sourceName === source)) expect(known).toMatchObject({ state: 'confirmed', value: { mode: 'stopped' } });
   const shown = new Set(picture.shows.map(showKey));
-  for (const [key, known] of state.shows) expect(known).toMatchObject({ state: 'confirmed', value: { enabled: shown.has(key) } });
+  // A span not open is off air: confirmed hidden, or not known but with nothing that may still show it.
+  for (const [key, known] of state.shows)
+    if (shown.has(key)) expect(known).toMatchObject({ state: 'confirmed', value: { enabled: true } });
+    else expect(showMayBeOn(known)).toBe(false);
   for (const key of shown) expect(state.shows.has(key)).toBe(true);
 }
 
@@ -183,7 +186,7 @@ describe('补的是现在该有的画面：失败补一次，过了切点作废�
 });
 
 describe('OBS 状态不确定时按此刻应有的全量恢复（01 设计 4.4、4.7）', () => {
-  it('重连后场景、叠加、解码器和显示来源全部按应有的发一次，记为恢复', () => {
+  it('重连后场景、叠加、解码器和显示来源全部按应有的发一次，记为恢复；确认隐藏过的来源不再隐藏', () => {
     const ledger = new ObsPictureLedger();
     settle(ledger, pictureAt(60), context());
     settle(ledger, pictureAt(150), context());
@@ -192,8 +195,9 @@ describe('OBS 状态不确定时按此刻应有的全量恢复（01 设计 4.4�
     const plan = planPictureReconcile(pictureAt(250), ledger.state(), context());
     expect(plan.ops.map(op => [op.kind, op.reason])).toEqual([
       ['decoder.stop', 'restore'], ['composition.update', 'restore'], ['program.switch', 'restore'],
-      ['decoder.start', 'restore'], ['decoder.start', 'restore'], ['decoder.start', 'restore'], ['show.set', 'restore']]);
-    expect(plan.ops.find(op => op.kind === 'show.set')).toMatchObject({ sourceName: '字幕', enabled: false });
+      ['decoder.start', 'restore'], ['decoder.start', 'restore'], ['decoder.start', 'restore']]);
+    // The subtitle's hide was confirmed before the reconnect: no second hide (it would go to the scene now on program).
+    expect(plan.ops.some(op => op.kind === 'show.set')).toBe(false);
   });
 
   it('从没发过的第一遍不算恢复', () => {
@@ -205,14 +209,14 @@ describe('画面被手动接管：下一段之前不切回（2026-11-10 第 5 �
   it('接管期间不发切场景，素材和显示来源照常对；应有画面变了才照常切', () => {
     const ledger = new ObsPictureLedger();
     settle(ledger, pictureAt(40), context());
-    ledger.takeOver('手动场景', '机位甲', 1);
+    ledger.takeOver('手动场景', programSignature(pictureProgram(pictureAt(60).target)!), 1);
     const during = planPictureReconcile(pictureAt(60), ledger.state(), context());
     expect(during.ops.map(op => op.kind)).toEqual(['show.set']);
     expect(during.waiting).toEqual([{ element: 'program', kind: 'taken-over', detail: '画面被手动接管（手动场景），到下一段再照常切换' }]);
     // A single material comes on program with its own start: the switch rides on it.
     const next = planPictureReconcile(pictureAt(150), ledger.state(), context());
     const change = next.ops.find(op => op.kind === 'decoder.start')!;
-    expect(change).toMatchObject({ program: { element: 'program', value: '素材一' } });
+    expect(change).toMatchObject({ program: { element: 'program', value: { sceneName: '素材一' } } });
     for (const write of next.ops.flatMap(pictureOpWrites)) { ledger.sent(write, 2); ledger.ack(write, 3); }
     expect(ledger.state().takenOver).toBeNull();
   });
@@ -224,9 +228,9 @@ describe('一个素材上画面：切场景和开播是一步（规则测试 obs
     settle(ledger, pictureAt(60), context());
     const ops = planPictureReconcile(pictureAt(150), ledger.state(), context()).ops;
     expect(ops.map(op => op.kind)).toEqual(['show.set', 'decoder.start']);
-    expect(ops[1]).toMatchObject({ program: { value: '素材一' } });
+    expect(ops[1]).toMatchObject({ program: { value: { sceneName: '素材一' } } });
     settle(ledger, pictureAt(150), context());
-    ledger.observe({ element: 'program', value: '机位乙' }, 5);
+    ledger.observe({ element: 'program', value: { sceneName: '机位乙', cueId: null } }, 5);
     expect(planPictureReconcile(pictureAt(160), ledger.state(), context()).ops).toMatchObject([{ kind: 'program.switch', sceneName: '素材一' }]);
     // The start refused: the program does not switch to a scene whose material did not start.
     const refused = new ObsPictureLedger();
@@ -252,7 +256,7 @@ describe('切开的同一素材接着播，不重启（media5b D1，OBS_SCENE_WO
     settle(ledger, pictureAt(250), context());
     const plan = planPictureReconcile(pictureAt(310), ledger.state(), context());
     expect(plan.ops.map(op => op.kind)).toEqual(['decoder.stop', 'decoder.stop', 'decoder.handover']);
-    expect(plan.ops.at(-1)).toMatchObject({ clip: { clipId: 'c4', sourceName: 'M3' }, program: { value: '素材三' } });
+    expect(plan.ops.at(-1)).toMatchObject({ clip: { clipId: 'c4', sourceName: 'M3' }, program: { value: { sceneName: '素材三' } } });
     expect(plan.ops.some(op => op.kind === 'decoder.stop' && op.sourceName === 'M3')).toBe(false);
     for (const write of plan.ops.flatMap(pictureOpWrites)) { ledger.sent(write, 1); ledger.ack(write, 1); }
     expect(ledger.state().decoders.get('M3')).toMatchObject({ state: 'confirmed', value: { clipId: 'c4', mode: 'playing' } });
@@ -264,7 +268,7 @@ describe('暂停时只暂停解码器（OBS_SCENE_WORKFLOW 2026-11-09）', () =>
   it('暂停中别的画面变化都不发，继续时按那时的位置补上', () => {
     const ledger = new ObsPictureLedger();
     settle(ledger, pictureAt(150), context());
-    ledger.observe({ element: 'program', value: '别的场景' }, 2);
+    ledger.observe({ element: 'program', value: { sceneName: '别的场景', cueId: null } }, 2);
     const plan = planPictureReconcile(pictureAt(150), ledger.state(), context({ transport: 'paused' }));
     expect(plan.ops.map(op => op.kind)).toEqual(['decoder.pause', 'program.switch']);
     expect(whilePaused(plan).ops).toMatchObject([{ kind: 'decoder.pause', sourceName: 'M1' }]);
@@ -302,12 +306,14 @@ describe('暂停、准备中和停歌', () => {
       .toMatchObject([{ kind: 'decoder.pause', clipId: 'c1', reason: 'restore' }]);
   });
 
-  it('同一个来源前后两段紧挨着：后一段开始时再显示一次，不先隐藏', () => {
+  it('同一个来源前后两段紧挨着：前一段先隐藏自己显示的，后一段再显示（每段一个元素）', () => {
     const at = (actionId: string): OnAirPicture => ({ ...pictureAt(60), shows: [{ cueId: actionId, actionId, sceneName: '机位甲', sourceName: '字幕', layerId: 'L2' }] });
     const ledger = new ObsPictureLedger();
     settle(ledger, at('first'), context());
     expect(planPictureReconcile(at('first'), ledger.state(), context()).ops).toEqual([]);
-    expect(planPictureReconcile(at('second'), ledger.state(), context()).ops).toMatchObject([{ kind: 'show.set', enabled: true, write: { target: 'on:second' } }]);
+    expect(planPictureReconcile(at('second'), ledger.state(), context()).ops).toMatchObject([
+      { kind: 'show.set', enabled: false, write: { target: 'off', value: { span: 'first' } } },
+      { kind: 'show.set', enabled: true, write: { target: 'on:second' } }]);
   });
 
   it('素材还在准备：画面先保持现状，写“还在准备”，不算失败', () => {
@@ -338,7 +344,7 @@ describe('同一个切点的请求一起发（沿用现在的分组）', () => {
     const start = (index: number, scene = '层'): PictureOp => ({ kind: 'decoder.start', clip: clip(`c${index}`, `M${index}`, scene, 0), mode: 'playing', reason: 'cut',
       write: { element: 'decoder', key: `M${index}`, value: { clipId: `c${index}`, mode: 'playing', offsetMs: 0 }, target: `c${index}:playing` }, program: null });
     const composition: PictureOp = { kind: 'composition.update', sceneName: '叠加', layers: [{ sceneName: '层' }], reason: 'cut', write: { element: 'composition', key: '叠加', value: 'x', target: 'x' } };
-    const program: PictureOp = { kind: 'program.switch', sceneName: '叠加', reason: 'cut', write: { element: 'program', value: '叠加', target: '叠加' } };
+    const program: PictureOp = { kind: 'program.switch', sceneName: '叠加', reason: 'cut', write: { element: 'program', value: { sceneName: '叠加', cueId: null }, target: '叠加' } };
     const stop: PictureOp = { kind: 'decoder.stop', sourceName: 'M0', reason: 'cut', write: { element: 'decoder', key: 'M0', value: { clipId: '', mode: 'stopped', offsetMs: 0 }, target: ':stopped' } };
     const ops = [stop, stop, composition, program, ...Array.from({ length: 10 }, (_, index) => start(index + 1))];
     expect(groupPictureOps(ops).map(group => group.length)).toEqual([1, 1, 10, 2]);

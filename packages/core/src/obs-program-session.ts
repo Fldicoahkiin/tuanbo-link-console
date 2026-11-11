@@ -4,7 +4,7 @@ import { CueRuntime, type DueCue, type RuntimeUpdate } from './cue-runtime';
 import { frameNumberToTimecode, millisecondsToFrameNumber, playbackFramesPerSecond, type MtcSample } from './mtc-timecode';
 import { ManagedOutputRuntime, type ManagedMediaExecutionReport, type ManagedOutputRuntimeDependencies } from './managed-output-runtime';
 import { compileManagedMediaTimeline, MANAGED_OBS_SCENE_NAME, type ManagedMediaEvent } from './managed-media-timeline';
-import { ObsPictureLedger, showKey, type Known, type LedgerWrite, type ShownSourceState } from './obs-picture-ledger';
+import { ObsPictureLedger, showKey, showMayBeOn, type LedgerWrite } from './obs-picture-ledger';
 import type { OnAirPicture } from './on-air-picture';
 import type { RecoveryBudgetView } from './output-recovery';
 import { COMPOSITION_GROUP_STARTS, DECODER_GROUP_STARTS, pictureOpWrites, planPictureReconcile, whilePaused, type PictureOp, type ReconcilePlan } from './picture-reconcile';
@@ -51,7 +51,7 @@ type Slot = 'stop' | 'before' | 'program' | 'start' | 'after';
  * Cue, which is sent once whatever happens; `layers`: the composition it puts on program;
  * `lateMs`: a clip that became ready after its boundary and starts late. */
 type Entry = { frame: number; priority: number; slot: Slot; label: string; writes: LedgerWrite[] } & (
-  | { kind: 'cue'; cue: LinkCue; point: string | null; layers: readonly string[] | null; shown: { key: string; cueId: string; actionId: string } | null }
+  | { kind: 'cue'; cue: LinkCue; point: string | null; layers: readonly string[] | null }
   | { kind: 'media'; event: ManagedMediaEvent; lateMs: number | null });
 type MediaEntry = Extract<Entry, { kind: 'media' }>;
 type Outcome = 'ok' | 'withdrawn' | { failed: string };
@@ -95,14 +95,6 @@ function cueOutcome(report: CueExecutionReport): Outcome {
   const failed = report.results.find(result => result.status === 'failed');
   if (failed) return { failed: failed.error ?? `${failed.action.label}没有完成` };
   return !report.results.length || report.results.some(result => result.status === 'succeeded') ? 'ok' : 'withdrawn';
-}
-/** A shown source may be on air: shown, or a hide OBS refused. A show OBS refused is not. */
-function mayShow(known: Known<ShownSourceState>): boolean {
-  switch (known.state) {
-    case 'confirmed': case 'pending': return known.value.enabled;
-    case 'unknown': return known.last?.enabled ?? false;
-    case 'failed': return !known.value.enabled;
-  }
 }
 
 /** Owns an immutable program and consumes device-clock observations. No renderer,
@@ -149,8 +141,8 @@ export class ObsProgramSession {
   private lost = false;
   /** Point Cues already sent for the queued ticks, failed or not, by execution: never sent again. */
   private readonly sentDue = new Set<string>();
-  /** Which span showed each shown source, by show key: its end hides it with that span's hide. */
-  private readonly shownBy = new Map<string, { cueId: string; actionId: string }>();
+  /** The Cue of each "show source" action: a span's end hides with that Cue's hide. */
+  private readonly spanCue = new Map<string, string>();
   /** When the song resumed, until the pass after it measured the resume. */
   private resumedAt: number | null = null;
   /** Set by an OBS reconnect until the owned scenes are prepared again; a pause leaves it for the resume. */
@@ -202,6 +194,7 @@ export class ObsProgramSession {
     this.managed.selectItem(itemId);
     this.timeline = this.managed.sceneTimeline!;
     this.cueById = new Map(item.cues.map(cue => [cue.id, cue]));
+    for (const cue of item.cues) for (const action of cue.actions) if (action.kind === 'obs.setSceneItemEnabled') this.spanCue.set(action.id, cue.id);
     for (const event of compileManagedMediaTimeline(project, itemId).events) (event.phase === 'start' ? this.starts : this.stops).set(event.clipId, event);
     this.fps = playbackFramesPerSecond(project.timebase.frameRate);
   }
@@ -251,7 +244,7 @@ export class ObsProgramSession {
         let outcome: Outcome = 'ok';
         try { await this.dependencies.guardOutput(allowed, () => this.dependencies.seekMedia(entry.event)); }
         catch (error) {
-          this.requireCurrent(generation);
+          if (!allowed()) { this.settle(entry.writes, 'withdrawn'); this.requireCurrent(generation); }
           outcome = { failed: errorText(error) };
           this.fault(`素材没有对准开始的位置：${entry.event.assetName}：${errorText(error)}。音乐照常播放，这个素材的画面可能和音乐对不上`);
         }
@@ -450,7 +443,9 @@ export class ObsProgramSession {
           const start = this.starts.get(op.clip.clipId);
           if (!start) break;
           // A handover goes out as the later half's start: the output carries its predecessor's decoder on (no seek, no restart).
-          const event = this.managed.alignEvent({ ...start, deferSceneSwitch: target.kind === 'composition' }, frame);
+          // Only the clip that is the whole picture switches the program to its own scene; any
+          // other start (a composition layer, a sound) leaves the program to the switch.
+          const event = this.managed.alignEvent({ ...start, deferSceneSwitch: !(target.kind === 'clip' && target.clipId === op.clip.clipId) }, frame);
           const lateMs = this.lateReady.has(start.clipId) ? Math.round(Math.max(0, frame - start.frameNumber) * 1000 / this.fps) : null;
           entries.push({ kind: 'media', slot: 'start', frame: 0, priority: 0, label: start.assetName, writes: pictureOpWrites(op), event, lateMs });
           break;
@@ -466,22 +461,23 @@ export class ObsProgramSession {
     }
     return entries;
   }
-  private cueEntry(slot: Slot, cue: LinkCue, writes: LedgerWrite[], layers: readonly string[] | null = null,
-    shown: { key: string; cueId: string; actionId: string } | null = null): Entry {
-    return { kind: 'cue', slot, frame: 0, priority: 0, label: cue.name, writes, cue, point: null, layers, shown };
+  private cueEntry(slot: Slot, cue: LinkCue, writes: LedgerWrite[], layers: readonly string[] | null = null): Entry {
+    return { kind: 'cue', slot, frame: 0, priority: 0, label: cue.name, writes, cue, point: null, layers };
   }
   private showEntry(picture: OnAirPicture, op: Extract<PictureOp, { kind: 'show.set' }>, slot: Slot): Entry | null {
-    const key = showKey(op), show = picture.shows.find(entry => showKey(entry) === key);
+    const key = op.write.element === 'show' ? op.write.key : null, show = picture.shows.find(entry => showKey(entry) === key);
     const cue = show && this.cueById.get(show.cueId), action = cue?.actions.find(entry => entry.id === show?.actionId);
     if (!show || !cue || !action) return null;
-    return this.cueEntry(slot, { ...cue, actions: [action] }, [op.write], null, { key, cueId: show.cueId, actionId: show.actionId });
+    return this.cueEntry(slot, { ...cue, actions: [action] }, [op.write]);
   }
   /** A shown source is hidden with the hide of the span that showed it. */
   private hideEntry(op: Extract<PictureOp, { kind: 'show.set' }>, slot: Slot): Entry | null {
-    const key = showKey(op), by = this.shownBy.get(key), end = by ? this.runtime.durationEnd(by.cueId) : null;
-    const hide = end?.actions.find(action => action.id === `${by?.actionId}${DURATION_END}`);
+    const span = op.write.element === 'show' ? op.write.value.span : null, cueId = span === null ? undefined : this.spanCue.get(span);
+    const end = cueId === undefined ? null : this.runtime.durationEnd(cueId);
+    const hide = end?.actions.find(action => action.id === `${span}${DURATION_END}`);
     if (end && hide) return this.cueEntry(slot, { ...end, actions: [hide] }, [op.write]);
     if (op.sceneName === null) return null;
+    const key = op.write.element === 'show' ? op.write.key : op.sourceName;
     const id = `picture-hide:${key}`, label = `隐藏来源 · ${op.sourceName}`;
     return this.cueEntry(slot, { id, name: label, enabled: true, notes: '', timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
       actions: [{ id: `${id}:hide`, label, kind: 'obs.setSceneItemEnabled', sceneName: op.sceneName, sourceName: op.sourceName, enabled: false }] }, [op.write]);
@@ -495,7 +491,7 @@ export class ObsProgramSession {
     const place = (slot: Slot, at: number, priority: number): Entry[] => steps.filter(entry => entry.slot === slot)
       .map(entry => ({ ...entry, frame: at, priority }));
     const pointEntries = (at: number | null): Entry[] => points.map(entry => ({ kind: 'cue', slot: 'before', frame: at ?? entry.scheduledFrame, priority: 1,
-      label: entry.cue.name, writes: [], cue: entry.cue, point: entry.executionId, layers: null, shown: null }));
+      label: entry.cue.name, writes: [], cue: entry.cue, point: entry.executionId, layers: null }));
     if (merged) return [...place('stop', frame, 0), ...place('program', frame, 1), ...place('start', frame, 2),
       ...pointEntries(frame + 1), ...place('before', frame + 1, 1), ...place('after', frame + 1, 1)];
     return [...place('stop', frame, 0), ...pointEntries(null), ...place('before', frame, 1), ...place('program', frame, 1),
@@ -590,8 +586,16 @@ export class ObsProgramSession {
     const playing = targets.filter(entry => entry.event.assetKind !== 'image');
     for (const entry of targets) if (entry.event.assetKind === 'image') this.settle(entry.writes.slice(0, 1), 'ok');
     if (playing.length && current()) {
-      const report = await this.dependencies.guardOutput(current, () => this.runner.run({ id: 'transport-start', name: '同步画面播放状态', notes: '', enabled: true,
-        timecode: frameNumberToTimecode(frame, this.project.timebase.frameRate), actions: this.managed.transportActions('start', playing.map(entry => entry.event.sourceName)) }, 'live', current));
+      let report: CueExecutionReport;
+      try {
+        report = await this.dependencies.guardOutput(current, () => this.runner.run({ id: 'transport-start', name: '同步画面播放状态', notes: '', enabled: true,
+          timecode: frameNumberToTimecode(frame, this.project.timebase.frameRate), actions: this.managed.transportActions('start', playing.map(entry => entry.event.sourceName)) }, 'live', current));
+      } catch (error) {
+        // Located but whether they play is not known: the next pass starts them again.
+        for (const entry of playing) if (entry.writes[0]) this.ledger.unanswered(entry.writes[0], errorText(error));
+        if (!current()) return cancelled();
+        throw error;
+      }
       this.dependencies.cueReport(report);
       for (const entry of playing) {
         const result = report.results.find(each => each.action.kind === 'obs.mediaAction' && each.action.inputName === entry.event.sourceName);
@@ -675,7 +679,6 @@ export class ObsProgramSession {
     try {
       if (entry.kind === 'cue') {
         if (entry.point) this.sentDue.add(entry.point);
-        if (entry.shown) this.shownBy.set(entry.shown.key, { cueId: entry.shown.cueId, actionId: entry.shown.actionId });
         const report = await this.cue(entry.cue, canSend);
         this.settle(entry.writes, cueOutcome(report));
         return report;
@@ -803,7 +806,7 @@ export class ObsProgramSession {
     // the song, like its clips; a later start from the middle shows it again.
     const hides = [...this.ledger.state().shows].flatMap(([key, known]) => {
       const value = known.state === 'unknown' ? known.last : known.value;
-      if (!value || value.sceneName === MANAGED_OBS_SCENE_NAME || !mayShow(known)) return [];
+      if (!value || value.sceneName === MANAGED_OBS_SCENE_NAME || !showMayBeOn(known)) return [];
       const entry = this.hideEntry({ kind: 'show.set', sceneName: value.sceneName, sourceName: value.sourceName, enabled: false, reason: 'cut',
         write: { element: 'show', key, value: { ...value, enabled: false }, target: 'off' } }, 'after');
       return entry?.kind === 'cue' ? [entry.cue] : [];

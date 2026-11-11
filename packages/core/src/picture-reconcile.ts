@@ -1,4 +1,4 @@
-import { pictureElementKey, showKey, type DecoderState, type Known, type LedgerWrite, type PictureLedgerState, type ShownSourceState } from './obs-picture-ledger';
+import { pictureElementKey, showKey, showMayBeOn, type DecoderState, type Known, type LedgerWrite, type PictureLedgerState, type ProgramState, type ShownSourceState } from './obs-picture-ledger';
 import type { CompositionLayer, OnAirPicture, PictureClip } from './on-air-picture';
 import { pictureProgramScene } from './on-air-picture';
 import type { OutputMode } from './output-failure';
@@ -97,8 +97,12 @@ export function planPictureReconcile(desired: OnAirPicture, ledger: PictureLedge
 
   const target = desired.target;
   const scene = pictureProgramScene(target);
-  const programWrite: LedgerWrite | null = scene === null ? null : { element: 'program', value: scene, target: scene };
-  const programDone = ledger.program.state === 'confirmed' && ledger.program.value === scene;
+  // A camera's program is its Cue: the next camera Cue switches again even to the same scene,
+  // which is how the timeline takes the picture back after a hand switch or a refused one.
+  const wantedProgram = pictureProgram(target);
+  const sameProgram = (value: ProgramState): boolean => value.sceneName === wantedProgram?.sceneName && value.cueId === wantedProgram.cueId;
+  const programWrite: LedgerWrite | null = wantedProgram && { element: 'program', value: wantedProgram, target: programSignature(wantedProgram) };
+  const programDone = ledger.program.state === 'confirmed' && sameProgram(ledger.program.value);
   const single = target.kind === 'clip' ? target.clipId : null;
   const singleClip = single === null ? undefined : desired.clips.find(clip => clip.clipId === single);
   const singleKnown = singleClip && ledger.decoders.get(singleClip.sourceName);
@@ -181,11 +185,11 @@ export function planPictureReconcile(desired: OnAirPicture, ledger: PictureLedge
       reason => ({ kind: 'composition.update', sceneName: target.sceneName, layers: target.layers, reason, write }));
   }
   if (programWrite && scene !== null) {
-    if (ledger.takenOver && ledger.takenOver.target === scene)
+    if (ledger.takenOver && ledger.takenOver.target === programWrite.target)
       waiting.push({ element: 'program', kind: 'taken-over', detail: `画面被手动接管（${ledger.takenOver.sceneName}），到下一段再照常切换` });
     else if (visiblePreparing) waiting.push({ element: 'program', kind: 'preparing', detail: '要切过去的素材还在准备' });
     // A single material whose decoder is not on it yet comes on program only with its own start.
-    else if (singleOwned) collect(decide(programWrite, ledger.takenOver ? undefined : ledger.program, value => value === scene), to(programs),
+    else if (singleOwned) collect(decide(programWrite, ledger.takenOver ? undefined : ledger.program, sameProgram), to(programs),
       reason => ({ kind: 'program.switch', sceneName: scene, reason, write: programWrite }));
   }
 
@@ -196,25 +200,27 @@ export function planPictureReconcile(desired: OnAirPicture, ledger: PictureLedge
   // backlog, goes after the switch and the starts, as `shownAt` sent it. Whether a same-frame
   // show should land on the new scene is a question recorded for R4, not decided here.
   const showInto = (reason: OpReason): PictureOp[] => reason === 'restore' || context.merged ? restoredShows : freshShows;
-  const wantedShows = new Set<string>();
-  for (const show of desired.shows) {
-    const key = showKey(show);
-    if (wantedShows.has(key)) continue;
-    wantedShows.add(key);
-    const value: ShownSourceState = { enabled: true, sceneName: show.sceneName, sourceName: show.sourceName, span: show.actionId };
-    const write: LedgerWrite = { element: 'show', key, value, target: `on:${show.actionId}` };
-    // Each span shows its source when it opens, also right after another span of the same source.
-    collect(decide(write, ledger.shows.get(key), state => state.enabled && state.span === show.actionId), showInto,
-      reason => ({ kind: 'show.set', sceneName: show.sceneName, sourceName: show.sourceName, enabled: true, reason, write }));
-  }
+  // Each span hides what it showed before the next one shows again (also back to back, one
+  // source): hides first in each slot. Only what may still be on air is hidden (`showMayBeOn`).
+  const wantedShows = new Set(desired.shows.map(showKey));
   for (const [key, known] of ledger.shows) {
     if (wantedShows.has(key)) continue;
     const last = knownValue(known);
-    if (!last || (known.state === 'confirmed' && !known.value.enabled)) continue;
+    if (!last || !showMayBeOn(known)) continue;
     const value: ShownSourceState = { ...last, enabled: false };
     const write: LedgerWrite = { element: 'show', key, value, target: 'off' };
     collect(decide(write, known, state => !state.enabled), showInto,
       reason => ({ kind: 'show.set', sceneName: last.sceneName, sourceName: last.sourceName, enabled: false, reason, write }));
+  }
+  const opened = new Set<string>();
+  for (const show of desired.shows) {
+    const key = showKey(show);
+    if (opened.has(key)) continue;
+    opened.add(key);
+    const value: ShownSourceState = { enabled: true, sceneName: show.sceneName, sourceName: show.sourceName, span: show.actionId };
+    const write: LedgerWrite = { element: 'show', key, value, target: `on:${show.actionId}` };
+    collect(decide(write, ledger.shows.get(key), state => state.enabled), showInto,
+      reason => ({ kind: 'show.set', sceneName: show.sceneName, sourceName: show.sourceName, enabled: true, reason, write }));
   }
 
   return { ops: [...resumes, ...stops, ...freshShows, ...compositions, ...programs, ...starts, ...restoredShows], waiting, suppressed };
@@ -251,6 +257,13 @@ export function groupPictureOps(ops: readonly PictureOp[]): PictureOp[][] {
   return groups;
 }
 
+/** The program the target wants: its scene and, for a camera or a held camera, that Cue. */
+export function pictureProgram(target: OnAirPicture['target']): ProgramState | null {
+  const sceneName = pictureProgramScene(target);
+  return sceneName === null ? null : { sceneName, cueId: target.kind === 'scene' || target.kind === 'hold' ? target.cueId : null };
+}
+/** The wanted program's signature: its scene and, for a camera, its Cue. */
+export function programSignature(program: ProgramState): string { return JSON.stringify([program.sceneName, program.cueId]); }
 export function decoderTarget(clipId: string, mode: DecoderState['mode']): string { return `${clipId}:${mode}`; }
 export function compositionSignature(layers: readonly CompositionLayer[]): string { return JSON.stringify(layers.map(layer => layer.sceneName)); }
 

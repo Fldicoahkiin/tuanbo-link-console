@@ -927,20 +927,19 @@ function backToBackStickerFixture(): LinkProject {
         actions: [{ id: `sticker-${seconds}`, kind: 'obs.setSceneItemEnabled' as const, label: '显示贴纸', sceneName: '全景', sourceName: '贴纸', enabled: true }] }))] }] });
 }
 
-it('同一个来源前后两段紧挨着：交界处只再显示一次、不先隐藏；OBS 断线跨过交界，恢复画面只把它再显示一次，后一段一直显示到 6 秒', async () => {
+it('同一个来源前后两段紧挨着、OBS 断线跨过交界：恢复画面先补发前一段的隐藏，再显示后一段，后一段一直显示到 6 秒', async () => {
   let connected = true;
   const test = setup(backToBackStickerFixture(), () => connected ? Promise.resolve() : Promise.reject(new Error('OBS 连接已断开')));
   await test.session.prepare(0); await test.advance(0, 2000);
-  // The second span's show at 3 s fails while OBS is gone; the source stays shown, so nothing hides it first.
+  // The first span's hide and the second span's show at 3 s both fail while OBS is gone.
   connected = false; await test.advance(2100, 4000);
-  expect(sticker(test)).toEqual([true, true]);
   connected = true;
-  expect(await test.session.rebuild(() => Promise.resolve())).toEqual({ sent: 2, succeeded: 2, failed: [], failure: null });
-  expect(sticker(test)).toEqual([true, true, true]);
+  expect(await test.session.rebuild(() => Promise.resolve())).toEqual({ sent: 3, succeeded: 3, failed: [], failure: null });
+  expect(sticker(test)).toEqual([true, false, true, false, true]);
   await test.advance(4100, 5900);
   expect(sticker(test).at(-1)).toBe(true);
   await test.advance(6000, 7000);
-  expect(sticker(test)).toEqual([true, true, true, false]); expect(test.session.error).toBeNull();
+  expect(sticker(test)).toEqual([true, false, true, false, true, false]); expect(test.session.error).toBeNull();
 });
 
 /** A video all song, a sticker shown over it from 1 s for 2 s, and a filter turned on at 3 s. */
@@ -1130,4 +1129,63 @@ it('同一个素材切成两段接着播：后一段在切点照常上画面（�
   const later = test.dependencies.executeManagedMediaEvent.mock.calls[1]![0].event;
   expect(later).toMatchObject({ sourceOffsetMs: 1000, deferSceneSwitch: false });
   expect(test.dependencies.seekMedia).not.toHaveBeenCalled(); expect(test.session.error).toBeNull();
+});
+
+/** Cameras on one track: `[seconds, durationMs, scene]` each. */
+function camerasFixture(cameras: [number, number, string][]): LinkProject {
+  return parseLinkProject({ ...createEmptyLinkProject('机位'), playbackSource: 'internal', obsOutputMode: 'scenes',
+    rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'layer-camera', name: '机位' }], cues: cameras.map(([seconds, durationMs, sceneName], index) => ({
+      id: `camera-${index}`, name: sceneName, layerId: 'layer-camera', durationMs, timecode: { hours: 0, minutes: 0, seconds, frames: 0 },
+      actions: [{ id: `switch-${index}`, kind: 'obs.setProgramScene' as const, label: '切机位', sceneName }] })) }] });
+}
+
+it('接连两个机位片段切到同一个场景：后一个照样发切换（手动切走、切换被拒绝后，下一个机位片段把画面拿回来）', async () => {
+  const project = camerasFixture([[0, 1000, '全景'], [1, 1000, '特写'], [2, 1000, '特写']]);
+  const test = setup(project); await test.session.prepare(0); await test.advance(0, 3500);
+  // The camera held after the last one ends is the same Cue: nothing more is sent.
+  expect(scenes(test)).toEqual(['全景', '特写', '特写']);
+  let refused = true;
+  const again = setup(project, action => {
+    if (action.kind !== 'obs.setProgramScene' || action.sceneName !== '特写' || !refused) return Promise.resolve();
+    refused = false; return Promise.reject(new Error('OBS 拒绝了'));
+  });
+  await again.session.prepare(0); await again.advance(0, 1900);
+  expect(scenes(again)).toEqual(['全景', '特写']);
+  await again.advance(2000, 3500);
+  expect(scenes(again)).toEqual(['全景', '特写', '特写']);
+  expect(results(again, 'switch-2')).toEqual([['switch-2', 'succeeded']]); expect(again.session.error).toBeNull();
+});
+
+it('OBS 重连：确认隐藏过的来源，恢复画面和停歌时都不再隐藏；隐藏没成功的，恢复画面和停歌时照样隐藏', async () => {
+  const test = setup(stickerFixture()); await test.session.prepare(0); await test.advance(0, 2000);
+  expect(sticker(test)).toEqual([true, false]);
+  await test.session.rebuild(() => Promise.resolve()); await test.advance(2100, 2500);
+  await test.session.stop();
+  expect(sticker(test)).toEqual([true, false]);
+  // OBS refuses every hide: the source may still be on air, so it is hidden again after the reconnect and at stop.
+  const refusing = setup(stickerFixture(), action => action.kind === 'obs.setSceneItemEnabled' && !action.enabled ? Promise.reject(new Error('OBS 拒绝了')) : Promise.resolve());
+  await refusing.session.prepare(0); await refusing.advance(0, 2000);
+  expect(sticker(refusing)).toEqual([true, false]);
+  await refusing.session.rebuild(() => Promise.resolve());
+  expect(sticker(refusing)).toEqual([true, false, false]);
+  await refusing.advance(2100, 2500);
+  await refusing.session.stop().catch(() => undefined);
+  expect(sticker(refusing)).toEqual([true, false, false, false]);
+});
+
+it('OBS 重连恢复画面让素材继续播放时按了暂停：继续以后素材照常播放，不会整首歌停着', async () => {
+  const test = setup(videoFixture()); await test.session.prepare(0); await test.advance(0, 1500);
+  let located = false, paused = false;
+  test.dependencies.seekMedia.mockImplementation(() => { located = !paused; return Promise.resolve(); });
+  // The real guard checks `canSend` when the request goes out and refuses after a pause.
+  test.dependencies.guardOutput = async <T,>(canSend: () => boolean, operation: () => Promise<T>): Promise<T> => {
+    if (located) { located = false; paused = true; void test.session.pause(); }
+    if (!canSend()) throw new Error('画面已取消');
+    return operation();
+  };
+  await test.session.rebuild(() => Promise.resolve()).catch(() => null);
+  const before = outputs(test).length;
+  test.time(4000); test.session.clock(1500, 4000); await test.session.settled();
+  expect(outputs(test).slice(before)).toContain('start');
+  expect(test.session.error).toBeNull();
 });

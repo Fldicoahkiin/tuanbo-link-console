@@ -19,17 +19,20 @@ export type Known<T> =
   | { state: 'failed'; value: T; attempts: number; reason: string; target: string };
 
 export type DecoderMode = 'playing' | 'paused' | 'stopped';
+/** The scene on program and, for a camera (or the camera held after it), the Cue that put it
+ * there: the next camera Cue is a new picture even on the same scene (its own switch goes out). */
+export type ProgramState = { sceneName: string; cueId: string | null };
 /** A decoder (an owned media input), keyed by source name. */
 export type DecoderState = { clipId: string; mode: DecoderMode; offsetMs: number };
-/** A shown source; the identity stays with the value so it can be hidden again. `span`:
- * the show action whose span showed it (null when not known). */
+/** A shown source, one per span (see `showKey`); the identity stays with the value so it can
+ * be hidden again. `span`: the show action whose span showed it. */
 export type ShownSourceState = { enabled: boolean; sceneName: string | null; sourceName: string; span: string | null };
 /** Someone switched program in OBS by hand (2026-11-10 decision 5); `target` is the
  * wanted program signature at that moment: no switch back until it changes. */
 export type PictureTakeover = { sceneName: string; since: number; target: string };
 
 export type PictureLedgerState = {
-  program: Known<string>;
+  program: Known<ProgramState>;
   takenOver: PictureTakeover | null;
   compositions: ReadonlyMap<string, Known<string>>;
   decoders: ReadonlyMap<string, Known<DecoderState>>;
@@ -39,12 +42,12 @@ export type PictureLedgerState = {
 /** One element's wanted value, as a reconcile op writes it. `target` names the wanted
  * state the value belongs to; a failure is kept against it. */
 export type LedgerWrite =
-  | { element: 'program'; value: string; target: string }
+  | { element: 'program'; value: ProgramState; target: string }
   | { element: 'composition'; key: string; value: string; target: string }
   | { element: 'decoder'; key: string; value: DecoderState; target: string }
   | { element: 'show'; key: string; value: ShownSourceState; target: string };
 export type LedgerObservation =
-  | { element: 'program'; value: string }
+  | { element: 'program'; value: ProgramState }
   | { element: 'composition'; key: string; value: string }
   | { element: 'decoder'; key: string; value: DecoderState }
   | { element: 'show'; key: string; value: ShownSourceState };
@@ -53,17 +56,19 @@ export type LedgerObservation =
 export function pictureElementKey(write: { element: LedgerWrite['element']; key?: string }): string {
   return write.element === 'program' ? 'program' : `${write.element}:${write.key ?? ''}`;
 }
-/** Shown sources are keyed by scene and source: one OBS scene item. */
-export function showKey(show: { sceneName: string | null; sourceName: string }): string {
-  return JSON.stringify([show.sceneName, show.sourceName]);
+/** Shown sources are keyed by span: scene, source and the show action. Each span shows what
+ * it opens and hides what it showed, also when the next span of the same source follows at
+ * once (the adapter clears its record of the shown item with that hide). */
+export function showKey(show: { sceneName: string | null; sourceName: string; actionId: string }): string {
+  return JSON.stringify([show.sceneName, show.sourceName, show.actionId]);
 }
 
-const NEVER: Known<string> = { state: 'unknown', reason: '还没有发过画面', last: null };
+const NEVER: Known<ProgramState> = { state: 'unknown', reason: '还没有发过画面', last: null };
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 type Make = <T>(value: T) => Known<T>;
 
 export class ObsPictureLedger {
-  private program: Known<string> = NEVER;
+  private program: Known<ProgramState> = NEVER;
   private takenOver: PictureTakeover | null = null;
   private readonly compositions = new Map<string, Known<string>>();
   private readonly decoders = new Map<string, Known<DecoderState>>();
@@ -102,7 +107,8 @@ export class ObsPictureLedger {
     const known = this.current(write);
     if (!known || known.state === 'pending') return;
     this.failures.delete(pictureElementKey(write));
-    this.put(write, () => forget(known, reason) as Known<never>);
+    if (write.element === 'show') this.shows.set(write.key, forgetShow(known as Known<ShownSourceState>, reason));
+    else this.put(write, () => forget(known, reason) as Known<never>);
   }
 
   /** OBS answered the request for `write`. An answer for a value no longer pending is stale and ignored. */
@@ -125,6 +131,7 @@ export class ObsPictureLedger {
   /** No answer: whether OBS applied it is not known. */
   unanswered(write: LedgerWrite, reason: string): void {
     if (!this.isPending(write)) return;
+    if (write.element === 'show') { this.shows.set(write.key, forgetShow(this.shows.get(write.key)!, reason)); return; }
     this.put(write, value => ({ state: 'unknown', reason, last: value }));
   }
 
@@ -134,22 +141,17 @@ export class ObsPictureLedger {
     this.put(observation, value => ({ state: 'confirmed', value, at: now }));
   }
 
-  /** The same material continues on the decoder after a cut: the clip id moves, the decoder is untouched. */
-  adopt(sourceName: string, clipId: string): void {
-    const known = this.decoders.get(sourceName);
-    if (known?.state === 'confirmed') this.decoders.set(sourceName, { ...known, value: { ...known.value, clipId } });
-  }
-
   takeOver(sceneName: string, target: string, now: number): void {
     this.takenOver = { sceneName, since: now, target };
-    this.program = { state: 'confirmed', value: sceneName, at: now };
+    this.program = { state: 'confirmed', value: { sceneName, cueId: null }, at: now };
   }
 
   /** Everything OBS holds is unknown again (reconnect); a hand switch from before no longer counts. */
   invalidate(reason: string): void {
     this.program = forget(this.program, reason);
     this.takenOver = null;
-    forgetAll(this.compositions, reason); forgetAll(this.decoders, reason); forgetAll(this.shows, reason);
+    forgetAll(this.compositions, reason); forgetAll(this.decoders, reason);
+    for (const [key, known] of this.shows) this.shows.set(key, forgetShow(known, reason));
     this.failures.clear(); this.before.clear();
   }
 
@@ -185,6 +187,23 @@ export class ObsPictureLedger {
 
 function forget<T>(known: Known<T>, reason: string): Known<T> {
   return { state: 'unknown', reason, last: known.state === 'unknown' ? known.last : known.value };
+}
+/** A shown source no longer known keeps `last.enabled` as whether it may still be on air:
+ * shown, a hide refused or not answered, or a show not answered may be; a confirmed hide
+ * or a refused show is not. So a source confirmed hidden gets no second hide (with no
+ * record of its item that hide would go to the scene now on program), and one whose hide
+ * did not come back is still hidden after a reconnect and when the song stops. */
+export function showMayBeOn(known: Known<ShownSourceState>): boolean {
+  switch (known.state) {
+    case 'confirmed': return known.value.enabled;
+    case 'pending': return true;
+    case 'unknown': return known.last?.enabled ?? false;
+    case 'failed': return !known.value.enabled;
+  }
+}
+function forgetShow(known: Known<ShownSourceState>, reason: string): Known<ShownSourceState> {
+  const last = known.state === 'unknown' ? known.last : known.value;
+  return { state: 'unknown', reason, last: last && { ...last, enabled: showMayBeOn(known) } };
 }
 function forgetAll<T>(map: Map<string, Known<T>>, reason: string): void {
   for (const [key, known] of map) map.set(key, forget(known, reason));
