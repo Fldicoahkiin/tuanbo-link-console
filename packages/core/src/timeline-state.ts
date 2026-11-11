@@ -1,5 +1,6 @@
 import { audioContainsMediaSource } from './audio-edit';
 import { SceneOutputTimeline } from './scene-output-timeline';
+import { collectManagedMediaTimeline } from './managed-media-timeline';
 import type {
   LinkAction,
   LinkCue,
@@ -93,6 +94,7 @@ export class TimelineStateIndex {
   private readonly visualObsCues: ResolvedTimelineObsCue[];
   private readonly clipOrder: number[];
   private readonly output: SceneOutputTimeline;
+  private readonly outsideOutput: ReadonlySet<string>;
   private readonly frameRate: MtcFrameRate;
   private readonly boundaries: number[];
   private last: { stretch: number; state: ResolvedTimelineState } | null = null;
@@ -130,6 +132,9 @@ export class TimelineStateIndex {
     const visualObsCues = item.cues.flatMap((cue): ResolvedTimelineObsCue[] => {
       const showAction = findVisualObsShowAction(cue);
       if (!showAction) return [];
+      // The schema lets a song with no tracks hold a show cue on none. It has no track to be drawn on,
+      // so the editor leaves it out of the state; the output skips it too (no track, no show).
+      if (!cue.layerId && item.visualLayers.length === 0) return [];
       if (!cue.layerId) throw new Error(`OBS 显示 Cue“${cue.name}”还没分配视觉图层`);
       const layerEntry = layerById.get(cue.layerId);
       if (!layerEntry) throw new Error(`OBS 显示 Cue“${cue.name}”引用不存在的图层：${cue.layerId}`);
@@ -152,7 +157,11 @@ export class TimelineStateIndex {
     // The item may be an edited copy that is not in the project yet.
     const scoped = project.rundown.includes(item) ? project
       : { ...project, rundown: [...project.rundown.filter(entry => entry.id !== item.id), item] };
-    this.output = new SceneOutputTimeline(scoped, item.id);
+    // Clips the output cannot play (say a clip on no track) are not under the picture rule here: they
+    // keep their own span, as before 0.5.9, and the preflight check tells the operator why they will not play.
+    const media = collectManagedMediaTimeline(scoped, item.id);
+    this.outsideOutput = new Set(media.refused.map(entry => entry.clipId));
+    this.output = new SceneOutputTimeline(scoped, item.id, media.events);
     const cutsMs = this.output.cutPoints().map(frame => frameToMilliseconds(frame, frameRate));
     this.boundaries = [...new Set([...clips, ...visualObsCues].flatMap(entry => [entry.startMs, entry.endMs]).concat(cutsMs))]
       .sort((left, right) => left - right);
@@ -180,7 +189,7 @@ export class TimelineStateIndex {
     // Written out field by field: this runs at every boundary the playhead crosses.
     const clips = this.clips.map((entry): ResolvedTimelineClip => {
       const active = isTimelineSpanActive(entry, playheadMs);
-      const visual = entry.visual && seen.has(entry.clip.id);
+      const visual = entry.visual && (this.outsideOutput.has(entry.clip.id) ? active : seen.has(entry.clip.id));
       return { startMs: entry.startMs, endMs: entry.endMs, startFrame: entry.startFrame, endFrame: entry.endFrame, durationMs: entry.durationMs,
         clip: entry.clip, asset: entry.asset, layer: entry.layer, layerIndex: entry.layerIndex, active,
         // A picture clip is visible only when seen; sound follows its span.

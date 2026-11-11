@@ -39,18 +39,36 @@ export type ManagedMediaTimeline = {
   events: ManagedMediaEvent[];
 };
 
+/** A clip the output cannot play, and why, in the words the preflight check shows. */
+export type RefusedMediaClip = { clipId: string; reason: string };
+
+/** The playback timeline: refuses the song when any clip cannot be played (preflight
+ * reports the reason as a blocking check; playback never starts with it). */
 export function compileManagedMediaTimeline(project: LinkProject, itemId: string): ManagedMediaTimeline {
+  const { refused, ...timeline } = collectManagedMediaTimeline(project, itemId);
+  const first = refused[0];
+  if (first) throw new Error(first.reason);
+  return timeline;
+}
+
+/** The one media timeline compiler. The clips the output can play become events; the
+ * ones it cannot are listed in `refused` instead of failing the song, for a reader (the
+ * editor) that must still show a project the schema accepts while preflight blocks it. */
+export function collectManagedMediaTimeline(project: LinkProject, itemId: string): ManagedMediaTimeline & { refused: RefusedMediaClip[] } {
   const item = requireItem(project, itemId);
   const assets = new Map(project.mediaAssets.map((asset) => [asset.id, asset]));
   const scenes = materialSceneTargets(project, itemId);
   const sceneByLayer = new Map(scenes.filter(target => target.layerId).map(target => [`${target.asset.id}:${target.layerId}`, target]));
+  const refused: RefusedMediaClip[] = [];
+  const refuse = (clipId: string, reason: string): [] => { refused.push({ clipId, reason }); return []; };
   const events = item.referenceMediaClips.flatMap((clip): ManagedMediaEvent[] => {
-    const asset = requireAsset(assets, clip.assetId);
+    const asset = assets.get(clip.assetId);
+    if (!asset) return refuse(clip.id, `媒体素材不存在：${clip.assetId}`);
     if (asset.kind === 'audio' && audioContainsMediaSource(item.referenceAudio, asset.id)) return [];
     const scene = sceneByLayer.get(`${asset.id}:${clip.layerId}`) ?? materialSceneNames(project.projectId, asset);
-    if (!clip.layerId) throw new Error(`素材片段“${clip.label}”还没分配视觉图层`);
+    if (!clip.layerId) return refuse(clip.id, `素材片段“${clip.label}”还没分配视觉图层`);
     const layerIndex = item.visualLayers.findIndex((layer) => layer.id === clip.layerId);
-    if (layerIndex < 0) throw new Error(`素材片段“${clip.label}”引用不存在的视觉图层`);
+    if (layerIndex < 0) return refuse(clip.id, `素材片段“${clip.label}”引用不存在的视觉图层`);
     if (!item.visualLayers[layerIndex]?.visible) return [];
     const span = resolveTimelineClipSpan(clip, project.timebase.frameRate);
     const base = {
@@ -77,7 +95,7 @@ export function compileManagedMediaTimeline(project: LinkProject, itemId: string
     ];
   });
   events.sort(compareManagedMediaEvents);
-  return { itemId, frameRate: project.timebase.frameRate, events };
+  return { itemId, frameRate: project.timebase.frameRate, events, refused };
 }
 
 export function materialSceneNames(projectId: string, asset: Pick<LinkMediaAsset, 'id' | 'name'>): { sceneName: string; sourceName: string } {
@@ -138,12 +156,6 @@ function requireItem(project: LinkProject, itemId: string): RundownItem {
   const item = project.rundown.find((candidate) => candidate.id === itemId);
   if (!item) throw new Error(`节目不存在：${itemId}`);
   return item;
-}
-
-function requireAsset(assets: Map<string, LinkMediaAsset>, assetId: string): LinkMediaAsset {
-  const asset = assets.get(assetId);
-  if (!asset) throw new Error(`媒体素材不存在：${assetId}`);
-  return asset;
 }
 
 function stableHash(value: string): string {

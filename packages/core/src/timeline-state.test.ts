@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SceneOutputTimeline } from './scene-output-timeline';
 import { DEFAULT_REFERENCE_CANVAS_TRANSFORM, parseLinkProject, type LinkProject, type MtcFrameRate } from '@tb/schema';
 import { frameNumberToTimecode } from './mtc-timecode';
+import { collectManagedMediaTimeline, compileManagedMediaTimeline } from './managed-media-timeline';
 import {
   compileScheduledTimelineCues,
   quantizeTimelineRange,
@@ -240,6 +241,82 @@ describe('timeline state', () => {
     const nearDayEnd = quantizeTimelineRange(86_399_000, 2_000, '30');
     expect(nearDayEnd.endMs).toBe(86_401_000);
     expect(quantizeTimelineRange(0, 86_400_000, '30', 1_000).endMs).toBe(1_000);
+  });
+
+  describe('输出放不了、工程又合法的片段：编辑器照旧按自己的区间显示，开播前检查挡住', () => {
+    const audioOnNoTrack = (): LinkProject => {
+      const value = project({ includeObs: false });
+      value.mediaAssets.push({ id: 'audio', name: 'Audio', kind: 'audio', folderId: null,
+        relativePath: 'assets/reference-media/audio.wav', sha256: 'c'.repeat(64), byteLength: 10, durationMs: 10_000 });
+      value.rundown[0]!.referenceMediaClips.push({ id: 'audio-clip', assetId: 'audio', startTimecode: frameNumberToTimecode(30, '30'),
+        sourceOffsetMs: 0, durationMs: 2_000, label: 'Audio', canvasTransform: DEFAULT_REFERENCE_CANVAS_TRANSFORM });
+      return parseLinkProject(value);
+    };
+    const videoInSongWithNoTracks = (): LinkProject => {
+      const value = project({ includeObs: false });
+      const item = value.rundown[0]!;
+      item.visualLayers = [];
+      delete item.referenceMediaClips[0]!.layerId;
+      return parseLinkProject(value);
+    };
+
+    it('没分轨道的音效：照常可听，不算画面', () => {
+      const value = audioOnNoTrack();
+      const index = new TimelineStateIndex(value, value.rundown[0]!);
+      const state = index.at(2_000);
+      expect(state.activeAudioClipIds).toEqual(['video-clip', 'audio-clip']);
+      expect(state.activeVisualClipIds).toEqual(['video-clip']);
+      expect(state.clips.find(entry => entry.clip.id === 'audio-clip')).toMatchObject({ active: true, visible: true, visual: false, audible: true, covered: false });
+      expect(index.at(3_000).activeAudioClipIds).toEqual([]);
+    });
+
+    it('没有轨道的歌里的画面片段：按自己的开始和结束显示', () => {
+      const value = videoInSongWithNoTracks();
+      const index = new TimelineStateIndex(value, value.rundown[0]!);
+      expect(index.at(500).activeVisualClipIds).toEqual([]);
+      expect(index.at(1_000).clips[0]).toMatchObject({ active: true, visible: true, visual: true, audible: true, covered: false, layer: null });
+      expect(index.at(2_999.9).activeVisualClipIds).toEqual(['video-clip']);
+      expect(index.at(3_000).activeVisualClipIds).toEqual([]);
+    });
+
+    it('隐藏轨道上的片段：不显示也不出声', () => {
+      const value = project({ includeObs: false });
+      value.rundown[0]!.visualLayers[1]!.visible = false;
+      const parsed = parseLinkProject(value);
+      const state = new TimelineStateIndex(parsed, parsed.rundown[0]!).at(2_000);
+      expect(state.clips[0]).toMatchObject({ active: true, visible: false, visual: false, audible: false, covered: false });
+    });
+
+    it('没写时长的机位（放到下一个机位或歌尾）：不报错，上层片段照常显示', () => {
+      const value = project({ includeObs: false });
+      const item = value.rundown[0]!;
+      item.referenceMediaClips[0]!.layerId = 'top';
+      item.cues = [{ id: 'camera', name: '机位', enabled: true, notes: '', layerId: 'bottom', timecode: frameNumberToTimecode(15, '30'),
+        actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: '近景' }] }];
+      const parsed = parseLinkProject(value);
+      const index = new TimelineStateIndex(parsed, parsed.rundown[0]!);
+      expect(index.at(500).activeVisualClipIds).toEqual([]);
+      expect(index.at(2_000).clips[0]).toMatchObject({ active: true, visible: true, visual: true, covered: false });
+      expect(index.at(3_000).activeVisualClipIds).toEqual([]);
+    });
+
+    it('没有轨道的歌里没分轨道的显示 Cue：不报错，不画在任何轨道上', () => {
+      const value = project();
+      const item = value.rundown[0]!;
+      item.visualLayers = [];
+      item.referenceMediaClips = [];
+      delete item.cues[0]!.layerId;
+      const parsed = parseLinkProject(value);
+      const state = new TimelineStateIndex(parsed, parsed.rundown[0]!).at(2_000);
+      expect(state.visualObsCues).toEqual([]);
+      expect(state.layers).toEqual([]);
+    });
+
+    it('正式播放和开播前检查仍用原来的原因挡住这些歌', () => {
+      expect(() => compileManagedMediaTimeline(audioOnNoTrack(), 'item')).toThrow('素材片段“Audio”还没分配视觉图层');
+      expect(() => compileManagedMediaTimeline(videoInSongWithNoTracks(), 'item')).toThrow('素材片段“Video”还没分配视觉图层');
+      expect(collectManagedMediaTimeline(audioOnNoTrack(), 'item').refused).toEqual([{ clipId: 'audio-clip', reason: '素材片段“Audio”还没分配视觉图层' }]);
+    });
   });
 
   it('旧 OBS 显示 Cue 缺少 durationMs 时工程解析明确失败', () => {
