@@ -14,15 +14,23 @@ function projectState(state: InternalPlayerState): { clock: PlayerClockState; co
     control: { ...rest, mtcSending: mtcSentPositionMs != null } };
 }
 
+/** Asks for one call before the next frame paints; `requestAnimationFrame` in the app, a hand tick in tests. */
+export type FrameRequest = (callback: () => void) => void;
+const nextFrame: FrameRequest = callback => { requestAnimationFrame(() => callback()); };
+
 /** Display subscriptions only. The output clock and controller retain the full
- * authoritative state; moving a playhead must not rerender the app shell. */
+ * authoritative state; moving a playhead must not rerender the app shell.
+ * The engine reports the clock about every 10 ms: clock subscribers hear at most
+ * once a frame, control subscribers at once, and `readClock` is always the newest
+ * value. Stamping reads `controller.clock.read()`, which none of this delays. */
 export class PlayerViewStore {
   private clock: PlayerClockState;
   private control: PlayerControlState;
   private readonly clockListeners = new Set<() => void>();
   private readonly controlListeners = new Set<() => void>();
+  private clockScheduled = false;
 
-  constructor() {
+  constructor(private readonly requestFrame: FrameRequest = nextFrame) {
     const { clock, control } = projectState(emptyInternalPlayerState);
     this.clock = clock; this.control = control;
   }
@@ -37,6 +45,16 @@ export class PlayerViewStore {
     if (clockChanged) this.clock = clock;
     if (controlChanged) this.control = control;
     if (controlChanged) for (const listener of this.controlListeners) listener();
-    if (clockChanged) for (const listener of this.clockListeners) listener();
+    if (clockChanged) this.scheduleClock();
+  };
+  private scheduleClock(): void {
+    // Nobody listening: nothing to schedule; a later subscriber reads the newest value itself.
+    if (this.clockScheduled || this.clockListeners.size === 0) return;
+    this.clockScheduled = true;
+    this.requestFrame(this.flushClock);
+  }
+  private readonly flushClock = (): void => {
+    this.clockScheduled = false;
+    for (const listener of this.clockListeners) listener();
   };
 }
