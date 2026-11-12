@@ -65,3 +65,13 @@ it('缺失文件明确失败，关闭精确定位时仍校验原文件但不生�
   t.inspectMediaAssets.mockResolvedValue({ a0: { fileAvailable: false } });
   await expect(prepareNextObsFiles(t.request, t.services, () => undefined)).rejects.toThrow('文件读不了');
 });
+
+// 0.5.9 S8a, S8b: the next song plays the newest version, which a held song (its own version older) asks for too.
+it('下一首的版本比在播这首新：照常准备；比它旧或换了工程：拒绝', async () => {
+  const t = fixture(), next = t.request.nextFiles!;
+  await prepareNextObsFiles({ ...t.request, nextFiles: { ...next, snapshot: { ...next.snapshot, revision: 3 } } }, t.services, () => undefined);
+  expect(t.inspectMediaAssets).toHaveBeenCalledTimes(6);
+  await expect(prepareNextObsFiles({ ...t.request, snapshot: { ...t.request.snapshot, revision: 4 }, nextFiles: { ...next, snapshot: { ...next.snapshot, revision: 3 } } },
+    t.services, () => undefined)).rejects.toThrow('对不上');
+  await expect(prepareNextObsFiles({ ...t.request, nextFiles: { ...next, snapshot: { ...next.snapshot, projectId: 'other' } } }, t.services, () => undefined)).rejects.toThrow('对不上');
+});

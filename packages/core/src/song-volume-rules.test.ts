@@ -28,7 +28,7 @@ function program(opened: LinkProject) {
   let state: InternalPlayerState = { ...emptyInternalPlayerState };
   const emit = (patch: Partial<NativePlayerStatus>): NativePlayerStatus => { status = { ...status!, ...patch }; listener?.(status); return status; };
   const api = {
-    preloadNativeObs: vi.fn(() => Promise.resolve()), cancelNativeObsPreload: vi.fn(() => Promise.resolve()),
+    preloadNativeObs: vi.fn(() => Promise.resolve()), prepareNextNativePlayback: vi.fn(() => Promise.resolve()), prepareNextNativeObs: vi.fn(() => Promise.resolve()), cancelNativeObsPreload: vi.fn(() => Promise.resolve()),
     onNativeObsStatus: () => () => undefined, stopNativeObs: vi.fn(() => Promise.resolve()),
     prepareNativeObs: (request: NativeObsPrepare): Promise<NativeObsStatus> => Promise.resolve({ version: 1, sessionId: request.sessionId,
       generation: request.generation, itemId: request.snapshot.item.id, revision: request.snapshot.revision, state: 'ready', reason: null,

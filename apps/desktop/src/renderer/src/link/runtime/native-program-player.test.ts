@@ -14,7 +14,7 @@ function fixture() {
   const emit = (patch: Partial<NativePlayerStatus> = {}): NativePlayerStatus => { if (!status) throw new Error('没有准备音频'); status = { ...status, ...patch }; listener?.(status); return status; };
   const api = {
     preloadNativeObs: vi.fn<(request: NativeObsPreload) => Promise<void>>(() => Promise.resolve()),
-    cancelNativeObsPreload: vi.fn(() => Promise.resolve()),
+    prepareNextNativePlayback: vi.fn(() => Promise.resolve()), prepareNextNativeObs: vi.fn(() => Promise.resolve()), cancelNativeObsPreload: vi.fn(() => Promise.resolve()),
     onNativeObsStatus: vi.fn<(_receive: (value: NativeObsStatus) => void) => () => void>(() => () => undefined),
     stopNativeObs: vi.fn(() => Promise.resolve()),
     prepareNativeObs: vi.fn((request: NativeObsPrepare): Promise<NativeObsStatus> => Promise.resolve({ version: 1, sessionId: request.sessionId,

@@ -127,7 +127,7 @@ function mainProcess() {
         },
         getNativePlaybackDevices: () => Promise.resolve({ protocol: 4, audio: [], midiOutputs: [], midiInputs: [] }),
         prepareNativeObs: () => Promise.reject(new Error('测试没有 OBS')), stopNativeObs: () => Promise.resolve(), onNativeObsStatus: () => () => undefined,
-        preloadNativeObs: () => Promise.resolve(), cancelNativeObsPreload: () => Promise.resolve()
+        preloadNativeObs: () => Promise.resolve(), prepareNextNativePlayback: () => Promise.resolve(), prepareNextNativeObs: () => Promise.resolve(), cancelNativeObsPreload: () => Promise.resolve()
       }
     });
     hosts.push(host);

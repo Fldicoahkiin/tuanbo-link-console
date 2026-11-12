@@ -1,6 +1,7 @@
-import { nativeObsPrepareSchema, nativeObsStopSchema, type NativeObsPrepare, type NativeObsStop, type NativeObsStatus } from '@tb/schema';
+import { nativeObsNextSchema, nativeObsPrepareSchema, nativeObsStopSchema, type NativeObsNext, type NativeObsPrepare, type NativeObsStop, type NativeObsStatus } from '@tb/schema';
 
-type Service = { prepare(request: NativeObsPrepare): Promise<NativeObsStatus>; stopOwned(request: NativeObsStop): Promise<void> };
+type Service = { prepare(request: NativeObsPrepare): Promise<NativeObsStatus>; stopOwned(request: NativeObsStop): Promise<void>;
+  prepareNext(request: NativeObsNext): Promise<void> };
 type Pending = { request: NativeObsPrepare; cancelled: boolean; dispatched: boolean };
 
 /** Capture intent before asynchronous license checks. Cancellation is tied to
@@ -22,6 +23,16 @@ export class NativeObsRequests {
     if (this.current !== pending || pending.cancelled) throw new Error('画面准备在排队时被取消');
     pending.dispatched = true;
     return this.service.prepare(request);
+  }
+
+  /** The next song prepared again while this picture runs (0.5.9 S8b). Bound to the same preparation as a stop; it starts
+   * no output, so no license check of its own. */
+  async next(value: unknown): Promise<void> {
+    const request = nativeObsNextSchema.parse(value), pending = this.current;
+    if (!pending || pending.request.sessionId !== request.sessionId || pending.request.generation !== request.generation || !pending.dispatched || pending.cancelled) {
+      throw new Error('下一首的画面准备请求已过期');
+    }
+    await this.service.prepareNext(request);
   }
 
   async stop(value: unknown): Promise<void> {

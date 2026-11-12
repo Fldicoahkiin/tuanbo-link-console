@@ -1,16 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, lightingDocumentSchema, lightingMa2BindingSchema, lightingTrackSchema, parseLinkProject,
-  type LightingDocument, type LinkProject, type NativeObsPrepare, type NativeObsStatus, type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus,
-  type RundownItem } from '@tb/schema';
-import { emptyInternalPlayerState, type InternalPlayerState, type LitSong, type ProgramLightingOutput } from './program-player';
+  type LightingDocument, type LinkAction, type LinkProject, type NativeObsNext, type NativeObsPrepare, type NativeObsStatus, type NativePlayerControl, type NativePlayerNext,
+  type NativePlayerPrepare, type NativePlayerStatus, type RundownItem } from '@tb/schema';
+import { emptyInternalPlayerState, type InternalPlayerDependencies, type InternalPlayerState, type LitSong, type ProgramLightingOutput } from './program-player';
 import { NativeProgramPlayer } from './native-program-player';
+import { MidiProgramSession, type MidiProgramDependencies } from './midi-program';
+import { frameNumberToTimecode } from './mtc-timecode';
+import { nextAudioIdentity, nextPictureIdentity } from './next-song-identity';
 import { LightingOffLedger, litReleaseActions } from './lighting-off-ledger';
 import { songStructureChanges } from './live-revision-effect';
 import { showGate, type ShowState } from './show-state';
 
 /**
- * 0.5.9 S8a（design 02 §3.5）：拿着歌时改工程。在播的歌的音频、时间码、画面和动作 MIDI 一直跟它开始的那一版；
- * 只有它保存的音量、它自己的“播完后”和它的灯光可能用到的执行器当即生效，别的等下一首（下一首放最新的一版）。
+ * 0.5.9 S8a（design 02 §3.5）：拿着歌时改工程。在播的歌的音频、时间码和画面一直跟它开始的那一版；
+ * 它保存的音量、它自己的“播完后”和它的灯光可能用到的执行器当即生效，别的等下一首（下一首放最新的一版）。
+ * S8b：下一首改了就重新准备（不碰在播的歌）；在播的歌的动作 MIDI 从播放头往后跟新的一版。
  * A change that breaks one of these fails here.
  */
 
@@ -39,13 +43,15 @@ function edited(from: LinkProject, itemId: string, change: (item: RundownItem) =
 }
 const withPlayback = (patch: Partial<NonNullable<RundownItem['playback']>>) => (item: RundownItem): RundownItem => ({ ...item, playback: { ...item.playback!, ...patch } });
 
-/** A program over a fake audio engine and picture host; `lighting` records what the lights-off ledger is told. */
-function program(opened: LinkProject) {
+/** A program over a fake audio engine and picture host; `lighting` records what the lights-off ledger is told.
+ * `runtime`: the action MIDI side of the host (prepare, pause, stop, retargetActions), when a test needs it. */
+function program(opened: LinkProject, runtime: Partial<InternalPlayerDependencies> = {}) {
   let status: NativePlayerStatus | null = null, listener: ((value: NativePlayerStatus) => void) | null = null;
   let state: InternalPlayerState = { ...emptyInternalPlayerState };
   const emit = (patch: Partial<NativePlayerStatus>): NativePlayerStatus => { status = { ...status!, ...patch }; listener?.(status); return status; };
   const api = {
-    preloadNativeObs: vi.fn(() => Promise.resolve()), cancelNativeObsPreload: vi.fn(() => Promise.resolve()),
+    preloadNativeObs: vi.fn(() => Promise.resolve()), prepareNextNativePlayback: vi.fn<(request: NativePlayerNext) => Promise<void>>(() => Promise.resolve()),
+    prepareNextNativeObs: vi.fn<(request: NativeObsNext) => Promise<void>>(() => Promise.resolve()), cancelNativeObsPreload: vi.fn(() => Promise.resolve()),
     onNativeObsStatus: () => () => undefined, stopNativeObs: vi.fn(() => Promise.resolve()),
     prepareNativeObs: vi.fn((request: NativeObsPrepare): Promise<NativeObsStatus> => Promise.resolve({ version: 1, sessionId: request.sessionId,
       generation: request.generation, itemId: request.snapshot.item.id, revision: request.snapshot.revision, state: 'ready', reason: null,
@@ -73,9 +79,11 @@ function program(opened: LinkProject) {
     })
   };
   const notice = vi.fn<(message: string, itemId: string | null) => void>();
-  const dependencies = { prepare: () => Promise.resolve(), ingest: () => Promise.resolve(), stop: () => Promise.resolve(), pause: () => Promise.resolve(),
+  const actions = { prepare: vi.fn<InternalPlayerDependencies['prepare']>(() => Promise.resolve()), stop: vi.fn<InternalPlayerDependencies['stop']>(() => Promise.resolve()),
+    pause: vi.fn<InternalPlayerDependencies['pause']>(() => Promise.resolve()) };
+  const dependencies = { ...actions, ingest: () => Promise.resolve(),
     resolveAudio: () => Promise.resolve('unused'), configuration: () => ({ outputDeviceId: 'default', mtcPortName: null, audioSampleRate: 48000 as const }),
-    changed: (next: InternalPlayerState) => { state = next; }, notice, closedFault: vi.fn() };
+    changed: (next: InternalPlayerState) => { state = next; }, notice, closedFault: vi.fn(), ...runtime };
   const output = {
     change: vi.fn<ProgramLightingOutput['change']>(() => Promise.resolve({ failed: [] })),
     stop: vi.fn<ProgramLightingOutput['stop']>(() => Promise.resolve({ failed: [] })),
@@ -87,7 +95,7 @@ function program(opened: LinkProject) {
   const gain = async (): Promise<number> => { await settle(); return Math.round((status?.gain ?? Number.NaN) * 100); };
   /** The engine played the song to its end. */
   const ended = async (): Promise<void> => { emit({ status: 'ended' }); await settle(); await settle(); };
-  return { player, api, gain, ended, settle, emit, notice, lighting: output, state: () => state };
+  return { player, api, gain, ended, settle, emit, notice, lighting: output, state: () => state, runtime: actions };
 }
 
 describe('音量：在播的歌保存的音量改了当即生效', () => {
@@ -340,5 +348,225 @@ describe('灯光：修改不发 Off，执行器只增不减；停止关所有版
     expect(ledger.owed().map(entry => entry.executor)).toEqual(['1.103']);
     // The new executor is in use: an Off for it is not owed while the song holds it.
     expect(ledger.owe([off('1.102'), off('1.101')], opening, 'song-change', null)).toEqual([]);
+  });
+});
+
+/** A promise the test answers. */
+function deferred() {
+  let answer: () => void = () => undefined;
+  const promise = new Promise<void>(resolve => { answer = resolve; });
+  return { promise, answer: () => answer() };
+}
+const otherAudio = (sha: string) => (item: RundownItem): RundownItem => ({ ...item, referenceAudio: { ...item.referenceAudio!, sha256: sha.repeat(64) } });
+
+describe('S8b：下一首改了就重新准备，不碰在播的歌', () => {
+  it('下一首的音频改了：按新的一版重新准备音频和画面文件，播完时开的正是准备好的那一份', async () => {
+    const v1 = project(), f = program(v1);
+    await f.player.play('甲');
+    const v2 = edited(v1, '乙', otherAudio('b'));
+    f.player.updateProject(v2, 2, 'C:/show/拿着歌时改.tblink');
+    await f.settle();
+    expect(f.api.prepareNextNativePlayback).toHaveBeenCalledOnce();
+    const asked: NativePlayerNext = f.api.prepareNextNativePlayback.mock.lastCall![0];
+    expect(asked.nextSnapshot).toMatchObject({ itemId: '乙', revision: 2, audio: { sha256: 'b'.repeat(64) } });
+    const files: NativeObsNext = f.api.prepareNextNativeObs.mock.lastCall![0];
+    expect(files.nextFiles).toMatchObject({ snapshot: { revision: 2, item: { id: '乙', referenceAudio: { sha256: 'b'.repeat(64) } } } });
+    await f.ended();
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: '乙' });
+    // The main process takes a preparation only by these identities (NativeAudioPreload.take, NativeObsPreloadPool.take).
+    const started = f.api.prepareNativePlayback.mock.lastCall![0], picture = f.api.prepareNativeObs.mock.lastCall![0];
+    expect(nextAudioIdentity(started.snapshot)).toBe(nextAudioIdentity(asked.nextSnapshot!));
+    expect(nextPictureIdentity(picture, started.snapshot.positionMs)).toBe(nextPictureIdentity({ ...picture, snapshot: files.nextFiles!.snapshot }, files.nextFiles!.positionMs));
+  });
+
+  it('下一首被删掉：放下它，准备它后面那首；别的歌改了不重新准备', async () => {
+    const v1 = project(), f = program(v1);
+    await f.player.play('甲');
+    f.player.updateProject(edited(v1, '丙', item => ({ ...item, title: '改了第三首' })), 2, 'C:/show/拿着歌时改.tblink');
+    f.player.updateProject(edited(v1, '甲', withPlayback({ volume: 30 })), 3, 'C:/show/拿着歌时改.tblink');
+    await f.settle();
+    expect(f.api.prepareNextNativePlayback).not.toHaveBeenCalled();
+    expect(f.api.prepareNextNativeObs).not.toHaveBeenCalled();
+    f.player.updateProject(edited(v1, '乙', () => null), 4, 'C:/show/拿着歌时改.tblink');
+    await f.settle();
+    expect(f.api.prepareNextNativePlayback.mock.lastCall![0].nextSnapshot).toMatchObject({ itemId: '丙', revision: 4 });
+    expect(f.api.prepareNextNativeObs.mock.lastCall![0].nextFiles).toMatchObject({ snapshot: { revision: 4, item: { id: '丙' } } });
+    // Its own end action switched away from 播下一首: nothing is prepared ahead any more.
+    f.player.updateProject(edited(edited(v1, '乙', () => null), '甲', withPlayback({ endAction: 'stop' })), 5, 'C:/show/拿着歌时改.tblink');
+    await f.settle();
+    expect(f.api.prepareNextNativePlayback.mock.lastCall![0].nextSnapshot).toBeNull();
+    expect(f.api.prepareNextNativeObs.mock.lastCall![0].nextFiles).toBeNull();
+  });
+
+  it('连改十次：同一时间最多一个在路上，最后一次的赢，中间的不再发', async () => {
+    const v1 = project(), f = program(v1);
+    await f.player.play('甲');
+    let inFlight = 0, most = 0;
+    const answers: (() => void)[] = [];
+    const held = (): Promise<void> => {
+      inFlight++; most = Math.max(most, inFlight);
+      const answer = deferred(); answers.push(answer.answer);
+      return answer.promise.finally(() => { inFlight--; });
+    };
+    f.api.prepareNextNativePlayback.mockImplementation(held);
+    f.api.prepareNextNativeObs.mockImplementation(held);
+    let version = v1;
+    for (let edit = 1; edit <= 10; edit++) {
+      version = edited(version, '乙', withPlayback({ startMs: edit * 100 }));
+      f.player.updateProject(version, edit + 1, 'C:/show/拿着歌时改.tblink');
+      await f.settle();
+    }
+    expect(f.api.prepareNextNativePlayback).toHaveBeenCalledTimes(1);
+    for (let round = 0; round < 3; round++) { for (const answer of answers.splice(0)) answer(); await f.settle(); }
+    expect(most).toBe(2);
+    expect(f.api.prepareNextNativePlayback).toHaveBeenCalledTimes(2);
+    expect(f.api.prepareNextNativeObs).toHaveBeenCalledTimes(2);
+    expect(f.api.prepareNextNativePlayback.mock.lastCall![0].nextSnapshot).toMatchObject({ itemId: '乙', revision: 11, positionMs: 1000 });
+    expect(f.api.prepareNextNativeObs.mock.lastCall![0].nextFiles).toMatchObject({ snapshot: { revision: 11 }, positionMs: 1000 });
+  });
+
+  it('重新准备期间：在播的歌的引擎、画面和动作 MIDI 什么都没收到；问的是另一条路，不是播放控制', async () => {
+    const v1 = project(), f = program(v1);
+    await f.player.play('甲');
+    const before = { prepared: f.api.prepareNativePlayback.mock.calls.length, controls: f.api.controlNativePlayback.mock.calls.length,
+      pictures: f.api.prepareNativeObs.mock.calls.length, stops: f.api.stopNativeObs.mock.calls.length, preloads: f.api.preloadNativeObs.mock.calls.length,
+      cancels: f.api.cancelNativeObsPreload.mock.calls.length, actions: f.runtime.prepare.mock.calls.length, actionStops: f.runtime.stop.mock.calls.length,
+      actionPauses: f.runtime.pause.mock.calls.length };
+    const audio = deferred(), picture = deferred();
+    f.api.prepareNextNativePlayback.mockImplementationOnce(() => audio.promise);
+    f.api.prepareNextNativeObs.mockImplementationOnce(() => picture.promise);
+    f.player.updateProject(edited(v1, '乙', otherAudio('c')), 2, 'C:/show/拿着歌时改.tblink');
+    await f.settle();
+    // The song plays on meanwhile: its clock comes in, nothing is sent back.
+    f.emit({ positionMs: 1500 }); f.emit({ positionMs: 1600 });
+    audio.answer(); picture.answer(); await f.settle();
+    expect({ prepared: f.api.prepareNativePlayback.mock.calls.length, controls: f.api.controlNativePlayback.mock.calls.length,
+      pictures: f.api.prepareNativeObs.mock.calls.length, stops: f.api.stopNativeObs.mock.calls.length, preloads: f.api.preloadNativeObs.mock.calls.length,
+      cancels: f.api.cancelNativeObsPreload.mock.calls.length, actions: f.runtime.prepare.mock.calls.length, actionStops: f.runtime.stop.mock.calls.length,
+      actionPauses: f.runtime.pause.mock.calls.length }).toEqual(before);
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: '甲', error: null, notice: null });
+    // Bound to the song's own session and its picture's preparation, not a control of either.
+    const asked = f.api.prepareNextNativePlayback.mock.lastCall![0], obs = f.api.prepareNativeObs.mock.lastCall![0];
+    expect(Object.keys(asked).sort()).toEqual(['generation', 'nextSnapshot', 'sessionId', 'version']);
+    expect(f.api.prepareNextNativeObs.mock.lastCall![0]).toMatchObject({ sessionId: obs.sessionId, generation: obs.generation });
+  });
+
+  it('播完时新的还没准备好：照常冷启动下一首（不等、不报错）', async () => {
+    const v1 = project(), f = program(v1);
+    await f.player.play('甲');
+    f.api.prepareNextNativePlayback.mockImplementationOnce(() => new Promise<void>(() => undefined));
+    f.player.updateProject(edited(v1, '乙', otherAudio('d')), 2, 'C:/show/拿着歌时改.tblink');
+    await f.settle();
+    await f.ended();
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: '乙', error: null });
+    expect(f.api.prepareNativePlayback.mock.lastCall![0].snapshot).toMatchObject({ itemId: '乙', revision: 2, audio: { sha256: 'd'.repeat(64) } });
+  });
+});
+
+const pressed = (id: string, note = 60, durationMs?: number): LinkAction => ({ id, label: id, kind: 'midi.noteOn', portProfileId: 'out', channel: 1, note, velocity: 100,
+  ...durationMs === undefined ? {} : { durationMs } });
+const released = (id: string, note = 60): LinkAction => ({ id, label: id, kind: 'midi.noteOff', portProfileId: 'out', channel: 1, note, velocity: 0 });
+/** The held song 甲 with these cues, at 30 frames a second: `atMs` is on a frame. */
+function withCues(from: LinkProject, cues: { id: string; atMs: number; actions: LinkAction[] }[]): LinkProject {
+  const parsed = parseLinkProject({ ...from, rundown: from.rundown.map(item => item.id !== '甲' ? item
+    : { ...item, cues: cues.map(cue => ({ id: cue.id, name: cue.id, enabled: true, notes: '', timecode: frameNumberToTimecode(cue.atMs * 30 / 1000, '30'), actions: cue.actions })) }) });
+  return edited(from, '甲', () => parsed.rundown.find(item => item.id === '甲')!);
+}
+/** An action MIDI session over a fake port, its clock driven by the test. */
+function actionPort() {
+  let now = 0;
+  const sent: number[][] = [], missed: string[] = [];
+  const dependencies: MidiProgramDependencies = { prepare: () => Promise.resolve(), close: () => Promise.resolve(), now: () => now,
+    send: (_port, bytes) => { sent.push([...bytes]); return Promise.resolve(); }, sent: () => undefined, missed: message => { missed.push(message); },
+    late: () => undefined, failed: error => { throw error; } };
+  const at = async (session: MidiProgramSession, positionMs: number) => { now = 10_000 + positionMs; session.clock(positionMs, now); await session.settled(); };
+  return { sent, missed, dependencies, at };
+}
+const ON = [0x90, 60, 100], OFF = [0x80, 60, 0];
+
+describe('S8b：在播的歌的动作 MIDI 从播放头往后跟新的一版', () => {
+  const base = withCues(project(), [{ id: 'x', atMs: 5000, actions: [pressed('x-on', 62)] }]);
+  const start = async (opened: LinkProject) => {
+    const port = actionPort(), session = new MidiProgramSession(opened, '甲', port.dependencies, 'live');
+    await session.prepare(0);
+    return { ...port, session };
+  };
+
+  it('播放头后面的动作挪到更后面：只在新的时间发一次', async () => {
+    const f = await start(base);
+    await f.at(f.session, 0); await f.at(f.session, 2000);
+    f.session.retarget(withCues(base, [{ id: 'x', atMs: 8000, actions: [pressed('x-on', 62)] }]));
+    for (const position of [3000, 5000, 6000]) await f.at(f.session, position);
+    expect(f.sent).toEqual([]);
+    for (const position of [8000, 9000, 10_000]) await f.at(f.session, position);
+    expect(f.sent).toEqual([[0x90, 62, 100]]);
+  });
+
+  it('挪到播放头前面：不发；已经发过的挪到后面：也不再发', async () => {
+    // A Program Change goes out however late it is (midi-late-rule.ts): it shows an action moved before the playhead is not sent.
+    const program = (id: string): LinkAction => ({ id, label: id, kind: 'midi.programChange', portProfileId: 'out', channel: 1, program: 7 });
+    const opened = withCues(base, [{ id: 'y', atMs: 1000, actions: [pressed('y-on', 64)] }, { id: 'x', atMs: 5000, actions: [pressed('x-on', 62)] },
+      { id: 'pc', atMs: 6000, actions: [program('pc-change')] }]);
+    const f = await start(opened);
+    await f.at(f.session, 0); await f.at(f.session, 1000); await f.at(f.session, 2000);
+    expect(f.sent).toEqual([[0x90, 64, 100]]);
+    f.session.retarget(withCues(base, [{ id: 'y', atMs: 7000, actions: [pressed('y-on', 64)] }, { id: 'x', atMs: 1000, actions: [pressed('x-on', 62)] },
+      { id: 'pc', atMs: 1500, actions: [program('pc-change')] }]));
+    for (const position of [3000, 5000, 7000, 9000]) await f.at(f.session, position);
+    expect(f.sent).toEqual([[0x90, 64, 100]]);
+  });
+
+  it('不留挂着的音：已发的 Note On 新的一版删了它的 Note Off，旧的 Note Off 照发；带时长的照旧时长结束；没发的删了就不发', async () => {
+    const opened = withCues(base, [{ id: 'held', atMs: 1000, actions: [pressed('held-on')] }, { id: 'pulse', atMs: 1000, actions: [pressed('pulse-on', 61, 1500)] },
+      { id: 'later', atMs: 3000, actions: [pressed('later-on', 63)] }, { id: 'end', atMs: 6000, actions: [released('held-off')] }]);
+    const f = await start(opened);
+    await f.at(f.session, 0); await f.at(f.session, 1000); await f.at(f.session, 2000);
+    expect(f.sent).toEqual([ON, [0x90, 61, 100]]);
+    // The new version has none of them: no Note Off for `held`, no `pulse` and no `later`.
+    f.session.retarget(withCues(base, []));
+    for (const position of [2500, 3000, 4000, 5000, 6000, 7000]) await f.at(f.session, position);
+    expect(f.sent).toEqual([ON, [0x90, 61, 100], [0x80, 61, 0], OFF]);
+  });
+
+  it('新的一版有它自己的 Note Off：按新的时间关，旧的那条不再发', async () => {
+    const opened = withCues(base, [{ id: 'held', atMs: 1000, actions: [pressed('held-on')] }, { id: 'end', atMs: 6000, actions: [released('held-off')] }]);
+    const f = await start(opened);
+    await f.at(f.session, 0); await f.at(f.session, 1000); await f.at(f.session, 2000);
+    f.session.retarget(withCues(base, [{ id: 'held', atMs: 1000, actions: [pressed('held-on')] }, { id: 'end', atMs: 4000, actions: [released('held-off')] }]));
+    for (const position of [3000, 4000, 5000, 6000, 7000]) await f.at(f.session, position);
+    expect(f.sent).toEqual([ON, OFF]);
+    expect(f.missed).toEqual([]);
+  });
+
+  it('暂停时改了：改动等在那里，继续播放时按新的一版从那时的位置排；暂停前已经发过的挪到后面也不再发', async () => {
+    const opened = withCues(base, [{ id: 'w', atMs: 1000, actions: [pressed('w-on', 66)] }, { id: 'x', atMs: 5000, actions: [pressed('x-on', 62)] }]);
+    const port = actionPort();
+    let session: MidiProgramSession | null = null, passed: ReadonlySet<string> = new Set();
+    const close = async () => { const closing = session; session = null; if (closing) passed = closing.passed; await closing?.close(); };
+    const f = program(opened, {
+      // As NativeProgramHost does: the actions are prepared from the version the player says they follow, and a play-on
+      // after a pause keeps the actions whose turn came (NativeMidiHost.prepare `playsOn`).
+      prepare: async (itemId, positionMs, { playsOn }) => {
+        await close(); session = new MidiProgramSession(f.player.actionsProject(), itemId, port.dependencies, 'live');
+        await session.prepare(positionMs, playsOn ? passed : undefined);
+      },
+      pause: close, stop: close, retargetActions: project => session?.retarget(project)
+    });
+    await f.player.play('甲');
+    for (const position of [0, 1000, 2000]) await port.at(session!, position);
+    expect(port.sent).toEqual([[0x90, 66, 100]]);
+    f.emit({ positionMs: 2000 }); await f.player.pause();
+    expect(session).toBeNull();
+    const moved = withCues(opened, [{ id: 'w', atMs: 3500, actions: [pressed('w-on', 66)] },
+      { id: 'x', atMs: 3000, actions: [pressed('x-on', 62)] }, { id: 'z', atMs: 4000, actions: [pressed('z-on', 65)] }]);
+    f.player.updateProject(moved, 2, 'C:/show/拿着歌时改.tblink');
+    expect(f.player.actionsProject()).toBe(moved);
+    await f.player.resume();
+    for (const position of [2500, 3000, 3500, 4000, 5000, 6000]) await port.at(session!, position);
+    expect(port.sent).toEqual([[0x90, 66, 100], [0x90, 62, 100], [0x90, 65, 100]]);
+    // A seek of the same song keeps them; the audio and picture still follow the version it started with.
+    await f.player.seek(1000);
+    expect(f.player.actionsProject()).toBe(moved);
+    expect(f.player.currentProject()).toBe(opened);
   });
 });

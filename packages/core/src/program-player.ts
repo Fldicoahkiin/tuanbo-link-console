@@ -1,17 +1,23 @@
-import type { NativeObsStatus, LightingDocument } from '@tb/schema';
+import type { NativeObsStatus, LightingDocument, LinkProject } from '@tb/schema';
 
 export type InternalPlayerState = import('@tb/schema').ProgramPlayerState;
 export const emptyInternalPlayerState: InternalPlayerState = {
   status: 'stopped', itemId: null, positionMs: 0, durationMs: 0, volume: 100, endAction: 'pause', defaultEndAction: 'pause', error: null, errorTitle: null, notice: null, playedItemIds: [], mtcEnabled: true, mtcPositionMs: null, mtcConnectionFailed: false
 };
 export type InternalPlayerDependencies = {
-  prepare: (itemId: string, positionMs: number, options: { reuseSession: boolean; mtcOutputEnabled: boolean; signal?: AbortSignal }) => Promise<void>;
+  /** `playsOn`: the same song plays on from a pause in the same pass (0.5.9 S8b): its actions whose turn came before the
+   * pause are not sent again, also where a newer version moved them after the playhead. */
+  prepare: (itemId: string, positionMs: number, options: { reuseSession: boolean; mtcOutputEnabled: boolean; signal?: AbortSignal; playsOn?: boolean }) => Promise<void>;
   ingest: (positionMs: number) => Promise<void>;
   started?: (positionMs: number) => void;
   scrub?: ((positionMs: number) => Promise<void>) | undefined;
   /** reason: set for programmatic pauses/stops; absent means the operator asked. */
   pause: (reason?: string) => Promise<void>;
   stop: (reason?: string) => Promise<void>;
+  /** The song on stage takes a newer version of its action MIDI (0.5.9 S8b, liveRevisionEffect `actions`): the actions
+   * after the playhead follow it. While its actions are not running (paused, or being prepared again) nothing is sent:
+   * they are prepared from that version as it plays on (NativeProgramPlayer.actionsProject). */
+  retargetActions?: (project: LinkProject, itemId: string) => void;
   resolveAudio: (relativePath: string) => Promise<string>;
   configuration: () => Omit<import('@tb/schema').NativeProgramConfiguration, 'preciseSeeking'>;
   changed: (state: InternalPlayerState) => void;

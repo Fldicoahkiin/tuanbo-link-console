@@ -1,8 +1,8 @@
-import { nativePlayerControlSchema, nativePlayerPrepareSchema, type NativePlayerControl,
-  type NativePlayerPrepare, type NativePlayerStatus } from '@tb/schema';
+import { nativePlayerControlSchema, nativePlayerNextSchema, nativePlayerPrepareSchema, type NativePlayerControl,
+  type NativePlayerNext, type NativePlayerPrepare, type NativePlayerStatus } from '@tb/schema';
 
 type Service = { prepare: (request: NativePlayerPrepare) => Promise<NativePlayerStatus>;
-  control: (request: NativePlayerControl) => Promise<NativePlayerStatus> };
+  control: (request: NativePlayerControl) => Promise<NativePlayerStatus>; prepareNext: (request: NativePlayerNext) => Promise<void> };
 type Session = { request: NativePlayerPrepare; generation: number; transport: number; dispatched: boolean; cancelled: boolean; authorization: AbortController };
 
 /** Capture request order before any asynchronous authorization. The service's
@@ -40,6 +40,16 @@ export class NativePlaybackRequests {
     if (!session.dispatched && request.kind === 'stop') return cancelledStatus(session, request.generation);
     if (!session.dispatched || session.cancelled && request.kind !== 'stop') throw new Error('音频还没准备好或已取消，请重新播放');
     return this.service().control(request);
+  }
+
+  /** The next song prepared again while this one plays (0.5.9 S8b). No transport boundary: it cancels no control in
+   * flight, and none cancels it here. No license check of its own: it starts no output, and the song it is for checks
+   * one as it starts. */
+  async next(value: unknown): Promise<void> {
+    const request = nativePlayerNextSchema.parse(value), session = this.session;
+    if (!session || request.sessionId !== session.request.sessionId || request.generation < session.generation) throw new Error('下一首的准备请求已失效');
+    if (!session.dispatched || session.cancelled) throw new Error('这首歌已经停了，下一首播到时照常准备');
+    return this.service().prepareNext(request);
   }
 
   private requireCurrent(session: Session, transport: number): void {

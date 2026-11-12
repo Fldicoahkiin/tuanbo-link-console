@@ -17,7 +17,8 @@ function service() {
   const prepare = vi.fn((r: NativePlayerPrepare): Promise<NativePlayerStatus> => Promise.resolve({ version: 1, sessionId: r.sessionId,
     generation: r.generation, itemId: r.snapshot.itemId, status: 'ready', positionMs: r.snapshot.positionMs, offsetMs: r.snapshot.offsetMs,
     sampleRate: 48000, enginePid: 123, engineTitle: 'test', mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: 0.5, analysis: null }));
-  return { prepare, control: vi.fn((): Promise<NativePlayerStatus> => Promise.reject(new Error('unexpected output'))) };
+  return { prepare, control: vi.fn((): Promise<NativePlayerStatus> => Promise.reject(new Error('unexpected output'))),
+    prepareNext: vi.fn(() => Promise.resolve()) };
 }
 
 it('授权未返回时停止立即取消准备；迟到许可不会创建音频服务', async () => {
@@ -78,4 +79,22 @@ it('下一首的准备可以比在播的这首新，不能更旧，也不能是�
   expect(nativePlayerPrepareSchema.safeParse({ ...next({ revision: 1 }), snapshot: { ...input.snapshot, revision: 2 } }).success).toBe(false);
   expect(nativePlayerPrepareSchema.safeParse(next({ projectId: 'other' })).success).toBe(false);
   expect(nativePlayerPrepareSchema.safeParse(next({ sampleRate: 44100 })).success).toBe(false);
+});
+
+it('0.5.9 S8b：下一首重新准备不是播放控制，不取消排队的控制，也不过授权；停了以后就失效', async () => {
+  const pending = deferred(), engine = service(), input = request();
+  const authorize = vi.fn((channel: string, value: unknown) => channel === 'link:native-player-control' && (value as { kind: string }).kind === 'play' ? pending.promise : Promise.resolve());
+  const gateway = new NativePlaybackRequests(() => engine, authorize);
+  const ready = await gateway.prepare(input); engine.control.mockResolvedValue({ ...ready, generation: 2, status: 'playing' });
+  const playing = gateway.control({ version: 1, sessionId: input.sessionId, generation: 2, kind: 'play' });
+  const next = { version: 1 as const, sessionId: input.sessionId, generation: 2, nextSnapshot: { ...input.snapshot, itemId: 'next' } };
+  await gateway.next(next);
+  expect(engine.prepareNext).toHaveBeenCalledExactlyOnceWith(next);
+  expect(authorize.mock.calls.map(([channel]) => channel)).toEqual(['link:native-player-prepare', 'link:native-player-control']);
+  pending.release(); await expect(playing).resolves.toMatchObject({ status: 'playing' });
+  await expect(gateway.next({ ...next, generation: 1 })).rejects.toThrow('已失效');
+  engine.control.mockResolvedValue({ ...ready, generation: 3, status: 'stopped' });
+  await gateway.control({ version: 1, sessionId: input.sessionId, generation: 3, kind: 'stop' });
+  await expect(gateway.next({ ...next, generation: 3 })).rejects.toThrow('已经停了');
+  expect(engine.prepareNext).toHaveBeenCalledTimes(1);
 });

@@ -9,10 +9,17 @@ export const obsProgramSnapshotSchema = z.object({
   assets: z.array(linkMediaAssetSchema)
 }).strict();
 export type ObsProgramSnapshot = z.infer<typeof obsProgramSnapshotSchema>;
+const nativeObsNextFilesSchema = z.object({ snapshot: obsProgramSnapshotSchema, positionMs: z.number().finite().min(0).max(86_400_000) }).strict();
 export const nativeObsPrepareSchema = z.object({ version: z.literal(1), sessionId: z.string().uuid(),
   generation: z.number().int().positive(), projectPath: z.string().min(1).max(4096), preciseSeeking: z.boolean(), snapshot: obsProgramSnapshotSchema,
-  nextFiles: z.object({ snapshot: obsProgramSnapshotSchema, positionMs: z.number().finite().min(0).max(86_400_000) }).strict().optional() }).strict();
+  nextFiles: nativeObsNextFilesSchema.optional() }).strict();
 export type NativeObsPrepare = z.infer<typeof nativeObsPrepareSchema>;
+/** The next song's files and picture as the newest version has them, while a song's picture runs (0.5.9 S8b): what is
+ * prepared ahead is let go and this is prepared instead. `generation` is the picture's own preparation, as for a stop;
+ * the song's picture itself is not touched. `nextFiles: null`: nothing is prepared ahead any more. */
+export const nativeObsNextSchema = z.object({ version: z.literal(1), sessionId: z.string().uuid(),
+  generation: z.number().int().positive(), nextFiles: nativeObsNextFilesSchema.nullable() }).strict();
+export type NativeObsNext = z.infer<typeof nativeObsNextSchema>;
 export const nativeObsPreloadSchema = nativeObsPrepareSchema.extend({ positionMs: z.number().finite().min(0).max(86_400_000) });
 export type NativeObsPreload = z.infer<typeof nativeObsPreloadSchema>;
 /** Generation is the original preparation generation, not the latest audio

@@ -10,8 +10,8 @@ function setup() {
   const permission = new Promise<void>(resolve => { release = resolve; });
   const state: NativeObsStatus = { version: 1, sessionId: request.sessionId, generation: 1, itemId: 'song', revision: 0,
     state: 'ready', reason: null, nextCueId: null, currentCueId: null, pendingCount: 0, positionMs: 0 };
-  const prepare = vi.fn(() => Promise.resolve(state)), stopOwned = vi.fn(() => Promise.resolve());
-  return { request, release, prepare, stopOwned, api: new NativeObsRequests({ prepare, stopOwned }, () => permission) };
+  const prepare = vi.fn(() => Promise.resolve(state)), stopOwned = vi.fn(() => Promise.resolve()), prepareNext = vi.fn(() => Promise.resolve());
+  return { request, release, prepare, stopOwned, prepareNext, api: new NativeObsRequests({ prepare, stopOwned, prepareNext }, () => permission) };
 }
 
 it('许可返回前停止，迟到准备不派发；旧的取消也不能影响新代数', async () => {
@@ -37,4 +37,15 @@ it('窗口的准备请求在文件检查拒绝时不派发', async () => {
   expect(test.prepare).not.toHaveBeenCalled();
   await test.api.prepare({ ...test.request, generation: 2 }, () => Promise.resolve());
   expect(test.prepare).toHaveBeenCalledTimes(1);
+});
+
+it('0.5.9 S8b：下一首的画面重新准备只认派发了的那次准备；排队中或停了就失效', async () => {
+  const test = setup(), next = { version: 1 as const, sessionId: test.request.sessionId, generation: 1, nextFiles: null };
+  const preparing = test.api.prepare(test.request);
+  await expect(test.api.next(next)).rejects.toThrow('已过期');
+  test.release(); await preparing;
+  await test.api.next(next); expect(test.prepareNext).toHaveBeenCalledExactlyOnceWith(next);
+  await expect(test.api.next({ ...next, generation: 2 })).rejects.toThrow('已过期');
+  await test.api.stop({ version: 1, sessionId: test.request.sessionId, generation: 1 });
+  await expect(test.api.next(next)).rejects.toThrow('已过期'); expect(test.prepareNext).toHaveBeenCalledTimes(1);
 });

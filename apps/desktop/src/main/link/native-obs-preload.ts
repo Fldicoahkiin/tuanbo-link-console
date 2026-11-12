@@ -1,7 +1,7 @@
 import { nativeObsPreloadSchema, nativeObsStopSchema, type NativeObsPrepare, type NativeObsPreload, type NativeObsStop } from '@tb/schema';
 import { ObsPreparationCancelled, type NativeObsOutputs } from './native-obs-outputs';
 import type { PictureFailure } from './native-obs-host';
-import { materialSceneTargets, pictureCleanupReason, pictureErrorDetail, projectFromObsSnapshot, toUserErrorMessage } from '@tb/core/link';
+import { materialSceneTargets, nextPictureIdentity, pictureCleanupReason, pictureErrorDetail, projectFromObsSnapshot, toUserErrorMessage } from '@tb/core/link';
 
 /** `settled`: the preparation itself has ended; its result goes to whoever asked for it, unless `taken`:
  * a song took it over before it ended, and that song hears its result. */
@@ -97,7 +97,7 @@ export class NativeObsPreloadPool {
 
   async take(request: NativeObsPrepare, positionMs: number, assertOwner: () => void): Promise<NativeObsOutputs> {
     const entry = this.entry;
-    if (entry && !entry.cancelled && entry.request.sessionId === request.sessionId && resourceKey(entry.request, entry.request.positionMs) === resourceKey(request, positionMs)) {
+    if (entry && !entry.cancelled && entry.request.sessionId === request.sessionId && nextPictureIdentity(entry.request, entry.request.positionMs) === nextPictureIdentity(request, positionMs)) {
       // The song taking it over being stopped or replaced cancels the preparation; that is not a failure.
       this.entry = null; entry.assertOwner = () => {
         try { assertOwner(); } catch (error) { throw new ObsPreparationCancelled(errorText(error)); }
@@ -158,13 +158,6 @@ export class NativeObsPreloadPool {
     this.dependencies.report({ log: `提前准备的画面没有清理干净，不影响播放。原因：${pictureErrorDetail(error)}`,
       shown: `提前准备的画面没有清理干净，不影响播放。原因：${pictureCleanupReason(error)}` });
   }
-}
-
-/** What the picture is, not which project version asked for it (0.5.9 S8a): the outputs are built from the song's
- * content only (projectFromObsSnapshot has no revision), and the session and its status take the revision of the
- * request that takes them over. */
-function resourceKey(request: NativeObsPrepare, positionMs: number): string {
-  return JSON.stringify([request.projectPath, request.preciseSeeking, { ...request.snapshot, revision: null }, positionMs]);
 }
 
 function errorText(error: unknown): string {

@@ -62,7 +62,7 @@ function rig(execute: (action: LinkAction) => Promise<void>, admit: () => boolea
     onNativePlaybackStatus: listener => { audioListeners.add(listener); return () => { audioListeners.delete(listener); }; },
     prepareNativeObs: request => requests.prepare(request), stopNativeObs: request => requests.stop(request),
     onNativeObsStatus: listener => { obsListeners.add(listener); return () => { obsListeners.delete(listener); }; },
-    preloadNativeObs: request => pool?.preload(request) ?? Promise.resolve(), cancelNativeObsPreload: request => pool?.cancel(request) ?? Promise.resolve()
+    preloadNativeObs: request => pool?.preload(request) ?? Promise.resolve(), prepareNextNativePlayback: () => Promise.resolve(), prepareNextNativeObs: () => Promise.resolve(), cancelNativeObsPreload: request => pool?.cancel(request) ?? Promise.resolve()
   }, { change: () => Promise.resolve({ failed: [] }), stop: () => Promise.resolve({ failed: [] }), widen: () => undefined });
   /** The music plays on from `from` to `to` ms, one engine status every 20 ms. */
   const playTo = async (from: number, to: number): Promise<void> => {

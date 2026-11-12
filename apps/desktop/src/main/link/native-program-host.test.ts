@@ -44,7 +44,7 @@ windowsTest('正式后台宿主使用真实 WASAPI 换歌、暂停恢复；空�
     api: { prepareNativePlayback: request => service.prepare(request), controlNativePlayback: request => service.control(request),
       getNativePlaybackDevices: () => service.devices(), prepareNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')),
       stopNativeObs: () => Promise.resolve(), onNativeObsStatus: () => () => undefined,
-      preloadNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')), cancelNativeObsPreload: () => Promise.resolve() },
+      preloadNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')), prepareNextNativePlayback: () => Promise.resolve(), prepareNextNativeObs: () => Promise.resolve(), cancelNativeObsPreload: () => Promise.resolve() },
     lighting: new LightingOffService({ console: { getMa2NetworkStatus: () => Promise.reject(new Error('空灯光不应访问控台')),
       playMa2Cue: () => Promise.reject(new Error('隔离测试禁止网络灯光输出')) }, resending: () => undefined, failed: message => errors.push(message) })
   });
@@ -91,7 +91,7 @@ windowsTest('44.1kHz 真实引擎曲尾不在整采样上时，灯光按引擎�
     api: { prepareNativePlayback: request => service.prepare(request), controlNativePlayback: request => service.control(request),
       getNativePlaybackDevices: () => service.devices(), prepareNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')),
       stopNativeObs: () => Promise.resolve(), onNativeObsStatus: () => () => undefined,
-      preloadNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')), cancelNativeObsPreload: () => Promise.resolve() },
+      preloadNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')), prepareNextNativePlayback: () => Promise.resolve(), prepareNextNativeObs: () => Promise.resolve(), cancelNativeObsPreload: () => Promise.resolve() },
     lighting: new LightingOffService({ console: { getMa2NetworkStatus: () => Promise.reject(new Error('空灯光不应访问控台')),
       playMa2Cue: () => Promise.reject(new Error('隔离测试禁止网络灯光输出')) }, resending: () => undefined, failed: message => errors.push(message) })
   });

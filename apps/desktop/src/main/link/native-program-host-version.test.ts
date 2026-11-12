@@ -34,7 +34,7 @@ it('动作 MIDI 按播放器现在的那一版工程准备：停着时换上的�
       status: request.kind === 'play' ? 'playing' : request.kind === 'stop' ? 'stopped' : status!.status }),
     getNativePlaybackDevices: () => Promise.resolve({ protocol: 4 as const, audio: [], midiOutputs: [], midiInputs: [] }),
     prepareNativeObs: () => Promise.reject(new Error('没有 OBS')), stopNativeObs: () => Promise.resolve(), onNativeObsStatus: () => () => undefined,
-    preloadNativeObs: () => Promise.reject(new Error('没有 OBS')), cancelNativeObsPreload: () => Promise.resolve() },
+    preloadNativeObs: () => Promise.reject(new Error('没有 OBS')), prepareNextNativePlayback: () => Promise.resolve(), prepareNextNativeObs: () => Promise.resolve(), cancelNativeObsPreload: () => Promise.resolve() },
     lighting: { change: () => Promise.resolve({ failed: [] }), stop: () => Promise.resolve({ failed: [] }), widen: () => undefined }
   });
   try {

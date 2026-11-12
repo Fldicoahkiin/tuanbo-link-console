@@ -31,8 +31,12 @@ type Dependencies = {
 };
 /** `resumed`: opened after its port came back, skipping `skipped` actions; `sent`: an action of it went out. */
 type Entry = { identity: Identity; session: MidiProgramSession; state: NativeMidiChannelState; resumed: boolean; skipped: number; sent: boolean };
-/** The playing song whose port was lost: its failed session (where the outage began) and the red message shown. */
+/** The playing song whose port was lost: its failed session (where the outage began) and the red message shown.
+ * `project`: the version its actions follow, also when a newer one arrives meanwhile (retarget). */
 type Lost = { project: LinkProject; identity: Identity; session: MidiProgramSession; fault: string };
+/** The song whose actions are being opened (prepare, resume) and the version they follow, also when a newer one arrives
+ * before its session exists (retarget). */
+type Opening = { itemId: string; project: LinkProject };
 
 /** Program-owned generic MIDI. Receives only NativePlayerService observations,
  * never renderer positions or an independent playback timer. */
@@ -43,6 +47,10 @@ export class NativeMidiHost {
   private readonly now: () => number;
   /** The playing song whose port was lost; its actions continue once the same port is back (authorised 2026-10-24). */
   private lost: Lost | null = null;
+  private opening: Opening | null = null;
+  /** The actions whose turn came in the last session stopped (MidiProgramSession.passed), for the song playing on after a
+   * pause in the same pass (prepare `playsOn`, 0.5.9 S8b). */
+  private passed: { itemId: string; keys: ReadonlySet<string> } | null = null;
   private readonly recovery: MidiPortRecovery;
   constructor(private readonly dependencies: Dependencies) {
     this.now = dependencies.now ?? (() => Number(process.hrtime.bigint()) / 1e6);
@@ -55,18 +63,37 @@ export class NativeMidiHost {
   }
   get status(): NativeMidiChannelState | null { return this.entry?.state ?? null; }
 
-  async prepare(project: LinkProject, identity: Identity): Promise<void> {
+  /** `playsOn`: the same song plays on from a pause (0.5.9 S8b): the actions whose turn came before the pause stay done,
+   * also where a version taken meanwhile moved them after the playhead. Otherwise (a start, a seek, a loop) the pass
+   * begins at this position. */
+  async prepare(project: LinkProject, identity: Identity, playsOn = false): Promise<void> {
     this.admit(identity);
-    const stopped = this.stop(), epoch = this.epoch;
+    const stopped = this.stop(), epoch = this.epoch, opening: Opening = { itemId: identity.itemId, project }; this.opening = opening;
+    const passed = playsOn && this.passed?.itemId === identity.itemId ? this.passed.keys : null;
     // The old driver has exited or was reported as kept; its failure does not decide this song.
     try { await stopped; } catch (error) { this.dependencies.error(`关闭上一首的 MIDI 失败：${toError(error).message}`); }
     if (epoch !== this.epoch) throw new Error('MIDI 准备已被新的操作取消');
     const audio = this.admit(identity);
-    await this.open(project, identity, audio.positionMs, epoch, null);
+    await this.open(opening.project, identity, audio.positionMs, epoch, null, passed);
   }
 
-  /** `outage`: the failed session this one resumes after its port came back. */
-  private async open(project: LinkProject, identity: Identity, positionMs: number, epoch: number, outage: MidiProgramSession | null): Promise<void> {
+  /** A newer version of the song's actions while they run (0.5.9 S8b): after the playhead they follow it
+   * (MidiProgramSession.retarget). A session still being opened, or waiting for its lost port, opens with it. Another
+   * song's version changes nothing here. Throws when its actions cannot be scheduled; the song keeps the ones it has. */
+  retarget(project: LinkProject, itemId: string): void {
+    const entry = this.entry;
+    if ((entry?.identity.itemId ?? this.opening?.itemId ?? this.lost?.identity.itemId ?? this.passed?.itemId) !== itemId) return;
+    // Also while no session runs (paused): a version that cannot be scheduled is said now, not at the resume.
+    MidiProgramSession.check(project, itemId);
+    if (entry && entry.identity.itemId === itemId && !['stopped', 'failed'].includes(entry.state.state)) entry.session.retarget(project);
+    if (this.opening?.itemId === itemId) this.opening.project = project;
+    if (this.lost?.identity.itemId === itemId) this.lost.project = project;
+  }
+
+  /** `outage`: the failed session this one resumes after its port came back. `passed`: the actions whose turn came in
+   * this pass before (prepare `playsOn`); after an outage, those of the failed session. */
+  private async open(project: LinkProject, identity: Identity, positionMs: number, epoch: number, outage: MidiProgramSession | null,
+    passed: ReadonlySet<string> | null): Promise<void> {
     let entry: Entry | null = null;
     const failed = (error: Error) => {
       if (!entry || this.entry !== entry) { this.dependencies.error(`上一首的 MIDI：${error.message}`); return; }
@@ -100,7 +127,7 @@ export class NativeMidiHost {
     const state: NativeMidiChannelState = { ...identity, state: 'preparing', reason: null, currentCueId: null };
     const opened: Entry = { identity, session, state, resumed: outage !== null, skipped: 0, sent: false }; entry = opened; this.entry = opened; this.dependencies.changed(state);
     try {
-      await session.prepare(positionMs);
+      await session.prepare(positionMs, outage?.passed ?? passed ?? undefined);
       if (epoch !== this.epoch || this.entry !== opened) throw new Error('MIDI 准备已取消');
       if (outage) {
         const audio = this.resumable();
@@ -146,9 +173,10 @@ export class NativeMidiHost {
   }
 
   stop(): Promise<void> {
-    this.epoch++; this.recovery.cancel(); this.lost = null;
+    this.epoch++; this.recovery.cancel(); this.lost = null; this.opening = null;
     const entry = this.entry; this.entry = null;
     if (!entry) return this.stopped;
+    this.passed = { itemId: entry.identity.itemId, keys: entry.session.passed };
     this.dependencies.changed({ ...entry.state, state: entry.state.state === 'failed' ? 'failed' : 'stopped' });
     const closing = entry.session.close();
     // Only the caller of this stop receives a close failure; later stops and preparations wait for the close without it.
@@ -169,7 +197,8 @@ export class NativeMidiHost {
     // A failed session closes itself and reports its own close failure.
     if (previous) await Promise.allSettled([previous.session.close()]);
     if (epoch !== this.epoch) throw new Error('MIDI 准备已被新的操作取消');
-    await this.open(lost.project, { sessionId: audio.sessionId, generation: audio.generation, itemId: audio.itemId }, audio.positionMs, epoch, lost.session);
+    // The version as it is now: retarget keeps `lost.project` up to date while the old session closed.
+    await this.open(lost.project, { sessionId: audio.sessionId, generation: audio.generation, itemId: audio.itemId }, audio.positionMs, epoch, lost.session, null);
   }
   private admit(identity: Identity): NativePlayerStatus {
     const audio = this.dependencies.audio();

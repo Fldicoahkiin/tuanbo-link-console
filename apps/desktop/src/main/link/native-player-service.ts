@@ -1,5 +1,5 @@
-import { nativePlayerControlSchema, nativePlayerPrepareSchema, nativePlayerStatusSchema,
-  type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativePlaybackEvent, type NativeDeviceQueryRequest, type NativePlaybackDevices } from '@tb/schema';
+import { nativePlayerControlSchema, nativePlayerNextSchema, nativePlayerPrepareSchema, nativePlayerStatusSchema,
+  type NativePlayerControl, type NativePlayerNext, type NativePlayerPrepare, type NativePlayerStatus, type NativePlaybackEvent, type NativeDeviceQueryRequest, type NativePlaybackDevices } from '@tb/schema';
 import { NativeAudioCache, type NativeAudioLease } from './native-audio-cache';
 import { NativeEngineRejection, NativePlaybackClient, type NativeClockState } from './native-playback-client';
 import { playableEndMs, rangeRejectedMessage } from './native-playback-range';
@@ -305,6 +305,25 @@ export class NativePlayerService {
     if (request.kind !== 'stop') return result;
     const task = result.finally(() => { if (this.stopping?.task === task) this.stopping = null; });
     this.stopping = { epoch, sessionId: request.sessionId, task }; return task;
+  }
+
+  /** The next song's audio as the newest version has it (0.5.9 S8b): what was prepared ahead is let go and this is
+   * prepared instead, as a play prepares it. The song that plays is not touched: no engine command, no transport
+   * boundary (`epoch`), nothing waits behind its controls or they behind this. Resolves once the old preparation is let
+   * go; the new one runs in the background and reports its own failure (preloadError). Before the song first plays only
+   * the request is kept: its play prepares it. A stop, seek or another song lets the new one go like the old one. */
+  async prepareNext(input: NativePlayerNext): Promise<void> {
+    const request = nativePlayerNextSchema.parse(input), state = this.state, source = this.source;
+    if (!state || !source || request.sessionId !== state.sessionId || request.generation < state.generation) throw new Error('下一首的准备请求已过期');
+    if (this.closing || !['ready', 'playing', 'paused'].includes(state.status)) throw new Error('这首歌已经停了，下一首播到时照常准备');
+    const next = request.nextSnapshot;
+    if (next && (next.projectId !== source.snapshot.projectId || next.revision < source.snapshot.revision || next.sampleRate !== source.snapshot.sampleRate)) {
+      throw new Error('下一节目必须属于同一工程、不早于当前节目的修订，并使用相同的音频采样率');
+    }
+    // A play prepares it ahead (control): until then only the request is kept.
+    const ahead = this.preload.started || state.status === 'playing';
+    if (next) source.nextSnapshot = next; else delete source.nextSnapshot;
+    await (next && ahead ? this.preload.replace(source.projectPath, next) : this.preload.discard());
   }
 
   async close(): Promise<void> {

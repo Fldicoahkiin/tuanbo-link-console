@@ -13,7 +13,8 @@ import { NativePlaybackClient } from './native-playback-client';
 /** A failed picture cleanup as the operator reads it: what failed, why (no code prefixes, said once), what to check. */
 const LEFTOVER = 'OBS 无响应。请检查 OBS 节目画面上是否还留着刚才的素材';
 
-function setup(prepareNextFiles = vi.fn<(request: NativeObsPrepare, assertCurrent: () => void) => Promise<void>>(() => Promise.resolve())) {
+function setup(prepareNextFiles = vi.fn<(request: NativeObsPrepare, assertCurrent: () => void) => Promise<void>>(() => Promise.resolve()),
+  cancelNextFiles = vi.fn<(sessionId: string) => Promise<void>>(() => Promise.resolve())) {
   const project = parseLinkProject({ ...createEmptyLinkProject('后台测试'), playbackSource: 'internal', obsOutputMode: 'scenes',
     rundown: ([['song', '', ''], ['next', 'next-', '下一首']] as const).map(([id, prefix, scene]) => ({ id, title: id, cues: [0, 1].map(seconds => ({ id: `${prefix}cue-${seconds}`, name: '机位',
       timecode: { hours: 0, minutes: 0, seconds, frames: 0 }, actions: [{ id: `${prefix}scene-${seconds}`, kind: 'obs.setProgramScene', label: '切机位', sceneName: `${scene}机位${seconds}` }] })) })) });
@@ -26,14 +27,14 @@ function setup(prepareNextFiles = vi.fn<(request: NativeObsPrepare, assertCurren
   const prepareOutputs = vi.fn<(assertCurrent: () => void) => Promise<void>>(() => Promise.resolve()), recoveries: PictureRecoveryLog[] = [];
   const request: NativeObsPrepare = { version: 1, sessionId: audio.sessionId, generation: 1, preciseSeeking: false, projectPath: 'C:/shows/test.tblink', snapshot: createObsProgramSnapshot(project, 'song', 4) };
   const host = new NativeObsHost({ audio: () => audio, changed: state => states.push(state), error: message => failures.push(message),
-    prepareNextFiles, recovered: entry => recoveries.push(entry),
+    prepareNextFiles, cancelNextFiles, recovered: entry => recoveries.push(entry),
     outputs: () => ({ executor: { id: 'test', supports: () => true, execute },
       guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
       prepareOutputs, holdOutputs, releaseOutputs, restoreScenes,
       now: () => now, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now }) }) });
   const observe = (patch: Partial<NativePlayerStatus>, time: number, ageMs = 0) => { now = time; audio = { ...audio, ...patch }; host.observe(clockFromNativeStatus(audio, ((process.hrtime.bigint() - BigInt(ageMs) * 1000000n) / 100n).toString())); };
-  return { host, request, execute, releaseOutputs, holdOutputs, restoreScenes, prepareOutputs, recoveries, failures, states, observe, prepareNextFiles, time: (value: number) => { now = value; }, audio: () => audio, change: (patch: Partial<NativePlayerStatus>) => { audio = { ...audio, ...patch }; },
+  return { host, request, execute, releaseOutputs, holdOutputs, restoreScenes, prepareOutputs, recoveries, failures, states, observe, prepareNextFiles, cancelNextFiles, time: (value: number) => { now = value; }, audio: () => audio, change: (patch: Partial<NativePlayerStatus>) => { audio = { ...audio, ...patch }; },
     song: (itemId: string, generation: number): NativeObsPrepare => ({ ...request, generation, snapshot: createObsProgramSnapshot(project, itemId, 4) }) };
 }
 
@@ -86,6 +87,52 @@ it('正式画面准备被停止中断：传给素材准备的检查按取消结�
   expect(() => check!()).toThrow(ObsPreparationCancelled);
   release(); await stopping; await preparing;
   expect(failures).toEqual([]);
+});
+
+// 0.5.9 S8b: the next song changed while this song's picture runs.
+it('播放中下一首换了：放下在准备的那份，等它结束再按新的准备，一次一个；这首歌自己的画面一点不动', async () => {
+  const finishes: (() => void)[] = [], checks: (() => void)[] = [];
+  const prepare = vi.fn<(request: NativeObsPrepare, current: () => void) => Promise<void>>((_request, current) => {
+    checks.push(current); return new Promise<void>(resolve => { finishes.push(resolve); }).then(() => current());
+  });
+  const test = setup(prepare), next = test.song('next', 1).snapshot;
+  test.request.nextFiles = { snapshot: next, positionMs: 0 };
+  await test.host.prepare(test.request);
+  test.observe({ status: 'playing', generation: 2 }, 0); test.observe({ positionMs: 10 }, 10);
+  expect(prepare).toHaveBeenCalledOnce();
+  const own = () => [test.execute.mock.calls.length, test.releaseOutputs.mock.calls.length, test.prepareOutputs.mock.calls.length, test.restoreScenes.mock.calls.length];
+  // This song's first cut went out at its clock.
+  await flushHost(); expect(test.execute).toHaveBeenCalledOnce();
+  const before = own();
+  const changed = { snapshot: { ...next, revision: 5, item: { ...next.item, title: '改过的下一首' } }, positionMs: 0 };
+  const asking = test.host.prepareNext({ version: 1, sessionId: test.request.sessionId, generation: 1, nextFiles: changed });
+  await flushHost();
+  expect(test.cancelNextFiles).toHaveBeenCalledExactlyOnceWith(test.request.sessionId);
+  expect(() => checks[0]!()).toThrow(ObsPreparationCancelled);
+  expect(prepare).toHaveBeenCalledOnce();
+  finishes[0]!(); await asking;
+  expect(prepare).toHaveBeenCalledTimes(2);
+  expect(prepare.mock.lastCall![0]).toMatchObject({ snapshot: test.request.snapshot, nextFiles: changed });
+  expect(() => checks[1]!()).not.toThrow();
+  expect(own()).toEqual(before);
+  expect(test.host.status).toMatchObject({ state: 'running', itemId: 'song', generation: 2 });
+  expect(test.failures).toEqual([]);
+  // Paused: the newest is prepared at the next clock of the music; asked for nothing (null), nothing is.
+  test.observe({ status: 'paused', generation: 3 }, 20);
+  const again = test.host.prepareNext({ version: 1, sessionId: test.request.sessionId, generation: 1, nextFiles: { ...changed, positionMs: 500 } });
+  await flushHost(); finishes[1]!(); await again;
+  expect(prepare).toHaveBeenCalledTimes(2);
+  test.observe({ status: 'playing', generation: 4, positionMs: 20 }, 30);
+  expect(prepare).toHaveBeenCalledTimes(3);
+  expect(prepare.mock.lastCall![0].nextFiles).toEqual({ ...changed, positionMs: 500 });
+  const none = test.host.prepareNext({ version: 1, sessionId: test.request.sessionId, generation: 1, nextFiles: null });
+  await flushHost(); finishes[2]!(); await none;
+  test.observe({ positionMs: 40 }, 40);
+  expect(prepare).toHaveBeenCalledTimes(3);
+  await expect(test.host.prepareNext({ version: 1, sessionId: test.request.sessionId, generation: 2, nextFiles: null })).rejects.toThrow('已过期');
+  await test.host.stop();
+  await expect(test.host.prepareNext({ version: 1, sessionId: test.request.sessionId, generation: 1, nextFiles: changed })).resolves.toBeUndefined();
+  expect(prepare).toHaveBeenCalledTimes(3);
 });
 
 it('跨工程或比当前节目更旧修订的下一节目不能随当前节目准备', async () => {
@@ -550,7 +597,7 @@ function program(endActionOrOptions: 'next' | 'stop' | ProgramOptions) {
     onNativePlaybackStatus: listener => { audioListeners.add(listener); return () => { audioListeners.delete(listener); }; },
     prepareNativeObs: request => requests.prepare(request), stopNativeObs: request => requests.stop(request),
     onNativeObsStatus: listener => { obsListeners.add(listener); return () => { obsListeners.delete(listener); }; },
-    preloadNativeObs: () => Promise.resolve(), cancelNativeObsPreload: () => Promise.resolve()
+    preloadNativeObs: () => Promise.resolve(), prepareNextNativePlayback: () => Promise.resolve(), prepareNextNativeObs: () => Promise.resolve(), cancelNativeObsPreload: () => Promise.resolve()
   }, { change: () => Promise.resolve({ failed: [] }), stop: () => Promise.resolve({ failed: [] }), widen: () => undefined });
   /** The music plays on from `from` to `to` ms (the end of the song is 2000 ms). */
   const playTo = async (from: number, to: number): Promise<void> => {

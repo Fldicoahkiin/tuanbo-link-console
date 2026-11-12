@@ -158,3 +158,37 @@ it('下一首的音频文件没了，刚开始提前准备就换了歌：只记�
   expect(f.error).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(letGo('ENOENT: ')));
   expect(f.prepare).not.toHaveBeenCalled();
 });
+
+// 0.5.9 S8b: the next song changed while this one plays.
+it('换成新的下一首：旧的放下以后新的才开始解码，一次只有一个；中途的播放不另开一个；接下一首时用的是新的', async () => {
+  const f = await fixture(); let complete: ((value: NativeAudioLease) => void) | undefined;
+  f.prepare.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+  f.preload.start('p.tblink', f.snapshot);
+  await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledOnce());
+  const changed = { ...f.snapshot, revision: 8, audio: { ...f.snapshot.audio, sha256: 'b'.repeat(64) } };
+  const letGo = f.preload.replace('p.tblink', changed);
+  // A play meanwhile (resume) finds the new one pending and starts nothing.
+  f.preload.start('p.tblink', f.snapshot);
+  await delay(20);
+  expect(f.prepare).toHaveBeenCalledOnce();
+  complete!(f.lease); await letGo;
+  expect(f.release).toHaveBeenCalledOnce();
+  // The old one ran to its end before it was released, then the new one.
+  await f.prepared(2);
+  expect(f.prepare).toHaveBeenCalledTimes(2);
+  expect(f.prepare.mock.lastCall![0]).toMatchObject({ sourceSha256: 'b'.repeat(64) });
+  expect(await f.preload.take('p.tblink', { ...changed, revision: 9 })).toBe(f.lease);
+  expect(f.error).not.toHaveBeenCalled();
+});
+
+it('换了以后又停了：新的还没开始就放下，不读文件、不解码、不报错', async () => {
+  const f = await fixture(); let complete: ((value: NativeAudioLease) => void) | undefined;
+  f.prepare.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+  f.preload.start('p.tblink', f.snapshot);
+  await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledOnce());
+  void f.preload.replace('p.tblink', { ...f.snapshot, itemId: 'other' });
+  const stopped = f.preload.discard(); complete!(f.lease); await stopped;
+  await delay(20);
+  expect(f.prepare).toHaveBeenCalledOnce(); expect(f.release).toHaveBeenCalledOnce(); expect(f.error).not.toHaveBeenCalled();
+  expect(f.preload.started).toBe(false);
+});

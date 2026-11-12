@@ -665,6 +665,7 @@ function registerIpc(
         itemId: request.nextFiles.snapshot.item.id, message: decoderPrepared ? '下一个节目的画面已准备好' : '下一个节目的文件已准备好，共用的来源等当前节目结束后交接', result: 'succeeded',
         details: { elapsedMs: performance.now() - started, decoderPrepared } });
     },
+    cancelNextFiles: sessionId => obsPreload.cancelNext(sessionId),
     changed: status => { sendToRenderer('link:native-obs-status', status); for (const listener of programObsListeners) listener(status); },
     recovered: entry => { void logger.record({ ...entry, category: 'device', device: 'obs' }).catch((error: unknown) => console.error('画面恢复日志写入失败', error)); },
     error: message => { void logger.record({ level: 'error', category: 'device', device: '后台画面', message, result: 'failed',
@@ -1094,6 +1095,8 @@ function registerIpc(
         getNativePlaybackDevices: scope => player().devices(scope), prepareNativeObs: value => obsRequests.prepare(value),
         stopNativeObs: value => obsRequests.stop(value), preloadNativeObs: value => obsPreload.preload(value),
         cancelNativeObsPreload: value => obsPreload.cancel(value),
+        // The next song while one is held (0.5.9 S8b): beside the song's own audio and picture, never through their controls.
+        prepareNextNativePlayback: value => playbackRequests.next(value), prepareNextNativeObs: value => obsRequests.next(value),
         onNativeObsStatus: listener => { programObsListeners.add(listener); return () => { programObsListeners.delete(listener); }; }
       },
       lighting: lightsOff

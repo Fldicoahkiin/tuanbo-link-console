@@ -67,6 +67,7 @@ export * from './live-revision-effect';
 export * from './native-program-player';
 export * from './native-audio-analysis';
 export * from './native-program-snapshot';
+export * from './next-song-identity';
 export * from './program-start';
 export * from './console-follow';
 export * from './optional-output-ready';

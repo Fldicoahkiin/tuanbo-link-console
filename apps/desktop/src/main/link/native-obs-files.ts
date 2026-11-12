@@ -12,7 +12,8 @@ export async function prepareNextObsFiles(request: NativeObsPrepare, services: {
 }, assertCurrent: () => void): Promise<void> {
   const next = request.nextFiles;
   if (!next) return;
-  if (next.snapshot.projectId !== request.snapshot.projectId || next.snapshot.revision !== request.snapshot.revision) {
+  // The next song plays the newest version: never one older than the song now on air (0.5.9 S8a, S8b).
+  if (next.snapshot.projectId !== request.snapshot.projectId || next.snapshot.revision < request.snapshot.revision) {
     throw new Error('下一个节目的文件准备和当前工程版本对不上');
   }
   const precise = preciseSeekAssetIds(next.snapshot, next.positionMs);

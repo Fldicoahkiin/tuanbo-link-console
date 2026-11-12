@@ -106,6 +106,11 @@ export const nativePlayerControlSchema = z.discriminatedUnion('kind', [
   z.object({ ...playerSession, kind: z.literal('volume'), volume: z.number().finite().min(0).max(1), durationMs: fadeDuration.optional() }).strict()
 ]);
 export type NativePlayerControl = z.infer<typeof nativePlayerControlSchema>;
+/** The next song's audio as the newest version has it, while a song plays (0.5.9 S8b): what is prepared ahead is let go
+ * and this is prepared instead. Not a transport control: it never reaches the engine, and it cancels nothing of the song
+ * that plays. `nextSnapshot: null`: nothing is prepared ahead any more. The same rules as `nextSnapshot` of a prepare. */
+export const nativePlayerNextSchema = z.object({ ...playerSession, nextSnapshot: playbackSnapshotSchema.nullable() }).strict();
+export type NativePlayerNext = z.infer<typeof nativePlayerNextSchema>;
 export const nativePlayerStatusSchema = z.object({ ...playerSession, itemId: z.string().min(1).max(256),
   status: z.enum(['preparing', 'ready', 'playing', 'paused', 'stopped', 'ended', 'error']), positionMs: timeMs,
   offsetMs: timeMs, sampleRate: z.union([z.literal(44100), z.literal(48000)]),

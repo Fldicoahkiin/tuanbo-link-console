@@ -1,6 +1,6 @@
 import { ObsPictureLeftover, ObsProgramSession, obsRecoveryText, OUTPUT_RECOVERY_RULES, OutputRecovery, pictureCleanupReason, pictureErrorDetail, projectFromObsSnapshot,
   type ObsProgramSessionDependencies, type ProgramClock } from '@tb/core/link';
-import { nativeObsPrepareSchema, type LinkProject, nativeObsStopSchema, nativeObsStatusSchema, type NativeObsPrepare, type NativeObsStop, type NativeObsStatus, type NativePlayerStatus, type NativePlayerControl, type ObsPictureItem } from '@tb/schema';
+import { nativeObsNextSchema, nativeObsPrepareSchema, type LinkProject, nativeObsStopSchema, type NativeObsNext, nativeObsStatusSchema, type NativeObsPrepare, type NativeObsStop, type NativeObsStatus, type NativePlayerStatus, type NativePlayerControl, type ObsPictureItem } from '@tb/schema';
 import { ObsPreparationCancelled } from './native-obs-outputs';
 
 type Outputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault' | 'clearFault' | 'pictureItems'> & {
@@ -18,11 +18,14 @@ type Outputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'medi
  * `lost`: the preparation failed while OBS was away; it is prepared again, at the position then, once OBS is back.
  * `rejoin`: prepared (again) while the music was not where it was prepared: at the first clock of the music the picture
  * is rebuilt at the current position, after this (the owned scenes prepared again, or nothing).
- * `started`: the music clocked this picture once. `released`: what the stop left on its last frame is being taken off (R14). */
+ * `started`: the music clocked this picture once. `released`: what the stop left on its last frame is being taken off (R14).
+ * `next`: the next song's files as last asked for (the request's, or a later prepareNext); `nextTurn` counts those asks,
+ * and `nextTask` is the one preparation of them in flight. */
 type Entry = { request: NativeObsPrepare; project: LinkProject; session: ObsProgramSession; state: NativeObsStatus; awaitingPause: boolean; ended: boolean; filesStarted: boolean;
   now: () => number; restoreScenes: Outputs['restoreScenes']; cleanup: Promise<void> | null; leftover: ObsPictureLeftover | null;
   connection: ObsPictureItem | null; parts: ObsPictureItem[]; counts: NonNullable<NativeObsStatus['recoveries']>; restores: OutputRecovery;
-  lost: boolean; rejoin: Rejoin | null; outputs: Outputs; started: boolean; released: Promise<void> | null };
+  lost: boolean; rejoin: Rejoin | null; outputs: Outputs; started: boolean; released: Promise<void> | null;
+  next: NativeObsPrepare['nextFiles'] | null; nextTurn: number; nextTask: Promise<void> | null };
 /** `restore`: what comes before the rebuild (the owned scenes prepared again, or nothing). `late`: OBS never went away;
  * the music only started before the picture was ready, and the red text says that instead of a reconnect. */
 type Rejoin = { restore: () => Promise<void>; late: boolean };
@@ -37,6 +40,8 @@ type Dependencies = {
   changed: (status: NativeObsStatus) => void;
   error: (message: string) => void;
   prepareNextFiles?: (request: NativeObsPrepare, assertCurrent: () => void) => Promise<void>;
+  /** Lets go of the next song's picture prepared ahead for this session (NativeObsPreloadPool.cancelNext). */
+  cancelNextFiles?: (sessionId: string) => Promise<void>;
   /** Each restore of the picture after OBS came back, and its limit (obs.restore). */
   recovered?: (entry: PictureRecoveryLog) => void;
 };
@@ -235,7 +240,8 @@ export class NativeObsHost {
       nextCueId: null, currentCueId: null, pendingCount: 0, positionMs: audio.positionMs, items: [], recoveries: [], ...(faults.length ? { fault: faults.join('；') } : {}) };
     const session = this.createSession(request, project, outputs);
     const entry: Entry = { request, project, session, state, awaitingPause: false, ended: false, filesStarted: false, now: outputs.now, restoreScenes: outputs.restoreScenes,
-      cleanup: null, leftover: null, connection: null, parts: [], counts: [], restores: new OutputRecovery(), lost: false, rejoin: null, outputs, started: false, released: null };
+      cleanup: null, leftover: null, connection: null, parts: [], counts: [], restores: new OutputRecovery(), lost: false, rejoin: null, outputs, started: false, released: null,
+      next: request.nextFiles ?? null, nextTurn: 0, nextTask: null };
     this.entry = entry; this.publish();
     try {
       await session.prepare(audio.positionMs);
@@ -365,20 +371,51 @@ export class NativeObsHost {
       const rebuilt = rejoin ? this.rebuild(entry, rejoin.restore, rejoin.late) : null;
       // The last frame of the song before goes once this song's picture is on: nothing black in between (R14).
       if (first && this.holds.some(hold => hold !== entry)) void (rebuilt ?? entry.session.settled()).then(() => this.releaseHolds(entry));
-      if (!entry.filesStarted && clock.state === 'running' && entry.request.nextFiles && this.dependencies.prepareNextFiles) {
-        entry.filesStarted = true;
-        // This song stopping or ending cancels it, which is not a failure. Any other failure is logged once, also one
-        // that ends after this song stopped and before the next song took it over (2026-11-09).
-        void this.dependencies.prepareNextFiles(entry.request, () => {
-          if (this.entry !== entry || ['failed', 'stopped'].includes(entry.state.state)) throw new ObsPreparationCancelled('下一个节目的文件准备已取消');
-        }).catch((error: unknown) => {
-          if (!(error instanceof ObsPreparationCancelled)) this.dependencies.error(`准备下一个节目的文件失败：${error instanceof Error ? error.message : String(error)}`);
-        });
-      }
+      if (!entry.filesStarted && clock.state === 'running') this.startNextFiles(entry);
     } else if (clock.state === 'held' && entry.state.state !== 'paused') {
       this.patch({ state: 'paused', generation: clock.generation, positionMs: clock.positionMs });
       void entry.session.pause().catch(error => { if (this.entry === entry) this.fail(String(error)); });
     }
+  }
+
+  /** The next song's files and picture as the newest version has them, while this song's picture runs (0.5.9 S8b):
+   * what was prepared ahead is let go and these are prepared instead, the way the first clock of the music prepares
+   * them. One preparation at a time: the new one begins once the old one has ended. The song's own picture session is
+   * not touched. Resolves once the new one has begun (or, before the music first plays, once it is kept for that clock);
+   * its failure is logged, as for the first. A picture that has stopped or failed prepares nothing ahead. */
+  async prepareNext(input: NativeObsNext): Promise<void> {
+    const request = nativeObsNextSchema.parse(input), entry = this.entry;
+    if (!entry || entry.request.sessionId !== request.sessionId || entry.request.generation !== request.generation) throw new Error('下一首的画面准备请求已过期');
+    if (['stopped', 'failed'].includes(entry.state.state)) return;
+    const next = request.nextFiles;
+    if (next && (next.snapshot.projectId !== entry.request.snapshot.projectId || next.snapshot.revision < entry.request.snapshot.revision)) {
+      throw new Error('下一个节目的文件准备和当前工程版本对不上');
+    }
+    entry.next = next; const turn = ++entry.nextTurn;
+    const previous = entry.nextTask;
+    if (!previous) return;
+    // The old one's checks fail from here on (`nextTurn`); what it prepared in OBS is let go.
+    await this.dependencies.cancelNextFiles?.(request.sessionId).catch((error: unknown) => this.dependencies.error(`清理下一个节目的准备失败：${pictureErrorDetail(error)}`));
+    await previous;
+    if (this.entry !== entry || entry.nextTurn !== turn || ['stopped', 'failed'].includes(entry.state.state)) return;
+    entry.nextTask = null; entry.filesStarted = false;
+    // Playing: begun now. Paused or not started: at the next clock of the music.
+    if (this.dependencies.audio()?.status === 'playing') this.startNextFiles(entry);
+  }
+
+  /** The next song's files and picture, prepared ahead while this song plays, as `entry.next` has them now. */
+  private startNextFiles(entry: Entry): void {
+    const nextFiles = entry.next, prepare = this.dependencies.prepareNextFiles;
+    if (!nextFiles || !prepare) return;
+    entry.filesStarted = true;
+    const turn = entry.nextTurn;
+    // This song stopping or ending, or a newer ask (prepareNext), cancels it, which is not a failure. Any other failure
+    // is logged once, also one that ends after this song stopped and before the next song took it over (2026-11-09).
+    entry.nextTask = prepare({ ...entry.request, nextFiles }, () => {
+      if (this.entry !== entry || entry.nextTurn !== turn || ['failed', 'stopped'].includes(entry.state.state)) throw new ObsPreparationCancelled('下一个节目的文件准备已取消');
+    }).catch((error: unknown) => {
+      if (!(error instanceof ObsPreparationCancelled)) this.dependencies.error(`准备下一个节目的文件失败：${error instanceof Error ? error.message : String(error)}`);
+    });
   }
 
   /** Resolves once the picture is cleaned up, even if that failed: the failure is logged once where it ran and

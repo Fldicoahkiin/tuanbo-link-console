@@ -1,10 +1,11 @@
-import { NativeProgramPlayer, type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type ProgramClock, type ProgramLightingOutput } from '@tb/core/link';
+import { NativeProgramPlayer, type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type ProgramClock, type ProgramLightingOutput,
+  type ProgramNextApi } from '@tb/core/link';
 import type { LinkProject, NativePlayerControl, NativePlayerStatus } from '@tb/schema';
 import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
 import type { MidiClaim, MidiClaimOwner } from './midi-port-broker';
 
 type AudioApi = Pick<LinkDesktopApi, 'prepareNativePlayback' | 'controlNativePlayback' | 'getNativePlaybackDevices'
-  | 'prepareNativeObs' | 'stopNativeObs' | 'onNativeObsStatus' | 'preloadNativeObs' | 'cancelNativeObsPreload'>;
+  | 'prepareNativeObs' | 'stopNativeObs' | 'onNativeObsStatus' | 'preloadNativeObs' | 'cancelNativeObsPreload'> & ProgramNextApi;
 type Dependencies = {
   executable: string;
   api: AudioApi;
@@ -54,22 +55,23 @@ export class NativeProgramHost {
         this.controller.reportUnavailable(`动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）`);
       } });
     this.controller = new NativeProgramPlayer(project, path, revision, {
-      prepare: async (itemId, positionMs, { signal }) => {
+      prepare: async (itemId, positionMs, { signal, playsOn }) => {
         const audio = dependencies.audio();
         if (!audio || audio.itemId !== itemId || audio.positionMs !== positionMs) throw new Error('MIDI 准备的起点和当前音频对不上');
         const cancelled = () => { void this.midi.stop().catch(cleanup => error(`取消 MIDI 准备失败：${String(cleanup)}`)); };
         if (signal?.aborted) throw new Error('MIDI 准备已取消');
         signal?.addEventListener('abort', cancelled, { once: true });
         try {
-          // The project the player plays now, not the one this host was built with (0.5.9 S7: the program stays open
-          // while the window edits, and takes each version once no song is held).
-          await this.midi.prepare(this.controller.currentProject(), { sessionId: audio.sessionId, generation: audio.generation, itemId });
+          // The version whose actions the song sends, not the one this host was built with (0.5.9 S7: the program stays
+          // open while the window edits; S8b: a held song's actions follow a newer version, also as it plays on).
+          await this.midi.prepare(this.controller.actionsProject(), { sessionId: audio.sessionId, generation: audio.generation, itemId }, playsOn === true);
           if (signal?.aborted || this.disposed) throw new Error('MIDI 准备已取消');
         } finally { signal?.removeEventListener('abort', cancelled); }
       },
       // MIDI observes the exact native QPC below, independently of the UI-facing
       // controller's coalesced state ingestion. This is not another sender.
       ingest: () => Promise.resolve(), pause: () => this.midi.stop(), stop: () => this.midi.stop(),
+      retargetActions: (project, itemId) => this.midi.retarget(project, itemId),
       resolveAudio: () => Promise.reject(new Error('后台节目宿主不使用浏览器音源地址')),
       configuration: () => dependencies.configuration(), preciseSeeking: () => dependencies.preciseSeeking(),
       changed: state => dependencies.changed(state), notice: (message, itemId) => dependencies.notice(message, itemId),

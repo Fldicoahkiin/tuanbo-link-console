@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type LinkProject, type RundownItem } from '@tb/schema';
-import { liveRevisionEffect, sameAudio, songAudioStructureKey, songStructureChanges } from './live-revision-effect';
+import { liveRevisionEffect, sameAudio, songActionsKey, songAudioStructureKey, songStructureChanges } from './live-revision-effect';
 
 // 0.5.9 S8a（design 02 §3.5）：拿着歌时送来的新一版，哪些当即生效、哪些等下一首。
 const SHA = 'a'.repeat(64);
@@ -39,7 +39,7 @@ describe('liveRevisionEffect', () => {
   const before = show(a, b);
   const held = { itemId: 'a', started: before };
   it('这首歌没动（同一个对象）：什么都不做', () => {
-    expect(liveRevisionEffect(before, replace(before, playback(b, { volume: 10 })), held)).toEqual({ volume: null, endAction: false, lighting: null, audio: false, removedHeld: false });
+    expect(liveRevisionEffect(before, replace(before, playback(b, { volume: 10 })), held)).toEqual({ volume: null, endAction: false, lighting: null, audio: false, removedHeld: false, actions: false });
   });
   it('音量改了：给出新的音量；没改：null', () => {
     expect(liveRevisionEffect(before, replace(before, playback(a, { volume: 40 })), held)).toMatchObject({ volume: 40, endAction: false, audio: false });
@@ -68,6 +68,37 @@ describe('liveRevisionEffect', () => {
     expect(liveRevisionEffect(before, removed, held)).toMatchObject({ removedHeld: true, volume: null, endAction: false, lighting: null });
     expect(liveRevisionEffect(removed, show(b, song('c')), held)).toMatchObject({ removedHeld: false });
     expect(liveRevisionEffect(before, replace(before, { ...a, enabled: false }), held)).toMatchObject({ removedHeld: true });
+  });
+});
+
+describe('liveRevisionEffect 的 actions（0.5.9 S8b）：动作 MIDI 和它现在跟的那一版比', () => {
+  const cue = (id: string, frames: number, note: number) => ({ id, name: id, enabled: true, notes: '',
+    timecode: { hours: 0, minutes: 0, seconds: 0, frames }, actions: [{ id: `${id}-on`, label: '按下', kind: 'midi.noteOn' as const,
+      portProfileId: 'port', channel: 1, note, velocity: 100 }] });
+  const a = song('a', { cues: [cue('c1', 5, 60)] }), before = show(a);
+  const held = { itemId: 'a', started: before };
+  it('改了动作（时间、内容、加减）是 actions；改音量、改名不是', () => {
+    expect(liveRevisionEffect(before, replace(before, { ...a, cues: [cue('c1', 9, 60)] }), held).actions).toBe(true);
+    expect(liveRevisionEffect(before, replace(before, { ...a, cues: [cue('c1', 5, 61)] }), held).actions).toBe(true);
+    expect(liveRevisionEffect(before, replace(before, { ...a, cues: [] }), held).actions).toBe(true);
+    expect(liveRevisionEffect(before, replace(before, playback(a, { volume: 20 })), held).actions).toBe(false);
+    expect(liveRevisionEffect(before, replace(before, { ...a, title: '改名' }), held).actions).toBe(false);
+  });
+  it('和它现在跟的那一版比，不和上一版比：改回它在发的动作不算', () => {
+    const moved = replace(before, { ...a, cues: [cue('c1', 9, 60)] });
+    // The song took `moved`'s actions; a version that only renames it changes nothing of them.
+    expect(liveRevisionEffect(moved, replace(moved, { ...moved.rundown[0]!, title: '再改' }), { ...held, actions: moved }).actions).toBe(false);
+    // Moved back: the song follows `moved`, so this is a change; it would not be against the version it started with.
+    expect(liveRevisionEffect(moved, replace(moved, { ...a, title: '改回' }), { ...held, actions: moved }).actions).toBe(true);
+    expect(liveRevisionEffect(moved, replace(moved, { ...a, title: '改回' }), held).actions).toBe(false);
+  });
+  it('音频本身改了：动作不接（它们按新的音频排）', () => {
+    expect(liveRevisionEffect(before, replace(before, playback({ ...a, cues: [cue('c1', 9, 60)] }, { startMs: 1000 })), held)).toMatchObject({ audio: true, actions: false });
+  });
+  it('排不出来的动作也算改了：用的时候报出来，这首歌照原来的发', () => {
+    const broken = { ...a, cues: [{ ...cue('c1', 9, 60), layerId: 'gone' }] };
+    expect(songActionsKey(broken, '30')).toContain('unscheduled');
+    expect(liveRevisionEffect(before, replace(before, broken), held).actions).toBe(true);
   });
 });
 

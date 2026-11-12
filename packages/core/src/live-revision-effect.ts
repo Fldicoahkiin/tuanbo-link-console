@@ -1,18 +1,22 @@
-import type { LightingDocument, LinkProject, RundownItem } from '@tb/schema';
+import type { LightingDocument, LinkProject, MtcFrameRate, RundownItem } from '@tb/schema';
 import { songDurationMs } from './audio-edit';
 import { savedSongVolume } from './link-command';
 import { programTimeOrigin } from './ma2-time-origin';
+import { isMidiAction } from './midi-program';
+import { compileRundownTimelineCues } from './timeline-state';
 
 /**
  * A newer version of the project reaches the program while it holds a song (0.5.9 S8a, design 02 §3.5). The song on air
- * keeps playing the version it started with: its audio, its timecode, its picture and its action MIDI (the picture and
- * the actions follow in S8b). Only what does not touch them takes effect in this pass: the song's saved volume, its own
- * end action, and the executors its lighting may run (they only grow until the song stops). Everything else waits for
- * the next song, which plays the newest version.
+ * keeps playing the version it started with: its audio, its timecode and its picture (the picture follows in S8b part
+ * 2). What takes effect in this pass: the song's saved volume, its own end action, the executors its lighting may run
+ * (they only grow until the song stops), and its action MIDI after the playhead (S8b) while its audio is the one it
+ * started with. Everything else waits for the next song, which plays the newest version. Which song is next and what
+ * is prepared for it are not decided here: the program compares what it asked to prepare with what it wants now
+ * (next-song-identity.ts), as the player bar can change that too.
  *
  * `before` is the version the program had until now, `after` the one that arrived, `started` the version the held song
- * started with. Branches an edit did not touch are the same objects (shareProjectStructure), so the song is compared by
- * reference first.
+ * started with, `actions` the version its action MIDI follows now (`started` until it took a newer one). Branches an
+ * edit did not touch are the same objects (shareProjectStructure), so the song is compared by reference first.
  */
 export type LiveRevisionEffect = {
   /** The held song's saved volume in `after`, when it changed from `before`; null when it did not. */
@@ -26,11 +30,16 @@ export type LiveRevisionEffect = {
   audio: boolean;
   /** The held song is gone from `after`, or is disabled there, and was there and enabled in `before`: it plays on as it started. */
   removedHeld: boolean;
+  /** The held song's action MIDI in `after` (when its cues fire and what they send, songActionsKey) differs from the
+   * version it follows now, and its audio is the one it started with: the actions after the playhead follow `after`.
+   * Actions that cannot be scheduled differ too: taking them fails and says so, and the song keeps the ones it has. */
+  actions: boolean;
 };
 
-const NOTHING: LiveRevisionEffect = { volume: null, endAction: false, lighting: null, audio: false, removedHeld: false };
+const NOTHING: LiveRevisionEffect = { volume: null, endAction: false, lighting: null, audio: false, removedHeld: false, actions: false };
 
-export function liveRevisionEffect(before: LinkProject, after: LinkProject, held: { itemId: string; started: LinkProject }): LiveRevisionEffect {
+export function liveRevisionEffect(before: LinkProject, after: LinkProject,
+  held: { itemId: string; started: LinkProject; actions?: LinkProject }): LiveRevisionEffect {
   const now = after.rundown.find(item => item.id === held.itemId);
   const was = before.rundown.find(item => item.id === held.itemId);
   const first = held.started.rundown.find(item => item.id === held.itemId);
@@ -38,13 +47,28 @@ export function liveRevisionEffect(before: LinkProject, after: LinkProject, held
   if (now === was) return NOTHING;
   if (!now || !now.enabled) return { ...NOTHING, removedHeld: Boolean(was?.enabled) };
   const volume = !was || savedSongVolume(was) !== savedSongVolume(now) ? savedSongVolume(now) : null;
+  const audio = Boolean(first && !sameAudio(first, now));
+  const actionsVersion = held.actions ?? held.started, following = actionsVersion.rundown.find(item => item.id === held.itemId);
+  // The same cues and layers are the same actions without working out their keys (a lighting or volume edit).
+  const untouched = following?.cues === now.cues && following.visualLayers === now.visualLayers && actionsVersion.timebase.frameRate === after.timebase.frameRate;
+  const actions = !audio && !untouched && (!following || songActionsKey(now, after.timebase.frameRate) !== songActionsKey(following, actionsVersion.timebase.frameRate));
   return {
     volume,
     endAction: was?.playback?.endAction !== now.playback?.endAction,
     lighting: now.lighting && now.lighting !== was?.lighting ? now.lighting : null,
-    audio: Boolean(first && !sameAudio(first, now)),
-    removedHeld: false
+    audio,
+    removedHeld: false,
+    actions
   };
+}
+
+/** What a song's action MIDI is (0.5.9 S8b): each MIDI action of the cues that run, with its cue and the frame it fires
+ * at, as MidiProgramSession schedules them; why they cannot be scheduled (a cue on a layer that is gone), when so. */
+export function songActionsKey(item: RundownItem, frameRate: MtcFrameRate): string {
+  try {
+    return JSON.stringify(compileRundownTimelineCues(item, frameRate)
+      .flatMap(({ cue, scheduledFrame }) => cue.actions.filter(isMidiAction).map(action => [cue.id, scheduledFrame, action])));
+  } catch (error) { return JSON.stringify({ unscheduled: error instanceof Error ? error.message : String(error) }); }
 }
 
 /** The one place that says what "the song's audio itself" is (0.5.9 S8a): the audio file and its segments and tracks,

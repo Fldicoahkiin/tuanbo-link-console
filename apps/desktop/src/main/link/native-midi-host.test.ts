@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, parseLinkProject, type NativePlayerStatus } from '@tb/schema';
+import { createEmptyLinkProject, parseLinkProject, type LinkProject, type NativePlayerStatus } from '@tb/schema';
 import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
 import { MidiOutputFailure } from './native-midi-output';
 import { clockFromNativeStatus, frameNumberToTimecode, MidiMessageSkipped } from '@tb/core/link';
@@ -154,5 +154,74 @@ it('接口断开后暂停或停止：不再等待该接口，也不打开端口'
   f.observe({ status: 'paused', generation: 3 });
   await new Promise(resolve => setTimeout(resolve, 1200));
   expect(f.ports.prepare).toHaveBeenCalledOnce(); expect(f.recovered).toEqual([]);
+  await f.host.stop();
+});
+
+// 0.5.9 S8b: a newer version of the held song's actions.
+it('在播的歌改了动作：播放头后面的按新的一版发；接口断开期间改的，接口回来以后也按新的；别的歌的版本不动它', async () => {
+  const f = fixture([0, 60, 120]), version = (frames: number[]) => fixture(frames).project;
+  await f.host.prepare(f.project, f.identity);
+  f.observe({ status: 'playing', generation: 2, positionMs: 20 });
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledOnce());
+  // The action at 2 s moves to 3 s.
+  f.host.retarget(version([0, 90, 120]), 'song');
+  f.host.retarget(version([0, 30, 30]), 'other');
+  f.observe({ positionMs: 2010 }); await new Promise(resolve => setTimeout(resolve, 10));
+  expect(f.ports.send).toHaveBeenCalledOnce();
+  f.observe({ positionMs: 3010 });
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(2));
+  expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 2], 2000);
+  // The port goes away; meanwhile the action at 4 s moves to 5 s. The session opened when it is back follows that.
+  f.outputs.mockResolvedValue([]);
+  f.unplug();
+  f.host.retarget(version([0, 90, 150]), 'song');
+  f.observe({ positionMs: 3500 });
+  f.outputs.mockResolvedValue([{ id: 4, name: 'TBLINK CUE' }]);
+  await vi.waitFor(() => expect(f.recovered).toHaveLength(1), { timeout: 3000 });
+  f.observe({ positionMs: 4010 }); await new Promise(resolve => setTimeout(resolve, 10));
+  expect(f.ports.send).toHaveBeenCalledTimes(2);
+  f.observe({ positionMs: 5010 });
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(3));
+  expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 2000);
+  await f.host.stop();
+});
+
+it('还在关上一首、没开这首的时候来了新的一版：这首开出来就按新的', async () => {
+  const f = fixture([0, 60]), version = (frames: number[]) => fixture(frames).project;
+  let closed: () => void = () => undefined;
+  await f.host.prepare(f.project, f.identity);
+  f.ports.close.mockImplementationOnce(() => new Promise<void>(resolve => { closed = resolve; }));
+  const preparing = f.host.prepare(f.project, f.identity);
+  await vi.waitFor(() => expect(f.ports.close).toHaveBeenCalledOnce());
+  f.host.retarget(version([0, 120]), 'song');
+  closed(); await preparing;
+  f.observe({ status: 'playing', generation: 2, positionMs: 20 });
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledOnce());
+  f.observe({ positionMs: 2010 }); await new Promise(resolve => setTimeout(resolve, 10));
+  expect(f.ports.send).toHaveBeenCalledOnce();
+  f.observe({ positionMs: 4010 });
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(2));
+  await f.host.stop();
+});
+
+it('暂停时改了动作：继续播放时已经轮到过的不再发，哪怕新的一版把它挪到了播放头后面；排不出来的一版当场拒绝', async () => {
+  const f = fixture([0, 60, 90]), version = (frames: number[]) => fixture(frames).project;
+  await f.host.prepare(f.project, f.identity);
+  f.observe({ status: 'playing', generation: 2, positionMs: 2010 });
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(2));
+  f.observe({ status: 'paused', generation: 3 });
+  await vi.waitFor(() => expect(f.ports.close).toHaveBeenCalledOnce());
+  // Paused: the action at 2 s, already sent, moves to 4 s.
+  const moved = version([0, 120, 90]);
+  f.host.retarget(moved, 'song');
+  const broken: LinkProject = { ...moved, rundown: moved.rundown.map(item => ({ ...item, cues: item.cues.map(cue => ({ ...cue, layerId: 'gone' })) })) };
+  expect(() => f.host.retarget(broken, 'song')).toThrow('不存在的图层');
+  await f.host.prepare(moved, { ...f.identity, generation: 3 }, true);
+  f.observe({ status: 'playing', generation: 4, positionMs: 2020 });
+  f.observe({ positionMs: 3010 });
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(3));
+  expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 2000);
+  f.observe({ positionMs: 4010 }); await new Promise(resolve => setTimeout(resolve, 10));
+  expect(f.ports.send).toHaveBeenCalledTimes(3);
   await f.host.stop();
 });

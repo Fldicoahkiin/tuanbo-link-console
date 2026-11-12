@@ -1,5 +1,6 @@
 import { stat } from 'node:fs/promises';
 import type { PlaybackSnapshot } from '@tb/schema';
+import { nextAudioIdentity } from '@tb/core/link';
 import type { NativeAudioCache, NativeAudioLease } from './native-audio-cache';
 
 type Identity = { size: number; mtimeMs: number; ctimeMs: number; ino: number };
@@ -18,13 +19,32 @@ type Options = { cache: Pick<NativeAudioCache, 'prepare'>; resolveAudio: (projec
 export class NativeAudioPreload {
   private task: Task | null = null;
   constructor(private readonly options: Options) {}
+  /** A next song is being prepared or is prepared, and not taken or let go yet. */
+  get started(): boolean { return this.task !== null; }
 
   start(projectPath: string, snapshot: PlaybackSnapshot): void {
     if (this.task) return; // A pause/resume cannot duplicate the one pending job.
+    this.begin(projectPath, snapshot, null);
+  }
+
+  /** The next song changed while this one plays (0.5.9 S8b): what was prepared ahead is let go and `snapshot` is prepared
+   * instead, one decode at a time: the new one begins once the old one is let go. It is the pending job at once, so a
+   * play meanwhile does not start another, and a stop, seek or another song lets it go like any other. Resolves once the
+   * old one is let go; a failed cleanup of it is reported, as for discard. */
+  replace(projectPath: string, snapshot: PlaybackSnapshot): Promise<void> {
+    const previous = this.task;
+    const letGo = previous ? this.release(previous).catch((error: unknown) => this.options.error(letGoFailure(error))) : null;
+    this.task = null;
+    this.begin(projectPath, snapshot, letGo);
+    return letGo ?? Promise.resolve();
+  }
+
+  /** `after`: what it waits for before it reads the source (replace); with nothing to wait for it begins at once. */
+  private begin(projectPath: string, snapshot: PlaybackSnapshot, after: Promise<void> | null): void {
     const task: Task = { projectPath, sourcePath: '', snapshot, abort: new AbortController(), result: null,
       promise: Promise.resolve(null), consumed: false, cleanup: null };
     this.task = task;
-    task.promise = this.prepare(task).catch((error: unknown) => {
+    task.promise = (after ? after.then(() => this.prepare(task)) : this.prepare(task)).catch((error: unknown) => {
       // Only the cancellation itself is quiet. Any other failure is reported even after a cancel: a decoder that
       // would not stop, or a failure of the job's own that came just then. Either one came while letting it go.
       if (!task.abort.signal.aborted) this.options.error(`下一首的音频没能提前准备好，播到这首时照常准备。原因：${reason(error)}`);
@@ -37,7 +57,7 @@ export class NativeAudioPreload {
     const started = performance.now();
     const task = this.task;
     if (!task) return null;
-    const matches = task.projectPath === projectPath && audioIdentity(task.snapshot) === audioIdentity(snapshot);
+    const matches = task.projectPath === projectPath && nextAudioIdentity(task.snapshot) === nextAudioIdentity(snapshot);
     // Held apart from the job: its background decode can fail, and clear the job's result, while the source is read below.
     const result = task.result;
     // Do not wait for an unfinished background decode at a user playback boundary. This song is then
@@ -63,9 +83,13 @@ export class NativeAudioPreload {
   async cancel(): Promise<void> {
     const task = this.task;
     if (!task) return;
+    try { await this.release(task); } finally { if (this.task === task) this.task = null; }
+  }
+  /** Cancels the job and releases what it prepared, once. */
+  private release(task: Task): Promise<void> {
     task.abort.abort();
     task.cleanup ??= task.promise.then(async result => { if (result && !task.consumed) await result.lease.release(); });
-    try { await task.cleanup; } finally { if (this.task === task) this.task = null; }
+    return task.cleanup;
   }
 
   /** Cancels for a caller that goes on either way: another song, a seek, stop or close. A failed
@@ -76,6 +100,8 @@ export class NativeAudioPreload {
   }
 
   private async prepare(task: Task): Promise<Prepared> {
+    // Let go before it began (replace): it never reads the file.
+    task.abort.signal.throwIfAborted();
     task.sourcePath = this.options.resolveAudio(task.projectPath, task.snapshot.audio.relativePath);
     const started = performance.now(), before = await stat(task.sourcePath), snapshot = task.snapshot;
     const lease = await this.options.cache.prepare({ sourcePath: task.sourcePath, sourceSha256: snapshot.audio.sha256,
@@ -112,11 +138,4 @@ function reason(error: unknown): string { return error instanceof Error ? error.
  * about 5 s, and its source cannot be prepared again until it exits (the cache says so when that is tried). */
 function letGoFailure(error: unknown): string {
   return `下一首提前准备的音频已放下，放下时出了错，这份音频不会再用。如果反复出现，请导出诊断包发给售后。原因：${reason(error)}`;
-}
-
-/** What the next song's audio is, not which project version asked for it (0.5.9 S8a): an edit to another song while
- * this one is held leaves the next song's prepared audio usable. */
-function audioIdentity(snapshot: PlaybackSnapshot): string {
-  return JSON.stringify([snapshot.projectId, snapshot.itemId, snapshot.audio.relativePath,
-    snapshot.audio.sha256, snapshot.audio.durationMs, snapshot.sampleRate, snapshot.positionMs]);
 }
