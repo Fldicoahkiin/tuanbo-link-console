@@ -313,7 +313,13 @@ export class NativeObsHost {
   /** Only NativePlayerService's locally validated observations may call this. */
   observe(clock: ProgramClock): void {
     const entry = this.entry;
-    if (!entry || entry.state.state === 'failed' || entry.state.state === 'stopped') return;
+    if (!entry) return;
+    if (entry.state.state === 'failed' || entry.state.state === 'stopped') {
+      // Music plays without a picture of its own (given up before it was ready, or failed): the last frame of a song
+      // stopped before it goes (R14). A late clock of the stopped song itself leaves that song's own frame alone.
+      if (clock.state === 'running') void this.releaseHolds(clock.sessionId === entry.request.sessionId && clock.itemId === entry.request.snapshot.item.id ? entry : null);
+      return;
+    }
     if (clock.sessionId !== entry.request.sessionId || clock.itemId !== entry.request.snapshot.item.id) {
       // A stale message from an old player must never stop or advance a new one.
       const current = this.dependencies.audio();
