@@ -11,7 +11,7 @@ import { idleShow, pausedShow, runningShow, showReader } from './fixtures/show-g
 // (`ma2.relogin`); it never reads the console again (2026-10-30) and never installs the plugin during the show.
 const memory = vi.hoisted(() => ({
   file: null as string | null, lines: [] as string[], connects: 0, version: '3.3.4.3', show: 'TEST', generation: 'one',
-  login: 'ok' as 'ok' | 'unreachable' | 'refused', drop: (): void => undefined, bridge: 'ready' as 'ready' | 'missing' | 'old' | 'foreign', installs: 0
+  login: 'ok' as 'ok' | 'unreachable' | 'refused' | 'silent', drop: (): void => undefined, bridge: 'ready' as 'ready' | 'missing' | 'old' | 'foreign', installs: 0
 }));
 vi.mock('node:fs/promises', () => ({ readFile: () => memory.file === null ? Promise.reject(Object.assign(new Error('Missing'), { code: 'ENOENT' })) : Promise.resolve(memory.file) }));
 vi.mock('./atomic-file', () => ({ writeFileAtomically: (_path: string, value: string) => { memory.file = value; return Promise.resolve(); } }));
@@ -29,7 +29,8 @@ vi.mock('./ma2-telnet', async (importOriginal) => {
       memory.connects += 1;
       await Promise.resolve();
       if (memory.login === 'unreachable') throw new original.Ma2UnreachableError('MA2 命令端口连接失败：192.0.2.1:30000（EHOSTUNREACH）');
-      if (memory.login === 'refused') throw new original.Ma2LoginRefusedError('MA2 网络端口已经连通，但登录没有成功。请检查登录用户、密码和 Telnet 的 Login Enabled 设置，不需要改电脑 IP');
+      if (memory.login === 'refused') throw new original.Ma2LoginRefusedError('已找到控台，但控台还没开启远程连接。请在控台设置里开启远程登录，再连接。');
+      if (memory.login === 'silent') throw new Error('MA2 网络端口已经连通，但登录没有成功。请检查登录用户、密码和 Telnet 的 Login Enabled 设置，不需要改电脑 IP');
       this.state = 'connected';
       memory.drop = () => { this.state = 'disconnected'; this.onState('disconnected', new Error('MA2 网络连接断开了，没确认的操作不会自动重试')); };
       return memory.version;
@@ -199,7 +200,7 @@ describe('演出中控台断了只自动重新登录（M5，2026-11-10 第 2 题
   });
 
   it.each([
-    ['控台拒绝登录', () => { memory.login = 'refused'; }, '登录没有成功'],
+    ['控台没开远程登录', () => { memory.login = 'refused'; }, '还没开启远程连接'],
     ['连上的是另一台控台', () => { memory.version = '3.9.60.74'; }, '连上的不是原来那台控台'],
     ['控台上的 Show 换了', () => { memory.show = 'OTHER'; }, '控台上的 Show 换了'],
   ])('%s：马上停下写明原因，等人处理，不再试', async (_name, change, words) => {
@@ -251,6 +252,24 @@ describe('演出中控台断了只自动重新登录（M5，2026-11-10 第 2 题
       expect(f.logs.filter(entry => entry.level === 'error')).toEqual([expect.objectContaining({ result: 'failed', message: `${LIMIT_TEXT}（试了 ${attempts} 次）` })]);
       await f.clock.pass(10 * 60_000);
       expect(memory.connects - 1).toBe(attempts);
+    } finally { f.manager.disconnect(); }
+  });
+
+  it('登录没等到回应（控台还在启动，或者用户、密码对不上）：不算控台拒绝，接着试并写明原因；控台好了就登上', async () => {
+    const f = await rig();
+    try {
+      f.setShow(runningShow);
+      memory.login = 'silent';
+      memory.drop();
+      await f.clock.pass(1000); await f.clock.pass(2000);
+      const waiting = f.manager.status();
+      expect(waiting).toMatchObject({ state: 'disconnected', error: null, relogin: { kind: 'relogin', attempt: 3 } });
+      expect(waiting.relogin?.kind === 'relogin' ? waiting.relogin.reason : '').toContain('登录没有成功');
+      memory.login = 'ok';
+      await f.clock.pass(4000);
+      const status = f.manager.status();
+      expect(status).toMatchObject({ state: 'connected', error: null }); expect(status.relogin).toBeUndefined();
+      expect(f.logs.map(entry => [entry.level, entry.result])).toEqual([['info', 'queued'], ['info', 'queued'], ['info', 'queued'], ['info', 'succeeded']]);
     } finally { f.manager.disconnect(); }
   });
 

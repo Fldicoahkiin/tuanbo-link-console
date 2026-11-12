@@ -13,7 +13,8 @@ type Waiter = { match: (text: string) => string | null; resolve: (value: string)
 
 /** No TCP connection reached the console at this address: it is off, unplugged or now at another IP. */
 export class Ma2UnreachableError extends Error {}
-/** The console answered and did not let this login in (wrong user or password, remote login off): trying the same login again cannot help. */
+/** The console said it takes no remote login (its remote command line is off): trying the same login again cannot help.
+ * A login that only got no answer in time is not this: a console still starting up answers late, so it is tried again. */
 export class Ma2LoginRefusedError extends Error {}
 /** Socket errors that mean nothing at this address answers on the console port. */
 const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT']);
@@ -123,7 +124,7 @@ export class Ma2Telnet {
   private waitFor(match: Waiter['match'], timeoutError?: () => Error): Promise<string> {
     if (this.waiter) return Promise.reject(new Error('MA2 网络请求还没完成'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(timeoutError?.() ?? (this.current === 'authenticating' ? new Ma2LoginRefusedError('MA2 网络端口已经连通，但登录没有成功。请检查登录用户、密码和 Telnet 的 Login Enabled 设置，不需要改电脑 IP') : new Error('MA2 响应超时，操作没有确认，不会自动重试'))), this.timeoutMs);
+      const timer = setTimeout(() => this.fail(timeoutError?.() ?? new Error(this.current === 'authenticating' ? 'MA2 网络端口已经连通，但登录没有成功。请检查登录用户、密码和 Telnet 的 Login Enabled 设置，不需要改电脑 IP' : 'MA2 响应超时，操作没有确认，不会自动重试')), this.timeoutMs);
       this.waiter = { match, resolve, reject, timer };
       this.check();
     });
