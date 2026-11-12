@@ -83,6 +83,13 @@ export class NativeMidiHost {
   }
   get status(): NativeMidiChannelState | null { return this.entry?.state ?? null; }
 
+  /** Whether this song's actions (session and generation) are the host's: the session it runs, or, while its lost port
+   * is waited for and opened again (`resume`, when no session is held for a moment), the one whose port was lost. */
+  holds(sessionId: string, generation: number): boolean {
+    const held = this.entry?.state ?? this.lost?.identity ?? null;
+    return held?.sessionId === sessionId && held.generation === generation;
+  }
+
   /** `pass`: the player's placing of the song (0.5.9 S8b). In the same pass as the session stopped last (the song plays
    * on after a pause) the actions whose turn came stay done, also where a version taken meanwhile moved them after the
    * playhead. A new pass (a start, a seek, a loop, a scrub) begins at this position and carries nothing.

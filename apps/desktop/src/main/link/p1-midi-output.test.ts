@@ -22,7 +22,7 @@ function recording(project: LinkProject = p1Project(), closing = false) {
   let status: NativeMidiChannelState | null = null;
   const finishes: { resolve: () => void; reject: (error: Error) => void }[] = [];
   const host = {
-    get status() { return status; },
+    holds: (sessionId: string, generation: number) => status?.sessionId === sessionId && status.generation === generation,
     prepare: vi.fn((_project: LinkProject, identity: { sessionId: string; generation: number; itemId: string }, pass?: number, source?: MidiClockSource) => {
       calls.push(`prepare:g${identity.generation}:p${pass}:${source?.opening ? 'opening' : 'plain'}`);
       if (source) sources.push(source);
@@ -310,6 +310,31 @@ describe('P1 跟随的动作 MIDI · 经共用宿主实际发出去的（P3d）'
     await vi.waitFor(() => expect(f.sent()).toEqual([[0x90, 60, 100], [0xc0, 3]]));
     expect(f.ports.prepare).toHaveBeenCalledTimes(2);
     await f.host.stop();
+  }, 10_000);
+
+  it('接口正在重新打开时停止跟随：宿主照样放开这首，不再等、不再重新打开这个接口', async () => {
+    const f = live('manual');
+    f.follow.arm('song');
+    await f.play(0, 10, 1_000);
+    await vi.waitFor(() => expect(f.sent()).toEqual([[0x90, 60, 100]]));
+    f.outputs.mockResolvedValue([]);
+    f.unplug();
+    // The port comes back; the host closes the lost session before it opens the port again, and that close takes a while.
+    let closed: () => void = () => undefined;
+    f.ports.close.mockImplementation(() => new Promise<void>(resolve => { closed = resolve; }));
+    f.outputs.mockResolvedValue([{ id: 4, name: 'TBLINK CUE' }]);
+    const song = f.host.status!;
+    await vi.waitFor(() => expect(f.host.status).toBeNull(), { timeout: 3000, interval: 50 });
+    // No session for a moment, but the song is still the host's (and only that pass of it).
+    expect([f.host.holds(song.sessionId, song.generation), f.host.holds(song.sessionId, song.generation + 1)]).toEqual([true, false]);
+    f.follow.stop('stop');
+    closed();
+    for (let turn = 0; turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+    // Let go: the port is not opened again for a song nobody follows, and nothing says the recovery failed.
+    expect(f.ports.prepare).toHaveBeenCalledTimes(1);
+    expect(f.errors).toEqual([]);
+    expect(f.recovered).toEqual([]);
+    expect(f.host.status).toBeNull();
   }, 10_000);
 });
 
