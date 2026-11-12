@@ -9,6 +9,12 @@ export class ObsPreparationNotNeeded extends Error {
   constructor(readonly event: ManagedMediaEvent, readonly decoder: string, readonly reason: string) { super(reason); }
 }
 
+/** A preparation that failed for a clip a newer plan no longer has there (0.5.9 R9): nothing of the song needs it.
+ * The lookahead logs it; the picture is not told (its red text would be about a clip that is gone). */
+export class ObsPreparationOutdated extends Error {
+  constructor(readonly event: ManagedMediaEvent, readonly decoder: string, readonly reason: string) { super(reason); }
+}
+
 type Slot = { event: ManagedMediaEvent; sourceName: string; ready: boolean;
   /** The clip's start (or the seek that put it on air from the middle) failed
    * before OBS showed this decoder: it still stands for the clip (its stop and the
@@ -64,6 +70,8 @@ export class ObsMediaPreload {
    * continued and not retired again here. A retirement OBS did not carry out is repaired by the
    * picture session, as a stop of that clip, within its limits. */
   private readonly retirementSent = new WeakSet<Slot>();
+  /** Preparations in flight for a clip a newer plan no longer has there (0.5.9 R9): given up as they end. */
+  private readonly outdated = new WeakSet<Slot>();
   private readonly lookaheadFrames: number;
   private readonly preparationSpacingFrames: number;
   private nextPreparationFrame = -Infinity;
@@ -92,8 +100,9 @@ export class ObsMediaPreload {
   /** A newer plan of the song on air (0.5.9 R9). A prepared decoder whose clip keeps its material, start and place in its
    * file is kept: an edit elsewhere does not prepare it again. One prepared for a clip the plan no longer has there gives
    * its slot up and stays owned and paused, as for a clip that ended unplayed (`expire`): never one on air, and a decoder
-   * holding a stopped song's last frame is not this song's. New clips are prepared by the lookahead, once their material
-   * is registered (`register`). */
+   * holding a stopped song's last frame is not this song's. One still being prepared for such a clip gives its slot up the
+   * same way once its preparation ends (`prime`). New clips are prepared by the lookahead, once their material is
+   * registered (`register`). */
   retarget(project: LinkProject, itemId: string): void {
     const before = this.clips;
     ({ timeline: this.timeline, starts: this.starts, clips: this.clips } = ObsMediaPreload.plan(project, itemId));
@@ -104,7 +113,8 @@ export class ObsMediaPreload {
     };
     for (const [sourceName, media] of this.media) {
       if (media.following && !same(media.following.event.clipId, sourceName)) { media.retained.add(media.following.sourceName); media.following = null; }
-      if (media.pending?.ready && !same(media.pending.event.clipId, sourceName)) {
+      if (media.pending && !same(media.pending.event.clipId, sourceName)) {
+        if (!media.pending.ready) { this.outdated.add(media.pending); continue; }
         media.retained.add(media.pending.sourceName); media.pending = media.following; media.following = null;
       }
     }
@@ -196,6 +206,8 @@ export class ObsMediaPreload {
       // and played; this clip is prepared again only when the picture session
       // allows it (`prepareAgain`).
       if (media.pending === slot) media.pending = null;
+      // For a clip a newer plan no longer has there (R9): what the plan has now is prepared as usual.
+      if (this.outdated.has(slot) && !this.closed) { media.retained.add(sourceName); throw new ObsPreparationOutdated(event, sourceName, failureReason(error)); }
       this.failed.add(event.clipId);
       // Failed after the clip went on air on the decoder of the clip it continues
       // (see the late-ready case below): the picture plays on as it should.
@@ -204,6 +216,12 @@ export class ObsMediaPreload {
         throw new ObsPreparationNotNeeded(event, sourceName, failureReason(error));
       }
       throw error;
+    }
+    if (this.outdated.has(slot)) {
+      // Prepared for a clip a newer plan no longer has there (R9): the slot goes to what the plan has now, as for a
+      // ready one (`retarget`); the decoder stays owned and paused, and its next preparation restarts it.
+      media.pending = media.following; media.following = null; media.retained.add(sourceName);
+      return;
     }
     if (media.current?.event.clipId === event.clipId) {
       // Ready too late: the clip already plays on, on the decoder of the clip it
@@ -222,11 +240,12 @@ export class ObsMediaPreload {
    * continues is not returned, so nothing starts it a second time. A material
    * whose start, stop or seek OBS has not answered yet waits for a later clock
    * sample: until the answer, its books may name a decoder OBS still shows, and
-   * preparing that one would be refused or would race the retirement. */
-  async upcoming(frame: number, assertCurrent: () => void): Promise<ManagedMediaEvent | null> {
+   * preparing that one would be refused or would race the retirement. `spaced` false: the song does not play (paused,
+   * or prepared at a position, 0.5.9 R9), so nothing goes on air meanwhile and preparations need not be spread out. */
+  async upcoming(frame: number, assertCurrent: () => void, spaced = true): Promise<ManagedMediaEvent | null> {
     assertCurrent();
     this.expire(frame);
-    if (frame < this.nextPreparationFrame) return null;
+    if (spaced && frame < this.nextPreparationFrame) return null;
     const overdue = this.timeline.at(frame).media.find(event => {
       if (event.assetKind !== 'audio' && event.assetKind !== 'video' || this.late.has(event.clipId) || this.failed.has(event.clipId) || !this.media.has(event.sourceName)) return false;
       const media = this.require(event);
@@ -265,7 +284,7 @@ export class ObsMediaPreload {
     try { await this.prime(event, assertCurrent); }
     catch (error) {
       // Same words; the type names the clip, so that the picture session can prepare it once more.
-      throw error instanceof ObsPreparationNotNeeded || !(error instanceof Error) ? error : new MediaPreparationFailed(event, error.message, { cause: error });
+      throw error instanceof ObsPreparationNotNeeded || error instanceof ObsPreparationOutdated || !(error instanceof Error) ? error : new MediaPreparationFailed(event, error.message, { cause: error });
     }
     return this.require(event).pending?.event.clipId === event.clipId ? event : null;
   }

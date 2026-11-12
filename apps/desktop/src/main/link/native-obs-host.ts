@@ -1,5 +1,5 @@
 import { ObsPictureLeftover, ObsProgramSession, obsRecoveryText, OUTPUT_RECOVERY_RULES, OutputRecovery, pictureCleanupReason, pictureErrorDetail, projectFromObsSnapshot,
-  type ObsProgramSessionDependencies, type ProgramClock } from '@tb/core/link';
+  unusablePictureVersionText, type ObsProgramSessionDependencies, type ProgramClock } from '@tb/core/link';
 import { nativeObsNextSchema, nativeObsPrepareSchema, nativeObsRetargetSchema, type NativeObsRetarget, type LinkProject, nativeObsStopSchema, type NativeObsNext, nativeObsStatusSchema, type NativeObsPrepare, type NativeObsStop, type NativeObsStatus, type NativePlayerStatus, type NativePlayerControl, type ObsPictureItem } from '@tb/schema';
 import { ObsPreparationCancelled } from './native-obs-outputs';
 
@@ -20,12 +20,15 @@ type Outputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'medi
  * is rebuilt at the current position, after this (the owned scenes prepared again, or nothing).
  * `started`: the music clocked this picture once. `released`: what the stop left on its last frame is being taken off (R14).
  * `next`: the next song's files as last asked for (the request's, or a later prepareNext); `nextTurn` counts those asks,
- * and `nextTask` is the one preparation of them in flight. */
+ * and `nextTask` is the one preparation of them in flight. `repreparing`: the song is being prepared again (`prepareAgain`),
+ * whose outputs and session are of one snapshot; `wanted`: the newest version that arrived meanwhile, handed to the new
+ * session once it is up (0.5.9 R9). */
 type Entry = { request: NativeObsPrepare; project: LinkProject; session: ObsProgramSession; state: NativeObsStatus; awaitingPause: boolean; ended: boolean; filesStarted: boolean;
   now: () => number; restoreScenes: Outputs['restoreScenes']; cleanup: Promise<void> | null; leftover: ObsPictureLeftover | null;
   connection: ObsPictureItem | null; parts: ObsPictureItem[]; counts: NonNullable<NativeObsStatus['recoveries']>; restores: OutputRecovery;
   lost: boolean; rejoin: Rejoin | null; outputs: Outputs; started: boolean; released: Promise<void> | null;
-  next: NativeObsPrepare['nextFiles'] | null; nextTurn: number; nextTask: Promise<void> | null };
+  next: NativeObsPrepare['nextFiles'] | null; nextTurn: number; nextTask: Promise<void> | null;
+  repreparing: boolean; wanted: { request: NativeObsRetarget; project: LinkProject } | null };
 /** `restore`: what comes before the rebuild (the owned scenes prepared again, or nothing). `late`: OBS never went away;
  * the music only started before the picture was ready, and the red text says that instead of a reconnect. */
 type Rejoin = { restore: () => Promise<void>; late: boolean };
@@ -157,6 +160,7 @@ export class NativeObsHost {
     const outages = this.outages, epoch = this.epoch;
     const current = (): void => { if (this.entry !== entry || epoch !== this.epoch || ['stopped', 'failed'].includes(entry.state.state)) throw new ObsPreparationCancelled('画面准备已取消'); };
     const earlier = entry.session;
+    entry.repreparing = true;
     await earlier.stop().then(() => earlier.release()).catch((error: unknown) => this.dependencies.error(`画面没有清理干净：${pictureErrorDetail(error)}`));
     try {
       current();
@@ -169,15 +173,28 @@ export class NativeObsHost {
       current();
       if (session.error) throw session.error;
       entry.rejoin = { restore: NOTHING, late: false };
-      // Prepared as the newest version it was given meanwhile (`retarget`): that one is applied.
+      // Prepared as the newest version it was given before this began (`retarget`): its picture at the music's position
+      // went out with the preparation (the cameras switched, the clips located there), as a song prepared at a position;
+      // the first clock rebuilds it there. So that version is applied now.
       const revision = entry.request.snapshot.revision;
       this.patch({ nextCueId: session.nextCueId, notice: outputs.outputNotice?.() ?? null, ...revision > entry.state.revision ? { appliedRevision: revision } : {} });
       this.fault('OBS 已重新连接，这首歌的画面准备好了，按当前位置接上');
+      // A version that arrived meanwhile goes to the new session now, as to any session running.
+      entry.repreparing = false;
+      const wanted = entry.wanted; entry.wanted = null;
+      if (wanted) this.take(entry, wanted.request, wanted.project);
     } catch (error) {
       if (error instanceof ObsPreparationCancelled || this.entry !== entry || epoch !== this.epoch) return;
       // OBS went away again: prepared again once it is back, within the same limit.
       if (this.outages !== outages || entry.connection) { this.waitForObs(entry); return; }
       this.fail(`OBS 已重新连接，但这首歌的画面没有重新准备好：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      // Lost again or failed: a version kept meanwhile is what the next preparation prepares.
+      if (entry.repreparing) {
+        entry.repreparing = false;
+        const wanted = entry.wanted; entry.wanted = null;
+        if (wanted) { entry.request.snapshot = wanted.request.snapshot; entry.project = wanted.project; }
+      }
     }
   }
   /** The preparation was lost to OBS going away: the song plays without its picture until OBS is back. */
@@ -189,22 +206,27 @@ export class NativeObsHost {
   /** A newer version of the held song's picture plan (0.5.9 R9, ProgramPictureOutput.retarget): the song's picture
    * session takes it at the current position, also while paused or not yet started. The song's request and project
    * become this version's, so that a preparation again (OBS back after it cut one short) prepares it. While such a
-   * preparation waits for OBS only that happens, and the version counts as applied once it is prepared. A version the
-   * session cannot take fails the picture, with why, and the music plays on (2026-10-30). One older than the version
-   * the song has is ignored. */
+   * preparation waits for OBS only that happens, and the version counts as applied once it is prepared; one that arrives
+   * while it runs is kept, newest only, and handed to the new session once it is up. A version the session cannot take
+   * fails the picture, with why, and the music plays on (2026-10-30). Every version is answered: taken (its status says
+   * when it is applied), or thrown with why it is not used. */
   retarget(input: NativeObsRetarget): void {
     const request = nativeObsRetargetSchema.parse(input), entry = this.entry;
     if (!entry || entry.request.sessionId !== request.sessionId || entry.request.snapshot.item.id !== request.snapshot.item.id
       || request.snapshot.projectId !== entry.request.snapshot.projectId) throw new Error('这一版画面不是正在放的这首歌的，没有用上');
-    if (['stopped', 'failed', 'preparing'].includes(entry.state.state) || request.revision <= entry.request.snapshot.revision) return;
+    if (entry.state.state === 'stopped' || entry.state.state === 'failed') throw new Error('这首歌的画面已经停了，这一版没有用上');
+    if (entry.state.state === 'preparing') throw new Error('这首歌的画面还在准备，这一版没有送到');
+    if (request.revision <= Math.max(entry.request.snapshot.revision, entry.wanted?.request.revision ?? 0)) throw new Error('画面已经有更新的一版，这一版用不着');
     let project: LinkProject;
-    try {
-      project = projectFromObsSnapshot(request.snapshot);
-      if (!entry.lost) entry.session.retarget(project, request.revision);
-    } catch (error) {
-      this.fail(`这次修改的画面用不上：${error instanceof Error ? error.message : String(error)}。音乐和时间码照常，这首歌停下重播时按新的样子放`);
-      return;
-    }
+    try { project = projectFromObsSnapshot(request.snapshot); }
+    catch (error) { this.fail(unusablePictureVersionText(error instanceof Error ? error.message : String(error))); return; }
+    if (entry.repreparing) { entry.wanted = { request, project }; return; }
+    this.take(entry, request, project);
+  }
+  /** The song's picture session takes `request` (`retarget`); while OBS is away only the song's request and project. */
+  private take(entry: Entry, request: NativeObsRetarget, project: LinkProject): void {
+    try { if (!entry.lost) entry.session.retarget(project, request.revision); }
+    catch (error) { this.fail(unusablePictureVersionText(error instanceof Error ? error.message : String(error))); return; }
     // Mutated in place: the session's callbacks know the song by this object (`owner`).
     entry.request.snapshot = request.snapshot; entry.project = project;
   }
@@ -274,7 +296,7 @@ export class NativeObsHost {
     const session = this.createSession(request, project, outputs);
     const entry: Entry = { request, project, session, state, awaitingPause: false, ended: false, filesStarted: false, now: outputs.now, restoreScenes: outputs.restoreScenes,
       cleanup: null, leftover: null, connection: null, parts: [], counts: [], restores: new OutputRecovery(), lost: false, rejoin: null, outputs, started: false, released: null,
-      next: request.nextFiles ?? null, nextTurn: 0, nextTask: null };
+      next: request.nextFiles ?? null, nextTurn: 0, nextTask: null, repreparing: false, wanted: null };
     this.entry = entry; this.publish();
     try {
       await session.prepare(audio.positionMs);
