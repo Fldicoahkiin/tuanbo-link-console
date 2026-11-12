@@ -764,6 +764,39 @@ describe('S8b 第二部分：在播的歌的画面按新的一版走（播放器
     expect(f.player.currentProject()).toBe(opened);
   });
 
+  it('画面拒绝了这一版：说明原因、不再等它，下一次改照常交；拒绝以后到下一版用上之前，窗口知道改的画面这一遍用不上（R9）', async () => {
+    const { opened, retarget, f } = setup();
+    await f.player.play('甲');
+    expect(f.state().pictureTakesEdits).toBe(true);
+    retarget.mockImplementationOnce(() => { throw new Error('画面已经有更新的一版，这一版用不着'); });
+    f.player.updateProject(withCues(opened, [cut('机位二')]), 2, 'C:/show/拿着歌时改.tblink');
+    expect(retarget).toHaveBeenCalledOnce();
+    expect(f.state().notice).toBe('这次修改的画面没能用上，画面照原来的播：画面已经有更新的一版，这一版用不着');
+    expect(f.state().pictureTakesEdits).toBe(false);
+    const v3 = withCues(opened, [cut('机位三')]);
+    f.player.updateProject(v3, 3, 'C:/show/拿着歌时改.tblink');
+    expect(retarget).toHaveBeenCalledTimes(2);
+    expect(retarget.mock.lastCall![0].revision).toBe(3);
+    f.pictureStatus({ appliedRevision: 3 });
+    expect(f.player.currentProject()).toBe(v3);
+    expect(f.state().pictureTakesEdits).toBe(true);
+  });
+
+  it('画面失败、停了、或者 OBS 重连恢复到了上限：窗口知道改的画面这一遍用不上（R9）', async () => {
+    const limit = setup();
+    await limit.f.player.play('甲');
+    limit.f.pictureStatus({ items: [{ id: 'obs.restore', scope: 'item', state: 'limit', detail: '这首歌的画面恢复已经到上限' }] });
+    expect(limit.f.state().pictureTakesEdits).toBe(false);
+    const failed = setup();
+    await failed.f.player.play('甲');
+    failed.f.pictureStatus({ state: 'failed', reason: '画面出错' });
+    expect(failed.f.state().pictureTakesEdits).toBe(false);
+    // No picture output that follows newer versions: said as before.
+    const plain = program(withCues(project(), [cut('机位一')]));
+    await plain.player.play('甲');
+    expect(plain.state().pictureTakesEdits).toBeUndefined();
+  });
+
   it('暂停时也交给画面；准备中改的，准备好了再交；没有画面输出时照旧按开始那一版', async () => {
     const { opened, retarget, f } = setup();
     let finish: (status: NativeObsStatus) => void = () => undefined;

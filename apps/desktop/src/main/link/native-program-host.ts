@@ -84,12 +84,11 @@ export class NativeProgramHost {
       controlNativePlayback: request => { this.interrupt(request); return dependencies.api.controlNativePlayback(request); },
       onNativePlaybackStatus: listener => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
     }, dependencies.lighting, dependencies.retargetPicture ? { retarget: ({ revision, snapshot }) => {
-      // The picture session of this program's song; answered by its status (`appliedRevision`).
+      // The picture session of this program's song; answered by its status (`appliedRevision`). A refusal reaches the
+      // player as a throw: it frees the version in flight and says why (NativeProgramPlayer.retargetPicture).
       const audio = dependencies.audio();
-      try {
-        if (!audio) throw new Error('这首歌已经停了');
-        dependencies.retargetPicture?.({ version: 1, sessionId: audio.sessionId, revision, snapshot });
-      } catch (failure) { error(`这次修改的画面没能用上，画面照原来的播：${failure instanceof Error ? failure.message : String(failure)}`); }
+      if (!audio) throw new Error('这首歌已经停了');
+      dependencies.retargetPicture?.({ version: 1, sessionId: audio.sessionId, revision, snapshot });
     } } : undefined);
   }
 

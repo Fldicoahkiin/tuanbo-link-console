@@ -95,6 +95,9 @@ export class NativeProgramPlayer {
   private picturePrepared: NativeObsStop | null = null;
   /** A picture session that reported it failed or stopped (0.5.9 R9): it is sent no further version. */
   private pictureEnded: NativeObsStop | null = null;
+  /** A picture session that refused the last version sent to it (0.5.9 R9): until a later one is applied there, an edit
+   * is not known to reach its picture this pass (`pictureTakesEdits`). A newer version is still sent as usual. */
+  private pictureRefused: NativeObsStop | null = null;
   private epoch = 0;
   private disposed = false;
   private closing: Promise<void> | null = null;
@@ -264,9 +267,19 @@ export class NativeProgramPlayer {
       air.pictureSent = { ...wanted, session };
       output.retarget({ revision: wanted.revision, snapshot });
     } catch (error) {
-      air.pictureSent = null;
+      air.pictureSent = null; this.pictureRefused = session;
+      this.update({});
       this.reportUnavailable(`这次修改的画面没能用上，画面照原来的播：${toUserErrorMessage(error)}`);
     }
+  }
+  /** Whether a picture edit to the song held reaches its picture this pass (0.5.9 R9, `pictureTakesEdits`): its picture
+   * session is prepared or being prepared, has not failed or stopped, has not reached its restore limit, and did not
+   * refuse the last version sent. */
+  private takesPictureEdits(state: InternalPlayerState): boolean {
+    const session = this.obsSession;
+    if (!session || this.pictureEnded === session || this.pictureRefused === session) return false;
+    if (!this.obsPreparing && this.picturePrepared !== session) return false;
+    return !(state.pictureItems ?? []).some(item => item.id === 'obs.restore' && item.state === 'limit');
   }
   /** The version `itemId` plays: the one it started with while it is the song held, else the newest. */
   private songVersion(itemId: string | null): { project: LinkProject; revision: number } {
@@ -765,11 +778,13 @@ export class NativeProgramPlayer {
    * leaves the one in flight unanswered: the next preparation of the picture takes the newest itself. */
   private pictureApplied(status: NativeObsStatus): void {
     // A session that ended takes no further version (R9): its picture stays failed, with the reason it reported.
-    if (status.state === 'failed' || status.state === 'stopped') this.pictureEnded = this.obsSession;
+    if ((status.state === 'failed' || status.state === 'stopped') && this.pictureEnded !== this.obsSession) { this.pictureEnded = this.obsSession; this.update({}); }
     const air = this.onAir, sent = air?.pictureSent;
     if (!air || !sent || sent.session !== this.obsSession) return;
     if (status.appliedRevision !== undefined && status.appliedRevision >= sent.revision) {
       air.picture = { project: sent.project, revision: sent.revision }; air.pictureSent = null;
+      // A later version taken: edits reach the picture again.
+      if (this.pictureRefused === sent.session) this.pictureRefused = null;
       this.update({}); this.retargetPicture();
     } else if (status.state === 'failed' || status.state === 'stopped') air.pictureSent = null;
   }
@@ -784,6 +799,7 @@ export class NativeProgramPlayer {
       const snapshot = createObsProgramSnapshot(version.project, itemId, version.revision);
       const nextFiles = this.nextObsFiles(itemId);
       this.obsSession = envelope; this.obsPreparing = true; this.nextAsked = { ...this.nextAsked, files: this.filesIdentity(nextFiles) };
+      this.update({});
       const preparing = this.api.prepareNativeObs({ ...envelope, projectPath: this.projectPath,
         preciseSeeking: this.dependencies.preciseSeeking?.() ?? false, snapshot, ...(nextFiles ? { nextFiles } : {}) });
       // A song that needs its picture waits for it (a first play may build seek
@@ -808,7 +824,7 @@ export class NativeProgramPlayer {
       if (this.picture === 'wait') this.startFault(`画面准备失败，音乐和时间码照常播放：${toUserErrorMessage(error)}`);
       else this.reportUnavailable(`画面没有联动，音频照常播放。原因：${toUserErrorMessage(error)}`);
     }
-    finally { if (this.obsSession === envelope) this.obsPreparing = false; }
+    finally { if (this.obsSession === envelope) { this.obsPreparing = false; this.update({}); } }
     // A newer version wanted while the picture was prepared goes now that it is up (part 2).
     this.retargetPicture();
   }
@@ -876,6 +892,7 @@ export class NativeProgramPlayer {
   }
   private async stopObs(): Promise<void> {
     const envelope = this.obsSession; this.obsSession = null; this.obsPreparing = false;
+    if (envelope) this.update({});
     if (envelope) await this.api.stopNativeObs(envelope);
   }
   private consumeClock(): void {
@@ -951,7 +968,13 @@ export class NativeProgramPlayer {
   private items() { return playlistItems(this.project, this.state.playlistId ?? 'all').filter(item => item.enabled && item.referenceAudio); }
   private markPlayed(): void { if (this.state.itemId) this.update({ playedItemIds: [...new Set([...this.state.playedItemIds, this.state.itemId])] }); }
   private current(token: number): boolean { return !this.disposed && token === this.epoch; }
-  private update(patch: Partial<InternalPlayerState>): void { if (this.disposed) return; this.state = { ...this.state, ...patch }; this.dependencies.changed(this.state); }
+  private update(patch: Partial<InternalPlayerState>): void {
+    if (this.disposed) return;
+    const next = { ...this.state, ...patch };
+    // Said only where the picture follows newer versions (a picture output that retargets, R9).
+    this.state = this.pictureOutput ? { ...next, pictureTakesEdits: this.takesPictureEdits(next) } : next;
+    this.dependencies.changed(this.state);
+  }
 }
 
 /** How long the edits pause before the selected song is prepared again with the newest version (0.5.9 S7). */
