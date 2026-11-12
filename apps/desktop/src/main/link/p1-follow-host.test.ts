@@ -39,8 +39,10 @@ function fixture(project: LinkProject, options: { prepare?: (itemId: string) => 
     prepareSong, changed: state => { states.push(state); }, log: (level, message) => { logs.push(`${level}:${message}`); }
   });
   const send = (command: P1FollowCommand, ownerId = OWNER) => host.command({ version: 1, ownerId, command });
-  const start = (mode: 'manual' | 'auto' = 'manual') => send({ kind: 'start', projectPath: 'C:/show.tblink', sessionId: OWNER, revision: 1, document: '{}',
-    mode, runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null });
+  const start = (mode: 'manual' | 'auto' = 'manual', ownerId = OWNER) => send({ kind: 'start', projectPath: 'C:/show.tblink', sessionId: OWNER, revision: 1, document: '{}',
+    mode, runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null }, ownerId);
+  /** The input's heartbeat at this interface time. */
+  const idle = (ms: number) => { claims.at(-1)!.listener.idle(at(ms)); };
   /** P1 playing on the claimed input, on the interface's clock. */
   const play = (fromFrame: number, frames: number, startMs: number) => {
     const listener = claims.at(-1)!.listener;
@@ -58,7 +60,7 @@ function fixture(project: LinkProject, options: { prepare?: (itemId: string) => 
   };
   /** An output reports its own state. */
   const report = (state: P1FollowState['outputs']['actionMidi']) => { actionMidi = state; outputChanged(); };
-  return { host, calls, states, logs, clocks, claims, prepareSong, send, start, play, lights, report };
+  return { host, calls, states, logs, clocks, claims, prepareSong, send, start, play, lights, report, idle };
 }
 
 describe('P1 跟随宿主', () => {
@@ -126,7 +128,7 @@ describe('P1 跟随宿主', () => {
     expect(f.prepareSong).toHaveBeenCalledTimes(2);
   });
 
-  it('关闭、界面没了都放开输入口；占用失败回到没跟随', async () => {
+  it('关闭和退出放开输入口；占用失败回到没跟随', async () => {
     const f = fixture(manualProject());
     await f.start();
     await f.send({ kind: 'close' });
@@ -134,9 +136,7 @@ describe('P1 跟随宿主', () => {
     expect(f.host.state).toEqual(expect.objectContaining({ phase: 'closed', input: null }));
     await f.start(); await f.send({ kind: 'arm', itemId: 'song' });
     f.play(0, 30, 1_000);
-    await f.host.pageGone(OTHER);
-    expect(f.host.state.phase).toBe('running');
-    await f.host.pageGone(OWNER);
+    await f.host.dispose();
     expect(f.calls.at(-1)).toBe('observe:stopped');
     expect(f.claims[1]!.release).toHaveBeenCalledOnce();
     expect(f.host.state.phase).toBe('closed');
@@ -173,12 +173,80 @@ describe('P1 跟随宿主', () => {
     await f.send({ kind: 'arm', itemId: 'song' });
     f.play(0, 30, 3_000);
     await f.host.pageGone(OWNER);
-    expect(f.lights).toEqual(['change:->song', 'stop:song', 'change:->song', 'close:song']);
-    await f.start(); await f.send({ kind: 'arm', itemId: 'song' });
-    f.play(0, 30, 5_000);
+    expect(f.lights).toEqual(['change:->song', 'stop:song', 'change:->song']);
     await f.host.dispose();
     expect(f.lights.at(-1)).toBe('close:song');
     expect(f.host.state.phase).toBe('closed');
+  });
+});
+
+describe('P1 跟随宿主 · 界面重新加载不结束跟随（2026-11-12）', () => {
+  it('界面没了：跟随照跟、输出照收时钟、不关灯、不放输入口；别的页面的界面没了不算', async () => {
+    const f = fixture(manualProject());
+    await f.start(); await f.send({ kind: 'arm', itemId: 'song' });
+    const first = f.play(0, 30, 1_000);
+    await f.host.pageGone(OTHER);
+    expect(f.host.state.ownerId).toBe(OWNER);
+    await f.host.pageGone(null);
+    expect(f.host.state).toMatchObject({ phase: 'running', ownerId: null, projectPath: 'C:/show.tblink', projectName: 'P1 手动跟随' });
+    const calls = f.calls.length;
+    f.play(30, 30, first.endMs);
+    expect(f.calls.slice(calls).every(call => call === 'observe:running')).toBe(true);
+    expect(f.calls.length).toBeGreaterThan(calls);
+    expect(f.lights).toEqual(['change:->song']);
+    expect(f.claims[0]!.release).not.toHaveBeenCalled();
+    expect(f.logs).toContain('info:界面重新打开，跟随 P1 照常继续：P1 手动跟随');
+  });
+
+  it('新页面接回：只接没有页面的、同一个工程的跟随；接回以后照常操作', async () => {
+    const f = fixture(manualProject());
+    await f.start(); await f.send({ kind: 'arm', itemId: 'song' });
+    const first = f.play(0, 30, 1_000);
+    await expect(f.send({ kind: 'adopt', projectPath: 'C:/show.tblink' }, OTHER)).rejects.toThrow('另一个界面正在跟随 P1');
+    await expect(f.send({ kind: 'adopt', projectPath: 'C:/show.tblink' })).rejects.toThrow('这个界面已经在跟随 P1');
+    await f.host.pageGone(null);
+    await expect(f.send({ kind: 'adopt', projectPath: 'C:/other.tblink' }, OTHER)).rejects.toThrow('还在跟随 P1 的是工程「P1 手动跟随」');
+    expect(f.host.state.ownerId).toBeNull();
+    await f.send({ kind: 'adopt', projectPath: 'C:/show.tblink' }, OTHER);
+    expect(f.host.state).toMatchObject({ phase: 'running', ownerId: OTHER });
+    await expect(f.send({ kind: 'stop' })).rejects.toThrow('另一个界面正在跟随 P1');
+    f.idle(first.lastSampleMs + 2_000);
+    expect(f.host.state.phase).toBe('frozen');
+    await f.send({ kind: 'stop' }, OTHER);
+    expect(f.lights).toEqual(['change:->song', 'stop:song']);
+  });
+
+  it('没有页面的跟随：哪个页面都能停止、关闭，别的命令和开始新的都不行，也不会被换掉', async () => {
+    const f = fixture(manualProject());
+    await f.start(); await f.send({ kind: 'arm', itemId: 'song' });
+    f.play(0, 30, 1_000);
+    await f.host.pageGone(null);
+    for (const command of [{ kind: 'arm', itemId: 'song' }, { kind: 'resync' }, { kind: 'rearm' }, { kind: 'manualTakeover' }] as const) {
+      await expect(f.send(command, OTHER)).rejects.toThrow('联动台重新打开之前开始的 P1 跟随还在继续（工程「P1 手动跟随」）');
+    }
+    await expect(f.start('manual', OTHER)).rejects.toThrow('还在继续');
+    await expect(f.start()).rejects.toThrow('还在继续');
+    expect(f.host.state).toMatchObject({ phase: 'running', ownerId: null });
+    await f.send({ kind: 'stop' }, OTHER);
+    expect(f.lights).toEqual(['change:->song', 'stop:song']);
+    expect(f.host.state).toMatchObject({ phase: 'standby', ownerId: null });
+    await f.send({ kind: 'close' }, OTHER);
+    expect(f.host.state.phase).toBe('closed');
+    expect(f.claims[0]!.release).toHaveBeenCalledOnce();
+  });
+
+  it('同一个页面在没跟着歌时再开始（工程改了）：换成新的一版，同一个输入口不重新打开；跟着歌时不换', async () => {
+    const project = autoProject();
+    const f = fixture(project);
+    await f.start('auto'); await f.send({ kind: 'arm', itemId: null });
+    await f.start('auto'); await f.send({ kind: 'arm', itemId: null });
+    expect(f.claims).toHaveLength(1);
+    expect(f.claims[0]!.release).not.toHaveBeenCalled();
+    f.play(songFrame(project, 'a'), 30, 1_000);
+    await vi.waitFor(() => expect(f.host.state).toMatchObject({ phase: 'running', itemId: 'a' }));
+    await expect(f.start('auto')).rejects.toThrow('正在跟随 P1，先停止再换工程');
+    expect(f.claims).toHaveLength(1);
+    await expect(f.start('auto', OTHER)).rejects.toThrow('另一个界面正在跟随 P1');
   });
 });
 

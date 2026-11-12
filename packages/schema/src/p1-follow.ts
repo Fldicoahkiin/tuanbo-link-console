@@ -27,6 +27,9 @@ const itemIdSchema = z.string().min(1).max(200);
  * editor is not P1's and stays where it is.
  * - `stop`: stop following; P1 itself is not stopped. The input stays open for the next `arm`.
  * - `close`: stop and let go of the input (the window left this project).
+ * - `adopt`: a page that loaded while a follow went on without one (the window reloaded, 2026-11-12) takes it over:
+ *   only a follow without a page, and only for the project at `projectPath`, the one this page has open.
+ * A follow without a page takes `stop` and `close` from any page; nothing else.
  */
 export const p1FollowCommandSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -41,7 +44,8 @@ export const p1FollowCommandSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('rearm') }).strict(),
   z.object({ kind: z.literal('manualTakeover') }).strict(),
   z.object({ kind: z.literal('stop') }).strict(),
-  z.object({ kind: z.literal('close') }).strict()
+  z.object({ kind: z.literal('close') }).strict(),
+  z.object({ kind: z.literal('adopt'), projectPath: z.string().min(1).max(4096) }).strict()
 ]);
 export type P1FollowCommand = z.infer<typeof p1FollowCommandSchema>;
 
@@ -78,10 +82,14 @@ export type P1FollowActionMidi = z.infer<typeof p1FollowActionMidiSchema>;
 export const p1FollowStateSchema = z.object({
   version: z.literal(1),
   phase: p1FollowPhaseSchema,
-  /** The page that started this follow (its request `ownerId`); only it acts on this state. Null while closed. */
+  /** The page that follows (its request `ownerId`); only it acts on this state. Null while closed, and while the follow
+   * goes on without a page (the window reloaded): then any page may stop it, the one with its project may adopt it. */
   ownerId: z.string().uuid().nullable(),
   /** Null while closed. */
   projectId: z.string().min(1).nullable(),
+  /** The project's file and name as the follow started (a page adopts only its own project). Null while closed. */
+  projectPath: z.string().max(4096).nullable(),
+  projectName: z.string().max(500).nullable(),
   mode: p1FollowModeSchema.nullable(),
   runMode: z.enum(['rehearsal', 'live']).nullable(),
   /** The song followed, prepared or waited for; null when auto waits for any song. */
@@ -109,7 +117,7 @@ export const p1FollowStateSchema = z.object({
 }).strict().superRefine((state, context) => {
   const closed = state.phase === 'closed';
   if (closed !== (state.projectId === null) || closed !== (state.mode === null) || closed !== (state.runMode === null) || closed !== (state.input === null)
-    || closed !== (state.ownerId === null)) {
+    || closed !== (state.projectPath === null) || closed !== (state.projectName === null) || closed && state.ownerId !== null) {
     context.addIssue({ code: 'custom', message: '只有没跟随时工程、方式和输入口才是空的', path: ['phase'] });
   }
   if ((state.phase === 'frozen') !== (state.cause !== null)) context.addIssue({ code: 'custom', message: '只有冻结时才有冻结原因', path: ['cause'] });

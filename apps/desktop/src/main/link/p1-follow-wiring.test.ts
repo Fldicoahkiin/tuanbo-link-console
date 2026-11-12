@@ -107,6 +107,26 @@ describe('P1 跟随接到主进程（P3f）', () => {
     expect(f.release).toHaveBeenCalledOnce();
   });
 
+  it('界面重新加载（2026-11-12）：跟随照跟、不关灯、授权和节目状态照旧；退出才结束并关这首的灯', async () => {
+    const project = manualProject(['1.301']);
+    const f = fixture(project);
+    await f.start('manual'); await f.send({ kind: 'arm', itemId: 'song' });
+    const first = f.play(0, 30, 1_000);
+    await f.wiring.pageGone();
+    expect(f.wiring.host.state).toMatchObject({ phase: 'running', ownerId: null, projectName: 'P1 手动跟随' });
+    f.play(30, 30, first.endMs);
+    await f.lights.settled();
+    expect(f.offs()).toEqual([]);
+    expect(f.running).toEqual([true]);
+    expect(f.wiring.running()).toBe(true);
+    expect(f.wiring.showInput()).toEqual({ state: 'running', itemId: 'song' });
+    expect(f.release).not.toHaveBeenCalled();
+    await f.wiring.dispose();
+    await f.lights.settled();
+    expect(f.offs()).toEqual(['1.301']);
+    expect(f.running).toEqual([true, false]);
+  });
+
   it('节目状态和授权：跟随时由主进程的跟随定，等下一首算拿着；停了交回', async () => {
     const f = fixture(manualProject([]));
     expect(f.wiring.showInput()).toBeUndefined();
@@ -128,13 +148,18 @@ describe('P1 跟随接到主进程（P3f）', () => {
   });
 
   it('每个阶段在节目状态里是什么', () => {
-    const base = { version: 1, ownerId: OWNER, projectId: 'p', mode: 'manual', runMode: 'live', itemId: 'song', sessionId: null, generation: 0, positionMs: null,
+    const base = { version: 1, ownerId: OWNER, projectId: 'p', projectPath: 'C:/show.tblink', projectName: '演出', mode: 'manual', runMode: 'live', itemId: 'song', sessionId: null, generation: 0, positionMs: null,
       cause: null, reason: null, input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null } } as const;
     const show = (phase: P1FollowState['phase']) => p1FollowShowInput({ ...base, phase });
     expect([show('waiting'), show('preparing'), show('running'), show('frozen'), show('takeover'), show('failed')].map(input => input?.state))
       .toEqual(['armed', 'preflight', 'running', 'timecodeLost', 'paused', 'error']);
     expect(show('standby')).toBeNull();
-    expect(p1FollowShowInput({ ...base, phase: 'closed', ownerId: null, projectId: null, mode: null, runMode: null, input: null, itemId: null })).toBeUndefined();
+    expect(p1FollowShowInput({ ...base, phase: 'closed', ownerId: null, projectId: null, projectPath: null, projectName: null, mode: null, runMode: null, input: null, itemId: null })).toBeUndefined();
+    // Auto-follow listening for its first song runs nothing yet: the window's run was idle then; after a song it holds.
+    const listening = { ...base, mode: 'auto', phase: 'waiting', itemId: null } as const;
+    expect(p1FollowShowInput(listening)).toBeNull();
+    expect(followRuns(listening)).toBe(false);
+    expect(p1FollowShowInput({ ...listening, itemId: 'song' })).toEqual({ state: 'armed', itemId: 'song' });
     expect((['closed', 'standby', 'waiting', 'preparing', 'running', 'frozen', 'takeover', 'failed'] as const).map(phase => followRuns({ ...base, phase })))
       .toEqual([false, false, true, true, true, true, true, true]);
   });

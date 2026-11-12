@@ -41,8 +41,9 @@ export function needsProductLicense(channel: string, value: unknown): boolean {
   // A stopped song switches its executors off; Go and Goto light them.
   if (channel === 'link:ma2-play-cue') return ma2PlaybackRequestSchema.parse(value).action.action !== 'off';
   if (channel === 'link:set-runtime-active') return value !== false;
-  // Stopping a P1 follow and leaving it end what a checked follow started (0.5.9 P3f).
-  if (channel === 'link:p1-follow') { const kind = p1FollowRequestSchema.parse(value).command.kind; return kind !== 'stop' && kind !== 'close'; }
+  // Stopping a P1 follow and leaving it end what a checked follow started (0.5.9 P3f); a reloaded page taking back the
+  // follow that went on meanwhile starts nothing (P4).
+  if (channel === 'link:p1-follow') { const kind = p1FollowRequestSchema.parse(value).command.kind; return kind !== 'stop' && kind !== 'close' && kind !== 'adopt'; }
   if (channel === 'link:obs-execute-managed-media') return linkManagedMediaExecutionPayloadSchema.parse(value).event.phase === 'start';
   if (channel === 'link:obs-execute') {
     const action = linkActionSchema.parse(value);

@@ -47,7 +47,9 @@ export type P1FollowWiring = {
   readonly host: P1FollowHost;
   /** The show's P1 input while the host has a follow; `undefined` without one (ShowStateService.followP1). */
   showInput(): ShowInputs['p1'] | undefined;
-  /** The main window's page is gone (releaseGonePage): its follow ends. */
+  /** Whether the follow runs the show now (followRuns): the quit and the window's guards wait for it as for a program. */
+  running(): boolean;
+  /** The main window's page is gone (releaseGonePage): its follow goes on without a page until one adopts or stops it. */
   pageGone(): Promise<void>;
   /** The app quits: the follow ends, its Offs go out, the input is let go. */
   dispose(): Promise<void>;
@@ -84,24 +86,27 @@ export function wireP1Follow(dependencies: P1FollowWiringDependencies): P1Follow
   return {
     host,
     showInput: () => p1FollowShowInput(host.state),
+    running: () => followRuns(host.state),
     pageGone: () => host.pageGone(null),
     dispose: () => host.dispose()
   };
 }
 
-/** The follow holds the show (and the license) from arming until it stops: as the window's run did. */
-export function followRuns(state: P1FollowState): boolean { return state.phase !== 'closed' && state.phase !== 'standby'; }
+/** The follow holds the show (and the license) from arming until it stops: as the window's run did. Auto-follow still
+ * listening for its first song runs nothing yet, as the window's run was idle then. */
+export function followRuns(state: P1FollowState): boolean { return p1FollowShowInput(state) != null; }
 
 /** The follow's state as the show reads P1 (packages/core show-state.ts p1Show), as the window's runtime reported it:
- * waiting for P1's song is `armed` (held, like stopped for the console: LIGHTING_WORKFLOW 节目在走时不写控台), preparing is
+ * waiting for the armed song is `armed` (held, like stopped for the console: LIGHTING_WORKFLOW 节目在走时不写控台), preparing is
  * `preflight`, a freeze is `timecodeLost`, a takeover is `paused` (CueRuntime enableManualTakeover), a song that could
- * not start is `error`. `null` while it follows nothing; `undefined` without a follow. */
+ * not start is `error`. `null` while it follows nothing, and while auto-follow listens for its first song (the window's
+ * runtime was idle then); `undefined` without a follow. */
 export function p1FollowShowInput(state: P1FollowState): ShowInputs['p1'] | undefined {
   const itemId = state.itemId;
   switch (state.phase) {
     case 'closed': return undefined;
     case 'standby': return null;
-    case 'waiting': return { state: 'armed', itemId };
+    case 'waiting': return state.mode === 'auto' && itemId === null ? null : { state: 'armed', itemId };
     case 'preparing': return { state: 'preflight', itemId };
     case 'running': return { state: 'running', itemId };
     case 'frozen': return { state: 'timecodeLost', itemId };

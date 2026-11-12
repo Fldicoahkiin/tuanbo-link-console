@@ -9,9 +9,13 @@ import type { MidiInputClaim, MidiInputListener } from './midi-port-broker';
  * The outputs are the shared ones of the internal player, reached only through `P1FollowOutputs`; the lights through
  * `P1FollowLights` (the one lights-off ledger). link-main reaches this through p1-follow-wiring.ts (P3f).
  *
- * As on the page today (runtime-midi-session.ts, link-midi-adapter.ts `subscribeMtc`): the input is opened when the
- * follow starts and closed when it is left; unplugged, it is not opened again by itself (the 2026-10-24 recovery covers
- * the outputs only): what ran freezes, and the operator starts again.
+ * As on the page before 0.5.9 P4: the input is opened when the follow starts and closed when it is left; unplugged, it
+ * is not opened again by itself (the 2026-10-24 recovery covers the outputs only): what ran freezes, and the operator
+ * starts again.
+ *
+ * A page that goes (the window reloads) does not end the follow (2026-11-12): it goes on without a page, the timecode
+ * still drives its outputs and nothing goes off. A new page with the same project adopts it (`adopt`); any page may
+ * stop or close it; nothing else reaches it until then. Only the quit (`dispose`) ends it without a page asking.
  */
 
 /** The outputs of one follow, its lights, and what each output reports of itself (P1FollowState `outputs`). */
@@ -30,14 +34,18 @@ export type P1FollowHostDependencies = {
   log(level: 'info' | 'warning' | 'error', message: string): void;
 };
 
+/** The MTC input of a follow: kept by the next follow of the same page on the same port (`start` while nothing runs). */
+type Input = { portName: string; state: 'opening' | 'open' | 'closed'; reason: string | null; claim: MidiInputClaim | null };
+
 type Follow = {
-  ownerId: string;
+  /** Null: the page that followed is gone and no page adopted it yet. */
+  ownerId: string | null;
   project: LinkProject;
+  projectPath: string;
   runMode: OutputMode;
   session: P1FollowSession;
   outputs: P1FollowOutputSet;
-  input: NonNullable<P1FollowState['input']>;
-  claim: MidiInputClaim | null;
+  input: Input;
 };
 
 /** The state goes to the window at once when anything but the position or the timecode changed, and otherwise at most
@@ -45,7 +53,7 @@ type Follow = {
 const POSITION_EVERY_MS = 100;
 
 const CLOSED: P1FollowState = {
-  version: 1, phase: 'closed', ownerId: null, projectId: null, mode: null, runMode: null, itemId: null, sessionId: null, generation: 0,
+  version: 1, phase: 'closed', ownerId: null, projectId: null, projectPath: null, projectName: null, mode: null, runMode: null, itemId: null, sessionId: null, generation: 0,
   positionMs: null, cause: null, reason: null, input: null, mtc: null, outputs: { actionMidi: null }
 };
 
@@ -66,16 +74,26 @@ export class P1FollowHost {
     return next;
   }
 
-  /** The window's page that started the follow is gone (reloaded or closed): the follow ends with it. `null`: whatever
-   * page it was (link-main knows only that the main window's page went). */
+  /** The window's page that followed is gone (reloaded or closed): the follow goes on without a page (2026-11-12).
+   * `null`: whatever page it was (link-main knows only that the main window's page went). */
   pageGone(ownerId: string | null): Promise<void> {
-    const next = this.turn.then(async () => { if (this.follow && (ownerId === null || this.follow.ownerId === ownerId)) await this.close(); });
+    const next = this.turn.then(() => {
+      const follow = this.follow;
+      if (!follow || follow.ownerId === null || ownerId !== null && follow.ownerId !== ownerId) return;
+      follow.ownerId = null;
+      this.dependencies.log('info', `界面重新打开，跟随 P1 照常继续：${follow.project.name}`);
+      this.publish(true);
+    });
     this.turn = next.catch(() => undefined);
     return next;
   }
 
   /** The app quits: the follow ends and the input is let go. */
-  dispose(): Promise<void> { return this.pageGone(null); }
+  dispose(): Promise<void> {
+    const next = this.turn.then(() => this.close());
+    this.turn = next.catch(() => undefined);
+    return next;
+  }
 
   private async run(request: P1FollowRequest): Promise<P1FollowState> {
     const command = request.command;
@@ -85,7 +103,15 @@ export class P1FollowHost {
     }
     const follow = this.follow;
     if (!follow) throw new Error('还没打开要跟随 P1 的工程');
-    if (follow.ownerId !== request.ownerId) throw new Error('另一个界面正在跟随 P1，这里不能操作');
+    if (command.kind === 'adopt') {
+      if (follow.ownerId !== null) throw new Error(follow.ownerId === request.ownerId ? '这个界面已经在跟随 P1' : '另一个界面正在跟随 P1，这里不能操作');
+      if (follow.projectPath !== command.projectPath) throw new Error(`还在跟随 P1 的是工程「${follow.project.name}」，不是这里打开的工程`);
+      follow.ownerId = request.ownerId;
+      this.dependencies.log('info', `重新打开的界面接着跟随 P1：${follow.project.name}`);
+      return this.publish(true);
+    }
+    if (follow.ownerId === null && command.kind !== 'stop' && command.kind !== 'close') throw new Error(orphanText(follow));
+    if (follow.ownerId !== null && follow.ownerId !== request.ownerId) throw new Error('另一个界面正在跟随 P1，这里不能操作');
     switch (command.kind) {
       case 'arm':
         if (follow.input.state !== 'open') throw new Error(follow.input.reason ?? `MTC 输入口「${follow.input.portName}」没有打开`);
@@ -101,9 +127,14 @@ export class P1FollowHost {
     return this.publish(true);
   }
 
+  /** A page starts following this project. The same page may start again while nothing runs (standby, or auto-follow
+   * still listening for its first song): the newer document replaces the follow, and the input stays open when it is the
+   * same port. A follow of another page, or one without a page, is never replaced. */
   private async start(ownerId: string, command: Extract<P1FollowRequest['command'], { kind: 'start' }>): Promise<void> {
     const previous = this.follow;
-    if (previous && previous.session.view.phase !== 'standby') throw new Error('正在跟随 P1，先停止再换工程');
+    if (previous && previous.ownerId === null) throw new Error(orphanText(previous));
+    if (previous && previous.ownerId !== ownerId) throw new Error('另一个界面正在跟随 P1，这里不能操作');
+    if (previous && !replaceable(previous)) throw new Error('正在跟随 P1，先停止再换工程');
     const project = await this.dependencies.openProject(command.document, command.projectPath);
     let follow: Follow | null = null;
     const outputs = this.dependencies.outputs(project, { runMode: command.runMode, lightingProfile: command.lightingProfile },
@@ -111,19 +142,24 @@ export class P1FollowHost {
     const session = new P1FollowSession(project, command.mode, {
       outputs: outputs.outputs, lights: outputs.lights, prepare: (itemId, sessionId) => { if (follow) this.prepare(follow, itemId, sessionId); }
     });
-    if (previous) await this.close();
-    const opened: Follow = { ownerId, project, runMode: command.runMode, session, outputs, claim: null,
-      input: { portName: command.inputPortName, state: 'opening', reason: null } };
+    // P1 may have started a song while the project was checked: then this follow is not replaced.
+    if (previous && !replaceable(previous)) throw new Error('正在跟随 P1，先停止再换工程');
+    const kept = previous && previous.input.portName === command.inputPortName && previous.input.state === 'open' && previous.input.claim ? previous.input : null;
+    if (previous && kept) previous.session.stop('close');
+    else if (previous) await this.close();
+    const input: Input = kept ?? { portName: command.inputPortName, state: 'opening', reason: null, claim: null };
+    const opened: Follow = { ownerId, project, projectPath: command.projectPath, runMode: command.runMode, session, outputs, input };
     follow = opened; this.follow = opened; this.nowMs = null;
     this.publish(true);
+    if (kept) return;
     try {
-      opened.claim = await this.dependencies.claimInput(command.inputPortName, this.listener(opened));
+      input.claim = await this.dependencies.claimInput(command.inputPortName, this.listener(input));
     } catch (error) {
       if (this.follow === opened) { this.follow = null; this.publish(true); }
       throw error instanceof Error ? error : new Error(String(error));
     }
     // A closed input reported while opening already set the state; otherwise it is open now.
-    if (opened.input.state === 'opening') opened.input = { ...opened.input, state: 'open' };
+    if (input.state === 'opening') input.state = 'open';
     this.dependencies.log('info', `已打开 P1 时间码输入「${command.inputPortName}」`);
   }
 
@@ -132,24 +168,28 @@ export class P1FollowHost {
     if (!follow) return;
     follow.session.stop('close');
     this.follow = null;
-    await follow.claim?.release();
+    const claim = follow.input.claim; follow.input.claim = null;
+    await claim?.release();
     this.publish(true);
   }
 
-  private listener(follow: Follow): MidiInputListener {
-    const current = (): boolean => this.follow === follow;
+  /** The input goes to whichever follow holds it now. */
+  private listener(input: Input): MidiInputListener {
+    const current = (): Follow | null => this.follow?.input === input ? this.follow : null;
     return {
       message: message => {
-        if (!current()) return;
+        const follow = current();
+        if (!follow) return;
         this.advance(message.at100ns);
         this.guard(follow, () => follow.session.message(message.bytes, message.at100ns));
       },
       idle: at100ns => {
-        if (!current()) return;
+        const follow = current();
+        if (!follow) return;
         this.advance(at100ns);
         this.guard(follow, () => follow.session.idle(at100ns));
       },
-      closed: reason => { if (current()) this.inputClosed(follow, reason); }
+      closed: reason => { const follow = current(); if (follow) this.inputClosed(follow, reason); }
     };
   }
 
@@ -166,10 +206,10 @@ export class P1FollowHost {
 
   /** Unplugged or failed: what runs freezes; the input is let go and opened again only by a new start. */
   private inputClosed(follow: Follow, reason: string): void {
-    follow.input = { ...follow.input, state: 'closed', reason };
+    follow.input.state = 'closed'; follow.input.reason = reason;
     follow.session.inputGone();
     this.dependencies.log('warning', `P1 时间码输入停了：${reason}`);
-    const claim = follow.claim; follow.claim = null;
+    const claim = follow.input.claim; follow.input.claim = null;
     void claim?.release().catch((error: unknown) => this.dependencies.log('error', `关闭 P1 时间码输入未完成：${error instanceof Error ? error.message : String(error)}`));
     this.publish(true);
   }
@@ -212,9 +252,10 @@ export class P1FollowHost {
     if (!follow) return CLOSED;
     const view = follow.session.view;
     return {
-      version: 1, phase: view.phase, ownerId: follow.ownerId, projectId: follow.project.projectId, mode: view.mode, runMode: follow.runMode,
+      version: 1, phase: view.phase, ownerId: follow.ownerId, projectId: follow.project.projectId, projectPath: follow.projectPath,
+      projectName: follow.project.name, mode: view.mode, runMode: follow.runMode,
       itemId: view.itemId, sessionId: view.sessionId, generation: view.generation, positionMs: view.positionMs,
-      cause: view.cause, reason: view.reason, input: follow.input,
+      cause: view.cause, reason: view.reason, input: { portName: follow.input.portName, state: follow.input.state, reason: follow.input.reason },
       mtc: view.mtc ? { timecode: view.mtc.sample.timecode, frameRate: view.mtc.sample.frameRate, receiving: view.mtc.receiving, stable: view.mtc.stable } : null,
       outputs: follow.outputs.state()
     };
@@ -223,4 +264,14 @@ export class P1FollowHost {
   private title(follow: Follow, itemId: string): string {
     return follow.project.rundown.find(item => item.id === itemId)?.title ?? itemId;
   }
+}
+
+/** Nothing runs yet: stopped, or auto-follow listening for its first song (no song is lit, nothing is sent). */
+function replaceable(follow: Follow): boolean {
+  const view = follow.session.view;
+  return view.phase === 'standby' || view.mode === 'auto' && view.phase === 'waiting' && view.itemId === null;
+}
+
+function orphanText(follow: Follow): string {
+  return `联动台重新打开之前开始的 P1 跟随还在继续（工程「${follow.project.name}」）。打开这个工程就能接着用；不用了请先停止它`;
 }
