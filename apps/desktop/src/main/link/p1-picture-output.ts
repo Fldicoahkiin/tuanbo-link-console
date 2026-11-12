@@ -59,9 +59,9 @@ export type P1PictureOutputDependencies = {
 /** `preparing`: the host prepares it; `following`: clocks go to the host; `held`: frozen; `off`: not prepared (refused or
  * failed), only positions go; `none`: no picture work, only positions go. `sessionId` and `clockGeneration`: the
  * follow's own clock of the song. `generation`: the picture's, one per pass and resume; `prepared`: the one its
- * preparation was asked with (null: not asked yet). */
+ * preparation was asked with (null: not asked yet); `followed`: this pass's clocks have gone to the host. */
 type Song = { sessionId: string; clockGeneration: number; itemId: string; phase: 'preparing' | 'following' | 'held' | 'off' | 'none';
-  latest: ProgramClock | null; fromMs: number; generation: number; prepared: number | null };
+  latest: ProgramClock | null; fromMs: number; generation: number; prepared: number | null; followed: boolean };
 /** The song made ready ahead: as the selected song (`generation` of the pool's request), or as `pass`'s next one. */
 type Ahead = { itemId: string; via: 'selection'; generation: number } | { itemId: string; via: 'next'; pass: Song };
 
@@ -150,11 +150,12 @@ export class P1PictureOutput implements P1FollowOutputs {
 
   /** Where the song is for the host: P1 plays it (preparing, following, and frozen in manual mode), or it is paused (auto).
    * While its pass is prepared, where that pass is prepared from: so a picture made ready at the head is the one taken,
-   * and the host's late rejoin puts it where P1 is on the first clock. */
+   * and the host's late rejoin puts it where P1 is on the first clock. A pass that never followed (P1 paused while it
+   * was prepared) is playing for the host: nothing of it is where P1 is, so it always joins at the first clock it gets. */
   private now(): PictureSongNow | null {
     const song = this.song;
     if (!song || song.phase === 'off' || song.phase === 'none') return null;
-    const status = song.phase === 'held' && this.dependencies.mode === 'auto' ? 'paused' : 'playing';
+    const status = song.phase === 'held' && song.followed && this.dependencies.mode === 'auto' ? 'paused' : 'playing';
     const positionMs = song.phase === 'preparing' ? song.fromMs : song.latest?.positionMs ?? song.fromMs;
     return { sessionId: this.session, generation: song.generation, itemId: song.itemId, status, positionMs };
   }
@@ -172,7 +173,7 @@ export class P1PictureOutput implements P1FollowOutputs {
     if (this.ahead?.itemId === clock.itemId) this.ahead = null; else this.letGoAhead();
     const needs = itemNeedsObs(project, clock.itemId);
     const song: Song = { sessionId: clock.sessionId, clockGeneration: clock.generation, itemId: clock.itemId, phase: needs ? 'preparing' : 'none',
-      latest, fromMs, generation: ++this.generations, prepared: null };
+      latest, fromMs, generation: ++this.generations, prepared: null, followed: false };
     this.song = song;
     if (!needs) { this.show(null); return; }
     void (async () => {
@@ -258,6 +259,7 @@ export class P1PictureOutput implements P1FollowOutputs {
 
   /** P1's clock, as the picture session has it: the follow's one session, this pass's generation. */
   private forward(song: Song, clock: ProgramClock): void {
+    if (clock.state === 'running' || clock.state === 'ended') song.followed = true;
     try { this.dependencies.host.observe({ ...clock, sessionId: this.session, generation: song.generation }); }
     catch (error) { this.dependencies.log('error', `跟随 P1 时画面出错：${toUserErrorReason(error)}`); }
   }

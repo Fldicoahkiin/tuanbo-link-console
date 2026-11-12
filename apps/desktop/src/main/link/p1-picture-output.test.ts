@@ -226,6 +226,39 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     expect(f.logs[0]).toMatch(/^info:「歌」的画面已提前准备好，用了 \d+ 毫秒$/);
   });
 
+  it('自动：画面还在准备时 P1 暂停，准备好以后 P1 从停下的位置接着放：画面按 P1 那时的位置接上，不失败，过去的不补', async () => {
+    const preparing = gate();
+    const f = fixture({ mode: 'auto', prepare: preparing.wait });
+    f.picture.observe(f.clock('ready', 0));
+    await f.play(0, 1000);
+    // P1 pauses at 1 s while the picture is still prepared (from the head); the preparation ends while it is paused.
+    f.picture.hold(); await settle();
+    preparing.open(); await settle();
+    expect(f.sent).toEqual([]);
+    // P1 goes on from where it stopped: the same pass, a newer generation.
+    f.picture.reconcileAt(f.clock('running', 1050, 2), true); await settle();
+    await f.play(1100, 2500, 2);
+    // Joined where P1 went on (the video put at 1.05 s), not as if it went on from the head: nothing late, nothing red,
+    // camera A of 0–1 s never sent; then on as the timeline goes.
+    expect(f.sent).toEqual(['seek:dance@1100', '素材start', '滤镜调色', '切到机位B']);
+    expect(f.picture.state).toMatchObject({ itemId: 'song', state: 'running', fault: null, reason: null });
+    expect(f.logs).toEqual([]);
+
+    // A pass that followed and then paused is paused for the host, as before: a next song asked for meanwhile waits for
+    // P1 to go on.
+    const followed = fixture({ mode: 'auto', project: threeSongs() });
+    followed.picture.observe(followed.clock('ready', 0));
+    await followed.play(0, 500);
+    followed.picture.expect('two');
+    await followed.play(550, 1000);
+    expect(followed.made.map(entry => entry.request.snapshot.item.id)).toEqual(['song', 'two']);
+    followed.picture.hold(); await settle();
+    followed.picture.expect('three'); await settle();
+    expect(followed.made.map(entry => entry.request.snapshot.item.id)).toEqual(['song', 'two']);
+    followed.picture.reconcileAt(followed.clock('running', 1050, 2), true); await settle();
+    expect(followed.made.map(entry => entry.request.snapshot.item.id)).toEqual(['song', 'two', 'three']);
+  });
+
   it('停下和换歌：上一首留在最后一帧，下一首的画面上了才撤；跟随关掉时放开，和关掉节目一样', async () => {
     const f = fixture();
     f.picture.observe(f.clock('ready', 0));
