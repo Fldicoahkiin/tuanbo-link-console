@@ -116,12 +116,14 @@ function tallyCue(tally: Tally, report: CueExecutionReport): void {
 /** The red text for a rebuilt picture (2026-11-09: it never says more came back
  * than did): what happened and what came back, each part that did not with why,
  * then what to do. `reconnect`: rebuilt as OBS reconnected, at the current
- * position; otherwise on the resume after it, at the resumed position. */
-export function obsRecoveryText(recovery: ObsRecovery, reconnect: boolean): string {
+ * position; otherwise on the resume after it, at the resumed position. `cause`:
+ * what made the rebuild at the current position, when it was not a reconnect (a
+ * picture joining music that started before it was ready). */
+export function obsRecoveryText(recovery: ObsRecovery, reconnect: boolean, cause = 'OBS 已重新连接'): string {
   const at = reconnect ? '当前位置' : '继续播放的位置', scenesLost = recovery.failure !== null;
   // What happened first: OBS came back, and whether the owned scenes were prepared again.
-  const opening = !scenesLost ? (reconnect ? 'OBS 已重新连接，' : '')
-    : `${reconnect ? 'OBS 已重新连接，但' : 'OBS 重新连接后'}素材场景没有重新准备好：${recovery.failure}。`;
+  const opening = !scenesLost ? (reconnect ? `${cause}，` : '')
+    : `${reconnect ? `${cause}，但` : 'OBS 重新连接后'}素材场景没有重新准备好：${recovery.failure}。`;
   const picture = scenesLost ? '机位' : '画面', missed = recovery.failed;
   if (!missed.length) return `${opening}${picture}已按${at}恢复（${recovery.sent} 项）${scenesLost ? '，素材可能播不出来' : ''}`;
   const reason = (miss: ObsRecoveryMiss): string => miss.reason.replace(/[。；\s]+$/, '');

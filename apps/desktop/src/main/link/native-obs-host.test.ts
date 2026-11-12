@@ -260,7 +260,8 @@ it('初始化在途时音频先启动：画面照常准备完，到音乐的下�
   release(); await expect(preparing).resolves.toMatchObject({ state: 'ready' });
   test.observe({ status: 'playing', generation: 2, positionMs: 1200 }, 710); await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(2));
   expect(test.execute.mock.calls.map(([action]) => action.kind === 'obs.setProgramScene' ? action.sceneName : action.kind)).toEqual(['机位0', '机位1']);
-  expect(test.host.status).toMatchObject({ state: 'running', fault: 'OBS 已重新连接，画面已按当前位置恢复（1 项）' });
+  // OBS never went away here: the red text says the picture joined late, not that OBS reconnected.
+  expect(test.host.status).toMatchObject({ state: 'running', fault: '这首歌的画面准备好时音乐已经在放了，画面已按当前位置恢复（1 项）' });
   await test.host.stop();
 });
 

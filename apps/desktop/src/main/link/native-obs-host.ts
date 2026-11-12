@@ -17,7 +17,12 @@ type Outputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'medi
 type Entry = { request: NativeObsPrepare; project: LinkProject; session: ObsProgramSession; state: NativeObsStatus; awaitingPause: boolean; ended: boolean; filesStarted: boolean;
   now: () => number; restoreScenes: Outputs['restoreScenes']; cleanup: Promise<void> | null; leftover: ObsPictureLeftover | null;
   connection: ObsPictureItem | null; parts: ObsPictureItem[]; counts: NonNullable<NativeObsStatus['recoveries']>; restores: OutputRecovery;
-  lost: boolean; rejoin: (() => Promise<void>) | null };
+  lost: boolean; rejoin: Rejoin | null };
+/** `restore`: what comes before the rebuild (the owned scenes prepared again, or nothing). `late`: OBS never went away;
+ * the music only started before the picture was ready, and the red text says that instead of a reconnect. */
+type Rejoin = { restore: () => Promise<void>; late: boolean };
+const NOTHING = (): Promise<void> => Promise.resolve();
+const LATE = '这首歌的画面准备好时音乐已经在放了';
 /** A recovery of the song's picture for the run log, as the session logs its own (R5): the channel, the item, the count and the limit. */
 export type PictureRecoveryLog = { level: 'warning' | 'error'; message: string; result: 'succeeded' | 'failed'; projectId: string; itemId: string;
   details: { channel: 'obs'; item: string; recoveries: { row: string; key: string; count: number; max: number }[] } };
@@ -94,17 +99,19 @@ export class NativeObsHost {
     const restore = (): Promise<void> => entry.restoreScenes?.(current) ?? Promise.resolve();
     if (entry.lost) { await this.prepareAgain(entry); return; }
     // Prepared and not started: rebuilt as it starts, the owned scenes first.
-    if (entry.state.state === 'ready') { entry.rejoin = restore; return; }
+    if (entry.state.state === 'ready') { entry.rejoin = { restore, late: false }; return; }
     await this.rebuild(entry, restore);
   }
 
-  /** The picture at the current position from nothing, after `restore`; reported in red once. */
-  private async rebuild(entry: Entry, restore: () => Promise<void>): Promise<void> {
+  /** The picture at the current position from nothing, after `restore`; reported in red once. `late`: OBS never went
+   * away, the picture only joins music that started before it was ready, and the text says so. */
+  private async rebuild(entry: Entry, restore: () => Promise<void>, late = false): Promise<void> {
+    const cause = late ? LATE : 'OBS 已重新连接';
     try {
       const rebuilt = await entry.session.recover(restore);
-      if (this.entry === entry) this.fault(rebuilt === null ? 'OBS 已重新连接；节目暂停了，继续播放时按当前位置恢复画面' : obsRecoveryText(rebuilt, true));
+      if (this.entry === entry) this.fault(rebuilt === null ? `${cause}；节目暂停了，继续播放时按当前位置恢复画面` : obsRecoveryText(rebuilt, true, cause));
     } catch (error) {
-      if (this.entry === entry) this.fault(`OBS 已重新连接，但画面恢复失败：${error instanceof Error ? error.message : String(error)}`);
+      if (this.entry === entry) this.fault(`${cause}，但画面恢复失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -137,7 +144,7 @@ export class NativeObsHost {
       await session.prepare(audio.positionMs);
       current();
       if (session.error) throw session.error;
-      entry.rejoin = () => Promise.resolve();
+      entry.rejoin = { restore: NOTHING, late: false };
       this.patch({ nextCueId: session.nextCueId, notice: outputs.outputNotice?.() ?? null });
       this.fault('OBS 已重新连接，这首歌的画面准备好了，按当前位置接上');
     } catch (error) {
@@ -223,7 +230,7 @@ export class NativeObsHost {
       if (epoch !== this.epoch || this.entry !== entry) throw new Error('画面准备已取消');
       // The music may have started meanwhile (design 01 §3.2 row 13): the picture joins at the current position.
       const now = this.playingSong(request);
-      if (now.status === 'playing' || now.generation !== request.generation) entry.rejoin ??= () => Promise.resolve();
+      if (now.status === 'playing' || now.generation !== request.generation) entry.rejoin ??= { restore: NOTHING, late: true };
       if (session.error) throw session.error;
       this.patch({ state: 'ready', nextCueId: session.nextCueId, notice: outputs.outputNotice?.() ?? null }); return entry.state;
     } catch (error) {
@@ -308,7 +315,7 @@ export class NativeObsHost {
     if (entry.state.state === 'preparing') {
       // The music started before the picture was ready (design 01 §3.2 row 13): it joins at the current position once
       // it is prepared. A seek or stop meanwhile stops it (`interrupt`), and the program prepares it again there.
-      if (audio.status === 'playing') entry.rejoin ??= () => Promise.resolve();
+      if (audio.status === 'playing') entry.rejoin ??= { restore: NOTHING, late: true };
       return;
     }
     if (entry.lost) {
@@ -332,7 +339,7 @@ export class NativeObsHost {
       entry.ended = audio.status === 'ended';
       if (entry.session.error) { this.fail(entry.session.error.message); return; }
       this.patch({ state: 'running', generation: audio.generation, positionMs: audio.positionMs, pendingCount: entry.session.pendingCount, nextCueId: entry.session.nextCueId });
-      if (rejoin) void this.rebuild(entry, rejoin);
+      if (rejoin) void this.rebuild(entry, rejoin.restore, rejoin.late);
       if (!entry.filesStarted && audio.status === 'playing' && entry.request.nextFiles && this.dependencies.prepareNextFiles) {
         entry.filesStarted = true;
         // This song stopping or ending cancels it, which is not a failure. Any other failure is logged once, also one
