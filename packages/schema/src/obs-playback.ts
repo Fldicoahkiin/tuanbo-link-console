@@ -20,6 +20,11 @@ export type NativeObsPrepare = z.infer<typeof nativeObsPrepareSchema>;
 export const nativeObsNextSchema = z.object({ version: z.literal(1), sessionId: z.string().uuid(),
   generation: z.number().int().positive(), nextFiles: nativeObsNextFilesSchema.nullable() }).strict();
 export type NativeObsNext = z.infer<typeof nativeObsNextSchema>;
+/** A newer version of the held song's picture plan, for the picture session of that song's program (0.5.9 R9,
+ * ProgramPictureOutput): the main process takes it at the current position. Same snapshot as a preparation's. */
+export const nativeObsRetargetSchema = z.object({ version: z.literal(1), sessionId: z.string().uuid(),
+  revision: z.number().int().nonnegative(), snapshot: obsProgramSnapshotSchema }).strict();
+export type NativeObsRetarget = z.infer<typeof nativeObsRetargetSchema>;
 export const nativeObsPreloadSchema = nativeObsPrepareSchema.extend({ positionMs: z.number().finite().min(0).max(86_400_000) });
 export type NativeObsPreload = z.infer<typeof nativeObsPreloadSchema>;
 /** Generation is the original preparation generation, not the latest audio

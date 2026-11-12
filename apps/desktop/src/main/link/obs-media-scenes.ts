@@ -85,6 +85,8 @@ const MEDIA_START_LEAD_MS = 200;
 /** Above the measured 66–100 ms steady cursor offset, so a clip in step is never repositioned. The read-back
  * (`picture-follow.ts`) finds a clip out of step by the same number. */
 const MEDIA_DRIFT_TOLERANCE_MS = PICTURE_DRIFT_TOLERANCE_MS;
+/** A moved clip counts as in place within this (the start of a clip uses the same, `execute`). */
+const MOVED_IN_STEP_MS = 30;
 
 /** A batch OBS stopped part way (or never ran): `executed` requests before the
  * failure took effect, in order. */
@@ -973,6 +975,28 @@ export class ObsMediaScenes {
       if (performance.now() >= deadline) throw new Error(`没能确认素材的解码状态：${inputName}`);
     }
     return state;
+  }
+
+  /** A newer plan moved the playing clip on this decoder, or trimmed its start (0.5.9 R9): put in step at `aligned`
+   * where it plays, no restart. Nothing when the decoder no longer plays that clip. */
+  async moveClip(event: ManagedMediaEvent, aligned: () => number): Promise<void> {
+    await this.run(async () => {
+      if (!this.active.has(event.sourceName) || this.startedClips.get(event.sourceName)?.clipId !== event.clipId) return;
+      await this.positionMedia(event.sourceName, aligned, MOVED_IN_STEP_MS);
+    });
+  }
+  /** A newer plan changed the look of the clip on this decoder (0.5.9 R9; E16 position, size and rotation, E17 mirror,
+   * crop and opacity): `lookFor`, then its opacity filter in a batch of its own and the scene item's transform in one
+   * write, as when the decoder is primed. Only what differs from what the session knows goes out; the rules of
+   * `lookFor` and `filterFor` hold (an untrusted material, a filter of that name that is not ours). Resolves with why it
+   * could not be set, or null. */
+  async relook(event: ManagedMediaEvent): Promise<string | null> {
+    return this.run(async () => {
+      const look = await this.lookFor(event.sourceName, event.transform, event.sourceSize, 'prime');
+      const filterProblem = await this.sendFilter(event.sourceName, look);
+      await this.sendLook(event.sourceName, look);
+      return look.problem !== undefined ? lookFailure(event, look.problem) : filterProblem !== null ? opacityFailure(event, filterProblem) : null;
+    });
   }
 
   /** Recovery rule B for a long-running clip: when OBS's cursor has drifted

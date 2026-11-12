@@ -640,6 +640,36 @@ describe('ObsWebSocketAdapter', () => {
     expect(created.filter(([, data]) => typeof data === 'object' && data !== null && 'sceneName' in data && data.sceneName === '近景拉腿')).toHaveLength(1);
     expect(client.calls.some(([method]) => ['SetSceneItemTransform', 'SetSourceFilterSettings', 'SetSourceFilterEnabled', 'SetCurrentProgramScene'].includes(method))).toBe(false);
   });
+  it('0.5.9 R9：播放中改了画面用到新场景，只往那个场景里加联动台的音频项（没有就建，关着就打开，开着不动）；音乐走桌面音频时一个请求都不发', async () => {
+    const client = fakeObsClient();
+    client.responses.set('GetInputList', { inputs: [{ inputName: '团播联动台·内部正式音频', inputKind: 'wasapi_process_output_capture' }] });
+    client.responses.set('GetInputPropertiesListPropertyItems', { propertyItems: [{ itemValue: 'app:Chrome_WidgetWin_1:app.exe' }] });
+    client.responses.set('GetCurrentProgramScene', { currentProgramSceneName: '全景拉腿' });
+    const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket); await adapter.connect('ws://127.0.0.1:4455', 'password');
+    // Before the capture is set up through our own item: nothing is asked or written.
+    client.calls.length = 0;
+    expect(await adapter.addMusicToScene('新机位', 'program')).toBe(false);
+    expect(client.calls).toEqual([]);
+    await adapter.setInternalAudioCapture(true, 'app.exe', 'app', 'default', ['近景拉腿']);
+    const lists: Record<string, unknown[]> = { 新机位: [{ sourceName: '摄像头', sceneItemId: 1, sceneItemEnabled: true }],
+      关着的: [{ sourceName: '团播联动台·内部正式音频', sceneItemId: 7, sceneItemEnabled: false }],
+      开着的: [{ sourceName: '团播联动台·内部正式音频', sceneItemId: 8, sceneItemEnabled: true }] };
+    const call = client.call.bind(client);
+    client.call = (request: string, data?: unknown): Promise<unknown> => {
+      if (request !== 'GetSceneItemList') return call(request, data);
+      client.calls.push([request, data]);
+      const sceneName = typeof data === 'object' && data !== null && 'sceneName' in data && typeof data.sceneName === 'string' ? data.sceneName : '';
+      return Promise.resolve({ sceneItems: lists[sceneName] ?? [] });
+    };
+    client.calls.length = 0;
+    expect(await adapter.addMusicToScene('新机位', 'program')).toBe(true);
+    expect(await adapter.addMusicToScene('关着的', 'background')).toBe(true);
+    expect(await adapter.addMusicToScene('开着的', 'background')).toBe(false);
+    expect(client.calls).toEqual([
+      ['GetSceneItemList', { sceneName: '新机位' }], ['CreateSceneItem', { sceneName: '新机位', sourceName: '团播联动台·内部正式音频', sceneItemEnabled: true }],
+      ['GetSceneItemList', { sceneName: '关着的' }], ['SetSceneItemEnabled', { sceneName: '关着的', sceneItemId: 7, sceneItemEnabled: true }],
+      ['GetSceneItemList', { sceneName: '开着的' }]]);
+  });
   it('画面读回（R8）：只发读取请求；读节目场景、在播素材的状态和位置；场景里有没有联动台的音乐看一层嵌套场景，记住到场景变了；转场中照实说', async () => {
     const client = fakeObsClient();
     client.responses.set('GetInputList', { inputs: [{ inputName: '团播联动台·内部正式音频', inputKind: 'wasapi_process_output_capture' }] });
@@ -697,6 +727,10 @@ describe('ObsWebSocketAdapter', () => {
     await adapter.setInternalAudioCapture(true, 'app.exe', 'app');
     expect(client.calls.some(([method]) => method === 'CreateInput')).toBe(false);
     expect(client.calls.some(([method]) => method === 'SetInputMute')).toBe(false);
+    // 0.5.9 R9: a scene a newer plan brings gets nothing, the desktop audio carries the music there too.
+    client.calls.length = 0;
+    expect(await adapter.addMusicToScene('新机位', 'program')).toBe(false);
+    expect(client.calls).toEqual([]);
     client.responses.set('GetSpecialInputs', { desktop1: '桌面音频', desktop2: '桌面音频 2' });
     await expect(adapter.setInternalAudioCapture(true, 'app.exe', 'app')).rejects.toThrow('两路桌面音频');
   });

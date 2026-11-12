@@ -451,6 +451,31 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     }
   }
 
+  /** Puts our music item into a scene a newer plan of the song on air uses and its preparation did not (0.5.9 R9; within
+   * 2026-09-10: only the app's own audio item, only in the song's target scenes). Only while the music goes through that
+   * item (`musicThroughItem`); when OBS's desktop audio carries it nothing is added. For the scene, what preparation does
+   * there and nothing else: the item is created, or switched on when it is there and off. The capture itself (its
+   * settings, window, mute, volume, the managed scene's item) is not touched. `tier`: 'program' for a scene due now, so
+   * that the item is there before the switch to it; 'background' otherwise. */
+  addMusicToScene(sceneName: string, tier: 'program' | 'background'): Promise<boolean> {
+    return this.requests.run(tier, async () => {
+      this.assertConnected();
+      if (!this.musicThroughItem || sceneName === MANAGED_OBS_SCENE_NAME) return false;
+      const name = MUSIC_INPUT_NAME;
+      const items = await this.request(() => this.client.call('GetSceneItemList', { sceneName }), 'GetSceneItemList');
+      const item = (items.sceneItems as { sourceName?: unknown; sceneItemId?: unknown; sceneItemEnabled?: unknown }[])
+        .find(entry => entry.sourceName === name);
+      if (!item) await this.request(() => this.client.call('CreateSceneItem', { sceneName, sourceName: name, sceneItemEnabled: true }), 'CreateSceneItem');
+      else if (item.sceneItemEnabled !== true && typeof item.sceneItemId === 'number') {
+        const sceneItemId = item.sceneItemId;
+        await this.request(() => this.client.call('SetSceneItemEnabled', { sceneName, sceneItemId, sceneItemEnabled: true }), 'SetSceneItemEnabled');
+      } else if (item.sceneItemEnabled === true) return false;
+      // Only this scene is read again; what the read-back knows of the others stays.
+      this.musicCarried.delete(sceneName);
+      return true;
+    });
+  }
+
   /** The picture read back (R8, design 01 §4.8), at the `control` tier: never before a picture switch. Read requests
    * only: the scene on program, each decoder asked about, and, while the music goes through the app's own audio item,
    * whether that scene carries it (remembered per scene until scenes or items change). Changes nothing in OBS. */

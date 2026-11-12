@@ -46,9 +46,11 @@ type Clip = { start: number; end: number; sourceOffsetMs: number };
  * never starts output and is driven by the formal audio clock, not the UI. */
 export class ObsMediaPreload {
   private readonly media = new Map<string, Media>();
-  private readonly timeline: SceneOutputTimeline;
-  private readonly starts: ManagedMediaEvent[];
-  private readonly clips: ReadonlyMap<string, Clip>;
+  private timeline: SceneOutputTimeline;
+  private starts: ManagedMediaEvent[];
+  private clips: ReadonlyMap<string, Clip>;
+  /** Materials a newer plan brought whose preparation failed (0.5.9 R9), with why: their clips are not waited for. */
+  private readonly unavailable = new Map<string, string>();
   private readonly frameMs: number;
   /** Clips prepared after their boundary (recovery rule B): once, and once more each time the
    * picture session allows it (`prepareAgain`). */
@@ -72,12 +74,7 @@ export class ObsMediaPreload {
   constructor(project: LinkProject, itemId: string, private readonly scenes: Scenes,
     private readonly native: { prime: (name: string, restartRetained: boolean, kind: 'audio' | 'video') => Promise<void>; seek: (name: string, positionMs: number) => Promise<void> },
     private readonly held?: HeldPictures) {
-    const events = compileManagedMediaTimeline(project, itemId).events;
-    this.timeline = new SceneOutputTimeline(project, itemId, events);
-    this.starts = this.timeline.preloadEntries();
-    const ends = new Map(events.filter(event => event.phase === 'stop').map(event => [event.clipId, event.frameNumber]));
-    this.clips = new Map(events.filter(event => event.phase === 'start').map(event => [event.clipId,
-      { start: event.frameNumber, end: ends.get(event.clipId) ?? Infinity, sourceOffsetMs: event.sourceOffsetMs }]));
+    ({ timeline: this.timeline, starts: this.starts, clips: this.clips } = ObsMediaPreload.plan(project, itemId));
     this.frameMs = 1000 / playbackFramesPerSecond(project.timebase.frameRate);
     this.lookaheadFrames = Math.ceil(10 * playbackFramesPerSecond(project.timebase.frameRate));
     // Eight live layers can still prepare inside the ten-second horizon.
@@ -85,6 +82,46 @@ export class ObsMediaPreload {
     // starting another full-resolution preheat on the next clock sample.
     this.preparationSpacingFrames = Math.ceil(0.5 * playbackFramesPerSecond(project.timebase.frameRate));
   }
+  private static plan(project: LinkProject, itemId: string): { timeline: SceneOutputTimeline; starts: ManagedMediaEvent[]; clips: ReadonlyMap<string, Clip> } {
+    const events = compileManagedMediaTimeline(project, itemId).events;
+    const timeline = new SceneOutputTimeline(project, itemId, events);
+    const ends = new Map(events.filter(event => event.phase === 'stop').map(event => [event.clipId, event.frameNumber]));
+    return { timeline, starts: timeline.preloadEntries(), clips: new Map(events.filter(event => event.phase === 'start').map(event => [event.clipId,
+      { start: event.frameNumber, end: ends.get(event.clipId) ?? Infinity, sourceOffsetMs: event.sourceOffsetMs }])) };
+  }
+  /** A newer plan of the song on air (0.5.9 R9). A prepared decoder whose clip keeps its material, start and place in its
+   * file is kept: an edit elsewhere does not prepare it again. One prepared for a clip the plan no longer has there gives
+   * its slot up and stays owned and paused, as for a clip that ended unplayed (`expire`): never one on air, and a decoder
+   * holding a stopped song's last frame is not this song's. New clips are prepared by the lookahead, once their material
+   * is registered (`register`). */
+  retarget(project: LinkProject, itemId: string): void {
+    const before = this.clips;
+    ({ timeline: this.timeline, starts: this.starts, clips: this.clips } = ObsMediaPreload.plan(project, itemId));
+    const same = (clipId: string, sourceName: string): boolean => {
+      const old = before.get(clipId), next = this.clips.get(clipId);
+      return Boolean(old && next && old.start === next.start && old.sourceOffsetMs === next.sourceOffsetMs)
+        && this.starts.some(event => event.clipId === clipId && event.sourceName === sourceName);
+    };
+    for (const [sourceName, media] of this.media) {
+      if (media.following && !same(media.following.event.clipId, sourceName)) { media.retained.add(media.following.sourceName); media.following = null; }
+      if (media.pending?.ready && !same(media.pending.event.clipId, sourceName)) {
+        media.retained.add(media.pending.sourceName); media.pending = media.following; media.following = null;
+      }
+    }
+    // What was refused, late or expired is about the clip as it was.
+    for (const set of [this.late, this.failed, this.expired]) for (const clipId of [...set]) if (!this.starts.some(event => event.clipId === clipId) || before.get(clipId)?.start !== this.clips.get(clipId)?.start) set.delete(clipId);
+  }
+  /** Whether a clip's decoder is ready for its start (0.5.9 R9): its material registered and the clip prepared on it, or
+   * on air; an image once its material is there. 'failed': its material could not be prepared (`unavailableMaterial`). */
+  clipState(event: ManagedMediaEvent): 'ready' | 'preparing' | 'failed' {
+    if (this.unavailable.has(event.sourceName)) return 'failed';
+    const media = this.media.get(event.sourceName);
+    if (!media) return 'preparing';
+    if (event.assetKind === 'image' || media.current?.event.clipId === event.clipId) return 'ready';
+    return media.pending?.ready && media.pending.event.clipId === event.clipId ? 'ready' : this.failed.has(event.clipId) ? 'failed' : 'preparing';
+  }
+  /** A material a newer plan brought could not be prepared (0.5.9 R9): its clips are not waited for. */
+  unavailableMaterial(sourceName: string, reason: string): void { this.unavailable.set(sourceName, reason); }
   register(projectId: string, asset: { id: string; name: string }, path: string, sourceName = materialSceneNames(projectId, asset).sourceName): void {
     // Registering again after OBS reconnects starts the decoder slots over; inputs
     // this session already used are still cleaned up when it stops.
@@ -191,7 +228,7 @@ export class ObsMediaPreload {
     this.expire(frame);
     if (frame < this.nextPreparationFrame) return null;
     const overdue = this.timeline.at(frame).media.find(event => {
-      if (event.assetKind !== 'audio' && event.assetKind !== 'video' || this.late.has(event.clipId) || this.failed.has(event.clipId)) return false;
+      if (event.assetKind !== 'audio' && event.assetKind !== 'video' || this.late.has(event.clipId) || this.failed.has(event.clipId) || !this.media.has(event.sourceName)) return false;
       const media = this.require(event);
       return !media.busy && media.current?.event.clipId !== event.clipId && media.pending === null;
     });
@@ -205,7 +242,8 @@ export class ObsMediaPreload {
     for (let index = low; index < this.starts.length; index++) {
       const event = this.starts[index]!;
       if (event.frameNumber > frame + this.lookaheadFrames) break;
-      if (next.has(event.sourceName) || this.failed.has(event.clipId)) continue;
+      // A material a newer plan brought is prepared once it is registered (R9).
+      if (next.has(event.sourceName) || this.failed.has(event.clipId) || !this.media.has(event.sourceName)) continue;
       if (this.require(event).current?.event.clipId === event.clipId) continue;
       next.set(event.sourceName, event);
     }

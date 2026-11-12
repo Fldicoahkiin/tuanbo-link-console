@@ -1093,6 +1093,7 @@ function registerIpc(
       },
       obsChanged: state => { if (state.state === 'running' || state.state === 'ready') callbacks.cueChanged(state.currentCueId); }, notice,
       closedFault: (message, itemId, kind) => callbacks.closedFault(message, itemId, kind),
+      retargetPicture: value => obsRequests.retarget(value),
       api: {
         prepareNativePlayback: value => playbackRequests.prepare(value), controlNativePlayback: value => playbackRequests.control(value),
         getNativePlaybackDevices: scope => player().devices(scope), prepareNativeObs: value => obsRequests.prepare(value),

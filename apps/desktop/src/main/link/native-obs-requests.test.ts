@@ -10,8 +10,8 @@ function setup() {
   const permission = new Promise<void>(resolve => { release = resolve; });
   const state: NativeObsStatus = { version: 1, sessionId: request.sessionId, generation: 1, itemId: 'song', revision: 0,
     state: 'ready', reason: null, nextCueId: null, currentCueId: null, pendingCount: 0, positionMs: 0 };
-  const prepare = vi.fn(() => Promise.resolve(state)), stopOwned = vi.fn(() => Promise.resolve()), prepareNext = vi.fn(() => Promise.resolve());
-  return { request, release, prepare, stopOwned, prepareNext, api: new NativeObsRequests({ prepare, stopOwned, prepareNext }, () => permission) };
+  const prepare = vi.fn(() => Promise.resolve(state)), stopOwned = vi.fn(() => Promise.resolve()), prepareNext = vi.fn(() => Promise.resolve()), retarget = vi.fn();
+  return { request, release, prepare, stopOwned, prepareNext, retarget, api: new NativeObsRequests({ prepare, stopOwned, prepareNext, retarget }, () => permission) };
 }
 
 it('许可返回前停止，迟到准备不派发；旧的取消也不能影响新代数', async () => {
@@ -48,4 +48,15 @@ it('0.5.9 S8b：下一首的画面重新准备只认派发了的那次准备；�
   await expect(test.api.next({ ...next, generation: 2 })).rejects.toThrow('已过期');
   await test.api.stop({ version: 1, sessionId: test.request.sessionId, generation: 1 });
   await expect(test.api.next(next)).rejects.toThrow('已过期'); expect(test.prepareNext).toHaveBeenCalledTimes(1);
+});
+
+it('0.5.9 R9：新一版画面只交给派发了、没停的那次准备', async () => {
+  const test = setup(), version = { version: 1 as const, sessionId: test.request.sessionId, revision: 2, snapshot: test.request.snapshot };
+  const preparing = test.api.prepare(test.request);
+  expect(() => test.api.retarget(version)).toThrow('来晚了');
+  test.release(); await preparing;
+  test.api.retarget(version); expect(test.retarget).toHaveBeenCalledExactlyOnceWith(version);
+  expect(() => test.api.retarget({ ...version, sessionId: crypto.randomUUID() })).toThrow('来晚了');
+  await test.api.stop({ version: 1, sessionId: test.request.sessionId, generation: 1 });
+  expect(() => test.api.retarget(version)).toThrow('来晚了'); expect(test.retarget).toHaveBeenCalledTimes(1);
 });

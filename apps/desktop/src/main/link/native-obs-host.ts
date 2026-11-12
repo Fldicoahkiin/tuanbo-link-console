@@ -1,6 +1,6 @@
 import { ObsPictureLeftover, ObsProgramSession, obsRecoveryText, OUTPUT_RECOVERY_RULES, OutputRecovery, pictureCleanupReason, pictureErrorDetail, projectFromObsSnapshot,
   type ObsProgramSessionDependencies, type ProgramClock } from '@tb/core/link';
-import { nativeObsNextSchema, nativeObsPrepareSchema, type LinkProject, nativeObsStopSchema, type NativeObsNext, nativeObsStatusSchema, type NativeObsPrepare, type NativeObsStop, type NativeObsStatus, type NativePlayerStatus, type NativePlayerControl, type ObsPictureItem } from '@tb/schema';
+import { nativeObsNextSchema, nativeObsPrepareSchema, nativeObsRetargetSchema, type NativeObsRetarget, type LinkProject, nativeObsStopSchema, type NativeObsNext, nativeObsStatusSchema, type NativeObsPrepare, type NativeObsStop, type NativeObsStatus, type NativePlayerStatus, type NativePlayerControl, type ObsPictureItem } from '@tb/schema';
 import { ObsPreparationCancelled } from './native-obs-outputs';
 
 type Outputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault' | 'clearFault' | 'pictureItems' | 'pictureFollow'> & {
@@ -169,7 +169,9 @@ export class NativeObsHost {
       current();
       if (session.error) throw session.error;
       entry.rejoin = { restore: NOTHING, late: false };
-      this.patch({ nextCueId: session.nextCueId, notice: outputs.outputNotice?.() ?? null });
+      // Prepared as the newest version it was given meanwhile (`retarget`): that one is applied.
+      const revision = entry.request.snapshot.revision;
+      this.patch({ nextCueId: session.nextCueId, notice: outputs.outputNotice?.() ?? null, ...revision > entry.state.revision ? { appliedRevision: revision } : {} });
       this.fault('OBS 已重新连接，这首歌的画面准备好了，按当前位置接上');
     } catch (error) {
       if (error instanceof ObsPreparationCancelled || this.entry !== entry || epoch !== this.epoch) return;
@@ -182,6 +184,29 @@ export class NativeObsHost {
   private waitForObs(entry: Entry): void {
     entry.lost = true; entry.session.abort('OBS 断开，画面等 OBS 重新连上后再准备');
     this.fault('OBS 断开了，这首歌的画面还没准备好。音乐和时间码照常，OBS 重新连上后按当前位置准备好画面接上');
+  }
+
+  /** A newer version of the held song's picture plan (0.5.9 R9, ProgramPictureOutput.retarget): the song's picture
+   * session takes it at the current position, also while paused or not yet started. The song's request and project
+   * become this version's, so that a preparation again (OBS back after it cut one short) prepares it. While such a
+   * preparation waits for OBS only that happens, and the version counts as applied once it is prepared. A version the
+   * session cannot take fails the picture, with why, and the music plays on (2026-10-30). One older than the version
+   * the song has is ignored. */
+  retarget(input: NativeObsRetarget): void {
+    const request = nativeObsRetargetSchema.parse(input), entry = this.entry;
+    if (!entry || entry.request.sessionId !== request.sessionId || entry.request.snapshot.item.id !== request.snapshot.item.id
+      || request.snapshot.projectId !== entry.request.snapshot.projectId) throw new Error('这一版画面不是正在放的这首歌的，没有用上');
+    if (['stopped', 'failed', 'preparing'].includes(entry.state.state) || request.revision <= entry.request.snapshot.revision) return;
+    let project: LinkProject;
+    try {
+      project = projectFromObsSnapshot(request.snapshot);
+      if (!entry.lost) entry.session.retarget(project, request.revision);
+    } catch (error) {
+      this.fail(`这次修改的画面用不上：${error instanceof Error ? error.message : String(error)}。音乐和时间码照常，这首歌停下重播时按新的样子放`);
+      return;
+    }
+    // Mutated in place: the session's callbacks know the song by this object (`owner`).
+    entry.request.snapshot = request.snapshot; entry.project = project;
   }
 
   /** Called after audio request validation, before it waits behind in-flight
@@ -310,6 +335,8 @@ export class NativeObsHost {
         if (report.status === 'failed') this.patch({ fault: `素材播放失败：${report.event.assetName} · ${report.error ?? '未知错误'}` });
       },
       fault: message => { if (owner()) this.fault(message); },
+      // The pass of a newer plan went out (0.5.9 R9): the program's picture follows that version from here.
+      pictureApplied: revision => { if (owner()) this.patch({ appliedRevision: revision, notice: outputs.outputNotice?.() ?? null }); },
       // While OBS is away nothing is repaired (R5): once it is back the picture is restored as a whole.
       connected: () => { const entry = owner(); return entry !== null && !entry.connection && (outputs.connected?.() ?? true); },
       // A part that is right again takes its red text with it, if that is still the one shown.
