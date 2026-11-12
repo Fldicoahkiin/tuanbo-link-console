@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { routeKey, type RouteInput } from './key-route';
-import { KEYMAP } from './keymap';
+import { KEYMAP, type KeyPage } from './keymap';
 import {
   fixedReason, keyMarks, keyProblem, migrateV1, NO_CHANGES, parseKeySettings, serializeKeySettings, settingsKeymap, songKeyNote, songKeyProblem, stopAnywhere,
   stopKeyProblem, V1_DEFAULTS, withKeys, withStop
@@ -96,5 +96,18 @@ describe('歌曲自己的快捷键', () => {
     expect(songKeyNote(table, 'Digit1')).toBeNull();
     // The timeline's own keys take them only with the focus in the timeline, where a song never plays anyway.
     expect(songKeyNote(table, 'Ctrl+KeyB')).toBeNull();
+  });
+
+  it('空格和 ↑↓ 照旧可以给歌曲（K10），输入框下写明拿走了什么：首页和编辑器时间线以外按空格就播这首歌，灯光工作台里空格照旧播放 / 暂停', () => {
+    expect(songKeyProblem(table, 'Space')).toBeNull();
+    expect(songKeyNote(table, 'Space')).toBe('空格 也是「播放 / 暂停」的键。设给这首歌以后，在首页和编辑器时间线以外的地方按它就是播这首歌，不再是「播放 / 暂停」。'
+      + '在灯光工作台里，空格 是「播放 / 暂停」，在那一页按它不会播这首歌。');
+    expect(songKeyNote(table, 'ArrowUp')).toBe('↑ 也是「上一首」的键。设给这首歌以后，在首页按它就是播这首歌，不再是「上一首」。');
+    // What the note says is what the router does (key-route.ts): the song's shortcut before the window's Space.
+    const press = (page: KeyPage) => routeKey({ chord: 'Space', repeat: false, composing: false, owner: null, inTimeline: false, modalOpen: false, overlays: [], drag: 'none', page,
+      available: () => true, song: chord => chord === 'Space' ? '这首歌' : undefined, keymap: table });
+    expect(press('project')).toEqual({ kind: 'song', itemId: '这首歌' });
+    expect(press('cues')).toEqual({ kind: 'song', itemId: '这首歌' });
+    expect(press('lighting')).toEqual({ kind: 'run', id: 'transport.playPause', scope: 'lighting' });
   });
 });

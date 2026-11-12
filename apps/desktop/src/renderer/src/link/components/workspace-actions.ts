@@ -163,17 +163,22 @@ function createClipActions(input: WorkspaceActionsInput) {
       input.setSelectedCueId(ref.kind === 'cue' ? rightId : null);
     });
   };
-  const duplicateClip = (clipId: string, startMs: number): void => {
+  /** A copy of `source` on its track at `startMs`: 创建副本 and paste copy a clip of the song, paste after a cut puts back the cut one (K10). */
+  const placeCopy = (source: (item: NonNullable<WorkspaceActionsInput['item']>) => ReferenceMediaClip, startMs: number, label: string): void => {
     if (!input.item) return;
     const item = input.item;
     runMutation(input, () => {
-      const clip = requireClip(item, clipId);
+      const clip = source(item);
       const copy = { ...structuredClone(clip), id: crypto.randomUUID(), startTimecode: timecodeAt(input, startMs) };
-      input.execute(placeContentCommand(item.id, { clip: copy }, trackTarget(undefined, { track: clip.layerId }), '复制素材片段'));
+      // A cut clip's track is gone when it was the only clip there (empty tracks go with every edit): a new top track.
+      const target = item.visualLayers.some(layer => layer.id === clip.layerId) ? trackTarget(undefined, { track: clip.layerId }) : { newTrack: 'top' as const };
+      input.execute(placeContentCommand(item.id, { clip: copy }, target, label));
       input.setSelectedClipId(copy.id);
       input.setSelectedCueId(null);
     });
   };
+  const duplicateClip = (clipId: string, startMs: number): void => placeCopy(item => requireClip(item, clipId), startMs, '复制素材片段');
+  const pasteClip = (clip: ReferenceMediaClip, startMs: number): void => placeCopy(() => clip, startMs, '粘贴素材片段');
   const transformClip = (clipId: string, canvasTransform: ReferenceCanvasTransform): void => {
     if (!input.item) return;
     const item = input.item;
@@ -219,7 +224,7 @@ function createClipActions(input: WorkspaceActionsInput) {
     const item = input.item;
     if (runMutation(input, () => input.execute(removeContentCommand(item.id, [{ kind: 'clip', id: clipId }])))) input.setSelectedClipId(null);
   };
-  return { moveClip, moveClipToTop, trim, splitClip, splitCue: (cueId: string, milliseconds: number) => split({ kind: 'cue', id: cueId }, milliseconds), duplicateClip, transformClip, sendClipLookToObs, keepObsClipLook, setClipEmbeddedAudioEnabled, removeClip };
+  return { moveClip, moveClipToTop, trim, splitClip, splitCue: (cueId: string, milliseconds: number) => split({ kind: 'cue', id: cueId }, milliseconds), duplicateClip, pasteClip, transformClip, sendClipLookToObs, keepObsClipLook, setClipEmbeddedAudioEnabled, removeClip };
 }
 
 function createCueActions(input: WorkspaceActionsInput, addAssetClip: (assetId: string, startMs: number, layerId?: string | null) => boolean) {

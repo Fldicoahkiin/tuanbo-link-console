@@ -23,21 +23,37 @@ describe('快捷键表的自检', () => {
     }
   });
 
-  it('页面自己的键（编辑器、灯光工作台）和两页共用的时间线不重复，只有灯光工作台 Cue 点上的 Delete、Backspace、Esc（只在 Cue 点里、比时间线先问）；灯光点和时间线重复的只有复制、粘贴、删除（04 设计 3.3 b、d，K6 由 timeline-commands 定归谁）', () => {
+  it('页面自己的键（编辑器、灯光工作台）和两页共用的时间线不重复，只有灯光工作台 Cue 点上的 Delete、Backspace、Esc（只在 Cue 点里、比时间线先问）；灯光点和时间线重复的只有复制、剪切、粘贴、删除（04 设计 3.3 b、d，K6、K10 由 timeline-commands 定归谁）', () => {
     const timeline = new Set(chordsOf('timeline'));
     expect(chordsOf('editor').filter(chord => timeline.has(chord))).toEqual([]);
     // The Cue points' Delete, Backspace and Escape (WaveformCuePoints, K6), asked before the timeline's and only with the focus in them.
     expect(chordsOf('lighting').filter(chord => timeline.has(chord)).sort()).toEqual(['Backspace', 'Delete', 'Escape']);
     expect(KEYMAP.filter(entry => entry.scope === 'lighting' && entry.keys.some(binding => timeline.has(binding.chord))).map(entry => entry.id)).toEqual(['edit.delete', 'edit.deselect']);
-    expect(chordsOf('lighting-points').filter(chord => timeline.has(chord)).sort()).toEqual(['Backspace', 'Ctrl+KeyC', 'Ctrl+KeyV', 'Delete']);
+    expect(chordsOf('lighting-points').filter(chord => timeline.has(chord)).sort()).toEqual(['Backspace', 'Ctrl+KeyC', 'Ctrl+KeyV', 'Ctrl+KeyX', 'Delete']);
   });
 
-  it('每一项都有名字，每个键都按一种拼法写（chordOf）', () => {
+  it('每一项都有名字，每个键都按一种拼法写（chordOf）；没有键的只有剪映没有默认键、自己可以设的操作（K10：上一个、下一个节拍）', () => {
     for (const entry of KEYMAP) {
       expect(entry.label.trim(), entry.id).not.toBe('');
-      expect(entry.keys.length, entry.id).toBeGreaterThan(0);
+      if (entry.jianying !== null || !entry.rebindable) expect(entry.keys.length, entry.id).toBeGreaterThan(0);
       for (const binding of entry.keys) expect(parseChord(binding.chord), `${entry.id} 的 ${binding.chord}`).not.toBeNull();
     }
+    expect(KEYMAP.filter(entry => !entry.keys.length).map(entry => `${entry.scope} ${entry.id}`)).toEqual(['timeline transport.prevBeat', 'timeline transport.nextBeat']);
+  });
+
+  it('K10 的键照剪映：Ctrl+J 手动踩点、Shift+M / Alt+Shift+M 下一个 / 上一个标记、V 停用灯光片段、Ctrl+X 剪切、Ctrl+Shift+B 全部分割；能改的标了能改', () => {
+    const entry = (scope: KeyScope, id: KeyEntry['id']) => KEYMAP.find(item => item.scope === scope && item.id === id);
+    const shown = (scope: KeyScope, id: KeyEntry['id']) => { const found = entry(scope, id); return found && `${found.keys.map(binding => binding.chord).join(' ')} ${found.rebindable ? '能改' : '不能改'}`; };
+    expect(shown('timeline', 'beat.add')).toBe('Ctrl+KeyJ 能改');
+    expect(shown('timeline', 'marker.next')).toBe('Shift+KeyM 能改');
+    expect(shown('timeline', 'marker.previous')).toBe('Alt+Shift+KeyM 能改');
+    expect(shown('timeline', 'edit.toggleEnabled')).toBe('KeyV 能改');
+    expect(shown('timeline', 'edit.cut')).toBe('Ctrl+KeyX 不能改');
+    expect(shown('editor', 'edit.splitAll')).toBe('Ctrl+Shift+KeyB 能改');
+    expect(shown('timeline', 'transport.nextBeat')).toBe(' 能改');
+    expect(entry('timeline', 'transport.nextBeat')?.jianying).toBeNull();
+    // The lighting workbench's M still stamps; the editor's M adds a marker (2026-11-11).
+    expect(shown('lighting', 'lighting.stamp')).toBe('KeyM 能改');
   });
 
   it('能改的项不是 Windows 或输入法的系统组合；能改的是编辑器、灯光工作台和时间线的键（K8），空格、Esc、工程键、复制粘贴删除和首页的键不能改', () => {
@@ -49,7 +65,7 @@ describe('快捷键表的自检', () => {
     const fixed = KEYMAP.filter(entry => !entry.rebindable).map(entry => `${entry.scope} ${entry.id}`);
     expect(fixed).toEqual(['global transport.playPause', 'global transport.stop', 'global home.prevSong', 'global home.nextSong', 'global document.save', 'global document.saveAs',
       'global document.undo', 'global document.redo', 'editor transport.playPause', 'lighting edit.delete', 'lighting edit.deselect', 'timeline transport.stop', 'timeline edit.deselect',
-      'timeline edit.copy', 'timeline edit.paste', 'timeline edit.delete', 'timeline edit.splitMoved', 'lighting-points edit.selectAll', 'lighting-points edit.copy',
+      'timeline edit.copy', 'timeline edit.cut', 'timeline edit.paste', 'timeline edit.delete', 'timeline edit.splitMoved', 'lighting-points edit.selectAll', 'lighting-points edit.copy',
       'lighting-points edit.cut', 'lighting-points edit.paste', 'lighting-points edit.delete']);
     // No key that can be changed is Escape (the stop's, the panels', the drags').
     expect(rebindable.flatMap(entry => entry.keys).filter(binding => binding.chord.endsWith('Escape'))).toEqual([]);

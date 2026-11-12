@@ -42,12 +42,12 @@ export const PAGE_SCOPES: Readonly<Record<KeyPage, readonly KeyScope[]>> = {
 export type CommandId =
   | 'transport.stop' | 'transport.playPause' | 'transport.pause' | 'transport.play'
   | 'transport.prevFrame' | 'transport.nextFrame' | 'transport.backMany' | 'transport.forwardMany'
-  | 'transport.start' | 'transport.end' | 'transport.prevEditPoint' | 'transport.nextEditPoint'
+  | 'transport.start' | 'transport.end' | 'transport.prevEditPoint' | 'transport.nextEditPoint' | 'transport.prevBeat' | 'transport.nextBeat'
   | 'home.prevSong' | 'home.nextSong'
   | 'edit.split' | 'edit.splitAll' | 'edit.trimLeft' | 'edit.trimRight' | 'edit.delete' | 'edit.copy' | 'edit.cut' | 'edit.paste'
-  | 'edit.duplicate' | 'edit.selectAll' | 'edit.deselect' | 'edit.splitMoved'
+  | 'edit.duplicate' | 'edit.selectAll' | 'edit.deselect' | 'edit.splitMoved' | 'edit.toggleEnabled'
   | 'view.snap' | 'view.zoomIn' | 'view.zoomOut' | 'view.zoomFit'
-  | 'marker.add'
+  | 'marker.add' | 'marker.next' | 'marker.previous' | 'beat.add'
   | 'lighting.stamp'
   | 'document.save' | 'document.saveAs' | 'document.undo' | 'document.redo';
 
@@ -79,7 +79,7 @@ export function bindingWorks(binding: KeyBinding, switchesOff: ReadonlySet<KeySw
 export type KeyEntry = {
   id: CommandId;
   scope: KeyScope;
-  /** The first is the one shown. */
+  /** The first is the one shown. None for a command 剪映 has no key for: the user can give it one (K10). */
   keys: readonly KeyBinding[];
   /** The name in the settings and in hints. */
   label: string;
@@ -193,6 +193,16 @@ export const KEYMAP: readonly KeyEntry[] = [
     area: 'timeline', buttons: 'items', jianying: { name: '上一个分割点', keys: ['ArrowUp'] }, rebindable: true },
   { id: 'transport.nextEditPoint', scope: 'timeline', keys: [key('ArrowDown')], label: '下一个剪辑点', group: '定位', kind: 'transport', repeat: 'repeat',
     area: 'timeline', buttons: 'items', jianying: { name: '下一个分割点', keys: ['ArrowDown'] }, rebindable: true },
+  // K10: the previous and next marker and beat. 剪映 has no key to go to a beat, so those two have none: the user can
+  // give them one in the settings (00-order 第 8 节). The beats are the ones the timeline snaps to.
+  { id: 'marker.previous', scope: 'timeline', keys: [key('Alt+Shift+KeyM')], label: '上一个标记', group: '定位', kind: 'transport', repeat: 'repeat',
+    area: 'timeline', buttons: 'items', jianying: { name: '上一个标记（待核对）', keys: ['Alt+Shift+KeyM'] }, rebindable: true },
+  { id: 'marker.next', scope: 'timeline', keys: [key('Shift+KeyM')], label: '下一个标记', group: '定位', kind: 'transport', repeat: 'repeat',
+    area: 'timeline', buttons: 'items', jianying: { name: '下一个标记（待核对）', keys: ['Shift+KeyM'] }, rebindable: true },
+  { id: 'transport.prevBeat', scope: 'timeline', keys: [], label: '上一个节拍（吸附用的节拍）', group: '定位', kind: 'transport', repeat: 'repeat',
+    area: 'timeline', buttons: 'items', jianying: null, rebindable: true },
+  { id: 'transport.nextBeat', scope: 'timeline', keys: [], label: '下一个节拍（吸附用的节拍）', group: '定位', kind: 'transport', repeat: 'repeat',
+    area: 'timeline', buttons: 'items', jianying: null, rebindable: true },
   { id: 'view.snap', scope: 'timeline', keys: [key('KeyN')], label: '吸附开关（吸附到片段边缘和歌曲节拍）', group: '视图', kind: 'view', repeat: 'once',
     area: 'timeline', buttons: 'items', jianying: { name: '自动吸附', keys: ['KeyN'] }, rebindable: true },
   { id: 'view.zoomIn', scope: 'timeline', keys: [key('Ctrl+Equal')], label: '放大时间线', group: '视图', kind: 'view', repeat: 'repeat',
@@ -203,8 +213,17 @@ export const KEYMAP: readonly KeyEntry[] = [
     area: 'timeline', buttons: 'items', jianying: { name: '缩放到合适', keys: ['Shift+KeyZ'] }, rebindable: true },
   { id: 'edit.copy', scope: 'timeline', keys: [key('Ctrl+KeyC')], label: '复制片段或 Cue', group: '剪辑', kind: 'edit', repeat: 'once',
     area: 'timeline', buttons: 'items', jianying: { name: '复制', keys: ['Ctrl+KeyC'] }, rebindable: false },
+  // K10: cut the selected picture clip (the editor's); with a lighting clip selected the lighting points' cut below.
+  { id: 'edit.cut', scope: 'timeline', keys: [key('Ctrl+KeyX')], label: '剪切画面片段', group: '剪辑', kind: 'edit', repeat: 'once',
+    area: 'timeline', buttons: 'items', jianying: { name: '剪切', keys: ['Ctrl+KeyX'] }, rebindable: false },
   { id: 'edit.paste', scope: 'timeline', keys: [key('Ctrl+KeyV')], label: '粘贴到播放头', group: '剪辑', kind: 'edit', repeat: 'once',
     area: 'timeline', buttons: 'items', jianying: { name: '粘贴', keys: ['Ctrl+KeyV'] }, rebindable: false },
+  // K10: 剪映's 手动踩点, on both pages; while something plays the beats wait and are written when it stops.
+  { id: 'beat.add', scope: 'timeline', keys: [key('Ctrl+KeyJ')], label: '在播放头加拍点（手动踩点）', group: '标记', kind: 'edit', repeat: 'once',
+    area: 'timeline', buttons: 'items', jianying: { name: '手动踩点', keys: ['Ctrl+KeyJ'] }, rebindable: true },
+  // K10: 剪映's 隐藏片段. Only lighting clips can be turned off (`muted`); a picture clip has no such state.
+  { id: 'edit.toggleEnabled', scope: 'timeline', keys: [key('KeyV')], label: '停用 / 启用所选灯光片段', group: '剪辑', kind: 'edit', repeat: 'once',
+    area: 'timeline', buttons: 'items', jianying: { name: '隐藏片段（待核对）', keys: ['KeyV'] }, rebindable: true },
   { id: 'edit.duplicate', scope: 'timeline', keys: [key('Ctrl+KeyD')], label: '在后方创建副本', group: '剪辑', kind: 'edit', repeat: 'once',
     area: 'timeline', buttons: 'items', jianying: { name: '复制片段（待核对）', keys: ['Ctrl+KeyD'] }, rebindable: true },
   { id: 'edit.split', scope: 'timeline', keys: [key('Ctrl+KeyB')], label: '在播放头分割', group: '剪辑', kind: 'edit', repeat: 'once',

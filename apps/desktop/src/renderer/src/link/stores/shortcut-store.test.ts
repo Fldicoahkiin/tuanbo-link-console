@@ -107,7 +107,7 @@ describe('改键', () => {
     expect(() => state().setKeys('timeline', 'edit.duplicate', ['Ctrl+KeyS'])).toThrow('保存工程');
     // Ctrl+Alt+S saves too (key-route.ts documentChord).
     expect(() => state().setKeys('timeline', 'edit.duplicate', ['Ctrl+Alt+KeyS'])).toThrow('保存工程');
-    expect(() => state().setKeys('timeline', 'edit.duplicate', ['Ctrl+KeyX'])).toThrow('剪切灯光点');
+    expect(() => state().setKeys('timeline', 'edit.duplicate', ['Ctrl+KeyX'])).toThrow('剪切画面片段');
     expect(() => state().setKeys('editor', 'marker.add', ['Space'])).toThrow('播放');
     expect(() => state().setKeys('lighting', 'transport.start', ['Shift+Escape'])).toThrow('Esc');
     expect(() => state().setKeys('lighting', 'transport.start', ['Meta+KeyH'])).toThrow('Windows');

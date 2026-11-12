@@ -252,19 +252,34 @@ export function songKeyProblem(keymap: readonly KeyEntry[], chord: KeyChord): st
   return project ? `${chordLabel(chord)} 是「${shortLabel(project)}」的键，按了不会播这首歌，请换一个。` : null;
 }
 
+/** Where a song's shortcut takes a window key over: the editor's window keys work only outside its timeline. */
+const TAKEOVER_NAMES: Readonly<Record<KeyPage, string>> = { project: '首页', cues: '编辑器时间线以外的地方', lighting: '灯光工作台' };
+
 /**
- * A note when `chord` is also a key of the editor or the lighting workbench outside the timeline: on those pages their
- * key is acted on first and the song does not play there. A song never plays with the focus in the timeline anyway
- * (key-route.ts), so the timeline's own keys need no note. Null when there is nothing to say.
+ * What a song's shortcut `chord` takes away or does not get, said where the shortcut is set; null when nothing.
+ * - A key of the editor or the lighting workbench outside the timeline: on those pages their key is acted on first and
+ *   the song does not play there. A song never plays with the focus in the timeline anyway (key-route.ts), so the
+ *   timeline's own keys need no note.
+ * - A key of the window that is not the project's or the stop's (Space plays and pauses, ↑↓ change songs on the home
+ *   page): the song's shortcut comes first (key-route.ts), so on the pages where no page key has it, it plays the song
+ *   and no longer does what it did (K10, 00-order 第 8 节: Space is still allowed). The stop keys and the project's keys
+ *   are refused (`songKeyProblem`), so they never get here.
  */
 export function songKeyNote(keymap: readonly KeyEntry[], chord: KeyChord): string | null {
+  const pageEntry = (page: KeyPage): KeyEntry | undefined => page === 'project' ? undefined
+    : keymap.find(item => item.scope !== 'global' && item.area !== 'timeline' && entryPages(item).includes(page) && item.keys.some(binding => binding.chord === chord));
   const found = (['cues', 'lighting'] as const).flatMap(page => {
-    const entry = keymap.find(item => item.scope !== 'global' && item.area !== 'timeline' && entryPages(item).includes(page) && item.keys.some(binding => binding.chord === chord));
+    const entry = pageEntry(page);
     return entry ? [{ page: PAGE_NAMES[page], name: shortLabel(entry) }] : [];
   });
+  const windowEntry = keymap.find(item => item.scope === 'global' && item.kind !== 'document' && item.id !== 'transport.stop' && item.keys.some(binding => binding.chord === chord));
+  const taken = windowEntry ? entryPages(windowEntry).filter(page => pageEntry(page) === undefined) : [];
+  const takeover = windowEntry && taken.length
+    ? `${chordLabel(chord)} 也是「${shortLabel(windowEntry)}」的键。设给这首歌以后，在${taken.map(page => TAKEOVER_NAMES[page]).join('和')}按它就是播这首歌，不再是「${shortLabel(windowEntry)}」。`
+    : '';
   const first = found[0];
-  if (!first) return null;
+  if (!first) return takeover || null;
   const where = found.every(item => item.name === first.name) ? `在${found.map(item => item.page).join('和')}里，${chordLabel(chord)} 是「${first.name}」`
     : `${chordLabel(chord)} ${found.map(item => `在${item.page}里是「${item.name}」`).join('，')}`;
-  return `${where}，在${found.length > 1 ? '那两页' : '那一页'}按它不会播这首歌。`;
+  return `${takeover}${where}，在${found.length > 1 ? '那两页' : '那一页'}按它不会播这首歌。`;
 }

@@ -36,7 +36,7 @@ import { useSongWaveform, type ReferenceWaveformSource } from './ReferenceWavefo
 import { useScrollPaint } from './timeline-scroll';
 import { waveformDisplay } from '../view-models/waveform-draw';
 import { formatTimelineTimecode, timelineInteractionTime } from './timeline-geometry';
-import { TimelineContextMenu, type TimelineContext, type TimelineTarget } from './TimelineContextMenu';
+import { TimelineContextMenu, type TimelineClipboard, type TimelineContext } from './TimelineContextMenu';
 import { TimelineToolbar } from './TimelineToolbar';
 import { TimelineLightingRecording } from './LightingRecordingControls';
 import { TimelineLayerHeading } from './TimelineLayerHeading';
@@ -92,8 +92,8 @@ type Props = {
   onStop?: () => void;
   /** Esc in the timeline with 「单按 Esc 停止」 off: nothing selected any more (K7). */
   onDeselect?: () => void;
-  /** A one-time hint for the operator (S, which split before 0.5.9, pressed in the timeline). */
-  onHint?: (message: string) => void;
+  /** A word for the operator: a one-time hint (S, which split before 0.5.9), what became of a beat tapped with Ctrl+J. */
+  onHint?: (message: string, tone?: 'info' | 'error') => void;
   lighting?: LightingTimelineProps;
   projectPath: string | null;
   assets: LinkMediaAsset[];
@@ -133,6 +133,7 @@ type Props = {
   onSetClipEmbeddedAudioEnabled: (clipId: string, enabled: boolean) => void;
   onSplitClip: (clipId: string, timeMs: number, group?: string) => void;
   onDuplicateClip: (clipId: string, startMs: number) => void;
+  onPasteClip: (clip: ReferenceMediaClip, startMs: number) => void;
   onDuplicateCue: (cueId: string, startMs: number) => void;
   onMoveCue: (cueId: string, timeMs: number, layerId?: string | null) => void;
   onMoveLayer: (layerId: string, targetIndex: number) => void;
@@ -151,7 +152,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   const musicSource = props.musicItem ? songMusicSource(props.musicItem) : undefined;
   const analysis = useAutomaticMusicAnalysis(props.projectPath, musicSource);
   const [musicDisplay, setMusicDisplay] = useState<LightingTimelineDisplay>({ sections: true, markers: true, rawAnalysis: true });
-  const beatSegments = useMusicBeatSegments(props.musicItem, analysis, musicRecognitionKey(props.projectPath, props.timelineState.itemId, musicSource), props.projectPath, props.playing);
+  const beatSegments = useMusicBeatSegments(props.musicItem, analysis, musicRecognitionKey(props.projectPath, props.timelineState.itemId, musicSource), props.projectPath, props.playing, props.onHint);
   const musicPanel = { beats: beatSegments, analysis, playhead: props.playhead, source: musicSource, projectPath: props.projectPath, analysisPanel: props.analysisPanel };
   const assets = useMemo(() => new Map(props.assets.map((asset) => [asset.id, asset])), [props.assets]);
   const waveform = useSongWaveform(props.referenceAudio);
@@ -167,7 +168,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   // not stop the show, until the pointer is let go (K5). Nothing is drawn for it, so the page does not draw again.
   const [playheadDrag] = useState(() => new DragSession<number>(globalThis, () => undefined, keyRouter));
   useEffect(() => () => playheadDrag.dispose(), [playheadDrag]);
-  const [clipboard, setClipboard] = useState<TimelineTarget | null>(null);
+  const [clipboard, setClipboard] = useState<TimelineClipboard | null>(null);
   const [snapEnabled, setSnapEnabled] = useTimelineSnap(props.lightingWorkspace === true);
   const [snapDistance, setSnapDistance] = useState(14);
   const [clipContext, setClipContext] = useState<TimelineContext | null>(null);
@@ -224,8 +225,9 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   useKeyCommands('timeline', { 'transport.playPause': playPause, ...(props.onStop ? { 'transport.stop': stopPlayback } : {}) });
   // The timeline's own keys, with the focus in it (K6, K7).
   useKeyCommands('timeline', {
-    ...timelineEditKeys(props, clipboard, setClipboard),
-    ...timelineTransportKeys({ frameRate: props.frameRate, durationMs: props.lightingWorkspace ? props.referenceAudio?.durationMs ?? props.durationMs : props.durationMs, editPoints: seekSnapPointsMs, playing: props.playing }, { playPause, onPlayingChange: props.onPlayingChange, seek: keySeek }),
+    ...timelineEditKeys(props, clipboard, setClipboard, props.musicItem ? beatSegments.tap : undefined),
+    ...timelineTransportKeys({ frameRate: props.frameRate, durationMs: props.lightingWorkspace ? props.referenceAudio?.durationMs ?? props.durationMs : props.durationMs, editPoints: seekSnapPointsMs, playing: props.playing,
+      markers: props.lighting && (!props.lightingWorkspace || musicDisplay.markers) ? markerSnapPoints(props.lighting.document.markers) : [], beats: props.lightingWorkspace ? beatSegments.snapPoints : props.audioEditor?.snapPoints ?? [] }, { playPause, onPlayingChange: props.onPlayingChange, seek: keySeek }),
     'view.snap': () => setSnapEnabled(!snapEnabled),
     'view.zoomIn': viewport.zoomIn, 'view.zoomOut': viewport.zoomOut, 'view.zoomFit': viewport.fit,
     ...(props.onDeselect ? { 'edit.deselect': props.onDeselect } : {}),

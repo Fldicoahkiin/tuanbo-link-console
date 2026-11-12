@@ -84,12 +84,35 @@ export function clearedSongMusic(source: AudioFingerprint, taskId: 'dismissed' |
   return songMusic('automatic', { ...result, state: 'cleared' });
 }
 
-/** Edits the song's beats in their own (source) time; the result is the song's new `music`. */
-export function editMusicStructure(item: Pick<RundownItem, 'music'>, action: { kind: 'clear' } | { kind: 'remove-beat'; id: string } | { kind: 'remove-segment'; id: string } | { kind: 'segment'; segment: MusicStructureSegment }): SongMusic {
+/** How close a beat tapped by hand may come to one already there (ms): closer, it is the same beat and not added. */
+export const TAPPED_BEAT_TOLERANCE_MS = 50;
+/** How close a removed beat must be to one tapped by hand to count as put back (ms), as a new analysis drops them. */
+const REMOVED_BEAT_TOLERANCE_MS = 70;
+
+/** Beats tapped by hand (`atMs` in source time) added to `current`: not where one is already, and put back where one was removed. */
+function addBeats(current: MusicStructure, atMs: readonly number[]): MusicStructure {
+  const beats = [...current.beats];
+  for (const at of [...atMs].sort((a, b) => a - b)) {
+    const time = round(at);
+    if (time < 0 || time >= current.durationMs || beats.some(beat => Math.abs(beat.atMs - time) < TAPPED_BEAT_TOLERANCE_MS)) continue;
+    let id = `beat:${time}`;
+    for (let n = 1; beats.some(beat => beat.id === id); n++) id = `beat:${time}:${n}`;
+    beats.push({ id, atMs: time, strong: false });
+  }
+  beats.sort((a, b) => a.atMs - b.atMs);
+  const added = beats.filter(beat => !current.beats.includes(beat));
+  return { ...current, state: 'ready', beats,
+    removedBeatMs: current.removedBeatMs.filter(removed => !added.some(beat => Math.abs(beat.atMs - removed) <= REMOVED_BEAT_TOLERANCE_MS)) };
+}
+
+/** Edits the song's beats in their own (source) time; the result is the song's new `music`. `add-beats`: beats tapped
+ * by hand (剪映's 手动踩点, Ctrl+J); they make cleared beats ready again. */
+export function editMusicStructure(item: Pick<RundownItem, 'music'>, action: { kind: 'clear' } | { kind: 'remove-beat'; id: string } | { kind: 'remove-segment'; id: string } | { kind: 'segment'; segment: MusicStructureSegment } | { kind: 'add-beats'; atMs: readonly number[] }): SongMusic {
   const music = item.music; if (!music) throw new Error('还没有音乐识别结果');
   const current = music.structure;
   let result: MusicStructure = current;
   if (action.kind === 'clear') result = { ...current, state: 'cleared', beats: [], segments: [], removedBeatMs: [], removedRanges: [] };
+  else if (action.kind === 'add-beats') result = addBeats(current, action.atMs);
   else if (action.kind === 'remove-beat') {
     const point = current.beats.find(beat => beat.id === action.id); if (!point) throw new Error('拍点已不存在');
     result = { ...current, beats: current.beats.filter(beat => beat.id !== action.id), removedBeatMs: [...current.removedBeatMs, point.atMs] };

@@ -4,14 +4,15 @@ import type { LinkCue, MtcFrameRate, ReferenceMediaClip, VisualLayer } from '@tb
 import { Menu, MenuItem, MenuSeparator } from '../ui';
 import { usePlayheadMs, type EditorPlayhead } from './editor-playhead';
 import { commandShortcut } from '../stores/shortcut-store';
-import { trimToPlayhead, type TimelineTarget, type TrimSide } from './timeline-commands';
+import { clipboardSource, cutClip, cutTarget, pasteClipboard, trimToPlayhead, type TimelineClipboard, type TimelineTarget, type TrimSide } from './timeline-commands';
 
-export type { TimelineTarget };
+export type { TimelineClipboard, TimelineTarget };
 export type TimelineContext = { target: TimelineTarget | null; x: number; y: number };
 type Actions = {
   onDeleteClip: (id: string) => void;
   onDeleteCue: (id: string) => void;
   onDuplicateClip: (id: string, at: number) => void;
+  onPasteClip: (clip: ReferenceMediaClip, at: number) => void;
   onDuplicateCue: (id: string, at: number) => void;
   onSplitClip: (id: string, at: number) => void;
   onTrim: (target: TimelineTarget, start: number, duration: number) => void;
@@ -19,9 +20,9 @@ type Actions = {
 };
 
 export function TimelineContextMenu({ context, clipboard, clips, cues, layers, frameRate, playhead, actions, onCopy, onSeek, onClose }: {
-  context: TimelineContext; clipboard: TimelineTarget | null; clips: ReferenceMediaClip[]; cues: LinkCue[]; layers: VisualLayer[];
+  context: TimelineContext; clipboard: TimelineClipboard | null; clips: ReferenceMediaClip[]; cues: LinkCue[]; layers: VisualLayer[];
   frameRate: MtcFrameRate; playhead: EditorPlayhead; actions: Actions;
-  onCopy: (target: TimelineTarget) => void; onSeek: (at: number) => void; onClose: () => void;
+  onCopy: (target: TimelineClipboard) => void; onSeek: (at: number) => void; onClose: () => void;
 }): JSX.Element {
   // Open for a moment: it follows the playhead every frame, as it did before (0.5.9 E2).
   const playheadMs = usePlayheadMs(playhead);
@@ -32,19 +33,22 @@ export function TimelineContextMenu({ context, clipboard, clips, cues, layers, f
   const span = clip ? resolveTimelineClipSpan(clip, frameRate) : cue?.durationMs !== undefined ? resolveTimelineCueSpan(cue, frameRate) : null;
   const startMs = span?.startMs ?? (cue ? timecodeToMilliseconds(cue.timecode, frameRate) : null);
   const locked = layers.some((layer) => layer.id === source?.layerId && layer.locked);
-  const copied = clipboard?.kind === 'clip' ? clips.find((entry) => entry.id === clipboard.id) : cues.find((entry) => entry.id === clipboard?.id);
+  const copied = clipboardSource(clipboard, clips, cues);
   const canPaste = Boolean(copied) && !layers.some((layer) => layer.id === copied?.layerId && layer.locked);
   const inside = span !== null && playheadMs > span.startMs && playheadMs < span.endMs;
   const run = (action: () => void): void => { onClose(); action(); };
   const duplicate = (item: TimelineTarget, at: number): void => { if (item.kind === 'clip') actions.onDuplicateClip(item.id, at); else actions.onDuplicateCue(item.id, at); };
   const trim = (side: TrimSide): void => { if (!target || !span) return; const trimmed = trimToPlayhead(span, playheadMs, side); actions.onTrim(target, trimmed.startMs, trimmed.durationMs); };
+  // Cut: the same as Ctrl+X (timeline-commands `cutTarget`), for a picture clip.
+  const cut = clip ? cutTarget({ clips, cues, layers, selectedClipId: clip.id }) : null;
   const name = clip?.label ?? cue?.actions.find((action) => action.kind === 'obs.setProgramScene')?.sceneName ?? cue?.name ?? '时间线';
   return <Menu x={context.x} y={context.y} label="时间线右键菜单" title={locked ? `${name} · 已锁定` : name} onClose={onClose}>
     {target && source ? <>
       <MenuItem icon={Copy} shortcut={commandShortcut('edit.copy', 'timeline')} onSelect={() => run(() => onCopy(target))}>复制</MenuItem>
+      {cut ? <MenuItem icon={Scissors} shortcut={commandShortcut('edit.cut', 'timeline')} disabled={cut === 'locked'} onSelect={() => { if (cut !== 'locked') run(() => cutClip(cut, onCopy, actions.onDeleteClip)); }}>剪切</MenuItem> : null}
       <MenuItem icon={CopyPlus} shortcut={commandShortcut('edit.duplicate', 'timeline')} disabled={locked} onSelect={() => run(() => duplicate(target, span?.endMs ?? startMs ?? playheadMs))}>{span ? '在后方创建副本' : '在原位置创建副本'}</MenuItem>
     </> : null}
-    <MenuItem icon={ClipboardPaste} shortcut={commandShortcut('edit.paste', 'timeline')} disabled={!canPaste} onSelect={() => { if (clipboard) run(() => duplicate(clipboard, playheadMs)); }}>粘贴到播放头</MenuItem>
+    <MenuItem icon={ClipboardPaste} shortcut={commandShortcut('edit.paste', 'timeline')} disabled={!canPaste} onSelect={() => { if (clipboard) run(() => pasteClipboard({ ...actions, clips }, clipboard, playheadMs)); }}>粘贴到播放头</MenuItem>
     {target && source ? <>
       <MenuSeparator />
       {clip && span ? <MenuItem icon={Scissors} shortcut={commandShortcut('edit.split', 'timeline')} disabled={locked || !inside} onSelect={() => run(() => actions.onSplitClip(clip.id, playheadMs))}>在播放头分割</MenuItem> : null}

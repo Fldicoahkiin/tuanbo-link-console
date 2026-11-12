@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AutomaticMusicCandidates, ReferenceAudio, RundownItem } from '@tb/schema';
-import { acceptMusicStructure } from './music-structure';
-import { songBeats, songBeatsAtDensity, songMusicAudio, songMusicSource, songTimeToMusicSource } from './song-beats';
+import { acceptMusicStructure, editMusicStructure } from './music-structure';
+import { addSongBeats, songBeats, songBeatsAtDensity, songMusicAudio, songMusicSource, songTimeToMusicSource } from './song-beats';
 
 const source = { assetId: 'source', relativePath: 'assets/reference-audio/song.wav', sha256: 'a'.repeat(64), durationMs: 6000 };
 const candidates: AutomaticMusicCandidates = { sourceSha256: source.sha256, durationMs: source.durationMs, bpm: 120, items: [
@@ -70,5 +70,35 @@ describe('songBeats：一首歌的节拍放到歌曲时间上', () => {
     expect(songBeatsAtDensity(beats.beats, 'sparse').map(beat => beat.atMs)).toEqual([0, 2000, 4000]);
     expect(songBeatsAtDensity(beats.beats, 'sparse')).toBe(songBeatsAtDensity(beats.beats, 'sparse'));
     expect(songMusicSource(item)).toBe(songMusicSource(item));
+  });
+});
+
+describe('addSongBeats：手动踩点（Ctrl+J，K10）', () => {
+  it('踩在歌曲时间上，存到音乐源的时间里：经片段换算，跟着音乐走；已经有拍点的地方不重复加，剪掉的地方不加', () => {
+    const cut = rendered([{ startMs: 0, sourceOffsetMs: 0, durationMs: 1000 }, { startMs: 1000, sourceOffsetMs: 4000, durationMs: 2000 }]);
+    const added = addSongBeats(song(cut), [1250, 1520, 3500]);
+    expect([added.added, added.outside]).toEqual([1, 1]);
+    expect(added.music.structure.beats.find(beat => beat.atMs === 4250)).toEqual({ id: 'beat:4250', atMs: 4250, strong: false });
+    expect(added.music.structure.beats).toHaveLength(music.structure.beats.length + 1);
+    expect(added.audio).toEqual(source);
+    expect(times({ title: '歌', referenceAudio: cut, music: added.music })).toContain(1250);
+  });
+
+  it('没有节拍的歌（没识别过、清除过）也能踩，踩完就有节拍；删掉过的拍点踩回来以后，重新识别不再删它', () => {
+    const fresh = addSongBeats({ title: '歌', referenceAudio: source }, [700, 1400]);
+    expect(fresh.added).toBe(2);
+    expect(fresh.music.structure).toMatchObject({ state: 'ready', sourceSha256: source.sha256 });
+    expect(times({ title: '歌', referenceAudio: source, music: fresh.music })).toEqual([700, 1400]);
+    const removed = editMusicStructure({ music }, { kind: 'remove-beat', id: 'beat:1000' });
+    const back = addSongBeats({ title: '歌', referenceAudio: source, music: removed }, [1010]);
+    expect([back.added, back.music.structure.removedBeatMs]).toEqual([1, []]);
+    const cleared = editMusicStructure({ music }, { kind: 'clear' });
+    expect(addSongBeats({ title: '歌', referenceAudio: source, music: cleared }, [300]).music.structure.state).toBe('ready');
+  });
+
+  it('没有音乐、节拍属于换掉的音乐时不写，说清楚原因', () => {
+    expect(() => addSongBeats({ title: '歌' }, [100])).toThrow('还没有音乐');
+    const other = { ...source, sha256: 'd'.repeat(64) };
+    expect(() => addSongBeats({ title: '歌', referenceAudio: other, music }, [100])).toThrow('重新识别');
   });
 });

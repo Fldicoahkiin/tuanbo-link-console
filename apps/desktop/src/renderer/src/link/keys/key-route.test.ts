@@ -282,7 +282,7 @@ describe('时间线的键（timeline-keys.test.ts 的用例）', () => {
     expect(onClip).toEqual({
       Delete: run('edit.delete', 'timeline'), Backspace: run('edit.delete', 'timeline'), KeyS: run('edit.splitMoved', 'timeline'), KeyM: run('marker.add', 'editor'),
       Enter: NATIVE, 'Ctrl+KeyV': run('edit.paste', 'timeline'), 'Ctrl+KeyD': run('edit.duplicate', 'timeline'), 'Ctrl+KeyC': run('edit.copy', 'timeline'),
-      'Ctrl+KeyX': run('edit.cut', 'lighting-points'), 'Ctrl+KeyZ': run('document.undo', 'global'), 'Ctrl+KeyA': run('edit.selectAll', 'lighting-points'),
+      'Ctrl+KeyX': run('edit.cut', 'timeline'), 'Ctrl+KeyZ': run('document.undo', 'global'), 'Ctrl+KeyA': run('edit.selectAll', 'lighting-points'),
       Home: run('transport.start', 'editor'), End: run('transport.end', 'editor'), ArrowLeft: run('transport.prevFrame', 'editor'), ArrowRight: run('transport.nextFrame', 'editor'),
       ArrowUp: run('transport.prevEditPoint', 'timeline'), ArrowDown: run('transport.nextEditPoint', 'timeline'), Escape: run('transport.stop', 'timeline'), Space: run('transport.playPause', 'editor'),
       'Ctrl+KeyB': run('edit.split', 'timeline'), 'Ctrl+Shift+KeyB': run('edit.splitAll', 'editor'), KeyQ: run('edit.trimLeft', 'editor'), KeyW: run('edit.trimRight', 'editor'),

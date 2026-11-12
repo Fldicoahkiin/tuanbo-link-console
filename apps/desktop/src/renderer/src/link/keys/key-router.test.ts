@@ -674,6 +674,7 @@ function timelineRouter(calls: string[], setup: TimelineSetup = {}): KeyRouter {
     lighting: setup.lightingClip === true ? { document: createLightingDocument(), selectedClipId: '灯光片段', selectedEventId: null, selectedEventIds: [], onChange: () => undefined, onSelect: () => undefined } : undefined,
     onPlayingChange: playing => { if (!playing) calls.push('暂停'); },
     onDuplicateClip: (id, at) => { calls.push(`复制 ${id} 到 ${at}`); }, onDuplicateCue: (id, at) => { calls.push(`复制 ${id} 到 ${at}`); },
+    onPasteClip: (clip, at) => { calls.push(`粘贴 ${clip.id} 到 ${at}`); },
     onSplitClip: (id, at) => { calls.push(`分割 ${id} 在 ${at}`); },
     onTrim: (ref, startMs, durationMs) => { calls.push(`修剪 ${ref.id} 为 ${startMs}+${durationMs}`); },
     onDeleteClip: id => { calls.push(`删除 ${id}`); }, onDeleteCue: id => { calls.push(`删除 ${id}`); }
@@ -685,7 +686,7 @@ function timelineRouter(calls: string[], setup: TimelineSetup = {}): KeyRouter {
   const seek = { from: () => props.playheadMs, to: (milliseconds: number) => { calls.push(`定位 ${milliseconds}`); } };
   router.register('timeline', () => ({
     ...timelineEditKeys(props, { kind: 'clip', id: '片段' }, target => { calls.push(`复制 ${target.id}`); }),
-    ...timelineTransportKeys({ frameRate: props.frameRate, durationMs: 9_000, editPoints: [500, 2_000], playing: false }, { playPause, onPlayingChange: props.onPlayingChange, seek }),
+    ...timelineTransportKeys({ frameRate: props.frameRate, durationMs: 9_000, editPoints: [500, 2_000], markers: [], beats: [], playing: false }, { playPause, onPlayingChange: props.onPlayingChange, seek }),
     'edit.deselect': () => { calls.push('取消选中'); }
   }), press => keyInTimeline(press.target));
   if (!lightingWorkspace) router.register('editor', () => ({ ...editorTransportKeys({ ...props, durationMs: 9_000 }, playPause, seek), ...editorEditKeys(props) }));

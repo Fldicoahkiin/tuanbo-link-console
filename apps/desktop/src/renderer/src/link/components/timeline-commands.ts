@@ -71,6 +71,25 @@ export function timelineClipboard(facts: { lightingClipSelected: boolean }): 'li
 
 /** A content clip or trigger point, as the timeline's clipboard and its right-click menu hold it. */
 export type TimelineTarget = { kind: 'clip' | 'cue'; id: string };
+/**
+ * What the content clipboard holds: what was copied, by id, pasted as it is when pasted; a cut clip (Ctrl+X, K10) also
+ * as it was cut, since it is no longer in the song: pasting puts a copy of that back.
+ */
+export type TimelineClipboard = TimelineTarget & { cut?: ReferenceMediaClip };
+
+/** The clip or trigger point a paste copies, or undefined when it is gone (and was not cut). */
+export function clipboardSource(clipboard: TimelineClipboard | null, clips: readonly ReferenceMediaClip[], cues: readonly LinkCue[]): ReferenceMediaClip | LinkCue | undefined {
+  if (!clipboard) return undefined;
+  if (clipboard.kind === 'cue') return cues.find(cue => cue.id === clipboard.id);
+  return clips.find(clip => clip.id === clipboard.id) ?? clipboard.cut;
+}
+
+/** What paste does with the clipboard at `at`: copies what was copied, or puts a copy of the cut clip back. The keys and the right-click menu both paste through it. */
+export function pasteClipboard(actions: Pick<TimelineKeyProps, 'clips' | 'onDuplicateClip' | 'onDuplicateCue' | 'onPasteClip'>, clipboard: TimelineClipboard, at: number): void {
+  if (clipboard.kind === 'cue') actions.onDuplicateCue(clipboard.id, at);
+  else if (clipboard.cut && !actions.clips.some(clip => clip.id === clipboard.id)) actions.onPasteClip(clipboard.cut, at);
+  else actions.onDuplicateClip(clipboard.id, at);
+}
 
 /** What Ctrl+C copies to the content clipboard: the selected clip, else the selected trigger point. */
 export function copyTarget(selection: { clip: string | null; trigger: string | null }): TimelineTarget | null {
@@ -138,6 +157,8 @@ export type TimelineKeyProps = {
   lighting?: Pick<LightingTimelineProps, 'document' | 'selectedClipId' | 'selectedEventId' | 'selectedEventIds' | 'onChange' | 'onSelect'> | undefined;
   onPlayingChange: (playing: boolean) => void;
   onDuplicateClip: (clipId: string, startMs: number) => void;
+  /** A copy of `clip` (a cut one) on its track at `startMs`. */
+  onPasteClip: (clip: ReferenceMediaClip, startMs: number) => void;
   onDuplicateCue: (cueId: string, startMs: number) => void;
   /** `group`: the splits of one key press that are undone together (Ctrl+Shift+B); they leave the selection alone. */
   onSplitClip: (clipId: string, timeMs: number, group?: string) => void;
@@ -168,28 +189,68 @@ export function deleteTimelineSelection(props: TimelineKeyProps): void {
 }
 
 /**
- * The timeline's editing keys (keymap.ts, scope `timeline`), each there only while it has something to act on, as the
- * timeline's own listener did before the key router (K6): copy and paste leave the lighting points' clipboard to them
- * (`timelineClipboard`), split and duplicate need something selected; Delete is always there.
+ * What Ctrl+X cuts (K10): the selected picture clip of the editor, as it is now, to paste back with Ctrl+V; not one on a
+ * locked track (the key is taken all the same). Null where the key is not the timeline's: nothing selected, a trigger
+ * point, or the lighting workbench.
  */
-export function timelineEditKeys(props: TimelineKeyProps, clipboard: TimelineTarget | null, setClipboard: (target: TimelineTarget) => void): KeyHandlers {
+export function cutTarget(props: Pick<TimelineKeyProps, 'lightingWorkspace' | 'clips' | 'layers' | 'cues' | 'selectedClipId'>): ReferenceMediaClip | 'locked' | null {
+  const clip = props.lightingWorkspace ? undefined : props.clips.find(entry => entry.id === props.selectedClipId);
+  if (!clip) return null;
+  return onLockedTrack(props, { kind: 'clip', id: clip.id }) ? 'locked' : clip;
+}
+
+/** Cut: the clip onto the clipboard as it is, then deleted from the song (one undo step). The key and the right-click menu both cut through it. */
+export function cutClip(clip: ReferenceMediaClip, setClipboard: (target: TimelineClipboard) => void, onDeleteClip: (clipId: string) => void): void {
+  setClipboard({ kind: 'clip', id: clip.id, cut: clip });
+  onDeleteClip(clip.id);
+}
+
+/**
+ * V (剪映's 隐藏片段, K10): the selected lighting clip turned off or on again (`muted`, which the show and the console's
+ * timeline leave out), one undo step; nothing on a locked track. Picture clips cannot be turned off. Null without a
+ * selected lighting clip.
+ */
+export function toggleLightingClip(lighting: TimelineKeyProps['lighting']): { document: LightingDocument; label: string } | 'locked' | null {
+  const clipId = lighting?.selectedClipId;
+  const track = clipId ? lighting?.document.tracks.find(entry => entry.clips.some(clip => clip.id === clipId)) : undefined;
+  const clip = track?.clips.find(entry => entry.id === clipId);
+  if (!lighting || !track || !clip) return null;
+  if (track.locked) return 'locked';
+  const muted = !clip.muted;
+  return { label: muted ? '停用灯光片段' : '启用灯光片段',
+    document: { ...lighting.document, tracks: lighting.document.tracks.map(entry => entry.id === track.id ? { ...entry, clips: entry.clips.map(item => item.id === clip.id ? { ...item, muted } : item) } : entry) } };
+}
+
+/**
+ * The timeline's editing keys (keymap.ts, scope `timeline`), each there only while it has something to act on, as the
+ * timeline's own listener did before the key router (K6): copy, cut and paste leave the lighting points' clipboard to
+ * them (`timelineClipboard`), split and duplicate need something selected; Delete is always there. Cut deletes the
+ * clip (one undo step) and keeps it on the clipboard; V turns the selected lighting clip off or on; Ctrl+J taps a beat
+ * at the playhead (`tap`: the song's beats, useMusicBeatSegments, which writes it or keeps it until nothing plays).
+ */
+export function timelineEditKeys(props: TimelineKeyProps, clipboard: TimelineClipboard | null, setClipboard: (target: TimelineClipboard) => void, tap?: (songMs: number) => void): KeyHandlers {
   const content = timelineClipboard({ lightingClipSelected: Boolean(props.lighting?.selectedClipId) }) === 'content';
   const selection = { clip: props.selectedClipId, trigger: props.selectedCueId };
   const copied = copyTarget(selection);
+  const cut = content ? cutTarget(props) : null;
+  const toggled = toggleLightingClip(props.lighting);
   const duplicate = duplicateTarget(selection, props.clips, props.cues, props.frameRate);
   const split = splitTarget({ workbench: props.lightingWorkspace === true, audio: Boolean(props.audioEditor?.selected), audioDisabled: props.audioEditor?.disabled ?? true, clip: props.selectedClipId });
   const copyTo = (target: TimelineTarget, at: number): void => { if (target.kind === 'clip') props.onDuplicateClip(target.id, at); else props.onDuplicateCue(target.id, at); };
   return {
     ...(content && copied ? { 'edit.copy': () => setClipboard(copied) } : {}),
-    ...(content && clipboard ? { 'edit.paste': () => copyTo(clipboard, props.playheadMs) } : {}),
+    ...(cut ? { 'edit.cut': () => { if (cut !== 'locked') cutClip(cut, setClipboard, props.onDeleteClip); } } : {}),
+    ...(content && clipboard ? { 'edit.paste': () => pasteClipboard(props, clipboard, props.playheadMs) } : {}),
     ...(duplicate ? { 'edit.duplicate': () => { if (duplicate.at !== null) copyTo(duplicate, duplicate.at); } } : {}),
     ...(split ? { 'edit.split': () => { if (split === 'audio') void props.audioEditor?.split(props.playheadMs); else if (props.selectedClipId) props.onSplitClip(props.selectedClipId, props.playheadMs); } } : {}),
+    ...(toggled ? { 'edit.toggleEnabled': () => { if (toggled !== 'locked') props.lighting?.onChange(toggled.document, toggled.label); } } : {}),
+    ...(tap ? { 'beat.add': () => tap(props.playheadMs) } : {}),
     'edit.delete': () => deleteTimelineSelection(props)
   };
 }
 
 /** Whether the clip or trigger point `id` is on a locked track. */
-function onLockedTrack(props: TimelineKeyProps, target: TimelineTarget): boolean {
+function onLockedTrack(props: Pick<TimelineKeyProps, 'clips' | 'cues' | 'layers'>, target: TimelineTarget): boolean {
   const layerId = target.kind === 'clip' ? props.clips.find(clip => clip.id === target.id)?.layerId : props.cues.find(cue => cue.id === target.id)?.layerId;
   return layerId !== undefined && (props.layers ?? []).some(layer => layer.id === layerId && layer.locked);
 }
@@ -269,9 +330,11 @@ export function editorTransportKeys(props: Pick<TimelineKeyProps, 'frameRate' | 
 /**
  * The keys both timelines share that play, pause and move the playhead (scope `timeline`): K pauses and L plays
  * (剪映's J/K/L, without the reverse play or the speeding up), Shift+←/→ move `MANY_FRAMES` frames, ↑↓ go to the
- * previous or next edit point (the toolbar's 「定位」 menu). Moving pauses first.
+ * previous or next edit point (the toolbar's 「定位」 menu); Shift+M and Alt+Shift+M the next and previous timeline
+ * marker, and the beat keys (no key unless the user gives them one) the next and previous of `beats`, the beats the
+ * timeline snaps to (K10): with none there the playhead stays. Moving pauses first.
  */
-export function timelineTransportKeys(facts: { frameRate: MtcFrameRate; durationMs: number; editPoints: readonly number[]; playing: boolean },
+export function timelineTransportKeys(facts: { frameRate: MtcFrameRate; durationMs: number; editPoints: readonly number[]; markers: readonly number[]; beats: readonly number[]; playing: boolean },
   controls: { playPause: () => void; onPlayingChange: (playing: boolean) => void; seek: TimelineSeek }): KeyHandlers {
   const go = (milliseconds: number): void => { controls.onPlayingChange(false); controls.seek.to(Math.max(0, Math.min(facts.durationMs, milliseconds))); };
   const frameMs = 1_000 / playbackFramesPerSecond(facts.frameRate);
@@ -281,21 +344,43 @@ export function timelineTransportKeys(facts: { frameRate: MtcFrameRate; duration
     'transport.backMany': () => go(controls.seek.from() - MANY_FRAMES * frameMs),
     'transport.forwardMany': () => go(controls.seek.from() + MANY_FRAMES * frameMs),
     'transport.prevEditPoint': () => go(previousEditPoint(facts.editPoints, controls.seek.from(), facts.frameRate)),
-    'transport.nextEditPoint': () => go(nextEditPoint(facts.editPoints, controls.seek.from(), facts.frameRate, facts.durationMs))
+    'transport.nextEditPoint': () => go(nextEditPoint(facts.editPoints, controls.seek.from(), facts.frameRate, facts.durationMs)),
+    ...pointKeys('marker.previous', 'marker.next', facts.markers, facts.frameRate, go, controls.seek),
+    ...pointKeys('transport.prevBeat', 'transport.nextBeat', facts.beats, facts.frameRate, go, controls.seek)
+  };
+}
+
+/** Two keys that go to the point of `points` before or after the playhead; the playhead stays where there is none. */
+function pointKeys(previous: 'marker.previous' | 'transport.prevBeat', next: 'marker.next' | 'transport.nextBeat', points: readonly number[], frameRate: MtcFrameRate,
+  go: (milliseconds: number) => void, seek: TimelineSeek): KeyHandlers {
+  const to = (at: number | undefined): void => { if (at !== undefined) go(at); };
+  return {
+    [previous]: () => to(pointBefore(points, seek.from(), frameRate)),
+    [next]: () => to(pointAfter(points, seek.from(), frameRate))
   };
 }
 
 /** Half a frame: an edit point closer to the playhead than that is where the playhead already is. */
 const halfFrameMs = (frameRate: MtcFrameRate): number => 1_000 / playbackFramesPerSecond(frameRate) / 2;
 
+/** The point before the playhead, more than half a frame away, or undefined. */
+export function pointBefore(points: readonly number[], playheadMs: number, frameRate: MtcFrameRate): number | undefined {
+  return [...points].filter(point => point < playheadMs - halfFrameMs(frameRate)).sort((a, b) => b - a)[0];
+}
+
+/** The point after the playhead, more than half a frame away, or undefined. */
+export function pointAfter(points: readonly number[], playheadMs: number, frameRate: MtcFrameRate): number | undefined {
+  return [...points].filter(point => point > playheadMs + halfFrameMs(frameRate)).sort((a, b) => a - b)[0];
+}
+
 /** The edit point before the playhead (the toolbar's 「上一剪辑点」), or the start. */
 export function previousEditPoint(points: readonly number[], playheadMs: number, frameRate: MtcFrameRate): number {
-  return [...points].filter(point => point < playheadMs - halfFrameMs(frameRate)).sort((a, b) => b - a)[0] ?? 0;
+  return pointBefore(points, playheadMs, frameRate) ?? 0;
 }
 
 /** The edit point after the playhead (the toolbar's 「下一剪辑点」), or the end. */
 export function nextEditPoint(points: readonly number[], playheadMs: number, frameRate: MtcFrameRate, durationMs: number): number {
-  return [...points].filter(point => point > playheadMs + halfFrameMs(frameRate)).sort((a, b) => a - b)[0] ?? durationMs;
+  return pointAfter(points, playheadMs, frameRate) ?? durationMs;
 }
 
 /** Which end of a clip a trim to the playhead moves: 「将开头修剪至播放头」 the start, 「将结尾修剪至播放头」 the end. */

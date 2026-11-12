@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { acceptMusicStructure, clearedSongMusic, editMusicStructure, ibtSongMusic, setSongMusicCommand, songBeats, songMusicAudio, songMusicSource, songTimeToMusicSource, type LinkDesktopApi, type PlacedSongBeats, type SongBeatSegment } from '@tb/core/link';
-import { audioBeatAnalysisSchema, type ReferenceAudioSource, type RundownItem, type SongMusic } from '@tb/schema';
+import { acceptMusicStructure, addSongBeats, clearedSongMusic, editMusicStructure, ibtSongMusic, setSongMusicCommand, songBeats, songMusicAudio, songMusicSource, songTimeToMusicSource, type LinkDesktopApi, type PlacedSongBeats, type SongBeatSegment } from '@tb/core/link';
+import { audioBeatAnalysisSchema, type ReferenceAudio, type ReferenceAudioSource, type RundownItem, type SongMusic } from '@tb/schema';
 import type { useAutomaticMusicAnalysis } from '../runtime/use-automatic-music-analysis';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { useDocumentStore } from '../stores/document-store';
@@ -113,6 +113,59 @@ export function writeSimpleBeats(key: string, blocked: boolean): SimpleDetection
   if (decision === 'write') useDocumentStore.getState().execute(setSongMusicCommand(kept.itemId, kept.source, kept.music, { label: '简易检测音乐节拍' }));
   return decision;
 }
+// Beats tapped by hand (Ctrl+J, 剪映's 手动踩点) while something plays or the runtime is busy: kept per song, like the
+// simple detection's result (and on the same signal), and written as one step once it stops (rule row 「一首歌的节拍」).
+type Taps = { itemId: string; audio: ReferenceAudio; songMs: number[] };
+const tapsPending = new Map<string, Taps>();
+
+/**
+ * What a tap or a write of kept taps did: `waiting` kept for later (`first`: the first one kept); `written`: how many
+ * beats are new and how many fell where the song plays no music, `kept` when they had been kept until now.
+ */
+export type BeatTapResult = { kind: 'waiting'; first: boolean } | { kind: 'written'; added: number; outside: number; kept: boolean } | { kind: 'none' };
+
+/** Writes the song's beats `songMs` (the song's time) as one `setSongMusicCommand`, unless none of them is new. */
+function writeTaps(itemId: string, songMs: readonly number[], kept: boolean): BeatTapResult {
+  const added = addSongBeats(findSong(itemId), songMs);
+  if (added.added > 0) useDocumentStore.getState().execute(setSongMusicCommand(itemId, added.audio, added.music, { label: '手动踩点' }));
+  return { kind: 'written', added: added.added, outside: added.outside, kept };
+}
+
+/** A beat tapped at `songMs` on the song `itemId`: written now, or kept while `blocked` (`key`: `simpleDetectionKey`). */
+export function tapBeat(key: string, itemId: string, songMs: number, blocked: boolean): BeatTapResult {
+  if (!blocked) return writeTaps(itemId, [songMs], false);
+  const audio = findSong(itemId).referenceAudio;
+  if (!audio) throw new Error('这首歌还没有音乐，添加音乐后再踩点');
+  const kept = tapsPending.get(key);
+  if (kept && kept.audio === audio) { kept.songMs.push(songMs); return { kind: 'waiting', first: false }; }
+  tapsPending.set(key, { itemId, audio, songMs: [songMs] }); simpleChanged();
+  return { kind: 'waiting', first: true };
+}
+
+/** Writes the taps kept for `key` once nothing blocks them; dropped with a reason when the song's audio changed meanwhile. */
+export function writeBeatTaps(key: string, blocked: boolean): BeatTapResult {
+  const kept = tapsPending.get(key);
+  if (!kept || blocked) return kept ? { kind: 'waiting', first: false } : { kind: 'none' };
+  tapsPending.delete(key); simpleChanged();
+  const song = useDocumentStore.getState().project?.rundown.find(entry => entry.id === kept.itemId);
+  if (!song) throw new Error('节目已经不在了，这次没有写入踩的拍点');
+  if (song.referenceAudio !== kept.audio) throw new Error('踩点时音乐被改了，这次没有写入踩的拍点，请重新踩');
+  return writeTaps(kept.itemId, kept.songMs, true);
+}
+export const beatTapsWaiting = (key: string): number => tapsPending.get(key)?.songMs.length ?? 0;
+
+/** What to tell the operator after a tap or a write, or null. */
+export function beatTapText(result: BeatTapResult): string | null {
+  if (result.kind === 'waiting') return result.first ? '踩的拍点先记下了，停止播放后一起写进这首歌。' : null;
+  if (result.kind === 'none') return null;
+  const parts = [
+    result.kept && result.added ? `写进了 ${result.added} 个踩的拍点。` : '',
+    result.outside ? `有 ${result.outside} 个踩在没有音乐的地方，没有加。` : '',
+    !result.added && !result.outside ? (result.kept ? '踩的拍点这首歌里都已经有了，没有新加。' : '这里已经有拍点了。') : ''
+  ].join('');
+  return parts || null;
+}
+
 /** Whether the song's beats now are those of the simple detection, shown as 简易检测的节拍 on both pages. */
 export const isSimpleBeats = (beats: Pick<MusicBeatSegments, 'data'>): boolean => beats.data?.state === 'ready' && beats.data.method === 'ibt';
 const NO_BEATS_FOUND ='没有检测到明显节奏点，请按听感手动放置灯光 Cue';
@@ -122,7 +175,7 @@ const NO_BEATS_FOUND ='没有检测到明显节奏点，请按听感手动放置
  * time. Recognition runs on `songMusicSource(item)`, the music track's source file, and every change is a
  * `setSongMusicCommand` on the song, never on its lighting. `scope` is the song's `musicRecognitionKey`.
  */
-export function useMusicBeatSegments(item: RundownItem | undefined, analysis: ReturnType<typeof useAutomaticMusicAnalysis>, scope: string, projectPath: string | null, playing: boolean) {
+export function useMusicBeatSegments(item: RundownItem | undefined, analysis: ReturnType<typeof useAutomaticMusicAnalysis>, scope: string, projectPath: string | null, playing: boolean, notify?: (message: string, tone: 'info' | 'error') => void) {
   const runtimeBusy = useRuntimeStore(state => state.state !== 'idle');
   const blocked = playing || runtimeBusy;
   const [error, setError] = useState('');
@@ -165,6 +218,16 @@ export function useMusicBeatSegments(item: RundownItem | undefined, analysis: Re
     if (!simplePendingWrite || blocked) return;
     try { if (writeSimpleBeats(simpleKey, blocked) === 'write') { setError(''); remember(attempted, scope); } } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }, [simplePendingWrite, blocked, simpleKey, scope]);
+  const taps = beatTapsWaiting(simpleKey);
+  useEffect(() => {
+    if (!taps || blocked) return;
+    try { const text = beatTapText(writeBeatTaps(simpleKey, blocked)); if (text) notify?.(text, 'info'); } catch (cause) { notify?.(cause instanceof Error ? cause.message : String(cause), 'error'); }
+  }, [taps, blocked, simpleKey, notify]);
+  /** Ctrl+J: a beat at `songMs`, written now or kept until nothing plays. */
+  const tap = (songMs: number): void => {
+    if (!itemId) return;
+    try { const text = beatTapText(tapBeat(simpleKey, itemId, songMs, blocked)); if (text) notify?.(text, 'info'); } catch (cause) { notify?.(cause instanceof Error ? cause.message : String(cause), 'error'); }
+  };
   const simpleDetect = (): void => {
     if (offer !== 'ready' || detecting || simplePendingWrite || !itemId || !projectPath) return;
     setError(''); setNotice('');
@@ -208,7 +271,7 @@ export function useMusicBeatSegments(item: RundownItem | undefined, analysis: Re
     const { sourceId, ...fields } = segment;
     commit(editMusicStructure(current(), { kind: 'segment', segment: { ...fields, id: sourceId, startMs, endMs } }), '修改音乐段落');
   });
-  return { data, stale, snapPoints, points, error, blocked, busy, selected: points.find(segment => segment.id === selectedId), select, remove, removeBeat, update, start, cancel, clear,
+  return { data, stale, snapPoints, points, error, blocked, busy, selected: points.find(segment => segment.id === selectedId), select, remove, removeBeat, update, start, cancel, clear, tap,
     simple: { offer, detecting, waitingToWrite: simplePendingWrite, notice: simplePendingWrite && blocked ? '检测好了，停止播放后会写入节拍。' : notice, run: simpleDetect } };
 }
 const noSegments: readonly SongBeatSegment[] = [];

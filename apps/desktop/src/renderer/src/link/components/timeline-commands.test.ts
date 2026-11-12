@@ -1,7 +1,7 @@
 import { createLightingDocument, lightingTrackSchema, linkCueSchema, referenceMediaClipSchema, type LightingDocument } from '@tb/schema';
 import { describe, expect, it } from 'vitest';
 import {
-  copyTarget, cuePointsToDelete, deleteTimelineSelection, duplicateTarget, editorEditKeys, editorTransportKeys, keysBackToTimeline, timelineTransportKeys, nextEditPoint, previousEditPoint, removeLightingPoints,
+  clipboardSource, copyTarget, cuePointsToDelete, cutTarget, deleteTimelineSelection, pointAfter, pointBefore, toggleLightingClip, type TimelineClipboard, duplicateTarget, editorEditKeys, editorTransportKeys, keysBackToTimeline, timelineTransportKeys, nextEditPoint, previousEditPoint, removeLightingPoints,
   splitTarget, timelineClipboard, timelineEditKeys, timelineSelection, trimAudioToPlayhead, trimToPlayhead, TIMELINE_SELECTION_ORDER, type TimelineKeyProps
 } from './timeline-commands';
 
@@ -20,6 +20,7 @@ function props(calls: string[], overrides: Partial<TimelineKeyProps> = {}): Time
     playheadMs: 1_000, frameRate: '25', clips: [], cues: [], selectedClipId: null, selectedCueId: null,
     onPlayingChange: () => undefined,
     onDuplicateClip: (id, at) => { calls.push(`复制 ${id} 到 ${at}`); }, onDuplicateCue: (id, at) => { calls.push(`复制 ${id} 到 ${at}`); },
+    onPasteClip: (clip, at) => { calls.push(`粘贴剪切的 ${clip.id} 到 ${at}`); },
     onSplitClip: (id, at) => { calls.push(`分割 ${id} 在 ${at}`); },
     onTrim: (ref, startMs, durationMs) => { calls.push(`修剪 ${ref.id} 为 ${startMs}+${durationMs}`); },
     onDeleteClip: id => { calls.push(`删除片段 ${id}`); }, onDeleteCue: id => { calls.push(`删除触发点 ${id}`); },
@@ -174,7 +175,7 @@ describe('剪映的键（K7）', () => {
     const log: string[] = [];
     let playhead = 1_000;
     const seek = { from: () => playhead, to: (ms: number) => { playhead = ms; log.push(`到 ${ms}`); } };
-    const keys = (playing: boolean) => timelineTransportKeys({ frameRate: '25', durationMs: 3_000, editPoints: [500, 2_000], playing },
+    const keys = (playing: boolean) => timelineTransportKeys({ frameRate: '25', durationMs: 3_000, editPoints: [500, 2_000], markers: [], beats: [], playing },
       { playPause: () => log.push('播放键'), onPlayingChange: next => log.push(next ? '播放' : '暂停'), seek });
     keys(true)['transport.pause']?.(press); keys(false)['transport.pause']?.(press);
     keys(false)['transport.play']?.(press); keys(true)['transport.play']?.(press);
@@ -272,4 +273,72 @@ it('鼠标点完时间线工具栏上的按钮，键交还给时间线，M、←
   // Clicks in a menu or panel the toolbar opened (mounted on the page body), and on what is not a button.
   const item: Node = { tag: 'button', attributes: { role: 'menuitem' }, parent: { tag: 'body' } };
   for (const target of [element(item), element({ tag: 'select', parent: toolbar }), null]) expect(keysBackToTimeline({ detail: 1, target }, bar)).toBe(false);
+});
+
+describe('K10 的键：剪切、停用灯光片段、手动踩点、上一个 / 下一个标记和节拍', () => {
+  const press = { target: null, global: () => undefined };
+  const at = (seconds: number) => ({ hours: 0, minutes: 0, seconds, frames: 0 });
+  const clip = (id: string, layerId: string) => referenceMediaClipSchema.parse({ id, assetId: '素材', startTimecode: at(0), durationMs: 2_000, label: id, layerId });
+
+  it('Ctrl+X 剪切选中的画面片段：放进剪贴板（连同剪切时的样子）再删掉，删除是一步；粘贴放回剪切的那一份；锁着的轨道不剪；灯光工作台、触发点、选着灯光片段时不归它', () => {
+    const calls: string[] = [];
+    const clips = [clip('片段', '轨道 1'), clip('锁着的', '轨道 2')];
+    const layers = [{ id: '轨道 1', locked: false }, { id: '轨道 2', locked: true }];
+    let clipboard: TimelineClipboard | null = null;
+    timelineEditKeys(props(calls, { clips, layers, selectedClipId: '片段' }), null, target => { clipboard = target; })['edit.cut']?.(press);
+    expect(calls).toEqual(['删除片段 片段']);
+    expect(clipboard).toEqual({ kind: 'clip', id: '片段', cut: clips[0] });
+    // The clip is gone from the song: paste puts the cut one back at the playhead.
+    calls.length = 0;
+    timelineEditKeys(props(calls, { clips: [clips[1]!] }), clipboard, () => undefined)['edit.paste']?.(press);
+    expect(calls).toEqual(['粘贴剪切的 片段 到 1000']);
+    // Undone (the clip is back): paste copies it as copy does.
+    calls.length = 0;
+    timelineEditKeys(props(calls, { clips }), clipboard, () => undefined)['edit.paste']?.(press);
+    expect(calls).toEqual(['复制 片段 到 1000']);
+    expect(clipboardSource(clipboard, [], [])).toBe(clips[0]);
+    // A locked track: the key is taken, nothing happens.
+    calls.length = 0;
+    const locked = timelineEditKeys(props(calls, { clips, layers, selectedClipId: '锁着的' }), null, () => { calls.push('放进剪贴板'); });
+    locked['edit.cut']?.(press);
+    expect([Boolean(locked['edit.cut']), calls]).toEqual([true, []]);
+    expect(cutTarget({ clips, layers, cues: [], selectedClipId: '片段', lightingWorkspace: true })).toBeNull();
+    const lighting = { document: lightingDocument(), selectedClipId: '灯光片段', selectedEventId: null, selectedEventIds: [], onChange: () => undefined, onSelect: () => undefined };
+    expect(timelineEditKeys(props(calls, { clips, selectedClipId: '片段', lighting }), null, () => undefined)['edit.cut']).toBeUndefined();
+    expect(timelineEditKeys(props(calls, { selectedCueId: '触发点' }), null, () => undefined)['edit.cut']).toBeUndefined();
+  });
+
+  it('V 停用、再按启用选中的灯光片段（一步撤销）；锁着的轨道不动；没选灯光片段时不归它（画面片段没有停用）', () => {
+    const changes: string[] = [];
+    let document = lightingDocument();
+    const lighting = () => ({ document, selectedClipId: '灯光片段', selectedEventId: null, selectedEventIds: [], onChange: (next: LightingDocument, label: string) => { document = next; changes.push(label); }, onSelect: () => undefined });
+    timelineEditKeys(props([], { lighting: lighting() }), null, () => undefined)['edit.toggleEnabled']?.(press);
+    expect([changes, document.tracks[0]!.clips[0]!.muted]).toEqual([['停用灯光片段'], true]);
+    timelineEditKeys(props([], { lighting: lighting() }), null, () => undefined)['edit.toggleEnabled']?.(press);
+    expect([changes, document.tracks[0]!.clips[0]!.muted]).toEqual([['停用灯光片段', '启用灯光片段'], false]);
+    expect(toggleLightingClip({ ...lighting(), document: lightingDocument(true) })).toBe('locked');
+    expect(timelineEditKeys(props([], { selectedClipId: '片段' }), null, () => undefined)['edit.toggleEnabled']).toBeUndefined();
+  });
+
+  it('Ctrl+J 在播放头踩一个拍点，交给这首歌的节拍（useMusicBeatSegments）；没有歌时不归它', () => {
+    const taps: number[] = [];
+    timelineEditKeys(props([]), null, () => undefined, ms => { taps.push(ms); })['beat.add']?.(press);
+    expect(taps).toEqual([1_000]);
+    expect(timelineEditKeys(props([]), null, () => undefined)['beat.add']).toBeUndefined();
+  });
+
+  it('Shift+M / Alt+Shift+M 到下一个、上一个标记，节拍键到下一个、上一个节拍；先暂停，离播放头不到半帧的不算，前后没有就不动', () => {
+    const log: string[] = [];
+    let playhead = 1_000;
+    const seek = { from: () => playhead, to: (ms: number) => { playhead = ms; log.push(`到 ${ms}`); } };
+    const keys = timelineTransportKeys({ frameRate: '25', durationMs: 9_000, editPoints: [], markers: [500, 1_010, 4_000], beats: [0, 980, 1_500], playing: false },
+      { playPause: () => undefined, onPlayingChange: next => log.push(next ? '播放' : '暂停'), seek });
+    keys['marker.next']?.(press); keys['marker.next']?.(press); keys['marker.previous']?.(press); keys['marker.previous']?.(press); keys['marker.previous']?.(press);
+    expect(log).toEqual(['暂停', '到 4000', '暂停', '到 1010', '暂停', '到 500']);
+    log.length = 0;
+    playhead = 1_000;
+    keys['transport.nextBeat']?.(press); keys['transport.nextBeat']?.(press); keys['transport.prevBeat']?.(press);
+    expect(log).toEqual(['暂停', '到 1500', '暂停', '到 980']);
+    expect([pointAfter([500], 500, '25'), pointBefore([500], 510, '25'), pointBefore([500], 530, '25')]).toEqual([undefined, undefined, 500]);
+  });
 });

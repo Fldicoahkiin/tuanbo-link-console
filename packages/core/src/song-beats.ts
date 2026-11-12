@@ -1,6 +1,6 @@
 import { referenceAudioSourceSchema, type AudioBeatLevel, type MusicStructureSegment, type ReferenceAudio, type ReferenceAudioSource, type RundownItem, type SongMusic } from '@tb/schema';
 import { audioTracks } from './audio-edit';
-import { musicStructureSegments } from './music-structure';
+import { clearedSongMusic, editMusicStructure, musicStructureSegments } from './music-structure';
 
 /**
  * A song's beats, the only place the editor and the lighting workspace read them from (0.5.9 E9).
@@ -106,6 +106,29 @@ function placeMusic(music: SongMusic, title: string, audio: ReferenceAudio): Son
 export function songTimeToMusicSource(beats: SongBeatsResult, songMs: number): number | undefined {
   const piece = beats.pieces.find(entry => songMs >= entry.startMs && songMs <= entry.startMs + entry.durationMs);
   return piece ? piece.sourceOffsetMs + songMs - piece.startMs : undefined;
+}
+
+/**
+ * Beats tapped by hand at `songTimesMs` (剪映's 手动踩点, Ctrl+J), as the song's new `music` and the audio it belongs to,
+ * for one `setSongMusicCommand`. Each lands on the part of the music source the song plays there, so it moves with the
+ * music like the recognised beats. A song without beats gets them from these alone. `added`: how many are new;
+ * `outside`: how many were where the song plays no music. Throws when the song has no music or its beats belong to
+ * music it no longer has (they have to be recognised again first).
+ */
+export function addSongBeats(item: Pick<RundownItem, 'music' | 'referenceAudio' | 'title'>, songTimesMs: readonly number[]): { music: SongMusic; audio: Pick<ReferenceAudioSource, 'sha256' | 'durationMs'>; added: number; outside: number } {
+  const source = songMusicSource(item);
+  if (!source) throw new Error('这首歌还没有音乐，添加音乐后再踩点');
+  const placed = songBeats(item);
+  if (placed.state === 'stale') throw new Error(placed.reason);
+  const music = placed.state === 'none' ? clearedSongMusic(source, 'dismissed') : item.music!;
+  const audio = placed.state === 'none' ? source : songMusicAudio(item, music);
+  if (!audio) throw new Error('音乐换了，先重新识别节拍再踩点');
+  const base = placed.state === 'none' ? songBeats({ ...item, music }) : placed;
+  if (base.state !== 'ready' && base.state !== 'cleared') throw new Error('音乐换了，先重新识别节拍再踩点');
+  const atMs = songTimesMs.flatMap(songMs => { const at = songTimeToMusicSource(base, songMs); return at === undefined ? [] : [at]; });
+  const next = editMusicStructure({ music }, { kind: 'add-beats', atMs });
+  const added = next.structure.beats.length - (placed.state === 'none' ? 0 : music.structure.beats.length);
+  return { music: next, audio, added, outside: songTimesMs.length - atMs.length };
 }
 
 const densities = new WeakMap<readonly SongBeat[], Partial<Record<AudioBeatLevel, readonly SongBeat[]>>>();
