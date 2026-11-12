@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createEmptyLinkProject, parseLinkProject, requiredSchemaVersion, schemaVersion3Reasons, type LinkProject, type ReferenceCanvasTransform, type ReferenceMediaClip } from '@tb/schema';
-import { canvasTransformFromObs, clipLookOnlyInPreview, clipObsTransform, obsMaterialPresentation, stagePlacement } from './media-obs-transform';
+import { createEmptyLinkProject, parseLinkProject, requiredSchemaVersion, schemaVersion3Reasons, serializeLinkProject, type LinkProject, type ReferenceCanvasTransform, type ReferenceMediaClip } from '@tb/schema';
+import { canvasTransformFromObs, clipLookOnlyInPreview, clipObsTransform, lookPartsOf, obsMaterialPresentation, quarterTurn, stagePlacement, withLookParts } from './media-obs-transform';
 import { clipOfMaterialSource, collectManagedMediaTimeline, lockedLayerMessage, materialSceneNames } from './managed-media-timeline';
 import { replaceReferenceMediaClipCommand } from './link-command';
 
@@ -109,5 +109,96 @@ describe('素材在 OBS 里的样子（0.5.9 E16）', () => {
     // Kept inside what the project holds.
     expect(canvasTransformFromObs({ centerX: -5000, centerY: 0, width: 1, height: 100000, rotation: 270 }, source, canvas))
       .toEqual({ x: -1, y: 0, scale: 1, scaleX: 0.05, scaleY: 8, rotation: -90 });
+  });
+});
+
+describe('镜像、转 90°、裁剪和不透明度（0.5.9 E17）', () => {
+  const source = { width: 1920, height: 1080 };
+  const plain: ReferenceCanvasTransform = { x: 0.5, y: 0.5, scale: 1, scaleX: 1, scaleY: 1, rotation: 0 };
+
+  it('镜像是场景项缩放取负，和转 90° 叠在一起各管各的；转 90° 一直在 -180 到 180 之间', () => {
+    const mirrored = quarterTurn(withLookParts(look, { flipX: true }), 1);
+    expect(obsMaterialPresentation(mirrored, canvas).sceneItemTransform).toMatchObject({ scaleX: -0.75, scaleY: 0.4, rotation: 60, alignment: 0, boundsType: 'OBS_BOUNDS_NONE' });
+    expect(obsMaterialPresentation(withLookParts(plain, { flipY: true }), canvas).sceneItemTransform).toMatchObject({ scaleX: 1, scaleY: -1 });
+    expect(quarterTurn({ ...plain, rotation: 180 }, 1).rotation).toBe(-90);
+    expect(quarterTurn({ ...plain, rotation: -90 }, -1).rotation).toBe(180);
+    expect(quarterTurn({ ...plain, rotation: 90 }, 1).rotation).toBe(180);
+    expect([1, 2, 3, 4].reduce(value => quarterTurn(value, -1), look).rotation).toBe(look.rotation);
+  });
+
+  it('裁剪按素材原来的尺寸换成像素；不知道尺寸时说明没法裁剪', () => {
+    const cropped = withLookParts(plain, { crop: { top: 0.25, right: 0, bottom: 0.1, left: 0.1 } });
+    expect(obsMaterialPresentation(cropped, canvas, source).sceneItemTransform).toMatchObject({ cropTop: 270, cropRight: 0, cropBottom: 108, cropLeft: 192 });
+    expect(() => obsMaterialPresentation(cropped, canvas)).toThrow('不知道素材原来有多大，没法裁剪');
+    expect(() => obsMaterialPresentation(cropped, canvas, { width: 0, height: 1080 })).toThrow('没法裁剪');
+    // No crop of its own: no crop fields, the scene item keeps the crop the material has in OBS.
+    expect(Object.keys(obsMaterialPresentation(look, canvas, source).sceneItemTransform).some(key => key.startsWith('crop'))).toBe(false);
+  });
+
+  it('不透明度只给滤镜的设置；完全不透明时没有滤镜设置；回到平常的值就不再存', () => {
+    expect(obsMaterialPresentation(withLookParts(look, { opacity: 0.5 }), canvas).filterSettings).toEqual({ opacity: 0.5 });
+    expect(obsMaterialPresentation(withLookParts(look, { opacity: 0 }), canvas).filterSettings).toEqual({ opacity: 0 });
+    expect(obsMaterialPresentation({ ...look, opacity: 1 }, canvas).filterSettings).toBeUndefined();
+    const edited = withLookParts(look, { flipX: true, flipY: true, crop: { top: 0.1, right: 0, bottom: 0, left: 0 }, opacity: 0.4 });
+    expect(withLookParts(edited, { flipX: false, flipY: false, crop: { top: 0, right: 0, bottom: 0, left: 0 }, opacity: 1 })).toEqual(look);
+    expect(withLookParts(edited, { crop: null })).not.toHaveProperty('crop');
+    expect(lookPartsOf(edited)).toEqual({ flipX: true, flipY: true, crop: { top: 0.1, right: 0, bottom: 0, left: 0 }, opacity: 0.4 });
+    expect(lookPartsOf(look)).toEqual({});
+  });
+
+  it('编辑器舞台按同一份换算画：裁剪后的大小、镜像、裁掉多少、不透明度都从 OBS 拿到的数里来', () => {
+    const edited = withLookParts(look, { flipX: true, crop: { top: 0, right: 0.25, bottom: 0.5, left: 0.25 }, opacity: 0.5 });
+    const placed = stagePlacement(edited, source, canvas);
+    expect(placed.width).toBeCloseTo(source.width * 0.5 / canvas.width * look.scale * look.scaleX, 9);
+    expect(placed.height).toBeCloseTo(source.height * 0.5 / canvas.height * look.scale * look.scaleY, 9);
+    expect(placed).toMatchObject({ left: look.x, top: look.y, rotation: look.rotation, flipX: true, flipY: false, opacity: 0.5,
+      crop: { top: 0, right: 0.25, bottom: 0.5, left: 0.25 } });
+    expect(stagePlacement(look, source, canvas)).toMatchObject({ flipX: false, flipY: false, opacity: 1, crop: { top: 0, right: 0, bottom: 0, left: 0 } });
+  });
+
+  it('实时画布上拖镜像过、裁剪过的素材：镜像和裁剪留着，送回 OBS 还在原处、原大小', () => {
+    const edited = withLookParts({ ...look, rotation: 30 }, { flipX: true, crop: { top: 0.1, right: 0.2, bottom: 0, left: 0.1 } });
+    const obs = obsMaterialPresentation(edited, canvas, source).sceneItemTransform;
+    const shown = { width: (source.width - obs.cropLeft! - obs.cropRight!) * obs.scaleX, height: (source.height - obs.cropTop! - obs.cropBottom!) * obs.scaleY };
+    const back = canvasTransformFromObs({ centerX: obs.positionX, centerY: obs.positionY, width: Math.abs(shown.width), height: Math.abs(shown.height), rotation: obs.rotation,
+      flipX: obs.scaleX < 0, flipY: obs.scaleY < 0, cropPixels: { top: obs.cropTop!, right: obs.cropRight!, bottom: obs.cropBottom!, left: obs.cropLeft! } }, source, canvas);
+    expect(back.flipX).toBe(true);
+    expect(back).not.toHaveProperty('flipY');
+    const again = obsMaterialPresentation(back, canvas, source).sceneItemTransform;
+    for (const key of ['positionX', 'positionY', 'scaleX', 'scaleY', 'rotation'] as const) expect(again[key]).toBeCloseTo(obs[key], 9);
+    expect([again.cropTop, again.cropRight, again.cropBottom, again.cropLeft]).toEqual([obs.cropTop, obs.cropRight, obs.cropBottom, obs.cropLeft]);
+  });
+
+  it('文件：没有这些字段的工程读进来存出去一字不差；片段带了其中任何一样就要 schema 3，原因写成 look；裁掉的不能比整个画面多', () => {
+    const older = project(2), text = serializeLinkProject(older);
+    expect(serializeLinkProject(parseLinkProject(JSON.parse(text)))).toBe(text);
+    expect(text).not.toMatch(/flipX|flipY|"crop"|opacity/u);
+    const withPart = (part: Partial<ReferenceCanvasTransform>) => ({ ...older, rundown: older.rundown.map(item => ({ ...item,
+      referenceMediaClips: item.referenceMediaClips.map((clip, index) => index ? clip : { ...clip, canvasTransform: { ...clip.canvasTransform, ...part } }) })) });
+    for (const part of [{ flipX: true }, { flipY: false }, { crop: { top: 0.1, right: 0, bottom: 0, left: 0 } }, { opacity: 0.5 }]) {
+      expect(schemaVersion3Reasons(withPart(part))).toEqual(['look']);
+      expect(() => parseLinkProject(withPart(part))).toThrow('schema 3');
+      expect(parseLinkProject({ ...withPart(part), schemaVersion: 3 }).rundown[0]!.referenceMediaClips[0]!.canvasTransform).toMatchObject(part);
+    }
+    expect(() => parseLinkProject({ ...withPart({ crop: { top: 0, right: 0.5, bottom: 0, left: 0.5 } }), schemaVersion: 3 })).toThrow('裁剪掉的部分不能比整个画面还多');
+    expect(() => parseLinkProject({ ...withPart({ opacity: 1.5 }), schemaVersion: 3 })).toThrow();
+  });
+
+  it('检查面板的「送到 OBS / 用 OBS 里的样子」把镜像、裁剪、不透明度当成位置和大小一样看', () => {
+    const clip = (canvasTransform: ReferenceCanvasTransform, obsTransform?: 'project') => ({ canvasTransform, ...(obsTransform ? { obsTransform } : {}) });
+    expect(clipLookOnlyInPreview(clip({ ...plain, flipX: true }))).toBe(true);
+    expect(clipLookOnlyInPreview(clip({ ...plain, opacity: 0.5 }))).toBe(true);
+    expect(clipLookOnlyInPreview(clip({ ...plain, crop: { top: 0.1, right: 0, bottom: 0, left: 0 } }))).toBe(true);
+    expect(clipLookOnlyInPreview(clip({ ...plain, flipX: true }, 'project'))).toBe(false);
+    expect(clipObsTransform(clip({ ...plain, opacity: 0.5 }))).toBeUndefined();
+  });
+
+  it('时间线事件只给带裁剪的片段带上素材原来的尺寸；别的片段的事件和以前一样', () => {
+    const value = project(2, ['clip-0', 'clip-1']);
+    const cropped = parseLinkProject({ ...value, rundown: value.rundown.map(item => ({ ...item, referenceMediaClips: item.referenceMediaClips.map((entry, index) => index
+      ? { ...entry, canvasTransform: withLookParts(entry.canvasTransform, { crop: { top: 0.1, right: 0, bottom: 0, left: 0 } }) } : entry) })) });
+    const starts = collectManagedMediaTimeline(cropped, 'song').events.filter(event => event.phase === 'start');
+    expect(starts.map(event => event.sourceSize)).toEqual([undefined, source]);
+    expect(Object.keys(starts[0]!)).not.toContain('sourceSize');
   });
 });

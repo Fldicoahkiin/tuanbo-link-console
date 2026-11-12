@@ -76,7 +76,9 @@ export const linkManagedMediaEventSchema = z.object({
   relativePath: z.string().min(1),
   sourceOffsetMs: z.number().int().nonnegative(),
   embeddedAudioEnabled: z.boolean(),
-  transform: referenceCanvasTransformSchema
+  transform: referenceCanvasTransformSchema,
+  /** What a crop of `transform` is a share of (0.5.9 E17). */
+  sourceSize: z.object({ width: z.number().positive(), height: z.number().positive() }).strict().optional()
 });
 
 export const linkManagedMediaExecutionPayloadSchema = z.object({

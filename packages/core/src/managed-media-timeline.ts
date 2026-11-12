@@ -34,6 +34,8 @@ export type ManagedMediaEvent = {
   /** The clip's look in OBS, set on the decoder's scene item before it goes on air; undefined leaves OBS's look as it
    * is (`media-obs-transform.ts`). */
   transform?: ReferenceCanvasTransform | undefined;
+  /** The material's own size in pixels, the size a crop of `transform` is a share of (0.5.9 E17): only with a crop. */
+  sourceSize?: { width: number; height: number } | undefined;
 };
 
 export type ManagedMediaTimeline = {
@@ -74,6 +76,7 @@ export function collectManagedMediaTimeline(project: LinkProject, itemId: string
     if (layerIndex < 0) return refuse(clip.id, `素材片段“${clip.label}”引用不存在的视觉图层`);
     if (!item.visualLayers[layerIndex]?.visible) return [];
     const span = resolveTimelineClipSpan(clip, project.timebase.frameRate);
+    const look = asset.kind === 'audio' ? undefined : clipObsTransform(clip);
     const base = {
       itemId,
       clipId: clip.id,
@@ -90,7 +93,8 @@ export function collectManagedMediaTimeline(project: LinkProject, itemId: string
       embeddedAudioEnabled: asset.kind === 'audio' || asset.kind === 'video' && clip.embeddedAudioEnabled !== false
         && !(project.playbackSource === 'internal' && audioContainsMediaSource(item.referenceAudio, asset.id))
         && (project.playbackSource !== 'internal' || project.internalVideoAudio === true),
-      transform: asset.kind === 'audio' ? undefined : clipObsTransform(clip)
+      transform: look,
+      ...(look?.crop && asset.width !== undefined && asset.height !== undefined ? { sourceSize: { width: asset.width, height: asset.height } } : {})
     } as const;
     return [
       { ...base, id: `managed-media:${clip.id}:start`, phase: 'start', frameNumber: span.startFrame },

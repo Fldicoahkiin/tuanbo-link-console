@@ -132,11 +132,13 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
       const asset = project.mediaAssets.find((candidate) => candidate.id === clip.assetId);
       if (!asset) continue;
       // Only a clip whose look the project sends to OBS is sized by it; the others show as OBS has them (E16).
+      // A mirror is a negative scale; a crop does not change how much the picture is enlarged (E17).
       const look = clipObsTransform(clip);
-      const { scaleX, scaleY } = look ? obsMaterialPresentation(look, project.outputCanvas).sceneItemTransform : { scaleX: 1, scaleY: 1 };
-      if (asset.width && asset.height && (Math.abs(scaleX) > 1 || Math.abs(scaleY) > 1)) {
+      const size = asset.width && asset.height ? { width: asset.width, height: asset.height } : null;
+      const { scaleX, scaleY } = look && size ? obsMaterialPresentation(look, project.outputCanvas, size).sceneItemTransform : { scaleX: 1, scaleY: 1 };
+      if (size && (Math.abs(scaleX) > 1 || Math.abs(scaleY) > 1)) {
         checks.push(warning(`quality.upscale.${clip.id}`, `素材清晰度：${asset.name}`,
-          `原图 ${asset.width}×${asset.height}，会放大到约 ${Math.round(asset.width * Math.abs(scaleX))}×${Math.round(asset.height * Math.abs(scaleY))}；放大不会让画面更清晰`));
+          `原图 ${size.width}×${size.height}，会放大到约 ${Math.round(size.width * Math.abs(scaleX))}×${Math.round(size.height * Math.abs(scaleY))}；放大不会让画面更清晰`));
       }
       checks.push(context.mediaAssets[asset.id]?.fileAvailable
         ? passed(`asset.media.${clip.id}`, `时间线素材：${asset.name}`, '文件可读')

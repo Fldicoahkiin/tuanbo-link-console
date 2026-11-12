@@ -310,14 +310,32 @@ export const DEFAULT_REFERENCE_CANVAS_TRANSFORM = {
   rotation: 0
 } as const;
 
+const cropShare = z.number().finite().min(0).lt(1);
+/** How much of the source is cut off on each side, as a share of the source's own width or height (0.5.9 E17). The
+ * two opposite sides together leave some picture. */
+export const referenceCanvasCropSchema = z.object({ top: cropShare, right: cropShare, bottom: cropShare, left: cropShare }).strict()
+  .refine(crop => crop.left + crop.right < 1 && crop.top + crop.bottom < 1, { message: '裁剪掉的部分不能比整个画面还多' });
+
 export const referenceCanvasTransformSchema = z.object({
   x: z.number().finite().min(-1).max(2),
   y: z.number().finite().min(-1).max(2),
   scale: z.number().finite().min(0.05).max(8),
   scaleX: z.number().finite().min(0.05).max(8).default(1),
   scaleY: z.number().finite().min(0.05).max(8).default(1),
-  rotation: z.number().finite().min(-180).max(180)
+  rotation: z.number().finite().min(-180).max(180),
+  /** Mirrored left to right, top to bottom (0.5.9 E17). Absent: not mirrored. */
+  flipX: z.boolean().optional(),
+  flipY: z.boolean().optional(),
+  /** Absent: not cropped. */
+  crop: referenceCanvasCropSchema.optional(),
+  /** 0 (not seen) to 1. Absent: fully opaque. */
+  opacity: z.number().finite().min(0).max(1).optional()
 });
+
+/** Whether a clip's look carries any part only releases after 0.5.8 keep (0.5.9 E17): mirror, crop or opacity. */
+export function canvasTransformHasLookParts(transform: Pick<z.infer<typeof referenceCanvasTransformSchema>, 'flipX' | 'flipY' | 'crop' | 'opacity'>): boolean {
+  return transform.flipX !== undefined || transform.flipY !== undefined || transform.crop !== undefined || transform.opacity !== undefined;
+}
 
 export const visualLayerSchema = z.object({
   id: z.string().min(1),
@@ -427,6 +445,7 @@ export type LinkMediaFolder = z.infer<typeof linkMediaFolderSchema>;
 export type LinkMediaAsset = z.infer<typeof linkMediaAssetSchema>;
 export type ReferenceMediaClip = z.infer<typeof referenceMediaClipSchema>;
 export type ReferenceCanvasTransform = z.infer<typeof referenceCanvasTransformSchema>;
+export type ReferenceCanvasCrop = z.infer<typeof referenceCanvasCropSchema>;
 export type RundownItem = z.infer<typeof rundownItemSchema>;
 export type RundownItemContent = z.infer<typeof rundownItemContentSchema>;
 export type LinkProject = z.infer<typeof linkProjectSchema>;
@@ -506,7 +525,7 @@ export const legacyReadableSchemaVersion: LinkProjectSchemaVersion = 2;
 
 /** What in a project only releases after 0.5.8 keep: a song's shared beats (`rundownItem.music`, 0.5.9 E9), a song
  * that lasts past its music (`referenceAudio.timeline.durationMs`, 0.5.9 E13), a clip whose look the project sends to
- * OBS (`referenceMediaClip.obsTransform`, 0.5.9 E16). */
+ * OBS (`referenceMediaClip.obsTransform`, 0.5.9 E16) or that is mirrored, cropped or not fully opaque (0.5.9 E17). */
 export type SchemaVersion3Reason = 'beats' | 'blank' | 'look';
 export const schemaVersion3ReasonSchema = z.enum(['beats', 'blank', 'look']);
 
@@ -516,7 +535,7 @@ export function schemaVersion3Reasons(project: Pick<LinkProject, 'rundown'>): Sc
   const reasons: SchemaVersion3Reason[] = [];
   if (project.rundown.some((item) => item.music !== undefined)) reasons.push('beats');
   if (project.rundown.some((item) => item.referenceAudio?.timeline?.durationMs !== undefined)) reasons.push('blank');
-  if (project.rundown.some((item) => item.referenceMediaClips.some((clip) => clip.obsTransform !== undefined))) reasons.push('look');
+  if (project.rundown.some((item) => item.referenceMediaClips.some((clip) => clip.obsTransform !== undefined || canvasTransformHasLookParts(clip.canvasTransform)))) reasons.push('look');
   return reasons;
 }
 
