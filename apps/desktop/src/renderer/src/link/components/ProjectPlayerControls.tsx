@@ -90,7 +90,7 @@ export function ProjectPlayerTransport({ controller, state, engine, selectedItem
 /**
  * The player-bar slider is the song's own volume, saved in the project (2026-11-09, docs/SONG_VOLUME.md): the song in
  * the player when one is, otherwise the selected song. A drag is heard at once and saved when let go, as one undo step;
- * the program hears the saved volume through useSongVolumeSync. A MIDI CC7 volume holds this run only and is shown
+ * the program takes the saved volume with the project's next version. A MIDI CC7 volume holds this run only and is shown
  * next to it.
  */
 function SongVolumeSlider({ controller, state, selectedItem, notify }: {
@@ -108,7 +108,7 @@ function SongVolumeSlider({ controller, state, selectedItem, notify }: {
       case 'preview':
         setPreview({ itemId: step.itemId, volume: step.volume });
         // Heard only from the song in the player; the selected song that is not playing is only saved on release.
-        if (step.itemId === playing) controller?.previewVolume(step.volume);
+        if (step.itemId === playing) controller?.previewVolume(step.itemId, step.volume);
         return;
       case 'commit': {
         setPreview(null);
@@ -117,7 +117,7 @@ function SongVolumeSlider({ controller, state, selectedItem, notify }: {
         try { useDocumentStore.getState().execute(setItemVolumeCommand(step.itemId, step.volume, step.gestureId)); }
         catch (error) {
           // Not saved: the song in the player goes back to the volume it has.
-          if (step.itemId === playing) controller?.previewVolume(savedSongVolume(song));
+          if (step.itemId === playing) controller?.previewVolume(step.itemId, savedSongVolume(song));
           notify(`音量没有保存：${error instanceof Error ? error.message : String(error)}`);
         }
       }

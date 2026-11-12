@@ -25,7 +25,7 @@ function host() {
     play: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()), resume: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()), reset: vi.fn(() => Promise.resolve()), toggle: vi.fn(() => Promise.resolve()),
     seek: vi.fn(() => Promise.resolve()), scrub: vi.fn(() => Promise.resolve()), skip: vi.fn(() => Promise.resolve()),
-    setSongVolume: vi.fn(), previewVolume: vi.fn(), overrideVolume: vi.fn(), setEndAction: vi.fn(), setPlaylist: vi.fn(), toggleMtc: vi.fn(), receiveMidi: vi.fn(), fade: vi.fn(),
+    previewVolume: vi.fn(), overrideVolume: vi.fn(), setEndAction: vi.fn(), setPlaylist: vi.fn(), toggleMtc: vi.fn(), receiveMidi: vi.fn(), fade: vi.fn(),
     preloadSelected: vi.fn(), obsReconnected: vi.fn(), freeze: vi.fn(), reportUnavailable: vi.fn(), runtimeUnavailable: vi.fn(), reportFault: vi.fn(), clearFault: vi.fn(), externalStop: vi.fn(),
     setWatched: vi.fn(), updateProject: vi.fn(), currentProject: vi.fn(), getAudioAnalysis: () => null, dispose: vi.fn(() => Promise.resolve()) } };
 }
@@ -402,15 +402,16 @@ it('关音频和画面还没完时新页面打开节目：等它关完再建新�
   expect(await service.open(request())).toBe('opened'); expect(create).toHaveBeenCalledTimes(3);
 });
 
-it('播放条拖动只试听，保存的歌曲音量单独送到节目；没标明试听的音量请求不进入控制器（2026-11-09）', async () => {
+it('播放条拖动只试听，带着拖的是哪首；保存的音量只随工程的版本到节目，没有别的控制；没标明试听的音量请求不进入控制器（2026-11-09，S10）', async () => {
   const output = host(), service = new NativeProgramService(vi.fn(() => output), vi.fn(), () => Promise.resolve(), unlicensed, quiet()), input = request();
   await service.open(input);
-  await service.control(command(input, { kind: 'volume', volume: 40, preview: true }));
-  expect(output.controller.previewVolume).toHaveBeenCalledWith(40);
-  await service.control(command(input, { kind: 'songVolume', itemId: 'song', volume: 40 }));
-  expect(output.controller.setSongVolume).toHaveBeenCalledWith('song', 40);
-  await expect(service.control({ version: 1, ownerId: input.ownerId, operation: { kind: 'volume', volume: 40 } })).rejects.toThrow();
+  await service.control(command(input, { kind: 'volume', itemId: 'dragged', volume: 40, preview: true }));
+  expect(output.controller.previewVolume).toHaveBeenCalledWith('dragged', 40);
+  await expect(service.control({ version: 1, ownerId: input.ownerId, operation: { kind: 'songVolume', itemId: 'song', volume: 40 } })).rejects.toThrow();
+  await expect(service.control({ version: 1, ownerId: input.ownerId, operation: { kind: 'volume', itemId: 'song', volume: 40 } })).rejects.toThrow();
+  await expect(service.control({ version: 1, ownerId: input.ownerId, operation: { kind: 'volume', volume: 40, preview: true } })).rejects.toThrow();
   expect(output.controller.overrideVolume).not.toHaveBeenCalled();
+  expect(output.controller.previewVolume).toHaveBeenCalledOnce();
 });
 
 // 0.5.9 S7：一个页面一个长期的节目，修改只送新的一版（design 02 §3.3、§3.4）。
@@ -621,7 +622,7 @@ it('开歌的控制等它前面送来的版本查完再播；停止不等，等�
     change: { kind: 'full', document: JSON.stringify({ ...f.project, name }) } }, slow);
   const answered = document(2, '第二版');
   const played = f.service.control(command(f.input, { kind: 'play', itemId: 'a', paused: false }));
-  const volume = f.service.control(command(f.input, { kind: 'volume', volume: 40, preview: true }));
+  const volume = f.service.control(command(f.input, { kind: 'volume', itemId: 'a', volume: 40, preview: true }));
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(f.output.controller.play).not.toHaveBeenCalled(); expect(f.output.controller.previewVolume).not.toHaveBeenCalled();
   release(); await answered; await played; await volume;

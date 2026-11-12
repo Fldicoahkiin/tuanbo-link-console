@@ -248,8 +248,7 @@ export class NativeProgramService {
       case 'seek': return player.seek(operation.positionMs);
       case 'scrub': return player.scrub(operation.itemId, operation.positionMs);
       case 'skip': return player.skip(operation.direction);
-      case 'volume': return player.previewVolume(operation.volume);
-      case 'songVolume': return player.setSongVolume(operation.itemId, operation.volume);
+      case 'volume': return player.previewVolume(operation.itemId, operation.volume);
       case 'endAction': return player.setEndAction(operation.endAction);
       case 'playlist': return player.setPlaylist(operation.playlistId);
       case 'preload': return player.preloadSelected(operation.itemId);

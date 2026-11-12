@@ -191,7 +191,7 @@ it('开歌在等最新一版编好时按了停止：停止马上发出去，等�
   const encoding = new Promise<void>(resolve => { finish = resolve; });
   f.dependencies.encode.mockImplementation(value => encoding.then(() => JSON.stringify(value)));
   const play = f.player.play('song');
-  f.player.previewVolume(30);
+  f.player.previewVolume('song', 30);
   await f.player.stop();
   expect(f.api.controlNativeProgram.mock.calls.map(call => call[0].operation.kind)).toEqual(['stop']);
   finish(); await play; await settle();

@@ -6,7 +6,6 @@ import { emptyInternalPlayerState, firstTimeWarning, mtcOutputSettings, toUserEr
 import { RemoteNativeProgramPlayer, type RemotePlayerDependencies } from './runtime/remote-native-program-player';
 import { programVersionKey, type ProgramDocument } from './runtime/program-document-feed';
 import { programDocumentCodec } from './stores/project-codec';
-import { songVolumeSync } from './runtime/song-volume-sync';
 import { playerEngineLabel } from './view-models/internal-audio-engine';
 import type { LinkRuntimeCoordinator } from './runtime/link-runtime-coordinator';
 import { useDocumentStore } from './stores/document-store';
@@ -78,13 +77,6 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     void input.connect(controlInputName).catch((error: unknown) => controller.reportUnavailable(`播放控制 MIDI 不可用：${String(error)}`));
     return () => input.dispose();
   }, [controller, controlInputName]);
-  useEffect(() => {
-    if (!controller || !project) return;
-    // A held song takes the next version only after 停止 (0.5.9 S7); its saved volume reaches it at once (song-volume-sync).
-    const sync = songVolumeSync(project, (itemId, volume) => controller.setSongVolume(itemId, volume));
-    sync(useDocumentStore.getState().project);
-    return useDocumentStore.subscribe(state => sync(state.project));
-  }, [controller, project]);
   // The window's playback keys while 联动台播放 plays the show (keys/key-router.ts): Escape stops, Space presses the
   // play button of the page on screen (its own registration; a page without one does nothing), ↑↓ go to the previous or
   // next song when that is turned on, a song's own shortcut plays that song.

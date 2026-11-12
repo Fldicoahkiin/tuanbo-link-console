@@ -92,9 +92,6 @@ export class NativeProgramPlayer {
   private readonly unsubscribe: () => void;
   private readonly analysis = nativeAudioAnalysis(() => this.native);
   private volumePending: { volume: number; durationMs: number } | null = null;
-  /** Saved song volumes the window's project changed after this program opened with `project` (setSongVolume). The
-   * song's own volume is this, else what `project` saved (2026-11-09). */
-  private readonly songVolumes = new Map<string, number>();
   private sendingVolume = false;
   private preloadGeneration = 0;
   /** The selected song's preparation: its picture as this program's project had it at `revision`, in `projectPath`. */
@@ -165,13 +162,9 @@ export class NativeProgramPlayer {
     const before = this.project;
     this.project = project; this.revision = revision; this.projectPath = projectPath;
     const held = this.holding() ? this.state.itemId : null;
-    // The saved song volumes heard before this version (setSongVolume) are in it: with no song held all of them; else
-    // those of the songs whose saved volume it changes, so the version and the volume heard never disagree.
-    if (!held) { this.songVolumes.clear(); return; }
-    for (const itemId of [...this.songVolumes.keys()]) {
-      const was = before.rundown.find(item => item.id === itemId), now = project.rundown.find(item => item.id === itemId);
-      if (!now || !was || savedSongVolume(was) !== savedSongVolume(now)) this.songVolumes.delete(itemId);
-    }
+    // Every song's saved volume is the one this version has (S10): the next song starts at it, and the held song takes
+    // it below. Nothing else sends a saved volume.
+    if (!held) return;
     // A song pressed whose start has not run yet starts with the newest version (play): nothing to take or to say here.
     if (this.onAir?.itemId !== held) return;
     const started = this.onAir.project;
@@ -591,18 +584,13 @@ export class NativeProgramPlayer {
     if (!this.state.mtcEnabled && this.native && !['preparing', 'stopped', 'error'].includes(this.native.status)) void this.command({ kind: 'stop-mtc' }).catch(error => this.reportUnavailable(`停止时间码失败：${toUserErrorMessage(error)}`));
     else if (this.state.mtcEnabled) this.reportUnavailable('下次播放时会重新准备时间码，这首歌不会中途补发。');
   }
-  /** A song's own volume was saved (2026-11-09; the window's useSongVolumeSync sends it): the song plays at it from
-   * now on, and at once when it is the song in the player and no CC7 volume holds this run. */
-  setSongVolume(itemId: string, volume: number): void {
-    if (!Number.isFinite(volume)) return;
-    this.songVolumes.set(itemId, clampVolume(volume));
-    // While the song is prepared, its start reads the volume (play).
-    if (itemId === this.state.itemId && ['playing', 'paused'].includes(this.state.status) && this.state.volumeOverride == null) this.output(this.outputVolume());
-  }
-  /** The player-bar slider while it is dragged: heard at once, saved nowhere; the release saves it (setSongVolume).
-   * The operator took the slider, so a CC7 volume of this run gives way to it. */
-  previewVolume(volume: number): void {
-    if (!Number.isFinite(volume) || !['playing', 'paused'].includes(this.state.status)) return;
+  /** The player-bar slider of `itemId` while it is dragged: heard at once, saved nowhere. The release saves it in the
+   * project, and the version that has it sets the output (updateProject), so the last thing heard is the saved volume
+   * whichever arrives first: the drag's last value is the one saved. Only the song in the player hears it: a drag that
+   * began on a song that has since given way changes nothing of the one playing now (S10). The operator took the
+   * slider, so a CC7 volume of this run gives way to it. */
+  previewVolume(itemId: string, volume: number): void {
+    if (!Number.isFinite(volume) || itemId !== this.state.itemId || !['playing', 'paused'].includes(this.state.status)) return;
     if (this.state.volumeOverride != null) this.update({ volumeOverride: null });
     this.output(clampVolume(volume));
   }
@@ -620,7 +608,7 @@ export class NativeProgramPlayer {
     if (!itemId) return 100;
     // As saved in the newest version; a held song it no longer has keeps the volume of the version it started with.
     const item = this.project.rundown.find(entry => entry.id === itemId) ?? this.songVersion(itemId).project.rundown.find(entry => entry.id === itemId);
-    return this.songVolumes.get(itemId) ?? (item ? savedSongVolume(item) : 100);
+    return item ? savedSongVolume(item) : 100;
   }
   private output(volume: number): void { this.reflectGain = false; this.update({ volume }); this.queueVolume(volume / 100, 0); }
   getAudioAnalysis() { return this.state.status === 'playing' ? this.analysis : null; }

@@ -90,10 +90,9 @@ const operation = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('seek'), positionMs: time }).strict(),
   z.object({ kind: z.literal('scrub'), itemId: z.string(), positionMs: time }).strict(),
   z.object({ kind: z.literal('skip'), direction: z.union([z.literal(-1), z.literal(1)]) }).strict(),
-  // The player-bar slider while it is dragged: heard at once, saved nowhere (song volume, 2026-11-09).
-  z.object({ kind: z.literal('volume'), volume: z.number().min(0).max(100), preview: z.literal(true) }).strict(),
-  // A song's saved volume changed in the window's project (useSongVolumeSync); the program plays it from now on.
-  z.object({ kind: z.literal('songVolume'), itemId: z.string().min(1), volume: z.number().min(0).max(100) }).strict(),
+  // The player-bar slider of `itemId` while it is dragged: heard at once, saved nowhere (song volume, 2026-11-09). The
+  // saved volume reaches the program only in the project's versions (S10).
+  z.object({ kind: z.literal('volume'), itemId: z.string().min(1), volume: z.number().min(0).max(100), preview: z.literal(true) }).strict(),
   z.object({ kind: z.literal('endAction'), endAction: z.enum(['stop', 'next', 'loop', 'pause']) }).strict(),
   z.object({ kind: z.literal('playlist'), playlistId: z.string() }).strict(),
   z.object({ kind: z.literal('preload'), itemId: z.string() }).strict(),

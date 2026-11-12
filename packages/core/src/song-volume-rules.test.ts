@@ -62,7 +62,15 @@ function program(opened: LinkProject) {
   const player = new NativeProgramPlayer(opened, 'C:/show/每首歌的音量.tblink', 1, dependencies, api, lighting);
   /** What the engine plays at now, 0–100. */
   const gain = async (): Promise<number> => { await new Promise(resolve => setTimeout(resolve, 0)); return Math.round((status?.gain ?? Number.NaN) * 100); };
-  return { player, api, gain, state: () => state };
+  // The window's project as the version stream sends it: the only way a saved volume reaches the program (S10).
+  let current = opened, revision = 1;
+  /** The window saved `volume` for `itemId` (the slider let go, the properties field, undo): its next version arrives. */
+  const saved = (itemId: string, volume: number): LinkProject => {
+    current = setItemVolumeCommand(itemId, volume, crypto.randomUUID()).execute(current);
+    player.updateProject(current, ++revision, 'C:/show/每首歌的音量.tblink');
+    return current;
+  };
+  return { player, api, gain, saved, project: () => current, state: () => state };
 }
 
 describe('一次拖动是一次修改、一步撤销', () => {
@@ -122,7 +130,7 @@ describe('播放中保存的音量一变，输出跟着变', () => {
     const f = program(project());
     await f.player.play('甲');
     expect(await f.gain()).toBe(80);
-    f.player.setSongVolume('甲', 30);
+    f.saved('甲', 30);
     expect(await f.gain()).toBe(30);
     await f.player.pause(); await f.player.resume();
     expect(await f.gain()).toBe(30);
@@ -134,7 +142,7 @@ describe('播放中保存的音量一变，输出跟着变', () => {
     await f.player.pause(); await f.player.resume();
     expect(await f.gain()).toBe(30);
     // Another song's saved volume changed while this one plays: this one is untouched, that one starts at it.
-    f.player.setSongVolume('乙', 65);
+    f.saved('乙', 65);
     expect(await f.gain()).toBe(30);
     await f.player.play('乙');
     // It starts at that volume, not at the one the program opened with and then corrected.
@@ -143,20 +151,48 @@ describe('播放中保存的音量一变，输出跟着变', () => {
     await f.player.dispose();
   });
 
-  it('拖动中的试听不被覆盖；松手保存以后输出等于保存的值', async () => {
+  it('拖动中的试听不被覆盖；松手保存以后输出等于保存的值，不管试听和新的一版谁先到', async () => {
+    // The drag's previews reach the program in order (one control queue); the version comes on its own channel, so it may
+    // come before the drag's last preview, or after it. The drag's last value is the one saved.
+    for (const order of [['preview', 'version'], ['version', 'preview']] as const) {
+      const f = program(project());
+      await f.player.play('甲');
+      f.player.previewVolume('甲', 70);
+      expect(await f.gain()).toBe(70);
+      for (const step of order) if (step === 'preview') f.player.previewVolume('甲', 55); else f.saved('甲', 55);
+      expect(await f.gain()).toBe(55);
+      expect(f.state().volume).toBe(55);
+      // Paused and played on, placed again: the saved volume, never the one before the drag.
+      await f.player.pause(); await f.player.resume();
+      await f.player.seek(1_000); await f.player.resume();
+      expect(await f.gain()).toBe(55);
+      await f.player.dispose();
+    }
+  });
+
+  it('拖的不是台上那首（停着时拖选中的歌、或拖动时已经换了歌）：在播的歌一点不变；那首歌下次按保存的音量开始', async () => {
     const f = program(project());
     await f.player.play('甲');
-    f.player.previewVolume(55);
-    expect(await f.gain()).toBe(55);
-    f.player.setSongVolume('甲', 55);
-    expect(await f.gain()).toBe(55);
-    expect(f.state().volume).toBe(55);
+    f.player.previewVolume('乙', 10);
+    expect(await f.gain()).toBe(80);
+    // A drag on 甲, and 乙 starts while it goes on: what is still on its way for 甲 changes nothing of 乙.
+    f.player.previewVolume('甲', 30);
+    expect(await f.gain()).toBe(30);
+    await f.player.play('乙');
+    expect(await f.gain()).toBe(40);
+    f.player.previewVolume('甲', 20);
+    f.saved('甲', 20);
+    expect(await f.gain()).toBe(40);
+    expect(f.state().volume).toBe(40);
+    await f.player.play('甲');
+    expect(f.api.prepareNativePlayback.mock.calls.at(-1)?.[0].snapshot.volume).toBe(0.2);
+    expect(await f.gain()).toBe(20);
     await f.player.dispose();
   });
 });
 
 describe('MIDI CC7 是这一遍的临时音量', () => {
-  it('CC7 不改工程，也不进撤销；保存的音量变了也不顶掉它', async () => {
+  it('CC7 不改工程，也不进撤销；保存的音量变了也不顶掉它，记着，CC7 让开以后就是它', async () => {
     const opened = project(), saved = structuredClone(opened);
     const f = program(opened);
     await f.player.play('甲');
@@ -164,8 +200,27 @@ describe('MIDI CC7 是这一遍的临时音量', () => {
     expect(await f.gain()).toBe(100);
     expect(f.state().volumeOverride).toBe(100);
     expect(opened).toEqual(saved);
-    f.player.setSongVolume('甲', 20);
+    f.saved('甲', 20);
     expect(await f.gain()).toBe(100);
+    expect(f.state()).toMatchObject({ volume: 100, volumeOverride: 100 });
+    // Stopped and played again, the CC7 volume is gone: the volume saved meanwhile.
+    await f.player.stop();
+    await f.player.play('甲');
+    expect(await f.gain()).toBe(20);
+    await f.player.dispose();
+  });
+
+  it('CC7 以后拖播放条：播放条接过来，松手以后是保存的值', async () => {
+    const f = program(project());
+    await f.player.play('甲');
+    f.player.receiveMidi(Uint8Array.from([0xb0, 7, 0]));
+    expect(await f.gain()).toBe(0);
+    f.player.previewVolume('甲', 60);
+    expect(f.state().volumeOverride).toBeNull();
+    expect(await f.gain()).toBe(60);
+    f.saved('甲', 60);
+    await f.player.pause(); await f.player.resume();
+    expect(await f.gain()).toBe(60);
     await f.player.dispose();
   });
 

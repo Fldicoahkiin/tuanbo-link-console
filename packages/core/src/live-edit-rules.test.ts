@@ -116,18 +116,15 @@ describe('音量：在播的歌保存的音量改了当即生效', () => {
     expect(f.state()).toMatchObject({ volume: 30, volumeOverride: 30 });
   });
 
-  it('和 songVolume 控制不打架：不管谁先到，最后都等于保存的音量；撤销回去也一样', async () => {
+  it('保存的音量只随版本来：撤销回去也是新的一版，输出跟着它，不留着之前的值', async () => {
     const v1 = project(), f = program(v1);
     await f.player.play('甲');
-    f.player.setSongVolume('甲', 50);
-    const v2 = edited(v1, '甲', withPlayback({ volume: 50 }));
-    f.player.updateProject(v2, 2, 'C:/show/拿着歌时改.tblink');
+    f.player.updateProject(edited(v1, '甲', withPlayback({ volume: 50 })), 2, 'C:/show/拿着歌时改.tblink');
     expect(await f.gain()).toBe(50);
-    // Undo: only the version arrives (the volume sync sends the saved volume again, here it comes after).
+    // Undo: the version before arrives again, and it alone puts the output back.
     f.player.updateProject(v1, 3, 'C:/show/拿着歌时改.tblink');
     expect(await f.gain()).toBe(80);
-    f.player.setSongVolume('甲', 80);
-    expect(await f.gain()).toBe(80);
+    expect(f.state().volume).toBe(80);
   });
 });
 

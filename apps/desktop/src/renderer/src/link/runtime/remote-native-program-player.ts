@@ -117,10 +117,9 @@ export class RemoteNativeProgramPlayer {
   reportUnavailable(message: string): void { void this.send({ kind: 'unavailable', message }); }
   runtimeUnavailable(message: string): void { void this.send({ kind: 'runtimeUnavailable', message }); }
   reportFault(message: string): void { void this.send({ kind: 'fault', message }); }
-  /** The player-bar slider while it is dragged: heard at once, saved nowhere (the release saves it in the project). */
-  previewVolume(volume: number): void { void this.send({ kind: 'volume', volume, preview: true }); }
-  /** A song's saved volume changed in this window's project (useSongVolumeSync). */
-  setSongVolume(itemId: string, volume: number): void { void this.send({ kind: 'songVolume', itemId, volume }); }
+  /** The player-bar slider of `itemId` while it is dragged: heard at once, saved nowhere (the release saves it in the
+   * project, and the program takes it with that version). */
+  previewVolume(itemId: string, volume: number): void { void this.send({ kind: 'volume', itemId, volume, preview: true }); }
   setEndAction(endAction: InternalPlayerState['endAction']): void { void this.send({ kind: 'endAction', endAction }); }
   setPlaylist(playlistId: string): void { void this.send({ kind: 'playlist', playlistId }); }
   toggleMtc(): void { void this.send({ kind: 'toggleMtc' }); }

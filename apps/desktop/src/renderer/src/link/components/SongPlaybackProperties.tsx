@@ -57,7 +57,7 @@ export function SongMtcStartInput({ item, notify, ...props }: Omit<InputHTMLAttr
 
 /**
  * The song's own volume (2026-11-09, docs/SONG_VOLUME.md), the same value as the player-bar slider. It stays editable
- * while 联动台播放 holds the song, and the song in the player plays at it at once (useSongVolumeSync).
+ * while 联动台播放 holds the song, and the song in the player plays at it at once (the project's version, S10).
  */
 export function SongVolumeField({ item, notify, disabled = false }: { item: RundownItem; notify: Notify; disabled?: boolean }): JSX.Element {
   const commit = (volume: number): boolean => {
