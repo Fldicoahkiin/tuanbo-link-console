@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { clockFromNativeStatus, createObsProgramSnapshot, frameNumberToTimecode, type LinkDesktopApi, type ProgramClock } from '@tb/core/link';
 import { createEmptyLinkProject, p1FollowPictureSchema, parseLinkProject, type LinkAction, type LinkProject, type NativeObsPrepare, type NativeObsStatus, type NativePlayerStatus } from '@tb/schema';
 import { NativeObsHost } from './native-obs-host';
+import { NativeObsPreloadPool, ObsPreloadRefused } from './native-obs-preload';
 import { pictureReadBack, type NativeObsOutputs } from './native-obs-outputs';
 import { P1PictureOutput } from './p1-picture-output';
 
@@ -26,6 +27,19 @@ function showProject(playbackSource: 'p1' | 'internal' = 'p1', name = 'P1 画面
       referenceMediaClips: [{ id: 'dance', assetId: 'video', label: '舞蹈', layerId: 'clips', startTimecode: at(0), durationMs: 10_000, sourceOffsetMs: 0 }],
       referenceAudio: { assetId: 'song-audio', relativePath: 'assets/song.wav', sha256: 'e'.repeat(64), durationMs: 20_000 } },
     { id: 'plain', title: '没有画面', cues: [], referenceAudio: { assetId: 'plain-audio', relativePath: 'assets/plain.wav', sha256: 'f'.repeat(64), durationMs: 20_000 } }] });
+}
+
+/** `showProject` with two more songs of their own videos (`two`, `three`), so either can be made ready while `song`
+ * plays: they share no material with it. */
+function threeSongs(): LinkProject {
+  const project = showProject();
+  const at = (ms: number) => frameNumberToTimecode(Math.round(ms * 30 / 1000), '30');
+  const song = (id: string) => ({ id, title: `歌${id}`, visualLayers: [{ id: `${id}-clips`, name: '素材' }], cues: [],
+    referenceMediaClips: [{ id: `${id}-clip`, assetId: `${id}-video`, label: id, layerId: `${id}-clips`, startTimecode: at(0), durationMs: 10_000, sourceOffsetMs: 0 }],
+    referenceAudio: { assetId: `${id}-audio`, relativePath: `assets/${id}.wav`, sha256: 'e'.repeat(64), durationMs: 20_000 } });
+  const video = (id: string) => ({ id: `${id}-video`, name: `视频${id}`, kind: 'video' as const, folderId: null, relativePath: `assets/${id}.mp4`, sha256: 'b'.repeat(64),
+    byteLength: 1, durationMs: 600_000, width: 1080, height: 1920 });
+  return parseLinkProject({ ...project, mediaAssets: [...project.mediaAssets, video('two'), video('three')], rundown: [...project.rundown, song('two'), song('three')] });
 }
 
 /** One OBS request as the tests compare them. */
@@ -62,15 +76,24 @@ function fixture(options: { mode?: 'manual' | 'auto'; refuse?: (action: LinkActi
       heldDecoders: () => new Map<string, string>(), handOver: () => Promise.resolve(),
       now: () => now, seekMedia: event => { sent.push(`seek:${event.clipId}@${Math.round(event.sourceOffsetMs / 100) * 100}`);
         sound.push({ clipId: event.clipId, on: event.embeddedAudioEnabled }); return Promise.resolve(); },
-      executeManagedMediaEvent: ({ event }) => { sent.push(`media:${event.phase}:${event.clipId}`); sound.push({ clipId: event.clipId, on: event.embeddedAudioEnabled }); return Promise.resolve(); },
+      executeManagedMediaEvent: ({ event }) => { sent.push(`media:${event.phase}:${event.clipId}`); sound.push({ clipId: event.clipId, on: event.embeddedAudioEnabled });
+        return Promise.resolve(); },
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-12T00:00:00Z', monotonicMs: now })
     } as NativeObsOutputs;
   };
-  const host = new NativeObsHost({ audio: () => audio, changed: state => programStates.push(state), error: message => logs.push(`host:${message}`),
-    outputs: async (request, _positionMs, _assertCurrent, source) => { await options.outputs?.(); made.push({ request, music: source === null }); return outputs(request); } });
+  // The one pool beside the one host, as link-main wires them: its admission refuses while anyone's picture is on.
+  const pool: NativeObsPreloadPool = new NativeObsPreloadPool({
+    authorize: async () => { if (audio?.status === 'playing' || host.busy) throw new ObsPreloadRefused('正在播放时不能准备另一个节目'); await host.stop(); },
+    create: (request, _positionMs, music) => { made.push({ request, music }); return outputs(request); },
+    report: failure => host.report(failure)
+  });
+  const host: NativeObsHost = new NativeObsHost({ audio: () => audio, changed: state => programStates.push(state), error: message => logs.push(`host:${message}`),
+    outputs: async (request, positionMs, assertCurrent, source) => { await options.outputs?.(); return pool.take(request, positionMs, assertCurrent, source === null); },
+    prepareNextFiles: async (request, assertCurrent, source) => { await pool.prepareNext(request, assertCurrent, source === null); },
+    cancelNextFiles: sessionId => pool.cancelNext(sessionId) });
   const changed = vi.fn();
   const authorize = vi.fn(options.authorize ?? (() => Promise.resolve()));
-  const picture = new P1PictureOutput({ host, project, projectPath: 'C:/shows/p1.tblink', mode: options.mode ?? 'manual', preciseSeeking: true, authorize, changed,
+  const picture = new P1PictureOutput({ host, pool, project, projectPath: 'C:/shows/p1.tblink', mode: options.mode ?? 'manual', preciseSeeking: true, authorize, changed,
     log: (level, message) => logs.push(`${level}:${message}`) });
   /** P1's clock of `itemId`, as P1FollowSession sends it; `positionMs` is also the time on the outputs' clock. */
   const clock = (state: ProgramClock['state'], positionMs: number, generation = 1, sessionId = P1, itemId = 'song'): ProgramClock => {
@@ -90,7 +113,7 @@ function fixture(options: { mode?: 'manual' | 'auto'; refuse?: (action: LinkActi
   const programClock = (patch: Partial<NativePlayerStatus>) => { const status = program(patch); now = status.positionMs; host.observe(clockFromNativeStatus(status, String(Math.round(Number(process.hrtime.bigint()) / 100)))); };
   const programRequest = (programProject: LinkProject): NativeObsPrepare => ({ version: 1, sessionId: PROGRAM, generation: 1, preciseSeeking: false, projectPath: 'C:/shows/program.tblink',
     snapshot: createObsProgramSnapshot(programProject, 'song', 1) });
-  return { project, host, picture, sent, sound, made, held, released, logs, programStates, changed, authorize, clock, play, program, programClock, programRequest, settle };
+  return { project, host, pool, picture, sent, sound, made, held, released, logs, programStates, changed, authorize, clock, play, program, programClock, programRequest, settle };
 }
 
 /** A gate a preparation waits at until the test opens it. */
@@ -195,7 +218,7 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     expect(f.released).toEqual([]);
     await f.play(0, 500, 1, NEXT);
     expect(f.released).toEqual(['song']);
-    expect(f.host.status).toMatchObject({ sessionId: NEXT, state: 'running' });
+    expect(f.host.status).toMatchObject({ itemId: 'song', state: 'running', generation: f.made[1]!.request.generation });
     // P1 changes to a song without a picture: the last frame stays until P1 plays it, then goes.
     f.picture.observe(f.clock('stopped', 500, 1, NEXT)); await settle();
     const plain = '2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e';
@@ -228,10 +251,10 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     holding.open(); await settle();
     await f.play(350, 1500, 1, NEXT);
     expect(f.sent.slice(before)).toEqual([]);
-    expect(f.made.map(entry => entry.request.sessionId)).toEqual([P1]);
+    expect(f.made).toHaveLength(1);
     expect(f.held).toEqual(['song:dance']);
     expect(f.picture.state).toBeNull();
-    expect(f.host.status).toMatchObject({ sessionId: P1, state: 'stopped' });
+    expect(f.host.status).toMatchObject({ itemId: 'song', state: 'stopped', generation: f.made[0]!.request.generation });
     expect(f.logs).toEqual([]);
     // Only that song's stop cancels it: a late stop of the song before leaves the one being prepared alone.
     const later = gate();
@@ -239,10 +262,11 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     g.picture.observe(g.clock('ready', 0));
     await g.play(0, 1500);
     g.picture.observe(g.clock('ready', 0, 1, NEXT)); await settle();
-    const stale = g.host.stopSource(g.picture.source, P1);
+    const stale = g.host.stopSource(g.picture.source, g.made[0]!.request.generation);
     later.open(); await stale;
     await g.play(0, 500, 1, NEXT);
-    expect(g.host.status).toMatchObject({ sessionId: NEXT, state: 'running' });
+    expect(g.host.status).toMatchObject({ state: 'running' });
+    expect(g.host.status!.generation).toBeGreaterThan(g.made[0]!.request.generation);
   });
 
   it('还在准备时关掉跟随：输出还没做好就关，这首的画面一点不发，做出来的输出放开，什么都不留', async () => {
@@ -253,8 +277,8 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     const closed = f.picture.close();
     making.open(); await closed; await settle();
     expect(f.sent).toEqual([]);
-    expect(f.made).toHaveLength(1);
-    expect(f.released).toEqual(['song']);
+    // Whatever outputs were made for it are let go (the pool's own check may stop it before any are made).
+    expect(f.released).toEqual(f.made.map(entry => entry.request.snapshot.item.id));
     expect(f.held).toEqual([]);
     expect(f.picture.state).toBeNull();
     expect(f.host.status).toBeNull();
@@ -265,7 +289,7 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     await g.play(0, 300);
     g.picture.observe(g.clock('stopped', 300)); await settle();
     again.open(); await settle();
-    expect([g.sent, g.held, g.released]).toEqual([[], [], ['song']]);
+    expect([g.sent, g.held, g.released]).toEqual([[], [], g.made.map(entry => entry.request.snapshot.item.id)]);
     expect(g.picture.state).toBeNull();
     // A follow that closes while the program's picture is being prepared leaves that preparation alone.
     const programs = gate();
@@ -315,7 +339,7 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     await f.play(0, 1000);
     await f.host.close();
     await f.play(1050, 2500);
-    expect(f.host.status).toMatchObject({ sessionId: P1, state: 'running' });
+    expect(f.host.status).toMatchObject({ sessionId: expect.not.stringMatching(PROGRAM), itemId: 'song', state: 'running' });
     expect(f.sent.at(-1)).toBe('切到机位B');
     expect([f.held, f.released]).toEqual([[], []]);
     await f.picture.close();
@@ -333,12 +357,12 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     await expect(p1.host.prepare(p1.programRequest(program))).rejects.toThrow('OBS 的画面正在跟随 P1（工程「P1 画面」），这首歌不联动画面，音乐和时间码照常');
     // Its stop of the picture it never got stops nothing of the follow's.
     await expect(p1.host.stopOwned({ version: 1, sessionId: PROGRAM, generation: 1 })).resolves.toBeUndefined();
-    expect(p1.host.status).toMatchObject({ sessionId: P1, state: 'running' });
+    expect(p1.host.status).toMatchObject({ sessionId: expect.not.stringMatching(PROGRAM), itemId: 'song', state: 'running' });
     // The program's music plays: its clocks do not touch the follow's picture, which goes on.
     p1.programClock({ status: 'playing', generation: 2, positionMs: 0 });
     for (let ms = 50; ms <= 500; ms += 50) p1.programClock({ positionMs: ms });
     await p1.play(1050, 2500);
-    expect(p1.host.status).toMatchObject({ sessionId: P1, state: 'running' });
+    expect(p1.host.status).toMatchObject({ sessionId: expect.not.stringMatching(PROGRAM), itemId: 'song', state: 'running' });
     expect(p1.sent.at(-1)).toBe('切到机位B');
     expect(p1.made.map(entry => entry.music)).toEqual([false]);
 
@@ -355,6 +379,144 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     expect(f.host.status).toMatchObject({ sessionId: PROGRAM, state: 'running' });
     expect(f.made.map(entry => entry.music)).toEqual([true]);
     expect(f.logs).toEqual([expect.stringContaining('跟随 P1 时这首歌的画面没有准备好，音乐、动作 MIDI 和灯光照常：OBS 的画面正在给联动台播放的节目用')]);
+  });
+
+  it('提前准备（2026-11-12）：手动待命时经提前准备那一处准备好，OBS 上的画面一点不动；P1 开始放，用的就是准备好的那一份，画面按 P1 的位置接上', async () => {
+    const f = fixture();
+    // A song before, stopped on its last frame.
+    f.picture.observe(f.clock('ready', 0));
+    await f.play(0, 1500);
+    f.picture.observe(f.clock('stopped', 1500)); await settle();
+    const sent = f.sent.length;
+    f.picture.expect('song'); await settle();
+    expect(f.made.map(entry => [entry.request.snapshot.item.id, entry.music])).toEqual([['song', false], ['song', false]]);
+    // Nothing reaches OBS, no session is prepared, the last frame stays.
+    expect(f.sent.length).toBe(sent);
+    expect(f.host.busy).toBe(false);
+    expect(f.host.status).toMatchObject({ itemId: 'song', state: 'stopped', generation: f.made[0]!.request.generation });
+    expect([f.held, f.released]).toEqual([['song:dance'], []]);
+    expect(f.picture.state).toBeNull();
+    expect(f.logs).toEqual([expect.stringMatching(/^info:「歌」的画面已提前准备好，用了 \d+ 毫秒$/)]);
+    // P1 plays it; its first position reaches us at 300 ms, and the picture is up before the next one.
+    f.picture.observe(f.clock('ready', 0, 1, NEXT));
+    f.picture.observe(f.clock('running', 300, 1, NEXT, 'song'));
+    for (let turn = 0; turn < 5; turn++) await settle();
+    await f.play(350, 1500, 1, NEXT);
+    // The very outputs made ready (made once), the session prepared at the head, the picture joins at P1's position.
+    expect(f.made).toHaveLength(2);
+    // Camera A (0–1 s, where P1 is), then the clip taken over from the last frame and started again.
+    expect(f.sent.slice(sent)).toEqual(['切到机位A', 'media:stop:dance', 'media:start:dance']);
+    expect(f.host.status).toMatchObject({ itemId: 'song', state: 'running' });
+    expect(f.host.status?.fault ?? null).toBeNull();
+    expect(f.released).toEqual(['song']);
+  });
+
+  it('提前准备：自动选歌按顺序，这首在放时下一首准备好（不加联动台的音乐）；P1 放下一首，上一首停在最后一帧，下一首用准备好的那一份', async () => {
+    const f = fixture({ mode: 'auto', project: threeSongs() });
+    f.picture.observe(f.clock('ready', 0)); f.picture.observe(f.clock('running', 0));
+    // As P1FollowSession tells it, right after the song's start.
+    f.picture.expect('two');
+    await f.play(50, 1500);
+    expect(f.made.map(entry => [entry.request.snapshot.item.id, entry.music])).toEqual([['song', false], ['two', false]]);
+    expect(f.sent.filter(entry => entry.includes('two'))).toEqual([]);
+    expect(f.logs).toEqual([]);
+    // P1 plays `two` from its head: `song` stops on its last frame, `two` takes what was made ready.
+    f.picture.observe(f.clock('stopped', 1500)); await settle();
+    const before = f.sent.length;
+    f.picture.observe(f.clock('ready', 0, 1, NEXT, 'two'));
+    await f.play(0, 500, 1, NEXT, 'two');
+    expect(f.made).toHaveLength(2);
+    expect(f.host.status).toMatchObject({ itemId: 'two', state: 'running' });
+    expect(f.held).toEqual(['song:dance']);
+    expect(f.released).toEqual(['song']);
+    // `two` goes on air at P1's position, and only then the last frame of `song` goes.
+    expect(f.sent.slice(before)).toEqual(['seek:two-clip@0', '素材start', 'media:stop:dance']);
+  });
+
+  it('提前准备：自动选歌不按顺序，P1 放了另一首：为下一首准备的放开一次，那一首照旧开始时准备', async () => {
+    const f = fixture({ mode: 'auto', project: threeSongs() });
+    f.picture.observe(f.clock('ready', 0)); f.picture.observe(f.clock('running', 0));
+    f.picture.expect('two');
+    await f.play(50, 1500);
+    f.picture.observe(f.clock('stopped', 1500)); await settle();
+    f.picture.observe(f.clock('ready', 0, 1, NEXT, 'three'));
+    await f.play(0, 1000, 1, NEXT, 'three');
+    expect(f.made.map(entry => entry.request.snapshot.item.id)).toEqual(['song', 'two', 'three']);
+    expect(f.released).toEqual(['two', 'song']);
+    expect(f.host.status).toMatchObject({ itemId: 'three', state: 'running' });
+    // P1 plays a song with no picture instead: what was made ready is let go all the same.
+    const g = fixture({ mode: 'auto', project: threeSongs() });
+    g.picture.observe(g.clock('ready', 0)); g.picture.observe(g.clock('running', 0));
+    g.picture.expect('two');
+    await g.play(50, 1500);
+    g.picture.observe(g.clock('stopped', 1500)); await settle();
+    g.picture.observe(g.clock('ready', 0, 1, NEXT, 'plain'));
+    await g.play(0, 500, 1, NEXT, 'plain');
+    expect(g.released).toEqual(['two', 'song']);
+  });
+
+  it('提前准备：节目的画面在用时被拒绝，不报给跟随、不标红，只记一行；节目的歌不受影响', async () => {
+    const f = fixture();
+    f.program({ status: 'ready' });
+    await f.host.prepare(f.programRequest(showProject('internal', '乙')));
+    f.programClock({ status: 'playing', generation: 1, positionMs: 0 });
+    for (let ms = 50; ms <= 500; ms += 50) f.programClock({ positionMs: ms });
+    await settle();
+    const sent = f.sent.length;
+    expect(() => f.picture.expect('song')).not.toThrow();
+    await settle();
+    expect(f.logs).toEqual(['info:「歌」的画面没有提前准备：正在播放时不能准备另一个节目。歌开始时再准备']);
+    expect(f.picture.state).toBeNull();
+    expect(f.changed).not.toHaveBeenCalled();
+    expect(f.made.map(entry => entry.music)).toEqual([true]);
+    expect(f.sent.length).toBe(sent);
+    expect(f.host.status).toMatchObject({ sessionId: PROGRAM, state: 'running' });
+    expect(f.host.status?.fault ?? null).toBeNull();
+  });
+
+  it('提前准备：说没有了、跟随关掉，准备好的放开一次，什么都不留', async () => {
+    const f = fixture();
+    f.picture.expect('song'); await settle();
+    f.picture.expect(null); await settle();
+    expect([f.made.length, f.released]).toEqual([1, ['song']]);
+    f.picture.expect('song'); await settle();
+    // Told the same song again: nothing new.
+    f.picture.expect('song'); await settle();
+    expect(f.made).toHaveLength(2);
+    await f.picture.close(); await settle();
+    expect(f.released).toEqual(['song', 'song']);
+    // Nothing of the follow is left: closing the pool lets nothing more go.
+    await f.pool.close();
+    expect(f.released).toEqual(['song', 'song']);
+    // While a song is on, as its next one: let go the same way.
+    const g = fixture({ project: threeSongs() });
+    g.picture.observe(g.clock('ready', 0)); g.picture.observe(g.clock('running', 0));
+    g.picture.expect('two');
+    await g.play(50, 500);
+    g.picture.expect(null); await settle();
+    expect(g.released).toEqual(['two']);
+    await g.picture.close(); await settle();
+    await g.pool.close();
+    expect(g.released).toEqual(['two', 'song']);
+  });
+
+  it('同一首歌的两遍：早一遍迟到的停止不停后一遍（画面会话整场一个，按这一遍的准备认）', async () => {
+    const f = fixture();
+    f.picture.observe(f.clock('ready', 0));
+    await f.play(0, 1000);
+    f.picture.observe(f.clock('stopped', 1000)); await settle();
+    f.picture.observe(f.clock('ready', 0, 1, NEXT));
+    await f.play(0, 500, 1, NEXT);
+    const first = f.made[0]!.request.generation, second = f.made[1]!.request.generation;
+    expect(second).toBeGreaterThan(first);
+    await f.host.stopSource(f.picture.source, first);
+    await f.play(550, 1000, 1, NEXT);
+    expect(f.host.status).toMatchObject({ itemId: 'song', state: 'running', generation: second });
+    // A late status of the earlier pass does not show on this one.
+    f.picture.source.changed({ ...f.host.status!, generation: first, state: 'failed', reason: '早一遍的' });
+    expect(f.picture.state).toMatchObject({ itemId: 'song', state: 'running', reason: null });
+    await f.host.stopSource(f.picture.source, second);
+    expect(f.host.status).toMatchObject({ state: 'stopped' });
   });
 
   it('P1 放的音乐不经联动台的音乐项：读回不找它（上一首留下的也不算），节目的照旧找', async () => {
