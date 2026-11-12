@@ -83,12 +83,13 @@ export class ManagedOutputRuntime {
   }
 
   /** A newer version of the song's plan while it plays (0.5.9 R9): what is derived from the project is replaced, the
-   * run's record of what it started and showed (its cleanup at the stop) stays. */
-  retarget(project: LinkProject, itemId: string): void {
+   * run's record of what it started and showed (its cleanup at the stop) stays. The caller compiled `events` and built
+   * `scenes` from `project`, so that nothing here can fail half way. */
+  retarget(project: LinkProject, itemId: string, events: ManagedMediaEvent[], scenes: SceneOutputTimeline): void {
     this.project = project;
     this.selectedItem = project.rundown.find((item) => item.id === itemId) ?? null;
-    this.mediaEvents = compileManagedMediaTimeline(project, itemId).events;
-    this.preparedScenes = new SceneOutputTimeline(project, itemId, this.mediaEvents);
+    this.mediaEvents = events;
+    this.preparedScenes = scenes;
   }
 
   resetExecution(): void {

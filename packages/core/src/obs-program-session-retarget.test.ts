@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkProject } from '@tb/schema';
-import { ObsProgramSession, type ObsProgramSessionDependencies } from './obs-program-session';
+import { MediaPreparationFailed, ObsProgramSession, type ObsProgramSessionDependencies } from './obs-program-session';
 import type { ManagedMediaEvent } from './managed-media-timeline';
 import type { LinkDesktopApi } from './link-desktop-contract';
 import type { PictureReading } from './picture-follow';
@@ -8,11 +8,12 @@ import type { PictureReading } from './picture-follow';
 /** 0.5.9 R9: a newer plan of the song on air takes effect in this pass (2026-11-10 decision 1, “这一遍立即生效”). */
 
 const at = (seconds: number) => ({ hours: 0, minutes: 0, seconds, frames: 0 });
-const camera = (seconds: number, scene = `场景 ${seconds}`) => ({ id: `cue-${seconds}`, name: `机位 ${seconds}`, timecode: at(seconds),
-  actions: [{ id: `action-${seconds}`, kind: 'obs.setProgramScene' as const, label: '切机位', sceneName: scene }] });
-const hide = (id: string, seconds: number) => ({ id, name: id, timecode: at(seconds),
-  actions: [{ id: `${id}-action`, kind: 'obs.setSceneItemEnabled' as const, label: id, sceneName: '场景 0', sourceName: id, enabled: false }] });
-function cameras(cues = [0, 1, 2, 3].map(seconds => camera(seconds))): LinkProject {
+type CueInput = { id: string; name: string; timecode: ReturnType<typeof at>; actions: LinkAction[]; layerId?: string; durationMs?: number };
+const camera = (seconds: number, scene = `场景 ${seconds}`): CueInput => ({ id: `cue-${seconds}`, name: `机位 ${seconds}`, timecode: at(seconds),
+  actions: [{ id: `action-${seconds}`, kind: 'obs.setProgramScene', label: '切机位', sceneName: scene }] });
+const hide = (id: string, seconds: number): CueInput => ({ id, name: id, timecode: at(seconds),
+  actions: [{ id: `${id}-action`, kind: 'obs.setSceneItemEnabled', label: id, sceneName: '场景 0', sourceName: id, enabled: false }] });
+function cameras(cues: CueInput[] = [0, 1, 2, 3].map(seconds => camera(seconds))): LinkProject {
   return parseLinkProject({ ...createEmptyLinkProject('后台画面'), playbackSource: 'internal', obsOutputMode: 'scenes',
     rundown: [{ id: 'song', title: '歌曲', cues }] });
 }
@@ -26,6 +27,18 @@ function video(clip: { assetId?: string; startSeconds?: number; durationMs?: num
       referenceMediaClips: clip ? [{ id: 'clip', assetId: clip.assetId ?? 'video', layerId: 'video-layer', label: '视频',
         startTimecode: at(clip.startSeconds ?? 0), durationMs: clip.durationMs ?? 10000 }] : [] }] });
 }
+
+type ClipInput = { id: string; assetId: string; layerId: string; startSeconds: number; durationMs: number; startFrames?: number; sourceOffsetMs?: number };
+/** Clips on two layers, `top` over `bottom` (visualLayers[0] is the top one). */
+function layered(clips: ClipInput[]): LinkProject {
+  return parseLinkProject({ ...base, playbackSource: 'internal', obsOutputMode: 'scenes',
+    mediaAssets: [asset('video'), asset('other')],
+    rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'top', name: '上层' }, { id: 'bottom', name: '下层' }], cues: [],
+      referenceMediaClips: clips.map(clip => ({ id: clip.id, assetId: clip.assetId, layerId: clip.layerId, label: clip.id,
+        startTimecode: { ...at(clip.startSeconds), frames: clip.startFrames ?? 0 }, durationMs: clip.durationMs,
+        ...clip.sourceOffsetMs === undefined ? {} : { sourceOffsetMs: clip.sourceOffsetMs } })) }] });
+}
+const isOther = (event: ManagedMediaEvent): boolean => event.sourceName.includes('other') || event.assetName === 'other';
 
 function setup(project: LinkProject, extra: Partial<ObsProgramSessionDependencies> = {}, execute?: (action: LinkAction) => Promise<void>) {
   let now = 0, online = true;
@@ -45,7 +58,9 @@ function setup(project: LinkProject, extra: Partial<ObsProgramSessionDependencie
   };
   const scenes = () => actions.filter(action => action.kind === 'obs.setProgramScene').map(action => 'sceneName' in action ? action.sceneName : '');
   const mediaSteps = () => media.mock.calls.map(([payload]) => `${payload.event.phase}:${payload.event.sourceName.includes('other') ? 'other' : 'video'}`);
-  return { session, actions, faults, applied, media, dependencies, advance, scenes, mediaSteps, offline: (value: boolean) => { online = !value; } };
+  const transports = () => actions.flatMap(action => action.kind === 'obs.mediaAction' ? [`${action.action}:${action.inputName.includes('other') ? 'other' : 'video'}`] : []);
+  return { session, actions, faults, applied, media, dependencies, advance, scenes, mediaSteps, transports, offline: (value: boolean) => { online = !value; },
+    at: (time: number) => { now = time; } };
 }
 const sameNow = (test: ReturnType<typeof setup>) => test.actions.length + test.media.mock.calls.length;
 
@@ -185,7 +200,7 @@ describe('R9 播放中改画面这一遍立即生效（2026-11-10 第 1 题）',
     const test = setup(cameras());
     const midi = cameras([{ ...camera(0), actions: [{ id: 'midi', kind: 'midi.programChange', label: 'PC', portProfileId: 'out', channel: 1, program: 1 }] }]);
     expect(() => test.session.retarget(midi, 2)).toThrow('后台画面快照含非 OBS 动作');
-    expect(() => test.session.retarget({ ...cameras(), timebase: { ...cameras().timebase, frameRate: 30 } }, 2)).toThrow('帧率');
+    expect(() => test.session.retarget({ ...cameras(), timebase: { ...cameras().timebase, frameRate: '25' } }, 2)).toThrow('帧率');
     expect(test.applied).toEqual([]);
   });
 
@@ -206,3 +221,179 @@ describe('R9 播放中改画面这一遍立即生效（2026-11-10 第 1 题）',
     expect(follows).toEqual(['unknown']);
   });
 });
+
+describe('R9 第二轮：没在走的时候改、改到一半被打断、改不了的一版', () => {
+  it('在某个位置准备好、还没开始播（拖动或暂停时定位）：改此刻的机位马上切，第一次走时间照常往下', async () => {
+    const test = setup(cameras());
+    await test.session.prepare(1500);
+    expect(test.scenes()).toEqual(['场景 1']);
+    test.session.retarget(cameras([camera(0), camera(1, '新机位 1'), camera(2), camera(3)]), 2); await test.session.settled();
+    expect(test.scenes()).toEqual(['场景 1', '新机位 1']);
+    expect(test.applied).toEqual([2]);
+    await test.advance(1600, 2100);
+    expect(test.scenes()).toEqual(['场景 1', '新机位 1', '场景 2']);
+  });
+
+  it('从头准备好、还没开始播：新的一版先交给输出（新素材、新场景的音乐），再算用上', async () => {
+    const retargetOutputs = vi.fn<NonNullable<ObsProgramSessionDependencies['retargetOutputs']>>(() => Promise.resolve());
+    const test = setup(cameras(), { retargetOutputs });
+    await test.session.prepare(0);
+    test.session.retarget(cameras([camera(0, '新机位 0'), camera(1), camera(2), camera(3)]), 2); await test.session.settled();
+    expect(retargetOutputs).toHaveBeenCalledOnce();
+    expect(retargetOutputs.mock.calls[0]![1]).toBe(0);
+    expect(test.applied).toEqual([2]);
+    expect(test.scenes()).toEqual([]);
+  });
+
+  it('在某个位置准备好、还没开始播：在画面上的素材挪了马上重新定位，删了马上停；第一次走时间不重开，之后暂停每个解码器都停', async () => {
+    const moved = setup(video());
+    await moved.session.prepare(1500);
+    expect(moved.dependencies.seekMedia).toHaveBeenCalledOnce();
+    moved.session.retarget(video({ startSeconds: 1 }), 2); await moved.session.settled();
+    expect(moved.dependencies.seekMedia).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(moved.dependencies.seekMedia).mock.calls[1]![0]).toMatchObject({ clipId: 'clip', sourceOffsetMs: 500 });
+    expect(moved.applied).toEqual([2]);
+    await moved.advance(1600, 2000);
+    expect(moved.mediaSteps()).toEqual([]);
+    await moved.session.pause();
+    expect(moved.transports()).toEqual(['pause:video']);
+
+    const deleted = setup(video());
+    await deleted.session.prepare(1500);
+    deleted.session.retarget(video(null), 2); await deleted.session.settled();
+    expect(deleted.mediaSteps()).toEqual(['stop:video']);
+    expect(deleted.applied).toEqual([2]);
+  });
+
+  it('暂停时换上新素材：马上开始准备，准备好了就按当前位置放上、保持暂停，不等走时间；继续以后跟着放', async () => {
+    let other: 'ready' | 'preparing' = 'preparing';
+    const prepareUpcoming = vi.fn<NonNullable<ObsProgramSessionDependencies['prepareUpcoming']>>(() => Promise.resolve(null));
+    const test = setup(video(), { clipReady: event => isOther(event) ? other : 'ready', prepareUpcoming });
+    await test.session.prepare(0); await test.advance(0, 2000); await test.session.pause();
+    const before = prepareUpcoming.mock.calls.length;
+    prepareUpcoming.mockImplementationOnce(() => { other = 'ready'; return Promise.resolve({ clipId: 'clip', sourceName: 'other' } as ManagedMediaEvent); });
+    test.session.retarget(video({ assetId: 'other' }), 2);
+    await vi.waitFor(() => expect(test.mediaSteps()).toEqual(['start:video', 'stop:video']));
+    await test.session.settled();
+    // Prepared without a clock, without the spacing of a playing song.
+    expect(prepareUpcoming.mock.calls.slice(before).map(call => call[2])).toEqual([false]);
+    const seeks = vi.mocked(test.dependencies.seekMedia).mock.calls.map(call => call[0]);
+    expect(seeks.filter(isOther)).toHaveLength(1);
+    expect(test.transports()).toEqual(['pause:video']);
+    await test.advance(2100, 2300);
+    expect(test.transports()).toEqual(['pause:video', 'start:other']);
+  });
+
+  it('暂停时换上的新素材准备失败：这一部分标红', async () => {
+    const prepareUpcoming = vi.fn<NonNullable<ObsProgramSessionDependencies['prepareUpcoming']>>(() => Promise.resolve(null));
+    let other: 'failed' | 'preparing' = 'preparing';
+    const test = setup(video(), { clipReady: event => isOther(event) ? other : 'ready', prepareUpcoming });
+    await test.session.prepare(0); await test.advance(0, 2000); await test.session.pause();
+    prepareUpcoming.mockImplementationOnce(() => { other = 'failed'; return Promise.reject(new MediaPreparationFailed({ clipId: 'clip', assetName: 'other', sourceName: 'other' } as ManagedMediaEvent, '解码不了')); });
+    test.session.retarget(video({ assetId: 'other' }), 2);
+    await vi.waitFor(() => expect(test.faults.some(fault => fault.includes('解码不了'))).toBe(true));
+  });
+
+  it('暂停时换了正在播的素材、新的还在准备时按继续：原来的画面跟着音乐继续，再暂停跟着停', async () => {
+    const test = setup(video(), { clipReady: event => isOther(event) ? 'preparing' : 'ready', prepareUpcoming: () => Promise.resolve(null) });
+    await test.session.prepare(0); await test.advance(0, 2000); await test.session.pause();
+    test.session.retarget(video({ assetId: 'other' }), 2); await test.session.settled();
+    expect(test.mediaSteps()).toEqual(['start:video']);
+    await test.advance(2100, 2300);
+    expect(test.transports()).toEqual(['pause:video', 'start:video']);
+    await test.session.pause();
+    expect(test.transports()).toEqual(['pause:video', 'start:video', 'pause:video']);
+  });
+
+  it('等新素材准备时，只留着这次修改拿掉的画面；按计划到点结束的照常停', async () => {
+    const plan = layered([{ id: 'below', assetId: 'video', layerId: 'bottom', startSeconds: 0, durationMs: 3000 }]);
+    const test = setup(plan, { clipReady: event => isOther(event) ? 'preparing' : 'ready', prepareUpcoming: () => Promise.resolve(null) });
+    await test.session.prepare(0); await test.advance(0, 2000);
+    test.session.retarget(layered([{ id: 'below', assetId: 'video', layerId: 'bottom', startSeconds: 0, durationMs: 3000 },
+      { id: 'new', assetId: 'other', layerId: 'top', startSeconds: 0, durationMs: 10000 }]), 2); await test.session.settled();
+    await test.advance(2100, 3500);
+    expect(test.mediaSteps()).toEqual(['start:video', 'stop:video']);
+  });
+
+  it('在画面上的素材删了：下面那层露出来', async () => {
+    const both = layered([{ id: 'clip', assetId: 'video', layerId: 'top', startSeconds: 0, durationMs: 10000 },
+      { id: 'below', assetId: 'other', layerId: 'bottom', startSeconds: 0, durationMs: 10000 }]);
+    const test = setup(both);
+    await test.session.prepare(0); await test.advance(0, 2000);
+    const before = test.mediaSteps().length;
+    test.session.retarget(layered([{ id: 'below', assetId: 'other', layerId: 'bottom', startSeconds: 0, durationMs: 10000 }]), 2); await test.session.settled();
+    expect(test.mediaSteps().slice(before)).toContain('stop:video');
+    expect(test.mediaSteps()).not.toContain('stop:other');
+    // The clip below is what the picture is now: its own scene is on program.
+    expect(test.scenes().at(-1)).toContain(test.media.mock.calls.find(([payload]) => isOther(payload.event))![0].event.sceneName);
+  });
+
+  it('暂停时修剪在画面上的素材：开头剪掉（位置不变）不重新定位；挪了一帧就重新定位', async () => {
+    const test = setup(video());
+    await test.session.prepare(0); await test.advance(0, 2000); await test.session.pause();
+    const seeks = () => vi.mocked(test.dependencies.seekMedia).mock.calls.length;
+    test.session.retarget(layered([{ id: 'clip', assetId: 'video', layerId: 'top', startSeconds: 1, durationMs: 9000, sourceOffsetMs: 1000 }]), 2);
+    await test.session.settled();
+    expect(seeks()).toBe(0);
+    test.session.retarget(layered([{ id: 'clip', assetId: 'video', layerId: 'top', startSeconds: 1, startFrames: 1, durationMs: 9000, sourceOffsetMs: 1000 }]), 3);
+    await test.session.settled();
+    expect(seeks()).toBe(1);
+    expect(test.applied).toEqual([2, 3]);
+  });
+
+  it('改到一半按了暂停：挪动没做完的照样做，按暂停以后的样子重新来一遍', async () => {
+    let release: () => void = () => undefined;
+    const moveMedia = vi.fn<NonNullable<ObsProgramSessionDependencies['moveMedia']>>(() => new Promise<void>(resolve => { release = resolve; }));
+    const test = setup(video(), { moveMedia });
+    await test.session.prepare(0); await test.advance(0, 2000);
+    test.session.retarget(video({ startSeconds: 1 }), 2);
+    await vi.waitFor(() => expect(moveMedia).toHaveBeenCalledOnce());
+    const pausing = test.session.pause();
+    release(); await pausing; await test.session.settled();
+    // Paused at its new place, by the pass that ran again for the pause.
+    expect(vi.mocked(test.dependencies.seekMedia).mock.calls.map(call => call[0])).toMatchObject([{ clipId: 'clip', sourceOffsetMs: 1000 }]);
+    expect(test.applied).toEqual([2]);
+  });
+
+  it('暂停时改到一半按了继续：没做完的挪动按继续以后的样子做', async () => {
+    let release: () => void = () => undefined;
+    const moveMedia = vi.fn<NonNullable<ObsProgramSessionDependencies['moveMedia']>>(() => Promise.resolve());
+    const test = setup(video(), { moveMedia });
+    await test.session.prepare(0); await test.advance(0, 2000); await test.session.pause();
+    vi.mocked(test.dependencies.seekMedia).mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    test.session.retarget(video({ startSeconds: 1 }), 2);
+    await vi.waitFor(() => expect(test.dependencies.seekMedia).toHaveBeenCalledOnce());
+    test.at(2100); test.session.clock(2100);
+    release(); await test.session.settled();
+    // Playing again: put in step where it plays, by the pass that ran again for the resume.
+    expect(moveMedia.mock.calls.map(call => call[0])).toMatchObject([{ clipId: 'clip' }]);
+    expect(test.applied).toEqual([2]);
+  });
+
+  it('等 OBS 的时候音乐往前走了：按等完以后的位置对齐', async () => {
+    const moveMedia = vi.fn<NonNullable<ObsProgramSessionDependencies['moveMedia']>>(() => Promise.resolve());
+    let test: ReturnType<typeof setup> | null = null;
+    test = setup(video(), { moveMedia, retargetOutputs: () => { test!.at(3000); test!.session.clock(3000); return Promise.resolve(); } });
+    await test.session.prepare(0); await test.advance(0, 2000);
+    test.session.retarget(video({ startSeconds: 1 }), 2); await test.session.settled();
+    expect(moveMedia.mock.calls[0]![0]).toMatchObject({ clipId: 'clip', sourceOffsetMs: 2000 });
+  });
+
+  it('队列里才发现建不起来的一版：画面停下并写明原因，原来的计划不再半新半旧地跑', async () => {
+    const states: string[] = [];
+    const test = setup(video(), { state: update => { states.push(update.state); } });
+    await test.session.prepare(0); await test.advance(0, 2000);
+    const good = video({ startSeconds: 1 }), item = good.rundown[0]!;
+    // The clip names no layer: checked before the queue, the item is fine; the plan cannot be built from it.
+    const broken: LinkProject = { ...good, rundown: [{ ...item, referenceMediaClips: (item.referenceMediaClips ?? []).map(clip => ({ ...clip, layerId: undefined })) }] };
+    expect(() => test.session.retarget(broken, 2)).not.toThrow();
+    await test.session.settled();
+    expect(test.session.error?.message).toMatch(/^这次修改的画面用不上：.+。音乐和时间码照常，这首歌停下重播时按新的样子放$/);
+    expect(states.at(-1)).toBe('error');
+    expect(test.applied).toEqual([]);
+    const sent = test.mediaSteps().length + test.actions.length;
+    await test.advance(2100, 3000);
+    expect(test.mediaSteps().length + test.actions.length).toBe(sent);
+  });
+});
+
