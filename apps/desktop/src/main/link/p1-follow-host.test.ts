@@ -252,6 +252,29 @@ describe('P1 跟随宿主 · 界面重新加载不结束跟随（2026-11-12）',
     await expect(f.start('auto', OTHER)).rejects.toThrow('另一个界面正在跟随 P1');
   });
 
+  it('跟随结束才放开输出（画面的最后一帧）：关闭、退出、被同一页面的新一版换掉、没在跟歌时界面没了；在跟歌时界面没了和按停止不放开（0.5.9）', async () => {
+    const running = fixture(manualProject());
+    await running.start(); await running.send({ kind: 'arm', itemId: 'song' });
+    running.play(0, 30, 1_000);
+    await running.host.pageGone(null);
+    await running.send({ kind: 'stop' });
+    expect(running.closed).toEqual([]);
+    await running.send({ kind: 'close' });
+    expect(running.closed).toEqual(['P1 手动跟随']);
+    const quit = fixture(manualProject());
+    await quit.start(); await quit.send({ kind: 'arm', itemId: 'song' });
+    await quit.host.dispose();
+    expect(quit.closed).toEqual(['P1 手动跟随']);
+    const replaced = fixture(autoProject());
+    await replaced.start('auto'); await replaced.send({ kind: 'arm', itemId: null });
+    await replaced.start('auto');
+    expect(replaced.closed).toEqual(['P1 自动选歌']);
+    const idle = fixture(manualProject());
+    await idle.start();
+    await idle.host.pageGone(null);
+    expect(idle.closed).toEqual(['P1 手动跟随']);
+  });
+
   it('没在跟歌的跟随随页面结束：待命、自动选歌还在等第一首时界面没了，跟随关闭、放开输入口，同一个工程再开始照常', async () => {
     for (const mode of ['manual', 'auto'] as const) {
       const f = fixture(mode === 'auto' ? autoProject() : manualProject());

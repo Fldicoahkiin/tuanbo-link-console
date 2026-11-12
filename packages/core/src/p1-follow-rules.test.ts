@@ -15,6 +15,8 @@ import type { LitSong } from './program-player';
 import type { OutputMode } from './output-failure';
 import { P1FollowSession, type P1FollowLights, type P1FollowOutputs } from './p1-follow-session';
 import { clockFromNativeStatus, type ProgramClock } from './program-clock';
+import { ObsProgramSession, type ObsProgramSessionDependencies } from './obs-program-session';
+import { createObsProgramSnapshot, projectFromObsSnapshot } from './obs-program-snapshot';
 
 /**
  * P1 follow rules (AGENTS §4.9; design 03 §7.1, 2026-11-10 "P1 跟随搬到后台"). Part 1 (step P2):
@@ -227,7 +229,23 @@ describe('P1 跟随规则 · 共用一套输出（03 §7.1 ⑦，动作 MIDI）'
     expect(p1.problems).toEqual([]); expect(internal.problems).toEqual([]);
   });
 
-  it.todo('⑦ 画面：同一串位置经两种时钟，OBS 请求完全相同（等 R9：画面会话收 P1 的时钟，obs-program-session.ts 去掉按来源的拒绝）');
+  it('⑦ 画面：同一个 P1 工程、同一串位置，经 P1 的时间码和经联动台播放的时钟，发给 OBS 的请求完全一样', async () => {
+    const project = pictureProject();
+    const p1 = pictureOutput(project, 'manual');
+    const follow = new P1FollowSession(project, 'manual', { outputs: p1.outputs, prepare: () => undefined, lights: NO_LIGHTS });
+    follow.arm('song');
+    playFollow(follow, 0, 120, 1_000);
+    await p1.settled();
+    const internal = pictureOutput(project, 'manual');
+    internal.outputs.observe(clockFromNativeStatus(playerStatus('ready', 0), null));
+    for (let frame = 0; frame < 120; frame += 2) {
+      internal.outputs.observe(clockFromNativeStatus(playerStatus('playing', (frame + 2) * 1000 / FPS), qpc(1_000 + (frame + 1.75) * FRAME_MS)));
+    }
+    await internal.settled();
+    expect(p1.sent).toEqual(['切到全景', '切到特写', '滤镜', '切到中景', '切到远景']);
+    expect(p1.sent).toEqual(internal.sent);
+    expect(p1.faults).toEqual([]); expect(internal.faults).toEqual([]);
+  });
 });
 
 describe('P1 跟随规则 · 重同步和同位置继续不补点动作（03 §7.1 ⑧，AGENTS §4.9）', () => {
@@ -294,7 +312,43 @@ describe('P1 跟随规则 · 重同步和同位置继续不补点动作（03 §7
     expect(lines).toHaveLength(1);
   });
 
-  it.todo('⑧ 画面：重同步或同位置继续后，此刻的机位和素材出现在 OBS（等 R9：画面会话的 reconcileAt）');
+  it('⑧ 画面：手动重同步，此刻的机位出现在 OBS，过去的机位和点动作不补；自动选歌同位置继续，这一遍发过的不重发', async () => {
+    const project = pictureProject();
+    const manual = pictureOutput(project, 'manual');
+    const follow = new P1FollowSession(project, 'manual', { outputs: manual.outputs, prepare: () => undefined, lights: NO_LIGHTS });
+    follow.arm('song');
+    const first = playFollow(follow, 0, 40, 1_000);
+    follow.idle(at(first.lastSampleMs + 600));
+    // P1 went on meanwhile, past 中景 and its filter at 2 s: nothing of it goes out while frozen, nor when the timecode is back.
+    const back = playFollow(follow, 74, 10, first.lastSampleMs + 1_000);
+    await manual.settled();
+    expect(manual.sent).toEqual(['切到全景', '切到特写']);
+    follow.resync();
+    playFollow(follow, 84, 20, back.endMs);
+    await manual.settled();
+    // The camera of now (中景 until 3 s): placed at the position resynced, and once more as it joins where P1 is then (the
+    // host's late rejoin); never its filter of 2 s, nothing before it again; then on as the timeline goes.
+    expect(manual.sent).toEqual(['切到全景', '切到特写', '切到中景', '切到中景', '切到远景']);
+    expect(manual.faults).toEqual([]);
+
+    const auto = autoPictureProject();
+    const out = pictureOutput(auto, 'auto');
+    const prepares: string[] = [];
+    const listening = new P1FollowSession(auto, 'auto', { outputs: out.outputs, prepare: (_itemId, sessionId) => { prepares.push(sessionId); }, lights: NO_LIGHTS });
+    listening.arm(null);
+    const start = auto.p1AutoFollow!.ranges[0]!.startSeconds * FPS;
+    const head = playFollow(listening, start, 2, 1_000);
+    listening.prepared(prepares[0]!);
+    const on = playFollow(listening, start + 2, 48, head.endMs);
+    listening.idle(at(on.lastSampleMs + 600));
+    await out.settled();
+    expect(out.sent).toEqual(['切到全景', '切到特写']);
+    playFollow(listening, start + 50, 70, on.lastSampleMs + 5_000);
+    await out.settled();
+    expect(listening.view.phase).toBe('running');
+    expect(out.sent).toEqual(['切到全景', '切到特写', '滤镜', '切到中景', '切到远景']);
+    expect(out.faults).toEqual([]);
+  });
 });
 
 describe('P1 跟随规则 · 换歌关灯（03 §7.1 ⑨）', () => {
@@ -369,7 +423,20 @@ describe('P1 跟随规则 · 排练和直播（03 §7.1 ⑩，AGENTS §4.8）', 
     expect(live.problems.some(problem => problem.includes('推子'))).toBe(true);
   });
 
-  it.todo('⑩ 画面：排练时第一个失败挡住这一路后面的画面动作，直播标红继续（等 R9）');
+  it('⑩ 画面：直播时一个机位没切成标红，后面的照切；共用的画面会话只按直播跑（排练也是这样），P1 跟随本来只按直播跑', async () => {
+    const project = pictureProject();
+    const out = pictureOutput(project, 'manual', action => action.kind === 'obs.setProgramScene' && action.sceneName === '特写');
+    const follow = new P1FollowSession(project, 'manual', { outputs: out.outputs, prepare: () => undefined, lights: NO_LIGHTS });
+    follow.arm('song');
+    playFollow(follow, 0, 120, 1_000);
+    await out.settled();
+    expect(out.sent.filter(entry => entry !== '切到特写')).toEqual(['切到全景', '滤镜', '切到中景', '切到远景']);
+    expect(out.faults.some(fault => fault.includes('特写') || fault.includes('切换节目画面'))).toBe(true);
+    // The session has no rehearsal of its own: it prepares, and runs its actions, as live only.
+    const session = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'obs-program-session.ts'), 'utf8').replace(/\r\n/g, '\n');
+    expect(session.match(/beginPreflight\('(\w+)'\)/g)?.every(call => call === "beginPreflight('live')")).toBe(true);
+    expect(session).not.toMatch(/beginPreflight\('rehearsal'\)|'rehearsal'/);
+  });
 });
 
 describe('P1 跟随规则 · 只在主进程跟随（0.5.9 P4，源码扫描）', () => {
@@ -411,9 +478,28 @@ describe('P1 跟随规则 · 只在主进程跟随（0.5.9 P4，源码扫描）'
     expect(main).toMatch(/runtimeActive: showRunning\(\), playerStatus:/);
   });
 
-  it.todo('画面：界面不为 P1 建 SceneOutputTimeline，P1 的画面只在主进程（等画面那一步）');
-  it.todo('画面：obs-program-session.ts 不按播放来源拒绝 P1 的时钟（等画面那一步）');
+  it('画面：界面不为 P1 驱动画面；P1 的画面只在主进程，接在 link-main 唯一的那个画面宿主上（p1-picture-output.ts）', () => {
+    const windowFiles = window.map(file => ({ path: file.path, text: file.text.replace(/\r\n/g, '\n') }));
+    const drivers = /\b(SceneOutputTimeline|ManagedOutputRuntime|ObsProgramSession|NativeObsHost|executeManagedMediaEvent|prepareNativeObs)\b/;
+    expect(windowFiles.filter(file => /\b(p1Follow|P1Follow|followP1)\b/.test(file.text) && drivers.test(file.text)).map(file => file.path)).toEqual([]);
+    const main = sources('apps/desktop/src/main').map(file => ({ path: file.path, text: file.text.replace(/\r\n/g, '\n') }));
+    expect(main.filter(file => /new NativeObsHost\(/.test(file.text)).map(file => file.path)).toEqual(['apps/desktop/src/main/link-main.ts']);
+    expect(main.filter(file => /new P1PictureOutput\(/.test(file.text)).map(file => file.path)).toEqual(['apps/desktop/src/main/link/p1-follow-wiring.ts']);
+    expect(repoText('apps/desktop/src/main/link-main.ts')).toMatch(/picture: \(\) => nativeObs \}\);/);
+    expect(repoText('apps/desktop/src/main/link/p1-picture-output.ts')).toMatch(/host\.prepare\(\{[^]*?\}, this\.source\)/);
+  });
+
+  it('画面：obs-program-session.ts 和画面快照不按播放来源拒绝 P1 的歌', () => {
+    expect(repoText('packages/core/src/obs-program-session.ts')).not.toMatch(/playbackSource/);
+    expect(repoText('packages/core/src/obs-program-snapshot.ts')).not.toMatch(/playbackSource !==|playbackSource ===/);
+    expect(repoText('apps/desktop/src/main/link/native-obs-host.ts')).not.toMatch(/playbackSource/);
+  });
 });
+
+/** The text of a repository file as the picture scans compare it, also in a Windows checkout (CRLF). */
+function repoText(path: string): string {
+  return readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', path), 'utf8').replace(/\r\n/g, '\n');
+}
 
 function midiProject(auto = false): LinkProject {
   const project = parseLinkProject({ ...createEmptyLinkProject('P1 动作 MIDI'), playbackSource: 'p1', rundown: [{ id: 'song', title: '歌曲',
@@ -491,6 +577,81 @@ function midiOutput(project: LinkProject, mode: OutputMode, refuse: (bytes: read
     reconcileAt: clock => { open(clock, false); tick(clock); }
   };
   return { sent, problems, settled: () => tail, outputs };
+}
+
+/** A P1 project whose song switches cameras each second (全景 0 s, 特写 1 s, 中景 2 s with a filter, a point action, 远景 3 s). */
+function pictureProject(auto = false): LinkProject {
+  const scenes = ['全景', '特写', '中景', '远景'];
+  const project = parseLinkProject({ ...createEmptyLinkProject('P1 画面'), playbackSource: 'p1', obsOutputMode: 'scenes', rundown: [{ id: 'song', title: '歌曲',
+    visualLayers: [{ id: 'cams', name: '机位' }],
+    cues: scenes.map((sceneName, index) => ({ id: `cam-${index}`, name: sceneName, layerId: 'cams', durationMs: 1000, timecode: frameNumberToTimecode(index * 30, '30'),
+      actions: [{ id: `cam-${index}-scene`, kind: 'obs.setProgramScene' as const, label: '切机位', sceneName },
+        ...index === 2 ? [{ id: 'cam-2-filter', kind: 'obs.setSourceFilterEnabled' as const, label: '滤镜', sourceName: sceneName, filterName: '调色', enabled: true }] : []] })),
+    referenceAudio: { assetId: 'audio', relativePath: 'assets/song.wav', sha256: 'a'.repeat(64), durationMs: 30_000 } }] });
+  if (auto) project.p1AutoFollow = allocateP1TimecodeRanges(project);
+  return project;
+}
+function autoPictureProject(): LinkProject { return pictureProject(true); }
+
+/**
+ * The OBS picture as the shared host drives it (main process p1-picture-output.ts on NativeObsHost): `ready` opens the
+ * song's picture session, a running clock moves it, a freeze pauses its clips in auto mode and leaves them in manual
+ * mode (in both, no clock reaches it until the follow goes on); going on from the same position (auto) plays on in the
+ * same session; a resync places the picture once at that position in a new one (the one before stopped) and joins P1
+ * where it is at the first clock (the host's late rejoin). The session is built from the P1 project's picture snapshot,
+ * as the main process builds it (createObsProgramSnapshot, which no longer refuses a P1 project). `refuse`: OBS refuses
+ * that action.
+ */
+function pictureOutput(project: LinkProject, mode: 'manual' | 'auto', refuse: (action: LinkAction) => boolean = () => false) {
+  const sent: string[] = [], faults: string[] = [];
+  const picture = projectFromObsSnapshot(createObsProgramSnapshot(project, 'song', 0));
+  let now = 0, session: ObsProgramSession | null = null, frozen = false, joining = false, tail: Promise<unknown> = Promise.resolve();
+  const name = (action: LinkAction): string => action.kind === 'obs.setProgramScene' ? `切到${action.sceneName}` : action.kind === 'obs.setSourceFilterEnabled' ? '滤镜' : action.kind;
+  const dependencies = (): ObsProgramSessionDependencies => ({ now: () => now, fault: message => { faults.push(message); },
+    recordLog: entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'rules', timestamp: '2026-11-12T00:00:00Z', monotonicMs: now }),
+    executeManagedMediaEvent: ({ event }) => { sent.push(`素材${event.phase}`); return Promise.resolve(); }, guardOutput: (_canSend, operation) => operation(),
+    prepareOutputs: () => Promise.resolve(), holdOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), seekMedia: () => Promise.resolve(),
+    cueReport: report => { for (const result of report.results) if (result.status === 'failed') faults.push(`${result.action.label}：${result.error ?? ''}`); },
+    mediaReport: () => undefined, state: update => { if (update.state === 'error') faults.push(update.reason ?? '画面出错'); },
+    executor: { id: 'obs', supports: entry => entry.kind.startsWith('obs.'), execute: entry => {
+      sent.push(name(entry)); return refuse(entry) ? Promise.reject(new Error('OBS 拒绝了')) : Promise.resolve(); } } });
+  /** `join`: prepared where P1 was, it joins where P1 is at its first clock, rebuilt there (the host's late rejoin). */
+  const open = (positionMs: number, join: boolean): void => {
+    const previous = session, opened = session = new ObsProgramSession(picture, 'C:/shows/p1.tblink', 'song', dependencies());
+    frozen = false; joining = join;
+    tail = tail.then(async () => { await previous?.stop(); await opened.prepare(positionMs); if (join) opened.joinNextClock(); });
+  };
+  const tick = (clock: ProgramClock): void => {
+    const current = session, observedAtMs = clock.observedAtMs, rebuild = joining;
+    if (!current || frozen || observedAtMs === null) return;
+    joining = false;
+    tail = tail.then(async () => {
+      now = observedAtMs; current.clock(clock.positionMs, observedAtMs);
+      if (rebuild) await current.recover(() => Promise.resolve());
+      return current.settled();
+    });
+  };
+  const hold = (): void => {
+    const current = session;
+    frozen = true;
+    if (current && mode === 'auto') tail = tail.then(() => current.pause());
+  };
+  const outputs: P1FollowOutputs = {
+    observe: clock => {
+      switch (clock.state) {
+        case 'ready': open(0, false); return;
+        case 'running': case 'ended': tick(clock); return;
+        case 'held': case 'lost': hold(); return;
+        case 'stopped': { const current = session; session = null; if (current) tail = tail.then(() => current.stop()); return; }
+      }
+    },
+    hold,
+    reconcileAt: (clock, playsOn) => {
+      if (playsOn) { frozen = false; tick(clock); return; }
+      open(clock.positionMs, true); tick(clock);
+    }
+  };
+  return { sent, faults, settled: () => tail, outputs };
 }
 
 /** The follow's lights as the main process turns them into Offs (p1-follow-wiring.ts followLights, through the one
