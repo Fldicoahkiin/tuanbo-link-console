@@ -14,7 +14,7 @@ import { NativePlaybackClient } from './native-playback-client';
 const LEFTOVER = 'OBS 无响应。请检查 OBS 节目画面上是否还留着刚才的素材';
 
 function setup(prepareNextFiles = vi.fn<(request: NativeObsPrepare, assertCurrent: () => void) => Promise<void>>(() => Promise.resolve()),
-  cancelNextFiles = vi.fn<(sessionId: string) => Promise<void>>(() => Promise.resolve())) {
+  cancelNextFiles = vi.fn<(sessionId: string) => Promise<void>>(() => Promise.resolve()), extra: Partial<NativeObsOutputs> = {}) {
   const project = parseLinkProject({ ...createEmptyLinkProject('后台测试'), playbackSource: 'internal', obsOutputMode: 'scenes',
     rundown: ([['song', '', ''], ['next', 'next-', '下一首']] as const).map(([id, prefix, scene]) => ({ id, title: id, cues: [0, 1].map(seconds => ({ id: `${prefix}cue-${seconds}`, name: '机位',
       timecode: { hours: 0, minutes: 0, seconds, frames: 0 }, actions: [{ id: `${prefix}scene-${seconds}`, kind: 'obs.setProgramScene', label: '切机位', sceneName: `${scene}机位${seconds}` }] })) })) });
@@ -32,7 +32,7 @@ function setup(prepareNextFiles = vi.fn<(request: NativeObsPrepare, assertCurren
       guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
       prepareOutputs, holdOutputs, releaseOutputs, restoreScenes,
       now: () => now, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
-      recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now }) }) });
+      recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now }), ...extra }) });
   const observe = (patch: Partial<NativePlayerStatus>, time: number, ageMs = 0) => { now = time; audio = { ...audio, ...patch }; host.observe(clockFromNativeStatus(audio, ((process.hrtime.bigint() - BigInt(ageMs) * 1000000n) / 100n).toString())); };
   return { host, request, execute, releaseOutputs, holdOutputs, restoreScenes, prepareOutputs, recoveries, failures, states, observe, prepareNextFiles, cancelNextFiles, time: (value: number) => { now = value; }, audio: () => audio, change: (patch: Partial<NativePlayerStatus>) => { audio = { ...audio, ...patch }; },
     song: (itemId: string, generation: number): NativeObsPrepare => ({ ...request, generation, snapshot: createObsProgramSnapshot(project, itemId, 4) }) };
@@ -262,6 +262,24 @@ it('画面按项列在状态里：一项补了还不行只标这一项，这首�
   await test.host.reconnected(); await flush();
   expect(test.host.status?.items?.some(item => item.id === 'obs.connection')).toBe(false);
   await test.host.stop();
+});
+
+it('画面读回和手动接管在状态里（R8）：OBS 报的场景交给这首歌的画面判断，接管标出场景；OBS 断着不转交；停了不再有“在跟”“接管”', async () => {
+  let onProgram = '';
+  const readPicture = vi.fn(() => Promise.resolve({ kind: 'read' as const, programScene: onProgram, transitioning: false, decoders: [], music: { kind: 'carried' as const } }));
+  const test = setup(undefined, undefined, { readPicture });
+  test.execute.mockImplementation(action => { if (action.kind === 'obs.setProgramScene') onProgram = action.sceneName; return Promise.resolve(); });
+  const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+  await test.host.prepare(test.request); test.observe({ status: 'playing', positionMs: 0 }, 0); await flush();
+  for (let time = 20; time <= 900; time += 20) { test.observe({ status: 'playing', positionMs: time }, time); await flush(); }
+  expect(readPicture).toHaveBeenCalled();
+  onProgram = '手动'; test.host.programSceneChanged('手动');
+  expect(test.host.status).toMatchObject({ follow: { state: 'taken-over' }, takeover: { sceneName: '手动' } });
+  // OBS away: what it reports is not passed on.
+  test.host.disconnect('网络断开'); test.host.programSceneChanged('别的');
+  expect(test.host.status?.takeover).toEqual({ sceneName: '手动' });
+  await test.host.stop();
+  expect(test.host.status).toMatchObject({ state: 'stopped', follow: null, takeover: null });
 });
 
 it('新音频准备立即作废旧输出，不把切歌的时钟派给上一首', async () => {

@@ -84,6 +84,13 @@ export function pictureDriftCheck(scenes: Pick<ObsMediaScenes, 'correctDrift'>, 
   };
 }
 
+/** The picture read back (R8): the scene on program and the decoders standing for the materials asked about now.
+ * A material with nothing on air is read as absent (its decoder is not asked). Read requests only. */
+export function pictureReadBack(obs: Pick<ObsWebSocketAdapter, 'readPicture'>, decoders: Pick<ObsMediaPreload, 'onAirSource'>): NonNullable<NativeObsOutputs['readPicture']> {
+  return request => obs.readPicture(request.decoders.map(decoder => ({ sourceName: decoder.sourceName,
+    inputName: decoders.onAirSource(decoder.sourceName), positionAt: decoder.positionAt })));
+}
+
 /** A clip shown from the middle and located (a start from the middle, a seek, a rebuild). A look that could not be set
  * (0.5.9 E16) leaves the clip shown and located as OBS has it: it counts as located, nothing is sent again, and the
  * run log gets one line with the clip's red text. */
@@ -414,8 +421,10 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
     handOver: (sourceName, reuse) => hold.handOver(sourceName, reuse),
     executeManagedMediaEvent: pictureMediaStep(obs, preload, path, relativePath => projects.resolveMediaAsset(path, relativePath),
       { record: entry => logger.record(entry), projectId: project.projectId, itemId: request.snapshot.item.id }),
-    // The drift check runs inside the picture session's own queue, where the next cut waits for it: it stays at the
-    // `program` tier of the material scenes, so a cut never ends up waiting behind a screenshot through it.
+    // The read-back (R8) runs once a second at the `control` tier, outside the session's queue, so it never comes
+    // before a cut. A correction it calls for runs inside the session's own queue, where the next cut waits for it: it
+    // stays at the `program` tier of the material scenes, so a cut never ends up waiting behind a screenshot through it.
+    readPicture: pictureReadBack(obs, preload),
     correctMediaDrift: pictureDriftCheck(obs.mediaScenes, preload),
     // The picture session decides, by the counts in output-recovery.ts, whether a failed preparation goes again.
     prepareAgain: clipId => preload.prepareAgain(clipId),

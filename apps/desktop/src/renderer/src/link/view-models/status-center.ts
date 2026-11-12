@@ -1,5 +1,5 @@
 import { lightsStillRunningText, lightsUnconfirmedText, type ConsoleFollow, type LightingOffCheck, type LinkObsSnapshot } from '@tb/core/link';
-import type { IntegrationProfile, LinkProject, Ma2NetworkStatus, ObsPictureItem } from '@tb/schema';
+import type { IntegrationProfile, LinkProject, Ma2NetworkStatus, ObsPictureFollow, ObsPictureItem } from '@tb/schema';
 import type { ConnectionCheck } from '../stores/connection-check-store';
 import type { Ma2ConnectionMethod } from '../stores/ma2-mode-store';
 import { midiConnectionTargets, usesNativeMidiOutput } from './connection-targets';
@@ -25,8 +25,9 @@ export type StatusCenterInput = {
   checks: Readonly<Record<string, ConnectionCheck>>;
   network: Ma2NetworkStatus | null;
   networkError: string | null;
-  /** `pictureItems`: the playing song's picture, part by part, as the picture host lists them (R5). */
-  player: { status: string; mtcSending: boolean; mtcConnectionFailed: boolean; pictureItems?: readonly ObsPictureItem[] };
+  /** `pictureItems`: the playing song's picture, part by part, as the picture host lists them (R5). `pictureFollow`:
+   * whether OBS shows what the timeline wants, as read back (R8). */
+  player: { status: string; mtcSending: boolean; mtcConnectionFailed: boolean; pictureItems?: readonly ObsPictureItem[]; pictureFollow?: ObsPictureFollow | null };
   /** Whether the console runs with the playing song, as last read back. */
   follow: ConsoleFollow;
   /** The lights-off read-back (M8): absent or empty, nothing is shown. */
@@ -118,15 +119,30 @@ export function statusCenter(input: StatusCenterInput): StatusCenter {
 
 /** The playing song's picture, from its parts (R5): each failed, unknown or used-up part is red on its own, one being
  * repaired or out of step with the music is yellow; one failing part never fails the rest. None while nothing plays. */
+/** Whether the picture follows, as read back (R8), with the same rules as 控台在不在跟: following only on a reading
+ * that agreed; one that could not be read is 无法确认 with the reason, never fine; taken over by hand is waiting. */
+export function pictureFollowStatus(follow: ObsPictureFollow): ConnectionStatus {
+  switch (follow.state) {
+    case 'following': return { state: 'ready', value: '画面在跟', detail: follow.detail };
+    case 'not-following': return { state: 'error', value: '画面没在跟', detail: `OBS 的画面和时间线对不上：${follow.detail}。音乐照常播放；请看 OBS 现在播的场景和素材` };
+    case 'checking': return { state: 'ready', value: '正在核对画面', detail: follow.detail };
+    case 'unknown': return { state: 'idle', value: '无法确认', detail: `无法确认画面在不在跟：${follow.detail}` };
+    case 'taken-over': return { state: 'warning', value: '画面被手动接管', detail: follow.detail };
+  }
+}
+
 export function pictureStatus(player: StatusCenterInput['player']): ConnectionStatus | undefined {
   if (!['playing', 'paused', 'preparing'].includes(player.status)) return undefined;
   const parts = (player.pictureItems ?? []).filter(item => item.scope !== 'channel' && item.state !== 'waiting');
-  if (!parts.length) return undefined;
+  const follow = player.pictureFollow ? pictureFollowStatus(player.pictureFollow) : undefined;
   const red = parts.filter(item => item.state === 'failed' || item.state === 'uncertain' || item.state === 'limit');
   const detail = parts.map(item => item.detail).join('；');
-  return red.length
-    ? { state: 'error', value: `${red.length} 项出错`, detail }
-    : { state: 'warning', value: parts.some(item => item.state === 'repairing') ? '补了一次' : '没对齐', detail };
+  // Red parts first, then not following, taken over, the yellow parts, cannot confirm, following.
+  if (red.length) return { state: 'error', value: `${red.length} 项出错`, detail: follow?.state === 'error' ? `${detail}；${follow.detail}` : detail };
+  if (follow?.state === 'error') return follow;
+  if (follow?.state === 'warning') return parts.length ? { ...follow, detail: `${follow.detail}；${detail}` } : follow;
+  if (parts.length) return { state: 'warning', value: parts.some(item => item.state === 'repairing') ? '补了一次' : '没对齐', detail };
+  return follow;
 }
 
 function statusGroupOf(row: StatusRow): StatusGroup['id'] {

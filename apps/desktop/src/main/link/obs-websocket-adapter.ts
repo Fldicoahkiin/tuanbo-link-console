@@ -11,9 +11,12 @@ import { basename, extname, join } from 'node:path';
 import type { LinkAction } from '@tb/schema';
 import {
   MANAGED_OBS_SCENE_NAME,
+  type DecoderReading,
   type LinkActionExecutor,
   type LinkObsSceneItemTransform,
-  type ManagedMediaEvent
+  type ManagedMediaEvent,
+  type MusicReading,
+  type PictureReading
 } from '@tb/core/link';
 import { OBSWebSocket, EventSubscription } from 'obs-websocket-js';
 
@@ -54,6 +57,15 @@ type StatusListener = (snapshot: ObsConnectionSnapshot) => void;
  * hide of it went out and did not succeed, and from when OBS reports a change to
  * that item or its scene, until it is checked again. */
 type ShownSource = { sceneName: string; sceneItemId: number; checked: number | null };
+/** One material the picture read-back asks about (R8): `inputName` the decoder standing for it now, null when nothing
+ * of it is on air; `positionAt` where the music says it should be at a `performance.now()` time. */
+export type PictureDecoderRead = { sourceName: string; inputName: string | null; positionAt: (at: number) => number };
+/** The app's own audio input, which carries the music into the scenes it plays in. */
+const MUSIC_INPUT_NAME = '团播联动台·内部正式音频';
+const MEDIA_READ_STATES: Record<string, DecoderReading['state']> = {
+  OBS_MEDIA_STATE_PLAYING: 'playing', OBS_MEDIA_STATE_PAUSED: 'paused', OBS_MEDIA_STATE_STOPPED: 'stopped', OBS_MEDIA_STATE_ENDED: 'ended',
+  OBS_MEDIA_STATE_OPENING: 'opening', OBS_MEDIA_STATE_BUFFERING: 'opening', OBS_MEDIA_STATE_ERROR: 'error'
+};
 
 const MEDIA_ACTIONS: Record<Extract<LinkAction, { kind: 'obs.mediaAction' }>['action'], string> = {
   restart: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
@@ -75,7 +87,16 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   private readonly requests: ObsRequestScheduler;
   private readonly listeners = new Set<StatusListener>();
   private readonly inventoryListeners = new Set<() => void>();
-  private readonly programListeners = new Set<() => void>();
+  private readonly programListeners = new Set<(sceneName: string) => void>();
+  /** The music reaches OBS through the app's own audio item in the scenes a song plays (R8): then a scene on program
+   * without it means the audience does not hear the song. False when it goes through desktop audio, or is off. */
+  private musicThroughItem = false;
+  /** Per scene, whether it carries the app's audio item, directly or one nested scene or group down; emptied on any
+   * change to scenes or their items, and on every connect. */
+  private readonly musicCarried = new Map<string, boolean>();
+  private musicEpoch = 0;
+  /** A scene transition is running: the read-back does not judge the picture then. */
+  private transitioning = false;
   /** Where each program-scene source was shown and not hidden since (a hide that
    * did not succeed does not count), so hiding it, or showing it again, acts on
    * that item. Kept across reconnects: OBS keeps its scene items when only the
@@ -112,9 +133,14 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     // Material scenes put the song's picture on air: the `program` tier (OBS 请求谁先发).
     // Prepared inside `preparePlaybackMedia` they stay in `background`.
     this.mediaScenes = new ObsMediaScenes(client, (operation, label) => this.request(operation, label), operation => this.requests.run('program', operation), ownLooks);
-    this.client.on('CurrentProgramSceneChanged', () => {
-      for (const listener of this.programListeners) listener();
+    this.client.on('CurrentProgramSceneChanged', ({ sceneName }) => {
+      for (const listener of this.programListeners) listener(sceneName);
     });
+    this.client.on('SceneTransitionStarted', () => { this.transitioning = true; });
+    this.client.on('SceneTransitionEnded', () => { this.transitioning = false; });
+    const musicChanged = (): void => { this.musicCarried.clear(); this.musicEpoch++; };
+    for (const event of ['SceneRemoved', 'SceneNameChanged', 'SceneListChanged', 'CurrentSceneCollectionChanged', 'InputNameChanged', 'SceneItemCreated',
+      'SceneItemRemoved', 'SceneItemEnableStateChanged'] as const) this.client.on(event, musicChanged);
     const inventoryChanged = (): void => { for (const listener of this.inventoryListeners) listener(); };
     for (const event of ['SceneCreated', 'SceneRemoved', 'SceneNameChanged', 'SceneListChanged', 'CurrentSceneCollectionChanged', 'InputCreated', 'InputRemoved', 'InputNameChanged', 'SceneItemCreated', 'SceneItemRemoved'] as const) {
       this.client.on(event, inventoryChanged);
@@ -194,7 +220,8 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     return () => this.inventoryListeners.delete(listener);
   }
 
-  subscribeProgramScene(listener: () => void): () => void {
+  /** `listener` hears the scene OBS now has on program, whoever switched it. */
+  subscribeProgramScene(listener: (sceneName: string) => void): () => void {
     this.programListeners.add(listener);
     return () => this.programListeners.delete(listener);
   }
@@ -202,6 +229,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   async connect(url: string, password: string, timeoutMs = 10_000): Promise<ObsConnectionSnapshot> {
     this.requests.invalidate(new Error('OBS 正在更换连接，旧请求已取消'));
     this.connection++;
+    this.musicCarried.clear(); this.musicEpoch++; this.transitioning = false;
     this.updateSnapshot({
       status: this.snapshot.status === 'disconnected' ? 'connecting' : 'reconnecting',
       error: null
@@ -365,11 +393,13 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
 
   private async configureAudioCapture(enabled: boolean, executable: string, title: string, audioDeviceId: string, sceneNames?: string[], windowClass?: string): Promise<void> {
     this.assertConnected();
+    // Until the scenes carry the item below, the read-back does not ask about it (R8).
+    this.musicThroughItem = false; this.musicCarried.clear(); this.musicEpoch++;
     if (enabled && await this.hasDefaultDesktopAudio(audioDeviceId)) {
       await this.setInternalAudioCapture(false, executable, title, audioDeviceId);
       return;
     }
-    const name = '团播联动台·内部正式音频';
+    const name = MUSIC_INPUT_NAME;
     const inputs = await this.request(() => this.client.call('GetInputList'), 'GetInputList');
     const kind = collectNameValueMap(inputs.inputs, 'inputName', 'inputKind')[name];
     if (!enabled && kind === undefined) return;
@@ -417,6 +447,53 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
           await this.request(() => this.client.call('SetSceneItemEnabled', { sceneName, sceneItemId: id, sceneItemEnabled: true }), 'SetSceneItemEnabled');
         }
       }
+      this.musicThroughItem = true;
+    }
+  }
+
+  /** The picture read back (R8, design 01 §4.8), at the `control` tier: never before a picture switch. Read requests
+   * only: the scene on program, each decoder asked about, and, while the music goes through the app's own audio item,
+   * whether that scene carries it (remembered per scene until scenes or items change). Changes nothing in OBS. */
+  readPicture(decoders: readonly PictureDecoderRead[]): Promise<PictureReading> {
+    return this.requests.run('control', async () => {
+      this.assertConnected();
+      const transitioning = this.transitioning;
+      const program = await this.request(() => this.client.call('GetCurrentProgramScene'), 'GetCurrentProgramScene');
+      const programScene = program.currentProgramSceneName;
+      const read: DecoderReading[] = [];
+      for (const decoder of decoders) {
+        const inputName = decoder.inputName;
+        if (inputName === null) { read.push({ sourceName: decoder.sourceName, state: 'absent', driftMs: null }); continue; }
+        const status = await this.request(() => this.client.call('GetMediaInputStatus', { inputName }), '读回素材播放位置');
+        const state = MEDIA_READ_STATES[status.mediaState] ?? 'other';
+        const driftMs = state === 'playing' && typeof status.mediaCursor === 'number' ? status.mediaCursor - decoder.positionAt(performance.now()) : null;
+        read.push({ sourceName: decoder.sourceName, state, driftMs });
+      }
+      const music: MusicReading = this.musicThroughItem ? await this.programMusic(programScene) : { kind: 'not-used' };
+      return { kind: 'read', programScene, transitioning: transitioning || this.transitioning, decoders: read, music };
+    });
+  }
+
+  /** Whether `sceneName` carries the app's audio item, shown, directly or in a nested scene or group shown in it. */
+  private async programMusic(sceneName: string): Promise<MusicReading> {
+    const known = this.musicCarried.get(sceneName);
+    if (known !== undefined) return { kind: known ? 'carried' : 'missing' };
+    const epoch = this.musicEpoch;
+    try {
+      const items = sceneItemsOf((await this.request(() => this.client.call('GetSceneItemList', { sceneName }), '读回场景里的音乐')).sceneItems);
+      let carried = items.some(item => item.enabled && item.sourceName === MUSIC_INPUT_NAME);
+      for (const item of items) {
+        if (carried) break;
+        if (!item.enabled || !item.nested) continue;
+        const inner = item.nested === 'group'
+          ? (await this.request(() => this.client.call('GetGroupSceneItemList', { sceneName: item.sourceName }), '读回分组里的音乐')).sceneItems
+          : (await this.request(() => this.client.call('GetSceneItemList', { sceneName: item.sourceName }), '读回嵌套场景里的音乐')).sceneItems;
+        carried = sceneItemsOf(inner).some(entry => entry.enabled && entry.sourceName === MUSIC_INPUT_NAME);
+      }
+      if (epoch === this.musicEpoch) this.musicCarried.set(sceneName, carried);
+      return { kind: carried ? 'carried' : 'missing' };
+    } catch (error) {
+      return { kind: 'unknown', reason: toErrorMessage(error) };
     }
   }
 
@@ -724,6 +801,12 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     const snapshot = this.getSnapshot();
     for (const listener of this.listeners) listener(snapshot);
   }
+}
+
+/** A scene's items as the read-back needs them: name, shown, and whether it is a nested scene or a group. */
+function sceneItemsOf(values: readonly Readonly<Record<string, unknown>>[]): { sourceName: string; enabled: boolean; nested: 'scene' | 'group' | null }[] {
+  return values.flatMap(value => typeof value.sourceName === 'string' ? [{ sourceName: value.sourceName, enabled: value.sceneItemEnabled === true,
+    nested: value.isGroup === true ? 'group' as const : value.sourceType === 'OBS_SOURCE_TYPE_SCENE' ? 'scene' as const : null }] : []);
 }
 
 function collectNames(values: readonly Readonly<Record<string, unknown>>[], property: string): string[] {

@@ -3,7 +3,7 @@ import { ObsPictureLeftover, ObsProgramSession, obsRecoveryText, OUTPUT_RECOVERY
 import { nativeObsNextSchema, nativeObsPrepareSchema, type LinkProject, nativeObsStopSchema, type NativeObsNext, nativeObsStatusSchema, type NativeObsPrepare, type NativeObsStop, type NativeObsStatus, type NativePlayerStatus, type NativePlayerControl, type ObsPictureItem } from '@tb/schema';
 import { ObsPreparationCancelled } from './native-obs-outputs';
 
-type Outputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault' | 'clearFault' | 'pictureItems'> & {
+type Outputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault' | 'clearFault' | 'pictureItems' | 'pictureFollow'> & {
   /** Prepares this song's owned scenes again after OBS reconnects; starts no decoder. */
   restoreScenes?: (assertCurrent: () => void) => Promise<void>;
   /** After the song stopped: the decoders holding its last frame, by clip (R14). */
@@ -91,6 +91,14 @@ export class NativeObsHost {
     const message = `OBS 断开了：${reason}。音乐和时间码照常，画面先停在这里，OBS 重新连上后按当前位置接上`;
     entry.connection = { id: 'obs.connection', scope: 'waiting', state: 'waiting', detail: message }; this.listItems(entry);
     this.fault(message);
+  }
+
+  /** OBS reports a new scene on program (`CurrentProgramSceneChanged`): the playing or paused song's picture decides
+   * whether someone switched it by hand (R8, 2026-11-10 decision 5). Not while OBS is away or the song is prepared again. */
+  programSceneChanged(sceneName: string): void {
+    const entry = this.entry;
+    if (!entry || entry.connection || entry.lost || entry.state.state !== 'running' && entry.state.state !== 'paused') return;
+    entry.session.programSceneChanged(sceneName);
   }
 
   /** Recovery rule B once OBS is back (R7, design 01 §4.7): OBS may have forgotten the owned scenes, so they are
@@ -311,6 +319,11 @@ export class NativeObsHost {
         const entry = owner();
         if (!entry) return;
         entry.parts = [...items, ...entry.parts.filter(part => part.id === 'obs.restore')]; entry.counts = recoveries; this.listItems(entry);
+      },
+      // The picture read back (R8): shown as the session says it, never taken from what was sent.
+      pictureFollow: (follow, takeover) => {
+        const entry = owner();
+        if (entry && !['stopped', 'failed'].includes(entry.state.state)) this.patch({ follow: { state: follow.state, detail: follow.detail }, takeover });
       }
     });
     return session;
@@ -425,7 +438,8 @@ export class NativeObsHost {
     ++this.epoch;
     const entry = this.entry;
     if (!entry) return;
-    if (entry.state.state !== 'stopped') this.patch({ state: 'stopped', pendingCount: 0 });
+    // A stopped song is not read back (R14): it neither follows nor is taken over.
+    if (entry.state.state !== 'stopped') this.patch({ state: 'stopped', pendingCount: 0, ...entry.state.follow || entry.state.takeover ? { follow: null, takeover: null } : {} });
     await this.cleanUp(entry);
   }
 

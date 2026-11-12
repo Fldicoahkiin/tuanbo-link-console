@@ -1,7 +1,7 @@
 import type { ObsOperationRunner } from './obs-request-scheduler';
 import type { OBSWebSocket } from 'obs-websocket-js';
 import type { LinkMediaAsset } from '@tb/schema';
-import { materialSceneNames, obsMaterialPresentation, type ManagedMediaEvent } from '@tb/core/link';
+import { materialSceneNames, obsMaterialPresentation, PICTURE_DRIFT_TOLERANCE_MS, type ManagedMediaEvent } from '@tb/core/link';
 import { z } from 'zod';
 import { includesObsMediaPath, sameObsMediaPath, verifyRelocatedObsMediaPath } from './obs-media-paths';
 import { MemoryMaterialOwnLooks, ownLookOf, type MaterialOwnLooks } from './obs-material-own-looks';
@@ -50,8 +50,9 @@ const KEEP_LOOK: Look = { requests: [], after: null, edits: 0 };
 /** Only the dedicated input in an application-owned material scene is controlled. */
 /** A paused seek lands this far ahead of the music, covering seek and decode time. */
 const MEDIA_START_LEAD_MS = 200;
-/** Above the measured 66–100 ms steady cursor offset, so a clip in step is never repositioned. */
-const MEDIA_DRIFT_TOLERANCE_MS = 300;
+/** Above the measured 66–100 ms steady cursor offset, so a clip in step is never repositioned. The read-back
+ * (`picture-follow.ts`) finds a clip out of step by the same number. */
+const MEDIA_DRIFT_TOLERANCE_MS = PICTURE_DRIFT_TOLERANCE_MS;
 
 /** A batch OBS stopped part way (or never ran): `executed` requests before the
  * failure took effect, in order. */

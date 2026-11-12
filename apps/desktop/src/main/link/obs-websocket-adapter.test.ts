@@ -640,6 +640,53 @@ describe('ObsWebSocketAdapter', () => {
     expect(created.filter(([, data]) => typeof data === 'object' && data !== null && 'sceneName' in data && data.sceneName === '近景拉腿')).toHaveLength(1);
     expect(client.calls.some(([method]) => ['SetSceneItemTransform', 'SetSourceFilterSettings', 'SetSourceFilterEnabled', 'SetCurrentProgramScene'].includes(method))).toBe(false);
   });
+  it('画面读回（R8）：只发读取请求；读节目场景、在播素材的状态和位置；场景里有没有联动台的音乐看一层嵌套场景，记住到场景变了；转场中照实说', async () => {
+    const client = fakeObsClient();
+    client.responses.set('GetInputList', { inputs: [{ inputName: '团播联动台·内部正式音频', inputKind: 'wasapi_process_output_capture' }] });
+    client.responses.set('GetInputPropertiesListPropertyItems', { propertyItems: [{ itemValue: 'app:Chrome_WidgetWin_1:app.exe' }] });
+    client.responses.set('GetCurrentProgramScene', { currentProgramSceneName: '全景拉腿' });
+    client.responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_PLAYING', mediaCursor: 5450, mediaDuration: 60000 });
+    const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket); await adapter.connect('ws://127.0.0.1:4455', 'password');
+    const heard: string[] = []; adapter.subscribeProgramScene(sceneName => heard.push(sceneName));
+    client.emit('CurrentProgramSceneChanged', { sceneName: '手动' });
+    expect(heard).toEqual(['手动']);
+    const decoders = [{ sourceName: '素材甲', inputName: '素材甲', positionAt: () => 5000 }, { sourceName: '素材乙', inputName: null, positionAt: () => 0 }];
+    // Desktop audio or nothing configured yet: the scene's items are not asked about.
+    expect(await adapter.readPicture(decoders)).toMatchObject({ music: { kind: 'not-used' } });
+    await adapter.setInternalAudioCapture(true, 'app.exe', 'app', 'default', ['近景拉腿']);
+    const nested = { sourceName: '嵌套', sceneItemEnabled: true, isGroup: false, sourceType: 'OBS_SOURCE_TYPE_SCENE' };
+    const lists: Record<string, unknown[]> = { 全景拉腿: [{ sourceName: '摄像头', sceneItemEnabled: true, isGroup: false, sourceType: 'OBS_SOURCE_TYPE_INPUT' }, nested],
+      嵌套: [{ sourceName: '团播联动台·内部正式音频', sceneItemEnabled: true, isGroup: false, sourceType: 'OBS_SOURCE_TYPE_INPUT' }] };
+    const call = client.call.bind(client);
+    client.call = (request: string, data?: unknown): Promise<unknown> => {
+      if (request !== 'GetSceneItemList') return call(request, data);
+      client.calls.push([request, data]);
+      const sceneName = typeof data === 'object' && data !== null && 'sceneName' in data && typeof data.sceneName === 'string' ? data.sceneName : '';
+      return Promise.resolve({ sceneItems: lists[sceneName] ?? [] });
+    };
+    client.calls.length = 0;
+    expect(await adapter.readPicture(decoders)).toEqual({ kind: 'read', programScene: '全景拉腿', transitioning: false, music: { kind: 'carried' },
+      decoders: [{ sourceName: '素材甲', state: 'playing', driftMs: 450 }, { sourceName: '素材乙', state: 'absent', driftMs: null }] });
+    expect(client.calls).toEqual([['GetCurrentProgramScene', undefined], ['GetMediaInputStatus', { inputName: '素材甲' }],
+      ['GetSceneItemList', { sceneName: '全景拉腿' }], ['GetSceneItemList', { sceneName: '嵌套' }]]);
+    // Remembered: the next reading asks only for the program and the decoder.
+    client.calls.length = 0; await adapter.readPicture(decoders);
+    expect(client.calls.map(([request]) => request)).toEqual(['GetCurrentProgramScene', 'GetMediaInputStatus']);
+    // The nested scene turned off in OBS: asked again, and missing.
+    nested.sceneItemEnabled = false; client.emit('SceneItemEnableStateChanged', { sceneName: '全景拉腿', sceneItemId: 2, sceneItemEnabled: false });
+    expect(await adapter.readPicture([])).toMatchObject({ music: { kind: 'missing' } });
+    client.emit('SceneTransitionStarted', { transitionName: '淡入淡出' });
+    expect(await adapter.readPicture([])).toMatchObject({ transitioning: true });
+    client.emit('SceneTransitionEnded', { transitionName: '淡入淡出' });
+    expect(await adapter.readPicture([])).toMatchObject({ transitioning: false });
+    // Cannot be read: said so, with OBS's reason, and not as missing.
+    client.emit('SceneItemCreated', { sceneName: '全景拉腿', sourceName: '贴纸', sceneItemId: 9, sceneItemIndex: 3 });
+    client.call = (request: string, data?: unknown): Promise<unknown> => request === 'GetSceneItemList' ? Promise.reject(new Error('场景不存在')) : call(request, data);
+    expect(await adapter.readPicture([])).toMatchObject({ music: { kind: 'unknown', reason: '场景不存在' } });
+    client.call = call; client.calls.length = 0;
+    await adapter.readPicture(decoders);
+    expect(client.calls.every(([request]) => request.startsWith('Get'))).toBe(true);
+  });
   it('默认桌面音频已采集音乐时复用该通路，不能再创建第二路', async () => {
     const client = fakeObsClient();
     client.responses.set('GetSpecialInputs', { desktop1: '桌面音频', desktop2: null });

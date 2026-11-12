@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createEmptyLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, type ObsPictureFollow, type ObsPictureItem } from '@tb/schema';
 import { statusCenter, statusGroups, type StatusCenterInput } from './status-center';
 import { liveChecks, SHOW_WAIT_BASIS } from './check-basis';
 import type { ConnectionCheck } from '../stores/connection-check-store';
@@ -129,6 +129,27 @@ it('这首歌的画面按项列出：一项出错只标这一项，其余照常�
   expect(video(lost)).toEqual(statusCenter(lost).rows.find(row => row.id === 'obs'));
   // Stopped: nothing listed.
   expect(statusCenter(input({ player: { ...playing([failed]), status: 'stopped' } })).rows.some(row => row.id === 'picture')).toBe(false);
+});
+
+it('画面在不在跟（R8）：和“控台在不在跟”一个写法；读不到是“无法确认”和原因，不算正常；手动接管标黄不标红；出错的项排在前面', () => {
+  const picture = (pictureFollow: ObsPictureFollow | null, pictureItems: ObsPictureItem[] = [], status = 'playing') =>
+    statusCenter(input({ player: { status, mtcSending: false, mtcConnectionFailed: false, pictureItems, pictureFollow } })).rows.find(row => row.id === 'picture');
+  expect(picture({ state: 'following', detail: 'OBS 在播「全景」，和时间线一致' })).toMatchObject({ state: 'ready', value: '画面在跟', detail: 'OBS 在播「全景」，和时间线一致' });
+  expect(picture({ state: 'not-following', detail: 'OBS 现在播的是「特写」，按时间线这时应该是「全景」' })).toMatchObject({ state: 'error', value: '画面没在跟',
+    detail: 'OBS 的画面和时间线对不上：OBS 现在播的是「特写」，按时间线这时应该是「全景」。音乐照常播放；请看 OBS 现在播的场景和素材' });
+  expect(picture({ state: 'unknown', detail: '读不到 OBS 现在的画面：请求超时' })).toMatchObject({ state: 'idle', value: '无法确认', detail: '无法确认画面在不在跟：读不到 OBS 现在的画面：请求超时' });
+  const taken = { state: 'taken-over', detail: '有人在 OBS 里切到了「手动」，联动台不切回去；到下一段画面按时间线照常切换' } as const;
+  expect(picture(taken)).toMatchObject({ state: 'warning', value: '画面被手动接管', detail: taken.detail });
+  expect(picture({ state: 'checking', detail: '刚切过画面，稍后核对' })).toMatchObject({ state: 'ready', value: '正在核对画面' });
+  // A red part stays first; a yellow one comes after a takeover; a reading that cannot confirm does not hide a yellow part.
+  const red: ObsPictureItem = { id: 'music', scope: 'item', state: 'failed', detail: '当前场景「手动」里没有联动台的音乐' };
+  const yellow: ObsPictureItem = { id: 'drift:a', scope: 'item', state: 'not-aligned', detail: '素材“开场”和音乐差了 400 ms，正在按音乐校正' };
+  expect(picture(taken, [red])).toMatchObject({ state: 'error', value: '1 项出错', detail: red.detail });
+  expect(picture(taken, [yellow])).toMatchObject({ state: 'warning', value: '画面被手动接管', detail: `${taken.detail}；${yellow.detail}` });
+  expect(picture({ state: 'unknown', detail: '读不到' }, [yellow])).toMatchObject({ state: 'warning', value: '没对齐' });
+  // Not read back yet, or stopped (R14): as before R8.
+  expect(picture(null)).toBeUndefined();
+  expect(picture({ state: 'not-following', detail: '对不上' }, [], 'stopped')).toBeUndefined();
 });
 
 it('M5：演出中控台断了在自动重新登录是等待（黄，第几次），一键连接的旧结果不盖过它；到上限或要人处理才标红', () => {

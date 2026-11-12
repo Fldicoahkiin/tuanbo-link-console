@@ -41,6 +41,11 @@ export type ObsPictureItem = z.infer<typeof obsPictureItemSchema>;
 export const obsRecoveryCountSchema = z.object({ row: z.string().min(1), key: z.string(), count: z.number().int().nonnegative(),
   max: z.number().int().positive().optional(), exhausted: z.boolean() }).strict();
 export type ObsRecoveryCount = z.infer<typeof obsRecoveryCountSchema>;
+/** Whether OBS shows what the timeline wants, as the read-back found it (R8, `picture-follow.ts`): read back, never
+ * taken from what was sent. `unknown` could not be read, with the reason in `detail`. */
+export const obsPictureFollowSchema = z.object({ state: z.enum(['unknown', 'checking', 'following', 'not-following', 'taken-over']),
+  detail: z.string().min(1) }).strict();
+export type ObsPictureFollow = z.infer<typeof obsPictureFollowSchema>;
 export const nativeObsStatusSchema = z.object({ version: z.literal(1), sessionId: z.string().uuid(),
   generation: z.number().int().positive(), itemId: z.string().min(1), revision: z.number().int().nonnegative(),
   state: z.enum(['preparing', 'ready', 'running', 'paused', 'stopped', 'failed']), reason: z.string().nullable(),
@@ -50,6 +55,10 @@ export const nativeObsStatusSchema = z.object({ version: z.literal(1), sessionId
   /** Every part of the picture with something to report, each on its own; a part that is right again leaves the list. */
   items: z.array(obsPictureItemSchema).max(256).optional(),
   recoveries: z.array(obsRecoveryCountSchema).max(256).optional(),
+  /** The picture read back (R8): following, not, cannot confirm, or taken over by hand. */
+  follow: obsPictureFollowSchema.nullable().optional(),
+  /** Someone switched program in OBS by hand: not switched back before the next segment (2026-11-10 decision 5). */
+  takeover: z.object({ sceneName: z.string().min(1) }).strict().nullable().optional(),
   nextCueId: z.string().nullable(), currentCueId: z.string().nullable(),
   pendingCount: z.number().int().nonnegative(), positionMs: z.number().finite().nonnegative()
 }).strict();

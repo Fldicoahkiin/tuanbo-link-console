@@ -364,3 +364,53 @@ describe('规则 8：停止以后画面停在最后一帧，下一首的画面�
     expect(read('apps/desktop/src/main/link-main.ts')).toContain('nativeObs?.close(host.controller.sessionId)');
   });
 });
+
+// ---- A scene switched by hand in OBS during a song (rule 10, 0.5.9 R8, 2026-11-10 decision 5) ----
+
+describe('规则 10：播放中有人在 OBS 里手动切了场景，下一段画面之前不切回去（R8，2026-11-12）', () => {
+  it('手动切走以后，暂停再继续、读回都不切回去；到下一段机位照常切，接管结束；手动切回时间线要的场景也算结束', async () => {
+    let onProgram = '';
+    const follows: string[] = [];
+    const show = pictureSession(camerasShow(['全景', '特写', '全景']), entry => { if (entry.kind === 'obs.setProgramScene') onProgram = entry.sceneName; return Promise.resolve(); }, {
+      readPicture: () => Promise.resolve({ kind: 'read', programScene: onProgram, transitioning: false, decoders: [], music: { kind: 'carried' } }),
+      pictureFollow: follow => { follows.push(follow.state); } });
+    await show.session.prepare(0); await show.advance(0, 400);
+    onProgram = '手动'; show.session.programSceneChanged('手动');
+    await show.advance(500, 600);
+    await show.session.pause(); await show.advance(700, 900);
+    expect(show.scenes()).toEqual(['全景']);
+    expect(follows.at(-1)).toBe('taken-over');
+    // The next segment: its switch goes out and ends the takeover (the reading after it says so).
+    await show.advance(1000, 1500);
+    expect(show.scenes()).toEqual(['全景', '特写']);
+    await show.advance(1600, 2000);
+    expect(follows.at(-1)).toBe('checking');
+    // Switched away and back to the scene wanted by hand: no longer taken over, nothing sent.
+    await show.advance(2100, 2200);
+    onProgram = '手动'; show.session.programSceneChanged('手动');
+    expect(follows.at(-1)).toBe('taken-over');
+    onProgram = '全景'; show.session.programSceneChanged('全景');
+    expect(follows.at(-1)).toBe('checking');
+    await show.advance(2300, 2900);
+    expect(show.scenes()).toEqual(['全景', '特写', '全景']);
+    expect(show.session.error).toBeNull(); expect(show.faults).toEqual([]);
+  });
+
+  it('源码：接管只在画面会话里认（programSceneChanged），主进程只转交 OBS 报的场景；别处不判断手动切换，也不往场景里加音乐', () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+    const read = (path: string): string => readFileSync(join(root, path), 'utf8');
+    const session = read('packages/core/src/obs-program-session.ts');
+    expect(session).toContain('this.ledger.takeOver(');
+    // (`nativeObs.takeOver` in the host is the next song taking a held decoder over, R14: another thing.)
+    for (const path of ['apps/desktop/src/main/link/native-obs-host.ts', 'apps/desktop/src/main/link/native-obs-outputs.ts', 'apps/desktop/src/main/link-main.ts',
+      'packages/core/src/picture-reconcile.ts']) expect(read(path), path).not.toMatch(/ledger\.takeOver\(|isHandSwitch\(/);
+    expect(read('apps/desktop/src/main/link-main.ts')).toContain('nativeObs?.programSceneChanged(');
+    // The read-back: the `control` tier (never before a picture switch), and read requests only (no item added to any scene).
+    const adapter = read('apps/desktop/src/main/link/obs-websocket-adapter.ts');
+    const start = adapter.indexOf('  readPicture('), end = adapter.indexOf('\n  }\n', adapter.indexOf('  private async programMusic('));
+    expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
+    const readBack = adapter.slice(start, end);
+    expect(readBack).toContain("this.requests.run('control'");
+    expect([...readBack.matchAll(/client\.call\('(\w+)'/g)].map(match => match[1]).filter(request => !request!.startsWith('Get'))).toEqual([]);
+  });
+});

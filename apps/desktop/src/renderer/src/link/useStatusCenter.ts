@@ -46,8 +46,9 @@ export function useStatusCenter(player: ProjectPlayer): StatusCenter {
   const networkError = useMa2NetworkStatusStore(state => state.error);
   const follow = useConsoleFollowStore(state => state.follow);
   const lightingOff = useShowStateStore(state => state.lightingOff);
-  const { status, mtcSending, mtcConnectionFailed, pictureItems } = player.state;
+  const { status, mtcSending, mtcConnectionFailed, pictureItems, pictureFollow } = player.state;
   return useMemo(() => statusCenter({ project, profile, method, local: { status: localStatus, error: localError }, obs, processes: { p1, ma2, ma3d },
-    midiPorts, nativeDevices, nativeDeviceError, checks, network, networkError, player: { status, mtcSending, mtcConnectionFailed, pictureItems: pictureItems ?? [] }, follow, lightingOff }),
-  [project, profile, method, localStatus, localError, obs, p1, ma2, ma3d, midiPorts, nativeDevices, nativeDeviceError, checks, network, networkError, status, mtcSending, mtcConnectionFailed, pictureItems, follow, lightingOff]);
+    midiPorts, nativeDevices, nativeDeviceError, checks, network, networkError,
+    player: { status, mtcSending, mtcConnectionFailed, pictureItems: pictureItems ?? [], pictureFollow: pictureFollow ?? null }, follow, lightingOff }),
+  [project, profile, method, localStatus, localError, obs, p1, ma2, ma3d, midiPorts, nativeDevices, nativeDeviceError, checks, network, networkError, status, mtcSending, mtcConnectionFailed, pictureItems, pictureFollow, follow, lightingOff]);
 }

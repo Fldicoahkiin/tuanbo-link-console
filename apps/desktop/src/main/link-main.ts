@@ -2007,6 +2007,8 @@ function registerIpc(
   });
   obs.subscribe(state => beautyOutput.connection(state.status === 'connected'));
   obs.subscribeProgramScene(() => beautyOutput.sceneChanged());
+  // A scene switched in OBS during a song: the song's picture decides whether it was taken over by hand (R8).
+  obs.subscribeProgramScene(sceneName => nativeObs?.programSceneChanged(sceneName));
   handle('link:beauty-output', (_event, value: unknown) => beautyOutput.configure(beautyBasicValuesSchema.parse(value)));
   handle('link:beauty-status', () => beautyOutput.status());
   const beautyComparison = new BeautyComparison(async target => {
