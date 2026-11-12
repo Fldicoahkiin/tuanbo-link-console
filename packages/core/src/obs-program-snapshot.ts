@@ -1,4 +1,4 @@
-import { createEmptyLinkProject, parseLinkProject, type LinkProject, type ObsProgramSnapshot } from '@tb/schema';
+import { createEmptyLinkProject, parseLinkProject, requiredSchemaVersion, type LinkProject, type ObsProgramSnapshot } from '@tb/schema';
 import { resolveTimelineClipSpan } from './timeline-state';
 
 /** Runtime data only: original console XML and unrelated programs stay in the
@@ -28,8 +28,11 @@ export function itemNeedsObs(project: LinkProject, itemId: string): boolean {
     || item.cues.some(cue => cue.enabled && cue.actions.some(action => action.kind.startsWith('obs.')))));
 }
 
+/** The picture's own project: only this song. Its file version is the one this song needs (`requiredSchemaVersion`),
+ * so a song only a newer version keeps (a clip's look sent to OBS, a blank after the music) is read as it is. */
 export function projectFromObsSnapshot(snapshot: ObsProgramSnapshot): LinkProject {
   return parseLinkProject({ ...createEmptyLinkProject(snapshot.item.title), projectId: snapshot.projectId,
+    schemaVersion: requiredSchemaVersion({ rundown: [snapshot.item] }),
     playbackSource: 'internal', internalVideoAudio: snapshot.internalVideoAudio,
     outputCanvas: snapshot.outputCanvas, timebase: { frameRate: snapshot.frameRate, mode: 'per-item-reset' },
     rundown: [snapshot.item], mediaAssets: snapshot.assets });

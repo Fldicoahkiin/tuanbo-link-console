@@ -19,6 +19,29 @@ it('只投影当前节目的 OBS 输出，保留原工程全部其他通道及�
     projectPath: 'C:/shows/test.tblink', snapshot, command: '任意命令' })).toThrow();
 });
 
+it('片段的样子要送 OBS 的歌（schema 3）照样能投影成画面工程，样子和是否送 OBS 都在快照里；样子变了快照就不同（0.5.9 E16）', () => {
+  const look = { x: 0.25, y: 0.75, scale: 0.5, scaleX: 1, scaleY: 1, rotation: 10 };
+  const project = parseLinkProject({ ...createEmptyLinkProject('样子'), schemaVersion: 3, playbackSource: 'internal', obsOutputMode: 'scenes',
+    mediaAssets: [{ id: 'video', name: '视频', kind: 'video', relativePath: 'video.mp4', sha256: 'a'.repeat(64), byteLength: 1, durationMs: 5000, width: 1920, height: 1080 }],
+    rundown: [{ id: 'song', title: '歌曲', cues: [], referenceMediaClips: [{ id: 'clip', assetId: 'video', label: '视频', startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
+      durationMs: 1000, canvasTransform: look, obsTransform: 'project' }] }] });
+  const snapshot = obsProgramSnapshotSchema.parse(createObsProgramSnapshot(project, 'song', 0));
+  expect(snapshot.item.referenceMediaClips[0]).toMatchObject({ canvasTransform: look, obsTransform: 'project' });
+  expect(projectFromObsSnapshot(snapshot).rundown[0]!.referenceMediaClips[0]).toMatchObject({ canvasTransform: look, obsTransform: 'project' });
+  const moved = parseLinkProject({ ...project, rundown: [{ ...project.rundown[0]!, referenceMediaClips: [{ ...project.rundown[0]!.referenceMediaClips[0]!, canvasTransform: { ...look, x: 0.5 } }] }] });
+  expect(JSON.stringify(createObsProgramSnapshot(moved, 'song', 0))).not.toBe(JSON.stringify(createObsProgramSnapshot(project, 'song', 0)));
+});
+
+it('音乐后面留了空白的歌（schema 3）也能投影成画面工程（0.5.9 E14）', () => {
+  const source = { assetId: 'music', relativePath: 'assets/reference-audio/music.wav', sha256: 'a'.repeat(64), durationMs: 20_000 };
+  const file = { assetId: 'mix', relativePath: 'assets/reference-audio/mix.wav', sha256: 'b'.repeat(64), durationMs: 21_000 };
+  const referenceAudio = { ...file, timeline: { source: file, segments: [{ id: 'mix', startMs: 0, sourceOffsetMs: 0, durationMs: 21_000 }],
+    tracks: [{ id: 'music-track', title: '歌曲音频', source, segments: [{ id: 'music', startMs: 0, sourceOffsetMs: 0, durationMs: 20_000 }] }], durationMs: 21_000 } };
+  const project = parseLinkProject({ ...createEmptyLinkProject('空白'), schemaVersion: 3, playbackSource: 'internal', obsOutputMode: 'scenes',
+    rundown: [{ id: 'song', title: '歌曲', cues: [], referenceAudio }] });
+  expect(projectFromObsSnapshot(createObsProgramSnapshot(project, 'song', 0)).rundown[0]!.referenceAudio?.timeline?.durationMs).toBe(21_000);
+});
+
 it('跨目标或损坏的媒体引用仍由完整工程关系校验拒绝', () => {
   const project = parseLinkProject({ ...createEmptyLinkProject('工程'), playbackSource: 'internal', obsOutputMode: 'scenes', rundown: [{ id: 'song', title: '歌曲', cues: [] }] });
   const snapshot = createObsProgramSnapshot(project, 'song', 0);
