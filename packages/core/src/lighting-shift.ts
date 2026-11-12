@@ -56,24 +56,39 @@ export function shiftLightingDocument(lighting: LightingDocument, deltaMs: numbe
   return lightingDocumentSchema.parse(next);
 }
 
-/** Where the earliest and latest lighting things are, in song time: what moving the song's lighting is held to.
- * Null when the document has nothing on its timeline. */
-export function lightingTimeRange(lighting: LightingDocument): { startMs: number; endMs: number } | null {
+/** What on the lighting timeline holds a whole-song move: the points (cues, notes and empty clips), the markers, the
+ * song's sections and the first beat of the music grid. */
+export type LightingTimeKind = 'point' | 'marker' | 'section' | 'first-beat';
+
+/** Where the earliest and latest lighting things of each kind are, in song time; a kind the document has none of is
+ * left out. songPaddingLimits says from it what stops taking blank time away (0.5.9 E15). */
+export function lightingTimeRanges(lighting: LightingDocument): Partial<Record<LightingTimeKind, { startMs: number; endMs: number }>> {
   const map = new LightingTempoMap(lighting.tempos);
-  const starts: number[] = []; const ends: number[] = [];
+  const times: Record<LightingTimeKind, number[]> = { point: [], marker: [], section: [], 'first-beat': [] };
   for (const track of lighting.tracks) for (const clip of track.clips) {
     // The clip itself may start at 0 (shiftLightingDocument starts it there); only where it plays counts.
     for (const event of clip.events) {
-      const at = lightingEventTime(clip, event, map);
-      starts.push(at);
-      ends.push(event.kind === 'note' ? lightingEventTime(clip, { ...event, at: event.at + event.duration }, map) : at);
+      times.point.push(lightingEventTime(clip, event, map));
+      if (event.kind === 'note') times.point.push(lightingEventTime(clip, { ...event, at: event.at + event.duration }, map));
     }
-    if (!clip.events.length) { starts.push(lightingClipSpan(clip, map).startMs); ends.push(lightingClipSpan(clip, map).startMs); }
+    if (!clip.events.length) times.point.push(lightingClipSpan(clip, map).startMs);
   }
-  for (const marker of lighting.markers) { starts.push(marker.startMs); ends.push(marker.endMs ?? marker.startMs); }
+  for (const marker of lighting.markers) times.marker.push(marker.startMs, marker.endMs ?? marker.startMs);
   if (lighting.music) {
-    starts.push(lighting.music.firstBeatMs);
-    for (const section of lighting.music.sections) { starts.push(section.startMs); ends.push(section.endMs); }
+    times['first-beat'].push(lighting.music.firstBeatMs);
+    for (const section of lighting.music.sections) times.section.push(section.startMs, section.endMs);
   }
-  return starts.length || ends.length ? { startMs: Math.min(...starts, ...ends), endMs: Math.max(...starts, ...ends) } : null;
+  const ranges: Partial<Record<LightingTimeKind, { startMs: number; endMs: number }>> = {};
+  for (const kind of Object.keys(times) as LightingTimeKind[]) {
+    const values = times[kind];
+    if (values.length) ranges[kind] = { startMs: Math.min(...values), endMs: Math.max(...values) };
+  }
+  return ranges;
+}
+
+/** Where the earliest and latest lighting things are, in song time: what moving the song's lighting is held to.
+ * Null when the document has nothing on its timeline. */
+export function lightingTimeRange(lighting: LightingDocument): { startMs: number; endMs: number } | null {
+  const ranges = Object.values(lightingTimeRanges(lighting));
+  return ranges.length ? { startMs: Math.min(...ranges.map(range => range.startMs)), endMs: Math.max(...ranges.map(range => range.endMs)) } : null;
 }

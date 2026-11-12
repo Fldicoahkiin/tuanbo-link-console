@@ -374,7 +374,7 @@ export type LinkDesktopApi = {
   startMusicMonitor(payload: import('@tb/schema').MusicMonitorRequest): Promise<import('@tb/schema').MusicMonitorStatus>;
   onMusicMonitorStatus(listener: (status: import('@tb/schema').MusicMonitorStatus) => void): () => void;
   stopMusicMonitor(): Promise<void>;
-  renderAudioSegments(payload: { projectPath: string; source: ReferenceAudio; segments: AudioSegment[]; tracks?: AudioTrack[] }): Promise<ReferenceAudio>;
+  renderAudioSegments(payload: { projectPath: string; source: ReferenceAudio; segments: AudioSegment[]; tracks?: AudioTrack[]; durationMs?: number }): Promise<ReferenceAudio>;
   saveWaveformCache(payload: { projectPath: string; sha256: string; peaks: number[] }): Promise<void>;
   inspectProjectAssets(path: string, project: LinkProject): Promise<LinkProjectAssetInspection>;
   inspectMediaAssets(payload: import('@tb/schema').LinkMediaInspectionPayload): Promise<LinkProjectAssetInspection['media']>;

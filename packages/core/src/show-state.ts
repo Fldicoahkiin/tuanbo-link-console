@@ -138,6 +138,9 @@ export const showOperationRules = {
   'document.saveAs': stopped('另存工程'),
   'document.save': always,
   'media.analyze': stopped('分析音乐'),
+  // Rendering a song's audio (blank time added, 0.5.9 E15) mixes in the main process, which also sends the show's
+  // pictures: it refuses while the show is on (`link:render-audio-segments`), for every song, so the editor says so first.
+  'audio.render': stopped('生成音频'),
   'media.editAudio': stopped('编辑音频'),
   'media.import': stopped('导入素材'),
   'media.relink': stopped('找回素材'),
