@@ -30,7 +30,9 @@ export function ResultView({ result, qr, paid, onHideSecret, onDone }: {
 function Secret({ value, onHide }: { value: string; onHide: () => void }) {
   const [left, setLeft] = useState(secretSeconds);
   useEffect(() => {
-    const timer = window.setInterval(() => setLeft(seconds => Math.max(0, seconds - 1)), 1000);
+    // 按到点的时刻算，不数跳了几次：标签页在后台时浏览器会把定时器放慢，数次数会让激活码留得比 60 秒久。
+    const deadline = Date.now() + secretSeconds * 1000;
+    const timer = window.setInterval(() => setLeft(Math.max(0, Math.ceil((deadline - Date.now()) / 1000))), 1000);
     return () => window.clearInterval(timer);
   }, []);
   useEffect(() => { if (left === 0) onHide(); }, [left, onHide]);
