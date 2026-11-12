@@ -45,17 +45,37 @@ const primaryDecoder = (name: string): string => name.endsWith(STANDBY_SUFFIX) ?
  * or the project's look as JSON), the decoder's live-edit count it was worked out at, and why it could not be worked
  * out (the clip is then shown as OBS has it, and told). */
 type Look = { requests: Requests; after: string | null; edits: number; problem?: string } & FilterLook;
+/** What a decoder's own input has under the console's picture filter name, as read from OBS (0.5.9 E17): nothing; our
+ * filter, on or off, with the opacity it has (none in its settings: OBS's default, fully opaque); a filter of that
+ * name the console did not make (another kind), which is never changed; or `doubt`: a write of ours failed or got no
+ * answer, so what it is now is not known. No entry: not read on this connection yet. */
+type FilterState = { kind: 'absent' } | { kind: 'ours'; enabled: boolean; opacity: number } | { kind: 'foreign' } | { kind: 'doubt' };
+/** Why a clip's opacity is not as the project has it: OBS did not take our write, the filter could not be read, or a
+ * filter of our name is not ours. */
+export type FilterProblem = { kind: 'set' | 'read'; reason: string } | { kind: 'foreign' };
 /** The opacity part of a look (0.5.9 E17): the requests for the decoder's picture filter, sent on their own ahead of the
- * scene item's look; what the filter is afterwards (FILTER_OFF or the opacity); whether they create it. */
-type FilterLook = { filter: Requests; filterAfter: string | null; filterCreates: boolean };
-const NO_FILTER: FilterLook = { filter: [], filterAfter: null, filterCreates: false };
+ * scene item's look, and what the filter is once they ran; why the opacity cannot be set as the clip wants; and
+ * whether the filter is only read after the clip is shown (a late clip with no opacity on a decoder not read yet). */
+type FilterLook = { filter: Requests; filterAfter: FilterState | null; filterProblem: FilterProblem | null; filterLater: boolean };
+const NO_FILTER: FilterLook = { filter: [], filterAfter: null, filterProblem: null, filterLater: false };
 const KEEP_LOOK: Look = { requests: [], after: null, edits: 0, ...NO_FILTER };
 /** The console's one filter on a material decoder's own input, carrying the clip's opacity (0.5.9 E17). Never on a
  * material scene, never on a source of the user's; the operator's filters on the decoder are copied to its standby
  * without it. */
 export const PICTURE_FILTER_NAME = '联动台·画面调节';
-/** The session book's word for a decoder whose picture filter is off, or not there. */
-const FILTER_OFF = 'off';
+/** OBS's opacity of a `color_filter_v2` with no opacity in its settings. */
+const FULLY_OPAQUE = 1;
+/** Where a clip's look is worked out: off air while the decoder is primed, or on the way to showing it (a start or a
+ * seek), where reading the filter must not hold up a clip that has no opacity. */
+type LookPoint = 'prime' | 'late';
+/** What a filter list says about the picture filter. */
+function filterStateOf(filters: z.infer<typeof filtersSchema>): FilterState {
+  const ours = filters.find(filter => filter.filterName === PICTURE_FILTER_NAME);
+  if (!ours) return { kind: 'absent' };
+  if (ours.filterKind !== OBS_PICTURE_FILTER_KIND) return { kind: 'foreign' };
+  const opacity = ours.filterSettings.opacity;
+  return { kind: 'ours', enabled: ours.filterEnabled, opacity: typeof opacity === 'number' ? opacity : FULLY_OPAQUE };
+}
 /** The crop a material's scene item has in OBS, from its kept own look: a clip with no crop of its own keeps it. */
 const CROP_FIELDS = ['cropTop', 'cropRight', 'cropBottom', 'cropLeft'] as const;
 
@@ -93,9 +113,13 @@ export function lookFailure(event: Pick<ManagedMediaEvent, 'assetName'>, reason:
   return `素材“${event.assetName}”照常在播，但没有按工程里的位置和大小摆，用的是 OBS 里现在的样子。原因：${reason.replace(/[。.；;\s]+$/u, '')}。下一段用到这个素材时会再按工程摆；一直这样，请重新连接 OBS，或把运行日志发给我们`;
 }
 
-/** The red text of a clip shown without the opacity the project gives it, because OBS did not take it (0.5.9 E17). */
-export function opacityFailure(event: Pick<ManagedMediaEvent, 'assetName'>, reason: string): string {
-  return `素材“${event.assetName}”照常在播，但不透明度没有按工程设好。原因：${reason.replace(/[。.；;\s]+$/u, '')}。下一段用到这个素材时会再按工程设；一直这样，请重新连接 OBS，或把运行日志发给我们`;
+/** The red text of a clip shown without the opacity the project gives it (0.5.9 E17). */
+export function opacityFailure(event: Pick<ManagedMediaEvent, 'assetName'>, problem: FilterProblem): string {
+  switch (problem.kind) {
+    case 'set': return `素材“${event.assetName}”照常在播，但不透明度没有按工程设好。原因：${problem.reason.replace(/[。.；;\s]+$/u, '')}。下一段用到这个素材时会再按工程设；一直这样，请重新连接 OBS，或把运行日志发给我们`;
+    case 'read': return `素材“${event.assetName}”照常在播，但没能读到它在 OBS 里的滤镜，不透明度可能不对。原因：${problem.reason.replace(/[。.；;\s]+$/u, '')}。下一段用到这个素材时会再读一次；一直这样，请重新连接 OBS，或把运行日志发给我们`;
+    case 'foreign': return `素材“${event.assetName}”照常在播，但不透明度没有设置：素材来源上已经有一个叫“${PICTURE_FILTER_NAME}”的滤镜，不是联动台建的。请在 OBS 里把它改名或删掉`;
+  }
 }
 
 export class ObsMediaScenes {
@@ -121,11 +145,12 @@ export class ObsMediaScenes {
    * the scene was created anew, or could not be read for a copy. No look of ours goes to their decoders this run; each
    * start says why. Forgotten on `clear()`: the store then answers again (and fails again, the same way). */
   private readonly untrusted = new Map<string, string>();
-  /** What this session knows a decoder's picture filter is (0.5.9 E17): FILTER_OFF or the opacity. No entry: not known. */
-  private readonly filterStates = new Map<string, string>();
-  /** Why the picture filter could not be set while the decoder was prepared off air: told by the clip's start or seek,
+  /** A decoder's picture filter as read from OBS on this connection, and kept up to date by our writes (0.5.9 E17).
+   * Read once, where the decoder is prepared; read again only after a write of ours failed (`doubt`) or a read failed. */
+  private readonly filterStates = new Map<string, FilterState>();
+  /** Why the picture filter could not be set while the decoder was primed off air: told by the clip's start or seek,
    * which then does not send it again. */
-  private readonly filterProblems = new Map<string, string>();
+  private readonly filterProblems = new Map<string, FilterProblem>();
   private canvas: { width: number; height: number } | null = null;
   constructor(private readonly client: OBSWebSocket, private readonly request: Request, private readonly run: ObsOperationRunner,
     private readonly ownLooks: MaterialOwnLooks = new MemoryMaterialOwnLooks()) {}
@@ -189,9 +214,8 @@ export class ObsMediaScenes {
           inputSettings: { ...settings.inputSettings, restart_on_activate: false, close_when_inactive: false, looping: false }
         }), '创建隐藏预备解码器');
         sceneItemId = created.sceneItemId;
-        // A new input has no filter of ours (E17).
-        this.filterStates.delete(sourceName); this.filterProblems.delete(sourceName);
-        try { await this.ownLooks.forgetFilterMade(sourceName); } catch (error) { this.distrust(primaryName, error); }
+        // A new input has no filters at all (E17); the copy below reads it once more all the same.
+        this.filterStates.set(sourceName, { kind: 'absent' }); this.filterProblems.delete(sourceName);
       }
       this.prepared.set(sourceName, { ...primary, sceneItemId });
       await this.batch([
@@ -219,10 +243,13 @@ export class ObsMediaScenes {
       await this.request(() => this.client.call('SetSceneItemTransform', { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemTransform: transform }), '复制预备画面变换');
       this.looks.set(to, OWN_LOOK);
       // The operator's filters only: the console's picture filter on either decoder is its clip's (E17), set by `prime`.
-      const filters = filtersSchema.parse((await this.request(() => this.client.call('GetSourceFilterList', { sourceName: from }), '读取预备画面滤镜')).filters)
-        .filter(filter => filter.filterName !== PICTURE_FILTER_NAME);
-      const previous = filtersSchema.parse((await this.request(() => this.client.call('GetSourceFilterList', { sourceName: to }), '检查预备画面滤镜')).filters)
-        .filter(filter => filter.filterName !== PICTURE_FILTER_NAME);
+      // The two lists say what each decoder's picture filter is, so neither is read again for it on this connection.
+      const fromList = filtersSchema.parse((await this.request(() => this.client.call('GetSourceFilterList', { sourceName: from }), '读取预备画面滤镜')).filters);
+      this.filterStates.set(from, filterStateOf(fromList));
+      const toList = filtersSchema.parse((await this.request(() => this.client.call('GetSourceFilterList', { sourceName: to }), '检查预备画面滤镜')).filters);
+      this.filterStates.set(to, filterStateOf(toList));
+      const filters = fromList.filter(filter => filter.filterName !== PICTURE_FILTER_NAME);
+      const previous = toList.filter(filter => filter.filterName !== PICTURE_FILTER_NAME);
       for (const filter of previous) if (!filters.some(item => item.filterName === filter.filterName && item.filterKind === filter.filterKind)) {
         await this.request(() => this.client.call('RemoveSourceFilter', { sourceName: to, filterName: filter.filterName }), '移除过期预备滤镜');
       }
@@ -281,11 +308,7 @@ export class ObsMediaScenes {
       } else {
         // Created anew: the creation look is the material's own look now, whatever was kept for it before (E16).
         // A record that cannot be dropped does not stop the creation: the material is not trusted this run instead.
-        try {
-          await this.ownLooks.drop(sourceName);
-          // Its inputs are new too: no filter of ours on them (E17).
-          await this.ownLooks.forgetFilterMade(sourceName); await this.ownLooks.forgetFilterMade(`${sourceName}${STANDBY_SUFFIX}`);
-        } catch (error) { this.distrust(sourceName, error); }
+        try { await this.ownLooks.drop(sourceName); } catch (error) { this.distrust(sourceName, error); }
         this.looks.delete(sourceName); this.looks.delete(`${sourceName}${STANDBY_SUFFIX}`);
         for (const name of [sourceName, `${sourceName}${STANDBY_SUFFIX}`]) { this.filterStates.delete(name); this.filterProblems.delete(name); }
         await this.request(() => this.client.call('CreateScene', { sceneName }), 'CreateScene');
@@ -295,6 +318,8 @@ export class ObsMediaScenes {
             : { is_local_file: true, local_file: playbackPath, looping: false, restart_on_activate: false, close_when_inactive: false, hw_decode: hardwareDecode }
         }), 'CreateInput');
         sceneItemId = created.sceneItemId;
+        // A new input has no filters at all (E17).
+        this.filterStates.set(sourceName, { kind: 'absent' });
         this.prepared.set(sourceName, { path, sha256: asset.sha256, playbackPaths, sceneName, sceneItemId, kind: asset.kind });
         if (asset.kind !== 'audio') {
           const canvas = await this.request(() => this.client.call('GetVideoSettings'), 'GetVideoSettings');
@@ -316,6 +341,10 @@ export class ObsMediaScenes {
       this.active.delete(sourceName);
       this.primed.delete(sourceName);
       if (!exists && sourceName !== baseNames.sourceName && asset.kind !== 'audio') await this.copyPresentation(baseNames.sourceName, sourceName);
+      // The picture filter is read here, once per decoder per connection, off the show path (E17). A read that fails
+      // does not stop the preparation: the state stays unread, and the clip's look reads it again and tells it when
+      // it matters (`filterFor`).
+      if (asset.kind !== 'audio' && !this.filterStates.has(sourceName)) await this.readFilter(sourceName);
     });
   }
 
@@ -330,9 +359,10 @@ export class ObsMediaScenes {
       await this.request(() => this.client.call('SetInputMute', { inputName: event.sourceName, inputMuted: true }), '预热素材静音');
       // The clip's look goes on while the decoder is off air, so its start shows it as it should be at once.
       if (!this.active.has(event.sourceName)) {
-        const look = await this.lookFor(event.sourceName, event.transform, event.sourceSize);
+        this.filterProblems.delete(event.sourceName);
+        const look = await this.lookFor(event.sourceName, event.transform, event.sourceSize, 'prime');
         await this.sendLook(event.sourceName, look);
-        // A filter OBS did not take leaves the decoder prepared; the clip's start tells it (E17).
+        // An opacity that could not be set leaves the decoder prepared; the clip's start tells it (E17).
         const failed = await this.sendFilter(event.sourceName, look);
         if (failed !== null) this.filterProblems.set(event.sourceName, failed);
       }
@@ -413,15 +443,15 @@ export class ObsMediaScenes {
       // Why the clip's look could not be worked out: it is shown as OBS has it all the same, and told after (E16).
       let lookProblem: string | null = null;
       // Why the clip's opacity could not be set (E17): shown all the same, and told after.
-      let filterProblem: string | null = null;
+      let filterProblem: FilterProblem | null = null;
       if (event.phase === 'start') {
         // A primed decoder has the clip's look already. An image, a decoder started unprimed and one on air for the
         // clip this one continues get it in the batch that shows them, ahead of the show (E16); its opacity goes just
         // ahead of that batch, on its own (E17).
-        const look = await this.lookFor(event.sourceName, event.transform, event.sourceSize);
+        const look = await this.lookFor(event.sourceName, event.transform, event.sourceSize, 'late');
         let lookSent = false;
         lookProblem = look.problem ?? null;
-        filterProblem = await this.filterOf(event.sourceName, look);
+        filterProblem = await this.sendFilter(event.sourceName, look);
         if (look.requests.length) this.looks.delete(event.sourceName);
         const wasActive = this.active.has(event.sourceName);
         // On air for this clip already (it plays on from the clip this one continues
@@ -493,6 +523,8 @@ export class ObsMediaScenes {
         if (play !== undefined) requests.push({ requestType: 'TriggerMediaInputAction', requestData: { inputName: event.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' } });
         await this.startBatch(requests, event, reach, retire(others.length), play);
         if (look.requests.length) this.settleLook(event.sourceName, look);
+        // A clip with no opacity was shown without waiting for the filter to be read; read it now (E17).
+        if (look.filterLater) filterProblem = await this.filterAfterShow(event.sourceName);
       } else {
         this.primed.delete(event.sourceName);
         if (event.assetKind !== 'image') requests.push(
@@ -637,9 +669,9 @@ export class ObsMediaScenes {
       const others = event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName);
       // A look that could not be worked out is left out here and the clip shown as OBS has it; the session book stays
       // unknown, so the decoder's next start tries again.
-      const look = await this.lookFor(event.sourceName, event.transform, event.sourceSize);
+      const look = await this.lookFor(event.sourceName, event.transform, event.sourceSize, 'late');
       if (look.requests.length) this.looks.delete(event.sourceName);
-      const filterProblem = await this.filterOf(event.sourceName, look);
+      let filterProblem = await this.sendFilter(event.sourceName, look);
       // A clip started from the middle (or rebuilt after a reconnect) is this
       // decoder's clip once it is shown, also when locating it fails below: the
       // drift check reaches it once it plays, and a later switch mutes it.
@@ -650,6 +682,7 @@ export class ObsMediaScenes {
         ...(event.deferSceneSwitch ? [] : [{ requestType: 'SetCurrentProgramScene' as const, requestData: { sceneName: target.sceneName } }])
       ], event, others.length + look.requests.length);
       if (look.requests.length) this.settleLook(event.sourceName, look);
+      if (look.filterLater) filterProblem = await this.filterAfterShow(event.sourceName);
       if (event.assetKind !== 'image') {
         await this.prepareSeekDecoder(event, target.sceneItemId);
         await native(event.sourceName, Math.round(event.sourceOffsetMs));
@@ -735,7 +768,7 @@ export class ObsMediaScenes {
    * The opacity goes with it as the decoder's picture filter (`filterFor`). Only material decoders of ours are written;
    * audio has no picture. A look that cannot be worked out (reading the own look, keeping it, reading the canvas size, a
    * crop of a source whose size is not known) sends nothing and says why: the clip is still shown. */
-  private async lookFor(decoder: string, transform: ManagedMediaEvent['transform'], sourceSize?: ManagedMediaEvent['sourceSize']): Promise<Look> {
+  private async lookFor(decoder: string, transform: ManagedMediaEvent['transform'], sourceSize: ManagedMediaEvent['sourceSize'], point: LookPoint): Promise<Look> {
     const target = this.prepared.get(decoder);
     if (!target || target.kind === 'audio') return KEEP_LOOK;
     const current = this.looks.get(decoder), item = { sceneName: target.sceneName, sceneItemId: target.sceneItemId };
@@ -746,7 +779,7 @@ export class ObsMediaScenes {
     try {
       let own = await this.ownLooks.read(key);
       if (!transform) {
-        const filter = await this.filterFor(decoder);
+        const filter = await this.filterFor(decoder, undefined, point);
         return !own || current === OWN_LOOK ? { ...KEEP_LOOK, edits, ...filter } : { requests: set(own), after: OWN_LOOK, edits, ...filter };
       }
       const presentation = obsMaterialPresentation(transform, await this.canvasSize(), sourceSize);
@@ -758,62 +791,92 @@ export class ObsMediaScenes {
       const kept = own;
       const keptCrop = Object.fromEntries(CROP_FIELDS.flatMap(field => typeof kept[field] === 'number' ? [[field, kept[field]]] : []));
       const look: Record<string, JsonValue> = { ...presentation.sceneItemTransform, ...(transform.crop ? {} : keptCrop) }, after = JSON.stringify(look);
-      const filter = await this.filterFor(decoder, presentation.filterSettings?.opacity);
+      const filter = await this.filterFor(decoder, presentation.filterSettings?.opacity, point);
       return current === after ? { ...KEEP_LOOK, edits, ...filter } : { requests: set(look), after, edits, ...filter };
     } catch (error) {
       return { ...KEEP_LOOK, edits, problem: failureReason(error) };
     }
   }
 
-  /** The decoder's picture filter for an opacity (0.5.9 E17; undefined: fully opaque, the filter off), unless the session
-   * knows it is so. Made the first time a clip needs it, kept on this machine before it is created; never removed, only
-   * switched off. A decoder the console never made it on gets nothing for a clip that is fully opaque. */
-  private async filterFor(decoder: string, opacity?: number): Promise<FilterLook> {
-    const wanted = opacity === undefined ? FILTER_OFF : String(opacity);
-    if (this.filterStates.get(decoder) === wanted) return NO_FILTER;
-    const made = await this.ownLooks.filterMade(decoder), sourceName = decoder, filterName = PICTURE_FILTER_NAME;
-    if (opacity === undefined) return made
-      ? { filter: [{ requestType: 'SetSourceFilterEnabled', requestData: { sourceName, filterName, filterEnabled: false } }], filterAfter: wanted, filterCreates: false }
-      : NO_FILTER;
-    if (!made) {
-      return { filter: [{ requestType: 'CreateSourceFilter', requestData: { sourceName, filterName, filterKind: OBS_PICTURE_FILTER_KIND, filterSettings: { opacity } } }],
-        filterAfter: wanted, filterCreates: true };
+  /** The decoder's picture filter for an opacity (0.5.9 E17; undefined: fully opaque, the filter off), from what OBS
+   * has, as read on this connection (`filterPlan`). A decoder not read yet, or in doubt after a write of ours failed, is
+   * read here first; on the way to showing a clip with no opacity it is read only after the show (`filterLater`), so a
+   * read never holds such a clip up. An opacity the decoder's priming could not set is told by the clip's start or seek
+   * that follows it, and not worked out again there. */
+  private async filterFor(decoder: string, opacity: number | undefined, point: LookPoint): Promise<FilterLook> {
+    const primed = point === 'late' ? this.filterProblems.get(decoder) : undefined;
+    if (primed !== undefined) { this.filterProblems.delete(decoder); return { ...NO_FILTER, filterProblem: primed }; }
+    let state = this.filterStates.get(decoder);
+    if (state === undefined || state.kind === 'doubt') {
+      if (point === 'late' && opacity === undefined) return { ...NO_FILTER, filterLater: true };
+      const doubt = state?.kind === 'doubt', unread = await this.readFilter(decoder);
+      // Not red for a clip with no opacity on a decoder that was simply not read yet.
+      if (unread !== null) return { ...NO_FILTER, filterProblem: opacity !== undefined || doubt ? unread : null };
+      state = this.filterStates.get(decoder);
+      if (state === undefined || state.kind === 'doubt') return NO_FILTER;
     }
-    return { filter: [
-      { requestType: 'SetSourceFilterSettings', requestData: { sourceName, filterName, filterSettings: { opacity }, overlay: true } },
-      { requestType: 'SetSourceFilterEnabled', requestData: { sourceName, filterName, filterEnabled: true } }
-    ], filterAfter: wanted, filterCreates: false };
+    return this.filterPlan(decoder, state, opacity);
+  }
+
+  /** Only what it takes from what OBS has to the opacity the clip wants: our filter made when it is not there, switched
+   * off (never removed) when the clip needs none, its settings written only when the opacity differs, switched on only
+   * when it is off. A filter of that name the console did not make is never changed. */
+  private filterPlan(decoder: string, state: Exclude<FilterState, { kind: 'doubt' }>, opacity: number | undefined): FilterLook {
+    const sourceName = decoder, filterName = PICTURE_FILTER_NAME;
+    switch (state.kind) {
+      case 'absent':
+        return opacity === undefined ? NO_FILTER : { ...NO_FILTER,
+          filter: [{ requestType: 'CreateSourceFilter', requestData: { sourceName, filterName, filterKind: OBS_PICTURE_FILTER_KIND, filterSettings: { opacity } } }],
+          filterAfter: { kind: 'ours', enabled: true, opacity } };
+      case 'foreign':
+        return opacity === undefined ? NO_FILTER : { ...NO_FILTER, filterProblem: { kind: 'foreign' } };
+      case 'ours': {
+        if (opacity === undefined) return state.enabled ? { ...NO_FILTER,
+          filter: [{ requestType: 'SetSourceFilterEnabled', requestData: { sourceName, filterName, filterEnabled: false } }],
+          filterAfter: { ...state, enabled: false } } : NO_FILTER;
+        const filter: Requests = [
+          ...(state.opacity !== opacity ? [{ requestType: 'SetSourceFilterSettings' as const, requestData: { sourceName, filterName, filterSettings: { opacity }, overlay: true } }] : []),
+          ...(!state.enabled ? [{ requestType: 'SetSourceFilterEnabled' as const, requestData: { sourceName, filterName, filterEnabled: true } }] : [])
+        ];
+        return filter.length ? { ...NO_FILTER, filter, filterAfter: { kind: 'ours', enabled: true, opacity } } : NO_FILTER;
+      }
+    }
+  }
+
+  /** Reads what the decoder's own input has under the picture filter's name, into the session's book (0.5.9 E17).
+   * Resolves with why it could not be read, or null; a failed read leaves the book as it was (not read, or in doubt),
+   * so the next look reads it again. Not repeated here. */
+  private async readFilter(decoder: string): Promise<FilterProblem | null> {
+    try {
+      const list = filtersSchema.parse((await this.request(() => this.client.call('GetSourceFilterList', { sourceName: decoder }), '读取素材来源的滤镜')).filters);
+      this.filterStates.set(decoder, filterStateOf(list));
+      return null;
+    } catch (error) {
+      return { kind: 'read', reason: failureReason(error) };
+    }
+  }
+
+  /** A clip with no opacity was shown before its decoder's filter was read: read it now and switch our filter off if it
+   * is on. Red only when the read fails on a decoder in doubt after a write of ours, or the switch-off fails. */
+  private async filterAfterShow(decoder: string): Promise<FilterProblem | null> {
+    const doubt = this.filterStates.get(decoder)?.kind === 'doubt', unread = await this.readFilter(decoder);
+    if (unread !== null) return doubt ? unread : null;
+    const state = this.filterStates.get(decoder);
+    if (state === undefined || state.kind === 'doubt') return null;
+    return this.sendFilter(decoder, { ...KEEP_LOOK, ...this.filterPlan(decoder, state, undefined) });
   }
 
   /** Sends the picture filter part of a look in a batch of its own, ahead of the batch that shows the clip, so OBS
-   * refusing it (a filter kind it does not know, a filter of ours removed by hand) never keeps the clip off the picture.
-   * Resolves with why it failed, or null. Not sent again: the next clip on this decoder works it out anew. */
-  private async sendFilter(decoder: string, look: Look): Promise<string | null> {
-    if (!look.filter.length) return null;
-    this.filterStates.delete(decoder);
-    try {
-      // On disk before the filter is created, so a filter of ours is never left on a decoder this machine does not know.
-      if (look.filterCreates) await this.ownLooks.keepFilterMade(decoder);
-      await this.batch(look.filter);
-    }
-    catch (error) {
-      // OBS refused to create it, so it is not there: no filter of ours is to be switched off later.
-      if (look.filterCreates && error instanceof MediaBatchError) {
-        try { await this.ownLooks.forgetFilterMade(decoder); } catch (forgotten) { this.distrust(primaryDecoder(decoder), forgotten); }
-      }
-      return failureReason(error);
-    }
+   * refusing it (a filter kind it does not know, a filter of ours removed by hand since it was read) never keeps the
+   * clip off the picture. Resolves with why the opacity is not as the clip wants, or null. A write that fails or gets no
+   * answer leaves the decoder in doubt: the next look on it reads it once and sends what it then needs. Not resent. */
+  private async sendFilter(decoder: string, look: Look): Promise<FilterProblem | null> {
+    if (!look.filter.length) return look.filterProblem;
+    this.filterStates.set(decoder, { kind: 'doubt' });
+    try { await this.batch(look.filter); }
+    catch (error) { return { kind: 'set', reason: failureReason(error) }; }
     if (look.filterAfter !== null) this.filterStates.set(decoder, look.filterAfter);
     return null;
-  }
-
-  /** The opacity of a clip that starts (or is located) on `decoder`: why it is not set, or null. One the decoder's
-   * preparation could not set is told and not sent again; a look that could not be worked out carries no filter. */
-  private async filterOf(decoder: string, look: Look): Promise<string | null> {
-    const failed = this.filterProblems.get(decoder);
-    this.filterProblems.delete(decoder);
-    if (failed !== undefined) return failed;
-    return this.sendFilter(decoder, look);
   }
 
   /** Sends a look on its own, for a decoder off air. */

@@ -1,7 +1,7 @@
 import type { OBSWebSocket } from 'obs-websocket-js';
 import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkProject, type ReferenceCanvasTransform } from '@tb/schema';
-import { MediaPreparationFailed, ObsProgramSession, SceneOutputTimeline, materialSceneNames, obsMaterialPresentation, type CueExecutionReport, type LinkDesktopApi } from '@tb/core/link';
+import { MediaPreparationFailed, ObsProgramSession, SceneOutputTimeline, materialSceneNames, obsMaterialPresentation, type CueExecutionReport, type LinkDesktopApi, type ManagedMediaEvent } from '@tb/core/link';
 import { ObsMediaPreload, ObsPreparationNotNeeded } from './obs-media-preload';
 import { MediaOutOfStepError, ObsMediaScenes, lookFailure, opacityFailure } from './obs-media-scenes';
 import { pictureDriftCheck, pictureExecutor, pictureSeekStep, pictureUpcoming } from './native-obs-outputs';
@@ -78,6 +78,14 @@ function fakeObs() {
   const filterWrites: Array<{ type: string; sourceName: string; filterName: string; onAir: boolean }> = [];
   /** Filter kinds OBS does not know. */
   const unknownFilterKinds = new Set<string>();
+  /** The source of each filter list the console read for its picture filter (E17), in order: not the two lists of a
+   * copy to the standby decoder, which copies the operator's filters as before. */
+  const filterReads: string[] = [];
+  /** The source of every filter list OBS was asked for, these two lists of a copy included. */
+  const filterLists: string[] = [];
+  let requestLabel = '';
+  /** The file of each image input. */
+  const images = new Map<string, string>();
   const filterOf = (data: Record<string, unknown>) => {
     const found = filters.get(String(data.sourceName))?.find(entry => entry.filterName === data.filterName);
     if (!found) throw new Error(`OBS 里没有这个滤镜：${String(data.filterName)}`);
@@ -116,15 +124,17 @@ function fakeObs() {
       case 'CreateInput': {
         const item = nextItem++;
         inputs.set(String(data.inputName), { scene: String(data.sceneName), item, state: 'OBS_MEDIA_STATE_STOPPED', base: 0, since: 0, muted: false, enabled: data.sceneItemEnabled === true });
+        if (data.inputKind === 'image_source') images.set(String(data.inputName), String((data.inputSettings as { file?: unknown }).file));
         return { sceneItemId: item };
       }
       case 'GetVideoSettings': return { baseWidth: 1080, baseHeight: 1920 };
-      case 'GetInputSettings': return { inputKind: 'ffmpeg_source', inputSettings: { local_file: path, hw_decode: true, restart_on_activate: false, close_when_inactive: false, looping: false } };
+      case 'GetInputSettings': if (images.has(String(data.inputName))) return { inputKind: 'image_source', inputSettings: { file: images.get(String(data.inputName)), unload: false } };
+        return { inputKind: 'ffmpeg_source', inputSettings: { local_file: path, hw_decode: true, restart_on_activate: false, close_when_inactive: false, looping: false } };
       case 'GetSceneItemList': return { sceneItems: [...inputs].filter(([, entry]) => entry.scene === data.sceneName).map(([sourceName, entry]) => ({ sourceName, sceneItemId: entry.item })) };
       case 'GetSceneItemTransform': return { sceneItemTransform: { ...itemDefaults, sourceWidth: 1080, sourceHeight: 1920, ...itemOf(data)?.[1].look } };
       case 'GetCurrentProgramScene': return { sceneName: program };
       case 'GetSceneItemLocked': return { sceneItemLocked: false };
-      case 'GetSourceFilterList': return { filters: (filters.get(String(data.sourceName)) ?? []).map((entry, filterIndex) => ({ ...entry, filterIndex })) };
+      case 'GetSourceFilterList': filterLists.push(String(data.sourceName)); if (requestLabel === '读取素材来源的滤镜') filterReads.push(String(data.sourceName)); return { filters: (filters.get(String(data.sourceName)) ?? []).map((entry, filterIndex) => ({ ...entry, filterIndex })) };
       case 'CreateSourceFilter': {
         if (unknownFilterKinds.has(String(data.filterKind))) throw new Error(`没有这种滤镜：${String(data.filterKind)}`);
         writeFilter(type, data);
@@ -219,13 +229,15 @@ function fakeObs() {
     return (...values) => { if (used || !match(...values)) return false; used = true; return true; };
   };
   return {
-    client: client as unknown as OBSWebSocket, sent, onAir, lookWrites, seenLooks, filters, filterWrites, unknownFilterKinds, requests, view: seen, decoder: (name: string): FakeInput => input(name), position: (name: string): number => Math.round(cursor(input(name))),
+    client: client as unknown as OBSWebSocket, sent, onAir, lookWrites, seenLooks, filters, filterWrites, unknownFilterKinds, filterReads, filterLists, requests, view: seen, decoder: (name: string): FakeInput => input(name), position: (name: string): number => Math.round(cursor(input(name))),
     /** The scene on program. */
     program: (): string => program,
     request: <T>(operation: () => Promise<T>, label: string): Promise<T> => {
       if (cancelled) return Promise.reject(new Error(`OBS 动作已取消或已过时，没有发送：${label}`));
       const refused = refusals.map(refusal => refusal(label)).find(reason => reason !== null);
-      return refused ? Promise.reject(new Error(refused)) : operation();
+      if (refused) return Promise.reject(new Error(refused));
+      requestLabel = label;
+      try { return operation(); } finally { requestLabel = ''; }
     },
     native: {
       prime: (name: string, restartRetained: boolean): Promise<void> => {
@@ -2335,7 +2347,8 @@ it('E17 规则：镜像、转 90°、裁剪和位置大小一起写在素材的�
   expect(obs.filters.get(standby) ?? []).toEqual([]);
   expect([...obs.filters.keys()].every(ownDecoder)).toBe(true);
   expect(obs.filterWrites.every(write => !write.onAir && ownDecoder(write.sourceName) && write.filterName === FILTER)).toBe(true);
-  expect(store.filters).toEqual(new Set([primary]));
+  // Nothing about the filter is kept on this machine: the file is E16's.
+  expect(Object.keys(store)).not.toContain('filters');
   await t.play(0, 13000, true);
   expect(t.failures()).toEqual([]);
   // On air at once at half opacity, then the other decoder fully opaque: no frame of either at the other's opacity.
@@ -2344,7 +2357,7 @@ it('E17 规则：镜像、转 90°、裁剪和位置大小一起写在素材的�
   await t.session.stop();
 });
 
-it('E17 规则：一段带全四样的片段，准备时比只有位置大小的多一个 CreateSourceFilter；滤镜已经有了的下一次运行是一批里的两条（设置、打开）', async () => {
+it('E17 规则：一段带全四样的片段，准备时比只有位置大小的多一个 CreateSourceFilter；下一次连接读到滤镜开着，只改不透明度那一条', async () => {
   const base = song([[0, 12000, 100]]);
   const run = async (look: ReferenceCanvasTransform, obs = fakeObs(), store = new MemoryMaterialOwnLooks()) => {
     const before = obs.requests.length;
@@ -2354,22 +2367,28 @@ it('E17 规则：一段带全四样的片段，准备时比只有位置大小的
   const placed = countOf(await run({ x: 0.5, y: 0.4, scale: 0.5, scaleX: 1, scaleY: 1, rotation: 90 })), full = countOf(await run(fullLook));
   expect([...full].filter(([type, count]) => count !== (placed.get(type) ?? 0))).toEqual([['CreateSourceFilter', 1]]);
   expect([...placed].filter(([type, count]) => count !== (full.get(type) ?? 0))).toEqual([]);
-  // The filter is there from the run before: its opacity is set and it is switched on.
+  // The filter is there, on, from the run before: only its opacity is written.
   const obs = fakeObs(), store = new MemoryMaterialOwnLooks();
   await run(fullLook, obs, store);
   const again = await run({ ...fullLook, opacity: 0.25 }, obs, store);
-  expect(again.filter(type => /Filter/u.test(type) && type !== 'GetSourceFilterList')).toEqual(['SetSourceFilterSettings', 'SetSourceFilterEnabled']);
+  expect(again.filter(type => /Filter/u.test(type) && type !== 'GetSourceFilterList')).toEqual(['SetSourceFilterSettings']);
   expect(obs.filters.get(primaryOf(base))).toEqual([{ filterName: FILTER, filterKind: 'color_filter_v2', filterEnabled: true, filterSettings: { opacity: 0.25 } }]);
 });
 
-it('E17 规则：片段没有这几样，联动台不多发一个请求：只在编辑器里摆过位置的、从没改过的，都没有滤镜请求，本机也不记', async () => {
-  for (const project of [song([[0, 12000, 100], [12, 12000, 12100]]), withLooks(song([[0, 12000, 100], [12, 12000, 12100]]), { 'clip-0': leftLook, 'clip-1': rightLook })]) {
+it('E17 规则：片段没有这几样，联动台不写一个滤镜请求；每个解码器每次连接最多读一次滤镜列表', async () => {
+  for (const project of [song([[0, 12000, 100], [12, 12000, 12100], [24, 12000, 24100]]), withLooks(song([[0, 12000, 100], [12, 12000, 12100], [24, 12000, 24100]]), { 'clip-0': leftLook, 'clip-1': rightLook })]) {
     const obs = fakeObs(), store = new MemoryMaterialOwnLooks();
+    const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation(), store);
+    // The material scene is there from before, so this connection reads what its decoders have.
+    await scenes.prepare(project.projectId, project.mediaAssets[0]!, path);
+    await scenes.prepareStandby(primaryOf(project));
+    obs.filterReads.length = 0;
     const t = await live(project, obs, undefined, true, 'test', store);
-    await t.play(0, 13000, true);
+    await t.play(0, 25000, true);
     expect(t.failures()).toEqual([]);
     expect(filterRequests(obs)).toEqual([]);
-    expect(store.filters.size).toBe(0);
+    expect([...countOf(obs.filterReads)].filter(([, count]) => count > 1)).toEqual([]);
+    expect(obs.filterReads.length).toBeGreaterThan(0);
     await t.session.stop();
   }
 });
@@ -2403,7 +2422,7 @@ it('E17 规则：复制到预备解码器时只复制操作员自己的滤镜；
   expect(obs.filters.get(primary)?.map(filter => filter.filterName)).toEqual([FILTER]);
 });
 
-it('E17 规则：OBS 不认这种滤镜：片段照常显示（镜像、裁剪照样有），开始那一步标红写明不透明度没设好，这一段不再发第二次；本机不记这个滤镜', async () => {
+it('E17 规则：OBS 不认这种滤镜：片段照常显示（镜像、裁剪照样有），开始那一步标红写明不透明度没设好，这一段不再发第二次', async () => {
   const project = withLooks(song([[0, 12000, 100]]), { 'clip-0': fullLook }), obs = fakeObs(), store = new MemoryMaterialOwnLooks();
   obs.unknownFilterKinds.add('color_filter_v2');
   const primary = primaryOf(project);
@@ -2411,10 +2430,161 @@ it('E17 规则：OBS 不认这种滤镜：片段照常显示（镜像、裁剪�
   await t.play(0, 1000, true);
   expect(obs.view().decoder).toBe('主');
   expect(obs.decoder(primary).look).toMatchObject({ scaleX: -0.5, cropLeft: 480 });
-  expect(t.reports).toContain(`clip-0 start failed：${opacityFailure({ assetName: '视频' }, 'CreateSourceFilter：没有这种滤镜：color_filter_v2')}`);
+  expect(t.reports).toContain(`clip-0 start failed：${opacityFailure({ assetName: '视频' }, { kind: 'set', reason: 'CreateSourceFilter：没有这种滤镜：color_filter_v2' })}`);
   expect(obs.requests.filter(type => type === 'CreateSourceFilter')).toHaveLength(1);
-  expect(store.filters.size).toBe(0);
   await t.session.stop();
+});
+
+/** A material scene prepared on an earlier connection, with what the operator then did to its primary decoder's filters. */
+async function earlier(project: LinkProject, obs: FakeObs, change: (primary: string) => Promise<unknown>): Promise<string> {
+  await new ObsMediaScenes(obs.client, obs.request, operation => operation()).prepare(project.projectId, project.mediaAssets[0]!, path);
+  const primary = primaryOf(project);
+  await change(primary);
+  return primary;
+}
+
+it('E17 规则：联动台的滤镜被人在 OBS 里删了：下次连接读到没有，照常重建，不标红；这次连接里写失败只红一次，下一段读一次再按读到的建', async () => {
+  const project = withLooks(song([[0, 12000, 100]]), { 'clip-0': { ...leftLook, opacity: 0.4 } }), obs = fakeObs();
+  const primary = await earlier(project, obs, name => obs.client.call('CreateSourceFilter', { sourceName: name, filterName: FILTER, filterKind: 'color_filter_v2', filterSettings: { opacity: 0.4 } }));
+  await obs.client.call('RemoveSourceFilter', { sourceName: primary, filterName: FILTER });
+  const t = await live(project, obs);
+  await t.play(0, 1000, true);
+  expect(t.failures()).toEqual([]);
+  expect(obs.filters.get(primary)).toEqual([{ filterName: FILTER, filterKind: 'color_filter_v2', filterEnabled: true, filterSettings: { opacity: 0.4 } }]);
+  expect(obs.seenLooks.filter(view => view.input !== null).map(view => view.opacity)).toEqual([0.4]);
+  await t.session.stop();
+  // Deleted again while this connection still thinks it is there: the next write fails once, the decoder is then in
+  // doubt and read once before the next look, which makes it again.
+  const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation());
+  await scenes.prepare(project.projectId, project.mediaAssets[0]!, path);
+  await obs.client.call('RemoveSourceFilter', { sourceName: primary, filterName: FILTER });
+  const event = new SceneOutputTimeline(withLooks(project, { 'clip-0': { ...leftLook, opacity: 0.7 } }), 'song').at(0).media[0]!;
+  await expect(scenes.execute(event, 'C:/shows/assets/video.mp4')).rejects.toThrow('不透明度没有按工程设好');
+  expect(obs.decoder(primary).enabled).toBe(true);
+  await scenes.execute({ ...event, phase: 'stop' }, 'C:/shows/assets/video.mp4');
+  const reads = obs.filterReads.length;
+  await scenes.execute(event, 'C:/shows/assets/video.mp4');
+  expect(obs.filterReads.length - reads).toBe(1);
+  expect(obs.filters.get(primary)).toEqual([{ filterName: FILTER, filterKind: 'color_filter_v2', filterEnabled: true, filterSettings: { opacity: 0.7 } }]);
+});
+
+it('E17 规则：第一次准备就读到联动台的滤镜开着（别的电脑或备份带来的），没设不透明度的片段上画面之前关掉一次，之后不再发', async () => {
+  const project = song([[0, 12000, 100], [12, 12000, 12100], [24, 12000, 24100]]), obs = fakeObs();
+  const primary = await earlier(project, obs, name => obs.client.call('CreateSourceFilter', { sourceName: name, filterName: FILTER, filterKind: 'color_filter_v2', filterSettings: { opacity: 0.4 } }));
+  const setup = obs.filterWrites.length, t = await live(project, obs);
+  await t.play(0, 25000, true);
+  expect(t.failures()).toEqual([]);
+  expect(obs.filterWrites.slice(setup).map(write => [write.type, write.sourceName === primary, write.onAir])).toEqual([['SetSourceFilterEnabled', true, false]]);
+  expect(obs.filters.get(primary)).toEqual([{ filterName: FILTER, filterKind: 'color_filter_v2', filterEnabled: false, filterSettings: { opacity: 0.4 } }]);
+  expect(obs.seenLooks.filter(view => view.input !== null).every(view => (view.opacity ?? 1) === 1)).toBe(true);
+  await t.session.stop();
+});
+
+it('E17 规则：素材来源上有一个同名、不是联动台建的滤镜：从不改、不删；要不透明度的片段照常显示并标红写明，不要的什么都不说', async () => {
+  const opaque = withLooks(song([[0, 12000, 100]]), { 'clip-0': { ...leftLook, opacity: 0.5 } }), obs = fakeObs();
+  const primary = await earlier(opaque, obs, name => obs.client.call('CreateSourceFilter', { sourceName: name, filterName: FILTER, filterKind: 'blur', filterSettings: { size: 2 } }));
+  const theirs = [{ filterName: FILTER, filterKind: 'blur', filterEnabled: true, filterSettings: { size: 2 } }];
+  const setup = obs.filterWrites.length, t = await live(opaque, obs);
+  await t.play(0, 1000, true);
+  expect(obs.view().decoder).toBe('主');
+  expect(t.reports).toContain(`clip-0 start failed：${opacityFailure({ assetName: '视频' }, { kind: 'foreign' })}`);
+  expect(opacityFailure({ assetName: '视频' }, { kind: 'foreign' })).toBe('素材“视频”照常在播，但不透明度没有设置：素材来源上已经有一个叫“联动台·画面调节”的滤镜，不是联动台建的。请在 OBS 里把它改名或删掉');
+  await t.session.stop();
+  const plain = await live(song([[0, 12000, 100]]), obs);
+  await plain.play(0, 1000, true);
+  expect(plain.failures()).toEqual([]);
+  expect(obs.filterWrites.slice(setup)).toEqual([]);
+  expect(obs.filters.get(primary)).toEqual(theirs);
+  await plain.session.stop();
+});
+
+it('E17 规则：关滤镜失败以后不知道它现在怎样：标红一次；下一段没设不透明度的，读一次，再按读到的关掉', async () => {
+  const project = withLooks(song([[0, 6000, 100], [6, 6000, 6100], [12, 6000, 12100], [18, 6000, 18100], [24, 6000, 24100]]), { 'clip-0': { ...leftLook, opacity: 0.3 } }), obs = fakeObs();
+  const primary = primaryOf(project);
+  let failedAt = -1;
+  obs.failOnce((type, data) => {
+    const hit = type === 'SetSourceFilterEnabled' && data.filterEnabled === false;
+    if (hit) failedAt = obs.filterReads.length;
+    return hit;
+  });
+  const t = await live(project, obs);
+  await t.play(0, 31000, true);
+  expect(t.failures().filter(text => text.includes('不透明度'))).toHaveLength(1);
+  expect(t.reports).toContainEqual(expect.stringMatching(/^clip-2 start failed：素材“视频”照常在播，但不透明度没有按工程设好/u));
+  // The decoder in doubt is read again before its next look: here by the copy to the standby decoder, which reads both
+  // lists anyway, so no read of its own is added. Then the switch-off it needs.
+  expect(failedAt).toBeGreaterThanOrEqual(0);
+  expect(obs.filterReads.slice(failedAt)).toEqual([]);
+  expect(obs.filterLists.slice(failedAt)).toContain(primary);
+  expect(obs.filterWrites.map(write => write.type)).toEqual(['CreateSourceFilter', 'SetSourceFilterEnabled']);
+  expect(obs.filters.get(primary)?.[0]).toMatchObject({ filterEnabled: false });
+  await t.session.stop();
+});
+
+it('E17 规则：关滤镜失败、又没有别的读到它：下一段没设不透明度的片段先上画面，再读一次，按读到的关掉；不再标红', async () => {
+  const logo = withLogo(song([[0, 4000, 100]]), [0, 4000]), asset = logo.mediaAssets.find(entry => entry.kind === 'image')!, obs = fakeObs();
+  const event = new SceneOutputTimeline(logo, 'song').at(0).media.find(entry => entry.clipId === 'logo-clip')!;
+  await new ObsMediaScenes(obs.client, obs.request, operation => operation()).prepare(logo.projectId, asset, 'C:/shows/assets/logo.png');
+  await obs.client.call('CreateSourceFilter', { sourceName: event.sourceName, filterName: FILTER, filterKind: 'color_filter_v2', filterSettings: { opacity: 0.4 } });
+  const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation());
+  await scenes.prepare(logo.projectId, asset, 'C:/shows/assets/logo.png');
+  obs.failOnce((type, data) => type === 'SetSourceFilterEnabled' && data.filterEnabled === false);
+  await expect(scenes.execute(event, 'C:/shows/assets/logo.png')).rejects.toThrow('不透明度没有按工程设好');
+  expect(obs.decoder(event.sourceName).enabled).toBe(true);
+  await scenes.execute({ ...event, phase: 'stop' }, 'C:/shows/assets/logo.png');
+  const reads = obs.filterReads.length, before = obs.requests.length;
+  await expect(scenes.execute(event, 'C:/shows/assets/logo.png')).resolves.toBeUndefined();
+  expect(obs.filterReads.length - reads).toBe(1);
+  expect(obs.requests.slice(before).filter(type => type === 'GetSourceFilterList' || type === 'SetSceneItemEnabled' || type === 'SetSourceFilterEnabled'))
+    .toEqual(['SetSceneItemEnabled', 'GetSourceFilterList', 'SetSourceFilterEnabled']);
+  expect(obs.filters.get(event.sourceName)?.[0]).toMatchObject({ filterEnabled: false });
+});
+
+it('E17 规则：重新连上 OBS 就忘了读到的滤镜，再准备时重新读；没读到的、晚到的没设不透明度的片段先上画面再读，要不透明度的先读', async () => {
+  const project = song([[0, 12000, 100]]), obs = fakeObs();
+  const primary = await earlier(project, obs, () => Promise.resolve());
+  const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation());
+  const readsOf = (): number => obs.filterReads.filter(name => name === primary).length;
+  await scenes.prepare(project.projectId, project.mediaAssets[0]!, path);
+  await scenes.prepare(project.projectId, project.mediaAssets[0]!, path);
+  expect(readsOf()).toBe(1);
+  scenes.clear();
+  await scenes.prepare(project.projectId, project.mediaAssets[0]!, path);
+  expect(readsOf()).toBe(2);
+  // An image shown late, its decoder not read (the read at its preparation failed), with our filter on.
+  const logo = withLogo(song([[0, 4000, 100]]), [0, 4000]), asset = logo.mediaAssets.find(entry => entry.kind === 'image')!;
+  const event = new SceneOutputTimeline(logo, 'song').at(0).media.find(entry => entry.clipId === 'logo-clip')!;
+  await new ObsMediaScenes(obs.client, obs.request, operation => operation()).prepare(logo.projectId, asset, 'C:/shows/assets/logo.png');
+  await obs.client.call('CreateSourceFilter', { sourceName: event.sourceName, filterName: FILTER, filterKind: 'color_filter_v2', filterSettings: { opacity: 0.4 } });
+  const late = async (shown: ManagedMediaEvent): Promise<string[]> => {
+    const fresh = new ObsMediaScenes(obs.client, obs.request, operation => operation());
+    obs.failOnce(type => type === 'GetSourceFilterList');
+    await fresh.prepare(logo.projectId, asset, 'C:/shows/assets/logo.png');
+    const before = obs.requests.length;
+    await fresh.execute(shown, 'C:/shows/assets/logo.png');
+    await fresh.execute({ ...shown, phase: 'stop' }, 'C:/shows/assets/logo.png');
+    return obs.requests.slice(before).filter(type => type === 'GetSourceFilterList' || type === 'SetSceneItemEnabled' || /^(Create|Set)SourceFilter/u.test(type));
+  };
+  expect(await late(event)).toEqual(['SetSceneItemEnabled', 'GetSourceFilterList', 'SetSourceFilterEnabled', 'SetSceneItemEnabled']);
+  expect(obs.filters.get(event.sourceName)?.[0]).toMatchObject({ filterEnabled: false });
+  const seeThrough = new SceneOutputTimeline(withLooks(logo, { 'logo-clip': { ...leftLook, opacity: 0.6 } }), 'song').at(0).media.find(entry => entry.clipId === 'logo-clip')!;
+  expect(await late(seeThrough)).toEqual(['GetSourceFilterList', 'SetSourceFilterSettings', 'SetSourceFilterEnabled', 'SetSceneItemEnabled', 'SetSceneItemEnabled']);
+});
+
+it('E17 规则：读不到滤镜：片段照常显示；要不透明度的标红写明，没设的、只是还没读过的不标红', async () => {
+  const logo = withLogo(song([[0, 4000, 100]]), [0, 4000]), asset = logo.mediaAssets.find(entry => entry.kind === 'image')!, obs = fakeObs();
+  const event = new SceneOutputTimeline(withLooks(logo, { 'logo-clip': { ...leftLook, opacity: 0.6 } }), 'song').at(0).media.find(entry => entry.clipId === 'logo-clip')!;
+  const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation());
+  await scenes.prepare(logo.projectId, asset, 'C:/shows/assets/logo.png');
+  scenes.clear();
+  obs.failOnce(type => type === 'GetSourceFilterList'); obs.failOnce(type => type === 'GetSourceFilterList');
+  await scenes.prepare(logo.projectId, asset, 'C:/shows/assets/logo.png');
+  await expect(scenes.execute(event, 'C:/shows/assets/logo.png')).rejects.toThrow(opacityFailure({ assetName: '台标' }, { kind: 'read', reason: 'OBS 没能执行 GetSourceFilterList' }));
+  expect(obs.decoder(event.sourceName).enabled).toBe(true);
+  await scenes.execute({ ...event, phase: 'stop' }, 'C:/shows/assets/logo.png');
+  const plain = { ...event }; delete plain.transform;
+  await expect(scenes.execute(plain, 'C:/shows/assets/logo.png')).resolves.toBeUndefined();
+  expect(filterRequests(obs)).toEqual([]);
 });
 
 it('E17 规则：素材原来在 OBS 里裁过：本机记下的原样带着裁剪，「用 OBS 里的样子」把裁剪、镜像和不透明度都换回去；只摆位置的片段也留着原来的裁剪', async () => {
@@ -2439,6 +2609,42 @@ it('E17 规则：素材原来在 OBS 里裁过：本机记下的原样带着裁�
   await second.play(0, 1000, true);
   expect(obs.seenLooks.at(-1)).not.toHaveProperty('opacity');
   await second.session.stop();
+});
+
+it('E17 规则：准备时读不到滤镜、片段又没设不透明度：不标红，也不多写；上画面以后读到了就照读到的办', async () => {
+  const project = song([[0, 12000, 100]]), obs = fakeObs();
+  const primary = await earlier(project, obs, () => Promise.resolve());
+  const read = (type: string, data: Record<string, unknown>): boolean => type === 'GetSourceFilterList' && data.sourceName === primary;
+  obs.failOnce(read); obs.failOnce(read);
+  const t = await live(project, obs);
+  await t.play(0, 1000, true);
+  expect(t.failures()).toEqual([]);
+  expect(filterRequests(obs)).toEqual([]);
+  await t.session.stop();
+});
+
+it('E17 规则：建滤镜失败的解码器，复制到预备解码器时顺带读到了它现在怎样，之后不再为它单独读', async () => {
+  const project = withLooks(song([[0, 12000, 100], [12, 12000, 12100], [24, 12000, 24100]]), { 'clip-0': { ...leftLook, opacity: 0.3 } }), obs = fakeObs();
+  const primary = primaryOf(project);
+  obs.failOnce(type => type === 'CreateSourceFilter');
+  const t = await live(project, obs);
+  await t.play(0, 25000, true);
+  expect(t.failures().filter(text => text.includes('不透明度'))).toHaveLength(1);
+  expect(obs.filterReads.filter(name => name === primary)).toEqual([]);
+  expect(obs.filters.get(primary) ?? []).toEqual([]);
+  await t.session.stop();
+});
+
+it('E17 规则：复制到预备解码器读到的两个滤镜列表就是这两个解码器的状态：准备时没读到的主解码器，复制以后再准备也不再读', async () => {
+  const project = song([[0, 12000, 100]]), obs = fakeObs();
+  const primary = await earlier(project, obs, () => Promise.resolve());
+  const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation());
+  obs.failOnce((type, data) => type === 'GetSourceFilterList' && data.sourceName === primary);
+  await scenes.prepare(project.projectId, project.mediaAssets[0]!, path);
+  await scenes.prepareStandby(primary);
+  const reads = obs.filterReads.length;
+  await scenes.prepare(project.projectId, project.mediaAssets[0]!, path);
+  expect(obs.filterReads.length).toBe(reads);
 });
 
 it('E17 规则：这次运行不信任本机记录的素材，联动台的滤镜也不碰；裁剪时不知道素材多大，片段照常显示、标红写明', async () => {
