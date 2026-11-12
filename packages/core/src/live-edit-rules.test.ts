@@ -753,6 +753,17 @@ describe('S8b 第二部分：在播的歌的画面按新的一版走（只做了
     expect(retarget.mock.lastCall![0]).toMatchObject({ revision: 5, snapshot: { item: { cues: [{ actions: [{ sceneName: '机位一' }] }] } } });
   });
 
+  it('画面接不了这一版、报了失败：之后再改也不再交给这个画面（R9）', async () => {
+    const { opened, retarget, f } = setup();
+    await f.player.play('甲');
+    f.player.updateProject(withCues(opened, [cut('机位二')]), 2, 'C:/show/拿着歌时改.tblink');
+    expect(retarget).toHaveBeenCalledOnce();
+    f.pictureStatus({ state: 'failed', reason: '这次修改的画面用不上' });
+    f.player.updateProject(withCues(opened, [cut('机位三')]), 3, 'C:/show/拿着歌时改.tblink');
+    expect(retarget).toHaveBeenCalledOnce();
+    expect(f.player.currentProject()).toBe(opened);
+  });
+
   it('暂停时也交给画面；准备中改的，准备好了再交；没有画面输出时照旧按开始那一版', async () => {
     const { opened, retarget, f } = setup();
     let finish: (status: NativeObsStatus) => void = () => undefined;

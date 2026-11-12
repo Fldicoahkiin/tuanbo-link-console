@@ -93,6 +93,8 @@ export class NativeProgramPlayer {
   private obsPreparing = false;
   /** The picture whose preparation came up (prepareObs): only its next song's files are asked for again (followNext). */
   private picturePrepared: NativeObsStop | null = null;
+  /** A picture session that reported it failed or stopped (0.5.9 R9): it is sent no further version. */
+  private pictureEnded: NativeObsStop | null = null;
   private epoch = 0;
   private disposed = false;
   private closing: Promise<void> | null = null;
@@ -255,7 +257,7 @@ export class NativeProgramPlayer {
    * preparation came up, and only when none is in flight there (receiveObs sends the next one once it is applied). */
   private retargetPicture(): void {
     const air = this.heldAir(this.state.itemId), output = this.pictureOutput, session = this.obsSession, wanted = air?.pictureWanted;
-    if (!air || !wanted || !output || air.pictureSent || !session || this.picturePrepared !== session || this.obsPreparing) return;
+    if (!air || !wanted || !output || air.pictureSent || !session || this.picturePrepared !== session || this.pictureEnded === session || this.obsPreparing) return;
     air.pictureWanted = null;
     try {
       const snapshot = createObsProgramSnapshot(wanted.project, air.itemId, wanted.revision);
@@ -762,6 +764,8 @@ export class NativeProgramPlayer {
    * (currentProject, the program's `pictureVersion`), and the newest wanted, if any, is sent. A session that ended
    * leaves the one in flight unanswered: the next preparation of the picture takes the newest itself. */
   private pictureApplied(status: NativeObsStatus): void {
+    // A session that ended takes no further version (R9): its picture stays failed, with the reason it reported.
+    if (status.state === 'failed' || status.state === 'stopped') this.pictureEnded = this.obsSession;
     const air = this.onAir, sent = air?.pictureSent;
     if (!air || !sent || sent.session !== this.obsSession) return;
     if (status.appliedRevision !== undefined && status.appliedRevision >= sent.revision) {
