@@ -303,7 +303,7 @@ async function live(project: LinkProject, obs: FakeObs, answer: (action: LinkAct
     recordLog: logs,
     executeManagedMediaEvent: ({ event }) => preload.execute(event, file(event.relativePath)),
     guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
-    prepareOutputs: () => Promise.resolve(), releaseOutputs: () => preload.close(),
+    prepareOutputs: () => Promise.resolve(), holdOutputs: () => Promise.resolve(), releaseOutputs: () => preload.close(),
     prepareUpcoming: production ? pictureUpcoming(preload, { record: logs, projectId: project.projectId, itemId: 'song' })
       : (frame, assertCurrent) => preload.upcoming(frame, assertCurrent),
     seekMedia: () => Promise.resolve(),
@@ -1056,7 +1056,7 @@ it('预热好的短片段整段落在 OBS 卡住时的积压里、被合并跳�
     recordLog: vi.fn<LinkDesktopApi['recordLog']>(entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-09T00:00:00Z', monotonicMs: now })),
     executeManagedMediaEvent: ({ event }) => preload.execute(event, path),
     guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
-    prepareOutputs: () => Promise.resolve(), releaseOutputs: () => preload.close(),
+    prepareOutputs: () => Promise.resolve(), holdOutputs: () => Promise.resolve(), releaseOutputs: () => preload.close(),
     prepareUpcoming: (frame, assertCurrent) => preload.upcoming(frame, assertCurrent),
     seekMedia: () => Promise.resolve(),
     mediaReport: report => { reports.push(`${report.event.clipId} ${report.event.phase} ${report.status}${report.error ? `：${report.error}` : ''}`); },
@@ -2056,7 +2056,8 @@ it('E16 规则：素材原来的样子记在这台电脑上：上一次运行里
   const placed = withLooks(song([[0, 12000, 100]]), { 'clip-0': leftLook }), unset = withoutLooks(placed), obs = fakeObs(), store = new MemoryMaterialOwnLooks();
   const primary = primaryOf(placed);
   const first = await live(placed, obs, undefined, true, 'test', store);
-  await first.play(0, 1000, true); await first.session.stop();
+  // Each run ends as the app quits: what the song left on its last frame is taken off (R14), as its stop did before.
+  await first.play(0, 1000, true); await first.session.release();
   expect(obs.decoder(primary).look).toMatchObject(inObs(leftLook));
   expect(store.looks.get(primary)).toMatchObject(ownLook);
   // The app restarts: a new session book, the same OBS and the same machine.
@@ -2065,10 +2066,10 @@ it('E16 规则：素材原来的样子记在这台电脑上：上一次运行里
   await second.play(0, 1000, true);
   expect(second.reports).toContain('clip-0 start succeeded');
   expect(JSON.parse(obs.seenLooks.filter(view => view.input === primary).at(-1)!.look)).toMatchObject(ownLook);
-  await second.session.stop();
+  await second.session.release();
   // Song 1 plays again, then the unset song: the own look kept the first time comes back, not song 1's.
   const third = await live(placed, obs, undefined, true, 'test', store);
-  await third.play(0, 1000, true); await third.session.stop();
+  await third.play(0, 1000, true); await third.session.release();
   expect(store.looks.get(primary)).toMatchObject(ownLook);
   await live(unset, obs, undefined, true, 'test', store);
   expect(obs.decoder(primary).look).toMatchObject(ownLook);
@@ -2218,4 +2219,48 @@ it('E16 规则：从中间开播或定位时样子没设好：片段照常显示
     expect(logs).toHaveBeenCalledWith(expect.objectContaining({ level: 'error', category: 'device', device: '后台画面', result: 'failed',
       message: lookFailure({ assetName: '视频' }, '本机记下的素材原来的样子写不进去'), details: { clipId: 'clip-0' } }));
   } finally { vi.useRealTimers(); }
+});
+
+/** A stopped song's last frame on these decoders (R14): `takeOver` hands one over and records it. */
+function holding(...names: string[]) {
+  const held = new Map(names.map(name => [name, 'stopped-clip'] as const)), order: string[] = [];
+  return { held, order, pictures: { decoders: () => held,
+    takeOver: vi.fn((name: string, reuse: boolean) => { order.push(`${reuse ? '接着显示' : '让出'} ${name}`); held.delete(name); return Promise.resolve(); }) } };
+}
+
+it('上一首停在最后一帧占着主解码器：这一首从预备解码器开播，那一帧不让出（R14）', async () => {
+  const project = song([[0, 4000]]), scenes = mockScenes(), native = mockNative(), events = new SceneOutputTimeline(project, 'song').preloadEntries();
+  const primary = events[0]!.sourceName, hold = holding(primary);
+  const preload = new ObsMediaPreload(project, 'song', scenes, native, hold.pictures);
+  preload.register(project.projectId, project.mediaAssets[0]!, path);
+  await preload.prime(events[0]!, current);
+  expect(scenes.prepareStandby).toHaveBeenCalledExactlyOnceWith(primary);
+  expect(scenes.prime.mock.calls.map(([event]) => event.sourceName)).toEqual([`${primary}·预备`]);
+  expect(hold.pictures.takeOver).not.toHaveBeenCalled();
+  await preload.execute(events[0]!, path);
+  expect(preload.onAirSource(primary)).toBe(`${primary}·预备`);
+});
+
+it('两个解码器都停着上一首的画面：准备要用的那一个先让出，然后才写它；只有这时最后一帧会在开播前换掉（R14）', async () => {
+  const project = song([[0, 4000]]), scenes = mockScenes(), native = mockNative(), events = new SceneOutputTimeline(project, 'song').preloadEntries();
+  const primary = events[0]!.sourceName, hold = holding(primary, `${primary}·预备`);
+  scenes.prime.mockImplementation(async (event, _path, run) => { hold.order.push(`准备 ${event.sourceName}`); await run(); });
+  const preload = new ObsMediaPreload(project, 'song', scenes, native, hold.pictures);
+  preload.register(project.projectId, project.mediaAssets[0]!, path);
+  await preload.prime(events[0]!, current);
+  expect(hold.order).toEqual([`让出 ${primary}`, `准备 ${primary}`]);
+  // Asked once: the decoder is this song's from then on.
+  await preload.execute(events[0]!, path);
+  expect(hold.pictures.takeOver).toHaveBeenCalledOnce();
+});
+
+it('空闲时提前准备下一段：停着上一首画面的解码器留给它，不让出（R14）', async () => {
+  const project = song([[0, 1000], [1, 1000]]), scenes = mockScenes(), native = mockNative(), events = new SceneOutputTimeline(project, 'song').preloadEntries();
+  const primary = events[0]!.sourceName, hold = holding(`${primary}·预备`);
+  const preload = new ObsMediaPreload(project, 'song', scenes, native, hold.pictures);
+  preload.register(project.projectId, project.mediaAssets[0]!, path);
+  await preload.prime(events[0]!, current);
+  await preload.primeFollowing(events[0]!, current);
+  expect(scenes.prime.mock.calls.map(([event]) => event.sourceName)).toEqual([primary]);
+  expect(hold.pictures.takeOver).not.toHaveBeenCalled();
 });

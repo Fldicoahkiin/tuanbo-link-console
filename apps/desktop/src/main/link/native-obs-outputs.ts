@@ -12,7 +12,7 @@ import type { ObsNativeSeek } from './obs-native-seek';
 import type { NativePlayerService } from './native-player-service';
 import type { LinkRunLogger } from './run-logger';
 import { redactValue } from './run-logger';
-import { ObsMediaPreload, ObsPreparationNotNeeded } from './obs-media-preload';
+import { ObsMediaPreload, ObsPreparationNotNeeded, type HeldPictures } from './obs-media-preload';
 import { obsMediaDecodeTargets } from './obs-media-decode';
 import { obsMediaCachePaths } from './obs-media-paths';
 import { PreparationSteps, SLOW_PREPARATION_STEP_MS } from './preparation-log';
@@ -24,6 +24,11 @@ export type NativeObsOutputs = Omit<ObsProgramSessionDependencies, 'state' | 'cu
   preloadResources: (assertCurrent: () => void, phase?: 'idle' | 'playback' | 'background' | 'reconnect') => Promise<void>;
   /** OBS forgot this song's owned scenes after a reconnect: prepare them again, without warming any decoder. */
   restoreScenes: (assertCurrent: () => void) => Promise<void>;
+  holdOutputs: NonNullable<ObsProgramSessionDependencies['holdOutputs']>;
+  /** After the song stopped: the decoders holding its last frame, each with the clip it holds (R14). */
+  heldDecoders: () => ReadonlyMap<string, string>;
+  /** A later song takes `sourceName` over (`HeldPictures.takeOver`): from then on this song's cleanup leaves it alone. */
+  handOver: (sourceName: string, reuse: boolean) => Promise<void>;
 };
 
 type Services = {
@@ -33,6 +38,8 @@ type Services = {
   logFailure: (error: Error) => void;
   /** Advisories and repeated warnings already recorded in this run of the software (preflightLogEntries, firstTimeWarning). */
   seenNotices: Set<string>;
+  /** What a stopped song left on its last frame, which this song's decoders take over (R14). */
+  held?: HeldPictures;
 };
 
 /** What a song's picture actions reach: OBS, and the decoders the song's materials take turns on. */
@@ -147,6 +154,56 @@ export function pictureMediaStep(obs: Pick<ObsWebSocketAdapter, 'guardPlaybackOp
   };
 }
 
+async function runAll(cleanup: readonly (() => Promise<void>)[]): Promise<void> {
+  const errors: string[] = [];
+  for (const release of cleanup) {
+    try { await release(); } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
+  }
+  if (errors.length) throw new Error(`画面没有清理干净：${errors.join('；')}`);
+}
+
+export type PictureHold = { release: () => Promise<void>; hold: (clips: readonly { sourceName: string; clipId: string }[]) => Promise<void>;
+  decoders: () => ReadonlyMap<string, string>; handOver: (sourceName: string, reuse: boolean) => Promise<void> };
+/** What a song's picture lets go of at its stop and at its release (R14). The stop: the decoders of the clips on air
+ * (and images shown) stay, holding the last frame, the program scene with them; everything else goes, with `finish`
+ * (the run log, the music's capture). The release: what still holds the last frame, less what a later song took over
+ * (that song's now, as is anything else of the same names it uses). Neither touches what another stopped song still
+ * holds and this song did not take over (it used the other decoder of the pair, or was cancelled meanwhile). */
+export function pictureHold(preload: Pick<ObsMediaPreload, 'close' | 'hold' | 'decoderOf' | 'forget' | 'giveWay'>, scenes: Pick<ObsMediaScenes, 'releasePrimed' | 'releaseImages'>,
+  materials: readonly { sourceName: string; image: boolean }[], held: HeldPictures | undefined, finish: readonly (() => Promise<void>)[]): PictureHold {
+  const imageNames = new Set(materials.filter(material => material.image).map(material => material.sourceName));
+  const decoderNames = materials.flatMap(material => [material.sourceName, `${material.sourceName}·预备`]);
+  const kept = new Map<string, string>(), handedOver = new Set<string>();
+  let holding = false;
+  const others = (): ReadonlyMap<string, string> => held?.decoders() ?? new Map<string, string>();
+  const release = (owned: (name: string) => boolean, closing: () => Promise<void>): Promise<void> => runAll([closing,
+    () => scenes.releasePrimed(decoderNames.filter(owned)), () => scenes.releaseImages([...imageNames].filter(owned)), ...finish]);
+  return {
+    release: () => {
+      if (holding) return release(name => kept.has(name) && !handedOver.has(name), () => preload.close());
+      const theirs = others();
+      return release(name => !theirs.has(name), () => preload.close());
+    },
+    hold: clips => {
+      const theirs = others();
+      holding = true;
+      for (const { sourceName, clipId } of clips) {
+        const decoder = imageNames.has(sourceName) ? sourceName : preload.decoderOf(sourceName);
+        if (decoder !== null) kept.set(decoder, clipId);
+      }
+      const keep = new Set(kept.keys());
+      return release(name => !keep.has(name) && !theirs.has(name), () => preload.hold(keep));
+    },
+    decoders: () => new Map([...kept].filter(([name]) => !handedOver.has(name))),
+    handOver: async (sourceName, reuse) => {
+      if (handedOver.has(sourceName) || !kept.has(sourceName)) return;
+      handedOver.add(sourceName);
+      if (reuse || imageNames.has(sourceName)) preload.forget(sourceName);
+      else await preload.giveWay(sourceName);
+    }
+  };
+}
+
 /** Per-program adapters. Original documents are neither rewritten nor reread;
  * only this immutable snapshot's referenced resources are prepared. */
 export function createNativeObsOutputs(request: NativeObsPrepare, services: Services, positionMs: number): NativeObsOutputs {
@@ -163,7 +220,15 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
   const preload = new ObsMediaPreload(project, request.snapshot.item.id, obs.mediaScenes, {
     prime: async (name, retained, kind) => { if (!address) throw new Error('画面连接还没准备好'); await seek.prime(address, name, retained, kind); },
     seek: async (name, position) => { if (!address) throw new Error('画面连接还没准备好'); await seek.seek(address, name, position); }
-  });
+  }, services.held);
+  const releaseCapture = async (): Promise<void> => {
+    const target = capture;
+    if (!target) return;
+    await obs.setInternalAudioCapture(false, target.executable, target.title, target.audioDeviceId, undefined, target.windowClass);
+    capture = null;
+  };
+  const hold = pictureHold(preload, obs.mediaScenes, materialTargets.map(target => ({ sourceName: target.sourceName, image: target.asset.kind === 'image' })),
+    services.held, [() => logger.flush(), releaseCapture]);
   const recordLog: NativeObsOutputs['recordLog'] = entry => logger.recordBuffered(entry.category === 'action' && entry.result === 'failed'
     ? { ...entry, details: { ...entry.details, obsRequests: obs.getRequestDiagnostics() } } : entry, services.logFailure);
   const pictureLog: PictureLog = { record: recordLog, projectId: project.projectId, itemId: request.snapshot.item.id };
@@ -342,20 +407,11 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       assertCurrent();
     },
     prepareUpcoming: (frame, assertCurrent) => obs.preparePlaybackMedia(() => upcoming(frame, assertCurrent)),
-    releaseOutputs: async () => {
-      const cleanup = [() => preload.close(), () => obs.mediaScenes.releasePrimed(materialTargets.flatMap(target => [target.sourceName, `${target.sourceName}·预备`])),
-        () => obs.mediaScenes.releaseImages(materialTargets.filter(target => target.asset.kind === 'image').map(target => target.sourceName)), () => logger.flush()];
-      const target = capture;
-      if (target) cleanup.push(async () => {
-        await obs.setInternalAudioCapture(false, target.executable, target.title, target.audioDeviceId, undefined, target.windowClass);
-        capture = null;
-      });
-      const errors: string[] = [];
-      for (const release of cleanup) {
-        try { await release(); } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
-      }
-      if (errors.length) throw new Error(`画面没有清理干净：${errors.join('；')}`);
-    },
+    releaseOutputs: () => hold.release(),
+    holdOutputs: clips => hold.hold(clips),
+    heldDecoders: () => hold.decoders(),
+    heldClipIds: () => new Set(hold.decoders().values()),
+    handOver: (sourceName, reuse) => hold.handOver(sourceName, reuse),
     executeManagedMediaEvent: pictureMediaStep(obs, preload, path, relativePath => projects.resolveMediaAsset(path, relativePath),
       { record: entry => logger.record(entry), projectId: project.projectId, itemId: request.snapshot.item.id }),
     // The drift check runs inside the picture session's own queue, where the next cut waits for it: it stays at the

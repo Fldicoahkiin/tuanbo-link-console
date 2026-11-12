@@ -168,7 +168,7 @@ function pictureSession(project: LinkProject, answer: (action: LinkAction) => Pr
   const dependencies: ObsProgramSessionDependencies = { now: () => now, fault: message => { faults.push(message); },
     recordLog: entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'rules', timestamp: '2026-11-11T00:00:00Z', monotonicMs: now }),
     executeManagedMediaEvent: () => Promise.resolve(), guardOutput: (_canSend, operation) => operation(),
-    prepareOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), seekMedia: () => Promise.resolve(),
+    prepareOutputs: () => Promise.resolve(), holdOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), seekMedia: () => Promise.resolve(),
     cueReport: () => undefined, mediaReport: () => undefined, state: update => { states.push(update.state); },
     executor: { id: 'obs', supports: entry => entry.kind.startsWith('obs.'), execute: entry => { sent.push(entry); return answer(entry); } }, ...extra };
   const session = new ObsProgramSession(project, 'C:/shows/rules.tblink', 'song', dependencies);
@@ -323,5 +323,44 @@ describe('规则 6：MA2 断了自己重新登录，只有一处', () => {
     expect(manager).toContain("row: 'ma2.relogin'");
     expect(manager).toContain("this.show('ma2.reconnect')");
     expect(read('apps/desktop/src/main/link/ma2-web-remote-relogin.ts')).toContain("row: 'ma2.webRemote.relogin'");
+  });
+});
+
+describe('规则 8：停止以后画面停在最后一帧，下一首的画面上了才撤下（R14，2026-11-12）', () => {
+  it('停止：在播的素材原地暂停、照常显示，节目场景不动；这首歌显示的来源照常隐藏；素材的停止等交还时才发', async () => {
+    const media: string[] = [], held: { sourceName: string; clipId: string }[][] = [];
+    const show = pictureSession(parseLinkProject({ ...pictureShow(), playbackSource: 'internal' }), () => Promise.resolve(), {
+      executeManagedMediaEvent: ({ event }) => { media.push(`${event.phase} ${event.clipId}`); return Promise.resolve(); },
+      holdOutputs: clips => { held.push([...clips]); return Promise.resolve(); } });
+    await show.session.prepare(0); await show.advance(0, 13000);
+    const before = show.sent.length;
+    await show.session.stop();
+    expect(show.sent.slice(before).map(entry => entry.kind === 'obs.mediaAction' ? entry.action : entry.kind === 'obs.setSceneItemEnabled' ? `${entry.sourceName} ${String(entry.enabled)}` : entry.kind))
+      .toEqual(['pause', '字幕 false']);
+    expect(media).toEqual(['start dance']);
+    expect(held).toEqual([[{ sourceName: expect.any(String) as string, clipId: 'dance' }]]);
+    await show.session.release();
+    expect(media).toEqual(['start dance', 'stop dance']);
+    expect(show.sent.slice(before)).toHaveLength(2);
+  });
+
+  it('源码：停止只暂停、隐藏显示来源、交出不占着最后一帧的输出；素材的停止、机位的清理和交还输出只在 release；播放器的停止不等画面', () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+    const read = (path: string): string => readFileSync(join(root, path), 'utf8');
+    const body = (text: string, head: string): string => {
+      const start = text.indexOf(head);
+      expect(start).toBeGreaterThanOrEqual(0);
+      return text.slice(start, text.indexOf('\n  }\n', start));
+    };
+    const session = read('packages/core/src/obs-program-session.ts');
+    const stop = body(session, '  private async stopSession(): Promise<void> {');
+    for (const word of ['sendMedia', 'takeCleanup', 'releaseOutputs']) expect(stop).not.toContain(word);
+    expect(stop).toContain('holdOutputs(this.heldClips())');
+    const release = body(session, '  private async releaseSession(');
+    for (const word of ['sendMedia', 'takeCleanup', 'releaseOutputs']) expect(release).toContain(word);
+    const player = body(read('packages/core/src/native-program-player.ts'), '  stop(): Promise<void> {');
+    expect(player).not.toMatch(/await this\.stopObs\(\)/);
+    // The program's close takes off what its stops left, as before.
+    expect(read('apps/desktop/src/main/link-main.ts')).toContain('nativeObs?.close(host.controller.sessionId)');
   });
 });

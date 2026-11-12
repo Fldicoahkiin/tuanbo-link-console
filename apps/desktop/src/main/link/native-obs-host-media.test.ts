@@ -117,7 +117,7 @@ function setup() {
       obs.sent.length = 0;
       return { executor: { id: 'obs', supports: () => true, execute: () => Promise.resolve() },
         guardOutput: <T>(canSend: () => boolean, operation: () => Promise<T>, dispatched?: () => void) => scheduler.guarded(canSend, operation, dispatched),
-        prepareOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), now: () => performance.now(),
+        prepareOutputs: () => Promise.resolve(), holdOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), now: () => performance.now(),
         seekMedia: () => Promise.resolve(), recordLog,
         executeManagedMediaEvent: pictureMediaStep({ guardPlaybackOperation: (canSend, operation, dispatched) => scheduler.guarded(canSend, operation, dispatched),
           getRequestDiagnostics: () => ({ stats: scheduler.getStats(), timings: [] }) }, preload, snapshot.projectPath, file,
@@ -138,13 +138,14 @@ async function until(done: () => boolean): Promise<void> {
 }
 const failedStart = (logs: readonly string[]): string | undefined => logs.find(line => line.startsWith('error 播放素材 · 视频 · failed'));
 
+/** The stop of a clip, which goes out as the song's picture is taken off (R14: at the close here, not at the stop). */
 const STOPPED = '[STOP SetInputMute SetSceneItemEnabled]', STARTED = '[SetSceneItemEnabled SetInputMute SetCurrentProgramScene PLAY]';
 
 it('OBS 照常执行：素材开始播放，到会话的结果是成功（2026-11-11 R3b）', async () => {
   watchSteps(); const test = setup();
-  await test.play(); await until(() => test.logs.some(line => line.includes('播放素材 · 视频 · succeeded'))); await test.host.stop();
+  await test.play(); await until(() => test.logs.some(line => line.includes('播放素材 · 视频 · succeeded'))); await test.host.close();
   expect(test.obs.sent).toEqual(['GetMediaInputStatus', STARTED, 'GetMediaInputStatus', STOPPED]);
-  expect(test.logs).toEqual(['info 播放素材 · 视频 · succeeded', 'info 停止素材 · 视频 · succeeded']);
+  expect(test.logs).toEqual(['info 播放素材 · 视频 · succeeded', 'info 停在最后一帧 · succeeded', 'info 停止素材 · 视频 · succeeded']);
   expect(test.host.status?.fault).toBeUndefined();
   expect(test.failures).toEqual([]);
   await expectSteps([{ kind: 'done' }], [{ kind: 'done' }]);
@@ -152,11 +153,11 @@ it('OBS 照常执行：素材开始播放，到会话的结果是成功（2026-1
 
 it('开始素材的请求超时：会话收到“没回应”；发出的请求、红字和日志和以前一样（2026-11-11 R3b）', async () => {
   watchSteps(); const test = setup(); test.obs.set('hold');
-  await test.play(); await until(() => failedStart(test.logs) !== undefined); await test.host.stop();
+  await test.play(); await until(() => failedStart(test.logs) !== undefined); await test.host.close();
   // The timeout ends the connection: the song's stop sends nothing more.
   expect(test.obs.sent).toEqual(['GetMediaInputStatus', STARTED]);
   const reason = 'OBS 素材场景批量控制 请求超时（200 ms）；不确定是否已执行，请检查 OBS 后重新连接';
-  expect(test.logs).toEqual(['error 素材动作失败的请求耗时', `error 播放素材 · 视频 · failed：${reason}`,
+  expect(test.logs).toEqual(['error 素材动作失败的请求耗时', `error 播放素材 · 视频 · failed：${reason}`, 'info 停在最后一帧 · succeeded',
     'error 素材动作失败的请求耗时', `error 停止素材 · 视频 · failed：${reason}`]);
   expect(test.host.status?.fault).toBe(`素材播放失败：视频 · ${reason}`);
   expect(test.failures).toEqual([`画面没有清理干净：${reason}`]);
@@ -169,7 +170,7 @@ it('开始素材的请求还没发出就停了：会话收到“没发出去”�
   let release: (() => void) | null = null;
   test.before(label => label === '检查预热素材' && !release ? new Promise<void>(resolve => { release = resolve; }) : null);
   await test.play(); await until(() => release !== null);
-  const stopping = test.host.stop(); release!(); await stopping;
+  const stopping = test.host.close(); release!(); await stopping;
   // Nothing of the start went out: the decoder is where the preparation left it, like a clip
   // the song never reached, and the song's stop leaves it to the preparation as it does those.
   expect(test.obs.sent).toEqual([]);
@@ -182,11 +183,11 @@ it('开始素材的请求还没发出就停了：会话收到“没发出去”�
 
 it('素材开始播放后和音乐没对齐：会话收到“失败、已上画面、没对齐”；发出的请求、红字和日志和以前一样（2026-11-11 R3b）', async () => {
   watchSteps(); const test = setup(); test.obs.set('behind');
-  await test.play(); await until(() => failedStart(test.logs) !== undefined); await test.host.stop();
+  await test.play(); await until(() => failedStart(test.logs) !== undefined); await test.host.close();
   expect(test.obs.sent).toEqual(['GetMediaInputStatus', STARTED, 'GetMediaInputStatus', STOPPED]);
   const line = failedStart(test.logs)!, reason = line.slice('error 播放素材 · 视频 · failed：'.length);
   expect(reason).toMatch(/^切场景后素材位置对不上：视频，按音乐应该在 5\d{3} ms，OBS 实际在 3\d{3} ms$/u);
-  expect(test.logs).toEqual(['error 素材动作失败的请求耗时', line, 'info 停止素材 · 视频 · succeeded']);
+  expect(test.logs).toEqual(['error 素材动作失败的请求耗时', line, 'info 停在最后一帧 · succeeded', 'info 停止素材 · 视频 · succeeded']);
   expect(test.host.status?.fault).toBe(`素材播放失败：视频 · ${reason}`);
   expect(test.failures).toEqual([]);
   await expectSteps([{ kind: 'failed', reason, onAir: true, outOfStep: true, sent: true }], [{ kind: 'done' }]);
@@ -194,10 +195,10 @@ it('素材开始播放后和音乐没对齐：会话收到“失败、已上画�
 
 it('OBS 拒绝显示素材：会话收到“失败”，不在画面上；发出的请求、红字和日志和以前一样（2026-11-11 R3b）', async () => {
   watchSteps(); const test = setup(); test.obs.set('refuse');
-  await test.play(); await until(() => failedStart(test.logs) !== undefined); await test.host.stop();
+  await test.play(); await until(() => failedStart(test.logs) !== undefined); await test.host.close();
   expect(test.obs.sent).toEqual(['GetMediaInputStatus', STARTED, STOPPED]);
   const reason = 'SetSceneItemEnabled：OBS 没能显示这个来源';
-  expect(test.logs).toEqual(['error 素材动作失败的请求耗时', `error 播放素材 · 视频 · failed：${reason}`, 'info 停止素材 · 视频 · succeeded']);
+  expect(test.logs).toEqual(['error 素材动作失败的请求耗时', `error 播放素材 · 视频 · failed：${reason}`, 'info 停在最后一帧 · succeeded', 'info 停止素材 · 视频 · succeeded']);
   expect(test.host.status?.fault).toBe(`素材播放失败：视频 · ${reason}`);
   expect(test.failures).toEqual([]);
   await expectSteps([{ kind: 'failed', reason, onAir: false, outOfStep: false, sent: true }], [{ kind: 'done' }]);

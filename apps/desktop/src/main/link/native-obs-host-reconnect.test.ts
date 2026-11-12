@@ -30,7 +30,7 @@ function setup() {
   const host = new NativeObsHost({ audio: () => audio, changed: () => undefined, error: () => undefined,
     outputs: () => ({ executor: { id: 'test', supports: () => true, execute },
       guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
-      prepareOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), restoreScenes,
+      prepareOutputs: () => Promise.resolve(), holdOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), restoreScenes,
       now: () => now, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now }) }) });
   const observe = (patch: Partial<NativePlayerStatus>, time: number): void => {

@@ -110,7 +110,7 @@ describe('后台节目的关灯和运行状态，按 link-main 的接法（progr
 function program() {
   const clock = { read: () => ({ positionMs: 0, durationMs: 1000, ready: true, playing: true, seeking: false }),
     subscribeBoundary: vi.fn<(listener: (boundary: PlaybackBoundary) => void) => () => void>(() => () => undefined) };
-  return { close: vi.fn(() => Promise.resolve()), controller: { clock,
+  return { close: vi.fn(() => Promise.resolve()), controller: { clock, sessionId: 'session',
     play: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()), resume: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()), reset: vi.fn(() => Promise.resolve()), toggle: vi.fn(() => Promise.resolve()),
     seek: vi.fn(() => Promise.resolve()), scrub: vi.fn(() => Promise.resolve()), skip: vi.fn(() => Promise.resolve()),

@@ -28,7 +28,7 @@ function rig(execute: (action: LinkAction) => Promise<void>, admit: () => boolea
     changed: value => { for (const listener of obsListeners) listener(value); },
     outputs: () => ({ executor: { id: 'obs', supports: () => true, execute },
       guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
-      prepareOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), now: () => now,
+      prepareOutputs: () => Promise.resolve(), holdOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), now: () => now,
       seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-10T00:00:00Z', monotonicMs: now }) }) });
   const requests = new NativeObsRequests(host, () => Promise.resolve());

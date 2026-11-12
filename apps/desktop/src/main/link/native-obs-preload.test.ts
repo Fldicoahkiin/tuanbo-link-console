@@ -14,7 +14,7 @@ function setup() {
     guardOutput: async (current, operation) => { if (!current()) throw new Error('已取消'); return operation(); },
     executor: { id: 'obs', supports: () => true, execute },
     now: () => performance.now(), preloadResources: vi.fn((current: () => void) => { current(); return Promise.resolve(); }), restoreScenes: vi.fn(() => Promise.resolve()), prepareOutputs: vi.fn(() => Promise.resolve()),
-    releaseOutputs: vi.fn(() => Promise.resolve()), seekMedia: vi.fn(() => Promise.resolve()), executeManagedMediaEvent: vi.fn(() => Promise.resolve()),
+    holdOutputs: () => Promise.resolve(), heldDecoders: () => new Map<string, string>(), handOver: () => Promise.resolve(), releaseOutputs: vi.fn(() => Promise.resolve()), seekMedia: vi.fn(() => Promise.resolve()), executeManagedMediaEvent: vi.fn(() => Promise.resolve()),
     recordLog: entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: new Date().toISOString(), monotonicMs: 0 })
   };
   const authorize = vi.fn(() => Promise.resolve()), create = vi.fn(() => outputs), report = vi.fn<(failure: PictureFailure) => void>();

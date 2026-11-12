@@ -6,6 +6,10 @@ import { ObsPreparationCancelled } from './native-obs-outputs';
 type Outputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault' | 'clearFault' | 'pictureItems'> & {
   /** Prepares this song's owned scenes again after OBS reconnects; starts no decoder. */
   restoreScenes?: (assertCurrent: () => void) => Promise<void>;
+  /** After the song stopped: the decoders holding its last frame, by clip (R14). */
+  heldDecoders?: () => ReadonlyMap<string, string>;
+  /** A later song takes that decoder over; `reuse` when it shows it on as it is. */
+  handOver?: (sourceName: string, reuse: boolean) => Promise<void>;
 };
 /** `cleanup`: this song's picture cleanup, run once. `leftover`: why it failed, until the program has heard it once
  * (a program that closed before it could show it hands it back, for the next song). */
@@ -13,11 +17,12 @@ type Outputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'medi
  * (`parts`) and recovery counts (`counts`). `restores`: this song's picture restored after OBS came back (obs.restore).
  * `lost`: the preparation failed while OBS was away; it is prepared again, at the position then, once OBS is back.
  * `rejoin`: prepared (again) while the music was not where it was prepared: at the first clock of the music the picture
- * is rebuilt at the current position, after this (the owned scenes prepared again, or nothing). */
+ * is rebuilt at the current position, after this (the owned scenes prepared again, or nothing).
+ * `started`: the music clocked this picture once. `released`: what the stop left on its last frame is being taken off (R14). */
 type Entry = { request: NativeObsPrepare; project: LinkProject; session: ObsProgramSession; state: NativeObsStatus; awaitingPause: boolean; ended: boolean; filesStarted: boolean;
   now: () => number; restoreScenes: Outputs['restoreScenes']; cleanup: Promise<void> | null; leftover: ObsPictureLeftover | null;
   connection: ObsPictureItem | null; parts: ObsPictureItem[]; counts: NonNullable<NativeObsStatus['recoveries']>; restores: OutputRecovery;
-  lost: boolean; rejoin: Rejoin | null };
+  lost: boolean; rejoin: Rejoin | null; outputs: Outputs; started: boolean; released: Promise<void> | null };
 /** `restore`: what comes before the rebuild (the owned scenes prepared again, or nothing). `late`: OBS never went away;
  * the music only started before the picture was ready, and the red text says that instead of a reconnect. */
 type Rejoin = { restore: () => Promise<void>; late: boolean };
@@ -53,6 +58,9 @@ export class NativeObsHost {
   private preparing = 0;
   /** Counts OBS going away: a preparation that saw it was lost to it, not failed. */
   private outages = 0;
+  /** Stopped songs whose picture stays on its last frame (R14), until the next song's picture is on, the program
+   * closes, or OBS comes back after going away. */
+  private readonly holds: Entry[] = [];
   constructor(private readonly dependencies: Dependencies) {}
   get status(): NativeObsStatus | null { return this.entry?.state ?? null; }
 
@@ -87,6 +95,8 @@ export class NativeObsHost {
    * Reported in red either way and logged once; scenes that could not be prepared again do not stop the cameras
    * coming back. A rebuilt part that did not come back stays named in that text (2026-11-09). */
   async reconnected(): Promise<void> {
+    // Nothing plays a stopped song's last frame: it is not restored, only taken off (R14).
+    void this.releaseAfterOutage();
     const entry = this.entry;
     if (!entry) return;
     const away = entry.connection !== null;
@@ -133,14 +143,15 @@ export class NativeObsHost {
   private async prepareAgain(entry: Entry): Promise<void> {
     const outages = this.outages, epoch = this.epoch;
     const current = (): void => { if (this.entry !== entry || epoch !== this.epoch || ['stopped', 'failed'].includes(entry.state.state)) throw new ObsPreparationCancelled('画面准备已取消'); };
-    await entry.session.stop().catch((error: unknown) => this.dependencies.error(`画面没有清理干净：${pictureErrorDetail(error)}`));
+    const earlier = entry.session;
+    await earlier.stop().then(() => earlier.release()).catch((error: unknown) => this.dependencies.error(`画面没有清理干净：${pictureErrorDetail(error)}`));
     try {
       current();
       const audio = this.playingSong(entry.request);
       const outputs = await this.dependencies.outputs(entry.request, audio.positionMs, current);
       current();
       const session = this.createSession(entry.request, entry.project, outputs);
-      Object.assign(entry, { session, lost: false, now: outputs.now, restoreScenes: outputs.restoreScenes, parts: entry.parts.filter(part => part.id === 'obs.restore'), counts: [] });
+      Object.assign(entry, { session, outputs, lost: false, now: outputs.now, restoreScenes: outputs.restoreScenes, parts: entry.parts.filter(part => part.id === 'obs.restore'), counts: [] });
       await session.prepare(audio.positionMs);
       current();
       if (session.error) throw session.error;
@@ -224,7 +235,7 @@ export class NativeObsHost {
       nextCueId: null, currentCueId: null, pendingCount: 0, positionMs: audio.positionMs, items: [], recoveries: [], ...(faults.length ? { fault: faults.join('；') } : {}) };
     const session = this.createSession(request, project, outputs);
     const entry: Entry = { request, project, session, state, awaitingPause: false, ended: false, filesStarted: false, now: outputs.now, restoreScenes: outputs.restoreScenes,
-      cleanup: null, leftover: null, connection: null, parts: [], counts: [], restores: new OutputRecovery(), lost: false, rejoin: null };
+      cleanup: null, leftover: null, connection: null, parts: [], counts: [], restores: new OutputRecovery(), lost: false, rejoin: null, outputs, started: false, released: null };
     this.entry = entry; this.publish();
     try {
       await session.prepare(audio.positionMs);
@@ -233,7 +244,10 @@ export class NativeObsHost {
       const now = this.playingSong(request);
       if (now.status === 'playing' || now.generation !== request.generation) entry.rejoin ??= { restore: NOTHING, late: true };
       if (session.error) throw session.error;
-      this.patch({ state: 'ready', nextCueId: session.nextCueId, notice: outputs.outputNotice?.() ?? null }); return entry.state;
+      this.patch({ state: 'ready', nextCueId: session.nextCueId, notice: outputs.outputNotice?.() ?? null });
+      // Prepared at a position, its frame is on now (a seek while paused): the last frame before it goes (R14).
+      if (session.showsPicture()) void this.releaseHolds(entry);
+      return entry.state;
     } catch (error) {
       // OBS went away while this was prepared (row 10): the song plays without its picture, prepared again once OBS is back.
       if (this.entry === entry && epoch === this.epoch && (this.outages !== outages || entry.connection) && !(error instanceof ObsPreparationCancelled)) {
@@ -243,7 +257,8 @@ export class NativeObsHost {
         return entry.state;
       }
       if (this.entry === entry && epoch === this.epoch) this.fail(error instanceof Error ? error.message : String(error));
-      await this.cleanUp(entry);
+      // A picture that never played keeps nothing on its last frame.
+      await this.release(entry);
       throw error;
     }
   }
@@ -336,11 +351,14 @@ export class NativeObsHost {
       // Prepared where the music no longer was: it starts where the music is now, and the picture is rebuilt there.
       const rejoin = clock.state === 'running' ? entry.rejoin : null;
       if (rejoin) { entry.rejoin = null; entry.session.joinNextClock(); }
+      const first = !entry.started; entry.started = true;
       entry.session.clock(clock.positionMs, entry.now() - ageMs);
       entry.ended = clock.state === 'ended';
       if (entry.session.error) { this.fail(entry.session.error.message); return; }
       this.patch({ state: 'running', generation: clock.generation, positionMs: clock.positionMs, pendingCount: entry.session.pendingCount, nextCueId: entry.session.nextCueId });
-      if (rejoin) void this.rebuild(entry, rejoin.restore, rejoin.late);
+      const rebuilt = rejoin ? this.rebuild(entry, rejoin.restore, rejoin.late) : null;
+      // The last frame of the song before goes once this song's picture is on: nothing black in between (R14).
+      if (first && this.holds.some(hold => hold !== entry)) void (rebuilt ?? entry.session.settled()).then(() => this.releaseHolds(entry));
       if (!entry.filesStarted && clock.state === 'running' && entry.request.nextFiles && this.dependencies.prepareNextFiles) {
         entry.filesStarted = true;
         // This song stopping or ending cancels it, which is not a failure. Any other failure is logged once, also one
@@ -370,12 +388,64 @@ export class NativeObsHost {
 
   /** Runs once per song; a stop or a new song arriving meanwhile waits for the same cleanup. Never retried. */
   private cleanUp(entry: Entry): Promise<void> {
+    if (!entry.released && !this.holds.includes(entry)) this.holds.push(entry);
     entry.cleanup ??= entry.session.stop().catch((error: unknown) => {
       this.dependencies.error(`画面没有清理干净：${pictureErrorDetail(error)}`);
       const leftover: ObsPictureLeftover = new ObsPictureLeftover(entry.request.snapshot.item.id, error, () => this.giveBack(entry, leftover));
       entry.leftover = leftover;
     });
     return entry.cleanup;
+  }
+  /** The program closes (`sessionId`), or the engine (none): its song stops and everything its stopped songs left on
+   * their last frame is taken off, as before R14. */
+  async close(sessionId?: string): Promise<void> {
+    const mine = (entry: Entry): boolean => sessionId === undefined || entry.request.sessionId === sessionId;
+    if (this.entry && mine(this.entry)) await this.stop();
+    await Promise.all(this.holds.filter(mine).map(entry => this.release(entry)));
+  }
+  /** The decoders stopped songs hold their last frame on, with the clip each holds (`HeldPictures`). */
+  heldDecoders(): ReadonlyMap<string, string> {
+    // Also while one is being taken off: a later song asking for it waits for that (`takeOver`).
+    return new Map(this.holds.flatMap(entry => [...entry.outputs.heldDecoders?.() ?? []]));
+  }
+  /** A later song takes `sourceName` over: a stopped song taking its last frame off finishes that first; otherwise the
+   * one holding it hands it over (it gives way unless `reuse`). */
+  async takeOver(sourceName: string, reuse: boolean): Promise<void> {
+    for (const entry of [...this.holds]) {
+      if (!entry.outputs.heldDecoders?.().has(sourceName)) continue;
+      if (entry.released) await entry.released;
+      else await entry.outputs.handOver?.(sourceName, reuse);
+    }
+  }
+  /** Takes off what the stopped song left on its last frame; once, never retried. A failure is logged and shown on the
+   * song playing or the next one; `afterOutage`, only logged: OBS may have lost those sources with the connection, and
+   * nothing of them is on air for any song (R14). */
+  private release(entry: Entry, afterOutage = false): Promise<void> {
+    entry.released ??= (async () => {
+      try {
+        await this.cleanUp(entry);
+        // A camera the song now playing shows on the owned output scene is that song's: it stays shown.
+        await entry.session.release(() => this.entry && this.entry !== entry ? this.entry.session.ownedSceneSources() : new Set<string>());
+      } catch (error) {
+        if (afterOutage) { this.dependencies.error(`OBS 重新连上后，停下的歌留在 OBS 里的最后一帧没有清理干净：${pictureErrorDetail(error)}`); return; }
+        this.dependencies.error(`画面没有清理干净：${pictureErrorDetail(error)}`);
+        const leftover: ObsPictureLeftover = new ObsPictureLeftover(entry.request.snapshot.item.id, error, () => this.giveBack(entry, leftover));
+        this.giveBack(entry, leftover);
+      } finally {
+        const index = this.holds.indexOf(entry);
+        if (index >= 0) this.holds.splice(index, 1);
+      }
+    })();
+    return entry.released;
+  }
+  /** All but `keep`; while OBS is away they wait for it (`releaseAfterOutage`), which is not a failed cleanup. */
+  private releaseHolds(keep: Entry | null): Promise<void> {
+    return Promise.all(this.holds.filter(entry => entry !== keep && entry.outputs.connected?.() !== false).map(entry => this.release(entry))).then(() => undefined);
+  }
+  /** OBS came back while songs were stopped on their last frame: that frame is not restored (nothing plays it), only
+   * taken off, so that no decoder counts as on air after the outage. */
+  private releaseAfterOutage(): Promise<void> {
+    return Promise.all(this.holds.map(entry => this.release(entry, true))).then(() => undefined);
   }
   /** A program that closed before it could show a failed cleanup hands it back (2026-11-09). A song that already took
    * the picture over, for example the next program's first song, which waited for this cleanup, will not ask for it
@@ -433,5 +503,7 @@ export class NativeObsHost {
   private fail(reason: string): void {
     if (!this.entry || this.entry.state.state === 'failed') return;
     this.patch({ state: 'failed', reason }); this.entry.session.abort(reason); this.dependencies.error(reason);
+    // A song whose picture failed shows nothing of its own; the last frame of the one before goes now.
+    void this.releaseHolds(this.entry);
   }
 }

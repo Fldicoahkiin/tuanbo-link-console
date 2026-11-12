@@ -194,6 +194,11 @@ export class ManagedOutputRuntime {
     if (layerId) this.addActiveObsSource(layerId, action.sourceName);
   }
 
+  /** The sources this run shows on the owned output scene, over all its tracks. */
+  ownedSceneSources(): ReadonlySet<string> {
+    return new Set([...this.activeObsSourcesByLayer.values()].flatMap((sources) => [...sources]));
+  }
+
   takeCleanup(): ManagedOutputCleanup {
     const mediaEvents = [...this.activeMediaByLayer.values()].flatMap((sources) => [...sources.values()]).map((event) => ({
       ...event, id: `${event.id}:operator-stop`, phase: 'stop' as const

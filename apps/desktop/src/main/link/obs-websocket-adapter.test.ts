@@ -1021,7 +1021,7 @@ async function stickerSongOnAir(adapter: ObsWebSocketAdapter) {
       executor: { id: adapter.id, supports: action => adapter.supports(action),
         execute: action => action.kind === 'obs.setSceneItemEnabled' ? adapter.setSourceEnabledInProgramScene(action.sourceName, action.enabled) : adapter.execute(action) },
       guardOutput: (canSend, operation, dispatched) => adapter.guardPlaybackOperation(canSend, operation, dispatched),
-      prepareOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), restoreScenes: () => Promise.resolve(),
+      prepareOutputs: () => Promise.resolve(), holdOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), restoreScenes: () => Promise.resolve(),
       seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-09T00:00:00Z', monotonicMs: now }) }) });
   let connected = true, recovering = Promise.resolve();

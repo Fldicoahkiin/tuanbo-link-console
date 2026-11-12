@@ -33,6 +33,11 @@ function continuationFailure(event: ManagedMediaEvent, error: unknown): string {
     ? `声音接着上一段往下播，切到这一段时出了错。原因：${reason}。如果这一段的声音不对，在 OBS 混音器里调整；后面的素材照常播`
     : `画面接着上一段往下播，切到这一段时出了错。原因：${reason}。如果 OBS 节目画面上不是这段素材，在 OBS 里切到它的场景；后面的素材照常播`;
 }
+/** The decoders a stopped song left holding its last frame (R14), and how a later song takes one over: `decoders`
+ * maps each to the clip it holds; `takeOver` hands it to the song asking, `reuse` when that song keeps showing it as it
+ * is (an image it shows again), otherwise the stopped song takes it off first (it gives way). */
+export type HeldPictures = { decoders(): ReadonlyMap<string, string>; takeOver(sourceName: string, reuse: boolean): Promise<void> };
+
 /** A clip as the timeline places it: its first and real end frame (a camera covering
  * it does not end it) and where in the file it starts. */
 type Clip = { start: number; end: number; sourceOffsetMs: number };
@@ -62,8 +67,11 @@ export class ObsMediaPreload {
   private nextPreparationFrame = -Infinity;
   private closed = false;
   private closing: Promise<void> | null = null;
+  /** Decoders this song asked for: a stopped song's last frame on one of them was handed over first (`held`). */
+  private readonly claimed = new Set<string>();
   constructor(project: LinkProject, itemId: string, private readonly scenes: Scenes,
-    private readonly native: { prime: (name: string, restartRetained: boolean, kind: 'audio' | 'video') => Promise<void>; seek: (name: string, positionMs: number) => Promise<void> }) {
+    private readonly native: { prime: (name: string, restartRetained: boolean, kind: 'audio' | 'video') => Promise<void>; seek: (name: string, positionMs: number) => Promise<void> },
+    private readonly held?: HeldPictures) {
     const events = compileManagedMediaTimeline(project, itemId).events;
     this.timeline = new SceneOutputTimeline(project, itemId, events);
     this.starts = this.timeline.preloadEntries();
@@ -124,7 +132,9 @@ export class ObsMediaPreload {
     }
     if (media.pending) throw new Error(`已经有下一个素材在等待播放：${event.assetName}`);
     const primary = event.sourceName;
-    const sourceName = media.current?.sourceName === primary ? `${primary}·预备` : primary;
+    const sourceName = this.free(media, primary, media.current?.sourceName === primary ? `${primary}·预备` : primary);
+    const handing = this.claim(sourceName, false);
+    if (handing) { await handing; assertCurrent(); }
     const slot = { event, sourceName, ready: false }; media.pending = slot;
     // Retain ownership before any write: cancellation still has to close a
     // decoder which was created but whose acknowledgement has not arrived.
@@ -251,9 +261,14 @@ export class ObsMediaPreload {
       && event.frameNumber <= opening.frameNumber + 2 * this.lookaheadFrames);
     if (!next) return;
     if (next.assetKind !== 'audio' && next.assetKind !== 'video') throw new Error('接续准备只支持音频和视频');
-    const sourceName = `${opening.sourceName}·预备`, kind = next.assetKind;
+    // The decoder the opening clip does not use. One still holding a stopped song's last frame is left to it: the
+    // lookahead prepares this clip once the song plays, by when that frame is gone (R14).
+    const primary = opening.sourceName, sourceName = media.pending.sourceName === primary ? `${primary}·预备` : primary, kind = next.assetKind;
+    if (this.held?.decoders().has(sourceName) && !this.claimed.has(sourceName)) return;
+    this.claimed.add(sourceName);
     media.touched.add(sourceName);
-    await this.scenes.prepareStandby(opening.sourceName); assertCurrent();
+    if (sourceName !== primary) await this.scenes.prepareStandby(primary);
+    assertCurrent();
     await this.scenes.prime({ ...next, sourceName }, media.path, async () => {
       assertCurrent(); await this.native.prime(sourceName, false, kind); assertCurrent();
       if (next.sourceOffsetMs !== 0) await this.native.seek(sourceName, Math.round(next.sourceOffsetMs));
@@ -265,7 +280,8 @@ export class ObsMediaPreload {
   }
 
   async execute(event: ManagedMediaEvent, path: string): Promise<void> {
-    if (event.assetKind === 'image') return this.scenes.execute(event, path);
+    // An image a stopped song left shown is shown on as it is (R14).
+    if (event.assetKind === 'image') { const handing = this.claim(event.sourceName, true); if (handing) await handing; return this.scenes.execute(event, path); }
     const media = this.require(event);
     if (media.path !== path || this.closed) throw new Error('素材的播放路径或状态已改变');
     // Keep at most the existing pair of decoders. Retain an inactive input only
@@ -391,10 +407,16 @@ export class ObsMediaPreload {
 
   /** Resolves with the red text of a look that could not be set (the clip is shown and located), or null (E16). */
   async seek(event: ManagedMediaEvent, path: string): Promise<string | null> {
-    if (event.assetKind === 'image') return this.scenes.seek(event, path, this.native.seek);
+    if (event.assetKind === 'image') { const handing = this.claim(event.sourceName, true); if (handing) await handing; return this.scenes.seek(event, path, this.native.seek); }
     const media = this.require(event);
     if (media.path !== path || this.closed) throw new Error('素材的定位路径或状态已改变');
-    const sourceName = media.pending?.sourceName ?? media.current?.sourceName ?? event.sourceName;
+    const sourceName = media.pending?.sourceName ?? media.current?.sourceName ?? this.free(media, event.sourceName, event.sourceName);
+    const handing = this.claim(sourceName, false);
+    if (handing) {
+      await handing;
+      if (media.path !== path || this.closed) throw new Error('素材的定位路径或状态已改变');
+    }
+    if (sourceName !== event.sourceName && !media.touched.has(sourceName)) await this.scenes.prepareStandby(event.sourceName);
     media.touched.add(sourceName); media.pending = null; media.following = null;
     media.retained.delete(sourceName);
     const slot: Slot = { event, sourceName, ready: true };
@@ -416,6 +438,55 @@ export class ObsMediaPreload {
     try { return await operation(); } finally { media.busy--; }
   }
 
+  /** The decoder to use for a clip of this material: `wanted`, unless it holds a stopped song's last frame and the
+   * other decoder of the pair is free, so that frame stays until this song's picture is on (R14). When both are
+   * taken the held one gives way (`claim`). */
+  private free(media: Media, primary: string, wanted: string): string {
+    const held = this.held?.decoders();
+    if (!held?.has(wanted) || this.claimed.has(wanted)) return wanted;
+    const other = wanted === primary ? `${primary}·预备` : primary;
+    return held.has(other) && !this.claimed.has(other) || media.current?.sourceName === other || media.pending?.sourceName === other ? wanted : other;
+  }
+  /** This song writes to `sourceName` from now on: a stopped song's last frame on it is handed over first. Null when
+   * there is nothing to hand over, so that a song with nothing held writes as soon as before (R14). */
+  private claim(sourceName: string, reuse: boolean): Promise<void> | null {
+    if (this.claimed.has(sourceName)) return null;
+    this.claimed.add(sourceName);
+    return this.held?.decoders().has(sourceName) ? this.held.takeOver(sourceName, reuse) : null;
+  }
+
+  /** The song stopped (R14): every decoder it used is stopped, but those in `keep`, which hold its last frame. */
+  async hold(keep: ReadonlySet<string>): Promise<void> {
+    try { await this.releaseTouched(keep); }
+    finally {
+      // What did not stop is reported now and not stopped again later: by then a later song may use that decoder.
+      for (const media of this.media.values()) for (const sourceName of [...media.touched]) if (!keep.has(sourceName)) this.forget(sourceName);
+    }
+  }
+  /** The physical decoder of this material's clip on air, if any (for the decoders holding the last frame). */
+  decoderOf(logicalName: string): string | null {
+    const current = this.media.get(logicalName)?.current;
+    return current && !current.offAir ? current.sourceName : null;
+  }
+  /** Another song took `sourceName` over: this one no longer stops or hides it. */
+  forget(sourceName: string): void {
+    for (const media of this.media.values()) {
+      media.touched.delete(sourceName); media.retained.delete(sourceName);
+      if (media.current?.sourceName === sourceName) media.current = null;
+      if (media.pending?.sourceName === sourceName) media.pending = null;
+      if (media.following?.sourceName === sourceName) media.following = null;
+    }
+  }
+  /** The stopped song's last frame on `sourceName` goes, for a later song that needs that decoder (it gives way). */
+  async giveWay(sourceName: string): Promise<void> {
+    try {
+      for (const media of this.media.values()) {
+        const current = media.current;
+        if (current?.sourceName === sourceName) await this.retire(media, current, { ...current.event, phase: 'stop' }, media.path, false, 'stop');
+      }
+    } finally { this.forget(sourceName); }
+  }
+
   close(): Promise<void> {
     this.closed = true;
     // Host cancellation and a pending preparation can converge here. Share the
@@ -423,12 +494,13 @@ export class ObsMediaPreload {
     this.closing ??= this.releaseTouched();
     return this.closing;
   }
-  private async releaseTouched(): Promise<void> {
+  private async releaseTouched(keep: ReadonlySet<string> = new Set()): Promise<void> {
     const errors: string[] = [];
     for (const [logical, media] of this.media) {
       const event = this.starts.find(candidate => candidate.sourceName === logical);
       if (!event) continue;
       for (const sourceName of media.touched) {
+        if (keep.has(sourceName)) continue;
         try {
           await this.scenes.execute({ ...event, sourceName, phase: 'stop' }, media.path);
           media.touched.delete(sourceName);

@@ -275,7 +275,7 @@ let midiPorts: MidiPortBroker | null = null;
  * once and hold up nothing (2026-11-10). The editor's music monitor is not among them: it stops with its page
  * (releaseGonePage) and at quit. */
 async function closeEngine(): Promise<void> {
-  const player = nativePlayer, shutdown = nativePlayerShutdown ??= closeEngineOutputs({ engine: player?.close(), picture: nativeObs?.stop(), preload: nativeObsPreload?.close() }, programFaults);
+  const player = nativePlayer, shutdown = nativePlayerShutdown ??= closeEngineOutputs({ engine: player?.close(), picture: nativeObs?.close(), preload: nativeObsPreload?.close() }, programFaults);
   try { await shutdown; }
   catch (error) {
     // 0.5.9 S6: logged and shown in red once, then the way is open again: the next quit or page release closes it once
@@ -641,6 +641,8 @@ function registerIpc(
     },
     create: (request, positionMs) => createNativeObsOutputs(request, { obs, projects: projectService, media: mediaPreviewService,
       profiles: profileStore, seek: nativeSeek, logger, seenNotices,
+      // A stopped song's last frame, which this song's decoders take over (R14); nativeObs is set below.
+      held: { decoders: () => nativeObs?.heldDecoders() ?? new Map<string, string>(), takeOver: (name, reuse) => nativeObs?.takeOver(name, reuse) ?? Promise.resolve() },
       logFailure: error => {
         if (nativeObs?.status?.sessionId === request.sessionId) nativeObs.disconnect(error.message);
         else console.error('已结束画面会话的运行日志未能落盘', error);
@@ -1097,7 +1099,11 @@ function registerIpc(
       lighting: lightsOff
     });
     nativeProgramHost = host;
-    return { controller: host.controller, close: async () => { await host.close(); if (nativeProgramHost === host) nativeProgramHost = null; },
+    return { controller: host.controller, close: async () => {
+      // Its stopped songs' last frames go with it (R14), also when the program did not close cleanly.
+      try { await host.close(); } finally { await nativeObs?.close(host.controller.sessionId); }
+      if (nativeProgramHost === host) nativeProgramHost = null;
+    },
       // Read from the engine itself after this close failed (0.5.9 S6): no engine left, or one that is not sounding.
       engineStopped: () => !(nativePlayer?.engineSounding() ?? false) };
   }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput(), programOutputs.runningChanged, programFaults);

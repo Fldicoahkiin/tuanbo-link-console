@@ -21,7 +21,7 @@ function request(): NativeProgramOpen { return { version: 1, ownerId: randomUUID
 function host() {
   const clock = { read: () => ({ positionMs: 0, durationMs: 1000, ready: true, playing: false, seeking: false }),
     subscribeBoundary: vi.fn<(listener: (boundary: PlaybackBoundary) => void) => () => void>(() => () => undefined) };
-  return { close: vi.fn(() => Promise.resolve()), controller: { clock,
+  return { close: vi.fn(() => Promise.resolve()), controller: { clock, sessionId: 'session',
     play: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()), resume: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()), reset: vi.fn(() => Promise.resolve()), toggle: vi.fn(() => Promise.resolve()),
     seek: vi.fn(() => Promise.resolve()), scrub: vi.fn(() => Promise.resolve()), skip: vi.fn(() => Promise.resolve()),

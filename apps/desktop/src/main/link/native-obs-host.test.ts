@@ -21,7 +21,7 @@ function setup(prepareNextFiles = vi.fn<(request: NativeObsPrepare, assertCurren
     positionMs: 0, offsetMs: 480000, sampleRate: 48000, enginePid: 1, engineTitle: '测试', mtcPortName: null, mtcSent: 0,
     audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: 1, analysis: null };
   let now = 0;
-  const execute = vi.fn<(action: LinkAction) => Promise<void>>(() => Promise.resolve()), releaseOutputs = vi.fn(() => Promise.resolve()), failures: string[] = [], states: NativeObsStatus[] = [];
+  const execute = vi.fn<(action: LinkAction) => Promise<void>>(() => Promise.resolve()), releaseOutputs = vi.fn(() => Promise.resolve()), holdOutputs = vi.fn(() => Promise.resolve()), failures: string[] = [], states: NativeObsStatus[] = [];
   const restoreScenes = vi.fn<(assertCurrent: () => void) => Promise<void>>(() => Promise.resolve());
   const prepareOutputs = vi.fn<(assertCurrent: () => void) => Promise<void>>(() => Promise.resolve()), recoveries: PictureRecoveryLog[] = [];
   const request: NativeObsPrepare = { version: 1, sessionId: audio.sessionId, generation: 1, preciseSeeking: false, projectPath: 'C:/shows/test.tblink', snapshot: createObsProgramSnapshot(project, 'song', 4) };
@@ -29,11 +29,11 @@ function setup(prepareNextFiles = vi.fn<(request: NativeObsPrepare, assertCurren
     prepareNextFiles, recovered: entry => recoveries.push(entry),
     outputs: () => ({ executor: { id: 'test', supports: () => true, execute },
       guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
-      prepareOutputs, releaseOutputs, restoreScenes,
+      prepareOutputs, holdOutputs, releaseOutputs, restoreScenes,
       now: () => now, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now }) }) });
   const observe = (patch: Partial<NativePlayerStatus>, time: number, ageMs = 0) => { now = time; audio = { ...audio, ...patch }; host.observe(clockFromNativeStatus(audio, ((process.hrtime.bigint() - BigInt(ageMs) * 1000000n) / 100n).toString())); };
-  return { host, request, execute, releaseOutputs, restoreScenes, prepareOutputs, recoveries, failures, states, observe, prepareNextFiles, time: (value: number) => { now = value; }, audio: () => audio, change: (patch: Partial<NativePlayerStatus>) => { audio = { ...audio, ...patch }; },
+  return { host, request, execute, releaseOutputs, holdOutputs, restoreScenes, prepareOutputs, recoveries, failures, states, observe, prepareNextFiles, time: (value: number) => { now = value; }, audio: () => audio, change: (patch: Partial<NativePlayerStatus>) => { audio = { ...audio, ...patch }; },
     song: (itemId: string, generation: number): NativeObsPrepare => ({ ...request, generation, snapshot: createObsProgramSnapshot(project, itemId, 4) }) };
 }
 
@@ -77,7 +77,7 @@ it('正式画面准备被停止中断：传给素材准备的检查按取消结�
     outputs: () => ({ executor: { id: 'test', supports: () => true, execute: () => Promise.resolve() },
       guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
       prepareOutputs: current => { check = current; return new Promise<void>(resolve => { release = resolve; }); },
-      releaseOutputs: () => Promise.resolve(), now: () => 0, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
+      holdOutputs: () => Promise.resolve(), releaseOutputs: () => Promise.resolve(), now: () => 0, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-09T00:00:00Z', monotonicMs: 0 }) }) });
   const preparing = host.prepare(test.request).catch((error: unknown) => error);
   await vi.waitFor(() => expect(check).not.toBeNull());
@@ -406,7 +406,7 @@ it('上一次的画面清理失败、节目自己的停止没收到：同一首�
   const test = setup(); await test.host.prepare(test.request);
   test.observe({ status: 'playing', generation: 1, positionMs: 0 }, 0);
   await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(1));
-  test.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
+  test.holdOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
   const faults: (string | null | undefined)[] = [];
   for (const generation of [2, 3]) {
     test.change({ generation, status: 'ready', positionMs: 0 });
@@ -426,7 +426,7 @@ it('停止时画面清理失败：节目自己的停止收到一次；之后的�
   const test = setup(); await test.host.prepare(test.request);
   test.observe({ status: 'playing', generation: 1, positionMs: 0 }, 0);
   await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(1));
-  test.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
+  test.holdOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
   // The operator stops: the audio stop reaches the picture first, then the program stops its own picture.
   test.host.interrupt({ version: 1, sessionId: test.request.sessionId, generation: 2, kind: 'stop' });
   const own: NativeObsStop = { version: 1, sessionId: test.request.sessionId, generation: 1 };
@@ -439,7 +439,7 @@ it('停止时画面清理失败：节目自己的停止收到一次；之后的�
   expect(test.host.status?.state).toBe('stopped');
   test.change({ generation: 3, itemId: 'next', status: 'ready', positionMs: 0 });
   expect((await test.host.prepare(test.song('next', 3))).fault ?? null).toBeNull();
-  expect(test.failures).toEqual(['画面没有清理干净：OBS 无响应']); expect(test.releaseOutputs).toHaveBeenCalledOnce();
+  expect(test.failures).toEqual(['画面没有清理干净：OBS 无响应']); expect(test.holdOutputs).toHaveBeenCalledOnce();
   await test.host.stop();
 });
 
@@ -447,7 +447,7 @@ it('上一首停止时画面清理失败、节目自己的停止没收到：下�
   const test = setup(); await test.host.prepare(test.request);
   test.observe({ status: 'playing', generation: 1, positionMs: 0 }, 0);
   await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(1));
-  test.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
+  test.holdOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
   test.host.interrupt({ version: 1, sessionId: test.request.sessionId, generation: 2, kind: 'stop' });
   test.change({ generation: 3, itemId: 'next', status: 'ready', positionMs: 0 });
   await expect(test.host.prepare(test.song('next', 3))).resolves.toMatchObject({ state: 'ready', itemId: 'next',
@@ -489,10 +489,10 @@ function program(endActionOrOptions: 'next' | 'stop' | ProgramOptions) {
   let audio: NativePlayerStatus | null = null, state: InternalPlayerState = { ...emptyInternalPlayerState }, time = 0;
   const audioListeners = new Set<(status: NativePlayerStatus) => void>(), obsListeners = new Set<(status: NativeObsStatus) => void>();
   const failures: string[] = [], notices: string[] = [], created: NativeObsOutputs[] = [];
-  const execute = vi.fn<(action: LinkAction) => Promise<void>>(() => Promise.resolve()), releaseOutputs = vi.fn(() => Promise.resolve());
+  const execute = vi.fn<(action: LinkAction) => Promise<void>>(() => Promise.resolve()), releaseOutputs = vi.fn(() => Promise.resolve()), holdOutputs = vi.fn(() => Promise.resolve());
   const make = (): NativeObsOutputs => {
     const base: NativeObsOutputs = { executor: { id: 'test', supports: () => true, execute },
-      guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(), prepareOutputs: () => Promise.resolve(), releaseOutputs,
+      guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(), prepareOutputs: () => Promise.resolve(), holdOutputs, heldDecoders: () => new Map<string, string>(), handOver: () => Promise.resolve(), releaseOutputs,
       restoreScenes: () => Promise.resolve(), preloadResources: current => { current(); return Promise.resolve(); },
       now: () => time, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-09T00:00:00Z', monotonicMs: time }) };
@@ -559,7 +559,7 @@ function program(endActionOrOptions: 'next' | 'stop' | ProgramOptions) {
       time = start + positionMs; emit({ status: positionMs >= 2000 ? 'ended' : 'playing', positionMs }); await new Promise(resolve => setTimeout(resolve, 0));
     }
   };
-  return { player: open(), open, host, execute, releaseOutputs, created, failures, notices, state: () => state, playTo, playToEnd: () => playTo(0, 2000),
+  return { player: open(), open, host, execute, releaseOutputs, holdOutputs, created, failures, notices, state: () => state, playTo, playToEnd: () => playTo(0, 2000),
     ids: () => execute.mock.calls.map(([action]) => action.id) };
 }
 
@@ -567,21 +567,21 @@ it('自动下一首时上一首的画面清理失败：播放器在下一首上�
   const t = program('next');
   await t.player.play('a');
   await vi.waitFor(() => expect(t.execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-a']));
-  t.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
+  t.holdOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
   await t.playToEnd();
   await vi.waitFor(() => expect(t.execute.mock.calls.map(([action]) => action.id)).toEqual(['scene-a', 'scene-b']));
   expect(t.state()).toMatchObject({ status: 'playing', itemId: 'b', fault: `上一首的画面没有清理干净，这一首照常播。原因：${LEFTOVER}` });
   expect(t.state().notice ?? '').not.toContain('清理'); expect(t.notices.filter(notice => notice.includes('清理'))).toEqual([]);
   expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']);
   await t.player.dispose();
-  expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']); expect(t.releaseOutputs).toHaveBeenCalledTimes(2);
+  expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']); expect(t.holdOutputs).toHaveBeenCalledTimes(2);
 });
 
 it.each([['按停止', 'next'], ['播完就停的歌播完', 'stop']] as const)('%s时画面清理失败：停下的播放器马上提示一次，只有画面那边记一次；之后再播歌不再显示、不再记录（2026-11-09）', async (_case, endAction) => {
   const t = program(endAction);
   await t.player.play('a');
   await vi.waitFor(() => expect(t.execute).toHaveBeenCalledTimes(1));
-  t.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
+  t.holdOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
   if (endAction === 'stop') await t.playToEnd(); else await t.player.stop();
   await vi.waitFor(() => expect(t.state()).toMatchObject({ status: 'stopped', fault: null, notice: `画面清理失败：${LEFTOVER}` }));
   expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']);
@@ -598,9 +598,9 @@ it('关闭节目时画面清理失败：只记一次，关闭照常完成；之�
   const t = program('next');
   await t.player.play('a');
   await vi.waitFor(() => expect(t.execute).toHaveBeenCalledTimes(1));
-  t.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
+  t.holdOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
   await expect(t.player.dispose()).resolves.toBeUndefined();
-  expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']); expect(t.releaseOutputs).toHaveBeenCalledOnce();
+  expect(t.failures).toEqual(['画面没有清理干净：OBS 无响应']); expect(t.holdOutputs).toHaveBeenCalledOnce();
   // The next program on the same picture host: the reloaded window, or another project.
   const next = t.open();
   await next.play('b');
@@ -622,7 +622,7 @@ it('关闭节目时画面还在清理、之后打开的节目第一首已经在�
     let refuse: (error: Error) => void = () => { throw new Error('还没开始清理'); };
     const cleaning = vi.fn(() => new Promise<void>((_resolve, reject) => { refuse = reject; }));
     // Songs without picture work give their picture one second; OBS answers neither the first picture nor its cleanup in time.
-    const t = program({ cueSeconds: [], outputs: (base, index) => index === 0 ? { ...base, prepareOutputs: gate.wait, releaseOutputs: cleaning } : base });
+    const t = program({ cueSeconds: [], outputs: (base, index) => index === 0 ? { ...base, prepareOutputs: gate.wait, holdOutputs: cleaning } : base });
     const playing = t.player.play('a');
     await vi.advanceTimersByTimeAsync(1100); await playing;
     expect(t.state()).toMatchObject({ status: 'playing', itemId: 'a' });
@@ -648,7 +648,7 @@ it('关闭的节目交还画面清理失败：接手画面的歌还在播就在�
   const test = setup();
   /** The program's own stop of the song playing hears its failed cleanup; the program then closes before showing it. */
   const failedStop = async (generation: number): Promise<ObsPictureLeftover> => {
-    test.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
+    test.holdOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
     const heard: unknown = await test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation }).then(() => null, (error: unknown) => error);
     if (!(heard instanceof ObsPictureLeftover)) throw new Error('清理失败没有交给节目自己的停止');
     return heard;
@@ -679,7 +679,7 @@ it('关闭的节目交还画面清理失败：接手画面的歌还在播就在�
 
 // 修复前：这一首的画面准备失败的红字整句顶掉“上一首的画面没有清理干净”，OBS 卡住时最常见。
 it('OBS 卡住：上一首的画面没清理干净、这一首的画面也准备失败：两条一起在这一首上标红，音乐照常播（2026-11-09）', async () => {
-  const t = program({ outputs: (base, index) => index === 0 ? { ...base, releaseOutputs: () => Promise.reject(new Error('OBS 无响应')) }
+  const t = program({ outputs: (base, index) => index === 0 ? { ...base, holdOutputs: () => Promise.reject(new Error('OBS 无响应')) }
     : index === 1 ? { ...base, prepareOutputs: () => Promise.reject(new Error('OBS 请求超时（2000 ms）')) } : base });
   await t.player.play('a');
   await vi.waitFor(() => expect(t.ids()).toEqual(['scene-a']));
@@ -694,9 +694,10 @@ it('画面清理失败的原因：运行日志里留着 OBS 的原话和来源�
   const t = program('next');
   await t.player.play('a');
   await vi.waitFor(() => expect(t.ids()).toEqual(['scene-a']));
-  t.releaseOutputs.mockRejectedValueOnce(new Error('SetInputSettings：No source was found by the name of `团播联动台·素材·开场`.'));
+  t.holdOutputs.mockRejectedValueOnce(new Error('SetInputSettings：No source was found by the name of `团播联动台·素材·开场`.'));
+  // The stop does not wait for the picture (R14): its own failure arrives just after.
   await t.player.stop();
-  expect(t.failures).toEqual(['画面没有清理干净：SetInputSettings：No source was found by the name of `团播联动台·素材·开场`.']);
+  await vi.waitFor(() => expect(t.failures).toEqual(['画面没有清理干净：SetInputSettings：No source was found by the name of `团播联动台·素材·开场`.']));
   // One next step: what to check after a failed cleanup, not the step a failed preparation suggests.
   expect(t.state()).toMatchObject({ status: 'stopped',
     notice: '画面清理失败：OBS 中找不到需要的场景或来源。请检查 OBS 节目画面上是否还留着刚才的素材' });
@@ -769,7 +770,7 @@ it('播放中点波形换位置、新位置的画面还在准备时按 MIDI 播�
 it('暂停时拖动定位、原来的画面清理失败：在这首歌上标红一次，不另外提示、播放器不再记一次；新位置的画面照常准备（2026-11-09）', async () => {
   const t = program({ cueSeconds: [0, 1] });
   await t.player.play('a'); await t.playTo(0, 300); await t.player.pause();
-  t.releaseOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
+  t.holdOutputs.mockRejectedValueOnce(new Error('OBS 无响应'));
   await t.player.scrub('a', 500);
   expect(t.state()).toMatchObject({ status: 'paused', fault: `上一次的画面没有清理干净，这一首照常播。原因：${LEFTOVER}` });
   expect(t.state().notice ?? '').not.toContain('清理'); expect(t.notices.filter(notice => notice.includes('清理'))).toEqual([]);
@@ -781,7 +782,7 @@ it('暂停时拖动定位、原来的画面清理失败：在这首歌上标红�
 
 it('画面还在准备时换歌、取消的画面清理失败：在新开的歌上标红一次，不另外提示、播放器不再记一次（2026-11-09）', async () => {
   const gate = hold();
-  const t = program({ outputs: (base, index) => index === 0 ? { ...base, prepareOutputs: gate.wait, releaseOutputs: () => Promise.reject(new Error('OBS 无响应')) } : base });
+  const t = program({ outputs: (base, index) => index === 0 ? { ...base, prepareOutputs: gate.wait, holdOutputs: () => Promise.reject(new Error('OBS 无响应')) } : base });
   const first = t.player.play('a');
   await vi.waitFor(() => expect(gate.reached()).toBe(true));
   const second = t.player.play('b');
@@ -795,7 +796,7 @@ it('画面还在准备时换歌、取消的画面清理失败：在新开的歌�
 
 it('自动下一首时上一首的画面清理失败、下一首接手的提前准备也失败：两个原因一起在下一首上标红，下一首照常切画面（2026-11-09）', async () => {
   let failLookahead: (error: Error) => void = () => { throw new Error('下一首还没开始提前准备'); };
-  const t = program({ pool: true, outputs: (base, index) => index === 0 ? { ...base, releaseOutputs: () => Promise.reject(new Error('OBS 无响应')) }
+  const t = program({ pool: true, outputs: (base, index) => index === 0 ? { ...base, holdOutputs: () => Promise.reject(new Error('OBS 无响应')) }
     : index === 1 ? { ...base, preloadResources: (_current, phase) => phase === 'background' ? new Promise<void>((_resolve, reject) => { failLookahead = reject; }) : Promise.resolve() }
     : base });
   const prepare = vi.spyOn(t.host, 'prepare');
@@ -827,7 +828,7 @@ function lookahead() {
   const create = (): NativeObsOutputs => {
     const outputs: NativeObsOutputs = { executor: { id: 'test', supports: () => true, execute },
       guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(), prepareOutputs: () => Promise.resolve(),
-      releaseOutputs: vi.fn(() => Promise.resolve()), restoreScenes: () => Promise.resolve(),
+      holdOutputs: () => Promise.resolve(), heldDecoders: () => new Map<string, string>(), handOver: () => Promise.resolve(), releaseOutputs: vi.fn(() => Promise.resolve()), restoreScenes: () => Promise.resolve(),
       preloadResources: (_current, phase) => phase === 'background' ? new Promise<void>((_resolve, reject) => { failLookahead = reject; }) : Promise.resolve(),
       now: () => time, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
       recordLog: entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-09T00:00:00Z', monotonicMs: time }) };
@@ -902,7 +903,7 @@ it('画面资源交接后被新的操作取消：照常报取消；释放失败�
   const releaseOutputs = vi.fn(() => Promise.reject(new Error('SetInputSettings：No source was found by the name of `团播联动台·素材·开场`.')));
   const host = new NativeObsHost({ audio: () => test.audio(), changed: () => undefined, error: message => failures.push(message),
     outputs: () => new Promise(resolve => { handOver = () => resolve({ executor: { id: 'test', supports: () => true, execute: () => Promise.resolve() },
-      guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(), prepareOutputs: () => Promise.resolve(), releaseOutputs,
+      guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(), prepareOutputs: () => Promise.resolve(), holdOutputs: () => Promise.resolve(), heldDecoders: () => new Map<string, string>(), handOver: () => Promise.resolve(), releaseOutputs,
       now: () => 0, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-09T00:00:00Z', monotonicMs: 0 }) }); }) });
   const preparing = expect(host.prepare(test.request)).rejects.toThrow('画面资源交接已取消');
@@ -925,10 +926,10 @@ it('别处没人报告的预备清理失败交给宿主：记录原话一次；�
   test.observe({ status: 'playing', generation: 1, positionMs: 0 }, 0);
   test.host.report({ log: '乙：No source was found', shown: '乙' }); expect(test.host.status).toMatchObject({ state: 'running', fault: '乙' });
   let release: () => void = () => { throw new Error('还没开始清理'); };
-  test.releaseOutputs.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
+  test.holdOutputs.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
   test.change({ generation: 2, status: 'ready', positionMs: 0 });
   const preparing = test.host.prepare({ ...test.request, generation: 2 });
-  await vi.waitFor(() => expect(test.releaseOutputs).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(test.holdOutputs).toHaveBeenCalledOnce());
   test.host.report({ log: '丙：No source was found', shown: '丙' }); release();
   await expect(preparing).resolves.toMatchObject({ state: 'ready', generation: 2, fault: '丙' });
   expect(test.failures).toEqual(['甲：No source was found', '乙：No source was found', '丙：No source was found']);
@@ -938,10 +939,10 @@ it('别处没人报告的预备清理失败交给宿主：记录原话一次；�
 it('新准备等待上一轮清理时也可取消，不能因尚未创建新 Entry 而漏掉停止', async () => {
   const test = setup(); await test.host.prepare(test.request);
   let release: () => void = () => { throw new Error('未初始化'); };
-  const gate = new Promise<void>(resolve => { release = resolve; }); test.releaseOutputs.mockReturnValueOnce(gate);
+  const gate = new Promise<void>(resolve => { release = resolve; }); test.holdOutputs.mockReturnValueOnce(gate);
   test.change({ generation: 2 });
   const preparing = expect(test.host.prepare({ ...test.request, generation: 2 })).rejects.toThrow('取消');
-  await vi.waitFor(() => expect(test.releaseOutputs).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(test.holdOutputs).toHaveBeenCalledTimes(1));
   const stopping = test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 2 });
   release(); await preparing; await stopping;
   expect(test.host.status?.state).toBe('stopped'); expect(test.execute).not.toHaveBeenCalled();
@@ -954,4 +955,51 @@ it('正式画面准备一开始就算忙，选中歌曲的预备不能停掉它�
   expect(test.host.busy).toBe(true);
   await preparing; expect(test.host.busy).toBe(true);
   await test.host.stop(); expect(test.host.busy).toBe(false);
+});
+
+it.each([['按停止', 'next'], ['播完就停的歌播完', 'stop']] as const)('%s：画面停在最后一帧、先不交还；下一首的画面上了以后才清理上一首（R14）', async (_case, endAction) => {
+  const t = program(endAction);
+  await t.player.play('a');
+  await vi.waitFor(() => expect(t.ids()).toEqual(['scene-a']));
+  if (endAction === 'stop') await t.playToEnd(); else await t.player.stop();
+  await vi.waitFor(() => expect(t.holdOutputs).toHaveBeenCalledOnce());
+  expect(t.releaseOutputs).not.toHaveBeenCalled();
+  expect(t.state()).toMatchObject({ status: 'stopped', fault: null, notice: null, pictureItems: [] });
+  expect(t.ids()).toEqual(['scene-a']);
+  await t.player.play('b');
+  await vi.waitFor(() => expect(t.releaseOutputs).toHaveBeenCalledOnce());
+  // a's picture is taken off after b's first scene went out, not before.
+  expect(t.ids()).toEqual(['scene-a', 'scene-b']);
+  expect(t.releaseOutputs.mock.invocationCallOrder[0]).toBeGreaterThan(t.execute.mock.invocationCallOrder[1]!);
+  expect(t.state()).toMatchObject({ status: 'playing', itemId: 'b', fault: null });
+  expect(t.failures).toEqual([]);
+  await t.player.dispose();
+});
+
+it('按停止不等画面：画面那边停不下来时停止照样马上完成（R14）', async () => {
+  const stuck = hold();
+  const t = program({ outputs: (base, index) => index === 0 ? { ...base, holdOutputs: stuck.wait } : base });
+  await t.player.play('a');
+  await vi.waitFor(() => expect(t.ids()).toEqual(['scene-a']));
+  await t.player.stop();
+  expect(t.state()).toMatchObject({ status: 'stopped' });
+  await vi.waitFor(() => expect(stuck.reached()).toBe(true));
+  stuck.release();
+  await t.player.dispose();
+});
+
+it('开播还在等画面准备时按停止：这一首不开播，画面也不切（R14）', async () => {
+  const gate = hold();
+  const t = program({ outputs: (base, index) => index === 0 ? { ...base, prepareOutputs: gate.wait } : base });
+  const starting = t.player.play('a');
+  await vi.waitFor(() => expect(gate.reached()).toBe(true));
+  const stopping = t.player.stop();
+  gate.release(); await stopping; await starting;
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(t.state()).toMatchObject({ status: 'stopped' });
+  expect(t.ids()).toEqual([]);
+  await t.player.play('b');
+  await vi.waitFor(() => expect(t.ids()).toEqual(['scene-b']));
+  expect(t.failures).toEqual([]);
+  await t.player.dispose();
 });

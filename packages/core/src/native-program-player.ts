@@ -67,7 +67,8 @@ export class ObsPictureLeftover extends Error {
 export class NativeProgramPlayer {
   private state: InternalPlayerState = { ...emptyInternalPlayerState };
   private native: NativePlayerStatus | null = null;
-  private readonly sessionId = crypto.randomUUID();
+  /** This program's picture and audio session: what the host takes off as the program closes (R14). */
+  readonly sessionId: string = crypto.randomUUID();
   private nativeGeneration = 0;
   private requestedPreparation = false;
   private obsSession: NativeObsStop | null = null;
@@ -435,7 +436,8 @@ export class NativeProgramPlayer {
     // published its session; otherwise the queued prepare cannot start audio.
     const stopping = (this.requestedPreparation ? this.command({ kind: 'stop' }) : Promise.resolve()).catch(error => { if (this.current(token)) this.fail(error); });
     return this.enqueue(token, async () => { await stopping; await this.releaseLighting('stop'); await this.optionalRuntime(() => this.cancelPreload(), '节目准备没清理干净');
-      await this.stopObs().catch((error: unknown) => this.pictureNotStopped(error, '画面清理失败')); await this.dependencies.stop(); this.runtimePrepared = false;
+      // The picture stays on its last frame (R14): nothing to wait for; the next song's picture takes it off.
+      void this.stopObs().catch((error: unknown) => this.pictureNotStopped(error, '画面清理失败')); await this.dependencies.stop(); this.runtimePrepared = false;
       if (this.current(token)) { this.boundary('pause'); this.update({ positionMs: 0, mtcSentPositionMs: null }); } });
   }
   /** The stop pressed tells the ledger once the timecode stopped: the song's executors go off, and every Off still owed

@@ -19,6 +19,12 @@ export type ObsProgramSessionDependencies = ManagedOutputRuntimeDependencies & {
   /** Returns the clip it made ready; one already past its boundary starts late (rule B). */
   prepareUpcoming?: (frame: number, assertCurrent: () => void) => Promise<ManagedMediaEvent | null>;
   releaseOutputs: () => Promise<void>;
+  /** The song stopped (R14): lets go of everything but the decoders of these clips, which hold its last frame until
+   * `releaseOutputs` stops and hides them (less any a later song took over meanwhile). */
+  holdOutputs: (held: readonly { sourceName: string; clipId: string }[]) => Promise<void>;
+  /** The clips (by id) whose last frame the stopped song still holds, as the outputs know it: less those a later song
+   * took over. Without it, every clip the ledger has on air. */
+  heldClipIds?: () => ReadonlySet<string>;
   executor: LinkActionExecutor;
   seekMedia: (event: ManagedMediaEvent) => Promise<void>;
   /** Puts a playing clip back in step with the music; returns the drift corrected, or null. `mayCorrect`
@@ -235,6 +241,7 @@ export class ObsProgramSession {
   private failure: Error | null = null;
   private closed = false;
   private stopping: Promise<void> | null = null;
+  private releasing: Promise<void> | null = null;
   /** The next clock starts the song where the music is then (`joinNextClock`). */
   private joining = false;
 
@@ -1116,25 +1123,85 @@ export class ObsProgramSession {
   }
 
   /** Invalidate first; already sent network work may finish, but no queued action
-   * from this generation is allowed to follow it. Cleanup uses only owned state. */
+   * from this generation is allowed to follow it. The song's picture stays on its last frame (R14, 2026-11-10
+   * decision 4): the clips on air pause where they are and stay shown, the scene on program stays; only the
+   * sources the song showed are hidden (2026-11-11 decision 3). What stays is taken off by `release`. */
   stop(): Promise<void> {
     this.stopping ??= this.stopSession();
     return this.stopping;
+  }
+  /** Some clip of this song may be on air (as the ledger knows it): a preparation at a position shows its frame already. */
+  showsPicture(): boolean { return this.onAir().length > 0; }
+  /** The clips the stopped song left on air (its last frame), by material and clip, as the ledger knows them. */
+  heldClips(): { sourceName: string; clipId: string }[] {
+    return this.closed ? this.onAir().map(event => ({ sourceName: event.sourceName, clipId: event.clipId })) : [];
+  }
+  /** Takes off what the stopped song left on air: as the next song's picture is on (so nothing goes black in between),
+   * as the program closes, or after OBS came back while it was stopped. Once; a failure is not retried. Cleanup uses
+   * only owned state: a decoder another song took over meanwhile is no longer this song's (its output skips it), and a
+   * source on the owned output scene the song now playing shows (`inUse`) stays shown. */
+  release(inUse: () => ReadonlySet<string> = () => new Set()): Promise<void> {
+    this.releasing ??= this.releaseSession(inUse);
+    return this.releasing;
+  }
+  /** The sources this song shows on the owned output scene (its cameras there), as the runtime tracks them. */
+  ownedSceneSources(): ReadonlySet<string> { return this.managed.ownedSceneSources(); }
+  private async releaseSession(inUse: () => ReadonlySet<string>): Promise<void> {
+    // A failed stop was reported where it ran (`fail`, and the host's cleanup); what it left is taken off all the same.
+    await this.stop().then(() => undefined, () => undefined);
+    // Every clip still holding the last frame stops, as it was sent before R14 at the stop; one a later song took over is
+    // that song's now.
+    const still = this.dependencies.heldClipIds?.() ?? null;
+    const errors: string[] = [], held = this.onAir().filter(event => still === null || still.has(event.clipId));
+    for (const event of held) {
+      try {
+        const report = await this.managed.sendMedia({ ...event, id: `${event.id}:operator-stop`, phase: 'stop' }, 'live'); this.dependencies.mediaReport(report);
+        if (report.status === 'failed') errors.push(report.error ?? '停止素材失败');
+        else this.ledger.observe({ element: 'decoder', key: event.sourceName, value: { clipId: event.clipId, mode: 'stopped', offsetMs: 0 } }, this.dependencies.now());
+      } catch (error) { errors.push(errorText(error)); }
+    }
+    // The song after it may show the same camera on the owned output scene: that one is the newer song's now.
+    const shown = inUse();
+    for (const cue of this.managed.takeCleanup().cameraCues.filter(cue => !cue.actions.some(action => action.kind === 'obs.setSceneItemEnabled' && shown.has(action.sourceName)))) {
+      try {
+        const failed = (await this.cue(cue, () => true)).results.find(result => result.status === 'failed');
+        if (failed) errors.push(failed.error ?? `${failed.action.label}没有完成`);
+      } catch (error) { errors.push(errorText(error)); }
+    }
+    try { await this.dependencies.releaseOutputs(); } catch (error) { errors.push(errorText(error)); }
+    if (errors.length) throw new Error(`画面没有清理干净：${errors.join('；')}`);
+  }
+  /** The clips on air pause where they are, as one media action each, and the ledger says so: their decoders hold the
+   * last frame. An image stays as it is. */
+  private async holdDecoders(errors: string[]): Promise<void> {
+    const writes = [...this.ledger.state().decoders].flatMap(([key, known]): Extract<LedgerWrite, { element: 'decoder' }>[] => {
+      const value = known.state === 'unknown' ? known.last : known.value;
+      if (!value || mayHold(known) === null || this.starts.get(value.clipId)?.assetKind === 'image') return [];
+      if (known.state === 'confirmed' && value.mode === 'paused') return [];
+      return [{ element: 'decoder', key, value: { ...value, mode: 'paused' }, target: decoderTarget(value.clipId, 'paused') }];
+    });
+    if (!writes.length) return;
+    const cue = { id: 'transport-hold', name: '停在最后一帧', notes: '', enabled: true,
+      timecode: frameNumberToTimecode(Math.max(0, this.frame), this.project.timebase.frameRate), actions: mediaTransportActions('pause', writes.map(write => write.key)).map(action => ({ ...action, label: '停在最后一帧' })) };
+    for (const write of writes) this.ledger.sent(write, this.dependencies.now());
+    try {
+      const report = await this.dependencies.guardOutput(() => true, () => this.runner.run(cue, 'live', () => true));
+      this.dependencies.cueReport(report);
+      for (const write of writes) {
+        const result = report.results.find(each => each.action.kind === 'obs.mediaAction' && each.action.inputName === write.key);
+        this.settle([write], result?.status === 'succeeded' ? 'ok' : result?.status === 'failed' ? { failed: result.error ?? '没有完成' } : 'withdrawn');
+        if (result?.status === 'failed') errors.push(result.error ?? '素材没有停在最后一帧');
+      }
+    } catch (error) { this.settle(writes, { failed: errorText(error) }); errors.push(errorText(error)); }
   }
   private async stopSession(): Promise<void> {
     this.closed = true; ++this.generation; this.dependencies.state(this.runtime.stop());
     await this.tail;
     await this.preloadWork;
-    // Every clip that may still be on air stops with the song, as it was sent.
-    const errors: string[] = [], stops = this.onAir().map(event => ({ ...event, id: `${event.id}:operator-stop`, phase: 'stop' as const }));
-    for (const event of stops) {
-      try {
-        const report = await this.managed.sendMedia(event, 'live'); this.dependencies.mediaReport(report);
-        if (report.status === 'failed') errors.push(report.error ?? '停止素材失败');
-      } catch (error) { errors.push(errorText(error)); }
-    }
+    const errors: string[] = [];
+    await this.holdDecoders(errors);
     // A shown source whose span the song did not reach the end of is hidden with
-    // the song, like its clips; a later start from the middle shows it again.
+    // the song; a later start from the middle shows it again.
     const hides = [...this.ledger.state().shows].flatMap(([key, known]) => {
       const value = known.state === 'unknown' ? known.last : known.value;
       if (!value || value.sceneName === MANAGED_OBS_SCENE_NAME || !showMayBeOn(known)) return [];
@@ -1142,13 +1209,15 @@ export class ObsProgramSession {
         write: { element: 'show', key, value: { ...value, enabled: false }, target: 'off' } }, 'after');
       return entry?.kind === 'cue' ? [entry.cue] : [];
     });
-    for (const cue of [...this.managed.takeCleanup().cameraCues, ...hides]) {
+    for (const cue of hides) {
       try {
         const failed = (await this.cue(cue, () => true)).results.find(result => result.status === 'failed');
         if (failed) errors.push(failed.error ?? `${failed.action.label}没有完成`);
       } catch (error) { errors.push(errorText(error)); }
     }
-    try { await this.dependencies.releaseOutputs(); } catch (error) { errors.push(errorText(error)); }
+    // The music's capture and every decoder not holding the last frame are let go now; the held ones by `release`.
+    try { await this.dependencies.holdOutputs(this.heldClips()); }
+    catch (error) { errors.push(errorText(error)); }
     if (errors.length) { const error = new Error(`画面没有清理干净：${errors.join('；')}`); this.fail(error); throw error; }
     this.dependencies.state(this.runtime.completeStop());
   }
