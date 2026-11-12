@@ -182,7 +182,7 @@ describe('P1 跟随接到主进程（P3f）', () => {
 
   it('动作 MIDI 自己报的状态随跟随的状态出去：开不了标红并写明原因', async () => {
     const project = manualProject([]);
-    project.rundown[0]!.cues = [{ id: 'cue', name: '开场', timecode: frameNumberToTimecode(0, '30'), actions: [
+    project.rundown[0]!.cues = [{ id: 'cue', name: '开场', timecode: frameNumberToTimecode(0, '30'), enabled: true, notes: '', actions: [
       { id: 'note', label: '开场', kind: 'midi.noteOn', portProfileId: 'out', channel: 1, note: 60, velocity: 100, durationMs: 100 }] }];
     const f = fixture(project);
     await f.start('manual'); await f.send({ kind: 'arm', itemId: 'song' });

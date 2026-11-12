@@ -15,7 +15,7 @@ const standby: P1FollowState = {
 function profile(): IntegrationProfile {
   const base = createDefaultIntegrationProfile();
   return { ...base, p1: { ...base.p1, mtcInputPortProfileId: 'mtc-in' },
-    midiPortProfiles: [...base.midiPortProfiles.filter(entry => entry.id !== 'mtc-in'), { id: 'mtc-in', label: 'P1', direction: 'input', portName: 'loopMIDI Port' }] };
+    midiPortProfiles: [...base.midiPortProfiles.filter(entry => entry.id !== 'mtc-in'), { id: 'mtc-in', direction: 'input', portName: 'loopMIDI Port' }] };
 }
 
 function fixture(options: { errorsShown?: boolean; answer?: (request: P1FollowRequest) => Promise<P1FollowState> } = {}) {
