@@ -2,7 +2,7 @@
 
 本文件由 `pnpm changelog` 根据 [release-notes/](release-notes/) 生成，不要直接修改。写法和发版时的用法见 [release-notes/README.md](release-notes/README.md)。
 
-## 0.5.9（未发布）
+## 0.5.9
 
 ### 快捷键变了，升级后先看这里
 

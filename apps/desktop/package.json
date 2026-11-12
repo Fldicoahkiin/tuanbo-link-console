@@ -1,7 +1,7 @@
 {
   "name": "@tb/desktop",
   "private": true,
-  "version": "0.5.8",
+  "version": "0.5.9",
   "productName": "团播联动台",
   "type": "module",
   "main": "out/main/index.cjs",
