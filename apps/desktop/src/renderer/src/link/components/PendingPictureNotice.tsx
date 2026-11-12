@@ -4,8 +4,8 @@ import type { PictureNotice } from '../view-models/picture-on-air';
 import './timeline-pending.css';
 
 /** The line above the editor's tracks, under its toolbar, for as long as 联动台播放 holds the song
- * (view-models/picture-on-air): that picture edits made meanwhile wait for 停止 and a replay, counting
- * deletions, which the timeline no longer draws, or that this window cannot confirm which version OBS
+ * (view-models/picture-on-air): that picture edits made meanwhile are on their way to OBS and used in this
+ * pass (R9), counting deletions, which the timeline no longer draws, or that this window cannot confirm which version OBS
  * plays. The tracks move once when playback starts or stops, never in the middle of an edit: a press or
  * a drag in progress keeps the row as it was until it is over (holdWhilePressed). Not in the toolbar: at
  * 1280 × 720 its one row has no room left. */

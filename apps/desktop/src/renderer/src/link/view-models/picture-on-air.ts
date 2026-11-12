@@ -5,8 +5,9 @@ import { NO_PENDING_PICTURE_EDITS, pendingPictureEdits, type PendingPictureEdits
 /**
  * Which version of a song's picture OBS plays while the editor shows it, and what the timeline marks
  * for it (0.5.9). While 联动台播放 prepares, plays or pauses a song, OBS follows the version the song
- * started with (each program event names it, 0.5.9 S7), and edits made since wait for a replay
- * (pending-picture-edits). After a window reload the background program may play a version this page
+ * started with, or a newer one its picture took since (each program event names it, `pictureVersion`,
+ * 0.5.9 S7, R9). An edit made since is on its way to OBS (pending-picture-edits) until the picture took
+ * it, in this pass, also while paused. After a window reload the background program may play a version this page
  * never sent (program-attachment), and it sends its state before it answers the open. Until it answered, and when it plays another version, the window
  * cannot tell which version is on air: it says so and why, and marks nothing on air. Worked out again
  * on every edit, never stored.
@@ -93,10 +94,11 @@ export function pictureMarks(onAir: PictureOnAir, current: SongPicture): Picture
   }
 }
 
+/** Information, not a warning (R9): an edit goes to OBS by itself and is used in this pass; nothing to do. */
 function versionNotice(edits: PendingPictureEdits): PictureNotice {
   const changed = edits.changed.size, removed = edits.removed;
-  if (!changed && !removed) return { tone: 'info', text: '播放中改画面，停下重播才生效', detail: 'OBS 按开始播放时的时间线播这首歌，播放中改过的部分会用虚线框标出来。' };
+  if (!changed && !removed) return { tone: 'info', text: '播放中改画面，这一遍就用上', detail: '改过的部分送到 OBS 之前用虚线框标出来，送到以后照改过的播，不用停下重播。' };
   const counts = [changed ? `改了 ${changed} 处` : '', removed ? `删了 ${removed} 处` : ''].filter(Boolean).join('、');
-  return { tone: 'warning', text: `播放中${counts}，停下重播才生效`,
-    detail: `OBS 还在按开始播放时的时间线播${removed ? `，删掉的 ${removed} 处也照常播出` : ''}。${REPLAY}，才会用上改过的时间线。` };
+  return { tone: 'info', text: `播放中${counts}，正在送到 OBS`,
+    detail: `送到以前 OBS 照上一版播${removed ? `，删掉的 ${removed} 处也还在播` : ''}。送到以后这一遍就按改过的播，不用停下重播。` };
 }

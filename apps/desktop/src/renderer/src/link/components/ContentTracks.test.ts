@@ -44,7 +44,7 @@ function drawn(project: LinkProject, onAirtime: Airtime | null, pending: Readonl
     .map(([, classes, name]) => [name!, classes!.split(/\s+/).filter(Boolean)]));
 }
 
-describe('时间线上的“正在播出”和“停下重播才生效”', () => {
+describe('时间线上的“正在播出”和“正在送到 OBS”', () => {
   it('播放中挪走机位 B：OBS 还在播 B，但时间线上 B 标等重播，不标正在播出；显示着的字幕照常标', () => {
     const playing = started();
     const editing = withContentTimeline(moveContentCommand('song', { kind: 'cue', id: 'b' }, 12_000, { track: 'cameras' })).execute(playing);

@@ -39,7 +39,7 @@ describe('编辑器按 OBS 在播的那一版标时间线', () => {
     expect(output.marks.onAirtime).toEqual(airtime(playing));
     expect(output.airtime).toEqual(airtime(editing));
     expect([...output.marks.pending.changed]).toEqual(['cue:b']);
-    expect(output.marks.notice?.text).toBe('播放中改了 1 处，停下重播才生效');
+    expect(output.marks.notice?.text).toBe('播放中改了 1 处，正在送到 OBS');
   });
 
   it('界面重新加载后接回的节目对不上：暂停时也写无法确认，不标正在播出', () => {

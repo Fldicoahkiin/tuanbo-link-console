@@ -3,9 +3,9 @@ import type { LinkCue, MtcFrameRate, ReferenceMediaClip, RundownItem, VisualLaye
 
 /**
  * What of a song's picture OBS does not have yet. While 联动台播放 prepares, plays or pauses a song,
- * OBS follows the project as it was when playback started (LinkApp keeps that version until 停止);
- * picture edits made since take effect only when the song is stopped and played again. Until the user
- * decides when they should take effect (0.6.0), the editor says so instead of marking them on air.
+ * OBS follows the version its picture runs (the program's `pictureVersion`: the one the song started
+ * with, or a newer one it took since, 0.5.9 R9). A picture edit made since goes to OBS by itself and is
+ * used in this pass; until the picture took it, the editor marks it as on its way instead of on air.
  * Worked out again from both versions on every edit, never stored in the project.
  */
 export type PendingPictureEdits = {

@@ -12,9 +12,9 @@ describe('时间线上方那行提示', () => {
   });
 
   it('用公共提示组件的单行样式，先写发生了什么，悬停能看到整句', () => {
-    const notice = { tone: 'warning', text: '播放中删了 1 处，停下重播才生效', detail: 'OBS 还在按开始播放时的时间线播，删掉的 1 处也照常播出。' } as const;
+    const notice = { tone: 'info', text: '播放中删了 1 处，正在送到 OBS', detail: '送到以前 OBS 照上一版播，删掉的 1 处也还在播。送到以后这一遍就按改过的播，不用停下重播。' } as const;
     const html = renderToStaticMarkup(React.createElement(PendingPictureNotice, { notice }));
-    expect(html).toContain('<div class="timeline-pending-notice"><div class="ui-notice" data-tone="warning" role="status" data-density="compact"');
+    expect(html).toContain('<div class="timeline-pending-notice"><div class="ui-notice" data-tone="info" role="status" data-density="compact"');
     expect(html).toContain(`title="${notice.text}。${notice.detail}"`);
     expect(html).toContain(`<strong>${notice.text}</strong><div>${notice.detail}</div>`);
   });

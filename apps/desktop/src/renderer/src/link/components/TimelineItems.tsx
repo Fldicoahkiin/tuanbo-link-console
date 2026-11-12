@@ -5,9 +5,9 @@ import { formatTimelineTimecode, timelineSpanWidth } from './timeline-geometry';
 import { offAirParts, offAirTitle, type OffAirPart } from './timeline-air';
 import './timeline-pending.css';
 
-/** On a part changed while its song plays: OBS does not have it yet (view-models/pending-picture-edits). */
-const PENDING_TEXT = '停下重播才生效';
-const PENDING_TITLE = '播放中改过，OBS 还在按开始播放时的时间线播，停下重播才生效';
+/** On a part changed while its song plays: on its way to OBS, which does not have it yet (view-models/pending-picture-edits, R9). */
+const PENDING_TEXT = '正在送到 OBS';
+const PENDING_TITLE = '播放中改过，正在送到 OBS，送到以后这一遍就按改过的播';
 
 export type { TimelineDrag } from './useTimelineItemDrag';
 

@@ -48,7 +48,7 @@ const pending = (playing: LinkProject, current: LinkProject) => pendingPictureEd
 const cueOf = (project: LinkProject, id: string): LinkCue => song(project).cues.find(cue => cue.id === id)!;
 const clipOf = (project: LinkProject, id: string): ReferenceMediaClip => song(project).referenceMediaClips.find(entry => entry.id === id)!;
 
-describe('播放中改的画面，停下重播才生效', () => {
+describe('播放中改的画面，送到 OBS 之前标出来', () => {
   it('没改画面就没有要等的；改名字、备注、动作说明和锁轨道都不进 OBS，不算', () => {
     const playing = onAir();
     expect(pending(playing, playing)).toEqual(NO_PENDING_PICTURE_EDITS);
@@ -96,7 +96,7 @@ describe('播放中改的画面，停下重播才生效', () => {
     expect(pending(playing, caption)).toEqual({ changed: new Set(), removed: 1 });
   });
 
-  it('挪动停用的机位、隐藏轨道上的素材不标；把它打开、把轨道显示出来，才标“停下重播才生效”', () => {
+  it('挪动停用的机位、隐藏轨道上的素材不标；把它打开、把轨道显示出来，才标“正在送到 OBS”', () => {
     const playing = withUnplayed();
     const moved = edit(playing, moveContentCommand('song', { kind: 'cue', id: 'off' }, 12_000, { track: 'cameras' }),
       moveContentCommand('song', { kind: 'clip', id: 'backstage' }, 1_000, { track: 'hidden' }));
