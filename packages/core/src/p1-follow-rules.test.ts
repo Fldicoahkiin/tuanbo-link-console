@@ -405,6 +405,12 @@ describe('P1 跟随规则 · 只在主进程跟随（0.5.9 P4，源码扫描）'
     expect(read('apps/desktop/src/main/link/show-state-service.ts')).not.toMatch(/activity\.p1/);
   });
 
+  it('诊断包和问题反馈的摘要看得到主进程的跟随', () => {
+    const main = read('apps/desktop/src/main/link-main.ts');
+    expect(main).toMatch(/runtimeActive, p1Following: p1Follow\?\.running\(\) === true, player: nativePlayer/);
+    expect(main).toMatch(/runtimeActive: showRunning\(\), playerStatus:/);
+  });
+
   it.todo('画面：界面不为 P1 建 SceneOutputTimeline，P1 的画面只在主进程（等画面那一步）');
   it.todo('画面：obs-program-session.ts 不按播放来源拒绝 P1 的时钟（等画面那一步）');
 });

@@ -269,7 +269,7 @@ let lightingOff: LightingOffService | null = null;
 let nativeProgramHost: NativeProgramHost | null = null;
 /** Every MIDI port the window uses is opened here, in main, and only while it is in use. */
 let midiPorts: MidiPortBroker | null = null;
-/** P1 followed in the main process (0.5.9 P3f, p1-follow-wiring.ts); the window does not use it before P4. */
+/** P1 followed in the main process (0.5.9 P3f, p1-follow-wiring.ts): since P4 the only P1 follow, the window only shows it. */
 let p1Follow: P1FollowWiring | null = null;
 /** A show is on: the window's player said so (link:set-runtime-active, 联动台播放), or the main process follows P1 (0.5.9 P4:
  * the window does not report P1 any more). Stopped, or auto-follow listening for its first song, is not a show. */
@@ -303,10 +303,11 @@ async function closeEngine(): Promise<void> {
  * returned; otherwise that program closes, then the audio and picture outputs and the runtime, unless the next page
  * opened a program meanwhile: that one keeps them (engine-shutdown.ts, 2026-11-10, 2026-11-11). */
 function releaseGonePage(): Promise<InternalPlayerState | null> {
-  // P1 following and the previews the page reported end with it; a program that plays on stays in the show.
+  // The previews the page reported end with it; a P1 follow that runs a song and a program that plays on stay in the show
+  // (a follow that follows nothing closes, P1FollowHost.pageGone).
   showState?.pageGone();
   lightingOff?.pageGone();
-  void p1Follow?.pageGone().catch((error: unknown) => console.error('P1 跟随没能随页面结束', error));
+  void p1Follow?.pageGone().catch((error: unknown) => console.error('没在跟歌的 P1 跟随没能随界面关掉', error));
   return releasePage(nativeProgram, { stopMonitor: () => musicMonitor?.stop(),
     teardown: async () => { await closeEngine(); await releaseRendererRuntime(); } }, programFaults);
 }
@@ -2315,7 +2316,7 @@ function registerIpc(
       osRelease: release(), cpu: cpus()[0]?.model ?? '未知', logicalProcessors: cpus().length,
       totalMemoryBytes: totalmem(), freeMemoryBytes: freemem(), uptimeSeconds: Math.round(process.uptime()), versions: process.versions,
       gpuFeatures: app.getGPUFeatureStatus(), processes: app.getAppMetrics(),
-      obs: obs.getSnapshot(), ma2: ma2Network.status(), runtimeActive, player: nativePlayer?.status ?? null,
+      obs: obs.getSnapshot(), ma2: ma2Network.status(), runtimeActive, p1Following: p1Follow?.running() === true, player: nativePlayer?.status ?? null,
       // Which networks this computer is on, for a console that cannot be reached; hardware addresses are left out.
       networkAdapters: Object.entries(networkInterfaces()).flatMap(([name, entries]) => (entries ?? []).filter(entry => entry.family === 'IPv4' && !entry.internal).map(entry => ({ name, address: entry.cidr ?? entry.address }))),
       license, update: updateManager.getStatus(), logSessionId: logger.sessionId,
@@ -2326,7 +2327,7 @@ function registerIpc(
     const obsSnapshot = obs.getSnapshot(), ma2Status = ma2Network.status();
     return feedbackEnvironment({ windowsRelease: release(), arch: process.arch, cpu: cpus()[0]?.model ?? '未知', totalMemoryBytes: totalmem(),
       obs: { status: obsSnapshot.status, obsVersion: obsSnapshot.obsVersion }, ma2: { state: ma2Status.state, version: ma2Status.version },
-      runtimeActive, playerStatus: nativePlayer?.status?.status ?? null });
+      runtimeActive: showRunning(), playerStatus: nativePlayer?.status?.status ?? null });
   };
   const writeDiagnostic = async (path: string, context: Readonly<Record<string, unknown>>, days: 1 | 7 | 30): Promise<void> => {
     await logger.exportDiagnosticPackage(path, { ...context, environment: await diagnosticEnvironment() }, { days });
