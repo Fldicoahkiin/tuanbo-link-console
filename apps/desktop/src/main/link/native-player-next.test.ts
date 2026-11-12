@@ -51,8 +51,9 @@ async function fixture() {
   const lease = (sha: string): NativeAudioLease => ({ path: `${sha}.pcm`, sampleRate: 48000, baseMs: 0, streaming: false, frames: 480000, durationMs: 10000,
     availableMs: 10000, completion: Promise.resolve({ ok: true }), release: vi.fn(() => Promise.resolve()) });
   const prepare = vi.fn<NativeAudioCache['prepare']>(input => Promise.resolve(lease(input.sourceSha256.slice(0, 1))));
-  const error = vi.fn(), measured = vi.fn();
+  const error = vi.fn(), measured = vi.fn(), ahead = vi.fn<(itemId: string) => void>();
   const service = new NativePlayerService({ executable: 'test', changed: vi.fn(), error, preloadError: error, measured,
+    measuredAhead: itemId => ({ add: () => undefined, done: () => ahead(itemId) }),
     checkDeviceHealth: () => Promise.resolve(), resolveAudio: () => source, cache: { prepare } });
   const snapshot = (itemId: string, sha: string): PlaybackSnapshot => ({ version: 1, projectId: 'test', itemId, revision: 1,
     audio: { relativePath: `${itemId}.wav`, sha256: sha.repeat(64), durationMs: 10000 },
@@ -61,7 +62,7 @@ async function fixture() {
     midiPortName: null, snapshot: snapshot('甲', 'a'), nextSnapshot: snapshot('乙', 'b') };
   const decoded = () => prepare.mock.calls.map(([input]) => input.sourceSha256.slice(0, 1));
   const warm = () => measured.mock.calls.filter(([phase]) => phase === '使用预先准备的下一首音频').length;
-  const ready = (count: number) => vi.waitFor(() => expect(measured.mock.calls.filter(([phase]) => phase === '预先准备下一首音频')).toHaveLength(count));
+  const ready = (count: number) => vi.waitFor(() => expect(ahead).toHaveBeenCalledTimes(count));
   return { service, request, snapshot, prepare, error, decoded, warm, ready };
 }
 

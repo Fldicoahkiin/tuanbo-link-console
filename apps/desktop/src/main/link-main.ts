@@ -189,7 +189,7 @@ import { ObsReconnector } from './link/obs-reconnector';
 import { NativeObsRequests } from './link/native-obs-requests';
 import { NativeObsPreloadPool } from './link/native-obs-preload';
 import { createNativeObsOutputs } from './link/native-obs-outputs';
-import { PreparationSteps, audioErrorLog } from './link/preparation-log';
+import { PreparationSteps, aheadAudioLog, audioErrorLog } from './link/preparation-log';
 import { obsStatusLogEntry } from './link/obs-status-log';
 import { prepareNextObsFiles } from './link/native-obs-files';
 
@@ -742,10 +742,11 @@ function registerIpc(
       if (!ffmpegPath) throw new Error('FFmpeg 音频解码组件未安装');
       let lastClockBoundary = '', lastReadyBoundary = '';
       // Each preparation's steps go into one 正式音频准备完成 entry; only a slow step is recorded as it happens.
-      const audioSteps = new PreparationSteps((step, ms) => {
+      const slowAudioStep = (step: string, ms: number): void => {
         void logger.record({ level: 'info', category: 'system', device: '音频', message: `音频准备较慢：${step} 用了 ${(ms / 1000).toFixed(1)} 秒`, details: { ms: Math.round(ms) } })
           .catch((error: unknown) => console.error('正式音频计时日志写入失败', error));
-      });
+      };
+      const audioSteps = new PreparationSteps(slowAudioStep);
       const measured = (phase: string, elapsedMs: number): void => audioSteps.add(phase, elapsedMs);
       nativePlayer = new NativePlayerService({
         checkDeviceHealth: async (recheck) => {
@@ -789,6 +790,8 @@ function registerIpc(
               .catch((failure: unknown) => console.error('节目预备清理日志写入失败', failure)); });
         },
         measured,
+        // The next song prepared ahead writes its own entry with its own steps (下一首的音频已提前准备好).
+        measuredAhead: aheadAudioLog(slowAudioStep, entry => logger.record(entry)),
         // error keeps the steps a failed preparation got through; preloadError (the next song's) leaves them.
         ...audioErrorLog(audioSteps, entry => logger.record(entry)),
         recovered: report => { void logger.record({ level: 'warning', category: 'device', device: '音频', ...(nativePlayer?.status ? { itemId: nativePlayer.status.itemId } : {}),

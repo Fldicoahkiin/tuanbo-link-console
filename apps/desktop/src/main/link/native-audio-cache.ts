@@ -48,12 +48,13 @@ export class NativeAudioCache {
     private readonly measured: (phase: string, elapsedMs: number) => void = () => undefined,
     private readonly warn: NativeAudioCacheWarn = () => undefined) {}
 
-  async prepare(input: z.input<typeof requestSchema>, signal: AbortSignal): Promise<NativeAudioLease> {
+  /** `measure` takes this preparation's steps instead of the cache's own (a next song prepared ahead keeps them apart). */
+  async prepare(input: z.input<typeof requestSchema>, signal: AbortSignal, measure: (phase: string, elapsedMs: number) => void = this.measured): Promise<NativeAudioLease> {
     const request = requestSchema.parse(input); signal.throwIfAborted();
     if (this.busy) throw new Error('上一个音频还在准备，请稍后再试');
     this.busy = true;
     let measuredAt = performance.now();
-    const measured = (phase: string): void => { const now = performance.now(); this.measured(phase, now - measuredAt); measuredAt = now; };
+    const measured = (phase: string): void => { const now = performance.now(); measure(phase, now - measuredAt); measuredAt = now; };
     try {
       await mkdir(this.directory, { recursive: true });
       // A source that cannot be read is fixed by repairing or replacing the audio; the window words it that way.

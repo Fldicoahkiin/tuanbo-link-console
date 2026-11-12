@@ -1,6 +1,7 @@
 import { nativePlayerControlSchema, nativePlayerNextSchema, nativePlayerPrepareSchema, nativePlayerStatusSchema,
   type NativePlayerControl, type NativePlayerNext, type NativePlayerPrepare, type NativePlayerStatus, type NativePlaybackEvent, type NativeDeviceQueryRequest, type NativePlaybackDevices } from '@tb/schema';
 import { NativeAudioCache, type NativeAudioLease } from './native-audio-cache';
+import type { MeasureAhead } from './preparation-log';
 import { NativeEngineRejection, NativePlaybackClient, type NativeClockState } from './native-playback-client';
 import { playableEndMs, rangeRejectedMessage } from './native-playback-range';
 import { NativeDeviceQuery } from './native-device-query';
@@ -37,7 +38,10 @@ type Options = {
    * shown for it: carried on from (`recover`), or the one that reached the limit. For the run log. */
   recovery?: (entry: { result: RecoveryResult; message: string; itemId: string; positionMs: number;
     /** The Windows code of a refused timecode send. */ code?: number }) => void;
+  /** Steps of the song being prepared, as one run-log entry once it is ready. */
   measured?: (phase: string, elapsedMs: number) => void;
+  /** Steps of the next song prepared ahead, one set per preparation, never mixed into `measured` (preparation-log.ts). */
+  measuredAhead?: MeasureAhead;
   beforeControl?: (request: NativePlayerControl) => void;
   /** Takes the timecode output from the editor before the engine opens it. */
   claimMidiOutput?: (portName: string) => Promise<MidiClaim>;
@@ -85,7 +89,7 @@ export class NativePlayerService {
   private mtcHold: { name: string; claim: MidiClaim | null } | null = null;
   constructor(private readonly options: Options) {
     // Only the fields it needs: a spread of these options would hand it this player's `error` as well.
-    this.preload = new NativeAudioPreload({ cache: options.cache, resolveAudio: options.resolveAudio, measured: options.measured,
+    this.preload = new NativeAudioPreload({ cache: options.cache, resolveAudio: options.resolveAudio, measured: options.measured, measuredAhead: options.measuredAhead,
       error: options.preloadError });
     this.deviceQuery = new NativeDeviceQuery(options.executable);
     this.audioDeviceQuery = new NativeDeviceQuery(options.executable, 'audio');

@@ -130,3 +130,17 @@ it('音频原文件缺失时报告为音频读取失败，界面据此提示修�
   await expect(cache.prepare({ sourcePath: join(directory, 'missing.wav'), sourceSha256: 'a'.repeat(64), expectedDurationMs: 2000, sampleRate: 48000 },
     new AbortController().signal)).rejects.toThrow(/^音频解码或读取失败：.*missing\.wav/);
 });
+
+// 0.5.9 遗留 2：下一首提前准备时，缓存测到的步骤交给那份准备自己，不进正在准备的这首。
+it('准备时给了自己的计时：这次的步骤只交给它，不进缓存自带的那一份；没给的照旧进缓存自带的', async () => {
+  if (!ffmpeg) throw new Error('测试缺少 FFmpeg');
+  const directory = await mkdtemp(join(tmpdir(), 'native-pcm-measure-'));
+  const own: string[] = [], ahead: string[] = [];
+  const cache = new NativeAudioCache(join(directory, 'cache'), ffmpeg, undefined, undefined, phase => { own.push(phase); });
+  const lease = await cache.prepare(await source(directory, 256), new AbortController().signal, phase => { ahead.push(phase); });
+  expect(ahead).toEqual(expect.arrayContaining(['音源校验', '磁盘预算与启动解码'])); expect(own).toEqual([]);
+  await lease.completion; await lease.release();
+  const current = await cache.prepare(await source(directory, 128), new AbortController().signal);
+  expect(own).toEqual(expect.arrayContaining(['音源校验', '磁盘预算与启动解码']));
+  await current.completion; await current.release();
+}, 20_000);

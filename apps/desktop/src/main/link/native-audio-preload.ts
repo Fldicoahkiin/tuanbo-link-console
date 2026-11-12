@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import type { PlaybackSnapshot } from '@tb/schema';
 import { nextAudioIdentity } from '@tb/core/link';
 import type { NativeAudioCache, NativeAudioLease } from './native-audio-cache';
+import type { MeasureAhead } from './preparation-log';
 
 type Identity = { size: number; mtimeMs: number; ctimeMs: number; ino: number };
 type Prepared = { lease: NativeAudioLease; identity: Identity };
@@ -12,7 +13,10 @@ type Options = { cache: Pick<NativeAudioCache, 'prepare'>; resolveAudio: (projec
    * error while it is let go for another song, a seek, stop or close. None of it is the failure of the song being
    * prepared or of that seek, stop or close (take() throws what is), so it is reported here and never to them. */
   error: (message: string) => void;
-  measured?: ((phase: string, elapsedMs: number) => void) | undefined };
+  /** Steps of the song being prepared (taking what was prepared ahead is one of them). */
+  measured?: ((phase: string, elapsedMs: number) => void) | undefined;
+  /** Steps of each preparation ahead, kept apart from the song being prepared and from one another (preparation-log.ts). */
+  measuredAhead?: MeasureAhead | undefined };
 
 /** One pinned next-source lease. This never controls an audio/MIDI device or
  * starts output. The current player owns its separate lease throughout. */
@@ -104,14 +108,15 @@ export class NativeAudioPreload {
     task.abort.signal.throwIfAborted();
     task.sourcePath = this.options.resolveAudio(task.projectPath, task.snapshot.audio.relativePath);
     const started = performance.now(), before = await stat(task.sourcePath), snapshot = task.snapshot;
+    const steps = this.options.measuredAhead?.(snapshot.itemId) ?? { add: () => undefined, done: () => undefined };
     const lease = await this.options.cache.prepare({ sourcePath: task.sourcePath, sourceSha256: snapshot.audio.sha256,
-      expectedDurationMs: snapshot.audio.durationMs, sampleRate: snapshot.sampleRate, positionMs: snapshot.positionMs }, task.abort.signal);
+      expectedDurationMs: snapshot.audio.durationMs, sampleRate: snapshot.sampleRate, positionMs: snapshot.positionMs }, task.abort.signal, steps.add);
     try {
       const after = await stat(task.sourcePath);
       if (!sameIdentity(before, after)) throw new Error('预先准备音频时文件发生了变化');
       const result = { lease, identity: after };
       task.result = result;
-      this.options.measured?.('预先准备下一首音频', performance.now() - started);
+      steps.done(performance.now() - started);
       void lease.completion.then(outcome => {
         if (!outcome.ok && this.task === task && !task.abort.signal.aborted && !task.consumed) {
           task.result = null; this.options.error(`下一首提前准备的音频解码失败，播到这首时照常准备。原因：${outcome.error.message}`);

@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,7 +8,8 @@ import type { NativeAudioCache, NativeAudioLease } from './native-audio-cache';
 import type { DecodeResult } from './native-audio-decode';
 import { NativePlayerService } from './native-player-service';
 import type { PortRecoveryReport } from './midi-port-recovery';
-import { PreparationSteps, audioErrorLog } from './preparation-log';
+import { PreparationSteps, aheadAudioLog, audioErrorLog } from './preparation-log';
+import type { LinkLogInput } from './run-logger';
 import { WindowsMidiHealth, midiHealthMessage, type MidiHealth } from './windows-midi-health';
 import { AUDIO_HRESULT, OUTPUT_RECOVERY_RULES, type RecoveryResult } from '@tb/core/link';
 
@@ -340,7 +341,10 @@ it('时间码接口被占用时说清是谁：本软件另一处用了同一接�
  * `refuse` fails its next release once, like a rename Windows refused while a virus scanner held the file.
  * The run log is kept as in the app (link-main): `error` takes the steps of the preparation so far, whatever goes
  * wrong with the next song prepared ahead goes to `preloadError` without taking them (audioErrorLog), and each
- * 音频已准备好 entry takes what is left (`ready`). */
+ * 音频已准备好 entry takes what is left (`ready`). Each preparation ahead writes its own entry (`ahead`, aheadAudioLog).
+ * The cache measures two steps named after the song it decodes (`音源校验 b`), in the steps of whichever preparation
+ * asked (as NativeAudioCache does), so a step that lands in another song's entry shows. A song in `hold` measures its
+ * first step and then waits until its preparation is let go. */
 async function preloading(f: ReturnType<typeof fixture>) {
   const directory = await mkdtemp(join(tmpdir(), 'tblink-player-preload-')), path = join(directory, 'song.wav');
   await writeFile(path, 'audio fixture');
@@ -350,12 +354,24 @@ async function preloading(f: ReturnType<typeof fixture>) {
       if (refuse.delete(song)) return Promise.reject(new Error('EPERM: operation not permitted, rename'));
       released.push(song); return Promise.resolve();
     } });
-  const prepare = vi.fn<NativeAudioCache['prepare']>(input => Promise.resolve(lease(input.sourceSha256[0]!)));
-  const steps = new PreparationSteps(() => undefined), log = audioErrorLog(steps, () => Promise.resolve());
+  const hold = new Set<string>(), entries: LinkLogInput[] = [];
+  const steps = new PreparationSteps(() => undefined);
+  const current = (phase: string, elapsedMs: number): void => { measured(phase, elapsedMs); steps.add(phase, elapsedMs); };
+  const prepare = vi.fn<NativeAudioCache['prepare']>((input, signal, measure = current) => {
+    const song = input.sourceSha256[0]!;
+    measure(`音源校验 ${song}`, 1);
+    if (hold.has(song)) return new Promise((_, reject) => { signal.addEventListener('abort', () => reject(signal.reason as Error)); });
+    measure(`解码预填充 ${song}`, 2);
+    return Promise.resolve(lease(song));
+  });
+  const record = (entry: LinkLogInput) => { entries.push(entry); return Promise.resolve(); };
+  const log = audioErrorLog(steps, record);
+  const ahead = () => entries.filter(entry => entry.message === '下一首的音频已提前准备好')
+    .map(entry => ({ itemId: entry.itemId, steps: (entry.details?.steps as { step: string }[]).map(({ step }) => step) }));
   const ready: { itemId: string; steps: string[] }[] = [];
   let readyBoundary = '';
   const service = new NativePlayerService({ ...f.options, resolveAudio: () => path, cache: { prepare },
-    measured: (phase, elapsedMs) => { measured(phase, elapsedMs); steps.add(phase, elapsedMs); },
+    measured: current, measuredAhead: aheadAudioLog(() => undefined, record),
     changed: status => {
       const boundary = `${status.sessionId}:${status.generation}`;
       if (status.status !== 'ready' || boundary === readyBoundary) return;
@@ -364,9 +380,91 @@ async function preloading(f: ReturnType<typeof fixture>) {
     error: message => { f.error(message); log.error(message); },
     preloadError: message => { preloadError(message); log.preloadError(message); } });
   const song = (id: string) => ({ ...f.request.snapshot, itemId: id, audio: { ...f.request.snapshot.audio, sha256: id.repeat(64) } });
-  const preloaded = (count: number) => vi.waitFor(() => expect(measured.mock.calls.filter(([phase]) => phase === '预先准备下一首音频')).toHaveLength(count));
-  return { service, prepare, lease, refuse, released, song, preloaded, measured, preloadError, ready };
+  const preloaded = (count: number) => vi.waitFor(() => expect(ahead()).toHaveLength(count));
+  return { service, prepare, lease, refuse, released, song, preloaded, measured, preloadError, ready, ahead, hold, entries, log };
 }
+
+/** A step measured for one song (`音源校验 b`) never appears in an entry of another. */
+const ownSteps = (entry: { itemId?: string | undefined; steps: string[] }) => entry.steps.filter(step => / [a-z]$/.test(step)).every(step => step.endsWith(` ${entry.itemId ?? ''}`));
+
+// 0.5.9 遗留 2：下一首提前准备时测到的步骤只记在它自己那一条里。
+describe('下一首提前准备的步骤只记在它自己那一条里', () => {
+  it('提前准备好再播到它：两条，各是各的歌、各是各的步骤', async () => {
+    const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, p = await preloading(f);
+    try {
+      await p.service.prepare({ ...f.request, snapshot: p.song('a'), nextSnapshot: p.song('b') });
+      await p.service.control({ ...envelope, generation: 2, kind: 'play' }); await p.preloaded(1);
+      expect(p.ahead()).toEqual([{ itemId: 'b', steps: ['音源校验 b', '解码预填充 b'] }]);
+      await expect(p.service.prepare({ ...f.request, generation: 3, snapshot: p.song('b') })).resolves.toMatchObject({ itemId: 'b', status: 'ready' });
+      // The play of A publishes ready once more (a new generation), with nothing left to take.
+      expect([...new Set(p.ready.map(entry => entry.itemId))]).toEqual(['a', 'b']);
+      expect(p.ready[0]!.steps).toEqual(expect.arrayContaining(['音源校验 a', '解码预填充 a']));
+      // B's entry: this preparation only, taking what was prepared ahead; nothing B decoded ahead, nothing of A.
+      expect(p.ready.at(-1)!.steps).toEqual(expect.arrayContaining(['设备检查与旧播放清理', '使用预先准备的下一首音频', '音源校验与解码预填充']));
+      expect(p.ready.at(-1)!.steps.filter(step => / [a-z]$/.test(step))).toEqual([]);
+      expect([...p.ready, ...p.ahead()].every(ownSteps)).toBe(true);
+    } finally { await p.service.close(); }
+  });
+
+  it('提前准备到一半，下一首改了：放下的那份不写、步骤不带进新的那份；新的写自己的一条', async () => {
+    const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, p = await preloading(f);
+    try {
+      p.hold.add('b');
+      await p.service.prepare({ ...f.request, snapshot: p.song('a'), nextSnapshot: p.song('b') });
+      await p.service.control({ ...envelope, generation: 2, kind: 'play' });
+      await vi.waitFor(() => expect(p.prepare).toHaveBeenCalledTimes(2));
+      await p.service.prepareNext({ version: 1, sessionId: f.request.sessionId, generation: 2, nextSnapshot: p.song('c') });
+      await p.preloaded(1);
+      expect(p.ahead()).toEqual([{ itemId: 'c', steps: ['音源校验 c', '解码预填充 c'] }]);
+      await p.service.prepare({ ...f.request, generation: 3, snapshot: p.song('c') });
+      expect(p.ready.at(-1)?.itemId).toBe('c');
+      expect([...p.ready, ...p.ahead()].every(ownSteps)).toBe(true);
+      expect(p.entries.filter(entry => JSON.stringify(entry.details ?? {}).includes('音源校验 b'))).toEqual([]);
+    } finally { await p.service.close(); }
+  });
+
+  it('提前准备好又换成别的：两份各写一条；之后播的那首不带它们的步骤', async () => {
+    const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, p = await preloading(f);
+    try {
+      await p.service.prepare({ ...f.request, snapshot: p.song('a'), nextSnapshot: p.song('b') });
+      await p.service.control({ ...envelope, generation: 2, kind: 'play' }); await p.preloaded(1);
+      await p.service.prepareNext({ version: 1, sessionId: f.request.sessionId, generation: 2, nextSnapshot: p.song('c') });
+      await p.preloaded(2);
+      expect(p.ahead().map(entry => entry.itemId)).toEqual(['b', 'c']);
+      await p.service.prepare({ ...f.request, generation: 3, snapshot: p.song('c') });
+      expect([...new Set(p.ready.map(entry => entry.itemId))]).toEqual(['a', 'c']);
+      expect([...p.ready, ...p.ahead()].every(ownSteps)).toBe(true);
+    } finally { await p.service.close(); }
+  });
+
+  it('提前准备好、一直没播到它：只有它自己那一条；停下以后播别的歌，那首的步骤里没有它的', async () => {
+    const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, p = await preloading(f);
+    try {
+      await p.service.prepare({ ...f.request, snapshot: p.song('a'), nextSnapshot: p.song('b') });
+      await p.service.control({ ...envelope, generation: 2, kind: 'play' }); await p.preloaded(1);
+      await p.service.control({ ...envelope, generation: 3, kind: 'stop' });
+      await p.service.prepare({ ...f.request, generation: 4, snapshot: p.song('d') });
+      expect([...new Set(p.ready.map(entry => entry.itemId))]).toEqual(['a', 'd']);
+      expect(p.ready.at(-1)!.steps).toEqual(expect.arrayContaining(['音源校验 d', '解码预填充 d']));
+      expect(p.ahead()).toEqual([{ itemId: 'b', steps: ['音源校验 b', '解码预填充 b'] }]);
+      expect([...p.ready, ...p.ahead()].every(ownSteps)).toBe(true);
+    } finally { await p.service.close(); }
+  });
+
+  it('下一首准备到一半时台上这首报错：这条不带下一首的步骤', async () => {
+    const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, p = await preloading(f);
+    try {
+      p.hold.add('b');
+      await p.service.prepare({ ...f.request, snapshot: p.song('a'), nextSnapshot: p.song('b') });
+      await p.service.control({ ...envelope, generation: 2, kind: 'play' });
+      await vi.waitFor(() => expect(p.prepare).toHaveBeenCalledTimes(2));
+      // A notice of the song on air, written the way the player's `error` is (link-main: audioErrorLog).
+      p.log.error('时间码输出没有回应');
+      expect(p.entries.at(-1)).toEqual({ level: 'error', category: 'device', device: '音频', message: '时间码输出没有回应', result: 'failed' });
+      expect(p.ahead()).toEqual([]);
+    } finally { await p.service.close(); }
+  });
+});
 
 it('下一首提前准备的音频放不掉一次：只记一次错误；换歌、再提前准备、接着播都照常', async () => {
   const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, p = await preloading(f);

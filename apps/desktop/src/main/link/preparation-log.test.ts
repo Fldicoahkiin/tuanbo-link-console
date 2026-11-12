@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PreparationSteps, SLOW_PREPARATION_STEP_MS, audioErrorLog } from './preparation-log';
+import { PreparationSteps, SLOW_PREPARATION_STEP_MS, aheadAudioLog, audioErrorLog } from './preparation-log';
 import type { LinkLogInput } from './run-logger';
 
 describe('PreparationSteps', () => {
@@ -55,6 +55,27 @@ describe('audioErrorLog', () => {
       expect(() => log.preloadError('下一首提前准备的音频解码失败，播到这首时照常准备。原因：音频解码 30 秒没有进展，已停止解码')).not.toThrow();
       await vi.waitFor(() => expect(console).toHaveBeenCalledTimes(2));
       expect(console.mock.calls).toEqual([['正式音频日志写入失败', expect.any(Error)], ['正式音频日志写入失败', expect.any(Error)]]);
+    } finally { console.mockRestore(); }
+  });
+});
+
+describe('aheadAudioLog', () => {
+  it('每份提前准备各记各的：准备好时为它的歌写一条「下一首的音频已提前准备好」；放下的那份什么都不写，步骤也不带给别的', async () => {
+    const record = vi.fn<(entry: LinkLogInput) => Promise<unknown>>(() => Promise.resolve()), slow = vi.fn();
+    const ahead = aheadAudioLog(slow, record);
+    const dropped = ahead('b'), next = ahead('c');
+    dropped.add('音源校验', 5);
+    next.add('音源校验', 4.4); next.add('解码预填充', SLOW_PREPARATION_STEP_MS);
+    expect(slow).toHaveBeenCalledExactlyOnceWith('解码预填充', SLOW_PREPARATION_STEP_MS);
+    next.done(3020.6);
+    expect(record).toHaveBeenCalledExactlyOnceWith({ level: 'info', category: 'system', device: '音频', itemId: 'c', message: '下一首的音频已提前准备好',
+      details: { totalMs: 3021, steps: [{ step: '音源校验', ms: 4 }, { step: '解码预填充', ms: SLOW_PREPARATION_STEP_MS }] } });
+    const console = vi.spyOn(globalThis.console, 'error').mockImplementation(() => undefined);
+    try {
+      record.mockRejectedValueOnce(new Error('磁盘已满'));
+      dropped.done(10);
+      await vi.waitFor(() => expect(console).toHaveBeenCalledExactlyOnceWith('下一首音频准备日志写入失败', expect.any(Error)));
+      expect(record).toHaveBeenLastCalledWith(expect.objectContaining({ itemId: 'b', details: { totalMs: 10, steps: [{ step: '音源校验', ms: 5 }] } }));
     } finally { console.mockRestore(); }
   });
 });

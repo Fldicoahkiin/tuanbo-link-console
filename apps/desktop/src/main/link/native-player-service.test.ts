@@ -41,15 +41,15 @@ windowsTest('MIDI 清单读取失败时仍准备音频，明确报告本首时�
 }, 10000);
 
 windowsTest('真实 WASAPI 播放期间预填充下一首，曲尾接管不再解码且保留下一首原始时间码', async () => {
-  const { options, request, failures } = await fixture(), measured = vi.fn();
+  const { options, request, failures } = await fixture(), measured = vi.fn(), ahead = vi.fn();
   const prepare = vi.fn(options.cache.prepare.bind(options.cache));
-  const player = new NativePlayerService({ ...options, cache: { prepare }, measured });
+  const player = new NativePlayerService({ ...options, cache: { prepare }, measured, measuredAhead: () => ({ add: () => undefined, done: ahead }) });
   const next = { ...request.snapshot, itemId: 'song-b', positionMs: 500, offsetMs: 960000 };
   try {
     await player.prepare({ ...request, snapshot: { ...request.snapshot, endMs: 1700 }, nextSnapshot: next });
     const pid = player.status!.enginePid;
     await player.control({ version: 1, sessionId: request.sessionId, generation: 2, kind: 'play' });
-    await expect.poll(() => measured.mock.calls.some(([phase]) => phase === '预先准备下一首音频')).toBe(true);
+    await expect.poll(() => ahead.mock.calls.length > 0).toBe(true);
     expect(player.status).toMatchObject({ itemId: 'song-a', status: 'playing', offsetMs: 480000, underruns: 0 });
     await expect.poll(() => player.status?.status).toBe('ended');
     const count = prepare.mock.calls.length;
