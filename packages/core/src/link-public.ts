@@ -70,6 +70,7 @@ export * from './native-program-snapshot';
 export * from './next-song-identity';
 export * from './program-start';
 export * from './console-follow';
+export * from './picture-follow';
 export * from './optional-output-ready';
 export * from './lighting-library';
 export * from './lighting-empty-cue';

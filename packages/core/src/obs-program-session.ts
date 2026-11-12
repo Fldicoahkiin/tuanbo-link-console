@@ -5,10 +5,13 @@ import { frameNumberToTimecode, millisecondsToFrameNumber, playbackFramesPerSeco
 import { alignManagedMediaEvent, ManagedOutputRuntime, MEDIA_NOT_STARTED, mediaTransportActions, type ManagedMediaExecutionReport, type ManagedMediaOutcome,
   type ManagedOutputRuntimeDependencies } from './managed-output-runtime';
 import { compileManagedMediaTimeline, MANAGED_OBS_SCENE_NAME, type ManagedMediaEvent } from './managed-media-timeline';
-import { ObsPictureLedger, pictureElementKey, showKey, showMayBeOn, type DecoderState, type Known, type LedgerWrite } from './obs-picture-ledger';
+import { ObsPictureLedger, pictureElementKey, showKey, showMayBeOn, type DecoderState, type Known, type LedgerWrite, type PictureLedgerState as PictureLedger } from './obs-picture-ledger';
 import type { OnAirPicture } from './on-air-picture';
 import { OUTPUT_RECOVERY_RULES, OutputRecovery, pictureRepairAllowed, pictureRepairKey, recordPictureRepair, type RecoveryBudgetView, type RecoveryResult, type RecoveryRow } from './output-recovery';
-import { COMPOSITION_GROUP_STARTS, DECODER_GROUP_STARTS, decoderTarget, pictureOpWrites, planPictureReconcile, whilePaused, type PictureOp, type ReconcilePlan } from './picture-reconcile';
+import { driftedDecoders, isHandSwitch, materialPositionMs, musicMissingText, nextPictureFollow, PICTURE_FOLLOW_SETTLE_MS, PICTURE_FOLLOW_START, PICTURE_READ_DECODERS, pictureFollowVerdict,
+  type PictureFollow, type PictureFollowTarget, type PictureReading } from './picture-follow';
+import { COMPOSITION_GROUP_STARTS, DECODER_GROUP_STARTS, decoderTarget, pictureOpWrites, pictureProgram, planPictureReconcile, programSignature, whilePaused, type PictureOp,
+  type ReconcilePlan } from './picture-reconcile';
 import type { SceneOutputTimeline } from './scene-output-timeline';
 
 export type ObsProgramSessionDependencies = ManagedOutputRuntimeDependencies & {
@@ -30,6 +33,12 @@ export type ObsProgramSessionDependencies = ManagedOutputRuntimeDependencies & {
   /** Puts a playing clip back in step with the music; returns the drift corrected, or null. `mayCorrect`
    * is asked with the drift found before anything is corrected: false leaves the clip as it is. */
   correctMediaDrift?: (event: ManagedMediaEvent, mayCorrect: (driftMs: number) => boolean) => Promise<number | null>;
+  /** Reads back what OBS shows now (R8): the program scene and these materials' decoders, each against where the music
+   * has it when OBS answers (`positionAt`, on `now`'s clock). Read requests only, on the request scheduler's `control`
+   * lane: a picture switch never waits for it. Without it nothing is read back and no drift is corrected. */
+  readPicture?: (request: PictureReadRequest) => Promise<PictureReading>;
+  /** Whether the picture follows the timeline as last read back, and the hand switch it waits for, whenever either changes. */
+  pictureFollow?: (follow: PictureFollow, takeover: { sceneName: string } | null) => void;
   /** The lookahead may prepare this clip once more after its preparation failed (0.5.9 R5). */
   prepareAgain?: (clipId: string) => void;
   /** Whether OBS is connected now. Nothing is repaired while it is not: that is the connection's failure. */
@@ -45,6 +54,9 @@ export type ObsProgramSessionDependencies = ManagedOutputRuntimeDependencies & {
   pictureItems?: (items: ObsPictureItem[], recoveries: ObsRecoveryCount[]) => void;
   now: () => number;
 };
+
+/** What a read-back asks OBS for (R8): each material by its name, with where it should be at the moment `at`. */
+export type PictureReadRequest = { decoders: { sourceName: string; positionAt: (at: number) => number }[] };
 
 /** A clip whose preparation did not succeed, from the output's lookahead: the session decides whether
  * it is prepared once more (`prepareAgain`), within the recovery limits. The message is the failure's. */
@@ -66,6 +78,8 @@ const rowMax = (row: RecoveryRow): number | null => { const limit = OUTPUT_RECOV
 /** The item of a clip's preparation and of a clip not in step with the music. */
 const preparationItem = (clipId: string): string => `preload:${clipId}`;
 const driftItem = (clipId: string): string => `drift:${clipId}`;
+/** The item of the music missing from the scene on program (R8). */
+const MUSIC_ITEM = 'music';
 
 /** A clock step that crossed a cut point, had point actions due, or rebuilt after a
  * position gap; kept until a pass sent everything it stands for. `shift`: how long
@@ -183,8 +197,18 @@ export class ObsProgramSession {
   private readonly refusedStarts = new Set<string>();
   /** Clips whose start failed and whose decoder became ready since: started once, late, with a red note. */
   private readonly lateReady = new Set<string>();
-  /** Drift is checked every 5 s, never within 1 s of a media start, resume or seek. */
+  /** No material's position is judged within 1 s of a media start, resume or seek. */
   private nextDriftCheck = -Infinity;
+  /** The read-back (R8): one in flight at most, about once a second while the song plays; `readTurn` rotates which
+   * materials it reads when more are on air than one reading takes. */
+  private reading = false;
+  private nextRead = -Infinity;
+  private readTurn = 0;
+  private follow: PictureFollow = PICTURE_FOLLOW_START;
+  /** Clips whose drift correction is queued: one at a time each. */
+  private readonly correcting = new Set<string>();
+  /** The last device clock observation: where the music is between two of them. */
+  private lastClock: { positionMs: number; observedAt: number } | null = null;
   private preloadFrame = -Infinity;
   private readonly runtime: CueRuntime;
   private readonly managed: ManagedOutputRuntime;
@@ -349,6 +373,7 @@ export class ObsProgramSession {
       const age = this.dependencies.now() - observedAt;
       if (!Number.isFinite(age) || age < 0) throw new Error(`播放位置的时间无效（已过 ${age} ms），画面联动已停止`);
       const sample = this.sample(positionMs, observedAt);
+      this.lastClock = { positionMs, observedAt };
       if (this.joining) { this.joining = false; this.requireUpdate(this.runtime.moveStart(sample)); this.frame = sample.totalFrames; this.settleMedia(sample.totalFrames); }
       const previousFrame = this.frame;
       let update: RuntimeUpdate, resumed = false;
@@ -367,7 +392,7 @@ export class ObsProgramSession {
       }
       this.advancing = true; this.frame = sample.totalFrames;
       if (update.state !== 'running') return;
-      this.preload(sample.totalFrames); this.watchDrift(sample.totalFrames);
+      this.preload(sample.totalFrames); this.readBack(sample.totalFrames);
       if (this.crossedMedia(previousFrame, sample.totalFrames)) this.settleMedia(sample.totalFrames);
       const points = this.points(update.dueCues), cut = this.cutIn(previousFrame, sample.totalFrames);
       if (cut !== null || points.length || update.rebuild) {
@@ -500,7 +525,7 @@ export class ObsProgramSession {
     for (const [id, item] of this.items) if (!this.special(id) && item.scope !== 'channel' && !mentioned.has(id)) this.clearItem(id);
     for (const entry of plan.suppressed) if (entry.kind === 'repair-limit') this.repairLimit(entry.element, entry.target);
   }
-  private special(id: string): boolean { return id.startsWith('preload:') || id.startsWith('drift:'); }
+  private special(id: string): boolean { return id.startsWith('preload:') || id.startsWith('drift:') || id === MUSIC_ITEM; }
   /** The steps that carry out the planner's ops, through the same Cues and clip events
    * as before: a camera as its Cue's switch, a composition as the owned composition Cue,
    * a clip's start through the preloaded decoder (its own scene in the same step when it
@@ -1030,33 +1055,146 @@ export class ObsProgramSession {
   private settleMedia(frame: number): void {
     this.nextDriftCheck = Math.max(this.nextDriftCheck, frame + this.fps);
   }
-  /** Recovery rule B for OBS video drifting from the music over a long clip. */
-  private watchDrift(frame: number): void {
-    const correct = this.dependencies.correctMediaDrift;
-    if (!correct || frame < this.nextDriftCheck) return;
-    this.nextDriftCheck = frame + 5 * this.fps;
-    const generation = this.generation;
-    this.enqueue(async () => {
-      for (const event of this.onAir()) {
-        const current = (): boolean => generation === this.generation && !this.closed && !this.failure && this.runtime.getState() === 'running';
-        if (event.assetKind === 'image' || !current()) continue;
-        // One correction per clip a minute (2026-11-10 decision 2): past it the clip is left as it is, in red.
-        let refused = false;
-        const mayCorrect = (driftMs: number): boolean => {
-          if (this.recovery.allows('picture.drift', event.clipId, this.dependencies.now())) return true;
-          refused = true; this.driftLimit(event, driftMs);
-          return false;
-        };
-        const drift = await this.dependencies.guardOutput(current, () => correct(this.align(event, this.frame), mayCorrect));
-        if (drift === null) {
-          // In step: a clip listed as out of step (corrected, or left at the limit) is right again.
-          if (!refused) this.clearItem(driftItem(event.clipId));
-          continue;
-        }
-        const result = this.recovery.record('picture.drift', event.clipId, this.dependencies.now());
-        this.recovered(driftItem(event.clipId), 'repairing', `素材和音乐差了 ${drift} ms，已按当前位置校正：${event.assetName}`, [result], 'warning');
-      }
+  /** The picture read back (R8, design 01 §4.8), about once a second while the song plays: what OBS has on program and
+   * the materials on air, against what the timeline wants and the ledger confirmed. One reading at a time. While OBS is
+   * away (R7) nothing is read and nothing counts against a limit: whether the picture follows cannot be confirmed. */
+  private readBack(frame: number): void {
+    const read = this.dependencies.readPicture;
+    if (!read || this.reading || frame < this.nextRead) return;
+    this.nextRead = frame + this.fps;
+    if (!this.online() || this.lost || this.restoring) { this.setFollow({ state: 'unknown', detail: 'OBS 没有连接，重新连上后再核对画面', misses: 0 }); return; }
+    const before = this.ledger.state(), clock = this.lastClock, generation = this.generation;
+    if (!clock) return;
+    const decoders = frame >= this.nextDriftCheck ? this.readable(before) : [];
+    this.reading = true;
+    const answer = (reading: PictureReading): void => {
+      if (generation !== this.generation || !this.playing() || this.lost || this.restoring || !this.online()) return;
+      this.judgeReading(reading, before, decoders);
+    };
+    void read({ decoders: decoders.map(event => ({ sourceName: event.sourceName,
+      positionAt: at => materialPositionMs(event.sourceOffsetMs, event.frameNumber * 1000 / this.fps, clock.positionMs + at - clock.observedAt) })) })
+      .then(answer, (error: unknown) => answer({ kind: 'unreadable', reason: trimReason(errorText(error)) }))
+      .finally(() => { this.reading = false; });
+  }
+  /** The materials one reading compares: on air as OBS confirmed it more than a second ago, wanted now and playing with
+   * the music; not images. At most `PICTURE_READ_DECODERS`, taking turns. */
+  private readable(ledger: PictureLedger): ManagedMediaEvent[] {
+    const picture = this.timeline.pictureAt(Math.max(0, this.frame)), now = this.dependencies.now();
+    const wanted = new Set([...picture.clips, ...picture.covered, ...picture.sounds].map(clip => clip.clipId));
+    const events = [...ledger.decoders].flatMap(([sourceName, known]) => {
+      if (known.state !== 'confirmed' || known.value.mode !== 'playing' || now - known.at < PICTURE_FOLLOW_SETTLE_MS || !wanted.has(known.value.clipId)) return [];
+      const start = this.starts.get(known.value.clipId);
+      return start && start.assetKind !== 'image' ? [{ ...start, sourceName }] : [];
     });
+    if (events.length <= PICTURE_READ_DECODERS) return events;
+    const from = this.readTurn++ % events.length;
+    return [...events.slice(from), ...events.slice(0, from)].slice(0, PICTURE_READ_DECODERS);
+  }
+  /** What a reading says, against the picture wanted when it came back. A part this song wrote since the reading went
+   * out is not judged (the reading may be from before that switch), nor one switched within the last second. A program
+   * switch that failed or is not known, read back as wanted, is confirmed: OBS shows it, there is nothing to repair. */
+  private judgeReading(reading: PictureReading, before: PictureLedger, decoders: readonly ManagedMediaEvent[]): void {
+    const ledger = this.ledger.state(), now = this.dependencies.now(), program = ledger.program;
+    const wanted = pictureProgram(this.timeline.pictureAt(Math.max(0, this.frame)).target);
+    let programScene: string | null = null, programWait: string | null = null;
+    if (ledger.takenOver) programWait = null;
+    else if (!wanted) programWait = '时间线这时不切节目画面';
+    else if (program !== before.program || program.state === 'pending') programWait = '刚切过画面，稍后核对';
+    else if (program.state === 'confirmed') {
+      if (program.value.sceneName !== wanted.sceneName || program.value.cueId !== wanted.cueId) programWait = '画面正要切换';
+      else if (now - program.at < PICTURE_FOLLOW_SETTLE_MS) programWait = '刚切过画面，稍后核对';
+      else programScene = wanted.sceneName;
+    } else if (reading.kind === 'read' && reading.programScene === wanted.sceneName && program.target === programSignature(wanted)) {
+      this.ledger.observe({ element: 'program', value: wanted }, now); this.clearItem('program'); programScene = wanted.sceneName;
+    } else programWait = program.state === 'unknown' && program.target === undefined ? '画面正要切换' : '这一项画面正在补发';
+    const compared = decoders.filter(event => ledger.decoders.get(event.sourceName) === before.decoders.get(event.sourceName));
+    const target: PictureFollowTarget = { programScene, programWait, takenOver: ledger.takenOver?.sceneName ?? null,
+      decoders: compared.map(event => ({ sourceName: event.sourceName, assetName: event.assetName, mode: 'playing' })) };
+    this.setFollow(nextPictureFollow(this.follow, pictureFollowVerdict(target, reading)));
+    if (reading.kind !== 'read') return;
+    // Out of step: listed, and corrected within the limit (picture.drift); in step again: off the list.
+    const drifted = new Map(driftedDecoders(target, reading).map(entry => [entry.sourceName, entry.driftMs]));
+    for (const event of compared) {
+      const driftMs = drifted.get(event.sourceName);
+      if (driftMs !== undefined) this.correctDrift(event, driftMs);
+      else if (reading.decoders.some(entry => entry.sourceName === event.sourceName && entry.state === 'playing')) this.clearItem(driftItem(event.clipId));
+    }
+    this.music(reading.programScene, reading.music.kind === 'missing');
+  }
+  /** The scene on program does not carry the music: red, with what to do, until it does (checking only, R8). */
+  private music(sceneName: string, missing: boolean): void {
+    const item = this.items.get(MUSIC_ITEM);
+    if (!missing) {
+      if (!item) return;
+      this.items.delete(MUSIC_ITEM); this.dependencies.clearFault?.(item.detail); this.publishItems();
+      return;
+    }
+    const message = musicMissingText(sceneName);
+    if (item?.detail === message) return;
+    this.setItem(MUSIC_ITEM, 'item', 'failed', message); this.fault(message);
+  }
+  private setFollow(follow: PictureFollow): void {
+    const previous = this.follow, takeover = this.ledger.state().takenOver;
+    this.follow = follow;
+    if (follow.state === previous.state && follow.detail === previous.detail) return;
+    if (!this.closed && !this.failure) this.dependencies.pictureFollow?.(follow, takeover && { sceneName: takeover.sceneName });
+  }
+
+  /** OBS reports a new scene on program (2026-11-10 decision 5). One that is neither what the timeline wants nor what
+   * this song last put there is a hand switch, also when another plugin made it. Taken over, the program is not switched
+   * back; the materials and shown sources are still reconciled, and at the next segment whose program differs the switch
+   * goes out as usual, which ends it (`ObsPictureLedger.ack`). Switched back to the wanted scene by hand: no longer taken
+   * over. Not judged while a switch of this song is on its way (its answer decides), before the song's first clock, or
+   * while OBS is away. */
+  programSceneChanged(sceneName: string): void {
+    if (!this.prepared || this.closed || this.failure || this.frame < 0 || this.lost || !this.online()) return;
+    const state = this.runtime.getState();
+    if (state !== 'running' && state !== 'paused') return;
+    const ledger = this.ledger.state(), program = ledger.program, now = this.dependencies.now();
+    if (program.state === 'pending' || ledger.takenOver?.sceneName === sceneName) return;
+    const wanted = pictureProgram(this.timeline.pictureAt(this.frame).target);
+    if (wanted && sceneName === wanted.sceneName) {
+      if (!ledger.takenOver) return;
+      this.ledger.observe({ element: 'program', value: wanted }, now);
+      this.setFollow({ state: 'checking', detail: `OBS 切回了「${sceneName}」，画面按时间线照常走`, misses: 0 });
+      return;
+    }
+    const ours = program.state === 'confirmed' ? program.value.sceneName : program.state === 'unknown' ? program.last?.sceneName ?? null : null;
+    if (!wanted || !isHandSwitch(sceneName, wanted.sceneName, ours)) return;
+    this.ledger.takeOver(sceneName, programSignature(wanted), now);
+    this.setFollow({ state: 'taken-over', detail: `有人在 OBS 里切到了「${sceneName}」，联动台不切回去；到下一段画面按时间线照常切换`, misses: 0 });
+    void this.dependencies.recordLog({ level: 'warning', category: 'action', device: 'obs', projectId: this.project.projectId, itemId: this.itemId,
+      message: `有人在 OBS 里把节目画面切到了「${sceneName}」：联动台不切回去，到下一段画面按时间线照常切换`, details: { sceneName, wanted: wanted.sceneName } })
+      .catch(error => this.fault(`记录画面被手动接管失败：${errorText(error)}`));
+  }
+
+  /** Recovery rule B for a material the read-back found out of step with the music: put back in step, once a minute per
+   * clip at most (2026-11-10 decision 2), in the picture session's own queue, where the next cut waits for it. */
+  private correctDrift(event: ManagedMediaEvent, driftMs: number): void {
+    const correct = this.dependencies.correctMediaDrift;
+    if (!correct || this.correcting.has(event.clipId)) return;
+    if (!this.items.has(driftItem(event.clipId))) this.setItem(driftItem(event.clipId), 'item', 'not-aligned', `素材“${event.assetName}”和音乐差了 ${Math.abs(driftMs)} ms，正在按音乐校正`);
+    const generation = this.generation;
+    this.correcting.add(event.clipId);
+    this.enqueue(async () => {
+      const current = (): boolean => generation === this.generation && !this.closed && !this.failure && this.runtime.getState() === 'running';
+      if (!current()) return;
+      // One correction per clip a minute (2026-11-10 decision 2): past it the clip is left as it is, in red.
+      let refused = false;
+      const mayCorrect = (found: number): boolean => {
+        if (this.recovery.allows('picture.drift', event.clipId, this.dependencies.now())) return true;
+        refused = true; this.driftLimit(event, found);
+        return false;
+      };
+      const drift = await this.dependencies.guardOutput(current, () => correct(this.align(event, this.frame), mayCorrect));
+      if (drift === null) {
+        // In step by the time it was corrected: a clip listed as out of step is right again.
+        if (!refused) this.clearItem(driftItem(event.clipId));
+        return;
+      }
+      const result = this.recovery.record('picture.drift', event.clipId, this.dependencies.now());
+      this.recovered(driftItem(event.clipId), 'repairing', `素材和音乐差了 ${drift} ms，已按当前位置校正：${event.assetName}`, [result], 'warning');
+    }, () => { this.correcting.delete(event.clipId); });
   }
   /** A clip found out of step again within the minute after its correction: not corrected again, in red once. */
   private driftLimit(event: ManagedMediaEvent, driftMs: number): void {
@@ -1222,14 +1360,15 @@ export class ObsProgramSession {
     this.dependencies.state(this.runtime.completeStop());
   }
 
-  private enqueue(operation: () => Promise<void>): void {
-    if (this.closed || this.failure) return;
-    if (this.queued >= 64) { this.fault('OBS 积压了超过 64 批画面动作，这一批没有发送；画面联动继续'); return; }
+  /** `done`: runs once the operation settled, or at once when it is not queued. */
+  private enqueue(operation: () => Promise<void>, done?: () => void): void {
+    if (this.closed || this.failure) { done?.(); return; }
+    if (this.queued >= 64) { done?.(); this.fault('OBS 积压了超过 64 批画面动作，这一批没有发送；画面联动继续'); return; }
     const generation = this.generation; this.queued++;
     this.tail = this.tail.then(async () => {
       if (generation !== this.generation || this.closed || this.failure) return;
       await operation();
-    }).catch(error => this.fault(`画面动作出错：${error instanceof Error ? error.message : String(error)}`)).finally(() => { this.queued--; });
+    }).catch(error => this.fault(`画面动作出错：${error instanceof Error ? error.message : String(error)}`)).finally(() => { this.queued--; done?.(); });
   }
   private async cue(cue: LinkCue, canExecute: () => boolean): Promise<CueExecutionReport> {
     const compiled = this.managed.compileVisualCue(cue);

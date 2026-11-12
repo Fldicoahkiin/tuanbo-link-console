@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkProject, type ObsPictureItem } from '@tb/schema';
-import { MediaPreparationFailed, ObsProgramSession, obsRecoveryText, type ObsProgramSessionDependencies } from './obs-program-session';
+import { MediaPreparationFailed, ObsProgramSession, obsRecoveryText, type ObsProgramSessionDependencies, type PictureReadRequest } from './obs-program-session';
+import type { PictureReading } from './picture-follow';
 import { compileManagedMediaTimeline, type ManagedMediaEvent } from './managed-media-timeline';
 import type { ManagedMediaOutcome } from './managed-output-runtime';
 import type { CueExecutionReport } from './cue-action-runner';
@@ -289,22 +290,45 @@ it('重建失败交给调用方报告，画面照常按当前位置重建；尚�
   expect(test.session.error).toBeNull(); await test.session.release();
 });
 
-it('长片段每 5 秒按当前位置检查一次漂移，校正时标红；起播、定位后 1 秒内不检查', async () => {
-  const test = setup(videoFixture()), correct = vi.fn<(event: import('./managed-media-timeline').ManagedMediaEvent) => Promise<number | null>>(() => Promise.resolve(null));
-  const drift = { ...test.dependencies, correctMediaDrift: correct };
-  const session = new ObsProgramSession(videoFixture(), 'C:/shows/test.tblink', 'song', drift);
+/** A read-back (R8) that finds the program on `scene` and every material it is asked for playing, `drift(now)` ms off the
+ * music. `asked`: each reading's materials, with where the music has them when OBS answers. */
+function reader(now: () => number, drift: (at: number) => number = () => 0, scene = '画面') {
+  const asked: { at: number; decoders: string[] }[] = [];
+  const readPicture = vi.fn((request: PictureReadRequest): Promise<PictureReading> => {
+    asked.push({ at: now(), decoders: request.decoders.map(decoder => `${decoder.sourceName} ${Math.round(decoder.positionAt(now()))}`) });
+    return Promise.resolve({ kind: 'read', programScene: scene, transitioning: false, music: { kind: 'not-used' },
+      decoders: request.decoders.map(decoder => ({ sourceName: decoder.sourceName, state: 'playing', driftMs: drift(now()) })) });
+  });
+  return { readPicture, asked, withMaterials: () => asked.filter(entry => entry.decoders.length) };
+}
+/** The material input a clip plays on. */
+function source(project: LinkProject, clipId: string): string {
+  return compileManagedMediaTimeline(project, 'song').events.find(event => event.clipId === clipId)!.sourceName;
+}
+/** A clock step, then the picture session's queue twice: a drift correction the read-back queued runs in this step. */
+async function step(session: ObsProgramSession, test: { time: (value: number) => void }, time: number, position = time): Promise<void> {
+  test.time(time); session.clock(position); await session.settled(); await session.settled();
+}
+
+// R8 (design 01 §4.8): the drift check is part of the read-back, once a second, instead of a loop of its own every 5 s.
+it('长片段的漂移跟着画面读回查：每秒读一次，差 300 ms 以上才校正并标红；起播、定位后 1 秒内不读素材（R8）', async () => {
+  const project = videoFixture(), test = setup(project), correct = vi.fn<(event: import('./managed-media-timeline').ManagedMediaEvent) => Promise<number | null>>(() => Promise.resolve(450));
+  const read = reader(test.dependencies.now, at => at === 5000 ? 450 : 0);
+  const drift = { ...test.dependencies, correctMediaDrift: correct, readPicture: read.readPicture };
+  const session = new ObsProgramSession(project, 'C:/shows/test.tblink', 'song', drift);
   await session.prepare(0);
-  for (let time = 0; time <= 5000; time += 100) { test.time(time); session.clock(time); await session.settled(); }
+  for (let time = 0; time <= 10000; time += 100) await step(session, test, time);
+  expect(read.asked.map(entry => entry.at)).toEqual([0, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]);
+  // The clip ends at 10 s: that reading compares no material.
+  expect(read.withMaterials().map(entry => entry.at)).toEqual([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000]);
+  expect(read.withMaterials()[4]!.decoders).toEqual([`${source(project, 'clip')} 5000`]);
   expect(correct.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([5000]);
-  correct.mockResolvedValueOnce(450);
-  for (let time = 5100; time <= 10000; time += 100) { test.time(time); session.clock(time); await session.settled(); }
-  expect(correct.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([5000, 10000]);
   expect(test.faults).toEqual(['素材和音乐差了 450 ms，已按当前位置校正：视频']);
   await session.release();
-  const seeked = new ObsProgramSession(videoFixture(), 'C:/shows/test.tblink', 'song', drift); correct.mockClear();
+  const seeked = new ObsProgramSession(project, 'C:/shows/test.tblink', 'song', drift); read.asked.length = 0;
   test.time(20000); await seeked.prepare(4500);
-  for (let time = 4500; time <= 5600; time += 100) { test.time(20000 + time); seeked.clock(time); await seeked.settled(); }
-  expect(correct.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([5500]); await seeked.release();
+  for (let time = 4500; time <= 5600; time += 100) await step(seeked, test, 20000 + time, time);
+  expect(read.withMaterials().map(entry => entry.decoders)).toEqual([[`${source(project, 'clip')} 5500`]]); await seeked.release();
 });
 
 it.each([0, 150])('机位覆盖结束只恢复叠加显隐，持续播放的视频不重发；应答耗时 %i ms', async latency => {
@@ -1243,13 +1267,14 @@ it('OBS 重连时已经结束的素材：恢复画面不再发它的停止，只
   expect(test.session.error).toBeNull();
 });
 
-it('几路素材同时在播：漂移检查和停歌按最近一次开播的先后，同一个素材后一段从头再排（2026-11-11 R3c）', async () => {
+it('几路素材同时在播：画面读回和停歌按最近一次开播的先后，同一个素材后一段从头再排（2026-11-11 R3c，R8 读回）', async () => {
   const project = clipsFixture([['a', 'va', 'upper', 0, 3000], ['b', 'vb', 'lower', 1, 15000], ['c', 'va', 'upper', 4, 12000]], ['upper', 'lower']);
-  const test = setup(project), correct = vi.fn<(event: import('./managed-media-timeline').ManagedMediaEvent) => Promise<number | null>>(() => Promise.resolve(null));
-  const session = new ObsProgramSession(project, 'C:/shows/test.tblink', 'song', { ...test.dependencies, correctMediaDrift: correct });
+  const test = setup(project), read = reader(test.dependencies.now);
+  const session = new ObsProgramSession(project, 'C:/shows/test.tblink', 'song', { ...test.dependencies, readPicture: read.readPicture });
   await session.prepare(0);
-  for (let time = 0; time <= 10000; time += 100) { test.time(time); session.clock(time); await session.settled(); }
-  expect(correct.mock.calls.map(([event]) => `${event.clipId} ${event.sourceOffsetMs}`)).toEqual(['b 4000', 'c 1000', 'b 9000', 'c 6000']);
+  for (let time = 0; time <= 10000; time += 100) await step(session, test, time);
+  const at = (time: number): string[] | undefined => read.asked.find(entry => entry.at === time)?.decoders;
+  expect([at(5000), at(10000)]).toEqual([[`${source(project, 'b')} 4000`, `${source(project, 'c')} 1000`], [`${source(project, 'b')} 9000`, `${source(project, 'c')} 6000`]]);
   await session.release();
   expect(mediaSent(test).slice(-2)).toEqual(['stop b', 'stop c']);
 });
@@ -1277,15 +1302,18 @@ it('从中间开播定位素材时停歌：还没定位的素材也照样停掉�
   expect(mediaSent(test)).toEqual(['stop a', 'stop b']);
 });
 
-it('素材开始或结束后 1 秒内不查漂移（2026-11-11 R3c）', async () => {
+it('素材开始或结束后 1 秒内读回不看素材（2026-11-11 R3c，R8 读回）', async () => {
   const project = clipsFixture([['a', 'va', 'upper', 0, 20000], ['b', 'vb', 'lower', 4, 3000]], ['upper', 'lower']);
   project.rundown[0]!.referenceMediaClips[1]!.startTimecode.frames = 15;
-  const test = setup(project), correct = vi.fn<(event: import('./managed-media-timeline').ManagedMediaEvent) => Promise<number | null>>(() => Promise.resolve(null));
-  const session = new ObsProgramSession(project, 'C:/shows/test.tblink', 'song', { ...test.dependencies, correctMediaDrift: correct });
+  const test = setup(project), read = reader(test.dependencies.now);
+  const session = new ObsProgramSession(project, 'C:/shows/test.tblink', 'song', { ...test.dependencies, readPicture: read.readPicture });
   await session.prepare(0);
-  for (let time = 0; time <= 16000; time += 100) { test.time(time); session.clock(time); await session.settled(); }
-  // b starts at 4.5 s and ends at 7.5 s: the checks due at 5 s and 7.5 s wait a second, then every 5 s.
-  expect(correct.mock.calls.map(([event]) => `${event.clipId} ${event.sourceOffsetMs}`)).toEqual(['a 5500', 'b 1000', 'a 10500', 'a 15500']);
+  for (let time = 0; time <= 10000; time += 100) await step(session, test, time);
+  // b starts at 4.5 s and ends at 7.5 s: the readings at 5 s and 8 s compare no material; a reading takes a material
+  // only once it was on air for a second (b at 6 s).
+  const a = source(project, 'a'), b = source(project, 'b');
+  expect(read.asked.map(entry => [entry.at, entry.decoders])).toEqual([[0, []], [1000, [`${a} 1000`]], [2000, [`${a} 2000`]], [3000, [`${a} 3000`]], [4000, [`${a} 4000`]],
+    [5000, []], [6000, [`${a} 6000`, `${b} 1500`]], [7000, [`${a} 7000`, `${b} 2500`]], [8000, []], [9000, [`${a} 9000`]], [10000, [`${a} 10000`]]]);
   await session.release();
 });
 
@@ -1417,11 +1445,16 @@ describe('失败分级接线，自动补一次（2026-11-10 第 2 题，0.5.9 R5
   it('素材已经在画面上、只是和音乐没对齐：不重新开播，列为“没对齐”，交给漂移校正；对齐了就拿掉', async () => {
     const execute = vi.fn<(payload: { projectPath: string; event: ManagedMediaEvent }) => Promise<ManagedMediaOutcome>>(() => Promise.resolve<ManagedMediaOutcome>({ kind: 'failed', reason: '切场景后素材位置对不上：视频', onAir: true, outOfStep: true, sent: true }));
     const correct = vi.fn<(event: ManagedMediaEvent, mayCorrect: (driftMs: number) => boolean) => Promise<number | null>>(() => Promise.resolve(null));
-    const test = repairing(videoFixture(), undefined, { executeManagedMediaEvent: execute, correctMediaDrift: correct });
+    let drift = 400;
+    const read = reader(() => test.dependencies.now(), () => drift);
+    const test = repairing(videoFixture(), undefined, { executeManagedMediaEvent: execute, correctMediaDrift: correct, readPicture: read.readPicture });
     await test.session.prepare(0); await test.advance(0, 900);
     expect(execute).toHaveBeenCalledOnce();
     expect(test.last()).toEqual([{ id: 'drift:clip', scope: 'item', state: 'not-aligned', detail: '素材“视频”已经在画面上，但和音乐没对齐。差得多时联动台过几秒会自动按音乐校正，不用处理' }]);
-    await test.advance(1000, 5200);
+    // The read-back finds it 400 ms off; by the time it is corrected OBS has it in step.
+    for (let time = 1000; time <= 1100; time += 100) await step(test.session, test, time);
+    drift = 0;
+    await test.advance(1200, 5200);
     expect(correct).toHaveBeenCalled(); expect(test.last()).toEqual([]);
     expect(execute).toHaveBeenCalledOnce(); expect(test.faults).toEqual([]);
   });
@@ -1435,11 +1468,13 @@ describe('失败分级接线，自动补一次（2026-11-10 第 2 题，0.5.9 R5
       if (!mayCorrect(500)) return Promise.resolve(null);
       corrected.push(now()); return Promise.resolve(500);
     });
-    const test = repairing(parseLinkProject(project), undefined, { correctMediaDrift: correct });
+    const read = reader(() => now(), () => 500);
+    const test = repairing(parseLinkProject(project), undefined, { correctMediaDrift: correct, readPicture: read.readPicture });
     now = test.dependencies.now;
-    await test.session.prepare(0); await test.advance(0, 66000);
-    // Checked every 5 s: corrected at 5 s, left as it is from 10 s to 60 s (said once), corrected again at 65 s.
-    expect(corrected).toEqual([5000, 65000]);
+    await test.session.prepare(0);
+    for (let time = 0; time <= 61500; time += 100) await step(test.session, test, time);
+    // Read back every second (R8): corrected at 1 s, left as it is from 2 s to 60 s (said once), corrected again at 61 s.
+    expect(corrected).toEqual([1000, 61000]);
     expect(test.faults).toEqual(['素材和音乐差了 500 ms，已按当前位置校正：视频',
       '素材“视频”和音乐差了 500 ms，这一分钟里已经校正过，不再反复校正：素材和音乐一直对不上，请检查 OBS 是否卡顿',
       '素材和音乐差了 500 ms，已按当前位置校正：视频']);
@@ -1570,5 +1605,130 @@ describe('停止后画面停在最后一帧（R14）', () => {
     const closed = setup(project());
     await closed.session.prepare(0); await closed.advance(0, 1000); await closed.session.stop(); await closed.session.release();
     expect(shown(closed)).toEqual(['一号 true', '二号 true', '一号 false', '二号 false']);
+  });
+});
+
+// ---- 0.5.9 R8: the picture read back, and a scene switched by hand in OBS (2026-11-10 decision 5) ----
+
+describe('画面读回和手动接管（R8，2026-11-10 第 5 题）', () => {
+  /** A session with the read-back: what OBS has on program follows the switches sent and the hand switches. */
+  function following(project: LinkProject, execute?: (action: LinkAction) => Promise<void>, music: () => 'carried' | 'missing' = () => 'carried', online?: () => boolean) {
+    let onProgram = '';
+    const test = setup(project, async action => { await execute?.(action); if (action.kind === 'obs.setProgramScene') onProgram = action.sceneName; }, online);
+    const follows: string[] = [], takeovers: (string | null)[] = [], items: ObsPictureItem[][] = [], cleared: string[] = [];
+    let programShown = (scene: string): string => scene;
+    const readPicture = vi.fn((request: PictureReadRequest): Promise<PictureReading> => Promise.resolve({ kind: 'read', programScene: programShown(onProgram), transitioning: false,
+      decoders: request.decoders.map(decoder => ({ sourceName: decoder.sourceName, state: 'playing', driftMs: 0 })), music: { kind: music() } }));
+    const session = new ObsProgramSession(project, 'C:/shows/test.tblink', 'song', { ...test.dependencies,
+      readPicture, pictureItems: list => items.push(list), clearFault: message => cleared.push(message),
+      pictureFollow: (follow, takeover) => { follows.push(`${follow.state}：${follow.detail}`); takeovers.push(takeover?.sceneName ?? null); } });
+    const advance = async (from: number, through: number): Promise<void> => { for (let time = from; time <= through; time += 100) await step(session, test, time); };
+    /** Someone switches the program in OBS: OBS has it, and reports it. */
+    const handSwitch = (sceneName: string): void => { onProgram = sceneName; session.programSceneChanged(sceneName); };
+    return { ...test, session, readPicture, follows, takeovers, items, cleared, advance, handSwitch, last: () => items.at(-1) ?? [],
+      /** OBS shows another program than it reported (a change event lost, say). */
+      showOnProgram: (shown: ((scene: string) => string)) => { programShown = shown; } };
+  }
+
+  it('播放中在 OBS 里手动切走：不切回去，标黄“被手动接管”，到下一段照常切，切完接管结束', async () => {
+    const test = following(camerasFixture([[0, 1000, '全景'], [1, 1000, '特写'], [2, 1000, '全景']]));
+    await test.session.prepare(0); await test.advance(0, 500);
+    test.handSwitch('观众互动');
+    await test.advance(600, 900);
+    expect(scenes(test)).toEqual(['全景']);
+    expect(test.follows.at(-1)).toBe('taken-over：有人在 OBS 里切到了「观众互动」，联动台不切回去；到下一段画面按时间线照常切换');
+    expect(test.takeovers.at(-1)).toBe('观众互动');
+    const log = test.dependencies.recordLog.mock.calls.map(([entry]) => entry).find(entry => entry.message.startsWith('有人在 OBS 里把节目画面切到了'));
+    expect(log).toMatchObject({ level: 'warning', device: 'obs', details: { sceneName: '观众互动', wanted: '全景' } });
+    // A pause and resume rebuilds the picture at the position: still not switched back.
+    await test.session.pause(); await step(test.session, test, 950, 900);
+    expect(scenes(test)).toEqual(['全景']);
+    await test.advance(1000, 3000);
+    expect(scenes(test)).toEqual(['全景', '特写', '全景']);
+    expect(test.follows.at(-1)).toMatch(/^following：OBS 在播「全景」/);
+    expect(test.takeovers.at(-1)).toBeNull();
+    expect(test.session.error).toBeNull(); expect(test.faults).toEqual([]);
+  });
+
+  it('接管时下一段机位切到同一个场景也照常切（下一个机位片段把画面拿回来）；之后又手动切走照旧接管', async () => {
+    const test = following(camerasFixture([[0, 1000, '全景'], [1, 1000, '全景']]));
+    await test.session.prepare(0); await test.advance(0, 500);
+    test.handSwitch('手动一');
+    await test.advance(600, 1500);
+    expect(scenes(test)).toEqual(['全景', '全景']);
+    test.handSwitch('手动二'); await test.advance(1600, 1900);
+    expect(scenes(test)).toEqual(['全景', '全景']); expect(test.follows.at(-1)).toMatch(/^taken-over：.*「手动二」/);
+  });
+
+  it('联动台自己切换的回报、切换还在路上时 OBS 报的场景都不算手动接管；手动切回时间线要的场景就不再算接管', async () => {
+    const answering = deferred();
+    const test = following(camerasFixture([[0, 1000, '全景'], [1, 1000, '特写']]), action => action.kind === 'obs.setProgramScene' && action.sceneName === '特写' ? answering.promise : Promise.resolve());
+    await test.session.prepare(0); await test.advance(0, 500);
+    test.session.programSceneChanged('全景');
+    test.time(1000); test.session.clock(1000);
+    await vi.waitFor(() => expect(scenes(test)).toEqual(['全景', '特写']));
+    test.session.programSceneChanged('别的');
+    answering.release(); await test.session.settled();
+    expect(test.follows.filter(entry => entry.startsWith('taken-over'))).toEqual([]);
+    await test.advance(1100, 1500);
+    test.handSwitch('手动'); expect(test.follows.at(-1)).toMatch(/^taken-over/);
+    test.handSwitch('特写');
+    expect(test.follows.at(-1)).toBe('checking：OBS 切回了「特写」，画面按时间线照常走'); expect(test.takeovers.at(-1)).toBeNull();
+  });
+
+  it('读回：连续两次场景对不上才标“没在跟”；刚切完 1 秒内不比；对上了回到“在跟”', async () => {
+    // Started at 0.5 s, so the readings fall at 0.5 s, 1.5 s, 2.5 s …: the one at 1.5 s comes half a second after the cut at 1 s.
+    const test = following(camerasFixture([[0, 1000, '全景'], [1, 5000, '特写']]));
+    await test.session.prepare(500); await test.advance(500, 1500);
+    expect(test.follows).toEqual(['checking：刚切过画面，稍后核对']);
+    await test.advance(1600, 2500);
+    expect(test.follows.at(-1)).toBe('following：OBS 在播「特写」，和时间线一致');
+    test.showOnProgram(() => '别的');
+    await test.advance(2600, 3500);
+    expect(test.follows.at(-1)).toBe('following：OBS 在播「特写」，和时间线一致');
+    await test.advance(3600, 4500);
+    expect(test.follows.at(-1)).toBe('not-following：OBS 现在播的是「别的」，按时间线这时应该是「特写」');
+    test.showOnProgram(scene => scene);
+    await test.advance(4600, 5500);
+    expect(test.follows.at(-1)).toBe('following：OBS 在播「特写」，和时间线一致');
+    expect(scenes(test)).toEqual(['全景', '特写']);
+  });
+
+  it('读不到写“无法确认”和原因；OBS 断着不读、不算次数，写无法确认', async () => {
+    let online = true;
+    const test = following(camerasFixture([[0, 5000, '全景']]), undefined, undefined, () => online);
+    test.readPicture.mockRejectedValueOnce(new Error('OBS 请求超时。'));
+    await test.session.prepare(0); await test.advance(0, 0);
+    expect(test.follows.at(-1)).toBe('unknown：读不到 OBS 现在的画面：OBS 请求超时');
+    online = false; const reads = test.readPicture.mock.calls.length;
+    await test.advance(100, 2000);
+    expect(test.readPicture.mock.calls.length).toBe(reads);
+    expect(test.follows.at(-1)).toBe('unknown：OBS 没有连接，重新连上后再核对画面');
+  });
+
+  it('当前场景里没有联动台的音乐：标红写明怎么办（只检查，不往场景里加东西）；有了就拿掉', async () => {
+    let music: 'carried' | 'missing' = 'carried';
+    const test = following(camerasFixture([[0, 5000, '全景']]), undefined, () => music);
+    await test.session.prepare(0); await test.advance(0, 900);
+    test.handSwitch('没有音乐的场景'); music = 'missing';
+    await test.advance(1000, 1000);
+    const text = '当前场景「没有音乐的场景」里没有联动台的音乐，观众听不到歌。请在 OBS 里切回联动台的场景，或者在这个场景里加上「团播联动台·内部正式音频」';
+    expect(test.last()).toEqual([{ id: 'music', scope: 'item', state: 'failed', detail: text }]);
+    expect(test.faults).toEqual([text]);
+    await test.advance(1100, 2000);
+    expect(test.faults).toEqual([text]);
+    music = 'carried'; await test.advance(2100, 3000);
+    expect(test.last()).toEqual([]); expect(test.cleared).toContain(text);
+    expect(test.actions.map(action => action.kind)).toEqual(['obs.setProgramScene']);
+  });
+
+  it('停歌以后不再读回，也不会是“没在跟”', async () => {
+    const test = following(camerasFixture([[0, 5000, '全景']]));
+    await test.session.prepare(0); await test.advance(0, 1500);
+    const reads = test.readPicture.mock.calls.length, follows = test.follows.length;
+    await test.session.stop();
+    test.handSwitch('手动'); test.time(3000); test.session.clock(3000);
+    expect(test.readPicture.mock.calls.length).toBe(reads); expect(test.follows.length).toBe(follows);
+    await test.session.release();
   });
 });

@@ -143,6 +143,8 @@ export class ObsPictureLedger {
   observe(observation: LedgerObservation, now: number): void {
     this.failures.delete(pictureElementKey(observation));
     this.put(observation, value => ({ state: 'confirmed', value, at: now }));
+    // The program back on the scene the timeline wants (switched back by hand, R8): no longer taken over.
+    if (observation.element === 'program') this.takenOver = null;
   }
 
   takeOver(sceneName: string, target: string, now: number): void {
