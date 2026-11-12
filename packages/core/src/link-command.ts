@@ -34,6 +34,7 @@ import {
 } from '@tb/schema';
 import { parseP1TimeOrigin, programTimeOrigin } from './ma2-time-origin';
 import { withSchemaVersion } from './project-schema-version';
+import { lightingIdMap, withNewLightingIds } from './lighting-ids';
 
 export type LinkCommand = {
   readonly id: string;
@@ -330,6 +331,9 @@ export function duplicateRundownItemCommand(
     const layerIds = new Map(copy.visualLayers.map((layer) => [layer.id, createId()]));
     for (const layer of copy.visualLayers) layer.id = layerIds.get(layer.id)!;
     for (const entry of [...copy.cues, ...copy.referenceMediaClips]) if (entry.layerId) entry.layerId = layerIds.get(entry.layerId);
+    // The copy's lighting is its own too: a point held in a drag while the show moves on to the copy must not
+    // land on the copy's point of the same id. Its pairing and sync state stay what they were (lighting-ids.ts).
+    if (copy.lighting) copy.lighting = withNewLightingIds(copy.lighting, lightingIdMap(createId));
     project.rundown.splice(sourceIndex + 1, 0, copy);
   }, now);
 }
