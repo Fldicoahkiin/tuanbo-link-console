@@ -332,3 +332,20 @@ it('选择预备在开歌前就失败：失败已经交给选歌的一方，开�
   expect(await t.pool.take({ ...t.request, generation: 3 }, 500, () => undefined)).toBe(t.outputs);
   expect(t.create).toHaveBeenCalledTimes(2); expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(1); expect(t.report).not.toHaveBeenCalled();
 });
+
+it('跟随 P1 的歌提前准备的不加联动台的音乐，只交给同样不加音乐的那一首；节目的照旧（0.5.9）', async () => {
+  const t = setup();
+  await t.pool.preload(t.request, undefined, false);
+  expect(t.create).toHaveBeenLastCalledWith(t.request, 500, false);
+  // The same song with our music item does not take it: it is let go and made anew with the music.
+  await t.pool.take({ ...t.request, generation: 3 }, 500, () => undefined);
+  expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(1);
+  expect(t.create).toHaveBeenLastCalledWith({ ...t.request, generation: 3 }, 500, true);
+  // Without the music, it is taken as it is.
+  await t.pool.preload({ ...t.request, generation: 4 }, undefined, false);
+  expect(await t.pool.take({ ...t.request, generation: 5 }, 500, () => undefined, false)).toBe(t.outputs);
+  expect(t.create).toHaveBeenCalledTimes(3);
+  // The program's own: with the music, as before.
+  await t.pool.preload({ ...t.request, generation: 6 });
+  expect(t.create).toHaveBeenLastCalledWith({ ...t.request, generation: 6 }, 500, true);
+});

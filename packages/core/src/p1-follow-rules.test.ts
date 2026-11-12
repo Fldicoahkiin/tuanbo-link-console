@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createEmptyLinkProject, parseLinkProject, type LinkProject } from '@tb/schema';
 import { frameNumberToTimecode } from './mtc-timecode';
-import { allocateP1TimecodeRanges } from './p1-auto-follow';
+import { allocateP1TimecodeRanges, nextP1Song } from './p1-auto-follow';
 import { P1Clock, type P1ClockEvent } from './p1-clock';
 import { createLightingDocument, lightingDocumentSchema, lightingMa2BindingSchema, lightingTrackSchema, nativePlayerStatusSchema, type LightingDocument, type LinkAction,
   type Ma2PlaybackAction, type NativePlayerStatus } from '@tb/schema';
@@ -681,4 +681,151 @@ function lightingWith(executors: string[]): LightingDocument {
     baselineTracks: executors.map((_executor, index) => track(index)), mappings: [],
     trackMappings: executors.map((executor, index) => ({ trackId: `track-${index}`, path: `Track ${index}`, executor, subtracks: [] })) });
   return lightingDocumentSchema.parse({ ...createLightingDocument(), ma2Bindings: [binding] });
+}
+
+/*
+ * The picture made ready ahead (user, 2026-11-12: 「我记得是完全实时同步吧，还是晚了」): the follow tells its outputs which
+ * song P1 is expected to play from its head next. Manual: the armed song. Auto: the first song auto-follow could start,
+ * then, as each song starts, the next one after it in rundown order (none after the last). A stop says none any more;
+ * rearming after a freeze says nothing new.
+ */
+describe('P1 跟随规则 · 提前准备下一首的画面（2026-11-12）', () => {
+  it('跟随告诉输出接下来要放哪首：手动是待命的那首；自动是按节目单顺序 P1 能开始的下一首，最后一首之后没有；停止说没有了，重新待命不另说', () => {
+    const project = rundownProject();
+    // In rundown order, only songs P1 can start: `off` is turned off, `none` has no P1 range.
+    expect([nextP1Song(project, null), nextP1Song(project, 'a'), nextP1Song(project, 'b'), nextP1Song(project, 'c'), nextP1Song(project, 'missing')])
+      .toEqual(['a', 'b', 'c', null, null]);
+    const told: (string | null)[] = [];
+    const outputs: P1FollowOutputs = { ...NO_OUTPUTS, expect: itemId => { told.push(itemId); } };
+    const started: string[] = [];
+    const auto = new P1FollowSession(project, 'auto', { outputs, lights: NO_LIGHTS, prepare: (_itemId, sessionId) => { started.push(sessionId); } });
+    auto.arm(null);
+    expect(told).toEqual(['a']);
+    const ready = (): void => { auto.prepared(started.at(-1)!); };
+    let ms = feed(auto, songFrame(project, 'a'), 10, 1_000); ready();
+    ms = feed(auto, songFrame(project, 'a') + 10, 10, ms);
+    expect(told).toEqual(['a', 'b']);
+    // Out of order: P1 plays c, the last; nothing after it.
+    ms = feed(auto, songFrame(project, 'c'), 10, ms + 100); ready();
+    feed(auto, songFrame(project, 'c') + 10, 10, ms);
+    expect(told).toEqual(['a', 'b', null]);
+    auto.stop('stop');
+    expect(told).toEqual(['a', 'b', null, null]);
+
+    const manualTold: (string | null)[] = [];
+    const manual = new P1FollowSession(project, 'manual', { outputs: { ...NO_OUTPUTS, expect: itemId => { manualTold.push(itemId); } }, lights: NO_LIGHTS, prepare: () => undefined });
+    manual.arm('b');
+    expect(manualTold).toEqual(['b']);
+    const end = feed(manual, 0, 30, 1_000);
+    // A song that starts in manual mode tells nothing new; a freeze and a rearm neither.
+    manual.idle(at(end + 700));
+    expect(manual.view.phase).toBe('frozen');
+    manual.rearm();
+    expect(manualTold).toEqual(['b']);
+    manual.stop('stop');
+    expect(manualTold).toEqual(['b', null]);
+  });
+});
+
+/** Four songs in rundown order: a, b and c P1 can start; `off` is turned off; `none` has no music, so no P1 range. */
+function rundownProject(): LinkProject {
+  const song = (id: string, enabled = true) => ({ id, title: id, enabled, cues: [],
+    referenceAudio: { assetId: `audio-${id}`, relativePath: `assets/${id}.wav`, sha256: 'a'.repeat(64), durationMs: 30_000 } });
+  const project = parseLinkProject({ ...createEmptyLinkProject('P1 按顺序'), playbackSource: 'p1',
+    rundown: [song('a'), { id: 'none', title: '没有音乐', cues: [] }, song('off', false), song('b'), song('c')] });
+  project.p1AutoFollow = allocateP1TimecodeRanges(project);
+  return project;
+}
+
+/** P1 playing `frames` frames from `fromFrame` into a follow, as `play` does into a clock; returns where it ended. */
+function feed(session: P1FollowSession, fromFrame: number, frames: number, startMs: number): number {
+  for (let offset = 0; offset < frames; offset += 2) {
+    const tc = frameNumberToTimecode(fromFrame + offset, '30');
+    const pieces = [tc.frames & 15, tc.frames >> 4, tc.seconds & 15, tc.seconds >> 4, tc.minutes & 15, tc.minutes >> 4, tc.hours & 15, (tc.hours >> 4) | (3 << 1)];
+    for (const [type, value] of pieces.entries()) session.message([0xf1, (type << 4) | value], at(startMs + (offset + type / 4) * FRAME_MS));
+  }
+  return startMs + frames * FRAME_MS;
+}
+
+/*
+ * A freeze while still waiting (review, 2026-11-12): in manual mode the follow was armed when P1 was already past the
+ * song's head, or P1's first timecode had another frame rate. No song was held; the operator's resync begins it at
+ * P1's position, as the resync of a held song places it: the console is told it runs this song (a stop switches it
+ * off), the action MIDI goes on from here, the picture is placed once at this position; nothing of the past is sent.
+ */
+describe('P1 跟随规则 · 还在待命就冻结了，重同步从 P1 此刻的位置开始这首歌（AGENTS §4.9，2026-11-12）', () => {
+  it('不是从开头开始：动作 MIDI 只发此刻之后的，过去的一条不补；控台从此跑这首，停止关这首的灯', async () => {
+    const project = midiProject();
+    const out = midiOutput(project, 'live');
+    const lit = lightsOn({ song: ['1.1', '1.2'] });
+    const follow = new P1FollowSession(project, 'manual', { outputs: out.outputs, prepare: () => undefined, lights: lit.lights });
+    follow.arm('song');
+    // P1 is at 2.2 s when armed, past the opening Note On, the CC at 15 and the Note On at 45; it goes on past 75.
+    const waited = playFollow(follow, 66, 20, 1_000);
+    await out.settled();
+    expect(follow.view).toMatchObject({ phase: 'frozen', cause: 'not-from-start' });
+    expect(out.sent).toEqual([]);
+    expect(lit.calls).toEqual([]);
+    follow.resync();
+    playFollow(follow, 86, 30, waited.endMs);
+    await out.settled();
+    expect(follow.view).toMatchObject({ phase: 'running', itemId: 'song' });
+    expect(out.sent.map(entry => entry.bytes)).toEqual([BYTES.go]);
+    expect(out.problems).toEqual([]);
+    expect(lit.calls).toEqual(['change null→song']);
+    follow.stop('stop');
+    expect(lit.calls).toEqual(['change null→song', 'stop song']);
+    expect(lit.offs).toEqual([['1.1', '1.2']]);
+  });
+
+  it('帧率不一致：P1 改对帧率以后重同步，和不是从开头开始一样从此刻开始；之前收到的位置一个不补', async () => {
+    const project = midiProject();
+    const out = midiOutput(project, 'live');
+    const lit = lightsOn({ song: ['1.1'] });
+    const follow = new P1FollowSession(project, 'manual', { outputs: out.outputs, prepare: () => undefined, lights: lit.lights });
+    follow.arm('song');
+    // P1 sends 25 fps from the head: frozen at once, nothing of the song's opening goes out.
+    const wrong = playAtRate(follow, 0, 10, 1_000, '25');
+    expect(follow.view).toMatchObject({ phase: 'frozen', cause: 'frame-rate' });
+    expect(() => { follow.resync(); }).toThrow(/帧率不一致/);
+    // P1 is set to 30 fps and goes on from 2.2 s; the operator resyncs there.
+    const back = playFollow(follow, 66, 20, wrong.endMs + 200);
+    follow.resync();
+    playFollow(follow, 86, 30, back.endMs);
+    await out.settled();
+    expect(follow.view).toMatchObject({ phase: 'running', itemId: 'song' });
+    expect(out.sent.map(entry => entry.bytes)).toEqual([BYTES.go]);
+    expect(out.problems).toEqual([]);
+    expect(lit.calls).toEqual(['change null→song']);
+    follow.stop('stop');
+    expect(lit.offs).toEqual([['1.1']]);
+  });
+
+  it('画面：此刻的机位出现在 OBS，过去的机位和点动作（2 秒的滤镜）不补，后面的照切', async () => {
+    const project = pictureProject();
+    const out = pictureOutput(project, 'manual');
+    const follow = new P1FollowSession(project, 'manual', { outputs: out.outputs, prepare: () => undefined, lights: NO_LIGHTS });
+    follow.arm('song');
+    const waited = playFollow(follow, 66, 10, 1_000);
+    await out.settled();
+    expect(out.sent).toEqual([]);
+    follow.resync();
+    playFollow(follow, 76, 30, waited.endMs);
+    await out.settled();
+    // 中景 is on air at 2.2 s: placed at the position resynced and once more as it joins where P1 is (the host's late
+    // rejoin), as the resync of a held song; never 全景, 特写 or the filter of 2 s; then 远景 at 3 s.
+    expect(out.sent).toEqual(['切到中景', '切到中景', '切到远景']);
+    expect(out.faults).toEqual([]);
+  });
+});
+
+/** `playFollow` at another MTC frame rate (the rate bits of the last piece): P1 set to a rate the project does not have. */
+function playAtRate(follow: P1FollowSession, fromFrame: number, frames: number, startMs: number, rate: '25'): { endMs: number } {
+  const frameMs = 1000 / 25;
+  for (let offset = 0; offset < frames; offset += 2) {
+    const tc = frameNumberToTimecode(fromFrame + offset, rate);
+    const pieces = [tc.frames & 15, tc.frames >> 4, tc.seconds & 15, tc.seconds >> 4, tc.minutes & 15, tc.minutes >> 4, tc.hours & 15, (tc.hours >> 4) | (1 << 1)];
+    for (const [type, value] of pieces.entries()) follow.message([0xf1, (type << 4) | value], at(startMs + (offset + type / 4) * frameMs));
+  }
+  return { endMs: startMs + frames * frameMs };
 }

@@ -4,9 +4,12 @@ import type { PictureFailure } from './native-obs-host';
 import { materialSceneTargets, nextPictureIdentity, pictureCleanupReason, pictureErrorDetail, projectFromObsSnapshot, toUserErrorMessage } from '@tb/core/link';
 
 /** `settled`: the preparation itself has ended; its result goes to whoever asked for it, unless `taken`:
- * a song took it over before it ended, and that song hears its result. */
-type Entry = { origin: 'selection' | 'next'; request: NativeObsPreload; cancelled: boolean; settled: boolean; taken: boolean;
+ * a song took it over before it ended, and that song hears its result. `music`: made with our music item (the audio
+ * player's song) or without (a P1 follow's): only a song of the same kind takes it over. */
+type Entry = { origin: 'selection' | 'next'; request: NativeObsPreload; music: boolean; cancelled: boolean; settled: boolean; taken: boolean;
   outputs: NativeObsOutputs | null; task: Promise<void>; assertOwner: (() => void) | null };
+/** The pool's admission refused a selection: someone's picture is on or being prepared. Not a failure of the song. */
+export class ObsPreloadRefused extends Error {}
 type Dependencies = {
   authorize: (request: NativeObsPreload) => Promise<void>;
   /** `music`: OBS takes the song's music through our music item (the audio player's song); false for a P1 follow's. */
@@ -26,8 +29,8 @@ export class NativeObsPreloadPool {
   constructor(private readonly dependencies: Dependencies) {}
 
   /** Internal lookahead from the admitted immutable session. Shared sources
-   * cannot be paused/reconfigured while the current song owns their decoder. */
-  async prepareNext(request: NativeObsPrepare, assertCurrent: () => void): Promise<boolean> {
+   * cannot be paused/reconfigured while the current song owns their decoder. `music`: false for a P1 follow's song. */
+  async prepareNext(request: NativeObsPrepare, assertCurrent: () => void, music = true): Promise<boolean> {
     const next = request.nextFiles;
     if (!next) return false;
     // The next song plays the newest version: never one older than the song now on air.
@@ -47,7 +50,7 @@ export class NativeObsPreloadPool {
     if (this.entry) throw new Error('已经有一个节目在准备，不能覆盖');
     const entry: Entry = {
       origin: 'next', request: { version: 1, sessionId: request.sessionId, generation: request.generation,
-        projectPath: request.projectPath, preciseSeeking: request.preciseSeeking, snapshot: next.snapshot, positionMs: next.positionMs },
+        projectPath: request.projectPath, preciseSeeking: request.preciseSeeking, snapshot: next.snapshot, positionMs: next.positionMs }, music,
       cancelled: false, settled: false, taken: false, outputs: null, task: Promise.resolve(), assertOwner: null
     };
     this.entry = entry;
@@ -57,7 +60,7 @@ export class NativeObsPreloadPool {
     };
     entry.task = (async () => {
       await this.cleanup; current();
-      entry.outputs = this.dependencies.create(entry.request, next.positionMs, true);
+      entry.outputs = this.dependencies.create(entry.request, next.positionMs, music);
       await entry.outputs.guardOutput(() => { current(); return true; }, () => entry.outputs!.preloadResources(current, 'background'));
       current();
     })().finally(() => { entry.settled = true; });
@@ -74,12 +77,13 @@ export class NativeObsPreloadPool {
     return true;
   }
 
-  /** `checkFiles`: the window's request names its media files; the program's own requests pass none. */
-  preload(value: unknown, checkFiles?: (request: NativeObsPreload) => Promise<void>): Promise<void> {
+  /** `checkFiles`: the window's request names its media files; the program's own requests pass none. `music`: false
+   * for a P1 follow's song made ready ahead (0.5.9). */
+  preload(value: unknown, checkFiles?: (request: NativeObsPreload) => Promise<void>, music = true): Promise<void> {
     const request = nativeObsPreloadSchema.parse(value);
     if (this.entry?.origin === 'selection' && this.entry.request.sessionId === request.sessionId && request.generation <= this.entry.request.generation) return Promise.reject(new Error('节目准备请求已过期'));
     const previous = this.discardReported();
-    const entry: Entry = { origin: 'selection', request, cancelled: false, settled: false, taken: false, outputs: null, task: Promise.resolve(), assertOwner: null }; this.entry = entry;
+    const entry: Entry = { origin: 'selection', request, music, cancelled: false, settled: false, taken: false, outputs: null, task: Promise.resolve(), assertOwner: null }; this.entry = entry;
     const current = (): void => { if (entry.cancelled) throw new ObsPreparationCancelled('节目准备已取消'); entry.assertOwner?.(); };
     entry.task = (async () => {
       await previous; current();
@@ -90,7 +94,7 @@ export class NativeObsPreloadPool {
       // The window's files are checked either way: the outputs load exactly these.
       await checkFiles?.(request);
       current();
-      entry.outputs = this.dependencies.create(request, request.positionMs, true);
+      entry.outputs = this.dependencies.create(request, request.positionMs, music);
       await entry.outputs.guardOutput(() => { current(); return true; }, () => entry.outputs!.preloadResources(current)); current();
     })().finally(() => { entry.settled = true; });
     return entry.task;
@@ -99,7 +103,8 @@ export class NativeObsPreloadPool {
   /** `music`: false for a P1 follow's song, whose music OBS does not take from us (`create`). */
   async take(request: NativeObsPrepare, positionMs: number, assertOwner: () => void, music = true): Promise<NativeObsOutputs> {
     const entry = this.entry;
-    if (entry && !entry.cancelled && entry.request.sessionId === request.sessionId && nextPictureIdentity(entry.request, entry.request.positionMs) === nextPictureIdentity(request, positionMs)) {
+    if (entry && !entry.cancelled && entry.music === music && entry.request.sessionId === request.sessionId
+      && nextPictureIdentity(entry.request, entry.request.positionMs) === nextPictureIdentity(request, positionMs)) {
       // The song taking it over being stopped or replaced cancels the preparation; that is not a failure.
       this.entry = null; entry.assertOwner = () => {
         try { assertOwner(); } catch (error) { throw new ObsPreparationCancelled(errorText(error)); }

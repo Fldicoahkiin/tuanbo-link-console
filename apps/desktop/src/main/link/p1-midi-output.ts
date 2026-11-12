@@ -18,7 +18,7 @@ import type { MidiClockSource, MidiSongNow, NativeMidiHost } from './native-midi
  * Nothing here throws into the follow: an output error is the host's (its state is red) and goes to the run log.
  */
 
-type Host = Pick<NativeMidiHost, 'prepare' | 'observe' | 'stop' | 'status'>;
+type Host = Pick<NativeMidiHost, 'prepare' | 'observe' | 'stop' | 'holds'>;
 type Log = (level: 'info' | 'warning' | 'error', message: string) => void;
 
 /** `preparing`: the host prepares from `fromMs`; `following`: clocks go to the host; `held`: closed at a freeze;
@@ -69,7 +69,11 @@ export class P1MidiOutput implements P1FollowOutputs {
 
   reconcileAt(clock: ProgramClock, playsOn: boolean): void {
     const song = this.song;
-    if (!song || song.sessionId !== clock.sessionId) return;
+    if (!song || song.sessionId !== clock.sessionId) {
+      // A resync of a song not begun yet (frozen while still waiting): it begins here, nothing of the past sent.
+      if (!playsOn) this.begin(clock, clock.positionMs, ++this.passes, false);
+      return;
+    }
     const fromMs = playsOn ? Math.min(song.latest?.positionMs ?? song.fromMs, clock.positionMs) : clock.positionMs;
     this.begin(clock, fromMs, playsOn ? song.pass : ++this.passes, false);
   }
@@ -94,10 +98,10 @@ export class P1MidiOutput implements P1FollowOutputs {
     this.log('error', `跟随 P1 时动作 MIDI 没有准备好，这首歌这一段不发动作：${message(error)}`);
   }
 
-  /** Only a song of this follow that the host still holds, as this output began it (session and generation). */
+  /** Only a song of this follow that the host still holds, as this output began it (session and generation), also while
+   * the host opens its lost port again. */
   private letGo(song: Song): void {
-    const held = this.host.status;
-    if (held?.sessionId !== song.sessionId || held.generation !== song.generation) return;
+    if (!this.host.holds(song.sessionId, song.generation)) return;
     void this.host.stop().catch((error: unknown) => this.log('error', `关闭跟随 P1 的动作 MIDI 失败：${message(error)}`));
   }
 

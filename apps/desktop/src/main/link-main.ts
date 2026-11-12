@@ -189,7 +189,7 @@ import { NativePlaybackRequests } from './link/native-playback-requests';
 import { NativeObsHost } from './link/native-obs-host';
 import { ObsReconnector } from './link/obs-reconnector';
 import { NativeObsRequests } from './link/native-obs-requests';
-import { NativeObsPreloadPool } from './link/native-obs-preload';
+import { NativeObsPreloadPool, ObsPreloadRefused } from './link/native-obs-preload';
 import { createNativeObsOutputs } from './link/native-obs-outputs';
 import { PreparationSteps, aheadAudioLog, audioErrorLog } from './link/preparation-log';
 import { obsStatusLogEntry } from './link/obs-status-log';
@@ -645,9 +645,9 @@ function registerIpc(
   const obsPreload = new NativeObsPreloadPool({
     authorize: async request => {
       await authorizeProduct('link:native-obs-prepare', request);
-      if (nativePlaybackActive() || nativeObs?.busy) throw new Error('正在播放时不能准备另一个节目');
+      if (nativePlaybackActive() || nativeObs?.busy) throw new ObsPreloadRefused('正在播放时不能准备另一个节目');
       await nativeObs?.stop();
-      if (nativePlaybackActive()) throw new Error('音频已经在准备了，不能再单独准备节目');
+      if (nativePlaybackActive()) throw new ObsPreloadRefused('音频已经在准备了，不能再单独准备节目');
     },
     create: (request, positionMs, music) => createNativeObsOutputs(request, { obs, projects: projectService, media: mediaPreviewService,
       profiles: profileStore, seek: nativeSeek, logger, seenNotices,
@@ -666,12 +666,13 @@ function registerIpc(
   nativeObs = new NativeObsHost({
     audio: () => nativePlayer?.status ?? null,
     outputs: (request, positionMs, assertCurrent, source) => obsPreload.take(request, positionMs, assertCurrent, source === null),
-    prepareNextFiles: async (request, assertCurrent) => {
+    prepareNextFiles: async (request, assertCurrent, source) => {
       if (!request.nextFiles) return;
       const started = performance.now();
       await prepareNextObsFiles(request, { projects: projectService, media: mediaPreviewService }, assertCurrent);
       assertCurrent();
-      const decoderPrepared = await obs.preparePlaybackMedia(() => obsPreload.prepareNext(request, assertCurrent));
+      // A P1 follow's next song: P1 plays its music, no music item of ours (as `outputs`).
+      const decoderPrepared = await obs.preparePlaybackMedia(() => obsPreload.prepareNext(request, assertCurrent, source === null));
       await logger.record({ level: 'info', category: 'preflight', device: '后台画面', projectId: request.snapshot.projectId,
         itemId: request.nextFiles.snapshot.item.id, message: decoderPrepared ? '下一个节目的画面已准备好' : '下一个节目的文件已准备好，共用的来源等当前节目结束后交接', result: 'succeeded',
         details: { elapsedMs: performance.now() - started, decoderPrepared } });
@@ -1134,7 +1135,7 @@ function registerIpc(
     executable: engineExecutable, authorize: () => authorizeOutput(), midiOutputs: async () => (await player().devices('all', true)).midiOutputs,
     checkFiles: async (projectPath, project) => { await projectAccess.assetFiles(projectPath, projectFileReferences(project).map(file => file.relativePath)); },
     lights: lightsOff, faults: programFaults, record: entry => logger.record(entry), showChanged: () => showState?.p1Changed(),
-    running: running => programOutputs.followRunningChanged(running), picture: () => nativeObs });
+    running: running => programOutputs.followRunningChanged(running), pool: () => nativeObsPreload, picture: () => nativeObs });
   p1Follow = follow;
   showState.followP1({ input: () => follow.showInput() });
   // Session registration captures cancellation synchronously; output adapters

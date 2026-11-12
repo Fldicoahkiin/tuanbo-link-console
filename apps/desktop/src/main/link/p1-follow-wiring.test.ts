@@ -41,7 +41,7 @@ function fixture(project: LinkProject, options: { refuseFiles?: string; license?
     executable: 'engine.exe', authorize, midiOutputs: () => Promise.resolve([]),
     checkFiles: () => options.refuseFiles ? Promise.reject(new Error(options.refuseFiles)) : Promise.resolve(),
     lights, faults: { report: message => { faults.push(message); }, windowOpened }, record: () => Promise.resolve(),
-    showChanged, running: value => { running.push(value); license?.followRunning(value); }, picture: () => options.picture ?? null
+    showChanged, running: value => { running.push(value); license?.followRunning(value); }, picture: () => options.picture ?? null, pool: () => null
   });
   const send = (command: P1FollowCommand) => handlers.get('link:p1-follow')!(null, { version: 1, ownerId: OWNER, command });
   const start = (mode: 'manual' | 'auto') => send({ kind: 'start', projectPath: 'C:/show.tblink', sessionId: OWNER, revision: 1, document: JSON.stringify(project),
@@ -193,10 +193,10 @@ describe('P1 跟随接到主进程（P3f）', () => {
     project.rundown[0]!.cues = [{ id: 'cue', name: '机位', timecode: frameNumberToTimecode(0, '30'), enabled: true, notes: '', actions: [
       { id: 'scene', label: '切机位', kind: 'obs.setProgramScene', sceneName: '全景' }] }];
     const calls: string[] = [];
-    let source: Parameters<NonNullable<PictureHost>['prepare']>[1] = null, prepared = '';
+    let source: Parameters<NonNullable<PictureHost>['prepare']>[1] = null, prepared = 0;
     const picture: NonNullable<PictureHost> = {
       prepare: (request, from) => {
-        source = from; prepared = request.sessionId;
+        source = from; prepared = request.generation;
         calls.push(`prepare:${request.snapshot.item.id}:${request.preciseSeeking}:${request.projectPath}`);
         const status: NativeObsStatus = { version: 1, sessionId: request.sessionId, generation: request.generation, itemId: request.snapshot.item.id, revision: 0,
           state: 'ready', reason: null, nextCueId: null, currentCueId: null, pendingCount: 0, positionMs: 0, items: [], recoveries: [] };
@@ -204,7 +204,8 @@ describe('P1 跟随接到主进程（P3f）', () => {
         return Promise.resolve(status);
       },
       observe: clock => { calls.push(`observe:${clock.source}:${clock.state}`); },
-      stopSource: (from, sessionId) => { calls.push(`stop:${from === source}:${sessionId === prepared}`); return Promise.resolve(); },
+      stopSource: (from, generation) => { calls.push(`stop:${from === source}:${generation === prepared}`); return Promise.resolve(); },
+      prepareNext: () => { calls.push('next'); return Promise.resolve(); },
       closeSource: from => { calls.push(`close:${from === source}`); return Promise.resolve(); }
     };
     const f = fixture(project, { picture });

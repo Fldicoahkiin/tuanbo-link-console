@@ -86,7 +86,7 @@ export function songPictureKey(project: LinkProject, itemId: string): string {
 function samePicture(a: LinkProject, b: LinkProject, itemId: string): boolean {
   const left = a.rundown.find(item => item.id === itemId), right = b.rundown.find(item => item.id === itemId);
   if (left && right && left.cues === right.cues && left.visualLayers === right.visualLayers && left.referenceMediaClips === right.referenceMediaClips
-    && a.mediaAssets === b.mediaAssets && a.outputCanvas === b.outputCanvas && a.internalVideoAudio === b.internalVideoAudio
+    && a.mediaAssets === b.mediaAssets && a.outputCanvas === b.outputCanvas && a.internalVideoAudio === b.internalVideoAudio && a.playbackSource === b.playbackSource
     && a.timebase.frameRate === b.timebase.frameRate && left.referenceAudio === right.referenceAudio) return true;
   return songPictureKey(a, itemId) === songPictureKey(b, itemId);
 }

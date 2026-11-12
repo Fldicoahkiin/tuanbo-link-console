@@ -62,7 +62,8 @@ type Dependencies = {
   outputs: (request: NativeObsPrepare, positionMs: number, assertCurrent: () => void, source: PictureClockSource | null) => Outputs | Promise<Outputs>;
   changed: (status: NativeObsStatus) => void;
   error: (message: string) => void;
-  prepareNextFiles?: (request: NativeObsPrepare, assertCurrent: () => void) => Promise<void>;
+  /** `source`: the song's clock source, as for `outputs`: a source's next song is made ready without our music item. */
+  prepareNextFiles?: (request: NativeObsPrepare, assertCurrent: () => void, source: PictureClockSource | null) => Promise<void>;
   /** Lets go of the next song's picture prepared ahead for this session (NativeObsPreloadPool.cancelNext). */
   cancelNextFiles?: (sessionId: string) => Promise<void>;
   /** Each restore of the picture after OBS came back, and its limit (obs.restore). */
@@ -416,7 +417,10 @@ export class NativeObsHost {
     if (entry.state.state === 'failed' || entry.state.state === 'stopped') {
       // Music plays without a picture of its own (given up before it was ready, or failed): the last frame of a song
       // stopped before it goes (R14). A late clock of the stopped song itself leaves that song's own frame alone.
-      if (clock.state === 'running') void this.releaseHolds(clock.sessionId === entry.request.sessionId && clock.itemId === entry.request.snapshot.item.id ? entry : null);
+      // A source's songs share one session: a later pass of the same song is not that song's late clock.
+      const own = clock.sessionId === entry.request.sessionId && clock.itemId === entry.request.snapshot.item.id
+        && (entry.source === null || clock.generation <= entry.state.generation);
+      if (clock.state === 'running') void this.releaseHolds(own ? entry : null);
       return;
     }
     // A song of one clock hears only that clock: the player's clocks never reach a P1 song's picture, nor P1's the player's.
@@ -508,7 +512,7 @@ export class NativeObsHost {
     // is logged once, also one that ends after this song stopped and before the next song took it over (2026-11-09).
     entry.nextTask = prepare({ ...entry.request, nextFiles }, () => {
       if (this.entry !== entry || entry.nextTurn !== turn || ['failed', 'stopped'].includes(entry.state.state)) throw new ObsPreparationCancelled('下一个节目的文件准备已取消');
-    }).catch((error: unknown) => {
+    }, entry.source).catch((error: unknown) => {
       if (!(error instanceof ObsPreparationCancelled)) this.dependencies.error(`准备下一个节目的文件失败：${error instanceof Error ? error.message : String(error)}`);
     });
   }
@@ -541,16 +545,17 @@ export class NativeObsHost {
   async close(sessionId?: string): Promise<void> {
     await this.closeWhere(entry => entry.source === null && (sessionId === undefined || entry.request.sessionId === sessionId));
   }
-  /** That song of a source stops, as the program's song stops (its last frame stays, R14); nothing else is touched. Also
-   * while its preparation is still on its way to an entry (the song before it being cleaned up, its outputs being made):
-   * that preparation is cancelled, nothing of the song goes out. While the source prepares another song, a song before
-   * it is already being stopped by that preparation: a late stop of it must not cancel the one being prepared. */
-  async stopSource(source: PictureClockSource, sessionId: string): Promise<void> {
+  /** That pass of a source's song stops, as the program's song stops (its last frame stays, R14); nothing else is
+   * touched. A source keeps one picture session for all its songs, so a pass is told by the `generation` it was prepared
+   * with. Also while its preparation is still on its way to an entry (the song before it being cleaned up, its outputs
+   * being made): that preparation is cancelled, nothing of the song goes out. While the source prepares another pass, a
+   * pass before it is already being stopped by that preparation: a late stop of it must not cancel the one being prepared. */
+  async stopSource(source: PictureClockSource, generation: number): Promise<void> {
     if (this.preparingFor(source)) {
-      if (this.requested?.sessionId === sessionId) await this.stop();
+      if (this.requested?.generation === generation) await this.stop();
       return;
     }
-    if (this.entry?.source === source && this.entry.request.sessionId === sessionId) await this.stop();
+    if (this.entry?.source === source && this.entry.request.generation === generation) await this.stop();
   }
   /** The follow of `source` closes (or the app quits): its song stops, also one still being prepared, and what its songs
    * left on their last frame is taken off, as when a program closes. */

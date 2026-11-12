@@ -10,6 +10,7 @@ import { P1FollowHost, type P1FollowHostDependencies, type P1FollowOutputSet } f
 import { P1FollowOutputList } from './p1-follow-outputs';
 import { P1MidiOutput } from './p1-midi-output';
 import type { NativeObsHost } from './native-obs-host';
+import type { NativeObsPreloadPool } from './native-obs-preload';
 import { P1PictureOutput } from './p1-picture-output';
 import type { LinkLogInput } from './run-logger';
 
@@ -47,7 +48,9 @@ export type P1FollowWiringDependencies = {
   /** Whether the follow runs the show, for the license (program-license.ts followRunningChanged). */
   running(running: boolean): void;
   /** The one picture host of the app (link-main's nativeObs): the follow's picture is one more song of it (0.5.9). */
-  picture(): Pick<NativeObsHost, 'prepare' | 'observe' | 'stopSource' | 'closeSource'> | null;
+  picture(): Pick<NativeObsHost, 'prepare' | 'observe' | 'stopSource' | 'closeSource' | 'prepareNext'> | null;
+  /** The one preload pool beside it (link-main's nativeObsPreload): the follow's next song made ready ahead (0.5.9). */
+  pool(): Pick<NativeObsPreloadPool, 'preload' | 'cancel' | 'cancelNext'> | null;
 };
 
 export type P1FollowWiring = {
@@ -168,7 +171,7 @@ function followOutputs(dependencies: P1FollowWiringDependencies, project: LinkPr
     }
   });
   const host = dependencies.picture();
-  const picture = host ? new P1PictureOutput({ host, project, projectPath: options.projectPath, mode: options.mode, preciseSeeking: options.preciseSeeking,
+  const picture = host ? new P1PictureOutput({ host, pool: dependencies.pool(), project, projectPath: options.projectPath, mode: options.mode, preciseSeeking: options.preciseSeeking,
     authorize: () => dependencies.authorize(), changed,
     log: (level, message) => log({ level, category: 'device', device: '后台画面', projectId: project.projectId, message, ...level === 'error' ? { result: 'failed' } : {} }) }) : null;
   const outputs = new P1FollowOutputList([

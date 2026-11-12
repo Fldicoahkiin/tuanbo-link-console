@@ -78,7 +78,21 @@ export function locateP1Sample(project: LinkProject, sample: MtcSample): { itemI
   const fps = nominalFramesPerSecond(sample.frameRate);
   const range = project.p1AutoFollow?.ranges.find((entry) => sample.totalFrames >= entry.startSeconds * fps
     && sample.totalFrames < (entry.startSeconds + entry.durationMs / 1000 + 1) * fps);
-  if (!range || !project.rundown.find((item) => item.id === range.itemId)?.enabled) return null;
+  if (!range || !p1CanStart(project, range.itemId)) return null;
   const totalFrames = sample.totalFrames - range.startSeconds * fps;
   return { itemId: range.itemId, sample: { ...sample, totalFrames, timecode: frameNumberToTimecode(totalFrames, sample.frameRate) } };
+}
+
+/** Auto-follow can start this song: it has a range P1 plays it in, and it is turned on (what `locateP1Sample` follows). */
+function p1CanStart(project: LinkProject, itemId: string): boolean {
+  return Boolean(project.p1AutoFollow?.ranges.some((range) => range.itemId === itemId) && project.rundown.find((item) => item.id === itemId)?.enabled);
+}
+
+/** The song auto-follow could start next in rundown order (0.5.9, P1 picture made ready ahead): the first one after
+ * `afterItemId` (null: from the top) that P1 can start; null after the last, never from the top again. A guess only: P1
+ * may play any song. */
+export function nextP1Song(project: LinkProject, afterItemId: string | null): string | null {
+  const from = afterItemId === null ? 0 : project.rundown.findIndex((item) => item.id === afterItemId) + 1;
+  if (from <= 0 && afterItemId !== null) return null;
+  return project.rundown.slice(from).find((item) => p1CanStart(project, item.id))?.id ?? null;
 }

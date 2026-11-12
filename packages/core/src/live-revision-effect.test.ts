@@ -63,6 +63,10 @@ describe('liveRevisionEffect', () => {
     // A later edit that leaves the trim stays different from the version the song started with.
     expect(liveRevisionEffect(trimmed, replace(trimmed, { ...trimmed.rundown[0]!, title: '再改' }), held)).toMatchObject({ audio: true });
   });
+  it('只改了谁放音乐：画面快照不一样了（视频自己的声音跟着变），所以也算画面改了', () => {
+    expect(liveRevisionEffect(before, { ...before, playbackSource: 'p1' }, held).picture).toBe(true);
+    expect(liveRevisionEffect(before, { ...before }, held).picture).toBe(false);
+  });
   it('删掉或停用：removedHeld 只在送来删掉它的那一版时说一次', () => {
     const removed = show(b);
     expect(liveRevisionEffect(before, removed, held)).toMatchObject({ removedHeld: true, volume: null, endAction: false, lighting: null });
