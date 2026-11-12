@@ -22,10 +22,10 @@ export function useSceneOutput(project: LinkProject | null, itemId: string | nul
   const item = project?.rundown.find(entry => entry.id === itemId);
   const frameRate = project?.timebase.frameRate ?? '30';
   const internal = project?.playbackSource === 'internal';
-  const { status, itemId: playing } = player.state;
+  const { status, itemId: playing, pictureTakesEdits } = player.state;
   // Worked out when playback starts or stops, not on every frame the playhead moves.
-  const onAir = useMemo(() => pictureOnAir(itemId, internal, { state: { status, itemId: playing }, project: playbackProject, outdated: player.outdated }),
-    [itemId, internal, status, playing, playbackProject, player.outdated]);
+  const onAir = useMemo(() => pictureOnAir(itemId, internal, { state: { status, itemId: playing, ...pictureTakesEdits === undefined ? {} : { pictureTakesEdits } },
+    project: playbackProject, outdated: player.outdated }), [itemId, internal, status, playing, pictureTakesEdits, playbackProject, player.outdated]);
   const marks = useMemo(() => item ? pictureMarks(onAir, { item, frameRate, airtime }) : NO_MARKS, [onAir, item, frameRate, airtime]);
   // The picture is worked out every frame (cheap), but the editor hears only when it changes (0.5.9 E2).
   const picture = usePlayheadValue(playhead, positionMs => timeline && !connected ? pictureKey(timeline, millisecondsToFrameNumber(positionMs, frameRate)) : null);

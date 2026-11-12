@@ -56,6 +56,7 @@ import { commandKeyLabel, markSplitHintShown, splitHintShown } from '../stores/s
 import { usePlayheadPaint, type EditorPlayhead } from './editor-playhead';
 import { DragSession } from './drag-session';
 import { keyRouter } from '../keys/key-router';
+import type { PendingMark } from '../view-models/picture-on-air';
 
 /**
  * The playhead a key moves (the frame steps, Shift+←/→, ↑↓, Home, End): a held key's seeks merged into one per frame
@@ -109,6 +110,8 @@ type Props = {
   onAirtime: Airtime | null;
   /** Parts changed while the song plays, which OBS does not have yet (view-models/pending-picture-edits). */
   pending: ReadonlySet<string>;
+  /** What those parts say (view-models/picture-on-air, R9). */
+  pendingMark: PendingMark;
   editRules: ContentEditRules;
   frameRate: MtcFrameRate;
   durationMs: number;
@@ -304,7 +307,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
           </div>}
           {props.audioEditor && !props.lightingWorkspace ? <SongPaddingHandles padding={props.audioEditor.padding} pixelsPerSecond={viewport.pixelsPerSecond} contentWidth={viewport.contentWidth} viewport={viewport} top={rulerHeight} height={Math.max(1, props.audioEditor?.tracks.length ?? 0) * (props.audioRowHeight ?? 76)} /> : null}
           {props.lightingWorkspace ? null : <ContentTracks layers={props.layers} clips={props.clips} cues={props.cues} assets={assets} frameRate={props.frameRate}
-            durationMs={props.durationMs} playhead={props.playhead} timelineState={props.timelineState} airtime={props.airtime} onAirtime={props.onAirtime} pending={props.pending}
+            durationMs={props.durationMs} playhead={props.playhead} timelineState={props.timelineState} airtime={props.airtime} onAirtime={props.onAirtime} pending={props.pending} pendingMark={props.pendingMark}
             selectedClipId={props.selectedClipId} selectedCueId={props.selectedCueId} beatSnapPoints={props.audioEditor?.snapPoints ?? []} markerSnapPoints={markerSnapPoints(props.lighting?.document.markers)} playing={props.playing}
             rules={props.editRules} viewport={viewport} tracks={visualTracks} snap={{ enabled: snapEnabled, thresholdMs: snapThresholdMs }}
             lanePointer={lanePointer} focusTimeline={() => timelineRef.current?.focus()}

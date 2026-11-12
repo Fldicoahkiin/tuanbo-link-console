@@ -44,7 +44,7 @@ describe('OBS 按哪一版画面在播', () => {
   it('准备中、播放中和暂停时按开始播放那一版，准备中已经算', () => {
     const project = started();
     for (const status of ['preparing', 'playing', 'paused'] as const) {
-      expect(pictureOnAir('song', true, holding(status, 'song', project))).toEqual({ kind: 'version', song: songPicture(project, 'song') });
+      expect(pictureOnAir('song', true, holding(status, 'song', project))).toEqual({ kind: 'version', song: songPicture(project, 'song'), takesEdits: true });
     }
   });
 

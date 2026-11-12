@@ -21,7 +21,7 @@ const moved = (project: LinkProject): LinkProject => withContentTimeline(moveCon
 const airtime = (project: LinkProject) => new SceneOutputTimeline(project, 'song').airtime();
 
 type Output = ReturnType<typeof useSceneOutput>;
-function sceneOutput(project: LinkProject, itemId: string | null, state: Pick<ProgramPlayerState, 'status' | 'itemId'>, playbackProject: LinkProject | null,
+function sceneOutput(project: LinkProject, itemId: string | null, state: Pick<ProgramPlayerState, 'status' | 'itemId' | 'pictureTakesEdits'>, playbackProject: LinkProject | null,
   { outdated = false, connected = true } = {}): Output {
   const result: Output[] = [];
   function Harness(): null {
@@ -40,6 +40,13 @@ describe('编辑器按 OBS 在播的那一版标时间线', () => {
     expect(output.airtime).toEqual(airtime(editing));
     expect([...output.marks.pending.changed]).toEqual(['cue:b']);
     expect(output.marks.notice?.text).toBe('播放中改了 1 处，正在送到 OBS');
+  });
+
+  it('这首歌的画面没有联动（失败了、没有画面会话）：播放器这么说，编辑器就写这一遍用不上，挪过的标停下重播才生效（R9）', () => {
+    const playing = started(), editing = moved(playing);
+    const output = sceneOutput(editing, 'song', { status: 'playing', itemId: 'song', pictureTakesEdits: false }, playing);
+    expect(output.marks.notice).toMatchObject({ tone: 'warning', text: '这首歌的画面现在没有联动，播放中改的画面这一遍用不上' });
+    expect(output.marks.pendingMark?.text).toBe('停下重播才生效');
   });
 
   it('界面重新加载后接回的节目对不上：暂停时也写无法确认，不标正在播出', () => {

@@ -68,6 +68,7 @@ import { useWorkspaceActions } from './workspace-actions';
 import type { DocumentActionProps } from './DocumentActions';
 import { PendingPictureNotice } from './PendingPictureNotice';
 import { useSceneOutput } from './useSceneOutput';
+import { PENDING_THIS_PASS } from '../view-models/picture-on-air';
 import { ownKeys } from '../keys/key-owner';
 import { useTimelineSegment } from './editor-playhead';
 
@@ -214,7 +215,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
           cues={item.cues}
           layers={item.visualLayers}
           timelineState={timelineState}
-          airtime={sceneOutput.airtime} onAirtime={sceneOutput.marks.onAirtime} pending={sceneOutput.marks.pending.changed}
+          airtime={sceneOutput.airtime} onAirtime={sceneOutput.marks.onAirtime} pending={sceneOutput.marks.pending.changed} pendingMark={sceneOutput.marks.pendingMark ?? PENDING_THIS_PASS}
           editRules={editRules}
           frameRate={project.timebase.frameRate}
           durationMs={durationMs}

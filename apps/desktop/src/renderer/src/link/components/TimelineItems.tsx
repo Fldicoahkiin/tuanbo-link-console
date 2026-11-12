@@ -3,11 +3,9 @@ import { cueTakesTime, resolveTimelineClipSpan, resolveTimelineCueSpan, timecode
 import type { LinkCue, LinkMediaAsset, MtcFrameRate, ReferenceMediaClip } from '@tb/schema';
 import { formatTimelineTimecode, timelineSpanWidth } from './timeline-geometry';
 import { offAirParts, offAirTitle, type OffAirPart } from './timeline-air';
+import { PENDING_REPLAY, type PendingMark } from '../view-models/picture-on-air';
 import './timeline-pending.css';
 
-/** On a part changed while its song plays: on its way to OBS, which does not have it yet (view-models/pending-picture-edits, R9). */
-const PENDING_TEXT = '正在送到 OBS';
-const PENDING_TITLE = '播放中改过，正在送到 OBS，送到以后这一遍就按改过的播';
 
 export type { TimelineDrag } from './useTimelineItemDrag';
 
@@ -25,8 +23,9 @@ type ItemProps = {
   pixelsPerSecond: number;
   selected: boolean;
   active: boolean;
-  /** Changed while the song plays: drawn where it will be, marked until the song is stopped and played again. */
-  pending: boolean;
+  /** Changed while the song plays and not in OBS yet: drawn where it will be, and says when it takes effect
+   * (view-models/picture-on-air, R9); null otherwise. */
+  pending: PendingMark | null;
   locked: boolean;
   /** The frames it is on air (timeline-air), for the covered parts. */
   onAir: readonly FrameRange[] | undefined;
@@ -46,17 +45,17 @@ export const TimelineClip = memo(function TimelineClip(props: ItemProps & { clip
   return <button
     aria-pressed={props.selected}
     data-kind="clip" data-id={props.clip.id}
-    className={`timeline-clip ${props.selected ? 'is-selected' : ''} ${props.active ? 'is-active' : ''} ${props.pending ? 'is-pending' : ''} ${props.locked ? 'is-locked' : ''} ${props.asset?.kind ?? 'missing'} ${props.held !== null ? 'is-dragging' : ''}`}
+    className={`timeline-clip ${props.selected ? 'is-selected' : ''} ${props.active ? 'is-active' : ''} ${props.pending ? 'is-pending' : ''} ${props.pending === PENDING_REPLAY ? 'is-pending-replay' : ''} ${props.locked ? 'is-locked' : ''} ${props.asset?.kind ?? 'missing'} ${props.held !== null ? 'is-dragging' : ''}`}
     data-off-air={offAirState(offAir)}
     style={{
       left: startMs / 1_000 * props.pixelsPerSecond,
       width: timelineSpanWidth(span.durationMs, props.pixelsPerSecond)
     }}
-    title={[props.clip.label, props.pending ? PENDING_TITLE : null, '左右拖动时间，上下拖动图层层级', formatTimelineTimecode(startMs, props.frameRate), offAirTitle(offAir)].filter(Boolean).join(' · ')}
+    title={[props.clip.label, props.pending?.title ?? null, '左右拖动时间，上下拖动图层层级', formatTimelineTimecode(startMs, props.frameRate), offAirTitle(offAir)].filter(Boolean).join(' · ')}
   >
     <OffAirParts parts={offAir} />
     <TrimHandle edge="start" title={props.locked ? '图层已锁定' : '拖动修剪片段入点'} />
-    <span>{props.clip.label}</span>{props.pending && settled ? <small className="timeline-pending-label">{PENDING_TEXT}</small> : <small>{clipLabel(props.asset, startMs, props.frameRate)}</small>}
+    <span>{props.clip.label}</span>{props.pending && settled ? <small className="timeline-pending-label">{props.pending.text}</small> : <small>{clipLabel(props.asset, startMs, props.frameRate)}</small>}
     <TrimHandle edge="end" title={props.locked ? '图层已锁定' : '拖动修剪片段出点'} />
   </button>;
 });
@@ -85,13 +84,13 @@ export const TimelineCue = memo(function TimelineCue(props: ItemProps & { cue: L
   const trimmable = span !== undefined && !props.locked;
   const label = cueLabel(cue, span !== undefined, startMs, durationMs, props.frameRate);
   return <button aria-pressed={props.selected} data-kind="cue" data-id={cue.id}
-    className={`timeline-cue cue-kind-${cueActionKind(cue)} ${span ? 'visual-obs-clip' : ''} ${props.selected ? 'is-selected' : ''} ${props.active ? 'is-active' : ''} ${props.pending ? 'is-pending' : ''} ${props.locked ? 'is-locked' : ''} ${props.held === 'drag' ? 'is-dragging' : ''}`}
+    className={`timeline-cue cue-kind-${cueActionKind(cue)} ${span ? 'visual-obs-clip' : ''} ${props.selected ? 'is-selected' : ''} ${props.active ? 'is-active' : ''} ${props.pending ? 'is-pending' : ''} ${props.pending === PENDING_REPLAY ? 'is-pending-replay' : ''} ${props.locked ? 'is-locked' : ''} ${props.held === 'drag' ? 'is-dragging' : ''}`}
     data-off-air={offAirState(offAir)}
     style={{ left: startMs / 1000 * props.pixelsPerSecond, top: 2, ...(span ? { width: timelineSpanWidth(durationMs, props.pixelsPerSecond) } : {}) }}
-    title={[props.locked ? '图层已锁定' : summary, props.pending ? PENDING_TITLE : null, ...(props.locked ? [] : [formatTimelineTimecode(startMs, props.frameRate), '左右拖动时间，上下拖动图层层级', offAirTitle(offAir)])].filter(Boolean).join(' · ')}>
+    title={[props.locked ? '图层已锁定' : summary, props.pending?.title ?? null, ...(props.locked ? [] : [formatTimelineTimecode(startMs, props.frameRate), '左右拖动时间，上下拖动图层层级', offAirTitle(offAir)])].filter(Boolean).join(' · ')}>
     <OffAirParts parts={offAir} />
     {trimmable ? <TrimHandle edge="start" title="拖动修改开始时间" /> : null}
-    <span>{sceneName ?? cue.name}</span>{props.pending && settled ? <small className="timeline-pending-label">{PENDING_TEXT}</small> : label !== null ? <small>{label}</small> : null}
+    <span>{sceneName ?? cue.name}</span>{props.pending && settled ? <small className="timeline-pending-label">{props.pending.text}</small> : label !== null ? <small>{label}</small> : null}
     {trimmable ? <TrimHandle edge="end" title="拖动修改结束时间" /> : null}
   </button>;
 });

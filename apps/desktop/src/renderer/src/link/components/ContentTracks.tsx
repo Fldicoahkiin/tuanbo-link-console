@@ -16,6 +16,7 @@ import { usePlayheadValue, type EditorPlayhead } from './editor-playhead';
 import { EdgeScroll, TRACK_HEIGHT, showsNewTrackAbove, snapshotTimeAt, trackLayout, type DragViewport, type ItemDragSnapshot, type SnapGuide } from './drag-preview';
 import './timeline-drag-hints.css';
 import { useScrollPaint, type ScrollPosition } from './timeline-scroll';
+import type { PendingMark } from '../view-models/picture-on-air';
 
 /** Items this far outside the drawn window stay drawn, so a fast scroll never shows a gap. */
 const CULL_MARGIN = 112;
@@ -68,6 +69,8 @@ export type ContentTracksProps = {
   onAirtime: Airtime | null;
   /** Parts (`media:` / `cue:` keys) changed while the song plays: marked, never shown on air. */
   pending: ReadonlySet<string>;
+  /** What those parts say (view-models/picture-on-air, R9). */
+  pendingMark: PendingMark;
   selectedClipId: string | null;
   selectedCueId: string | null;
   /** The song's beat points snapping adds (`songBeatSnapPoints`, from `songBeats`); none for a song without beats. */
@@ -246,14 +249,14 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
           const span = resolveTimelineClipSpan(clip, props.frameRate);
           if (!shown(ref, span.startMs, span.durationMs)) return null;
           return <TimelineClip key={clip.id} clip={clip} asset={props.assets.get(clip.assetId)} frameRate={props.frameRate}
-            pixelsPerSecond={viewport.pixelsPerSecond} selected={props.selectedClipId === clip.id} active={onAir.has(`media:${clip.id}`)} pending={props.pending.has(`media:${clip.id}`)}
+            pixelsPerSecond={viewport.pixelsPerSecond} selected={props.selectedClipId === clip.id} active={onAir.has(`media:${clip.id}`)} pending={props.pending.has(`media:${clip.id}`) ? props.pendingMark : null}
             locked={layer.locked} onAir={props.airtime.get(`media:${clip.id}`)} held={heldAs(ref)} />;
         })}
         {props.cues.filter((cue) => cue.layerId === layer.id).map((cue) => {
           const ref = { kind: 'cue', id: cue.id } as const;
           if (!shown(ref, partStart(ref, props), timelineCueSpan(cue, props.frameRate)?.durationMs ?? 0)) return null;
           return <TimelineCue key={cue.id} cue={cue} frameRate={props.frameRate} pixelsPerSecond={viewport.pixelsPerSecond}
-            selected={props.selectedCueId === cue.id} active={onAir.has(`cue:${cue.id}`)} pending={props.pending.has(`cue:${cue.id}`)} locked={layer.locked}
+            selected={props.selectedCueId === cue.id} active={onAir.has(`cue:${cue.id}`)} pending={props.pending.has(`cue:${cue.id}`) ? props.pendingMark : null} locked={layer.locked}
             onAir={props.airtime.get(`cue:${cue.id}`)} held={heldAs(ref)} />;
         })}
       </div>;

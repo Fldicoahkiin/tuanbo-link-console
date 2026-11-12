@@ -8,6 +8,8 @@
  */
 @layer pages {
   .reference-timeline :is(.timeline-clip, .timeline-cue).is-pending { border-style: dashed; border-color: var(--color-accent); }
+  /* The song's picture does not follow edits now: the warning colour and “停下重播才生效”, as before R9. */
+  .reference-timeline :is(.timeline-clip, .timeline-cue).is-pending-replay { border-color: var(--color-warning); }
   .reference-timeline :is(.timeline-clip, .timeline-cue).is-pending > .timeline-pending-label { font: 500 var(--type-caption)/1 var(--font-ui); }
 
   /* The row keeps its height while it is empty: a press that began with the line keeps it until released. */
