@@ -24,7 +24,8 @@ class FakeOutput {
 }
 class FakeInput {
   closes = 0;
-  constructor(readonly receive: (message: NativeMidiMessage) => void, readonly failed: (error: Error) => void) {}
+  constructor(readonly receive: (message: NativeMidiMessage) => void, readonly failed: (error: Error) => void,
+    readonly idle: (at100ns: bigint) => void) {}
   open(): Promise<void> { return Promise.resolve(); }
   close(): Promise<void> { this.closes += 1; return Promise.resolve(); }
 }
@@ -45,7 +46,7 @@ function setup(ports = { midiInputs: [{ id: 0, name: 'P1 MTC' }], midiOutputs: [
     authorize,
     list,
     createOutput: failed => { const output = new FakeOutput(failed); outputs.push(output); return output; },
-    createInput: (receive, failed) => { const input = new FakeInput(receive, failed); inputs.push(input); return input; },
+    createInput: (receive, failed, _invalid, idle) => { const input = new FakeInput(receive, failed, idle); inputs.push(input); return input; },
     emit: event => { events.push(event); },
     log: () => undefined,
     now100ns: () => 1_000n,
@@ -212,4 +213,63 @@ it('列表读取失败时通知窗口并停止自动刷新', async () => {
   expect(list).toHaveBeenCalledTimes(2);
   await broker.listPorts(true);
   expect(list).toHaveBeenLastCalledWith(true);
+});
+
+function listener() {
+  const heard: { message: NativeMidiMessage[]; idle: bigint[]; closed: string[] } = { message: [], idle: [], closed: [] };
+  return { heard, listener: { message: (message: NativeMidiMessage) => { heard.message.push(message); }, idle: (at: bigint) => { heard.idle.push(at); },
+    closed: (reason: string) => { heard.closed.push(reason); } } };
+}
+
+// 0.5.9 P3b, design 03 §4.1.5: the main process holds P1's MTC input itself; the window cannot open it meanwhile.
+it('主进程占用 P1 时间码输入口：窗口原来的使用先停下，占用期间窗口打不开；消息和心跳带接口时间直接给主进程', async () => {
+  const { broker, inputs, events } = setup();
+  const windowHandle = await broker.open('input', 'P1 MTC');
+  const { heard, listener: p1 } = listener();
+  const claim = await broker.claimInput('P1 MTC', 'P1 时间码', p1);
+  expect(closedReason(events, windowHandle)).toBe('正在跟随 P1，MIDI 接口「P1 MTC」要用来收P1 时间码，这里的 MIDI 已停止。停止跟随 P1 后再试。');
+  expect(inputs).toHaveLength(2); expect(inputs[0]!.closes).toBe(1);
+  await expect(broker.open('input', 'P1 MTC')).rejects.toThrow('MIDI 接口「P1 MTC」正在用作P1 时间码。停止跟随 P1 后再试。');
+  inputs[1]!.receive({ bytes: [0xf1, 0x10], at100ns: 123n }); inputs[1]!.idle(1_123n);
+  expect(heard.message).toEqual([{ bytes: [0xf1, 0x10], at100ns: 123n }]); expect(heard.idle).toEqual([1_123n]);
+  // Nothing of it goes to the window.
+  expect(events.filter(event => event.kind === 'message')).toEqual([]);
+  // The window reloading does not take it.
+  await broker.releaseWindow(); expect(inputs[1]!.closes).toBe(0);
+  await expect(broker.claimInput('P1 MTC', 'P1 时间码', p1)).rejects.toThrow('已经在用作P1 时间码');
+  await claim.release(); expect(inputs[1]!.closes).toBe(1); expect(heard.closed).toEqual([]);
+  await broker.open('input', 'P1 MTC'); expect(inputs).toHaveLength(3);
+});
+
+it('占用的输入口拔掉或驱动进程出错：告诉主进程，不自己重新打开；放手以前窗口照样打不开', async () => {
+  vi.useFakeTimers();
+  const ports = { midiInputs: [{ id: 0, name: 'P1 MTC' }], midiOutputs: [] };
+  const { broker, inputs } = setup(ports);
+  await broker.listPorts(false);
+  const { heard, listener: p1 } = listener();
+  const claim = await broker.claimInput('P1 MTC', 'P1 时间码', p1);
+  ports.midiInputs = [];
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(heard.closed).toEqual(['MIDI 接口「P1 MTC」已断开。重新插好后再打开。']);
+  expect(inputs[0]!.closes).toBe(1);
+  ports.midiInputs = [{ id: 0, name: 'P1 MTC' }];
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(inputs).toHaveLength(1);
+  inputs[0]!.receive({ bytes: [0xf1, 0x10], at100ns: 1n }); expect(heard.message).toEqual([]);
+  await expect(broker.open('input', 'P1 MTC')).rejects.toThrow('正在用作P1 时间码');
+  await claim.release();
+  const again = listener();
+  await broker.claimInput('P1 MTC', 'P1 时间码', again.listener);
+  inputs[1]!.failed(new Error('MIDI 输入服务异常退出：1'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(again.heard.closed).toEqual(['MIDI 输入服务异常退出：1']); expect(inputs).toHaveLength(2);
+});
+
+it('授权没通过时不占用输入口，窗口照常能打开', async () => {
+  let allowed = false;
+  const { broker, inputs } = setup(undefined, () => allowed ? Promise.resolve() : Promise.reject(new Error('授权已过期')));
+  await expect(broker.claimInput('P1 MTC', 'P1 时间码', listener().listener)).rejects.toThrow('授权已过期');
+  expect(inputs).toHaveLength(0);
+  allowed = true;
+  await broker.open('input', 'P1 MTC'); expect(inputs).toHaveLength(1);
 });
