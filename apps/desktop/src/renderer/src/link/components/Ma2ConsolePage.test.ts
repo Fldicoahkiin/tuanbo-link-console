@@ -43,12 +43,12 @@ describe('控台页页脚（SSR）', () => {
     expect(text(on)).toContain('网页遥控已连上，推杆区显示控台当前值');
     expect(on).not.toContain('<button');
   });
-  it('网页遥控断了（C2）：正在自动重新登录是等待，不标红、照旧给“连接网页遥控”；5 分钟到上限标红', () => {
+  it('网页遥控断了（C2）：正在自动重新登录是等待，标黄不标红、照旧给“连接网页遥控”；5 分钟到上限标红', () => {
     const draw = (footer: ReturnType<typeof ma2ConsoleFooter>): string => renderToStaticMarkup(React.createElement(Ma2ConsoleFooter, { footer, connecting: false, onConnect: () => Promise.resolve() }));
     const keys = { text: '按键：网页遥控', tone: 'normal' as const };
     const relogin = draw(ma2ConsoleFooter({ kind: 'relogin', attempt: 2 }, keys));
     expect(text(relogin)).toContain('网页遥控断了，正在自动重新登录（第 2 次）');
-    expect(relogin).not.toContain('role="alert"'); expect(relogin).not.toContain('danger'); expect(text(relogin)).toContain('连接网页遥控');
+    expect(relogin).not.toContain('role="alert"'); expect(relogin).not.toContain('danger'); expect(relogin).toContain('data-tone="warning"'); expect(text(relogin)).toContain('连接网页遥控');
     const limit = draw(ma2ConsoleFooter({ kind: 'stopped', reason: '网页遥控断线 5 分钟还没能自动重新登录，请检查控台和网络后手动连接', limit: true }, keys));
     expect(limit).toContain('data-tone="danger"'); expect(limit).toContain('role="alert"');
     expect(text(limit)).toContain('网页遥控断线 5 分钟还没能自动重新登录，请检查控台和网络后手动连接');

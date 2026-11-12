@@ -148,10 +148,11 @@ function bandNote(rows: readonly Ma2ConsoleLiveRow[], shown: boolean): Ma2Consol
   const failed = rows.find((row): row is Extract<Ma2ConsoleLiveRow, { kind: 'failed' }> => row.kind === 'failed');
   if (failed) return { text: `读不到控台上这几格现在的状态。原因：${failed.reason}`, tone: 'warning' };
   const waiting = rows.find((row): row is Extract<Ma2ConsoleLiveRow, { kind: 'read' }> => row.kind === 'read' && row.waiting !== undefined);
-  return waiting?.waiting ? { text: waiting.waiting, tone: 'normal' } : null;
+  // Yellow: the session dropped and what is shown turns old, though nothing is asked of the operator yet.
+  return waiting?.waiting ? { text: waiting.waiting, tone: 'warning' } : null;
 }
 
-/** The words while a session logs in again on its own (C2): a wait, never red. */
+/** The words while a session logs in again on its own (C2): a wait, shown in yellow (it dropped; faders and live state wait), never red. */
 export function ma2ReloginText(attempt: number): string { return `网页遥控断了，正在自动重新登录（第 ${attempt} 次）`; }
 
 /**
@@ -164,7 +165,7 @@ export function ma2FaderLiveRow(input: { wanted: boolean; start: number; snapsho
   if (!input.wanted) return { kind: 'off', note: MA2_CONSOLE_CONNECT_NOTE };
   if (input.error && input.session?.kind === 'relogin') {
     const waiting = ma2ReloginText(input.session.attempt);
-    return input.snapshot ? { ...faderRead(input.snapshot), waiting } : { kind: 'off', note: waiting };
+    return input.snapshot ? { ...faderRead(input.snapshot), waiting } : { kind: 'off', note: waiting, tone: 'warning' };
   }
   if (input.error) return { kind: 'failed', reason: input.error };
   if (!input.snapshot) return { kind: 'reading' };
@@ -210,7 +211,7 @@ export function ma2ButtonLiveRow(input: Ma2ButtonRowInput | undefined): Ma2Conso
         : { kind: 'off', note: 'Button 区的网页遥控现在没连着，这里只显示页面结构。按一次键会重新连上' };
     case 'relogin': {
       const waiting = `Button 区的${ma2ReloginText(input.attempt)}`;
-      return input.last ? { kind: 'read', readAt: input.last.readAt, items: input.last.items, faders: [], waiting } : { kind: 'off', note: `${waiting}，这里先只显示页面结构` };
+      return input.last ? { kind: 'read', readAt: input.last.readAt, items: input.last.items, faders: [], waiting } : { kind: 'off', note: `${waiting}，这里先只显示页面结构`, tone: 'warning' };
     }
     case 'reading': return { kind: 'reading' };
     case 'failed': return { kind: 'failed', reason: input.reason };
@@ -281,8 +282,8 @@ export function ma2ConsoleFooter(webRemote: Ma2ConsoleWebRemote, buttonKeys: { t
     case 'connecting': return line('正在连接网页遥控…', 'normal', false);
     case 'connected': return line('网页遥控已连上，推杆区显示控台当前值', 'normal', false);
     case 'failed': return line(`网页遥控停了，推杆区的实时状态没有更新。原因：${webRemote.reason}`, 'warning', true);
-    // Waiting, never red; the operator may still connect by hand, and that takes over.
-    case 'relogin': return line(ma2ReloginText(webRemote.attempt), 'normal', true);
+    // Waiting, in yellow and never red; the operator may still connect by hand, and that takes over.
+    case 'relogin': return line(ma2ReloginText(webRemote.attempt), 'warning', true);
     case 'stopped': return line(webRemote.limit ? webRemote.reason : `网页遥控停了，需要手动连接。原因：${webRemote.reason}`, 'danger', true);
   }
 }

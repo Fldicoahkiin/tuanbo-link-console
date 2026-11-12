@@ -11,7 +11,7 @@ import { writeFileAtomically } from './atomic-file';
 import { verifyMa2ShowSource } from './ma2-show-probe';
 import { MA2_BUTTON_RANGES, Ma2LivePlayback, ma2ObservedRange, type Ma2ButtonSnapshot } from './ma2-live-playback';
 import { Ma2ExecutorChannels, type Ma2ButtonAreaAnswer } from './ma2-executor-channel';
-import { Ma2ReloginStop, Ma2WebRemoteRelogin, type Ma2ReloginLog } from './ma2-web-remote-relogin';
+import { Ma2ReloginStop, Ma2WebRemoteRelogin, ma2ReloginReason, type Ma2ReloginLog } from './ma2-web-remote-relogin';
 
 const profilesSchema = z.array(z.object({ host: z.ipv4(), username: z.string().min(1).max(256) }).strict()).max(128);
 type ButtonSession = { client: Ma2LivePlayback; scope: string; verifiedAt: number; reads: Map<string, Ma2ButtonSnapshot>; reading: Promise<unknown> };
@@ -125,7 +125,7 @@ export class Ma2LiveService {
     const relogin = this.faderRelogin.view(scope);
     if (relogin && relogin.kind !== 'connected') return relogin;
     if (this.scope !== scope) return { kind: 'idle' };
-    if (this.failed) return { kind: 'stopped', reason: this.faderFailure ?? '实时推杆已停止，请重新连接', limit: false };
+    if (this.failed) return { kind: 'stopped', reason: ma2ReloginReason(this.faderFailure ?? '实时推杆已停止，请重新连接'), limit: false };
     return this.client?.connected ? { kind: 'connected' } : { kind: 'idle' };
   }
   release(): void {

@@ -19,6 +19,8 @@ const RULE = OUTPUT_RECOVERY_RULES[ROW];
 const LIMIT_MS = RULE.limit.maxMs;
 const LABEL: Record<Ma2ReloginSession, string> = { fader: '推杆区', buttons: 'Button 区' };
 const seconds = (ms: number): number => Math.max(0, Math.round(ms / 1000));
+/** A reason as the windows are told it: what the status schema takes (512 characters), so a long error never makes the state unreadable. */
+export const ma2ReloginReason = (reason: string): string => reason.length > 512 ? `${reason.slice(0, 511)}…` : reason;
 /** What the operator must deal with, so trying again is pointless. Anything else (network, timeout, the Telnet line not up) is tried again. */
 function needsPerson(error: unknown): boolean { return error instanceof Ma2ReloginStop || error instanceof Ma2LoginRefused || error instanceof Ma2ShowSourceChanged; }
 
@@ -73,8 +75,8 @@ export class Ma2WebRemoteRelogin<T> {
     if (state.kind === 'idle' || state.scope !== scope) return null;
     switch (state.kind) {
       case 'connected': return { kind: 'connected' };
-      case 'relogin': return { kind: 'relogin', attempt: state.attempt, since: state.since, reason: state.reason };
-      case 'stopped': return { kind: 'stopped', reason: state.reason, limit: state.limit };
+      case 'relogin': return { kind: 'relogin', attempt: state.attempt, since: state.since, reason: ma2ReloginReason(state.reason) };
+      case 'stopped': return { kind: 'stopped', reason: ma2ReloginReason(state.reason), limit: state.limit };
     }
   }
 

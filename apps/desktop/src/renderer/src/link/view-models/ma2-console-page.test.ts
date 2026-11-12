@@ -179,7 +179,7 @@ describe('网页遥控断了自动重新登录时怎么显示（C2）', () => {
   it('页脚第二行：正在重新登录写第几次，是等待不标红，照旧能手动连；到上限用表里的话标红；别的原因停下也标红、写原因', () => {
     const relogin = ma2ConsoleWebRemote({ wanted: true, connecting: false, error: '断了', session: { kind: 'relogin', attempt: 3, since: 0, reason: '断了' }, snapshot: true });
     expect(relogin).toEqual({ kind: 'relogin', attempt: 3 });
-    expect(ma2ConsoleFooter(relogin, keys)).toMatchObject({ webRemote: '网页遥控断了，正在自动重新登录（第 3 次）', webRemoteTone: 'normal', connect: true });
+    expect(ma2ConsoleFooter(relogin, keys)).toMatchObject({ webRemote: '网页遥控断了，正在自动重新登录（第 3 次）', webRemoteTone: 'warning', connect: true });
     const limit = ma2ConsoleWebRemote({ wanted: true, connecting: false, error: '断了', session: { kind: 'stopped', reason: LIMIT, limit: true }, snapshot: true });
     expect(ma2ConsoleFooter(limit, keys)).toMatchObject({ webRemote: LIMIT, webRemoteTone: 'danger', connect: true });
     const refused = ma2ConsoleWebRemote({ wanted: true, connecting: false, error: '断了', session: { kind: 'stopped', reason: '控台拒绝登录，请检查实时推杆用户名和密码', limit: false }, snapshot: false });
@@ -197,9 +197,9 @@ describe('网页遥控断了自动重新登录时怎么显示（C2）', () => {
     expect(faderBand(row, 1500).cells[0]!.live).toEqual({ kind: 'live', running: true, cue: '3 副歌', stale: false });
     const old = faderBand(row, 1000 + MA2_CONSOLE_LIVE_STALE_MS + 1);
     expect(old.cells[0]!.live).toMatchObject({ stale: true });
-    expect(old.note).toEqual({ text: '网页遥控断了，正在自动重新登录（第 2 次）', tone: 'normal' });
+    expect(old.note).toEqual({ text: '网页遥控断了，正在自动重新登录（第 2 次）', tone: 'warning' });
     expect(ma2FaderLiveRow({ wanted: true, start: 1, snapshot: null, error: '断了', session: { kind: 'relogin', attempt: 1, since: 0, reason: '' } }))
-      .toEqual({ kind: 'off', note: '网页遥控断了，正在自动重新登录（第 1 次）' });
+      .toEqual({ kind: 'off', note: '网页遥控断了，正在自动重新登录（第 1 次）', tone: 'warning' });
     // Stopped: a failure, as before.
     expect(ma2FaderLiveRow({ wanted: true, start: 1, snapshot, error: '断了', session: { kind: 'stopped', reason: LIMIT, limit: true } })).toEqual({ kind: 'failed', reason: '断了' });
   });
@@ -212,8 +212,8 @@ describe('网页遥控断了自动重新登录时怎么显示（C2）', () => {
     expect(row).toEqual({ kind: 'relogin', attempt: 2, last: { readAt: 1000, items: read.items } });
     const shown = band({ rows: new Map([[101, ma2ButtonLiveRow(row)]]), now: 1000 + MA2_CONSOLE_LIVE_STALE_MS + 1 });
     expect(cell(shown, 101).live).toEqual({ kind: 'live', running: true, cue: '1 主歌', stale: true });
-    expect(shown.note).toEqual({ text: 'Button 区的网页遥控断了，正在自动重新登录（第 2 次）', tone: 'normal' });
-    expect(ma2ButtonLiveRow(ma2ButtonRowAfter(undefined, { kind: 'relogin', attempt: 1 }))).toEqual({ kind: 'off', note: 'Button 区的网页遥控断了，正在自动重新登录（第 1 次），这里先只显示页面结构' });
+    expect(shown.note).toEqual({ text: 'Button 区的网页遥控断了，正在自动重新登录（第 2 次）', tone: 'warning' });
+    expect(ma2ButtonLiveRow(ma2ButtonRowAfter(undefined, { kind: 'relogin', attempt: 1 }))).toEqual({ kind: 'off', note: 'Button 区的网页遥控断了，正在自动重新登录（第 1 次），这里先只显示页面结构', tone: 'warning' });
     expect(ma2ButtonLiveRow({ kind: 'off', why: 'stopped', reason: LIMIT })).toEqual({ kind: 'off', note: `Button 区的网页遥控停了：${LIMIT}。按一次键会重新连上`, tone: 'warning' });
     // Logged in again: the next read shows as usual.
     expect(ma2ButtonRowAfter(row, { ...read, readAt: 9000 })).toEqual({ kind: 'live', readAt: 9000, items: read.items });
