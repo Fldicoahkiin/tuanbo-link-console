@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, parseLinkProject, type IntegrationProfile, type P1FollowRequest, type P1FollowState } from '@tb/schema';
+import { frameNumberToTimecode } from '@tb/core/link';
+import { createEmptyLinkProject, parseLinkProject, type IntegrationProfile, type LinkProject, type P1FollowRequest, type P1FollowState } from '@tb/schema';
+import type { MidiInputListener } from '../../../../main/link/midi-port-broker';
+import { P1FollowHost } from '../../../../main/link/p1-follow-host';
 import { createDefaultIntegrationProfile } from '../view-models/local-integration-profile';
-import { followRuntimeState, orphanFollow, P1FollowClient } from './p1-follow-client';
+import { followRuntimeState, nothingFollowed, orphanFollow, P1FollowClient, type P1FollowStartInput } from './p1-follow-client';
 
 const PAGE = '6f1c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f';
 const OTHER = '7f1c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f';
@@ -105,5 +108,121 @@ describe('界面上跟随 P1 的唯一入口（P4）', () => {
     expect(at('waiting', { mode: 'auto', itemId: null })).toBe('idle');
     expect(at('standby', {}, true)).toBe('preflight');
     expect(at('running', {}, true)).toBe('running');
+  });
+});
+
+/** The real main-process follow behind the real client, as the window reaches it (link:p1-follow). */
+function live() {
+  const project: LinkProject = parseLinkProject({ ...createEmptyLinkProject('演出'), playbackSource: 'p1', rundown: [{ id: 'song', title: '歌', cues: [] }] });
+  const claims: { portName: string; listener: MidiInputListener; release: ReturnType<typeof vi.fn> }[] = [];
+  const listeners = new Set<(state: P1FollowState) => void>();
+  const host = new P1FollowHost({
+    claimInput: (portName, listener) => { const release = vi.fn(() => Promise.resolve()); claims.push({ portName, listener, release }); return Promise.resolve({ owner: 'P1 时间码', release }); },
+    openProject: () => Promise.resolve(project),
+    outputs: () => ({ outputs: { observe: () => undefined, hold: () => undefined, reconcileAt: () => undefined }, lights: { change: () => undefined, stop: () => undefined },
+      state: () => ({ actionMidi: null, picture: null }), close: () => Promise.resolve() }),
+    prepareSong: () => Promise.resolve(), changed: state => { for (const listener of listeners) listener(state); }, log: () => undefined
+  });
+  const requests: P1FollowRequest[] = [];
+  const client = new P1FollowClient({
+    api: { p1Follow: request => { requests.push(request); return host.command(request); }, getP1FollowState: () => Promise.resolve(host.state),
+      onP1FollowState: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; } },
+    ownerId: PAGE, shown: () => undefined, errorsShown: () => true
+  });
+  client.connect();
+  // The same document version throughout: the operator only re-plugs a cable or changes this computer's settings.
+  let settings = profile();
+  const input = (): P1FollowStartInput => ({ project, path: 'C:/show.tblink', documentId: 1, revision: 7, profile: settings, preciseSeeking: false, encode: () => Promise.resolve('{}') });
+  const play = (frames: number, startMs: number) => {
+    const listener = claims.at(-1)!.listener;
+    for (let frame = 0; frame < frames; frame += 2) {
+      const tc = frameNumberToTimecode(frame, '30');
+      const pieces = [tc.frames & 15, tc.frames >> 4, tc.seconds & 15, tc.seconds >> 4, tc.minutes & 15, tc.minutes >> 4, tc.hours & 15, (tc.hours >> 4) | (3 << 1)];
+      for (const [type, value] of pieces.entries()) listener.message({ bytes: [0xf1, (type << 4) | value], at100ns: BigInt(Math.round((startMs + (frame + type / 4) * 1000 / 30) * 10_000)) });
+    }
+  };
+  const starts = () => requests.filter(request => request.command.kind === 'start');
+  return { host, client, claims, requests, starts, input, play, change: (next: IntegrationProfile) => { settings = next; } };
+}
+
+function withPort(base: IntegrationProfile, portName: string): IntegrationProfile {
+  return { ...base, midiPortProfiles: base.midiPortProfiles.map(entry => entry.id === 'mtc-in' ? { ...entry, portName } : entry) };
+}
+
+describe('同一版工程再按「启动并待命」：没跟着歌时，输入口停了或设置改了就重新开始', () => {
+  it('跟着歌时拔掉 P1 的线、停止、插回再开始：重新开始，输入口重新打开，能待命', async () => {
+    const f = live();
+    await f.client.start(f.input, 'manual');
+    await f.client.arm('song');
+    f.play(30, 1_000);
+    expect(f.host.state.phase).toBe('running');
+    f.claims[0]!.listener.closed('MIDI 接口「loopMIDI Port」已断开。重新插好后再打开。');
+    expect(f.host.state).toMatchObject({ phase: 'frozen', input: { state: 'closed' } });
+    await f.client.stop();
+    expect(f.host.state).toMatchObject({ phase: 'standby', input: { state: 'closed' } });
+    const again = await f.client.start(f.input, 'manual');
+    expect(f.starts()).toHaveLength(2);
+    expect(f.claims).toHaveLength(2);
+    expect(again.input).toEqual({ portName: 'loopMIDI Port', state: 'open', reason: null });
+    await expect(f.client.arm('song')).resolves.toMatchObject({ phase: 'waiting', itemId: 'song' });
+  });
+
+  it('待命前换了 P1 的 MTC 输入口：带着新的输入口重新开始', async () => {
+    const f = live();
+    await f.client.start(f.input, 'manual');
+    f.change(withPort(profile(), 'USB MIDI Interface'));
+    const state = await f.client.start(f.input, 'manual');
+    expect(f.starts().map(request => request.command.kind === 'start' ? request.command.inputPortName : null)).toEqual(['loopMIDI Port', 'USB MIDI Interface']);
+    expect(f.claims.map(claim => claim.portName)).toEqual(['loopMIDI Port', 'USB MIDI Interface']);
+    expect(f.claims[0]!.release).toHaveBeenCalledTimes(1);
+    expect(state.input).toMatchObject({ portName: 'USB MIDI Interface', state: 'open' });
+  });
+
+  it('待命时改了别的连接设置（例如动作 MIDI 的输出口）：带着新的设置重新开始，输入口不重开', async () => {
+    const f = live();
+    await f.client.start(f.input, 'manual');
+    const base = profile();
+    f.change({ ...base, midiPortProfiles: [...base.midiPortProfiles, { id: 'actions', direction: 'output', portName: 'USB MIDI Interface' }] });
+    await f.client.start(f.input, 'manual');
+    expect(f.starts()).toHaveLength(2);
+    const command = f.starts()[1]!.command;
+    expect(command.kind === 'start' && command.lightingProfile?.midiPortProfiles.some(entry => entry.id === 'actions')).toBe(true);
+    expect(f.claims).toHaveLength(1);
+  });
+
+  it('什么都没变：不再发开始（同一版只发一次）', async () => {
+    const f = live();
+    await f.client.start(f.input, 'manual');
+    await f.client.start(f.input, 'manual');
+    await f.client.arm('song');
+    await f.client.start(f.input, 'manual');
+    expect(f.starts()).toHaveLength(1);
+    expect(f.claims).toHaveLength(1);
+  });
+
+  it('跟着歌时改了设置：照旧跟着这首歌，不发开始；停止以后再开始才带上新设置', async () => {
+    const f = live();
+    await f.client.start(f.input, 'manual');
+    await f.client.arm('song');
+    f.play(30, 1_000);
+    f.change(withPort(profile(), 'USB MIDI Interface'));
+    await expect(f.client.start(f.input, 'manual')).resolves.toMatchObject({ phase: 'running', input: { portName: 'loopMIDI Port', state: 'open' } });
+    expect(f.starts()).toHaveLength(1);
+    await f.client.stop();
+    await f.client.start(f.input, 'manual');
+    expect(f.starts()).toHaveLength(2);
+    expect(f.host.state.input).toMatchObject({ portName: 'USB MIDI Interface', state: 'open' });
+  });
+
+  it('待命时输入口停了（驱动进程出错）：再开始就重新打开输入口', async () => {
+    const f = live();
+    await f.client.start(f.input, 'manual');
+    f.claims[0]!.listener.closed('MIDI 输入服务意外关闭');
+    expect(f.client.state).toMatchObject({ phase: 'standby', input: { state: 'closed' } });
+    expect(nothingFollowed(f.client.state!)).toBe(true);
+    await f.client.start(f.input, 'manual');
+    expect(f.starts()).toHaveLength(2);
+    expect(f.claims).toHaveLength(2);
+    expect(f.client.state?.input?.state).toBe('open');
   });
 });
