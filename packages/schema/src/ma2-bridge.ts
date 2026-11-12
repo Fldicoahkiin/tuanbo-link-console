@@ -23,6 +23,11 @@ export const ma2CapabilitiesSchema = z.object({
   version: z.string(), lua: z.string(), plugin: z.boolean(), objects: z.boolean(), files: z.boolean(), message: z.string()
 }).strict();
 export type Ma2Capabilities = z.infer<typeof ma2CapabilitiesSchema>;
+/** A line to the console logging in again on its own after it dropped (C2, M5): which attempt, since when, and why the
+ * last one did not get through. */
+export const ma2ReloginWaitSchema = z.object({ kind: z.literal('relogin'), attempt: z.number().int().min(1).max(10_000), since: z.number().finite(), reason: z.string().max(512) }).strict();
+/** It stopped and waits for the operator (`limit`: the recovery table's limit was reached; otherwise `reason` says what needs a person). */
+export const ma2ReloginStoppedSchema = z.object({ kind: z.literal('stopped'), reason: z.string().max(512), limit: z.boolean() }).strict();
 export const ma2NetworkStatusSchema = z.object({
   settings: ma2NetworkSettingsSchema.nullable(), passwordSaved: z.boolean(),
   profiles: z.array(ma2NetworkSettingsSchema).optional(), capabilities: ma2CapabilitiesSchema.nullable().optional(),
@@ -30,7 +35,12 @@ export const ma2NetworkStatusSchema = z.object({
   /** Which connection this is: a new login gets a new number. A check made on an earlier connection does not stand for this one. */
   connection: z.number().int().nonnegative().optional(),
   /** The last connect reached nothing at the saved address: the console is off, unplugged or at another IP. */
-  unreachable: z.literal(true).optional()
+  unreachable: z.literal(true).optional(),
+  /** The Telnet line dropped during the show and logs in again on its own, or stopped doing so (M5). */
+  relogin: z.discriminatedUnion('kind', [ma2ReloginWaitSchema, ma2ReloginStoppedSchema]).optional(),
+  /** Logged in, but the console's plugin is missing or old and is installed only when the show has stopped (M5): what uses
+   * the plugin waits until then, and this says why. */
+  pluginWait: z.string().max(512).optional()
 }).strict();
 export type Ma2NetworkStatus = z.infer<typeof ma2NetworkStatusSchema>;
 import { lightingDocumentSchema, lightingMa2EventMappingSchema, lightingMa2TrackMappingSchema, lightingMa2CueCatalogSchema } from './lighting';

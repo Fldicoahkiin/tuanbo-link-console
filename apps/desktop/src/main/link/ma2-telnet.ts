@@ -13,6 +13,8 @@ type Waiter = { match: (text: string) => string | null; resolve: (value: string)
 
 /** No TCP connection reached the console at this address: it is off, unplugged or now at another IP. */
 export class Ma2UnreachableError extends Error {}
+/** The console answered and did not let this login in (wrong user or password, remote login off): trying the same login again cannot help. */
+export class Ma2LoginRefusedError extends Error {}
 /** Socket errors that mean nothing at this address answers on the console port. */
 const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT']);
 
@@ -28,13 +30,14 @@ export class Ma2Telnet {
   readTraffic(): Readonly<typeof this.traffic> { return { ...this.traffic }; }
   private queuedCommands = 0;
   private connectionEpoch = 0;
-  constructor(private readonly address: Ma2NetworkAddress, private readonly onState: (state: Ma2TelnetState) => void = () => undefined, private readonly timeoutMs = 5000, private readonly validatePeers?: Ma2PeerValidator) {
+  constructor(private readonly address: Ma2NetworkAddress, private readonly onState: (state: Ma2TelnetState, cause?: Error) => void = () => undefined, private readonly timeoutMs = 5000, private readonly validatePeers?: Ma2PeerValidator) {
     if (!isIP(address.host) || [address.port, address.monitorPort].some((port) => !Number.isInteger(port) || port < 1 || port > 65535) || address.port === address.monitorPort) throw new Error('请填写有效的控台 IP 地址和端口');
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw new Error('MA2 连接超时设置无效');
     if (address.localAddress !== undefined && (isIP(address.localAddress) !== 4 || address.localAddress === '0.0.0.0')) throw new Error('电脑连接地址无效，请重新检查网卡');
   }
   get state(): Ma2TelnetState { return this.current; }
-  private setState(state: Ma2TelnetState): void { this.current = state; this.onState(state); }
+  /** `cause`: why it went down, when it did. */
+  private setState(state: Ma2TelnetState, cause?: Error): void { this.current = state; this.onState(state, cause); }
   async connect(username: string, password: string): Promise<string> {
     if (this.socket || this.connecting) throw new Error('MA2 正在连接或已连接');
     // MA command quoting does not document embedded quotes or escapes.
@@ -115,12 +118,12 @@ export class Ma2Telnet {
     const streams = this.streams; this.streams = [];
     for (const stream of streams) stream.socket.destroy();
     if (this.waiter) { clearTimeout(this.waiter.timer); this.waiter.reject(error); this.waiter = null; }
-    if (this.current !== 'disconnected') this.setState('disconnected');
+    if (this.current !== 'disconnected') this.setState('disconnected', error);
   }
   private waitFor(match: Waiter['match'], timeoutError?: () => Error): Promise<string> {
     if (this.waiter) return Promise.reject(new Error('MA2 网络请求还没完成'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(timeoutError?.() ?? new Error(this.current === 'authenticating' ? 'MA2 网络端口已经连通，但登录没有成功。请检查登录用户、密码和 Telnet 的 Login Enabled 设置，不需要改电脑 IP' : 'MA2 响应超时，操作没有确认，不会自动重试')), this.timeoutMs);
+      const timer = setTimeout(() => this.fail(timeoutError?.() ?? (this.current === 'authenticating' ? new Ma2LoginRefusedError('MA2 网络端口已经连通，但登录没有成功。请检查登录用户、密码和 Telnet 的 Login Enabled 设置，不需要改电脑 IP') : new Error('MA2 响应超时，操作没有确认，不会自动重试'))), this.timeoutMs);
       this.waiter = { match, resolve, reject, timer };
       this.check();
     });
@@ -157,7 +160,7 @@ export class Ma2Telnet {
     if (stream.buffer.length > 1024 * 1024) { this.fail(new Error('MA2 网络响应超过限制')); return; }
     stream.buffer = stream.buffer.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
     if (stream.socket === this.socket && this.current === 'connecting' && /(?:^|[\r\n])\s*Remote commandline disabled\s*(?:[\r\n]|$)/i.test(stream.buffer)) {
-      this.fail(new Error('已找到控台，但控台还没开启远程连接。请在控台设置里开启远程登录，再连接。'));
+      this.fail(new Ma2LoginRefusedError('已找到控台，但控台还没开启远程连接。请在控台设置里开启远程登录，再连接。'));
       return;
     }
     this.check();

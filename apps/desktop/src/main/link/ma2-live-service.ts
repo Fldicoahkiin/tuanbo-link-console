@@ -8,7 +8,7 @@ import { ma2ExecutorObserveRequestSchema, ma2LiveConnectSchema, ma2LiveInputSche
 import type { SecureProfileStore } from './secure-profile-store';
 import type { Ma2Telnet } from './ma2-telnet';
 import { writeFileAtomically } from './atomic-file';
-import { verifyMa2ShowSource } from './ma2-show-probe';
+import { verifyMa2ShowSource, type Ma2ShowSource } from './ma2-show-probe';
 import { MA2_BUTTON_RANGES, Ma2LivePlayback, ma2ObservedRange, type Ma2ButtonSnapshot } from './ma2-live-playback';
 import { Ma2ExecutorChannels, type Ma2ButtonAreaAnswer } from './ma2-executor-channel';
 import { Ma2ReloginStop, Ma2WebRemoteRelogin, ma2ReloginReason, type Ma2ReloginLog } from './ma2-web-remote-relogin';
@@ -109,6 +109,22 @@ export class Ma2LiveService {
     return () => { this.reloginLogs.delete(listener); };
   }
   private reloginLog(entry: Ma2ReloginLog): void { for (const listener of this.reloginLogs) listener(entry); }
+  /** M5: the plugin sessions that the Telnet line logging in again (or the plugin installed after the show) replaced on
+   * the same console and Show, each pointing at what the console says now. Kept across `close`: a page read before still
+   * names the old session. */
+  private readonly carriedSessions = new Map<string, string>();
+  /** The Telnet line is back on the same console and Show, and the plugin's session is now `after`'s (M5, 00-order: only a
+   * changed session is no reason for the web remote to stop). The web remote does not go through the plugin, so the
+   * sessions here and their logging in again go on; what needs the plugin checks its own session. */
+  consoleBack(before: Ma2ShowSource, after: Ma2ShowSource): void {
+    if (before.show !== after.show || before.version !== after.version || before.generation === after.generation) return;
+    const from = sourceKey(before), to = sourceKey(after);
+    for (const [key, value] of this.carriedSessions) if (value === from) this.carriedSessions.set(key, to);
+    this.carriedSessions.set(from, to);
+  }
+  /** Another console, or the operator disconnected: nothing carries over. */
+  consoleChanged(): void { this.carriedSessions.clear(); }
+  private readonly carried = (expected: Ma2ShowSource, actual: Ma2ShowSource): boolean => this.carriedSessions.get(sourceKey(expected)) === sourceKey(actual);
   /**
    * The console page's web remote sessions for this console and Show (C2): read from what is here, nothing is asked of the
    * console. A session another console or Show uses reads as idle.
@@ -164,7 +180,7 @@ export class Ma2LiveService {
   private async openFaders(input: Ma2LiveConnect): Promise<Ma2LiveSnapshot> {
     const request = ma2LiveConnectSchema.parse(input); this.close();
     const generation = this.generation;
-    await verifyMa2ShowSource(this.telnet(request), request.expectedSource);
+    await verifyMa2ShowSource(this.telnet(request), request.expectedSource, this.carried);
     if (generation !== this.generation) throw new Error('控台连接已改变');
     const client: Ma2LivePlayback = this.faderSocket(request.network.host, reason => this.faderDropped(client, reason)); this.client = client;
     try {
@@ -199,7 +215,7 @@ export class Ma2LiveService {
   private async reloginFaders(target: FaderTarget): Promise<void> {
     const generation = this.generation;
     const login = await this.savedLogin(target.network.host);
-    await verifyMa2ShowSource(this.telnet(target), target.expectedSource);
+    await verifyMa2ShowSource(this.telnet(target), target.expectedSource, this.carried);
     if (generation !== this.generation) throw new Error('控台连接已改变');
     const client: Ma2LivePlayback = this.faderSocket(target.network.host, reason => this.faderDropped(client, reason));
     try { await client.connect(login.username, login.password); }
@@ -211,7 +227,7 @@ export class Ma2LiveService {
   /** The Button session logged in again on its own (C2): only while its keys still go on the web remote, after the same Show check. */
   private async reloginButtons(target: Ma2LayoutDirectoryRequest): Promise<void> {
     if (this.channels.forKey(this.key(target), 101) !== 'webRemote') throw new Ma2ReloginStop('Button 区的按键已经不走网页遥控');
-    await verifyMa2ShowSource(this.telnet(target), target.expectedSource);
+    await verifyMa2ShowSource(this.telnet(target), target.expectedSource, this.carried);
     await this.buttonSession(target);
   }
   /** The user saved for this console and its password from the secure store; neither there stops logging in again. */
@@ -241,7 +257,7 @@ export class Ma2LiveService {
     const generation = this.generation;
     const client = this.client;
     try {
-      if (Date.now() - this.verifiedAt > 1000) { await verifyMa2ShowSource(this.telnet(request), request.expectedSource); this.verifiedAt = Date.now(); }
+      if (Date.now() - this.verifiedAt > 1000) { await verifyMa2ShowSource(this.telnet(request), request.expectedSource, this.carried); this.verifiedAt = Date.now(); }
       if (generation !== this.generation) throw new Error('控台连接已改变');
       const snapshot = await client.read(request.page, request.start);
       if (generation !== this.generation) throw new Error('控台连接已改变');
@@ -460,7 +476,7 @@ export class Ma2LiveService {
   private async buttonShow(session: ButtonSession, request: Ma2ExecutorInput): Promise<void> {
     const now = Date.now();
     if (!this.failed && this.scope === session.scope && now - this.verifiedAt <= BUTTON_SHOW_MS || now - session.verifiedAt <= BUTTON_SHOW_MS) return;
-    await verifyMa2ShowSource(this.telnet(request), request.expectedSource);
+    await verifyMa2ShowSource(this.telnet(request), request.expectedSource, this.carried);
     session.verifiedAt = Date.now();
   }
   /** 15 button executors from `start`, read again when the last read is older than 1 s; one read at a time. `peek`: the
@@ -584,3 +600,5 @@ export class Ma2LiveService {
   }
 }
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
+/** One Show, plugin session and console version, as one key. */
+const sourceKey = (source: Ma2ShowSource): string => JSON.stringify([source.show, source.generation, source.version]);

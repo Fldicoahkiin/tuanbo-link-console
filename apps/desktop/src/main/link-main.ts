@@ -1100,7 +1100,8 @@ function registerIpc(
       // Read from the engine itself after this close failed (0.5.9 S6): no engine left, or one that is not sounding.
       engineStopped: () => !(nativePlayer?.engineSounding() ?? false) };
   }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput(), programOutputs.runningChanged, programFaults);
-  showState = new ShowStateService(nativeProgram, show => sendToRenderer('link:show-state', show), lightsOff);
+  // A plugin that waited for the show to stop is installed when it has (M5).
+  showState = new ShowStateService(nativeProgram, show => { sendToRenderer('link:show-state', show); ma2Network.showChanged(); }, lightsOff);
   handle('link:show-state-get', () => showState!.current());
   handle('link:show-activity', (_event, value: unknown) => { showState!.report(value); });
   // Session registration captures cancellation synchronously; output adapters
@@ -1277,6 +1278,8 @@ function registerIpc(
   handle('link:ma2-web-remote-state', (_event, value: unknown) => ma2Network.live().webRemoteState(ma2LayoutDirectoryRequestSchema.parse(value)));
   // Logging in again on its own (C2): each attempt, the success and the stop are written here; waiting is never an error.
   ma2Network.live().onReloginLog(entry => { void logger.record({ level: entry.level, category: 'device', device: 'MA2', message: entry.message, result: entry.result, details: entry.details }); });
+  // The Telnet line logging in again on its own during the show (M5): the same kind of lines.
+  ma2Network.onReloginLog(entry => { void logger.record({ level: entry.level, category: 'device', device: 'MA2', message: entry.message, result: entry.result, details: entry.details }); });
   handle('link:ma2-observe-executor', async (_event, value: unknown) => {
     try { return await ma2Network.live().observe(ma2ExecutorObserveRequestSchema.parse(value)); }
     catch (error) { await logger.record({ level: 'warning', category: 'device', device: 'MA2', message: `读不到控台执行器状态，这首歌不再核对控台在不在跟：${String(error)}`, result: 'failed' }); throw error; }
@@ -1306,7 +1309,8 @@ function registerIpc(
       // While the web remote for Button keys is on trial, every press it sent is logged for the on-site check; renews are not.
       if (press) await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `网页遥控按下执行器 ${press.page}.${press.slot} 第 ${press.button + 1} 个键：网页遥控上叫「${press.name}」，页面上是 ${press.function}`, result: 'succeeded' });
     }
-    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `执行器按键未完成：${String(error)}`, result: 'failed' }); throw error; }
+    // A key on the plugin while the plugin waits for the show to stop (M5) is a wait, not a failure.
+    catch (error) { await recordMa2Failure('执行器按键', `执行器按键未完成：${String(error)}`, error); throw error; }
   });
   handle('link:ma2-executor-release', async () => {
     try { await ma2Network.releaseExecutors(); }
@@ -1341,7 +1345,7 @@ function registerIpc(
       await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `Timecode ${request.target} 已创建并确认`, result: 'succeeded' });
       return result;
     } catch (error) {
-      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: error instanceof Error ? error.message : String(error), result: 'failed' });
+      await recordMa2Failure(`新建 Timecode ${request.target}`, error instanceof Error ? error.message : String(error), error);
       throw error;
     }
   });

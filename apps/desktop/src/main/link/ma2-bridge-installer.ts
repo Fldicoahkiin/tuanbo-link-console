@@ -2,16 +2,37 @@ import { createHash, randomBytes } from 'node:crypto';
 import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
 import { runMa2GuardedLua } from './ma2-lua-command';
 
-/** Transfer only the application's bundled bridge. No project-supplied code or Show writes. */
-export async function ensureMa2NetworkBridge(connection: Pick<Ma2Telnet, 'command'>, source: string): Promise<void> {
+/** What the console has where the bundled bridge goes: it (`ready`), nothing (`missing`, also after the console loaded a
+ * Show or restarted and the global is gone), an older bundled bridge (`old`), or something else (`foreign`). */
+export type Ma2BridgeState = 'ready' | 'missing' | 'old' | 'foreign';
+
+function bundled(source: string): { bytes: Buffer; digest: string } {
   const bytes = Buffer.from(source, 'utf8');
   if (!bytes.length || bytes.length > 256 * 1024) throw new Error('内置控台连接组件无效，请重新安装联动台');
-  const digest = createHash('sha256').update(bytes).digest('hex');
-  const call = async (body: string): Promise<string> => {
+  return { bytes, digest: createHash('sha256').update(bytes).digest('hex') };
+}
+function bootCall(connection: Pick<Ma2Telnet, 'command'>): (body: string) => Promise<string> {
+  return async body => {
     const prefix = `TBLINK_BOOT_${randomBytes(16).toString('hex')}:`;
     return connection.command(`Lua "${body};gma.echo('${prefix}'..r)"`, (text) => ma2ResponseLine(text, prefix));
   };
-  const current = await call(`local r='missing';if type(TBLINK_NET)=='function' then if TBLINK_BRIDGE_SOURCE=='${digest}' and TBLINK_BRIDGE_READY==true then r='ready' elseif type(TBLINK_BRIDGE_SOURCE)=='string' and #TBLINK_BRIDGE_SOURCE==64 and TBLINK_BRIDGE_SOURCE:gsub('[a-f0-9]','')=='' then r='replace:'..TBLINK_BRIDGE_SOURCE else r='foreign' end end`);
+}
+const probe = (digest: string): string => `local r='missing';if type(TBLINK_NET)=='function' then if TBLINK_BRIDGE_SOURCE=='${digest}' and TBLINK_BRIDGE_READY==true then r='ready' elseif type(TBLINK_BRIDGE_SOURCE)=='string' and #TBLINK_BRIDGE_SOURCE==64 and TBLINK_BRIDGE_SOURCE:gsub('[a-f0-9]','')=='' then r='replace:'..TBLINK_BRIDGE_SOURCE else r='foreign' end end`;
+
+/** Only looks (M5: logging in again during the show): one short command, the same check the install starts with; it never
+ * installs, replaces or stops anything. */
+export async function readMa2NetworkBridge(connection: Pick<Ma2Telnet, 'command'>, source: string): Promise<Ma2BridgeState> {
+  const current = await bootCall(connection)(probe(bundled(source).digest));
+  if (current === 'ready' || current === 'missing' || current === 'foreign') return current;
+  if (/^replace:[a-f0-9]{64}$/.test(current)) return 'old';
+  throw new Error('控台连接组件状态无法识别');
+}
+
+/** Transfer only the application's bundled bridge. No project-supplied code or Show writes. */
+export async function ensureMa2NetworkBridge(connection: Pick<Ma2Telnet, 'command'>, source: string): Promise<void> {
+  const { bytes, digest } = bundled(source);
+  const call = bootCall(connection);
+  const current = await call(probe(digest));
   if (current === 'ready') return;
   if (current === 'foreign') throw new Error('控台的连接接口被一个不认识的插件占用了，联动台没有覆盖它，请检查控台上的插件');
   const previousSource = /^replace:([a-f0-9]{64})$/.exec(current)?.[1];

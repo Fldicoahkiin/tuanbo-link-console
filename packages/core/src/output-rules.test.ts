@@ -292,3 +292,36 @@ describe('规则 5：OBS 断了自己重连，连上后画面按当前位置恢�
     expect(main).not.toContain('program.seek(positionMs)');
   });
 });
+
+// ---- MA2 logging in again on its own (rule 6, 0.5.9 C2 and M5, design 03 §4.2.5) ----
+
+describe('规则 6：MA2 断了自己重新登录，只有一处', () => {
+  it('源码：等多久和上限只在 output-recovery.ts；网页遥控和 Telnet 那条线共用 ma2-relogin.ts 一处，别处不自己排重新登录', () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+    const read = (path: string): string => readFileSync(join(root, path), 'utf8');
+    const recovery = read('packages/core/src/output-recovery.ts');
+    for (const row of ['ma2.relogin', 'ma2.webRemote.relogin']) expect(recovery).toContain(`'${row}'`);
+    expect(recovery).toContain('MA2_RELOGIN_DELAYS_MS');
+    const relogin = read('apps/desktop/src/main/link/ma2-relogin.ts');
+    expect(relogin).toContain('ma2ReloginDelayMs(');
+    expect(relogin).toContain('OUTPUT_RECOVERY_RULES[');
+    // Its one timer waits what the table says, nothing of its own.
+    expect(relogin.match(/\bset(Timeout|Interval)\(/g)).toHaveLength(1);
+    expect(relogin).toContain('setTimeout(run, ms)');
+    // Nobody else reads the waits: the two lines name their row and go through the one engine.
+    const sources = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) return entry.name === 'node_modules' || entry.name === 'out' || entry.name === 'dist' ? [] : sources(path);
+      return /\.(ts|tsx)$/.test(entry.name) && !/\.test\.(ts|tsx)$/.test(entry.name) ? [path] : [];
+    });
+    const files = [...sources(join(root, 'packages')), ...sources(join(root, 'apps'))].map(path => ({ path: relative(root, path).replaceAll('\\', '/'), text: readFileSync(path, 'utf8') }));
+    expect(files.filter(file => /\bma2ReloginDelayMs\(|\bMA2_RELOGIN_DELAYS_MS\b/.test(file.text)).map(file => file.path).sort())
+      .toEqual(['apps/desktop/src/main/link/ma2-relogin.ts', 'packages/core/src/output-recovery.ts']);
+    expect(files.filter(file => /\bnew Ma2Relogin\b|\bextends Ma2Relogin\b/.test(file.text)).map(file => file.path).sort())
+      .toEqual(['apps/desktop/src/main/link/ma2-network-manager.ts', 'apps/desktop/src/main/link/ma2-web-remote-relogin.ts']);
+    const manager = read('apps/desktop/src/main/link/ma2-network-manager.ts');
+    expect(manager).toContain("row: 'ma2.relogin'");
+    expect(manager).toContain("this.show('ma2.reconnect')");
+    expect(read('apps/desktop/src/main/link/ma2-web-remote-relogin.ts')).toContain("row: 'ma2.webRemote.relogin'");
+  });
+});

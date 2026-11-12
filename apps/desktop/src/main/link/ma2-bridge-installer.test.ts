@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { ensureMa2NetworkBridge } from './ma2-bridge-installer';
+import { ensureMa2NetworkBridge, readMa2NetworkBridge } from './ma2-bridge-installer';
 import { runMa2GuardedLua } from './ma2-lua-command';
 
 vi.mock('./ma2-lua-command', () => ({ runMa2GuardedLua: vi.fn() }));
@@ -27,6 +27,16 @@ it('不覆盖没有应用所有权标记的其他插件', async () => {
   const client = connection(() => 'foreign');
   await expect(ensureMa2NetworkBridge(client, 'return function() end')).rejects.toThrow('联动台没有覆盖它');
   expect(client.commands).toHaveLength(1);
+});
+it('M5：只看不装：一条短命令说出控台上是什么，不装、不换、不停任何东西', async () => {
+  for (const [reply, state] of [['ready', 'ready'], ['missing', 'missing'], [`replace:${'a'.repeat(64)}`, 'old'], ['foreign', 'foreign']] as const) {
+    const client = connection(() => reply);
+    await expect(readMa2NetworkBridge(client, 'return function() end')).resolves.toBe(state);
+    expect(client.commands).toHaveLength(1);
+    expect(client.commands[0]).not.toMatch(/TBLINK_BOOTSTRAP|TBLINK_NET\(|load\(/);
+  }
+  expect(runMa2GuardedLua).not.toHaveBeenCalled();
+  await expect(readMa2NetworkBridge(connection(() => 'what'), 'return function() end')).rejects.toThrow('无法识别');
 });
 function upgradeClient(options: { busy?: boolean; corrupt?: boolean } = {}) {
   return connection(line => {

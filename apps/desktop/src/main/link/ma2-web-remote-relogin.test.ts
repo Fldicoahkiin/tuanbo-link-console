@@ -197,6 +197,54 @@ describe('网页遥控断了自动重新登录（C2）', () => {
     } finally { f.live.close(); }
   });
 
+  it('M5：Telnet 重新登上的是同一台控台、同一个 Show，只是插件会话变了：网页遥控接着登、接着读；Show 变了就停下等人', async () => {
+    const f = await rig();
+    try {
+      await f.connect();
+      fake();
+      f.telnetState.down = true;
+      f.ma2.drop('faders');
+      await pass(1000);
+      // The console restarted with the same Show: its plugin is gone, so its session reads empty.
+      const before = { ...f.source };
+      f.source.generation = '';
+      f.live.consoleBack(before, { ...f.source });
+      f.telnetState.down = false;
+      await pass(2000);
+      expect(f.state().fader).toEqual({ kind: 'connected' });
+      const read = f.live.read({ network, expectedSource: f.scope.expectedSource, page: 1000, start: 1 });
+      await pass(1100);
+      await expect(read).resolves.toMatchObject({ page: 1000 });
+      // Logged in again a second time on a newer session: the page read on the first still stands.
+      const middle = { ...f.source };
+      f.source.generation = '2';
+      f.live.consoleBack(middle, { ...f.source });
+      const opens = f.ma2.opens('faders');
+      f.ma2.drop('faders');
+      await pass(1000);
+      expect(f.ma2.opens('faders')).toBe(opens + 1);
+      expect(f.state().fader).toEqual({ kind: 'connected' });
+      // Another Show: nothing carries over, it stops and waits for a person.
+      f.source.show = 'OTHER';
+      f.ma2.drop('faders');
+      await pass(1000);
+      expect(f.state().fader).toMatchObject({ kind: 'stopped', limit: false, reason: '控台的 Show 或连接变了，请重新读取素材；这一页没有使用旧数据' });
+    } finally { f.live.close(); }
+  });
+
+  it('M5：没有 Telnet 重新登上的说法，插件会话变了照旧停下（C1 的规矩不变）', async () => {
+    const f = await rig();
+    try {
+      await f.connect();
+      fake();
+      f.source.generation = '';
+      f.ma2.drop('faders');
+      await pass(1000);
+      expect(f.state().fader).toMatchObject({ kind: 'stopped', limit: false });
+      expect(JSON.stringify(f.state().fader)).toContain('插件没在运行');
+    } finally { f.live.close(); }
+  });
+
   it('操作员手动点连接时让路：之后不再自己试，换了控台或 Show（close）就停', async () => {
     const f = await rig();
     try {

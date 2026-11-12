@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ma2ExecutorPageRequestSchema } from './ma2-executor-page';
-import { ma2NetworkTargetSchema } from './ma2-bridge';
+import { ma2NetworkTargetSchema, ma2ReloginStoppedSchema, ma2ReloginWaitSchema } from './ma2-bridge';
 
 const button = z.object({ id: z.number().int().min(0).max(2), name: z.string().max(128), active: z.boolean() }).strict();
 const fader = z.object({ value: z.number().finite(), min: z.number().finite(), max: z.number().finite(), name: z.string().max(128), text: z.string().max(128) }).strict();
@@ -57,8 +57,8 @@ export type Ma2ButtonLive = z.infer<typeof ma2ButtonLiveSchema>;
 export const ma2WebRemoteSessionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('idle') }).strict(),
   z.object({ kind: z.literal('connected') }).strict(),
-  z.object({ kind: z.literal('relogin'), attempt: z.number().int().min(1).max(10_000), since: z.number().finite(), reason: z.string().max(512) }).strict(),
-  z.object({ kind: z.literal('stopped'), reason: z.string().max(512), limit: z.boolean() }).strict()
+  ma2ReloginWaitSchema,
+  ma2ReloginStoppedSchema
 ]);
 /** The fader view's session and the Button area's, for one console and Show. */
 export const ma2WebRemoteStateSchema = z.object({ fader: ma2WebRemoteSessionSchema, buttons: ma2WebRemoteSessionSchema }).strict();

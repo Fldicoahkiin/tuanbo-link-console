@@ -3,7 +3,7 @@ import type { IntegrationProfile, LinkProject, Ma2NetworkStatus, ObsPictureItem 
 import type { ConnectionCheck } from '../stores/connection-check-store';
 import type { Ma2ConnectionMethod } from '../stores/ma2-mode-store';
 import { midiConnectionTargets, usesNativeMidiOutput } from './connection-targets';
-import { lightingConnectionDestination, ma2EditingConnectionStatus, midiConnectionStatus, obsConnectionStatus, type ConnectionStatus } from './connection-status';
+import { lightingConnectionDestination, ma2EditingConnectionStatus, ma2NetworkWaitStatus, midiConnectionStatus, obsConnectionStatus, type ConnectionStatus } from './connection-status';
 
 /** Where the settings for a status live. */
 export type StatusDestination = { category: 'ma2' | 'obs' | 'audio' | 'virtual' | 'source' | 'maintenance'; focus?: 'audio-output' | 'lighting-mtc' | 'obs-connection' | 'ma2-connection' };
@@ -62,6 +62,8 @@ export function statusCenter(input: StatusCenterInput): StatusCenter {
   const { project, profile, method, local, obs, processes, checks, network, networkError } = input;
   const internal = project?.playbackSource === 'internal';
   const row = (id: string, name: string, destination: StatusDestination, status: ConnectionStatus): StatusRow => ({ id, name, destination, ...status });
+  // Logging in again on its own during the show, or a plugin waiting for the stop (M5): the live state, not the last check.
+  const ma2Wait = method === 'network' ? ma2NetworkWaitStatus(network) : null;
   const rows: StatusRow[] = [
     checked(row('ma2-app', 'MA2 onPC 程序', { category: 'ma2' }, { value: processes.ma2.status === 'running' ? '运行中' : '未运行', state: processes.ma2.status === 'running' ? 'ready' : 'idle', detail: processes.ma2.error ?? '一键连接会启动选好的本机 onPC；网络通信另外检查' }), checks['ma2-app']),
     checked(row('ma3d', 'MA 3D 预演', { category: 'ma2' }, { value: processes.ma3d.status === 'running' ? '运行中' : '未运行', state: processes.ma3d.status === 'running' ? 'ready' : 'idle', detail: processes.ma3d.error ?? '一键连接会启动选好的 MA 3D；请在 MA 3D 里加入对应控台的 Session' }), checks.ma3d),
@@ -71,7 +73,7 @@ export function statusCenter(input: StatusCenterInput): StatusCenter {
     checked(row('midi', '系统 MIDI', { category: 'audio' }, { value: '检测中', state: 'idle', detail: '检查系统 MIDI 服务与驱动' }), checks.midi),
     checked(row('loop', '虚拟 MIDI', { category: 'virtual' }, { value: '未检查', state: 'idle', detail: '软件之间传 MIDI 用；实体 MIDI 接口不受影响' }), checks.loop),
     checked(row('p1', 'P1 播放器', { category: 'source' }, { value: internal || !project ? '未启用' : processes.p1.status === 'running' ? '运行中' : '未运行', state: internal || !project ? 'skipped' : processes.p1.status === 'running' ? 'ready' : 'idle', detail: internal ? '当前由联动台播放，不需要启动 P1' : processes.p1.error ?? '跟随 P1 时会启动 P1，并接收它发来的时间码' }), internal || !project ? undefined : checks.p1),
-    checked(row('ma2', 'MA2 网络', { category: 'ma2' }, { value: method !== 'network' ? '未启用' : network?.state === 'connected' ? '已连接' : checks.ma2?.state === 'checking' ? '连接中' : '未连接', state: method !== 'network' ? 'skipped' : network?.state === 'connected' ? 'ready' : checks.ma2?.state === 'checking' ? 'checking' : networkError || network?.error || checks.ma2?.state === 'error' ? 'error' : 'idle', detail: method !== 'network' ? '当前使用 ' + (method === 'local' ? '本机 onPC' : 'MIDI') : networkError ?? network?.error ?? checks.ma2?.detail ?? '一键连接会连接已保存的控台；没保存过时，会自动找局域网里唯一的一台控台' }), method === 'network' && checks.ma2?.state !== 'ready' ? checks.ma2 : undefined),
+    ma2Wait ? row('ma2', 'MA2 网络', { category: 'ma2' }, ma2Wait) : checked(row('ma2', 'MA2 网络', { category: 'ma2' }, { value: method !== 'network' ? '未启用' : network?.state === 'connected' ? '已连接' : checks.ma2?.state === 'checking' ? '连接中' : '未连接', state: method !== 'network' ? 'skipped' : network?.state === 'connected' ? 'ready' : checks.ma2?.state === 'checking' ? 'checking' : networkError || network?.error || checks.ma2?.state === 'error' ? 'error' : 'idle', detail: method !== 'network' ? '当前使用 ' + (method === 'local' ? '本机 onPC' : 'MIDI') : networkError ?? network?.error ?? checks.ma2?.detail ?? '一键连接会连接已保存的控台；没保存过时，会自动找局域网里唯一的一台控台' }), method === 'network' && checks.ma2?.state !== 'ready' ? checks.ma2 : undefined),
     checked(row('bridge', 'MA2 工程通信', { category: 'ma2' }, { value: method === 'midi' ? '未启用' : method === 'local' && local.status === 'ready' ? '已响应' : method === 'network' && network?.state !== 'connected' ? '待网络连接' : '未检查', state: method === 'midi' ? 'skipped' : method === 'local' && local.status === 'ready' ? 'ready' : 'idle', detail: method === 'midi' ? '仅 MIDI 时不读写控台工程' : local.error ?? '另外检查能否读写控台，网络登录成功不代表这一项已就绪' }), method === 'midi' || method === 'network' && network?.state !== 'connected' ? undefined : checks.bridge)
   ];
   // M8: an Off read back still running is yellow; one that could not be confirmed is one plain sentence, as before M8.

@@ -1,4 +1,4 @@
-import type { LinkObsSnapshot } from '@tb/core/link';
+import { OUTPUT_RECOVERY_RULES, type LinkObsSnapshot } from '@tb/core/link';
 import type { Ma2NetworkStatus } from '@tb/schema';
 import type { ConnectionCheck } from '../stores/connection-check-store';
 
@@ -8,7 +8,7 @@ export type ConnectionStatus = { state: 'ready' | 'warning' | 'error' | 'checkin
 /** The overview reports the live connection; detailed bridge checks remain separate. */
 export function ma2EditingConnectionStatus(input: {
   method: 'network' | 'local' | 'midi';
-  network: Pick<Ma2NetworkStatus, 'state' | 'error'> | null;
+  network: Pick<Ma2NetworkStatus, 'state' | 'error' | 'relogin' | 'pluginWait'> | null;
   networkError: string | null;
   local: { status: 'disconnected' | 'connecting' | 'ready' | 'error'; error: string | null };
   bridge: ConnectionCheck | undefined;
@@ -20,12 +20,28 @@ export function ma2EditingConnectionStatus(input: {
     return { state: input.local.status === 'error' ? 'error' : 'idle', value: '未连接', detail: input.local.error ?? '还没连接本机控台' };
   }
   if (input.networkError) return { state: 'error', value: '连接异常', detail: input.networkError };
+  const waiting = ma2NetworkWaitStatus(input.network);
+  if (waiting) return waiting;
   // The word and the colour say the same thing: a network login with a failed read/write check is not "connected".
   if (input.network?.state === 'connected') return input.bridge?.state === 'error'
     ? { state: 'warning', value: '读写异常', detail: `控台网络已登录，但读写控台这一步没通过。原因：${input.bridge.detail}` }
     : { state: 'ready', value: '已连接', detail: input.bridge?.state === 'ready' ? `控台网络已连接；${input.bridge.detail}` : '控台网络已连接；每次读写时还会再检查通信和内容' };
   if (input.network?.state === 'connecting' || input.network?.state === 'authenticating') return { state: 'checking', value: '连接中', detail: '正在连接并登录控台' };
   return { state: input.network?.error ? 'error' : 'idle', value: '未连接', detail: input.network?.error ?? '还没连接控台' };
+}
+
+/**
+ * The Telnet line to the console during the show (M5): logging in again on its own is a wait (yellow, which attempt),
+ * and so is a plugin that waits for the show to stop; red only at the limit or when a person is needed.
+ */
+export function ma2NetworkWaitStatus(network: Pick<Ma2NetworkStatus, 'relogin' | 'pluginWait'> | null): ConnectionStatus | null {
+  const relogin = network?.relogin;
+  if (relogin?.kind === 'relogin') return { state: 'warning', value: `自动重新登录（第 ${relogin.attempt} 次）`,
+    detail: `控台断开了，正在自动重新登录（第 ${relogin.attempt} 次），最多试 ${OUTPUT_RECOVERY_RULES['ma2.relogin'].limit.maxMs / 60_000} 分钟。登上以后关灯和按键照常，不会自动重新读取控台。原因：${relogin.reason}` };
+  if (relogin?.kind === 'stopped') return relogin.limit ? { state: 'error', value: '自动重新登录没成功', detail: relogin.reason }
+    : { state: 'error', value: '需要手动连接', detail: `控台没有再自动重新登录：${relogin.reason}` };
+  if (network?.pluginWait) return { state: 'warning', value: '已连接，插件停止后再装', detail: network.pluginWait };
+  return null;
 }
 
 /** Live transport state wins over results of an earlier connection/inventory check. */
