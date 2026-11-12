@@ -77,6 +77,19 @@ export function pictureDriftCheck(scenes: Pick<ObsMediaScenes, 'correctDrift'>, 
   };
 }
 
+/** A clip shown from the middle and located (a start from the middle, a seek, a rebuild). A look that could not be set
+ * (0.5.9 E16) leaves the clip shown and located as OBS has it: it counts as located, nothing is sent again, and the
+ * run log gets one line with the clip's red text. */
+export function pictureSeekStep(decoders: Pick<ObsMediaPreload, 'seek'>, log: PictureLog): (event: ManagedMediaEvent, path: string) => Promise<void> {
+  return async (event, path) => {
+    const problem = await decoders.seek(event, path);
+    if (problem === null) return;
+    void log.record({ level: 'error', category: 'device', device: '后台画面', projectId: log.projectId, itemId: log.itemId,
+      message: problem, result: 'failed', details: { clipId: event.clipId } })
+      .catch((error: unknown) => console.error('素材样子没有设好未能记入日志', error));
+  };
+}
+
 /** The lookahead of a song's picture (ObsMediaPreload.upcoming). A clip whose
  * preparation failed once it already played on from the decoder of the clip it
  * continues needs nothing: the program is not told (its red text would say the
@@ -155,6 +168,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
     ? { ...entry, details: { ...entry.details, obsRequests: obs.getRequestDiagnostics() } } : entry, services.logFailure);
   const pictureLog: PictureLog = { record: recordLog, projectId: project.projectId, itemId: request.snapshot.item.id };
   const upcoming = pictureUpcoming(preload, pictureLog);
+  const seekStep = pictureSeekStep(preload, pictureLog);
   const outputs: NativeObsOutputs = {
     outputNotice: () => captureNotice,
     now: () => performance.now(), executor: pictureExecutor(obs, preload, pictureLog),
@@ -354,7 +368,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       if (!address) throw new Error('画面连接还没准备好');
       const target = address;
       await seek.prepare(target);
-      await preload.seek(event, projects.resolveMediaAsset(path, event.relativePath));
+      await seekStep(event, projects.resolveMediaAsset(path, event.relativePath));
     }
   };
   return outputs;

@@ -3,16 +3,16 @@ import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkProject, type ReferenceCanvasTransform } from '@tb/schema';
 import { MediaPreparationFailed, ObsProgramSession, SceneOutputTimeline, materialSceneNames, obsMaterialPresentation, type CueExecutionReport, type LinkDesktopApi } from '@tb/core/link';
 import { ObsMediaPreload, ObsPreparationNotNeeded } from './obs-media-preload';
-import { MediaOutOfStepError, ObsMediaScenes } from './obs-media-scenes';
-import { pictureDriftCheck, pictureExecutor, pictureUpcoming } from './native-obs-outputs';
-import { MemoryMaterialOwnLooks, type MaterialOwnLooks } from './obs-material-own-looks';
+import { MediaOutOfStepError, ObsMediaScenes, lookFailure } from './obs-media-scenes';
+import { pictureDriftCheck, pictureExecutor, pictureSeekStep, pictureUpcoming } from './native-obs-outputs';
+import { MemoryMaterialOwnLooks, type MaterialOwnLooks, type OwnLook } from './obs-material-own-looks';
 import { ObsLiveEditor } from './obs-live-editor';
 
 function mockScenes() {
   return { prepareStandby: vi.fn<ObsMediaScenes['prepareStandby']>(name => Promise.resolve(`${name}·预备`)),
     copyPresentation: vi.fn<ObsMediaScenes['copyPresentation']>(() => Promise.resolve()),
     prime: vi.fn<ObsMediaScenes['prime']>(async (_event, _path, run) => { await run(); }),
-    execute: vi.fn<ObsMediaScenes['execute']>(() => Promise.resolve()), seek: vi.fn<ObsMediaScenes['seek']>(() => Promise.resolve()),
+    execute: vi.fn<ObsMediaScenes['execute']>(() => Promise.resolve()), seek: vi.fn<ObsMediaScenes['seek']>(() => Promise.resolve(null)),
     isActive: vi.fn<ObsMediaScenes['isActive']>(() => false), continueClip: vi.fn<ObsMediaScenes['continueClip']>(() => false) };
 }
 function mockNative() {
@@ -575,8 +575,8 @@ it('片段还在准备时被定位接管（从中间开播或重建画面，用�
 it('同一素材连着定位两次（拖动进度），前一次在 OBS 显示它之前失败时后一次还没答复：后一次照常算这个素材在画面上的，不被前一次的失败改成没在播', async () => {
   const t = setup(), [first, second] = t.events, primary = first!.sourceName;
   let failFirst: (error: Error) => void = () => undefined, finishSecond = (): void => undefined;
-  t.scenes.seek.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { failFirst = reject; }))
-    .mockImplementationOnce(() => new Promise<void>(resolve => { finishSecond = resolve; }));
+  t.scenes.seek.mockImplementationOnce(() => new Promise<string | null>((_resolve, reject) => { failFirst = reject; }))
+    .mockImplementationOnce(() => new Promise<string | null>(resolve => { finishSecond = () => resolve(null); }));
   const firstSeek = t.preload.seek({ ...first!, sourceOffsetMs: 3000 }, t.path).then(() => null, (error: unknown) => error);
   const secondSeek = t.preload.seek({ ...second!, sourceOffsetMs: 5000 }, t.path);
   failFirst(new Error('OBS 没能执行 SetSceneItemEnabled'));
@@ -2165,4 +2165,57 @@ it('E16 规则：复制到预备解码器的是素材原来的样子：本机记
   await obs.client.call('SetSceneItemTransform', { sceneName, sceneItemId, sceneItemTransform: { positionX: 700, boundsType: 'OBS_BOUNDS_NONE' } });
   await scenes.copyPresentation(primary, standby);
   expect(obs.decoder(standby).look).toMatchObject(ownLook);
+});
+
+/** This machine's record of own looks, broken the way a damaged or locked file is. */
+class BrokenOwnLooks extends MemoryMaterialOwnLooks {
+  constructor(private readonly broken: ReadonlySet<'read' | 'keep' | 'drop'>) { super(); }
+  override read(decoder: string): Promise<OwnLook | null> { return this.broken.has('read') ? Promise.reject(new Error('本机记下的素材原来的样子损坏了')) : super.read(decoder); }
+  override keep(decoder: string, look: OwnLook): Promise<void> { return this.broken.has('keep') ? Promise.reject(new Error('本机记下的素材原来的样子写不进去')) : super.keep(decoder, look); }
+  override drop(decoder: string): Promise<void> { return this.broken.has('drop') ? Promise.reject(new Error('本机记下的素材原来的样子写不进去')) : super.drop(decoder); }
+}
+
+it('E16 规则：新建素材场景时本机记录作废不了：素材照常新建、准备、显示；这次运行不写联动台的样子，每次开始标红写明原因', async () => {
+  const project = withLooks(song([[0, 12000, 100], [12, 12000, 12100]]), { 'clip-0': leftLook, 'clip-1': rightLook }), obs = fakeObs(), primary = primaryOf(project);
+  const t = await live(project, obs, undefined, true, 'test', new BrokenOwnLooks(new Set(['drop'])));
+  expect(obs.decoder(primary).look).toMatchObject(createdLook);
+  await t.play(0, 13000, true);
+  expect(obs.seenLooks.filter(view => view.input !== null).map(view => view.input)).toEqual([primary, `${primary}·预备`]);
+  // Only the creation look and its copy to the second decoder, as before 0.5.9: no look of ours.
+  for (const write of obs.lookWrites) expect(write.look).toMatchObject(createdLook);
+  const red = lookFailure({ assetName: '视频' }, '本机记下的素材原来的样子写不进去');
+  expect(t.reports).toEqual(expect.arrayContaining([`clip-0 start failed：${red}`, `clip-1 start failed：${red}`]));
+  await t.session.stop();
+});
+
+it('E16 规则：复制到预备解码器时本机记录读不了：照样准备好预备解码器，复制主解码器现在的样子', async () => {
+  const project = song([[0, 12000, 100]]), obs = fakeObs();
+  const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation(), new BrokenOwnLooks(new Set(['read'])));
+  await scenes.prepare(project.projectId, project.mediaAssets[0]!, path);
+  const { sceneName, sourceName: primary } = materialSceneNames(project.projectId, project.mediaAssets[0]!);
+  await obs.client.call('SetSceneItemTransform', { sceneName, sceneItemId: obs.decoder(primary).item, sceneItemTransform: { positionX: 300 } });
+  const standby = await scenes.prepareStandby(primary);
+  expect(obs.decoder(standby).look).toMatchObject({ ...createdLook, positionX: 300 });
+});
+
+it('E16 规则：从中间开播或定位时样子没设好：片段照常显示、算定位成功，不重发；运行日志记一行，和开始时的红字同一句', async () => {
+  vi.useFakeTimers();
+  try {
+    const project = withLooks(song([[0, 12000, 100]]), { 'clip-0': leftLook }), obs = fakeObs(), primary = primaryOf(project);
+    const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation(), new BrokenOwnLooks(new Set(['keep'])));
+    // The native seek leaves the decoder paused where it was told, as the real one does.
+    const preload = new ObsMediaPreload(project, 'song', scenes, { ...obs.native, seek: async (name, ms) => {
+      await obs.client.call('TriggerMediaInputAction', { inputName: name, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE' }); await obs.native.seek(name, ms);
+    } });
+    await scenes.prepare(project.projectId, project.mediaAssets[0]!, path);
+    preload.register(project.projectId, project.mediaAssets[0]!, path);
+    const logs = recorder(), [first] = new SceneOutputTimeline(project, 'song').preloadEntries();
+    expect(await outcome(pictureSeekStep(preload, { record: logs, projectId: project.projectId, itemId: 'song' })({ ...first!, sourceOffsetMs: 3000 }, path))).toBe('完成');
+    expect(preload.onAirSource(primary)).toBe(primary);
+    expect(obs.view()).toMatchObject({ decoder: '主', state: 'PAUSED', cursor: 3000 });
+    expect(obs.lookWrites.some(write => write.look.boundsType === 'OBS_BOUNDS_NONE')).toBe(false);
+    expect(logs).toHaveBeenCalledTimes(1);
+    expect(logs).toHaveBeenCalledWith(expect.objectContaining({ level: 'error', category: 'device', device: '后台画面', result: 'failed',
+      message: lookFailure({ assetName: '视频' }, '本机记下的素材原来的样子写不进去'), details: { clipId: 'clip-0' } }));
+  } finally { vi.useRealTimers(); }
 });

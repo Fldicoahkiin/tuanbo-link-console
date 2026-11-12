@@ -389,7 +389,8 @@ export class ObsMediaPreload {
     else if (!failed) media.touched.delete(previous.sourceName);
   }
 
-  async seek(event: ManagedMediaEvent, path: string): Promise<void> {
+  /** Resolves with the red text of a look that could not be set (the clip is shown and located), or null (E16). */
+  async seek(event: ManagedMediaEvent, path: string): Promise<string | null> {
     if (event.assetKind === 'image') return this.scenes.seek(event, path, this.native.seek);
     const media = this.require(event);
     if (media.path !== path || this.closed) throw new Error('素材的定位路径或状态已改变');
@@ -398,7 +399,7 @@ export class ObsMediaPreload {
     media.retained.delete(sourceName);
     const slot: Slot = { event, sourceName, ready: true };
     media.current = slot;
-    try { await this.answered(media, () => this.scenes.seek({ ...event, sourceName }, path, this.native.seek)); }
+    try { return await this.answered(media, () => this.scenes.seek({ ...event, sourceName }, path, this.native.seek)); }
     catch (error) {
       // OBS never showed this decoder: it stands for the clip, off air, as after a
       // start that failed before its show. The program's play after the rebuild
@@ -410,9 +411,9 @@ export class ObsMediaPreload {
 
   /** Runs one start, stop or seek of the material; its next preparation waits
    * until OBS answered it, whether it succeeded or not. */
-  private async answered(media: Media, operation: () => Promise<void>): Promise<void> {
+  private async answered<T>(media: Media, operation: () => Promise<T>): Promise<T> {
     media.busy++;
-    try { await operation(); } finally { media.busy--; }
+    try { return await operation(); } finally { media.busy--; }
   }
 
   close(): Promise<void> {

@@ -76,7 +76,7 @@ export function failureReason(error: unknown): string {
 }
 
 /** The red text of a clip shown without the look the project gives it, because the look could not be worked out. */
-function lookFailure(event: Pick<ManagedMediaEvent, 'assetName'>, reason: string): string {
+export function lookFailure(event: Pick<ManagedMediaEvent, 'assetName'>, reason: string): string {
   return `素材“${event.assetName}”照常在播，但没有按工程里的位置和大小摆，用的是 OBS 里现在的样子。原因：${reason.replace(/[。.；;\s]+$/u, '')}。下一段用到这个素材时会再按工程摆；一直这样，请重新连接 OBS，或把运行日志发给我们`;
 }
 
@@ -99,11 +99,15 @@ export class ObsMediaScenes {
   private readonly liveEdits = new Map<string, number>();
   /** Material scene items the live canvas wrote to: `scene\nitem id` → source name. */
   private readonly liveItems = new Map<string, string>();
+  /** Materials whose kept own look this run cannot trust, with the store's reason: a record could not be dropped when
+   * the scene was created anew, or could not be read for a copy. No look of ours goes to their decoders this run; each
+   * start says why. Forgotten on `clear()`: the store then answers again (and fails again, the same way). */
+  private readonly untrusted = new Map<string, string>();
   private canvas: { width: number; height: number } | null = null;
   constructor(private readonly client: OBSWebSocket, private readonly request: Request, private readonly run: ObsOperationRunner,
     private readonly ownLooks: MaterialOwnLooks = new MemoryMaterialOwnLooks()) {}
   /** OBS disconnected or reconnected: this session's book goes; the material's own looks kept on the machine stay. */
-  clear(): void { this.prepared.clear(); this.active.clear(); this.startedClips.clear(); this.compositions.clear(); this.compositionItems.clear(); this.primed.clear(); this.looks.clear(); this.liveItems.clear(); this.canvas = null; }
+  clear(): void { this.prepared.clear(); this.active.clear(); this.startedClips.clear(); this.compositions.clear(); this.compositionItems.clear(); this.primed.clear(); this.looks.clear(); this.liveItems.clear(); this.untrusted.clear(); this.canvas = null; }
 
   /** Before the live canvas writes a transform to a scene item (0.5.9 E16): when it is one of our material decoders, its
    * own look is kept on this machine first (if none is kept yet), and this session no longer knows what it shows. Found
@@ -180,7 +184,10 @@ export class ObsMediaScenes {
       // The copy gets the material's own look (E16): the one kept on this machine, or else the source decoder's
       // transform, which the console then never changed. The clip the copy is prepared for then sets its own look, if
       // it has one (`prime`).
-      const own = await this.ownLooks.read(primaryDecoder(from));
+      // A kept look that cannot be read leaves the copy as the source has it, and the material is not trusted this run.
+      let own: Awaited<ReturnType<MaterialOwnLooks['read']>> = null;
+      try { own = await this.ownLooks.read(primaryDecoder(from)); }
+      catch (error) { this.distrust(primaryDecoder(from), error); this.distrust(primaryDecoder(to), error); }
       const transform = own ?? (await this.request(() => this.client.call('GetSceneItemTransform', { sceneName: source.sceneName, sceneItemId: source.sceneItemId }), '读取预备画面变换')).sceneItemTransform;
       this.looks.delete(to);
       await this.request(() => this.client.call('SetSceneItemTransform', { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemTransform: transform }), '复制预备画面变换');
@@ -243,7 +250,8 @@ export class ObsMediaScenes {
         sceneItemId = item.sceneItemId;
       } else {
         // Created anew: the creation look is the material's own look now, whatever was kept for it before (E16).
-        await this.ownLooks.drop(sourceName);
+        // A record that cannot be dropped does not stop the creation: the material is not trusted this run instead.
+        try { await this.ownLooks.drop(sourceName); } catch (error) { this.distrust(sourceName, error); }
         this.looks.delete(sourceName); this.looks.delete(`${sourceName}${STANDBY_SUFFIX}`);
         await this.request(() => this.client.call('CreateScene', { sceneName }), 'CreateScene');
         const created = await this.request(() => this.client.call('CreateInput', {
@@ -573,13 +581,16 @@ export class ObsMediaScenes {
     });
   }
 
-  async seek(event: ManagedMediaEvent, path: string, native: (name: string, position: number) => Promise<void>): Promise<void> {
+  /** Shows the clip from the middle and locates it. Resolves with the red text of a look that could not be worked out
+   * (the clip is shown and located as OBS has it), or null: the caller logs it, since a located clip's failure would
+   * read as not located (E16). */
+  async seek(event: ManagedMediaEvent, path: string, native: (name: string, position: number) => Promise<void>): Promise<string | null> {
     return this.run(async () => {
       const target = this.prepared.get(event.sourceName);
       if (event.phase !== 'start' || !target || target.path !== path || target.sceneName !== event.sceneName) throw new Error('要定位的素材还没准备好，或和工程对不上');
       const others = event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName);
       // A look that could not be worked out is left out here and the clip shown as OBS has it; the session book stays
-      // unknown, so the decoder's next start tries again (a located clip's failure here would read as not located).
+      // unknown, so the decoder's next start tries again.
       const look = await this.lookFor(event.sourceName, event.transform);
       if (look.requests.length) this.looks.delete(event.sourceName);
       // A clip started from the middle (or rebuilt after a reconnect) is this
@@ -597,6 +608,7 @@ export class ObsMediaScenes {
         await native(event.sourceName, Math.round(event.sourceOffsetMs));
         await this.confirmSeek(event, target.sceneItemId);
       }
+      return look.problem === undefined ? null : lookFailure(event, look.problem);
     });
   }
 
@@ -680,6 +692,8 @@ export class ObsMediaScenes {
     const current = this.looks.get(decoder), item = { sceneName: target.sceneName, sceneItemId: target.sceneItemId };
     const edits = this.liveEdits.get(decoder) ?? 0, key = primaryDecoder(decoder);
     const set = (sceneItemTransform: Record<string, JsonValue>): Requests => [{ requestType: 'SetSceneItemTransform', requestData: { ...item, sceneItemTransform } }];
+    const untrusted = this.untrusted.get(key);
+    if (untrusted !== undefined) return { requests: [], after: null, edits, problem: untrusted };
     try {
       const own = await this.ownLooks.read(key);
       if (!transform) return !own || current === OWN_LOOK ? KEEP_LOOK : { requests: set(own), after: OWN_LOOK, edits };
@@ -707,6 +721,12 @@ export class ObsMediaScenes {
   private settleLook(decoder: string, look: Look): void {
     if (look.after === null || (this.liveEdits.get(decoder) ?? 0) !== look.edits) this.looks.delete(decoder);
     else this.looks.set(decoder, look.after);
+  }
+
+  /** The kept own look of this material decoder cannot be trusted this run (the store failed): `lookFor` says why. */
+  private distrust(decoder: string, error: unknown): void {
+    if (!this.untrusted.has(decoder)) this.untrusted.set(decoder, failureReason(error));
+    this.looks.delete(decoder); this.looks.delete(`${decoder}${STANDBY_SUFFIX}`);
   }
 
   private async canvasSize(): Promise<{ width: number; height: number }> {
