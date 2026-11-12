@@ -1050,7 +1050,9 @@ function registerIpc(
   handle('link:ma2-network-status', async () => { await ma2NetworkReady; return ma2Network.status(); });
   handle('link:ma2-current-show', async () => { await ma2NetworkReady; return ma2Network.currentShow(); });
   // The program's lighting Off and its running state, as the license rules want them (program-license.ts).
-  const programOutputs = programLicense(licenseGate, { ready: ma2NetworkReady, status: () => ma2Network.status(), send: sendMa2Cue });
+  const programOutputs = programLicense(licenseGate, { ready: ma2NetworkReady, status: () => ma2Network.status(), send: sendMa2Cue },
+    error => { void logger.record({ level: 'warning', category: 'state', device: 'P1 跟随', message: `开始跟随 P1 时授权没有通过：${toUserErrorReason(error)}。之后的每一首歌照常检查授权`, result: 'failed' })
+      .catch((recordError: unknown) => console.error('P1 跟随的授权日志未能保存', recordError)); });
   const lightsOff = new LightingOffService({ console: programOutputs.network,
     resending: count => { void logger.record({ level: 'warning', category: 'device', device: 'MA2', message: `控台重新连上了，补发 ${count} 条还没确认的关灯指令` })
       .catch((error: unknown) => console.error('关灯补发日志未能保存', error)); },

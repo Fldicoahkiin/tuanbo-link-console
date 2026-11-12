@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { allocateP1TimecodeRanges, frameNumberToTimecode } from '@tb/core/link';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, lightingDocumentSchema, lightingMa2BindingSchema, lightingTrackSchema, p1FollowStateSchema,
-  type LightingDocument, type LinkProject, type Ma2NetworkStatus, type Ma2PlaybackRequest, type P1FollowCommand, type P1FollowState } from '@tb/schema';
+  type LicenseStatus, type LightingDocument, type LinkProject, type Ma2NetworkStatus, type Ma2PlaybackRequest, type P1FollowCommand, type P1FollowState } from '@tb/schema';
 import { LightingOffService } from './lighting-off-service';
 import type { MidiInputListener } from './midi-port-broker';
 import { followRuns, p1FollowShowInput, wireP1Follow } from './p1-follow-wiring';
+import { authorizeRequest, programLicense, type LicenseGate } from './program-license';
+import { LicenseAccess } from './license-access';
 
 /** The P1 follow as link-main wires it (0.5.9 P3f): the real host, outputs and lights-off ledger; a fake console, broker
  * and IPC. */
@@ -14,18 +16,22 @@ const FRAME_MS = 1000 / FPS;
 const OWNER = '6f1c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f';
 const settings = { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false };
 
-function fixture(project: LinkProject, options: { refuseFiles?: string } = {}) {
+/** `license`: link-main's license instead of a fake one: every request through its check (authorizeRequest), the
+ * outputs' check (authorizeOutput) and the follow's running state into programLicense. */
+function fixture(project: LinkProject, options: { refuseFiles?: string; license?: LicenseGate & { followRunning(running: boolean): void } } = {}) {
   const handlers = new Map<string, (event: unknown, value: unknown) => unknown>();
   const states: P1FollowState[] = [], running: boolean[] = [], faults: string[] = [], listeners: MidiInputListener[] = [];
   const status: Ma2NetworkStatus = { state: 'connected', settings: { ...settings }, passwordSaved: false, version: '3.3.4.3', error: null, connection: 1 };
   const playMa2Cue = vi.fn<(request: Ma2PlaybackRequest) => Promise<void>>(() => Promise.resolve());
   const lights = new LightingOffService({ console: { getMa2NetworkStatus: () => Promise.resolve(status), playMa2Cue }, failed: () => undefined, resending: () => undefined });
-  const authorize = vi.fn(() => Promise.resolve());
+  const license = options.license;
+  const authorize = vi.fn(() => license ? license.access.requireOutput() : Promise.resolve());
   const showChanged = vi.fn();
   const windowOpened = vi.fn();
   const release = vi.fn(() => Promise.resolve());
   const wiring = wireP1Follow({
-    handle: (channel, listener) => { handlers.set(channel, listener); },
+    handle: (channel, listener) => { handlers.set(channel, license
+      ? async (event: unknown, value: unknown) => { await authorizeRequest(license, channel, value); return listener(event, value); } : listener); },
     send: (_channel, state) => { states.push(p1FollowStateSchema.parse(state)); },
     broker: {
       claimInput: (_name, owner, listener) => { listeners.push(listener); return Promise.resolve({ owner, release }); },
@@ -34,7 +40,7 @@ function fixture(project: LinkProject, options: { refuseFiles?: string } = {}) {
     executable: 'engine.exe', authorize, midiOutputs: () => Promise.resolve([]),
     checkFiles: () => options.refuseFiles ? Promise.reject(new Error(options.refuseFiles)) : Promise.resolve(),
     lights, faults: { report: message => { faults.push(message); }, windowOpened }, record: () => Promise.resolve(),
-    showChanged, running: value => { running.push(value); }
+    showChanged, running: value => { running.push(value); license?.followRunning(value); }
   });
   const send = (command: P1FollowCommand) => handlers.get('link:p1-follow')!(null, { version: 1, ownerId: OWNER, command });
   const start = (mode: 'manual' | 'auto') => send({ kind: 'start', projectPath: 'C:/show.tblink', sessionId: OWNER, revision: 1, document: JSON.stringify(project),
@@ -192,7 +198,67 @@ describe('P1 跟随接到主进程（P3f）', () => {
     expect(f.states.at(-1)?.outputs.actionMidi?.reason).toContain('MIDI 输出设置不存在');
     expect(f.wiring.host.state.outputs.actionMidi?.state).not.toBe('running');
   });
+
+  it('授权（P4）：跟随在跑时授权失效，P1 放的下一首照常准备、照常开始，界面什么都不用确认；停了以后再待命要重新检查', async () => {
+    const f = licensed(autoProject({ a: [], b: [] }));
+    await f.start('auto'); await f.send({ kind: 'arm', itemId: null });
+    const a = f.play(songFrame(f.project, 'a'), 30, 1_000);
+    await vi.waitFor(() => expect(f.wiring.host.state).toMatchObject({ phase: 'running', itemId: 'a' }));
+    f.lapse(lapsedLicense.到期!);
+    f.play(songFrame(f.project, 'b'), 30, a.lastSampleMs + 2_000);
+    await vi.waitFor(() => expect(f.wiring.host.state).toMatchObject({ phase: 'running', itemId: 'b', reason: null }));
+    // Each song's preparation asked the license, and it held both times.
+    expect(f.authorize.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect((await Promise.allSettled(f.authorize.mock.results.map(result => result.value))).every(result => result.status === 'fulfilled')).toBe(true);
+    expect(f.refused).not.toHaveBeenCalled();
+    await f.send({ kind: 'stop' });
+    await expect(f.send({ kind: 'arm', itemId: null })).rejects.toThrow('有效授权');
+  });
+
+  it('授权（P4）：自动选歌只在听、还没跟歌时不拿授权：这时失效，P1 点的第一首就不开始', async () => {
+    const f = licensed(autoProject({ a: [], b: [] }));
+    await f.start('auto'); await f.send({ kind: 'arm', itemId: null });
+    f.lapse(lapsedLicense.到期!);
+    f.play(songFrame(f.project, 'a'), 30, 1_000);
+    await vi.waitFor(() => expect(f.wiring.host.state).toMatchObject({ phase: 'failed', itemId: 'a' }));
+    expect(f.wiring.host.state.reason).toContain('有效授权');
+  });
+
+  it('授权（P4）：手动跟随待命时的检查通过以后，授权失效、界面不在，这首歌的输出照旧过授权', async () => {
+    const f = licensed(manualProject([]));
+    await f.start('manual'); await f.send({ kind: 'arm', itemId: 'song' });
+    await vi.waitFor(() => expect(f.running).toEqual([true]));
+    f.lapse(lapsedLicense.离线期到!);
+    await f.wiring.pageGone();
+    f.play(0, 30, 1_000);
+    expect(f.wiring.host.state).toMatchObject({ phase: 'running', itemId: 'song' });
+    await expect(f.access.requireOutput()).resolves.toBeUndefined();
+    await f.send({ kind: 'stop' });
+    await expect(f.access.requireOutput()).rejects.toThrow('有效授权');
+  });
 });
+
+const validLicense: LicenseStatus = {
+  machineCode: `TB1-${'A'.repeat(64)}`, state: 'active', message: '本机授权有效', enforcement: 'required', onlineAvailable: true,
+  claims: { version: 1, product: 'tuanbo-link-console', licenseId: '9d53530a-6712-423e-985e-e69beb9ec1c6', customer: '测试客户', machineCode: `TB1-${'A'.repeat(64)}`,
+    kind: 'subscription', issuedAt: '2026-09-27T00:00:00Z', useUntil: '2026-11-09T12:00:00Z', updatesUntil: '2027-09-27T00:00:00Z' }
+};
+const lapsedLicense: Record<string, LicenseStatus> = {
+  到期: { ...validLicense, state: 'expired', message: '授权已到期；工程文件不受影响' },
+  离线期到: { ...validLicense, state: 'renewal-required', message: '离线使用期已到，请联网验证一次授权（买断授权本身没有到期）' },
+  时间回拨: { ...validLicense, state: 'invalid', claims: null, message: '读取或校验授权失败：检测到系统时间被调回过，请校正系统日期后联网验证' }
+};
+
+/** The follow on link-main's license: a real LicenseAccess and programLicense, valid until `lapse`. */
+function licensed(project: LinkProject) {
+  let status = validLicense;
+  const access = new LicenseAccess(() => Promise.resolve(status));
+  const gate: LicenseGate = { access, changing: () => false };
+  const refused = vi.fn<(error: unknown) => void>();
+  const outputs = programLicense(gate, { ready: Promise.resolve(), status: () => { throw new Error('这个测试不连控台'); }, send: () => Promise.resolve() }, refused);
+  const f = fixture(project, { license: { ...gate, followRunning: running => { outputs.followRunningChanged(running); } } });
+  return { ...f, project, access, refused, lapse: (next: LicenseStatus) => { status = next; } };
+}
 
 /** A song whose console timeline runs `executors`. */
 function document(executors: string[]): LightingDocument {

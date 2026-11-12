@@ -187,7 +187,7 @@ describe('试听和节目用同一张清单', () => {
     const expired: LicenseStatus = { machineCode: `TB1-${'A'.repeat(64)}`, state: 'expired', message: '授权已到期；工程文件不受影响', enforcement: 'required', onlineAvailable: true, claims: null };
     const access = new LicenseAccess(() => Promise.resolve(expired));
     const status: Ma2NetworkStatus = { state: 'connected', settings, passwordSaved: false, version: '3.3.4.3', error: null, connection: 1 };
-    const wiring = programLicense({ access, changing: () => false }, { ready: Promise.resolve(), status: () => status, send });
+    const wiring = programLicense({ access, changing: () => false }, { ready: Promise.resolve(), status: () => status, send }, () => undefined);
     const service = new LightingOffService({ console: wiring.network, failed: () => undefined, resending: () => undefined });
     await expect(service.stop(lit('a', '开场', ['1.101']), 'stop')).resolves.toEqual({ failed: [] });
     await expect(service.receive({ version: 1, source: 'preview', phase: 'stop', document: document(['1.102']), song: null })).resolves.toEqual({ failed: [] });

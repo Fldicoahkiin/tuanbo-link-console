@@ -65,6 +65,9 @@ export class LicenseAccess {
   private programRunning = false;
   /** The program was running when the window last confirmed the session, and has kept running since. */
   private programHolds = false;
+  /** The P1 follow runs the show and its own check passed when it started (setFollowRunning). */
+  private followHolds = false;
+  private followGeneration = 0;
   private generation = 0;
   private workspaceGranted = false;
   constructor(private readonly status: () => Promise<LicenseStatus>) {}
@@ -74,7 +77,11 @@ export class LicenseAccess {
     if (needsProductLicense(channel, value)) await this.requireOutput();
   }
   async requireOutput(): Promise<void> {
-    if (this.windowHolds || this.programHolds) return;
+    if (this.windowHolds || this.programHolds || this.followHolds) return;
+    await this.check();
+  }
+  /** The license as it is now, whatever runs. */
+  private async check(): Promise<void> {
     const status = await this.status();
     if (status.state !== 'active' || !status.claims || status.claims.kind === 'trial') throw new Error(`使用团播联动台需要有效授权：${status.message}${status.state === 'inactive' ? '。请购买并激活本机' : ''}。`);
     this.workspaceGranted = true;
@@ -91,5 +98,19 @@ export class LicenseAccess {
   setProgramRunning(running: boolean): void {
     this.programRunning = running;
     if (!running) this.programHolds = false;
+  }
+  /** The main-process P1 follow starts running the show (armed until stopped, p1-follow-wiring.ts followRuns) or stops.
+   * No window confirms a follow (0.5.9 P4), so the follow holds the license by its own check, made the moment it starts
+   * running: right after the check of the manual follow's arm, or with the preparation of auto-follow's first song (which
+   * is checked as well, so a license that lapsed while auto-follow listened refuses that song). It holds until the follow
+   * stops, with or without a page; the next follow is checked again. Resolves once the check is done; rejects with
+   * what it read when the license does not hold, and then the follow holds nothing. */
+  async setFollowRunning(running: boolean): Promise<void> {
+    this.followGeneration += 1;
+    this.followHolds = false;
+    if (!running) return;
+    const generation = this.followGeneration;
+    await this.check();
+    if (generation === this.followGeneration) this.followHolds = true;
   }
 }

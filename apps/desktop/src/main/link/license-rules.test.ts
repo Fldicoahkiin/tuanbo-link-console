@@ -76,8 +76,9 @@ describe('授权失效时停止、关灯照常发出', () => {
 function programConsole(license: () => LicenseStatus, changing = () => false) {
   const access = new LicenseAccess(() => Promise.resolve(license()));
   const send = vi.fn<(request: Ma2PlaybackRequest) => Promise<void>>(() => Promise.resolve());
-  const wiring = programLicense({ access, changing }, { ready: Promise.resolve(), status: () => consoleStatus, send });
-  return { access, send, wiring };
+  const followRefused = vi.fn<(error: unknown) => void>();
+  const wiring = programLicense({ access, changing }, { ready: Promise.resolve(), status: () => consoleStatus, send }, followRefused);
+  return { access, send, wiring, followRefused };
 }
 
 describe('后台节目的关灯和运行状态，按 link-main 的接法（program-license.ts）', () => {
@@ -118,6 +119,55 @@ describe('后台节目的关灯和运行状态，按 link-main 的接法（progr
     await expect(f.access.requireOutput()).resolves.toBeUndefined();
     f.wiring.runningChanged(false);
     await expect(f.access.requireOutput()).rejects.toThrow('有效授权');
+  });
+});
+
+/** The check the follow makes when it starts running reads the license at once and settles within a turn. */
+const settled = () => new Promise<void>(resolve => { setTimeout(resolve, 0); });
+
+describe('P1 跟随在主进程里自己拿着授权，界面什么都不确认（0.5.9 P4）', () => {
+  for (const [reason, status] of Object.entries(lapsed)) it(`${reason}：跟随开始时检查通过，演出中失效照常输出；界面不在了也一样；停了就放手`, async () => {
+    let license = valid;
+    const f = programConsole(() => license);
+    // The manual follow's arm passed its check; the follow runs; the window never calls setActive.
+    await f.access.requireOutput();
+    f.wiring.followRunningChanged(true); await settled();
+    license = status;
+    await expect(f.access.requireOutput()).resolves.toBeUndefined();
+    await expect(f.access.authorize('link:native-player-prepare', undefined)).resolves.toBeUndefined();
+    // The page goes: link-main's releaseRendererRuntime ends the window's run, which never started.
+    await f.access.setActive(false);
+    await expect(f.access.requireOutput()).resolves.toBeUndefined();
+    f.wiring.followRunningChanged(false); await settled();
+    await expect(f.access.requireOutput()).rejects.toThrow('有效授权');
+    await expect(f.access.authorize('link:p1-follow', { version: 1, ownerId: randomUUID(), command: { kind: 'arm', itemId: null } })).rejects.toThrow('有效授权');
+    expect(f.followRefused).not.toHaveBeenCalled();
+  });
+
+  for (const [reason, status] of Object.entries(lapsed)) it(`${reason}：自动选歌只在听、还没跟歌时不拿授权；失效以后 P1 点的第一首过不了检查，跟随也拿不到`, async () => {
+    let license = valid;
+    const f = programConsole(() => license);
+    // arm(null) passed its check; listening for the first song is not running.
+    await f.access.requireOutput();
+    license = status;
+    await expect(f.access.requireOutput()).rejects.toThrow('有效授权');
+    // P1 picks the first song: the follow runs (preparing) and its own check does not pass either.
+    f.wiring.followRunningChanged(true); await settled();
+    await expect(f.access.requireOutput()).rejects.toThrow('有效授权');
+    expect(f.followRefused).toHaveBeenCalledOnce();
+    expect(String(f.followRefused.mock.calls[0]![0])).toContain('有效授权');
+  });
+
+  it('跟随停了又马上开始：上一次没检查完的结果不替新的一次拿授权', async () => {
+    let finish: (value: LicenseStatus) => void = () => { throw new Error('未开始读取'); };
+    let pending = true;
+    const access = new LicenseAccess(() => pending ? new Promise<LicenseStatus>(resolve => { finish = resolve; }) : Promise.resolve(lapsed.到期!));
+    const wiring = programLicense({ access, changing: () => false }, { ready: Promise.resolve(), status: () => consoleStatus, send: () => Promise.resolve() }, () => undefined);
+    wiring.followRunningChanged(true);
+    pending = false;
+    wiring.followRunningChanged(false); wiring.followRunningChanged(true);
+    finish(valid); await settled();
+    await expect(access.requireOutput()).rejects.toThrow('有效授权');
   });
 });
 
