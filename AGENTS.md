@@ -225,6 +225,7 @@ docs/                           设计、实施、验收和服务器安装说明
 ## 11. 文档
 
 - [README.md](./README.md)：安装、使用、产品边界和「发布与部署链路」。
+- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)：整体结构（由哪几部分组成、一首歌怎么到各路输出、工程的版本、状态从哪来）和改代码的步骤。改代码之前先读。
 - [docs/LIGHTING_WORKFLOW.md](./docs/LIGHTING_WORKFLOW.md)：灯光工作流 10 条、同步规则和在代码里的落点，灯光相关改动以此为准。
 - [docs/UI_COPY_GUIDE.md](./docs/UI_COPY_GUIDE.md)：界面文案规范。
 - [docs/KEYBOARD_SHORTCUTS.md](./docs/KEYBOARD_SHORTCUTS.md)：键位表、停止键和按住 Enter 的规则、和剪映不一样的地方。

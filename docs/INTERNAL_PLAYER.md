@@ -1,5 +1,7 @@
 # 内部音乐主控与 MA2 onPC
 
+> 这是 0.3.0 到 0.4.x 时的说明，只作记录。里面的行为有些已经改了（比如 OBS 断开不再停歌，画面失败照常放音乐）。现在的结构见 [ARCHITECTURE.md](./ARCHITECTURE.md)，规则见 [AGENTS.md](../AGENTS.md) 和 [LIGHTING_WORKFLOW.md](./LIGHTING_WORKFLOW.md)；不一致时以它们和代码为准。
+
 0.3.0 增加内部音乐主控，保留原有 P1 跟随。工程中的播放模式需要明确选择，不会因 P1 或 OBS 断线自动换时钟。
 
 ## 使用

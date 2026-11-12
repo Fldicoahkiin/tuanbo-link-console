@@ -275,7 +275,7 @@ OBS、外部程序路径、MIDI 端口等机器相关设置保存在本机集成
 | 软件保护 | [凭证、加密与后续防破解](docs/SECURITY.md) |
 | 办理执行 | [商户、备案、自动交付与开票步骤](docs/COMMERCIAL_ONBOARDING.md) |
 | 公司经营 | [支付申请、税务与开票](docs/PAYMENTS_AND_TAX.md) |
-| 开发约束 | [仓库维护](docs/REPOSITORY_GUIDE.md) · [Agent 工作规范](AGENTS.md) |
+| 开发约束 | [架构说明和改代码的步骤](docs/ARCHITECTURE.md) · [Agent 工作规范](AGENTS.md) · [仓库维护（旧）](docs/REPOSITORY_GUIDE.md) |
 
 ## 第三方组件
 
