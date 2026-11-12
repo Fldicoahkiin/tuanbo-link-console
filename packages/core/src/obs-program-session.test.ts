@@ -1712,7 +1712,7 @@ describe('画面读回和手动接管（R8，2026-11-10 第 5 题）', () => {
     await test.session.prepare(0); await test.advance(0, 900);
     test.handSwitch('没有音乐的场景'); music = 'missing';
     await test.advance(1000, 1000);
-    const text = '当前场景「没有音乐的场景」里没有联动台的音乐，观众听不到歌。请在 OBS 里切回联动台的场景，或者在这个场景里加上「团播联动台·内部正式音频」';
+    const text = '当前场景「没有音乐的场景」里没有联动台的音乐，观众听不到歌。请在 OBS 里切回这首歌用的场景，或者把「团播联动台·内部正式音频」加进这个场景';
     expect(test.last()).toEqual([{ id: 'music', scope: 'item', state: 'failed', detail: text }]);
     expect(test.faults).toEqual([text]);
     await test.advance(1100, 2000);

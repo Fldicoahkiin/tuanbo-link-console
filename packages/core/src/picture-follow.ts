@@ -113,5 +113,5 @@ export function nextPictureFollow(previous: PictureFollow, verdict: PictureFollo
 
 /** The red text when the scene on program would not carry the music to the audience. */
 export function musicMissingText(sceneName: string): string {
-  return `当前场景「${sceneName}」里没有联动台的音乐，观众听不到歌。请在 OBS 里切回联动台的场景，或者在这个场景里加上「团播联动台·内部正式音频」`;
+  return `当前场景「${sceneName}」里没有联动台的音乐，观众听不到歌。请在 OBS 里切回这首歌用的场景，或者把「团播联动台·内部正式音频」加进这个场景`;
 }
