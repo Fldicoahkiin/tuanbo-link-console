@@ -1,0 +1,73 @@
+/*
+ * 运营后台的样式入口。组件是 shadcn/ui（Base UI 版，nova 风格），颜色、圆角、字体只在这里定；
+ * 页面里用 Tailwind 的类，不写死颜色（用 bg-primary、text-muted-foreground 这样带语义的类）。
+ * 构建：build-console.mjs 用 Tailwind 把这个文件编成 dist/console/console.css（线上只发这一个样式文件，CSP 是 style-src 'self'）。
+ */
+@layer theme, base, legacy, components, utilities;
+@import "tailwindcss" source(none);
+@source "./";
+@import "tw-animate-css";
+
+/* 后台只有浅色。组件源码里的 dark: 类保留着，但这个开关永远不会打开。 */
+@custom-variant dark (&:is(.dark *));
+
+/* shadcn 的组件用这些状态写法（data-open:、data-checked: 等），同时认 Base UI 和 Radix 的属性。照 shadcn/tailwind.css 抄的（MIT）。 */
+@custom-variant data-open { &:where([data-state="open"]), &:where([data-open]:not([data-open="false"])) { @slot; } }
+@custom-variant data-closed { &:where([data-state="closed"]), &:where([data-closed]:not([data-closed="false"])) { @slot; } }
+@custom-variant data-checked { &:where([data-state="checked"]), &:where([data-checked]:not([data-checked="false"])) { @slot; } }
+@custom-variant data-unchecked { &:where([data-state="unchecked"]), &:where([data-unchecked]:not([data-unchecked="false"])) { @slot; } }
+@custom-variant data-selected { &:where([data-selected="true"]) { @slot; } }
+@custom-variant data-disabled { &:where([data-disabled="true"]), &:where([data-disabled]:not([data-disabled="false"])) { @slot; } }
+@custom-variant data-active { &:where([data-state="active"]), &:where([data-active]:not([data-active="false"])) { @slot; } }
+@custom-variant data-horizontal { &:where([data-orientation="horizontal"]) { @slot; } }
+@custom-variant data-vertical { &:where([data-orientation="vertical"]) { @slot; } }
+@utility no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; &::-webkit-scrollbar { display: none; } }
+
+@theme inline {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --color-background: var(--background); --color-foreground: var(--foreground);
+  --color-card: var(--card); --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover); --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary); --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary); --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted); --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent); --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive); --color-success: var(--success); --color-warning: var(--warning);
+  --color-border: var(--border); --color-input: var(--input); --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar); --color-sidebar-foreground: var(--sidebar-foreground);
+  --radius-sm: calc(var(--radius) - 4px); --radius-md: calc(var(--radius) - 2px); --radius-lg: var(--radius); --radius-xl: calc(var(--radius) + 4px);
+  --animate-shake: shake 0.3s ease-in-out;
+  @keyframes shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+}
+
+/*
+ * 颜色。一个强调色（蓝，原来后台的 #0067d9），其余是偏冷的灰。
+ * 三种状态色只用来标状态：success 正常 / 已完成，warning 等人处理，destructive 不可逆或已失效。它们都够深，可以直接当文字色。
+ */
+:root {
+  --radius: 0.5rem;
+  --background: oklch(1 0 0); --foreground: oklch(0.21 0.006 285.885);
+  --card: oklch(1 0 0); --card-foreground: oklch(0.21 0.006 285.885);
+  --popover: oklch(1 0 0); --popover-foreground: oklch(0.21 0.006 285.885);
+  --primary: oklch(0.534 0.192 257.4); --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.375); --secondary-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.967 0.001 286.375); --muted-foreground: oklch(0.5 0.016 285.938);
+  --accent: oklch(0.967 0.001 286.375); --accent-foreground: oklch(0.21 0.006 285.885);
+  --destructive: oklch(0.539 0.194 26.7); --success: oklch(0.511 0.113 157.6); --warning: oklch(0.531 0.119 65.1);
+  --border: oklch(0.92 0.004 286.32); --input: oklch(0.871 0.006 286.286); --ring: oklch(0.534 0.192 257.4);
+  --sidebar: oklch(0.985 0.001 286.375); --sidebar-foreground: oklch(0.37 0.013 285.805);
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html { color-scheme: light; font-synthesis: none; }
+  /* position: relative 是 Base UI 的浮层在 iOS Safari 上定位要的；#root 的 isolation 让浮层（挂在 body 下）总在页面内容上面。 */
+  body { @apply bg-background text-foreground font-sans text-sm antialiased; position: relative; }
+  #root { isolation: isolate; }
+  /* 手机上输入框小于 16px，Safari 会在聚焦时放大页面。 */
+  @media (max-width: 640px) { input, select, textarea { font-size: 16px; } }
+  /* Base UI 在严格 CSP 下不能自己插 <style>（见 components/providers.tsx 的 CSPProvider），它要的这两条规则写在这里。 */
+  .base-ui-disable-scrollbar { scrollbar-width: none; }
+  .base-ui-disable-scrollbar::-webkit-scrollbar { display: none; }
+}

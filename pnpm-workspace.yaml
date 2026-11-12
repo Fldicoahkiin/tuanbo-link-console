@@ -22,5 +22,8 @@ overrides:
   'form-data@4': '4.0.6'
   'nanoid@3': '3.3.18'
   'postcss@8': '8.5.23'
+  # 运营后台的组件库（Base UI、Tailwind）会把这两个包带到更新的版本，pnpm 会让桌面端的 zustand、eslint、vite 跟着换；钉在桌面端原来用的版本上，后台的改动不动桌面端的依赖。
+  'use-sync-external-store@1': '1.6.0'
+  'jiti@2': '2.6.1'
 patchedDependencies:
   'extract-zip@2.0.1': 'patches/extract-zip@2.0.1.patch'

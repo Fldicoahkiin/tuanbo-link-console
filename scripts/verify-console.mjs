@@ -17,6 +17,9 @@ const fixture = await startConsoleFixture();
 const origin = 'https://admin.tuanbo-link.jinhefilm.com';
 const assets = new URL('../apps/licensing-server/dist/console/', import.meta.url);
 const shots = new URL('../apps/licensing-server/dist/console-review/', import.meta.url); await mkdir(shots, { recursive: true });
+// 页面带上和线上一样的 CSP（从 Nginx 配置里读，不另抄一份）：组件库或页面在运行时插 <style>、内联脚本会被浏览器拦下，这里当作失败。
+const csp = /add_header Content-Security-Policy "([^"]+)"/.exec(await readFile(new URL('../apps/licensing-server/deploy/console-site.conf', import.meta.url), 'utf8'))?.[1];
+assert.ok(csp, 'console-site.conf 里没找到 Content-Security-Policy');
 function totp(secret) {
   let bits = 0; let value = 0; const bytes = [];
   for (const char of secret) { value = (value << 5) | 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'.indexOf(char); bits += 5; if (bits >= 8) { bytes.push((value >>> (bits - 8)) & 255); bits -= 8; } }
@@ -51,9 +54,10 @@ try {
       if (path.startsWith('/console-api/')) { await route.fulfill(await forward(route.request())); return; }
       const files = { '/': ['index.html', 'text/html'], '/console.js': ['console.js', 'application/javascript'], '/console.css': ['console.css', 'text/css'] };
       const file = files[path]; if (!file) { await route.fulfill({ status: 404 }); return; }
-      await route.fulfill({ contentType: file[1], body: await readFile(new URL(file[0], assets)) });
+      await route.fulfill({ contentType: file[1], headers: { 'Content-Security-Policy': csp }, body: await readFile(new URL(file[0], assets)) });
     });
     const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error' && /Content Security Policy/i.test(message.text())) errors.push(message.text()); });
     await page.goto(origin); await page.getByRole('button', { name: '使用开通凭据设置账号' }).click();
     const invitation = role === 'owner' ? { token: fixture.invitation } : fixture.invite(role);
     const secret = role === 'owner' ? fixture.secret : fixture.enrollment(invitation.token).secret;

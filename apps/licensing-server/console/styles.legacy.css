@@ -1,0 +1,4 @@
+/* 迁移期间的样式入口：新主题加上旧的 console.css。旧样式在 legacy 层，优先级低于新组件的 Tailwind 类。
+   页面全部换成新组件后，这个文件和 console.css 一起删掉，build-console.mjs 改回直接编 styles.css。 */
+@import "./styles.css";
+@import "./console.css" layer(legacy);

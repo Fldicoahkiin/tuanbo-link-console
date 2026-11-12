@@ -6,6 +6,7 @@ import { detailSchema, feedbackRoles, pageSchema, permissions, sessionSchema, ty
 import { api, ApiError, errorMessage, messageSchema } from './api';
 import { RevenueTrend } from './revenue-trend';
 import { AuthView } from './auth-view';
+import { Providers } from './components/providers';
 import { ActionDialog } from './action-dialog';
 import { actionNames, beijingTime, destructiveActions, display, forms, roleNames } from './forms';
 import { DataTable, Fields, ServerClock, detailRow } from './table';
@@ -158,4 +159,4 @@ function App() {
 }
 const root = document.getElementById('root');
 if (!root) throw new Error('缺少管理界面根节点');
-createRoot(root).render(<StrictMode><App /></StrictMode>);
+createRoot(root).render(<StrictMode><Providers><App /></Providers></StrictMode>);
