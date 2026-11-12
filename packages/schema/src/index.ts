@@ -35,6 +35,7 @@ export * from './music-analysis';
 export * from './automatic-music-analysis';
 export * from './music-monitor';
 export * from './native-program';
+export * from './p1-follow';
 
 export { musicStructureSchema, musicStructureSegmentSchema, type MusicStructure, type MusicStructureSegment } from './music-structure';
 export * from './song-music';
