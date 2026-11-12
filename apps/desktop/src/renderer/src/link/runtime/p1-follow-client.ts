@@ -53,9 +53,12 @@ export class P1FollowClient {
 
   get state(): P1FollowState | null { return this.latest; }
 
-  /** Starts following this project, or does nothing when this page follows the same version of it already. */
-  start(input: P1FollowStartInput, mode: 'manual' | 'auto'): Promise<P1FollowState> {
+  /** Starts following this project, or does nothing when this page follows the same version of it already. `read`: the
+   * project as the window has it when this start's turn comes. */
+  start(read: () => P1FollowStartInput, mode: 'manual' | 'auto'): Promise<P1FollowState> {
     return this.queue(async () => {
+      // Read when its turn comes: starts queued behind one another all send the newest version, or none when it is sent.
+      const input = read();
       const version = `${input.documentId}:${input.revision}`;
       const current = this.latest;
       if (current && current.ownerId === this.dependencies.ownerId && current.phase !== 'closed' && this.started === version && current.mode === mode) return current;

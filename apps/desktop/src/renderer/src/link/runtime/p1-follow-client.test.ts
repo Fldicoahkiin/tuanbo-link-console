@@ -35,22 +35,36 @@ function fixture(options: { errorsShown?: boolean; answer?: (request: P1FollowRe
 describe('界面上跟随 P1 的唯一入口（P4）', () => {
   it('开始：带上 MTC 输入口的名字、这台电脑的设置，只按直播跑；同一版不重发，工程改了才再开始', async () => {
     const f = fixture();
-    await f.client.start(f.input(), 'manual');
+    await f.client.start(() => (f.input()), 'manual');
     expect(f.requests[0]).toMatchObject({ ownerId: PAGE, command: { kind: 'start', projectPath: 'C:/show.tblink', mode: 'manual', runMode: 'live',
       inputPortName: 'loopMIDI Port', document: '{}', revision: 1, lightingProfile: { p1: { mtcInputPortProfileId: 'mtc-in' } } } });
-    await f.client.start(f.input(), 'manual');
+    await f.client.start(() => (f.input()), 'manual');
     expect(f.requests).toHaveLength(1);
-    await f.client.start(f.input(2), 'manual');
+    await f.client.start(() => (f.input(2)), 'manual');
     expect(f.requests).toHaveLength(2);
+  });
+
+  it('改得快时，排着队的开始都读最新的一版：只送最新的一次', async () => {
+    let release: () => void = () => undefined;
+    let revision = 1;
+    const f = fixture({ answer: () => new Promise(resolve => { release = () => resolve({ ...standby }); }) });
+    const first = f.client.start(() => f.input(revision), 'manual');
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    revision = 2; const second = f.client.start(() => f.input(revision), 'manual');
+    revision = 3; const third = f.client.start(() => f.input(revision), 'manual');
+    release(); await first;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    release(); await second; await third;
+    expect(f.requests.map(request => request.command.kind === 'start' ? request.command.revision : null)).toEqual([1, 3]);
   });
 
   it('界面还没在显示主进程的红字时不开始；没保存、联动台播放的工程、没设输入口都写明原因', async () => {
     const f = fixture({ errorsShown: false });
-    await expect(f.client.start(f.input(), 'manual')).rejects.toThrow('界面还没准备好显示出错提示');
+    await expect(f.client.start(() => (f.input()), 'manual')).rejects.toThrow('界面还没准备好显示出错提示');
     const g = fixture();
-    await expect(g.client.start({ ...g.input(), path: null }, 'manual')).rejects.toThrow('工程还没保存');
-    await expect(g.client.start({ ...g.input(), project: { ...g.input().project, playbackSource: 'internal' } }, 'manual')).rejects.toThrow('由联动台播放');
-    await expect(g.client.start({ ...g.input(), profile: { ...profile(), midiPortProfiles: [] } }, 'manual')).rejects.toThrow('还没设置 P1 的 MTC 输入端口');
+    await expect(g.client.start(() => ({ ...g.input(), path: null }), 'manual')).rejects.toThrow('工程还没保存');
+    await expect(g.client.start(() => ({ ...g.input(), project: { ...g.input().project, playbackSource: 'internal' } }), 'manual')).rejects.toThrow('由联动台播放');
+    await expect(g.client.start(() => ({ ...g.input(), profile: { ...profile(), midiPortProfiles: [] } }), 'manual')).rejects.toThrow('还没设置 P1 的 MTC 输入端口');
     expect([...f.requests, ...g.requests]).toEqual([]);
   });
 

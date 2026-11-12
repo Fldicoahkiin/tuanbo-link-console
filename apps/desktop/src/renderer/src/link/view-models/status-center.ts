@@ -1,5 +1,5 @@
 import { lightsStillRunningText, lightsUnconfirmedText, type ConsoleFollow, type LightingOffCheck, type LinkObsSnapshot } from '@tb/core/link';
-import type { IntegrationProfile, LinkProject, Ma2NetworkStatus, ObsPictureItem } from '@tb/schema';
+import type { IntegrationProfile, LinkProject, Ma2NetworkStatus, ObsPictureItem, P1FollowState } from '@tb/schema';
 import type { ConnectionCheck } from '../stores/connection-check-store';
 import type { Ma2ConnectionMethod } from '../stores/ma2-mode-store';
 import { midiConnectionTargets, usesNativeMidiOutput } from './connection-targets';
@@ -127,6 +127,35 @@ export function pictureStatus(player: StatusCenterInput['player']): ConnectionSt
   return red.length
     ? { state: 'error', value: `${red.length} 项出错`, detail }
     : { state: 'warning', value: parts.some(item => item.state === 'repairing') ? '补了一次' : '没对齐', detail };
+}
+
+/**
+ * The main process's P1 follow (0.5.9 P4), as the home page's P1 panel shows it: waiting and a frozen timecode are yellow
+ * with their reason; red only for what failed (the input, the song that could not start, the song's action MIDI).
+ */
+export function p1FollowStatus(follow: P1FollowState | null): ConnectionStatus {
+  if (!follow || follow.phase === 'closed') return { state: 'idle', value: 'P1 跟随', detail: '还没接收 P1 的时间码。点「启动并待命」或一键连接后开始接收' };
+  if (follow.ownerId === null) return { state: 'warning', value: '还在跟随', detail: `联动台重新打开之前开始的跟随还在继续（工程「${follow.projectName ?? ''}」）` };
+  if (follow.input?.state === 'closed') return { state: 'error', value: '收不到时间码', detail: follow.input.reason ?? 'P1 的时间码接口停了，请检查 MIDI 线和接口，再点「启动并待命」' };
+  const base = followPhaseStatus(follow);
+  const midi = follow.outputs.actionMidi;
+  const midiProblem = midi?.state === 'failed' ? midi.reason ?? '动作 MIDI 没准备好' : midi?.fault ?? null;
+  return midiProblem && base.state !== 'error' ? { state: 'error', value: '动作 MIDI 出错', detail: `${midiProblem}；${base.detail}` } : base;
+}
+
+function followPhaseStatus(follow: P1FollowState): ConnectionStatus {
+  const reason = follow.reason;
+  switch (follow.phase) {
+    case 'closed': case 'standby': return { state: 'idle', value: '正在接收', detail: reason ?? '正在接收 P1 的时间码，还没跟随哪首歌' };
+    case 'waiting': return follow.itemId === null
+      ? { state: 'warning', value: '等 P1 点歌', detail: reason ?? '在 P1 里点歌，联动台就跟着这首歌' }
+      : { state: 'warning', value: '等 P1 播放', detail: reason ?? '等 P1 从头播放这首歌' };
+    case 'preparing': return { state: 'checking', value: '准备中', detail: reason ?? 'P1 开始播放了，正在准备这首歌的输出' };
+    case 'running': return { state: 'ready', value: '在跟', detail: '跟着 P1 的时间码' };
+    case 'frozen': return { state: 'warning', value: '时间码停了', detail: `${reason ?? '收不到连续的时间码，自动 Cue 先停下'}。${follow.mode === 'manual' ? '时间码恢复后点「重新同步」接着跟' : 'P1 继续播放或重新点歌就接着跟'}` };
+    case 'takeover': return { state: 'warning', value: '手动接管', detail: reason ?? '不再跟着时间码，Cue 由人来触发' };
+    case 'failed': return { state: 'error', value: '没开始', detail: reason ?? '这首歌没有开始，P1 从头播放一首歌时再试' };
+  }
 }
 
 function statusGroupOf(row: StatusRow): StatusGroup['id'] {

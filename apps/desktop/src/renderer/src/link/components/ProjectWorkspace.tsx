@@ -6,6 +6,7 @@ import { useDocumentStore } from '../stores/document-store';
 import { currentShowWait, useShowGate } from '../stores/show-state-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
+import { chooseP1Song } from '../stores/p1-follow-store';
 import { useSelectedProgram } from '../useSelectedProgram';
 import { linkDesktopViewModel, linkFileViewModel } from '../view-models/link-desktop-view-model';
 import { importProgramFiles } from './import-program-files';
@@ -120,7 +121,8 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
 
   const selectCurrentItem = (item: RundownItem): void => {
     if (!item.enabled) return;
-    coordinator?.selectItem(item.id);
+    if (project.playbackSource === 'internal') coordinator?.selectItem(item.id);
+    else chooseP1Song(item.id);
     setSelectedItemId(item.id);
   };
 

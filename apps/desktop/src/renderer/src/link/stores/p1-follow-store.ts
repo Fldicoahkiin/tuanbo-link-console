@@ -1,8 +1,12 @@
+import { useMemo } from 'react';
 import { create } from 'zustand';
 import type { P1FollowState } from '@tb/schema';
-import { followRuntimeState, P1_FOLLOW_PAGE, P1FollowClient } from '../runtime/p1-follow-client';
+import { followRuntimeState, orphanFollow, P1_FOLLOW_PAGE, P1FollowClient, type P1FollowStartInput } from '../runtime/p1-follow-client';
+import { recordRuntimeOperator } from '../runtime/runtime-action-log';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { useDocumentStore } from './document-store';
+import { useIntegrationStore } from './integration-store';
+import { projectCodec } from './project-codec';
 import { useRuntimeStore } from './runtime-store';
 
 /*
@@ -31,6 +35,47 @@ export function p1FollowClient(): P1FollowClient {
   return client;
 }
 
+/** The project as the document store has it now, with this computer's settings. */
+function startInput(): P1FollowStartInput {
+  const { project, path, documentId, revision } = useDocumentStore.getState();
+  if (!project) throw new Error('还没打开工程，请先打开一个工程');
+  return { project, path, documentId, revision, profile: useIntegrationStore.getState().profile, encode: value => projectCodec.encode(value) };
+}
+
+/**
+ * Holds P1's timecode for the open project (standby), the same version of it only once; auto-follow then listens for
+ * the song P1 plays. Where the window used to listen to P1 (one-click connect, 启动并待命, auto-follow turned on).
+ */
+export async function followP1(): Promise<P1FollowState> {
+  // A song followed (or adopted) goes on as it started; the next version reaches it once nothing is followed.
+  const current = p1FollowClient().state;
+  if (current && current.ownerId === P1_FOLLOW_PAGE && current.phase !== 'closed' && !nothingFollowed(current)) return current;
+  const auto = useDocumentStore.getState().project?.p1AutoFollow?.enabled === true;
+  const state = await p1FollowClient().start(startInput, auto ? 'auto' : 'manual');
+  return auto && state.phase === 'standby' ? p1FollowClient().arm(null) : state;
+}
+
+/** Stopped, or auto-follow listening for its first song (the main process takes a newer start then, p1-follow-host.ts). */
+export function nothingFollowed(state: P1FollowState): boolean {
+  return state.phase === 'standby' || state.mode === 'auto' && state.phase === 'waiting' && state.itemId === null;
+}
+
+/** The window's preflight runs: the follow shows it as the check while it stands by. */
+export async function checkingP1Follow<T>(step: () => Promise<T>): Promise<T> {
+  setP1FollowChecking(true);
+  try { return await step(); } finally { setP1FollowChecking(false); }
+}
+
+/** The song the operator chose to wait for under P1 (only while nothing is followed; a followed song is P1's). */
+export function chooseP1Song(itemId: string): void {
+  const runtime = useRuntimeStore.getState();
+  if (runtime.state !== 'idle') return;
+  runtime.setState({ currentItemId: itemId, currentCueId: null, nextCueId: null });
+  const project = useDocumentStore.getState().project;
+  if (project) void recordRuntimeOperator(project.projectId, project.rundown.find(item => item.id === itemId), '选择当前节目', { itemId })
+    .catch((error: unknown) => console.error('选择当前节目没有记进运行日志', error));
+}
+
 export function setP1FollowChecking(checking: boolean): void {
   useP1FollowStore.setState({ checking });
   const follow = useP1FollowStore.getState().follow;
@@ -40,6 +85,12 @@ export function setP1FollowChecking(checking: boolean): void {
 export function showP1Follow(state: P1FollowState): void {
   useP1FollowStore.setState({ follow: state });
   mirror(state);
+}
+
+/** A follow that goes on without a page, for the notice that offers it (null when there is none). */
+export function useOrphanP1Follow(): ReturnType<typeof orphanFollow> {
+  const follow = useP1FollowStore(state => state.follow);
+  return useMemo(() => orphanFollow(follow), [follow]);
 }
 
 /** Only while the open project follows P1 (联动台播放 writes the runtime store itself) and only for this page's follow. */
