@@ -46,7 +46,7 @@ function fixture(options: { mode?: 'manual' | 'auto'; refuse?: (action: LinkActi
   let now = 0, audio: NativePlayerStatus | null = null;
   /** Every OBS request in order: cue actions, clip steps, seeks; `outputs` counts the outputs made for a song. */
   const sent: string[] = [], made: { request: NativeObsPrepare; music: boolean }[] = [], held: string[] = [], released: string[] = [], logs: string[] = [], programStates: NativeObsStatus[] = [];
-  const outputs = (request: NativeObsPrepare, music: boolean): NativeObsOutputs => {
+  const outputs = (request: NativeObsPrepare): NativeObsOutputs => {
     const item = request.snapshot.item.id;
     return {
       executor: { id: 'obs', supports: () => true, execute: action => { sent.push(named(action));
@@ -62,7 +62,7 @@ function fixture(options: { mode?: 'manual' | 'auto'; refuse?: (action: LinkActi
     } as NativeObsOutputs;
   };
   const host = new NativeObsHost({ audio: () => audio, changed: state => programStates.push(state), error: message => logs.push(`host:${message}`),
-    outputs: (request, _positionMs, _assertCurrent, source) => { made.push({ request, music: source === null }); return outputs(request, source === null); } });
+    outputs: (request, _positionMs, _assertCurrent, source) => { made.push({ request, music: source === null }); return outputs(request); } });
   const changed = vi.fn();
   const authorize = vi.fn(() => Promise.resolve());
   const picture = new P1PictureOutput({ host, project, projectPath: 'C:/shows/p1.tblink', mode: options.mode ?? 'manual', preciseSeeking: true, authorize, changed,

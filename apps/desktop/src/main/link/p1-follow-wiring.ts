@@ -1,6 +1,6 @@
 import { firstTimeWarning, lightsLeftOnText, toUserErrorReason, type LightingOffOutcome, type LitSong, type P1FollowLights,
   type ShowInputs } from '@tb/core/link';
-import { p1FollowRequestSchema, parseLinkProject, type IntegrationProfile, type LinkProject, type P1FollowActionMidi,
+import { p1FollowRequestSchema, parseLinkProject, type LinkProject, type P1FollowActionMidi,
   type P1FollowState } from '@tb/schema';
 import type { LightingOffService } from './lighting-off-service';
 import type { ClosedProgramFaults } from './main-process-errors';
