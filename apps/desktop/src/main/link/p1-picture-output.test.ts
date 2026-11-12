@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { clockFromNativeStatus, createObsProgramSnapshot, frameNumberToTimecode, type LinkDesktopApi, type ProgramClock } from '@tb/core/link';
 import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkProject, type NativeObsPrepare, type NativeObsStatus, type NativePlayerStatus } from '@tb/schema';
 import { NativeObsHost } from './native-obs-host';
-import type { NativeObsOutputs } from './native-obs-outputs';
+import { pictureReadBack, type NativeObsOutputs } from './native-obs-outputs';
 import { P1PictureOutput } from './p1-picture-output';
 
 /*
@@ -182,7 +182,10 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     expect(f.released).toEqual(['song']);
     await f.play(0, 100, 1, plain, 'plain');
     expect(f.released).toEqual(['song', 'song']);
+    // A song without picture work prepares nothing, and that is not a failure.
     expect(f.made).toHaveLength(2);
+    expect(f.picture.state).toBeNull();
+    expect(f.logs).toEqual([]);
     // Stopped once more on a frame, then the follow closes: released.
     f.picture.observe(f.clock('ready', 0, 1, P1)); await f.play(0, 1500);
     f.picture.observe(f.clock('stopped', 1500)); await settle();
@@ -213,6 +216,9 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     const program = showProject('internal', '乙');
     p1.program({ status: 'ready' });
     await expect(p1.host.prepare(p1.programRequest(program))).rejects.toThrow('OBS 的画面正在跟随 P1（工程「P1 画面」），这首歌不联动画面，音乐和时间码照常');
+    // Its stop of the picture it never got stops nothing of the follow's.
+    await expect(p1.host.stopOwned({ version: 1, sessionId: PROGRAM, generation: 1 })).resolves.toBeUndefined();
+    expect(p1.host.status).toMatchObject({ sessionId: P1, state: 'running' });
     // The program's music plays: its clocks do not touch the follow's picture, which goes on.
     p1.programClock({ status: 'playing', generation: 2, positionMs: 0 });
     for (let ms = 50; ms <= 500; ms += 50) p1.programClock({ positionMs: ms });
@@ -234,5 +240,14 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     expect(f.host.status).toMatchObject({ sessionId: PROGRAM, state: 'running' });
     expect(f.made.map(entry => entry.music)).toEqual([true]);
     expect(f.logs).toEqual([expect.stringContaining('跟随 P1 时这首歌的画面没有准备好，音乐、动作 MIDI 和灯光照常：OBS 的画面正在给联动台播放的节目用')]);
+  });
+
+  it('P1 放的音乐不经联动台的音乐项：读回不找它（上一首留下的也不算），节目的照旧找', async () => {
+    const reading = { kind: 'read' as const, programScene: '机位A', transitioning: false, decoders: [], music: { kind: 'missing' as const } };
+    const obs = { readPicture: () => Promise.resolve(reading) };
+    const decoders = { onAirSource: () => null };
+    const request = { decoders: [] };
+    await expect(pictureReadBack(obs, decoders, false)(request)).resolves.toEqual({ ...reading, music: { kind: 'not-used' } });
+    await expect(pictureReadBack(obs, decoders)(request)).resolves.toEqual(reading);
   });
 });
