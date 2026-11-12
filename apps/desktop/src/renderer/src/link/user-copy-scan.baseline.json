@@ -1,0 +1,120 @@
+{
+  "apps/desktop/src/main/link-main.ts": {
+    "IPC": 3,
+    "会话": 2,
+    "通道": 1
+  },
+  "apps/desktop/src/main/link/automatic-music-service.ts": {
+    "队列": 1
+  },
+  "apps/desktop/src/main/link/beauty-comparison.ts": {
+    "通道": 1
+  },
+  "apps/desktop/src/main/link/beauty-runtime.ts": {
+    "通道": 1
+  },
+  "apps/desktop/src/main/link/local-test-license.ts": {
+    "通道": 1
+  },
+  "apps/desktop/src/main/link/ma2-event-write.ts": {
+    "回读": 1
+  },
+  "apps/desktop/src/main/link/ma2-executor-channel.ts": {
+    "通道": 1
+  },
+  "apps/desktop/src/main/link/ma2-live-service.ts": {
+    "通道": 1
+  },
+  "apps/desktop/src/main/link/ma2-network-manager.ts": {
+    "通道": 1
+  },
+  "apps/desktop/src/main/link/ma2-onpc-bridge.ts": {
+    "回读": 2
+  },
+  "apps/desktop/src/main/link/ma2-song-watch.ts": {
+    "回读": 1
+  },
+  "apps/desktop/src/main/link/ma2-timecode-xml.ts": {
+    "回读": 2
+  },
+  "apps/desktop/src/main/link/native-midi-output.ts": {
+    "会话": 1
+  },
+  "apps/desktop/src/main/link/native-midi-ports.ts": {
+    "会话": 1
+  },
+  "apps/desktop/src/main/link/obs-beauty.ts": {
+    "通道": 2
+  },
+  "apps/desktop/src/main/link/obs-bridge-access.ts": {
+    "通道": 1
+  },
+  "apps/desktop/src/main/link/p1-project-service.ts": {
+    "camelCase": 2
+  },
+  "apps/desktop/src/main/link/purchase-service.ts": {
+    "凭证": 3
+  },
+  "apps/desktop/src/main/link/run-logger.ts": {
+    "脱敏": 2
+  },
+  "apps/desktop/src/main/link/secure-profile-store.ts": {
+    "凭证": 1
+  },
+  "apps/desktop/src/renderer/src/link/components/LoopMidiSettings.tsx": {
+    "通道": 1
+  },
+  "apps/desktop/src/renderer/src/link/components/ObsLiveCanvas.tsx": {
+    "会话": 1
+  },
+  "apps/desktop/src/renderer/src/link/runtime/ma2-editing-session.ts": {
+    "回读": 1
+  },
+  "apps/desktop/src/renderer/src/link/runtime/ma2-name-sync.ts": {
+    "回读": 1
+  },
+  "apps/desktop/src/renderer/src/link/runtime/runtime-midi-session.ts": {
+    "档案": 2
+  },
+  "apps/desktop/src/renderer/src/link/runtime/use-ma2-executor-channel.ts": {
+    "通道": 1
+  },
+  "apps/desktop/src/renderer/src/link/runtime/use-ma2-sync.ts": {
+    "回读": 1
+  },
+  "apps/desktop/src/renderer/src/link/stores/document-store.ts": {
+    "回读": 1
+  },
+  "apps/desktop/src/renderer/src/link/useInternalPlayer.ts": {
+    "通道": 1
+  },
+  "apps/desktop/src/renderer/src/link/view-models/link-preflight-view-model.ts": {
+    "预检": 1
+  },
+  "packages/core/src/lighting-midi-file.ts": {
+    "camelCase": 1
+  },
+  "packages/core/src/lighting-recording.ts": {
+    "通道": 1
+  },
+  "packages/core/src/ma2-import.ts": {
+    "回读": 3
+  },
+  "packages/core/src/midi-program.ts": {
+    "会话": 2
+  },
+  "packages/core/src/obs-program-session.ts": {
+    "会话": 1,
+    "通道": 1
+  },
+  "packages/core/src/timeline-state.ts": {
+    "camelCase": 1
+  },
+  "packages/schema/src/link-project.ts": {
+    "camelCase": 1,
+    "schema": 2
+  },
+  "packages/schema/src/live-cue-edit.ts": {
+    "通道": 1
+  }
+}

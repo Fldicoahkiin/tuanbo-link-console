@@ -42,3 +42,9 @@
 - 代码里用 `===`、`includes`、`startsWith` 比较的字符串，例如“名称已写入控台并回读确认”“素材不包含音频轨道”“音乐分析完成”。改之前先搜一遍谁在比较它。
 
 改了文案要同步改测试里的断言。
+
+## 测试守着的词（2026-11-12）
+
+`apps/desktop/src/renderer/src/link/user-copy-scan.test.ts` 扫 `apps/desktop/src`、`packages/core/src`、`packages/schema/src` 里的源码（不扫测试和测试用的 fixtures）：带中文的字符串、模板字符串和 JSX 文字都算给人看的文字，在里面找代码里的词。词表在测试文件的 `CODE_WORDS`：上面「写法」里不让用的词、用词表里的旧说法，加上 session、revision、snapshot、payload、IPC、preload、renderer、handler、callback、schema、DTO、undefined、null（英文按原样的大小写比，「Session」是控台上的词，不算），以及夹在中文里的驼峰写法的标识符（`itemId` 这种；grandMA2、onPC、loopMIDI 等现场看得到的名字除外）。「MIDI 通道」和灯具的通道是现场的说法，不算。`${…}` 里面是代码，不算；在电脑上跑的脚本（多行、带 `$变量` 的 PowerShell）也不算。
+
+以前写下的还没改，记在旁边的 `user-copy-scan.baseline.json` 里，按文件和词记个数。哪个文件里哪个词多了一个、或者出现了基线里没有的，测试就失败：换成日常说法。少了照常通过，带 `--reporter=verbose` 时会提示调低基线：运行 `TB_COPY_BASELINE=lower pnpm exec vitest run apps/desktop/src/renderer/src/link/user-copy-scan.test.ts`，它只会把个数往下调、去掉已经清零的，不会加，然后把基线和改动一起提交。不要手改基线把数调高；确实是现场的说法，就加进测试里的例外并写明为什么。
