@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { clockFromNativeStatus, createObsProgramSnapshot, frameNumberToTimecode, type LinkDesktopApi, type ProgramClock } from '@tb/core/link';
-import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkProject, type NativeObsPrepare, type NativeObsStatus, type NativePlayerStatus } from '@tb/schema';
+import { createEmptyLinkProject, p1FollowPictureSchema, parseLinkProject, type LinkAction, type LinkProject, type NativeObsPrepare, type NativeObsStatus, type NativePlayerStatus } from '@tb/schema';
 import { NativeObsHost } from './native-obs-host';
 import { pictureReadBack, type NativeObsOutputs } from './native-obs-outputs';
 import { P1PictureOutput } from './p1-picture-output';
@@ -41,11 +41,15 @@ function named(action: LinkAction): string {
 /** Lets the host's and the session's queued steps run (everything they wait for is a resolved promise here). */
 async function settle(): Promise<void> { for (let turn = 0; turn < 20; turn++) await new Promise(resolve => setImmediate(resolve)); }
 
-function fixture(options: { mode?: 'manual' | 'auto'; refuse?: (action: LinkAction) => boolean; prepare?: () => Promise<void>; project?: LinkProject } = {}) {
+function fixture(options: { mode?: 'manual' | 'auto'; refuse?: (action: LinkAction) => boolean; prepare?: () => Promise<void>; project?: LinkProject;
+  /** Waited for before a song's outputs are made, and as a stopped song holds its last frame. */
+  outputs?: () => Promise<void>; hold?: () => Promise<void>; authorize?: () => Promise<void> } = {}) {
   const project = options.project ?? showProject();
   let now = 0, audio: NativePlayerStatus | null = null;
   /** Every OBS request in order: cue actions, clip steps, seeks; `outputs` counts the outputs made for a song. */
   const sent: string[] = [], made: { request: NativeObsPrepare; music: boolean }[] = [], held: string[] = [], released: string[] = [], logs: string[] = [], programStates: NativeObsStatus[] = [];
+  /** Whether each clip step and seek sent to OBS plays the clip's own sound (`SetInputMute`). */
+  const sound: { clipId: string; on: boolean }[] = [];
   const outputs = (request: NativeObsPrepare): NativeObsOutputs => {
     const item = request.snapshot.item.id;
     return {
@@ -53,18 +57,19 @@ function fixture(options: { mode?: 'manual' | 'auto'; refuse?: (action: LinkActi
         return options.refuse?.(action) ? Promise.reject(new Error('OBS 拒绝了')) : Promise.resolve(); } },
       guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
       prepareOutputs: () => options.prepare?.() ?? Promise.resolve(), preloadResources: () => Promise.resolve(), restoreScenes: () => Promise.resolve(),
-      holdOutputs: clips => { held.push(`${item}:${clips.map(clip => clip.clipId).join(',')}`); return Promise.resolve(); },
+      holdOutputs: async clips => { await options.hold?.(); held.push(`${item}:${clips.map(clip => clip.clipId).join(',')}`); },
       releaseOutputs: () => { released.push(item); return Promise.resolve(); },
       heldDecoders: () => new Map<string, string>(), handOver: () => Promise.resolve(),
-      now: () => now, seekMedia: event => { sent.push(`seek:${event.clipId}@${Math.round(event.sourceOffsetMs / 100) * 100}`); return Promise.resolve(); },
-      executeManagedMediaEvent: ({ event }) => { sent.push(`media:${event.phase}:${event.clipId}`); return Promise.resolve(); },
+      now: () => now, seekMedia: event => { sent.push(`seek:${event.clipId}@${Math.round(event.sourceOffsetMs / 100) * 100}`);
+        sound.push({ clipId: event.clipId, on: event.embeddedAudioEnabled }); return Promise.resolve(); },
+      executeManagedMediaEvent: ({ event }) => { sent.push(`media:${event.phase}:${event.clipId}`); sound.push({ clipId: event.clipId, on: event.embeddedAudioEnabled }); return Promise.resolve(); },
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-11-12T00:00:00Z', monotonicMs: now })
     } as NativeObsOutputs;
   };
   const host = new NativeObsHost({ audio: () => audio, changed: state => programStates.push(state), error: message => logs.push(`host:${message}`),
-    outputs: (request, _positionMs, _assertCurrent, source) => { made.push({ request, music: source === null }); return outputs(request); } });
+    outputs: async (request, _positionMs, _assertCurrent, source) => { await options.outputs?.(); made.push({ request, music: source === null }); return outputs(request); } });
   const changed = vi.fn();
-  const authorize = vi.fn(() => Promise.resolve());
+  const authorize = vi.fn(options.authorize ?? (() => Promise.resolve()));
   const picture = new P1PictureOutput({ host, project, projectPath: 'C:/shows/p1.tblink', mode: options.mode ?? 'manual', preciseSeeking: true, authorize, changed,
     log: (level, message) => logs.push(`${level}:${message}`) });
   /** P1's clock of `itemId`, as P1FollowSession sends it; `positionMs` is also the time on the outputs' clock. */
@@ -85,7 +90,7 @@ function fixture(options: { mode?: 'manual' | 'auto'; refuse?: (action: LinkActi
   const programClock = (patch: Partial<NativePlayerStatus>) => { const status = program(patch); now = status.positionMs; host.observe(clockFromNativeStatus(status, String(Math.round(Number(process.hrtime.bigint()) / 100)))); };
   const programRequest = (programProject: LinkProject): NativeObsPrepare => ({ version: 1, sessionId: PROGRAM, generation: 1, preciseSeeking: false, projectPath: 'C:/shows/program.tblink',
     snapshot: createObsProgramSnapshot(programProject, 'song', 1) });
-  return { project, host, picture, sent, made, held, released, logs, programStates, changed, authorize, clock, play, program, programClock, programRequest, settle };
+  return { project, host, picture, sent, sound, made, held, released, logs, programStates, changed, authorize, clock, play, program, programClock, programRequest, settle };
 }
 
 /** A gate a preparation waits at until the test opens it. */
@@ -112,6 +117,22 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     expect(f.logs).toEqual([]);
     expect(f.made.map(entry => entry.music)).toEqual([false]);
     expect(f.authorize).toHaveBeenCalledOnce();
+  });
+
+  it('视频自己的声音：P1 放音乐时只看片段自己的开关，和 0.5.8 一样（开着就有声，关了就没声）', async () => {
+    const withSwitch = (on: boolean | undefined): LinkProject => {
+      const project = showProject(), [song, ...rest] = project.rundown;
+      const clip = { ...song!.referenceMediaClips[0]!, ...(on === undefined ? {} : { embeddedAudioEnabled: on }) };
+      return parseLinkProject({ ...project, rundown: [{ ...song!, referenceMediaClips: [clip] }, ...rest] });
+    };
+    for (const [on, expected] of [[undefined, true], [true, true], [false, false]] as const) {
+      const f = fixture({ project: withSwitch(on) });
+      f.picture.observe(f.clock('ready', 0));
+      await f.play(0, 1500);
+      expect(f.sent, String(on)).toEqual(['切到机位A', 'media:start:dance']);
+      expect(f.sound.length, String(on)).toBeGreaterThan(0);
+      expect(f.sound, String(on)).toEqual(f.sound.map(() => ({ clipId: 'dance', on: expected })));
+    }
   });
 
   it('冻结：手动模式素材照放、点动作和机位停在原地；自动选歌素材暂停；两种都不补发', async () => {
@@ -192,6 +213,100 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     expect(f.held.at(-1)).toBe('song:dance');
     await f.picture.close();
     expect(f.released).toEqual(['song', 'song', 'song']);
+  });
+
+  it('还在准备时停下：上一首的画面还没收拾完就停，这首的画面一点不发，做出来的输出放开，这首不留最后一帧', async () => {
+    const holding = gate();
+    const f = fixture({ hold: holding.wait });
+    f.picture.observe(f.clock('ready', 0));
+    await f.play(0, 1500);
+    // P1 changes song: the song before is still being put on its last frame when this one stops.
+    f.picture.observe(f.clock('ready', 0, 1, NEXT)); await settle();
+    const before = f.sent.length;
+    await f.play(0, 300, 1, NEXT);
+    f.picture.observe(f.clock('stopped', 300, 1, NEXT)); await settle();
+    holding.open(); await settle();
+    await f.play(350, 1500, 1, NEXT);
+    expect(f.sent.slice(before)).toEqual([]);
+    expect(f.made.map(entry => entry.request.sessionId)).toEqual([P1]);
+    expect(f.held).toEqual(['song:dance']);
+    expect(f.picture.state).toBeNull();
+    expect(f.host.status).toMatchObject({ sessionId: P1, state: 'stopped' });
+    expect(f.logs).toEqual([]);
+    // Only that song's stop cancels it: a late stop of the song before leaves the one being prepared alone.
+    const later = gate();
+    const g = fixture({ hold: later.wait });
+    g.picture.observe(g.clock('ready', 0));
+    await g.play(0, 1500);
+    g.picture.observe(g.clock('ready', 0, 1, NEXT)); await settle();
+    const stale = g.host.stopSource(g.picture.source, P1);
+    later.open(); await stale;
+    await g.play(0, 500, 1, NEXT);
+    expect(g.host.status).toMatchObject({ sessionId: NEXT, state: 'running' });
+  });
+
+  it('还在准备时关掉跟随：输出还没做好就关，这首的画面一点不发，做出来的输出放开，什么都不留', async () => {
+    const making = gate();
+    const f = fixture({ outputs: making.wait });
+    f.picture.observe(f.clock('ready', 0));
+    await f.play(0, 300);
+    const closed = f.picture.close();
+    making.open(); await closed; await settle();
+    expect(f.sent).toEqual([]);
+    expect(f.made).toHaveLength(1);
+    expect(f.released).toEqual(['song']);
+    expect(f.held).toEqual([]);
+    expect(f.picture.state).toBeNull();
+    expect(f.host.status).toBeNull();
+    // Stopped the same way while its outputs are made: nothing goes out, they are let go.
+    const again = gate();
+    const g = fixture({ outputs: again.wait });
+    g.picture.observe(g.clock('ready', 0));
+    await g.play(0, 300);
+    g.picture.observe(g.clock('stopped', 300)); await settle();
+    again.open(); await settle();
+    expect([g.sent, g.held, g.released]).toEqual([[], [], ['song']]);
+    expect(g.picture.state).toBeNull();
+    // A follow that closes while the program's picture is being prepared leaves that preparation alone.
+    const programs = gate();
+    const h = fixture({ outputs: programs.wait });
+    h.program({ status: 'ready' });
+    const prepared = h.host.prepare(h.programRequest(showProject('internal', '乙')));
+    await settle();
+    const gone = h.picture.close();
+    programs.open(); await gone;
+    await expect(prepared).resolves.toMatchObject({ sessionId: PROGRAM, state: 'ready' });
+  });
+
+  it('跟随的状态只在画面显示的东西变了才更新：一串位置不会每一步都通知', async () => {
+    const f = fixture();
+    const shown: string[] = [];
+    f.changed.mockImplementation(() => shown.push(JSON.stringify(f.picture.state)));
+    f.picture.observe(f.clock('ready', 0));
+    await f.play(0, 950);
+    expect(f.picture.state).toMatchObject({ itemId: 'song', state: 'running' });
+    expect(shown.length).toBeGreaterThan(0);
+    // Each notice shows something the one before did not.
+    expect(shown.filter((entry, index) => index > 0 && entry === shown[index - 1])).toEqual([]);
+    const after = shown.length;
+    await f.play(1000, 1950);
+    expect(shown.slice(after).filter((entry, index, all) => entry === (index > 0 ? all[index - 1] : shown[after - 1]))).toEqual([]);
+  });
+
+  it('太长的原因和出错写到跟随状态允许的长度（8192 个字）为止', async () => {
+    const long = '很'.repeat(10_000);
+    const f = fixture();
+    f.picture.observe(f.clock('ready', 0));
+    await f.play(0, 100);
+    const status = f.host.status!;
+    f.picture.source.changed({ ...status, reason: long, fault: long });
+    expect(f.picture.state).toMatchObject({ reason: long.slice(0, 8192), fault: long.slice(0, 8192) });
+    expect(() => p1FollowPictureSchema.parse(f.picture.state)).not.toThrow();
+    const g = fixture({ authorize: () => Promise.reject(new Error(long)) });
+    g.picture.observe(g.clock('ready', 0)); await settle();
+    expect(g.picture.state).toMatchObject({ state: 'failed' });
+    expect(g.picture.state!.reason!.length).toBeLessThanOrEqual(8192);
+    expect(() => p1FollowPictureSchema.parse(g.picture.state)).not.toThrow();
   });
 
   it('界面没了：关音频引擎（closeEngine 的 nativeObs.close()）不碰跟随的画面；跟随结束才放开', async () => {

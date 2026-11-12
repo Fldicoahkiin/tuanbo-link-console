@@ -10,6 +10,8 @@ export function createObsProgramSnapshot(project: LinkProject, itemId: string, r
   const ids = new Set(item.referenceMediaClips.map(clip => clip.assetId));
   return { version: 1, projectId: project.projectId, revision, frameRate: project.timebase.frameRate,
     outputCanvas: project.outputCanvas, internalVideoAudio: project.internalVideoAudio ?? false,
+    // Only a song P1 plays says so; an internal song's snapshot stays as it always was (absent = internal).
+    ...(project.playbackSource !== 'internal' ? { playbackSource: 'p1' as const } : {}),
     item: { id: item.id, title: item.title, enabled: item.enabled, notes: item.notes,
       ...(item.referenceAudio ? { referenceAudio: item.referenceAudio } : {}),
       visualLayers: item.visualLayers, referenceMediaClips: item.referenceMediaClips,
@@ -33,7 +35,7 @@ export function itemNeedsObs(project: LinkProject, itemId: string): boolean {
 export function projectFromObsSnapshot(snapshot: ObsProgramSnapshot): LinkProject {
   return parseLinkProject({ ...createEmptyLinkProject(snapshot.item.title), projectId: snapshot.projectId,
     schemaVersion: requiredSchemaVersion({ rundown: [snapshot.item] }),
-    playbackSource: 'internal', internalVideoAudio: snapshot.internalVideoAudio,
+    playbackSource: snapshot.playbackSource ?? 'internal', internalVideoAudio: snapshot.internalVideoAudio,
     outputCanvas: snapshot.outputCanvas, timebase: { frameRate: snapshot.frameRate, mode: 'per-item-reset' },
     rundown: [snapshot.item], mediaAssets: snapshot.assets });
 }

@@ -24,6 +24,9 @@ import type { NativeObsHost, PictureClockSource, PictureSongNow } from './native
  */
 
 type Host = Pick<NativeObsHost, 'prepare' | 'observe' | 'stopSource' | 'closeSource'>;
+/** The longest reason and fault the follow's state carries (`p1FollowPictureSchema`); the host's own status has no limit. */
+const TEXT_LIMIT = 8192;
+const cut = (text: string | null): string | null => text === null ? null : text.slice(0, TEXT_LIMIT);
 type Log = (level: 'info' | 'warning' | 'error', message: string) => void;
 
 export type P1PictureOutputDependencies = {
@@ -144,7 +147,7 @@ export class P1PictureOutput implements P1FollowOutputs {
     this.dependencies.log('error', `跟随 P1 时这首歌的画面没有准备好，音乐、动作 MIDI 和灯光照常：${reason}`);
     // A preparation the host had begun keeps the parts it listed; one it refused has none.
     const shown = this.shown?.itemId === song.itemId ? this.shown : null;
-    this.show({ itemId: song.itemId, state: 'failed', reason, fault: shown?.fault ?? null, items: shown?.items ?? [], follow: null });
+    this.show({ itemId: song.itemId, state: 'failed', reason: cut(reason), fault: shown?.fault ?? null, items: shown?.items ?? [], follow: null });
   }
 
   private forward(clock: ProgramClock): void {
@@ -156,12 +159,22 @@ export class P1PictureOutput implements P1FollowOutputs {
   private statusChanged(status: NativeObsStatus): void {
     // Only the song this follow holds now: what a song let go of (stopping, on its last frame) shows nothing more.
     if (this.song?.sessionId !== status.sessionId) return;
-    this.show({ itemId: status.itemId, state: status.state, reason: status.reason, fault: status.fault ?? null, items: status.items ?? [],
+    this.show({ itemId: status.itemId, state: status.state, reason: cut(status.reason), fault: cut(status.fault ?? null), items: status.items ?? [],
       follow: status.follow ?? null });
   }
 
+  /** The follow's state changes only when what it shows does: the host reports each position step of a running song. */
   private show(picture: P1FollowPicture | null): void {
+    if (samePicture(this.shown, picture)) return;
     this.shown = picture;
     this.dependencies.changed();
   }
+}
+
+/** Two pictures show the same. The host's status is parsed anew on each report, so its parts and read-back are compared
+ * by what they say, not by reference. */
+function samePicture(a: P1FollowPicture | null, b: P1FollowPicture | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.itemId === b.itemId && a.state === b.state && a.reason === b.reason && a.fault === b.fault
+    && JSON.stringify(a.items) === JSON.stringify(b.items) && JSON.stringify(a.follow) === JSON.stringify(b.follow);
 }

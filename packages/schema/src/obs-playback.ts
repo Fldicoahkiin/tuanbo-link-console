@@ -4,6 +4,9 @@ import { mtcFrameRateSchema, outputCanvasSchema, rundownItemSchema, linkMediaAss
 export const obsProgramSnapshotSchema = z.object({
   version: z.literal(1), projectId: z.string().min(1), revision: z.number().int().nonnegative(),
   frameRate: mtcFrameRateSchema, outputCanvas: outputCanvasSchema, internalVideoAudio: z.boolean(),
+  /** What plays the song's music. Absent = internal: the audio player's song. `p1`: P1 plays it, so a video clip's own
+   * sound follows the clip's switch alone, as the project has it (0.5.9, P1 picture). */
+  playbackSource: z.enum(['p1', 'internal']).optional(),
   item: rundownItemSchema.pick({ id: true, title: true, enabled: true, notes: true, referenceAudio: true,
     visualLayers: true, referenceMediaClips: true, cues: true }).strict(),
   assets: z.array(linkMediaAssetSchema)

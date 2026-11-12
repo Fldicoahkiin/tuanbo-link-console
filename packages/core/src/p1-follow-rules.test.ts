@@ -490,9 +490,11 @@ describe('P1 跟随规则 · 只在主进程跟随（0.5.9 P4，源码扫描）'
   });
 
   it('画面：obs-program-session.ts 和画面快照不按播放来源拒绝 P1 的歌', () => {
-    expect(repoText('packages/core/src/obs-program-session.ts')).not.toMatch(/playbackSource/);
-    expect(repoText('packages/core/src/obs-program-snapshot.ts')).not.toMatch(/playbackSource !==|playbackSource ===/);
-    expect(repoText('apps/desktop/src/main/link/native-obs-host.ts')).not.toMatch(/playbackSource/);
+    // They may read what plays the music (a P1 clip keeps its own sound), never refuse a song for it.
+    const refusal = /playbackSource\s*[!=]==?[^;{}]*\bthrow\b|\bthrow\b[^;{}]*playbackSource/;
+    for (const path of ['packages/core/src/obs-program-session.ts', 'packages/core/src/obs-program-snapshot.ts', 'apps/desktop/src/main/link/native-obs-host.ts']) {
+      expect(repoText(path), path).not.toMatch(refusal);
+    }
   });
 });
 

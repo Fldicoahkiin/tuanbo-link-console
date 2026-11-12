@@ -541,13 +541,26 @@ export class NativeObsHost {
   async close(sessionId?: string): Promise<void> {
     await this.closeWhere(entry => entry.source === null && (sessionId === undefined || entry.request.sessionId === sessionId));
   }
-  /** That song of a source stops, as the program's song stops (its last frame stays, R14); nothing else is touched. */
+  /** That song of a source stops, as the program's song stops (its last frame stays, R14); nothing else is touched. Also
+   * while its preparation is still on its way to an entry (the song before it being cleaned up, its outputs being made):
+   * that preparation is cancelled, nothing of the song goes out. While the source prepares another song, a song before
+   * it is already being stopped by that preparation: a late stop of it must not cancel the one being prepared. */
   async stopSource(source: PictureClockSource, sessionId: string): Promise<void> {
+    if (this.preparingFor(source)) {
+      if (this.requested?.sessionId === sessionId) await this.stop();
+      return;
+    }
     if (this.entry?.source === source && this.entry.request.sessionId === sessionId) await this.stop();
   }
-  /** The follow of `source` closes (or the app quits): its song stops and what its songs left on their last frame is
-   * taken off, as when a program closes. */
-  closeSource(source: PictureClockSource): Promise<void> { return this.closeWhere(entry => entry.source === source); }
+  /** The follow of `source` closes (or the app quits): its song stops, also one still being prepared, and what its songs
+   * left on their last frame is taken off, as when a program closes. */
+  async closeSource(source: PictureClockSource): Promise<void> {
+    if (this.preparingFor(source)) await this.stop();
+    await this.closeWhere(entry => entry.source === source);
+  }
+  /** A preparation of `source`'s is in flight. `stop` cancels it safely: while it runs the entry is none, a stopped or
+   * failed one, or that source's own (`assertOwner` refuses a source while another owner's song is on). */
+  private preparingFor(source: PictureClockSource): boolean { return this.preparing > 0 && this.requestedSource === source; }
   private async closeWhere(mine: (entry: Entry) => boolean): Promise<void> {
     if (this.entry && mine(this.entry)) await this.stop();
     await Promise.all(this.holds.filter(mine).map(entry => this.release(entry)));
