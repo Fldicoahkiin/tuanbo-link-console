@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createEmptyLinkProject, parseLinkProject, type LinkProject } from '@tb/schema';
 import { frameNumberToTimecode } from './mtc-timecode';
 import { allocateP1TimecodeRanges } from './p1-auto-follow';
@@ -367,6 +370,43 @@ describe('P1 跟随规则 · 排练和直播（03 §7.1 ⑩，AGENTS §4.8）', 
   });
 
   it.todo('⑩ 画面：排练时第一个失败挡住这一路后面的画面动作，直播标红继续（等 R9）');
+});
+
+describe('P1 跟随规则 · 只在主进程跟随（0.5.9 P4，源码扫描）', () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const read = (path: string): string => readFileSync(join(root, path), 'utf8');
+  const sources = (directory: string): { path: string; text: string }[] => readdirSync(join(root, directory), { withFileTypes: true }).flatMap(entry => {
+    const path = `${directory}/${entry.name}`;
+    if (entry.isDirectory()) return entry.name === 'node_modules' ? [] : sources(path);
+    return /\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [{ path, text: read(path) }] : [];
+  });
+  const window = sources('apps/desktop/src/renderer/src');
+
+  it('界面不解时间码、不订阅 MTC 输入：P1 的时间码只在主进程（MtcQuarterFrameDecoder、subscribeMtc）', () => {
+    expect(window.filter(file => /\bMtcQuarterFrameDecoder\b|\bsubscribeMtc\b/.test(file.text)).map(file => file.path)).toEqual([]);
+  });
+
+  it('界面只经 runtime/p1-follow-client.ts 发跟随命令、收跟随状态', () => {
+    const users = window.filter(file => /\.(p1Follow|getP1FollowState|onP1FollowState)\(|link:p1-follow/.test(file.text)).map(file => file.path);
+    expect(users).toEqual(['apps/desktop/src/renderer/src/link/runtime/p1-follow-client.ts']);
+  });
+
+  it('动作 MIDI 不按播放来源拒绝：P1 跟随和联动台播放用同一个会话（midi-program.ts）', () => {
+    expect(read('packages/core/src/midi-program.ts')).not.toMatch(/playbackSource/);
+  });
+
+  it('退出、授权和节目状态看得到主进程的跟随；动作 MIDI 恢复的那一行只有一处写法', () => {
+    const main = read('apps/desktop/src/main/link-main.ts');
+    expect(main).toMatch(/function showRunning\(\): boolean \{ return runtimeActive \|\| p1Follow\?\.running\(\) === true; \}/);
+    expect(main).toMatch(/songStarted: \(\) => \{\s*if \(!showRunning\(\) && !nativePlaybackActive\(\)\) return false;/);
+    expect(main).toMatch(/if \(showRunning\(\) \|\| nativePlaybackActive\(\)\) \{\s*showRuntimeActiveExitWarning\(\);/);
+    const recovered = [...sources('apps/desktop/src/main'), ...sources('packages/core/src')].filter(file => file.text.includes('个动作，不补发')).map(file => file.path);
+    expect(recovered).toEqual(['apps/desktop/src/main/link/native-midi-host.ts']);
+    expect(read('apps/desktop/src/main/link/show-state-service.ts')).not.toMatch(/activity\.p1/);
+  });
+
+  it.todo('画面：界面不为 P1 建 SceneOutputTimeline，P1 的画面只在主进程（等画面那一步）');
+  it.todo('画面：obs-program-session.ts 不按播放来源拒绝 P1 的时钟（等画面那一步）');
 });
 
 function midiProject(auto = false): LinkProject {
