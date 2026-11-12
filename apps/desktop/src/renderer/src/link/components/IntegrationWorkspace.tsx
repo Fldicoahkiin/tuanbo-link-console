@@ -17,6 +17,8 @@ import { useRuntimeStore } from '../stores/runtime-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { readAndStoreMidiPorts } from '../view-models/midi-device-inventory';
 import { runDesktopPreflight } from '../view-models/link-preflight-view-model';
+import { checkingP1Follow, followP1, p1FollowClient } from '../stores/p1-follow-store';
+import { toUserErrorMessage } from '@tb/core/link';
 import { DetectionReport, useLocalIntegrationConnection } from './LocalIntegrationConnection';
 import { isMtcSignalReady } from '../view-models/local-integration-midi';
 import { P1ProjectSyncPanel } from './P1ProjectSyncPanel';
@@ -57,7 +59,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
   useSettingsDirty('programs', settingsOpen && JSON.stringify(programDraftValues(draft)) !== JSON.stringify(programDraftValues(storedProfile ?? createDefaultIntegrationProfile())));
   useEffect(() => { if (!settingsOpen) { const profile = useIntegrationStore.getState().profile ?? createDefaultIntegrationProfile(); setDraft(profile); draftBaseline.current = profile; setPassword(''); } }, [settingsOpen]);
   const connectionProgress = useConnectionCheckStore();
-  const localIntegration = useLocalIntegrationConnection({ draft, password, readMidiPorts: () => readAndStoreMidiPorts(midiMonitor), openMidiPorts: (ids, direction) => direction === 'input' ? midiMonitor.openInputs(ids) : midiMonitor.openOutputs(ids), listenToP1: async () => { if (!coordinator) throw new Error('请先打开 P1 跟随工程'); await coordinator.initializeMidi(); }, notify, onDraft: setDraft, onPasswordCleared: () => setPassword(''), onObsPassword: setPassword, onBusyChange: setBusy });
+  const localIntegration = useLocalIntegrationConnection({ draft, password, readMidiPorts: () => readAndStoreMidiPorts(midiMonitor), openMidiPorts: (ids, direction) => direction === 'input' ? midiMonitor.openInputs(ids) : midiMonitor.openOutputs(ids), listenToP1: async () => { await followP1(); }, notify, onDraft: setDraft, onPasswordCleared: () => setPassword(''), onObsPassword: setPassword, onBusyChange: setBusy });
   const lastMtcAt = useRuntimeStore((state) => state.lastMtcAt);
   const mtcStable = useRuntimeStore((state) => state.mtcStable);
   const detectedFrameRate = useRuntimeStore((state) => state.detectedFrameRate);
@@ -126,7 +128,6 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
     }
   };
   const launchSequence = async (): Promise<void> => {
-    if (!coordinator) return;
     setBusy(true);
     try {
       const profile = await persistDraft();
@@ -136,20 +137,21 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
       useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory());
       if (internal) { notify('OBS 已连接，请到“工程与节目单”点击歌曲。'); return; }
       useIntegrationStore.getState().setProcess(await linkDesktopViewModel.startExternalApplication('p1'));
-      await coordinator.waitForMtcInputPort(profile.p1.startupTimeoutMs);
-      await coordinator.initializeMidi();
+      await midiMonitor.waitForConnectedInput(profile.p1.mtcInputPortProfileId, profile.p1.startupTimeoutMs, ports => useIntegrationStore.getState().setMidiPorts(ports));
+      // The main process takes P1's timecode from here (0.5.9 P4); auto-follow listens for P1's song right away.
+      await followP1();
       if (useDocumentStore.getState().project?.p1AutoFollow?.enabled) {
-        await coordinator.enableP1AutoFollow(() => runDesktopPreflight(coordinator, 'live', 'awaiting-external-start', true));
         notify('P1 自动监听已恢复，请直接点击 P1 歌曲。');
         return;
       }
-      const report = await runDesktopPreflight(coordinator, 'live', 'awaiting-external-start');
+      const report = await checkingP1Follow(() => runDesktopPreflight(midiMonitor, 'live', 'awaiting-external-start'));
       if (!report.passed) {
-        coordinator.stop(true, '开播前检查未通过');
         notify('设备已启动，但开播前检查还有问题要处理，联动没有进入待命。', 'error');
         return;
       }
-      await coordinator.armFromStart();
+      const itemId = useRuntimeStore.getState().currentItemId;
+      if (!itemId) throw new Error('还没设置当前节目，请先到节目单里选一首');
+      await p1FollowClient().arm(itemId);
       notify('已待命，正在等 P1 发来 MTC 时间码，收到后才会跟随时间线。如果 P1 播放后仍显示“未发送”，请检查 P1 设置里的 MIDI 输出设备。');
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
@@ -169,7 +171,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
         currentItemTitle={currentItemTitle} runtimeState={runtimeState}
         obsReady={obs.status === 'connected'} p1Ready={processes.p1.status === 'running'}
         mtcReady={mtcReady}
-        onLaunch={() => void launchSequence()} onStop={() => stopRuntime(coordinator, runtimeState, notify)}
+        onLaunch={() => void launchSequence()} onStop={() => stopRuntime(runtimeState, notify)}
       />}
       <P1ProjectSyncPanel heading={false} disabled={runtimeActive} notify={notify} />
       {/* P1's timecode matters only while following P1; under the internal player it is not expected (2026-10-28, picture 4). */}
@@ -193,10 +195,11 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
   );
 }
 
-function stopRuntime(coordinator: LinkRuntimeCoordinator | null, runtimeState: string, notify: Props['notify']): void {
-  if (!coordinator || runtimeState === 'idle' || runtimeState === 'stopping') return;
-  coordinator.stop();
-  notify('正在停止联动，并清理联动台在 OBS 里创建的输出。');
+/** Stops following P1 (the main process switches this song's lights off); P1 itself plays on. */
+function stopRuntime(runtimeState: string, notify: Props['notify']): void {
+  if (runtimeState === 'idle' || runtimeState === 'stopping') return;
+  notify('正在停止跟随 P1，并关掉这首歌用到的灯光。P1 自己不会停。');
+  void p1FollowClient().stop().catch((error: unknown) => notify(`没能停止跟随 P1：${toUserErrorMessage(error)}`, 'error'));
 }
 
 function P1MtcSetupNotice({ ready, portAvailable }: { ready: boolean; portAvailable: boolean }): JSX.Element {

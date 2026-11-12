@@ -65,6 +65,8 @@ export class P1Clock {
   private last: Position | null = null;
   /** Latest position seen at all (also while frozen), for resync and auto-follow's new-song check. */
   private observed: Position | null = null;
+  /** Latest whole timecode decoded, as P1 sent it (not relative to a song), whatever the phase: for the screen. */
+  private heard: MtcSample | null = null;
   /** Auto-follow: frozen in a way only P1 playing a song from its head can end. */
   private needsRestart = false;
   private sessionId = '';
@@ -79,6 +81,10 @@ export class P1Clock {
   }
 
   get state(): P1FollowState { return this.current; }
+  /** The latest whole timecode P1 sent, as it came in (also before arming); null before the first. */
+  get timecode(): MtcSample | null { return this.heard; }
+  /** The interface's "now" in ms: the later of the newest message and heartbeat; null before the first. */
+  get now(): number | null { return this.nowMs; }
 
   /** One MIDI message from the P1 input with the interface's timestamp. Quarter frames carry the
    * position; a Full Frame relocates, so pieces collected before it are dropped. */
@@ -87,9 +93,11 @@ export class P1Clock {
     const events = this.checkLoss();
     if (isFullFrame(bytes)) { this.decoder.reset(); return events; }
     if (bytes.length !== 2 || bytes[0] !== 0xf1) return events;
-    if (this.current.phase === 'idle' || this.current.phase === 'stopped') return events;
+    // Decoded in every phase so the screen shows P1's timecode before arming too (the page decoded whatever it listened
+    // to, link-runtime-coordinator.ts ingestQuarterFrame); only an armed clock acts on it. Arming starts a fresh decode.
     const sample = this.decoder.push(bytes[1]!, atMs);
-    if (!sample) return events;
+    if (sample) this.heard = sample;
+    if (!sample || this.current.phase === 'idle' || this.current.phase === 'stopped') return events;
     return [...events, ...(this.mode === 'auto' ? this.autoSample(sample) : this.manualSample(sample))];
   }
 
@@ -97,6 +105,13 @@ export class P1Clock {
   idle(at100ns: bigint): P1ClockEvent[] {
     this.advance(at100ns);
     return this.checkLoss();
+  }
+
+  /** The input itself is gone (unplugged, or its helper failed): no message and no heartbeat will come, so silence
+   * cannot be measured any more. What was running is lost now, as it would be after MTC_LOSS_MS of silence. */
+  inputGone(): P1ClockEvent[] {
+    if (this.current.phase !== 'running') return [];
+    return [this.freeze('lost', 'MTC 信号中断', false)];
   }
 
   /** Manual: follow this song from its head. Auto: `null`, P1 picks the song. */

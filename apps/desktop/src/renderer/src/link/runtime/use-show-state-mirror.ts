@@ -1,15 +1,14 @@
 import { useEffect } from 'react';
-import { toUserErrorMessage, type LinkRuntimeState } from '@tb/core/link';
+import { toUserErrorMessage } from '@tb/core/link';
 import type { LinkShowActivity } from '@tb/schema';
-import { useRuntimeStore } from '../stores/runtime-store';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { useShowStateStore } from '../stores/show-state-store';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 
-/** What this window knows about the show and main does not: P1 following while its runtime is not idle, and the
- * editor's or the lighting workbench's own preview playing. */
-export function showActivity(runtime: { state: LinkRuntimeState; currentItemId: string | null }, previewPlaying: boolean): LinkShowActivity {
-  return { version: 1, p1: runtime.state === 'idle' ? null : { state: runtime.state, itemId: runtime.currentItemId }, preview: previewPlaying };
+/** What this window knows about the show and main does not: the editor's or the lighting workbench's own preview
+ * playing. P1 following is the main process's own (0.5.9 P4). */
+export function showActivity(previewPlaying: boolean): LinkShowActivity {
+  return { version: 1, preview: previewPlaying };
 }
 
 /**
@@ -37,15 +36,14 @@ export function useShowStateMirror(notify: (message: string, tone: 'info' | 'err
   useEffect(() => {
     let last = '';
     const report = (): void => {
-      const activity = showActivity(useRuntimeStore.getState(), useMa2SyncStore.getState().previewPlaying), text = JSON.stringify(activity);
+      const activity = showActivity(useMa2SyncStore.getState().previewPlaying), text = JSON.stringify(activity);
       if (text === last) return;
       last = text;
       void desktop.reportShowActivity(activity).catch((error: unknown) => {
-        notify(`跟 P1 或预览的状态没记上，这期间控台操作可能不会等它停下。再出现请重启联动台。原因：${toUserErrorMessage(error)}`, 'error');
+        notify(`预览的状态没记上，这期间控台操作可能不会等它停下。再出现请重启联动台。原因：${toUserErrorMessage(error)}`, 'error');
       });
     };
     report();
-    const stopRuntime = useRuntimeStore.subscribe(report), stopPreview = useMa2SyncStore.subscribe(report);
-    return () => { stopRuntime(); stopPreview(); };
+    return useMa2SyncStore.subscribe(report);
   }, [notify]);
 }

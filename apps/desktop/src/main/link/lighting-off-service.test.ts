@@ -37,6 +37,25 @@ function fixture() {
 afterEach(() => { vi.useRealTimers(); });
 
 describe('换歌关灯（第 4 题）', () => {
+  it('主进程跟随 P1（0.5.9 P3f）：换歌只关上一首独有的；跟着的歌在用的不被别人的停止关掉；停止关这首的并补发欠着的', async () => {
+    const f = fixture();
+    await expect(f.service.followChange(null, lit('a', '开场', ['1.101', '1.102']))).resolves.toEqual({ failed: [] });
+    expect(f.playMa2Cue).not.toHaveBeenCalled();
+    await f.service.followChange(lit('a', '开场', ['1.101', '1.102']), lit('b', '返场', ['1.102', '1.103']));
+    expect(f.executors()).toEqual(['1.101']);
+    // The program stopping a song on 1.103 does not switch off what P1's song runs.
+    await f.service.stop(lit('x', '串场', ['1.103', '1.104']), 'stop');
+    expect(f.executors()).toEqual(['1.101', '1.104']);
+    f.status.state = 'disconnected';
+    await f.service.followStop(lit('b', '返场', ['1.102', '1.103']), 'stop');
+    expect(f.service.owed().map(entry => [entry.executor, entry.cause])).toEqual([['1.102', 'stop'], ['1.103', 'stop']]);
+    f.status.state = 'connected';
+    // Nothing lit: the stop sends only what is still owed.
+    await f.service.followStop(null, 'close');
+    expect(f.executors()).toEqual(['1.101', '1.104', '1.102', '1.103']);
+    expect(f.service.owed()).toEqual([]);
+  });
+
   it('Off 等于上一首用到的减去下一首也用的；先发上一首独有的，同一个期限、停止优先', async () => {
     const f = fixture();
     await f.service.change(null, lit('a', '开场', ['1.101', '1.102']));
@@ -128,10 +147,8 @@ describe('试听和节目用同一张清单', () => {
     f.status.state = 'connected';
     await f.service.receive({ version: 1, source: 'preview', phase: 'stop', document: document([]), song: null });
     expect(f.playMa2Cue).not.toHaveBeenCalled();
-    // Following P1, stop in the app switches the song off and sends what is still owed, without stopping P1.
-    await f.service.receive({ version: 1, source: 'p1', phase: 'stop', document: document(['1.106']), song: { itemId: 'p', title: 'P1 的歌' } });
-    expect(f.executors()).toEqual(['1.106', '1.101', '1.105']);
-    expect(f.service.owed()).toEqual([]);
+    // Following P1 is the main process's own (0.5.9 P4): the window has no P1 stop to send here any more.
+    await expect(f.service.receive({ version: 1, source: 'p1', phase: 'stop', document: document(['1.106']), song: { itemId: 'p', title: 'P1 的歌' } })).rejects.toThrow();
     f.service.close();
   });
 
@@ -170,7 +187,7 @@ describe('试听和节目用同一张清单', () => {
     const expired: LicenseStatus = { machineCode: `TB1-${'A'.repeat(64)}`, state: 'expired', message: '授权已到期；工程文件不受影响', enforcement: 'required', onlineAvailable: true, claims: null };
     const access = new LicenseAccess(() => Promise.resolve(expired));
     const status: Ma2NetworkStatus = { state: 'connected', settings, passwordSaved: false, version: '3.3.4.3', error: null, connection: 1 };
-    const wiring = programLicense({ access, changing: () => false }, { ready: Promise.resolve(), status: () => status, send });
+    const wiring = programLicense({ access, changing: () => false }, { ready: Promise.resolve(), status: () => status, send }, () => undefined);
     const service = new LightingOffService({ console: wiring.network, failed: () => undefined, resending: () => undefined });
     await expect(service.stop(lit('a', '开场', ['1.101']), 'stop')).resolves.toEqual({ failed: [] });
     await expect(service.receive({ version: 1, source: 'preview', phase: 'stop', document: document(['1.102']), song: null })).resolves.toEqual({ failed: [] });

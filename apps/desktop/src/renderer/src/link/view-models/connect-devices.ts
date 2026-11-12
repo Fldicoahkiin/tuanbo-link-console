@@ -204,7 +204,8 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
         checks.checking(key);
         if (!target.required) { skip(key, '未启用此接口'); continue; }
         const mapped = profile.midiPortProfiles.find(port => port.id === target.id && port.direction === target.direction);
-        const nativeOutput = usesNativeMidiOutput(options.project, target.direction);
+        // P1's timecode input is the main process's (0.5.9 P4, p1-follow-host.ts): only checked here, opened by the P1 step.
+        const nativeOutput = usesNativeMidiOutput(options.project, target.direction), p1Input = target.direction === 'input' && target.id === profile.p1.mtcInputPortProfileId;
         await run(key, target.name, async () => {
           if (!mapped?.portName) throw new Error('还没设置接口，请在“音频与 MIDI”里选择');
           if (nativeOutput) {
@@ -219,9 +220,10 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
           if (!midi) throw new Error('系统 MIDI 没有准备好，请先处理系统检测里的问题');
           const matching = midi.value.filter(port => port.name === mapped.portName && port.direction === target.direction && port.state === 'connected');
           if (matching.length !== 1) throw new Error('接口不可用或有重名接口，请检查设备连接');
+          if (p1Input) return;
           const errors = await options.openMidiPorts([target.id], target.direction);
           if (errors.length) throw new Error(errors.join('；'));
-        }, nativeOutput ? 'Windows 接口检查通过；现在不发送时间码，播放时才打开接口发送' : '接口已打开；还没发送任何 Cue 或时间码');
+        }, nativeOutput ? 'Windows 接口检查通过；现在不发送时间码，播放时才打开接口发送' : p1Input ? '接口可用；跟随 P1 时由联动台在后台接收时间码' : '接口已打开；还没发送任何 Cue 或时间码');
       }
     };
     await obsTask();

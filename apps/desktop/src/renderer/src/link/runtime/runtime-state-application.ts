@@ -36,7 +36,3 @@ export function applyRuntimeState(input: {
     useRuntimeStore.getState().setState({ state: 'error', reason: `运行状态日志写入失败：${message}` });
   });
 }
-export function resetRuntimeExecutionView(): void {
-  useRuntimeStore.getState().setState({ timecode: null, detectedFrameRate: null, mtcStable: false,
-    lastMtcAt: null, reports: [], mediaReports: [], currentCueId: null });
-}

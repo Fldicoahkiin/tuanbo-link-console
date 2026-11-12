@@ -39,6 +39,8 @@ import { useProjectPersistence } from './useProjectPersistence';
 import { useRecoveryCopyWriter } from './recovery-copy-writer';
 import { confirmReplaceDocument, showOpenedProject, useDocumentCommands, useDocumentStateReport } from './project-document';
 import { useP1AutoFollow } from './useP1AutoFollow';
+import { P1OrphanNotice } from './components/P1OrphanNotice';
+import { p1FollowClient, setMainErrorsShown } from './stores/p1-follow-store';
 import { useInternalPlayer } from './useInternalPlayer';
 import { useMa2Sync } from './runtime/use-ma2-sync';
 import { useConsoleFollow } from './runtime/use-console-follow';
@@ -120,7 +122,8 @@ export function LinkApp(): JSX.Element {
 
   useDocumentStateReport(notify);
 
-  useRuntimeCloseProtection(internalPlayer.state.status === 'preparing' ? 'preflight' : runtimeState, notify);
+  // Only 联动台播放's: the main process knows of its own P1 follow (0.5.9 P4).
+  useRuntimeCloseProtection(project?.playbackSource !== 'internal' ? 'idle' : internalPlayer.state.status === 'preparing' ? 'preflight' : runtimeState, notify);
 
   useDocumentErrorNotification(documentError, notify);
   useUpdateAvailableNotice(notify);
@@ -141,13 +144,15 @@ export function LinkApp(): JSX.Element {
       : null;
     coordinatorDocumentIdRef.current = documentId;
     const next = new LinkRuntimeCoordinator(playbackProject, projectPath);
-    if (currentItemId && playbackProject.rundown.some((item) => item.id === currentItemId && item.enabled)) next.selectItem(currentItemId, false);
-    else useRuntimeStore.getState().setState({ currentItemId: null, currentCueId: null, nextCueId: null });
+    // The song chosen stays chosen while it is still in the project (under P1 the follow writes it while it follows one).
+    if (!currentItemId || !playbackProject.rundown.some((item) => item.id === currentItemId && item.enabled)) useRuntimeStore.getState().setState({ currentItemId: null, currentCueId: null, nextCueId: null });
     setCoordinator(next);
     return () => next.dispose();
   }, [documentId, playbackProject, projectPath]);
 
-  useP1AutoFollow(coordinator, integrationInitialized, project?.playbackSource !== 'internal' && project?.p1AutoFollow?.enabled === true, notify);
+  // The main process follows P1 (0.5.9 P4): this page shows its state, a follow that outlived a reload included.
+  useEffect(() => p1FollowClient().connect(), []);
+  useP1AutoFollow(playbackProject, projectPath, integrationInitialized, notify);
 
   const createProject = async (): Promise<void> => {
     setNewProjectError(null);
@@ -237,7 +242,7 @@ export function LinkApp(): JSX.Element {
       <section className={`app-workspace${connectionsOpen ? ' settings-workspace' : ''}`}>
         <main className="app-main" id="workspace-content" tabIndex={-1} aria-label={connectionsOpen ? '设置' : NAVIGATION.find(item => item.id === page)?.label}>
           <div className="content-scroll">{pageContent}<section ref={connectionsPanel} hidden={!connectionsOpen} className="connections-dialog" role="dialog" aria-modal="false" aria-label={settingsOpen ? '设置' : '连接与设备'}><div className="connections-content" ref={settingsLocator.ref}><IntegrationWorkspace quickConnectHost={connectHost} midiMonitor={midiMonitor} category={settingsCategory} onCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }} coordinator={coordinator} notify={notify} settingsOpen={connectionsOpen && settingsOpen} onSettingsOpen={openSettings} onCreate={() => leaveSettings(beginCreateProject)} onOpen={() => leaveSettings(() => void openProject())} /></div></section>
-      <div className="toast-stack" role="region" aria-label="通知"><div role="status" aria-live="polite">{licenseNotices.map((message, index) => <div className="toast info" key={`license-${index}`}><span>{message}</span><button aria-label="关闭授权提醒" onClick={() => dismissLicenseNotice(index)}><X aria-hidden="true" /></button></div>)}{notices.filter(notice => notice.tone === 'info').map((notice) => <div className="toast info" key={notice.id}><span>{notice.message}</span><button aria-label="关闭通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div><div role="alert">{notices.filter(notice => notice.tone === 'error').map((notice) => <div className="toast error" key={notice.id}><span>{notice.message}</span><button aria-label="关闭错误通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div></div></div>
+      <div className="toast-stack" role="region" aria-label="通知"><div role="status" aria-live="polite">{licenseNotices.map((message, index) => <div className="toast info" key={`license-${index}`}><span>{message}</span><button aria-label="关闭授权提醒" onClick={() => dismissLicenseNotice(index)}><X aria-hidden="true" /></button></div>)}{notices.filter(notice => notice.tone === 'info').map((notice) => <div className="toast info" key={notice.id}><span>{notice.message}</span><button aria-label="关闭通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div><P1OrphanNotice notify={notify} /><div role="alert">{notices.filter(notice => notice.tone === 'error').map((notice) => <div className="toast error" key={notice.id}><span>{notice.message}</span><button aria-label="关闭错误通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div></div></div>
         </main>
       </section>
 
@@ -357,13 +362,15 @@ function useDesktopIntegrationEvents(notify: (message: string, tone?: 'info' | '
     // the program opens only after that (useInternalPlayer waits for it), and main takes the open as the sign that red
     // text reaches this window.
     const unsubscribeMainErrors = showMainProcessErrors(listener => linkDesktopViewModel.onMainProcessError(listener), notify);
+    // A P1 follow starts only once its red text reaches this page (p1-follow-client.ts).
+    setMainErrorsShown(true);
     void loadDesktopIntegrationState(() => cancelled, notify);
     return () => {
       cancelled = true;
       unsubscribeInventory();
       unsubscribeObs();
       unsubscribeProcess();
-      unsubscribeMainErrors();
+      unsubscribeMainErrors(); setMainErrorsShown(false);
     };
   }, [notify]);
   return midiMonitor;

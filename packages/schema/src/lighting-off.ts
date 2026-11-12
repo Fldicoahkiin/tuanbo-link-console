@@ -12,12 +12,11 @@ export const lightingOffSongSchema = z.object({ itemId: z.string().min(1).max(20
  *   now, so nothing owed for them is sent. `pause`: its timecode no longer runs (paused, or it failed to start): the
  *   executors are not in use by the window any more, and nothing is owed, the lights stay as they are until the
  *   operator stops. `stop`: the operator stopped it, every executor of the song is owed an Off.
- * - `p1`: following P1, the operator pressed stop in the app (00-order §8 item 4): `stop` switches the song's executors
- *   off and sends every Off still owed once more, without stopping P1. `start` as for a preview.
+ * Following P1 is the main process's own (0.5.9 P4): its stop goes to the ledger there (LightingOffService.followStop).
  */
 export const lightingOffRequestSchema = z.object({
   version: z.literal(1),
-  source: z.enum(['preview', 'p1']),
+  source: z.literal('preview'),
   phase: z.enum(['start', 'pause', 'stop']),
   document: lightingDocumentSchema,
   song: lightingOffSongSchema.nullable()

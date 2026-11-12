@@ -7,7 +7,7 @@ vi.mock('../../registry/license-output', () => ({ requireOutputLicense: vi.fn().
 import { createEmptyLinkProject, parseLinkProject, type LinkAction } from '@tb/schema';
 import { runDesktopPreflight } from './link-preflight-view-model';
 import { createDefaultIntegrationProfile } from './local-integration-profile';
-import { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
+import { LinkMidiAdapter } from '../../registry/link-midi-adapter';
 import { useDocumentStore } from '../stores/document-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useRuntimeStore } from '../stores/runtime-store';
@@ -23,7 +23,7 @@ vi.mock('./link-desktop-view-model', () => ({ linkDesktopViewModel: {
 } }));
 
 const midiRequest = vi.fn(() => Promise.reject(new Error('测试：系统 MIDI 枚举不可用')));
-let coordinator: LinkRuntimeCoordinator | undefined;
+let midi: LinkMidiAdapter | undefined;
 beforeEach(() => {
   midiRequest.mockClear();
   stubMidi(midiRequest);
@@ -33,7 +33,7 @@ beforeEach(() => {
   useIntegrationStore.getState().setProfile(profile);
   useIntegrationStore.getState().setMidiPorts([]);
 });
-afterEach(() => { coordinator?.dispose(); coordinator = undefined; vi.unstubAllGlobals(); });
+afterEach(() => { midi?.dispose(); midi = undefined; vi.unstubAllGlobals(); });
 
 function setup(actions: LinkAction[] = [], selected = 'song') {
   const project = parseLinkProject({ ...createEmptyLinkProject('预检 MIDI 边界'), playbackSource: 'internal', obsOutputMode: 'scenes', rundown: [
@@ -41,9 +41,9 @@ function setup(actions: LinkAction[] = [], selected = 'song') {
     { id: 'other', title: '其他节目', cues: [] }
   ] });
   useDocumentStore.getState().setProject(project, 'C:\\test\\show.tblink');
-  coordinator = new LinkRuntimeCoordinator(project, 'C:\\test\\show.tblink');
-  coordinator.selectItem(selected, false);
-  return coordinator;
+  useRuntimeStore.getState().setState({ currentItemId: selected });
+  midi = new LinkMidiAdapter(() => null, () => undefined);
+  return midi;
 }
 const lightingAction: LinkAction = { id: 'light-action', label: '灯光', kind: 'midi.noteOn', portProfileId: 'lighting-output', channel: 1, note: 60, velocity: 100 };
 

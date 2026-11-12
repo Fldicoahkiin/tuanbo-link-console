@@ -1,5 +1,5 @@
 import { linkActionSchema, linkManagedMediaExecutionPayloadSchema, ma2PlaybackRequestSchema, type LicenseStatus } from '@tb/schema';
-import { nativePlayerControlSchema } from '@tb/schema';
+import { nativePlayerControlSchema, p1FollowRequestSchema } from '@tb/schema';
 
 const publicCalls = new Set([
   'link:ma2-audition-control', 'link:ma2-play-cancel',
@@ -21,7 +21,9 @@ const publicCalls = new Set([
   // The lights-off ledger: the window's previews say what they use and what they owe; it only ever sends Off.
   'link:lighting-off',
   // What its read-back found (M8), read only.
-  'link:lighting-off-check-get'
+  'link:lighting-off-check-get',
+  // P1 follow's state, read only (0.5.9 P3f).
+  'link:p1-follow-state-get'
 ]);
 
 const workspaceSaveCalls = new Set(['link:save-project', 'link:write-recovery-copy', 'link:discard-recovery-copy',
@@ -39,6 +41,9 @@ export function needsProductLicense(channel: string, value: unknown): boolean {
   // A stopped song switches its executors off; Go and Goto light them.
   if (channel === 'link:ma2-play-cue') return ma2PlaybackRequestSchema.parse(value).action.action !== 'off';
   if (channel === 'link:set-runtime-active') return value !== false;
+  // Stopping a P1 follow and leaving it end what a checked follow started (0.5.9 P3f); a reloaded page taking back the
+  // follow that went on meanwhile starts nothing (P4).
+  if (channel === 'link:p1-follow') { const kind = p1FollowRequestSchema.parse(value).command.kind; return kind !== 'stop' && kind !== 'close' && kind !== 'adopt'; }
   if (channel === 'link:obs-execute-managed-media') return linkManagedMediaExecutionPayloadSchema.parse(value).event.phase === 'start';
   if (channel === 'link:obs-execute') {
     const action = linkActionSchema.parse(value);
@@ -60,6 +65,9 @@ export class LicenseAccess {
   private programRunning = false;
   /** The program was running when the window last confirmed the session, and has kept running since. */
   private programHolds = false;
+  /** The P1 follow runs the show and its own check passed when it started (setFollowRunning). */
+  private followHolds = false;
+  private followGeneration = 0;
   private generation = 0;
   private workspaceGranted = false;
   constructor(private readonly status: () => Promise<LicenseStatus>) {}
@@ -69,7 +77,11 @@ export class LicenseAccess {
     if (needsProductLicense(channel, value)) await this.requireOutput();
   }
   async requireOutput(): Promise<void> {
-    if (this.windowHolds || this.programHolds) return;
+    if (this.windowHolds || this.programHolds || this.followHolds) return;
+    await this.check();
+  }
+  /** The license as it is now, whatever runs. */
+  private async check(): Promise<void> {
     const status = await this.status();
     if (status.state !== 'active' || !status.claims || status.claims.kind === 'trial') throw new Error(`使用团播联动台需要有效授权：${status.message}${status.state === 'inactive' ? '。请购买并激活本机' : ''}。`);
     this.workspaceGranted = true;
@@ -86,5 +98,19 @@ export class LicenseAccess {
   setProgramRunning(running: boolean): void {
     this.programRunning = running;
     if (!running) this.programHolds = false;
+  }
+  /** The main-process P1 follow starts running the show (armed until stopped, p1-follow-wiring.ts followRuns) or stops.
+   * No window confirms a follow (0.5.9 P4), so the follow holds the license by its own check, made the moment it starts
+   * running: right after the check of the manual follow's arm, or with the preparation of auto-follow's first song (which
+   * is checked as well, so a license that lapsed while auto-follow listened refuses that song). It holds until the follow
+   * stops, with or without a page; the next follow is checked again. Resolves once the check is done; rejects with
+   * what it read when the license does not hold, and then the follow holds nothing. */
+  async setFollowRunning(running: boolean): Promise<void> {
+    this.followGeneration += 1;
+    this.followHolds = false;
+    if (!running) return;
+    const generation = this.followGeneration;
+    await this.check();
+    if (generation === this.followGeneration) this.followHolds = true;
   }
 }

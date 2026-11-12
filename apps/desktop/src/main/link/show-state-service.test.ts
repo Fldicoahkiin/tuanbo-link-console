@@ -60,12 +60,10 @@ it('只在演出状态变了时才发：播放位置每次都变，状态不变�
   expect(published).toHaveLength(count);
 });
 
-it('页面没了：界面报的 P1 跟随和预览一起清掉', async () => {
+it('页面没了：界面报的预览一起清掉', async () => {
   const { program, show } = await opened();
   await program.close();
-  show.report({ version: 1, p1: { state: 'running', itemId: 'p1-song' }, preview: false });
-  expect(show.current()).toMatchObject({ phase: 'running', source: 'p1', itemId: 'p1-song' });
-  show.report({ version: 1, p1: null, preview: true });
+  show.report({ version: 1, preview: true });
   expect(show.current()).toMatchObject({ phase: 'running', source: 'preview' });
   show.pageGone();
   expect(show.current()).toEqual({ phase: 'idle', program: null });
@@ -74,7 +72,7 @@ it('页面没了：界面报的 P1 跟随和预览一起清掉', async () => {
 it('孤儿节目还在后台放：不是空闲，并说明没有界面在看', async () => {
   const { program, show, published, input, player } = await opened();
   player.changed(playing);
-  show.report({ version: 1, p1: null, preview: true });
+  show.report({ version: 1, preview: true });
   expect(await program.release()).toMatchObject({ status: 'playing' });
   show.pageGone();
   expect(show.current()).toMatchObject({ phase: 'running', source: 'internal', itemId: 'song', program: { watched: false } });
@@ -86,8 +84,10 @@ it('孤儿节目还在后台放：不是空闲，并说明没有界面在看', a
 
 it('界面上报的内容在边界上校验，不合格的不改状态', async () => {
   const { show } = await opened();
-  expect(() => show.report({ version: 1, p1: { state: 'playing', itemId: null }, preview: false })).toThrow();
-  expect(() => show.report({ p1: null, preview: false })).toThrow();
+  expect(() => show.report({ version: 1, preview: 'yes' })).toThrow();
+  expect(() => show.report({ preview: false })).toThrow();
+  // P1 following is the main process's own (0.5.9 P4): the window has no P1 to report any more.
+  expect(() => show.report({ version: 1, p1: { state: 'running', itemId: 'song' }, preview: false })).toThrow();
   expect(show.current()).toMatchObject({ phase: 'idle' });
 });
 
@@ -104,5 +104,25 @@ it('停下的节目还有关灯指令在发时算在停止，发完回到空闲'
   sending = true; changed();
   expect(show.current()).toMatchObject({ phase: 'stopping', source: 'internal' });
   sending = false; changed();
+  expect(show.current()).toMatchObject({ phase: 'idle' });
+});
+
+// 0.5.9 P3f、P4：节目状态里的 P1 只由主进程的跟随定，界面不再上报。
+it('主进程跟随 P1 时由它定 P1：等下一首算拿着、跟丢了算断码；没跟随时没有 P1', () => {
+  const program = new NativeProgramService(vi.fn(), vi.fn(), () => Promise.resolve(), () => undefined, closedProgramFaultReporter(() => Promise.resolve(), vi.fn()));
+  const published: LinkShowState[] = [];
+  const show = new ShowStateService(program, value => published.push(linkShowStateSchema.parse(value)));
+  let input: ReturnType<Parameters<ShowStateService['followP1']>[0]['input']>;
+  show.followP1({ input: () => input });
+  expect(show.current()).toMatchObject({ phase: 'idle' });
+  input = { state: 'armed', itemId: 'song' }; show.p1Changed();
+  expect(show.current()).toMatchObject({ phase: 'held', source: 'p1', itemId: 'song' });
+  input = { state: 'timecodeLost', itemId: 'song' }; show.p1Changed();
+  expect(show.current()).toMatchObject({ phase: 'held', source: 'p1', itemId: 'song', reason: 'timecode-lost' });
+  expect(published.at(-1)).toMatchObject({ reason: 'timecode-lost' });
+  // Following, but not armed; and no follow at all.
+  input = null; show.p1Changed();
+  expect(show.current()).toMatchObject({ phase: 'idle' });
+  input = undefined; show.p1Changed();
   expect(show.current()).toMatchObject({ phase: 'idle' });
 });

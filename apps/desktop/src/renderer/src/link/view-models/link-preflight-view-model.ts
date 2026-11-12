@@ -1,6 +1,7 @@
 import { collectCueMidiOutputProfileIds, expectedMa2Shows, preflightLogEntries, runLinkPreflight, type PreflightMode, type PreflightReport } from '@tb/core/link';
 import { ma2NetworkStatusSchema } from '@tb/schema';
-import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
+import type { LinkMidiAdapter } from '../../registry/link-midi-adapter';
+import { recordRuntimeOperator } from '../runtime/runtime-action-log';
 import { useDocumentStore } from '../stores/document-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useRuntimeStore } from '../stores/runtime-store';
@@ -11,8 +12,9 @@ import { requireOutputLicense } from '../../registry/license-output';
 /** Preflight advisories already logged in this window's run (preflightLogEntries). */
 const notedAdvisories = new Set<string>();
 
+/** `midi`: the window's MIDI port list, read again for the check (it opens nothing). */
 export async function runDesktopPreflight(
-  coordinator: LinkRuntimeCoordinator,
+  midi: Pick<LinkMidiAdapter, 'initialize'>,
   mode: PreflightMode,
   mtcRequirement: 'running' | 'start-on-go' | 'awaiting-external-start' | 'internal',
   p1ClockObserved = false,
@@ -27,7 +29,7 @@ export async function runDesktopPreflight(
   await requireOutputLicense();
   assertCurrent();
 
-  coordinator.beginPreflight(mode);
+  useRuntimeStore.getState().setState({ preflight: null, mode });
   const selectedId = useRuntimeStore.getState().currentItemId;
   const rundown = mtcRequirement === 'internal' ? document.project.rundown.filter((item) => item.id === selectedId) : document.project.rundown;
   const mediaIds = new Set(rundown.flatMap((item) => item.referenceMediaClips.map((clip) => clip.assetId)));
@@ -39,7 +41,7 @@ export async function runDesktopPreflight(
   const needsMidi = mtcRequirement !== 'internal'
     || (options.internalMtcOutputEnabled !== false && Boolean(integration.profile.internalPlayer?.mtcOutputPortProfileId))
     || collectCueMidiOutputProfileIds(inspectedProject).length > 0;
-  if (needsMidi) await coordinator.initializeMidi(mtcRequirement !== 'internal');
+  if (needsMidi) useIntegrationStore.getState().setMidiPorts(await midi.initialize());
   assertCurrent();
   const [assets, security, inventory, snapshots, appInfo] = await Promise.all([
     linkDesktopViewModel.inspectProjectAssets(document.path, inspectedProject),
@@ -123,7 +125,10 @@ export async function runDesktopPreflight(
     assertCurrent();
     useIntegrationStore.getState().setProfile(profile);
   }
-  assertCurrent(); await coordinator.applyPreflight(report); assertCurrent();
+  assertCurrent();
+  await recordRuntimeOperator(document.project.projectId, document.project.rundown.find(item => item.id === currentRuntime.currentItemId), '开播前检查', { mode: report.mode, passed: report.passed });
+  assertCurrent();
+  useRuntimeStore.getState().setState({ preflight: report, mode: report.mode });
   return report;
 }
 

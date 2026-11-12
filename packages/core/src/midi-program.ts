@@ -85,6 +85,8 @@ export class MidiProgramSession {
   private readonly sounding = new Map<number, Event>();
   /** The actions whose turn came in this pass before this session opened (prepare `passed`): not sent by it. */
   private carried: ReadonlySet<string> = new Set();
+  /** Until the first clock: the opening of a follow (prepare `opening`). */
+  private opening: ((message: string) => void) | null = null;
   private epoch = 0;
   private state: 'new' | 'preparing' | 'ready' | 'running' | 'closed' | 'failed' = 'new';
   private readonly cancellation = new AbortController();
@@ -139,10 +141,13 @@ export class MidiProgramSession {
   get passed(): ReadonlySet<string> { return this.handled; }
 
   /** `passed`: the song plays on in the same pass (after a pause, or after its port came back, 0.5.9 S8b): the actions
-   * whose turn came before stay done, also where a newer version moved them after `positionMs`. */
-  async prepare(positionMs: number, passed?: ReadonlySet<string>): Promise<void> {
+   * whose turn came before stay done, also where a newer version moved them after `positionMs`.
+   * `opening`: the session starts a follow of a song that already plays (P1, 0.5.9 P3d): the actions from `positionMs` up
+   * to the first clock go out with it once, as on time; they are not judged late or marked red, and `opening` gets one
+   * line on how many there were and how late the latest was. After that first clock the late rule applies unchanged. */
+  async prepare(positionMs: number, passed?: ReadonlySet<string>, opening?: (message: string) => void): Promise<void> {
     if (this.state !== 'new' || !Number.isFinite(positionMs) || positionMs < 0) throw new Error('MIDI 会话准备状态或位置无效');
-    this.state = 'preparing'; this.position = positionMs; this.takesPosition = positionMs === 0;
+    this.state = 'preparing'; this.position = positionMs; this.takesPosition = positionMs === 0; this.opening = opening ?? null;
     if (passed) { this.carried = new Set(passed); for (const key of passed) this.handled.add(key); }
     // A seek does not replay past actions, including a note release whose
     // corresponding Note On was never sent by this session.
@@ -171,14 +176,17 @@ export class MidiProgramSession {
     }
     this.state = 'running'; this.position = positionMs; this.takesPosition = false;
     const tick: Tick = { missed: [], late: [], refused: [], held: 0 }, epoch = this.epoch;
-    let missed = 0, handled = 0;
+    const opening = this.opening; this.opening = null;
+    let missed = 0, handled = 0, openingLateMs = 0;
     while (this.cursor < this.events.length && this.events[this.cursor]!.atMs <= positionMs) {
       const event = this.events[this.cursor++]!;
       if (this.carried.has(actionKey(event))) continue;
       handled++;
       if (!event.release) this.handled.add(actionKey(event));
-      // When the device clock says this action was due, on the same clock as `now`.
-      const dueAtMs = observedAtMs - (positionMs - event.atMs);
+      // When the device clock says this action was due, on the same clock as `now`; in the opening of a follow, now.
+      const scheduledAtMs = observedAtMs - (positionMs - event.atMs);
+      if (opening) openingLateMs = Math.max(openingLateMs, now - scheduledAtMs);
+      const dueAtMs = opening ? now : scheduledAtMs;
       let bytes: number[];
       try { bytes = encodeMidiAction(event.action); } catch (error) {
         const reason = toError(error).message;
@@ -188,6 +196,7 @@ export class MidiProgramSession {
       this.queue(event, bytes, dueAtMs, epoch, tick);
     }
     if (missed) this.dependencies.missed(`播放位置更新中断，错过了 ${missed} 个 MIDI 动作，没有补发`);
+    if (opening && handled) opening(`开始跟随：歌曲开头到第一个位置的 ${handled} 条 MIDI 动作一起发送，最晚的比歌里的时间晚了 ${Math.round(openingLateMs)} ms`);
     if (handled) this.tail = this.tail.then(() => { if (epoch === this.epoch) this.report(tick); });
   }
 
@@ -306,7 +315,8 @@ function labels(names: readonly string[]): string {
 function toError(error: unknown): Error { return error instanceof Error ? error : new Error(String(error)); }
 function scheduledCues(project: LinkProject, itemId: string): ReturnType<typeof compileRundownTimelineCues> {
   const item = project.rundown.find(entry => entry.id === itemId);
-  if (project.playbackSource !== 'internal' || !item || !item.enabled) throw new Error('后台 MIDI 只支持已启用的“联动台播放”节目');
+  // Either clock drives the same actions (0.5.9 P3d): the internal player's or P1's timecode.
+  if (!item || !item.enabled) throw new Error('后台 MIDI 只发已启用的歌曲的动作');
   return compileRundownTimelineCues(item, project.timebase.frameRate);
 }
 function eventOrder(left: Event, right: Event): number {

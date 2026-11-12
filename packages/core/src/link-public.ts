@@ -2,6 +2,8 @@ export * from './mtc-timecode';
 export * from './mtc-output';
 export * from './mtc-output-settings';
 export * from './p1-auto-follow';
+export * from './p1-clock';
+export * from './p1-follow-session';
 export * from './cue-runtime';
 export * from './cue-action-runner';
 export * from './link-command';

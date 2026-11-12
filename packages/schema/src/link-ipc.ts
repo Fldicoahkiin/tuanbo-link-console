@@ -34,11 +34,11 @@ export const linkSaveResponseSchema = linkSaveRequestSchema.extend({ result: lin
 export const linkRuntimeActiveSchema = z.boolean();
 /** The window's runtime (P1 following) as packages/core LinkRuntimeState names it. */
 export const linkRuntimeStateSchema = z.enum(['idle', 'preflight', 'armed', 'running', 'timecodeLost', 'paused', 'error', 'stopping']);
-/** What only the window knows about the show, reported on every change (link:show-activity): P1 following while its
- * runtime is not idle, and the editor's or the lighting workbench's own preview playing. Cleared when the page is gone. */
+/** What only the window knows about the show, reported on every change (link:show-activity): the editor's or the
+ * lighting workbench's own preview playing. Cleared when the page is gone. P1 following is the main process's own
+ * (0.5.9 P4, p1-follow-host.ts). */
 export const linkShowActivitySchema = z.object({
   version: z.literal(1),
-  p1: z.object({ state: linkRuntimeStateSchema, itemId: z.string().min(1).max(200).nullable() }).strict().nullable(),
   preview: z.boolean()
 }).strict();
 export type LinkShowActivity = z.infer<typeof linkShowActivitySchema>;

@@ -55,3 +55,21 @@
 ## 一首歌前后的空白
 
 `packages/core/src/song-padding.ts` 的 `padSongCommand`（2026-11-11）：一条命令、一步撤销。音频先渲染好（`padSongRender` 给主进程渲染的参数）再交进来，对不上就不写。内容按整帧挪（`content-timeline.ts` 的 `shiftContent`），音频和灯光按同样帧数的毫秒挪（`lighting-shift.ts` 的 `shiftLightingDocument`：节拍锁定的片段换成时间锁定、带节拍锚点）；MTC 起始码、控台时间线的起点和 MA2 基线不动，差异按普通改动改写控台一次。能去掉多少空白、被什么挡住只由 `songPaddingLimits` 算（`songPaddingRoom` 是不带原因的那一份），碰到最早或最晚的内容就停。P1 跟随的工程不能用；演出没停止时也加不了：界面问 `showGate` 的 `audio.render`，主进程在播放时不生成音频。编辑器的入口是音频轨两端的空白手柄和音频属性的「前空白」「后空白」（2026-11-12），都经 `components/song-padding-flow.ts` 的 `padSongSteps`（先生成音频、同一组数字写命令）；整首挪过的歌到控台确认之前按以联动台为准写，记下和忘掉只在 `ma2-edit-times.ts` 的 `noteMa2LocalEdits`（`runtime/ma2-song-shift.ts`）。别处不自己整首平移（`song-padding-rules.test.ts` 守着）
+
+## P1 跟随
+
+跟随 P1 整个在主进程里做（0.5.9，2026-11-12）：界面卡住、重新加载都不影响正在跟的歌。和联动台播放是明确选的两种方式，互相不自动切换。
+
+- **规则只在 `packages/core/src/p1-follow-session.ts`**（`P1FollowSession`）：P1 的时间码在走、停了还是换了一首由 `packages/core/src/p1-clock.ts` 说，这里定各路输出这时被告知什么、操作员这时能做什么。别处不自己解读 P1 的时间码。
+- **主进程 `apps/desktop/src/main/link/p1-follow-host.ts`** 拿着 P1 的时间码输入口（向 `apps/desktop/src/main/link/midi-port-broker.ts` 以「P1 时间码」的名义占用，不经过界面），跑一个 `P1FollowSession`，把状态推给界面（`link:p1-follow-state`，格式在 `packages/schema/src/p1-follow.ts`）。接线只在 `apps/desktop/src/main/link/p1-follow-wiring.ts`，`link-main.ts` 只建一次。
+- **界面只经 `apps/desktop/src/renderer/src/link/runtime/p1-follow-client.ts` 发命令**（`link:p1-follow`），状态只落在 `apps/desktop/src/renderer/src/link/stores/p1-follow-store.ts`，显示走 `apps/desktop/src/renderer/src/link/view-models/status-center.ts` 的 `p1FollowStatus`。界面不解时间码、不订阅 MTC 输入、不驱动任何输出。
+- **输出用联动台播放的那一套，不另写一份。** 动作 MIDI 经 `apps/desktop/src/main/link/p1-midi-output.ts` 接到同一个 `NativeMidiHost` 和 `MidiProgramSession`（晚到规则、端口恢复都一样）。输出列表在 `apps/desktop/src/main/link/p1-follow-outputs.ts`：一路出错不连累别的；输出出错走它自己的状态和运行日志，不往跟随里抛。画面那一路还没接上（0.5.9 进行中）：接的时候也是把 P1 的时钟交给同一个 `ObsProgramSession`、加进这个列表，不在界面里另开一条路。
+- **灯光**：控台按 P1 的时间码自己跑。关灯照 `docs/LIGHTING_WORKFLOW.md`（2026-11-11）：在联动台按停止关这首歌的执行器、P1 不停；P1 换歌只关上一首独有的；P1 自己停、断码、等下一首都不关。走同一张关灯清单（`apps/desktop/src/main/link/lighting-off-service.ts` 的 `followChange`、`followStop`）。
+- **界面没了（重新加载）**：在跟一首歌的跟随照跟，不发 Off；新页面打开的是同一个工程就接回（`adopt`），不是同一个工程就提示这个工程还在跟随、只能停止它。什么都没在跟的（手动待命、自动选歌还在等第一首）随界面关掉、放开输入口：自动选歌由新页面自己重新开始，手动的由操作员再点。退出软件结束跟随。
+- **授权**：跟随开始跟歌时主进程自己检查一次，通过就拿着到跟随停下（`apps/desktop/src/main/link/license-access.ts` 的 `setFollowRunning`），界面在不在都一样，和节目那一条分开。见 `docs/LICENSE_IMPLEMENTATION.md`。
+- **演出状态**：`apps/desktop/src/main/link/show-state-service.ts` 看得到跟随（等歌、准备、时间码丢了、接管、失败）；主进程里“演出在不在走”只问 `link-main.ts` 的 `showRunning()`，退出、诊断包和问题反馈都用它。
+- **自动选歌**时每首歌不先跑界面的开播前检查：主进程照联动台播放开歌那样准备各路输出，哪一路不行就标红不参加，其余照跟。
+- **断码和继续**（AGENTS.md 第 4 节第 9 条不变）：时间码丢了或异常跳变就冻结，不猜、不补。手动模式在首页点「重新同步」接着跟，过去的动作不补；自动选歌从同一位置继续算同一遍，发过的不重发。开始跟一首歌时，歌的开头到第一个跟上的位置之间的动作发一次，不算晚到、不标红，记一行运行日志；之后照共用的晚到规则。
+- P1 的输入口拔掉以后不自己重新打开（2026-10-24 的恢复只管输出）：正在跑的冻结，由操作员重新开始。
+
+守着它的测试：`packages/core/src/p1-follow-rules.test.ts`（规则 ⑦ 到 ⑩，和“只在主进程跟随”的源码扫描）、`packages/core/src/p1-follow-session.test.ts`、`apps/desktop/src/main/link/p1-follow-host.test.ts`、`apps/desktop/src/main/link/license-rules.test.ts` 里 P1 跟随那一组。

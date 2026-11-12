@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type NativePlayerStatus } from '@tb/schema';
-import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
+import { NativeMidiHost, type ActionMidiRecovery, type MidiClockSource, type MidiSongNow, type NativeMidiChannelState } from './native-midi-host';
 import { MidiOutputFailure } from './native-midi-output';
 import { clockFromNativeStatus, frameNumberToTimecode, MidiMessageSkipped } from '@tb/core/link';
 
@@ -61,6 +61,28 @@ it('准备未完成便播放时明确拒绝参与；晚到准备结果不会启�
   await vi.waitFor(() => expect(f.ports.prepare).toHaveBeenCalledOnce());
   f.observe({ status: 'playing', generation: 2 }); complete!(); await prepared;
   expect(f.errors[0]).toContain('还没准备好音频就变了'); expect(f.ports.send).not.toHaveBeenCalled(); await f.host.stop();
+});
+
+// 0.5.9 P3d: the P1 adapter keeps P1's positions while the host prepares, because of this rule.
+it('准备中只有同一代的 ready 或暂停算没变：开始播放或换了代数都让这首不发 MIDI', async () => {
+  const cases: [Partial<NativePlayerStatus>, boolean][] = [
+    [{ status: 'ready' }, false], [{ status: 'paused' }, false], [{ status: 'playing' }, true], [{ status: 'ready', generation: 2 }, true], [{ status: 'paused', generation: 2 }, true]
+  ];
+  for (const [patch, aborts] of cases) {
+    const f = fixture(); let complete: (() => void) | undefined;
+    f.ports.prepare.mockImplementationOnce(() => new Promise<void>(resolve => { complete = resolve; }));
+    const prepared = f.host.prepare(f.project, f.identity);
+    await vi.waitFor(() => expect(f.ports.prepare).toHaveBeenCalledOnce());
+    f.observe(patch); complete!();
+    if (aborts) {
+      await expect(prepared).rejects.toThrow('取消');
+      expect(f.errors[0]).toContain('还没准备好音频就变了');
+    } else {
+      await prepared;
+      expect(f.host.status?.state).toBe('ready'); expect(f.errors).toEqual([]);
+    }
+    await f.host.stop();
+  }
 });
 
 it('新音频会话替换及停止使旧 MIDI 队列失效，不依赖界面转发', async () => {
@@ -242,3 +264,29 @@ it('新的一遍（定位、拖动、循环）什么都不带过去：挪到后�
 it('接口断开又回来以后还是同一遍：再暂停继续，已经轮到过的照样不再发', async () => {
   expect(await passThrough(1, 1, true)).toEqual([[[0xc0, 1]], [[0xc0, 2]], [[0xc0, 3]]]);
 }, 60000);
+
+// 0.5.9 P3d: a song whose clock is not the audio player's (P1's timecode).
+it('另一个时钟来源的歌：在哪由它自己说，不看音频播放器；一遍只在同一个来源里带过去', async () => {
+  const f = fixture([0, 60]);
+  await f.host.prepare(f.project, f.identity, 1);
+  f.observe({ status: 'playing', generation: 2, positionMs: 20 });
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledOnce());
+  await f.host.stop();
+  // A follow of the same song, its pass numbered 1 by its own count: nothing of the player's pass 1 carries over.
+  const follow = { sessionId: '5e081ed2-7f76-44c8-9c45-b0e06e860870', generation: 1, itemId: 'song' };
+  let where: MidiSongNow | null = { ...follow, status: 'ready', positionMs: 0, audioError: null };
+  const source: MidiClockSource = { now: () => where, opening: null };
+  await f.host.prepare(f.project, follow, 1, source);
+  expect(f.host.status?.state).toBe('ready');
+  where = { ...follow, status: 'playing', positionMs: 20, audioError: null };
+  // The player's status says another session stopped; this song is where its source says.
+  f.observe({ status: 'stopped', generation: 5 });
+  expect(f.host.status?.state).toBe('ready');
+  f.host.observe({ source: 'p1', ...follow, state: 'running', positionMs: 20, observedAtMs: 1000, reason: null });
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(2));
+  expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 1], 2000);
+  // Its source does not have it ready: refused as for the player.
+  await f.host.stop();
+  where = null;
+  await expect(f.host.prepare(f.project, follow, 2, source)).rejects.toThrow('不是当前要播放的这首歌');
+});

@@ -5,13 +5,22 @@ type Port = { id: number; name: string };
 type Output = { open(name: string): Promise<void>; send(bytes: readonly number[], deadline100ns: bigint): Promise<unknown>; close(): Promise<void> };
 type Input = { open(name: string): Promise<void>; close(): Promise<void> };
 type Direction = 'input' | 'output';
-/** `reason`: why the channel ended while someone still held it. */
-type Channel = { direction: Direction; name: string; handles: Set<number>; ready: Promise<void>; output: Output | null; input: Input | null; closed: boolean; reason: string | null };
+/** `reason`: why the channel ended while someone still held it. `claim`: the main process holds this input itself
+ * (claimInput); then no window handle ever joins it. */
+type Channel = { direction: Direction; name: string; handles: Set<number>; ready: Promise<void>; output: Output | null; input: Input | null; closed: boolean; reason: string | null;
+  claim: MidiInputListener | null };
 
 /** What in formal playback, or an explicit check, takes an output from the window. */
 export type MidiClaimOwner = '时间码' | '动作 MIDI' | '接口检查';
 /** An output held for formal use. `others`: who else in formal use holds the same output now. */
 export type MidiClaim = { readonly owner: MidiClaimOwner; release(): void; others(): MidiClaimOwner[] };
+/** What the main process takes an input for itself (design 03 §4.1.5): P1's MTC, which P1 follow reads in the main
+ * process. Windows inputs are single-client, so the window cannot open it meanwhile. */
+export type MidiInputClaimOwner = 'P1 时间码';
+/** Everything of a claimed input: its messages and the helper's heartbeat on the interface's clock, and `closed`
+ * when it ended without being released (unplugged, or the helper failed). It is not opened again by itself. */
+export type MidiInputListener = { message(message: NativeMidiMessage): void; idle(at100ns: bigint): void; closed(reason: string): void };
+export type MidiInputClaim = { readonly owner: MidiInputClaimOwner; release(): Promise<void> };
 
 export type MidiPortBrokerDependencies = {
   /** License check before any port opens. */
@@ -19,7 +28,9 @@ export type MidiPortBrokerDependencies = {
   /** Windows MIDI inventory; `recheck` repeats a failed Windows MIDI check. */
   list(recheck: boolean): Promise<{ midiInputs: readonly Port[]; midiOutputs: readonly Port[] }>;
   createOutput(failed: (error: Error) => void): Output;
-  createInput(receive: (message: NativeMidiMessage) => void, failed: (error: Error) => void, invalid: (count: number) => void): Input;
+  /** `idle`: the helper's heartbeat (native-midi-input.ts); only a claimed input listens to it. */
+  createInput(receive: (message: NativeMidiMessage) => void, failed: (error: Error) => void, invalid: (count: number) => void,
+    idle: (at100ns: bigint) => void): Input;
   emit(event: MidiPortEvent): void;
   log(level: 'info' | 'warning' | 'error', message: string): void;
   now100ns?: () => bigint;
@@ -42,6 +53,8 @@ export class MidiPortBroker {
   private readonly exiting = new Map<string, Promise<void>>();
   /** Outputs formal playback holds: port name → claim → owner. */
   private readonly formal = new Map<string, Map<number, MidiClaimOwner>>();
+  /** Inputs the main process holds itself: port name → owner. */
+  private readonly inputClaims = new Map<string, MidiInputClaimOwner>();
   private nextHandle = 0;
   private nextClaim = 0;
   /** Counts the pages that went away (releaseWindow): an open still waiting when its page went belongs to nobody. */
@@ -75,6 +88,7 @@ export class MidiPortBroker {
     await this.dependencies.authorize();
     if (this.page !== page) throw new Error(pageGoneMessage(name));
     if (direction === 'output') this.requireFree(name);
+    else this.requireInputFree(name);
     const key = `${direction}:${name}`;
     let channel = this.channels.get(key);
     if (!channel || channel.closed) channel = this.start(direction, name);
@@ -122,11 +136,46 @@ export class MidiPortBroker {
       } };
   }
 
-  /** The window reloaded or exited: nothing it opened is in use any more. */
+  /** The main process opens this input for itself (P1 follow, design 03 §4.1.5). The window's use of it ends first;
+   * until the claim is released the window cannot open it. Opening waits for the license like any open. Resolves once
+   * the input is open; a second claim of the same input is refused. Unplugged or failed, it ends with `closed` and
+   * stays closed: only a new claim opens it again (the 2026-10-24 port recovery covers outputs, not this input). */
+  async claimInput(name: string, owner: MidiInputClaimOwner, listener: MidiInputListener): Promise<MidiInputClaim> {
+    if (this.disposed) throw new Error('MIDI 服务已关闭');
+    const held = this.inputClaims.get(name);
+    if (held) throw new Error(`MIDI 接口「${name}」已经在用作${held}`);
+    // Reserved before anything is awaited: from here a window open of this input is refused.
+    this.inputClaims.set(name, owner);
+    let channel: Channel | null = null;
+    try {
+      await this.dependencies.authorize();
+      if (this.disposed) throw new Error('MIDI 服务已关闭');
+      const window = this.channels.get(`input:${name}`);
+      if (window && !window.closed) await this.shut(window, inputTakenMessage(name, owner));
+      const opened = channel = this.start('input', name, listener);
+      await opened.ready;
+      if (opened.closed || this.disposed) throw new Error(opened.reason ?? `MIDI 接口「${name}」已关闭`);
+    } catch (error) {
+      if (channel && !channel.closed) await this.shut(channel, null);
+      this.inputClaims.delete(name);
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+    const claimed = channel;
+    let released = false;
+    return { owner, release: async () => {
+      if (released) return;
+      released = true;
+      this.inputClaims.delete(name);
+      await this.shut(claimed, null);
+    } };
+  }
+
+  /** The window reloaded or exited: nothing it opened is in use any more. An input the main process claimed is not
+   * the window's and stays (its owner lets it go). */
   async releaseWindow(): Promise<void> {
     this.page++;
     this.handles.clear();
-    await Promise.all([...this.channels.values()].filter(channel => !channel.closed).map(channel => this.shut(channel, null)));
+    await Promise.all([...this.channels.values()].filter(channel => !channel.closed && !channel.claim).map(channel => this.shut(channel, null)));
   }
 
   async dispose(): Promise<void> {
@@ -134,6 +183,8 @@ export class MidiPortBroker {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     await this.releaseWindow();
+    this.inputClaims.clear();
+    await Promise.all([...this.channels.values()].filter(channel => !channel.closed).map(channel => this.shut(channel, null)));
   }
 
   private requireFree(name: string): void {
@@ -141,14 +192,20 @@ export class MidiPortBroker {
     if (owners.length) throw new Error(busyMessage(name, owners));
   }
 
-  private start(direction: Direction, name: string): Channel {
+  private requireInputFree(name: string): void {
+    const owner = this.inputClaims.get(name);
+    if (owner) throw new Error(inputBusyMessage(name, owner));
+  }
+
+  private start(direction: Direction, name: string, claim: MidiInputListener | null = null): Channel {
     const key = `${direction}:${name}`;
-    const channel: Channel = { direction, name, handles: new Set(), ready: Promise.resolve(), output: null, input: null, closed: false, reason: null };
+    const channel: Channel = { direction, name, handles: new Set(), ready: Promise.resolve(), output: null, input: null, closed: false, reason: null, claim };
     const failed = (error: Error) => { if (!channel.closed) void this.shut(channel, error.message); };
     let port: Output | Input;
     if (direction === 'output') port = channel.output = this.dependencies.createOutput(failed);
     else port = channel.input = this.dependencies.createInput(message => this.deliver(channel, message), failed,
-      count => this.dependencies.log('warning', `MIDI 接口「${name}」送来 ${count} 条不完整的消息，已略过`));
+      count => this.dependencies.log('warning', `MIDI 接口「${name}」送来 ${count} 条不完整的消息，已略过`),
+      at100ns => { if (!channel.closed) channel.claim?.idle(at100ns); });
     this.channels.set(key, channel);
     // The helper of an earlier use of this port may still be exiting; until it has, the port is not free.
     channel.ready = (this.exiting.get(key) ?? Promise.resolve()).then(() => {
@@ -167,6 +224,8 @@ export class MidiPortBroker {
 
   private deliver(channel: Channel, message: NativeMidiMessage): void {
     if (channel.closed) return;
+    // The main process reads the interface's own timestamp; no age is worked out for it.
+    if (channel.claim) { channel.claim.message(message); return; }
     const age = this.now100ns() - message.at100ns;
     const ageMs = age > 0n ? Math.min(600_000, Number(age) / 10_000) : 0;
     for (const handle of channel.handles) this.dependencies.emit({ version: 1, kind: 'message', handle, bytes: message.bytes, ageMs });
@@ -183,6 +242,7 @@ export class MidiPortBroker {
       if (reason) this.dependencies.emit({ version: 1, kind: 'closed', handle, reason });
     }
     channel.handles.clear();
+    if (reason) channel.claim?.closed(reason);
     if (reason) this.dependencies.log('warning', `MIDI ${channel.direction === 'output' ? '输出' : '输入'}「${channel.name}」已停止：${reason}`);
     const previous = this.exiting.get(key) ?? Promise.resolve();
     const exited = previous.then(() => (channel.output ?? channel.input)?.close()).catch((error: unknown) => {
@@ -234,6 +294,12 @@ export class MidiPortBroker {
 function takenMessage(name: string, owner: MidiClaimOwner): string {
   return owner === '接口检查' ? `正在检查 MIDI 接口「${name}」，这里的 MIDI 已停止。检查完成后再试。`
     : `正在播放的节目要用 MIDI 接口「${name}」发${owner}，这里的 MIDI 已停止。停止播放后再试。`;
+}
+function inputTakenMessage(name: string, owner: MidiInputClaimOwner): string {
+  return `正在跟随 P1，MIDI 接口「${name}」要用来收${owner}，这里的 MIDI 已停止。停止跟随 P1 后再试。`;
+}
+function inputBusyMessage(name: string, owner: MidiInputClaimOwner): string {
+  return `MIDI 接口「${name}」正在用作${owner}。停止跟随 P1 后再试。`;
 }
 function pageGoneMessage(name: string): string {
   return `没有打开 MIDI 接口「${name}」：要用它的界面已经重新加载或退出了。新界面要用时会自己再打开。`;

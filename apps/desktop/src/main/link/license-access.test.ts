@@ -79,3 +79,11 @@ it('只有未激活的电脑提示购买；已付费但需联网或到期时只�
     expect(String(failure)).not.toContain('请购买');
   }
 });
+it('P1 跟随：停止和关闭不要授权，开始、待命、重同步要；看状态不要', () => {
+  const request = (command: unknown) => ({ version: 1, ownerId: '9d53530a-6712-423e-985e-e69beb9ec1c6', command });
+  for (const kind of ['stop', 'close']) expect(needsProductLicense('link:p1-follow', request({ kind }))).toBe(false);
+  expect(needsProductLicense('link:p1-follow', request({ kind: 'adopt', projectPath: 'C:/show.tblink' }))).toBe(false);
+  for (const command of [{ kind: 'arm', itemId: null }, { kind: 'resync' }, { kind: 'rearm' }, { kind: 'manualTakeover' }]) expect(needsProductLicense('link:p1-follow', request(command))).toBe(true);
+  expect(needsProductLicense('link:p1-follow-state-get', undefined)).toBe(false);
+  expect(() => needsProductLicense('link:p1-follow', { command: { kind: 'stop' } })).toThrow();
+});

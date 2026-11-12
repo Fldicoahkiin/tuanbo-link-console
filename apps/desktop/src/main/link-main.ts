@@ -182,6 +182,8 @@ import { NativeProgramHost } from './link/native-program-host';
 import { NativeProgramService } from './link/native-program-service';
 import { ShowStateService } from './link/show-state-service';
 import { LightingOffService } from './link/lighting-off-service';
+import { wireP1Follow, type P1FollowWiring } from './link/p1-follow-wiring';
+import { actionMidiRecoveredEntry } from './link/native-midi-host';
 import { followWindowPage } from './link/window-page';
 import { NativePlaybackRequests } from './link/native-playback-requests';
 import { NativeObsHost } from './link/native-obs-host';
@@ -267,6 +269,11 @@ let lightingOff: LightingOffService | null = null;
 let nativeProgramHost: NativeProgramHost | null = null;
 /** Every MIDI port the window uses is opened here, in main, and only while it is in use. */
 let midiPorts: MidiPortBroker | null = null;
+/** P1 followed in the main process (0.5.9 P3f, p1-follow-wiring.ts): since P4 the only P1 follow, the window only shows it. */
+let p1Follow: P1FollowWiring | null = null;
+/** A show is on: the window's player said so (link:set-runtime-active, 联动台播放), or the main process follows P1 (0.5.9 P4:
+ * the window does not report P1 any more). Stopped, or auto-follow listening for its first song, is not a show. */
+function showRunning(): boolean { return runtimeActive || p1Follow?.running() === true; }
 
 /** The audio engine and what plays with it, once no program is left. Only an engine that could not close fails this
  * (closeEngineOutputs): a failed close keeps the owned instance (heldEngine), and no other engine opens on the same
@@ -296,9 +303,11 @@ async function closeEngine(): Promise<void> {
  * returned; otherwise that program closes, then the audio and picture outputs and the runtime, unless the next page
  * opened a program meanwhile: that one keeps them (engine-shutdown.ts, 2026-11-10, 2026-11-11). */
 function releaseGonePage(): Promise<InternalPlayerState | null> {
-  // P1 following and the previews the page reported end with it; a program that plays on stays in the show.
+  // The previews the page reported end with it; a P1 follow that runs a song and a program that plays on stay in the show
+  // (a follow that follows nothing closes, P1FollowHost.pageGone).
   showState?.pageGone();
   lightingOff?.pageGone();
+  void p1Follow?.pageGone().catch((error: unknown) => console.error('没在跟歌的 P1 跟随没能随界面关掉', error));
   return releasePage(nativeProgram, { stopMonitor: () => musicMonitor?.stop(),
     teardown: async () => { await closeEngine(); await releaseRendererRuntime(); } }, programFaults);
 }
@@ -374,7 +383,7 @@ async function bootstrap(): Promise<void> {
     buildVersion,
     app.isPackaged,
     (status) => sendToRenderer('link:update-status', status),
-    { playbackActive: () => runtimeActive || nativePlaybackActive(), license: () => readLicenseStatus(), releaseKeys: releasePublicKeys,
+    { playbackActive: () => showRunning() || nativePlaybackActive(), license: () => readLicenseStatus(), releaseKeys: releasePublicKeys,
       log: (level, message) => { void logger.record({ level, category: 'system', device: '软件更新', message, result: level === 'info' ? 'succeeded' : 'failed' })
         .catch((error: unknown) => console.error('更新校验日志写入失败', error)); } }
   );
@@ -433,7 +442,7 @@ async function bootstrap(): Promise<void> {
   });
   runQuit = async (reason, finish) => {
     if (quitFlowRunning) { recordQuitStep('退出流程进行中，忽略重复请求', { reason }); return false; }
-    if (runtimeActive || nativePlaybackActive()) {
+    if (showRunning() || nativePlaybackActive()) {
       showRuntimeActiveExitWarning();
       return false;
     }
@@ -710,7 +719,7 @@ function registerIpc(
     },
     // The editor previews send a whole lighting state at once.
     createOutput: failed => new NativeMidiOutput(engineExecutable, failed, 256),
-    createInput: (receive, failed, invalid) => new NativeMidiInput(engineExecutable, receive, failed, invalid),
+    createInput: (receive, failed, invalid, idle) => new NativeMidiInput(engineExecutable, receive, failed, invalid, idle),
     emit: event => sendToRenderer('link:midi-event', event),
     log: (level, message) => { void logger.record({ level, category: 'device', device: 'MIDI', message, result: level === 'info' ? 'succeeded' : 'failed' })
       .catch((error: unknown) => console.error('MIDI 日志写入失败', error)); }
@@ -807,7 +816,7 @@ function registerIpc(
     return nativePlayer;
   };
   handle('link:native-player-devices', (_event, value: unknown) => player().devices(nativeDeviceQueryRequestSchema.parse(value).scope));
-  const midiCheck = new NativeMidiCheckService(engineExecutable, () => runtimeActive || nativePlaybackActive(), undefined,
+  const midiCheck = new NativeMidiCheckService(engineExecutable, () => showRunning() || nativePlaybackActive(), undefined,
     name => midiPortBroker.claimFormal(name, '接口检查'));
   handle('link:native-midi-check', async (_event, value: import('@tb/schema').NativeMidiCheck) => {
     try {
@@ -862,7 +871,7 @@ function registerIpc(
   authorizeProduct = (channel, value) => authorizeRequest(licenseGate, channel, value);
   handle('link:license-require-output', () => authorizeOutput());
   const changeOnlineLicense = async (code?: string) => {
-    if (runtimeActive || licenseChanging) throw new Error('请先停止播放，并等上一个授权操作完成');
+    if (showRunning() || licenseChanging) throw new Error('请先停止播放，并等上一个授权操作完成');
     licenseChanging = true;
     const action = code === undefined ? '联网验证授权' : '输入激活码激活';
     try {
@@ -896,7 +905,7 @@ function registerIpc(
     return true;
   });
   handle('link:license-import', async () => {
-    if (runtimeActive || licenseChanging) throw new Error('请先停止播放，并等授权操作完成后再更换授权');
+    if (showRunning() || licenseChanging) throw new Error('请先停止播放，并等授权操作完成后再更换授权');
     licenseChanging = true;
     try {
       const result = await dialog.showOpenDialog(mainWindow!, { title: '导入本机授权', properties: ['openFile'], filters: [{ name: '团播联动台授权', extensions: ['tbllicense'] }] });
@@ -904,7 +913,7 @@ function registerIpc(
       if (result.canceled || !file) return null;
       if ((await stat(file)).size > 16384) throw new Error('授权文件太大，请确认选的是正确的文件');
       const token = await readFile(file, 'utf8');
-      if (runtimeActive) throw new Error('正在播放，请停止后再导入授权');
+      if (showRunning()) throw new Error('正在播放，请停止后再导入授权');
       const status = await (await getLicenseService()).activate(token);
       await logger.record({ level: 'info', category: 'system', device: '授权', message: '已导入本机授权', result: 'succeeded', details: licenseLogDetails(status) });
       return status;
@@ -1045,7 +1054,9 @@ function registerIpc(
   handle('link:ma2-network-status', async () => { await ma2NetworkReady; return ma2Network.status(); });
   handle('link:ma2-current-show', async () => { await ma2NetworkReady; return ma2Network.currentShow(); });
   // The program's lighting Off and its running state, as the license rules want them (program-license.ts).
-  const programOutputs = programLicense(licenseGate, { ready: ma2NetworkReady, status: () => ma2Network.status(), send: sendMa2Cue });
+  const programOutputs = programLicense(licenseGate, { ready: ma2NetworkReady, status: () => ma2Network.status(), send: sendMa2Cue },
+    error => { void logger.record({ level: 'warning', category: 'state', device: 'P1 跟随', message: `开始跟随 P1 时授权没有通过：${toUserErrorReason(error)}。之后的每一首歌照常检查授权`, result: 'failed' })
+      .catch((recordError: unknown) => console.error('P1 跟随的授权日志未能保存', recordError)); });
   const lightsOff = new LightingOffService({ console: programOutputs.network,
     resending: count => { void logger.record({ level: 'warning', category: 'device', device: 'MA2', message: `控台重新连上了，补发 ${count} 条还没确认的关灯指令` })
       .catch((error: unknown) => console.error('关灯补发日志未能保存', error)); },
@@ -1086,9 +1097,7 @@ function registerIpc(
       preciseSeeking: () => callbacks.configuration().preciseSeeking, changed: state => callbacks.changed(state),
       midiChanged: state => { if (state.state === 'running' || state.state === 'ready') callbacks.cueChanged(state.currentCueId); },
       midiRecovered: (report, itemId) => {
-        void logger.record({ level: 'warning', category: 'device', device: '动作 MIDI', projectId: project.projectId, itemId,
-          message: `动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）：从下一个动作起照常发送，中断期间跳过了 ${report.skippedActions} 个动作，不补发`,
-          details: { portName: report.portName, interruptedAt: report.interruptedAt, recoveredAt: report.recoveredAt, durationMs: report.durationMs, skippedActions: report.skippedActions } })
+        void logger.record(actionMidiRecoveredEntry(report, project.projectId, itemId))
           .catch((error: unknown) => console.error('动作 MIDI 恢复日志未能保存', error));
       },
       obsChanged: state => { if (state.state === 'running' || state.state === 'ready') callbacks.cueChanged(state.currentCueId); }, notice,
@@ -1117,6 +1126,14 @@ function registerIpc(
   showState = new ShowStateService(nativeProgram, show => { sendToRenderer('link:show-state', show); ma2Network.showChanged(); }, lightsOff);
   handle('link:show-state-get', () => showState!.current());
   handle('link:show-activity', (_event, value: unknown) => { showState!.report(value); });
+  // P1 followed in the main process (0.5.9 P3f): everything of it is wired in p1-follow-wiring.ts.
+  const follow = wireP1Follow({ handle: (channel, listener) => handle(channel, listener), send: sendToRenderer, broker: midiPortBroker,
+    executable: engineExecutable, authorize: () => authorizeOutput(), midiOutputs: async () => (await player().devices('all', true)).midiOutputs,
+    checkFiles: async (projectPath, project) => { await projectAccess.assetFiles(projectPath, projectFileReferences(project).map(file => file.relativePath)); },
+    lights: lightsOff, faults: programFaults, record: entry => logger.record(entry), showChanged: () => showState?.p1Changed(),
+    running: running => programOutputs.followRunningChanged(running) });
+  p1Follow = follow;
+  showState.followP1({ input: () => follow.showInput() });
   // Session registration captures cancellation synchronously; output adapters
   // validate and authorize every actual audio, OBS, MIDI and lighting request.
   handle('link:native-program-open', async (_event, value: unknown) => {
@@ -1401,7 +1418,7 @@ function registerIpc(
   handle('link:update-check', (): Promise<LinkUpdateStatus> => updateManager.check());
   handle('link:update-download', (): Promise<LinkUpdateStatus> => updateManager.download());
   handle('link:update-install', async () => {
-    if (runtimeActive || nativePlaybackActive()) throw new Error('联动还没停止。请先到集成中心停止联动、等 OBS 清理完成，再安装更新');
+    if (showRunning() || nativePlaybackActive()) throw new Error('联动还没停止。请先到集成中心停止联动、等 OBS 清理完成，再安装更新');
     await updateManager.prepareInstall();
     const decision = await dialog.showMessageBox(mainWindow!, {
       type: 'question',
@@ -1474,7 +1491,7 @@ function registerIpc(
   });
   handle('link:loop-midi', async (_event, value: unknown) => {
     const action = loopMidiActionSchema.parse(value);
-    if (action !== 'detect' && runtimeActive) throw new Error('请先停止演出，再配置虚拟 MIDI');
+    if (action !== 'detect' && showRunning()) throw new Error('请先停止演出，再配置虚拟 MIDI');
     try {
       if (action === 'download') await shell.openExternal('https://www.tobias-erichsen.de/software/loopmidi.html');
       const result = loopMidiStatusSchema.parse(await (action === 'start' ? loopMidiService.start() : loopMidiService.detect()));
@@ -1739,7 +1756,7 @@ function registerIpc(
   });
   handle('link:stop-music-monitor', () => musicMonitor!.stop());
   handle('link:analyze-music', async (_event, value: unknown) => {
-    if (runtimeActive) throw new Error('请先停止播放，再分析音乐');
+    if (showRunning()) throw new Error('请先停止播放，再分析音乐');
     const request = musicAnalysisRequestSchema.parse(value);
     await projectAccess.assetFiles(request.projectPath, [request.source.relativePath]);
     return musicAnalysis.analyze(request.taskId, request.projectPath, request.source);
@@ -1752,7 +1769,7 @@ function registerIpc(
   });
   handle('link:render-audio-segments', async (_event, value: unknown) => {
     const payload = audioRenderRequestSchema.parse(value);
-    if (runtimeActive) throw new Error('请停止播放后编辑音频');
+    if (showRunning()) throw new Error('请停止播放后编辑音频');
     await projectAccess.assetFiles(payload.projectPath, [payload.source, ...(payload.tracks ?? []).map(track => track.source)].map(source => source.relativePath));
     if (payload.durationMs !== undefined && !payload.tracks) throw new Error('歌曲总长只能和音轨一起渲染');
     return payload.tracks ? audioEditService.mix(payload.projectPath, payload.tracks, payload.durationMs) : audioEditService.render(payload.projectPath, payload.source, payload.segments);
@@ -1798,7 +1815,7 @@ function registerIpc(
     return directory;
   });
   handle('link:relink-asset-files', (_event, value: unknown) => {
-    if (runtimeActive) throw new Error('请停止播放后找回素材');
+    if (showRunning()) throw new Error('请停止播放后找回素材');
     return assetRelinkRequests.relink(linkProjectAssetRelinkPayloadSchema.parse(value));
   });
   handle('link:p1-detect-current-project', async () => {
@@ -2061,7 +2078,7 @@ function registerIpc(
   handle('link:obs-connect', () => connectObs());
   let localObsConnecting = false;
   handle('link:obs-connect-local', () => reconnector.manual(async () => {
-    if (runtimeActive) throw new Error('请先停止节目再连接 OBS');
+    if (showRunning()) throw new Error('请先停止节目再连接 OBS');
     if (localObsConnecting) throw new Error('正在自动连接 OBS，请稍等');
     localObsConnecting = true;
     try {
@@ -2151,7 +2168,7 @@ function registerIpc(
       return decision.response === 0;
     },
     stop: async () => {
-      if (runtimeActive) throw new Error('请先停止播放，再修复 OBS 组件');
+      if (showRunning()) throw new Error('请先停止播放，再修复 OBS 组件');
       const profile = await requireProfile(profileStore);
       if (obs.getSnapshot().status !== 'connected') await connectObs();
       // The repair closes OBS itself: not reconnected until the repair connects it again.
@@ -2178,7 +2195,7 @@ function registerIpc(
     }
   });
   handle('link:obs-bridge-repair', async (): Promise<void> => {
-    if (runtimeActive) throw new Error('请先停止播放，再修复 OBS 组件');
+    if (showRunning()) throw new Error('请先停止播放，再修复 OBS 组件');
     if (bridgeMaintenance) throw new Error('正在修复 OBS 组件，请稍等');
     bridgeMaintenance = true;
     livePreview.close(); liveAddress = null; liveBridgeInstalled = false;
@@ -2304,7 +2321,7 @@ function registerIpc(
       osRelease: release(), cpu: cpus()[0]?.model ?? '未知', logicalProcessors: cpus().length,
       totalMemoryBytes: totalmem(), freeMemoryBytes: freemem(), uptimeSeconds: Math.round(process.uptime()), versions: process.versions,
       gpuFeatures: app.getGPUFeatureStatus(), processes: app.getAppMetrics(),
-      obs: obs.getSnapshot(), ma2: ma2Network.status(), runtimeActive, player: nativePlayer?.status ?? null,
+      obs: obs.getSnapshot(), ma2: ma2Network.status(), runtimeActive, p1Following: p1Follow?.running() === true, player: nativePlayer?.status ?? null,
       // Which networks this computer is on, for a console that cannot be reached; hardware addresses are left out.
       networkAdapters: Object.entries(networkInterfaces()).flatMap(([name, entries]) => (entries ?? []).filter(entry => entry.family === 'IPv4' && !entry.internal).map(entry => ({ name, address: entry.cidr ?? entry.address }))),
       license, update: updateManager.getStatus(), logSessionId: logger.sessionId,
@@ -2315,7 +2332,7 @@ function registerIpc(
     const obsSnapshot = obs.getSnapshot(), ma2Status = ma2Network.status();
     return feedbackEnvironment({ windowsRelease: release(), arch: process.arch, cpu: cpus()[0]?.model ?? '未知', totalMemoryBytes: totalmem(),
       obs: { status: obsSnapshot.status, obsVersion: obsSnapshot.obsVersion }, ma2: { state: ma2Status.state, version: ma2Status.version },
-      runtimeActive, playerStatus: nativePlayer?.status?.status ?? null });
+      runtimeActive: showRunning(), playerStatus: nativePlayer?.status?.status ?? null });
   };
   const writeDiagnostic = async (path: string, context: Readonly<Record<string, unknown>>, days: 1 | 7 | 30): Promise<void> => {
     await logger.exportDiagnosticPackage(path, { ...context, environment: await diagnosticEnvironment() }, { days });
@@ -2431,14 +2448,14 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
       return closeIds;
     },
     songStarted: () => {
-      if (!runtimeActive && !nativePlaybackActive()) return false;
+      if (!showRunning() && !nativePlaybackActive()) return false;
       showRuntimeActiveExitWarning();
       return true;
     },
     program: nativeProgram,
     // What the quit asks about is the lights-off list itself (R13): what the program's close owed and did not send, and
     // any Off still owed from before (a stop, a song change, a preview), once every Off on its way was answered.
-    faults: { collect: async during => { await during(); await lightingOff?.settled(); return lightingOff?.quitMessages() ?? []; } },
+    faults: { collect: async during => { await during(); await p1Follow?.dispose(); await lightingOff?.settled(); return lightingOff?.quitMessages() ?? []; } },
     quitWithLightsOn: async lightsLeftOn => {
       // Asked like the audition's (2026-11-10); it is logged and shown in red as well.
       recordQuitStep('节目的灯光没能关闭', { error: lightsLeftOn.join('\n') });
@@ -2527,7 +2544,7 @@ function settleRepeatedLogs(): void {
 
 function recordQuitStep(step: string, details: Record<string, unknown> = {}): void {
   void ipcLogger?.record({ level: 'info', category: 'system', device: '退出流程', message: step,
-    details: { runtimeActive, nativePlayback: nativePlaybackActive(), documentDirty: documentState.dirty, allowWindowClose, quitFlowRunning,
+    details: { runtimeActive, p1Following: p1Follow?.running() === true, nativePlayback: nativePlaybackActive(), documentDirty: documentState.dirty, allowWindowClose, quitFlowRunning,
       windows: BrowserWindow.getAllWindows().length, ...details } })
     .catch((error: unknown) => console.error('退出流程日志未能写入', error));
 }
@@ -2541,7 +2558,7 @@ function showRuntimeActiveExitWarning(): void {
     type: 'warning' as const,
     title: '联动还没停止',
     message: '音频或联动还在运行。',
-    detail: '请回到播放器停止播放。如果还有画面联动，等相关来源清理完再退出。',
+    detail: '请回到播放器停止播放；跟随 P1 时请先停止跟随 P1。如果还有画面联动，等相关来源清理完再退出。',
     buttons: ['返回软件'],
     defaultId: 0,
     cancelId: 0,

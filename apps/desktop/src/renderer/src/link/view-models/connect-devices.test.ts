@@ -326,6 +326,15 @@ it('P1 模式启动播放器并建立时间码监听，不发送播放命令', a
   expect(api.startExternalApplication).toHaveBeenCalledWith('p1'); expect(config.listenToP1).toHaveBeenCalledOnce();
   expect(useConnectionCheckStore.getState().checks.p1?.detail).toContain('等待 P1 开始播放');
 });
+it('P1 的时间码输入口只检查不在界面打开：由后台跟随 P1 接收（0.5.9 P4）', async () => {
+  const config = options(); config.project = createEmptyLinkProject('P1 跟随');
+  config.draft.midiPortProfiles = config.draft.midiPortProfiles.map(port => port.id === config.draft.p1.mtcInputPortProfileId ? { ...port, portName: 'HirenderP1' } : port);
+  config.readMidiPorts = vi.fn(() => Promise.resolve([{ id: 'p1', name: 'HirenderP1', manufacturer: '', direction: 'input' as const, state: 'connected' as const, connection: 'closed' as const },
+    { id: 'keyboard', name: '遥控键盘', manufacturer: '', direction: 'input' as const, state: 'connected' as const, connection: 'closed' as const }]));
+  await connectDevices(config);
+  expect(useConnectionCheckStore.getState().checks[`port:${config.draft.p1.mtcInputPortProfileId}`]).toMatchObject({ state: 'ready', detail: '接口可用；跟随 P1 时由联动台在后台接收时间码' });
+  expect(config.openMidiPorts).not.toHaveBeenCalledWith([config.draft.p1.mtcInputPortProfileId], 'input');
+});
 it('配置保存失败即停止：不连接旧目标，后续步骤均未执行', async () => {
   api.saveIntegrationProfile.mockRejectedValueOnce(new Error('配置无法保存'));
   await connectDevices(options());
