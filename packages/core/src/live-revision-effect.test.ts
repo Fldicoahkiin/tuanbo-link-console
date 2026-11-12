@@ -39,7 +39,7 @@ describe('liveRevisionEffect', () => {
   const before = show(a, b);
   const held = { itemId: 'a', started: before };
   it('这首歌没动（同一个对象）：什么都不做', () => {
-    expect(liveRevisionEffect(before, replace(before, playback(b, { volume: 10 })), held)).toEqual({ volume: null, endAction: false, lighting: null, audio: false, removedHeld: false, actions: false });
+    expect(liveRevisionEffect(before, replace(before, playback(b, { volume: 10 })), held)).toEqual({ volume: null, endAction: false, lighting: null, audio: false, removedHeld: false, actions: false, picture: false });
   });
   it('音量改了：给出新的音量；没改：null', () => {
     expect(liveRevisionEffect(before, replace(before, playback(a, { volume: 40 })), held)).toMatchObject({ volume: 40, endAction: false, audio: false });

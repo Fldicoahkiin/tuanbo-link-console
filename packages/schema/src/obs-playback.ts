@@ -60,7 +60,10 @@ export const nativeObsStatusSchema = z.object({ version: z.literal(1), sessionId
   /** Someone switched program in OBS by hand: not switched back before the next segment (2026-11-10 decision 5). */
   takeover: z.object({ sceneName: z.string().min(1) }).strict().nullable().optional(),
   nextCueId: z.string().nullable(), currentCueId: z.string().nullable(),
-  pendingCount: z.number().int().nonnegative(), positionMs: z.number().finite().nonnegative()
+  pendingCount: z.number().int().nonnegative(), positionMs: z.number().finite().nonnegative(),
+  /** The version whose picture plan the session runs now, after a retarget (0.5.9 S8b part 2, ProgramPictureOutput);
+   * absent: the one it was prepared with (`revision`). */
+  appliedRevision: z.number().int().nonnegative().optional()
 }).strict();
 export type NativeObsStatus = z.infer<typeof nativeObsStatusSchema>;
 /** Sent while a missing OBS seek cache is being generated for one asset. */
