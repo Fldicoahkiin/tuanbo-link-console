@@ -346,7 +346,7 @@ describe('规则 8：停止以后画面停在最后一帧，下一首的画面�
 
   it('源码：停止只暂停、隐藏显示来源、交出不占着最后一帧的输出；素材的停止、机位的清理和交还输出只在 release；播放器的停止不等画面', () => {
     const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-    const read = (path: string): string => readFileSync(join(root, path), 'utf8');
+    const read = (path: string): string => readFileSync(join(root, path), 'utf8').replace(/\r\n/g, '\n'); // a checkout on Windows has CRLF
     const body = (text: string, head: string): string => {
       const start = text.indexOf(head);
       expect(start).toBeGreaterThanOrEqual(0);
@@ -398,7 +398,7 @@ describe('规则 10：播放中有人在 OBS 里手动切了场景，下一段�
 
   it('源码：接管只在画面会话里认（programSceneChanged），主进程只转交 OBS 报的场景；别处不判断手动切换，也不往场景里加音乐', () => {
     const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-    const read = (path: string): string => readFileSync(join(root, path), 'utf8');
+    const read = (path: string): string => readFileSync(join(root, path), 'utf8').replace(/\r\n/g, '\n'); // a checkout on Windows has CRLF
     const session = read('packages/core/src/obs-program-session.ts');
     expect(session).toContain('this.ledger.takeOver(');
     // (`nativeObs.takeOver` in the host is the next song taking a held decoder over, R14: another thing.)

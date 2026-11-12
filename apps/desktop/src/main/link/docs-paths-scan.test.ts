@@ -84,7 +84,8 @@ function missingIn(document: string, text: string, names: ReadonlySet<string>): 
 
 /** The rows of AGENTS.md「同一件事只有一处实现」: what, where it is decided, the tests that guard it, the link to its rules. */
 function onePlaceRows(agents: string): { title: string; where: string; tests: string; detail: string }[] {
-  const lines = agents.split('\n');
+  // A checkout on Windows ends its lines with CRLF.
+  const lines = agents.split(/\r?\n/);
   const start = lines.indexOf('| 事情 | 唯一的地方 | 守着它的测试 | 细节 |');
   const rows: { title: string; where: string; tests: string; detail: string }[] = [];
   for (let index = start + 2; start >= 0 && lines[index]?.startsWith('|') === true; index += 1) {
@@ -134,6 +135,10 @@ describe('现行文档里写到的文件都在（2026-11-12）', () => {
     const sections = (): string[] => ['怎么认控台'];
     const good = '| 怎么认控台 | 只按编号认（`packages/core/src/ma2-console-identity.ts`） | `packages/core/src/ma2-console-identity.test.ts` | [灯光和 MA2](./docs/ONE_PLACE_LIGHTING.md#怎么认控台) |';
     expect(onePlaceRows(sample(good)).flatMap(row => rowProblems(row, sections))).toEqual([]);
+    // The same table as a checkout on Windows has it.
+    const windows = onePlaceRows(sample(good).replace(/\n/g, '\r\n'));
+    expect(windows.map(row => row.title)).toEqual(['怎么认控台']);
+    expect(windows.flatMap(row => rowProblems(row, sections))).toEqual([]);
     expect(onePlaceRows(sample(good.replace('`packages/core/src/ma2-console-identity.test.ts`', '还没有'))).flatMap(row => rowProblems(row, sections))).toEqual(['怎么认控台：没写哪个测试守着']);
     expect(onePlaceRows(sample(good.replace('（`packages/core/src/ma2-console-identity.ts`）', ''))).flatMap(row => rowProblems(row, sections))).toEqual(['怎么认控台：没写在哪个文件']);
     expect(onePlaceRows(sample(good)).flatMap(row => rowProblems(row, () => []))).toEqual(['怎么认控台：docs/ONE_PLACE_LIGHTING.md 里没有「怎么认控台」这一节']);
