@@ -35,17 +35,8 @@ function forward(request) {
     }); req.on('error', reject); req.end(request.postData() ?? undefined);
   });
 }
-// 用户在下拉里选中一项时，浏览器先发 input 再发 change，两个事件之间页面有机会重画。selectOption 在一次调用里连发两个事件，
-// 测不出「选了又弹回」（2026-11-12 现场：「原因」下拉选不上），所以这里按浏览器的顺序分两步发，并核对选中的值留住了。
-// 对话框里已经没有原生下拉了；页面上还有原生下拉时用它。导出只是为了暂时没有调用时 lint 不把它当成没用的函数。
-export async function choose(select, value) {
-  await select.evaluate(async (element, next) => {
-    element.value = next; element.dispatchEvent(new Event('input', { bubbles: true }));
-    await new Promise(resolve => { setTimeout(resolve, 0); });
-    element.dispatchEvent(new Event('change', { bubbles: true }));
-  }, value);
-  assert.equal(await select.inputValue(), value);
-}
+// 用户在下拉里选中一项时，浏览器先发 input 再发 change，两个事件之间页面有机会重画。Playwright 的 selectOption 在一次调用里连发两个事件，
+// 测不出「选了又弹回」（2026-11-12 现场：「原因」下拉选不上）。后台现在没有原生下拉了；下面两个函数都像人一样一步一步点，不要换回 selectOption。
 // 对话框里的下拉（Base UI Select）：像人一样点开触发器、点选项，再核对触发器上显示的文字。
 async function pick(scope, label, option) {
   const trigger = scope.getByRole('combobox', { name: label });
@@ -56,6 +47,20 @@ async function pick(scope, label, option) {
 async function preset(dialog, label, option) {
   await dialog.getByRole('group', { name: `常用${label}` }).getByRole('button', { name: option, exact: true }).click();
   assert.equal(await dialog.getByRole('textbox', { name: label }).inputValue(), option);
+}
+// 窄屏时导航收在抽屉里：入口看不见就先点「打开导航」。数入口时也要先打开抽屉，否则抽屉关着永远数到 0；数完按 Esc 关上。
+async function go(page, name) {
+  const entry = page.getByRole('button', { name, exact: true });
+  if (!(await entry.isVisible())) await page.getByRole('button', { name: '打开导航' }).click();
+  await entry.click();
+}
+async function navCount(page, name) {
+  const menu = page.getByRole('button', { name: '打开导航' });
+  if (!(await menu.isVisible())) return page.getByRole('button', { name, exact: true }).count();
+  await menu.click(); await page.getByRole('navigation', { name: '后台导航' }).waitFor();
+  const count = await page.getByRole('button', { name, exact: true }).count();
+  await page.keyboard.press('Escape'); await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  return count;
 }
 const browser = await chromium.launch({ headless: true, ...(process.env.TBLINK_TEST_BROWSER_CHANNEL ? { channel: process.env.TBLINK_TEST_BROWSER_CHANNEL } : {}) }); const errors = [];
 try {
@@ -188,12 +193,12 @@ try {
     await page.getByRole('heading', { name: '待办事项' }).waitFor();
     assert.equal(await page.getByText('累计净收款').count(), role === 'finance' ? 1 : 0);
     assert.equal(await page.getByRole('heading', { name: '收款趋势' }).count(), role === 'finance' ? 1 : 0);
-    assert.equal(await page.getByRole('button', { name: '人员管理', exact: true }).count(), 0);
-    assert.equal(await page.getByRole('button', { name: '软件更新', exact: true }).count(), 0);
+    assert.equal(await navCount(page, '人员管理'), 0);
+    assert.equal(await navCount(page, '软件更新'), 0);
     // 反馈带联系方式和诊断包，只有运营能看到入口。
-    assert.equal(await page.getByRole('button', { name: '问题反馈', exact: true }).count(), role === 'operations' ? 1 : 0);
+    assert.equal(await navCount(page, '问题反馈'), role === 'operations' ? 1 : 0);
     assert.equal(await page.getByRole('button', { name: /待处理问题反馈/ }).count(), role === 'operations' ? 1 : 0);
-    await page.getByRole('button', { name: '订单中心', exact: true }).click(); await page.getByRole('row', { name: /BROWSER-ORDER-1/ }).getByRole('button', { name: '查看详情' }).click(); await page.getByRole('heading', { name: '订单详情' }).waitFor();
+    await go(page, '订单中心'); await page.getByRole('row', { name: /BROWSER-ORDER-1/ }).getByRole('button', { name: '查看详情' }).click(); await page.getByRole('heading', { name: '订单详情' }).waitFor();
     assert.equal(await page.getByRole('button', { name: '重发领取凭据', exact: true }).count(), role === 'operations' ? 1 : 0);
     assert.equal(await page.getByRole('button', { name: '登记已办理的退款', exact: true }).count(), role === 'finance' ? 1 : 0);
     assert.equal((await page.locator('body').innerText()).includes('TBA-'), false);
@@ -221,7 +226,7 @@ try {
       await dialog.getByText('开票记录已保存').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
       await page.getByRole('button', { name: '财务记录', exact: true }).click(); await page.getByText('BROWSER-REFUND-1', { exact: true }).waitFor();
       // 工作台大字为净收款：线下 800 元加支付宝 800 元，扣除 80 元退款。
-      await page.getByRole('button', { name: '工作台', exact: true }).click(); await page.locator('.balance-primary strong', { hasText: /^¥1520\.00$/ }).waitFor();
+      await page.getByRole('button', { name: '工作台', exact: true }).click(); await page.getByTestId('net-income').filter({ hasText: /^¥1520\.00$/ }).waitFor();
     }
     assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth), true);
     await page.screenshot({ path: fileURLToPath(new URL(`${role}.png`, shots)), fullPage: true }); await context.close();
