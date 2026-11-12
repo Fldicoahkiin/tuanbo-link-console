@@ -1,9 +1,15 @@
 name: Verify Desktop
 
 # Desktop changes on master were otherwise only built when a release was packaged, half an hour into Release Windows.
-# This catches type and lint errors, a release bundle that packaging would refuse, and a failing unit test (on
-# Windows, which the file, process and PowerShell tests need) minutes after the push. Until 2026-10-30 the tests
-# ran only when a release was packaged, so a broken lighting rule (docs/LIGHTING_WORKFLOW.md) reached master unseen.
+# A push runs the cheap half on Linux: types, lint, a release bundle that packaging would refuse, and the unit tests
+# (the few that need Windows skip themselves there), so a broken rule test (docs/LIGHTING_WORKFLOW.md) is seen minutes
+# after the push.
+#
+# The whole suite on Windows takes about 26 minutes and a Windows minute counts double against the account's Actions
+# minutes: in November 2026 running it on every push used the month's minutes up in two days. It now runs only when
+# this workflow is started by hand, and in Release Windows before every release. Start it by hand before a release
+# when a change touches what only runs on Windows (the tests marked skipIf(process.platform !== 'win32') and the
+# modules under them: IBT, the OBS component install, system PowerShell, external processes).
 
 on:
   push:
@@ -34,7 +40,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (v7.0.1)
         with:
@@ -56,8 +62,15 @@ jobs:
         run: |
           pnpm --filter @tb/desktop exec electron-vite build --mode release
           node scripts/verify-release-bundle.mjs
+      - name: Unit tests
+        # `pnpm test` without tools/ibt/build.mjs, which only builds on Windows.
+        run: |
+          pnpm test:release
+          pnpm exec vitest run
 
   test:
+    # By hand only: see the note at the top.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:

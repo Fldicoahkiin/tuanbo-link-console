@@ -10,7 +10,7 @@
    - 分支在触发后又有新提交时，tag 作业拒绝，免得把别的改动发出去；核对后用新的提交号重新触发。
    - master 已经有下一版的改动时，从要发布的提交开 `release/X.Y.Z` 分支，在那个分支上触发。
    - 打了 tag 但没发布出去的版本（打包失败，GitHub 上没有它的 release 或草稿，更新源也没有它），修好后在修复提交上再触发一次，标签挪过去，版本号不变（用户 2026-10-26 要求不跳号）。已有草稿或已发布的版本，tag 作业拒绝挪动。
-   - 推 master 后 Verify Desktop 在几分钟内检查类型、lint，以及正式模式构建不带本机开发测试通道（这类问题以前要到打包时才发现，0.5.3 第一次就是这样失败的）。
+   - 推 master 后 Verify Desktop 在 Linux 上检查类型、lint、单测，以及正式模式构建不带本机开发测试通道（这类问题以前要到打包时才发现，0.5.3 第一次就是这样失败的）。Windows 上的全部单测不再每次推都跑（2026-11-12，省 Actions 额度）：发版时 Release Windows 的 verify 会跑；动了只在 Windows 上能跑的东西时，发版前先手动触发一次 Verify Desktop。
 3. 之后全部自动（2026-10-24 用户定下：在 GitHub 云端打包，工位电脑只负责把包搬到服务器；不用 Cloudflare）：
    - Release Windows 的 verify 和 build 作业在 GitHub 云端 Windows 上同时跑（2026-10-29 起，以前 build 要等 verify 结束，多约 15 分钟）：verify 检查版本、类型、单测、lint；build 下载美颜和音乐分析的固定资产，打包、签名，等 verify 通过（`scripts/wait-for-job.mjs`）后才把四个文件放进这个标签的草稿 GitHub Release。verify 没通过就没有草稿，tag 仍能挪到修复提交，版本号不跳。
    - 搬运：工位电脑的计划任务每 10 分钟（以及登录、联网时）跑一次 `scripts/relay-release.mjs`，Mac 也可以手动 `pnpm release:relay`，二选一，重复运行安全。它下载草稿、按构建清单核对，上传到服务器 staging；服务器上已有或正在上传就不重复传。[服务器安装](SERVER_INSTALL_DELTA_UPLOAD_20261029.md)之后只下载、上传更新源当前版没有的块（0.5.4 到 0.5.5 上传 8.4 MB，原来 982 MB），服务器拼出完整安装包再核对；拼不出来就改传完整安装包。

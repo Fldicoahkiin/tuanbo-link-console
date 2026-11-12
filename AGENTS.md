@@ -147,11 +147,11 @@ docs/                           设计、实施、验收和服务器安装说明
 
 ## 6. 测试与验证
 
-- 推 master 前跑 `pnpm typecheck`、`pnpm test`、`pnpm lint`。`pnpm lint` 自己带 4 GB 的内存上限（根目录 `package.json`）：整个仓库一起做带类型的检查要 2 GB 以上，Node 默认的上限在 GitHub 的 runner 和云端容器里不够。lint 报 exit 134、日志开头是 `Last few GCs` 就是内存用完了，不是代码问题，调大这个数，不删 lint 规则。
+- 推 master 前在本地把 CI 的步骤全跑一遍：`pnpm typecheck`、`pnpm test`、`pnpm lint`，再加正式模式构建检查（`pnpm --filter @tb/desktop exec electron-vite build --mode release` 和 `node scripts/verify-release-bundle.mjs`）。把关靠本地这一遍，不靠推上去让 CI 试。`pnpm lint` 自己带 4 GB 的内存上限（根目录 `package.json`）：整个仓库一起做带类型的检查要 2 GB 以上，Node 默认的上限在 GitHub 的 runner 和云端容器里不够。lint 报 exit 134、日志开头是 `Last few GCs` 就是内存用完了，不是代码问题，调大这个数，不删 lint 规则。
 - 规则测试守着用户定下的规则，例如 `packages/core/src/lighting-workflow-rules.test.ts` 对应灯光 10 条。改代码让它们失败就是违反了规则，不能靠改测试过关。
-- CI：推 master 后 Verify Desktop 跑类型、lint、正式模式构建和 Windows 单测（约 25 分钟）；Verify Licensing Server 跑服务端测试并自动部署授权服务、官网和后台。只改文档不触发。
+- CI 要省着用（2026-11-12 用户要求，原话“能少用ci就少用，不要像现在这么密集”：11-11、11-12 两天推了十几次 master，每次 Windows 单测跑 26 分钟、Windows 的分钟按 2 倍计，把当月的 GitHub Actions 额度用完了，之后的 run 几秒内就失败、一个 job 都不起）。现在推 master 后 Verify Desktop 只在 Linux 上跑类型、lint、正式模式构建和单测；Windows 上的全部单测只在两处跑：手动触发 Verify Desktop，和发版时 Release Windows 的 verify。动了只在 Windows 上能跑的东西（标了 `skipIf(process.platform !== 'win32')` 的测试和它们下面的模块：IBT、OBS 组件安装、系统 PowerShell、外部程序）时，发版前手动触发一次。Verify Licensing Server 跑服务端测试并自动部署授权服务、官网和后台。只改文档不触发。不为了看结果反复查、反复重跑；额度用完时不推 master，等恢复或由用户决定加额度。
 - Electron e2e 不在 CI 里，按需在本机跑；依赖真实设备的用例被跳过，不代表硬件通过。
-- 云端 Linux 容器里：Node 用 25.8.2（和 CI 一致）；`pnpm test` 里的 `node tools/ibt/build.mjs` 只能在 Windows 跑，改用 `pnpm test:release` 加 `pnpm exec vitest run`；`ibt-beat-service`、`obs-live-install`、`obs-plugin-deployment`、`windows-powershell` 四个测试文件在 Linux 上固定失败约 10 个，没碰它们时以 Windows CI 为准。
+- 云端 Linux 容器里：Node 用 25.8.2（和 CI 一致）；`pnpm test` 里的 `node tools/ibt/build.mjs` 只能在 Windows 跑，改用 `pnpm test:release` 加 `pnpm exec vitest run`；`ibt-beat-service`、`obs-live-install`、`obs-plugin-deployment`、`windows-powershell` 四个测试文件里只在 Windows 上能跑的 10 个用例在别的系统上自己跳过（2026-11-12），所以 Linux 上应当全过；这 10 个以 Windows 上的结果为准。
 - 文档和回复要分清“已实现”“自动化验证通过”“本机联调”和“现场实机验证”。没在现场 Windows 和实体 MA2 上试过的，写明“未实机验证”。
 
 现场排查先想到这些：
@@ -163,7 +163,7 @@ docs/                           设计、实施、验收和服务器安装说明
 
 ## 7. Git、更新日志与发版
 
-- 代码以 GitHub master 为准。改完、检查通过就提交并直接推 master，不开 PR。推之前先合并最新 master（Website Release 会以 github-actions[bot] 往 master 提交 `release.json`），推完盯到 CI 全绿。
+- 代码以 GitHub master 为准，不开 PR。改完、本地检查通过就提交，但**不要每做完一步就推 master**（2026-11-12，见第 6 节“CI 要省着用”）：攒成一批再推，用户要测、要发版，或者一批相关的改动做完时推一次，平时一天不超过一次，现场等着的修复除外。云端会话做完一步只推自己的工作分支当备份，那不触发任何工作流。推之前先合并最新 master（Website Release 会以 github-actions[bot] 往 master 提交 `release.json`），推完看一次 CI 的结果。
 - 提交用 Conventional Commits，不加任何 AI 署名，不写 Co-Authored-By。Claude 的提交作者用 `Claude <noreply@anthropic.com>`，不要沿用上一条提交的 github-actions[bot]。
 - 不覆盖用户已有的修改，脏工作区先报告。不强推，不用 `git reset --hard`，不删分支。
 - 删除文件用 `trash`，禁止 `rm` 及其任何变体；删源码用补丁。

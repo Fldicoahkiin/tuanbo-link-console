@@ -21,7 +21,8 @@ function pcmWave(silence: boolean): Buffer {
   return wav;
 }
 
-it('真实 IBT 识别主拍，静音不生成外推节拍；支持中文路径', async () => {
+// Runs the real tools/ibt/bin/ibt.exe, which only `node tools/ibt/build.mjs` on Windows produces.
+it.skipIf(process.platform !== 'win32')('真实 IBT 识别主拍，静音不生成外推节拍；支持中文路径', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'tblink-节拍-'));
   const source = join(directory, '舞蹈 & 120.wav');
   try {

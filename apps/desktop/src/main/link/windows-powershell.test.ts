@@ -14,8 +14,11 @@ function clearSearchPath(): void {
   }
 }
 
+// Two of these build Windows paths (win32.join, a drive root) and only hold on Windows.
+const onWindows = it.skipIf(process.platform !== 'win32');
+
 describe('Windows 系统 PowerShell 定位', () => {
-  it('按系统目录定位，支持空格和中文，不使用 PATH', async () => {
+  onWindows('按系统目录定位，支持空格和中文，不使用 PATH', async () => {
     await mkdir(resolve('artifacts'), { recursive: true });
     const root = await mkdtemp(resolve('artifacts', '系统目录 '));
     const directory = join(root, 'System32', 'WindowsPowerShell', 'v1.0');
@@ -31,7 +34,7 @@ describe('Windows 系统 PowerShell 定位', () => {
     await expect(windowsPowerShellExecutable({ SystemRoot: root })).rejects.toThrow('系统目录');
   });
 
-  it('系统组件缺失时给出修复说明，不回退到 PATH 中的程序', async () => {
+  onWindows('系统组件缺失时给出修复说明，不回退到 PATH 中的程序', async () => {
     vi.stubEnv('SystemRoot', resolve('artifacts', 'missing-windows-components'));
     await expect(windowsPowerShellExecutable()).rejects.toThrow('Windows 系统命令组件缺失或无法访问');
   });
