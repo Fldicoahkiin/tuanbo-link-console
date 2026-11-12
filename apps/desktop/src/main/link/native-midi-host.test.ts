@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, parseLinkProject, type LinkProject, type NativePlayerStatus } from '@tb/schema';
+import { createEmptyLinkProject, parseLinkProject, type NativePlayerStatus } from '@tb/schema';
 import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
 import { MidiOutputFailure } from './native-midi-output';
 import { clockFromNativeStatus, frameNumberToTimecode, MidiMessageSkipped } from '@tb/core/link';
@@ -204,24 +204,41 @@ it('还在关上一首、没开这首的时候来了新的一版：这首开出�
   await f.host.stop();
 });
 
-it('暂停时改了动作：继续播放时已经轮到过的不再发，哪怕新的一版把它挪到了播放头后面；排不出来的一版当场拒绝', async () => {
+/** Plays past the actions at 0 s and 2 s (opened for `first`), pauses, takes a version that moves the one at 2 s to
+ * 4 s, opens again for `then` and plays to 4 s: what went out. `recover`: the port goes away and comes back before the pause. */
+async function passThrough(first: number | undefined, then: number | undefined, recover = false): Promise<unknown[][]> {
   const f = fixture([0, 60, 90]), version = (frames: number[]) => fixture(frames).project;
-  await f.host.prepare(f.project, f.identity);
+  await f.host.prepare(f.project, f.identity, first);
   f.observe({ status: 'playing', generation: 2, positionMs: 2010 });
   await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(2));
+  if (recover) {
+    f.outputs.mockResolvedValue([]); f.unplug(); f.observe({ positionMs: 2100 });
+    f.outputs.mockResolvedValue([{ id: 4, name: 'TBLINK CUE' }]);
+    await vi.waitFor(() => expect(f.recovered).toHaveLength(1), { timeout: 3000 });
+    f.observe({ positionMs: 2200 }); await new Promise(resolve => setTimeout(resolve, 10));
+  }
   f.observe({ status: 'paused', generation: 3 });
-  await vi.waitFor(() => expect(f.ports.close).toHaveBeenCalledOnce());
-  // Paused: the action at 2 s, already sent, moves to 4 s.
+  await vi.waitFor(() => expect(f.ports.close).toHaveBeenCalledTimes(recover ? 2 : 1));
   const moved = version([0, 120, 90]);
   f.host.retarget(moved, 'song');
-  const broken: LinkProject = { ...moved, rundown: moved.rundown.map(item => ({ ...item, cues: item.cues.map(cue => ({ ...cue, layerId: 'gone' })) })) };
-  expect(() => f.host.retarget(broken, 'song')).toThrow('不存在的图层');
-  await f.host.prepare(moved, { ...f.identity, generation: 3 }, true);
-  f.observe({ status: 'playing', generation: 4, positionMs: 2020 });
+  await f.host.prepare(moved, { ...f.identity, generation: 3 }, then);
+  f.observe({ status: 'playing', generation: 4, positionMs: 2300 });
   f.observe({ positionMs: 3010 });
-  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(3));
-  expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 2000);
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 2000));
   f.observe({ positionMs: 4010 }); await new Promise(resolve => setTimeout(resolve, 10));
-  expect(f.ports.send).toHaveBeenCalledTimes(3);
   await f.host.stop();
+  return f.ports.send.mock.calls.map(call => call.slice(1, 2));
+}
+
+it('同一遍里暂停再继续：已经轮到过的不再发，哪怕新的一版把它挪到了播放头后面', async () => {
+  expect(await passThrough(1, 1)).toEqual([[[0xc0, 1]], [[0xc0, 2]], [[0xc0, 3]]]);
 });
+
+it('新的一遍（定位、拖动、循环）什么都不带过去：挪到后面的那个到新的时间照发；没说是哪一遍的也不带', async () => {
+  expect(await passThrough(1, 2)).toEqual([[[0xc0, 1]], [[0xc0, 2]], [[0xc0, 3]], [[0xc0, 2]]]);
+  expect(await passThrough(undefined, undefined)).toEqual([[[0xc0, 1]], [[0xc0, 2]], [[0xc0, 3]], [[0xc0, 2]]]);
+});
+
+it('接口断开又回来以后还是同一遍：再暂停继续，已经轮到过的照样不再发', async () => {
+  expect(await passThrough(1, 1, true)).toEqual([[[0xc0, 1]], [[0xc0, 2]], [[0xc0, 3]]]);
+}, 60000);

@@ -5,9 +5,10 @@ export const emptyInternalPlayerState: InternalPlayerState = {
   status: 'stopped', itemId: null, positionMs: 0, durationMs: 0, volume: 100, endAction: 'pause', defaultEndAction: 'pause', error: null, errorTitle: null, notice: null, playedItemIds: [], mtcEnabled: true, mtcPositionMs: null, mtcConnectionFailed: false
 };
 export type InternalPlayerDependencies = {
-  /** `playsOn`: the same song plays on from a pause in the same pass (0.5.9 S8b): its actions whose turn came before the
-   * pause are not sent again, also where a newer version moved them after the playhead. */
-  prepare: (itemId: string, positionMs: number, options: { reuseSession: boolean; mtcOutputEnabled: boolean; signal?: AbortSignal; playsOn?: boolean }) => Promise<void>;
+  /** `pass`: which placing of the song this preparation belongs to (0.5.9 S8b). It goes up whenever the song is placed
+   * anew (a start, a seek, a loop, a scrub) and stays when it plays on after a pause: within one pass the actions whose
+   * turn came are not sent again, also where a newer version moved them after the playhead. */
+  prepare: (itemId: string, positionMs: number, options: { reuseSession: boolean; mtcOutputEnabled: boolean; signal?: AbortSignal; pass?: number }) => Promise<void>;
   ingest: (positionMs: number) => Promise<void>;
   started?: (positionMs: number) => void;
   scrub?: ((positionMs: number) => Promise<void>) | undefined;

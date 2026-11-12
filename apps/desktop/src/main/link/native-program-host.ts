@@ -55,7 +55,7 @@ export class NativeProgramHost {
         this.controller.reportUnavailable(`动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）`);
       } });
     this.controller = new NativeProgramPlayer(project, path, revision, {
-      prepare: async (itemId, positionMs, { signal, playsOn }) => {
+      prepare: async (itemId, positionMs, { signal, pass }) => {
         const audio = dependencies.audio();
         if (!audio || audio.itemId !== itemId || audio.positionMs !== positionMs) throw new Error('MIDI 准备的起点和当前音频对不上');
         const cancelled = () => { void this.midi.stop().catch(cleanup => error(`取消 MIDI 准备失败：${String(cleanup)}`)); };
@@ -64,7 +64,7 @@ export class NativeProgramHost {
         try {
           // The version whose actions the song sends, not the one this host was built with (0.5.9 S7: the program stays
           // open while the window edits; S8b: a held song's actions follow a newer version, also as it plays on).
-          await this.midi.prepare(this.controller.actionsProject(), { sessionId: audio.sessionId, generation: audio.generation, itemId }, playsOn === true);
+          await this.midi.prepare(this.controller.actionsProject(), { sessionId: audio.sessionId, generation: audio.generation, itemId }, pass);
           if (signal?.aborted || this.disposed) throw new Error('MIDI 准备已取消');
         } finally { signal?.removeEventListener('abort', cancelled); }
       },

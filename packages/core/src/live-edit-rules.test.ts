@@ -538,35 +538,148 @@ describe('S8b：在播的歌的动作 MIDI 从播放头往后跟新的一版', (
     expect(f.missed).toEqual([]);
   });
 
-  it('暂停时改了：改动等在那里，继续播放时按新的一版从那时的位置排；暂停前已经发过的挪到后面也不再发', async () => {
+  it('暂停时改了：改动等在那里，继续播放时按新的一版从那时的位置排；暂停前已经发过的挪到后面也不再发（a、b）', async () => {
     const opened = withCues(base, [{ id: 'w', atMs: 1000, actions: [pressed('w-on', 66)] }, { id: 'x', atMs: 5000, actions: [pressed('x-on', 62)] }]);
-    const port = actionPort();
-    let session: MidiProgramSession | null = null, passed: ReadonlySet<string> = new Set();
-    const close = async () => { const closing = session; session = null; if (closing) passed = closing.passed; await closing?.close(); };
-    const f = program(opened, {
-      // As NativeProgramHost does: the actions are prepared from the version the player says they follow, and a play-on
-      // after a pause keeps the actions whose turn came (NativeMidiHost.prepare `playsOn`).
-      prepare: async (itemId, positionMs, { playsOn }) => {
-        await close(); session = new MidiProgramSession(f.player.actionsProject(), itemId, port.dependencies, 'live');
-        await session.prepare(positionMs, playsOn ? passed : undefined);
-      },
-      pause: close, stop: close, retargetActions: project => session?.retarget(project)
-    });
-    await f.player.play('甲');
-    for (const position of [0, 1000, 2000]) await port.at(session!, position);
-    expect(port.sent).toEqual([[0x90, 66, 100]]);
-    f.emit({ positionMs: 2000 }); await f.player.pause();
-    expect(session).toBeNull();
+    const r = actionRig(opened);
+    await r.f.player.play('甲');
+    await r.run([0, 1000, 2000]);
+    expect(r.port.sent).toEqual([[0x90, 66, 100]]);
+    await r.f.player.pause();
     const moved = withCues(opened, [{ id: 'w', atMs: 3500, actions: [pressed('w-on', 66)] },
       { id: 'x', atMs: 3000, actions: [pressed('x-on', 62)] }, { id: 'z', atMs: 4000, actions: [pressed('z-on', 65)] }]);
-    f.player.updateProject(moved, 2, 'C:/show/拿着歌时改.tblink');
-    expect(f.player.actionsProject()).toBe(moved);
-    await f.player.resume();
-    for (const position of [2500, 3000, 3500, 4000, 5000, 6000]) await port.at(session!, position);
-    expect(port.sent).toEqual([[0x90, 66, 100], [0x90, 62, 100], [0x90, 65, 100]]);
+    r.f.player.updateProject(moved, 2, 'C:/show/拿着歌时改.tblink');
+    expect(r.f.player.actionsProject()).toBe(moved);
+    await r.f.player.resume();
+    await r.run([2500, 3000, 3500, 4000, 5000, 6000]);
+    expect(r.port.sent).toEqual([[0x90, 66, 100], [0x90, 62, 100], [0x90, 65, 100]]);
     // A seek of the same song keeps them; the audio and picture still follow the version it started with.
-    await f.player.seek(1000);
-    expect(f.player.actionsProject()).toBe(moved);
-    expect(f.player.currentProject()).toBe(opened);
+    await r.f.player.seek(1000);
+    expect(r.f.player.actionsProject()).toBe(moved);
+    expect(r.f.player.currentProject()).toBe(opened);
+  });
+});
+
+/** The held song 甲 through the player, its action MIDI on a real MidiProgramSession over a fake port. The prepare
+ * dependency does what NativeMidiHost does: it carries what the stopped session handled only into the same pass. */
+function actionRig(opened: LinkProject) {
+  const port = actionPort();
+  let session: MidiProgramSession | null = null, sessionPass: number | undefined, failNext = false;
+  let passed: { pass: number | undefined; keys: ReadonlySet<string> } | null = null;
+  const passes: (number | undefined)[] = [];
+  const close = async () => {
+    const closing = session; session = null;
+    if (closing) passed = { pass: sessionPass, keys: closing.passed };
+    await closing?.close();
+  };
+  const f = program(opened, {
+    prepare: async (itemId, positionMs, { pass }) => {
+      passes.push(pass); await close();
+      if (failNext) { failNext = false; throw new Error('动作 MIDI 没有准备好'); }
+      session = new MidiProgramSession(f.player.actionsProject(), itemId, port.dependencies, 'live'); sessionPass = pass;
+      await session.prepare(positionMs, pass !== undefined && passed?.pass === pass ? passed.keys : undefined);
+    },
+    pause: close, stop: close, retargetActions: project => session?.retarget(project)
+  });
+  /** The music plays through these positions: the player sees them, and the session gets each as a clock. */
+  const run = async (positions: number[]) => {
+    for (const position of positions) { f.emit({ positionMs: position }); await port.at(session!, position); }
+  };
+  return { f, port, run, passes, failNextPrepare: () => { failNext = true; } };
+}
+const X = [0x90, 64, 100], Y = [0x90, 67, 100];
+
+describe('S8b：一遍里轮到过的动作不再发，重新放到某处就是新的一遍', () => {
+  const opened = withCues(project(), [{ id: 'x', atMs: 1000, actions: [pressed('x-on', 64)] }, { id: 'y', atMs: 1500, actions: [pressed('y-on', 67)] }]);
+
+  it('c：播放中拖回 X 前面再接着放：X 到点再发一次', async () => {
+    const r = actionRig(opened);
+    await r.f.player.play('甲'); await r.run([0, 500, 1000, 1500, 2000]);
+    // The scrub leaves it paused there (no press while it placed the song); play is pressed after it.
+    await r.f.player.scrub('甲', 500); await r.f.player.resume();
+    await r.run([500, 1000, 1500]);
+    expect(r.port.sent).toEqual([X, Y, X, Y]);
+    expect(r.passes[1]).not.toBe(r.passes[0]);
+  });
+
+  it('d：暂停、拖回 X 前面、继续：X 再发；i：暂停时新的一版把 Y 挪到新位置后面，Y 按新的时间发', async () => {
+    const r = actionRig(opened);
+    await r.f.player.play('甲'); await r.run([0, 500, 1000, 1500, 2000]);
+    await r.f.player.pause();
+    await r.f.player.scrub('甲', 500);
+    r.f.player.updateProject(withCues(opened, [{ id: 'x', atMs: 1000, actions: [pressed('x-on', 64)] }, { id: 'y', atMs: 3000, actions: [pressed('y-on', 67)] }]), 2, 'C:/show/拿着歌时改.tblink');
+    await r.f.player.resume();
+    await r.run([500, 1000, 1500, 2000, 3000]);
+    expect(r.port.sent).toEqual([X, Y, X, Y]);
+  });
+
+  it('e：定位回 X 前面：X 再发', async () => {
+    const r = actionRig(opened);
+    await r.f.player.play('甲'); await r.run([0, 500, 1000, 1500, 2000]);
+    await r.f.player.seek(500); await r.f.settle();
+    await r.run([500, 1000]);
+    expect(r.port.sent).toEqual([X, Y, X]);
+  });
+
+  it('f：定位回去时动作 MIDI 没准备成，暂停再继续：X 再发', async () => {
+    const r = actionRig(opened);
+    await r.f.player.play('甲'); await r.run([0, 500, 1000, 1500, 2000]);
+    r.failNextPrepare();
+    await r.f.player.seek(500); await r.f.settle();
+    await r.f.player.pause();
+    await r.f.player.resume();
+    await r.run([500, 1000]);
+    expect(r.port.sent).toEqual([X, Y, X]);
+  });
+
+  it('g：暂停继续两次：X 一直不再发', async () => {
+    const r = actionRig(opened);
+    await r.f.player.play('甲'); await r.run([0, 500, 1000, 1200]);
+    for (let round = 0; round < 2; round++) {
+      await r.f.player.pause();
+      r.f.player.updateProject(withCues(opened, [{ id: 'x', atMs: 2500 + round * 1000, actions: [pressed('x-on', 64)] },
+        { id: 'y', atMs: 1500, actions: [pressed('y-on', 67)] }]), round + 2, 'C:/show/拿着歌时改.tblink');
+      await r.f.player.resume();
+    }
+    await r.run([1300, 1500, 2500, 3500, 4000]);
+    expect(r.port.sent).toEqual([X, Y]);
+  });
+
+  it('排不出来的一版（Cue 在不存在的图层上）：播放器当场拒绝，暂停中也一样，这首歌照原来的动作发', async () => {
+    const retarget = vi.fn<NonNullable<InternalPlayerDependencies['retargetActions']>>();
+    const f = program(opened, { retargetActions: retarget });
+    await f.player.play('甲'); await f.player.pause();
+    const broken: LinkProject = edited(opened, '甲', item => ({ ...item, cues: item.cues.map(cue => ({ ...cue, layerId: 'gone' })) }));
+    f.player.updateProject(broken, 2, 'C:/show/拿着歌时改.tblink');
+    expect(retarget).not.toHaveBeenCalled();
+    expect(f.player.actionsProject()).toBe(opened);
+    expect(f.state().notice).toContain('这次修改的 MIDI 动作没能用上');
+  });
+
+  it('h：循环：每一遍 X 都发', async () => {
+    const r = actionRig(edited(opened, '甲', withPlayback({ endAction: 'loop' })));
+    await r.f.player.play('甲'); await r.run([0, 500, 1000, 1500, 2000]);
+    await r.f.ended(); await r.f.settle();
+    await r.run([0, 500, 1000, 1500]);
+    expect(r.port.sent).toEqual([X, Y, X, Y]);
+  });
+});
+
+describe('S8b：下一首准备不了，同一首在播的歌只说一次', () => {
+  it('下一首的播放范围不对、准备不了：连改十次也只提示、只记一次', async () => {
+    // Its range ends before it starts (an older file, or an edit the store did not check): it cannot be prepared ahead.
+    const opened = edited(project(), '乙', withPlayback({ startMs: 9000, endMs: 3000 }));
+    const f = program(opened);
+    await f.player.play('甲');
+    let version = opened;
+    for (let edit = 1; edit <= 10; edit++) {
+      version = edited(version, '丙', item => ({ ...item, title: `改了 ${edit}` }));
+      f.player.updateProject(version, edit + 1, 'C:/show/拿着歌时改.tblink');
+      await f.settle();
+      // A seek of the held song clears the player's notice halfway: still the same song held, so not said again.
+      if (edit === 5) { await f.player.seek(500); await f.settle(); expect(f.state().notice ?? '').not.toContain('下一个节目'); }
+    }
+    const said = f.notice.mock.calls.filter(([message]) => message.includes('下一个节目'));
+    expect(said.length).toBeGreaterThan(0); expect(said.length).toBeLessThanOrEqual(2);
+    expect(new Set(said.map(([message]) => message)).size).toBe(said.length);
   });
 });
