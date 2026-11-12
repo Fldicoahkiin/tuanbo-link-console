@@ -116,7 +116,11 @@ export class P1PictureOutput implements P1FollowOutputs {
 
   reconcileAt(clock: ProgramClock, playsOn: boolean): void {
     const song = this.song;
-    if (!song || song.sessionId !== clock.sessionId) return;
+    if (!song || song.sessionId !== clock.sessionId) {
+      // A resync of a song not begun yet (frozen while still waiting): placed once at this position, as any resync.
+      if (!playsOn) this.begin(clock, clock.positionMs, clock);
+      return;
+    }
     if (song.phase === 'none' || playsOn && song.phase === 'off') { this.resume(song, clock); this.forward(song, clock); return; }
     if (!playsOn) { this.begin(clock, clock.positionMs, clock); return; }
     // The same pass: the clips go on from where they paused, put where the music is now.

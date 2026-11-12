@@ -85,9 +85,13 @@ describe('P1 跟随的动作 MIDI · 对共用宿主的调用顺序（P3d）', (
     expect(f.now()).toMatchObject({ generation: 3, status: 'ready', positionMs: 4_000 });
     await f.ready();
     expect(f.calls.at(-1)).toBe('observe:running@4200');
-    // Another session's reconcile is not this song's.
-    f.output.reconcileAt(clock('running', 1, 9, 'other'), false);
+    // Going on from where it stopped is only ever this song's; a resync of another session (rearmed, then frozen while
+    // still waiting) begins that one here, a new pass.
+    f.output.reconcileAt(clock('running', 1, 9, 'other'), true);
     expect(f.host.prepare).toHaveBeenCalledTimes(3);
+    f.output.reconcileAt(clock('running', 5_000, 9, 'other'), false);
+    expect(f.calls.at(-1)).toBe('prepare:g9:p3:plain');
+    expect(f.now()).toMatchObject({ generation: 9, status: 'ready', positionMs: 5_000 });
   });
 
   it('stopped：宿主放开这首；换歌（手动从头待命不发 stopped）时新的 ready 直接准备，宿主自己先放开上一首', async () => {
@@ -265,6 +269,24 @@ describe('P1 跟随的动作 MIDI · 经共用宿主实际发出去的（P3d）'
     f.follow.resync();
     await f.play(100, 30, back.endMs);
     await vi.waitFor(() => expect(f.sent()).toEqual([[0x90, 60, 100], [0xc0, 3]]));
+    await f.host.stop();
+  });
+
+  it('手动：待命时 P1 已经放过开头（还在等就冻结了），重同步在宿主上从这个位置开始这首；之前的动作一条不补', async () => {
+    const f = live('manual');
+    f.follow.arm('song');
+    // P1 is at 2.33 s when armed, past the Note On at 0 and the PC at 60: frozen while still waiting, the host holds nothing.
+    const waited = await f.play(70, 20, 1_000);
+    expect(f.follow.view).toMatchObject({ phase: 'frozen', cause: 'not-from-start' });
+    expect(f.host.status).toBeNull();
+    f.follow.resync();
+    await f.play(90, 40, waited.endMs);
+    await vi.waitFor(() => expect(f.sent()).toEqual([[0xc0, 3]]));
+    expect(f.host.status?.state).toBe('running');
+    expect(f.ports.prepare).toHaveBeenCalledTimes(1);
+    expect(f.faults).toEqual([]); expect(f.errors).toEqual([]);
+    // Not the start of a follow: no opening catch-up line.
+    expect(f.logs).toEqual([]);
     await f.host.stop();
   });
 

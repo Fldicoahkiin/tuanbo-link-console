@@ -746,3 +746,86 @@ function feed(session: P1FollowSession, fromFrame: number, frames: number, start
   }
   return startMs + frames * FRAME_MS;
 }
+
+/*
+ * A freeze while still waiting (review, 2026-11-12): in manual mode the follow was armed when P1 was already past the
+ * song's head, or P1's first timecode had another frame rate. No song was held; the operator's resync begins it at
+ * P1's position, as the resync of a held song places it: the console is told it runs this song (a stop switches it
+ * off), the action MIDI goes on from here, the picture is placed once at this position; nothing of the past is sent.
+ */
+describe('P1 跟随规则 · 还在待命就冻结了，重同步从 P1 此刻的位置开始这首歌（AGENTS §4.9，2026-11-12）', () => {
+  it('不是从开头开始：动作 MIDI 只发此刻之后的，过去的一条不补；控台从此跑这首，停止关这首的灯', async () => {
+    const project = midiProject();
+    const out = midiOutput(project, 'live');
+    const lit = lightsOn({ song: ['1.1', '1.2'] });
+    const follow = new P1FollowSession(project, 'manual', { outputs: out.outputs, prepare: () => undefined, lights: lit.lights });
+    follow.arm('song');
+    // P1 is at 2.2 s when armed, past the opening Note On, the CC at 15 and the Note On at 45; it goes on past 75.
+    const waited = playFollow(follow, 66, 20, 1_000);
+    await out.settled();
+    expect(follow.view).toMatchObject({ phase: 'frozen', cause: 'not-from-start' });
+    expect(out.sent).toEqual([]);
+    expect(lit.calls).toEqual([]);
+    follow.resync();
+    playFollow(follow, 86, 30, waited.endMs);
+    await out.settled();
+    expect(follow.view).toMatchObject({ phase: 'running', itemId: 'song' });
+    expect(out.sent.map(entry => entry.bytes)).toEqual([BYTES.go]);
+    expect(out.problems).toEqual([]);
+    expect(lit.calls).toEqual(['change null→song']);
+    follow.stop('stop');
+    expect(lit.calls).toEqual(['change null→song', 'stop song']);
+    expect(lit.offs).toEqual([['1.1', '1.2']]);
+  });
+
+  it('帧率不一致：P1 改对帧率以后重同步，和不是从开头开始一样从此刻开始；之前收到的位置一个不补', async () => {
+    const project = midiProject();
+    const out = midiOutput(project, 'live');
+    const lit = lightsOn({ song: ['1.1'] });
+    const follow = new P1FollowSession(project, 'manual', { outputs: out.outputs, prepare: () => undefined, lights: lit.lights });
+    follow.arm('song');
+    // P1 sends 25 fps from the head: frozen at once, nothing of the song's opening goes out.
+    const wrong = playAtRate(follow, 0, 10, 1_000, '25');
+    expect(follow.view).toMatchObject({ phase: 'frozen', cause: 'frame-rate' });
+    expect(() => { follow.resync(); }).toThrow(/帧率不一致/);
+    // P1 is set to 30 fps and goes on from 2.2 s; the operator resyncs there.
+    const back = playFollow(follow, 66, 20, wrong.endMs + 200);
+    follow.resync();
+    playFollow(follow, 86, 30, back.endMs);
+    await out.settled();
+    expect(follow.view).toMatchObject({ phase: 'running', itemId: 'song' });
+    expect(out.sent.map(entry => entry.bytes)).toEqual([BYTES.go]);
+    expect(out.problems).toEqual([]);
+    expect(lit.calls).toEqual(['change null→song']);
+    follow.stop('stop');
+    expect(lit.offs).toEqual([['1.1']]);
+  });
+
+  it('画面：此刻的机位出现在 OBS，过去的机位和点动作（2 秒的滤镜）不补，后面的照切', async () => {
+    const project = pictureProject();
+    const out = pictureOutput(project, 'manual');
+    const follow = new P1FollowSession(project, 'manual', { outputs: out.outputs, prepare: () => undefined, lights: NO_LIGHTS });
+    follow.arm('song');
+    const waited = playFollow(follow, 66, 10, 1_000);
+    await out.settled();
+    expect(out.sent).toEqual([]);
+    follow.resync();
+    playFollow(follow, 76, 30, waited.endMs);
+    await out.settled();
+    // 中景 is on air at 2.2 s: placed at the position resynced and once more as it joins where P1 is (the host's late
+    // rejoin), as the resync of a held song; never 全景, 特写 or the filter of 2 s; then 远景 at 3 s.
+    expect(out.sent).toEqual(['切到中景', '切到中景', '切到远景']);
+    expect(out.faults).toEqual([]);
+  });
+});
+
+/** `playFollow` at another MTC frame rate (the rate bits of the last piece): P1 set to a rate the project does not have. */
+function playAtRate(follow: P1FollowSession, fromFrame: number, frames: number, startMs: number, rate: '25'): { endMs: number } {
+  const frameMs = 1000 / 25;
+  for (let offset = 0; offset < frames; offset += 2) {
+    const tc = frameNumberToTimecode(fromFrame + offset, rate);
+    const pieces = [tc.frames & 15, tc.frames >> 4, tc.seconds & 15, tc.seconds >> 4, tc.minutes & 15, tc.minutes >> 4, tc.hours & 15, (tc.hours >> 4) | (1 << 1)];
+    for (const [type, value] of pieces.entries()) follow.message([0xf1, (type << 4) | value], at(startMs + (offset + type / 4) * frameMs));
+  }
+  return { endMs: startMs + frames * frameMs };
+}

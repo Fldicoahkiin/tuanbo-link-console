@@ -205,6 +205,27 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     expect([manual.held, manual.released]).toEqual([['song:dance'], ['song']]);
   });
 
+  it('手动：待命时 P1 已经放过开头（还在等就冻结了），重同步在这个位置开始这首的画面：此刻的机位和素材上 OBS，过去的点动作不补', async () => {
+    const f = fixture({ mode: 'manual' });
+    // Armed (made ready at the head, as the follow asks), but P1 was already in the song: no `ready`, nothing held.
+    f.picture.expect('song'); await settle();
+    expect(f.picture.state).toBeNull();
+    // Going on from where it stopped is never the start of a song: a song not held stays so.
+    f.picture.reconcileAt(f.clock('running', 2600, 2), true); await settle();
+    expect(f.picture.state).toBeNull();
+    f.picture.reconcileAt(f.clock('running', 2600, 2), false); await settle();
+    await f.play(2650, 3500, 2);
+    // Camera B of 2.6 s (placed there, and once more as it joins where P1 is: the late rejoin), never camera A, never B's
+    // filter of 2 s; the video under B comes on at 3 s as the timeline goes.
+    expect(f.sent).toEqual(['切到机位B', '切到机位B', 'media:start:dance']);
+    expect(f.picture.state).toMatchObject({ itemId: 'song', state: 'running', fault: null });
+    // What was made ready at the head is not for 2.6 s: let go once, the song's own made where P1 is, without the music.
+    expect(f.made.map(entry => entry.music)).toEqual([false, false]);
+    expect(f.released).toEqual(['song']);
+    expect(f.logs).toHaveLength(1);
+    expect(f.logs[0]).toMatch(/^info:「歌」的画面已提前准备好，用了 \d+ 毫秒$/);
+  });
+
   it('停下和换歌：上一首留在最后一帧，下一首的画面上了才撤；跟随关掉时放开，和关掉节目一样', async () => {
     const f = fixture();
     f.picture.observe(f.clock('ready', 0));

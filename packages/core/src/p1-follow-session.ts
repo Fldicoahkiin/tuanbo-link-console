@@ -26,7 +26,9 @@ import type { ProgramClock } from './program-clock';
  * - `hold`: the timecode froze (lost, jumped): automatic Cues stop where they are; nothing between is sent later.
  * - `reconcileAt`: the follow goes on at this position after a freeze (manual resync, or P1 going on from where it
  *   stopped): from here on, nothing passed is sent later. `playsOn`: P1 went on from where it stopped (auto), the same
- *   pass of the song: what was handled before is not handled again; false after a resync, a new pass from here.
+ *   pass of the song: what was handled before is not handled again; false after a resync, a new pass from here. A
+ *   resync of a song the output holds nothing of (frozen while still waiting: armed when P1 was already in the song)
+ *   begins that song here, as the resync of a held song places it: nothing of the past is sent.
  * - `expect`: the song P1 is expected to play from its head next (manual: the armed one; auto: the next in rundown order
  *   it could start); null: none any more (0.5.9, the picture made ready ahead). Never an order: an output may get ready
  *   whatever of that song cannot be seen or heard, and a wrong guess costs nothing. Optional: an output with nothing to
@@ -265,8 +267,10 @@ export class P1FollowSession {
   }
 
   /** Resynced (manual) or resumed (auto): the follow goes on here, past Cues are not sent later (CueRuntime `resync`
-   * marks them missed; `resumeP1` takes only fps/4 frames). */
+   * marks them missed; `resumeP1` takes only fps/4 frames). A resync after a freeze while still waiting holds no song
+   * yet: the song begins here, and the console runs its lighting from P1's timecode from now on. */
   private goOn(clock: P1ClockObservation, playsOn: boolean): void {
+    if (!playsOn && this.held?.sessionId !== clock.sessionId && this.lit !== clock.itemId) this.light(clock.itemId);
     this.held = clock;
     this.dependencies.outputs.reconcileAt(clock, playsOn);
     this.phase = 'running'; this.cause = null; this.reason = null;

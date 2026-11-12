@@ -69,7 +69,11 @@ export class P1MidiOutput implements P1FollowOutputs {
 
   reconcileAt(clock: ProgramClock, playsOn: boolean): void {
     const song = this.song;
-    if (!song || song.sessionId !== clock.sessionId) return;
+    if (!song || song.sessionId !== clock.sessionId) {
+      // A resync of a song not begun yet (frozen while still waiting): it begins here, nothing of the past sent.
+      if (!playsOn) this.begin(clock, clock.positionMs, ++this.passes, false);
+      return;
+    }
     const fromMs = playsOn ? Math.min(song.latest?.positionMs ?? song.fromMs, clock.positionMs) : clock.positionMs;
     this.begin(clock, fromMs, playsOn ? song.pass : ++this.passes, false);
   }

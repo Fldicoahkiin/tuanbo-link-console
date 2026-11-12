@@ -68,7 +68,18 @@ describe('P1 跟随会话 · 手动模式（协调器 armFromStart / resyncCurre
     expect(f.calls).toEqual([]);
     expect(f.session.view).toMatchObject({ phase: 'frozen', cause: 'not-from-start', reason: 'MTC 不是从节目开头开始的' });
     f.session.resync();
-    expect(f.shape()).toEqual(['reconcileAt:running']);
+    // The song begins where P1 is: the outputs are placed there (no head-to-here catch-up), the console runs its lights.
+    expect(f.calls).toEqual([{ kind: 'reconcileAt', playsOn: false, clock: expect.objectContaining({ state: 'running', itemId: 'song' }) as ProgramClock }]);
+    const resynced = f.calls[0]?.kind === 'reconcileAt' ? f.calls[0].clock : null;
+    expect(resynced?.positionMs).toBeGreaterThanOrEqual(10_000);
+    expect(f.lights).toEqual(['change:->song']);
+    expect(f.session.view).toMatchObject({ phase: 'running', itemId: 'song' });
+    // Then on as for any song held: positions go to the outputs, a stop switches its lights off.
+    play(f.session, 10 * FPS + 30, 30, 2_100);
+    expect(f.shape().slice(1).length).toBeGreaterThan(0);
+    expect(f.shape().slice(1).every(kind => kind === 'observe:running')).toBe(true);
+    f.session.stop('stop');
+    expect(f.lights).toEqual(['change:->song', 'stop:song']);
   });
 
   it('从头重新待命：输出不清（界面只忘掉执行过的），新的一轮在开头重新准备', () => {
