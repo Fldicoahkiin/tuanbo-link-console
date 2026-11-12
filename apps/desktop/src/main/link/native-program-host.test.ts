@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import ffmpeg from 'ffmpeg-static';
-import { emptyInternalPlayerState, type InternalPlayerState } from '@tb/core/link';
+import { clockFromNativeStatus, emptyInternalPlayerState, type InternalPlayerState } from '@tb/core/link';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
 import { NativeAudioCache } from './native-audio-cache';
 import { NativePlayerService } from './native-player-service';
@@ -34,7 +34,7 @@ windowsTest('正式后台宿主使用真实 WASAPI 换歌、暂停恢复；空�
   const executable = resolve(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? 'tools/playback-engine/bin/tblink-playback.exe');
   const service = new NativePlayerService({ executable, cache: new NativeAudioCache(join(directory, 'cache'), ffmpeg), resolveAudio: () => path,
     checkDeviceHealth: async () => { expect(await probeWindowsMidi(resolve('tools/midi-probe/bin/tblink-midi-probe.exe'))).toBe('ready'); },
-    changed: (status, qpc) => host?.observe(status, qpc), beforeControl: request => host?.interrupt(request), error: message => errors.push(message),
+    changed: (status, qpc) => host?.observe(status, clockFromNativeStatus(status, qpc)), beforeControl: request => host?.interrupt(request), error: message => errors.push(message),
     preloadError: message => errors.push(message) });
   host = new NativeProgramHost(project, join(directory, 'project.tblink'), 1, {
     executable, audio: () => service.status, midiOutputs: async () => (await service.devices('all', true)).midiOutputs, authorize: () => Promise.resolve(), preciseSeeking: () => false,
@@ -81,7 +81,7 @@ windowsTest('44.1kHz 真实引擎曲尾不在整采样上时，灯光按引擎�
   const executable = resolve(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? 'tools/playback-engine/bin/tblink-playback.exe');
   const service = new NativePlayerService({ executable, cache: new NativeAudioCache(join(directory, 'cache'), ffmpeg), resolveAudio: () => path,
     checkDeviceHealth: () => Promise.resolve(),
-    changed: (status, qpc) => host?.observe(status, qpc), beforeControl: request => host?.interrupt(request), error: message => errors.push(message),
+    changed: (status, qpc) => host?.observe(status, clockFromNativeStatus(status, qpc)), beforeControl: request => host?.interrupt(request), error: message => errors.push(message),
     preloadError: message => errors.push(message) });
   host = new NativeProgramHost(project, join(directory, 'project.tblink'), 1, {
     executable, audio: () => service.status, midiOutputs: async () => (await service.devices('all', true)).midiOutputs, authorize: () => Promise.resolve(), preciseSeeking: () => false,

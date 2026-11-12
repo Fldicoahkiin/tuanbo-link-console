@@ -61,6 +61,7 @@ export * from './output-recovery';
 export * from './program-player';
 export * from './midi-program';
 export * from './midi-late-rule';
+export * from './program-clock';
 export * from './lighting-off-ledger';
 export * from './live-revision-effect';
 export * from './native-program-player';

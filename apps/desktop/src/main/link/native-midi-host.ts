@@ -1,4 +1,4 @@
-import { MidiProgramSession } from '@tb/core/link';
+import { MidiProgramSession, type ProgramClock } from '@tb/core/link';
 import type { IntegrationProfile, LinkProject, NativePlayerControl, NativePlayerStatus } from '@tb/schema';
 import { NativeMidiPorts } from './native-midi-ports';
 import { MidiOutputFailure } from './native-midi-output';
@@ -116,26 +116,26 @@ export class NativeMidiHost {
     }
   }
 
-  observe(audio: NativePlayerStatus, qpc100ns: string | null): void {
+  observe(clock: ProgramClock): void {
     const entry = this.entry;
     if (!entry || entry.state.state === 'stopped' || entry.state.state === 'failed') return;
-    if (audio.sessionId !== entry.identity.sessionId || audio.itemId !== entry.identity.itemId) {
+    if (clock.sessionId !== entry.identity.sessionId || clock.itemId !== entry.identity.itemId) {
       const current = this.dependencies.audio();
       if (current?.sessionId === entry.identity.sessionId && current.itemId === entry.identity.itemId) return;
       this.stopReported(); return;
     }
-    if (audio.generation < entry.state.generation) return;
-    if (audio.status === 'error' || audio.audioError || audio.status === 'stopped' || audio.status === 'preparing') { this.stopReported(); return; }
+    if (clock.generation < entry.state.generation) return;
+    if (clock.state === 'stopped') { this.stopReported(); return; }
     if (entry.state.state === 'preparing') {
-      if (!entry.resumed && (audio.generation !== entry.identity.generation || !['ready', 'paused'].includes(audio.status))) {
+      if (!entry.resumed && (clock.generation !== entry.identity.generation || !['ready', 'held'].includes(clock.state))) {
         entry.session.abort('MIDI 还没准备好音频就变了，这一首不发 MIDI，也不会中途补发');
       }
       return;
     }
-    if (audio.generation > entry.state.generation) this.patch({ generation: audio.generation });
-    if (audio.status === 'paused') { if (entry.state.state === 'running') this.stopReported(); return; }
-    if (audio.status !== 'playing' && audio.status !== 'ended' || !qpc100ns || qpc100ns === '0') return;
-    entry.session.clock(audio.positionMs, Number(qpc100ns) / 10000);
+    if (clock.generation > entry.state.generation) this.patch({ generation: clock.generation });
+    if (clock.state === 'held') { if (entry.state.state === 'running') this.stopReported(); return; }
+    if (clock.state !== 'running' && clock.state !== 'ended' || clock.observedAtMs === null) return;
+    entry.session.clock(clock.positionMs, clock.observedAtMs);
     if (!entry.session.error && entry.state.state !== 'running') this.patch({ state: 'running' });
   }
 

@@ -1,5 +1,5 @@
 import { ObsPictureLeftover, ObsProgramSession, obsRecoveryText, OUTPUT_RECOVERY_RULES, OutputRecovery, pictureCleanupReason, pictureErrorDetail, projectFromObsSnapshot,
-  type ObsProgramSessionDependencies } from '@tb/core/link';
+  type ObsProgramSessionDependencies, type ProgramClock } from '@tb/core/link';
 import { nativeObsPrepareSchema, type LinkProject, nativeObsStopSchema, nativeObsStatusSchema, type NativeObsPrepare, type NativeObsStop, type NativeObsStatus, type NativePlayerStatus, type NativePlayerControl, type ObsPictureItem } from '@tb/schema';
 import { ObsPreparationCancelled } from './native-obs-outputs';
 
@@ -296,52 +296,52 @@ export class NativeObsHost {
   }
 
   /** Only NativePlayerService's locally validated observations may call this. */
-  observe(audio: NativePlayerStatus, qpc100ns: string | null = null): void {
+  observe(clock: ProgramClock): void {
     const entry = this.entry;
     if (!entry || entry.state.state === 'failed' || entry.state.state === 'stopped') return;
-    if (audio.sessionId !== entry.request.sessionId || audio.itemId !== entry.request.snapshot.item.id) {
+    if (clock.sessionId !== entry.request.sessionId || clock.itemId !== entry.request.snapshot.item.id) {
       // A stale message from an old player must never stop or advance a new one.
       const current = this.dependencies.audio();
       if (current?.sessionId === entry.request.sessionId && current.itemId === entry.request.snapshot.item.id) return;
       void this.stop().catch(error => this.dependencies.error(String(error))); return;
     }
-    if (audio.generation < entry.state.generation) return;
-    if (audio.status === 'preparing' || audio.status === 'stopped' || audio.status === 'error' || audio.audioError) {
+    if (clock.generation < entry.state.generation) return;
+    if (clock.state === 'stopped') {
       void this.stop().catch(error => this.dependencies.error(String(error))); return;
     }
     if (entry.awaitingPause) {
-      if (audio.status !== 'paused') return;
+      if (clock.state !== 'held') return;
       entry.awaitingPause = false;
     }
     if (entry.state.state === 'preparing') {
       // The music started before the picture was ready (design 01 §3.2 row 13): it joins at the current position once
       // it is prepared. A seek or stop meanwhile stops it (`interrupt`), and the program prepares it again there.
-      if (audio.status === 'playing') entry.rejoin ??= { restore: NOTHING, late: true };
+      if (clock.state === 'running') entry.rejoin ??= { restore: NOTHING, late: true };
       return;
     }
     if (entry.lost) {
       // No picture until OBS is back; the song goes on and the status follows it.
-      if (audio.status === 'playing' || audio.status === 'ended') this.patch({ state: 'running', generation: audio.generation, positionMs: audio.positionMs, pendingCount: 0 });
-      else if (audio.status === 'paused') this.patch({ state: 'paused', generation: audio.generation, positionMs: audio.positionMs });
+      if (clock.state === 'running' || clock.state === 'ended') this.patch({ state: 'running', generation: clock.generation, positionMs: clock.positionMs, pendingCount: 0 });
+      else if (clock.state === 'held') this.patch({ state: 'paused', generation: clock.generation, positionMs: clock.positionMs });
       return;
     }
-    if (audio.status === 'playing' || audio.status === 'ended') {
+    if (clock.state === 'running' || clock.state === 'ended') {
       // Status-only changes (volume/MIDI/transport admission) are not device
       // observations. A final position is delivered once, not replayed forever.
-      if (qpc100ns === null || qpc100ns === '0' || entry.ended) return;
+      if (clock.observedAtMs === null || entry.ended) return;
       // Windows libuv hrtime and IAudioClock's QPC use the same machine counter.
       // Preserve its age through pipe batching instead of restarting the deadline
       // at receive time. No wall clock or renderer clock participates here.
-      const ageMs = Number(process.hrtime.bigint() - BigInt(qpc100ns) * 100n) / 1e6;
+      const ageMs = Number(process.hrtime.bigint()) / 1e6 - clock.observedAtMs;
       // Prepared where the music no longer was: it starts where the music is now, and the picture is rebuilt there.
-      const rejoin = audio.status === 'playing' ? entry.rejoin : null;
+      const rejoin = clock.state === 'running' ? entry.rejoin : null;
       if (rejoin) { entry.rejoin = null; entry.session.joinNextClock(); }
-      entry.session.clock(audio.positionMs, entry.now() - ageMs);
-      entry.ended = audio.status === 'ended';
+      entry.session.clock(clock.positionMs, entry.now() - ageMs);
+      entry.ended = clock.state === 'ended';
       if (entry.session.error) { this.fail(entry.session.error.message); return; }
-      this.patch({ state: 'running', generation: audio.generation, positionMs: audio.positionMs, pendingCount: entry.session.pendingCount, nextCueId: entry.session.nextCueId });
+      this.patch({ state: 'running', generation: clock.generation, positionMs: clock.positionMs, pendingCount: entry.session.pendingCount, nextCueId: entry.session.nextCueId });
       if (rejoin) void this.rebuild(entry, rejoin.restore, rejoin.late);
-      if (!entry.filesStarted && audio.status === 'playing' && entry.request.nextFiles && this.dependencies.prepareNextFiles) {
+      if (!entry.filesStarted && clock.state === 'running' && entry.request.nextFiles && this.dependencies.prepareNextFiles) {
         entry.filesStarted = true;
         // This song stopping or ending cancels it, which is not a failure. Any other failure is logged once, also one
         // that ends after this song stopped and before the next song took it over (2026-11-09).
@@ -351,8 +351,8 @@ export class NativeObsHost {
           if (!(error instanceof ObsPreparationCancelled)) this.dependencies.error(`准备下一个节目的文件失败：${error instanceof Error ? error.message : String(error)}`);
         });
       }
-    } else if (audio.status === 'paused' && entry.state.state !== 'paused') {
-      this.patch({ state: 'paused', generation: audio.generation, positionMs: audio.positionMs });
+    } else if (clock.state === 'held' && entry.state.state !== 'paused') {
+      this.patch({ state: 'paused', generation: clock.generation, positionMs: clock.positionMs });
       void entry.session.pause().catch(error => { if (this.entry === entry) this.fail(String(error)); });
     }
   }

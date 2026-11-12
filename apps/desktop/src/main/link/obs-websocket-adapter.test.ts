@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { OBSWebSocket } from 'obs-websocket-js';
 import { describe, expect, it } from 'vitest';
-import { createObsProgramSnapshot, type LinkDesktopApi } from '@tb/core/link';
+import { clockFromNativeStatus, createObsProgramSnapshot, type LinkDesktopApi } from '@tb/core/link';
 import { createEmptyLinkProject, parseLinkProject, type NativePlayerStatus } from '@tb/schema';
 import { ObsWebSocketAdapter } from './obs-websocket-adapter';
 import { NativeObsHost } from './native-obs-host';
@@ -1038,7 +1038,7 @@ async function stickerSongOnAir(adapter: ObsWebSocketAdapter) {
     play: async (fromMs: number, throughMs: number): Promise<void> => {
       for (let position = fromMs; position <= throughMs; position += 100) {
         now = position; audio = { ...audio, positionMs: position };
-        host.observe(audio, (process.hrtime.bigint() / 100n).toString());
+        host.observe(clockFromNativeStatus(audio, (process.hrtime.bigint() / 100n).toString()));
         await new Promise(resolve => { setImmediate(resolve); });
       }
     },

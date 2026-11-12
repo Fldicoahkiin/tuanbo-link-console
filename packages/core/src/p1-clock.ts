@@ -1,6 +1,7 @@
 import type { LinkProject } from '@tb/schema';
 import { MtcQuarterFrameDecoder, nominalFramesPerSecond, playbackFramesPerSecond, type MtcSample } from './mtc-timecode';
 import { locateP1Sample, validateP1TimecodeRanges } from './p1-auto-follow';
+import type { ProgramClock } from './program-clock';
 
 /*
  * The one place that decides, for P1 follow, whether the timecode is running, lost, jumped or
@@ -28,23 +29,12 @@ export type P1FollowMode = 'manual' | 'auto';
 export type P1FreezeCause = 'lost' | 'jump' | 'unknown-range' | 'not-from-start' | 'frame-rate';
 
 /**
- * What P1 is doing, field for field the `ProgramClock` of design 03 §4.1.1 with `source: 'p1'`.
- * That type lands with step P1 in `program-clock.ts`; this one is replaced by it then.
+ * What P1 is doing while it runs: a `ProgramClock` (design 03 §4.1.1) from P1, always running and always observed at
+ * the interface time (ms) of the quarter frame that completed this position. Auto-follow subtracts the song's P1 range
+ * start, manual follows MTC as is. A session is one follow of one song (a new arm, a new song in auto-follow, or a
+ * rearm from the start); the generation goes up on every new session, resume and resync.
  */
-export type P1ClockObservation = {
-  source: 'p1';
-  /** One follow of one song: a new arm, a new song in auto-follow, or a rearm from the start. */
-  sessionId: string;
-  /** Goes up on every new session, resume and resync; outputs drop work from an older one. */
-  generation: number;
-  itemId: string;
-  state: 'running';
-  /** Position inside the song: auto-follow subtracts the song's P1 range start, manual follows MTC as is. */
-  positionMs: number;
-  /** Interface time (ms) of the quarter frame that completed this position. */
-  observedAtMs: number;
-  reason: null;
-};
+export type P1ClockObservation = ProgramClock & { source: 'p1'; state: 'running'; observedAtMs: number; reason: null };
 
 export type P1FollowState =
   | { phase: 'idle' }

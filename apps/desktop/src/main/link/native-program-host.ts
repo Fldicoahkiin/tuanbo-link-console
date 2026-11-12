@@ -1,4 +1,4 @@
-import { NativeProgramPlayer, type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type ProgramLightingOutput } from '@tb/core/link';
+import { NativeProgramPlayer, type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type ProgramClock, type ProgramLightingOutput } from '@tb/core/link';
 import type { LinkProject, NativePlayerControl, NativePlayerStatus } from '@tb/schema';
 import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
 import type { MidiClaim, MidiClaimOwner } from './midi-port-broker';
@@ -82,9 +82,10 @@ export class NativeProgramHost {
     }, dependencies.lighting);
   }
 
-  observe(status: NativePlayerStatus, qpc100ns: string | null): void {
+  /** `status` feeds this host's own player; the outputs read only `clock`, made from it (`clockFromNativeStatus`). */
+  observe(status: NativePlayerStatus, clock: ProgramClock): void {
     if (this.disposed) return;
-    this.midi.observe(status, qpc100ns);
+    this.midi.observe(clock);
     for (const listener of this.listeners) listener(status);
   }
 

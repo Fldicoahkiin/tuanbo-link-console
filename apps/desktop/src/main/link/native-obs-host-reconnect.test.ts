@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { createObsProgramSnapshot, type LinkDesktopApi } from '@tb/core/link';
+import { clockFromNativeStatus, createObsProgramSnapshot, type LinkDesktopApi } from '@tb/core/link';
 import { createEmptyLinkProject, parseLinkProject, type LinkAction, type NativePlayerStatus, type NativeObsPrepare } from '@tb/schema';
 import { NativeObsHost } from './native-obs-host';
 
@@ -34,7 +34,7 @@ function setup() {
       now: () => now, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now }) }) });
   const observe = (patch: Partial<NativePlayerStatus>, time: number): void => {
-    now = time; audio = { ...audio, ...patch }; host.observe(audio, (process.hrtime.bigint() / 100n).toString());
+    now = time; audio = { ...audio, ...patch }; host.observe(clockFromNativeStatus(audio, (process.hrtime.bigint() / 100n).toString()));
   };
   const control = (kind: 'play' | 'pause', generation: number): void => host.interrupt({ version: 1, sessionId: audio.sessionId, generation, kind });
   /** Plays 0 → 1450 ms; OBS drops at 500 ms, so the 1 s switch to 机位1 fails in red. */

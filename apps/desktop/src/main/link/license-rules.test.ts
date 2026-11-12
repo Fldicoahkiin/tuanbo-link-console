@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type LicenseStatus, type Ma2NetworkStatus, type Ma2PlaybackAction,
   type Ma2PlaybackRequest, type NativeObsPrepare, type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativeProgramOpen } from '@tb/schema';
-import { emptyInternalPlayerState, midiMessageNeedsLicense, type PlaybackBoundary } from '@tb/core/link';
+import { clockFromNativeStatus, emptyInternalPlayerState, midiMessageNeedsLicense, type PlaybackBoundary } from '@tb/core/link';
 import { LicenseAccess, needsProductLicense } from './license-access';
 import { NativeProgramService } from './native-program-service';
 import { NativeProgramHost } from './native-program-host';
@@ -255,7 +255,7 @@ async function programHost(endAction: 'pause' | 'stop' = 'pause') {
     player: () => hosts.at(-1)!.controller,
     play: (itemId: string) => service.control({ version: 1, ownerId: first.ownerId, operation: { kind: 'play', itemId } }),
     /** The playback engine reports the end of the song. */
-    ended: () => hosts.at(-1)!.observe({ ...audio!, status: 'ended', positionMs: 9000 }, null),
+    ended: () => { const status: NativePlayerStatus = { ...audio!, status: 'ended', positionMs: 9000 }; hosts.at(-1)!.observe(status, clockFromNativeStatus(status, null)); },
     /** Audio preparation waits until the returned function is called. */
     hold: () => { let release!: () => void; held = new Promise<void>(resolve => { release = resolve; }); return () => { held = null; release(); }; },
     lapse: (next: LicenseStatus) => { license = next; } };

@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { createObsProgramSnapshot, emptyInternalPlayerState, NativeProgramPlayer, ObsPictureLeftover, type InternalPlayerState, type LinkDesktopApi } from '@tb/core/link';
+import { clockFromNativeStatus, createObsProgramSnapshot, emptyInternalPlayerState, NativeProgramPlayer, ObsPictureLeftover, type InternalPlayerState, type LinkDesktopApi } from '@tb/core/link';
 import { createEmptyLinkProject, parseLinkProject, type LinkAction, type NativePlayerControl, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus, type NativeObsStop } from '@tb/schema';
 import { NativeObsHost, type PictureRecoveryLog } from './native-obs-host';
 import { NativeObsRequests } from './native-obs-requests';
@@ -32,7 +32,7 @@ function setup(prepareNextFiles = vi.fn<(request: NativeObsPrepare, assertCurren
       prepareOutputs, releaseOutputs, restoreScenes,
       now: () => now, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now }) }) });
-  const observe = (patch: Partial<NativePlayerStatus>, time: number, ageMs = 0) => { now = time; audio = { ...audio, ...patch }; host.observe(audio, ((process.hrtime.bigint() - BigInt(ageMs) * 1000000n) / 100n).toString()); };
+  const observe = (patch: Partial<NativePlayerStatus>, time: number, ageMs = 0) => { now = time; audio = { ...audio, ...patch }; host.observe(clockFromNativeStatus(audio, ((process.hrtime.bigint() - BigInt(ageMs) * 1000000n) / 100n).toString())); };
   return { host, request, execute, releaseOutputs, restoreScenes, prepareOutputs, recoveries, failures, states, observe, prepareNextFiles, time: (value: number) => { now = value; }, audio: () => audio, change: (patch: Partial<NativePlayerStatus>) => { audio = { ...audio, ...patch }; },
     song: (itemId: string, generation: number): NativeObsPrepare => ({ ...request, generation, snapshot: createObsProgramSnapshot(project, itemId, 4) }) };
 }
@@ -97,7 +97,7 @@ it('跨工程或比当前节目更旧修订的下一节目不能随当前节目�
 
 it('状态更新不能冒充设备采样；旧 QPC 晚到也照样切画面，不漏切，后续新采样继续（2026-11-09）', async () => {
   const test = setup(); await test.host.prepare(test.request);
-  test.change({ status: 'playing', generation: 2 }); test.host.observe(test.audio());
+  test.change({ status: 'playing', generation: 2 }); test.host.observe(clockFromNativeStatus(test.audio(), null));
   await new Promise(resolve => setTimeout(resolve, 0)); expect(test.execute).not.toHaveBeenCalled();
   test.observe({ positionMs: 0 }, 200, 200);
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -143,7 +143,7 @@ it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('真实 WASAPI 管道�
     test.time(performance.now());
     test.change({ status: event.state === 'ended' ? 'ended' : 'playing', generation: 2, positionMs: event.positionMs });
     ages.push(Number(process.hrtime.bigint() - BigInt(event.qpc100ns) * 100n) / 1e6);
-    test.host.observe(test.audio(), event.qpc100ns);
+    test.host.observe(clockFromNativeStatus(test.audio(), event.qpc100ns));
   }, error => audioFailures.push(error.message));
   try {
     await client.start();
@@ -176,7 +176,7 @@ it('只接受当前已准备音频的同会话同代数，歌曲名称不能替�
 
 it('主进程音频观察推进画面；旧会话消息不能扰动当前会话', async () => {
   const test = setup(); await test.host.prepare(test.request);
-  test.host.observe({ ...test.audio(), sessionId: crypto.randomUUID(), status: 'stopped' });
+  test.host.observe(clockFromNativeStatus({ ...test.audio(), sessionId: crypto.randomUUID(), status: 'stopped' }, null));
   expect(test.host.status?.state).toBe('ready');
   for (let time = 0; time <= 1000; time += 50) {
     test.observe({ status: 'playing', positionMs: time, generation: 2 }, time);
@@ -184,7 +184,7 @@ it('主进程音频观察推进画面；旧会话消息不能扰动当前会话'
   }
   expect(test.execute).toHaveBeenCalledTimes(2); expect(test.failures).toEqual([]);
   expect(test.host.status).toMatchObject({ state: 'running', currentCueId: 'cue-1', nextCueId: null });
-  test.host.observe({ ...test.audio(), generation: 1, status: 'stopped' });
+  test.host.observe(clockFromNativeStatus({ ...test.audio(), generation: 1, status: 'stopped' }, null));
   expect(test.host.status?.state).toBe('running');
   await test.host.stop();
 });
@@ -512,7 +512,7 @@ function program(endActionOrOptions: 'next' | 'stop' | ProgramOptions) {
   const emit = (patch: Partial<NativePlayerStatus>): NativePlayerStatus => {
     if (!audio) throw new Error('没有准备音频');
     const status: NativePlayerStatus = { ...audio, ...patch }; audio = status;
-    pictures().observe(status, (process.hrtime.bigint() / 100n).toString());
+    pictures().observe(clockFromNativeStatus(status, (process.hrtime.bigint() / 100n).toString()));
     for (const listener of audioListeners) listener(status);
     return status;
   };
@@ -837,7 +837,7 @@ function lookahead() {
   const host = new NativeObsHost({ audio: () => test.audio(), changed: () => undefined, error: message => failures.push(message),
     outputs: (request, positionMs, assertCurrent) => pool.take(request, positionMs, assertCurrent),
     prepareNextFiles: async (request, assertCurrent) => { await pool.prepareNext(request, assertCurrent); } });
-  const observe = (patch: Partial<NativePlayerStatus>, at: number): void => { time = at; test.change(patch); host.observe(test.audio(), (process.hrtime.bigint() / 100n).toString()); };
+  const observe = (patch: Partial<NativePlayerStatus>, at: number): void => { time = at; test.change(patch); host.observe(clockFromNativeStatus(test.audio(), (process.hrtime.bigint() / 100n).toString())); };
   /** The first song plays while the next one's picture is prepared in the background; then it ends and stops its own picture. */
   const playFirstToEnd = async (): Promise<void> => {
     await host.prepare({ ...test.request, nextFiles: { snapshot: test.song('next', 1).snapshot, positionMs: 0 } });

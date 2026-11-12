@@ -1,6 +1,6 @@
 import type { OBSWebSocket } from 'obs-websocket-js';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createObsProgramSnapshot, ManagedOutputRuntime, ObsProgramSession, projectFromObsSnapshot, SceneOutputTimeline, type LinkDesktopApi, type ManagedMediaOutcome } from '@tb/core/link';
+import { clockFromNativeStatus, createObsProgramSnapshot, ManagedOutputRuntime, ObsProgramSession, projectFromObsSnapshot, SceneOutputTimeline, type LinkDesktopApi, type ManagedMediaOutcome } from '@tb/core/link';
 import { createEmptyLinkProject, parseLinkProject, type NativeObsPrepare, type NativePlayerStatus } from '@tb/schema';
 import { NativeObsHost } from './native-obs-host';
 import { mediaStepOutcome, pictureMediaStep } from './native-obs-outputs';
@@ -128,7 +128,7 @@ function setup() {
   const play = async (): Promise<void> => {
     await host.prepare(request);
     audio = { ...audio, status: 'playing', generation: 2, positionMs: 0 };
-    host.observe(audio, (process.hrtime.bigint() / 100n).toString());
+    host.observe(clockFromNativeStatus(audio, (process.hrtime.bigint() / 100n).toString()));
   };
   return { host, obs, failures, logs, play, audio: () => audio, before: (hook: (label: string) => Promise<void> | null): void => { beforeRequest = hook; } };
 }

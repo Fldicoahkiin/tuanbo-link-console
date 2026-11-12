@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { emptyInternalPlayerState, NativeProgramPlayer, type InternalPlayerState, type LinkDesktopApi } from '@tb/core/link';
+import { clockFromNativeStatus, emptyInternalPlayerState, NativeProgramPlayer, type InternalPlayerState, type LinkDesktopApi } from '@tb/core/link';
 import { createEmptyLinkProject, parseLinkProject, type LinkAction, type NativeObsStatus, type NativePlayerStatus, type NativeProgramOpen } from '@tb/schema';
 import { NativeObsHost } from './native-obs-host';
 import { NativeObsRequests } from './native-obs-requests';
@@ -35,7 +35,7 @@ function rig(execute: (action: LinkAction) => Promise<void>, admit: () => boolea
   const emit = (patch: Partial<NativePlayerStatus>): NativePlayerStatus => {
     if (!audio) throw new Error('没有准备音频');
     const status: NativePlayerStatus = { ...audio, ...patch }; audio = status;
-    host.observe(status, (process.hrtime.bigint() / 100n).toString());
+    host.observe(clockFromNativeStatus(status, (process.hrtime.bigint() / 100n).toString()));
     for (const listener of audioListeners) listener(status);
     return status;
   };

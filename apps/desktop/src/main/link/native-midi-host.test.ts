@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type NativePlayerStatus } from '@tb/schema';
 import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
 import { MidiOutputFailure } from './native-midi-output';
-import { frameNumberToTimecode, MidiMessageSkipped } from '@tb/core/link';
+import { clockFromNativeStatus, frameNumberToTimecode, MidiMessageSkipped } from '@tb/core/link';
 
 function fixture(cueFrames: readonly number[] = [0]) {
   const project = parseLinkProject({ ...createEmptyLinkProject('后台 MIDI 宿主'), playbackSource: 'internal', rundown: [{ id: 'song', title: '节目',
@@ -20,7 +20,7 @@ function fixture(cueFrames: readonly number[] = [0]) {
   const host = new NativeMidiHost({ audio: () => audio, profile: () => null, executable: 'unused', now: () => 1000,
     authorize: () => Promise.resolve(), ports: report => { failed = report; return ports; }, changed: state => states.push(state), error: message => errors.push(message),
     fault: (message, itemId) => faults.push([message, itemId]), outputs, recovered: (report, itemId) => recovered.push([report, itemId]) });
-  const observe = (patch: Partial<NativePlayerStatus>, qpc: string | null = '10000000') => { audio = { ...audio, ...patch }; host.observe(audio, qpc); };
+  const observe = (patch: Partial<NativePlayerStatus>, qpc: string | null = '10000000') => { audio = { ...audio, ...patch }; host.observe(clockFromNativeStatus(audio, qpc)); };
   const unplug = (code = 6) => failed(new MidiOutputFailure(`MIDI 输出失败：接口已断开（错误码 ${code}）`, code, 'TBLINK CUE'));
   return { project, host, identity, ports, states, errors, faults, recovered, outputs, observe, unplug, audio: () => audio };
 }
@@ -47,8 +47,8 @@ it('暂停准备等待恢复，重复暂停遥测不撤销尚未开始的已准�
 it('旧会话、旧代数和无效准备不会关闭当前通道', async () => {
   const f = fixture(); await f.host.prepare(f.project, f.identity); f.observe({ status: 'playing', generation: 2 });
   await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledOnce());
-  f.host.observe({ ...f.audio(), sessionId: 'old', status: 'stopped' }, null);
-  f.host.observe({ ...f.audio(), generation: 1, status: 'stopped' }, null);
+  f.host.observe(clockFromNativeStatus({ ...f.audio(), sessionId: 'old', status: 'stopped' }, null));
+  f.host.observe(clockFromNativeStatus({ ...f.audio(), generation: 1, status: 'stopped' }, null));
   f.host.interrupt({ version: 1, sessionId: f.identity.sessionId, generation: 1, kind: 'stop' });
   await expect(f.host.prepare(f.project, { ...f.identity, generation: 9 })).rejects.toThrow('不是当前要播放的这首歌');
   expect(f.host.status?.state).toBe('running'); expect(f.ports.close).not.toHaveBeenCalled(); await f.host.stop();

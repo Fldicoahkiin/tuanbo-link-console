@@ -2,7 +2,7 @@ import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@
 import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema, ma2ExecutorChannelChoiceRequestSchema } from '@tb/schema';
 import { ma2NetworkTargetSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
-import { firstTimeWarning, holdForShow, isShowWait, lightingReadBackLogs, materialSceneTargets, projectFileReferences, showGate, toUserErrorReason, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
+import { clockFromNativeStatus, firstTimeWarning, holdForShow, isShowWait, lightingReadBackLogs, materialSceneTargets, projectFileReferences, showGate, toUserErrorReason, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
 import { assertMa2ConnectionOwner, isLocalMa2Address, waitForMa2Listener } from './link/ma2-connection-owner';
@@ -757,7 +757,8 @@ function registerIpc(
           (message, details) => { void logger.record({ level: 'warning', category: 'system', device: '音频', message, details }).catch((error: unknown) => console.error('音频缓存日志写入失败', error)); }),
         resolveAudio: (projectPath, relativePath) => projectService.resolveReferenceAudio(projectPath, relativePath),
         changed: (status, qpc100ns) => {
-          nativeObs?.observe(status, qpc100ns); nativeProgramHost?.observe(status, qpc100ns); nativePlayerUi.publish(status);
+          const clock = clockFromNativeStatus(status, qpc100ns);
+          nativeObs?.observe(clock); nativeProgramHost?.observe(status, clock); nativePlayerUi.publish(status);
           const readyBoundary = `${status.sessionId}:${status.generation}`;
           if (status.status === 'ready' && readyBoundary !== lastReadyBoundary) {
             lastReadyBoundary = readyBoundary;
