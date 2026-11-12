@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { SceneOutputTimeline } from '@tb/core/link';
-import { ManagedOutputRuntime } from '@tb/core/link';
-import { compileManagedMediaTimeline } from '@tb/core/link';
+import { alignManagedMediaEvent, compileManagedMediaTimeline, type ManagedMediaEvent } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
 
 /** The output work at one frame, from a fresh timeline of this revision. */
 const outputAt = (project: LinkProject, itemId: string, frame: number) => new SceneOutputTimeline(project, itemId).at(frame);
+/** A clip start moved to `frame`, from the song's compiled start of that clip. */
+const aligned = (project: LinkProject, event: ManagedMediaEvent, frame: number) => alignManagedMediaEvent(event,
+  compileManagedMediaTimeline(project, 'song').events.find(candidate => candidate.id === event.id) ?? event, frame, project.timebase.frameRate);
 
 function projectFixture() {
   return parseLinkProject({ ...createEmptyLinkProject('插入机位'), obsOutputMode: 'scenes', mediaAssets: [{ id: 'video', name: '舞蹈.mp4', kind: 'video', relativePath: 'assets/dance.mp4', sha256: 'a'.repeat(64), byteLength: 10, durationMs: 40000, width: 1080, height: 1920 }], rundown: [{
@@ -44,12 +46,10 @@ describe('机位片段结束恢复素材', () => {
     camera.timecode = { hours: 0, minutes: 9, seconds: 0, frames: 2 }; camera.durationMs = 60000;
     const timeline = new SceneOutputTimeline(project, 'song');
     const restored = timeline.preloadEntries().at(-1)!;
-    const runtime = new ManagedOutputRuntime(project, 'show.tblink', { executeManagedMediaEvent: () => Promise.resolve(), recordLog: () => Promise.reject(new Error('不应写日志')) });
-    runtime.selectItem('song');
     const original = compileManagedMediaTimeline(project, 'song').events.find(event => event.phase === 'start')!;
     const expected = 2000 + Math.round((restored.frameNumber - original.frameNumber) * 1001 / 30);
     expect(restored.sourceOffsetMs).toBe(expected);
-    expect(runtime.alignEvent(original, restored.frameNumber).sourceOffsetMs).toBe(expected);
+    expect(aligned(project, original, restored.frameNumber).sourceOffsetMs).toBe(expected);
     expect(expected - (2000 + Math.round((restored.frameNumber - original.frameNumber) * 1000 / 30))).toBeGreaterThan(500);
   });
   it('播放会话重复查询复用准备结果，切换到新修订才采用改动的机位时长', () => {
@@ -68,9 +68,7 @@ describe('机位片段结束恢复素材', () => {
     expect(work.media).toHaveLength(1);
     expect(work.media[0]?.deferSceneSwitch).toBe(true);
     expect(work.cues[0]?.cue.actions[0]).toMatchObject({ kind: 'obs.setProgramScene', sceneLayers: [work.media[0]?.sceneName, '拉腿机位'] });
-    const runtime = new ManagedOutputRuntime(project, 'show.tblink', { executeManagedMediaEvent: () => Promise.resolve(), recordLog: () => Promise.reject(new Error('不应写日志')) });
-    runtime.selectItem('song');
-    expect(runtime.alignEvent(work.media[0]!, 330)).toMatchObject({ deferSceneSwitch: true, sourceOffsetMs: 7000 });
+    expect(aligned(project, work.media[0]!, 330)).toMatchObject({ deferSceneSwitch: true, sourceOffsetMs: 7000 });
   });
   it('10–15 秒覆盖视频，15 秒恢复视频第 11 秒，不能从头或暂停处继续', () => {
     const project = projectFixture();
@@ -78,9 +76,7 @@ describe('机位片段结束恢复素材', () => {
     expect(outputAt(project, 'song', 300).cues[0]?.cue.id).toBe('camera');
     const work = outputAt(project, 'song', 450);
     expect(work.cues).toEqual([]); expect(work.media[0]?.clipId).toBe('clip');
-    const runtime = new ManagedOutputRuntime(project, 'show.tblink', { executeManagedMediaEvent: () => Promise.resolve(), recordLog: () => Promise.reject(new Error('不应写日志')) });
-    runtime.selectItem('song');
-    expect(runtime.alignEvent(work.media[0]!, 450).sourceOffsetMs).toBe(11000);
+    expect(aligned(project, work.media[0]!, 450).sourceOffsetMs).toBe(11000);
   });
   it('从机位中间继续保持机位；定位到机位结束之后只恢复视频、不补发 MIDI', () => {
     const project = projectFixture();

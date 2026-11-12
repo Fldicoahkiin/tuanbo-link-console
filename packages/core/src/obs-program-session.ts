@@ -786,7 +786,7 @@ export class ObsProgramSession {
     const before = new Map(this.starts);
     // The swap.
     this.runtime = runtime; this.project = project; this.plans++;
-    this.managed.retarget(project, this.itemId, events, timeline);
+    this.managed.retarget(project, this.itemId, timeline);
     this.timeline = timeline; this.cueById = cueById; this.mediaEvents = events;
     this.spanCue.clear();
     for (const [actionId, cueId] of spans) this.spanCue.set(actionId, cueId);

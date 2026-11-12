@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseLinkProject } from '@tb/schema';
-import { collectCrossedManagedMediaEvents, compileManagedMediaTimeline, materialSceneNames, materialSceneTargets } from './managed-media-timeline';
+import { compileManagedMediaTimeline, materialSceneNames, materialSceneTargets } from './managed-media-timeline';
 import { SceneOutputTimeline } from './scene-output-timeline';
 import { editReferenceAudioCommand, setReferenceAudioCommand } from './link-command';
 import { audioTracks, audioSegments } from './audio-edit';
@@ -109,15 +109,6 @@ describe('managed media timeline', () => {
       clip('first', 'video', 'layer-top', 0, 2_000),
       clip('second', 'video', 'layer-top', 30, 1_000)
     ]), 'item')).toThrow('同一视觉图层的时间片段不能重叠');
-  });
-
-  it('uses the same strict crossing rule and never replays executed events', () => {
-    const timeline = compileManagedMediaTimeline(projectWithClips([
-      clip('clip-video', 'video', 'layer-top', 30, 1_000)
-    ]), 'item');
-    expect(collectCrossedManagedMediaEvents(timeline.events, 29, 30, new Set()).map((event) => event.phase)).toEqual(['start']);
-    expect(collectCrossedManagedMediaEvents(timeline.events, 30, 60, new Set(['managed-media:clip-video:stop']))).toEqual([]);
-    expect(collectCrossedManagedMediaEvents(timeline.events, 60, 20, new Set())).toEqual([]);
   });
 });
 

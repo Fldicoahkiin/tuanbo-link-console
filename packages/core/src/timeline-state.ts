@@ -265,10 +265,6 @@ export function isTimelineSpanActive(span: Pick<TimelineSpan, 'startMs' | 'endMs
   return span.startMs <= playheadMs && playheadMs < span.endMs;
 }
 
-export function wasTimelineFrameCrossed(previousFrame: number, currentFrame: number, boundaryFrame: number): boolean {
-  return previousFrame < boundaryFrame && boundaryFrame <= currentFrame;
-}
-
 export function findVisualObsShowAction(cue: LinkCue): VisualObsShowAction | null {
   const action = cue.actions.find((candidate) => candidate.kind === 'obs.setSceneItemEnabled' && candidate.enabled);
   return action?.kind === 'obs.setSceneItemEnabled' ? action : null;
