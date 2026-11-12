@@ -13,7 +13,8 @@ import type { ProgramClock } from './program-clock';
  *
  * The move adds no behaviour: every rule below is the page's P1 path as of b0461fe2, named where it comes from:
  * `link-runtime-coordinator.ts` (the coordinator), `p1-auto-follow-controller.ts` (the controller), `cue-runtime.ts`
- * (CueRuntime) and `mtc-stability-tracker.ts`. Where the outputs are told something, the shared outputs decide what it
+ * (CueRuntime) and `mtc-stability-tracker.ts`; those paths were deleted once this replaced them (0.5.9), so the names
+ * in the comments below are theirs at that commit. Where the outputs are told something, the shared outputs decide what it
  * does to the picture and the action MIDI (P3d and the picture part). The lights are the one addition, decided on
  * 2026-11-11 (docs/LIGHTING_WORKFLOW.md 换歌关灯): the page's P1 path sent no Off; here `P1FollowLights` is told which
  * song the console runs from P1's timecode, and when the operator stops it.

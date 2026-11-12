@@ -73,7 +73,7 @@
   - **冻结**：点动作和机位停在原地，不补；手动模式素材照放（时间码丢了或跳变，P1 还在放），自动选歌素材暂停（P1 停了）。
   - **接着跟**：自动选歌从同一位置继续，素材接着放、对到真实位置，这一遍发过的不重发；手动「重新同步」按这个位置对一次，此刻的机位和素材出现在 OBS，过去的点动作不补。冻结前在放的那一遍留在最后一帧，新的一遍上了再撤。
   - **停下**：P1 换歌、在联动台按停止，画面留在最后一帧，和联动台播放同一条规矩（`ObsProgramSession.stop`、宿主的 `holds`）；跟随关掉、被同一界面的新一版换掉、退出软件时放开，和关掉节目一样。界面没了不碰在跟歌的跟随的画面（`closeEngine` 的 `nativeObs.close()` 只关播放器的歌）。这首歌的画面还在准备（上一首还在收拾、输出还没做好）时停下或关掉跟随，准备当场作废，这首的画面一点不发、做出来的输出放开（`native-obs-host.ts` 的 `stopSource`、`closeSource`）；上一首迟到的停止不会把正在准备的这首作废。
-  - **视频自己的声音**：和 0.5.8 一样只看片段自己的开关（`compileManagedMediaTimeline`）。画面快照记着谁放音乐（`obsProgramSnapshotSchema` 的 `playbackSource`：P1 的歌写 `p1`，联动台播放的歌不写这一项，快照和以前一样），画面工程照它还原；画面会话里只有 Cue 的时钟（`CueRuntime`）拿到按联动台播放走的那一份（`obs-program-session.ts` 的 `cueClockProject`），因为它只跟着会话给的位置走。
+  - **视频自己的声音**：和 0.5.8 一样只看片段自己的开关（`compileManagedMediaTimeline`）。画面快照记着谁放音乐（`obsProgramSnapshotSchema` 的 `playbackSource`：P1 的歌写 `p1`，联动台播放的歌不写这一项，快照和以前一样），画面工程照它还原；画面会话里 Cue 的时钟（`CueRuntime`）只跟着会话给的位置走，不看谁放音乐（2026-11-12 删掉了它自己读 P1 时间码的旧路径）。
   - **状态**：跟随的状态里有 `outputs.picture`（`packages/schema/src/p1-follow.ts`），首页的跟随状态和「这首歌的画面」照它显示，和联动台播放时一样（`status-center.ts` 的 `p1PictureStatus`）；读回怎么判断只在 `packages/core/src/picture-follow.ts`。画面显示的东西变了才通知（宿主每走一步都报），原因和出错写到 8192 个字为止（`p1-picture-output.ts`）。
   - 跟随中改工程，画面这一遍不跟（R9 的 `retarget` 在 P1 下不接）；P1 跟随只按直播跑。
 - **灯光**：控台按 P1 的时间码自己跑。关灯照 `docs/LIGHTING_WORKFLOW.md`（2026-11-11）：在联动台按停止关这首歌的执行器、P1 不停；P1 换歌只关上一首独有的；P1 自己停、断码、等下一首都不关。走同一张关灯清单（`apps/desktop/src/main/link/lighting-off-service.ts` 的 `followChange`、`followStop`）。

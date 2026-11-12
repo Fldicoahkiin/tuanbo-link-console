@@ -109,7 +109,7 @@ export function followRuns(state: P1FollowState): boolean { return p1FollowShowI
 
 /** The follow's state as the show reads P1 (packages/core show-state.ts p1Show), as the window's runtime reported it:
  * waiting for the armed song is `armed` (held, like stopped for the console: LIGHTING_WORKFLOW 节目在走时不写控台), preparing is
- * `preflight`, a freeze is `timecodeLost`, a takeover is `paused` (CueRuntime enableManualTakeover), a song that could
+ * `preflight`, a freeze is `timecodeLost`, a takeover is `paused` (as the page's manual takeover was), a song that could
  * not start is `error`. `null` while it follows nothing, and while auto-follow listens for its first song (the window's
  * runtime was idle then); `undefined` without a follow. */
 export function p1FollowShowInput(state: P1FollowState): ShowInputs['p1'] | undefined {

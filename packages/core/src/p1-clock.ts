@@ -8,7 +8,8 @@ import type { ProgramClock } from './program-clock';
  * started another song (AGENTS §4.9; design 03 §4.1.2). Pure: every time is the MIDI interface's
  * own timestamp (`at100ns` of the native input, and its `idle` heartbeat), never the moment a main
  * process or a page got around to handling it. A batch that arrives late but whose timestamps kept
- * time is not a loss. Not wired yet: CueRuntime and the page's P1 path stay as they are until P3/P4.
+ * time is not a loss. `P1FollowSession` reads it in the main process; the page's own P1 path and CueRuntime's
+ * reading of P1's timecode, which the numbers below come from, were deleted once this replaced them (0.5.9).
  *
  * The numbers are moved unchanged from `cue-runtime.ts` (lines as of bfc8a766):
  * - MTC_LOSS_MS = 500 (L28; used in `ingest` L220 and `tick` L258)
