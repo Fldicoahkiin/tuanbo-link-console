@@ -32,6 +32,16 @@ function forward(request) {
     }); req.on('error', reject); req.end(request.postData() ?? undefined);
   });
 }
+// 用户在下拉里选中一项时，浏览器先发 input 再发 change，两个事件之间页面有机会重画。selectOption 在一次调用里连发两个事件，
+// 测不出「选了又弹回」（2026-11-12 现场：「原因」下拉选不上），所以这里按浏览器的顺序分两步发，并核对选中的值留住了。
+async function choose(select, value) {
+  await select.evaluate(async (element, next) => {
+    element.value = next; element.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(resolve => { setTimeout(resolve, 0); });
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, value);
+  assert.equal(await select.inputValue(), value);
+}
 const browser = await chromium.launch({ headless: true, ...(process.env.TBLINK_TEST_BROWSER_CHANNEL ? { channel: process.env.TBLINK_TEST_BROWSER_CHANNEL } : {}) }); const errors = [];
 try {
   async function pageFor(role, width = 1440) {
@@ -74,17 +84,17 @@ try {
   await dialog.getByRole('button', { name: '创建订单' }).click(); await dialog.getByText('线下订单已创建，待核款').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
   await page.getByRole('button', { name: '查看详情' }).first().click(); await page.getByRole('button', { name: '确认线下收款' }).click();
   // 必填项未填时主按钮置灰；付款方式选「其他」才出文本框；备注选填。
-  await dialog.locator('select[name=paymentMethod]').selectOption('__other'); await dialog.getByLabel('付款方式（其他）').fill('测试核款');
+  await choose(dialog.locator('select[name=paymentMethod]'), '__other'); await dialog.getByLabel('付款方式（其他）').fill('测试核款');
   assert.equal(await dialog.getByRole('button', { name: '确认收款并发码' }).isDisabled(), true);
   await dialog.getByLabel('收款流水号').fill('BROWSER-BANK-1');
   // 只签一份时结果直接显示激活码，点完成后直接打开这张授权的详情。
   await dialog.getByRole('button', { name: '确认收款并发码' }).click(); await dialog.getByText('核款与发码已完成').waitFor(); assert.match(await dialog.locator('pre.secret').innerText(), /^TBA-/);
   await dialog.getByRole('button', { name: '完成', exact: true }).click(); await page.getByRole('heading', { name: '授权详情' }).waitFor();
   assert.equal((await page.locator('body').innerText()).includes('TBA-'), false);
-  await page.getByRole('button', { name: '查看完整激活码' }).click(); await dialog.getByLabel('原因').selectOption('向客户交付'); await dialog.getByRole('button', { name: '显示激活码' }).click(); await dialog.locator('pre.secret').waitFor(); assert.match(await dialog.locator('pre.secret').innerText(), /^TBA-/); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByRole('button', { name: '查看完整激活码' }).click(); await choose(dialog.getByLabel('原因'), '向客户交付'); await dialog.getByRole('button', { name: '显示激活码' }).click(); await dialog.locator('pre.secret').waitFor(); assert.match(await dialog.locator('pre.secret').innerText(), /^TBA-/); await dialog.getByRole('button', { name: '完成', exact: true }).click();
   // 超过 5 分钟后再做敏感操作：表单上方弹验证层，输错抖动并清空，输对后自动继续原操作。
   fixture.advance(301000);
-  await page.getByRole('button', { name: '查看完整激活码' }).click(); await dialog.getByLabel('原因').selectOption('核对客户提供的激活码'); await dialog.getByRole('button', { name: '显示激活码' }).click();
+  await page.getByRole('button', { name: '查看完整激活码' }).click(); await choose(dialog.getByLabel('原因'), '核对客户提供的激活码'); await dialog.getByRole('button', { name: '显示激活码' }).click();
   await page.getByText('二次验证：未验证').waitFor();
   const code = dialog.getByLabel('验证器验证码', { exact: true }); await code.fill('000000'); await dialog.getByText('验证码不对或已用过').waitFor(); assert.equal(await code.inputValue(), '');
   assert.equal(await dialog.getByLabel('原因').inputValue(), '核对客户提供的激活码');
@@ -106,7 +116,7 @@ try {
   await dialog.getByRole('button', { name: '创建订单' }).click(); await dialog.getByText('线下订单已创建，待核款').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
   await page.getByRole('row', { name: /BROWSER-ORDER-3/ }).getByRole('button', { name: '查看详情' }).click(); await page.getByRole('heading', { name: '订单详情' }).waitFor();
   await page.getByRole('button', { name: '关闭订单', exact: true }).click(); assert.equal(await dialog.getByRole('button', { name: '关闭此订单' }).isDisabled(), true);
-  await dialog.getByLabel('原因').selectOption('客户放弃购买'); await dialog.getByRole('button', { name: '关闭此订单' }).click(); await dialog.getByText('订单已关闭').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  await choose(dialog.getByLabel('原因'), '客户放弃购买'); await dialog.getByRole('button', { name: '关闭此订单' }).click(); await dialog.getByText('订单已关闭').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: '关闭订单', exact: true }).count(), 0);
   // 待办数字跳转带上对应筛选。
   await page.getByRole('button', { name: '工作台', exact: true }).click(); await page.getByRole('button', { name: /七日内到期/ }).click();
@@ -137,7 +147,7 @@ try {
     await page.getByRole('link', { name: '下载诊断包' }).getAttribute('href'));
   assert.deepEqual(served, { status: 200, disposition: `attachment; filename="${report.number}.tbdiag.gz"`, type: 'application/gzip', bytes: report.bytes });
   await page.getByRole('button', { name: '处理问题反馈', exact: true }).click();
-  await dialog.getByLabel('处理状态').selectOption('closed'); await dialog.getByRole('button', { name: '保存处理结果' }).click();
+  await choose(dialog.getByLabel('处理状态'), 'closed'); await dialog.getByRole('button', { name: '保存处理结果' }).click();
   await dialog.getByText('关闭前请写明处理结论').waitFor();
   await dialog.getByLabel('处理结论').fill('MA2 时间线 MTC 起始码偏了 2 帧，已改正'); await dialog.getByRole('button', { name: '保存处理结果' }).click();
   await dialog.getByText('反馈已更新').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
@@ -181,7 +191,7 @@ try {
       await dialog.getByLabel('问题描述').fill('浏览器测试工单');
       await dialog.getByRole('button', { name: '创建工单' }).click(); await dialog.getByText('售后工单已创建').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
       await page.getByRole('button', { name: '售后工单', exact: true }).click(); await page.getByRole('button', { name: '查看详情' }).first().click(); await page.getByRole('button', { name: '处理工单', exact: true }).click();
-      await dialog.getByLabel('处理状态').selectOption('closed'); await dialog.getByLabel('授权处理结论').fill('已核对，不变更授权');
+      await choose(dialog.getByLabel('处理状态'), 'closed'); await dialog.getByLabel('授权处理结论').fill('已核对，不变更授权');
       await dialog.getByRole('button', { name: '保存处理结果' }).click(); await dialog.getByText('工单已更新').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
     }
     if (role === 'finance') {

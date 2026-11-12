@@ -29,7 +29,8 @@ function Input({ action, field, row, touched, onTouch, errors }: { action: Conso
     : field.key === 'quantity' ? 1 : field.type === 'money' && action === 'fulfill' && typeof row?.amountFen === 'number' ? row.amountFen / 100 : undefined;
   let control;
   if (field.type === 'select') control = <select {...common} defaultValue={String(row?.[field.key] ?? field.options?.[0]?.[0] ?? '')}>{field.options?.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>;
-  else if (field.type === 'preset') control = <><select {...common} value={choice} onChange={event => setChoice(event.target.value)}><option value="" disabled>请选择</option>{field.options?.map(([value, label]) => <option key={value} value={value}>{label}</option>)}<option value={other}>其他</option></select>
+  // 这个下拉不交给 React 管值（defaultValue）：浏览器先发 input 再发 change，表单在 input 时重新校验并重画，受控的下拉会在两个事件之间被改回旧值，选了又弹回「请选择」。
+  else if (field.type === 'preset') control = <><select {...common} defaultValue={choice} onChange={event => setChoice(event.target.value)}><option value="" disabled>请选择</option>{field.options?.map(([value, label]) => <option key={value} value={value}>{label}</option>)}<option value={other}>其他</option></select>
     {choice === other && <input name={`${field.key}Other`} required maxLength={field.maxLength ?? 500} placeholder="请写明" aria-label={`${field.label}（其他）`} autoComplete="off" />}</>;
   else if (field.type === 'textarea') control = <textarea {...common} maxLength={field.maxLength ?? 500} rows={2} />;
   else if (field.type === 'money') control = <span className="money-input"><input {...common} type="number" inputMode="decimal" step="0.01" min="0.01" defaultValue={defaultValue} autoComplete="off" /><span aria-hidden="true">元</span></span>;
