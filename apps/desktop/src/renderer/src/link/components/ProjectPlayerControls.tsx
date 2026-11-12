@@ -3,7 +3,8 @@ import { ListRestart, Pause, Play, RotateCcw, SkipBack, SkipForward, Square, Vol
 import { savedSongVolume, setItemVolumeCommand, SongVolumeGesture, type InternalPlayerState, type SongVolumeStep } from '@tb/core/link';
 import type { RundownItem } from '@tb/schema';
 import type { RemoteNativeProgramPlayer } from '../runtime/remote-native-program-player';
-import type { PlayerControlState, PlayerViewStore } from '../stores/player-view-store';
+import type { ProjectPlayer } from '../runtime/project-player';
+import type { PlayerControlState } from '../stores/player-view-store';
 import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { Button, IconButton, Select } from '../ui';
@@ -12,10 +13,7 @@ import { songVolumeView } from '../view-models/song-volume';
 import { homePlayButton, pressHomePlayButton } from './play-buttons';
 import { useKeyCommands } from '../keys/useKeyCommands';
 
-/** `engine` names the audio engine this player uses, for the operator. `outdated`: the background program plays a
- * version of the project this page did not send, taken over after a window reload; null until the program answered
- * the open (program-attachment). */
-export type ProjectPlayer = { controller: RemoteNativeProgramPlayer | null; state: PlayerControlState; view: PlayerViewStore; engine: string; outdated: boolean | null };
+export type { ProjectPlayer };
 
 type EndAction = InternalPlayerState['endAction'];
 const endActions: ReadonlyArray<readonly [EndAction, string]> = [['next', '顺序连播'], ['stop', '播完停止'], ['pause', '播完暂停'], ['loop', '单曲循环']];

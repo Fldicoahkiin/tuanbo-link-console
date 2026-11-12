@@ -54,7 +54,9 @@ packages/schema  ←  packages/core  ←  主进程（main/link）
 | `keys/` | 全部按键的路由和键位表 |
 | `../registry/` | 界面这一侧的音频和 MIDI 适配器（MIDI 都经主进程） |
 
-`stores/`、`view-models/`、`runtime/`、`keys/`、`ui/` 不引用 `components/` 里的东西。
+`stores/`、`view-models/`、`runtime/`、`keys/`、`ui/` 不引用 `components/` 里的东西。`ui/` 也不读 `stores/`、`runtime/` 和 `../registry/`；`../registry/` 不引用上面任何一层。
+
+这一节的方向都有自动检查：规则写在根目录 `eslint.config.mjs` 的 `LAYER_RULES`，`pnpm lint` 会拦越界的引用；`apps/desktop/src/main/link/layer-rules.test.ts` 在 `pnpm test` 里用同一份规则把源码扫一遍，并且一条一条证明规则真的会报。要改方向先问用户，不要为了让引用通过去放宽规则。
 
 ## 3. 一首歌从按下播放到各路输出（联动台播放）
 
@@ -158,6 +160,7 @@ packages/schema  ←  packages/core  ←  主进程（main/link）
 
 - 测试以用户在现场手动测试为主；自动化只用单测、类型检查、lint 和正式模式构建检查。推 master 之前在本地全跑一遍（命令见 AGENTS.md 第 6 节），不靠推上去让 CI 试。
 - **规则测试**（`*-rules.test.ts`）一条对应用户定的一条规则；**源码扫描**（`*-scan.test.ts` 和规则测试里的扫描）守着“别处不许再写一份”。AGENTS.md 表里的行写着哪个测试守着它。
+- **分层**（第 2 节）由 `eslint.config.mjs` 的 `LAYER_RULES` 和 `layer-rules.test.ts` 守着。
 - 没在现场 Windows 和实体 MA2 上试过的东西，文档和回复里都写明“未实机验证”，待验证的列在 [plan.md](./plan.md) 开头。
 
 ## 11. 改代码的步骤

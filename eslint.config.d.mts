@@ -4,5 +4,8 @@ import type { Linter } from 'eslint';
 export declare const KEY_LISTENER_RESTRICTIONS: readonly { selector: string; message: string }[];
 export declare const KEY_LISTENER_FILES: readonly string[];
 export declare const KEY_LISTENER_EXCEPTIONS: readonly string[];
+/** The layer rules (docs/ARCHITECTURE.md 第 2 节), for layer-rules.test.ts. */
+export declare const LAYER_RULES: Linter.Config[];
+export declare const LAYER_SETTINGS: Record<string, unknown>;
 declare const config: Linter.Config[];
 export default config;

@@ -76,7 +76,7 @@ docs/                           设计、实施、验收和服务器安装说明
 ## 4. 架构硬约束
 
 1. 所有 LinkProject 修改必须封装为 `LinkCommand` 并经 `useDocumentStore.execute(command)`；组件禁止直接改工程对象。
-2. 分层方向固定为 Schema/Domain → Registry/Adapters → Stores/Runtime → Components → 最小 IPC，不得倒流。
+2. 分层方向固定为 Schema/Domain → Registry/Adapters → Stores/Runtime → Components → 最小 IPC，不得倒流。哪一部分能引用哪一部分见 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) 第 2 节，规则写在 `eslint.config.mjs` 的 `LAYER_RULES`，`pnpm lint` 拦，`apps/desktop/src/main/link/layer-rules.test.ts` 守着（2026-11-12）；不为了让引用通过去放宽它。
 3. IPC 只传已定义的 DTO，不承载 Cue、时间码、开播前检查等业务判断。
 4. 外部边界错误必须明确返回、展示并记录；禁止静默 fallback、吞异常、自动重试，或在联动台播放和 P1 跟随之间自动切换。例外只有用户授权并写进文档的几处：第 2 节的 MIDI 端口恢复，LIGHTING_WORKFLOW.md「同步规则」里的重试，以及 2026-11-10 用户定的“有次数上限的自动恢复”（声卡、时间码、画面：画面按此刻该有的样子补一次、后面的素材再准备一次、素材和音乐对不上时校正；OBS 自己断了自动重连、连上后按当前位置恢复画面；控台页的网页遥控断了用保存的用户重新登录；演出中联动台和控台之间的连接断了用保存的登录重新登录，只登录、不读不同步），次数和等多久只写在 `packages/core/src/output-recovery.ts`，每次都记运行日志并在界面上写明（输出出错标红；还在重连、重新登录时算等待，写第几次，到上限才标红），到上限就停下等人处理；点 Cue、按键和推杆值不重发。
 5. OBS 请求默认 2 秒超时；外部程序只能按精确路径、PID、启动时间和所有权管理。

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { ma2NetworkStatusSchema, type LinkProject } from '@tb/schema';
 import { toUserErrorMessage } from '@tb/core/link';
-import type { ProjectPlayer } from '../components/ProjectPlayerControls';
+import type { ProjectPlayer } from './project-player';
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
 import { publishConsoleFollow } from '../stores/console-follow-store';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
