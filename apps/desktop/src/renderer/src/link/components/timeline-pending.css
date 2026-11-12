@@ -1,13 +1,15 @@
 /*
- * Picture edits made while the song plays (0.5.9): OBS keeps playing the version the song started
- * with, so they take effect only after 停止 and playing again. Such a part gets a dashed edge and says
- * “停下重播才生效” on its second line. Under the toolbar, a compact link/ui Notice (PendingPictureNotice)
- * stays for the whole playback: it counts those edits together with deletions, which the timeline no
- * longer draws, or says the version on air cannot be confirmed. In the pages layer, so it wins over the
+ * Picture edits made while the song plays (0.5.9 R9): they go to OBS by themselves and are used in this
+ * pass. Until OBS took them, such a part gets a dashed edge in the accent colour (information, nothing to
+ * do) and says “正在送到 OBS” on its second line. Under the toolbar, a compact link/ui Notice
+ * (PendingPictureNotice) stays for the whole playback: it counts those edits together with deletions,
+ * which the timeline no longer draws, or says the version on air cannot be confirmed. In the pages layer, so it wins over the
  * legacy timeline rules; the notice's own look stays in ui.css.
  */
 @layer pages {
-  .reference-timeline :is(.timeline-clip, .timeline-cue).is-pending { border-style: dashed; border-color: var(--color-warning); }
+  .reference-timeline :is(.timeline-clip, .timeline-cue).is-pending { border-style: dashed; border-color: var(--color-accent); }
+  /* The song's picture does not follow edits now: the warning colour and “停下重播才生效”, as before R9. */
+  .reference-timeline :is(.timeline-clip, .timeline-cue).is-pending-replay { border-color: var(--color-warning); }
   .reference-timeline :is(.timeline-clip, .timeline-cue).is-pending > .timeline-pending-label { font: 500 var(--type-caption)/1 var(--font-ui); }
 
   /* The row keeps its height while it is empty: a press that began with the line keeps it until released. */

@@ -414,3 +414,21 @@ describe('规则 10：播放中有人在 OBS 里手动切了场景，下一段�
     expect([...readBack.matchAll(/client\.call\('(\w+)'/g)].map(match => match[1]).filter(request => !request!.startsWith('Get'))).toEqual([]);
   });
 });
+
+describe('规则 11：播放中改了在播这首歌的画面，这一遍就用上，暂停时也是；过去的点动作不重放（R9，2026-11-10 第 1 题）', () => {
+  for (const paused of [false, true]) it(paused ? '暂停时' : '播放中', async () => {
+    const applied: number[] = [];
+    const test = pictureSession(camerasShow(['甲', '乙', '丙'], [1]), () => Promise.resolve(), { pictureApplied: revision => { applied.push(revision); } });
+    await test.session.prepare(0); await test.advance(0, 1500);
+    if (paused) await test.session.pause();
+    const filters = (): number => test.sent.filter(entry => entry.kind === 'obs.setSourceFilterEnabled').length;
+    expect(filters()).toBe(1);
+    test.session.retarget(camerasShow(['甲', '新乙', '新丙'], [1]), 2); await test.session.settled();
+    // The camera at the playhead is the new plan's at once; the filter of the camera already crossed is not sent again.
+    expect(test.scenes()).toEqual(['甲', '乙', '新乙']);
+    expect(filters()).toBe(1);
+    expect(applied).toEqual([2]);
+    await test.advance(1600, 2100);
+    expect(test.scenes()).toEqual(['甲', '乙', '新乙', '新丙']);
+  });
+});

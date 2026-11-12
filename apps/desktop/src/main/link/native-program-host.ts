@@ -1,6 +1,6 @@
 import { NativeProgramPlayer, type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type ProgramClock, type ProgramLightingOutput,
   type ProgramNextApi } from '@tb/core/link';
-import type { LinkProject, NativePlayerControl, NativePlayerStatus } from '@tb/schema';
+import type { LinkProject, NativeObsRetarget, NativePlayerControl, NativePlayerStatus } from '@tb/schema';
 import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
 import type { MidiClaim, MidiClaimOwner } from './midi-port-broker';
 
@@ -25,6 +25,8 @@ type Dependencies = {
   /** The action MIDI port came back: logged with the outage's start, end and skipped actions. */
   midiRecovered(report: ActionMidiRecovery, itemId: string): void;
   obsChanged?(state: import('@tb/schema').NativeObsStatus): void;
+  /** A newer version of the held song's picture plan, for its picture session (0.5.9 R9, NativeObsRequests.retarget). */
+  retargetPicture?(request: NativeObsRetarget): void;
   notice(message: string, itemId: string | null): void;
   /** A failure no window sees in the player's state (the lights-off a stop owed): after the program closed, or while it
    * plays on without a window. NativeProgramService passes it to closedProgramFaultReporter, which logs it as an error
@@ -81,7 +83,13 @@ export class NativeProgramHost {
       ...dependencies.api,
       controlNativePlayback: request => { this.interrupt(request); return dependencies.api.controlNativePlayback(request); },
       onNativePlaybackStatus: listener => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
-    }, dependencies.lighting);
+    }, dependencies.lighting, dependencies.retargetPicture ? { retarget: ({ revision, snapshot }) => {
+      // The picture session of this program's song; answered by its status (`appliedRevision`). A refusal reaches the
+      // player as a throw: it frees the version in flight and says why (NativeProgramPlayer.retargetPicture).
+      const audio = dependencies.audio();
+      if (!audio) throw new Error('这首歌已经停了');
+      dependencies.retargetPicture?.({ version: 1, sessionId: audio.sessionId, revision, snapshot });
+    } } : undefined);
   }
 
   /** `status` feeds this host's own player; the outputs read only `clock`, made from it (`clockFromNativeStatus`). */

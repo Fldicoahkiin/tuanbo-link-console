@@ -7,6 +7,7 @@ import { ContentTracks, contentEditRules, type ContentTracksProps } from './Cont
 import type { Airtime } from './timeline-air';
 import { EditorPlayhead } from './editor-playhead';
 import { TimelineScroll } from './timeline-scroll';
+import { PENDING_THIS_PASS } from '../view-models/picture-on-air';
 
 // The renderer's TSX compiles to React.createElement here; the desktop bridge needs a window.
 vi.stubGlobal('React', React);
@@ -32,7 +33,7 @@ function drawn(project: LinkProject, onAirtime: Airtime | null, pending: Readonl
   const item = project.rundown[0]!;
   const props: ContentTracksProps = {
     layers: item.visualLayers, clips: item.referenceMediaClips, cues: item.cues, assets: new Map(), frameRate: project.timebase.frameRate, durationMs: 20_000,
-    playhead: new EditorPlayhead(9_000), timelineState: new TimelineStateIndex(project, item).at(9_000), airtime: new SceneOutputTimeline(project, 'song').airtime(), onAirtime, pending,
+    playhead: new EditorPlayhead(9_000), timelineState: new TimelineStateIndex(project, item).at(9_000), airtime: new SceneOutputTimeline(project, 'song').airtime(), onAirtime, pending, pendingMark: PENDING_THIS_PASS,
     selectedClipId: null, selectedCueId: null, beatSnapPoints: [], markerSnapPoints: [], playing: false, rules: contentEditRules(project, 'song'),
     viewport: { viewportRef: { current: null }, pixelsPerSecond: 50, scroll: new TimelineScroll(), view: { left: 0, width: 2_000, top: 0, height: 600 }, timeAtClientX: () => 0, scrollLeftTo: vi.fn(), maxScrollLeft: () => 0 },
     tracks: { start: 0, lightingIndex: item.visualLayers.length, lightingHeight: 0, coveredTop: 0 }, snap: { enabled: false, thresholdMs: 0 }, lanePointer: {},
@@ -44,7 +45,7 @@ function drawn(project: LinkProject, onAirtime: Airtime | null, pending: Readonl
     .map(([, classes, name]) => [name!, classes!.split(/\s+/).filter(Boolean)]));
 }
 
-describe('时间线上的“正在播出”和“停下重播才生效”', () => {
+describe('时间线上的“正在播出”和“正在送到 OBS”', () => {
   it('播放中挪走机位 B：OBS 还在播 B，但时间线上 B 标等重播，不标正在播出；显示着的字幕照常标', () => {
     const playing = started();
     const editing = withContentTimeline(moveContentCommand('song', { kind: 'cue', id: 'b' }, 12_000, { track: 'cameras' })).execute(playing);

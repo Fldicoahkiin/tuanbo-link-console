@@ -44,7 +44,7 @@ describe('OBS 按哪一版画面在播', () => {
   it('准备中、播放中和暂停时按开始播放那一版，准备中已经算', () => {
     const project = started();
     for (const status of ['preparing', 'playing', 'paused'] as const) {
-      expect(pictureOnAir('song', true, holding(status, 'song', project))).toEqual({ kind: 'version', song: songPicture(project, 'song') });
+      expect(pictureOnAir('song', true, holding(status, 'song', project))).toEqual({ kind: 'version', song: songPicture(project, 'song'), takesEdits: true });
     }
   });
 
@@ -77,15 +77,15 @@ describe('时间线上标出的画面', () => {
     expect(pictureMarks({ kind: 'timeline' }, current)).toEqual({ onAirtime: current.airtime, pending: NO_PENDING_PICTURE_EDITS, notice: null });
   });
 
-  it('播放中没改：高亮按开始播放那一版；提示条一直留着，写明规则', () => {
+  it('播放中没改：高亮按 OBS 在播那一版；提示条一直留着，写明规则（R9：这一遍就用上）', () => {
     const project = started(), current = songPicture(project, 'song')!;
     const marks = pictureMarks(pictureOnAir('song', true, holding('paused', 'song', project)), current);
     expect(marks.onAirtime).toEqual(current.airtime);
     expect(marks.pending).toEqual(NO_PENDING_PICTURE_EDITS);
-    expect(marks.notice).toEqual({ tone: 'info', text: '播放中改画面，停下重播才生效', detail: 'OBS 按开始播放时的时间线播这首歌，播放中改过的部分会用虚线框标出来。' });
+    expect(marks.notice).toEqual({ tone: 'info', text: '播放中改画面，这一遍就用上', detail: '改过的部分送到 OBS 之前用虚线框标出来，送到以后照改过的播，不用停下重播。' });
   });
 
-  it('播放中挪了机位：在播的高亮跟着 OBS 那一版，挪过的标“停下重播才生效”不高亮，提示条写出按钮名', () => {
+  it('播放中挪了机位：在播的高亮跟着 OBS 那一版，挪过的标“正在送到 OBS”不高亮，提示条是说明、不用停下（R9）', () => {
     const playing = started();
     const moved = edit(playing, moveContentCommand('song', { kind: 'cue', id: 'b' }, 12_000, { track: 'cameras' }));
     const marks = pictureMarks(pictureOnAir('song', true, holding('playing', 'song', playing)), songPicture(moved, 'song')!);
@@ -94,18 +94,18 @@ describe('时间线上标出的画面', () => {
     // At 9 s OBS still shows b where it started; b is drawn at 12 s, waiting for a replay.
     expect([...markedOnAir(marks.onAirtime, marks.pending.changed, frame(9), [])]).toEqual([]);
     expect([...markedOnAir(marks.onAirtime, marks.pending.changed, frame(1), [])]).toEqual(['media:opening']);
-    expect(marks.notice).toEqual({ tone: 'warning', text: '播放中改了 1 处，停下重播才生效',
-      detail: 'OBS 还在按开始播放时的时间线播。点方块按钮“停止播放”（或按 Esc）后重新播放，才会用上改过的时间线。' });
+    expect(marks.notice).toEqual({ tone: 'info', text: '播放中改了 1 处，正在送到 OBS',
+      detail: '送到以前 OBS 照上一版播。送到以后这一遍就按改过的播，不用停下重播。' });
   });
 
   it('删掉的部分照常播出，提示里计数', () => {
     const playing = started();
     const removed = edit(playing, removeContentCommand('song', [{ kind: 'cue', id: 'a' }, { kind: 'cue', id: 'b' }]));
     const marks = pictureMarks(pictureOnAir('song', true, holding('playing', 'song', playing)), songPicture(removed, 'song')!);
-    expect(marks.notice).toEqual({ tone: 'warning', text: '播放中删了 2 处，停下重播才生效',
-      detail: 'OBS 还在按开始播放时的时间线播，删掉的 2 处也照常播出。点方块按钮“停止播放”（或按 Esc）后重新播放，才会用上改过的时间线。' });
+    expect(marks.notice).toEqual({ tone: 'info', text: '播放中删了 2 处，正在送到 OBS',
+      detail: '送到以前 OBS 照上一版播，删掉的 2 处也还在播。送到以后这一遍就按改过的播，不用停下重播。' });
     const both = edit(playing, removeContentCommand('song', [{ kind: 'cue', id: 'a' }]), moveContentCommand('song', { kind: 'cue', id: 'b' }, 12_000, { track: 'cameras' }));
-    expect(pictureMarks(pictureOnAir('song', true, holding('playing', 'song', playing)), songPicture(both, 'song')!).notice?.text).toBe('播放中改了 1 处、删了 1 处，停下重播才生效');
+    expect(pictureMarks(pictureOnAir('song', true, holding('playing', 'song', playing)), songPicture(both, 'song')!).notice?.text).toBe('播放中改了 1 处、删了 1 处，正在送到 OBS');
   });
 
   it('开始播放那一版里没有这首歌时，什么都不算在播，会播出的部分全都等重播', () => {

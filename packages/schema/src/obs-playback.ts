@@ -20,6 +20,11 @@ export type NativeObsPrepare = z.infer<typeof nativeObsPrepareSchema>;
 export const nativeObsNextSchema = z.object({ version: z.literal(1), sessionId: z.string().uuid(),
   generation: z.number().int().positive(), nextFiles: nativeObsNextFilesSchema.nullable() }).strict();
 export type NativeObsNext = z.infer<typeof nativeObsNextSchema>;
+/** A newer version of the held song's picture plan, for the picture session of that song's program (0.5.9 R9,
+ * ProgramPictureOutput): the main process takes it at the current position. Same snapshot as a preparation's. */
+export const nativeObsRetargetSchema = z.object({ version: z.literal(1), sessionId: z.string().uuid(),
+  revision: z.number().int().nonnegative(), snapshot: obsProgramSnapshotSchema }).strict();
+export type NativeObsRetarget = z.infer<typeof nativeObsRetargetSchema>;
 export const nativeObsPreloadSchema = nativeObsPrepareSchema.extend({ positionMs: z.number().finite().min(0).max(86_400_000) });
 export type NativeObsPreload = z.infer<typeof nativeObsPreloadSchema>;
 /** Generation is the original preparation generation, not the latest audio
@@ -60,7 +65,10 @@ export const nativeObsStatusSchema = z.object({ version: z.literal(1), sessionId
   /** Someone switched program in OBS by hand: not switched back before the next segment (2026-11-10 decision 5). */
   takeover: z.object({ sceneName: z.string().min(1) }).strict().nullable().optional(),
   nextCueId: z.string().nullable(), currentCueId: z.string().nullable(),
-  pendingCount: z.number().int().nonnegative(), positionMs: z.number().finite().nonnegative()
+  pendingCount: z.number().int().nonnegative(), positionMs: z.number().finite().nonnegative(),
+  /** The version whose picture plan the session runs now, after a retarget (0.5.9 S8b part 2, ProgramPictureOutput);
+   * absent: the one it was prepared with (`revision`). */
+  appliedRevision: z.number().int().nonnegative().optional()
 }).strict();
 export type NativeObsStatus = z.infer<typeof nativeObsStatusSchema>;
 /** Sent while a missing OBS seek cache is being generated for one asset. */

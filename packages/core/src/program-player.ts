@@ -1,4 +1,4 @@
-import type { NativeObsStatus, LightingDocument, LinkProject } from '@tb/schema';
+import type { NativeObsStatus, LightingDocument, LinkProject, ObsProgramSnapshot } from '@tb/schema';
 
 export type InternalPlayerState = import('@tb/schema').ProgramPlayerState;
 export const emptyInternalPlayerState: InternalPlayerState = {
@@ -88,4 +88,19 @@ export type ProgramLightingOutput = {
   /** The song on air got a newer version of its lighting (0.5.9 S8a; `song` is the one it had, also with this version,
    * litAlso): its executors in use only grow, nothing is switched off, and an Off already owed stays owed. */
   widen(song: LitSong): void;
+};
+
+/** The held song's picture follows a newer version in this pass (0.5.9 S8b part 2, design 02 §3.5, 00-order §2 item 1),
+ * beside ProgramLightingOutput. The picture lane (R9) implements it on the picture session the song's preparation
+ * opened (NativeObsHost); the player is its only caller.
+ * - `retarget` hands over the song's picture plan of version `revision`. It passes no position: the session reads the one
+ *   clock and brings the picture to what that plan has at this moment, without replaying cuts already past.
+ * - It answers nothing itself. The session reports the version whose plan it runs as `appliedRevision` in its status
+ *   (NativeObsStatus), once it has switched to that plan; each picture part that did not go through is graded and shown
+ *   red as usual, and does not hold `appliedRevision` back. A plan the session cannot take at all ends the picture
+ *   (state 'failed', red), and the music plays on (2026-10-30).
+ * - The player keeps at most one retarget in flight per picture session and sends only the newest version once the one
+ *   in flight is applied; a new preparation of the song's picture (a seek, a loop) takes the newest version itself. */
+export type ProgramPictureOutput = {
+  retarget(request: { revision: number; snapshot: ObsProgramSnapshot }): void;
 };

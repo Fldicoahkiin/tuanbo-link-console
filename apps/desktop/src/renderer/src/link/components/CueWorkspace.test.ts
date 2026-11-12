@@ -65,7 +65,7 @@ describe('编辑器按联动台播放接回的节目标时间线', () => {
   it('同一版：在播的机位 B 标正在播出，上方写播放中改画面的规则', () => {
     const { html, parts } = editor(false);
     expect(parts.get('机位 b')).toContain('is-active');
-    expect(html).toContain('播放中改画面，停下重播才生效');
+    expect(html).toContain('播放中改画面，这一遍就用上');
     expect(html).not.toContain('无法确认');
   });
 

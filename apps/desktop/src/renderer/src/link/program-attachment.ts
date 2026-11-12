@@ -3,7 +3,7 @@ import type { LinkProject } from '@tb/schema';
 /**
  * What a window knows of the background program its page opened (useInternalPlayer, 0.5.9 S7, S8a). Every event of
  * the program names the newest version it holds (NativeProgramEvent.documentVersion) and the version the held song's
- * picture follows (pictureVersion, the one the song started with); the page remembers the versions it sent
+ * picture follows (pictureVersion: the one the song started with, or a newer one its picture took, R9); the page remembers the versions it sent
  * (ProgramDocumentFeed), so it knows both projects exactly. After a window reload the program may hold a song started
  * with a version this page never had: the window says the picture plays another version until that song stops.
  */

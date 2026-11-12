@@ -849,3 +849,46 @@ it('红字里“原因：”后面的原因不带句末标点，后面接着写�
   expect(failureReason('SetInputMute：OBS 没能执行 SetInputMute. ')).toBe('SetInputMute：OBS 没能执行 SetInputMute');
   expect(failureReason(new Error('SetSceneItemEnabled：OBS 没能执行 SetSceneItemEnabled'))).toBe('SetSceneItemEnabled：OBS 没能执行 SetSceneItemEnabled');
 });
+
+describe('0.5.9 R9：播放中改了在画面上的片段', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  it('挪了位置或剪了开头：在播的解码器原地对到新位置，不重新开始；差不到 30 ms 不动；换了片段的解码器不碰', async () => {
+    vi.useFakeTimers();
+    const { scenes, calls, setMediaState } = fixture();
+    await scenes.prepare('project', asset, 'C:/dance.mp4');
+    await scenes.seek(event, 'C:/dance.mp4', (_name, position) => { setMediaState('OBS_MEDIA_STATE_PAUSED', position); return Promise.resolve(); });
+    setMediaState('OBS_MEDIA_STATE_PLAYING', 2300); calls.length = 0;
+    await held(scenes.moveClip({ ...event, sourceOffsetMs: 4300 }, () => 4300));
+    expect(seekTargets(calls)).toEqual([4500]);
+    expect(calls.some(call => JSON.stringify(call.requestData ?? null).includes('RESTART'))).toBe(false);
+    setMediaState('OBS_MEDIA_STATE_PLAYING', 4310); calls.length = 0;
+    await scenes.moveClip({ ...event, sourceOffsetMs: 4300 }, () => 4300);
+    expect(calls.map(call => call.requestType)).toEqual(['GetMediaInputStatus']);
+    calls.length = 0;
+    await scenes.moveClip({ ...event, clipId: 'other', sourceOffsetMs: 9000 }, () => 9000);
+    expect(calls).toEqual([]);
+  });
+  it('改了样子（E16 位置大小、E17 镜像裁剪不透明度）：在播的解码器上写一次场景项，不透明度单独一批改联动台的滤镜；一样的不再发；不要不透明度了就关掉滤镜、不删', async () => {
+    const { scenes, calls, responses } = fixture();
+    responses.set('GetSourceFilterList', { filters: [] });
+    await scenes.prepare('project', asset, 'C:/dance.mp4');
+    const opaque = { x: 0.5, y: 0.5, scale: 0.5, scaleX: 1, scaleY: 1, rotation: 0, flipX: true }, look = { ...opaque, opacity: 0.5 };
+    calls.length = 0;
+    expect(await scenes.relook({ ...event, transform: look })).toBeNull();
+    const writes = (): string[] => calls.map(call => call.requestType).filter(type => type.startsWith('Set') || type.startsWith('Create') || type.startsWith('Remove'));
+    expect(writes()).toEqual(['CreateSourceFilter', 'SetSceneItemTransform']);
+    expect(calls.find(call => call.requestType === 'CreateSourceFilter')?.requestData).toEqual({ sourceName: names.sourceName, filterName: '联动台·画面调节',
+      filterKind: 'color_filter_v2', filterSettings: { opacity: 0.5 } });
+    calls.length = 0;
+    expect(await scenes.relook({ ...event, transform: look })).toBeNull();
+    expect(writes()).toEqual([]);
+    calls.length = 0;
+    expect(await scenes.relook({ ...event, transform: { ...look, opacity: 0.25 } })).toBeNull();
+    expect(writes()).toEqual(['SetSourceFilterSettings']);
+    // No opacity any more: our filter is switched off, never removed; the scene item keeps its look.
+    calls.length = 0;
+    expect(await scenes.relook({ ...event, transform: opaque })).toBeNull();
+    expect(writes()).toEqual(['SetSourceFilterEnabled']);
+    expect(calls.find(call => call.requestType === 'SetSourceFilterEnabled')?.requestData).toEqual({ sourceName: names.sourceName, filterName: '联动台·画面调节', filterEnabled: false });
+  });
+});

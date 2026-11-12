@@ -1,7 +1,7 @@
 import { dirname } from 'node:path';
 import { stat, statfs } from 'node:fs/promises';
-import { firstTimeWarning, millisecondsToFrameNumber, preciseSeekAssetIds, preflightLogEntries, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type LinkActionExecutor, type ManagedMediaEvent, type ManagedMediaOutcome, type ObsProgramSessionDependencies } from '@tb/core/link';
-import type { NativeObsPrepare } from '@tb/schema';
+import { firstTimeWarning, millisecondsToFrameNumber, pictureProgramScene, preciseSeekAssetIds, preflightLogEntries, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type LinkActionExecutor, type ManagedMediaEvent, type ManagedMediaOutcome, type ObsProgramSessionDependencies } from '@tb/core/link';
+import type { LinkProject, NativeObsPrepare } from '@tb/schema';
 import type { ObsWebSocketAdapter } from './obs-websocket-adapter';
 import { MediaOnAirError, MediaOutOfStepError, type ObsMediaScenes } from './obs-media-scenes';
 import { ObsRequestNotSent, ObsRequestUnanswered } from './obs-request-scheduler';
@@ -12,7 +12,7 @@ import type { ObsNativeSeek } from './obs-native-seek';
 import type { NativePlayerService } from './native-player-service';
 import type { LinkRunLogger } from './run-logger';
 import { redactValue } from './run-logger';
-import { ObsMediaPreload, ObsPreparationNotNeeded, type HeldPictures } from './obs-media-preload';
+import { ObsMediaPreload, ObsPreparationNotNeeded, ObsPreparationOutdated, type HeldPictures } from './obs-media-preload';
 import { obsMediaDecodeTargets } from './obs-media-decode';
 import { obsMediaCachePaths } from './obs-media-paths';
 import { PreparationSteps, SLOW_PREPARATION_STEP_MS } from './preparation-log';
@@ -93,14 +93,17 @@ export function pictureReadBack(obs: Pick<ObsWebSocketAdapter, 'readPicture'>, d
 
 /** A clip shown from the middle and located (a start from the middle, a seek, a rebuild). A look that could not be set
  * (0.5.9 E16) leaves the clip shown and located as OBS has it: it counts as located, nothing is sent again, and the
- * run log gets one line with the clip's red text. */
-export function pictureSeekStep(decoders: Pick<ObsMediaPreload, 'seek'>, log: PictureLog): (event: ManagedMediaEvent, path: string) => Promise<void> {
+ * run log gets one line with the clip's red text; the text goes back to the picture session, which lists it as the
+ * clip's own part (0.5.9 R9). */
+export function pictureSeekStep(decoders: Pick<ObsMediaPreload, 'seek'>, log: PictureLog): (event: ManagedMediaEvent, path: string) => Promise<string | null> {
   return async (event, path) => {
     const problem = await decoders.seek(event, path);
-    if (problem === null) return;
+    if (problem === null) return null;
     void log.record({ level: 'error', category: 'device', device: '后台画面', projectId: log.projectId, itemId: log.itemId,
       message: problem, result: 'failed', details: { clipId: event.clipId } })
       .catch((error: unknown) => console.error('素材样子没有设好未能记入日志', error));
+    // Also the clip's own part of the picture (0.5.9 R9): red, and it still counts as located.
+    return problem;
   };
 }
 
@@ -108,10 +111,17 @@ export function pictureSeekStep(decoders: Pick<ObsMediaPreload, 'seek'>, log: Pi
  * preparation failed once it already played on from the decoder of the clip it
  * continues needs nothing: the program is not told (its red text would say the
  * clip may not play, while it is on air), and the run log gets one line. */
-export function pictureUpcoming(decoders: Pick<ObsMediaPreload, 'upcoming'>, log: PictureLog): (frame: number, assertCurrent: () => void) => Promise<ManagedMediaEvent | null> {
-  return async (frame, assertCurrent) => {
-    try { return await decoders.upcoming(frame, assertCurrent); }
+export function pictureUpcoming(decoders: Pick<ObsMediaPreload, 'upcoming'>, log: PictureLog): (frame: number, assertCurrent: () => void, spaced?: boolean) => Promise<ManagedMediaEvent | null> {
+  return async (frame, assertCurrent, spaced) => {
+    try { return await decoders.upcoming(frame, assertCurrent, spaced); }
     catch (error) {
+      if (error instanceof ObsPreparationOutdated) {
+        void log.record({ level: 'info', category: 'device', device: '后台画面', projectId: log.projectId, itemId: log.itemId,
+          message: `准备素材没成功：${error.event.assetName}。这一段已经改掉了，用不上，不用处理。原因：${error.reason}`, result: 'failed',
+          details: { clipId: error.event.clipId, inputName: error.decoder, error: error.reason } })
+          .catch((failure: unknown) => console.error('改掉的素材准备失败未能记入日志', failure));
+        return null;
+      }
       if (!(error instanceof ObsPreparationNotNeeded)) throw error;
       void log.record({ level: 'warning', category: 'device', device: '后台画面', projectId: log.projectId, itemId: log.itemId,
         message: `准备素材没成功：${error.event.assetName}。这一段已经接着上一段往下播，画面照常。原因：${error.reason}。不用处理，后面的素材照常播`, result: 'failed',
@@ -161,6 +171,36 @@ export function pictureMediaStep(obs: Pick<ObsWebSocketAdapter, 'guardPlaybackOp
   };
 }
 
+/** Our music item into the scenes a newer plan of the song on air uses and the song did not (0.5.9 R9, within
+ * 2026-09-10): `carried` are the scenes it went into for this song, kept up to date here. The scene due now (`now`) is
+ * done on the switch's tier and awaited, so that the item is there before the switch to it; the others go in the
+ * background. Never taken out of a scene. A scene done: one info line in the run log. A scene that could not be: one
+ * line and the notice (what happened, then what to do), the switch goes out all the same and the read-back shows the
+ * scene in red while it is on program (R8); not tried again. Nothing when OBS's desktop audio carries the music. */
+export function pictureMusicScenes(obs: Pick<ObsWebSocketAdapter, 'addMusicToScene'>, log: { record: LinkRunLogger['record']; projectId: string; itemId: string },
+  carried: Set<string>, notice: (message: string) => void): (scenes: readonly string[], now: string | null) => Promise<void> {
+  const add = async (sceneName: string, tier: 'program' | 'background'): Promise<void> => {
+    carried.add(sceneName);
+    let added: boolean;
+    try { added = await obs.addMusicToScene(sceneName, tier); }
+    catch (error) {
+      const message = `OBS 场景「${sceneName}」没能加上联动台的音乐：${error instanceof Error ? error.message : String(error)}。画面照常切过去，切到这个场景时观众可能听不到歌，请在 OBS 里把「团播联动台·内部正式音频」加进这个场景。`;
+      notice(message);
+      await log.record({ level: 'warning', category: 'device', device: 'OBS 音乐采集', projectId: log.projectId, itemId: log.itemId,
+        message, result: 'failed', details: { sceneName } }).catch((failure: unknown) => console.error('场景没加上音乐未能记入日志', failure));
+      return;
+    }
+    if (added) await log.record({ level: 'info', category: 'device', device: 'OBS 音乐采集', projectId: log.projectId, itemId: log.itemId,
+      message: `这次修改用到的场景「${sceneName}」加上了联动台的音乐`, result: 'succeeded', details: { sceneName } })
+      .catch((failure: unknown) => console.error('场景加上音乐未能记入日志', failure));
+  };
+  return async (scenes, now) => {
+    const missing = scenes.filter(scene => !carried.has(scene));
+    for (const scene of missing) if (scene !== now) void add(scene, 'background');
+    if (now !== null && missing.includes(now)) await add(now, 'program');
+  };
+}
+
 async function runAll(cleanup: readonly (() => Promise<void>)[]): Promise<void> {
   const errors: string[] = [];
   for (const release of cleanup) {
@@ -178,13 +218,14 @@ export type PictureHold = { release: () => Promise<void>; hold: (clips: readonly
  * holds and this song did not take over (it used the other decoder of the pair, or was cancelled meanwhile). */
 export function pictureHold(preload: Pick<ObsMediaPreload, 'close' | 'hold' | 'decoderOf' | 'forget' | 'giveWay'>, scenes: Pick<ObsMediaScenes, 'releasePrimed' | 'releaseImages'>,
   materials: readonly { sourceName: string; image: boolean }[], held: HeldPictures | undefined, finish: readonly (() => Promise<void>)[]): PictureHold {
-  const imageNames = new Set(materials.filter(material => material.image).map(material => material.sourceName));
-  const decoderNames = materials.flatMap(material => [material.sourceName, `${material.sourceName}·预备`]);
+  // Read when used: a newer plan of the song (0.5.9 R9) adds materials to `materials`.
+  const images = (): ReadonlySet<string> => new Set(materials.filter(material => material.image).map(material => material.sourceName));
+  const decoderNames = (): string[] => materials.flatMap(material => [material.sourceName, `${material.sourceName}·预备`]);
   const kept = new Map<string, string>(), handedOver = new Set<string>();
   let holding = false;
   const others = (): ReadonlyMap<string, string> => held?.decoders() ?? new Map<string, string>();
   const release = (owned: (name: string) => boolean, closing: () => Promise<void>): Promise<void> => runAll([closing,
-    () => scenes.releasePrimed(decoderNames.filter(owned)), () => scenes.releaseImages([...imageNames].filter(owned)), ...finish]);
+    () => scenes.releasePrimed(decoderNames().filter(owned)), () => scenes.releaseImages([...images()].filter(owned)), ...finish]);
   return {
     release: () => {
       if (holding) return release(name => kept.has(name) && !handedOver.has(name), () => preload.close());
@@ -192,7 +233,7 @@ export function pictureHold(preload: Pick<ObsMediaPreload, 'close' | 'hold' | 'd
       return release(name => !theirs.has(name), () => preload.close());
     },
     hold: clips => {
-      const theirs = others();
+      const theirs = others(), imageNames = images();
       holding = true;
       for (const { sourceName, clipId } of clips) {
         const decoder = imageNames.has(sourceName) ? sourceName : preload.decoderOf(sourceName);
@@ -205,7 +246,7 @@ export function pictureHold(preload: Pick<ObsMediaPreload, 'close' | 'hold' | 'd
     handOver: async (sourceName, reuse) => {
       if (handedOver.has(sourceName) || !kept.has(sourceName)) return;
       handedOver.add(sourceName);
-      if (reuse || imageNames.has(sourceName)) preload.forget(sourceName);
+      if (reuse || images().has(sourceName)) preload.forget(sourceName);
       else await preload.giveWay(sourceName);
     }
   };
@@ -215,14 +256,19 @@ export function pictureHold(preload: Pick<ObsMediaPreload, 'close' | 'hold' | 'd
  * only this immutable snapshot's referenced resources are prepared. */
 export function createNativeObsOutputs(request: NativeObsPrepare, services: Services, positionMs: number): NativeObsOutputs {
   const { obs, projects, profiles, seek, logger } = services;
-  const project = projectFromObsSnapshot(request.snapshot), path = request.projectPath;
+  const path = request.projectPath, itemId = request.snapshot.item.id;
+  // A newer plan of the song on air replaces it (`retargetOutputs`, 0.5.9 R9).
+  let project = projectFromObsSnapshot(request.snapshot);
   // Leave decode-engine headroom for the standby slot. Remaining live layers
   // use fast CPU lossless caches instead of adding more hardware sessions.
+  // A newer plan adds its new materials here (`retargetOutputs`); none is taken out.
   const materialTargets = obsMediaDecodeTargets(project);
   const preciseAssets = preciseSeekAssetIds(request.snapshot, positionMs);
   let address: string | null = null, capture: NativePlayerService['audioCaptureIdentity'] | null = null;
-  let prepared = false;
+  let prepared = false, released = false;
   let captureNotice: string | null = null;
+  /** The scenes our music item was put into for this song (the capture's, then each one a newer plan added). */
+  const musicScenes = new Set<string>();
   const identities = new Map<string, { size: number; mtimeMs: number; ctimeMs: number; ino: number }>();
   const preload = new ObsMediaPreload(project, request.snapshot.item.id, obs.mediaScenes, {
     prime: async (name, retained, kind) => { if (!address) throw new Error('画面连接还没准备好'); await seek.prime(address, name, retained, kind); },
@@ -234,13 +280,66 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
     await obs.setInternalAudioCapture(false, target.executable, target.title, target.audioDeviceId, undefined, target.windowClass);
     capture = null;
   };
-  const hold = pictureHold(preload, obs.mediaScenes, materialTargets.map(target => ({ sourceName: target.sourceName, image: target.asset.kind === 'image' })),
-    services.held, [() => logger.flush(), releaseCapture]);
+  const holdMaterials = materialTargets.map(target => ({ sourceName: target.sourceName, image: target.asset.kind === 'image' }));
+  const hold = pictureHold(preload, obs.mediaScenes, holdMaterials, services.held, [() => logger.flush(), releaseCapture]);
+  /** The scenes the song's plan switches to and its materials' scenes: where our music item goes. */
+  const songScenes = (): string[] => {
+    const item = project.rundown.find(entry => entry.id === itemId);
+    return [...new Set([...(item?.cues ?? []).filter(cue => cue.enabled).flatMap(cue => cue.actions.flatMap(action => action.kind === 'obs.setProgramScene' ? [action.sceneName] : [])),
+      ...materialTargets.map(target => target.sceneName)])];
+  };
   const recordLog: NativeObsOutputs['recordLog'] = entry => logger.recordBuffered(entry.category === 'action' && entry.result === 'failed'
     ? { ...entry, details: { ...entry.details, obsRequests: obs.getRequestDiagnostics() } } : entry, services.logFailure);
   const pictureLog: PictureLog = { record: recordLog, projectId: project.projectId, itemId: request.snapshot.item.id };
   const upcoming = pictureUpcoming(preload, pictureLog);
   const seekStep = pictureSeekStep(preload, pictureLog);
+  /** A newer plan's materials, prepared in the background as at preparation (the same file checks); one that cannot be
+   * is its clips' red part and the run log's line, the rest of the picture goes on. `settled`: after each one, prepared
+   * or not, so that a song that does not play prepares its clips now (the lookahead runs on clocks). */
+  const prepareAdded = async (targets: typeof materialTargets, settled: () => void): Promise<void> => {
+    const assertCurrent = (): void => { if (released) throw new ObsPreparationCancelled('这首歌的画面已经停了，新的素材不再准备'); };
+    for (const target of targets) {
+      const { asset } = target;
+      try {
+        assertCurrent();
+        const inspected = await projects.inspectMediaAssets(path, [asset]); assertCurrent();
+        if (!inspected[asset.id]?.fileAvailable) throw new Error(`素材文件读不了：${asset.name}`);
+        const absolute = projects.resolveMediaAsset(path, asset.relativePath);
+        const identity = await stat(absolute);
+        if (!identity.isFile()) throw new Error(`素材文件读不了：${asset.name}`);
+        identities.set(absolute, identity); assertCurrent();
+        const playbackPath = request.preciseSeeking && asset.kind === 'video'
+          ? await services.media.ensureObsSeekVideo(path, asset.relativePath, asset.sha256, target.hardwareDecode ? 'hardware' : 'software') : absolute;
+        assertCurrent();
+        await obs.preparePlaybackMedia(() => obs.mediaScenes.prepare(project.projectId, asset, absolute, playbackPath, obsMediaCachePaths(path, asset.sha256), target, target.hardwareDecode));
+        assertCurrent();
+        preload.register(project.projectId, asset, absolute, target.sourceName);
+      } catch (error) {
+        if (error instanceof ObsPreparationCancelled) return;
+        const reason = error instanceof Error ? error.message : String(error);
+        preload.unavailableMaterial(target.sourceName, reason);
+        await logger.record({ level: 'error', category: 'preflight', device: '后台画面', projectId: project.projectId, itemId,
+          message: `这次修改加的素材没有准备好：${asset.name}`, result: 'failed', details: { assetId: asset.id, error: reason } });
+      }
+      settled();
+    }
+  };
+  const music = pictureMusicScenes(obs, { record: entry => logger.record(entry), projectId: project.projectId, itemId }, musicScenes,
+    notice => { captureNotice = notice; });
+  const retarget = async (next: LinkProject, frame: number, settled: () => void): Promise<void> => {
+    project = next;
+    preload.retarget(next, itemId);
+    const known = new Set(materialTargets.map(target => target.sourceName));
+    let hardware = materialTargets.filter(target => target.hardwareDecode).length;
+    // Within the decode budget of the preparation (`obsMediaDecodeTargets`).
+    const added = obsMediaDecodeTargets(next).filter(target => !known.has(target.sourceName))
+      .map(target => ({ ...target, hardwareDecode: target.asset.kind === 'video' && hardware++ < 2 }));
+    for (const target of added) { materialTargets.push(target); holdMaterials.push({ sourceName: target.sourceName, image: target.asset.kind === 'image' }); }
+    if (added.length) void prepareAdded(added, settled);
+    // Only where the music capture was set up for this song.
+    if (!capture) return;
+    await music(songScenes(), pictureProgramScene(new SceneOutputTimeline(next, itemId).pictureAt(frame).target));
+  };
   const outputs: NativeObsOutputs = {
     outputNotice: () => captureNotice,
     now: () => performance.now(), executor: pictureExecutor(obs, preload, pictureLog),
@@ -369,11 +468,8 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       }
       if (!report.passed) throw new Error(report.checks.filter(check => check.status === 'blocking').map(check => check.detail).join('；'));
       measure('开播前检查');
-      const upcoming = [...new Set([
-        ...request.snapshot.item.cues.filter(cue => cue.enabled).flatMap(cue => cue.actions.flatMap(action =>
-          action.kind === 'obs.setProgramScene' ? [action.sceneName] : [])),
-        ...materialTargets.map(target => target.sceneName)
-      ])];
+      // The plan as it is now: after a reconnect, a newer one the song took (R9).
+      const upcoming = songScenes();
       const prepareStructure = async (): Promise<void> => {
         for (const entry of opening.cues) for (const action of entry.cue.actions) {
           if (action.kind !== 'obs.setProgramScene' || !action.sceneLayers) continue;
@@ -399,10 +495,9 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
           throw new Error('准备好的素材有变化，请重新导入后再准备节目');
         }
       }
-      const scenes = [...new Set([...request.snapshot.item.cues.filter(cue => cue.enabled)
-        .flatMap(cue => cue.actions.flatMap(action => action.kind === 'obs.setProgramScene' ? [action.sceneName] : [])),
-      ...materialTargets.map(target => target.sceneName)])];
+      const scenes = songScenes();
       capture = services.audioIdentity();
+      for (const scene of scenes) musicScenes.add(scene);
       try { await obs.setInternalAudioCapture(true, capture.executable, capture.title, capture.audioDeviceId, scenes, capture.windowClass); }
       catch (error) {
         assertCurrent();
@@ -413,9 +508,21 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       }
       assertCurrent();
     },
-    prepareUpcoming: (frame, assertCurrent) => obs.preparePlaybackMedia(() => upcoming(frame, assertCurrent)),
-    releaseOutputs: () => hold.release(),
-    holdOutputs: clips => hold.hold(clips),
+    prepareUpcoming: (frame, assertCurrent, spaced) => obs.preparePlaybackMedia(() => upcoming(frame, assertCurrent, spaced)),
+    releaseOutputs: () => { released = true; return hold.release(); },
+    holdOutputs: clips => { released = true; return hold.hold(clips); },
+    retargetOutputs: (next, frame, settled) => retarget(next, frame, settled),
+    clipReady: event => preload.clipState(event),
+    moveMedia: event => {
+      const decoder = preload.decoderOf(event.sourceName);
+      if (decoder === null) return Promise.resolve();
+      const received = performance.now();
+      return obs.mediaScenes.moveClip({ ...event, sourceName: decoder }, () => event.sourceOffsetMs + performance.now() - received);
+    },
+    relookMedia: event => {
+      const decoder = preload.decoderOf(event.sourceName);
+      return decoder === null ? Promise.resolve(null) : obs.mediaScenes.relook({ ...event, sourceName: decoder });
+    },
     heldDecoders: () => hold.decoders(),
     heldClipIds: () => new Set(hold.decoders().values()),
     handOver: (sourceName, reuse) => hold.handOver(sourceName, reuse),
@@ -433,7 +540,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       if (!address) throw new Error('画面连接还没准备好');
       const target = address;
       await seek.prepare(target);
-      await seekStep(event, projects.resolveMediaAsset(path, event.relativePath));
+      return seekStep(event, projects.resolveMediaAsset(path, event.relativePath));
     }
   };
   return outputs;
