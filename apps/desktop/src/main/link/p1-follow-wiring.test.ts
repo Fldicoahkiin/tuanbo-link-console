@@ -25,7 +25,7 @@ function fixture(project: LinkProject, options: { refuseFiles?: string; license?
   const playMa2Cue = vi.fn<(request: Ma2PlaybackRequest) => Promise<void>>(() => Promise.resolve());
   const lights = new LightingOffService({ console: { getMa2NetworkStatus: () => Promise.resolve(status), playMa2Cue }, failed: () => undefined, resending: () => undefined });
   const license = options.license;
-  const authorize = vi.fn(() => license ? license.access.requireOutput() : Promise.resolve());
+  const authorize = vi.fn<() => Promise<void>>(() => license ? license.access.requireOutput() : Promise.resolve());
   const showChanged = vi.fn();
   const windowOpened = vi.fn();
   const release = vi.fn(() => Promise.resolve());
@@ -209,7 +209,7 @@ describe('P1 跟随接到主进程（P3f）', () => {
     await vi.waitFor(() => expect(f.wiring.host.state).toMatchObject({ phase: 'running', itemId: 'b', reason: null }));
     // Each song's preparation asked the license, and it held both times.
     expect(f.authorize.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect((await Promise.allSettled(f.authorize.mock.results.map(result => result.value))).every(result => result.status === 'fulfilled')).toBe(true);
+    expect(f.authorize.mock.settledResults.map(result => result.type)).toEqual(f.authorize.mock.calls.map(() => 'fulfilled'));
     expect(f.refused).not.toHaveBeenCalled();
     await f.send({ kind: 'stop' });
     await expect(f.send({ kind: 'arm', itemId: null })).rejects.toThrow('有效授权');
