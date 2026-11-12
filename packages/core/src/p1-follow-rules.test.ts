@@ -707,7 +707,7 @@ describe('P1 跟随规则 · 提前准备下一首的画面（2026-11-12）', ()
     expect(told).toEqual(['a', 'b']);
     // Out of order: P1 plays c, the last; nothing after it.
     ms = feed(auto, songFrame(project, 'c'), 10, ms + 100); ready();
-    ms = feed(auto, songFrame(project, 'c') + 10, 10, ms);
+    feed(auto, songFrame(project, 'c') + 10, 10, ms);
     expect(told).toEqual(['a', 'b', null]);
     auto.stop('stop');
     expect(told).toEqual(['a', 'b', null, null]);

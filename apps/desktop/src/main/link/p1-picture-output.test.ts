@@ -339,7 +339,8 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     await f.play(0, 1000);
     await f.host.close();
     await f.play(1050, 2500);
-    expect(f.host.status).toMatchObject({ sessionId: expect.not.stringMatching(PROGRAM), itemId: 'song', state: 'running' });
+    expect(f.host.status).toMatchObject({ itemId: 'song', state: 'running' });
+    expect(f.host.status?.sessionId).not.toBe(PROGRAM);
     expect(f.sent.at(-1)).toBe('切到机位B');
     expect([f.held, f.released]).toEqual([[], []]);
     await f.picture.close();
@@ -357,12 +358,14 @@ describe('跟随 P1 时的画面：同一个画面宿主（0.5.9）', () => {
     await expect(p1.host.prepare(p1.programRequest(program))).rejects.toThrow('OBS 的画面正在跟随 P1（工程「P1 画面」），这首歌不联动画面，音乐和时间码照常');
     // Its stop of the picture it never got stops nothing of the follow's.
     await expect(p1.host.stopOwned({ version: 1, sessionId: PROGRAM, generation: 1 })).resolves.toBeUndefined();
-    expect(p1.host.status).toMatchObject({ sessionId: expect.not.stringMatching(PROGRAM), itemId: 'song', state: 'running' });
+    expect(p1.host.status).toMatchObject({ itemId: 'song', state: 'running' });
+    expect(p1.host.status?.sessionId).not.toBe(PROGRAM);
     // The program's music plays: its clocks do not touch the follow's picture, which goes on.
     p1.programClock({ status: 'playing', generation: 2, positionMs: 0 });
     for (let ms = 50; ms <= 500; ms += 50) p1.programClock({ positionMs: ms });
     await p1.play(1050, 2500);
-    expect(p1.host.status).toMatchObject({ sessionId: expect.not.stringMatching(PROGRAM), itemId: 'song', state: 'running' });
+    expect(p1.host.status).toMatchObject({ itemId: 'song', state: 'running' });
+    expect(p1.host.status?.sessionId).not.toBe(PROGRAM);
     expect(p1.sent.at(-1)).toBe('切到机位B');
     expect(p1.made.map(entry => entry.music)).toEqual([false]);
 
