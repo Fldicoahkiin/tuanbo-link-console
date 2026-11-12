@@ -10,7 +10,7 @@
 
 1. **现场在用，稳定性第一。** 直播间每天拿它开播。一个改动宁可少做，不可让正在播的歌出问题。
 2. **演出在主进程里跑，界面只发命令、照着状态显示。** 界面卡住、重新加载、崩溃，都不能影响正在播的歌。不要把计时、发时间码、切画面、发 MIDI 的逻辑放回界面。
-3. **同一件事只有一处实现。** 哪件事在哪一处，列在 AGENTS.md 第 4 节的表里。新功能接到已有的那一处上，不另开一条路。历史上反复出现的问题，根因几乎都是同一件事有了第二份实现。
+3. **同一件事只有一处实现。** 哪件事在哪一处，列在 AGENTS.md 第 4 节的表里，每一行的规矩全文在 `docs/ONE_PLACE_PLAYBACK.md`、`docs/ONE_PLACE_PICTURE.md`、`docs/ONE_PLACE_LIGHTING.md`、`docs/ONE_PLACE_EDITOR.md`。新功能接到已有的那一处上，不另开一条路。历史上反复出现的问题，根因几乎都是同一件事有了第二份实现。
 4. **外部设备出错要明说。** 返回、显示、记日志，三样都要。不悄悄重试，不悄悄换一条路，不把“命令发出去了”当成功。允许的自动恢复只有 `packages/core/src/output-recovery.ts` 里那几样，次数也只写在那里。
 5. **等待不算失败。** 断线、播放中、编辑中都只是等，界面标黄、写明在等什么；到了上限或确实失败才标红。一首歌失败不挡别的歌。
 6. **规则测试守着用户定下的规则。** 名字里带 `rules` 或 `scan` 的测试红了，是代码违反了规则，不能靠改测试过关。AGENTS.md 和 LIGHTING_WORKFLOW.md 里带日期的决定是用户定过的，不要悄悄改回去。
@@ -159,8 +159,10 @@ packages/schema  ←  packages/core  ←  主进程（main/link）
 ## 10. 测试怎么把关
 
 - 测试以用户在现场手动测试为主；自动化只用单测、类型检查、lint 和正式模式构建检查。推 master 之前在本地全跑一遍（命令见 AGENTS.md 第 6 节），不靠推上去让 CI 试。
-- **规则测试**（`*-rules.test.ts`）一条对应用户定的一条规则；**源码扫描**（`*-scan.test.ts` 和规则测试里的扫描）守着“别处不许再写一份”。AGENTS.md 表里的行写着哪个测试守着它。
+- **规则测试**（`*-rules.test.ts`）一条对应用户定的一条规则；**源码扫描**（`*-scan.test.ts` 和规则测试里的扫描）守着“别处不许再写一份”。AGENTS.md 表里的每一行都写着哪个测试守着它（`docs-paths-scan.test.ts` 检查每行都写了）。
 - **分层**（第 2 节）由 `eslint.config.mjs` 的 `LAYER_RULES` 和 `layer-rules.test.ts` 守着。
+- **规则测试只能加，不能悄悄改。** `docs/rule-tests.json` 记着每一条规则测试的指纹（算法在 `scripts/rule-tests.mjs`：这条测试自己的写法，加上它用到的同一个文件里的常量、函数和 `beforeEach`），`apps/desktop/src/main/link/rule-manifest-scan.test.ts` 守着：清单里的测试被改、被跳过、被删就红，红的时候会写明怎么办。新加的规则测试用 `pnpm rules:record` 登记，它只加新的。能动已有规则测试的只有两种情况：用户改了这条规则；或者规则没变，只是测试调用代码的写法要跟着变、断言一条没放松。那时在清单的 `changes` 末尾加一条，写明哪天、为什么；`tests` 里已有的指纹不改，文件不重新生成。
+- **文档里写到的文件必须存在。** `apps/desktop/src/main/link/docs-paths-scan.test.ts` 读第 12 节列的现行文档，写成代码的路径和文档之间的链接找不到文件就红。文件搬了、改名了，在同一次提交里把文档改过来。
 - 没在现场 Windows 和实体 MA2 上试过的东西，文档和回复里都写明“未实机验证”，待验证的列在 [plan.md](./plan.md) 开头。
 
 ## 11. 改代码的步骤
@@ -171,7 +173,7 @@ packages/schema  ←  packages/core  ←  主进程（main/link）
 4. **改工程数据走命令。** 新的修改做成 `LinkCommand`。动了工程格式，看 `packages/schema/src/link-project.ts` 里的版本规则（旧版本打不开的改动要升版本，见 AGENTS.md 第 2 节）。
 5. **和演出有关的操作问 `showGate`。** 不自己判断“在不在播放”。
 6. **出错的路径和成功的路径一样要写。** 对外的每一步：失败返回什么、界面显示什么、日志记什么。不写空的 `catch`，不加静默的退路。
-7. **补测试。** 新规则加规则测试；修 bug 先写一个会失败的测试。不改已有规则测试里的断言；确实是用户改了规则，在同一次提交里写明哪天定的。
+7. **补测试。** 新规则加规则测试，写完运行 `pnpm rules:record` 登记；修 bug 先写一个会失败的测试。不改已有规则测试里的断言；确实是用户改了规则，在同一次提交里把哪天定的写进 `docs/rule-tests.json` 的 `changes`（第 10 节）。
 8. **本地检查全过再提交。** `pnpm typecheck`、`pnpm test`、`pnpm lint` 和正式模式构建检查。lint 报内存不够（exit 134）是内存上限的问题，不是删规则的理由。
 9. **写下来。** 用户能感觉到的改动在 `release-notes/` 下一版的文件里加一条；新定的长期规则写进 AGENTS.md 或对应文档；这份文档里说的结构变了，同一次提交里改这里。
 
@@ -191,6 +193,7 @@ packages/schema  ←  packages/core  ←  主进程（main/link）
 
 - [AGENTS.md](../AGENTS.md)、[CLAUDE.md](../CLAUDE.md)：规范。
 - 本文：结构。
+- [ONE_PLACE_PLAYBACK.md](./ONE_PLACE_PLAYBACK.md)、[ONE_PLACE_PICTURE.md](./ONE_PLACE_PICTURE.md)、[ONE_PLACE_LIGHTING.md](./ONE_PLACE_LIGHTING.md)、[ONE_PLACE_EDITOR.md](./ONE_PLACE_EDITOR.md)：AGENTS.md「同一件事只有一处实现」每一行的规矩全文。
 - [LIGHTING_WORKFLOW.md](./LIGHTING_WORKFLOW.md)：灯光、MA2、时间码、播放。
 - [OBS_SCENE_WORKFLOW.md](./OBS_SCENE_WORKFLOW.md)、[OBS_REALTIME_CANVAS.md](./OBS_REALTIME_CANVAS.md)：画面。
 - [KEYBOARD_SHORTCUTS.md](./KEYBOARD_SHORTCUTS.md)、[SONG_VOLUME.md](./SONG_VOLUME.md)、[UI_COPY_GUIDE.md](./UI_COPY_GUIDE.md)。
