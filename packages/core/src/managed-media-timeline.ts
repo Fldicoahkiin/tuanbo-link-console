@@ -8,7 +8,7 @@ import type {
 import { frameNumberToTimecode, millisecondsToFrameNumber } from './mtc-timecode';
 import { audioContainsMediaSource } from './audio-edit';
 import { clipObsTransform } from './media-obs-transform';
-import { resolveTimelineClipSpan, wasTimelineFrameCrossed } from './timeline-state';
+import { resolveTimelineClipSpan } from './timeline-state';
 
 export const MANAGED_OBS_SCENE_NAME = '团播联动台输出';
 export const MANAGED_OBS_SOURCE_PREFIX = '团播联动台·';
@@ -164,19 +164,6 @@ export function lockedLayerMessage(layer: { name: string }): string { return `�
 
 export function managedMediaEventTimecode(event: ManagedMediaEvent, frameRate: MtcFrameRate) {
   return frameNumberToTimecode(event.frameNumber, frameRate);
-}
-
-export function collectCrossedManagedMediaEvents(
-  events: readonly ManagedMediaEvent[],
-  previousFrame: number,
-  currentFrame: number,
-  executedEventIds: ReadonlySet<string>
-): ManagedMediaEvent[] {
-  if (currentFrame < previousFrame) return [];
-  return events.filter((event) => (
-    !executedEventIds.has(event.id)
-    && wasTimelineFrameCrossed(previousFrame, currentFrame, event.frameNumber)
-  ));
 }
 
 function compareManagedMediaEvents(left: ManagedMediaEvent, right: ManagedMediaEvent): number {

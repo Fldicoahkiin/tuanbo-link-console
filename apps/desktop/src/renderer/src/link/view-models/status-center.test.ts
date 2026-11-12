@@ -173,7 +173,7 @@ it('M5：演出中控台断了在自动重新登录是等待（黄，第几次�
 it('跟随 P1（P4）：等待和时间码停了标黄写原因，只有出错的标红；手动模式停了说怎么接着跟', () => {
   const base: P1FollowState = { version: 1, phase: 'running', ownerId: '6f1c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f', projectId: 'p', projectPath: 'C:/show.tblink', projectName: '演出',
     mode: 'manual', runMode: 'live', itemId: 'song', sessionId: 's', generation: 1, positionMs: 0, cause: null, reason: null,
-    input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null } };
+    input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null, picture: null } };
   expect(p1FollowStatus(null)).toMatchObject({ state: 'idle', value: 'P1 跟随' });
   expect(p1FollowStatus(base)).toMatchObject({ state: 'ready', value: '在跟' });
   expect(p1FollowStatus({ ...base, phase: 'waiting' })).toMatchObject({ state: 'warning', value: '等 P1 播放' });
@@ -184,7 +184,25 @@ it('跟随 P1（P4）：等待和时间码停了标黄写原因，只有出错�
   expect(p1FollowStatus({ ...base, phase: 'frozen', mode: 'auto', cause: 'lost', reason: '断了' }).detail).toContain('P1 继续播放或重新点歌');
   expect(p1FollowStatus({ ...base, phase: 'failed', reason: '画面没准备好' })).toEqual({ state: 'error', value: '没开始', detail: '画面没准备好' });
   expect(p1FollowStatus({ ...base, input: { portName: 'loopMIDI Port', state: 'closed', reason: '接口拔掉了' } })).toEqual({ state: 'error', value: '收不到时间码', detail: '接口拔掉了' });
-  expect(p1FollowStatus({ ...base, outputs: { actionMidi: { itemId: 'song', state: 'running', reason: null, fault: '有一条动作晚了，跳过了' } } }))
+  expect(p1FollowStatus({ ...base, outputs: { actionMidi: { itemId: 'song', state: 'running', reason: null, fault: '有一条动作晚了，跳过了' }, picture: null } }))
     .toEqual({ state: 'error', value: '动作 MIDI 出错', detail: '有一条动作晚了，跳过了；跟着 P1 的时间码' });
   expect(p1FollowStatus({ ...base, ownerId: null })).toMatchObject({ state: 'warning', value: '还在跟随' });
+});
+
+it('跟随 P1 时的画面（0.5.9）：和联动台播放时一样显示各部分和“画面在不在跟”；没联动标红写原因；没有画面的歌不显示', () => {
+  const base: P1FollowState = { version: 1, phase: 'running', ownerId: '6f1c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f', projectId: 'p', projectPath: 'C:/show.tblink', projectName: '演出',
+    mode: 'manual', runMode: 'live', itemId: 'song', sessionId: 's', generation: 1, positionMs: 0, cause: null, reason: null,
+    input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null, picture: null } };
+  const picture = { itemId: 'song', state: 'running' as const, reason: null, fault: null, items: [], follow: { state: 'following' as const, detail: '机位和素材都对得上' } };
+  const project = { ...createEmptyLinkProject('P1'), playbackSource: 'p1' as const };
+  const row = (p1Picture: NonNullable<P1FollowState['outputs']['picture']> | null) => statusCenter(input({ project, p1Picture })).rows.find(entry => entry.id === 'picture');
+  expect(row(picture)).toMatchObject({ state: 'ready', value: '画面在跟', detail: '机位和素材都对得上' });
+  expect(row({ ...picture, items: [{ id: 'preload:dance', scope: 'item', state: 'failed', detail: '素材没准备好：舞蹈' }] })).toMatchObject({ state: 'error', value: '1 项出错' });
+  const refused = { ...picture, state: 'failed' as const, reason: 'OBS 的画面正在给联动台播放的节目用', follow: null };
+  expect(row(refused)).toMatchObject({ state: 'error', value: '画面没联动', detail: 'OBS 的画面正在给联动台播放的节目用' });
+  expect(row(null)).toBeUndefined();
+  expect(row({ ...picture, state: 'stopped' })).toBeUndefined();
+  expect(p1FollowStatus({ ...base, outputs: { actionMidi: null, picture: refused } }))
+    .toEqual({ state: 'error', value: '画面没联动', detail: 'OBS 的画面正在给联动台播放的节目用；跟着 P1 的时间码' });
+  expect(p1FollowStatus({ ...base, outputs: { actionMidi: null, picture } })).toMatchObject({ state: 'ready', value: '在跟' });
 });

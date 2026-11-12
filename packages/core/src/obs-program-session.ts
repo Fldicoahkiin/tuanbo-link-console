@@ -105,10 +105,10 @@ const formerKey = (sourceName: string, clipId: string): string => `${sourceName}
 /** Where in its file a clip is at song time zero: two plans with the same value play it in the same place. */
 const alignmentMs = (event: ManagedMediaEvent, fps: number): number => event.sourceOffsetMs - event.frameNumber * 1000 / fps;
 
-/** The song as this session can play it (internal playback, the item there and enabled, only OBS actions); why not, in
- * plain words. Checked as a session opens and as a newer plan arrives (0.5.9 R9). */
+/** The song as this session can play it (the item there, only OBS actions); why not, in plain words. Checked as a
+ * session opens and as a newer plan arrives (0.5.9 R9). Whatever drives the song's clock, the internal player or P1's
+ * timecode, the session plays it the same way: it only ever sees positions (0.5.9, P1 picture). */
 function pictureItem(project: LinkProject, itemId: string): RundownItem {
-  if (project.playbackSource !== 'internal') throw new Error('后台画面只支持“联动台播放”的工程');
   const item = project.rundown.find(entry => entry.id === itemId);
   if (!item) throw new Error('后台画面节目不存在');
   // Other outputs belong to independent channels, never pretend that an OBS
@@ -376,7 +376,7 @@ export class ObsProgramSession {
       () => this.dependencies.prepareOutputs(() => this.requireCurrent(generation)));
     this.requireCurrent(generation);
     const sample = this.sample(positionMs);
-    this.requireUpdate(this.runtime.arm(this.dependencies.now(), positionMs > 0 ? sample : null, 'awaiting-external-start'));
+    this.requireUpdate(this.runtime.arm(positionMs > 0 ? sample : null));
     this.frame = positionMs > 0 ? sample.totalFrames : -1;
     if (positionMs > 0) {
       // The picture at the start position, as after a position gap: camera first,
@@ -767,7 +767,7 @@ export class ObsProgramSession {
     // playhead are not due, those after it are, and the ones this run already sent stay sent.
     const runtime = new CueRuntime(project, 100), now = this.dependencies.now();
     const sample = this.frame >= 0 ? this.sample((this.frame + 0.5) * 1000 / this.fps, this.lastClock?.observedAt ?? now) : null;
-    for (const update of [runtime.selectItem(this.itemId), runtime.beginPreflight('live'), runtime.arm(now, sample, 'awaiting-external-start')]) {
+    for (const update of [runtime.selectItem(this.itemId), runtime.beginPreflight('live'), runtime.arm(sample)]) {
       if (update.state === 'error') throw new Error(update.reason ?? '新的画面计划不能用');
     }
     runtime.carryExecuted(this.runtime.executedCues());
@@ -780,7 +780,7 @@ export class ObsProgramSession {
     const before = new Map(this.starts);
     // The swap.
     this.runtime = runtime; this.project = project; this.plans++;
-    this.managed.retarget(project, this.itemId, events, timeline);
+    this.managed.retarget(project, this.itemId, timeline);
     this.timeline = timeline; this.cueById = cueById; this.mediaEvents = events;
     this.spanCue.clear();
     for (const [actionId, cueId] of spans) this.spanCue.set(actionId, cueId);

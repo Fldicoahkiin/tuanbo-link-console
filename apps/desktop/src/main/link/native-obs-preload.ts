@@ -9,7 +9,8 @@ type Entry = { origin: 'selection' | 'next'; request: NativeObsPreload; cancelle
   outputs: NativeObsOutputs | null; task: Promise<void>; assertOwner: (() => void) | null };
 type Dependencies = {
   authorize: (request: NativeObsPreload) => Promise<void>;
-  create: (request: NativeObsPrepare, positionMs: number) => NativeObsOutputs;
+  /** `music`: OBS takes the song's music through our music item (the audio player's song); false for a P1 follow's. */
+  create: (request: NativeObsPrepare, positionMs: number, music: boolean) => NativeObsOutputs;
   /** A failure no caller hears about, reported once: the failed cleanup of a preparation that was replaced, or a
    * preparation that failed after its song took it over. `log` keeps OBS's own words; `shown` is what the operator reads. */
   report: (failure: PictureFailure) => void;
@@ -56,7 +57,7 @@ export class NativeObsPreloadPool {
     };
     entry.task = (async () => {
       await this.cleanup; current();
-      entry.outputs = this.dependencies.create(entry.request, next.positionMs);
+      entry.outputs = this.dependencies.create(entry.request, next.positionMs, true);
       await entry.outputs.guardOutput(() => { current(); return true; }, () => entry.outputs!.preloadResources(current, 'background'));
       current();
     })().finally(() => { entry.settled = true; });
@@ -89,13 +90,14 @@ export class NativeObsPreloadPool {
       // The window's files are checked either way: the outputs load exactly these.
       await checkFiles?.(request);
       current();
-      entry.outputs = this.dependencies.create(request, request.positionMs);
+      entry.outputs = this.dependencies.create(request, request.positionMs, true);
       await entry.outputs.guardOutput(() => { current(); return true; }, () => entry.outputs!.preloadResources(current)); current();
     })().finally(() => { entry.settled = true; });
     return entry.task;
   }
 
-  async take(request: NativeObsPrepare, positionMs: number, assertOwner: () => void): Promise<NativeObsOutputs> {
+  /** `music`: false for a P1 follow's song, whose music OBS does not take from us (`create`). */
+  async take(request: NativeObsPrepare, positionMs: number, assertOwner: () => void, music = true): Promise<NativeObsOutputs> {
     const entry = this.entry;
     if (entry && !entry.cancelled && entry.request.sessionId === request.sessionId && nextPictureIdentity(entry.request, entry.request.positionMs) === nextPictureIdentity(request, positionMs)) {
       // The song taking it over being stopped or replaced cancels the preparation; that is not a failure.
@@ -116,10 +118,10 @@ export class NativeObsPreloadPool {
         await this.release(entry).catch((cleanup: unknown) => this.reportCleanup(cleanup));
       }
       assertOwner();
-      return this.dependencies.create(request, positionMs);
+      return this.dependencies.create(request, positionMs, music);
     }
     await this.discardReported(); assertOwner();
-    return this.dependencies.create(request, positionMs);
+    return this.dependencies.create(request, positionMs, music);
   }
 
   /** The program's stop or close drops its selected song's preparation. A failed cleanup is reported once and never

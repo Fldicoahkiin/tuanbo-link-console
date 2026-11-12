@@ -209,31 +209,6 @@ export class SceneOutputTimeline {
     }
     return entries;
   }
-  cross(previous: number, frame: number, due: RuntimeUpdate['dueCues'], media: ManagedMediaEvent[]): SceneWork {
-    const end = this.index.ends[firstAfter(this.index.ends, previous)];
-    if (!due.length && !media.length && (end === undefined || end > frame)) return { cues: [], media: [] };
-    const boundary = Math.min(frame, end !== undefined && end <= frame ? end : frame,
-      ...due.filter(entry => entry.cue.actions.some(action => action.kind === 'obs.setProgramScene')).map(entry => entry.scheduledFrame),
-      ...media.map(event => event.frameNumber));
-    return boundaryWork(this.index.itemId, boundary, due, media, this.at(previous), this.at(frame));
-  }
-  /** Recovery rule B after a position gap: the picture at `frame`, whatever was
-   * crossed on the way. Scenes go first so rebuilt shown sources land on the
-   * scene now on program; everything is scheduled at `frame`. */
-  rebuild(previous: number, frame: number, due: RuntimeUpdate['dueCues'], media: ManagedMediaEvent[]): SceneWork {
-    // A clip that started and stopped inside the gap never played; there is nothing to stop.
-    const started = new Set(media.filter(event => event.phase === 'start').map(event => event.clipId));
-    const stops = media.filter(event => event.phase === 'stop' && !started.has(event.clipId)).map(event => ({ ...event, frameNumber: frame }));
-    const work = boundaryWork(this.index.itemId, frame, [], stops, this.at(previous), this.at(frame));
-    return { cues: [...work.cues, ...shownAt(due, frame)], media: work.media };
-  }
-  /** Recovery rule B when OBS's picture state is unknown (after a reconnect, or a
-   * pause cut a send short): the picture at `frame` from nothing, with every clip
-   * on air entering at `frame`, after the `stops` of clips that ended meanwhile. */
-  restore(frame: number, shown: RuntimeUpdate['dueCues'], stops: ManagedMediaEvent[] = []): SceneWork {
-    const work = boundaryWork(this.index.itemId, frame, [], stops.map(event => ({ ...event, frameNumber: frame })), { cues: [], media: [] }, this.at(frame));
-    return { cues: [...work.cues, ...shownAt(shown, frame)], media: work.media };
-  }
 
   private event(clipId: string): ManagedMediaEvent {
     const event = this.index.events.get(clipId);
@@ -249,15 +224,6 @@ export class SceneOutputTimeline {
       offsetMs: event.sourceOffsetMs + Math.round((frame - event.frameNumber) * 1000 / this.fps),
       continuesFrom: this.index.continues.get(event.clipId) };
   }
-}
-
-/** Shown-source actions one frame after the scene and clips they land on, since a
- * show acts on the scene then on program; camera switches come from the timeline. */
-function shownAt(due: RuntimeUpdate['dueCues'], frame: number): RuntimeUpdate['dueCues'] {
-  return due.flatMap((entry) => {
-    const actions = entry.cue.actions.filter((action) => action.kind !== 'obs.setProgramScene');
-    return actions.length ? [{ ...entry, cue: { ...entry.cue, actions }, scheduledFrame: frame + 1 }] : [];
-  });
 }
 
 type StackEntry = { key: string; layer: number; start: number } & ({ cue: LinkCue } | { media: ManagedMediaEvent });
@@ -313,34 +279,6 @@ function continuations(media: readonly Media[], fps: number): Map<string, string
     if (before) result.set(event.clipId, before.event.clipId);
   }
   return result;
-}
-
-function boundaryWork(itemId: string, frame: number, due: RuntimeUpdate['dueCues'], media: ManagedMediaEvent[], before: SceneWork, after: SceneWork): SceneWork {
-  const key = (work: SceneWork): string => JSON.stringify([work.media.map(event => event.clipId), work.cues.map(entry => entry.cue.actions)]);
-  const cues = due.flatMap((entry) => {
-    const actions = entry.cue.actions.filter((action) => action.kind !== 'obs.setProgramScene');
-    return actions.length ? [{ ...entry, cue: { ...entry.cue, actions } }] : [];
-  });
-  const stops = media.filter((event) => event.phase === 'stop');
-  if (key(before) === key(after)) return { cues, media: stops };
-  // A change above a playing clip must not seek/pause its decoder again.
-  // Keep scene selection separate from media lifecycle when removing an overlay.
-  const retained = new Set(before.media.map(event => event.clipId));
-  const entering = after.media.filter(event => !retained.has(event.clipId));
-  // Adjacent clips on the same owned input reposition that decoder directly.
-  // Hiding/stopping it first creates an avoidable inactive/decode cycle and a
-  // blank frame. A real gap, different source, or covered clip still stops.
-  const physicalStops = stops.filter(stop => !entering.some(start =>
-    start.sourceName === stop.sourceName && start.layerId === stop.layerId
-    && start.frameNumber === stop.frameNumber));
-  const single = after.media.length === 1 ? after.media[0] : undefined;
-  const selection = single && !single.deferSceneSwitch && retained.has(single.clipId)
-    ? [{ scheduledFrame: frame, executionId: crypto.randomUUID(), cue: {
-      id: `timeline-selection:${itemId}`, name: '显示持续播放的素材', enabled: true, notes: '',
-      timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
-      actions: [{ id: `timeline-selection:${itemId}:scene`, label: '恢复底层画面', kind: 'obs.setProgramScene' as const, sceneName: single.sceneName }]
-    } }] : [];
-  return { cues: [...cues, ...after.cues.map(entry => ({ ...entry, scheduledFrame: frame })), ...selection], media: [...physicalStops, ...entering.map((event) => ({ ...event, frameNumber: frame }))] };
 }
 
 function firstAfter(frames: readonly number[], frame: number): number {

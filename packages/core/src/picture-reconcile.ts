@@ -212,9 +212,9 @@ export function planPictureReconcile(desired: OnAirPicture, ledger: PictureLedge
   // Shown sources: open spans are shown; anything else that may be showing is hidden.
   // The order is today's, on purpose (2026-11-11: R3 must not change what an operator sees).
   // A show or hide newly due at a cut goes out before the camera switch, so it acts on the
-  // scene that was live, as `boundaryWork` sent it; a restored one, and every one of a merged
-  // backlog, goes after the switch and the starts, as `shownAt` sent it. Whether a same-frame
-  // show should land on the new scene is a question recorded for R4, not decided here.
+  // scene that was live, as the old timeline crossing sent it; a restored one, and every one of a
+  // merged backlog, goes after the switch and the starts, as the old rebuild sent it. R4 kept this
+  // order: a same-frame show stays on the scene before the switch.
   const showInto = (reason: OpReason): PictureOp[] => reason === 'restore' || context.merged ? restoredShows : freshShows;
   // Each span hides what it showed before the next one shows again (also back to back, one
   // source): hides first in each slot. Only what may still be on air is hidden (`showMayBeOn`).

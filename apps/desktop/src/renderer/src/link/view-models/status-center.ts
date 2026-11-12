@@ -1,5 +1,5 @@
 import { lightsStillRunningText, lightsUnconfirmedText, type ConsoleFollow, type LightingOffCheck, type LinkObsSnapshot } from '@tb/core/link';
-import type { IntegrationProfile, LinkProject, Ma2NetworkStatus, ObsPictureFollow, ObsPictureItem, P1FollowState } from '@tb/schema';
+import type { IntegrationProfile, LinkProject, Ma2NetworkStatus, ObsPictureFollow, ObsPictureItem, P1FollowPicture, P1FollowState } from '@tb/schema';
 import type { ConnectionCheck } from '../stores/connection-check-store';
 import type { Ma2ConnectionMethod } from '../stores/ma2-mode-store';
 import { midiConnectionTargets, usesNativeMidiOutput } from './connection-targets';
@@ -32,6 +32,8 @@ export type StatusCenterInput = {
   follow: ConsoleFollow;
   /** The lights-off read-back (M8): absent or empty, nothing is shown. */
   lightingOff?: LightingOffCheck;
+  /** The picture of the song a P1 follow holds (0.5.9): shown as the playing song's picture when the player has none. */
+  p1Picture?: P1FollowPicture | null;
 };
 export type StatusCenter = { rows: StatusRow[]; overview: StatusOverview[]; midiTargets: ReturnType<typeof midiConnectionTargets> };
 /** The details panel lists the rows by device, in the order of the top bar (音频, 视频, 灯光). */
@@ -97,7 +99,7 @@ export function statusCenter(input: StatusCenterInput): StatusCenter {
     rows.push(row(id, target.name, { category: 'audio' }, midiConnectionStatus({ required: target.required, portName: mapped?.portName, available, open, native, check: checks[id],
       inventoryPending: native && input.nativeDevices === null && input.nativeDeviceError === null, systemError: checks.midi?.state === 'error' ? checks.midi.detail : undefined })));
   }
-  const picture = pictureStatus(input.player);
+  const picture = pictureStatus(input.player) ?? p1PictureStatus(input.p1Picture);
   if (picture) rows.push(row('picture', '这首歌的画面', { category: 'obs' }, picture));
   const find = (id: string): StatusRow | undefined => rows.find(entry => entry.id === id);
   const playing = input.player.status === 'playing';
@@ -145,9 +147,23 @@ export function pictureStatus(player: StatusCenterInput['player']): ConnectionSt
   return follow;
 }
 
+/** The picture of the song a P1 follow holds (0.5.9), with the program's rules (`pictureStatus`): the same parts and
+ * read-back; one that was not prepared (another program had OBS's picture, or it failed) is red with why, as is the
+ * song's last picture fault. None for a song without picture work, and once it stopped. */
+export function p1PictureStatus(picture: P1FollowPicture | null | undefined): ConnectionStatus | undefined {
+  if (!picture || picture.state === 'stopped') return undefined;
+  if (picture.state === 'failed') return { state: 'error', value: '画面没联动', detail: picture.reason ?? '这首歌的画面没有准备好，音乐、动作 MIDI 和灯光照常' };
+  const status = pictureStatus({ status: picture.state === 'running' ? 'playing' : picture.state === 'paused' ? 'paused' : 'preparing', mtcSending: false,
+    mtcConnectionFailed: false, pictureItems: picture.items, pictureFollow: picture.follow });
+  if (picture.fault && status?.state !== 'error') return { state: 'error', value: '画面出错', detail: picture.fault };
+  if (status) return status;
+  return picture.state === 'preparing' || picture.state === 'ready'
+    ? { state: 'checking', value: '画面准备中', detail: '这首歌的画面在准备，好了就按 P1 那时放到的位置接上；音乐、动作 MIDI 和灯光不等它' } : undefined;
+}
+
 /**
  * The main process's P1 follow (0.5.9 P4), as the home page's P1 panel shows it: waiting and a frozen timecode are yellow
- * with their reason; red only for what failed (the input, the song that could not start, the song's action MIDI).
+ * with their reason; red only for what failed (the input, the song that could not start, the song's action MIDI or picture).
  */
 export function p1FollowStatus(follow: P1FollowState | null): ConnectionStatus {
   if (!follow || follow.phase === 'closed') return { state: 'idle', value: 'P1 跟随', detail: '还没接收 P1 的时间码。点「启动并待命」或一键连接后开始接收' };
@@ -156,7 +172,10 @@ export function p1FollowStatus(follow: P1FollowState | null): ConnectionStatus {
   const base = followPhaseStatus(follow);
   const midi = follow.outputs.actionMidi;
   const midiProblem = midi?.state === 'failed' ? midi.reason ?? '动作 MIDI 没准备好' : midi?.fault ?? null;
-  return midiProblem && base.state !== 'error' ? { state: 'error', value: '动作 MIDI 出错', detail: `${midiProblem}；${base.detail}` } : base;
+  if (midiProblem && base.state !== 'error') return { state: 'error', value: '动作 MIDI 出错', detail: `${midiProblem}；${base.detail}` };
+  // The picture's red, as the program's (its yellow parts and read-back are in the row 「这首歌的画面」).
+  const picture = p1PictureStatus(follow.outputs.picture);
+  return picture?.state === 'error' && base.state !== 'error' ? { state: 'error', value: picture.value, detail: `${picture.detail}；${base.detail}` } : base;
 }
 
 function followPhaseStatus(follow: P1FollowState): ConnectionStatus {

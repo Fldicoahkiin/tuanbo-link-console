@@ -9,7 +9,7 @@ const OTHER = '7f1c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f';
 const standby: P1FollowState = {
   version: 1, phase: 'standby', ownerId: PAGE, projectId: 'p', projectPath: 'C:/show.tblink', projectName: '演出', mode: 'manual', runMode: 'live',
   itemId: null, sessionId: null, generation: 0, positionMs: null, cause: null, reason: null,
-  input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null }
+  input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null, picture: null }
 };
 
 function profile(): IntegrationProfile {
@@ -28,7 +28,7 @@ function fixture(options: { errorsShown?: boolean; answer?: (request: P1FollowRe
     ownerId: PAGE, shown: state => { shown.push(state); }, errorsShown: () => options.errorsShown ?? true
   });
   const project = parseLinkProject({ ...createEmptyLinkProject('演出'), playbackSource: 'p1', rundown: [{ id: 'song', title: '歌', cues: [] }] });
-  const input = (revision = 1) => ({ project, path: 'C:/show.tblink', documentId: 1, revision, profile: profile(), encode: () => Promise.resolve('{}') });
+  const input = (revision = 1) => ({ project, path: 'C:/show.tblink', documentId: 1, revision, profile: profile(), preciseSeeking: false, encode: () => Promise.resolve('{}') });
   return { client, requests, shown, p1Follow, input, push: (state: P1FollowState) => push(state) };
 }
 
@@ -37,7 +37,7 @@ describe('界面上跟随 P1 的唯一入口（P4）', () => {
     const f = fixture();
     await f.client.start(() => (f.input()), 'manual');
     expect(f.requests[0]).toMatchObject({ ownerId: PAGE, command: { kind: 'start', projectPath: 'C:/show.tblink', mode: 'manual', runMode: 'live',
-      inputPortName: 'loopMIDI Port', document: '{}', revision: 1, lightingProfile: { p1: { mtcInputPortProfileId: 'mtc-in' } } } });
+      inputPortName: 'loopMIDI Port', document: '{}', revision: 1, lightingProfile: { p1: { mtcInputPortProfileId: 'mtc-in' } }, preciseSeeking: false } });
     await f.client.start(() => (f.input()), 'manual');
     expect(f.requests).toHaveLength(1);
     await f.client.start(() => (f.input(2)), 'manual');

@@ -65,7 +65,16 @@
 - **规则只在 `packages/core/src/p1-follow-session.ts`**（`P1FollowSession`）：P1 的时间码在走、停了还是换了一首由 `packages/core/src/p1-clock.ts` 说，这里定各路输出这时被告知什么、操作员这时能做什么。别处不自己解读 P1 的时间码。
 - **主进程 `apps/desktop/src/main/link/p1-follow-host.ts`** 拿着 P1 的时间码输入口（向 `apps/desktop/src/main/link/midi-port-broker.ts` 以「P1 时间码」的名义占用，不经过界面），跑一个 `P1FollowSession`，把状态推给界面（`link:p1-follow-state`，格式在 `packages/schema/src/p1-follow.ts`）。接线只在 `apps/desktop/src/main/link/p1-follow-wiring.ts`，`link-main.ts` 只建一次。
 - **界面只经 `apps/desktop/src/renderer/src/link/runtime/p1-follow-client.ts` 发命令**（`link:p1-follow`），状态只落在 `apps/desktop/src/renderer/src/link/stores/p1-follow-store.ts`，显示走 `apps/desktop/src/renderer/src/link/view-models/status-center.ts` 的 `p1FollowStatus`。界面不解时间码、不订阅 MTC 输入、不驱动任何输出。
-- **输出用联动台播放的那一套，不另写一份。** 动作 MIDI 经 `apps/desktop/src/main/link/p1-midi-output.ts` 接到同一个 `NativeMidiHost` 和 `MidiProgramSession`（晚到规则、端口恢复都一样）。输出列表在 `apps/desktop/src/main/link/p1-follow-outputs.ts`：一路出错不连累别的；输出出错走它自己的状态和运行日志，不往跟随里抛。画面那一路还没接上（0.5.9 进行中）：接的时候也是把 P1 的时钟交给同一个 `ObsProgramSession`、加进这个列表，不在界面里另开一条路。
+- **输出用联动台播放的那一套，不另写一份。** 动作 MIDI 经 `apps/desktop/src/main/link/p1-midi-output.ts` 接到同一个 `NativeMidiHost` 和 `MidiProgramSession`（晚到规则、端口恢复都一样）。输出列表在 `apps/desktop/src/main/link/p1-follow-outputs.ts`：一路出错不连累别的；输出出错走它自己的状态和运行日志，不往跟随里抛。
+- **画面是这个列表里的又一项**（0.5.9，2026-11-12）：`apps/desktop/src/main/link/p1-picture-output.ts` 把 P1 的时钟交给 `link-main.ts` 里唯一的那个 `NativeObsHost`（同一个 `ObsProgramSession`、停歌留最后一帧、OBS 重连、读回“画面在不在跟”），宿主不分两份：跟随给它一个“这首歌在哪”的来源（`native-obs-host.ts` 的 `PictureClockSource`），就像动作 MIDI 的 `MidiClockSource`。播放器的时钟和控制碰不到跟随的画面，P1 的时钟也碰不到节目的。P1 放的音乐不经联动台的音乐项进 OBS，读回也不找它。界面不为 P1 驱动画面。
+  - **同一时间只归一家**：另一家（另一个工程的节目，或跟随）的歌在台上或正在准备画面时，后来的那一家被拒绝并写明原因，这一路标红，音乐、时间码、动作 MIDI 和灯光照常（2026-10-30）；正在用的画面不被抢走。停下的歌不占着画面（它的最后一帧等下一首的画面上了再撤）。
+  - **开始跟一首歌不等画面**：画面在后台准备，准备好了按 P1 那一刻的位置接上（宿主的“音乐先开始、画面晚到”），之前的不补；对 P1 这是常态，不标红，只有没接上的部分标红。准备不了就这一路标红写原因，别的照跟。没有画面的歌不准备。
+  - **冻结**：点动作和机位停在原地，不补；手动模式素材照放（时间码丢了或跳变，P1 还在放），自动选歌素材暂停（P1 停了）。
+  - **接着跟**：自动选歌从同一位置继续，素材接着放、对到真实位置，这一遍发过的不重发；手动「重新同步」按这个位置对一次，此刻的机位和素材出现在 OBS，过去的点动作不补。冻结前在放的那一遍留在最后一帧，新的一遍上了再撤。
+  - **停下**：P1 换歌、在联动台按停止，画面留在最后一帧，和联动台播放同一条规矩（`ObsProgramSession.stop`、宿主的 `holds`）；跟随关掉、被同一界面的新一版换掉、退出软件时放开，和关掉节目一样。界面没了不碰在跟歌的跟随的画面（`closeEngine` 的 `nativeObs.close()` 只关播放器的歌）。这首歌的画面还在准备（上一首还在收拾、输出还没做好）时停下或关掉跟随，准备当场作废，这首的画面一点不发、做出来的输出放开（`native-obs-host.ts` 的 `stopSource`、`closeSource`）；上一首迟到的停止不会把正在准备的这首作废。
+  - **视频自己的声音**：和 0.5.8 一样只看片段自己的开关（`compileManagedMediaTimeline`）。画面快照记着谁放音乐（`obsProgramSnapshotSchema` 的 `playbackSource`：P1 的歌写 `p1`，联动台播放的歌不写这一项，快照和以前一样），画面工程照它还原；画面会话里只有 Cue 的时钟（`CueRuntime`）拿到按联动台播放走的那一份（`obs-program-session.ts` 的 `cueClockProject`），因为它只跟着会话给的位置走。
+  - **状态**：跟随的状态里有 `outputs.picture`（`packages/schema/src/p1-follow.ts`），首页的跟随状态和「这首歌的画面」照它显示，和联动台播放时一样（`status-center.ts` 的 `p1PictureStatus`）；读回怎么判断只在 `packages/core/src/picture-follow.ts`。画面显示的东西变了才通知（宿主每走一步都报），原因和出错写到 8192 个字为止（`p1-picture-output.ts`）。
+  - 跟随中改工程，画面这一遍不跟（R9 的 `retarget` 在 P1 下不接）；P1 跟随只按直播跑。
 - **灯光**：控台按 P1 的时间码自己跑。关灯照 `docs/LIGHTING_WORKFLOW.md`（2026-11-11）：在联动台按停止关这首歌的执行器、P1 不停；P1 换歌只关上一首独有的；P1 自己停、断码、等下一首都不关。走同一张关灯清单（`apps/desktop/src/main/link/lighting-off-service.ts` 的 `followChange`、`followStop`）。
 - **界面没了（重新加载）**：在跟一首歌的跟随照跟，不发 Off；新页面打开的是同一个工程就接回（`adopt`），不是同一个工程就提示这个工程还在跟随、只能停止它。什么都没在跟的（手动待命、自动选歌还在等第一首）随界面关掉、放开输入口：自动选歌由新页面自己重新开始，手动的由操作员再点。退出软件结束跟随。
 - **授权**：跟随开始跟歌时主进程自己检查一次，通过就拿着到跟随停下（`apps/desktop/src/main/link/license-access.ts` 的 `setFollowRunning`），界面在不在都一样，和节目那一条分开。见 `docs/LICENSE_IMPLEMENTATION.md`。
@@ -74,4 +83,4 @@
 - **断码和继续**（AGENTS.md 第 4 节第 9 条不变）：时间码丢了或异常跳变就冻结，不猜、不补。手动模式在首页点「重新同步」接着跟，过去的动作不补；自动选歌从同一位置继续算同一遍，发过的不重发。开始跟一首歌时，歌的开头到第一个跟上的位置之间的动作发一次，不算晚到、不标红，记一行运行日志；之后照共用的晚到规则。
 - P1 的输入口拔掉以后不自己重新打开（2026-10-24 的恢复只管输出）：正在跑的冻结，由操作员重新开始。
 
-守着它的测试：`packages/core/src/p1-follow-rules.test.ts`（规则 ⑦ 到 ⑩，和“只在主进程跟随”的源码扫描）、`packages/core/src/p1-follow-session.test.ts`、`apps/desktop/src/main/link/p1-follow-host.test.ts`、`apps/desktop/src/main/link/license-rules.test.ts` 里 P1 跟随那一组。
+守着它的测试：`packages/core/src/p1-follow-rules.test.ts`（规则 ⑦ 到 ⑩，含画面；“只在主进程跟随”和画面的源码扫描）、`packages/core/src/p1-follow-session.test.ts`、`apps/desktop/src/main/link/p1-follow-host.test.ts`、`apps/desktop/src/main/link/p1-picture-output.test.ts`、`apps/desktop/src/main/link/license-rules.test.ts` 里 P1 跟随那一组。

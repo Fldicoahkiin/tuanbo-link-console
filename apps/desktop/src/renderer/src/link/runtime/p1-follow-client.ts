@@ -21,6 +21,8 @@ export type P1FollowStartInput = {
   documentId: number;
   revision: number;
   profile: IntegrationProfile | null;
+  /** How the picture locates its clips on this computer (display preferences), as for the program. */
+  preciseSeeking: boolean;
   encode(project: LinkProject): Promise<string>;
 };
 
@@ -71,7 +73,8 @@ export class P1FollowClient {
       if (port.length !== 1 || !port[0]?.portName) throw new Error('还没设置 P1 的 MTC 输入端口');
       const document = await input.encode(input.project);
       const state = await this.send({ kind: 'start', projectPath: input.path, sessionId: crypto.randomUUID(), revision: input.revision, document,
-        mode, runMode: 'live', inputPortName: port[0].portName, lightingProfile: profile });
+        mode, runMode: 'live', inputPortName: port[0].portName, lightingProfile: profile,
+        preciseSeeking: input.preciseSeeking });
       this.started = version;
       return state;
     });

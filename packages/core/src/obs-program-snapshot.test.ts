@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import { createEmptyLinkProject, nativeObsPrepareSchema, obsProgramSnapshotSchema, parseLinkProject } from '@tb/schema';
 import { createObsProgramSnapshot, projectFromObsSnapshot, preciseSeekAssetIds } from './obs-program-snapshot';
+import { compileManagedMediaTimeline } from './managed-media-timeline';
 
 it('只投影当前节目的 OBS 输出，保留原工程全部其他通道及原始偏移', () => {
   const project = parseLinkProject({ ...createEmptyLinkProject('原工程'), playbackSource: 'internal', obsOutputMode: 'scenes',
@@ -65,4 +66,49 @@ it('零裁剪片段也可能在边界后或机位结束时进入，准备全部�
   expect([...preciseSeekAssetIds(snapshot, 3000)]).toEqual(['next']);
   expect([...preciseSeekAssetIds(snapshot, 3500)]).toEqual(['next']);
   expect(() => preciseSeekAssetIds(snapshot, NaN)).toThrow('位置无效');
+});
+
+it('视频原声：不管谁放音乐、视频原声开没开、片段自己的开关、歌的音频是不是从这个素材来的，经画面快照算出来的和工程本身算出来的一样（0.5.9，P1 的画面）', () => {
+  const asset = (id: string, kind: 'video' | 'audio') => ({ id, name: id, kind, relativePath: `${id}.${kind === 'video' ? 'mp4' : 'wav'}`,
+    sha256: 'a'.repeat(64), byteLength: 1, durationMs: 5000, ...(kind === 'video' ? { width: 1920, height: 1080 } : {}) });
+  const clip = (id: string, assetId: string, embeddedAudioEnabled: boolean | undefined) => ({ id, assetId, label: id, layerId: `${id}-layer`,
+    startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 1000, ...(embeddedAudioEnabled === undefined ? {} : { embeddedAudioEnabled }) });
+  const layers = (clipId: string) => [{ id: `${clipId}-layer`, name: '轨道 1', visible: true, locked: false }];
+  const sources = [{ playbackSource: 'p1' }, { playbackSource: 'internal' }, {}] as const;
+  let compared = 0;
+  for (const source of sources) for (const internalVideoAudio of [true, false, undefined]) for (const own of [true, false, undefined]) for (const contains of [true, false]) {
+    const music = { assetId: 'music', relativePath: 'assets/music.wav', sha256: 'b'.repeat(64), durationMs: 5000 };
+    const project = parseLinkProject({ ...createEmptyLinkProject('原声'), ...source, obsOutputMode: 'scenes',
+      ...(internalVideoAudio === undefined ? {} : { internalVideoAudio }),
+      mediaAssets: [asset('video', 'video'), asset('sound', 'audio')],
+      rundown: [{ id: 'video-song', title: '视频', cues: [], referenceAudio: { ...music, ...(contains ? { sourceMediaAssetId: 'video' } : {}) },
+        visualLayers: layers('video-clip'), referenceMediaClips: [clip('video-clip', 'video', own)] },
+      { id: 'sound-song', title: '音频', cues: [], referenceAudio: { ...music, ...(contains ? { sourceMediaAssetId: 'sound' } : {}) },
+        visualLayers: layers('sound-clip'), referenceMediaClips: [clip('sound-clip', 'sound', own)] }] });
+    for (const itemId of ['video-song', 'sound-song']) {
+      const sound = (value: typeof project) => compileManagedMediaTimeline(value, itemId).events.map(event => [event.id, event.embeddedAudioEnabled]);
+      const direct = sound(project), viaSnapshot = sound(projectFromObsSnapshot(createObsProgramSnapshot(project, itemId, 0)));
+      expect(viaSnapshot, JSON.stringify({ source, internalVideoAudio, own, contains, itemId })).toEqual(direct);
+      // An audio clip the song's audio already plays is left out both ways.
+      if (itemId === 'sound-song') expect(direct.length, JSON.stringify({ contains })).toBe(contains ? 0 : 2);
+      compared++;
+    }
+  }
+  expect(compared).toBe(108);
+  // The case the snapshot used to get wrong: P1 plays the music and the clip's switch is on.
+  const p1 = parseLinkProject({ ...createEmptyLinkProject('P1'), playbackSource: 'p1', obsOutputMode: 'scenes', mediaAssets: [asset('video', 'video')],
+    rundown: [{ id: 'song', title: '歌曲', cues: [], visualLayers: layers('clip'), referenceMediaClips: [clip('clip', 'video', undefined)] }] });
+  expect(compileManagedMediaTimeline(projectFromObsSnapshot(createObsProgramSnapshot(p1, 'song', 0)), 'song').events.map(event => event.embeddedAudioEnabled)).toEqual([true, true]);
+});
+
+it('联动台播放的歌，画面快照没有 playbackSource 这一项（和以前一样）；P1 的歌、没写播放方式的工程写 p1', () => {
+  const project = (source: object) => parseLinkProject({ ...createEmptyLinkProject('播放方式'), ...source, obsOutputMode: 'scenes', rundown: [{ id: 'song', title: '歌曲', cues: [] }] });
+  const internal = createObsProgramSnapshot(project({ playbackSource: 'internal' }), 'song', 0);
+  expect(Object.keys(internal)).toEqual(['version', 'projectId', 'revision', 'frameRate', 'outputCanvas', 'internalVideoAudio', 'item', 'assets']);
+  expect(projectFromObsSnapshot(internal).playbackSource).toBe('internal');
+  for (const source of [{ playbackSource: 'p1' }, {}]) {
+    const snapshot = obsProgramSnapshotSchema.parse(createObsProgramSnapshot(project(source), 'song', 0));
+    expect(snapshot.playbackSource).toBe('p1');
+    expect(projectFromObsSnapshot(snapshot).playbackSource).toBe('p1');
+  }
 });

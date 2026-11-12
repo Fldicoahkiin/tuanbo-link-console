@@ -12,7 +12,6 @@ export function applyRuntimeState(input: {
   const previous = useRuntimeStore.getState();
   useRuntimeStore.getState().setState({
     state: input.update.state,
-    manualTakeover: input.update.manualTakeover,
     missedCueIds: input.update.missedCueIds,
     nextCueId: input.nextCueId,
     reason: input.update.reason ?? ((input.update.state === 'error' || input.update.state === 'timecodeLost') && previous.state === input.update.state

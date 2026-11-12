@@ -4,12 +4,14 @@ import { resolveTimelineClipSpan } from './timeline-state';
 /** Runtime data only: original console XML and unrelated programs stay in the
  * document. This snapshot is never used to replace or save the user's project. */
 export function createObsProgramSnapshot(project: LinkProject, itemId: string, revision: number): ObsProgramSnapshot {
-  if (project.playbackSource !== 'internal') throw new Error('后台画面只支持“联动台播放”的工程');
+  // Either playback source: the picture follows the internal player or P1's timecode the same way (0.5.9, P1 picture).
   const item = project.rundown.find(entry => entry.id === itemId);
   if (!item) throw new Error('画面节目不存在');
   const ids = new Set(item.referenceMediaClips.map(clip => clip.assetId));
   return { version: 1, projectId: project.projectId, revision, frameRate: project.timebase.frameRate,
     outputCanvas: project.outputCanvas, internalVideoAudio: project.internalVideoAudio ?? false,
+    // Only a song P1 plays says so; an internal song's snapshot stays as it always was (absent = internal).
+    ...(project.playbackSource !== 'internal' ? { playbackSource: 'p1' as const } : {}),
     item: { id: item.id, title: item.title, enabled: item.enabled, notes: item.notes,
       ...(item.referenceAudio ? { referenceAudio: item.referenceAudio } : {}),
       visualLayers: item.visualLayers, referenceMediaClips: item.referenceMediaClips,
@@ -33,7 +35,7 @@ export function itemNeedsObs(project: LinkProject, itemId: string): boolean {
 export function projectFromObsSnapshot(snapshot: ObsProgramSnapshot): LinkProject {
   return parseLinkProject({ ...createEmptyLinkProject(snapshot.item.title), projectId: snapshot.projectId,
     schemaVersion: requiredSchemaVersion({ rundown: [snapshot.item] }),
-    playbackSource: 'internal', internalVideoAudio: snapshot.internalVideoAudio,
+    playbackSource: snapshot.playbackSource ?? 'internal', internalVideoAudio: snapshot.internalVideoAudio,
     outputCanvas: snapshot.outputCanvas, timebase: { frameRate: snapshot.frameRate, mode: 'per-item-reset' },
     rundown: [snapshot.item], mediaAssets: snapshot.assets });
 }

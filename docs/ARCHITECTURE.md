@@ -105,7 +105,7 @@ P1 的 MTC → P1FollowHost            主进程，占着「P1 时间码」输�
   → P1Clock（packages/core）         时间码在走、停了，还是换了一首
   → P1FollowSession（packages/core） 各路输出这时被告知什么、操作员这时能做什么
         ├─ 动作 MIDI   P1MidiOutput → 同一个 NativeMidiHost 和 MidiProgramSession
-        ├─ 画面        还没接上（0.5.9 进行中）：接的时候把 P1 的时钟交给同一个 ObsProgramSession
+        ├─ 画面        P1PictureOutput → 同一个 NativeObsHost 和 ObsProgramSession（同一时间只归一家）
         └─ 灯光        控台按 P1 的时间码自己跑；关灯走同一张清单（LightingOffService）
 ```
 
@@ -114,7 +114,7 @@ P1 的 MTC → P1FollowHost            主进程，占着「P1 时间码」输�
 - 界面重新加载：在跟一首歌的跟随照跟，新页面接回；什么都没在跟的随界面关掉。授权由跟随自己拿着。
 - 时间码丢了或异常跳变就冻结，不猜、不补（AGENTS.md 第 4 节第 9 条）。
 
-规矩全文见 `docs/ONE_PLACE_PLAYBACK.md` 的「P1 跟随」。相关文件：`packages/core/src/p1-clock.ts`、`packages/core/src/p1-follow-session.ts`、`packages/schema/src/p1-follow.ts`，`apps/desktop/src/main/link/` 下的 `p1-follow-host.ts`、`p1-follow-wiring.ts`、`p1-follow-outputs.ts`、`p1-midi-output.ts`。
+规矩全文见 `docs/ONE_PLACE_PLAYBACK.md` 的「P1 跟随」。相关文件：`packages/core/src/p1-clock.ts`、`packages/core/src/p1-follow-session.ts`、`packages/schema/src/p1-follow.ts`，`apps/desktop/src/main/link/` 下的 `p1-follow-host.ts`、`p1-follow-wiring.ts`、`p1-follow-outputs.ts`、`p1-midi-output.ts`、`p1-picture-output.ts`。画面不等：开始跟歌时在后台准备，好了按 P1 那时的位置接上；停下留最后一帧，跟随结束才放开，界面没了不碰它。
 
 ## 4. 工程和它的版本
 

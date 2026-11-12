@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { allocateP1TimecodeRanges, frameNumberToTimecode } from '@tb/core/link';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, lightingDocumentSchema, lightingMa2BindingSchema, lightingTrackSchema, p1FollowStateSchema,
-  type LicenseStatus, type LightingDocument, type LinkProject, type Ma2NetworkStatus, type Ma2PlaybackRequest, type P1FollowCommand, type P1FollowState } from '@tb/schema';
+  type LicenseStatus, type LightingDocument, type LinkProject, type Ma2NetworkStatus, type Ma2PlaybackRequest, type NativeObsStatus, type P1FollowCommand, type P1FollowState } from '@tb/schema';
 import { LightingOffService } from './lighting-off-service';
 import type { MidiInputListener } from './midi-port-broker';
 import { followRuns, p1FollowShowInput, wireP1Follow } from './p1-follow-wiring';
@@ -11,6 +11,7 @@ import { LicenseAccess } from './license-access';
 /** The P1 follow as link-main wires it (0.5.9 P3f): the real host, outputs and lights-off ledger; a fake console, broker
  * and IPC. */
 
+type PictureHost = ReturnType<Parameters<typeof wireP1Follow>[0]['picture']>;
 const FPS = 30;
 const FRAME_MS = 1000 / FPS;
 const OWNER = '6f1c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f';
@@ -18,7 +19,7 @@ const settings = { host: '192.0.2.1', port: 30000, monitorPort: 30001, username:
 
 /** `license`: link-main's license instead of a fake one: every request through its check (authorizeRequest), the
  * outputs' check (authorizeOutput) and the follow's running state into programLicense. */
-function fixture(project: LinkProject, options: { refuseFiles?: string; license?: LicenseGate & { followRunning(running: boolean): void } } = {}) {
+function fixture(project: LinkProject, options: { refuseFiles?: string; license?: LicenseGate & { followRunning(running: boolean): void }; picture?: PictureHost } = {}) {
   const handlers = new Map<string, (event: unknown, value: unknown) => unknown>();
   const states: P1FollowState[] = [], running: boolean[] = [], faults: string[] = [], listeners: MidiInputListener[] = [];
   const status: Ma2NetworkStatus = { state: 'connected', settings: { ...settings }, passwordSaved: false, version: '3.3.4.3', error: null, connection: 1 };
@@ -40,11 +41,11 @@ function fixture(project: LinkProject, options: { refuseFiles?: string; license?
     executable: 'engine.exe', authorize, midiOutputs: () => Promise.resolve([]),
     checkFiles: () => options.refuseFiles ? Promise.reject(new Error(options.refuseFiles)) : Promise.resolve(),
     lights, faults: { report: message => { faults.push(message); }, windowOpened }, record: () => Promise.resolve(),
-    showChanged, running: value => { running.push(value); license?.followRunning(value); }
+    showChanged, running: value => { running.push(value); license?.followRunning(value); }, picture: () => options.picture ?? null
   });
   const send = (command: P1FollowCommand) => handlers.get('link:p1-follow')!(null, { version: 1, ownerId: OWNER, command });
   const start = (mode: 'manual' | 'auto') => send({ kind: 'start', projectPath: 'C:/show.tblink', sessionId: OWNER, revision: 1, document: JSON.stringify(project),
-    mode, runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null });
+    mode, runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null, preciseSeeking: true });
   const offs = () => playMa2Cue.mock.calls.map(([request]) => request.action.target === 'executor' ? request.action.executor : '');
   const play = (fromFrame: number, frames: number, startMs: number) => {
     const listener = listeners.at(-1)!;
@@ -155,7 +156,7 @@ describe('P1 跟随接到主进程（P3f）', () => {
 
   it('每个阶段在节目状态里是什么', () => {
     const base = { version: 1, ownerId: OWNER, projectId: 'p', projectPath: 'C:/show.tblink', projectName: '演出', mode: 'manual', runMode: 'live', itemId: 'song', sessionId: null, generation: 0, positionMs: null,
-      cause: null, reason: null, input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null } } as const;
+      cause: null, reason: null, input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null, picture: null } } as const;
     const show = (phase: P1FollowState['phase']) => p1FollowShowInput({ ...base, phase });
     expect([show('waiting'), show('preparing'), show('running'), show('frozen'), show('takeover'), show('failed')].map(input => input?.state))
       .toEqual(['armed', 'preflight', 'running', 'timecodeLost', 'paused', 'error']);
@@ -184,6 +185,44 @@ describe('P1 跟随接到主进程（P3f）', () => {
     f.play(songFrame(project, 'b'), 30, 1_000);
     await vi.waitFor(() => expect(f.wiring.host.state).toMatchObject({ phase: 'failed', itemId: 'b', reason: '授权已过期，请重新激活' }));
     expect(f.authorize).toHaveBeenCalledOnce();
+  });
+
+  it('画面（0.5.9）：是 P1FollowOutputList 里的又一项，接在那一个画面宿主上；它报的状态随跟随的状态出去；停止留最后一帧，关掉跟随才放开', async () => {
+    const project = manualProject([]);
+    project.name = 'P1 画面跟随';
+    project.rundown[0]!.cues = [{ id: 'cue', name: '机位', timecode: frameNumberToTimecode(0, '30'), enabled: true, notes: '', actions: [
+      { id: 'scene', label: '切机位', kind: 'obs.setProgramScene', sceneName: '全景' }] }];
+    const calls: string[] = [];
+    let source: Parameters<NonNullable<PictureHost>['prepare']>[1] = null, prepared = '';
+    const picture: NonNullable<PictureHost> = {
+      prepare: (request, from) => {
+        source = from; prepared = request.sessionId;
+        calls.push(`prepare:${request.snapshot.item.id}:${request.preciseSeeking}:${request.projectPath}`);
+        const status: NativeObsStatus = { version: 1, sessionId: request.sessionId, generation: request.generation, itemId: request.snapshot.item.id, revision: 0,
+          state: 'ready', reason: null, nextCueId: null, currentCueId: null, pendingCount: 0, positionMs: 0, items: [], recoveries: [] };
+        from?.changed(status);
+        return Promise.resolve(status);
+      },
+      observe: clock => { calls.push(`observe:${clock.source}:${clock.state}`); },
+      stopSource: (from, sessionId) => { calls.push(`stop:${from === source}:${sessionId === prepared}`); return Promise.resolve(); },
+      closeSource: from => { calls.push(`close:${from === source}`); return Promise.resolve(); }
+    };
+    const f = fixture(project, { picture });
+    await f.start('manual'); await f.send({ kind: 'arm', itemId: 'song' });
+    f.play(0, 30, 1_000);
+    await vi.waitFor(() => expect(f.states.at(-1)?.outputs.picture).toMatchObject({ itemId: 'song', state: 'ready', reason: null, items: [], follow: null }));
+    expect(source).toMatchObject({ owner: '工程「P1 画面跟随」' });
+    expect(calls[0]).toBe('prepare:song:true:C:/show.tblink');
+    f.play(30, 10, 2_000);
+    expect(calls.slice(1).every(call => call === 'observe:p1:running')).toBe(true);
+    expect(calls.length).toBeGreaterThan(1);
+    // The license check of the outputs covers the picture as well.
+    expect(f.authorize).toHaveBeenCalled();
+    await f.send({ kind: 'stop' });
+    expect(calls.at(-1)).toBe('stop:true:true');
+    expect(f.wiring.host.state.outputs.picture).toBeNull();
+    await f.send({ kind: 'close' });
+    expect(calls.at(-1)).toBe('close:true');
   });
 
   it('动作 MIDI 自己报的状态随跟随的状态出去：开不了标红并写明原因', async () => {

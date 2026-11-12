@@ -423,3 +423,29 @@ describe('R9 第二轮：没在走的时候改、改到一半被打断、改不�
   });
 });
 
+
+describe('P1 放音乐的歌也能接新的一版（0.5.9，P1 的画面）', () => {
+  it('P1 的歌：会话打开和接新的一版都照联动台播放那样走，机位按新的切；视频自己的声音照片段自己的开关', async () => {
+    const p1 = (project: LinkProject): LinkProject => parseLinkProject({ ...project, playbackSource: 'p1' });
+    const test = setup(p1(cameras()));
+    await test.session.prepare(0); await test.advance(0, 500);
+    test.session.retarget(p1(cameras([camera(0), camera(1, '新机位'), camera(2), camera(3)])), 2); await test.session.settled();
+    expect(test.faults).toEqual([]);
+    expect(test.applied).toEqual([2]);
+    await test.advance(600, 2100);
+    expect(test.scenes()).toEqual(['场景 0', '新机位', '场景 2']);
+    const clip = setup(p1(video()));
+    await clip.session.prepare(0); await clip.advance(0, 500);
+    clip.session.retarget(p1(video({ durationMs: 5000 })), 2); await clip.session.settled();
+    expect(clip.faults).toEqual([]);
+    expect(clip.applied).toEqual([2]);
+    expect(clip.media.mock.calls.map(([payload]) => payload.event.embeddedAudioEnabled)).toEqual([true]);
+    // A new version taken before P1's music is joined: the picture still joins where the music is then.
+    const late = setup(p1(cameras()));
+    await late.session.prepare(0);
+    late.session.retarget(p1(cameras([camera(0), camera(1), camera(2, '新机位'), camera(3)])), 2); await late.session.settled();
+    late.session.joinNextClock(); await late.advance(1500, 2100);
+    expect(late.faults).toEqual([]);
+    expect(late.scenes()).toEqual(['新机位']);
+  });
+});

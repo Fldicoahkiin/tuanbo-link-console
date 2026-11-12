@@ -1,5 +1,4 @@
-import { MANAGED_OBS_SCENE_NAME, collectCrossedManagedMediaEvents, compileManagedMediaTimeline, type ManagedMediaEvent } from './managed-media-timeline';
-import type { ActionExecutionResult, CueActionRunner } from './cue-action-runner';
+import { MANAGED_OBS_SCENE_NAME, compileManagedMediaTimeline, type ManagedMediaEvent } from './managed-media-timeline';
 import { playbackFramesPerSecond } from './mtc-timecode';
 import type { LinkDesktopApi } from './link-desktop-contract';
 import type { LinkRunMode } from './cue-runtime';
@@ -19,7 +18,7 @@ export type ManagedMediaOutcome =
   | { kind: 'unanswered'; reason: string }
   | { kind: 'failed'; reason: string; onAir: boolean; outOfStep: boolean; sent: boolean };
 
-/** `outcome`: the step's kind, when the output told it (the renderer's P1 following does not). */
+/** `outcome`: the step's kind, when the output told it. */
 export type ManagedMediaExecutionReport = {
   executionId: string; event: ManagedMediaEvent; status: 'succeeded' | 'failed' | 'skipped';
   startedAt: number; finishedAt: number; durationMs: number; error?: string; outcome?: ManagedMediaOutcome;
@@ -30,15 +29,7 @@ export type ManagedOutputRuntimeDependencies = Pick<LinkDesktopApi, 'recordLog'>
   executeManagedMediaEvent: (payload: Parameters<LinkDesktopApi['executeManagedMediaEvent']>[0]) => Promise<ManagedMediaOutcome | void>;
 };
 
-export type ManagedOutputCleanup = { cameraCues: LinkCue[]; mediaEvents: ManagedMediaEvent[] };
-
-export async function collectManagedOutputCleanupAfter(
-  pendingTimelineWork: Promise<void>,
-  runtime: Pick<ManagedOutputRuntime, 'takeCleanup'>
-): Promise<ManagedOutputCleanup> {
-  await pendingTimelineWork;
-  return runtime.takeCleanup();
-}
+export type ManagedOutputCleanup = { cameraCues: LinkCue[] };
 
 /** The skipped report for a clip stop whose start this run did not send. */
 export const MEDIA_NOT_STARTED = '对应的片段这次没有成功启动';
@@ -59,14 +50,8 @@ export function alignManagedMediaEvent(event: ManagedMediaEvent, original: Manag
 
 export class ManagedOutputRuntime {
   private selectedItem: RundownItem | null = null;
-  private mediaEvents: ManagedMediaEvent[] = [];
   private preparedScenes: SceneOutputTimeline | null = null;
   get sceneTimeline(): SceneOutputTimeline | null { return this.preparedScenes; }
-  private readonly executedMediaEventIds = new Set<string>();
-  private readonly activeMediaByLayer = new Map<string, Map<string, ManagedMediaEvent>>();
-  /** Clips whose timeline stop went out and failed: still cleaned up at the song's
-   * stop, but a resume does not play them again (the stop is not re-sent either). */
-  private readonly stopAttempted = new Set<string>();
   private readonly activeObsSourcesByLayer = new Map<string, Set<string>>();
 
   constructor(
@@ -77,78 +62,22 @@ export class ManagedOutputRuntime {
 
   selectItem(itemId: string): void {
     this.selectedItem = this.project.rundown.find((item) => item.id === itemId) ?? null;
-    this.mediaEvents = compileManagedMediaTimeline(this.project, itemId).events;
-    this.preparedScenes = new SceneOutputTimeline(this.project, itemId, this.mediaEvents);
+    this.preparedScenes = new SceneOutputTimeline(this.project, itemId, compileManagedMediaTimeline(this.project, itemId).events);
     this.resetExecution();
   }
 
   /** A newer version of the song's plan while it plays (0.5.9 R9): what is derived from the project is replaced, the
-   * run's record of what it started and showed (its cleanup at the stop) stays. The caller compiled `events` and built
-   * `scenes` from `project`, so that nothing here can fail half way. */
-  retarget(project: LinkProject, itemId: string, events: ManagedMediaEvent[], scenes: SceneOutputTimeline): void {
+   * run's record of what it showed (its cleanup at the stop) stays. The caller built `scenes` from `project`, so that
+   * nothing here can fail half way. */
+  retarget(project: LinkProject, itemId: string, scenes: SceneOutputTimeline): void {
     this.project = project;
     this.selectedItem = project.rundown.find((item) => item.id === itemId) ?? null;
-    this.mediaEvents = events;
     this.preparedScenes = scenes;
   }
 
+  /** Forgets the sources this run showed on the owned output scene. */
   resetExecution(): void {
-    this.executedMediaEventIds.clear();
-    this.activeMediaByLayer.clear();
-    this.stopAttempted.clear();
     this.activeObsSourcesByLayer.clear();
-  }
-  /** Clips started in this run and not stopped since, one per source and layer. */
-  private activeMedia(): ManagedMediaEvent[] { return [...this.activeMediaByLayer.values()].flatMap(entries => [...entries.values()]); }
-
-  /** The inputs a pause or resume acts on: clips started in this run and not
-   * stopped since. A resume leaves out a clip whose timeline stop already went out. */
-  transportSources(action: 'pause' | 'start'): string[] {
-    return [...new Set(this.activeMedia().filter((event) => event.assetKind !== 'image'
-      && (action === 'pause' || !this.stopAttempted.has(event.clipId))).map((event) => event.sourceName))];
-  }
-
-  transportActions(action: 'pause' | 'start', sources = this.transportSources(action)): LinkAction[] {
-    return mediaTransportActions(action, sources);
-  }
-
-  alignEvent(event: ManagedMediaEvent, currentFrame: number): ManagedMediaEvent {
-    return alignManagedMediaEvent(event, this.mediaEvents.find((candidate) => candidate.id === event.id) ?? event, currentFrame, this.project.timebase.frameRate);
-  }
-
-  /** Rehearsal throws on the first failure. Live returns the failures to be shown and continues. */
-  async executeTransport(runner: CueActionRunner, action: 'pause' | 'start', currentFrame: number, mode: LinkRunMode = 'rehearsal'): Promise<{ actions: ActionExecutionResult[]; media: ManagedMediaExecutionReport[] }> {
-    const failures: { actions: ActionExecutionResult[]; media: ManagedMediaExecutionReport[] } = { actions: [], media: [] };
-    for (const command of this.transportActions(action)) {
-      const result = await runner.retry('p1-transport', command);
-      if (result.status !== 'failed') continue;
-      if (mode === 'rehearsal') throw new Error(result.error ?? 'OBS 媒体同步失败');
-      failures.actions.push(result);
-    }
-    return failures;
-  }
-
-  collectCrossed(previousFrame: number, currentFrame: number): ManagedMediaEvent[] {
-    const events = collectCrossedManagedMediaEvents(this.mediaEvents, previousFrame, currentFrame, this.executedMediaEventIds);
-    for (const event of events) this.executedMediaEventIds.add(event.id);
-    return events;
-  }
-
-  collectThrough(currentFrame: number): ManagedMediaEvent[] {
-    const events = this.mediaEvents.filter((event) => (
-      event.frameNumber <= currentFrame && !this.executedMediaEventIds.has(event.id)
-    ));
-    for (const event of events) this.executedMediaEventIds.add(event.id);
-    return events;
-  }
-
-  async reportSkippedMedia(
-    events: readonly ManagedMediaEvent[],
-    reason: string
-  ): Promise<ManagedMediaExecutionReport[]> {
-    const reports: ManagedMediaExecutionReport[] = [];
-    for (const event of events) reports.push(await this.skippedMedia(event, reason));
-    return reports;
   }
 
   /** An older show-source cue first hides what its track showed before. */
@@ -189,15 +118,6 @@ export class ManagedOutputRuntime {
     if (showResult?.status === 'succeeded') this.addActiveObsSource(originalCue.layerId, show.sourceName);
   }
 
-  applyRetriedVisualAction(cueId: string, action: LinkAction, status: string): void {
-    if (status !== 'succeeded' || action.kind !== 'obs.setSceneItemEnabled' || action.sceneName !== MANAGED_OBS_SCENE_NAME) return;
-    const originalCueId = cueId.endsWith(':duration-end') ? cueId.slice(0, -':duration-end'.length) : cueId;
-    const layerId = this.selectedItem?.cues.find((cue) => cue.id === originalCueId)?.layerId;
-    if (!layerId) return;
-    if (action.enabled) this.addActiveObsSource(layerId, action.sourceName);
-    else this.removeActiveObsSource(layerId, action.sourceName);
-  }
-
   trackVisualActionAttempt(cueId: string, action: LinkAction): void {
     if (action.kind !== 'obs.setSceneItemEnabled' || action.sceneName !== MANAGED_OBS_SCENE_NAME || !action.enabled) return;
     const layerId = this.selectedItem?.cues.find((cue) => cue.id === cueId)?.layerId;
@@ -210,9 +130,6 @@ export class ManagedOutputRuntime {
   }
 
   takeCleanup(): ManagedOutputCleanup {
-    const mediaEvents = [...this.activeMediaByLayer.values()].flatMap((sources) => [...sources.values()]).map((event) => ({
-      ...event, id: `${event.id}:operator-stop`, phase: 'stop' as const
-    }));
     const cameraCues = [...this.activeObsSourcesByLayer.entries()].flatMap(([layerId, sourceNames]) => [...sourceNames].map((sourceName, index) => ({
       id: `managed-camera-stop:${layerId}:${index}`,
       name: `停止机位 · ${sourceName}`,
@@ -225,22 +142,13 @@ export class ManagedOutputRuntime {
         kind: 'obs.setSceneItemEnabled' as const, sceneName: MANAGED_OBS_SCENE_NAME, sourceName, enabled: false
       }]
     })));
-    return { cameraCues, mediaEvents };
+    return { cameraCues };
   }
 
-  /** Sends a clip event and keeps this runtime's record of the clips it started (the renderer's
-   * P1 following reads it): a stop of a clip it did not start is skipped. */
-  executeMedia(event: ManagedMediaEvent, mode: LinkRunMode, canExecute: () => boolean = () => true): Promise<ManagedMediaExecutionReport> {
-    if (event.phase === 'stop' && this.activeMediaByLayer.get(event.layerId)?.get(event.sourceName)?.clipId !== event.clipId) {
-      return this.skippedMedia(event, MEDIA_NOT_STARTED);
-    }
-    return this.runMedia(event, mode, canExecute, true);
-  }
-
-  /** Sends a clip event, reported and logged as `executeMedia` does, without this runtime's
-   * record of started clips: the main process's picture session decides from its ledger. */
+  /** Sends a clip event, reported and logged. Which clips are on air is not kept here: the picture
+   * session decides from its ledger. */
   sendMedia(event: ManagedMediaEvent, mode: LinkRunMode, canExecute: () => boolean = () => true): Promise<ManagedMediaExecutionReport> {
-    return this.runMedia(event, mode, canExecute, false);
+    return this.runMedia(event, mode, canExecute);
   }
 
   /** A clip event not sent, reported and logged as skipped with why. */
@@ -251,7 +159,7 @@ export class ManagedOutputRuntime {
     return mediaReport(executionId, event, 'skipped', startedAt, performance.now(), reason);
   }
 
-  private async runMedia(event: ManagedMediaEvent, mode: LinkRunMode, canExecute: () => boolean, track: boolean): Promise<ManagedMediaExecutionReport> {
+  private async runMedia(event: ManagedMediaEvent, mode: LinkRunMode, canExecute: () => boolean): Promise<ManagedMediaExecutionReport> {
     const executionId = crypto.randomUUID();
     const startedAt = performance.now();
     if (!this.projectPath) {
@@ -268,23 +176,14 @@ export class ManagedOutputRuntime {
     try {
       outcome = await this.dependencies.executeManagedMediaEvent({ projectPath: this.projectPath, event });
       if (!outcome || outcome.kind === 'done') {
-        if (track && event.phase === 'start') this.addActiveMedia(event);
-        else if (track) this.removeActiveMedia(event);
         await this.recordMediaEvent(event, executionId, 'succeeded', performance.now() - startedAt);
         return { ...mediaReport(executionId, event, 'succeeded', startedAt, performance.now()), ...(outcome ? { outcome } : {}) };
       }
     } catch (error) {
-      return this.failedMedia(event, executionId, startedAt, error instanceof Error ? error.message : String(error), mode, track);
+      return this.finishFailedMedia(event, executionId, startedAt, error instanceof Error ? error.message : String(error), mode);
     }
     // An outcome other than done is reported exactly as the error it stands for would be.
-    return this.failedMedia(event, executionId, startedAt, outcome.reason, mode, track, outcome);
-  }
-
-  private failedMedia(event: ManagedMediaEvent, executionId: string, startedAt: number, error: string, mode: LinkRunMode,
-    track: boolean, outcome?: ManagedMediaOutcome): Promise<ManagedMediaExecutionReport> {
-    if (track && event.phase === 'start') this.addActiveMedia(event);
-    else if (track) this.stopAttempted.add(event.clipId);
-    return this.finishFailedMedia(event, executionId, startedAt, error, mode, outcome);
+    return this.finishFailedMedia(event, executionId, startedAt, outcome.reason, mode, outcome);
   }
 
   private async finishFailedMedia(
@@ -328,19 +227,6 @@ export class ManagedOutputRuntime {
     const sources = this.activeObsSourcesByLayer.get(layerId) ?? new Set<string>();
     sources.add(sourceName);
     this.activeObsSourcesByLayer.set(layerId, sources);
-  }
-
-  private addActiveMedia(event: ManagedMediaEvent): void {
-    const sources = this.activeMediaByLayer.get(event.layerId) ?? new Map<string, ManagedMediaEvent>();
-    sources.set(event.sourceName, event);
-    this.activeMediaByLayer.set(event.layerId, sources);
-  }
-
-  private removeActiveMedia(event: ManagedMediaEvent): void {
-    const sources = this.activeMediaByLayer.get(event.layerId);
-    if (!sources) return;
-    sources.delete(event.sourceName);
-    if (sources.size === 0) this.activeMediaByLayer.delete(event.layerId);
   }
 
   private removeActiveObsSource(layerId: string, sourceName: string): void {

@@ -9,8 +9,7 @@ import {
   resolveTimelineClipSpan,
   resolveTimelineCueSpan,
   resolveTimelineState,
-  TimelineStateIndex,
-  wasTimelineFrameCrossed
+  TimelineStateIndex
 } from './timeline-state';
 
 describe('timeline state', () => {
@@ -145,7 +144,7 @@ describe('timeline state', () => {
   it('快速跨过 OBS 开始和结束边界时按显示后隐藏顺序生成事件', () => {
     const value = project();
     const events = compileScheduledTimelineCues(value.rundown[0]!.cues, '30');
-    const crossed = events.filter((event) => wasTimelineFrameCrossed(29, 91, event.scheduledFrame));
+    const crossed = events.filter((event) => 29 < event.scheduledFrame && event.scheduledFrame <= 91);
     expect(crossed.map((event) => event.cue.id)).toEqual(['obs-clip', 'obs-clip:duration-end']);
     expect(crossed.at(-1)?.cue.actions).toMatchObject([{ kind: 'obs.setSceneItemEnabled', enabled: false }]);
   });

@@ -15,6 +15,8 @@ function fixture(project: LinkProject, options: { prepare?: (itemId: string) => 
   const calls: string[] = [], states: P1FollowState[] = [], logs: string[] = [], clocks: ProgramClock[] = [], lights: string[] = [];
   let actionMidi: P1FollowState['outputs']['actionMidi'] = null, outputChanged: () => void = () => undefined;
   const claims: { name: string; listener: MidiInputListener; release: ReturnType<typeof vi.fn> }[] = [];
+  /** The outputs each follow let go of as it ended (P1FollowOutputSet `close`), by project name. */
+  const closed: string[] = [];
   const prepareSong = vi.fn((_project: LinkProject, itemId: string) => options.prepare?.(itemId) ?? Promise.resolve());
   const host = new P1FollowHost({
     claimInput: async (name, listener) => {
@@ -33,14 +35,15 @@ function fixture(project: LinkProject, options: { prepare?: (itemId: string) => 
           reconcileAt: clock => { calls.push(`reconcileAt:${clock.state}`); clocks.push(clock); }
         },
         lights: { change: (previous, next) => { lights.push(`change:${previous ?? '-'}>${next}`); }, stop: (itemId, cause) => { lights.push(`${cause}:${itemId}`); } },
-        state: () => ({ actionMidi })
+        state: () => ({ actionMidi, picture: null }),
+        close: () => { closed.push(_project.name); return Promise.resolve(); }
       };
     },
     prepareSong, changed: state => { states.push(state); }, log: (level, message) => { logs.push(`${level}:${message}`); }
   });
   const send = (command: P1FollowCommand, ownerId = OWNER) => host.command({ version: 1, ownerId, command });
   const start = (mode: 'manual' | 'auto' = 'manual', ownerId = OWNER) => send({ kind: 'start', projectPath: 'C:/show.tblink', sessionId: OWNER, revision: 1, document: '{}',
-    mode, runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null }, ownerId);
+    mode, runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null, preciseSeeking: true }, ownerId);
   /** The input's heartbeat at this interface time. */
   const idle = (ms: number) => { claims.at(-1)!.listener.idle(at(ms)); };
   /** P1 playing on the claimed input, on the interface's clock. */
@@ -60,7 +63,7 @@ function fixture(project: LinkProject, options: { prepare?: (itemId: string) => 
   };
   /** An output reports its own state. */
   const report = (state: P1FollowState['outputs']['actionMidi']) => { actionMidi = state; outputChanged(); };
-  return { host, calls, states, logs, clocks, claims, prepareSong, send, start, play, lights, report, idle };
+  return { host, calls, states, logs, clocks, claims, prepareSong, send, start, play, lights, report, idle, closed };
 }
 
 describe('P1 跟随宿主', () => {
@@ -247,6 +250,29 @@ describe('P1 跟随宿主 · 界面重新加载不结束跟随（2026-11-12）',
     await expect(f.start('auto')).rejects.toThrow('正在跟随 P1，先停止再换工程');
     expect(f.claims).toHaveLength(1);
     await expect(f.start('auto', OTHER)).rejects.toThrow('另一个界面正在跟随 P1');
+  });
+
+  it('跟随结束才放开输出（画面的最后一帧）：关闭、退出、被同一页面的新一版换掉、没在跟歌时界面没了；在跟歌时界面没了和按停止不放开（0.5.9）', async () => {
+    const running = fixture(manualProject());
+    await running.start(); await running.send({ kind: 'arm', itemId: 'song' });
+    running.play(0, 30, 1_000);
+    await running.host.pageGone(null);
+    await running.send({ kind: 'stop' });
+    expect(running.closed).toEqual([]);
+    await running.send({ kind: 'close' });
+    expect(running.closed).toEqual(['P1 手动跟随']);
+    const quit = fixture(manualProject());
+    await quit.start(); await quit.send({ kind: 'arm', itemId: 'song' });
+    await quit.host.dispose();
+    expect(quit.closed).toEqual(['P1 手动跟随']);
+    const replaced = fixture(autoProject());
+    await replaced.start('auto'); await replaced.send({ kind: 'arm', itemId: null });
+    await replaced.start('auto');
+    expect(replaced.closed).toEqual(['P1 自动选歌']);
+    const idle = fixture(manualProject());
+    await idle.start();
+    await idle.host.pageGone(null);
+    expect(idle.closed).toEqual(['P1 手动跟随']);
   });
 
   it('没在跟歌的跟随随页面结束：待命、自动选歌还在等第一首时界面没了，跟随关闭、放开输入口，同一个工程再开始照常', async () => {

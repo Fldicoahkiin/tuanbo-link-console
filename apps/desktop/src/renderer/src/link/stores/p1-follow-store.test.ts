@@ -20,7 +20,7 @@ const { createDefaultIntegrationProfile } = await import('../view-models/local-i
 const OTHER = '7f1c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f';
 const state = (patch: Partial<P1FollowState>): P1FollowState => ({ version: 1, phase: 'standby', ownerId: P1_FOLLOW_PAGE, projectId: 'p', projectPath: 'C:/show.tblink',
   projectName: '演出', mode: 'manual', runMode: 'live', itemId: null, sessionId: null, generation: 0, positionMs: null, cause: null, reason: null,
-  input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null }, ...patch } as P1FollowState);
+  input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null, picture: null }, ...patch } as P1FollowState);
 
 function open(auto: boolean): void {
   useDocumentStore.getState().setProject(parseLinkProject({ ...createEmptyLinkProject('演出'), playbackSource: 'p1', p1AutoFollow: { enabled: auto, ranges: [{ itemId: 'song', startSeconds: 60, durationMs: 60_000 }] },

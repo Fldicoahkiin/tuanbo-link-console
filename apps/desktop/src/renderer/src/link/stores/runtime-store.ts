@@ -7,7 +7,6 @@ import type { MtcFrameRate } from '@tb/schema';
 export type RuntimeStoreState = {
   state: LinkRuntimeState;
   mode: 'rehearsal' | 'live';
-  manualTakeover: boolean;
   currentItemId: string | null;
   timecode: SmpteTimecode | null;
   detectedFrameRate: MtcFrameRate | null;
@@ -27,7 +26,6 @@ export type RuntimeStoreState = {
 const initial = {
   state: 'idle' as const,
   mode: 'rehearsal' as const,
-  manualTakeover: false,
   currentItemId: null,
   timecode: null,
   detectedFrameRate: null,

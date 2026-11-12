@@ -13,7 +13,7 @@ it.skipIf(!process.env.TBLINK_CUE_BENCHMARK)('五万 Cue 调度基准：完整�
     })) }] });
   const runtime = new CueRuntime(project);
   const started = performance.now();
-  runtime.selectItem('program'); runtime.beginPreflight('live'); runtime.arm(0);
+  runtime.selectItem('program'); runtime.beginPreflight('live'); runtime.arm();
   const preparationMs = performance.now() - started;
   const timings: number[] = [];
   const nextTimings: number[] = [], previousNextTimings: number[] = [];

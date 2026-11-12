@@ -280,7 +280,8 @@ function showRunning(): boolean { return runtimeActive || p1Follow?.running() ==
  * device while its process is there (player() reads it each time); the next close tries it once more.
  * Never claim stopped or spawn a replacement. The picture and the preselected pictures that do not close are reported
  * once and hold up nothing (2026-11-10). The editor's music monitor is not among them: it stops with its page
- * (releaseGonePage) and at quit. */
+ * (releaseGonePage) and at quit. Nor is a P1 follow's picture: `nativeObs.close()` closes only the audio player's
+ * songs, so a follow that runs a song keeps its picture when the page goes; it goes with the follow (0.5.9). */
 async function closeEngine(): Promise<void> {
   const player = nativePlayer, shutdown = nativePlayerShutdown ??= closeEngineOutputs({ engine: player?.close(), picture: nativeObs?.close(), preload: nativeObsPreload?.close() }, programFaults);
   try { await shutdown; }
@@ -648,7 +649,7 @@ function registerIpc(
       await nativeObs?.stop();
       if (nativePlaybackActive()) throw new Error('音频已经在准备了，不能再单独准备节目');
     },
-    create: (request, positionMs) => createNativeObsOutputs(request, { obs, projects: projectService, media: mediaPreviewService,
+    create: (request, positionMs, music) => createNativeObsOutputs(request, { obs, projects: projectService, media: mediaPreviewService,
       profiles: profileStore, seek: nativeSeek, logger, seenNotices,
       // A stopped song's last frame, which this song's decoders take over (R14); nativeObs is set below.
       held: { decoders: () => nativeObs?.heldDecoders() ?? new Map<string, string>(), takeOver: (name, reuse) => nativeObs?.takeOver(name, reuse) ?? Promise.resolve() },
@@ -656,14 +657,15 @@ function registerIpc(
         if (nativeObs?.status?.sessionId === request.sessionId) nativeObs.disconnect(error.message);
         else console.error('已结束画面会话的运行日志未能落盘', error);
       },
-      audioIdentity: () => { if (!nativePlayer) throw new Error('音频还没准备好'); return nativePlayer.audioCaptureIdentity; } }, positionMs),
+      // A P1 follow's song: P1 plays the music, no music item of ours goes into OBS.
+      audioIdentity: music ? () => { if (!nativePlayer) throw new Error('音频还没准备好'); return nativePlayer.audioCaptureIdentity; } : null }, positionMs),
     // Logged once and shown in red on the song playing; nativeObs is set just below, before any preparation runs.
     report: failure => nativeObs?.report(failure)
   });
   nativeObsPreload = obsPreload;
   nativeObs = new NativeObsHost({
     audio: () => nativePlayer?.status ?? null,
-    outputs: (request, positionMs, assertCurrent) => obsPreload.take(request, positionMs, assertCurrent),
+    outputs: (request, positionMs, assertCurrent, source) => obsPreload.take(request, positionMs, assertCurrent, source === null),
     prepareNextFiles: async (request, assertCurrent) => {
       if (!request.nextFiles) return;
       const started = performance.now();
@@ -1132,7 +1134,7 @@ function registerIpc(
     executable: engineExecutable, authorize: () => authorizeOutput(), midiOutputs: async () => (await player().devices('all', true)).midiOutputs,
     checkFiles: async (projectPath, project) => { await projectAccess.assetFiles(projectPath, projectFileReferences(project).map(file => file.relativePath)); },
     lights: lightsOff, faults: programFaults, record: entry => logger.record(entry), showChanged: () => showState?.p1Changed(),
-    running: running => programOutputs.followRunningChanged(running) });
+    running: running => programOutputs.followRunningChanged(running), picture: () => nativeObs });
   p1Follow = follow;
   showState.followP1({ input: () => follow.showInput() });
   // Session registration captures cancellation synchronously; output adapters

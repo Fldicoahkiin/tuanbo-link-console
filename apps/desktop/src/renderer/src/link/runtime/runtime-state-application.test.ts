@@ -15,7 +15,7 @@ describe('applyRuntimeState', () => {
       project: createEmptyLinkProject('测试'),
       item: undefined,
       nextCueId: null,
-      update: { state: 'timecodeLost', manualTakeover: false, dueCues: [], missedCueIds: [] }
+      update: { state: 'timecodeLost', dueCues: [], missedCueIds: [] }
     });
     expect(useRuntimeStore.getState().reason).toBe('MTC 信号中断');
   });
