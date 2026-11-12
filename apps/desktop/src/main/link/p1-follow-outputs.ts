@@ -15,6 +15,7 @@ export class P1FollowOutputList implements P1FollowOutputs {
   observe(clock: ProgramClock): void { this.each(output => output.observe(clock)); }
   hold(): void { this.each(output => output.hold()); }
   reconcileAt(clock: ProgramClock, playsOn: boolean): void { this.each(output => output.reconcileAt(clock, playsOn)); }
+  expect(itemId: string | null): void { this.each(output => output.expect?.(itemId)); }
 
   private each(step: (output: P1FollowOutputs) => void): void {
     for (const { name, output } of this.entries) {

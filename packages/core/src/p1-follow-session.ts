@@ -1,6 +1,7 @@
 import type { LinkProject } from '@tb/schema';
 import { isMtcSampleContinuous } from './cue-runtime';
 import type { MtcSample } from './mtc-timecode';
+import { nextP1Song } from './p1-auto-follow';
 import { P1Clock, type P1ClockEvent, type P1ClockObservation, type P1FollowMode, type P1FreezeCause } from './p1-clock';
 import type { ProgramClock } from './program-clock';
 
@@ -25,11 +26,16 @@ import type { ProgramClock } from './program-clock';
  * - `hold`: the timecode froze (lost, jumped): automatic Cues stop where they are; nothing between is sent later.
  * - `reconcileAt`: the follow goes on at this position after a freeze (manual resync, or P1 going on from where it
  *   stopped): from here on, nothing passed is sent later. `playsOn`: P1 went on from where it stopped (auto), the same
- *   pass of the song: what was handled before is not handled again; false after a resync, a new pass from here. */
+ *   pass of the song: what was handled before is not handled again; false after a resync, a new pass from here.
+ * - `expect`: the song P1 is expected to play from its head next (manual: the armed one; auto: the next in rundown order
+ *   it could start); null: none any more (0.5.9, the picture made ready ahead). Never an order: an output may get ready
+ *   whatever of that song cannot be seen or heard, and a wrong guess costs nothing. Optional: an output with nothing to
+ *   get ready ahead leaves it out. */
 export type P1FollowOutputs = {
   observe(clock: ProgramClock): void;
   hold(): void;
   reconcileAt(clock: ProgramClock, playsOn: boolean): void;
+  expect?(itemId: string | null): void;
 };
 
 /** The console runs a song's lighting from P1's timecode by itself; the follow says which song that is and when the
@@ -92,7 +98,7 @@ export class P1FollowSession {
   private lit: string | null = null;
   private stableSince: number | null = null;
 
-  constructor(project: LinkProject, readonly mode: P1FollowMode, private readonly dependencies: P1FollowDependencies) {
+  constructor(private readonly project: LinkProject, readonly mode: P1FollowMode, private readonly dependencies: P1FollowDependencies) {
     this.clock = new P1Clock(project, mode);
   }
 
@@ -118,6 +124,8 @@ export class P1FollowSession {
     this.clock.arm(itemId);
     this.phase = 'waiting'; this.cause = null;
     this.reason = this.clock.state.phase === 'waiting' ? this.clock.state.reason : null;
+    // The song P1 is expected to play first: the armed one, or the first auto-follow could start.
+    this.dependencies.outputs.expect?.(this.mode === 'manual' ? itemId : nextP1Song(this.project, null));
   }
 
   /** Manual: go on from where P1 is now, after a freeze (coordinator `resyncCurrentTime`, CueRuntime `resync`): only
@@ -128,7 +136,8 @@ export class P1FollowSession {
   }
 
   /** After a freeze: wait for the song's head again (coordinator `rearmFromStart`, CueRuntime `rearmFromStart`: only
-   * from a lost timecode). The outputs are not cleared: the page only forgot what it had executed. */
+   * from a lost timecode). The outputs are not cleared: the page only forgot what it had executed. Nothing new is
+   * expected: the frozen song is still held, its restart is prepared when it comes. */
   rearm(): void {
     if (this.phase !== 'frozen') throw new Error('只有时间码中断后才能从头重新待命');
     this.clock.rearmFromStart();
@@ -151,6 +160,7 @@ export class P1FollowSession {
     this.clock.stop();
     this.pending = null;
     this.release(OPERATOR_STOP);
+    this.dependencies.outputs.expect?.(null);
     this.phase = 'standby'; this.cause = null; this.reason = null;
     const lit = this.lit; this.lit = null;
     if (lit) this.dependencies.lights.stop(lit, cause);
@@ -241,6 +251,8 @@ export class P1FollowSession {
     this.held = clock;
     this.dependencies.outputs.observe(clock);
     this.phase = 'running'; this.cause = null; this.reason = null;
+    // Auto: played in rundown order, the song after this one is next (none after the last).
+    if (this.mode === 'auto') this.dependencies.outputs.expect?.(nextP1Song(this.project, clock.itemId));
   }
 
   private frozen(cause: P1FreezeCause, reason: string): void {

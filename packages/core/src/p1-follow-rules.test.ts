@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createEmptyLinkProject, parseLinkProject, type LinkProject } from '@tb/schema';
 import { frameNumberToTimecode } from './mtc-timecode';
-import { allocateP1TimecodeRanges } from './p1-auto-follow';
+import { allocateP1TimecodeRanges, nextP1Song } from './p1-auto-follow';
 import { P1Clock, type P1ClockEvent } from './p1-clock';
 import { createLightingDocument, lightingDocumentSchema, lightingMa2BindingSchema, lightingTrackSchema, nativePlayerStatusSchema, type LightingDocument, type LinkAction,
   type Ma2PlaybackAction, type NativePlayerStatus } from '@tb/schema';
@@ -681,4 +681,68 @@ function lightingWith(executors: string[]): LightingDocument {
     baselineTracks: executors.map((_executor, index) => track(index)), mappings: [],
     trackMappings: executors.map((executor, index) => ({ trackId: `track-${index}`, path: `Track ${index}`, executor, subtracks: [] })) });
   return lightingDocumentSchema.parse({ ...createLightingDocument(), ma2Bindings: [binding] });
+}
+
+/*
+ * The picture made ready ahead (user, 2026-11-12: 「我记得是完全实时同步吧，还是晚了」): the follow tells its outputs which
+ * song P1 is expected to play from its head next. Manual: the armed song. Auto: the first song auto-follow could start,
+ * then, as each song starts, the next one after it in rundown order (none after the last). A stop says none any more;
+ * rearming after a freeze says nothing new.
+ */
+describe('P1 跟随规则 · 提前准备下一首的画面（2026-11-12）', () => {
+  it('跟随告诉输出接下来要放哪首：手动是待命的那首；自动是按节目单顺序 P1 能开始的下一首，最后一首之后没有；停止说没有了，重新待命不另说', () => {
+    const project = rundownProject();
+    // In rundown order, only songs P1 can start: `off` is turned off, `none` has no P1 range.
+    expect([nextP1Song(project, null), nextP1Song(project, 'a'), nextP1Song(project, 'b'), nextP1Song(project, 'c'), nextP1Song(project, 'missing')])
+      .toEqual(['a', 'b', 'c', null, null]);
+    const told: (string | null)[] = [];
+    const outputs: P1FollowOutputs = { ...NO_OUTPUTS, expect: itemId => { told.push(itemId); } };
+    const started: string[] = [];
+    const auto = new P1FollowSession(project, 'auto', { outputs, lights: NO_LIGHTS, prepare: (_itemId, sessionId) => { started.push(sessionId); } });
+    auto.arm(null);
+    expect(told).toEqual(['a']);
+    const ready = (): void => { auto.prepared(started.at(-1)!); };
+    let ms = feed(auto, songFrame(project, 'a'), 10, 1_000); ready();
+    ms = feed(auto, songFrame(project, 'a') + 10, 10, ms);
+    expect(told).toEqual(['a', 'b']);
+    // Out of order: P1 plays c, the last; nothing after it.
+    ms = feed(auto, songFrame(project, 'c'), 10, ms + 100); ready();
+    ms = feed(auto, songFrame(project, 'c') + 10, 10, ms);
+    expect(told).toEqual(['a', 'b', null]);
+    auto.stop('stop');
+    expect(told).toEqual(['a', 'b', null, null]);
+
+    const manualTold: (string | null)[] = [];
+    const manual = new P1FollowSession(project, 'manual', { outputs: { ...NO_OUTPUTS, expect: itemId => { manualTold.push(itemId); } }, lights: NO_LIGHTS, prepare: () => undefined });
+    manual.arm('b');
+    expect(manualTold).toEqual(['b']);
+    const end = feed(manual, 0, 30, 1_000);
+    // A song that starts in manual mode tells nothing new; a freeze and a rearm neither.
+    manual.idle(at(end + 700));
+    expect(manual.view.phase).toBe('frozen');
+    manual.rearm();
+    expect(manualTold).toEqual(['b']);
+    manual.stop('stop');
+    expect(manualTold).toEqual(['b', null]);
+  });
+});
+
+/** Four songs in rundown order: a, b and c P1 can start; `off` is turned off; `none` has no music, so no P1 range. */
+function rundownProject(): LinkProject {
+  const song = (id: string, enabled = true) => ({ id, title: id, enabled, cues: [],
+    referenceAudio: { assetId: `audio-${id}`, relativePath: `assets/${id}.wav`, sha256: 'a'.repeat(64), durationMs: 30_000 } });
+  const project = parseLinkProject({ ...createEmptyLinkProject('P1 按顺序'), playbackSource: 'p1',
+    rundown: [song('a'), { id: 'none', title: '没有音乐', cues: [] }, song('off', false), song('b'), song('c')] });
+  project.p1AutoFollow = allocateP1TimecodeRanges(project);
+  return project;
+}
+
+/** P1 playing `frames` frames from `fromFrame` into a follow, as `play` does into a clock; returns where it ended. */
+function feed(session: P1FollowSession, fromFrame: number, frames: number, startMs: number): number {
+  for (let offset = 0; offset < frames; offset += 2) {
+    const tc = frameNumberToTimecode(fromFrame + offset, '30');
+    const pieces = [tc.frames & 15, tc.frames >> 4, tc.seconds & 15, tc.seconds >> 4, tc.minutes & 15, tc.minutes >> 4, tc.hours & 15, (tc.hours >> 4) | (3 << 1)];
+    for (const [type, value] of pieces.entries()) session.message([0xf1, (type << 4) | value], at(startMs + (offset + type / 4) * FRAME_MS));
+  }
+  return startMs + frames * FRAME_MS;
 }
