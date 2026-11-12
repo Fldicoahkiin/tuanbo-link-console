@@ -692,7 +692,7 @@ describe('S8b：下一首准备不了，同一首在播的歌只说一次', () =
   });
 });
 
-describe('S8b 第二部分：在播的歌的画面按新的一版走（只做了播放器这边，画面那边是 R9）', () => {
+describe('S8b 第二部分：在播的歌的画面按新的一版走（播放器这边；画面那边见 R9 的 native-obs-host-retarget.test.ts）', () => {
   const cut = (scene: string, atMs = 2000) => ({ id: 'cam', atMs, actions: [{ id: 'cam-cut', label: '切机位', kind: 'obs.setProgramScene' as const, sceneName: scene }] });
   const setup = () => {
     const opened = withCues(project(), [cut('机位一')]);
