@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { linkActionSchema, mtcFrameRateSchema, smpteTimecodeSchema } from './link-project';
+import { mtcFrameRateSchema, smpteTimecodeSchema } from './link-project';
 
 /*
  * P1 follow in the main process (0.5.9 P3, design 03 §4.1.4 and §4.1.7): what the window asks of it
@@ -19,8 +19,9 @@ const itemIdSchema = z.string().min(1).max(200);
  * - `arm`: manual, wait for P1 to play this song from its head; auto, `itemId` null: listen for the song P1 plays.
  * - `resync`: manual, after the timecode froze: go on from where P1 is now; what was passed is not sent later.
  * - `rearm`: after the timecode froze: wait for the song's head again (auto: for P1's next song).
- * - `manualTakeover`, `manualGo`: after the timecode froze, the operator fires the Cues by hand.
- * - `retryAction`, `testAction`: send one action again, or once to try it.
+ * - `manualTakeover`: after the timecode froze, the operator takes over by hand; the timecode is not followed again.
+ * No manual GO or action retry: today's window has no caller for them (0.5.9 P3d); the single action test of the
+ * editor is not P1's and stays where it is.
  * - `stop`: stop following; P1 itself is not stopped. The input stays open for the next `arm`.
  * - `close`: stop and let go of the input (the window left this project).
  */
@@ -35,9 +36,6 @@ export const p1FollowCommandSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('resync') }).strict(),
   z.object({ kind: z.literal('rearm') }).strict(),
   z.object({ kind: z.literal('manualTakeover') }).strict(),
-  z.object({ kind: z.literal('manualGo'), cueId: z.string().min(1).max(400) }).strict(),
-  z.object({ kind: z.literal('retryAction'), cueId: z.string().min(1).max(400), actionId: z.string().min(1).max(400) }).strict(),
-  z.object({ kind: z.literal('testAction'), action: linkActionSchema }).strict(),
   z.object({ kind: z.literal('stop') }).strict(),
   z.object({ kind: z.literal('close') }).strict()
 ]);

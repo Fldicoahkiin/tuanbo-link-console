@@ -23,11 +23,12 @@ import type { ProgramClock } from './program-clock';
  *   lets the song go.
  * - `hold`: the timecode froze (lost, jumped): automatic Cues stop where they are; nothing between is sent later.
  * - `reconcileAt`: the follow goes on at this position after a freeze (manual resync, or P1 going on from where it
- *   stopped): from here on, nothing passed is sent later. */
+ *   stopped): from here on, nothing passed is sent later. `playsOn`: P1 went on from where it stopped (auto), the same
+ *   pass of the song: what was handled before is not handled again; false after a resync, a new pass from here. */
 export type P1FollowOutputs = {
   observe(clock: ProgramClock): void;
   hold(): void;
-  reconcileAt(clock: ProgramClock): void;
+  reconcileAt(clock: ProgramClock, playsOn: boolean): void;
 };
 
 export type P1FollowDependencies = {
@@ -189,8 +190,8 @@ export class P1FollowSession {
         case 'song': this.song(event.itemId, event.sessionId); break;
         case 'clock': this.running(event.clock); break;
         case 'frozen': this.frozen(event.cause, event.reason); break;
-        case 'resumed': if (this.phase === 'frozen' && this.held?.sessionId === event.clock.sessionId) this.goOn(event.clock); break;
-        case 'resynced': if (this.phase === 'frozen') this.goOn(event.clock); break;
+        case 'resumed': if (this.phase === 'frozen' && this.held?.sessionId === event.clock.sessionId) this.goOn(event.clock, true); break;
+        case 'resynced': if (this.phase === 'frozen') this.goOn(event.clock, false); break;
       }
     }
   }
@@ -233,9 +234,9 @@ export class P1FollowSession {
 
   /** Resynced (manual) or resumed (auto): the follow goes on here, past Cues are not sent later (CueRuntime `resync`
    * marks them missed; `resumeP1` takes only fps/4 frames). */
-  private goOn(clock: P1ClockObservation): void {
+  private goOn(clock: P1ClockObservation, playsOn: boolean): void {
     this.held = clock;
-    this.dependencies.outputs.reconcileAt(clock);
+    this.dependencies.outputs.reconcileAt(clock, playsOn);
     this.phase = 'running'; this.cause = null; this.reason = null;
   }
 

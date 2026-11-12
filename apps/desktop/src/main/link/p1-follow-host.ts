@@ -88,8 +88,6 @@ export class P1FollowHost {
       case 'resync': follow.session.resync(); this.dependencies.log('info', '按当前时间重新同步'); break;
       case 'rearm': follow.session.rearm(); this.dependencies.log('info', '从头重新待命'); break;
       case 'manualTakeover': follow.session.takeover(); this.dependencies.log('info', '确认手动接管'); break;
-      case 'manualGo': case 'retryAction': case 'testAction':
-        throw new Error('跟随 P1 时的手动 GO、重试动作和单步测试还没有搬到后台');
       case 'stop': follow.session.stop(); this.dependencies.log('info', '停止跟随 P1'); break;
       case 'close': await this.close(); break;
     }

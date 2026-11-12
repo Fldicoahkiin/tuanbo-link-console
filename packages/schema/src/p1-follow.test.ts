@@ -10,12 +10,15 @@ const standby: P1FollowState = {
 };
 
 describe('P1 跟随的 IPC 契约（0.5.9 P3a）', () => {
-  it('收下设计里的每一条命令，外加离开工程时的 close', () => {
+  it('收下设计里的每一条命令，外加离开工程时的 close；手动 GO、重试动作和单步测试不在这里（P3d）', () => {
     const start = { kind: 'start', projectPath: 'C:/Shows/show.tblink', sessionId: ownerId, revision: 3, document: '{}', mode: 'auto', runMode: 'live', inputPortName: 'loopMIDI Port' };
     const commands = [start, { kind: 'arm', itemId: 'song' }, { kind: 'arm', itemId: null }, { kind: 'resync' }, { kind: 'rearm' }, { kind: 'manualTakeover' },
-      { kind: 'manualGo', cueId: 'cue' }, { kind: 'retryAction', cueId: 'cue', actionId: 'action' },
-      { kind: 'testAction', action: { id: 'a', label: '机位', kind: 'obs.setProgramScene', sceneName: '机位 1' } }, { kind: 'stop' }, { kind: 'close' }];
+      { kind: 'stop' }, { kind: 'close' }];
     for (const command of commands) expect(p1FollowRequestSchema.parse(request(command)).command).toEqual(command);
+    for (const command of [{ kind: 'manualGo', cueId: 'cue' }, { kind: 'retryAction', cueId: 'cue', actionId: 'action' },
+      { kind: 'testAction', action: { id: 'a', label: '机位', kind: 'obs.setProgramScene', sceneName: '机位 1' } }]) {
+      expect(p1FollowRequestSchema.safeParse(request(command)).success).toBe(false);
+    }
   });
 
   it('拒绝多出来的字段、空的输入口和不认识的命令', () => {

@@ -116,13 +116,9 @@ describe('P1 跟随宿主', () => {
     expect(f.prepareSong).toHaveBeenCalledTimes(2);
   });
 
-  it('关闭、界面没了都放开输入口；手动 GO、重试和单步测试还没搬过来，明确拒绝；占用失败回到没跟随', async () => {
+  it('关闭、界面没了都放开输入口；占用失败回到没跟随', async () => {
     const f = fixture(manualProject());
     await f.start();
-    for (const command of [{ kind: 'manualGo', cueId: 'cue' }, { kind: 'retryAction', cueId: 'cue', actionId: 'a' },
-      { kind: 'testAction', action: { id: 'a', label: '机位', kind: 'obs.setProgramScene', sceneName: '机位' } }] as const) {
-      await expect(f.send(command)).rejects.toThrow('还没有搬到后台');
-    }
     await f.send({ kind: 'close' });
     expect(f.claims[0]!.release).toHaveBeenCalledOnce();
     expect(f.host.state).toEqual(expect.objectContaining({ phase: 'closed', input: null }));
