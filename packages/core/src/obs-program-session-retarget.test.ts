@@ -3,6 +3,7 @@ import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkPro
 import { ObsProgramSession, type ObsProgramSessionDependencies } from './obs-program-session';
 import type { ManagedMediaEvent } from './managed-media-timeline';
 import type { LinkDesktopApi } from './link-desktop-contract';
+import type { PictureReading } from './picture-follow';
 
 /** 0.5.9 R9: a newer plan of the song on air takes effect in this pass (2026-11-10 decision 1, “这一遍立即生效”). */
 
@@ -186,5 +187,22 @@ describe('R9 播放中改画面这一遍立即生效（2026-11-10 第 1 题）',
     expect(() => test.session.retarget(midi, 2)).toThrow('后台画面快照含非 OBS 动作');
     expect(() => test.session.retarget({ ...cameras(), timebase: { ...cameras().timebase, frameRate: 30 } }, 2)).toThrow('帧率');
     expect(test.applied).toEqual([]);
+  });
+
+  it('改之前发出、改之后才回来的读回不按新的一版判断；下一次读回照常', async () => {
+    const answers: Array<(reading: PictureReading) => void> = [], follows: string[] = [];
+    const test = setup(cameras(), {
+      readPicture: () => new Promise<PictureReading>(resolve => { answers.push(resolve); }),
+      pictureFollow: follow => { follows.push(follow.state); } });
+    await test.session.prepare(0); await test.advance(0, 1500);
+    expect(answers.length).toBeGreaterThan(0);
+    test.session.retarget(cameras([camera(0), camera(1), camera(2, '新机位'), camera(3)]), 2); await test.session.settled();
+    for (const answer of answers.splice(0)) answer({ kind: 'unreadable', reason: 'OBS 没有回应' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(follows).toEqual([]);
+    await test.advance(1600, 3000);
+    for (const answer of answers.splice(0)) answer({ kind: 'unreadable', reason: 'OBS 没有回应' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(follows).toEqual(['unknown']);
   });
 });

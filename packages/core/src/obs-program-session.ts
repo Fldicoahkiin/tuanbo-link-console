@@ -732,7 +732,7 @@ export class ObsProgramSession {
     runtime.carryExecuted(this.runtime.executedCues());
     if (state === 'running' && sample) runtime.ingest(sample);
     else if (state === 'paused') runtime.pauseAutomatic();
-    this.runtime = runtime; this.project = project;
+    this.runtime = runtime; this.project = project; this.plans++;
     this.managed.retarget(project, this.itemId);
     this.timeline = this.managed.sceneTimeline!;
     this.cueById = new Map(item.cues.map(cue => [cue.id, cue]));
@@ -772,6 +772,8 @@ export class ObsProgramSession {
   }
   /** Each clip that kept its material across the plan changes since the last pass, with its event before them. */
   private readonly moved = new Map<string, ManagedMediaEvent>();
+  /** Counts the plans taken (`adopt`): a reading sent under an earlier plan is not judged against a later one. */
+  private plans = 0;
   /** The pass of a newer plan at the current position (see `retarget`). */
   private async retargetPass(paused: boolean): Promise<void> {
     const revision = this.unapplied!, generation = this.generation, losses = this.losses, state = this.runtime.getState();
@@ -1283,12 +1285,13 @@ export class ObsProgramSession {
     if (!read || this.reading || frame < this.nextRead) return;
     this.nextRead = frame + this.fps;
     if (!this.online() || this.lost || this.restoring) { this.setFollow({ state: 'unknown', detail: 'OBS 没有连接，重新连上后再核对画面', misses: 0 }); return; }
-    const before = this.ledger.state(), clock = this.lastClock, generation = this.generation;
+    const before = this.ledger.state(), clock = this.lastClock, generation = this.generation, plans = this.plans;
     if (!clock) return;
     const decoders = frame >= this.nextDriftCheck ? this.readable(before) : [];
     this.reading = true;
     const answer = (reading: PictureReading): void => {
-      if (generation !== this.generation || !this.playing() || this.lost || this.restoring || !this.online()) return;
+      // A newer plan taken meanwhile (R9): the reading may be from before its pass, so it is not judged.
+      if (generation !== this.generation || plans !== this.plans || !this.playing() || this.lost || this.restoring || !this.online()) return;
       this.judgeReading(reading, before, decoders);
     };
     void read({ decoders: decoders.map(event => ({ sourceName: event.sourceName,
