@@ -66,7 +66,7 @@ it('四类角色通过真实 HTTP 强制授权，列表不泄露码', async () =
 it('登录 Cookie 安全属性、权限变更即时撤销会话', async () => {
   const s = await setup(); s.advance();
   const login = await s.send('/console-api/login', undefined, { username: 'owner', password: 'long-test-password', code: s.code(s.users.owner!.id) });
-  expect(login.status).toBe(200); expect(login.cookie?.[0]).toContain('Secure; HttpOnly; SameSite=Strict');
+  expect(login.status).toBe(200); expect(login.cookie?.[0]).toContain('Secure; HttpOnly; SameSite=Strict'); expect(login.cookie?.[0]).toContain('Max-Age=2592000');
   const updated = await s.send('/console-api/commands', 'owner', { operationId: randomUUID(), input: { action: 'update-user', id: s.users.viewer!.id, role: 'viewer', enabled: false, reason: '离职' } });
   expect(updated.status).toBe(200); expect((await s.send('/console-api/session', 'viewer')).status).toBe(401);
 });

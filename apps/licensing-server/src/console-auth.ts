@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
-import { roleSchema, userSchema, type ConsoleRole, type ConsoleUser } from './console-contract';
+import { consolePolicy, roleSchema, userSchema, type ConsoleRole, type ConsoleUser } from './console-contract';
 import { ServiceError } from './service';
 
 const accountSchema = z.object({ id: z.string(), username: z.string(), role: roleSchema, enabled: z.number(), password: z.string().nullable(), totp: z.string(), last_step: z.number(), invite_hash: z.string().nullable(), invite_until: z.number().nullable(), recovery: z.string() });
@@ -132,13 +132,13 @@ export class ConsoleAuth {
       throw new ServiceError(401, 'INVALID_LOGIN', '账号、密码或验证码无效');
     }
     const token = randomBytes(32).toString('hex'); const csrf = randomBytes(32).toString('hex'); const now = this.now();
-    this.db.prepare('DELETE FROM console_sessions WHERE touched<? OR created<?').run(now - 1800000, now - 28800000);
+    this.db.prepare('DELETE FROM console_sessions WHERE touched<? OR created<?').run(now - consolePolicy.sessionIdleMs, now - consolePolicy.sessionMaxMs);
     this.db.prepare('INSERT INTO console_sessions VALUES(?,?,?,?,?,?)').run(digest(token), account.id, csrf, now, now, now);
     this.audit(account.id, 'auth.login', account.id, '', 'success', requestId);
     return { token, session: { hash: digest(token), user: this.publicUser(account), csrf, verifiedAt: now } };
   }
   session(token: string): ConsoleSession {
-    const row = this.db.prepare('SELECT * FROM console_sessions WHERE hash=? AND touched>? AND created>?').get(digest(token), this.now() - 1800000, this.now() - 28800000);
+    const row = this.db.prepare('SELECT * FROM console_sessions WHERE hash=? AND touched>? AND created>?').get(digest(token), this.now() - consolePolicy.sessionIdleMs, this.now() - consolePolicy.sessionMaxMs);
     if (!row) throw new ServiceError(401, 'SESSION_EXPIRED', '请重新登录');
     const parsed = z.object({ hash: z.string(), user_id: z.string(), csrf: z.string(), verified: z.number() }).parse(row);
     const account = this.account(parsed.user_id);

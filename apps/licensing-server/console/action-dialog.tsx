@@ -30,7 +30,7 @@ function Input({ action, field, row, touched, onTouch, errors }: { action: Conso
   let control;
   if (field.type === 'select') control = <select {...common} defaultValue={String(row?.[field.key] ?? field.options?.[0]?.[0] ?? '')}>{field.options?.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>;
   // 这个下拉不交给 React 管值（defaultValue）：浏览器先发 input 再发 change，表单在 input 时重新校验并重画，受控的下拉会在两个事件之间被改回旧值，选了又弹回「请选择」。
-  else if (field.type === 'preset') control = <><select {...common} defaultValue={choice} onChange={event => setChoice(event.target.value)}><option value="" disabled>请选择</option>{field.options?.map(([value, label]) => <option key={value} value={value}>{label}</option>)}<option value={other}>其他</option></select>
+  else if (field.type === 'preset') control = <><select {...common} defaultValue={choice} onChange={event => setChoice(event.target.value)}>{required ? <option value="" disabled>请选择</option> : <option value="">不写</option>}{field.options?.map(([value, label]) => <option key={value} value={value}>{label}</option>)}<option value={other}>其他</option></select>
     {choice === other && <input name={`${field.key}Other`} required maxLength={field.maxLength ?? 500} placeholder="请写明" aria-label={`${field.label}（其他）`} autoComplete="off" />}</>;
   else if (field.type === 'textarea') control = <textarea {...common} maxLength={field.maxLength ?? 500} rows={2} />;
   else if (field.type === 'money') control = <span className="money-input"><input {...common} type="number" inputMode="decimal" step="0.01" min="0.01" defaultValue={defaultValue} autoComplete="off" /><span aria-hidden="true">元</span></span>;
@@ -89,7 +89,7 @@ export function ActionDialog({ action, row, csrf, verifiedAt, clockOffset, syncS
     const parsed = actionSchema.safeParse(value);
     if (!parsed.success) { setError('请检查标红的字段。'); return; }
     const command = { operationId: crypto.randomUUID(), input: parsed.data };
-    // 超过 5 分钟未验证时先弹验证层，避免往返一次被拒。
+    // 超过二次验证有效期（consolePolicy.stepUpMs）未验证时先弹验证层，避免往返一次被拒。
     if (sensitiveActions.has(action) && stepUpRemaining(verifiedAt, clockOffset) <= 0) { setAwaiting(command); return; }
     void send(command);
   }

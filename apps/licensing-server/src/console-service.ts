@@ -3,7 +3,7 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { z } from 'zod';
 import { ConsoleAuth, redactConsoleText, type ConsoleSession } from './console-auth';
 import { migrateConsole } from './console-database';
-import { commandSchema, detailSchema, feedbackRoles, pageSchema, permissions, resultSchema, rowSchema, sensitiveActions, type ConsoleAction, type ConsoleResult, type ConsoleRow, type PageQuery, type UpdateOutcome, type UpdateRequest, type UpdateStatus } from './console-contract';
+import { commandSchema, consolePolicy, detailSchema, feedbackRoles, pageSchema, permissions, resultSchema, rowSchema, sensitiveActions, type ConsoleAction, type ConsoleResult, type ConsoleRow, type PageQuery, type UpdateOutcome, type UpdateRequest, type UpdateStatus } from './console-contract';
 import { ServiceError, type LicensingService } from './service';
 import { feedbackEnvironmentSchema } from '../../../packages/schema/src/feedback';
 
@@ -41,6 +41,13 @@ const feedbackRows = `SELECT f.id,f.number,f.category,f.state,${feedbackAttachme
   CASE WHEN length(f.description)>60 THEN substr(f.description,1,60)||'…' ELSE f.description END AS summary,f.version,f.machine_code AS machineCode,f.created FROM feedback f`;
 /** 解析失败返回 undefined，由调用方标注「记录无法解析」。 */
 function readJson(text: string): unknown { try { return JSON.parse(text) as unknown; } catch { return undefined; } }
+// 服务层、更新发布器和支付宝仍要求非空的原因；后台没写原因时传这里的固定说法（2026-11-12 起原因选填）。审计里的原因照实记录，没写就是空。
+const defaultReasons: Partial<Record<ConsoleAction['action'], string>> = {
+  'retry-delivery': '后台补交付', 'delivery-access': '后台重发领取凭据', 'revoke-delivery-access': '后台撤销领取凭据', 'set-expiry': '后台调整到期时间',
+  revoke: '后台撤销授权', migrate: '后台办理换机', 'refund-review': '后台处理渠道退款', 'alipay-refund': '退款',
+  'publish-update': '后台发布更新', 'rollback-update': '后台回滚更新', 'discard-update': '后台丢弃待发布版本'
+};
+const statedReason = (input: ConsoleAction): string => input.reason || defaultReasons[input.action] || '';
 const beijingMinute = (iso: string) => new Date(Date.parse(iso) + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ');
 const beijingDayStart = (day: string) => new Date(`${day}T00:00:00+08:00`).toISOString();
 const beijingDayEnd = (day: string) => new Date(Date.parse(`${day}T00:00:00+08:00`) + 86400000).toISOString();
@@ -245,7 +252,7 @@ export class ConsoleService {
   }
   private authorize(input: ConsoleAction, session: ConsoleSession): void {
     if (!permissions[input.action].includes(session.user.role)) throw new ServiceError(403, 'FORBIDDEN', '当前角色不能执行此操作');
-    if (sensitiveActions.has(input.action) && this.now() - session.verifiedAt >= 300000) throw new ServiceError(403, 'STEP_UP_REQUIRED', '需要二次验证');
+    if (sensitiveActions.has(input.action) && this.now() - session.verifiedAt >= consolePolicy.stepUpMs) throw new ServiceError(403, 'STEP_UP_REQUIRED', '需要二次验证');
   }
   operation(id: string, session: ConsoleSession): ConsoleResult {
     const row = this.db.prepare('SELECT result,state FROM console_operations WHERE id=? AND actor=?').get(id, session.user.id);
@@ -280,7 +287,7 @@ export class ConsoleService {
           if (input.action === 'reconcile') { await channels.reconcile(input.id); result = { id: input.id, message: '查单完成' }; }
           else if (input.action === 'alipay-refund') {
             // 退款请求先落库，渠道结果未确认时保持待确认，运营用新操作编号按原金额重提即复用同一 out_request_no。
-            const request = this.service.prepareAlipayRefund(input.id, input.amountFen, input.reason, session.user.id);
+            const request = this.service.prepareAlipayRefund(input.id, input.amountFen, statedReason(input), session.user.id);
             const outcome = await channels.refund(request);
             if (!outcome.confirmed) throw new ServiceError(502, 'REFUND_UNCONFIRMED', '支付宝尚未确认本笔退款，订单与授权未变。请稍后返回表单按相同金额重新提交，支付宝按同一退款请求号去重，不会重复退款');
             return this.service.consoleTransaction(() => finish(this.recordAlipayRefund(request, outcome.refundedTotalFen, session.user.id)));
@@ -295,7 +302,7 @@ export class ConsoleService {
       if (input.action === 'publish-update' || input.action === 'rollback-update' || input.action === 'discard-update') {
         if (!channels.updates) throw new ServiceError(503, 'UPDATES_UNAVAILABLE', '本服务器未启用更新发布');
         this.service.consoleTransaction(begin);
-        const common = { id: operationId, actor: `${session.user.username} (${session.user.id})`, reason: safeInput.reason, requestedAt: new Date(this.now()).toISOString() };
+        const common = { id: operationId, actor: `${session.user.username} (${session.user.id})`, reason: safeInput.reason || defaultReasons[input.action] || '', requestedAt: new Date(this.now()).toISOString() };
         const request: UpdateRequest = input.action === 'publish-update' ? { ...common, action: 'publish', staged: input.id, manifestSha256: input.manifestSha256 }
           : input.action === 'rollback-update' ? { ...common, action: 'rollback', version: input.id } : { ...common, action: 'discard', staged: input.id };
         const outcome = await channels.updates.request(request);
@@ -322,15 +329,14 @@ export class ConsoleService {
         return success(order.id, '线下订单已创建，待核款');
       }
       case 'fulfill': this.service.fulfill(input.id, { amountFen: input.amountFen, paymentReference: input.paymentReference }); this.auth.audit(actor, 'manual-payment-method', input.id, input.paymentMethod, 'success', operationId); return this.issued(input.id, '核款与发码已完成');
-      // 服务层与本机管理接口仍要求非空原因；后台备注留空时传固定标签。
-      case 'retry-delivery': this.service.retryDelivery(input.id, { reason: input.reason || '后台补交付' }); return success(input.id, '补交付已完成');
+      case 'retry-delivery': this.service.retryDelivery(input.id, { reason: statedReason(input) }); return success(input.id, '补交付已完成');
       case 'close-order': this.service.closeUnlinkedOrder(input.id); return success(input.id, '订单已关闭');
-      case 'delivery-access': { const result = this.service.issueDeliveryAccess(input.id, { reason: input.reason || '后台重发领取凭据' }); return { id: input.id, message: '新的领取凭据已签发，旧凭据失效', secret: result.token, expiresAt: result.expiresAt }; }
-      case 'revoke-delivery-access': this.service.revokeDeliveryAccess(input.id, { reason: input.reason }); return success(input.id, '领取凭据已撤销');
+      case 'delivery-access': { const result = this.service.issueDeliveryAccess(input.id, { reason: statedReason(input) }); return { id: input.id, message: '新的领取凭据已签发，旧凭据失效', secret: result.token, expiresAt: result.expiresAt }; }
+      case 'revoke-delivery-access': this.service.revokeDeliveryAccess(input.id, { reason: statedReason(input) }); return success(input.id, '领取凭据已撤销');
       case 'reveal': return { id: input.id, message: '完整激活码', secret: this.service.consoleReveal(input.id) };
-      case 'set-expiry': { const before = this.service.consoleLicense(input.id).useUntil; this.service.setLicenseExpiry(input.id, input.useUntil, input.reason); this.auth.audit(actor, 'license.expiry-adjusted', input.id, `原截止：${before ?? '永久'}；新截止：${input.useUntil}；${input.reason}`, 'success', operationId); return success(input.id, '到期时间已更新，下次联网验证生效'); }
-      case 'revoke': this.service.revoke(input.id, { reason: input.reason }); return success(input.id, '授权已撤销');
-      case 'migrate': { const result = this.service.migrate(input.id, { reason: input.reason }); return { id: input.id, message: '换机完成，旧码已失效', secret: result.code }; }
+      case 'set-expiry': { const before = this.service.consoleLicense(input.id).useUntil; this.service.setLicenseExpiry(input.id, input.useUntil, statedReason(input)); this.auth.audit(actor, 'license.expiry-adjusted', input.id, `原截止：${before ?? '永久'}；新截止：${input.useUntil}${input.reason ? `；${input.reason}` : ''}`, 'success', operationId); return success(input.id, '到期时间已更新，下次联网验证生效'); }
+      case 'revoke': this.service.revoke(input.id, { reason: statedReason(input) }); return success(input.id, '授权已撤销');
+      case 'migrate': { const result = this.service.migrate(input.id, { reason: statedReason(input) }); return { id: input.id, message: '换机完成，旧码已失效', secret: result.code }; }
       case 'grant': {
         const result = this.service.createGrant({ customer: input.customer, customerType: input.customerType, quantity: input.quantity, useUntil: input.useUntil }, `GRANT-${operationId}`);
         this.db.prepare('INSERT INTO console_order_meta VALUES(?,?,?,?,?)').run(result.id, at, input.purpose, input.reason, actor);
@@ -374,7 +380,7 @@ export class ConsoleService {
         return success(input.id, '开票记录已保存');
       }
       case 'refund-review': {
-        const { revoked } = this.service.reviewRefund(input.id, input.decision, input.reason, actor);
+        const { revoked } = this.service.reviewRefund(input.id, input.decision, statedReason(input), actor);
         return success(input.id, input.decision === 'revoke' ? `已撤销本订单 ${revoked.length} 份授权，渠道退款处理完成` : '已保留授权，渠道退款处理完成');
       }
       case 'reconcile': case 'alipay-refund': case 'payment-link': throw new ServiceError(500, 'INVALID_DISPATCH', '渠道操作必须通过渠道通道执行');

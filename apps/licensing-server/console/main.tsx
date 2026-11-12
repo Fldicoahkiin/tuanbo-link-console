@@ -9,7 +9,7 @@ import { AuthView } from './auth-view';
 import { ActionDialog } from './action-dialog';
 import { actionNames, beijingTime, destructiveActions, display, forms, roleNames } from './forms';
 import { DataTable, Fields, ServerClock, detailRow } from './table';
-import { StepUpBadge, StepUpDialog, StepUpPrompt } from './step-up';
+import { StepUpBadge, StepUpDialog, StepUpPrompt, stepUpMinutes } from './step-up';
 import { defaultFilter, detailRoutes, emptyFilter, readLocation, writeLocation, type Filter } from './location';
 
 type Session = z.infer<typeof sessionSchema>;
@@ -114,7 +114,7 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
         <section className="desk-shortcuts"><h2>开始处理</h2>{can('create-order') && <button onClick={() => open('create-order')}>创建线下订单<ArrowUpRight size={15} /></button>}{can('grant') && <button onClick={() => open('grant')}>签发内测 / 赠送授权<ArrowUpRight size={15} /></button>}<button onClick={() => navigate('licenses')}>管理激活码与期限<ArrowUpRight size={15} /></button></section></div>
         <details className="maintenance"><summary><span><ShieldCheck size={16} />运行与维护</span><span>服务{String(overview.item.service ?? '状态未知')} · 查看记录</span></summary><Fields row={Object.fromEntries(['service', 'backup', 'recovery'].map(key => [key, overview.item[key] ?? null]))} />{overview.related.some(row => row.category !== 'cashflow') && <DataTable rows={overview.related.filter(row => row.category !== 'cashflow')} fields={['name', 'state', 'checkedAt', 'detail']} />}</details>
       </>}
-      {route === 'security' && <section className="panel security"><h2>二次验证</h2><StepUpPrompt key={session.verifiedAt} csrf={session.csrf} title="立即验证" hint="每枚验证码只能用一次；验证后 5 分钟内的敏感操作无需再输。" onVerified={reloadSession} /><p>最近验证：{beijingTime(session.verifiedAt)}</p><p className="muted">修改密码或更换验证器：由另一名管理员执行“重置人员认证”后重新开通。</p></section>}
+      {route === 'security' && <section className="panel security"><h2>二次验证</h2><StepUpPrompt key={session.verifiedAt} csrf={session.csrf} title="立即验证" hint={`每枚验证码只能用一次；验证后 ${stepUpMinutes} 分钟内的敏感操作无需再输。`} onVerified={reloadSession} /><p>最近验证：{beijingTime(session.verifiedAt)}</p><p className="muted">修改密码或更换验证器：由另一名管理员执行“重置人员认证”后重新开通。</p></section>}
       {route === 'updates' && detail && <>
         <section className="panel"><h2>更新源</h2><Fields row={detail.item} /><div className="actions">{detail.item.rollbackVersion && !detail.item.rollbackIssue && actionButton('rollback-update', { id: detail.item.rollbackVersion })}</div></section>
         <section className="panel"><h2>待发布版本</h2>{detail.related.length ? detail.related.map(row => <div key={String(row.id)}><Fields row={row} /><div className="actions">{!row.issue && actionButton('publish-update', row)}{actionButton('discard-update', row)}</div></div>)

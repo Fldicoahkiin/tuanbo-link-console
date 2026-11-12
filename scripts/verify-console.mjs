@@ -92,8 +92,8 @@ try {
   await dialog.getByRole('button', { name: '完成', exact: true }).click(); await page.getByRole('heading', { name: '授权详情' }).waitFor();
   assert.equal((await page.locator('body').innerText()).includes('TBA-'), false);
   await page.getByRole('button', { name: '查看完整激活码' }).click(); await choose(dialog.getByLabel('原因'), '向客户交付'); await dialog.getByRole('button', { name: '显示激活码' }).click(); await dialog.locator('pre.secret').waitFor(); assert.match(await dialog.locator('pre.secret').innerText(), /^TBA-/); await dialog.getByRole('button', { name: '完成', exact: true }).click();
-  // 超过 5 分钟后再做敏感操作：表单上方弹验证层，输错抖动并清空，输对后自动继续原操作。
-  fixture.advance(301000);
+  // 超过 30 分钟（二次验证有效期）后再做敏感操作：表单上方弹验证层，输错抖动并清空，输对后自动继续原操作。
+  fixture.advance(30 * 60000 + 1000);
   await page.getByRole('button', { name: '查看完整激活码' }).click(); await choose(dialog.getByLabel('原因'), '核对客户提供的激活码'); await dialog.getByRole('button', { name: '显示激活码' }).click();
   await page.getByText('二次验证：未验证').waitFor();
   const code = dialog.getByLabel('验证器验证码', { exact: true }); await code.fill('000000'); await dialog.getByText('验证码不对或已用过').waitFor(); assert.equal(await code.inputValue(), '');
@@ -115,8 +115,9 @@ try {
   await dialog.getByLabel('授权截止时间').fill('2026-11-06T16:00'); await dialog.getByLabel('金额').fill('800');
   await dialog.getByRole('button', { name: '创建订单' }).click(); await dialog.getByText('线下订单已创建，待核款').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
   await page.getByRole('row', { name: /BROWSER-ORDER-3/ }).getByRole('button', { name: '查看详情' }).click(); await page.getByRole('heading', { name: '订单详情' }).waitFor();
-  await page.getByRole('button', { name: '关闭订单', exact: true }).click(); assert.equal(await dialog.getByRole('button', { name: '关闭此订单' }).isDisabled(), true);
-  await choose(dialog.getByLabel('原因'), '客户放弃购买'); await dialog.getByRole('button', { name: '关闭此订单' }).click(); await dialog.getByText('订单已关闭').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  // 原因选填（2026-11-12）：没选原因时按钮就能点，不选原因直接关闭订单。
+  await page.getByRole('button', { name: '关闭订单', exact: true }).click(); assert.equal(await dialog.getByRole('button', { name: '关闭此订单' }).isDisabled(), false);
+  await dialog.getByRole('button', { name: '关闭此订单' }).click(); await dialog.getByText('订单已关闭').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: '关闭订单', exact: true }).count(), 0);
   // 待办数字跳转带上对应筛选。
   await page.getByRole('button', { name: '工作台', exact: true }).click(); await page.getByRole('button', { name: /七日内到期/ }).click();

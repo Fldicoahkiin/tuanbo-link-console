@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { pipeline } from 'node:stream/promises';
 import { z } from 'zod';
-import { enrollmentSchema, loginSchema, pageQuerySchema, sessionSchema } from './console-contract';
+import { consolePolicy, enrollmentSchema, loginSchema, pageQuerySchema, sessionSchema } from './console-contract';
 import type { ConsoleChannels, ConsoleService } from './console-service';
 import type { UpdateReleases } from './update-releases';
 import type { FeedbackStore } from './feedback';
@@ -24,7 +24,7 @@ export async function dispatchConsole(options: ConsoleHttp, request: IncomingMes
       // 按账号加来源计数：他人刷同一用户名不能锁住本人；每次猜测仍须同时命中密码和验证码。
       const input = loginSchema.parse(body); auth.limit(`account:${input.username.toLowerCase()}:${address}`);
       const result = await auth.login(input.username, input.password, input.code, requestId);
-      response.setHeader('Set-Cookie', `${cookieName}=${result.token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=28800`);
+      response.setHeader('Set-Cookie', `${cookieName}=${result.token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${consolePolicy.sessionMaxMs / 1000}`);
       return sessionSchema.parse({ ...result.session, now: options.service.clock() });
     }
     if (path === '/console-api/enrollment-info') return auth.enrollmentInfo(z.object({ token: z.string().min(32).max(128) }).strict().parse(body).token);
@@ -39,7 +39,7 @@ export async function dispatchConsole(options: ConsoleHttp, request: IncomingMes
   }
   if (request.method === 'POST' && path === '/console-api/verify') {
     auth.limit(`verify:${session.user.id}`); const input = z.object({ code: z.string().min(6).max(100) }).strict().parse(await readBody());
-    auth.verify(session, input.code, requestId); return { message: '二次验证完成，有效期五分钟' };
+    auth.verify(session, input.code, requestId); return { message: `二次验证完成，${consolePolicy.stepUpMs / 60000} 分钟内有效` };
   }
   if (request.method === 'POST' && path === '/console-api/commands') {
     const body = await readBody();

@@ -86,6 +86,13 @@ it('全额原路退款：未确认时订单与授权不变；换新操作编号�
   expect(s.db.prepare("SELECT detail FROM audit WHERE target=? AND action='order.state-changed'").all(order.id).map(row => row.detail)).toContain('fulfilled->refunded:alipay:console-refund');
 });
 
+it('退款原因选填：不写时送给支付宝的退款原因是固定说法「退款」', async () => {
+  const s = await setup(); const order = s.buy(1);
+  s.answers['alipay.trade.refund'] = () => new Error('网络中断');
+  await expect(s.execute({ action: 'alipay-refund', id: order.id, amountFen: 80000, reason: '' })).rejects.toThrow('网络异常');
+  expect(s.calls.find(call => call.method === 'alipay.trade.refund')?.business.refund_reason).toBe('退款');
+});
+
 it('部分退款与查询未成功：只记录并进入异常队列，运营保留或撤销授权后出列；新的退款重新入列；超额拒绝', async () => {
   const s = await setup(); const order = s.buy(2);
   s.answers['alipay.trade.refund'] = business => reply('alipay.trade.refund', { code: '10000', out_trade_no: business.out_trade_no, fund_change: 'N', refund_fee: '0.00' });

@@ -2,7 +2,8 @@ import type { ConsoleAction } from '../src/console-contract';
 /** preset：预设选项加「其他」，选「其他」才出文本框；money：以元输入、按分提交；hidden：带上所选行的值（如要确认的 manifest 摘要），不显示输入框。 */
 export type Field = { key: string; label: string; type?: 'number' | 'money' | 'datetime-local' | 'textarea' | 'select' | 'preset' | 'hidden'; options?: readonly [string, string][]; optional?: boolean; maxLength?: number };
 const presets = (texts: readonly string[]): [string, string][] => texts.map(text => [text, text]);
-const reason = (choices?: readonly string[], label = '原因'): Field => choices ? { key: 'reason', label, type: 'preset', options: presets(choices) } : { key: 'reason', label, type: 'textarea' };
+// 原因一律选填（2026-11-12）。
+const reason = (choices?: readonly string[], label = '原因（选填）'): Field => choices ? { key: 'reason', label, type: 'preset', options: presets(choices), optional: true } : { key: 'reason', label, type: 'textarea', optional: true };
 const note: Field = { key: 'reason', label: '备注（选填）', optional: true };
 const customer: Field[] = [{ key: 'customer', label: '客户名称' }, { key: 'customerType', label: '客户类型', type: 'select', options: [['company', '企业'], ['personal', '个人']] }, { key: 'quantity', label: '授权数量（1–100）', type: 'number' }, { key: 'useUntil', label: '授权截止时间（北京时间）', type: 'datetime-local' }];
 const amount: Field = { key: 'amountFen', label: '金额', type: 'money' };
@@ -30,7 +31,7 @@ export const forms: Record<ConsoleAction['action'], { title: string; note?: stri
   'update-ticket': { title: '处理工单', note: '关闭时须写明授权处理结论。', submit: '保存处理结果', fields: [{ key: 'state', label: '处理状态', type: 'select', options: [['processing', '处理中'], ['closed', '关闭'], ['open', '待处理']] }, { key: 'conclusion', label: '授权处理结论', type: 'textarea', optional: true }, note] },
   'update-feedback': { title: '处理问题反馈', note: '关闭时写明原因和处理办法，以后遇到同类问题可以搜到。关闭后仍可重新打开。', submit: '保存处理结果', fields: [{ key: 'state', label: '处理状态', type: 'select', options: [['processing', '处理中'], ['closed', '关闭'], ['open', '待处理']] }, { key: 'conclusion', label: '处理结论', type: 'textarea', optional: true }, note] },
   refund: { title: '登记已办理的退款', note: '只记账，不会退款，也不会撤销授权。', submit: '登记退款', fields: [amount, { key: 'reference', label: '退款凭证编号' }, { key: 'handledAt', label: '实际办理时间（北京时间）', type: 'datetime-local' }, note] },
-  'alipay-refund': { title: '支付宝原路退款', note: '全额退款会撤销本订单全部授权；结果未确认时按相同金额重提不会重复退款。', submit: '向支付宝退款', fields: [amount, { ...reason(['客户申请退款', '重复付款'], '退款原因（买家可见）'), maxLength: 256 }] },
+  'alipay-refund': { title: '支付宝原路退款', note: '全额退款会撤销本订单全部授权；结果未确认时按相同金额重提不会重复退款。', submit: '向支付宝退款', fields: [amount, { ...reason(['客户申请退款', '重复付款'], '退款原因（买家可见，选填）'), maxLength: 256 }] },
   'refund-review': { title: '处理渠道退款', note: '续费订单只能保留授权，需先用「调整到期时间」回退续期。', submit: '提交处理结果', fields: [{ key: 'decision', label: '处理方式', type: 'select', options: [['revoke', '撤销本订单全部授权'], ['keep', '保留授权，仅结案']] }, reason(['客户申请退款', '协商保留授权'])] },
   'publish-update': { title: '发布更新', note: '服务器会重新核对安装包、manifest 和发布签名，并确认版本高于当前更新源，全部通过才替换更新源；客户端安装前还会再验签。', submit: '发布到更新源',
     fields: [{ key: 'manifestSha256', label: 'manifest 摘要', type: 'hidden' }, reason(['安装验收通过'])] },
