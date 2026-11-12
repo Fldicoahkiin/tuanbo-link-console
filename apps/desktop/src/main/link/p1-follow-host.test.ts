@@ -330,6 +330,39 @@ describe('P1 跟随宿主 · 界面重新加载不结束跟随（2026-11-12）',
   });
 });
 
+describe('P1 跟随宿主 · 时间码有一段解不出来（2026-11-12）', () => {
+  /** One cycle whose seconds come from two positions (12 and 59: "60"), as when P1 relocates mid-cycle. */
+  const badCycle = (listener: MidiInputListener, frame: number, startMs: number) => {
+    const tc = frameNumberToTimecode(frame, '30');
+    const pieces = [tc.frames & 15, tc.frames >> 4, 12, 3, tc.minutes & 15, tc.minutes >> 4, tc.hours & 15, (tc.hours >> 4) | (3 << 1)];
+    for (const [type, value] of pieces.entries()) listener.message({ bytes: [0xf1, (type << 4) | value], at100ns: at(startMs + type / 4 * FRAME_MS) });
+  };
+
+  it('跟着歌时有两段解不出来：略过，只记一条提醒；输入口照开，歌照跟，不冻结', async () => {
+    const f = fixture(manualProject());
+    await f.start(); await f.send({ kind: 'arm', itemId: 'song' });
+    const first = f.play(0, 60, 1_000);
+    f.calls.length = 0;
+    badCycle(f.claims[0]!.listener, 60, first.endMs);
+    badCycle(f.claims[0]!.listener, 62, first.endMs + 2 * FRAME_MS);
+    f.play(64, 30, first.endMs + 4 * FRAME_MS);
+    expect(f.logs.filter(line => line.includes('读不出来'))).toEqual(['warning:P1 的时间码有一段读不出来，已略过，接着收：MTC quarter-frame 解码出无效时间码：00:00:60:00 @ 30']);
+    expect(f.logs.filter(line => line.startsWith('error:'))).toEqual([]);
+    expect(f.calls.length).toBeGreaterThan(0);
+    expect(f.calls.every(call => call === 'observe:running')).toBe(true);
+    expect(f.claims[0]!.release).not.toHaveBeenCalled();
+    expect(f.host.state).toMatchObject({ phase: 'running', cause: null, input: { state: 'open', reason: null } });
+  });
+
+  it('别的处理失败照旧：输入口停下、放开，写明原因', async () => {
+    const f = fixture(manualProject());
+    await f.start(); await f.send({ kind: 'arm', itemId: 'song' });
+    f.claims[0]!.listener.message({ bytes: [0xf1, 0x00], at100ns: -1n });
+    expect(f.claims[0]!.release).toHaveBeenCalledOnce();
+    expect(f.host.state.input).toEqual({ portName: 'loopMIDI Port', state: 'closed', reason: 'P1 时间码处理失败：MIDI 接口时间无效' });
+  });
+});
+
 function manualProject(): LinkProject {
   return parseLinkProject({ ...createEmptyLinkProject('P1 手动跟随'), projectId: 'manual', playbackSource: 'p1', rundown: [{ id: 'song', title: '歌曲', cues: [] }] });
 }

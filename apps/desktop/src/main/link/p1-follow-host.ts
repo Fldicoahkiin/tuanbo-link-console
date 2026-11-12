@@ -1,4 +1,4 @@
-import { P1FollowSession, type OutputMode, type P1FollowLights, type P1FollowMode, type P1FollowOutputs } from '@tb/core/link';
+import { MtcDecodeError, P1FollowSession, type OutputMode, type P1FollowLights, type P1FollowMode, type P1FollowOutputs } from '@tb/core/link';
 import { p1FollowStateSchema, type IntegrationProfile, type LinkProject, type P1FollowRequest, type P1FollowState } from '@tb/schema';
 import type { MidiInputClaim, MidiInputListener } from './midi-port-broker';
 
@@ -211,9 +211,15 @@ export class P1FollowHost {
     };
   }
 
-  /** Whatever the timecode did is shown; a message the follow cannot take ends the input, as a failed helper does. */
+  /** Whatever the timecode did is shown; a message the follow cannot take ends the input, as a failed helper does. A
+   * cycle of quarter frames that made no timecode is not one of those: the follow dropped it and goes on (p1-clock.ts
+   * says when, the first of a run); it is only said in the run log. */
   private guard(follow: Follow, step: () => void): void {
     try { step(); } catch (error) {
+      if (error instanceof MtcDecodeError) {
+        this.dependencies.log('warning', `P1 的时间码有一段读不出来，已略过，接着收：${error.message}`);
+        return;
+      }
       const reason = error instanceof Error ? error.message : String(error);
       this.dependencies.log('error', `P1 时间码处理失败：${reason}`);
       this.inputClosed(follow, `P1 时间码处理失败：${reason}`);

@@ -12,6 +12,15 @@ export type MtcSample = {
 
 const RATE_BY_CODE: readonly MtcFrameRate[] = ['24', '25', '29.97df', '30'];
 
+/** A whole quarter-frame cycle that makes no timecode (pieces of two positions when the sender relocated mid-cycle can
+ * give seconds over 59 and the like). Told apart by its type, never by its text. */
+export class MtcDecodeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MtcDecodeError';
+  }
+}
+
 export class MtcQuarterFrameDecoder {
   private readonly pieces: Array<number | undefined> = new Array<number | undefined>(8);
   private lastType: number | null = null;
@@ -56,7 +65,7 @@ export class MtcQuarterFrameDecoder {
   private decode(receivedAtMs: number, direction: MtcDirection): MtcSample {
     const piece = (index: number): number => this.pieces[index] ?? 0;
     const frameRate = RATE_BY_CODE[(piece(7) >> 1) & 0x03];
-    if (!frameRate) throw new Error('MTC 帧率编码无效');
+    if (!frameRate) throw new MtcDecodeError('MTC 帧率编码无效');
     const timecode: SmpteTimecode = {
       hours: piece(6) | ((piece(7) & 0x01) << 4),
       minutes: piece(4) | ((piece(5) & 0x03) << 4),
@@ -95,7 +104,7 @@ function assertDecodedTimecode(timecode: SmpteTimecode, frameRate: MtcFrameRate)
     const value = [timecode.hours, timecode.minutes, timecode.seconds, timecode.frames]
       .map((part) => String(part).padStart(2, '0'))
       .join(':');
-    throw new Error(`MTC quarter-frame 解码出无效时间码：${value} @ ${frameRate}`);
+    throw new MtcDecodeError(`MTC quarter-frame 解码出无效时间码：${value} @ ${frameRate}`);
   }
 }
 
