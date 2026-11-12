@@ -15,6 +15,8 @@ function fixture(project: LinkProject, options: { prepare?: (itemId: string) => 
   const calls: string[] = [], states: P1FollowState[] = [], logs: string[] = [], clocks: ProgramClock[] = [], lights: string[] = [];
   let actionMidi: P1FollowState['outputs']['actionMidi'] = null, outputChanged: () => void = () => undefined;
   const claims: { name: string; listener: MidiInputListener; release: ReturnType<typeof vi.fn> }[] = [];
+  /** The outputs each follow let go of as it ended (P1FollowOutputSet `close`), by project name. */
+  const closed: string[] = [];
   const prepareSong = vi.fn((_project: LinkProject, itemId: string) => options.prepare?.(itemId) ?? Promise.resolve());
   const host = new P1FollowHost({
     claimInput: async (name, listener) => {
@@ -33,14 +35,15 @@ function fixture(project: LinkProject, options: { prepare?: (itemId: string) => 
           reconcileAt: clock => { calls.push(`reconcileAt:${clock.state}`); clocks.push(clock); }
         },
         lights: { change: (previous, next) => { lights.push(`change:${previous ?? '-'}>${next}`); }, stop: (itemId, cause) => { lights.push(`${cause}:${itemId}`); } },
-        state: () => ({ actionMidi })
+        state: () => ({ actionMidi, picture: null }),
+        close: () => { closed.push(_project.name); return Promise.resolve(); }
       };
     },
     prepareSong, changed: state => { states.push(state); }, log: (level, message) => { logs.push(`${level}:${message}`); }
   });
   const send = (command: P1FollowCommand, ownerId = OWNER) => host.command({ version: 1, ownerId, command });
   const start = (mode: 'manual' | 'auto' = 'manual', ownerId = OWNER) => send({ kind: 'start', projectPath: 'C:/show.tblink', sessionId: OWNER, revision: 1, document: '{}',
-    mode, runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null }, ownerId);
+    mode, runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null, preciseSeeking: true }, ownerId);
   /** The input's heartbeat at this interface time. */
   const idle = (ms: number) => { claims.at(-1)!.listener.idle(at(ms)); };
   /** P1 playing on the claimed input, on the interface's clock. */
@@ -60,7 +63,7 @@ function fixture(project: LinkProject, options: { prepare?: (itemId: string) => 
   };
   /** An output reports its own state. */
   const report = (state: P1FollowState['outputs']['actionMidi']) => { actionMidi = state; outputChanged(); };
-  return { host, calls, states, logs, clocks, claims, prepareSong, send, start, play, lights, report, idle };
+  return { host, calls, states, logs, clocks, claims, prepareSong, send, start, play, lights, report, idle, closed };
 }
 
 describe('P1 跟随宿主', () => {

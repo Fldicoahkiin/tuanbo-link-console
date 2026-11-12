@@ -173,7 +173,7 @@ it('M5：演出中控台断了在自动重新登录是等待（黄，第几次�
 it('跟随 P1（P4）：等待和时间码停了标黄写原因，只有出错的标红；手动模式停了说怎么接着跟', () => {
   const base: P1FollowState = { version: 1, phase: 'running', ownerId: '6f1c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f', projectId: 'p', projectPath: 'C:/show.tblink', projectName: '演出',
     mode: 'manual', runMode: 'live', itemId: 'song', sessionId: 's', generation: 1, positionMs: 0, cause: null, reason: null,
-    input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null } };
+    input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null, picture: null } };
   expect(p1FollowStatus(null)).toMatchObject({ state: 'idle', value: 'P1 跟随' });
   expect(p1FollowStatus(base)).toMatchObject({ state: 'ready', value: '在跟' });
   expect(p1FollowStatus({ ...base, phase: 'waiting' })).toMatchObject({ state: 'warning', value: '等 P1 播放' });
@@ -184,7 +184,7 @@ it('跟随 P1（P4）：等待和时间码停了标黄写原因，只有出错�
   expect(p1FollowStatus({ ...base, phase: 'frozen', mode: 'auto', cause: 'lost', reason: '断了' }).detail).toContain('P1 继续播放或重新点歌');
   expect(p1FollowStatus({ ...base, phase: 'failed', reason: '画面没准备好' })).toEqual({ state: 'error', value: '没开始', detail: '画面没准备好' });
   expect(p1FollowStatus({ ...base, input: { portName: 'loopMIDI Port', state: 'closed', reason: '接口拔掉了' } })).toEqual({ state: 'error', value: '收不到时间码', detail: '接口拔掉了' });
-  expect(p1FollowStatus({ ...base, outputs: { actionMidi: { itemId: 'song', state: 'running', reason: null, fault: '有一条动作晚了，跳过了' } } }))
+  expect(p1FollowStatus({ ...base, outputs: { actionMidi: { itemId: 'song', state: 'running', reason: null, fault: '有一条动作晚了，跳过了' }, picture: null } }))
     .toEqual({ state: 'error', value: '动作 MIDI 出错', detail: '有一条动作晚了，跳过了；跟着 P1 的时间码' });
   expect(p1FollowStatus({ ...base, ownerId: null })).toMatchObject({ state: 'warning', value: '还在跟随' });
 });

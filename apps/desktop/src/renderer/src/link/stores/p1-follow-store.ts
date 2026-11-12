@@ -8,6 +8,7 @@ import { useDocumentStore } from './document-store';
 import { useIntegrationStore } from './integration-store';
 import { projectCodec } from './project-codec';
 import { useRuntimeStore } from './runtime-store';
+import { useDisplayPreferences } from './display-preferences-store';
 
 /*
  * The main process's P1 follow as this window shows it (0.5.9 P4): the one place its state lands. `follow` is this page's
@@ -39,7 +40,8 @@ export function p1FollowClient(): P1FollowClient {
 function startInput(): P1FollowStartInput {
   const { project, path, documentId, revision } = useDocumentStore.getState();
   if (!project) throw new Error('还没打开工程，请先打开一个工程');
-  return { project, path, documentId, revision, profile: useIntegrationStore.getState().profile, encode: value => projectCodec.encode(value) };
+  return { project, path, documentId, revision, profile: useIntegrationStore.getState().profile, preciseSeeking: useDisplayPreferences.getState().preciseSeeking,
+    encode: value => projectCodec.encode(value) };
 }
 
 /**

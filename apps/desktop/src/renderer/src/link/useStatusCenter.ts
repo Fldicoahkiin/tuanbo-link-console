@@ -9,6 +9,7 @@ import { useMa2NetworkStatusStore } from './stores/ma2-network-status-store';
 import { useConsoleFollowStore } from './stores/console-follow-store';
 import { showGate } from '@tb/core/link';
 import { useShowStateStore } from './stores/show-state-store';
+import { useP1FollowStore } from './stores/p1-follow-store';
 import { statusCenter, type StatusCenter } from './view-models/status-center';
 import { liveChecks } from './view-models/check-basis';
 import type { ConnectionCheck } from './stores/connection-check-store';
@@ -46,9 +47,11 @@ export function useStatusCenter(player: ProjectPlayer): StatusCenter {
   const networkError = useMa2NetworkStatusStore(state => state.error);
   const follow = useConsoleFollowStore(state => state.follow);
   const lightingOff = useShowStateStore(state => state.lightingOff);
+  // The picture of the song a P1 follow holds, from the main process (0.5.9): the follow has no player of the window.
+  const p1Picture = useP1FollowStore(state => state.follow?.outputs.picture ?? null);
   const { status, mtcSending, mtcConnectionFailed, pictureItems, pictureFollow } = player.state;
   return useMemo(() => statusCenter({ project, profile, method, local: { status: localStatus, error: localError }, obs, processes: { p1, ma2, ma3d },
     midiPorts, nativeDevices, nativeDeviceError, checks, network, networkError,
-    player: { status, mtcSending, mtcConnectionFailed, pictureItems: pictureItems ?? [], pictureFollow: pictureFollow ?? null }, follow, lightingOff }),
-  [project, profile, method, localStatus, localError, obs, p1, ma2, ma3d, midiPorts, nativeDevices, nativeDeviceError, checks, network, networkError, status, mtcSending, mtcConnectionFailed, pictureItems, pictureFollow, follow, lightingOff]);
+    player: { status, mtcSending, mtcConnectionFailed, pictureItems: pictureItems ?? [], pictureFollow: pictureFollow ?? null }, follow, lightingOff, p1Picture }),
+  [project, profile, method, localStatus, localError, obs, p1, ma2, ma3d, midiPorts, nativeDevices, nativeDeviceError, checks, network, networkError, status, mtcSending, mtcConnectionFailed, pictureItems, pictureFollow, follow, lightingOff, p1Picture]);
 }

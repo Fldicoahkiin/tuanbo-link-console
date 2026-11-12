@@ -11,6 +11,7 @@ import { LicenseAccess } from './license-access';
 /** The P1 follow as link-main wires it (0.5.9 P3f): the real host, outputs and lights-off ledger; a fake console, broker
  * and IPC. */
 
+type PictureHost = ReturnType<Parameters<typeof wireP1Follow>[0]['picture']>;
 const FPS = 30;
 const FRAME_MS = 1000 / FPS;
 const OWNER = '6f1c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f';
@@ -18,7 +19,7 @@ const settings = { host: '192.0.2.1', port: 30000, monitorPort: 30001, username:
 
 /** `license`: link-main's license instead of a fake one: every request through its check (authorizeRequest), the
  * outputs' check (authorizeOutput) and the follow's running state into programLicense. */
-function fixture(project: LinkProject, options: { refuseFiles?: string; license?: LicenseGate & { followRunning(running: boolean): void } } = {}) {
+function fixture(project: LinkProject, options: { refuseFiles?: string; license?: LicenseGate & { followRunning(running: boolean): void }; picture?: PictureHost } = {}) {
   const handlers = new Map<string, (event: unknown, value: unknown) => unknown>();
   const states: P1FollowState[] = [], running: boolean[] = [], faults: string[] = [], listeners: MidiInputListener[] = [];
   const status: Ma2NetworkStatus = { state: 'connected', settings: { ...settings }, passwordSaved: false, version: '3.3.4.3', error: null, connection: 1 };
@@ -40,11 +41,11 @@ function fixture(project: LinkProject, options: { refuseFiles?: string; license?
     executable: 'engine.exe', authorize, midiOutputs: () => Promise.resolve([]),
     checkFiles: () => options.refuseFiles ? Promise.reject(new Error(options.refuseFiles)) : Promise.resolve(),
     lights, faults: { report: message => { faults.push(message); }, windowOpened }, record: () => Promise.resolve(),
-    showChanged, running: value => { running.push(value); license?.followRunning(value); }
+    showChanged, running: value => { running.push(value); license?.followRunning(value); }, picture: () => options.picture ?? null
   });
   const send = (command: P1FollowCommand) => handlers.get('link:p1-follow')!(null, { version: 1, ownerId: OWNER, command });
   const start = (mode: 'manual' | 'auto') => send({ kind: 'start', projectPath: 'C:/show.tblink', sessionId: OWNER, revision: 1, document: JSON.stringify(project),
-    mode, runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null });
+    mode, runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null, preciseSeeking: true });
   const offs = () => playMa2Cue.mock.calls.map(([request]) => request.action.target === 'executor' ? request.action.executor : '');
   const play = (fromFrame: number, frames: number, startMs: number) => {
     const listener = listeners.at(-1)!;
@@ -155,7 +156,7 @@ describe('P1 跟随接到主进程（P3f）', () => {
 
   it('每个阶段在节目状态里是什么', () => {
     const base = { version: 1, ownerId: OWNER, projectId: 'p', projectPath: 'C:/show.tblink', projectName: '演出', mode: 'manual', runMode: 'live', itemId: 'song', sessionId: null, generation: 0, positionMs: null,
-      cause: null, reason: null, input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null } } as const;
+      cause: null, reason: null, input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null, picture: null } } as const;
     const show = (phase: P1FollowState['phase']) => p1FollowShowInput({ ...base, phase });
     expect([show('waiting'), show('preparing'), show('running'), show('frozen'), show('takeover'), show('failed')].map(input => input?.state))
       .toEqual(['armed', 'preflight', 'running', 'timecodeLost', 'paused', 'error']);

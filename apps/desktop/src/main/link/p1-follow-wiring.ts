@@ -6,9 +6,11 @@ import type { LightingOffService } from './lighting-off-service';
 import type { ClosedProgramFaults } from './main-process-errors';
 import type { MidiPortBroker } from './midi-port-broker';
 import { actionMidiRecoveredEntry, NativeMidiHost } from './native-midi-host';
-import { P1FollowHost, type P1FollowOutputSet } from './p1-follow-host';
+import { P1FollowHost, type P1FollowHostDependencies, type P1FollowOutputSet } from './p1-follow-host';
 import { P1FollowOutputList } from './p1-follow-outputs';
 import { P1MidiOutput } from './p1-midi-output';
+import type { NativeObsHost } from './native-obs-host';
+import { P1PictureOutput } from './p1-picture-output';
 import type { LinkLogInput } from './run-logger';
 
 /*
@@ -17,6 +19,9 @@ import type { LinkLogInput } from './run-logger';
  * state's P1 input and the license's running state. link-main only builds this once and calls `pageGone` and
  * `dispose`. Since P4 this is the only P1 follow: the window reaches it only through runtime/p1-follow-client.ts.
  */
+
+/** How the window started the follow, as its outputs take it (P1FollowHost `outputs`). */
+type FollowOptions = Parameters<P1FollowHostDependencies['outputs']>[1];
 
 export type P1FollowWiringDependencies = {
   /** link-main's `handle`: main window only; the license wrapper checks what needsProductLicense says. */
@@ -41,6 +46,8 @@ export type P1FollowWiringDependencies = {
   showChanged(): void;
   /** Whether the follow runs the show, for the license (program-license.ts followRunningChanged). */
   running(running: boolean): void;
+  /** The one picture host of the app (link-main's nativeObs): the follow's picture is one more song of it (0.5.9). */
+  picture(): Pick<NativeObsHost, 'prepare' | 'observe' | 'stopSource' | 'closeSource'> | null;
 };
 
 export type P1FollowWiring = {
@@ -67,7 +74,7 @@ export function wireP1Follow(dependencies: P1FollowWiringDependencies): P1Follow
       await dependencies.checkFiles(projectPath, project);
       return project;
     },
-    outputs: (project, options, changed) => followOutputs(dependencies, project, options.lightingProfile, changed, log),
+    outputs: (project, options, changed) => followOutputs(dependencies, project, options, changed, log),
     prepareSong: (project, itemId) => prepareSong(dependencies, project, itemId),
     changed: state => {
       dependencies.send('link:p1-follow-state', state);
@@ -126,9 +133,11 @@ async function prepareSong(dependencies: Pick<P1FollowWiringDependencies, 'autho
 }
 
 /** One follow's outputs: the action MIDI on its own NativeMidiHost, built as the native program builds its own
- * (native-program-host.ts: the same broker claim, port recovery and run-log lines), and the lights on the one ledger. */
-function followOutputs(dependencies: P1FollowWiringDependencies, project: LinkProject, profile: IntegrationProfile | null, changed: () => void,
+ * (native-program-host.ts: the same broker claim, port recovery and run-log lines), the picture on the one picture host
+ * of the app (P1PictureOutput), and the lights on the one ledger. */
+function followOutputs(dependencies: P1FollowWiringDependencies, project: LinkProject, options: FollowOptions, changed: () => void,
   log: (entry: LinkLogInput) => void): P1FollowOutputSet {
+  const profile = options.lightingProfile;
   const seen = new Set<string>();
   let actionMidi: (P1FollowActionMidi & { sessionId: string }) | null = null;
   const fault = (message: string): void => { if (actionMidi) { actionMidi = { ...actionMidi, fault: message }; changed(); } };
@@ -158,15 +167,20 @@ function followOutputs(dependencies: P1FollowWiringDependencies, project: LinkPr
       if (actionMidi?.fault === report.fault) { actionMidi = { ...actionMidi, fault: null }; changed(); }
     }
   });
+  const host = dependencies.picture();
+  const picture = host ? new P1PictureOutput({ host, project, projectPath: options.projectPath, mode: options.mode, preciseSeeking: options.preciseSeeking,
+    authorize: () => dependencies.authorize(), changed,
+    log: (level, message) => log({ level, category: 'device', device: '后台画面', projectId: project.projectId, message, ...level === 'error' ? { result: 'failed' } : {} }) }) : null;
   const outputs = new P1FollowOutputList([
-    { name: '动作 MIDI', output: new P1MidiOutput(project, midi, (level, message) => log({ level, category: 'device', device: '动作 MIDI', projectId: project.projectId, message })) }
-    // The picture joins this list as one more entry.
+    { name: '动作 MIDI', output: new P1MidiOutput(project, midi, (level, message) => log({ level, category: 'device', device: '动作 MIDI', projectId: project.projectId, message })) },
+    ...picture ? [{ name: '画面', output: picture }] : []
   ], (name, error) => {
     const message = `跟随 P1 时${name}出错：${toUserErrorReason(error)}`;
     log({ level: 'error', category: 'device', device: name, projectId: project.projectId, message, result: 'failed' });
     if (name === '动作 MIDI') fault(message);
   });
-  return { outputs, lights: followLights(dependencies, project), state: () => ({ actionMidi: actionMidi ? publicMidi(actionMidi) : null }) };
+  return { outputs, lights: followLights(dependencies, project), close: () => picture?.close() ?? Promise.resolve(),
+    state: () => ({ actionMidi: actionMidi ? publicMidi(actionMidi) : null, picture: picture?.state ?? null }) };
 }
 
 function publicMidi({ itemId, state, reason, fault }: P1FollowActionMidi & { sessionId: string }): P1FollowActionMidi {

@@ -34,7 +34,10 @@ export type NativeObsOutputs = Omit<ObsProgramSessionDependencies, 'state' | 'cu
 type Services = {
   obs: ObsWebSocketAdapter; projects: LinkProjectService; media: MediaPreviewService;
   profiles: SecureProfileStore; seek: ObsNativeSeek; logger: LinkRunLogger;
-  audioIdentity: () => NativePlayerService['audioCaptureIdentity'];
+  /** The audio player whose music OBS takes through our music item; null when the song's music is not ours to put in
+   * OBS (a P1 follow: P1 plays it, the operator's OBS takes it as before). Then no music item is added and the
+   * read-back does not look for one. */
+  audioIdentity: (() => NativePlayerService['audioCaptureIdentity']) | null;
   logFailure: (error: Error) => void;
   /** Advisories and repeated warnings already recorded in this run of the software (preflightLogEntries, firstTimeWarning). */
   seenNotices: Set<string>;
@@ -86,9 +89,13 @@ export function pictureDriftCheck(scenes: Pick<ObsMediaScenes, 'correctDrift'>, 
 
 /** The picture read back (R8): the scene on program and the decoders standing for the materials asked about now.
  * A material with nothing on air is read as absent (its decoder is not asked). Read requests only. */
-export function pictureReadBack(obs: Pick<ObsWebSocketAdapter, 'readPicture'>, decoders: Pick<ObsMediaPreload, 'onAirSource'>): NonNullable<NativeObsOutputs['readPicture']> {
-  return request => obs.readPicture(request.decoders.map(decoder => ({ sourceName: decoder.sourceName,
-    inputName: decoders.onAirSource(decoder.sourceName), positionAt: decoder.positionAt })));
+export function pictureReadBack(obs: Pick<ObsWebSocketAdapter, 'readPicture'>, decoders: Pick<ObsMediaPreload, 'onAirSource'>, music = true): NonNullable<NativeObsOutputs['readPicture']> {
+  return async request => {
+    const reading = await obs.readPicture(request.decoders.map(decoder => ({ sourceName: decoder.sourceName,
+      inputName: decoders.onAirSource(decoder.sourceName), positionAt: decoder.positionAt })));
+    // A song whose music is not ours (P1 plays it): our music item is not looked for, whatever an earlier song left.
+    return music || reading.kind !== 'read' ? reading : { ...reading, music: { kind: 'not-used' } };
+  };
 }
 
 /** A clip shown from the middle and located (a start from the middle, a seek, a rebuild). A look that could not be set
@@ -496,6 +503,8 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
         }
       }
       const scenes = songScenes();
+      // A P1 follow's song: P1 plays the music, OBS gets no music item of ours.
+      if (!services.audioIdentity) return;
       capture = services.audioIdentity();
       for (const scene of scenes) musicScenes.add(scene);
       try { await obs.setInternalAudioCapture(true, capture.executable, capture.title, capture.audioDeviceId, scenes, capture.windowClass); }
@@ -531,7 +540,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
     // The read-back (R8) runs once a second at the `control` tier, outside the session's queue, so it never comes
     // before a cut. A correction it calls for runs inside the session's own queue, where the next cut waits for it: it
     // stays at the `program` tier of the material scenes, so a cut never ends up waiting behind a screenshot through it.
-    readPicture: pictureReadBack(obs, preload),
+    readPicture: pictureReadBack(obs, preload, services.audioIdentity !== null),
     correctMediaDrift: pictureDriftCheck(obs.mediaScenes, preload),
     // The picture session decides, by the counts in output-recovery.ts, whether a failed preparation goes again.
     prepareAgain: clipId => preload.prepareAgain(clipId),

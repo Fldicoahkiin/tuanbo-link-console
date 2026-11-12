@@ -1,4 +1,4 @@
-import { P1FollowSession, type OutputMode, type P1FollowLights, type P1FollowOutputs } from '@tb/core/link';
+import { P1FollowSession, type OutputMode, type P1FollowLights, type P1FollowMode, type P1FollowOutputs } from '@tb/core/link';
 import { p1FollowStateSchema, type IntegrationProfile, type LinkProject, type P1FollowRequest, type P1FollowState } from '@tb/schema';
 import type { MidiInputClaim, MidiInputListener } from './midi-port-broker';
 
@@ -19,8 +19,10 @@ import type { MidiInputClaim, MidiInputListener } from './midi-port-broker';
  * stop or close it; nothing else reaches it until then. Only the quit (`dispose`) ends it without a page asking.
  */
 
-/** The outputs of one follow, its lights, and what each output reports of itself (P1FollowState `outputs`). */
-export type P1FollowOutputSet = { outputs: P1FollowOutputs; lights: P1FollowLights; state(): P1FollowState['outputs'] };
+/** The outputs of one follow, its lights, and what each output reports of itself (P1FollowState `outputs`). `close`: the
+ * follow is over (closed, replaced by a new start, the app quits): what it still holds is let go (the picture's last
+ * frame, as when a program closes). */
+export type P1FollowOutputSet = { outputs: P1FollowOutputs; lights: P1FollowLights; state(): P1FollowState['outputs']; close(): Promise<void> };
 
 export type P1FollowHostDependencies = {
   /** The broker's `claimInput(name, 'P1 时间码', listener)`. */
@@ -28,7 +30,8 @@ export type P1FollowHostDependencies = {
   /** The window's document, parsed and checked as an opened project (schema, relations, its files). */
   openProject(document: string, projectPath: string): Promise<LinkProject>;
   /** The shared outputs and the lights for this follow of this project. `changed`: an output's own state changed. */
-  outputs(project: LinkProject, options: { runMode: OutputMode; lightingProfile: IntegrationProfile | null }, changed: () => void): P1FollowOutputSet;
+  outputs(project: LinkProject, options: { runMode: OutputMode; lightingProfile: IntegrationProfile | null; mode: P1FollowMode; projectPath: string; preciseSeeking: boolean },
+    changed: () => void): P1FollowOutputSet;
   /** Auto-follow: P1 started this song; resolves when its outputs may start, rejects with what the operator reads. */
   prepareSong(project: LinkProject, itemId: string): Promise<void>;
   changed(state: P1FollowState): void;
@@ -55,7 +58,7 @@ const POSITION_EVERY_MS = 100;
 
 const CLOSED: P1FollowState = {
   version: 1, phase: 'closed', ownerId: null, projectId: null, projectPath: null, projectName: null, mode: null, runMode: null, itemId: null, sessionId: null, generation: 0,
-  positionMs: null, cause: null, reason: null, input: null, mtc: null, outputs: { actionMidi: null }
+  positionMs: null, cause: null, reason: null, input: null, mtc: null, outputs: { actionMidi: null, picture: null }
 };
 
 export class P1FollowHost {
@@ -145,7 +148,8 @@ export class P1FollowHost {
     if (previous && !replaceable(previous)) throw new Error('正在跟随 P1，先停止再换工程');
     const project = await this.dependencies.openProject(command.document, command.projectPath);
     let follow: Follow | null = null;
-    const outputs = this.dependencies.outputs(project, { runMode: command.runMode, lightingProfile: command.lightingProfile },
+    const outputs = this.dependencies.outputs(project, { runMode: command.runMode, lightingProfile: command.lightingProfile, mode: command.mode,
+      projectPath: command.projectPath, preciseSeeking: command.preciseSeeking },
       () => { if (follow && this.follow === follow) this.publish(true); });
     const session = new P1FollowSession(project, command.mode, {
       outputs: outputs.outputs, lights: outputs.lights, prepare: (itemId, sessionId) => { if (follow) this.prepare(follow, itemId, sessionId); }
@@ -153,7 +157,7 @@ export class P1FollowHost {
     // P1 may have started a song while the project was checked: then this follow is not replaced.
     if (previous && !replaceable(previous)) throw new Error('正在跟随 P1，先停止再换工程');
     const kept = previous && previous.input.portName === command.inputPortName && previous.input.state === 'open' && previous.input.claim ? previous.input : null;
-    if (previous && kept) previous.session.stop('close');
+    if (previous && kept) { previous.session.stop('close'); await this.letGo(previous); }
     else if (previous) await this.close();
     const input: Input = kept ?? { portName: command.inputPortName, state: 'opening', reason: null, claim: null };
     const opened: Follow = { ownerId, project, projectPath: command.projectPath, runMode: command.runMode, session, outputs, input };
@@ -176,9 +180,15 @@ export class P1FollowHost {
     if (!follow) return;
     follow.session.stop('close');
     this.follow = null;
+    await this.letGo(follow);
     const claim = follow.input.claim; follow.input.claim = null;
     await claim?.release();
     this.publish(true);
+  }
+
+  /** A follow that is over lets go of what its outputs still hold; a failure is logged and holds up nothing. */
+  private async letGo(follow: Follow): Promise<void> {
+    await follow.outputs.close().catch((error: unknown) => this.dependencies.log('error', `跟随 P1 结束时输出没有放开：${error instanceof Error ? error.message : String(error)}`));
   }
 
   /** The input goes to whichever follow holds it now. */

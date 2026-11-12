@@ -198,7 +198,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
 /** Stops following P1 (the main process switches this song's lights off); P1 itself plays on. */
 function stopRuntime(runtimeState: string, notify: Props['notify']): void {
   if (runtimeState === 'idle' || runtimeState === 'stopping') return;
-  notify('正在停止跟随 P1，并关掉这首歌用到的灯光。P1 自己不会停。');
+  notify('正在停止跟随 P1，并关掉这首歌用到的灯光。OBS 的画面停在这一帧，下一首歌的画面接上时再换。P1 自己不会停。');
   void p1FollowClient().stop().catch((error: unknown) => notify(`没能停止跟随 P1：${toUserErrorMessage(error)}`, 'error'));
 }
 

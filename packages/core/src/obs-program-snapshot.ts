@@ -4,7 +4,7 @@ import { resolveTimelineClipSpan } from './timeline-state';
 /** Runtime data only: original console XML and unrelated programs stay in the
  * document. This snapshot is never used to replace or save the user's project. */
 export function createObsProgramSnapshot(project: LinkProject, itemId: string, revision: number): ObsProgramSnapshot {
-  if (project.playbackSource !== 'internal') throw new Error('后台画面只支持“联动台播放”的工程');
+  // Either playback source: the picture follows the internal player or P1's timecode the same way (0.5.9, P1 picture).
   const item = project.rundown.find(entry => entry.id === itemId);
   if (!item) throw new Error('画面节目不存在');
   const ids = new Set(item.referenceMediaClips.map(clip => clip.assetId));

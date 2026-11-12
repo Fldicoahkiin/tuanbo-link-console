@@ -105,10 +105,10 @@ const formerKey = (sourceName: string, clipId: string): string => `${sourceName}
 /** Where in its file a clip is at song time zero: two plans with the same value play it in the same place. */
 const alignmentMs = (event: ManagedMediaEvent, fps: number): number => event.sourceOffsetMs - event.frameNumber * 1000 / fps;
 
-/** The song as this session can play it (internal playback, the item there and enabled, only OBS actions); why not, in
- * plain words. Checked as a session opens and as a newer plan arrives (0.5.9 R9). */
+/** The song as this session can play it (the item there, only OBS actions); why not, in plain words. Checked as a
+ * session opens and as a newer plan arrives (0.5.9 R9). Whatever drives the song's clock, the internal player or P1's
+ * timecode, the session plays it the same way: it only ever sees positions (0.5.9, P1 picture). */
 function pictureItem(project: LinkProject, itemId: string): RundownItem {
-  if (project.playbackSource !== 'internal') throw new Error('后台画面只支持“联动台播放”的工程');
   const item = project.rundown.find(entry => entry.id === itemId);
   if (!item) throw new Error('后台画面节目不存在');
   // Other outputs belong to independent channels, never pretend that an OBS

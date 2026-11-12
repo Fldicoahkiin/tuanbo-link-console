@@ -28,18 +28,38 @@ type Entry = { request: NativeObsPrepare; project: LinkProject; session: ObsProg
   connection: ObsPictureItem | null; parts: ObsPictureItem[]; counts: NonNullable<NativeObsStatus['recoveries']>; restores: OutputRecovery;
   lost: boolean; rejoin: Rejoin | null; outputs: Outputs; started: boolean; released: Promise<void> | null;
   next: NativeObsPrepare['nextFiles'] | null; nextTurn: number; nextTask: Promise<void> | null;
-  repreparing: boolean; wanted: { request: NativeObsRetarget; project: LinkProject } | null };
+  repreparing: boolean; wanted: { request: NativeObsRetarget; project: LinkProject } | null;
+  /** Where this song is: null for the audio player's song (the program), else the source it was prepared with (P1). */
+  source: PictureClockSource | null };
 /** `restore`: what comes before the rebuild (the owned scenes prepared again, or nothing). `late`: OBS never went away;
  * the music only started before the picture was ready, and the red text says that instead of a reconnect. */
 type Rejoin = { restore: () => Promise<void>; late: boolean };
 const NOTHING = (): Promise<void> => Promise.resolve();
 const LATE = '这首歌的画面准备好时音乐已经在放了';
+/** A P1 song always plays before its picture is ready (P1 starts it): that is not a fault, only what did not come back is. */
+const P1_LATE = '画面准备好时 P1 已经放到这里了';
+
+/** Where the song is, as the host reads it of the audio player (`NativePlayerStatus`) or of a source. */
+type SongNow = Pick<NativePlayerStatus, 'sessionId' | 'generation' | 'itemId' | 'status' | 'positionMs' | 'audioError'>;
+/** Where a song is whose music the audio player does not play: a P1 follow's song, as P1's timecode has it (0.5.9). */
+export type PictureSongNow = Pick<NativePlayerStatus, 'sessionId' | 'generation' | 'itemId' | 'positionMs'> & { status: 'ready' | 'playing' | 'paused' };
+/**
+ * The other clock the one picture host follows besides the audio player (0.5.9, the picture under P1 follow), as
+ * `MidiClockSource` is for the action MIDI: the same host, the same session, holds, reconnects and read-back; only where
+ * the song is comes from here. Its songs are clocked with `source: 'p1'` clocks; the player's clocks never reach them, and
+ * the player's controls (`interrupt`) do not either. Its music never goes through OBS's music item (P1 plays it).
+ * - `owner`: who holds the picture while one of its songs is on, as another owner's refusal names it.
+ * - `now`: this source's song now; null when it has none.
+ * - `changed`: the status of its own songs' pictures (the program's go to `changed` of the host).
+ */
+export type PictureClockSource = { owner: string; now(): PictureSongNow | null; changed(status: NativeObsStatus): void };
 /** A recovery of the song's picture for the run log, as the session logs its own (R5): the channel, the item, the count and the limit. */
 export type PictureRecoveryLog = { level: 'warning' | 'error'; message: string; result: 'succeeded' | 'failed'; projectId: string; itemId: string;
   details: { channel: 'obs'; item: string; recoveries: { row: string; key: string; count: number; max: number }[] } };
 type Dependencies = {
   audio: () => NativePlayerStatus | null;
-  outputs: (request: NativeObsPrepare, positionMs: number, assertCurrent: () => void) => Outputs | Promise<Outputs>;
+  /** `source`: the song's clock source, null for the audio player's song; with one, OBS gets no music item of ours. */
+  outputs: (request: NativeObsPrepare, positionMs: number, assertCurrent: () => void, source: PictureClockSource | null) => Outputs | Promise<Outputs>;
   changed: (status: NativeObsStatus) => void;
   error: (message: string) => void;
   prepareNextFiles?: (request: NativeObsPrepare, assertCurrent: () => void) => Promise<void>;
@@ -58,6 +78,8 @@ export type PictureFailure = { log: string; shown: string };
 export class NativeObsHost {
   private entry: Entry | null = null;
   private requested: NativeObsPrepare | null = null;
+  /** The source of the preparation last admitted (null: the audio player's). */
+  private requestedSource: PictureClockSource | null = null;
   private epoch = 0;
   /** Reported while a song's picture was being prepared: shown on that song once its picture exists. */
   private unshown: string[] = [];
@@ -75,6 +97,8 @@ export class NativeObsHost {
   /** The program's own stop of its picture hears a failed cleanup, once (2026-11-09); every other stop resolves. */
   async stopOwned(input: NativeObsStop): Promise<void> {
     const request = nativeObsStopSchema.parse(input);
+    // The picture is another owner's now (a P1 follow): nothing of the program's is on to stop.
+    if (this.requestedSource) return;
     if (!this.requested || this.requested.sessionId !== request.sessionId || this.requested.generation !== request.generation) {
       throw new Error('这是上一次准备的停止请求，已忽略，当前节目不受影响');
     }
@@ -132,9 +156,11 @@ export class NativeObsHost {
   /** The picture at the current position from nothing, after `restore`; reported in red once. `late`: OBS never went
    * away, the picture only joins music that started before it was ready, and the text says so. */
   private async rebuild(entry: Entry, restore: () => Promise<void>, late = false): Promise<void> {
-    const cause = late ? LATE : 'OBS 已重新连接';
+    // A P1 song: joining late is how its picture starts (decision 3); only a part that did not come back is red.
+    const quiet = late && entry.source !== null, cause = quiet ? P1_LATE : late ? LATE : 'OBS 已重新连接';
     try {
       const rebuilt = await entry.session.recover(restore);
+      if (quiet && (rebuilt === null || !rebuilt.failed.length && rebuilt.failure === null)) return;
       if (this.entry === entry) this.fault(rebuilt === null ? `${cause}；节目暂停了，继续播放时按当前位置恢复画面` : obsRecoveryText(rebuilt, true, cause));
     } catch (error) {
       if (this.entry === entry) this.fault(`${cause}，但画面恢复失败：${error instanceof Error ? error.message : String(error)}`);
@@ -164,8 +190,8 @@ export class NativeObsHost {
     await earlier.stop().then(() => earlier.release()).catch((error: unknown) => this.dependencies.error(`画面没有清理干净：${pictureErrorDetail(error)}`));
     try {
       current();
-      const audio = this.playingSong(entry.request);
-      const outputs = await this.dependencies.outputs(entry.request, audio.positionMs, current);
+      const audio = this.playingSong(entry.request, entry.source);
+      const outputs = await this.dependencies.outputs(entry.request, audio.positionMs, current, entry.source);
       current();
       const session = this.createSession(entry.request, entry.project, outputs);
       Object.assign(entry, { session, outputs, lost: false, now: outputs.now, restoreScenes: outputs.restoreScenes, parts: entry.parts.filter(part => part.id === 'obs.restore'), counts: [] });
@@ -235,7 +261,8 @@ export class NativeObsHost {
    * native work. Queue cancellation cannot wait for the eventual acknowledgement. */
   interrupt(request: NativePlayerControl): void {
     const entry = this.entry;
-    if (!entry || request.sessionId !== entry.request.sessionId || request.generation < entry.state.generation
+    // The player's controls reach only the player's song.
+    if (!entry || entry.source || request.sessionId !== entry.request.sessionId || request.generation < entry.state.generation
       || ['failed', 'stopped'].includes(entry.state.state)) return;
     if (request.kind === 'stop' || request.kind === 'seek') {
       void this.stop().catch(error => this.dependencies.error(String(error))); return;
@@ -246,16 +273,20 @@ export class NativeObsHost {
     } else if (request.kind === 'play') entry.awaitingPause = false;
   }
 
-  async prepare(input: NativeObsPrepare): Promise<NativeObsStatus> {
+  /** `source`: where the song is, when the audio player does not play it (a P1 follow); its song may already play. The
+   * picture is one owner's at a time: while another owner's song is on or being prepared, this one is refused with why,
+   * and its music goes on (2026-10-30); the picture in use is never taken away. */
+  async prepare(input: NativeObsPrepare, source: PictureClockSource | null = null): Promise<NativeObsStatus> {
     const request = nativeObsPrepareSchema.parse(input);
     // The next song plays the newest version: never one older than this song's (0.5.9 S8a).
     if (request.nextFiles && (request.nextFiles.snapshot.projectId !== request.snapshot.projectId || request.nextFiles.snapshot.revision < request.snapshot.revision)) {
       throw new Error('下一个节目的文件准备和当前工程版本对不上');
     }
-    this.assertAdmission(request);
-    this.requested = request;
+    this.assertOwner(source);
+    this.assertAdmission(request, source);
+    this.requested = request; this.requestedSource = source;
     this.preparing++;
-    try { return await this.prepareSession(request); }
+    try { return await this.prepareSession(request, source); }
     // A song that never got its picture leaves nothing to show them on; they are in the log.
     finally { if (--this.preparing === 0) this.unshown = []; }
   }
@@ -272,15 +303,15 @@ export class NativeObsHost {
   /** A program picture is being prepared or is on air; a preselection must not stop it. */
   get busy(): boolean { return this.preparing > 0 || Boolean(this.entry && !['stopped', 'failed'].includes(this.entry.state.state)); }
 
-  private async prepareSession(request: NativeObsPrepare): Promise<NativeObsStatus> {
+  private async prepareSession(request: NativeObsPrepare, source: PictureClockSource | null): Promise<NativeObsStatus> {
     const epoch = ++this.epoch, outages = this.outages;
     const previous = this.entry;
     // A failed cleanup was logged where it ran. It must not keep this song, or any
     // after it, from its picture (2026-11-09). The previous song's own status is no longer shown.
     if (previous) await this.cleanUp(previous);
     if (epoch !== this.epoch) throw new Error('画面准备已被新的操作取消');
-    const audio = this.assertAdmission(request), project = projectFromObsSnapshot(request.snapshot);
-    const outputs = await this.dependencies.outputs(request, audio.positionMs, () => { if (epoch !== this.epoch) throw new Error('画面资源交接已取消'); });
+    const audio = this.assertAdmission(request, source), project = projectFromObsSnapshot(request.snapshot);
+    const outputs = await this.dependencies.outputs(request, audio.positionMs, () => { if (epoch !== this.epoch) throw new Error('画面资源交接已取消'); }, source);
     if (epoch !== this.epoch) {
       await outputs.releaseOutputs().catch((error: unknown) => this.report({ log: `取消的画面准备没有清理干净，不影响播放。原因：${pictureErrorDetail(error)}`,
         shown: `取消的画面准备没有清理干净，不影响播放。原因：${pictureCleanupReason(error)}` }));
@@ -296,13 +327,13 @@ export class NativeObsHost {
     const session = this.createSession(request, project, outputs);
     const entry: Entry = { request, project, session, state, awaitingPause: false, ended: false, filesStarted: false, now: outputs.now, restoreScenes: outputs.restoreScenes,
       cleanup: null, leftover: null, connection: null, parts: [], counts: [], restores: new OutputRecovery(), lost: false, rejoin: null, outputs, started: false, released: null,
-      next: request.nextFiles ?? null, nextTurn: 0, nextTask: null, repreparing: false, wanted: null };
+      next: request.nextFiles ?? null, nextTurn: 0, nextTask: null, repreparing: false, wanted: null, source };
     this.entry = entry; this.publish();
     try {
       await session.prepare(audio.positionMs);
       if (epoch !== this.epoch || this.entry !== entry) throw new Error('画面准备已取消');
       // The music may have started meanwhile (design 01 §3.2 row 13): the picture joins at the current position.
-      const now = this.playingSong(request);
+      const now = this.playingSong(request, source);
       if (now.status === 'playing' || now.generation !== request.generation) entry.rejoin ??= { restore: NOTHING, late: true };
       if (session.error) throw session.error;
       this.patch({ state: 'ready', nextCueId: session.nextCueId, notice: outputs.outputNotice?.() ?? null });
@@ -388,9 +419,11 @@ export class NativeObsHost {
       if (clock.state === 'running') void this.releaseHolds(clock.sessionId === entry.request.sessionId && clock.itemId === entry.request.snapshot.item.id ? entry : null);
       return;
     }
+    // A song of one clock hears only that clock: the player's clocks never reach a P1 song's picture, nor P1's the player's.
+    if (clock.source !== (entry.source ? 'p1' : 'internal')) return;
     if (clock.sessionId !== entry.request.sessionId || clock.itemId !== entry.request.snapshot.item.id) {
       // A stale message from an old player must never stop or advance a new one.
-      const current = this.dependencies.audio();
+      const current = this.songNow(entry.source);
       if (current?.sessionId === entry.request.sessionId && current.itemId === entry.request.snapshot.item.id) return;
       void this.stop().catch(error => this.dependencies.error(String(error))); return;
     }
@@ -462,7 +495,7 @@ export class NativeObsHost {
     if (this.entry !== entry || entry.nextTurn !== turn || ['stopped', 'failed'].includes(entry.state.state)) return;
     entry.nextTask = null; entry.filesStarted = false;
     // Playing: begun now. Paused or not started: at the next clock of the music.
-    if (this.dependencies.audio()?.status === 'playing') this.startNextFiles(entry);
+    if (this.songNow(entry.source)?.status === 'playing') this.startNextFiles(entry);
   }
 
   /** The next song's files and picture, prepared ahead while this song plays, as `entry.next` has them now. */
@@ -503,9 +536,19 @@ export class NativeObsHost {
     return entry.cleanup;
   }
   /** The program closes (`sessionId`), or the engine (none): its song stops and everything its stopped songs left on
-   * their last frame is taken off, as before R14. */
+   * their last frame is taken off, as before R14. Only the audio player's songs: a P1 follow's picture is not the
+   * engine's, and goes with that follow (`closeSource`), also when the window's page goes (2026-11-12). */
   async close(sessionId?: string): Promise<void> {
-    const mine = (entry: Entry): boolean => sessionId === undefined || entry.request.sessionId === sessionId;
+    await this.closeWhere(entry => entry.source === null && (sessionId === undefined || entry.request.sessionId === sessionId));
+  }
+  /** That song of a source stops, as the program's song stops (its last frame stays, R14); nothing else is touched. */
+  async stopSource(source: PictureClockSource, sessionId: string): Promise<void> {
+    if (this.entry?.source === source && this.entry.request.sessionId === sessionId) await this.stop();
+  }
+  /** The follow of `source` closes (or the app quits): its song stops and what its songs left on their last frame is
+   * taken off, as when a program closes. */
+  closeSource(source: PictureClockSource): Promise<void> { return this.closeWhere(entry => entry.source === source); }
+  private async closeWhere(mine: (entry: Entry) => boolean): Promise<void> {
     if (this.entry && mine(this.entry)) await this.stop();
     await Promise.all(this.holds.filter(mine).map(entry => this.release(entry)));
   }
@@ -571,15 +614,32 @@ export class NativeObsHost {
     return leftover;
   }
 
-  private assertAdmission(request: NativeObsPrepare): NativePlayerStatus {
-    const audio = this.dependencies.audio();
+  /** The song of the audio player, or of `source`. */
+  private songNow(source: PictureClockSource | null): SongNow | null {
+    if (!source) return this.dependencies.audio();
+    const song = source.now();
+    return song ? { ...song, audioError: null } : null;
+  }
+  /** The picture is one owner's at a time (0.5.9): the one whose preparation runs, else the one whose song is on.
+   * Another owner is refused with why; a stopped or failed song holds nothing (its last frame goes when the next is on). */
+  private assertOwner(source: PictureClockSource | null): void {
+    const entry = this.entry;
+    const holder = this.preparing > 0 ? { source: this.requestedSource } : entry && !['stopped', 'failed'].includes(entry.state.state) ? { source: entry.source } : null;
+    if (!holder || holder.source === source) return;
+    throw new Error(holder.source
+      ? `OBS 的画面正在跟随 P1（${holder.source.owner}），这首歌不联动画面，音乐和时间码照常。停止跟随 P1 以后再放就有画面`
+      : 'OBS 的画面正在给联动台播放的节目用，跟随 P1 的这首歌不联动画面，动作 MIDI 和灯光照常。节目停下以后，P1 下一首歌就有画面');
+  }
+  /** A program's song waits, ready or paused, for its picture; a source's song may already play (P1 starts it). */
+  private assertAdmission(request: NativeObsPrepare, source: PictureClockSource | null): SongNow {
+    const audio = this.songNow(source);
     if (!audio || audio.sessionId !== request.sessionId || audio.generation !== request.generation || audio.itemId !== request.snapshot.item.id
-      || !['ready', 'paused'].includes(audio.status) || audio.audioError) throw new Error('画面准备的不是当前这首歌，这一首不联动画面，也不会中途加入');
+      || !(source ? ['ready', 'paused', 'playing'] : ['ready', 'paused']).includes(audio.status) || audio.audioError) throw new Error('画面准备的不是当前这首歌，这一首不联动画面，也不会中途加入');
     return audio;
   }
   /** This song's audio, also once it plays: a preparation joining the music (R7). */
-  private playingSong(request: NativeObsPrepare): NativePlayerStatus {
-    const audio = this.dependencies.audio();
+  private playingSong(request: NativeObsPrepare, source: PictureClockSource | null): SongNow {
+    const audio = this.songNow(source);
     if (!audio || audio.sessionId !== request.sessionId || audio.generation < request.generation || audio.itemId !== request.snapshot.item.id
       || !['ready', 'paused', 'playing'].includes(audio.status) || audio.audioError) throw new Error('画面准备的不是当前这首歌，这一首不联动画面，也不会中途加入');
     return audio;
@@ -600,7 +660,9 @@ export class NativeObsHost {
     const urgent = !previous || status.sessionId !== previous.sessionId || status.itemId !== previous.itemId
       || status.generation !== previous.generation || status.state !== previous.state || status.reason !== previous.reason;
     if (!urgent && now - this.displayedAt < 50) return;
-    this.displayed = status; this.displayedAt = now; this.dependencies.changed(status);
+    this.displayed = status; this.displayedAt = now;
+    // Each owner hears its own picture: a P1 follow's goes to its source, the program's to the host's `changed`.
+    if (this.entry.source) this.entry.source.changed(status); else this.dependencies.changed(status);
   }
   private fault(message: string): void {
     if (!this.entry || ['stopped', 'failed'].includes(this.entry.state.state)) return;

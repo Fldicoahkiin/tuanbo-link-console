@@ -6,12 +6,12 @@ const request = (command: unknown) => ({ version: 1, ownerId, command });
 
 const standby: P1FollowState = {
   version: 1, phase: 'standby', ownerId, projectId: 'project', projectPath: 'C:/Shows/show.tblink', projectName: '演出', mode: 'manual', runMode: 'live', itemId: null, sessionId: null, generation: 0,
-  positionMs: null, cause: null, reason: null, input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null }
+  positionMs: null, cause: null, reason: null, input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null, picture: null }
 };
 
 describe('P1 跟随的 IPC 契约（0.5.9 P3a）', () => {
   it('收下设计里的每一条命令，外加离开工程时的 close；手动 GO、重试动作和单步测试不在这里（P3d）', () => {
-    const start = { kind: 'start', projectPath: 'C:/Shows/show.tblink', sessionId: ownerId, revision: 3, document: '{}', mode: 'auto', runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null };
+    const start = { kind: 'start', projectPath: 'C:/Shows/show.tblink', sessionId: ownerId, revision: 3, document: '{}', mode: 'auto', runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null, preciseSeeking: true };
     const commands = [start, { kind: 'arm', itemId: 'song' }, { kind: 'arm', itemId: null }, { kind: 'resync' }, { kind: 'rearm' }, { kind: 'manualTakeover' },
       { kind: 'stop' }, { kind: 'close' }, { kind: 'adopt', projectPath: 'C:/Shows/show.tblink' }];
     for (const command of commands) expect(p1FollowRequestSchema.parse(request(command)).command).toEqual(command);
@@ -51,9 +51,9 @@ describe('P1 跟随的 IPC 契约（0.5.9 P3a）', () => {
     const closed = { ...standby, phase: 'closed', ownerId: null, projectId: null, projectPath: null, projectName: null, mode: null, runMode: null, input: null };
     expect(p1FollowStateSchema.safeParse({ ...closed, ownerId }).success).toBe(false);
     const red = { ...standby, phase: 'running', itemId: 'song', sessionId: 's', generation: 1, positionMs: 100,
-      outputs: { actionMidi: { itemId: 'song', state: 'running', reason: null, fault: 'MIDI 动作晚了超过 100 ms，没有补发：开场' } } };
+      outputs: { actionMidi: { itemId: 'song', state: 'running', reason: null, fault: 'MIDI 动作晚了超过 100 ms，没有补发：开场' }, picture: null } };
     expect(p1FollowStateSchema.parse(red)).toEqual(red);
-    expect(p1FollowStateSchema.safeParse({ ...red, outputs: { actionMidi: { ...red.outputs.actionMidi, state: 'fine' } } }).success).toBe(false);
+    expect(p1FollowStateSchema.safeParse({ ...red, outputs: { ...red.outputs, actionMidi: { ...red.outputs.actionMidi, state: 'fine' } } }).success).toBe(false);
     expect(p1FollowStateSchema.safeParse({ ...red, outputs: {} }).success).toBe(false);
   });
 });
