@@ -3,7 +3,7 @@ import type { ConsoleRow } from '../../src/console-contract';
 import { PageCard } from '../components/page-card';
 import { StatusBadge } from '../components/status-badge';
 import { Button, buttonVariants } from '../components/ui/button';
-import { beijingTime } from '../forms';
+import { beijingTime, display } from '../forms';
 import { cn } from '../lib/utils';
 import { DataTable, Fields, detailRow } from '../table';
 import type { ActionName, Detail } from '../console-app';
@@ -60,12 +60,15 @@ export function RecordDetail({ route, resource, selected, detail, can, open, bac
   const download = resource === 'feedback' && item.attachment === 'received'
     ? <a className={cn(buttonVariants({ variant: 'outline' }), 'max-sm:h-10')} href={`/console-api/feedback/${String(item.id)}/diagnostic`} download><Download aria-hidden="true" />下载诊断包</a>
     : undefined;
+  // 标题旁的状态：两个状态显示成同样的字（订单没付款时状态和付款状态都是「待付款」）就只留一个。
+  const badges = (statusFields[resource] ?? []).filter(field => item[field] !== undefined)
+    .filter((field, index, all) => all.findIndex(other => display(other, item[other] ?? null) === display(field, item[field] ?? null)) === index);
   return <div className="flex flex-col gap-6">
     <div className="flex flex-col gap-3">
       {backButton}
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-lg font-medium">{titles[resource] ?? '订单详情'}</h2>
-        {(statusFields[resource] ?? []).filter(field => item[field] !== undefined).map(field => <StatusBadge key={field} field={field} value={item[field] ?? null} />)}
+        {badges.map(field => <StatusBadge key={field} field={field} value={item[field] ?? null} />)}
       </div>
     </div>
     <PageCard title="基本信息"><Fields row={detailRow(item)} /></PageCard>

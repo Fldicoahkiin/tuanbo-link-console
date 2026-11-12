@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { CircleCheck, ExternalLink } from 'lucide-react';
 import type { ConsoleResult } from '../../../src/console-contract';
 import { beijingTime } from '../../forms';
+import { cn } from '../../lib/utils';
 import { CopyButton } from '../copy-button';
 import { Button, buttonVariants } from '../ui/button';
 import { Spinner } from '../ui/spinner';
@@ -51,7 +52,7 @@ function Payment({ url, qr }: { url: string; qr: string }) {
     {qr && <img src={qr} width={200} height={200} alt="支付宝付款二维码" className="size-50" />}
     <div className="flex w-full flex-wrap justify-center gap-2">
       <CopyButton value={url} size="default" className="h-9">复制链接</CopyButton>
-      <a className={buttonVariants({ variant: 'outline', className: 'h-9' })} href={url} target="_blank" rel="noreferrer">
+      <a className={cn(buttonVariants({ variant: 'outline' }), 'h-9')} href={url} target="_blank" rel="noreferrer">
         <ExternalLink aria-hidden="true" />打开付款页
       </a>
     </div>

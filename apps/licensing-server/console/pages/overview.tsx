@@ -39,7 +39,7 @@ export function OverviewPage({ overview, can, open, navigate }: OverviewProps) {
             const count = Number(item[task.key] ?? 0);
             return <li key={task.key}>
               <button type="button" onClick={() => navigate(task.route, task.preset)}
-                className={cn('hover:bg-muted/50 focus-visible:ring-ring/50 flex min-h-12 w-full items-center gap-3 px-4 py-2.5 text-left outline-none focus-visible:ring-3 focus-visible:ring-inset')}>
+                className="hover:bg-muted/50 focus-visible:ring-ring/50 flex min-h-12 w-full items-center gap-3 px-4 py-2.5 text-left outline-none focus-visible:ring-3 focus-visible:ring-inset">
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="text-sm">{task.title}</span>
                   {task.hint && <span className="text-muted-foreground text-xs">{task.hint}</span>}
@@ -81,7 +81,7 @@ export function OverviewPage({ overview, can, open, navigate }: OverviewProps) {
 
 function Maintenance({ item, checks }: { item: ConsoleRow; checks: ConsoleRow[] }) {
   return <details className="group bg-card ring-foreground/10 rounded-xl ring-1">
-    <summary className={cn('hover:bg-muted/50 flex cursor-pointer list-none items-center gap-3 rounded-xl px-4 py-3 text-sm [&::-webkit-details-marker]:hidden')}>
+    <summary className="hover:bg-muted/50 flex cursor-pointer list-none items-center gap-3 rounded-xl px-4 py-3 text-sm [&::-webkit-details-marker]:hidden">
       <ShieldCheck className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
       <span className="flex-1 font-medium">运行与维护</span>
       <span className="text-muted-foreground text-xs">服务{String(item.service ?? '状态未知')} · 查看记录</span>

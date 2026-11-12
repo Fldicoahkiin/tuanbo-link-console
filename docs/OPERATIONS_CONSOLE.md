@@ -32,7 +32,7 @@ React 管理页面：工作台、订单、授权及绑定设备、交付异常�
 
 - **授权生命周期**：状态只在服务端一处计算（`console-service.ts` 的 `licenseRows`），互斥优先级为已撤销 > 已过期 > 即将到期（7 天内，不论是否绑定）> 生效中（已绑定）> 未激活。授权页顶部页签带各状态数量，默认打开「生效中」；新签发未绑定的授权在「未激活」。详情页的生命周期时间线以业务审计为事件来源，操作人从后台审计按同一对象、前后 5 秒匹配，无历史权限的角色看不到操作人；「已过期」节点按到期时间合成。
 - **网址**：页面、详情、筛选和页码写在地址 `#/licenses?state=unbound` 中，刷新或分享后还原同一视图；切换页面和详情进入浏览器历史，筛选只替换当前地址。
-- **操作原因**：所有写操作的原因都选填（2026-11-12 起，见上）；种类有限的用下拉预设加「其他」，下拉可选「不写」，选了「其他」就要写明。原因为空时，向服务层、更新发布器和支付宝传固定说法，因为它们仍要求非空原因。
+- **操作原因**：所有写操作的原因都选填（2026-11-12 起，见上）。原因和付款方式是一个输入框，下面一排常用项，点一下就填上，也可以直接写别的（2026-11-12 界面重做前是下拉加「其他」）。原因为空时，向服务层、更新发布器和支付宝传固定说法，因为它们仍要求非空原因。
 - **二次验证**：6 位验证码输满自动提交，恢复码通过「改用恢复码」切换；敏感操作距上次验证超过 30 分钟时在已填表单上方弹出验证层，验证后自动继续原操作。页头标签显示剩余时间，会话接口返回服务器时间用于校正倒计时。
 - **人员**：可用管理员少于 2 名时，人员页提示并提供「开通第二名管理员」，预选角色和原因。
 - **签发与付款链接**：签发特殊授权或确认线下收款只签出一份时，结果直接显示激活码（60 秒后隐藏），关闭后打开这张授权的详情；签出多份的特殊授权打开订单。付款链接弹窗打开期间每 5 秒读一次本地订单状态（不调支付宝），到账后显示「已付款，已发码」。
@@ -95,9 +95,62 @@ node scripts/verify-console.mjs
 python -m unittest discover -s apps/licensing-server/deploy -p test_console_deployment.py
 ```
 
-CI 安装 Playwright Chromium 后运行同一个浏览器脚本，不设置浏览器渠道。脚本创建临时独立数据库、随机测试密钥，在浏览器测试上下文拦截管理站请求并转发本机服务；不连接生产管理站，不使用真实支付。截图输出到 `apps/licensing-server/dist/console-review/`，不进入版本控制。
+CI 安装 Playwright Chromium 后运行同一个浏览器脚本，不设置浏览器渠道。脚本带着线上的 CSP 跑（见下一节）。脚本创建临时独立数据库、随机测试密钥，在浏览器测试上下文拦截管理站请求并转发本机服务；不连接生产管理站，不使用真实支付。截图输出到 `apps/licensing-server/dist/console-review/`，不进入版本控制。
 
 产物：`dist/index.js`、`dist/console-bootstrap.js`、`dist/console/{index.html,console.js,console.css,manifest.json}`。源码测试夹具不作为生产入口。网站构建路径现使用 `fileURLToPath`，支持 Windows 中文目录。
+
+## 界面和组件库（2026-11-12 重做）
+
+用户 2026-11-12 要求（原话“组件库感觉也不是很好，你自己看着优化”“登录页面的好多页都可以优化一下”）。功能、接口、权限没变，变的是界面和代码的组织。自动化验证通过（下面的验收脚本和三种窗口大小的截图），**未在真实的 Windows 浏览器和手机上验证**。
+
+**用什么**：React 19、Tailwind 4、[shadcn/ui](https://ui.shadcn.com) 的 Base UI 版（nova 风格，MIT）。只有浅色，一个强调色（蓝），和桌面端同一套“精修”规则（4px 网格、三级文字、不用渐变和光晕）。颜色、圆角、字体只在 `apps/licensing-server/console/styles.css` 定，页面里只用带语义的类（`bg-primary`、`text-muted-foreground`），不写死色值。
+
+**线上不允许页面运行时插样式**（Nginx 的 CSP 是 `style-src 'self'`，见 `apps/licensing-server/deploy/console-site.conf`）。所以：
+
+- Base UI 包在 `CSPProvider disableStyleElements` 里（`console/components/providers.tsx`），它要的两条滚动条规则写在 `styles.css`。
+- 不引入会自己插 `<style>` 的库：sonner、input-otp、任何 CSS-in-JS、图表库。提示用 `console/components/toaster.tsx` 的 `notify`，收款趋势是手画的 SVG。
+- `scripts/verify-console.mjs` 从 `console-site.conf` 读出这条 CSP，带着它跑；页面报一条 CSP 违规，验收就失败。
+- 要放宽 CSP 就是改生产 Nginx，先按 AGENTS.md 第 8 节写安装说明、装到服务器，再推代码。
+
+**代码在哪**（都在 `apps/licensing-server/console/` 下）：
+
+| 文件 | 管什么 |
+| --- | --- |
+| `main.tsx` | 入口：查登录状态，显示登录页或后台 |
+| `console-app.tsx` | 后台的状态和取数：当前视图、网址同步、读取、权限。页面组件只收属性，不自己取数 |
+| `navigation.ts` | 导航、各列表的列和筛选、工作台待办这些配置 |
+| `shell/` | 侧栏、顶栏、手机上的导航抽屉 |
+| `pages/` | 工作台、列表、详情（`detail-actions.tsx` 定每个操作按钮什么时候出现、怎么分组）、软件更新、安全设置 |
+| `forms.ts` | 26 种操作各自的表单字段，和表单用的纯函数（校验、北京时间换算、换算成要提交的对象），`forms.test.ts` 测 |
+| `action-dialog.tsx`、`components/forms/` | 所有写操作共用的对话框：填表、二次验证、提交、结果 |
+| `step-up.tsx`、`auth-view.tsx`、`components/auth-parts.tsx` | 二次验证、登录和三步开通 |
+| `table.tsx` | 列表和详情的字段显示；窄屏（768px 以下）每条记录显示成一块 |
+| `components/ui/` | shadcn/ui 的组件，生成的，不手改 |
+| `components/` 其余 | 后台自己组合的共用件：提示、复制按钮、状态色块、卡片 |
+
+**加一个组件**：仓库根目录运行 `node scripts/add-console-component.mjs <组件名>`（比如 `checkbox`）。它从 shadcn-ui/ui 仓库取 Base UI 版的源码，换成 nova 风格的类和 lucide 图标，写到 `components/ui/`。没有用 shadcn 自己的命令行，是因为它要 `@/` 别名和 `components.json`，而仓库的 lint 按根目录的 TypeScript 配置检查后台源码，别名解析不了；后台源码里 import 一律用相对路径。
+
+**和网上常见的写法不一样的地方**（网上的例子多是 Radix 版）：
+
+- 没有 `asChild`，用 `render`：`<DialogTrigger render={<Button variant="outline" />}>`。
+- 链接做成按钮的样子：`<a className={cn(buttonVariants({ variant: 'outline' }), '别的类')}>`。要过一遍 `cn()`，否则边框出不来。
+- 下拉要传 `items={[{ value, label }]}` 才显示文字而不是值；在对话框里给 `SelectContent` 加 `alignItemWithTrigger={false}`。
+- 状态属性是 `data-open`、`data-checked` 这种。拿不准的 API 查 `apps/licensing-server/node_modules/@base-ui/react/docs/react/components/` 下的本地文档。
+- 验收脚本里操作下拉要像人一样点开再点选项，不用 Playwright 的 `selectOption`（它测不出 2026-11-12 修的“选了又弹回”）。
+
+**构建**：`build-console.mjs` 先用 esbuild 打 `console.js`，再用 Tailwind 把 `styles.css` 编成 `console.css`（Tailwind 只扫 `console/` 目录）。发布的仍是 `dist/console/` 下固定的四个文件。
+
+**依赖**：`pnpm-workspace.yaml` 里有两条 override（`use-sync-external-store`、`jiti`）。它们让给后台加依赖时不顺带升级桌面端的间接依赖；以后动后台的依赖，看一眼 `pnpm-lock.yaml` 里桌面端有没有跟着变。
+
+**这次改了的行为**：
+
+- 提交按钮不再因为没填全而变灰：点了在缺的那一项下面写明缺什么。关闭工单、关闭反馈时的结论和已开票的发票编号，界面先提示，服务端照旧判断。
+- 到期时间有「+7 天」「+30 天」「+1 年」，办理时间有「现在」。
+- 详情页的操作按用途分组，仍然全部直接看得见；会让凭据失效或不可逆的是红色。
+- 列表的状态、来源选了立刻生效；搜索和日期点「查询」。
+- 读取时不再把页面往下顶：第一次读显示占位，重新读时内容变淡。
+- 登录过期后任何请求都会回到登录页并说明原因。人员详情改完权限后显示的是新数据。
+- 开通账号显示三步进度；验证器密钥、恢复码可以复制，恢复码可以存成文本文件。
 
 ## 首次生产安装
 

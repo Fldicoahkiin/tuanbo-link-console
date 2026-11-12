@@ -16,7 +16,8 @@ function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const signedOut = useCallback(() => setSession(null), []);
+  // 退出或登录过期：回到登录页；过期时带一句说明，显示在登录卡片上方。
+  const signedOut = useCallback((notice = '') => { setSession(null); setError(notice); }, []);
   useEffect(() => {
     let live = true;
     void api('session', sessionSchema)
@@ -34,7 +35,7 @@ function App() {
   }
   if (session) return <ConsoleApp initial={session} signedOut={signedOut} />;
   return <>
-    {/* 连不上服务器（不是没登录）时，报错放在登录卡片上方。 */}
+    {/* 连不上服务器、或登录过期被退回来时，说明放在登录卡片上方；登录成功后清掉。 */}
     {error && <div className="fixed inset-x-0 top-4 z-10 flex justify-center px-4">
       <Alert variant="destructive" className="max-w-sm"><AlertDescription>{error}</AlertDescription></Alert>
     </div>}

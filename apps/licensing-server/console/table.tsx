@@ -71,7 +71,7 @@ export function DataTable({ rows, fields, select, canSelect }: {
   const selectable = (row: ConsoleRow) => select !== undefined && (canSelect?.(row) ?? true);
   return <div className="w-full min-w-0 rounded-lg border md:overflow-x-auto">
     <Table className="max-md:block">
-      <TableHeader className={cn('bg-muted/50 max-md:sr-only')}>
+      <TableHeader className="bg-muted/50 max-md:sr-only">
         <TableRow className="hover:bg-transparent">
           {fields.map(key => <TableHead key={key} className={cn('text-muted-foreground h-9 px-3 text-xs font-normal', isMoney(key) && 'text-right')}>{labels[key] ?? key}</TableHead>)}
           {select && <TableHead className="w-10 px-2"><span className="sr-only">操作</span></TableHead>}

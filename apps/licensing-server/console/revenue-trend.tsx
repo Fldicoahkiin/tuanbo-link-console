@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import type { ConsoleRow } from '../src/console-contract';
 import { PageCard } from './components/page-card';
-import { cn } from './lib/utils';
 import { Label } from './components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 
@@ -18,6 +17,7 @@ export function RevenueTrend({ rows, className }: { rows: ConsoleRow[]; classNam
     </PageCard>;
   }
   const current = rows.find(row => row.day === selected) ?? last;
+  // 纵轴最大值至少 1 元；这么小的时候刻度留一位小数（见下面的刻度文字），免得中间那格的 0.5 被四舍五入成 1。
   const maximum = Math.max(100, ...rows.flatMap(row => [Number(row.incomeFen), Number(row.refundFen)]));
   const x = (index: number) => 58 + index * 704 / Math.max(1, rows.length - 1);
   const y = (value: number) => 166 - value / maximum * 134;
@@ -27,7 +27,7 @@ export function RevenueTrend({ rows, className }: { rows: ConsoleRow[]; classNam
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm" aria-live="polite">
         <span className="text-muted-foreground tabular-nums">{String(current.day)}</span>
         <span className="flex items-center gap-1.5">
-          <span className={cn('bg-primary size-2 rounded-full')} aria-hidden="true" />
+          <span className="bg-primary size-2 rounded-full" aria-hidden="true" />
           收款 <strong className="font-semibold tabular-nums">{money(Number(current.incomeFen))}</strong>
         </span>
         <span className="flex items-center gap-1.5">
@@ -39,7 +39,7 @@ export function RevenueTrend({ rows, className }: { rows: ConsoleRow[]; classNam
         {[0, 0.5, 1].map(fraction => <g key={fraction}>
           <line x1="58" x2="762" y1={y(maximum * fraction)} y2={y(maximum * fraction)} stroke="var(--border)" />
           <text x="48" y={y(maximum * fraction) + 4} textAnchor="end" className="fill-muted-foreground text-[11px]">
-            {(maximum * fraction / 100).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
+            {(maximum * fraction / 100).toLocaleString('zh-CN', { maximumFractionDigits: maximum < 1000 ? 1 : 0 })}
           </text>
         </g>)}
         <polyline points={points('incomeFen')} fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinejoin="round" />

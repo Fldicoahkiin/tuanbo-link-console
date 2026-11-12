@@ -3,7 +3,7 @@
  * 页面里用 Tailwind 的类，不写死颜色（用 bg-primary、text-muted-foreground 这样带语义的类）。
  * 构建：build-console.mjs 用 Tailwind 把这个文件编成 dist/console/console.css（线上只发这一个样式文件，CSP 是 style-src 'self'）。
  */
-@layer theme, base, legacy, components, utilities;
+@layer theme, base, components, utilities;
 @import "tailwindcss" source(none);
 @source "./";
 @import "tw-animate-css";

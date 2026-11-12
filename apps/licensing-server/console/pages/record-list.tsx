@@ -66,7 +66,7 @@ export function RecordList(props: ListProps) {
         </a>}
       </div>}
     </div>
-    {backupNeeded && <Alert role="note" className={cn('border-warning/30 bg-warning/5 flex flex-col gap-3 p-4 sm:flex-row sm:items-center')}>
+    {backupNeeded && <Alert role="note" className="border-warning/30 bg-warning/5 flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
       <span className="text-warning shrink-0"><ShieldAlert className="size-5" aria-hidden="true" /></span>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <AlertTitle>只有 1 名可用的管理员</AlertTitle>

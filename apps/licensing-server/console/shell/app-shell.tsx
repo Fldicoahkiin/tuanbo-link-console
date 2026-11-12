@@ -27,7 +27,7 @@ export function AppShell({ items, route, title, username, role, busy, navigate, 
   const [menuOpen, setMenuOpen] = useState(false);
   const sidebar = { items, route, username, role, busy, logout };
   return <div className="bg-background text-foreground min-h-svh lg:pl-58">
-    <aside className={cn('bg-sidebar fixed inset-y-0 left-0 z-30 hidden w-58 border-r lg:block')}>
+    <aside className="bg-sidebar fixed inset-y-0 left-0 z-30 hidden w-58 border-r lg:block">
       <SidebarBody {...sidebar} navigate={navigate} />
     </aside>
     <div className="flex min-w-0 flex-col">
@@ -36,7 +36,7 @@ export function AppShell({ items, route, title, username, role, busy, navigate, 
           <SheetTrigger render={<Button variant="ghost" size="icon" className="-ml-2 size-9 lg:hidden" aria-label="打开导航" />}>
             <Menu aria-hidden="true" />
           </SheetTrigger>
-          <SheetContent side="left" showCloseButton={false} className={cn('bg-sidebar w-72 gap-0 p-0')}>
+          <SheetContent side="left" showCloseButton={false} className="bg-sidebar w-72 gap-0 p-0">
             <SheetTitle className="sr-only">后台导航</SheetTitle>
             <SheetClose render={<Button variant="ghost" size="icon" className="absolute top-3.5 right-3 size-9" aria-label="关闭导航" />}>
               <X aria-hidden="true" />

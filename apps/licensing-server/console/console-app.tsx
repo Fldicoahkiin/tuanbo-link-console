@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { z } from 'zod';
 import { detailSchema, pageSchema, permissions, sessionSchema, type ConsoleAction, type ConsoleResult, type ConsoleRow } from '../src/console-contract';
 import { api, errorMessage, messageSchema, onSessionExpired } from './api';
-import { notify } from './components/toaster';
 import { defaultFilter, detailRoutes, emptyFilter, readLocation, writeLocation, type Filter } from './location';
 import { navigation, visibleNavigation } from './navigation';
 import { ActionDialog } from './action-dialog';
@@ -24,7 +23,7 @@ export type ActionName = ConsoleAction['action'];
 export type DialogState = { action: ActionName; row: ConsoleRow | null };
 
 /** 后台的状态和取数：当前视图、网址同步、读取、权限。界面交给 ConsoleView。 */
-export function useConsoleState(initial: Session, signedOut: () => void) {
+export function useConsoleState(initial: Session, signedOut: (notice?: string) => void) {
   const [start] = useState(() => readLocation(window.location.hash));
   const [session, setSession] = useState(initial);
   const [route, setRoute] = useState(start.route);
@@ -48,13 +47,12 @@ export function useConsoleState(initial: Session, signedOut: () => void) {
   const resource = route === 'exceptions' ? 'orders' : route;
   // 读取只看选中的编号：人员详情读完列表后换成同一个人的新一行，编号不变就不会再读一次。
   const selectedKey = selected ? String(selected.id) : null;
-  // 登录过期由 api() 统一通知：提示一次并回到登录页（同时失败的几个请求只提示一次）。
+  // 登录过期由 api() 统一通知：回到登录页，并在登录卡片上方说明原因（同时失败的几个请求只处理一次）。
   const expired = useRef(false);
   useEffect(() => onSessionExpired(() => {
     if (expired.current) return;
     expired.current = true;
-    notify.error('登录已过期', '请重新登录。');
-    signedOut();
+    signedOut('登录已过期，请重新登录。');
   }), [signedOut]);
   const load = useCallback(async () => {
     const revision = ++sequence.current;
@@ -197,7 +195,7 @@ export function useConsoleState(initial: Session, signedOut: () => void) {
 }
 export type ConsoleState = ReturnType<typeof useConsoleState>;
 /** 后台：状态和取数在 useConsoleState，这里只按当前视图挑页面交给外壳。 */
-export function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () => void }) {
+export function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: (notice?: string) => void }) {
   const state = useConsoleState(initial, signedOut);
   const { session, route, title, detail, selected, overview, data, busy, error, dialog, clockOffset, can, open } = state;
   // 这个视图已经有内容时，重新读取只把内容调淡；还没有内容时显示骨架。
