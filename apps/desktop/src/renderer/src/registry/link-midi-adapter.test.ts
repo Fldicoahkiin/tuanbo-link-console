@@ -120,47 +120,6 @@ describe('LinkMidiAdapter', () => {
     ]);
   });
 
-  it('MTC quarter-frame 按接口送达的时刻上报，不算转发路上的时间', async () => {
-    const access = midiAccess([]);
-    installAccess(access);
-    const adapter = new LinkMidiAdapter(resolveProfile, vi.fn());
-    await adapter.initialize();
-    const messages: Array<{ messageType: number; value: number; receivedAt: number }> = [];
-    const unsubscribe = await adapter.subscribeMtc('in', '30', (message) => messages.push(message));
-    const input = access.inputs.get('input')!;
-    input.emit([0xf1, 0x34], 42);
-
-    expect(messages).toEqual([{ messageType: 3, value: 4, receivedAt: 42 }]);
-    expect(input.open).toHaveBeenCalledOnce();
-    expect(adapter.hasActiveMtcSubscription('in')).toBe(true);
-    unsubscribe();
-    expect(adapter.hasActiveMtcSubscription('in')).toBe(false);
-    expect(input.close).toHaveBeenCalledOnce();
-    expect(input.listeners.size).toBe(0);
-  });
-
-  it('实际输入端口改变或断开后不复用旧 MTC 订阅', async () => {
-    let inputName = 'P1 MTC';
-    const access = midiAccess([]);
-    const firstInput = access.inputs.get('input');
-    if (!firstInput) throw new Error('测试 MIDI 输入不存在');
-    installAccess(access);
-    const adapter = new LinkMidiAdapter((id) => id === 'in'
-      ? { id, direction: 'input', portName: inputName }
-      : resolveProfile(id), vi.fn());
-    await adapter.initialize();
-    await adapter.subscribeMtc('in', '30', vi.fn());
-    expect(adapter.hasActiveMtcSubscription('in')).toBe(true);
-
-    access.inputs.set('input-2', new FakePort('input-2', 'P1 MTC 2', 'input', access));
-    inputName = 'P1 MTC 2';
-    expect(adapter.hasActiveMtcSubscription('in')).toBe(false);
-
-    inputName = 'P1 MTC';
-    firstInput.state = 'disconnected';
-    expect(adapter.hasActiveMtcSubscription('in')).toBe(false);
-  });
-
   it('缺失端口和非 ASCII MSC 字段明确失败', async () => {
     const access = midiAccess([]);
     installAccess(access);
@@ -245,8 +204,7 @@ describe('LinkMidiAdapter', () => {
     const texts = [...await opening];
     const rejection = async (run: () => Promise<unknown>): Promise<string> => run().then(() => '', (error: unknown) => error instanceof Error ? error.message : String(error));
     texts.push(await rejection(() => adapter.execute({ id: 'pc', label: 'Program', kind: 'midi.programChange', portProfileId: 'missing', channel: 1, program: 1 })));
-    texts.push(await rejection(() => adapter.subscribeMtc('twin', '30', vi.fn())));
-    texts.push(await rejection(() => adapter.subscribeMtc('absent', '30', vi.fn())));
+    texts.push(...await adapter.openInputs(['twin']), ...await adapter.openInputs(['absent']));
     texts.push(await rejection(() => adapter.waitForConnectedInput('twin', 1000, vi.fn())));
     access.inputs.delete('d'); access.inputs.get('c')!.state = 'disconnected';
     const waiting = rejection(() => adapter.waitForConnectedInput('twin', 1000, vi.fn()));
@@ -307,24 +265,23 @@ describe('LinkMidiAdapter', () => {
     monitor.dispose();
   });
 
-  it('输入端口关闭失败会显式上报且释放状态监听', async () => {
+  it('端口关闭失败会显式上报且释放状态监听', async () => {
     const access = midiAccess([]);
-    const input = access.inputs.get('input');
-    if (!input) throw new Error('测试 MIDI 输入不存在');
-    input.close.mockRejectedValueOnce(new Error('设备正忙'));
+    const output = access.outputs.get('output');
+    if (!output) throw new Error('测试 MIDI 输出不存在');
+    output.close.mockRejectedValueOnce(new Error('设备正忙'));
     installAccess(access);
     const reportedErrors: Error[] = [];
     const reportError = (error: Error): void => { reportedErrors.push(error); };
     const adapter = new LinkMidiAdapter(resolveProfile, reportError);
     await adapter.initialize();
-    await adapter.subscribeMtc('in', '30', vi.fn());
+    expect(await adapter.openOutputs(['out'])).toEqual([]);
 
     adapter.dispose();
     await vi.waitFor(() => expect(reportedErrors).toHaveLength(1));
 
-    expect(reportedErrors[0]?.message).toContain('MIDI 接口「P1 MTC」关闭失败：设备正忙');
+    expect(reportedErrors[0]?.message).toContain('MIDI 接口「P1 Control」关闭失败：设备正忙');
     expect(access.listeners.size).toBe(0);
-    expect(input.listeners.size).toBe(0);
   });
 });
 

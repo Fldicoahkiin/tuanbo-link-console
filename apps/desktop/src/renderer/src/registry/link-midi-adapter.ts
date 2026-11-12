@@ -1,7 +1,7 @@
 import { refreshMidiAccess, requestMidiAccess, type MidiAccess, type MidiInput, type MidiOutput, type MidiPort,
   type MidiPortConnectionState, type MidiPortDeviceState } from './midi-access';
 import { requireOutputLicense } from './license-output';
-import type { IntegrationProfile, LinkAction, MtcFrameRate } from '@tb/schema';
+import type { IntegrationProfile, LinkAction } from '@tb/schema';
 import { buildMidiShowControlMessage, encodeMidiAction, isMidiAction, midiMessageNeedsLicense, type LinkActionExecutor } from '@tb/core/link';
 export { buildMidiShowControlMessage } from '@tb/core/link';
 
@@ -18,12 +18,6 @@ export type MidiPortSnapshot = {
   direction: 'input' | 'output';
   state: MidiPortDeviceState;
   connection: MidiPortConnectionState;
-};
-
-export type MtcQuarterFrameMessage = {
-  messageType: number;
-  value: number;
-  receivedAt: number;
 };
 
 export function hasConnectedProfilePort(
@@ -50,7 +44,6 @@ export class LinkMidiAdapter implements LinkActionExecutor {
   private readonly portListeners = new Set<PortChangeListener>();
   private unsubscribeAccess: (() => void) | null = null;
   private reportedFailure: string | null = null;
-  private mtcInput: { port: MidiInput; unsubscribe: () => void } | null = null;
   /** Outputs this adapter opened; closed again when it is released. */
   private readonly openedOutputs = new Set<MidiOutput>();
 
@@ -84,7 +77,6 @@ export class LinkMidiAdapter implements LinkActionExecutor {
   }
 
   async refreshPorts(): Promise<MidiPortSnapshot[]> {
-    if (this.mtcInput) throw new Error('MTC 输入正在使用，请停止联动后重新检测端口');
     if (this.initialization) throw new Error('正在检测 MIDI 端口，请等这次检测完成');
     this.generation++;
     const generation = this.generation;
@@ -159,7 +151,6 @@ export class LinkMidiAdapter implements LinkActionExecutor {
   dispose(): void {
     this.generation += 1;
     this.initialization = null;
-    this.closeMtcInput();
     for (const output of this.openedOutputs) this.closePort(output);
     this.openedOutputs.clear();
     this.unsubscribeAccess?.(); this.unsubscribeAccess = null;
@@ -179,40 +170,6 @@ export class LinkMidiAdapter implements LinkActionExecutor {
     for (const input of this.access.inputs.values()) ports.push(portSnapshot(input, 'input'));
     for (const output of this.access.outputs.values()) ports.push(portSnapshot(output, 'output'));
     return ports.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
-  }
-
-  async subscribeMtc(
-    profileId: string,
-    expectedFrameRate: MtcFrameRate,
-    listener: (message: MtcQuarterFrameMessage, expectedFrameRate: MtcFrameRate) => void
-  ): Promise<() => void> {
-    const input = this.resolveInput(profileId);
-    if (this.mtcInput && this.mtcInput.port !== input) this.closeMtcInput();
-    await input.open();
-    this.mtcInput?.unsubscribe();
-    const subscription = { port: input, unsubscribe: input.onMessage((event) => {
-      const status = event.data[0];
-      const data = event.data[1];
-      if (status !== 0xf1 || data === undefined) return;
-      listener({
-        messageType: (data >> 4) & 0x07,
-        value: data & 0x0f,
-        // When the interface delivered it, not when it reached this window.
-        receivedAt: event.receivedAt
-      }, expectedFrameRate);
-    }) };
-    this.mtcInput = subscription;
-    return () => {
-      if (this.mtcInput === subscription) this.closeMtcInput();
-    };
-  }
-
-  hasActiveMtcSubscription(profileId: string): boolean {
-    if (!this.mtcInput || this.mtcInput.port.state !== 'connected' || this.mtcInput.port.connection !== 'open') return false;
-    const profile = this.resolvePortProfile(profileId);
-    if (!profile || profile.direction !== 'input' || !this.access) return false;
-    const matches = [...this.access.inputs.values()].filter((port) => port.name === profile.portName);
-    return matches.length === 1 && matches[0] === this.mtcInput.port;
   }
 
   async execute(action: LinkAction): Promise<void> {
@@ -278,14 +235,6 @@ export class LinkMidiAdapter implements LinkActionExecutor {
     const input = matches[0];
     if (!input) throw new Error(`MIDI 输入端口「${profile.portName}」不存在`);
     return input;
-  }
-
-  private closeMtcInput(): void {
-    if (!this.mtcInput) return;
-    const { port, unsubscribe } = this.mtcInput;
-    unsubscribe();
-    this.mtcInput = null;
-    this.closePort(port);
   }
 
   private closePort(port: MidiPort): void {
