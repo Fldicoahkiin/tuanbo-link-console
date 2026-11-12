@@ -19,6 +19,7 @@ import { useFrameValue } from './useFrameValue';
 import { AudioTimelineSegments } from './AudioTimelineSegments';
 import { AudioTrackLane } from './AudioTrackLane';
 import type { AudioEditor } from './useAudioEditor';
+import { SongPaddingHandles } from './SongPaddingHandles';
 import { lightingSnapPoints, markerSnapPoints, timelineSnapPoints } from './timeline-snap-points';
 import { useTimelineSnap } from '../stores/timeline-view-store';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
@@ -301,6 +302,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
             {waveform.waveform && !waveform.error ? null : <span className={waveform.error ? 'timeline-lane-error' : 'timeline-lane-empty'}>{waveform.error ?? (props.referenceAudio ? '正在生成歌曲音频波形…' : '当前节目还没添加音频')}</span>}
             {props.audioEditor ? <AudioTimelineSegments readOnly={props.lightingWorkspace === true} playhead={props.playhead} editor={props.audioEditor} waveform={waveform.waveform} display="waveform" view={viewport.view} scroll={scroll} pixelsPerSecond={viewport.pixelsPerSecond} onSelect={(id) => props.onSelectAudio?.(id)} onSeek={(ms) => seekTo(ms, true)} /> : null}
           </div>}
+          {props.audioEditor && !props.lightingWorkspace ? <SongPaddingHandles padding={props.audioEditor.padding} pixelsPerSecond={viewport.pixelsPerSecond} contentWidth={viewport.contentWidth} viewport={viewport} top={rulerHeight} height={Math.max(1, props.audioEditor?.tracks.length ?? 0) * (props.audioRowHeight ?? 76)} /> : null}
           {props.lightingWorkspace ? null : <ContentTracks layers={props.layers} clips={props.clips} cues={props.cues} assets={assets} frameRate={props.frameRate}
             durationMs={props.durationMs} playhead={props.playhead} timelineState={props.timelineState} airtime={props.airtime} onAirtime={props.onAirtime} pending={props.pending}
             selectedClipId={props.selectedClipId} selectedCueId={props.selectedCueId} beatSnapPoints={props.audioEditor?.snapPoints ?? []} markerSnapPoints={markerSnapPoints(props.lighting?.document.markers)} playing={props.playing}

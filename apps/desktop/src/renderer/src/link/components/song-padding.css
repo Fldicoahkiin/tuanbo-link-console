@@ -1,0 +1,41 @@
+/*
+ * Blank time before and after a song's music on the editor's audio track (0.5.9 E15, 05 设计 7.7): the hatched blank,
+ * greyed where the playback range leaves it out, the two blank handles outside the segments' own trim handles, and
+ * the whole-song move while the lead handle is held (one variable on the timeline's content, painted in the drag's
+ * frames by SongPaddingHandles; nothing here runs on a pointer move).
+ */
+@layer pages {
+  .reference-timeline .song-padding-layer { position: absolute; left: 0; right: 0; z-index: 30; pointer-events: none; }
+
+  .reference-timeline .song-blank {
+    position: absolute; top: calc(var(--space-1) + var(--space-half)); bottom: var(--space-half); border: 1px dashed var(--color-border-strong); border-radius: var(--radius-sm);
+    background-image: repeating-linear-gradient(135deg, transparent 0, transparent 6px, var(--color-hairline) 6px, var(--color-hairline) 8px);
+  }
+  .reference-timeline .song-blank[data-unplayed] { border-color: var(--color-border); background-color: var(--color-canvas-overlay); opacity: 0.5; }
+  .reference-timeline .song-blank-preview { border-color: var(--color-accent); }
+  .reference-timeline .song-blank[hidden] { display: none; }
+  /* While a handle is held its side's blank is drawn by the preview alone. */
+  .reference-timeline .song-padding-layer[data-dragging='lead'] .song-blank[data-side='lead'],
+  .reference-timeline .song-padding-layer[data-dragging='tail'] .song-blank[data-side='tail'] { display: none; }
+
+  .reference-timeline .song-padding-handle {
+    position: absolute; bottom: var(--space-half); pointer-events: auto; cursor: ew-resize; touch-action: none;
+    border: 1px solid var(--color-border-strong); background: var(--color-surface-raised); color: var(--color-text);
+    translate: var(--song-padding-move, 0px) 0;
+  }
+  .reference-timeline .song-padding-handle[aria-disabled='true'] { cursor: not-allowed; color: var(--color-text-disabled); }
+  .reference-timeline .song-padding-handle[data-waiting] { cursor: progress; }
+  .reference-timeline .song-padding-length { z-index: 1; }
+  .reference-timeline .song-padding-length[data-stopped='true'] { border-color: var(--color-warning); }
+  .reference-timeline .song-padding-status {
+    position: absolute; top: 0; padding: 0 var(--space-1); border-radius: var(--radius-sm); background: var(--color-surface-raised);
+    color: var(--color-text-secondary); font: 400 var(--type-caption)/18px var(--font-ui); white-space: nowrap;
+  }
+
+  .audio-inspector .song-padding-error { color: var(--color-danger); }
+
+  /* The lead handle held: the music, the cameras, the clips and the lighting move together by the blank's change. */
+  .reference-timeline .timeline-content[data-padding-drag='lead'] :is(
+    .waveform-lane > .audio-timeline-segment, .waveform-lane > .audio-beat-marker, .cue-lane > *, .lighting-lane > *
+  ) { translate: var(--song-padding-shift, 0px) 0; }
+}

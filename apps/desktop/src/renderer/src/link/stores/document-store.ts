@@ -39,13 +39,28 @@ function historyStep(project: LinkProject, frame: HistoryFrame, direction: 'undo
 function stageWait(before: LinkProject, next: LinkProject, show: ShowState): string | null {
   if (!onInternalStage(show)) return null;
   const changes = songStructureChanges(before, next);
-  const wait = (op: 'song.remove' | 'song.audio.edit', itemId: string): string | null => {
+  const wait = (op: 'song.remove', itemId: string): string | null => {
     const gate = showGate(op, show, itemId);
     return gate.kind === 'wait' ? gate.message : null;
   };
   for (const itemId of changes.removed) { const message = wait('song.remove', itemId); if (message) return message; }
-  for (const itemId of changes.audio) { const message = wait('song.audio.edit', itemId); if (message) return message; }
+  for (const itemId of changes.audio) { const message = songAudioEditWait(itemId, show); if (message) return message; }
   return null;
+}
+/**
+ * Why an edit of this song's audio itself (blank time before and after it included, 0.5.9 E15) would wait now, in
+ * the words execute() would refuse it with; null when it would be committed. The editor says it beforehand instead of
+ * working out for itself whether the song plays.
+ */
+export function songAudioEditWait(itemId: string, show: ShowState): string | null {
+  if (!onInternalStage(show)) return null;
+  const gate = showGate('song.audio.edit', show, itemId);
+  return gate.kind === 'wait' ? gate.message : null;
+}
+/** `songAudioEditWait` for the page, worked out again when the show changes. */
+export function useSongAudioEditWait(itemId: string | null): string | null {
+  const show = useShowStateStore(state => state.show);
+  return useMemo(() => itemId === null ? null : songAudioEditWait(itemId, show), [itemId, show]);
 }
 const currentShow = (): ShowState => useShowStateStore.getState().show;
 /** 联动台播放 holds a song (preparing, playing, paused, ended or stopping): the only show whose song keeps the version
