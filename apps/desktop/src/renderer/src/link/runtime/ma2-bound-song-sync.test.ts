@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type LightingTrack, type LinkProject, type Ma2ApplyRequest, type Ma2ApplyResult, type Ma2CompareRequest, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
-import { importMa2TimecodeCommand, ma2PendingChanges, setLightingCommand, SHOW_WAIT_CLOCK_MOVING, type Ma2SyncPreview } from '@tb/core/link';
+import { importMa2TimecodeCommand, ma2PendingChanges, padSongCommand, padSongRender, setLightingCommand, SHOW_WAIT_CLOCK_MOVING, type Ma2SyncPreview } from '@tb/core/link';
 import { convertMa2Snapshot, convertMa2Timecode } from '../../../../main/link/ma2-timecode-conversion';
 import { compareMa2LightingReadback } from '../../../../main/link/ma2-comparison';
 import { Ma2OnpcBridge } from '../../../../main/link/ma2-onpc-bridge';
@@ -433,3 +433,27 @@ it.skipIf(!process.env.MA2_ONPC_AUTO_SYNC_ACCEPTANCE)('真实 onPC 自动写回�
     expect(sameMa2XmlObjects(await bridge.request('READ', target), original)).toBe(true);
   }
 }, 300000);
+
+// 0.5.9 E15（冲突 5）：整首挪过的歌，控台上原来的点读回来会被当成“控台后改的”，把灯拽回原处、和音乐差一段空白。
+it('方式 1 的歌整首挪过（加了前空白）：到控台确认之前按“以联动台为准”写，确认以后照原来的方式读回', async () => {
+  const file = { assetId: 'music', relativePath: 'assets/reference-audio/music.wav', sha256: 'a'.repeat(64), durationMs: 20_000 };
+  const music = (leadMs: number, sha256: string) => ({ ...file, sha256, durationMs: 20_000 + leadMs, timeline: { source: file, segments: [{ id: 'music', startMs: leadMs, sourceOffsetMs: 0, durationMs: 20_000 }] } });
+  const value = project();
+  value.playbackSource = 'internal';
+  value.rundown[0] = { ...value.rundown[0]!, referenceAudio: music(0, 'b'.repeat(64)) };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  applyMa2.mockImplementation(confirmWrite);
+  start(); edit(1000); await tick();
+  expect(applyMa2.mock.calls.at(-1)?.[0]).toMatchObject({ consoleChanges: 'read-back' });
+  expect(song().state).toBe('verified');
+  // A second before the music, as the editor writes it (the rendered mix, then the one command).
+  const padded = music(1_000, 'c'.repeat(64));
+  useDocumentStore.getState().execute(padSongCommand('song', { baseAudioSha256: 'b'.repeat(64), leadDeltaMs: 1_000, tailMs: 0,
+    rendered: { ...padded, timeline: { source: padded, segments: [{ id: 'mix', startMs: 0, sourceOffsetMs: 0, durationMs: 21_000 }], tracks: padSongRender(music(0, 'b'.repeat(64)), 1_000, 0, '25').tracks } } }));
+  await tick();
+  expect(applyMa2.mock.calls.at(-1)?.[0]).toMatchObject({ consoleChanges: 'software' });
+  expect(song().state).toBe('verified');
+  // The next edit, a little later than where the move put the point, is read back as chosen.
+  edit(useDocumentStore.getState().project!.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[0]!.at + 100); await tick();
+  expect(applyMa2.mock.calls.at(-1)?.[0]).toMatchObject({ consoleChanges: 'read-back' });
+});

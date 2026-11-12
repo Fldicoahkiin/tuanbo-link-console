@@ -16,6 +16,7 @@ import { runMa2NameSync } from './ma2-name-sync';
 import { archiveBeforeSync } from './ma2-sync-archive';
 import { archiveMa2Project } from './ma2-project-archive';
 import { readMa2SongFromConsole } from './ma2-console-version';
+import { ma2ConsoleChangesFor, ma2SongShifted } from './ma2-song-shift';
 
 /**
  * Failed attempts in a row before a sync stops and waits for an edit or 刷新同步. Way 2 (the song's
@@ -231,7 +232,8 @@ async function syncImportedSong(entry: SongSync): Promise<void> {
   update(entry, entry.state === 'verified' ? { checking: true } : { checking: true, state: 'syncing', message: '正在读取这首歌的控台时间码…' });
   const project = () => { const state = useDocumentStore.getState(); return state.documentId === entry.documentId ? state.project : null; };
   const outcome = await syncBoundSong({
-    itemId: entry.itemId, connection: { dataDirectory: '', network: place.network }, project, consoleChanges: entry.consoleChangesOnce ?? useMa2RealtimePreference.getState().consoleChanges,
+    // A song moved as a whole (blank time before its music) is written, not read back, until the console confirms it.
+    itemId: entry.itemId, connection: { dataDirectory: '', network: place.network }, project, consoleChanges: ma2ConsoleChangesFor(entry, useMa2RealtimePreference.getState().consoleChanges),
     current: () => canContinue(entry) && currentShowWait('ma2.sync.write') === null,
     read: request => window.tbLink.previewMa2(request),
     compare: request => window.tbLink.compareMa2(request),
@@ -376,7 +378,8 @@ export async function tickMa2SongSync(): Promise<void> {
         const synced = await window.tbLink.syncMa2Song({ network, expectedSource: { show, generation, version }, projectId: before.project.projectId, itemId: item.id,
           requestId, progressId: requestId, settings, name: requestedName, points,
           ...(item.lighting.consoleSong ? { binding: item.lighting.consoleSong } : {}), ...(entry.rewriteLegacyNames ? { rewriteLegacyNames: true } : {}),
-          writeMode: useMa2RealtimePreference.getState().writeMode, consoleChanges: useMa2RealtimePreference.getState().consoleChanges,
+          // A song moved as a whole is written over the console's changes until the console confirms it (E15).
+          writeMode: useMa2RealtimePreference.getState().writeMode, consoleChanges: ma2SongShifted(entry) ? 'software' : useMa2RealtimePreference.getState().consoleChanges,
           ...editTimes(entry),
           ...(start === undefined ? {} : { timecodeStartMs: start, ...(item.referenceAudio ? { timecodeLengthMs: Math.ceil(item.referenceAudio.durationMs) } : {}) }) },
           progress => update(entry, { progress }));

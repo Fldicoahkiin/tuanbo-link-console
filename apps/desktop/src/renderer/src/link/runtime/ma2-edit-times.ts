@@ -1,6 +1,7 @@
 import { ma2PendingChanges, ma2SongPoints, programTimeOrigin } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { updateMa2Song, useMa2SyncStore, type SongSync } from '../stores/ma2-sync-store';
+import { clearMa2SongShift, noteMa2SongsShifted } from './ma2-song-shift';
 
 /**
  * When each side last changed a song's lighting (2026-11-11, 矛盾的时候采用最新的): the times the
@@ -45,6 +46,8 @@ function localEditKey(entry: SongSync, item: Program): string | null {
  */
 export function noteMa2LocalEdits(): void {
   const document = useDocumentStore.getState();
+  // A song moved as a whole is written before it is read back again (0.5.9 E15): noted before what is unconfirmed.
+  noteMa2SongsShifted(document.documentId, document.project);
   for (const entry of Object.values(useMa2SyncStore.getState().songs)) {
     if (entry.documentId !== document.documentId) continue;
     const item = document.project?.rundown.find(value => value.id === entry.itemId);
@@ -53,7 +56,9 @@ export function noteMa2LocalEdits(): void {
     const edits = localEditKey(entry, item);
     const seen = seenEdits.get(key);
     seenEdits.set(key, edits ?? '');
-    if (edits === null) { if (entry.localEditedAt !== undefined) updateMa2Song(entry, { localEditedAt: undefined }); continue; }
+    // Nothing the console has not confirmed: a song moved as a whole is read back as chosen again, whether the console
+    // confirmed its rewrite or the move was undone before it was written (the one place that forgets it, ma2-song-shift.ts).
+    if (edits === null) { if (entry.localEditedAt !== undefined) updateMa2Song(entry, { localEditedAt: undefined }); clearMa2SongShift(entry); continue; }
     if (seen !== undefined && seen !== edits && !confirming) updateMa2Song(entry, { localEditedAt: Date.now() });
   }
 }
