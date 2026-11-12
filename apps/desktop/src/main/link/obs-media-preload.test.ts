@@ -3,7 +3,7 @@ import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type LinkAction, type LinkProject, type ReferenceCanvasTransform } from '@tb/schema';
 import { MediaPreparationFailed, ObsProgramSession, SceneOutputTimeline, materialSceneNames, obsMaterialPresentation, type CueExecutionReport, type LinkDesktopApi } from '@tb/core/link';
 import { ObsMediaPreload, ObsPreparationNotNeeded } from './obs-media-preload';
-import { MediaOutOfStepError, ObsMediaScenes, lookFailure } from './obs-media-scenes';
+import { MediaOutOfStepError, ObsMediaScenes, lookFailure, opacityFailure } from './obs-media-scenes';
 import { pictureDriftCheck, pictureExecutor, pictureSeekStep, pictureUpcoming } from './native-obs-outputs';
 import { MemoryMaterialOwnLooks, type MaterialOwnLooks, type OwnLook } from './obs-material-own-looks';
 import { ObsLiveEditor } from './obs-live-editor';
@@ -69,8 +69,28 @@ function fakeObs() {
   /** The next matching batch waits here: sent, but OBS has not carried it out yet. */
   let gate: { match: (batch: Batch) => boolean; wait: Promise<void> } | null = null, holding = false;
   const sent: string[] = [], onAir: OnAir[] = [], lookWrites: LookWrite[] = [];
-  /** Each time the audience sees another input, or the one it sees gets another look: the input and its look. */
-  const seenLooks: Array<{ input: string | null; look: string }> = [];
+  /** Each time the audience sees another input, or the one it sees gets another look: the input, its look and the
+   * opacity its enabled picture filter gives it (null: none, E17). */
+  const seenLooks: Array<{ input: string | null; look: string; opacity?: number | null }> = [];
+  /** Each source's filters, in order (E17); and each filter request OBS carried out: what, on which source, whether
+   * the audience saw that source then. */
+  const filters = new Map<string, Array<{ filterName: string; filterKind: string; filterEnabled: boolean; filterSettings: Record<string, unknown> }>>();
+  const filterWrites: Array<{ type: string; sourceName: string; filterName: string; onAir: boolean }> = [];
+  /** Filter kinds OBS does not know. */
+  const unknownFilterKinds = new Set<string>();
+  const filterOf = (data: Record<string, unknown>) => {
+    const found = filters.get(String(data.sourceName))?.find(entry => entry.filterName === data.filterName);
+    if (!found) throw new Error(`OBS 里没有这个滤镜：${String(data.filterName)}`);
+    return found;
+  };
+  const writeFilter = (type: string, data: Record<string, unknown>): void => {
+    const target = input(data.sourceName);
+    filterWrites.push({ type, sourceName: String(data.sourceName), filterName: String(data.filterName), onAir: target.enabled && target.scene === program });
+  };
+  const pictureOpacity = (name: string): number | null => {
+    const own = filters.get(name)?.find(entry => entry.filterName === '联动台·画面调节' && entry.filterEnabled);
+    return own ? Number(own.filterSettings.opacity) : null;
+  };
   const landing = new Map<string, { at: number; to: number }>();
   const itemOf = (data: Record<string, unknown>): [string, FakeInput] | undefined => [...inputs].find(([, candidate]) => candidate.scene === data.sceneName && candidate.item === data.sceneItemId);
   /** OBS carries the request out with an error; a batch stops there. */
@@ -85,7 +105,10 @@ function fakeObs() {
   };
   const cursor = (target: FakeInput): number => target.state === 'OBS_MEDIA_STATE_PLAYING' ? target.base + performance.now() - target.since : target.base;
   const freeze = (target: FakeInput): void => { target.base = cursor(target); target.since = performance.now(); };
+  /** Every request OBS got, by type, in order. */
+  const requests: string[] = [];
   const handle = (type: string, data: Record<string, unknown>): unknown => {
+    requests.push(type);
     if (failures.some(failure => failure(type, data))) throw new Error(`OBS 没能执行 ${type}`);
     switch (type) {
       case 'GetSceneList': return { scenes: [...sceneNames].map(sceneName => ({ sceneName })) };
@@ -101,7 +124,22 @@ function fakeObs() {
       case 'GetSceneItemTransform': return { sceneItemTransform: { ...itemDefaults, sourceWidth: 1080, sourceHeight: 1920, ...itemOf(data)?.[1].look } };
       case 'GetCurrentProgramScene': return { sceneName: program };
       case 'GetSceneItemLocked': return { sceneItemLocked: false };
-      case 'GetSourceFilterList': return { filters: [] };
+      case 'GetSourceFilterList': return { filters: (filters.get(String(data.sourceName)) ?? []).map((entry, filterIndex) => ({ ...entry, filterIndex })) };
+      case 'CreateSourceFilter': {
+        if (unknownFilterKinds.has(String(data.filterKind))) throw new Error(`没有这种滤镜：${String(data.filterKind)}`);
+        writeFilter(type, data);
+        const list = filters.get(String(data.sourceName)) ?? [];
+        if (list.some(entry => entry.filterName === data.filterName)) throw new Error('滤镜名称已被占用');
+        list.push({ filterName: String(data.filterName), filterKind: String(data.filterKind), filterEnabled: true, filterSettings: { ...data.filterSettings as Record<string, unknown> } });
+        filters.set(String(data.sourceName), list); return {};
+      }
+      case 'SetSourceFilterSettings': { const found = filterOf(data); writeFilter(type, data); found.filterSettings = { ...data.overlay === false ? {} : found.filterSettings, ...data.filterSettings as Record<string, unknown> }; return {}; }
+      case 'SetSourceFilterEnabled': { const found = filterOf(data); writeFilter(type, data); found.filterEnabled = data.filterEnabled === true; return {}; }
+      case 'SetSourceFilterIndex': {
+        const list = filters.get(String(data.sourceName)) ?? [], found = filterOf(data);
+        list.splice(list.indexOf(found), 1); list.splice(Number(data.filterIndex), 0, found); return {};
+      }
+      case 'RemoveSourceFilter': { const found = filterOf(data); writeFilter(type, data); const list = filters.get(String(data.sourceName))!; list.splice(list.indexOf(found), 1); return {}; }
       case 'GetSourceScreenshot': return { imageData: 'data:image/png;base64,x' };
       case 'SetSceneItemTransform': {
         const entry = itemOf(data);
@@ -153,8 +191,9 @@ function fakeObs() {
     const last = onAir.at(-1);
     if (!last || last.decoder !== view.decoder || last.state !== view.state || last.cursor !== view.cursor) onAir.push(view);
     const top = [...inputs].filter(([, entry]) => entry.scene === program && entry.enabled).sort((a, b) => b[1].item - a[1].item)[0];
-    const now = { input: top?.[0] ?? null, look: JSON.stringify(top?.[1].look ?? null) }, previous = seenLooks.at(-1);
-    if (!previous || previous.input !== now.input || previous.look !== now.look) seenLooks.push(now);
+    const opacity = top ? pictureOpacity(top[0]) : null;
+    const now = { input: top?.[0] ?? null, look: JSON.stringify(top?.[1].look ?? null), ...opacity !== null ? { opacity } : {} }, previous = seenLooks.at(-1);
+    if (!previous || previous.input !== now.input || previous.look !== now.look || previous.opacity !== now.opacity) seenLooks.push(now);
   };
   const client = {
     /** OBS's events: the fake sends none. */
@@ -180,7 +219,7 @@ function fakeObs() {
     return (...values) => { if (used || !match(...values)) return false; used = true; return true; };
   };
   return {
-    client: client as unknown as OBSWebSocket, sent, onAir, lookWrites, seenLooks, view: seen, decoder: (name: string): FakeInput => input(name), position: (name: string): number => Math.round(cursor(input(name))),
+    client: client as unknown as OBSWebSocket, sent, onAir, lookWrites, seenLooks, filters, filterWrites, unknownFilterKinds, requests, view: seen, decoder: (name: string): FakeInput => input(name), position: (name: string): number => Math.round(cursor(input(name))),
     /** The scene on program. */
     program: (): string => program,
     request: <T>(operation: () => Promise<T>, label: string): Promise<T> => {
@@ -2263,4 +2302,158 @@ it('空闲时提前准备下一段：停着上一首画面的解码器留给它�
   await preload.primeFollowing(events[0]!, current);
   expect(scenes.prime.mock.calls.map(([event]) => event.sourceName)).toEqual([primary]);
   expect(hold.pictures.takeOver).not.toHaveBeenCalled();
+});
+
+/** The same project after 「用 OBS 里的样子」 on every clip: no look sent, and the editor's preview back to plain. */
+function obsOwnLooks(project: LinkProject): LinkProject {
+  const item = project.rundown[0]!;
+  return parseLinkProject({ ...project, schemaVersion: 1, rundown: [{ ...item, referenceMediaClips: item.referenceMediaClips.map(clip => {
+    const unset = { ...clip, canvasTransform: { x: 0.5, y: 0.5, scale: 1, scaleX: 1, scaleY: 1, rotation: 0 } }; delete unset.obsTransform; return unset;
+  }) }] });
+}
+
+/* 0.5.9 E17: mirror, quarter turns, crop and opacity. The first three are part of the scene item's look E16 writes, at
+ * the same moments and in the same batch; the opacity is one filter of ours on the decoder's own input. */
+
+/** The fake's video is 1920×1080: this look mirrors it left to right, turns it a quarter right, cuts a quarter off its
+ * left, a tenth off its top and a fifth off its bottom, and shows it half see-through. */
+const fullLook: ReferenceCanvasTransform = { x: 0.5, y: 0.4, scale: 0.5, scaleX: 1, scaleY: 1, rotation: 90, flipX: true,
+  crop: { top: 0.1, right: 0, bottom: 0.2, left: 0.25 }, opacity: 0.5 };
+const FILTER = '联动台·画面调节';
+/** Filters are only ever on the decoders of our material scenes, never on a scene or a source of the user's. */
+const ownDecoder = (name: string): boolean => /^团播联动台·素材·.*·来源(·预备)?$/u.test(name);
+const filterRequests = (obs: FakeObs): string[] => obs.requests.filter(type => /Filter/u.test(type) && type !== 'GetSourceFilterList');
+const countOf = (list: readonly string[]): Map<string, number> => list.reduce((counts, type) => counts.set(type, (counts.get(type) ?? 0) + 1), new Map<string, number>());
+
+it('E17 规则：镜像、转 90°、裁剪和位置大小一起写在素材的场景项上；不透明度是这个解码器自己来源上的一个联动台滤镜，上画面之前就设好', async () => {
+  const project = withLooks(song([[0, 12000, 100], [12, 12000, 12100]]), { 'clip-0': fullLook }), obs = fakeObs(), store = new MemoryMaterialOwnLooks();
+  const primary = primaryOf(project), standby = `${primary}·预备`;
+  const t = await live(project, obs, undefined, true, 'test', store);
+  expect(obs.decoder(primary).look).toMatchObject({ scaleX: -0.5, scaleY: 0.5, rotation: 90, cropTop: 108, cropRight: 0, cropBottom: 216, cropLeft: 480, positionX: 540, positionY: 768 });
+  expect(obs.filters.get(primary)).toEqual([{ filterName: FILTER, filterKind: 'color_filter_v2', filterEnabled: true, filterSettings: { opacity: 0.5 } }]);
+  // The other clip has none of it: its decoder gets no filter.
+  expect(obs.filters.get(standby) ?? []).toEqual([]);
+  expect([...obs.filters.keys()].every(ownDecoder)).toBe(true);
+  expect(obs.filterWrites.every(write => !write.onAir && ownDecoder(write.sourceName) && write.filterName === FILTER)).toBe(true);
+  expect(store.filters).toEqual(new Set([primary]));
+  await t.play(0, 13000, true);
+  expect(t.failures()).toEqual([]);
+  // On air at once at half opacity, then the other decoder fully opaque: no frame of either at the other's opacity.
+  const shown = obs.seenLooks.filter(view => view.input !== null);
+  expect(shown.map(view => [view.input, view.opacity ?? 1])).toEqual([[primary, 0.5], [standby, 1]]);
+  await t.session.stop();
+});
+
+it('E17 规则：一段带全四样的片段，准备时比只有位置大小的多一个 CreateSourceFilter；滤镜已经有了的下一次运行是一批里的两条（设置、打开）', async () => {
+  const base = song([[0, 12000, 100]]);
+  const run = async (look: ReferenceCanvasTransform, obs = fakeObs(), store = new MemoryMaterialOwnLooks()) => {
+    const before = obs.requests.length;
+    await (await live(withLooks(base, { 'clip-0': look }), obs, undefined, true, 'test', store)).session.stop();
+    return obs.requests.slice(before);
+  };
+  const placed = countOf(await run({ x: 0.5, y: 0.4, scale: 0.5, scaleX: 1, scaleY: 1, rotation: 90 })), full = countOf(await run(fullLook));
+  expect([...full].filter(([type, count]) => count !== (placed.get(type) ?? 0))).toEqual([['CreateSourceFilter', 1]]);
+  expect([...placed].filter(([type, count]) => count !== (full.get(type) ?? 0))).toEqual([]);
+  // The filter is there from the run before: its opacity is set and it is switched on.
+  const obs = fakeObs(), store = new MemoryMaterialOwnLooks();
+  await run(fullLook, obs, store);
+  const again = await run({ ...fullLook, opacity: 0.25 }, obs, store);
+  expect(again.filter(type => /Filter/u.test(type) && type !== 'GetSourceFilterList')).toEqual(['SetSourceFilterSettings', 'SetSourceFilterEnabled']);
+  expect(obs.filters.get(primaryOf(base))).toEqual([{ filterName: FILTER, filterKind: 'color_filter_v2', filterEnabled: true, filterSettings: { opacity: 0.25 } }]);
+});
+
+it('E17 规则：片段没有这几样，联动台不多发一个请求：只在编辑器里摆过位置的、从没改过的，都没有滤镜请求，本机也不记', async () => {
+  for (const project of [song([[0, 12000, 100], [12, 12000, 12100]]), withLooks(song([[0, 12000, 100], [12, 12000, 12100]]), { 'clip-0': leftLook, 'clip-1': rightLook })]) {
+    const obs = fakeObs(), store = new MemoryMaterialOwnLooks();
+    const t = await live(project, obs, undefined, true, 'test', store);
+    await t.play(0, 13000, true);
+    expect(t.failures()).toEqual([]);
+    expect(filterRequests(obs)).toEqual([]);
+    expect(store.filters.size).toBe(0);
+    await t.session.stop();
+  }
+});
+
+it('E17 规则：不透明度不用了就把滤镜关掉，不删；同一素材下一段没设时在它上画面之前关好', async () => {
+  const project = withLooks(song([[0, 12000, 100], [12, 12000, 12100], [24, 12000, 24100]]), { 'clip-0': { ...leftLook, opacity: 0.3 } }), obs = fakeObs();
+  const primary = primaryOf(project);
+  const t = await live(project, obs);
+  await t.play(0, 25000, true);
+  expect(t.failures()).toEqual([]);
+  expect(obs.filters.get(primary)).toEqual([{ filterName: FILTER, filterKind: 'color_filter_v2', filterEnabled: false, filterSettings: { opacity: 0.3 } }]);
+  expect(obs.filterWrites.map(write => [write.type, write.onAir])).toEqual([['CreateSourceFilter', false], ['SetSourceFilterEnabled', false]]);
+  const shown = obs.seenLooks.filter(view => view.input !== null);
+  expect(shown.map(view => [view.input === primary ? '主' : '预备', view.opacity ?? 1])).toEqual([['主', 0.3], ['预备', 1], ['主', 1]]);
+  await t.session.stop();
+});
+
+it('E17 规则：复制到预备解码器时只复制操作员自己的滤镜；两边的联动台滤镜都不碰（不复制、不当成过期删掉）', async () => {
+  const project = song([[0, 12000, 100]]), obs = fakeObs(), store = new MemoryMaterialOwnLooks();
+  const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation(), store);
+  await scenes.prepare(project.projectId, project.mediaAssets[0]!, path);
+  const { sourceName: primary } = materialSceneNames(project.projectId, project.mediaAssets[0]!), standby = `${primary}·预备`;
+  await obs.client.call('CreateSourceFilter', { sourceName: primary, filterName: FILTER, filterKind: 'color_filter_v2', filterSettings: { opacity: 0.5 } });
+  await obs.client.call('CreateSourceFilter', { sourceName: primary, filterName: '模糊', filterKind: 'blur', filterSettings: { size: 3 } });
+  await scenes.prepareStandby(primary);
+  expect(obs.filters.get(standby)?.map(filter => filter.filterName)).toEqual(['模糊']);
+  await obs.client.call('CreateSourceFilter', { sourceName: standby, filterName: FILTER, filterKind: 'color_filter_v2', filterSettings: { opacity: 0.8 } });
+  await obs.client.call('RemoveSourceFilter', { sourceName: primary, filterName: '模糊' });
+  await scenes.copyPresentation(primary, standby);
+  expect(obs.filters.get(standby)).toEqual([{ filterName: FILTER, filterKind: 'color_filter_v2', filterEnabled: true, filterSettings: { opacity: 0.8 } }]);
+  expect(obs.filters.get(primary)?.map(filter => filter.filterName)).toEqual([FILTER]);
+});
+
+it('E17 规则：OBS 不认这种滤镜：片段照常显示（镜像、裁剪照样有），开始那一步标红写明不透明度没设好，这一段不再发第二次；本机不记这个滤镜', async () => {
+  const project = withLooks(song([[0, 12000, 100]]), { 'clip-0': fullLook }), obs = fakeObs(), store = new MemoryMaterialOwnLooks();
+  obs.unknownFilterKinds.add('color_filter_v2');
+  const primary = primaryOf(project);
+  const t = await live(project, obs, undefined, true, 'test', store);
+  await t.play(0, 1000, true);
+  expect(obs.view().decoder).toBe('主');
+  expect(obs.decoder(primary).look).toMatchObject({ scaleX: -0.5, cropLeft: 480 });
+  expect(t.reports).toContain(`clip-0 start failed：${opacityFailure({ assetName: '视频' }, 'CreateSourceFilter：没有这种滤镜：color_filter_v2')}`);
+  expect(obs.requests.filter(type => type === 'CreateSourceFilter')).toHaveLength(1);
+  expect(store.filters.size).toBe(0);
+  await t.session.stop();
+});
+
+it('E17 规则：素材原来在 OBS 里裁过：本机记下的原样带着裁剪，「用 OBS 里的样子」把裁剪、镜像和不透明度都换回去；只摆位置的片段也留着原来的裁剪', async () => {
+  const placed = withLooks(song([[0, 12000, 100], [12, 12000, 12100]]), { 'clip-0': fullLook, 'clip-1': leftLook }), obs = fakeObs(), store = new MemoryMaterialOwnLooks();
+  const primary = primaryOf(placed), standby = `${primary}·预备`;
+  const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation(), store);
+  await scenes.prepare(placed.projectId, placed.mediaAssets[0]!, path);
+  // Cropped by hand in OBS before the console ever placed it.
+  await obs.client.call('SetSceneItemTransform', { sceneName: obs.decoder(primary).scene, sceneItemId: obs.decoder(primary).item, sceneItemTransform: { cropLeft: 30, cropTop: 12 } });
+  const first = await live(placed, obs, undefined, true, 'test', store);
+  expect(store.looks.get(primary)).toMatchObject({ cropLeft: 30, cropTop: 12 });
+  expect(obs.decoder(primary).look).toMatchObject({ cropLeft: 480, cropTop: 108, scaleX: -0.5 });
+  expect(obs.decoder(standby).look).toMatchObject({ ...inObs(leftLook), cropLeft: 30, cropTop: 12 });
+  await first.play(0, 1000, true); await first.session.release();
+  // The primary decoder holds the console's crop now; a clip that only moves it gets the material's own crop back.
+  const moved = await live(withLooks(placed, { 'clip-0': leftLook, 'clip-1': leftLook }), obs, undefined, true, 'test', store);
+  expect(obs.decoder(primary).look).toMatchObject({ ...inObs(leftLook), cropLeft: 30, cropTop: 12 });
+  await moved.session.release();
+  const second = await live(obsOwnLooks(placed), obs, undefined, true, 'test', store);
+  expect(obs.decoder(primary).look).toMatchObject({ ...store.looks.get(primary), cropLeft: 30, cropTop: 12 });
+  expect(obs.filters.get(primary)?.[0]).toMatchObject({ filterName: FILTER, filterEnabled: false });
+  await second.play(0, 1000, true);
+  expect(obs.seenLooks.at(-1)).not.toHaveProperty('opacity');
+  await second.session.stop();
+});
+
+it('E17 规则：这次运行不信任本机记录的素材，联动台的滤镜也不碰；裁剪时不知道素材多大，片段照常显示、标红写明', async () => {
+  const project = withLooks(song([[0, 12000, 100]]), { 'clip-0': fullLook }), obs = fakeObs();
+  const t = await live(project, obs, undefined, true, 'test', new BrokenOwnLooks(new Set(['drop'])));
+  await t.play(0, 1000, true);
+  expect(filterRequests(obs)).toEqual([]);
+  expect(obs.view().decoder).toBe('主');
+  await t.session.stop();
+  const logo = withLooks(withLogo(song([[0, 4000, 100]]), [0, 4000]), { 'logo-clip': { ...leftLook, crop: { top: 0.5, right: 0, bottom: 0, left: 0 }, opacity: 0.5 } });
+  const other = fakeObs(), shown = await live(logo, other);
+  const event = new SceneOutputTimeline(logo, 'song').at(0).media.find(entry => entry.clipId === 'logo-clip')!;
+  expect(event.sourceSize).toEqual({ width: 512, height: 512 });
+  const unknown = { ...event }; delete unknown.sourceSize;
+  await expect(shown.scenes.execute(unknown, 'C:/shows/assets/logo.png')).rejects.toThrow(lookFailure({ assetName: '台标' }, '不知道素材原来有多大，没法裁剪'));
+  expect(other.decoder(event.sourceName).enabled).toBe(true);
+  expect(filterRequests(other)).toEqual([]);
 });

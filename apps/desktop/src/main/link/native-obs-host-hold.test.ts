@@ -23,6 +23,8 @@ function fakeObs() {
   const looks: string[] = [];
   /** Requests OBS refuses. */
   const refuse = new Set<string>();
+  /** Each input's filters by name (E17): enabled, and the opacity set. */
+  const filters = new Map<string, Map<string, { enabled: boolean; opacity: unknown }>>();
   /** After each request: whether the program scene shows any of its items. */
   const blank: string[] = [];
   let item = 1, program = '机位';
@@ -54,7 +56,19 @@ function fakeObs() {
       case 'SetInputSettings': Object.assign(input(data.inputName).settings, data.inputSettings); return {};
       case 'GetVideoSettings': return { baseWidth: 1080, baseHeight: 1920 };
       case 'GetSceneItemTransform': return { sceneItemTransform: { sourceWidth: 1080, sourceHeight: 1920, ...byItem(data.sceneItemId)[1].look } };
-      case 'GetSourceFilterList': return { filters: [] };
+      case 'GetSourceFilterList': return { filters: [...filters.get(String(data.sourceName)) ?? []].map(([filterName, filter], filterIndex) => ({
+        filterName, filterKind: 'color_filter_v2', filterIndex, filterEnabled: filter.enabled, filterSettings: { opacity: filter.opacity } })) };
+      case 'CreateSourceFilter': case 'SetSourceFilterSettings': case 'SetSourceFilterEnabled': {
+        // A filter goes on an input only: our decoders' own sources (E17).
+        const target = input(data.sourceName), list = filters.get(String(data.sourceName)) ?? new Map<string, { enabled: boolean; opacity: unknown }>();
+        const settings = data.filterSettings as { opacity?: unknown } | undefined;
+        const filter = list.get(String(data.filterName)) ?? (type === 'CreateSourceFilter' ? { enabled: true, opacity: undefined } : null);
+        if (!filter) throw new Error('OBS 里没有这个滤镜');
+        if (settings) filter.opacity = settings.opacity;
+        if (type === 'SetSourceFilterEnabled') filter.enabled = data.filterEnabled === true;
+        list.set(String(data.filterName), filter); filters.set(String(data.sourceName), list);
+        looks.push(`${short(String(data.sourceName))} ${target.enabled ? '在画面上' : '不在画面上'} 滤镜`); return {};
+      }
       case 'GetSourceScreenshot': return { imageData: 'data:image/png;base64,x' };
       case 'SetSceneItemTransform': {
         const [name, target] = byItem(data.sceneItemId);
@@ -101,7 +115,7 @@ function fakeObs() {
       return Promise.resolve(results);
     }
   };
-  return { client: client as unknown as OBSWebSocket, log, looks, refuse, blank, inputs, program: () => program, call: client.call,
+  return { client: client as unknown as OBSWebSocket, log, looks, refuse, blank, inputs, filters, program: () => program, call: client.call,
     native: {
       prime: (name: string): Promise<void> => { const target = input(name); target.state = 'OBS_MEDIA_STATE_PAUSED'; target.base = 0; return Promise.resolve(); },
       seek: (name: string, positionMs: number): Promise<void> => { input(name).base = positionMs; return Promise.resolve(); }
@@ -427,5 +441,38 @@ it('停下以后的状态：停着的那一帧不算在播、不算失败，这�
   expect(test.host.status).toMatchObject({ state: 'running', itemId: 'b', items: [] });
   expect(test.host.status?.fault).toBeUndefined();
   expect(test.failures.filter(line => line.includes('清理'))).toEqual([]);
+  await test.host.close();
+});
+
+/* E17 and the held frame: the opacity is a filter on each decoder's own input, so it follows the same rule as the
+ * look: the next song's opacity goes on the decoder it opens on, never on the one holding the last frame. */
+const seeThrough: ReferenceCanvasTransform = { ...left, flipX: true, crop: { top: 0.1, right: 0, bottom: 0, left: 0.2 }, opacity: 0.4 };
+const faded: ReferenceCanvasTransform = { ...right, flipY: true, opacity: 0.7 };
+
+it.each([
+  ['两首都有自己的不透明度', { a: seeThrough, b: faded }],
+  ['上一首有不透明度、下一首没设', { a: seeThrough }],
+  ['上一首没设、下一首有不透明度', { b: faded }]
+] as const)('同一素材、下一首不透明度不同（%s）：停着的那一帧的滤镜不跟着变；滤镜只写在不在画面上的解码器（E17）', async (_case, looks) => {
+  const test = setup(show(true, 'video', looks));
+  const name = (standby: boolean) => [...test.obs.inputs.keys()].find(entry => entry.endsWith('·预备') === standby)!;
+  const opacity = (standby: boolean) => {
+    const filter = test.obs.filters.get(name(standby))?.get('联动台·画面调节');
+    return filter?.enabled === true ? filter.opacity : 1;
+  };
+  await test.play('a'); await until(() => test.obs.log.includes('PLAY 主'));
+  expect(opacity(false)).toBe('a' in looks ? looks.a.opacity : 1);
+  await test.host.stop();
+  const held = opacity(false), heldLook = { ...test.obs.inputs.get(name(false))!.look };
+  test.obs.looks.length = 0;
+  await test.play('b'); await until(() => test.host.heldDecoders().size === 0);
+  // While a's frame was held, nothing was written to its decoder (its scene item nor its filter), and nothing on air.
+  expect(test.obs.looks.every(line => line.startsWith('预备 不在画面上'))).toBe(true);
+  expect(test.obs.inputs.get(name(false))!.look).toEqual(heldLook);
+  expect(opacity(false)).toBe(held);
+  expect(opacity(true)).toBe('b' in looks ? looks.b.opacity : 1);
+  expect([...test.obs.filters.keys()].every(source => source.startsWith('团播联动台·素材·'))).toBe(true);
+  expect(test.obs.blank).toEqual([]);
+  expect(test.failures).toEqual([]);
   await test.host.close();
 });

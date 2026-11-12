@@ -35,3 +35,20 @@ it('文件坏了就说出来，不当作没记过；记下的只是能写回 OBS
   expect(ownLookOf({ positionX: 1, sourceWidth: 1920, sourceHeight: 1080, width: 960, height: 540, boundsType: 'OBS_BOUNDS_NONE', cropToBounds: false }))
     .toEqual({ positionX: 1, boundsType: 'OBS_BOUNDS_NONE', cropToBounds: false });
 });
+
+it('原来的样子带着裁剪；联动台在哪个解码器上做过画面调节滤镜也记在同一个文件里，没做过时文件和以前一样（0.5.9 E17）', async () => {
+  const file = await lookFile(), decoder = '团播联动台·素材·视频·0000000·来源', standby = `${decoder}·预备`;
+  expect(ownLookOf({ positionX: 1, cropLeft: 30, cropTop: 12, cropRight: 0, cropBottom: 0, sourceWidth: 1920 })).toEqual({ positionX: 1, cropLeft: 30, cropTop: 12, cropRight: 0, cropBottom: 0 });
+  const looks = new FileMaterialOwnLooks(file);
+  await looks.keep(decoder, { positionX: 540 });
+  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, looks: { [decoder]: { positionX: 540 } } });
+  await expect(looks.filterMade(standby)).resolves.toBe(false);
+  await looks.keepFilterMade(standby);
+  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, looks: { [decoder]: { positionX: 540 } }, filters: [standby] });
+  const restarted = new FileMaterialOwnLooks(file);
+  await expect(restarted.filterMade(standby)).resolves.toBe(true);
+  await expect(restarted.filterMade(decoder)).resolves.toBe(false);
+  await restarted.forgetFilterMade(standby);
+  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, looks: { [decoder]: { positionX: 540 } } });
+  await expect(new FileMaterialOwnLooks(file).filterMade(standby)).resolves.toBe(false);
+});
