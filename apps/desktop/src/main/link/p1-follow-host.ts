@@ -13,8 +13,9 @@ import type { MidiInputClaim, MidiInputListener } from './midi-port-broker';
  * is not opened again by itself (the 2026-10-24 recovery covers the outputs only): what ran freezes, and the operator
  * starts again.
  *
- * A page that goes (the window reloads) does not end the follow (2026-11-12): it goes on without a page, the timecode
- * still drives its outputs and nothing goes off. A new page with the same project adopts it (`adopt`); any page may
+ * A page that goes (the window reloads) does not end a follow that runs a song (2026-11-12): it goes on without a page,
+ * the timecode still drives its outputs and nothing goes off. One that follows nothing yet (standby, or auto-follow
+ * listening for its first song) closes with the page and lets the input go. A new page with the same project adopts it (`adopt`); any page may
  * stop or close it; nothing else reaches it until then. Only the quit (`dispose`) ends it without a page asking.
  */
 
@@ -74,12 +75,19 @@ export class P1FollowHost {
     return next;
   }
 
-  /** The window's page that followed is gone (reloaded or closed): the follow goes on without a page (2026-11-12).
+  /** The window's page that followed is gone (reloaded or closed). A follow that runs a song goes on without a page
+   * (2026-11-12); one that follows nothing (standby, or auto-follow listening for its first song) closes: nothing runs
+   * and nothing is lit, and its input goes back. A page with the same project starts again as on a fresh start.
    * `null`: whatever page it was (link-main knows only that the main window's page went). */
   pageGone(ownerId: string | null): Promise<void> {
-    const next = this.turn.then(() => {
+    const next = this.turn.then(async () => {
       const follow = this.follow;
       if (!follow || follow.ownerId === null || ownerId !== null && follow.ownerId !== ownerId) return;
+      if (replaceable(follow)) {
+        this.dependencies.log('info', `界面重新打开，没在跟歌的 P1 跟随随之结束：${follow.project.name}`);
+        await this.close();
+        return;
+      }
       follow.ownerId = null;
       this.dependencies.log('info', `界面重新打开，跟随 P1 照常继续：${follow.project.name}`);
       this.publish(true);

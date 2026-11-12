@@ -12,10 +12,10 @@ import { P1MidiOutput } from './p1-midi-output';
 import type { LinkLogInput } from './run-logger';
 
 /*
- * P1 follow in the main process, as link-main wires it (0.5.9 P3f, first part): one P1FollowHost, its IPC
+ * P1 follow in the main process, as link-main wires it (0.5.9 P3f): one P1FollowHost, its IPC
  * (link:p1-follow, link:p1-follow-state-get; its state goes out as link:p1-follow-state), its outputs and lights, the show
  * state's P1 input and the license's running state. link-main only builds this once and calls `pageGone` and
- * `dispose`. The window does not call it yet (P4): its own P1 path stays as it is beside it.
+ * `dispose`. Since P4 this is the only P1 follow: the window reaches it only through runtime/p1-follow-client.ts.
  */
 
 export type P1FollowWiringDependencies = {
@@ -49,7 +49,8 @@ export type P1FollowWiring = {
   showInput(): ShowInputs['p1'] | undefined;
   /** Whether the follow runs the show now (followRuns): the quit and the window's guards wait for it as for a program. */
   running(): boolean;
-  /** The main window's page is gone (releaseGonePage): its follow goes on without a page until one adopts or stops it. */
+  /** The main window's page is gone (releaseGonePage): a follow that runs a song goes on without a page until one adopts
+   * or stops it; one that follows nothing closes (P1FollowHost.pageGone). */
   pageGone(): Promise<void>;
   /** The app quits: the follow ends, its Offs go out, the input is let go. */
   dispose(): Promise<void>;

@@ -248,6 +248,60 @@ describe('P1 跟随宿主 · 界面重新加载不结束跟随（2026-11-12）',
     expect(f.claims).toHaveLength(1);
     await expect(f.start('auto', OTHER)).rejects.toThrow('另一个界面正在跟随 P1');
   });
+
+  it('没在跟歌的跟随随页面结束：待命、自动选歌还在等第一首时界面没了，跟随关闭、放开输入口，同一个工程再开始照常', async () => {
+    for (const mode of ['manual', 'auto'] as const) {
+      const f = fixture(mode === 'auto' ? autoProject() : manualProject());
+      await f.start(mode);
+      if (mode === 'auto') await f.send({ kind: 'arm', itemId: null });
+      expect(f.host.state.phase).toBe(mode === 'auto' ? 'waiting' : 'standby');
+      await f.host.pageGone(null);
+      expect(f.host.state).toEqual(expect.objectContaining({ phase: 'closed', ownerId: null, input: null }));
+      expect(f.claims[0]!.release).toHaveBeenCalledOnce();
+      expect(f.lights).toEqual([]);
+      await f.start(mode, OTHER);
+      expect(f.host.state).toMatchObject({ phase: 'standby', ownerId: OTHER });
+      expect(f.claims).toHaveLength(2);
+    }
+  });
+
+  it('跟着歌的跟随不随页面结束：等待命的歌、准备中、在走、冻结、手动接管、没开始，界面没了都照样留着', async () => {
+    const gone = async (f: ReturnType<typeof fixture>, phase: P1FollowState['phase']) => {
+      expect(f.host.state.phase).toBe(phase);
+      await f.host.pageGone(null);
+      expect(f.host.state).toMatchObject({ phase, ownerId: null });
+      expect(f.claims[0]!.release).not.toHaveBeenCalled();
+    };
+    const waiting = fixture(manualProject());
+    await waiting.start(); await waiting.send({ kind: 'arm', itemId: 'song' });
+    await gone(waiting, 'waiting');
+    let finish: () => void = () => undefined;
+    const project = autoProject();
+    const preparing = fixture(project, { prepare: () => new Promise<void>(resolve => { finish = resolve; }) });
+    await preparing.start('auto'); await preparing.send({ kind: 'arm', itemId: null });
+    preparing.play(songFrame(project, 'a'), 30, 1_000);
+    await gone(preparing, 'preparing');
+    finish();
+    const running = fixture(manualProject());
+    await running.start(); await running.send({ kind: 'arm', itemId: 'song' });
+    running.play(0, 30, 1_000);
+    await gone(running, 'running');
+    const frozen = fixture(manualProject());
+    await frozen.start(); await frozen.send({ kind: 'arm', itemId: 'song' });
+    const before = frozen.play(0, 30, 1_000);
+    frozen.idle(before.lastSampleMs + 2_000);
+    await gone(frozen, 'frozen');
+    const takeover = fixture(manualProject());
+    await takeover.start(); await takeover.send({ kind: 'arm', itemId: 'song' });
+    takeover.idle(takeover.play(0, 30, 1_000).lastSampleMs + 2_000);
+    await takeover.send({ kind: 'manualTakeover' });
+    await gone(takeover, 'takeover');
+    const failed = fixture(project, { prepare: () => Promise.reject(new Error('授权已过期，请重新激活')) });
+    await failed.start('auto'); await failed.send({ kind: 'arm', itemId: null });
+    failed.play(songFrame(project, 'a'), 30, 1_000);
+    await vi.waitFor(() => expect(failed.host.state.phase).toBe('failed'));
+    await gone(failed, 'failed');
+  });
 });
 
 function manualProject(): LinkProject {
