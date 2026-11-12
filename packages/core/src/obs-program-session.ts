@@ -1,4 +1,4 @@
-import type { LinkCue, LinkProject, ObsPictureItem, ObsRecoveryCount } from '@tb/schema';
+import type { LinkCue, LinkProject, ObsPictureItem, ObsRecoveryCount, RundownItem } from '@tb/schema';
 import { actionResultLog, CueActionRunner, type CueExecutionReport, type LinkActionExecutor } from './cue-action-runner';
 import { CueRuntime, type DueCue, type RuntimeUpdate } from './cue-runtime';
 import { frameNumberToTimecode, millisecondsToFrameNumber, playbackFramesPerSecond, type MtcSample } from './mtc-timecode';
@@ -29,7 +29,24 @@ export type ObsProgramSessionDependencies = ManagedOutputRuntimeDependencies & {
    * took over. Without it, every clip the ledger has on air. */
   heldClipIds?: () => ReadonlySet<string>;
   executor: LinkActionExecutor;
-  seekMedia: (event: ManagedMediaEvent) => Promise<void>;
+  /** Shows and locates a clip from the middle. Resolves with why its look could not be set (it is shown and located all
+   * the same, 0.5.9 E16), or nothing. */
+  seekMedia: (event: ManagedMediaEvent) => Promise<string | null | void>;
+  /** A newer plan of the song arrived while it plays (0.5.9 R9): the outputs take it before its pass (new materials are
+   * prepared in the background; our music item goes into scenes the song did not use, the one due at `frame` before
+   * this resolves). Failures are the outputs' own to report: the picture goes on. */
+  retargetOutputs?: (project: LinkProject, frame: number) => Promise<void>;
+  /** Whether the decoder of a clip a newer plan brought is ready (0.5.9 R9); until it is, its part waits and what is on
+   * air stays. Without it every clip counts as ready. */
+  clipReady?: (event: ManagedMediaEvent) => 'ready' | 'preparing' | 'failed';
+  /** Puts the decoder of a playing clip in step with the place a newer plan gives it (0.5.9 R9: moved, or its start
+   * trimmed), where it plays now: no restart. */
+  moveMedia?: (event: ManagedMediaEvent) => Promise<void>;
+  /** Writes the look a newer plan gives the clip on air on its decoder (0.5.9 R9, E16). Resolves with why it could not
+   * be set, or null. */
+  relookMedia?: (event: ManagedMediaEvent) => Promise<string | null>;
+  /** The pass of the plan of `revision` went out (0.5.9 R9), whatever each of its parts came to. */
+  pictureApplied?: (revision: number) => void;
   /** Puts a playing clip back in step with the music; returns the drift corrected, or null. `mayCorrect`
    * is asked with the drift found before anything is corrected: false leaves the clip as it is. */
   correctMediaDrift?: (event: ManagedMediaEvent, mayCorrect: (driftMs: number) => boolean) => Promise<number | null>;
@@ -78,6 +95,25 @@ const rowMax = (row: RecoveryRow): number | null => { const limit = OUTPUT_RECOV
 /** The item of a clip's preparation and of a clip not in step with the music. */
 const preparationItem = (clipId: string): string => `preload:${clipId}`;
 const driftItem = (clipId: string): string => `drift:${clipId}`;
+/** The item of a clip whose look could not be set as it was located or as a newer plan changed it (0.5.9 R9). */
+const lookItem = (clipId: string): string => `look:${clipId}`;
+/** The item of a playing clip that could not be put where a newer plan has it (0.5.9 R9). */
+const moveItem = (clipId: string): string => `move:${clipId}`;
+const formerKey = (sourceName: string, clipId: string): string => `${sourceName}\u0000${clipId}`;
+/** Where in its file a clip is at song time zero: two plans with the same value play it in the same place. */
+const alignmentMs = (event: ManagedMediaEvent, fps: number): number => event.sourceOffsetMs - event.frameNumber * 1000 / fps;
+
+/** The song as this session can play it (internal playback, the item there and enabled, only OBS actions); why not, in
+ * plain words. Checked as a session opens and as a newer plan arrives (0.5.9 R9). */
+function pictureItem(project: LinkProject, itemId: string): RundownItem {
+  if (project.playbackSource !== 'internal') throw new Error('后台画面只支持“联动台播放”的工程');
+  const item = project.rundown.find(entry => entry.id === itemId);
+  if (!item) throw new Error('后台画面节目不存在');
+  // Other outputs belong to independent channels, never pretend that an OBS
+  // executor sent MIDI or a console action.
+  if (item.cues.some(cue => cue.actions.some(action => !action.kind.startsWith('obs.')))) throw new Error('后台画面快照含非 OBS 动作，必须先分配到对应输出通道');
+  return item;
+}
 /** The item of the music missing from the scene on program (R8). */
 const MUSIC_ITEM = 'music';
 
@@ -210,10 +246,10 @@ export class ObsProgramSession {
   /** The last device clock observation: where the music is between two of them. */
   private lastClock: { positionMs: number; observedAt: number } | null = null;
   private preloadFrame = -Infinity;
-  private readonly runtime: CueRuntime;
+  private runtime: CueRuntime;
   private readonly managed: ManagedOutputRuntime;
   private readonly runner: CueActionRunner;
-  private readonly timeline: SceneOutputTimeline;
+  private timeline: SceneOutputTimeline;
   private readonly ledger = new ObsPictureLedger();
   /** This song's automatic recoveries and their limits (2026-11-10 decision 2): the counts are the table's. */
   private readonly recovery = new OutputRecovery();
@@ -223,11 +259,21 @@ export class ObsProgramSession {
   private readonly limitsShown = new Set<string>();
   /** A part failed or is not known: the next device clock observation runs a pass that may repair it. */
   private repairDue = false;
-  private readonly cueById: ReadonlyMap<string, LinkCue>;
+  private cueById: ReadonlyMap<string, LinkCue>;
   private readonly starts = new Map<string, ManagedMediaEvent>();
   private readonly stops = new Map<string, ManagedMediaEvent>();
   /** Every clip event of the song, for the boundaries a clock step crossed. */
-  private readonly mediaEvents: readonly ManagedMediaEvent[];
+  private mediaEvents: readonly ManagedMediaEvent[];
+  /** Clip starts of earlier plans whose decoder may still hold them (0.5.9 R9): its stop, pause, labels and cleanup. */
+  private readonly former = new Map<string, ManagedMediaEvent>();
+  /** Clips a newer plan brought or moved to another material: they wait for their decoder (`clipReady`). */
+  private readonly introduced = new Set<string>();
+  /** The newest plan to take, while one is queued (one at a time, newest only). */
+  private wantedPlan: { project: LinkProject; revision: number } | null = null;
+  private retargetQueued = false;
+  /** A plan taken whose pass has not gone out: OBS was away (the restore sends it) or the song not started yet (its
+   * first clock does). */
+  private unapplied: number | null = null;
   private readonly fps: number;
   private tail: Promise<void> = Promise.resolve();
   /** Clock steps not yet completely sent, oldest first. One goes out as crossed; several
@@ -269,14 +315,9 @@ export class ObsProgramSession {
   /** The next clock starts the song where the music is then (`joinNextClock`). */
   private joining = false;
 
-  constructor(private readonly project: LinkProject, projectPath: string, private readonly itemId: string,
+  constructor(private project: LinkProject, projectPath: string, private readonly itemId: string,
     private readonly dependencies: ObsProgramSessionDependencies) {
-    if (project.playbackSource !== 'internal') throw new Error('后台画面只支持“联动台播放”的工程');
-    const item = project.rundown.find(entry => entry.id === itemId);
-    if (!item) throw new Error('后台画面节目不存在');
-    // Other outputs belong to independent channels, never pretend that an OBS
-    // executor sent MIDI or a console action.
-    if (item.cues.some(cue => cue.actions.some(action => !action.kind.startsWith('obs.')))) throw new Error('后台画面快照含非 OBS 动作，必须先分配到对应输出通道');
+    const item = pictureItem(project, itemId);
     // Picture actions have a 100 ms execution boundary; any longer silence between
     // device observations is a gap rebuilt at the current position (rule B).
     this.runtime = new CueRuntime(project, 100);
@@ -347,7 +388,7 @@ export class ObsProgramSession {
         const [decoder, ...program] = entry.writes;
         for (const write of entry.writes) this.ledger.sent(write, this.dependencies.now());
         let outcome: Outcome = 'ok';
-        try { await this.dependencies.guardOutput(allowed, () => this.dependencies.seekMedia(entry.event)); }
+        try { this.lookProblem(entry.event, await this.dependencies.guardOutput(allowed, () => this.dependencies.seekMedia(entry.event))); }
         catch (error) {
           if (!allowed()) { this.settle(entry.writes, 'withdrawn'); this.requireCurrent(generation); }
           outcome = { failed: errorText(error) };
@@ -393,6 +434,8 @@ export class ObsProgramSession {
       this.advancing = true; this.frame = sample.totalFrames;
       if (update.state !== 'running') return;
       this.preload(sample.totalFrames); this.readBack(sample.totalFrames);
+      // A plan taken before the song's first clock goes out as the picture now with it (R9).
+      if (this.unapplied !== null && !this.lost && this.online()) this.queueRetarget();
       if (this.crossedMedia(previousFrame, sample.totalFrames)) this.settleMedia(sample.totalFrames);
       const points = this.points(update.dueCues), cut = this.cutIn(previousFrame, sample.totalFrames);
       if (cut !== null || points.length || update.rebuild) {
@@ -506,11 +549,17 @@ export class ObsProgramSession {
 
   /** The planner's ops for the picture at `frame` against the ledger. `merged`: several
    * cuts in one pass (or none, or a rebuild), so shown sources go after the switch. */
-  private plan(frame: number, transport: 'running' | 'paused', merged: boolean): { picture: OnAirPicture; plan: ReconcilePlan } {
+  private plan(frame: number, transport: 'running' | 'paused', merged: boolean, trigger?: 'retarget'): { picture: OnAirPicture; plan: ReconcilePlan } {
     const picture = this.timeline.pictureAt(frame);
+    // Only a clip a newer plan brought can be waited for (R9): every other one is ready as before, and one whose decoder
+    // missed its boundary goes the late road (`startLate`).
+    const ready = (clip: { clipId: string }): 'ready' | 'preparing' | 'failed' => {
+      const start = this.introduced.has(clip.clipId) ? this.starts.get(clip.clipId) : undefined;
+      return start ? this.dependencies.clipReady?.(start) ?? 'ready' : 'ready';
+    };
     // Live only: this session never runs a rehearsal, where the planner would hold everything after a failure instead.
     return { picture, plan: planPictureReconcile(picture, this.ledger.state(), { mode: 'live', transport, now: this.dependencies.now(),
-      ready: () => 'ready', budget: this.online() ? this.recovery : OFFLINE, holding: false, merged }) };
+      ready, budget: this.online() ? this.recovery : OFFLINE, holding: false, merged, trigger }) };
   }
   private online(): boolean { return this.dependencies.connected?.() ?? true; }
 
@@ -525,7 +574,7 @@ export class ObsProgramSession {
     for (const [id, item] of this.items) if (!this.special(id) && item.scope !== 'channel' && !mentioned.has(id)) this.clearItem(id);
     for (const entry of plan.suppressed) if (entry.kind === 'repair-limit') this.repairLimit(entry.element, entry.target);
   }
-  private special(id: string): boolean { return id.startsWith('preload:') || id.startsWith('drift:') || id === MUSIC_ITEM; }
+  private special(id: string): boolean { return ['preload:', 'drift:', 'look:', 'move:'].some(prefix => id.startsWith(prefix)) || id === MUSIC_ITEM; }
   /** The steps that carry out the planner's ops, through the same Cues and clip events
    * as before: a camera as its Cue's switch, a composition as the owned composition Cue,
    * a clip's start through the preloaded decoder (its own scene in the same step when it
@@ -548,8 +597,9 @@ export class ObsProgramSession {
         case 'decoder.pause': case 'decoder.resume': break;
         case 'decoder.stop': {
           const clipId = op.write.element === 'decoder' ? op.write.value.clipId : '';
-          const start = this.starts.get(clipId), event = this.stops.get(clipId)
-            ?? (start ? { ...start, id: `${start.id}:stop`, phase: 'stop' as const } : undefined);
+          // The clip as the decoder holds it: of an earlier plan when a newer one put the clip on another material (R9).
+          const start = this.startOn(op.sourceName, clipId), stop = this.stops.get(clipId);
+          const event = stop?.sourceName === op.sourceName ? stop : start ? { ...start, id: `${start.id}:stop`, phase: 'stop' as const } : undefined;
           if (event) entries.push({ kind: 'media', slot: 'stop', frame: 0, priority: 0, label: event.assetName, writes: [op.write], event, lateMs: null }, op);
           break;
         }
@@ -634,6 +684,167 @@ export class ObsProgramSession {
       ...pointEntries(frame + 1), ...place('before', frame + 1, 1), ...place('after', frame + 1, 1)];
     return [...place('stop', frame, 0), ...pointEntries(null), ...place('before', frame, 1), ...place('program', frame, 1),
       ...place('start', frame, 2), ...place('after', frame + 1, 1)].sort((left, right) => left.frame - right.frame || left.priority - right.priority);
+  }
+
+  /** A newer version of the song's picture plan while it plays or is paused (0.5.9 R9, 2026-11-10 decision 1: “这一遍立即
+   * 生效”). Throws, taking nothing, when the session cannot play it (why, in plain words). Otherwise it is taken inside
+   * the session's own queue, between two passes, one at a time and newest only: a version overtaken while it waited is
+   * dropped. What the session derives from the project is replaced at once; what OBS has (the ledger), the recovery
+   * counts, the hand takeover, the read-back and the last frame held stay. Then one pass brings the picture to what the
+   * new plan has at the current position: only the difference with the ledger goes out, nothing between the two plans is
+   * replayed. While paused the clips are located and stay paused. While OBS is away the plan is taken and nothing is
+   * sent: the restore after the reconnect sends it. `pictureApplied` says when its pass went out. */
+  retarget(project: LinkProject, revision: number): void {
+    if (this.closed || this.failure) return;
+    pictureItem(project, this.itemId);
+    if (project.timebase.frameRate !== this.project.timebase.frameRate) throw new Error('这次修改改了工程的帧率，正在播的歌不能中途换过去');
+    this.wantedPlan = { project, revision };
+    this.queueRetarget();
+  }
+  private queueRetarget(): void {
+    if (this.retargetQueued || this.closed || this.failure) return;
+    this.retargetQueued = true; this.queued++;
+    this.tail = this.tail.then(() => { this.retargetQueued = false; return this.retargetStep(); })
+      .catch(error => this.fault(`画面没有完全换成这次修改的样子：${errorText(error)}`)).finally(() => { this.queued--; });
+  }
+  private async retargetStep(): Promise<void> {
+    if (this.closed || this.failure) return;
+    const wanted = this.wantedPlan;
+    if (wanted) { this.wantedPlan = null; this.adopt(wanted.project); this.unapplied = wanted.revision; }
+    if (this.unapplied === null || !this.prepared) return;
+    const state = this.runtime.getState();
+    // Nothing of the song is on air yet: its first clock plays the new plan.
+    if (state === 'armed' && this.frame < 0) { this.reportApplied(); return; }
+    // Not started, or OBS away: sent by the first clock, or by the restore after the reconnect.
+    if ((state !== 'running' && state !== 'paused') || this.lost || this.restoring || !this.online()) return;
+    await this.retargetPass(state === 'paused');
+  }
+  /** The plan of `project` replaces the one the session runs, in one step (see `retarget`). */
+  private adopt(project: LinkProject): void {
+    const item = pictureItem(project, this.itemId), before = new Map(this.starts), state = this.runtime.getState();
+    // The Cue runtime starts over where the song is, as when it joins music already playing: the Cues at or before the
+    // playhead are not due, those after it are, and the ones this run already sent stay sent.
+    const runtime = new CueRuntime(project, 100), now = this.dependencies.now();
+    const sample = this.frame >= 0 ? this.sample((this.frame + 0.5) * 1000 / this.fps, this.lastClock?.observedAt ?? now) : null;
+    for (const update of [runtime.selectItem(this.itemId), runtime.beginPreflight('live'), runtime.arm(now, sample, 'awaiting-external-start')]) {
+      if (update.state === 'error') throw new Error(update.reason ?? '新的画面计划不能用');
+    }
+    runtime.carryExecuted(this.runtime.executedCues());
+    if (state === 'running' && sample) runtime.ingest(sample);
+    else if (state === 'paused') runtime.pauseAutomatic();
+    this.runtime = runtime; this.project = project;
+    this.managed.retarget(project, this.itemId);
+    this.timeline = this.managed.sceneTimeline!;
+    this.cueById = new Map(item.cues.map(cue => [cue.id, cue]));
+    this.spanCue.clear();
+    for (const cue of item.cues) for (const action of cue.actions) if (action.kind === 'obs.setSceneItemEnabled') this.spanCue.set(action.id, cue.id);
+    this.mediaEvents = compileManagedMediaTimeline(project, this.itemId).events;
+    this.starts.clear(); this.stops.clear();
+    for (const event of this.mediaEvents) (event.phase === 'start' ? this.starts : this.stops).set(event.clipId, event);
+    // What a decoder may still hold of an earlier plan stays known by that plan's event; a clip whose start changed is
+    // judged afresh (its refusal and late readiness were about the old one).
+    for (const [clipId, old] of before) {
+      const next = this.starts.get(clipId);
+      if (next?.sourceName !== old.sourceName) this.former.set(formerKey(old.sourceName, clipId), old);
+      if (!next || next.sourceName !== old.sourceName || next.frameNumber !== old.frameNumber || next.sourceOffsetMs !== old.sourceOffsetMs) {
+        this.refusedStarts.delete(clipId); this.lateReady.delete(clipId);
+      }
+    }
+    for (const [clipId, next] of this.starts) if (before.get(clipId)?.sourceName !== next.sourceName) this.introduced.add(clipId);
+    for (const clipId of [...this.introduced]) if (!this.starts.has(clipId)) this.introduced.delete(clipId);
+    // A queued point Cue goes only if the new plan still has it there; with the new plan's actions.
+    for (const tick of this.ticks) tick.points = tick.points.flatMap(entry => {
+      const cue = this.cueById.get(entry.cue.id);
+      return cue && cue.enabled && JSON.stringify(cue.timecode) === JSON.stringify(entry.cue.timecode) ? this.points([{ ...entry, cue }]) : [];
+    });
+    // Parts of clips the new plan no longer has are no longer this song's to report.
+    for (const id of [...this.items.keys()]) {
+      const [kind, ...rest] = id.split(':'), clipId = rest.join(':');
+      if (['preload', 'drift', 'look', 'move'].includes(kind!) && !this.starts.has(clipId)) this.clearItem(id);
+    }
+    this.preloadFrame = -Infinity;
+    // Accumulated until a pass goes out: versions taken while OBS was away compare with what was last on air.
+    for (const [clipId, old] of before) {
+      const next = this.starts.get(clipId);
+      if (next?.sourceName === old.sourceName && !this.moved.has(clipId)) this.moved.set(clipId, old);
+    }
+    for (const clipId of [...this.moved.keys()]) if (this.starts.get(clipId)?.sourceName !== this.moved.get(clipId)!.sourceName) this.moved.delete(clipId);
+  }
+  /** Each clip that kept its material across the plan changes since the last pass, with its event before them. */
+  private readonly moved = new Map<string, ManagedMediaEvent>();
+  /** The pass of a newer plan at the current position (see `retarget`). */
+  private async retargetPass(paused: boolean): Promise<void> {
+    const revision = this.unapplied!, generation = this.generation, losses = this.losses, state = this.runtime.getState();
+    const current = (): boolean => generation === this.generation && !this.closed && !this.failure && this.runtime.getState() === state;
+    const frame = Math.max(0, this.frame);
+    try { await this.dependencies.retargetOutputs?.(this.project, frame); }
+    catch (error) { this.fault(`画面没有完全换成这次修改的样子：${errorText(error)}`); }
+    if (!current()) return;
+    await this.retouch(frame, paused, current);
+    if (!current()) return;
+    // Paused, a clip on air is compared by its place too (the planner locates one the new plan moved).
+    const planned = this.plan(frame, paused ? 'paused' : 'running', true, 'retarget');
+    this.review(planned.plan);
+    const entries = this.layout(this.translate(planned, frame, true), [], frame, true);
+    // Paused, the clips the new plan puts on air are located and kept paused; the resume plays them.
+    const targets = paused ? entries.filter((entry): entry is MediaEntry => entry.kind === 'media' && entry.event.phase === 'start') : [];
+    const sent = await this.send(entries.filter(entry => !targets.includes(entry as MediaEntry)), current, null, false);
+    if (losses !== this.losses) return;
+    if (!sent.complete) this.partial = true;
+    for (const entry of targets) {
+      if (!current()) break;
+      const [decoder, ...program] = entry.writes, located = entry.event.assetKind !== 'image' ? pausedDecoder(decoder) : decoder;
+      const writes = [located, ...program].filter((write): write is LedgerWrite => write !== undefined);
+      for (const write of writes) this.ledger.sent(write, this.dependencies.now());
+      try { this.lookProblem(entry.event, await this.dependencies.guardOutput(current, () => this.dependencies.seekMedia(entry.event))); this.settle(writes, 'ok'); }
+      catch (error) { this.settle(writes, current() ? { failed: errorText(error) } : 'withdrawn'); }
+    }
+    if (losses !== this.losses) return;
+    if (this.unapplied === revision) this.reportApplied();
+  }
+  /** Clips on air that kept their material: one the new plan moved (or whose start it trimmed) by a frame or more is put
+   * in step where it plays, with no restart, and one whose look changed gets its new look on its decoder. Neither is a
+   * recovery: nothing is counted. Paused, a moved clip is located by the pass itself (the planner compares positions). */
+  private async retouch(frame: number, paused: boolean, current: () => boolean): Promise<void> {
+    const ledger = this.ledger.state(), picture = this.timeline.pictureAt(frame), frameMs = 1000 / this.fps;
+    const wanted = new Set([...picture.clips, ...picture.covered, ...picture.sounds].map(clip => clip.clipId));
+    const moved = [...this.moved.values()]; this.moved.clear();
+    for (const old of moved) {
+      const next = this.starts.get(old.clipId), known = next && ledger.decoders.get(next.sourceName);
+      if (!next || known?.state !== 'confirmed' || known.value.clipId !== next.clipId || known.value.mode === 'stopped' || !wanted.has(next.clipId)) continue;
+      const event = this.align({ ...next, deferSceneSwitch: true }, frame);
+      if (!paused && next.assetKind !== 'image' && this.dependencies.moveMedia && Math.abs(alignmentMs(next, this.fps) - alignmentMs(old, this.fps)) >= frameMs - 0.5) {
+        try { await this.dependencies.guardOutput(current, () => this.dependencies.moveMedia!(event)); this.clearItem(moveItem(next.clipId)); this.settleMedia(frame); }
+        catch (error) {
+          if (!current()) return;
+          const message = `素材“${next.assetName}”没能挪到改过的位置。原因：${trimReason(errorText(error))}。画面照常播，差得多时联动台过几秒会按音乐校正`;
+          this.setItem(moveItem(next.clipId), 'item', 'failed', message); this.fault(message);
+        }
+      }
+      if (JSON.stringify(next.transform ?? null) !== JSON.stringify(old.transform ?? null) && this.dependencies.relookMedia) {
+        try { this.lookProblem(next, await this.dependencies.guardOutput(current, () => this.dependencies.relookMedia!(event))); }
+        catch (error) { if (current()) this.lookProblem(next, errorText(error)); }
+      }
+      if (!current()) return;
+    }
+  }
+  /** A look that could not be set as a clip was located or changed (E16, R9): its own part of the picture, in red; it
+   * does not make the clip count as not located. Set again: off the list. */
+  private lookProblem(event: ManagedMediaEvent, problem: string | null | void): void {
+    if (typeof problem !== 'string') { this.clearItem(lookItem(event.clipId)); return; }
+    if (this.items.get(lookItem(event.clipId))?.detail === problem) return;
+    this.setItem(lookItem(event.clipId), 'item', 'failed', problem); this.fault(problem);
+  }
+  private reportApplied(): void {
+    const revision = this.unapplied;
+    if (revision === null) return;
+    this.unapplied = null;
+    if (!this.closed && !this.failure) this.dependencies.pictureApplied?.(revision);
+  }
+  /** The clip `sourceName` holds: the current plan's, or an earlier plan's when the clip has moved to another material. */
+  private startOn(sourceName: string, clipId: string): ManagedMediaEvent | undefined {
+    const start = this.starts.get(clipId);
+    return start?.sourceName === sourceName ? start : this.former.get(formerKey(sourceName, clipId)) ?? start;
   }
 
   /** Recovery rule B after OBS reconnects (R7, design 01 §4.7): from now on what OBS shows is
@@ -725,7 +936,7 @@ export class ObsProgramSession {
       const [decoder, ...program] = entry.writes, located = paused && entry.event.assetKind !== 'image' ? pausedDecoder(decoder) : decoder;
       for (const write of [located, ...program]) if (write) this.ledger.sent(write, this.dependencies.now());
       try {
-        await this.dependencies.guardOutput(current, () => this.dependencies.seekMedia(entry.event)); tally.succeeded++; this.settle(program, 'ok');
+        this.lookProblem(entry.event, await this.dependencies.guardOutput(current, () => this.dependencies.seekMedia(entry.event))); tally.succeeded++; this.settle(program, 'ok');
         // Paused, a located clip is what OBS holds now: paused there, which the resume plays.
         if (paused && located !== decoder && located?.element === 'decoder') this.ledger.observe({ element: 'decoder', key: located.key, value: located.value }, this.dependencies.now());
       }
@@ -765,6 +976,8 @@ export class ObsProgramSession {
     if (losses === this.losses) {
       // Ticks queued meanwhile go out after this as what changed since this picture.
       this.lost = false; this.partial = this.ticks.length > 0;
+      // A plan taken while OBS was away went out with this rebuild (R9).
+      this.reportApplied();
     }
     return { sent: parts.length + targets.length, ...tally };
   }
@@ -907,7 +1120,7 @@ export class ObsProgramSession {
       case 'program': return '切换节目画面';
       case 'composition': return '叠加画面';
       case 'decoder': {
-        const start = [...this.starts.values()].find(event => event.sourceName === key);
+        const start = [...this.starts.values(), ...this.former.values()].find(event => event.sourceName === key);
         const verb = target.endsWith(':stopped') ? '停止' : target.endsWith(':paused') ? '暂停' : '';
         return `${verb}素材“${start?.assetName ?? key}”`;
       }
@@ -987,7 +1200,12 @@ export class ObsProgramSession {
     const allowed = (): boolean => !this.closed && !this.failure;
     this.preloadWork = this.dependencies.guardOutput(allowed, () => prepare(frame, () => {
       if (!allowed()) throw new Error('后续素材准备已取消');
-    })).then(prepared => { if (prepared) { this.clearItem(preparationItem(prepared.clipId)); this.startLate(prepared); } })
+    })).then(prepared => {
+      if (!prepared) return;
+      this.clearItem(preparationItem(prepared.clipId)); this.startLate(prepared);
+      // A clip a newer plan brought is ready: the pass after it puts it on air at the current position (R9).
+      if (this.introduced.delete(prepared.clipId)) this.scheduleDrain();
+    })
       .catch(error => { if (!this.closed && !this.failure) this.preparationFailed(error); })
       .finally(() => { this.preloadWork = null; });
   }
@@ -1000,6 +1218,8 @@ export class ObsProgramSession {
       return;
     }
     const event = error.event, item = preparationItem(event.clipId), now = this.dependencies.now();
+    // A clip a newer plan brought no longer waits for a decoder that does not come: its start goes out and says why (R9).
+    if (this.introduced.delete(event.clipId)) this.scheduleDrain();
     if (!this.online()) {
       // The connection failed, not the clip: OBS prepares the song's scenes again once it is back.
       const message = `准备后面的素材没成功：${event.assetName}。原因：${reason}。OBS 没有连接，重新连上 OBS 后会再准备`;
@@ -1044,7 +1264,7 @@ export class ObsProgramSession {
   /** The clips that may be on air, as the ledger knows them: the drift check and the song's stop act on these. */
   private onAir(): ManagedMediaEvent[] {
     return [...this.ledger.state().decoders].flatMap(([sourceName, known]) => {
-      const clipId = mayHold(known), start = clipId === null ? undefined : this.starts.get(clipId);
+      const clipId = mayHold(known), start = clipId === null ? undefined : this.startOn(sourceName, clipId);
       return start ? [{ ...start, sourceName }] : [];
     });
   }
@@ -1314,7 +1534,7 @@ export class ObsProgramSession {
   private async holdDecoders(errors: string[]): Promise<void> {
     const writes = [...this.ledger.state().decoders].flatMap(([key, known]): Extract<LedgerWrite, { element: 'decoder' }>[] => {
       const value = known.state === 'unknown' ? known.last : known.value;
-      if (!value || mayHold(known) === null || this.starts.get(value.clipId)?.assetKind === 'image') return [];
+      if (!value || mayHold(known) === null || this.startOn(key, value.clipId)?.assetKind === 'image') return [];
       if (known.state === 'confirmed' && value.mode === 'paused') return [];
       return [{ element: 'decoder', key, value: { ...value, mode: 'paused' }, target: decoderTarget(value.clipId, 'paused') }];
     });

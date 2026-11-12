@@ -53,6 +53,11 @@ export class CueRuntime {
   getState(): LinkRuntimeState {
     return this.state;
   }
+  /** The Cues this run executed (0.5.9 R9): a newer plan of the same song keeps them executed (`carryExecuted`). */
+  executedCues(): ReadonlySet<string> { return this.executedCueIds; }
+  /** Marks these Cues of the song executed in this run: one sent before a newer plan arrived is not sent again in it,
+   * also when the newer plan moved it behind the playhead (as action MIDI, S8b). */
+  carryExecuted(cueIds: Iterable<string>): void { for (const id of cueIds) if (this.authoredCueIds.has(id)) this.executedCueIds.add(id); }
 
   /** Query the prepared index, never sort the whole program on a clock tick.
    * Execution identity belongs to the session, not the UI's recent reports. */

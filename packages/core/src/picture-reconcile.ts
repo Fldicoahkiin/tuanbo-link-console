@@ -167,16 +167,21 @@ export function planPictureReconcile(desired: OnAirPicture, ledger: PictureLedge
       && (mode === 'playing' || Math.abs(state.offsetMs - clip.offsetMs) <= PAUSED_POSITION_TOLERANCE_MS)),
     to(starts), reason => ({ kind: 'decoder.start', clip, mode, reason, write, program }));
   }
+  // Program and composition wait for the visible clips they show: the picture stays as it is meanwhile, and so do the
+  // decoders that show it now (0.5.9 R9: an edit never turns the picture black while its new material prepares).
+  const visiblePreparing = desired.clips.some(clip => preparing.has(clip.clipId));
   for (const [sourceName, known] of ledger.decoders) {
     if (wantedSources.has(sourceName)) continue;
     const last = knownValue(known);
     if (known.state === 'confirmed' && known.value.mode === 'stopped') continue;
+    if (visiblePreparing) {
+      waiting.push({ element: pictureElementKey({ element: 'decoder', key: sourceName }), kind: 'preparing', detail: '新的素材还在准备，画面先照旧' });
+      continue;
+    }
     const write: LedgerWrite = { element: 'decoder', key: sourceName, value: { clipId: last?.clipId ?? '', mode: 'stopped', offsetMs: 0 }, target: decoderTarget('', 'stopped') };
     collect(decide(write, known, state => state.mode === 'stopped'), to(stops), reason => ({ kind: 'decoder.stop', sourceName, reason, write }));
   }
 
-  // Program and composition wait for the visible clips they show: the picture stays as it is meanwhile.
-  const visiblePreparing = desired.clips.some(clip => preparing.has(clip.clipId));
   if (target.kind === 'composition') {
     const signature = compositionSignature(target.layers);
     const write: LedgerWrite = { element: 'composition', key: target.sceneName, value: signature, target: signature };

@@ -70,7 +70,7 @@ export class ManagedOutputRuntime {
   private readonly activeObsSourcesByLayer = new Map<string, Set<string>>();
 
   constructor(
-    private readonly project: LinkProject,
+    private project: LinkProject,
     private readonly projectPath: string | null,
     private readonly dependencies: ManagedOutputRuntimeDependencies
   ) {}
@@ -80,6 +80,15 @@ export class ManagedOutputRuntime {
     this.mediaEvents = compileManagedMediaTimeline(this.project, itemId).events;
     this.preparedScenes = new SceneOutputTimeline(this.project, itemId, this.mediaEvents);
     this.resetExecution();
+  }
+
+  /** A newer version of the song's plan while it plays (0.5.9 R9): what is derived from the project is replaced, the
+   * run's record of what it started and showed (its cleanup at the stop) stays. */
+  retarget(project: LinkProject, itemId: string): void {
+    this.project = project;
+    this.selectedItem = project.rundown.find((item) => item.id === itemId) ?? null;
+    this.mediaEvents = compileManagedMediaTimeline(project, itemId).events;
+    this.preparedScenes = new SceneOutputTimeline(project, itemId, this.mediaEvents);
   }
 
   resetExecution(): void {
