@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { create } from 'zustand';
 import type { P1FollowState } from '@tb/schema';
-import { followRuntimeState, orphanFollow, P1_FOLLOW_PAGE, P1FollowClient, type P1FollowStartInput } from '../runtime/p1-follow-client';
+import { followRuntimeState, nothingFollowed, orphanFollow, P1_FOLLOW_PAGE, P1FollowClient, type P1FollowStartInput } from '../runtime/p1-follow-client';
 import { recordRuntimeOperator } from '../runtime/runtime-action-log';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { useDocumentStore } from './document-store';
@@ -58,9 +58,7 @@ export async function followP1(): Promise<P1FollowState> {
 }
 
 /** Stopped, or auto-follow listening for its first song (the main process takes a newer start then, p1-follow-host.ts). */
-export function nothingFollowed(state: P1FollowState): boolean {
-  return state.phase === 'standby' || state.mode === 'auto' && state.phase === 'waiting' && state.itemId === null;
-}
+export { nothingFollowed };
 
 /** The window's preflight runs: the follow shows it as the check while it stands by. */
 export async function checkingP1Follow<T>(step: () => Promise<T>): Promise<T> {

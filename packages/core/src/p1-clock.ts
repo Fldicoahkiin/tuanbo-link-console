@@ -1,5 +1,5 @@
 import type { LinkProject } from '@tb/schema';
-import { MtcQuarterFrameDecoder, nominalFramesPerSecond, playbackFramesPerSecond, type MtcSample } from './mtc-timecode';
+import { MtcDecodeError, MtcQuarterFrameDecoder, nominalFramesPerSecond, playbackFramesPerSecond, type MtcSample } from './mtc-timecode';
 import { locateP1Sample, validateP1TimecodeRanges } from './p1-auto-follow';
 import type { ProgramClock } from './program-clock';
 
@@ -71,6 +71,8 @@ export class P1Clock {
   private needsRestart = false;
   private sessionId = '';
   private generation = 0;
+  /** In a run of cycles that made no timecode; a good timecode ends it. */
+  private undecodable = false;
 
   constructor(private readonly project: LinkProject, private readonly mode: P1FollowMode) {
     if (project.playbackSource === 'internal') throw new Error('这个工程由联动台播放，不跟随 P1');
@@ -90,15 +92,33 @@ export class P1Clock {
    * position; a Full Frame relocates, so pieces collected before it are dropped. */
   message(bytes: readonly number[], at100ns: bigint): P1ClockEvent[] {
     const atMs = this.advance(at100ns);
+    // Decoded in every phase so the screen shows P1's timecode before arming too (the page decoded whatever it listened
+    // to, link-runtime-coordinator.ts ingestQuarterFrame); only an armed clock acts on it. Arming starts a fresh decode.
+    const sample = bytes.length === 2 && bytes[0] === 0xf1 ? this.quarterFrame(bytes[1]!, atMs) : null;
     const events = this.checkLoss();
     if (isFullFrame(bytes)) { this.decoder.reset(); return events; }
     if (bytes.length !== 2 || bytes[0] !== 0xf1) return events;
-    // Decoded in every phase so the screen shows P1's timecode before arming too (the page decoded whatever it listened
-    // to, link-runtime-coordinator.ts ingestQuarterFrame); only an armed clock acts on it. Arming starts a fresh decode.
-    const sample = this.decoder.push(bytes[1]!, atMs);
     if (sample) this.heard = sample;
     if (!sample || this.current.phase === 'idle' || this.current.phase === 'stopped') return events;
     return [...events, ...(this.mode === 'auto' ? this.autoSample(sample) : this.manualSample(sample))];
+  }
+
+  /** A cycle that makes no timecode (P1 relocated mid-cycle) is dropped and the decoder starts a fresh cycle; the input
+   * goes on and the rules judge what follows (silence is a loss, the next position is checked for a jump). The first of
+   * a run is thrown before anything follows from its message (its time still counts as the interface's now), so that
+   * the host says it once in the run log. */
+  private quarterFrame(data: number, atMs: number): MtcSample | null {
+    try {
+      const sample = this.decoder.push(data, atMs);
+      if (sample) this.undecodable = false;
+      return sample;
+    } catch (error) {
+      if (!(error instanceof MtcDecodeError)) throw error;
+      this.decoder.reset();
+      if (this.undecodable) return null;
+      this.undecodable = true;
+      throw error;
+    }
   }
 
   /** The native input's heartbeat: nothing arrived, and this is the interface's time now. */

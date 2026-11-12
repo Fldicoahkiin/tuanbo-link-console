@@ -224,8 +224,14 @@ export class MidiPortBroker {
 
   private deliver(channel: Channel, message: NativeMidiMessage): void {
     if (channel.closed) return;
-    // The main process reads the interface's own timestamp; no age is worked out for it.
-    if (channel.claim) { channel.claim.message(message); return; }
+    // The main process reads the interface's own timestamp, no age is worked out for it, except that an observation cannot
+    // be from the future: the interface's count runs a fraction of a ms ahead of this clock at times, and a timestamp
+    // later than now is delivered as now (the window's age below is clamped at 0 the same way).
+    if (channel.claim) {
+      const now = this.now100ns();
+      channel.claim.message(message.at100ns > now ? { ...message, at100ns: now } : message);
+      return;
+    }
     const age = this.now100ns() - message.at100ns;
     const ageMs = age > 0n ? Math.min(600_000, Number(age) / 10_000) : 0;
     for (const handle of channel.handles) this.dependencies.emit({ version: 1, kind: 'message', handle, bytes: message.bytes, ageMs });

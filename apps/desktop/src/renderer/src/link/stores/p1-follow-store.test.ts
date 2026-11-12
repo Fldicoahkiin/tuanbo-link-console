@@ -49,6 +49,21 @@ describe('界面里的跟随 P1 状态（P4）', () => {
     expect(bridge.p1Follow).toHaveBeenCalledTimes(2);
   });
 
+  it('自动选歌等第一首歌时输入口停了：自动监听再开始时重新发开始、重新开始听（同一版工程）', async () => {
+    open(true);
+    useP1FollowStore.setState({ follow: null });
+    let closed = true;
+    bridge.p1Follow.mockImplementation(request => Promise.resolve(request.command.kind === 'arm'
+      ? state({ mode: 'auto', phase: 'waiting', input: closed ? { portName: 'loopMIDI Port', state: 'closed', reason: 'MIDI 输入服务意外关闭' } : { portName: 'loopMIDI Port', state: 'open', reason: null } })
+      : state({ mode: 'auto', phase: 'standby' })));
+    await followP1();
+    closed = false;
+    await followP1();
+    expect(bridge.p1Follow.mock.calls.map(([request]) => request.command.kind)).toEqual(['start', 'arm', 'start', 'arm']);
+    await followP1();
+    expect(bridge.p1Follow).toHaveBeenCalledTimes(4);
+  });
+
   it('运行状态只照这个页面的跟随写；别的页面的跟随不写', () => {
     open(false);
     showP1Follow(state({ phase: 'running', itemId: 'song', mtc: { timecode: { hours: 1, minutes: 0, seconds: 2, frames: 3 }, frameRate: '30', receiving: true, stable: true } }));
