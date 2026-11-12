@@ -3,6 +3,12 @@ import { createEmptyLinkProject, parseLinkProject, type LinkProject } from '@tb/
 import { frameNumberToTimecode } from './mtc-timecode';
 import { allocateP1TimecodeRanges } from './p1-auto-follow';
 import { P1Clock, type P1ClockEvent } from './p1-clock';
+import { nativePlayerStatusSchema, type LinkAction, type NativePlayerStatus } from '@tb/schema';
+import { MidiMessageSkipped } from './midi-late-rule';
+import { MidiProgramSession } from './midi-program';
+import type { OutputMode } from './output-failure';
+import { P1FollowSession, type P1FollowOutputs } from './p1-follow-session';
+import { clockFromNativeStatus, type ProgramClock } from './program-clock';
 
 /**
  * P1 follow rules (AGENTS §4.9; design 03 §7.1, 2026-11-10 "P1 跟随搬到后台"). Part 1 (step P2):
@@ -171,4 +177,191 @@ function play(clock: P1Clock, fromFrame: number, frames: number, startMs: number
     }
   }
   return { events, endMs: startMs + frames * FRAME_MS, lastSampleMs };
+}
+
+/*
+ * Part 2 (step P3, design 03 §7.1 ⑦–⑩): P1 follow drives the same outputs as the internal player. The action MIDI path
+ * is checked here: one MIDI output, fed the clocks of `P1FollowSession` (P1's MTC) or `clockFromNativeStatus` (the
+ * internal player), runs the shared `MidiProgramSession`. The picture path waits for R9 (todos below).
+ */
+
+const NOTE: LinkAction = { id: 'note', label: '开场', kind: 'midi.noteOn', portProfileId: 'out', channel: 1, note: 60, velocity: 100, durationMs: 100 };
+const CUES: { frame: number; action: LinkAction }[] = [
+  { frame: 0, action: NOTE },
+  { frame: 15, action: { id: 'cc', label: '推子', kind: 'midi.controlChange', portProfileId: 'out', channel: 2, controller: 7, value: 64 } },
+  { frame: 45, action: { ...NOTE, id: 'note-45', label: '主歌', note: 62 } },
+  { frame: 75, action: { id: 'pc', label: '换音色', kind: 'midi.programChange', portProfileId: 'out', channel: 1, program: 5 } },
+  { frame: 100, action: { id: 'go', label: '副歌', kind: 'midi.showControl', portProfileId: 'out', deviceId: 0x7f, commandFormat: 0x01, command: 'go', cueNumber: '3' } }
+];
+const BYTES = { note: [0x90, 60, 100], noteOff: [0x80, 60, 0], cc: [0xb1, 7, 64], note45: [0x90, 62, 100], note45Off: [0x80, 62, 0], pc: [0xc0, 5],
+  go: [0xf0, 0x7f, 0x7f, 0x02, 0x01, 0x01, 0x33, 0xf7] };
+
+describe('P1 跟随规则 · 共用一套输出（03 §7.1 ⑦，动作 MIDI）', () => {
+  it('⑦ 同一个工程、同一串位置：经 P1 的时间码和经联动台播放的时钟，动作 MIDI 发出去的完全一样', async () => {
+    const project = midiProject();
+    const p1 = midiOutput(project, 'live');
+    const follow = new P1FollowSession(project, 'manual', { outputs: p1.outputs, prepare: () => undefined });
+    follow.arm('song');
+    playFollow(follow, 0, 120, 1_000);
+    await p1.settled();
+    // The internal player at the same positions and times: ready at the head, then playing. A decoded MTC position is
+    // two frames after the frame its pieces encode, complete with the last piece.
+    const internal = midiOutput(project, 'live');
+    internal.outputs.observe(clockFromNativeStatus(playerStatus('ready', 0), null));
+    for (let frame = 0; frame < 120; frame += 2) {
+      internal.outputs.observe(clockFromNativeStatus(playerStatus('playing', (frame + 2) * 1000 / FPS), qpc(1_000 + (frame + 1.75) * FRAME_MS)));
+    }
+    await internal.settled();
+    expect(p1.sent.map(entry => entry.bytes)).toEqual([BYTES.note, BYTES.noteOff, BYTES.cc, BYTES.note45, BYTES.note45Off, BYTES.pc, BYTES.go]);
+    expect(p1.sent).toEqual(internal.sent);
+    expect(p1.problems).toEqual([]); expect(internal.problems).toEqual([]);
+  });
+
+  it.todo('⑦ 画面：同一串位置经两种时钟，OBS 请求完全相同（等 R9：画面会话收 P1 的时钟，obs-program-session.ts 去掉按来源的拒绝）');
+  it.todo('⑦ 动作 MIDI 会话直接用 P1 工程建（等 P3d：midi-program.ts 不再按 playbackSource 拒绝；现在测试里用同一首歌的联动台播放副本）');
+});
+
+describe('P1 跟随规则 · 重同步和同位置继续不补点动作（03 §7.1 ⑧，AGENTS §4.9）', () => {
+  it('⑧ 手动：断码期间一条不发，时间码回来也不发；重同步以后，过去的动作不补，后面的照发', async () => {
+    const project = midiProject();
+    const out = midiOutput(project, 'live');
+    const follow = new P1FollowSession(project, 'manual', { outputs: out.outputs, prepare: () => undefined });
+    follow.arm('song');
+    const first = playFollow(follow, 0, 30, 1_000);
+    follow.idle(at(first.lastSampleMs + 600));
+    // P1 went on meanwhile: frames 60–90 come back, past the actions at 45 and 75.
+    const back = playFollow(follow, 60, 30, first.lastSampleMs + 1_000);
+    await out.settled();
+    expect(out.sent.map(entry => entry.bytes)).toEqual([BYTES.note, BYTES.noteOff, BYTES.cc]);
+    follow.resync();
+    playFollow(follow, 90, 30, back.endMs);
+    await out.settled();
+    expect(out.sent.map(entry => entry.bytes)).toEqual([BYTES.note, BYTES.noteOff, BYTES.cc, BYTES.go]);
+    expect(out.problems).toEqual([]);
+  });
+
+  it('⑧ 自动选歌：P1 暂停后从同一位置继续，之后的动作照发；暂停期间没有动作被补发', async () => {
+    const project = midiProject(true);
+    const out = midiOutput(project, 'live');
+    const prepares: string[] = [];
+    const follow = new P1FollowSession(project, 'auto', { outputs: out.outputs, prepare: (_itemId, sessionId) => { prepares.push(sessionId); } });
+    follow.arm(null);
+    const start = project.p1AutoFollow!.ranges[0]!.startSeconds * FPS;
+    // Prepared right after the first position (a slow preparation makes the opening actions late: see the late rule).
+    const first = playFollow(follow, start, 2, 1_000);
+    follow.prepared(prepares[0]!);
+    const on = playFollow(follow, start + 2, 38, first.endMs);
+    follow.idle(at(on.lastSampleMs + 600));
+    playFollow(follow, start + 40, 70, on.lastSampleMs + 5_000);
+    await out.settled();
+    expect(follow.view.phase).toBe('running');
+    expect(out.sent.map(entry => entry.bytes)).toEqual([BYTES.note, BYTES.noteOff, BYTES.cc, BYTES.note45, BYTES.note45Off, BYTES.pc, BYTES.go]);
+    expect(out.problems).toEqual([]);
+  });
+
+  it.todo('⑧ 画面：重同步或同位置继续后，此刻的机位和素材出现在 OBS（等 R9：画面会话的 reconcileAt）');
+});
+
+describe('P1 跟随规则 · 换歌关灯（03 §7.1 ⑨）', () => {
+  it.todo('⑨ P1 换歌只关上一首独有的执行器（等组长定：今天 P1 跟随一条关灯都不发；接 lighting-off-service.ts 在 P3f）');
+});
+
+describe('P1 跟随规则 · 排练和直播（03 §7.1 ⑩，AGENTS §4.8）', () => {
+  it('⑩ 动作 MIDI：排练时第一条没发出的动作挡住后面的（松开照发）；直播时只这一条没发，后面照发', async () => {
+    const run = async (mode: OutputMode) => {
+      const project = midiProject();
+      const out = midiOutput(project, mode, bytes => bytes[0] === 0xb1);
+      const follow = new P1FollowSession(project, 'manual', { outputs: out.outputs, prepare: () => undefined });
+      follow.arm('song');
+      playFollow(follow, 0, 120, 1_000);
+      await out.settled();
+      return out;
+    };
+    const rehearsal = await run('rehearsal');
+    expect(rehearsal.sent.map(entry => entry.bytes)).toEqual([BYTES.note, BYTES.noteOff]);
+    expect(rehearsal.problems.some(problem => problem.includes('不再发送'))).toBe(true);
+    const live = await run('live');
+    expect(live.sent.map(entry => entry.bytes)).toEqual([BYTES.note, BYTES.noteOff, BYTES.note45, BYTES.note45Off, BYTES.pc, BYTES.go]);
+    expect(live.problems.some(problem => problem.includes('推子'))).toBe(true);
+  });
+
+  it.todo('⑩ 画面：排练时第一个失败挡住这一路后面的画面动作，直播标红继续（等 R9）');
+});
+
+function midiProject(auto = false): LinkProject {
+  const project = parseLinkProject({ ...createEmptyLinkProject('P1 动作 MIDI'), playbackSource: 'p1', rundown: [{ id: 'song', title: '歌曲',
+    cues: CUES.map((cue, index) => ({ id: `cue-${index}`, name: cue.action.label, timecode: frameNumberToTimecode(cue.frame, '30'), actions: [cue.action] })),
+    referenceAudio: { assetId: 'audio', relativePath: 'assets/song.wav', sha256: 'a'.repeat(64), durationMs: 30_000 } }] });
+  if (auto) project.p1AutoFollow = allocateP1TimecodeRanges(project);
+  return project;
+}
+
+function playerStatus(status: 'ready' | 'playing', positionMs: number): NativePlayerStatus {
+  return nativePlayerStatusSchema.parse({
+    version: 1, sessionId: '6f1c2b0e-8a8d-4c47-9a38-0d6a51f1f6a1', generation: 1, itemId: 'song', status, positionMs,
+    offsetMs: 0, sampleRate: 48000, enginePid: null, engineTitle: null, mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null,
+    underruns: 0, mtcInterruptions: 0, gain: 1, analysis: null
+  });
+}
+
+function qpc(ms: number): string { return String(Math.round(ms * 10_000)); }
+
+/** `play` for a whole follow: the same quarter frames on the interface's clock. */
+function playFollow(follow: P1FollowSession, fromFrame: number, frames: number, startMs: number): { endMs: number; lastSampleMs: number } {
+  let lastSampleMs = startMs;
+  for (let offset = 0; offset < frames; offset += 2) {
+    const tc = frameNumberToTimecode(fromFrame + offset, '30');
+    const pieces = [tc.frames & 15, tc.frames >> 4, tc.seconds & 15, tc.seconds >> 4, tc.minutes & 15, tc.minutes >> 4, tc.hours & 15, (tc.hours >> 4) | (3 << 1)];
+    for (const [type, value] of pieces.entries()) {
+      const ms = startMs + (offset + type / 4) * FRAME_MS;
+      follow.message([0xf1, (type << 4) | value], at(ms));
+      if (type === 7) lastSampleMs = ms;
+    }
+  }
+  return { endMs: startMs + frames * FRAME_MS, lastSampleMs };
+}
+
+/**
+ * One action MIDI output as the shared host drives it: `ready` (or a reconcile) opens a session at that position, a
+ * running clock sends what is due, a hold or a stop closes it. Both clocks go through this same output, so equal sends
+ * mean equal clocks for the outputs. The session is built from the song's internal-player twin until P3d admits P1.
+ */
+function midiOutput(project: LinkProject, mode: OutputMode, refuse: (bytes: readonly number[]) => boolean = () => false) {
+  const twin = parseLinkProject({ ...project, playbackSource: 'internal', p1AutoFollow: undefined });
+  const sent: { bytes: number[]; deadlineAtMs: number }[] = [], problems: string[] = [];
+  let now = 0, session: MidiProgramSession | null = null, tail: Promise<unknown> = Promise.resolve();
+  const close = (): void => {
+    const current = session; session = null;
+    if (current) tail = tail.then(() => current.close());
+  };
+  const open = (clock: ProgramClock): void => {
+    close();
+    const opened = session = new MidiProgramSession(twin, clock.itemId, {
+      prepare: () => Promise.resolve(), close: () => Promise.resolve(), now: () => now, sent: () => undefined,
+      send: (_port, bytes, deadlineAtMs) => {
+        if (refuse(bytes)) return Promise.reject(new MidiMessageSkipped('接口拒绝了这一条', -7));
+        sent.push({ bytes: [...bytes], deadlineAtMs });
+        return Promise.resolve();
+      },
+      missed: message => { problems.push(message); }, late: message => { problems.push(message); }, failed: error => { problems.push(error.message); }
+    }, mode);
+    tail = tail.then(() => opened.prepare(clock.positionMs));
+  };
+  const tick = (clock: ProgramClock): void => {
+    const current = session, observedAtMs = clock.observedAtMs;
+    if (!current || observedAtMs === null) return;
+    tail = tail.then(() => { now = observedAtMs; current.clock(clock.positionMs, observedAtMs); return current.settled(); });
+  };
+  const outputs: P1FollowOutputs = {
+    observe: clock => {
+      switch (clock.state) {
+        case 'ready': open(clock); return;
+        case 'running': case 'ended': tick(clock); return;
+        case 'held': case 'lost': case 'stopped': close(); return;
+      }
+    },
+    hold: close,
+    reconcileAt: clock => { open(clock); tick(clock); }
+  };
+  return { sent, problems, settled: () => tail, outputs };
 }
