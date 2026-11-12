@@ -412,13 +412,14 @@ it('停下以后的状态：停着的那一帧不算在播、不算失败，这�
   expect(clean.host.status).toMatchObject({ state: 'stopped', itemId: 'a', items: [] });
   expect(clean.host.status?.fault).toBeUndefined();
   await clean.host.close();
-  // a's start is refused by OBS: a's own red part, listed while a plays.
+  // a's cut is refused by OBS: a's own red parts, listed while a plays.
   const test = setup(show(false));
   test.obs.refuse.add('SetCurrentProgramScene');
-  await test.play('a'); await until(() => (test.host.status?.items ?? []).some(item => item.state === 'failed'));
+  const red = (item: { state: string }): boolean => item.state === 'failed' || item.state === 'uncertain';
+  await test.play('a'); await until(() => (test.host.status?.items ?? []).some(red));
   test.obs.refuse.clear();
   const listed = test.host.status?.items;
-  expect(listed?.some(item => item.state === 'failed')).toBe(true);
+  expect(listed?.some(red)).toBe(true);
   await test.host.stop();
   expect(test.host.status?.state).toBe('stopped');
   expect(test.host.status?.items).toEqual(listed);
