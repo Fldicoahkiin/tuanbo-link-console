@@ -37,8 +37,9 @@ type Props = {
   onSelectCue: (cueId: string) => void;
   onSelectObsResource: (resource: ObsResource) => void;
   onTransformClip: (clipId: string, transform: ReferenceCanvasTransform) => void;
-  /** The clip an OBS source of ours shows (core `clipOfMaterialSource`): null for any other source; throws to refuse. */
-  materialClipOf?: ((sourceName: string) => string | null) | undefined;
+  /** The clip an OBS source of ours shows at the playhead (core `clipOfMaterialSource`): null for any other source;
+   * throws to refuse. */
+  materialClipOf?: ((sourceName: string, playheadMs: number) => string | null) | undefined;
   onMoveClipToTop: (clipId: string) => void;
   onRemoveClip: (clipId: string) => void;
   onDropObsResource: (resource: ObsResource, startMs?: number, layerId?: string) => void;
@@ -55,15 +56,20 @@ export function ReferenceStage(props: Props): JSX.Element {
   const keyDrag = useCapturedDrag();
   // On the live canvas a material's own picture is moved like any source, and the move is kept on its clip: it then
   // goes to OBS with the rest of the clip's look when the material is prepared (E16). Stable for the memoised canvas.
+  // The clip is chosen when the drag starts (the clip under the playhead then) and kept for its release.
   const latest = useRef(props);
   latest.current = props;
+  const draggedClip = useRef<{ sourceName: string; clipId: string | null } | null>(null);
   const materialEdits = useMemo<ObsLiveMaterialEdits>(() => ({
     refuse: (item) => {
-      try { latest.current.materialClipOf?.(item.sourceName); return null; }
+      draggedClip.current = null;
+      try { draggedClip.current = { sourceName: item.sourceName, clipId: latest.current.materialClipOf?.(item.sourceName, latest.current.playhead.read()) ?? null }; return null; }
       catch (error) { return toMessage(error); }
     },
     released: (item, transform, scene) => {
-      const clipId = latest.current.materialClipOf?.(item.sourceName);
+      const dragged = draggedClip.current;
+      draggedClip.current = null;
+      const clipId = dragged?.sourceName === item.sourceName ? dragged.clipId : null;
       if (!clipId) return;
       latest.current.onTransformClip(clipId, canvasTransformFromObs(obsItemPicture(transform),
         { width: transform.sourceWidth, height: transform.sourceHeight }, { width: scene.width, height: scene.height }));

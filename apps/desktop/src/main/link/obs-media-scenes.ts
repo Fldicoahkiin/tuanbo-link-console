@@ -4,6 +4,7 @@ import type { LinkMediaAsset } from '@tb/schema';
 import { materialSceneNames, obsMaterialPresentation, type ManagedMediaEvent } from '@tb/core/link';
 import { z } from 'zod';
 import { includesObsMediaPath, sameObsMediaPath, verifyRelocatedObsMediaPath } from './obs-media-paths';
+import { MemoryMaterialOwnLooks, ownLookOf, type MaterialOwnLooks } from './obs-material-own-looks';
 
 type Request = <T>(operation: () => Promise<T>, label: string) => Promise<T>;
 type MediaState = { mediaState: string; mediaDuration: number; mediaCursor: number };
@@ -34,15 +35,17 @@ function compositionOrderRequests(sceneName: string, layers: string[], items: Ma
 }
 
 type Requests = Parameters<OBSWebSocket['callBatch']>[0];
-/** A write of ours to a decoder's look is out, or OBS did not confirm it: the next clip writes its look again. */
-const UNKNOWN_LOOK = '?';
+/** The session book's word for a decoder holding the material's own look (as kept on this machine). */
+const OWN_LOOK = 'own';
 const STANDBY_SUFFIX = '·预备';
+const MATERIAL_SCENE_PREFIX = '团播联动台·素材·';
 /** The material decoder a standby copy belongs to: both show the same material, with the same own look in OBS. */
 const primaryDecoder = (name: string): string => name.endsWith(STANDBY_SUFFIX) ? name.slice(0, -STANDBY_SUFFIX.length) : name;
-/** What a clip asks of its decoder's look: the requests (none when it already has it) and the look afterwards
- * (null: OBS's own look). */
-type Look = { requests: Requests; after: string | null };
-const KEEP_LOOK: Look = { requests: [], after: null };
+/** What a clip asks of its decoder's look: the requests (none when it already has it), the look afterwards (OWN_LOOK
+ * or the project's look as JSON), the decoder's live-edit count it was worked out at, and why it could not be worked
+ * out (the clip is then shown as OBS has it, and told). */
+type Look = { requests: Requests; after: string | null; edits: number; problem?: string };
+const KEEP_LOOK: Look = { requests: [], after: null, edits: 0 };
 
 /** Only the dedicated input in an application-owned material scene is controlled. */
 /** A paused seek lands this far ahead of the music, covering seek and decode time. */
@@ -72,6 +75,11 @@ export function failureReason(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).replace(/[。.；;\s]+$/u, '');
 }
 
+/** The red text of a clip shown without the look the project gives it, because the look could not be worked out. */
+function lookFailure(event: Pick<ManagedMediaEvent, 'assetName'>, reason: string): string {
+  return `素材“${event.assetName}”照常在播，但没有按工程里的位置和大小摆，用的是 OBS 里现在的样子。原因：${reason.replace(/[。.；;\s]+$/u, '')}。下一段用到这个素材时会再按工程摆；一直这样，请重新连接 OBS，或把运行日志发给我们`;
+}
+
 export class ObsMediaScenes {
   private readonly prepared = new Map<string, { path: string; sha256: string; playbackPaths: readonly string[]; sceneName: string; sceneItemId: number; kind: LinkMediaAsset['kind'] }>();
   private readonly active = new Set<string>();
@@ -82,15 +90,43 @@ export class ObsMediaScenes {
   private readonly compositions = new Map<string, string>();
   private readonly compositionItems = new Map<string, Map<string, CompositionItem>>();
   private readonly primed = new Map<string, 'preparing' | 'ready'>();
-  /** The look a decoder's scene item has from us (0.5.9 E16): the transform the project set, as `lookKey` writes it,
-   * or UNKNOWN_LOOK while a write of ours is out or failed. No entry: OBS's own look, never written by us. */
+  /** What this session knows a decoder's scene item shows (0.5.9 E16): OWN_LOOK (the material's own look, as kept on
+   * this machine) or a project look as JSON. No entry: not known (never written this session, a write of ours out or
+   * not confirmed, or moved on the live canvas). The material's own look itself is kept on the machine (`ownLooks`),
+   * so what a clip shows never depends on what this session did before. */
   private readonly looks = new Map<string, string>();
-  /** The material's own look in OBS, read from a decoder before the first write of ours to it: what a clip that
-   * leaves OBS's look alone shows again after a clip of the same material with a look of its own. */
-  private readonly obsLooks = new Map<string, Record<string, JsonValue>>();
+  /** Live-canvas transform writes per decoder this session: a look worked out before one is not booked after it. */
+  private readonly liveEdits = new Map<string, number>();
+  /** Material scene items the live canvas wrote to: `scene\nitem id` → source name. */
+  private readonly liveItems = new Map<string, string>();
   private canvas: { width: number; height: number } | null = null;
-  constructor(private readonly client: OBSWebSocket, private readonly request: Request, private readonly run: ObsOperationRunner) {}
-  clear(): void { this.prepared.clear(); this.active.clear(); this.startedClips.clear(); this.compositions.clear(); this.compositionItems.clear(); this.primed.clear(); this.looks.clear(); this.obsLooks.clear(); this.canvas = null; }
+  constructor(private readonly client: OBSWebSocket, private readonly request: Request, private readonly run: ObsOperationRunner,
+    private readonly ownLooks: MaterialOwnLooks = new MemoryMaterialOwnLooks()) {}
+  /** OBS disconnected or reconnected: this session's book goes; the material's own looks kept on the machine stay. */
+  clear(): void { this.prepared.clear(); this.active.clear(); this.startedClips.clear(); this.compositions.clear(); this.compositionItems.clear(); this.primed.clear(); this.looks.clear(); this.liveItems.clear(); this.canvas = null; }
+
+  /** Before the live canvas writes a transform to a scene item (0.5.9 E16): when it is one of our material decoders, its
+   * own look is kept on this machine first (if none is kept yet), and this session no longer knows what it shows. Found
+   * by our material scene and source names, so a material this session never prepared counts too. Runs inside the live
+   * canvas's own request turn; a failure refuses the write. */
+  async beforeLiveTransform(sceneName: string, sceneItemId: number): Promise<void> {
+    if (!sceneName.startsWith(MATERIAL_SCENE_PREFIX)) return;
+    const key = `${sceneName}\n${sceneItemId}`;
+    let sourceName = this.liveItems.get(key);
+    if (sourceName === undefined) {
+      const items = await this.request(() => this.client.call('GetSceneItemList', { sceneName }), '读取素材场景');
+      const found = items.sceneItems.find(entry => entry.sceneItemId === sceneItemId);
+      sourceName = typeof found?.sourceName === 'string' ? found.sourceName : '';
+    }
+    if (sourceName !== `${sceneName}·来源` && sourceName !== `${sceneName}·来源${STANDBY_SUFFIX}`) return;
+    this.liveEdits.set(sourceName, (this.liveEdits.get(sourceName) ?? 0) + 1);
+    this.looks.delete(sourceName);
+    if (!this.liveItems.has(key) && !await this.ownLooks.read(primaryDecoder(sourceName))) {
+      const own = await this.request(() => this.client.call('GetSceneItemTransform', { sceneName, sceneItemId }), '读取素材在 OBS 里原来的样子');
+      await this.ownLooks.keep(primaryDecoder(sourceName), ownLookOf(own.sceneItemTransform));
+    }
+    this.liveItems.set(key, sourceName);
+  }
 
   /** A second decoder inside the same owned scene. The logical scene remains
    * stable for composition, while only the visible input changes at a boundary. */
@@ -141,15 +177,14 @@ export class ObsMediaScenes {
     return this.run(async () => {
       const source = this.prepared.get(from), target = this.prepared.get(to);
       if (!source || !target || source.path !== target.path || this.active.has(to)) throw new Error('预备画面必须来自同一素材的非活动解码器');
-      // The copy gets the material's own look in OBS. A decoder with a look of ours from a clip (E16) passes on the
-      // look it had before; the clip the copy is prepared for then sets its own look, if it has one (`prime`).
-      const own = this.looks.has(from) ? this.obsLooks.get(primaryDecoder(from)) : undefined;
-      if (this.looks.has(from) && !own) throw new Error('不知道这个素材在 OBS 里原来的样子，没有复制到准备好的画面');
+      // The copy gets the material's own look (E16): the one kept on this machine, or else the source decoder's
+      // transform, which the console then never changed. The clip the copy is prepared for then sets its own look, if
+      // it has one (`prime`).
+      const own = await this.ownLooks.read(primaryDecoder(from));
       const transform = own ?? (await this.request(() => this.client.call('GetSceneItemTransform', { sceneName: source.sceneName, sceneItemId: source.sceneItemId }), '读取预备画面变换')).sceneItemTransform;
-      if (!this.obsLooks.has(primaryDecoder(to))) this.obsLooks.set(primaryDecoder(to), transform as Record<string, JsonValue>);
-      this.looks.set(to, UNKNOWN_LOOK);
-      await this.request(() => this.client.call('SetSceneItemTransform', { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemTransform: transform }), '复制预备画面变换');
       this.looks.delete(to);
+      await this.request(() => this.client.call('SetSceneItemTransform', { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemTransform: transform }), '复制预备画面变换');
+      this.looks.set(to, OWN_LOOK);
       const filters = filtersSchema.parse((await this.request(() => this.client.call('GetSourceFilterList', { sourceName: from }), '读取预备画面滤镜')).filters);
       const previous = filtersSchema.parse((await this.request(() => this.client.call('GetSourceFilterList', { sourceName: to }), '检查预备画面滤镜')).filters);
       for (const filter of previous) if (!filters.some(item => item.filterName === filter.filterName && item.filterKind === filter.filterKind)) {
@@ -207,6 +242,9 @@ export class ObsMediaScenes {
         }
         sceneItemId = item.sceneItemId;
       } else {
+        // Created anew: the creation look is the material's own look now, whatever was kept for it before (E16).
+        await this.ownLooks.drop(sourceName);
+        this.looks.delete(sourceName); this.looks.delete(`${sourceName}${STANDBY_SUFFIX}`);
         await this.request(() => this.client.call('CreateScene', { sceneName }), 'CreateScene');
         const created = await this.request(() => this.client.call('CreateInput', {
           sceneName, inputName: sourceName, inputKind: kind, sceneItemEnabled: true,
@@ -323,12 +361,15 @@ export class ObsMediaScenes {
       // How far from the music a decoder this start leaves running may be
       // afterwards: the drift check's tolerance for one on air for this clip already.
       let inStepMs = 100;
+      // Why the clip's look could not be worked out: it is shown as OBS has it all the same, and told after (E16).
+      let lookProblem: string | null = null;
       if (event.phase === 'start') {
         // A primed decoder has the clip's look already. An image, a decoder started unprimed and one on air for the
         // clip this one continues get it in the batch that shows them, ahead of the show (E16).
         const look = await this.lookFor(event.sourceName, event.transform);
         let lookSent = false;
-        if (look.requests.length) this.looks.set(event.sourceName, UNKNOWN_LOOK);
+        lookProblem = look.problem ?? null;
+        if (look.requests.length) this.looks.delete(event.sourceName);
         const wasActive = this.active.has(event.sourceName);
         // On air for this clip already (it plays on from the clip this one continues
         // in the file, or the clip comes back from under a camera): in step within
@@ -433,6 +474,8 @@ export class ObsMediaScenes {
           throw typeof status.mediaCursor === 'number' ? new MediaOutOfStepError(message) : new MediaOnAirError(message);
         }
       }
+      // On air all the same, with the look OBS has (E16).
+      if (lookProblem !== null) throw new MediaOnAirError(lookFailure(event, lookProblem));
     });
   }
 
@@ -535,8 +578,10 @@ export class ObsMediaScenes {
       const target = this.prepared.get(event.sourceName);
       if (event.phase !== 'start' || !target || target.path !== path || target.sceneName !== event.sceneName) throw new Error('要定位的素材还没准备好，或和工程对不上');
       const others = event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName);
+      // A look that could not be worked out is left out here and the clip shown as OBS has it; the session book stays
+      // unknown, so the decoder's next start tries again (a located clip's failure here would read as not located).
       const look = await this.lookFor(event.sourceName, event.transform);
-      if (look.requests.length) this.looks.set(event.sourceName, UNKNOWN_LOOK);
+      if (look.requests.length) this.looks.delete(event.sourceName);
       // A clip started from the middle (or rebuilt after a reconnect) is this
       // decoder's clip once it is shown, also when locating it fails below: the
       // drift check reaches it once it plays, and a later switch mutes it.
@@ -621,40 +666,47 @@ export class ObsMediaScenes {
     });
   }
 
-  /** What `decoder` needs for a clip's look (E16, the mapping in core `media-obs-transform.ts`): the project's look
-   * when the clip has one; otherwise OBS's own look, which needs nothing unless a clip of ours changed it before. The
-   * material's own look is read once before the first write of ours, so it can be put back. Only material decoders of
-   * ours are written; audio has no picture. */
+  /** What `decoder` needs for a clip's look (E16, the mapping in core `media-obs-transform.ts`), from the project and
+   * what is kept on this machine only, never from what this session did before:
+   * - a clip with a look: the project's look, unless the session knows the decoder has it. Before the console's first
+   *   ever write to the material, its own look is read and kept on this machine (on disk before the write goes out);
+   * - a clip without one: nothing when nothing is kept for the material (OBS's look as it is, as in 0.5.8); otherwise
+   *   the kept own look, unless the session knows the decoder has it.
+   * Only material decoders of ours are written; audio has no picture. A look that cannot be worked out (reading the
+   * own look, keeping it, reading the canvas size) sends nothing and says why: the clip is still shown. */
   private async lookFor(decoder: string, transform: ManagedMediaEvent['transform']): Promise<Look> {
     const target = this.prepared.get(decoder);
     if (!target || target.kind === 'audio') return KEEP_LOOK;
     const current = this.looks.get(decoder), item = { sceneName: target.sceneName, sceneItemId: target.sceneItemId };
-    if (!transform) {
-      if (current === undefined) return KEEP_LOOK;
-      const own = this.obsLooks.get(primaryDecoder(decoder));
-      if (!own) throw new Error('不知道这个素材在 OBS 里原来的样子，没法换回去');
-      return { requests: [{ requestType: 'SetSceneItemTransform', requestData: { ...item, sceneItemTransform: own } }], after: null };
+    const edits = this.liveEdits.get(decoder) ?? 0, key = primaryDecoder(decoder);
+    const set = (sceneItemTransform: Record<string, JsonValue>): Requests => [{ requestType: 'SetSceneItemTransform', requestData: { ...item, sceneItemTransform } }];
+    try {
+      const own = await this.ownLooks.read(key);
+      if (!transform) return !own || current === OWN_LOOK ? KEEP_LOOK : { requests: set(own), after: OWN_LOOK, edits };
+      const look = obsMaterialPresentation(transform, await this.canvasSize()).sceneItemTransform, after = JSON.stringify(look);
+      if (current === after) return KEEP_LOOK;
+      if (!own) {
+        const read = await this.request(() => this.client.call('GetSceneItemTransform', item), '读取素材在 OBS 里原来的样子');
+        await this.ownLooks.keep(key, ownLookOf(read.sceneItemTransform));
+      }
+      return { requests: set(look), after, edits };
+    } catch (error) {
+      return { requests: [], after: null, edits, problem: failureReason(error) };
     }
-    const look = obsMaterialPresentation(transform, await this.canvasSize()).sceneItemTransform, after = JSON.stringify(look);
-    if (current === after) return KEEP_LOOK;
-    if (current === undefined && !this.obsLooks.has(primaryDecoder(decoder))) {
-      const own = await this.request(() => this.client.call('GetSceneItemTransform', item), '读取素材在 OBS 里原来的样子');
-      this.obsLooks.set(primaryDecoder(decoder), own.sceneItemTransform as Record<string, JsonValue>);
-    }
-    return { requests: [{ requestType: 'SetSceneItemTransform', requestData: { ...item, sceneItemTransform: look } }], after };
   }
 
   /** Sends a look on its own, for a decoder off air. */
   private async sendLook(decoder: string, look: Look): Promise<void> {
     if (!look.requests.length) return;
-    this.looks.set(decoder, UNKNOWN_LOOK);
+    this.looks.delete(decoder);
     await this.batch(look.requests);
     this.settleLook(decoder, look);
   }
 
-  /** OBS carried the look out: the books say which one the decoder has. */
+  /** OBS carried the look out: the book says which one the decoder has, unless the live canvas moved it since. */
   private settleLook(decoder: string, look: Look): void {
-    if (look.after === null) this.looks.delete(decoder); else this.looks.set(decoder, look.after);
+    if (look.after === null || (this.liveEdits.get(decoder) ?? 0) !== look.edits) this.looks.delete(decoder);
+    else this.looks.set(decoder, look.after);
   }
 
   private async canvasSize(): Promise<{ width: number; height: number }> {

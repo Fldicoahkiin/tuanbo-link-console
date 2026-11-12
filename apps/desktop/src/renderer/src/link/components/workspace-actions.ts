@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import {
   addMediaAssetCommand,
   frameNumberToTimecode,
+  lockedLayerMessage,
   millisecondsToFrameNumber,
   materialSceneNames,
   moveContentCommand,
@@ -337,7 +338,7 @@ function assertLayerUnlocked(input: WorkspaceActionsInput, layerId: string | und
   if (!layerId || !input.item) return;
   const layer = input.item.visualLayers.find((candidate) => candidate.id === layerId);
   if (!layer) throw new Error(`图层不存在：${layerId}`);
-  if (layer.locked) throw new Error(`图层“${layer.name}”已锁定。`);
+  if (layer.locked) throw new Error(lockedLayerMessage(layer));
 }
 
 function requireAsset(input: WorkspaceActionsInput, assetId: string): LinkProject['mediaAssets'][number] {

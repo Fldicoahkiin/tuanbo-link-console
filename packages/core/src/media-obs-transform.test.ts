@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, requiredSchemaVersion, schemaVersion3Reasons, type LinkProject, type ReferenceCanvasTransform, type ReferenceMediaClip } from '@tb/schema';
 import { canvasTransformFromObs, clipLookOnlyInPreview, clipObsTransform, obsMaterialPresentation, stagePlacement } from './media-obs-transform';
-import { clipOfMaterialSource, collectManagedMediaTimeline, materialSceneNames } from './managed-media-timeline';
+import { clipOfMaterialSource, collectManagedMediaTimeline, lockedLayerMessage, materialSceneNames } from './managed-media-timeline';
 import { replaceReferenceMediaClipCommand } from './link-command';
 
 const look: ReferenceCanvasTransform = { x: 0.25, y: 0.75, scale: 0.5, scaleX: 1.5, scaleY: 0.8, rotation: -30 };
@@ -85,6 +85,19 @@ describe('素材在 OBS 里的样子（0.5.9 E16）', () => {
     const single = project(1);
     expect(clipOfMaterialSource(single, 'song', materialSceneNames(single.projectId, single.mediaAssets[0]!).sourceName, null)).toBe('clip-0');
     expect(() => clipOfMaterialSource(value, 'song', '团播联动台·素材·别的·0000000·来源', null)).toThrow('不在当前这首歌里');
+  });
+
+  it('实时画布上的画面是播放头下那一段：先认播放头下的，不在任何一段上时才看选中的；轨道锁着时不让拖，说法和检查面板一样', () => {
+    const value = project(2);
+    const { sourceName } = materialSceneNames(value.projectId, value.mediaAssets[0]!);
+    // clip-0 runs 0–5 s, clip-1 runs 10–15 s.
+    expect(clipOfMaterialSource(value, 'song', sourceName, 'clip-0', 12000)).toBe('clip-1');
+    expect(clipOfMaterialSource(value, 'song', sourceName, 'clip-1', 1000)).toBe('clip-0');
+    expect(clipOfMaterialSource(value, 'song', sourceName, 'clip-1', 7000)).toBe('clip-1');
+    expect(() => clipOfMaterialSource(value, 'song', sourceName, null, 7000)).toThrow('先在时间线上选中要改的那一段');
+    const locked = { ...value, rundown: value.rundown.map(item => ({ ...item, visualLayers: item.visualLayers.map(layer => ({ ...layer, locked: true })) })) };
+    expect(() => clipOfMaterialSource(locked, 'song', sourceName, null, 12000)).toThrow(lockedLayerMessage({ name: '视频' }));
+    expect(lockedLayerMessage({ name: '视频' })).toBe('图层“视频”已锁定。');
   });
 
   it('实时画布上拖到哪，记下的样子送回 OBS 就在哪', () => {

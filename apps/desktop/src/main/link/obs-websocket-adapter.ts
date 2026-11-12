@@ -4,6 +4,7 @@ import { ObsRequestScheduler } from './obs-request-scheduler';
 import { encodeObsAudioWindow, selectObsAudioWindow } from './obs-audio-window';
 import { ObsSourceManager } from './obs-source-manager';
 import { ObsMediaScenes } from './obs-media-scenes';
+import { MemoryMaterialOwnLooks, type MaterialOwnLooks } from './obs-material-own-looks';
 import type { ObsEditorPreview } from './obs-editor-preview';
 import { mkdir } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
@@ -95,19 +96,22 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     private readonly screenshotsDirectory: string,
     client: OBSWebSocket = new OBSWebSocket(),
     private readonly requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
-    readonly editorPreview?: ObsEditorPreview
+    readonly editorPreview?: ObsEditorPreview,
+    /** Where the console's material decoders keep their own look in OBS (0.5.9 E16): on this machine in the app. */
+    ownLooks: MaterialOwnLooks = new MemoryMaterialOwnLooks()
   ) {
     this.client = client;
     this.requests = new ObsRequestScheduler(requestTimeoutMs, error => {
       this.mediaScenes.clear(); this.editorPreview?.clear();
       this.updateSnapshot({ status: 'error', error: error.message });
     });
-    this.liveEditor = new ObsLiveEditor(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
+    this.liveEditor = new ObsLiveEditor(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation),
+      (sceneName, sceneItemId) => this.mediaScenes.beforeLiveTransform(sceneName, sceneItemId));
     this.beauty = new ObsBeauty(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
     this.sources = new ObsSourceManager(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
     // Material scenes put the song's picture on air: the `program` tier (OBS 请求谁先发).
     // Prepared inside `preparePlaybackMedia` they stay in `background`.
-    this.mediaScenes = new ObsMediaScenes(client, (operation, label) => this.request(operation, label), operation => this.requests.run('program', operation));
+    this.mediaScenes = new ObsMediaScenes(client, (operation, label) => this.request(operation, label), operation => this.requests.run('program', operation), ownLooks);
     this.client.on('CurrentProgramSceneChanged', () => {
       for (const listener of this.programListeners) listener();
     });

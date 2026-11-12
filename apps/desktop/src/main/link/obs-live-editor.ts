@@ -4,7 +4,10 @@ import type { OBSWebSocket } from 'obs-websocket-js';
 
 export class ObsLiveEditor {
   private readonly listeners = new Set<() => void>();
-  constructor(private readonly client: OBSWebSocket, private readonly request: <T>(operation: () => Promise<T>, label: string) => Promise<T>, private readonly run: ObsOperationRunner) {
+  /** `beforeTransform`: asked before a transform is written to a scene item (the console's own material decoders keep
+   * their own look first, 0.5.9 E16); a failure refuses the write. */
+  constructor(private readonly client: OBSWebSocket, private readonly request: <T>(operation: () => Promise<T>, label: string) => Promise<T>, private readonly run: ObsOperationRunner,
+    private readonly beforeTransform: (sceneName: string, sceneItemId: number) => Promise<void> = () => Promise.resolve()) {
     for (const event of ['CurrentProgramSceneChanged', 'SceneItemTransformChanged', 'SceneItemEnableStateChanged', 'SceneItemLockStateChanged', 'SceneItemListReindexed', 'SceneItemCreated', 'SceneItemRemoved', 'InputNameChanged'] as const) {
       client.on(event, () => { for (const listener of this.listeners) listener(); });
     }
@@ -29,6 +32,7 @@ export class ObsLiveEditor {
       if (locked.sceneItemLocked && (edit.transform || edit.enabled !== undefined)) throw new Error('这个 OBS 来源已锁定，请先在 OBS 里解锁');
       const transform: Record<string, number> = {};
       for (const [key, value] of Object.entries(edit.transform ?? {})) if (value !== undefined) transform[key] = value;
+      if (edit.transform) await this.beforeTransform(edit.sceneName, edit.sceneItemId);
       if (edit.transform) await this.request(() => this.client.call('SetSceneItemTransform', { ...target, sceneItemTransform: transform }), '同步 OBS 来源变换');
       const { locked: lockValue, enabled } = edit;
       if (lockValue !== undefined) await this.request(() => this.client.call('SetSceneItemLocked', { ...target, sceneItemLocked: lockValue }), '同步 OBS 来源锁定');

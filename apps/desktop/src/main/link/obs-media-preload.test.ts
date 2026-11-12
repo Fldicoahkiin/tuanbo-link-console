@@ -5,6 +5,8 @@ import { MediaPreparationFailed, ObsProgramSession, SceneOutputTimeline, materia
 import { ObsMediaPreload, ObsPreparationNotNeeded } from './obs-media-preload';
 import { MediaOutOfStepError, ObsMediaScenes } from './obs-media-scenes';
 import { pictureDriftCheck, pictureExecutor, pictureUpcoming } from './native-obs-outputs';
+import { MemoryMaterialOwnLooks, type MaterialOwnLooks } from './obs-material-own-looks';
+import { ObsLiveEditor } from './obs-live-editor';
 
 function mockScenes() {
   return { prepareStandby: vi.fn<ObsMediaScenes['prepareStandby']>(name => Promise.resolve(`${name}·预备`)),
@@ -55,6 +57,9 @@ type FakeInput = { scene: string; item: number; state: string; base: number; sin
 type LookWrite = { sceneName: string; input: string; look: Record<string, unknown>; onAir: boolean };
 type OnAir = { decoder: string | null; state: string; cursor: number };
 type Batch = Array<{ requestType: string; requestData?: Record<string, unknown> }>;
+/** What OBS reports for a scene item nothing set: every settable field, as GetSceneItemTransform answers. */
+const itemDefaults = { positionX: 0, positionY: 0, rotation: 0, scaleX: 1, scaleY: 1, alignment: 5, boundsType: 'OBS_BOUNDS_NONE', boundsAlignment: 0,
+  boundsWidth: 0, boundsHeight: 0, cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0 };
 /** OBS keeping each input's own state, as on the field machine: which decoder the
  * audience sees on program, whether it plays and where. A paused cursor stays put;
  * a playing one runs with the clock. `sent` lists the writes OBS carried out. */
@@ -93,7 +98,9 @@ function fakeObs() {
       case 'GetVideoSettings': return { baseWidth: 1080, baseHeight: 1920 };
       case 'GetInputSettings': return { inputKind: 'ffmpeg_source', inputSettings: { local_file: path, hw_decode: true, restart_on_activate: false, close_when_inactive: false, looping: false } };
       case 'GetSceneItemList': return { sceneItems: [...inputs].filter(([, entry]) => entry.scene === data.sceneName).map(([sourceName, entry]) => ({ sourceName, sceneItemId: entry.item })) };
-      case 'GetSceneItemTransform': return { sceneItemTransform: { sourceWidth: 1080, sourceHeight: 1920, ...itemOf(data)?.[1].look } };
+      case 'GetSceneItemTransform': return { sceneItemTransform: { ...itemDefaults, sourceWidth: 1080, sourceHeight: 1920, ...itemOf(data)?.[1].look } };
+      case 'GetCurrentProgramScene': return { sceneName: program };
+      case 'GetSceneItemLocked': return { sceneItemLocked: false };
       case 'GetSourceFilterList': return { filters: [] };
       case 'GetSourceScreenshot': return { imageData: 'data:image/png;base64,x' };
       case 'SetSceneItemTransform': {
@@ -150,6 +157,8 @@ function fakeObs() {
     if (!previous || previous.input !== now.input || previous.look !== now.look) seenLooks.push(now);
   };
   const client = {
+    /** OBS's events: the fake sends none. */
+    on: (): void => undefined,
     call: (type: string, data: Record<string, unknown> = {}) => {
       try { const result = handle(type, data); look(); return Promise.resolve(result); }
       catch (error) { return Promise.reject(error instanceof Error ? error : new Error(String(error))); }
@@ -272,8 +281,9 @@ function recorder(clock: () => number = () => 0) {
  * actions go through the executor, the drift check and the lookahead of
  * native-obs-outputs.ts, to an adapter that switches scenes and sends media actions
  * as the real one does; `answer` then answers the other actions. */
-async function live(project: LinkProject, obs: FakeObs, answer: (action: LinkAction) => Promise<void> = () => Promise.resolve(), following = true, wiring: 'test' | 'production' = 'test') {
-  const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation());
+async function live(project: LinkProject, obs: FakeObs, answer: (action: LinkAction) => Promise<void> = () => Promise.resolve(), following = true, wiring: 'test' | 'production' = 'test',
+  ownLooks: MaterialOwnLooks = new MemoryMaterialOwnLooks()) {
+  const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation(), ownLooks);
   const preload = new ObsMediaPreload(project, 'song', scenes, obs.native);
   const file = (relativePath: string): string => `C:/shows/${relativePath}`;
   for (const asset of project.mediaAssets) {
@@ -2025,4 +2035,134 @@ it('E16 规则：图片片段的样子和显示同一批发给 OBS，排在显�
   expect(obs.lookWrites.filter(write => write.input === logo).at(-1)).toMatchObject({ look: inObs(leftLook), onAir: false });
   expect(obs.lookWrites.every(ownMaterial)).toBe(true);
   await t.session.stop();
+});
+
+/* The material's own look is kept on this machine (obs-material-own-looks.ts), so what a clip that is not set shows
+ * never depends on what earlier runs did. The fake OBS keeps its scene items across ObsMediaScenes instances, as the
+ * scene collection does across restarts of the app. */
+
+/** The same project with no clip's look sent to OBS (an older song, or 「用 OBS 里的样子」): the same material scenes. */
+function withoutLooks(project: LinkProject): LinkProject {
+  const item = project.rundown[0]!;
+  return parseLinkProject({ ...project, schemaVersion: 1, rundown: [{ ...item, referenceMediaClips: item.referenceMediaClips.map(clip => {
+    const unset = { ...clip }; delete unset.obsTransform; return unset;
+  }) }] });
+}
+/** How OBS has a material scene item the console created and never placed: the material's own look. */
+const ownLook = { ...itemDefaults, ...createdLook };
+const primaryOf = (project: LinkProject): string => new SceneOutputTimeline(project, 'song').preloadEntries()[0]!.sourceName;
+
+it('E16 规则：素材原来的样子记在这台电脑上：上一次运行里有一段送过样子，重开软件以后没设的那一段照样是 OBS 原来的样子；那首歌再播一遍也不会把它的样子当成原来的', async () => {
+  const placed = withLooks(song([[0, 12000, 100]]), { 'clip-0': leftLook }), unset = withoutLooks(placed), obs = fakeObs(), store = new MemoryMaterialOwnLooks();
+  const primary = primaryOf(placed);
+  const first = await live(placed, obs, undefined, true, 'test', store);
+  await first.play(0, 1000, true); await first.session.stop();
+  expect(obs.decoder(primary).look).toMatchObject(inObs(leftLook));
+  expect(store.looks.get(primary)).toMatchObject(ownLook);
+  // The app restarts: a new session book, the same OBS and the same machine.
+  const second = await live(unset, obs, undefined, true, 'test', store);
+  expect(obs.decoder(primary).look).toMatchObject(ownLook);
+  await second.play(0, 1000, true);
+  expect(second.reports).toContain('clip-0 start succeeded');
+  expect(JSON.parse(obs.seenLooks.filter(view => view.input === primary).at(-1)!.look)).toMatchObject(ownLook);
+  await second.session.stop();
+  // Song 1 plays again, then the unset song: the own look kept the first time comes back, not song 1's.
+  const third = await live(placed, obs, undefined, true, 'test', store);
+  await third.play(0, 1000, true); await third.session.stop();
+  expect(store.looks.get(primary)).toMatchObject(ownLook);
+  await live(unset, obs, undefined, true, 'test', store);
+  expect(obs.decoder(primary).look).toMatchObject(ownLook);
+  expect(obs.lookWrites.every(write => !write.onAir && ownMaterial(write))).toBe(true);
+});
+
+it('E16 规则：OBS 断开重连（clear）只忘掉这次运行记着的，不忘本机记下的原来的样子；软件在送过样子的片段播着时崩了，重开后没设的片段先播也是原来的样子', async () => {
+  const placed = withLooks(song([[0, 12000, 100]]), { 'clip-0': leftLook }), unset = withoutLooks(placed), store = new MemoryMaterialOwnLooks();
+  const primary = primaryOf(placed);
+  // Reconnect: the same ObsMediaScenes, cleared.
+  const obs = fakeObs(), first = await live(placed, obs, undefined, true, 'test', store);
+  await first.play(0, 1000, true); await first.session.stop();
+  first.scenes.clear();
+  const preload = new ObsMediaPreload(unset, 'song', first.scenes, obs.native);
+  await first.scenes.prepare(unset.projectId, unset.mediaAssets[0]!, path);
+  preload.register(unset.projectId, unset.mediaAssets[0]!, path);
+  await preload.prime(new SceneOutputTimeline(unset, 'song').at(0).media[0]!, current);
+  expect(obs.decoder(primary).look).toMatchObject(ownLook);
+  // Crash: the clip with a look is on air when the app goes; a new app plays the unset clip first.
+  const crashed = fakeObs(), running = await live(placed, crashed, undefined, true, 'test', store);
+  await running.play(0, 1000, true);
+  expect(crashed.decoder(primary).look).toMatchObject(inObs(leftLook));
+  const after = await live(unset, crashed, undefined, true, 'test', store);
+  expect(crashed.decoder(primary).look).toMatchObject(ownLook);
+  await after.play(0, 1000, true);
+  expect(JSON.parse(crashed.seenLooks.at(-1)!.look)).toMatchObject(ownLook);
+});
+
+it('E16 规则：本机没记过原来样子的素材（联动台从没改过它）：没设的片段一个 SetSceneItemTransform 都不发，什么也不记', async () => {
+  const project = song([[0, 12000, 100], [12, 12000, 12100]]), obs = fakeObs(), store = new MemoryMaterialOwnLooks();
+  await (await live(project, obs, undefined, true, 'test', store)).session.stop();
+  obs.lookWrites.length = 0;
+  const t = await live(project, obs, undefined, true, 'test', store);
+  await t.play(0, 13000, true);
+  expect(t.reports).toEqual(expect.arrayContaining(['clip-0 start succeeded', 'clip-1 start succeeded']));
+  // Only the standby decoder gets the primary's look copied as before 0.5.9; the material's decoder is never written.
+  expect(obs.lookWrites.filter(write => write.input === primaryOf(project))).toEqual([]);
+  for (const write of obs.lookWrites) expect(write).toMatchObject({ input: `${primaryOf(project)}·预备`, look: createdLook, onAir: false });
+  expect(store.looks.size).toBe(0);
+  await t.session.stop();
+});
+
+it('E16 规则：素材场景是新建出来的：本机以前记下的原来的样子作废，新建时的样子就是它原来的样子', async () => {
+  const project = song([[0, 12000, 100], [12, 12000, 12100]]), obs = fakeObs(), store = new MemoryMaterialOwnLooks(), primary = primaryOf(project);
+  store.looks.set(primary, { ...itemDefaults, positionX: 1, positionY: 2 });
+  const t = await live(project, obs, undefined, true, 'test', store);
+  expect(store.looks.has(primary)).toBe(false);
+  await t.play(0, 13000, true);
+  for (const write of obs.lookWrites) expect(write.look).toMatchObject(createdLook);
+  await t.session.stop();
+});
+
+it('E16 规则：原来的样子没能记到本机：不写联动台的样子（没留住原样的场景项不改），片段照常显示，这一段标红写明怎么回事', async () => {
+  class FullDisk extends MemoryMaterialOwnLooks { override keep(): Promise<void> { return Promise.reject(new Error('磁盘满了')); } }
+  const project = withLooks(song([[0, 12000, 100]]), { 'clip-0': leftLook }), obs = fakeObs(), primary = primaryOf(project);
+  const t = await live(project, obs, undefined, true, 'test', new FullDisk());
+  await t.play(0, 1000, true);
+  expect(obs.lookWrites.some(write => write.look.boundsType === 'OBS_BOUNDS_NONE')).toBe(false);
+  expect(obs.decoder(primary).look).toMatchObject(createdLook);
+  expect(obs.view().decoder).toBe('主');
+  expect(t.reports).toContain('clip-0 start failed：素材“视频”照常在播，但没有按工程里的位置和大小摆，用的是 OBS 里现在的样子。原因：磁盘满了。下一段用到这个素材时会再按工程摆；一直这样，请重新连接 OBS，或把运行日志发给我们');
+  await t.session.stop();
+});
+
+it('E16 规则：实时画布上拖联动台的素材：第一次写变换之前先把原来的样子记到本机（这次运行没准备过它也认得出来）；之后没设的片段还是原来的样子', async () => {
+  const project = song([[0, 12000, 100]]), obs = fakeObs(), store = new MemoryMaterialOwnLooks(), primary = primaryOf(project);
+  const t = await live(project, obs, undefined, true, 'test', store);
+  await t.play(0, 1000, true);
+  const { scene: sceneName, item: sceneItemId } = obs.decoder(primary);
+  expect(obs.program()).toBe(sceneName);
+  const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation(), store);
+  const editor = new ObsLiveEditor(obs.client, obs.request, operation => operation(), (scene, item) => scenes.beforeLiveTransform(scene, item));
+  await editor.edit({ sceneName, sceneItemId, transform: { positionX: 100, positionY: 200 } });
+  await editor.edit({ sceneName, sceneItemId, transform: { positionX: 120, positionY: 200 } });
+  expect(store.looks.get(primary)).toMatchObject(ownLook);
+  expect(obs.decoder(primary).look).toMatchObject({ positionX: 120, positionY: 200 });
+  // Not one of ours: nothing is read or kept.
+  await scenes.beforeLiveTransform('机位1', 1);
+  expect(store.looks.size).toBe(1);
+  await t.session.stop();
+  await live(project, obs, undefined, true, 'test', store);
+  expect(obs.decoder(primary).look).toMatchObject(ownLook);
+});
+
+it('E16 规则：复制到预备解码器的是素材原来的样子：本机记着就用记着的，没记过就用主解码器现在的样子（联动台没改过它）', async () => {
+  const project = song([[0, 12000, 100]]), obs = fakeObs(), store = new MemoryMaterialOwnLooks();
+  const scenes = new ObsMediaScenes(obs.client, obs.request, operation => operation(), store);
+  await scenes.prepare(project.projectId, project.mediaAssets[0]!, path);
+  const { sceneName, sourceName: primary } = materialSceneNames(project.projectId, project.mediaAssets[0]!), sceneItemId = obs.decoder(primary).item;
+  await obs.client.call('SetSceneItemTransform', { sceneName, sceneItemId, sceneItemTransform: { positionX: 300 } });
+  const standby = await scenes.prepareStandby(primary);
+  expect(obs.decoder(standby).look).toMatchObject({ ...createdLook, positionX: 300 });
+  store.looks.set(primary, ownLook);
+  await obs.client.call('SetSceneItemTransform', { sceneName, sceneItemId, sceneItemTransform: { positionX: 700, boundsType: 'OBS_BOUNDS_NONE' } });
+  await scenes.copyPresentation(primary, standby);
+  expect(obs.decoder(standby).look).toMatchObject(ownLook);
 });

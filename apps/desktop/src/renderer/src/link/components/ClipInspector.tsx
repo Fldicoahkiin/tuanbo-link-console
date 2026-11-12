@@ -43,13 +43,13 @@ export function ClipInspector(props: {
           <Button variant="secondary" size="sm" icon={MonitorUp} onClick={props.onSendLookToObs}>送到 OBS</Button>
           <Button variant="ghost" size="sm" icon={Undo2} onClick={props.onUseObsLook}>用 OBS 里的样子</Button>
         </>}>
-        以前在这里调的位置和大小没有送到 OBS。要让正式画面也这样摆，点「送到 OBS」；想保持 OBS 里现在的样子，点「用 OBS 里的样子」。
+        以前在这里调的位置和大小没有送到 OBS。要让正式画面也这样摆，点「送到 OBS」；想让正式画面照 OBS 里原来的样子摆，点「用 OBS 里的样子」。
       </Notice> : null}
       <div className="layout-preset-row">
         <Button variant="secondary" size="sm" icon={RotateCcw} onClick={() => props.onTransform(originalMediaCanvasTransform())}>原始大小</Button>
         <Button variant="secondary" size="sm" icon={Crosshair} onClick={() => props.onTransform(centerMediaCanvasTransform(transform))}>画布居中</Button>
         <Button variant="secondary" size="sm" icon={Maximize} onClick={() => props.onTransform(fitMediaCanvasTransform(sourceWidth, sourceHeight))}>适应画布</Button>
-        {props.clip.obsTransform === 'project' ? <Button variant="secondary" size="sm" icon={Undo2} onClick={props.onUseObsLook}>用 OBS 里的样子</Button> : null}
+        {props.clip.obsTransform === 'project' ? <Button variant="secondary" size="sm" icon={Undo2} title="这一段换回联动台第一次摆这个素材之前，它在 OBS 里的样子" onClick={props.onUseObsLook}>用 OBS 里的样子</Button> : null}
       </div>
       <div className="visual-layout-grid">
         <LayoutNumber label="位置 X" unit="px" value={transform.x * REFERENCE_CANVAS_WIDTH} onCommit={(value) => patch({ x: clamp(value / REFERENCE_CANVAS_WIDTH, -1, 2) })} />

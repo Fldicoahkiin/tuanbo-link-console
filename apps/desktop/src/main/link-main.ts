@@ -154,6 +154,7 @@ import { musicAnalysisRequestSchema, musicAnalysisControlSchema } from '@tb/sche
 import { audioAnalysisRequestSchema, audioRenderRequestSchema } from '@tb/schema';
 import { ObsWebSocketAdapter } from './link/obs-websocket-adapter';
 import { ObsEditorPreview, findLocalObsPid } from './link/obs-editor-preview';
+import { FileMaterialOwnLooks } from './link/obs-material-own-looks';
 import { P1ProjectService } from './link/p1-project-service';
 import { LinkRunLogger, redactValue, type LinkLogEntry, type LinkLogFilter } from './link/run-logger';
 import { closedProgramFaultReporter, mainProcessErrorReporter, programLightsQuitPrompt, reportMainProcessErrors } from './link/main-process-errors';
@@ -343,7 +344,8 @@ async function bootstrap(): Promise<void> {
   Menu.setApplicationMenu(null);
   const profileStore = new SecureProfileStore(app.getPath('userData'), safeStorage);
   const obs = new ObsWebSocketAdapter(join(app.getPath('documents'), '团播联动台', 'screenshots'), undefined, undefined,
-    new ObsEditorPreview(join(app.getPath('documents'), '团播联动台', 'OBS预览')));
+    new ObsEditorPreview(join(app.getPath('documents'), '团播联动台', 'OBS预览')),
+    new FileMaterialOwnLooks(join(app.getPath('userData'), 'link-integrations', 'obs-material-own-looks.json')));
   const processManager = new ExternalProcessManager(new WindowsProcessTools(identityHelper), obs);
   const integrationDetector = new WindowsIntegrationDetector();
   const logger = new LinkRunLogger(join(app.getPath('userData'), 'link-logs'), () => [...knownSecrets]);
