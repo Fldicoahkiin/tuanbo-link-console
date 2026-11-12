@@ -191,3 +191,24 @@ describe('时间线右键复制机位', () => {
     expect(notify).toHaveBeenCalledWith('轨道“画面”已锁定，先解锁再放', 'error');
   });
 });
+
+describe('镜像、转 90°、裁剪和不透明度（0.5.9 E17）', () => {
+  it('拖一次不透明度滑块是一步撤销，改了就送到 OBS；锁着的轨道不让改', () => {
+    const { actions } = fixture(false, false, true);
+    const before = useDocumentStore.getState().project!.rundown[0]!.referenceMediaClips[0]!;
+    actions.transformClip('clip', { ...before.canvasTransform, opacity: 0.5 }, 'drag-1');
+    actions.transformClip('clip', { ...before.canvasTransform, opacity: 0.3 }, 'drag-1');
+    expect(useDocumentStore.getState().project!.rundown[0]!.referenceMediaClips[0]).toMatchObject({ obsTransform: 'project', canvasTransform: { opacity: 0.3 } });
+    useDocumentStore.getState().undo();
+    expect(useDocumentStore.getState().project!.rundown[0]!.referenceMediaClips[0]).toEqual(before);
+    actions.transformClip('clip', { ...before.canvasTransform, flipX: true });
+    actions.transformClip('clip', { ...before.canvasTransform, flipX: true, flipY: true });
+    useDocumentStore.getState().undo();
+    expect(useDocumentStore.getState().project!.rundown[0]!.referenceMediaClips[0]!.canvasTransform).toEqual({ ...before.canvasTransform, flipX: true });
+    const locked = fixture(true, false, true);
+    const kept = useDocumentStore.getState().project;
+    locked.actions.transformClip('clip', { ...before.canvasTransform, opacity: 0.5 }, 'drag-2');
+    expect(useDocumentStore.getState().project).toEqual(kept);
+    expect(locked.notify).toHaveBeenCalledWith(expect.stringContaining('已锁定'), 'error');
+  });
+});

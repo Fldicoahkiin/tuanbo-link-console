@@ -13,6 +13,7 @@ import { StageMediaContextMenu } from './StageMediaContextMenu';
 import { usePreviewMediaLifecycle } from './usePreviewMediaLifecycle';
 import { useCapturedDrag } from './useCapturedDrag';
 import { usePlayheadEffect, usePlayheadValue, type EditorPlayhead } from './editor-playhead';
+import './stage-media-look.css';
 
 type Props = {
   /** The clips the output shows; the camera, if any, lies beneath them. */
@@ -71,8 +72,12 @@ export function ReferenceStage(props: Props): JSX.Element {
       draggedClip.current = null;
       const clipId = dragged?.sourceName === item.sourceName ? dragged.clipId : null;
       if (!clipId) return;
-      latest.current.onTransformClip(clipId, canvasTransformFromObs(obsItemPicture(transform),
-        { width: transform.sourceWidth, height: transform.sourceHeight }, { width: scene.width, height: scene.height }));
+      // The mirror and crop come back from the scene item (E17); the opacity is not in it and stays the clip's.
+      const placed = canvasTransformFromObs({ ...obsItemPicture(transform), flipX: transform.scaleX < 0, flipY: transform.scaleY < 0,
+        cropPixels: { top: transform.cropTop, right: transform.cropRight, bottom: transform.cropBottom, left: transform.cropLeft } },
+        { width: transform.sourceWidth, height: transform.sourceHeight }, { width: scene.width, height: scene.height });
+      const opacity = latest.current.timelineState?.clips.find(entry => entry.clip.id === clipId)?.clip.canvasTransform.opacity;
+      latest.current.onTransformClip(clipId, opacity === undefined ? placed : { ...placed, opacity });
     }
   }), []);
   // Clips starting within 2 s are loaded ahead; the stage draws again only when that list changes.
@@ -322,7 +327,9 @@ function MediaCanvasLayer(props: {
     setPreview(current.origin);
     props.onSnapGuides({ x: null, y: null });
   };
-  // Drawn from the transform OBS gets (core media-obs-transform.ts), so the preview is what goes on air (E16).
+  // Drawn from what OBS gets (core media-obs-transform.ts), so the preview is what goes on air (E16): the box is the
+  // picture left after the crop, rotated; inside it the picture is mirrored and faded, and the source is shifted by the
+  // crop, as OBS does it (E17).
   const placement = stagePlacement(preview, { width: props.asset.width ?? props.canvasWidth, height: props.asset.height ?? props.canvasHeight },
     { width: props.canvasWidth, height: props.canvasHeight });
   const style: CSSProperties = {
@@ -335,8 +342,18 @@ function MediaCanvasLayer(props: {
     top: `${placement.top * 100}%`,
     transform: `translate(-50%, -50%) rotate(${placement.rotation}deg)`
   };
+  const { crop } = placement, shownWidth = 1 - crop.left - crop.right, shownHeight = 1 - crop.top - crop.bottom;
+  const pictureStyle: CSSProperties = {
+    opacity: placement.opacity,
+    transform: placement.flipX || placement.flipY ? `scale(${placement.flipX ? -1 : 1}, ${placement.flipY ? -1 : 1})` : undefined
+  };
+  const sourceStyle: CSSProperties = {
+    left: `${-crop.left / shownWidth * 100}%`, top: `${-crop.top / shownHeight * 100}%`,
+    width: `${100 / shownWidth}%`, height: `${100 / shownHeight}%`
+  };
   return <button className={`stage-media-layer ${props.selected ? 'is-selected' : ''} ${props.locked ? 'is-locked' : ''}`} style={style} onContextMenu={props.onContextMenu} onPointerDown={(event) => beginGesture(event, 'move')} onPointerMove={moveGesture} onPointerUp={endGesture} onPointerCancel={cancelGesture}>
-    {url && props.asset.kind === 'video' ? <video
+    {url && props.asset.kind !== 'audio' ? <span className="stage-media-picture" style={pictureStyle}><span className="stage-media-source" style={sourceStyle}>
+    {props.asset.kind === 'video' ? <video
       ref={videoRef}
       muted={props.muted}
       playsInline
@@ -347,8 +364,8 @@ function MediaCanvasLayer(props: {
         if (playing && !props.hidden) void event.currentTarget.play().catch((error: unknown) => onPlaybackError(toMessage(error)));
       }}
       onError={() => props.onPlaybackError(`视频无法解码：${props.asset.name}`)}
-    /> : null}
-    {url && props.asset.kind === 'image' ? <img src={url} alt={props.asset.name} /> : null}
+    /> : <img src={url} alt={props.asset.name} />}
+    </span></span> : null}
     {url && props.asset.kind === 'audio' ? <div className="stage-audio-layer"><Volume2 /><strong>{props.asset.name}</strong></div> : null}
     {!url ? <span className="preview-loading">正在准备可编辑预览：{props.asset.name}…</span> : null}
     <span className="stage-layer-name">{props.asset.name}</span>

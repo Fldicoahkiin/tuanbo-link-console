@@ -1,0 +1,9 @@
+/*
+ * A material's picture on the editor stage (0.5.9 E17): the layer is the picture left after the crop; inside it the
+ * picture is mirrored and faded, and the whole source is shifted so only the uncropped part shows. The numbers come
+ * from core `stagePlacement`, set inline; this file only lays the two boxes out.
+ */
+@layer pages {
+  .stage-media-layer > .stage-media-picture { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .stage-media-picture > .stage-media-source { position: absolute; display: block; }
+}

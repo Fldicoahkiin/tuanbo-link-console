@@ -21,14 +21,15 @@ export function obsItemCenter(t: Transform): Direction {
   const a = anchor(t.alignment), delta = rotate((.5 - a.x) * box.width, (.5 - a.y) * box.height, t.rotation);
   return { x: t.positionX + delta.x, y: t.positionY + delta.y };
 }
-/** Where the picture itself is on the canvas: its centre, its size in pixels and its rotation. A box that scales
- * the picture inside it (OBS_BOUNDS_SCALE_INNER, how material scene items are created) holds a smaller picture,
- * centred in the box. Crop is left out: material crop comes with E17. */
+/** Where the picture itself is on the canvas: its centre, its size in pixels (what is left after the crop) and its
+ * rotation. A box that scales the picture inside it (OBS_BOUNDS_SCALE_INNER, how material scene items are created)
+ * holds a smaller picture, centred in the box. */
 export function obsItemPicture(t: Transform): { centerX: number; centerY: number; width: number; height: number; rotation: number } {
   const center = obsItemCenter(t), box = obsItemBoxSize(t);
-  if (t.boundsType === 'OBS_BOUNDS_SCALE_INNER' && t.sourceWidth > 0 && t.sourceHeight > 0) {
-    const scale = Math.min(Math.abs(box.width) / t.sourceWidth, Math.abs(box.height) / t.sourceHeight);
-    return { centerX: center.x, centerY: center.y, width: t.sourceWidth * scale, height: t.sourceHeight * scale, rotation: t.rotation };
+  const shownWidth = t.sourceWidth - t.cropLeft - t.cropRight, shownHeight = t.sourceHeight - t.cropTop - t.cropBottom;
+  if (t.boundsType === 'OBS_BOUNDS_SCALE_INNER' && shownWidth > 0 && shownHeight > 0) {
+    const scale = Math.min(Math.abs(box.width) / shownWidth, Math.abs(box.height) / shownHeight);
+    return { centerX: center.x, centerY: center.y, width: shownWidth * scale, height: shownHeight * scale, rotation: t.rotation };
   }
   return { centerX: center.x, centerY: center.y, width: Math.abs(box.width), height: Math.abs(box.height), rotation: t.rotation };
 }

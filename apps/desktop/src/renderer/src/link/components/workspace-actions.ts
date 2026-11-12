@@ -179,14 +179,16 @@ function createClipActions(input: WorkspaceActionsInput) {
   };
   const duplicateClip = (clipId: string, startMs: number): void => placeCopy(item => requireClip(item, clipId), startMs, '复制素材片段');
   const pasteClip = (clip: ReferenceMediaClip, startMs: number): void => placeCopy(() => clip, startMs, '粘贴素材片段');
-  const transformClip = (clipId: string, canvasTransform: ReferenceCanvasTransform): void => {
+  /** `group`: one gesture of a slider (the opacity, E17): its steps are undone together. */
+  const transformClip = (clipId: string, canvasTransform: ReferenceCanvasTransform, group?: string): void => {
     if (!input.item) return;
     const item = input.item;
     runMutation(input, () => {
       const clip = requireClip(item, clipId);
       assertClipUnlocked(input, clip);
       // An edit in the editor is the look on air from now on: it goes to OBS when the material is prepared (E16).
-      input.execute(replaceReferenceMediaClipCommand(item.id, { ...clip, canvasTransform, obsTransform: 'project' }));
+      const command = replaceReferenceMediaClipCommand(item.id, { ...clip, canvasTransform, obsTransform: 'project' });
+      input.execute(group === undefined ? command : { ...command, historyGroup: `clip-look:${clipId}:${group}` });
     });
   };
   /** A clip adjusted before 0.5.9 sends that adjustment to OBS from now on. */

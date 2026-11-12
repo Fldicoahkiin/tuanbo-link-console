@@ -8,6 +8,9 @@
   .cue-inspector .visual-layout-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1) var(--space-2); }
   .cue-inspector .layout-number { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; gap: var(--space-1); min-width: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
   .cue-inspector .layout-number > .ui-unit { max-width: 160px; }
+  .cue-inspector .layout-opacity { display: grid; grid-template-columns: 52px minmax(0, 1fr) 40px; align-items: center; gap: var(--space-1); color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
+  .cue-inspector .layout-opacity input { width: 100%; margin: 0; accent-color: var(--color-accent); }
+  .cue-inspector .layout-opacity output { text-align: right; font-family: var(--font-numeric); }
   .cue-inspector .visual-toggle { min-width: 0; font-size: var(--type-caption); }
 
   .cue-inspector .cue-detail-header { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
