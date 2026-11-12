@@ -81,6 +81,7 @@
 - **演出状态**：`apps/desktop/src/main/link/show-state-service.ts` 看得到跟随（等歌、准备、时间码丢了、接管、失败）；主进程里“演出在不在走”只问 `link-main.ts` 的 `showRunning()`，退出、诊断包和问题反馈都用它。
 - **自动选歌**时每首歌不先跑界面的开播前检查：主进程照联动台播放开歌那样准备各路输出，哪一路不行就标红不参加，其余照跟。
 - **断码和继续**（AGENTS.md 第 4 节第 9 条不变）：时间码丢了或异常跳变就冻结，不猜、不补。手动模式在首页点「重新同步」接着跟，过去的动作不补；自动选歌从同一位置继续算同一遍，发过的不重发。开始跟一首歌时，歌的开头到第一个跟上的位置之间的动作发一次，不算晚到、不标红，记一行运行日志；之后照共用的晚到规则。
+- **时间码是什么时候到的**按 MIDI 接口自己记的时刻算。接口的时刻偶尔比联动台自己的钟早零点几毫秒，这时按收到的那一刻算，不会因此让这首歌的动作 MIDI 或画面出错（`apps/desktop/src/main/link/midi-port-broker.ts` 的 `deliver`，只在这一处）。
 - P1 的输入口拔掉以后不自己重新打开（2026-10-24 的恢复只管输出）：正在跑的冻结，由操作员重新开始：停止、插好线，再点「启动并待命」（或一键连接）就重新打开输入口。没在跟歌时换了 P1 的输入口、改了连接设置，再点一次也按新的开始；什么都没变就不重来。正在跟一首歌时改设置不影响这首，停止以后再开始才用新的（`apps/desktop/src/renderer/src/link/runtime/p1-follow-client.ts` 的 `start`）。
 
 守着它的测试：`packages/core/src/p1-follow-rules.test.ts`（规则 ⑦ 到 ⑩，含画面；“只在主进程跟随”和画面的源码扫描）、`packages/core/src/p1-follow-session.test.ts`、`apps/desktop/src/main/link/p1-follow-host.test.ts`、`apps/desktop/src/main/link/p1-picture-output.test.ts`、`apps/desktop/src/main/link/license-rules.test.ts` 里 P1 跟随那一组。

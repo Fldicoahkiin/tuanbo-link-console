@@ -241,6 +241,16 @@ it('主进程占用 P1 时间码输入口：窗口原来的使用先停下，占
   await broker.open('input', 'P1 MTC'); expect(inputs).toHaveLength(3);
 });
 
+it('占用的输入口：接口时间不晚于主进程此刻的照原样给；晚于此刻的（观察不会来自将来）按此刻给', async () => {
+  const { broker, inputs } = setup();
+  const { heard, listener: p1 } = listener();
+  await broker.claimInput('P1 MTC', 'P1 时间码', p1);
+  inputs[0]!.receive({ bytes: [0xf1, 0x10], at100ns: 999n });
+  inputs[0]!.receive({ bytes: [0xf1, 0x20], at100ns: 1_000n });
+  inputs[0]!.receive({ bytes: [0xf1, 0x30], at100ns: 1_003n });
+  expect(heard.message).toEqual([{ bytes: [0xf1, 0x10], at100ns: 999n }, { bytes: [0xf1, 0x20], at100ns: 1_000n }, { bytes: [0xf1, 0x30], at100ns: 1_000n }]);
+});
+
 it('占用的输入口拔掉或驱动进程出错：告诉主进程，不自己重新打开；放手以前窗口照样打不开', async () => {
   vi.useFakeTimers();
   const ports = { midiInputs: [{ id: 0, name: 'P1 MTC' }], midiOutputs: [] };
