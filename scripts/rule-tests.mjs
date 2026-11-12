@@ -35,7 +35,8 @@ export function ruleTestFiles(repository) {
 
 /** 一个规则测试文件里的每一条测试：`{ 标题: 指纹 }`。`it.todo` 什么都不守，不记。 */
 export function ruleTestsIn(path, text) {
-  const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, path.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  // Windows 上检出的文件换行是 CRLF：多行的模板字符串里带着 \r，不先换成 \n 同一条测试在两个系统上指纹不一样。
+  const source = ts.createSourceFile(path, text.replace(/\r\n/g, '\n'), ts.ScriptTarget.Latest, true, path.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
   const declared = new Map();
   const hooks = [];
   const found = [];

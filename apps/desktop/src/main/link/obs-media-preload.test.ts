@@ -369,7 +369,9 @@ async function live(project: LinkProject, obs: FakeObs, answer: (action: LinkAct
     for (let at = from; at <= to; at += 100) {
       now = at; session.clock(at);
       if (settle) await session.settled();
-      await new Promise(resolve => setTimeout(resolve, 0));
+      // After `settled` nothing of this step is left to wait for, so no timer: a Windows timer ticks about every 16 ms,
+      // and the 251 steps of a 25 s song took a test past its 5 s limit there. Without `settle` time has to pass, as before.
+      await new Promise(resolve => { if (settle) setImmediate(resolve); else setTimeout(resolve, 0); });
     }
   };
   /** Under fake timers: the music moves from `from` to `to` ms in 100 ms steps on the

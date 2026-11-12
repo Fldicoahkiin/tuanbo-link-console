@@ -13,6 +13,7 @@
     "release:relay": "node --use-env-proxy scripts/relay-release.mjs",
     "changelog": "node scripts/write-changelog.mjs",
     "rules:record": "node scripts/record-rule-tests.mjs",
+    "test:windows-timers": "vitest run --config vitest.windows-timers.config.ts",
     "test:release": "node --test scripts/release-config.test.mjs apps/desktop/scripts/start-built.test.mjs apps/desktop/scripts/require-release-build.test.mjs scripts/build-assets.test.mjs scripts/github-releases.test.mjs scripts/relay-release.test.mjs scripts/release-notes.test.mjs scripts/wait-for-job.test.mjs tools/obs/beauty/distribution.test.mjs",
     "release:check": "node scripts/verify-release-version.mjs --release",
     "dist:dir": "pnpm --filter @tb/desktop dist:dir",

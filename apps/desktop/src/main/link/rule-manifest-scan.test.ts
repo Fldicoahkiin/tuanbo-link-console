@@ -97,6 +97,16 @@ describe('规则测试只能加，不能悄悄改（2026-11-12）', () => {
     expect(touched(`${SAMPLE}\nit('新的', () => { expect(1).toBe(1); });\n`)).toEqual(['新的']);
   });
 
+  it('同一份测试在 Windows 上检出（换行是 CRLF）指纹不变', () => {
+    // A template literal over several lines carries the line ends in its text.
+    const text = `${SAMPLE}it('多行的字', () => { expect(${'`第一行\n第二行`'}).toContain('第二行'); });\n`;
+    const windows = text.replace(/\n/g, '\r\n');
+    expect(windows).not.toBe(text);
+    expect(Object.keys(ruleTestsIn(FILE, text))).toContain('多行的字');
+    expect(ruleTestsIn(FILE, windows)).toEqual(ruleTestsIn(FILE, text));
+    expect(touched(SAMPLE.replace(/\n/g, '\r\n'))).toEqual([]);
+  });
+
   it('改了、不见了的报出来并写明怎么办；changes 里写明哪天、为什么以后才认新的写法', () => {
     const weakened = { [FILE]: ruleTestsIn(FILE, SAMPLE.replace('toBe(true)', 'toBe(false)').replace("it('别的数', () => { expect(OTHER).toBe(9); });", '')) };
     const difference = compareRuleTests(listed(), weakened);
