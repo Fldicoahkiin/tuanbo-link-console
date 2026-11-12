@@ -4,35 +4,31 @@ import { CueRuntime, isMtcSampleContinuous } from './cue-runtime';
 import { frameNumberToTimecode, type MtcSample } from './mtc-timecode';
 
 describe('CueRuntime', () => {
-  it('后台观察模式不派发或认领执行结果，不能被 P1 或通用 MIDI 绕过断流保护', () => {
+  it('后台观察模式不派发或认领执行结果，不能被通用 MIDI 绕过断流保护', () => {
     const value = { ...project(), playbackSource: 'internal' as const };
     const runtime = new CueRuntime(value); runtime.selectItem('item'); runtime.beginPreflight('live');
-    runtime.arm(0, sample(30, 0), 'awaiting-external-start', 'external');
-    expect(runtime.tick(4000)).toMatchObject({ state: 'armed', dueCues: [], missedCueIds: [] });
+    runtime.arm(sample(30, 0), 'external');
     expect(runtime.ingest(sample(120, 4000))).toMatchObject({ state: 'running', dueCues: [], missedCueIds: [] });
-    expect(runtime.manualGo('cue-1').dueCues).toEqual([]);
     runtime.pauseAutomatic(); expect(runtime.resumeMedia(sample(126, 9000)).state).toBe('running');
-    runtime.stop(); runtime.completeStop(); runtime.beginPreflight('live'); runtime.arm(10000);
-    // Local Cues on the formal audio clock: a quiet observer is not a loss, a jump still freezes.
-    runtime.ingest(sample(0, 10000)); expect(runtime.tick(10501).state).toBe('running');
+    runtime.stop(); runtime.completeStop(); runtime.beginPreflight('live'); runtime.arm();
+    // Local Cues on the formal audio clock: a jump still freezes.
+    runtime.ingest(sample(0, 10000));
     expect(runtime.ingest(sample(300, 10600)).state).toBe('timecodeLost');
-    for (const source of ['p1', 'internal'] as const) {
-      const blocked = project(); blocked.playbackSource = source;
-      if (source === 'internal') blocked.rundown[0]!.cues[0]!.actions = [{ id: 'midi', label: '不可旁路', kind: 'midi.noteOn', portProfileId: 'out', channel: 1, note: 60, velocity: 100 }];
-      const execution = new CueRuntime(blocked); execution.selectItem('item'); execution.beginPreflight('live');
-      expect(execution.arm(0, null, 'awaiting-external-start', 'external').state).toBe('error');
-    }
+    const blocked = project(); blocked.playbackSource = 'internal';
+    blocked.rundown[0]!.cues[0]!.actions = [{ id: 'midi', label: '不可旁路', kind: 'midi.noteOn', portProfileId: 'out', channel: 1, note: 60, velocity: 100 }];
+    const execution = new CueRuntime(blocked); execution.selectItem('item'); execution.beginPreflight('live');
+    expect(execution.arm(null, 'external').state).toBe('error');
   });
-  it('下一 Cue 使用运行索引，手动执行不受最近报告淘汰影响，重新布防重置', () => {
+  it('下一 Cue 使用运行索引，重新布防重置', () => {
     const runtime = new CueRuntime(project());
-    runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm(0);
+    runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm();
     expect(runtime.getNextCueId()).toBe('cue-1');
-    runtime.ingest(sample(0, 0)); runtime.tick(501); runtime.enableManualTakeover();
-    expect(runtime.manualGo('cue-1').dueCues).toHaveLength(1);
+    expect(runtime.ingest(sample(30, 1000)).dueCues).toHaveLength(1);
     expect(runtime.getNextCueId()).toBe('cue-2');
-    expect(runtime.manualGo('cue-2').dueCues).toHaveLength(1);
+    expect(runtime.ingest(sample(45, 1500)).dueCues).toHaveLength(0);
+    expect(runtime.ingest(sample(60, 2000)).dueCues).toHaveLength(1);
     expect(runtime.getNextCueId()).toBeNull();
-    runtime.stop(); runtime.completeStop(); runtime.beginPreflight('live'); runtime.arm(1000);
+    runtime.stop(); runtime.completeStop(); runtime.beginPreflight('live'); runtime.arm();
     expect(runtime.getNextCueId()).toBe('cue-1');
   });
   it('下一 Cue 不显示隐藏层或自动生成的结束动作，保持同帧原顺序', () => {
@@ -48,18 +44,16 @@ describe('CueRuntime', () => {
   });
   it('本机音频准备后重建时钟基准，保留已执行 Cue；观察间隔不当作断流，位置不一致仍拒绝', () => {
     const runtime = new CueRuntime({ ...project(), playbackSource: 'internal' });
-    runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm(0);
+    runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm();
     expect(runtime.ingest(sample(30, 1000)).dueCues.map(due => due.cue.id)).toEqual(['cue-1']);
     expect(runtime.anchorMediaClock(sample(30, 5000)).state).toBe('running');
     expect(runtime.ingest(sample(31, 5034)).dueCues).toEqual([]);
-    expect(runtime.tick(5600).state).toBe('running');
     expect(runtime.anchorMediaClock(sample(20, 5700)).state).toBe('error');
   });
   it('本机音频时钟：界面卡顿超过 500ms 不判定时间码丢失，按当前位置重建，期间越过的点动作现在补发，之后的 Cue 照常执行', () => {
     const runtime = new CueRuntime({ ...project(), playbackSource: 'internal' });
-    runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm(0);
+    runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm();
     runtime.ingest(sample(0, 0)); runtime.ingest(sample(3, 100));
-    expect(runtime.tick(1200).state).toBe('running');
     const gap = runtime.ingest(sample(45, 1500));
     expect(gap).toMatchObject({ state: 'running', missedCueIds: [], rebuild: true });
     expect(gap.dueCues.map(due => [due.cue.id, due.scheduledFrame])).toEqual([['cue-1', 45]]);
@@ -74,7 +68,7 @@ describe('CueRuntime', () => {
     const value = { ...project(), playbackSource: 'internal' as const };
     value.rundown[0]!.cues = [{ id: 'show', name: '显示来源', timecode: frameNumberToTimecode(30, '30'), durationMs: 3_000, enabled: true, notes: '', layerId: 'layer',
       actions: [{ id: 'show-action', label: '显示来源 · 扑克牌', kind: 'obs.setSceneItemEnabled', sceneName: '团播联动台输出', sourceName: '扑克牌', enabled: true }] }];
-    const gap = new CueRuntime(value); gap.selectItem('item'); gap.beginPreflight('live'); gap.arm(0);
+    const gap = new CueRuntime(value); gap.selectItem('item'); gap.beginPreflight('live'); gap.arm();
     gap.ingest(sample(0, 0)); gap.ingest(sample(27, 900));
     const stalled = gap.ingest(sample(48, 1_600));
     expect(stalled).toMatchObject({ state: 'running', missedCueIds: [], rebuild: true, reason: '播放位置更新中断了 700 ms，画面已按当前位置恢复' });
@@ -82,34 +76,28 @@ describe('CueRuntime', () => {
     for (let frame = 51; frame <= 117; frame += 3) expect(gap.ingest(sample(frame, 1_600 + (frame - 48) * 1000 / 30)).dueCues).toEqual([]);
     const hidden = gap.ingest(sample(120, 1_600 + 72_000 / 30));
     expect(hidden.dueCues.map(due => [due.cue.id, due.scheduledFrame])).toEqual([['show:duration-end', 120]]);
-    const brief = new CueRuntime(value); brief.selectItem('item'); brief.beginPreflight('live'); brief.arm(0);
+    const brief = new CueRuntime(value); brief.selectItem('item'); brief.beginPreflight('live'); brief.arm();
     brief.ingest(sample(0, 0)); brief.ingest(sample(27, 900));
     expect(brief.ingest(sample(130, 4_300))).toMatchObject({ dueCues: [], missedCueIds: [], reason: '播放位置更新中断了 3400 ms，画面已按当前位置恢复' });
     expect(brief.ingest(sample(133, 4_400)).dueCues).toEqual([]);
-    const shown = new CueRuntime(value); shown.selectItem('item'); shown.beginPreflight('live'); shown.arm(0);
+    const shown = new CueRuntime(value); shown.selectItem('item'); shown.beginPreflight('live'); shown.arm();
     for (let frame = 0; frame <= 30; frame += 3) shown.ingest(sample(frame, frame * 1000 / 30));
     expect(shown.ingest(sample(130, 4_333)).dueCues.map(due => [due.cue.id, due.scheduledFrame])).toEqual([['show:duration-end', 130]]);
     const current = new CueRuntime(value); current.selectItem('item'); current.beginPreflight('live');
-    expect(current.arm(0, sample(45, 0)).missedCueIds).toEqual(['show']);
+    expect(current.arm(sample(45, 0)).missedCueIds).toEqual(['show']);
     for (let frame = 60; frame <= 120; frame += 15) expect(current.ingest(sample(frame, (frame - 45) * 1000 / 30)).dueCues).toEqual([]);
   });
-  it('本机音频时钟位置与经过时间不符的跳变、外部 MTC 的断流仍冻结自动 Cue', () => {
+  it('本机音频时钟位置与经过时间不符的跳变仍冻结自动 Cue', () => {
     const internal = new CueRuntime({ ...project(), playbackSource: 'internal' });
-    internal.selectItem('item'); internal.beginPreflight('live'); internal.arm(0);
+    internal.selectItem('item'); internal.beginPreflight('live'); internal.arm();
     internal.ingest(sample(0, 0));
     expect(internal.ingest(sample(300, 100)).state).toBe('timecodeLost');
-    const external = new CueRuntime(project());
-    external.selectItem('item'); external.beginPreflight('live'); external.arm(0);
-    external.ingest(sample(0, 0)); external.ingest(sample(3, 100));
-    expect(external.ingest(sample(45, 1500)).state).toBe('timecodeLost');
   });
-  it('本机时钟准备接口不能掩盖位置跳变或用于 P1 模式', () => {
-    for (const source of ['internal', 'p1'] as const) {
-      const runtime = new CueRuntime({ ...project(), playbackSource: source });
-      runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm(0);
-      runtime.ingest(sample(0, 0));
-      expect(runtime.anchorMediaClock(sample(source === 'internal' ? 30 : 0, 2000)).state).toBe('error');
-    }
+  it('本机时钟准备接口不能掩盖位置跳变', () => {
+    const runtime = new CueRuntime({ ...project(), playbackSource: 'internal' });
+    runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm();
+    runtime.ingest(sample(0, 0));
+    expect(runtime.anchorMediaClock(sample(30, 2000)).state).toBe('error');
   });
   it('空闲监听 MTC 时不要求先选节目，也不改变运行状态', () => {
     const runtime = new CueRuntime(project());
@@ -123,15 +111,6 @@ describe('CueRuntime', () => {
     expect(isMtcSampleContinuous(previous, sample(0, 1_067))).toBe(false);
     expect(isMtcSampleContinuous(previous, sample(60, 1_067))).toBe(false);
     expect(isMtcSampleContinuous(previous, sample(32, 1_067, '25'))).toBe(false);
-  });
-
-  it('允许操作员显式暂停和恢复自动联动', () => {
-    const runtime = new CueRuntime(project());
-    runtime.selectItem('item');
-    runtime.beginPreflight('rehearsal');
-    runtime.arm();
-    expect(runtime.pauseAutomatic().state).toBe('paused');
-    expect(runtime.resumeAutomatic().state).toBe('armed');
   });
 
   it('每次布防都会建立新执行会话，停止后第二轮仍可触发同一 Cue', () => {
@@ -151,7 +130,7 @@ describe('CueRuntime', () => {
     const runtime = new CueRuntime(project());
     runtime.selectItem('item');
     runtime.beginPreflight('rehearsal');
-    expect(runtime.arm(1_000, sample(35, 1_000))).toMatchObject({ state: 'armed', missedCueIds: ['cue-1'] });
+    expect(runtime.arm(sample(35, 1_000))).toMatchObject({ state: 'armed', missedCueIds: ['cue-1'] });
     expect(runtime.ingest(sample(36, 1_034)).dueCues).toEqual([]);
     expect(runtime.ingest(sample(50, 1_500)).dueCues).toEqual([]);
     expect(runtime.ingest(sample(60, 1_834)).dueCues.map((due) => due.cue.id)).toEqual(['cue-2']);
@@ -170,66 +149,11 @@ describe('CueRuntime', () => {
     expect(runtime.ingest(sample(60, 1082)).dueCues).toHaveLength(0);
   });
 
-  it('freezes on loss and requires explicit resync', () => {
-    const runtime = new CueRuntime(project());
-    runtime.selectItem('item');
-    runtime.beginPreflight('rehearsal');
-    runtime.arm();
-    runtime.ingest(sample(0, 0));
-    expect(runtime.tick(501)).toMatchObject({ state: 'timecodeLost', reason: 'MTC 信号中断' });
-    expect(runtime.ingest(sample(30, 1000)).dueCues).toHaveLength(0);
-    expect(runtime.resync(sample(30, 1000))).toMatchObject({ state: 'running', missedCueIds: ['cue-1'] });
-  });
-
-  it('从当前 MTC 布防后不再收到新帧也会在 500ms 后冻结', () => {
-    const runtime = new CueRuntime(project());
-    runtime.selectItem('item');
-    runtime.beginPreflight('live');
-    runtime.arm(1_000, sample(35, 1_000));
-    expect(runtime.tick(1_501)).toMatchObject({ state: 'timecodeLost', reason: 'MTC 信号中断' });
-  });
-
-  it('布防后首个完整 MTC 到达前中断也会在 500ms 后冻结', () => {
-    const runtime = new CueRuntime(project());
-    runtime.selectItem('item');
-    runtime.beginPreflight('rehearsal');
-    runtime.arm(0);
-
-    expect(runtime.tick(500).state).toBe('armed');
-    expect(runtime.tick(501)).toMatchObject({
-      state: 'timecodeLost',
-      reason: 'MTC 信号中断',
-      dueCues: []
-    });
-  });
-
-  it('等待 P1 首次播放时保持待命，开始播放后仍在断流 500ms 后冻结', () => {
-    const runtime = new CueRuntime(project());
-    runtime.selectItem('item');
-    runtime.beginPreflight('live');
-    runtime.arm(0, null, 'awaiting-external-start');
-    expect(runtime.tick(30_000)).toMatchObject({ state: 'armed', dueCues: [] });
-    expect(runtime.ingest(sample(0, 30_000))).toMatchObject({ state: 'running', dueCues: [] });
-    expect(runtime.ingest(sample(2, 30_067))).toMatchObject({ state: 'running', dueCues: [] });
-    expect(runtime.tick(30_568)).toMatchObject({ state: 'timecodeLost', reason: 'MTC 信号中断' });
-    expect(runtime.ingest(sample(30, 31_000)).dueCues).toEqual([]);
-  });
-
-  it('外部播放待命仍拒绝从曲目中途接入', () => {
-    const runtime = new CueRuntime(project());
-    runtime.selectItem('item');
-    runtime.beginPreflight('live');
-    runtime.arm(0, null, 'awaiting-external-start');
-    expect(runtime.ingest(sample(61, 30_000))).toMatchObject({
-      state: 'timecodeLost', reason: 'MTC 不是从节目开头开始的', dueCues: []
-    });
-  });
-
   it('从头布防收到明显晚于开头的首帧时冻结且绝不批量回填 Cue', () => {
     const runtime = new CueRuntime(project());
     runtime.selectItem('item');
     runtime.beginPreflight('rehearsal');
-    runtime.arm(0);
+    runtime.arm();
 
     expect(runtime.ingest(sample(61, 100))).toMatchObject({
       state: 'timecodeLost',
@@ -246,24 +170,6 @@ describe('CueRuntime', () => {
     expect(runtime.ingest(sample(0, 0, '25'))).toMatchObject({ state: 'error' });
   });
 
-  it('allows manual GO only after takeover confirmation', () => {
-    const runtime = new CueRuntime(project());
-    runtime.selectItem('item');
-    runtime.beginPreflight('rehearsal');
-    runtime.arm();
-    expect(runtime.manualGo('cue-1')).toMatchObject({ state: 'error' });
-
-    const recovered = new CueRuntime(project());
-    recovered.selectItem('item');
-    recovered.beginPreflight('rehearsal');
-    recovered.arm();
-    recovered.ingest(sample(0, 0));
-    recovered.tick(501);
-    recovered.enableManualTakeover();
-    expect(recovered.manualGo('cue-1').dueCues.map((due) => due.cue.id)).toEqual(['cue-1']);
-    expect(recovered.manualGo('cue-1')).toMatchObject({ state: 'error', reason: 'Cue 已执行：一秒' });
-  });
-
   it('暂停自动联动时持续跟踪 MTC，并将越过的 Cue 标为错过', () => {
     const runtime = new CueRuntime(project());
     runtime.selectItem('item');
@@ -273,37 +179,6 @@ describe('CueRuntime', () => {
     expect(runtime.pauseAutomatic().state).toBe('paused');
     const paused = runtime.ingest(sample(30, 67));
     expect(paused).toMatchObject({ state: 'paused', missedCueIds: ['cue-1'] });
-    expect(runtime.resumeAutomatic().state).toBe('running');
-    expect(runtime.ingest(sample(32, 134)).dueCues).toEqual([]);
-  });
-
-  it('手动接管拒绝触发已停用 Cue', () => {
-    const value = project();
-    value.rundown[0]!.cues[0]!.enabled = false;
-    const runtime = new CueRuntime(value);
-    runtime.selectItem('item');
-    runtime.beginPreflight('rehearsal');
-    runtime.arm();
-    runtime.ingest(sample(0, 0));
-    runtime.tick(501);
-    runtime.enableManualTakeover();
-    expect(runtime.manualGo('cue-1')).toMatchObject({ state: 'error', reason: 'Cue 已停用：一秒' });
-  });
-
-  it('手动接管按最后时间码标记丢码期间越过且未执行的 Cue', () => {
-    const runtime = new CueRuntime(project());
-    runtime.selectItem('item');
-    runtime.beginPreflight('rehearsal');
-    runtime.arm();
-    runtime.ingest(sample(0, 0));
-    runtime.tick(501);
-
-    expect(runtime.enableManualTakeover(sample(35, 1_100))).toMatchObject({
-      state: 'paused',
-      manualTakeover: true,
-      missedCueIds: ['cue-1']
-    });
-    expect(runtime.manualGo('cue-2').dueCues.map((due) => due.cue.id)).toEqual(['cue-2']);
   });
 
   it('明确经过 stopping 状态后回到 idle', () => {
@@ -340,14 +215,6 @@ describe('CueRuntime', () => {
     armed.beginPreflight('rehearsal');
     armed.arm();
     expect(armed.beginPreflight('live')).toMatchObject({ state: 'error', reason: '当前状态（armed）不能重新做开播前检查' });
-  });
-
-  it('P1 播放触发失败时从 armed 明确进入 error', () => {
-    const runtime = new CueRuntime(project());
-    runtime.selectItem('item');
-    runtime.beginPreflight('rehearsal');
-    runtime.arm();
-    expect(runtime.abortStart('P1 MIDI 发送失败')).toMatchObject({ state: 'error', reason: 'P1 MIDI 发送失败' });
   });
 
   it('执行链错误会冻结状态机，必须停止清理后才能重新预检', () => {
@@ -405,28 +272,6 @@ describe('CueRuntime', () => {
     }]);
   });
 
-  it('MTC 丢失后重同步会把已越过的 OBS 自动结束边界标为错过', () => {
-    const value = project();
-    value.rundown[0]!.cues = [{
-      id: 'camera', name: '显示机位', timecode: frameNumberToTimecode(30, '30'), durationMs: 1_000,
-      enabled: true, notes: '', layerId: 'layer', actions: [{
-        id: 'show', label: '显示机位', kind: 'obs.setSceneItemEnabled',
-        sceneName: '团播联动台输出', sourceName: '机位一', enabled: true
-      }]
-    }];
-    const runtime = new CueRuntime(value);
-    runtime.selectItem('item');
-    runtime.beginPreflight('rehearsal');
-    runtime.arm();
-    expect(runtime.ingest(sample(30, 1_000)).dueCues.map((due) => due.cue.id)).toEqual(['camera']);
-    expect(runtime.tick(1_501).state).toBe('timecodeLost');
-
-    expect(runtime.resync(sample(60, 1_500))).toMatchObject({
-      state: 'running',
-      missedCueIds: ['camera:duration-end']
-    });
-  });
-
   it('隐藏视觉图层不会把显示 Cue 发送到运行执行队列', () => {
     const value = project();
     value.rundown[0]!.visualLayers[0]!.visible = false;
@@ -449,18 +294,8 @@ describe('CueRuntime', () => {
     const selected = runtime.selectItem('item', 35);
     expect(selected.missedCueIds).toEqual(['cue-1']);
     runtime.beginPreflight('rehearsal');
-    runtime.arm(0, sample(35, 0));
+    runtime.arm(sample(35, 0));
     expect(runtime.ingest(sample(36, 34)).dueCues).toEqual([]);
-  });
-
-  it('P1 暂停后同位置恢复继续过点，跳到中途则拒绝恢复', () => {
-    const runtime = new CueRuntime(project());
-    runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm();
-    runtime.ingest(sample(28, 0));
-    expect(runtime.tick(600).state).toBe('timecodeLost');
-    expect(runtime.resumeP1(sample(30, 5000))).toMatchObject({ state: 'running', dueCues: [{ cue: { id: 'cue-1' } }] });
-    expect(runtime.tick(5600).state).toBe('timecodeLost');
-    expect(runtime.resumeP1(sample(90, 9000)).state).toBe('error');
   });
 
   it('非预期前跳和时间倒退都立即进入 timecodeLost', () => {

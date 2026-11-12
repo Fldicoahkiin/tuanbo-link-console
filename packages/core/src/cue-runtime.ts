@@ -1,5 +1,5 @@
 import type { LinkCue, LinkProject, RundownItem } from '@tb/schema';
-import { nominalFramesPerSecond, timecodeToFrameNumber, type MtcSample } from './mtc-timecode';
+import { nominalFramesPerSecond, type MtcSample } from './mtc-timecode';
 import { compileRundownTimelineCues, type ScheduledTimelineCue } from './timeline-state';
 import { liveCueEditRequestSchema, liveCueEditCommitSchema, validateLinkProjectRelations, type LiveCueEditRequest, type LiveCueEditCommit } from '@tb/schema';
 import { prepareLiveCueEdit, type PreparedCueEdit, type CueEditResult } from './live-cue-edit';
@@ -16,7 +16,6 @@ export type DueCue = {
 
 export type RuntimeUpdate = {
   state: LinkRuntimeState;
-  manualTakeover: boolean;
   dueCues: DueCue[];
   missedCueIds: string[];
   reason?: string;
@@ -40,10 +39,8 @@ export class CueRuntime {
   private pendingEdit: PreparedCueEdit | null = null;
   private previousFrame = -1;
   private lastSample: MtcSample | null = null;
-  private armedAtMs: number | null = null;
   private readonly executedCueIds = new Set<string>();
   private readonly missedCueIds = new Set<string>();
-  private manualTakeover = false;
   private executionOwner: 'local' | 'external' = 'local';
 
   /** `observationGapMs`: on the internal clock, a longer silence between position
@@ -147,17 +144,12 @@ export class CueRuntime {
     return this.update();
   }
 
-  arm(
-    nowMs = performance.now(),
-    currentSample: MtcSample | null = null,
-    startMode: 'immediate' | 'awaiting-external-start' = 'immediate',
-    executionOwner: 'local' | 'external' = 'local'
-  ): RuntimeUpdate {
+  /** Armed at `currentSample`, or at the song's head when there is none, until the first position comes. */
+  arm(currentSample: MtcSample | null = null, executionOwner: 'local' | 'external' = 'local'): RuntimeUpdate {
     if (this.state !== 'preflight') return this.fail(`只有开播前检查完成后才能待命，当前状态：${this.state}`);
     if (!this.selectedItem) return this.fail('还没选择节目');
-    if (executionOwner === 'external' && (this.project.playbackSource !== 'internal'
-      || this.scheduledCues.some(entry => entry.cue.actions.some(action => action.kind.startsWith('midi.'))))) {
-      return this.fail('外部执行状态观察不能接管 P1 输入或本地 MIDI Cue');
+    if (executionOwner === 'external' && this.scheduledCues.some(entry => entry.cue.actions.some(action => action.kind.startsWith('midi.')))) {
+      return this.fail('外部执行状态观察不能接管本地 MIDI Cue');
     }
     this.executionOwner = executionOwner;
     if (currentSample && currentSample.frameRate !== this.project.timebase.frameRate) {
@@ -169,19 +161,17 @@ export class CueRuntime {
     this.pendingEdit = null; this.editSessionId = crypto.randomUUID();
     this.previousFrame = currentSample?.totalFrames ?? -1;
     this.lastSample = currentSample;
-    this.armedAtMs = currentSample || startMode === 'awaiting-external-start' ? null : nowMs;
-    this.manualTakeover = false;
     if (currentSample && executionOwner === 'local') this.markCuesThroughAsMissed(currentSample.totalFrames);
     return this.update();
   }
 
-  /** Armed and not started yet: the start moves to `sample`, ahead of where it was armed (internal playback only). A
-   * picture prepared while the music went on joins it there (0.5.9 R7); what lies before it is not executed. */
+  /** Armed and not started yet: the start moves to `sample`, ahead of where it was armed. A picture prepared while the
+   * music went on joins it there (0.5.9 R7); what lies before it is not executed. */
   moveStart(sample: MtcSample): RuntimeUpdate {
-    if (this.state !== 'armed' || this.project.playbackSource !== 'internal' || this.executionOwner !== 'local') return this.fail(`只有待命时才能改开始的位置，当前状态：${this.state}`);
+    if (this.state !== 'armed' || this.executionOwner !== 'local') return this.fail(`只有待命时才能改开始的位置，当前状态：${this.state}`);
     if (sample.frameRate !== this.project.timebase.frameRate) return this.fail(`MTC 帧率不一致：应为 ${this.project.timebase.frameRate}，收到的是 ${sample.frameRate}`);
     if (sample.totalFrames < this.previousFrame) return this.fail('播放起点和准备的位置对不上，请重新定位后播放');
-    this.previousFrame = sample.totalFrames; this.lastSample = sample; this.armedAtMs = null;
+    this.previousFrame = sample.totalFrames; this.lastSample = sample;
     this.markCuesThroughAsMissed(sample.totalFrames);
     return this.update();
   }
@@ -200,10 +190,10 @@ export class CueRuntime {
     if (this.executionOwner === 'external') {
       if (this.state !== 'armed' && this.state !== 'running') return this.update();
       this.lastSample = sample; this.previousFrame = sample.totalFrames;
-      this.armedAtMs = null; this.state = 'running';
+      this.state = 'running';
       return this.update();
     }
-    if (this.state === 'paused' && !this.manualTakeover) {
+    if (this.state === 'paused') {
       if (this.lastSample && sample.receivedAtMs - this.lastSample.receivedAtMs > MTC_LOSS_MS) {
         this.lastSample = sample;
         return this.loseTimecode('MTC 信号中断');
@@ -216,7 +206,6 @@ export class CueRuntime {
       this.markCrossedCuesAsMissed(sample.totalFrames);
       this.previousFrame = sample.totalFrames;
       this.lastSample = sample;
-      this.armedAtMs = null;
       return this.update();
     }
     if (this.state !== 'armed' && this.state !== 'running') return this.update();
@@ -231,7 +220,7 @@ export class CueRuntime {
     }
     // The formal audio clock is the timeline itself. A late observation whose
     // position kept time is a gap in watching, not a lost timecode.
-    if (this.lastSample && this.ownsInternalClock() && sample.receivedAtMs - this.lastSample.receivedAtMs > this.observationGapMs
+    if (this.lastSample && sample.receivedAtMs - this.lastSample.receivedAtMs > this.observationGapMs
       && !isUnexpectedJump(this.lastSample, sample)) return this.rebuildAt(sample);
     if (this.lastSample && sample.receivedAtMs - this.lastSample.receivedAtMs > MTC_LOSS_MS) {
       this.lastSample = sample;
@@ -253,82 +242,8 @@ export class CueRuntime {
     for (const due of dueCues) this.executedCueIds.add(due.cue.id);
     this.previousFrame = sample.totalFrames;
     this.lastSample = sample;
-    this.armedAtMs = null;
     this.state = 'running';
     return this.update(dueCues);
-  }
-
-  tick(nowMs: number): RuntimeUpdate {
-    if (this.executionOwner === 'external') return this.update();
-    if (
-      (this.state === 'armed' || (this.state === 'paused' && !this.manualTakeover))
-      && this.lastSample === null
-      && this.armedAtMs !== null
-      && nowMs - this.armedAtMs > MTC_LOSS_MS
-    ) {
-      return this.loseTimecode('MTC 信号中断');
-    }
-    if (
-      (this.state === 'armed' || this.state === 'running' || (this.state === 'paused' && !this.manualTakeover))
-      && this.lastSample && !this.ownsInternalClock()
-      && nowMs - this.lastSample.receivedAtMs > MTC_LOSS_MS
-    ) {
-      return this.loseTimecode('MTC 信号中断');
-    }
-    return this.update();
-  }
-
-  resync(sample: MtcSample): RuntimeUpdate {
-    if (this.state !== 'timecodeLost') return this.fail(`只有时间码中断后才能重新同步，当前状态：${this.state}`);
-    this.pendingEdit = null; this.editSessionId = crypto.randomUUID();
-    this.previousFrame = sample.totalFrames;
-    this.lastSample = sample;
-    this.armedAtMs = null;
-    if (this.selectedItem) {
-      for (const event of eventsBetween(this.scheduledCues, -1, sample.totalFrames)) {
-        if (event.scheduledFrame <= sample.totalFrames && !this.executedCueIds.has(event.cue.id)) {
-          this.missedCueIds.add(event.cue.id);
-        }
-      }
-    }
-    this.state = 'running';
-    return this.update();
-  }
-
-  resumeP1(sample: MtcSample): RuntimeUpdate {
-    if (this.state !== 'timecodeLost' || !this.lastSample) return this.fail('P1 恢复前没有可以确认的暂停位置');
-    const delta = sample.totalFrames - this.previousFrame;
-    if (sample.frameRate !== this.lastSample.frameRate || delta < 0 || delta > nominalFramesPerSecond(sample.frameRate) / 4) {
-      return this.fail('P1 恢复位置发生跳变，请从歌曲开头重新播放');
-    }
-    this.lastSample = { ...this.lastSample, receivedAtMs: sample.receivedAtMs - delta * 1000 / nominalFramesPerSecond(sample.frameRate) };
-    this.state = 'running';
-    return this.ingest(sample);
-  }
-
-  rearmFromStart(nowMs = performance.now()): RuntimeUpdate {
-    if (this.state !== 'timecodeLost') return this.fail(`只有时间码中断后才能从头重新待命，当前状态：${this.state}`);
-    this.pendingEdit = null; this.editSessionId = crypto.randomUUID();
-    this.executedCueIds.clear();
-    this.missedCueIds.clear();
-    this.previousFrame = -1;
-    this.lastSample = null;
-    this.armedAtMs = nowMs;
-    this.manualTakeover = false;
-    this.state = 'armed';
-    return this.update();
-  }
-
-  enableManualTakeover(currentSample: MtcSample | null = null): RuntimeUpdate {
-    if (this.state !== 'timecodeLost') return this.fail(`只有时间码中断后才能手动接管，当前状态：${this.state}`);
-    if (currentSample) {
-      this.markCuesThroughAsMissed(currentSample.totalFrames);
-      this.previousFrame = currentSample.totalFrames;
-      this.lastSample = currentSample;
-    }
-    this.manualTakeover = true;
-    this.state = 'paused';
-    return this.update();
   }
 
   pauseAutomatic(reason = '操作员暂停自动联动'): RuntimeUpdate {
@@ -340,18 +255,11 @@ export class CueRuntime {
     return this.update([], reason);
   }
 
-  resumeAutomatic(): RuntimeUpdate {
-    if (this.state !== 'paused') return this.fail(`只有暂停时才能恢复，当前状态：${this.state}`);
-    if (this.manualTakeover) return this.fail('手动接管期间不能恢复自动联动，请先停止，再重新做开播前检查');
-    this.state = this.lastSample ? 'running' : 'armed';
-    return this.update();
-  }
-
   resumeMedia(sample: MtcSample): RuntimeUpdate {
     if (this.executionOwner === 'external' && this.state === 'paused') {
       this.state = 'running'; return this.ingest(sample);
     }
-    if (this.project.playbackSource === 'internal' && this.state === 'paused' && !this.lastSample && this.previousFrame === -1) {
+    if (this.state === 'paused' && !this.lastSample && this.previousFrame === -1) {
       // Prepared at zero and paused before any audio was emitted. The first real
       // playback observation executes the opening boundary, never preparation.
       this.state = 'armed'; return this.ingest(sample);
@@ -367,8 +275,8 @@ export class CueRuntime {
 
   /** Audio has not advanced while its output/OBS transport was being prepared. */
   anchorMediaClock(sample: MtcSample): RuntimeUpdate {
-    if (this.executionOwner === 'external' && this.project.playbackSource === 'internal' && ['armed', 'running'].includes(this.state)) return this.ingest(sample);
-    if (this.project.playbackSource !== 'internal' || !['armed', 'running'].includes(this.state)
+    if (this.executionOwner === 'external' && ['armed', 'running'].includes(this.state)) return this.ingest(sample);
+    if (!['armed', 'running'].includes(this.state)
       || !this.lastSample || sample.frameRate !== this.lastSample.frameRate
       || sample.totalFrames < this.previousFrame
       || sample.totalFrames - this.previousFrame > nominalFramesPerSecond(sample.frameRate) / 4) {
@@ -379,40 +287,15 @@ export class CueRuntime {
     return this.update();
   }
 
-  manualGo(cueId: string): RuntimeUpdate {
-    if (this.executionOwner === 'external') return this.update([], '这次播放由后台控制，界面不能发送 Cue');
-    if (!this.manualTakeover || !this.selectedItem) return this.fail('还没确认手动接管');
-    const cue = this.selectedItem.cues.find((candidate) => candidate.id === cueId);
-    if (!cue) return this.fail(`Cue 不存在：${cueId}`);
-    if (!cue.enabled) return this.fail(`Cue 已停用：${cue.name}`);
-    if (this.executedCueIds.has(cue.id)) return this.fail(`Cue 已执行：${cue.name}`);
-    const runnableCue = this.scheduledCues
-      .find((entry) => entry.cue.id === cue.id)?.cue;
-    if (!runnableCue) return this.fail(`Cue 所在的画面图层已隐藏：${cue.name}`);
-    this.executedCueIds.add(cue.id);
-    return this.update([{ cue: runnableCue, scheduledFrame: timecodeToFrameNumber(runnableCue.timecode, this.project.timebase.frameRate), executionId: crypto.randomUUID() }]);
-  }
-
   stop(reason = '操作员请求停止'): RuntimeUpdate {
     this.pendingEdit = null; this.editSessionId = crypto.randomUUID();
     this.state = 'stopping';
     this.lastSample = null;
-    this.armedAtMs = null;
-    this.manualTakeover = false;
-    return this.update([], reason);
-  }
-
-  abortStart(reason: string): RuntimeUpdate {
-    if (this.state !== 'armed') return this.fail(`只有待命时才能取消 P1 启动，当前状态：${this.state}`);
-    this.lastSample = null;
-    this.armedAtMs = null;
-    this.state = 'error';
     return this.update([], reason);
   }
 
   failExecution(reason: string): RuntimeUpdate {
     this.lastSample = null;
-    this.armedAtMs = null;
     return this.fail(reason);
   }
 
@@ -426,26 +309,9 @@ export class CueRuntime {
     return this.mode;
   }
 
-  /** The local formal audio clock; its own player reports a stalled position. */
-  private ownsInternalClock(): boolean { return this.project.playbackSource === 'internal' && this.executionOwner === 'local'; }
-
   /** The hide that ends a show-source Cue's span; null for any other Cue. */
   durationEnd(cueId: string): LinkCue | null {
     return cueId.endsWith(':duration-end') ? null : this.scheduledCues.find(entry => entry.cue.id === `${cueId}:duration-end`)?.cue ?? null;
-  }
-
-  /** Recovery rule B when OBS lost its state (a reconnect): the show-source Cues
-   * whose span covers `frame`, due now and counted as executed so their ends still hide. */
-  shownSourcesAt(frame: number): DueCue[] {
-    if (!this.ownsInternalClock() || !this.selectedItem) return [];
-    const due: DueCue[] = [];
-    for (const { cue } of eventsBetween(this.scheduledCues, -1, frame)) {
-      const end = cue.id.endsWith(':duration-end') ? undefined : this.scheduledCues.find(entry => entry.cue.id === `${cue.id}:duration-end`)?.scheduledFrame;
-      if (end === undefined || end <= frame) continue;
-      this.missedCueIds.delete(cue.id); this.executedCueIds.add(cue.id);
-      due.push({ cue, scheduledFrame: frame, executionId: crypto.randomUUID() });
-    }
-    return due;
   }
 
   /** Recovery rule B: shown sources are state, so a show still within its span
@@ -467,7 +333,7 @@ export class CueRuntime {
       if (cue.actions.length && cue.actions.every(action => action.kind === 'obs.setProgramScene')) { this.executedCueIds.add(cue.id); continue; }
       now(cue); late += 1;
     }
-    this.previousFrame = frame; this.lastSample = sample; this.armedAtMs = null; this.state = 'running';
+    this.previousFrame = frame; this.lastSample = sample; this.state = 'running';
     return { ...this.update(due, `播放位置更新中断了 ${gapMs} ms，画面已按当前位置恢复${late ? `，期间的 ${late} 个联动 Cue 现在补发` : ''}`), rebuild: true };
   }
 
@@ -502,7 +368,6 @@ export class CueRuntime {
   private update(dueCues: DueCue[] = [], reason?: string): RuntimeUpdate {
     return {
       state: this.state,
-      manualTakeover: this.manualTakeover,
       dueCues,
       missedCueIds: [...this.missedCueIds],
       ...(reason ? { reason } : {})

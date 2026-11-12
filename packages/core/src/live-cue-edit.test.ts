@@ -11,7 +11,7 @@ function fixture(): CueRuntime {
   const runtime = new CueRuntime(parseLinkProject({ schemaVersion: 1, projectId: 'project', name: '测试',
     createdAt: '2026-10-05T00:00:00Z', updatedAt: '2026-10-05T00:00:00Z', playbackSource: 'internal',
     timebase: { frameRate: '30', mode: 'per-item-reset' }, rundown: [{ id: 'program', title: '歌曲', cues: [cue('past', 1), cue('future', 20)] }] }));
-  runtime.selectItem('program'); runtime.beginPreflight('live'); runtime.arm(0); advance(runtime, 0, 0); return runtime;
+  runtime.selectItem('program'); runtime.beginPreflight('live'); runtime.arm(); advance(runtime, 0, 0); return runtime;
 }
 function request(runtime: CueRuntime, cues: LinkCue[], transactionId = 'edit'): LiveCueEditRequest {
   const context = runtime.getCueEditContext(); if (!context) throw new Error('缺少测试会话');
@@ -66,7 +66,8 @@ it('撤销形成新事务；旧准备、旧版本及暂停前确认均不能覆�
   expect(runtime.prepareCueEdit(moved).status).toBe('not-applied');
   expect(commit(runtime, undo).status).toBe('applied');
   const later = request(runtime, [cue('past', 1), cue('future', 40)], 'later'); runtime.prepareCueEdit(later);
-  runtime.pauseAutomatic(); runtime.resumeAutomatic();
+  runtime.pauseAutomatic();
+  runtime.resumeMedia({ frameRate: '30', timecode: frameNumberToTimecode(0, '30'), totalFrames: 0, receivedAtMs: 0, direction: 'forward' });
   expect(commit(runtime, later).status).toBe('not-applied');
   expect(advance(runtime, 1, 1200)).toEqual(['past', 'future']);
 });

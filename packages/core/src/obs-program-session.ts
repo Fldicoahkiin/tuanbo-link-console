@@ -121,12 +121,6 @@ function pictureItem(project: LinkProject, itemId: string): RundownItem {
 export function unusablePictureVersionText(reason: string): string {
   return `这次修改的画面用不上：${trimReason(reason)}。音乐和时间码照常，这首歌停下重播时按新的样子放`;
 }
-/** The project the session's Cue runtime runs. The runtime only ever follows positions the session gives it, the way
- * it follows the internal player's clock, so it gets the project as an internal one whatever plays the music. Everything
- * else in the session keeps the project as the snapshot has it: a P1 song's clips keep their own sound (0.5.9, P1 picture). */
-function cueClockProject(project: LinkProject): LinkProject {
-  return project.playbackSource === 'internal' ? project : { ...project, playbackSource: 'internal' };
-}
 /** The item of the music missing from the scene on program (R8). */
 const MUSIC_ITEM = 'music';
 
@@ -335,7 +329,7 @@ export class ObsProgramSession {
     const item = pictureItem(project, itemId);
     // Picture actions have a 100 ms execution boundary; any longer silence between
     // device observations is a gap rebuilt at the current position (rule B).
-    this.runtime = new CueRuntime(cueClockProject(project), 100);
+    this.runtime = new CueRuntime(project, 100);
     this.managed = new ManagedOutputRuntime(project, projectPath, dependencies);
     // Live mode: a failed action is reported in red and later actions still run.
     // No time limit on a whole action: the OBS request scheduler limits each of
@@ -382,7 +376,7 @@ export class ObsProgramSession {
       () => this.dependencies.prepareOutputs(() => this.requireCurrent(generation)));
     this.requireCurrent(generation);
     const sample = this.sample(positionMs);
-    this.requireUpdate(this.runtime.arm(this.dependencies.now(), positionMs > 0 ? sample : null, 'awaiting-external-start'));
+    this.requireUpdate(this.runtime.arm(positionMs > 0 ? sample : null));
     this.frame = positionMs > 0 ? sample.totalFrames : -1;
     if (positionMs > 0) {
       // The picture at the start position, as after a position gap: camera first,
@@ -771,9 +765,9 @@ export class ObsProgramSession {
     const item = pictureItem(project, this.itemId), state = this.runtime.getState();
     // The Cue runtime starts over where the song is, as when it joins music already playing: the Cues at or before the
     // playhead are not due, those after it are, and the ones this run already sent stay sent.
-    const runtime = new CueRuntime(cueClockProject(project), 100), now = this.dependencies.now();
+    const runtime = new CueRuntime(project, 100), now = this.dependencies.now();
     const sample = this.frame >= 0 ? this.sample((this.frame + 0.5) * 1000 / this.fps, this.lastClock?.observedAt ?? now) : null;
-    for (const update of [runtime.selectItem(this.itemId), runtime.beginPreflight('live'), runtime.arm(now, sample, 'awaiting-external-start')]) {
+    for (const update of [runtime.selectItem(this.itemId), runtime.beginPreflight('live'), runtime.arm(sample)]) {
       if (update.state === 'error') throw new Error(update.reason ?? '新的画面计划不能用');
     }
     runtime.carryExecuted(this.runtime.executedCues());
