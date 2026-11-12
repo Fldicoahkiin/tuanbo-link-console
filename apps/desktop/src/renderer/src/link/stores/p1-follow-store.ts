@@ -48,7 +48,7 @@ function startInput(): P1FollowStartInput {
  */
 export async function followP1(): Promise<P1FollowState> {
   // A song followed (or adopted) goes on as it started; the next version reaches it once nothing is followed.
-  const current = p1FollowClient().state;
+  const current = useP1FollowStore.getState().follow;
   if (current && current.ownerId === P1_FOLLOW_PAGE && current.phase !== 'closed' && !nothingFollowed(current)) return current;
   const auto = useDocumentStore.getState().project?.p1AutoFollow?.enabled === true;
   const state = await p1FollowClient().start(startInput, auto ? 'auto' : 'manual');
