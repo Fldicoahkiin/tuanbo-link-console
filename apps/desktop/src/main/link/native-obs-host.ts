@@ -177,7 +177,8 @@ export class NativeObsHost {
 
   async prepare(input: NativeObsPrepare): Promise<NativeObsStatus> {
     const request = nativeObsPrepareSchema.parse(input);
-    if (request.nextFiles && (request.nextFiles.snapshot.projectId !== request.snapshot.projectId || request.nextFiles.snapshot.revision !== request.snapshot.revision)) {
+    // The next song plays the newest version: never one older than this song's (0.5.9 S8a).
+    if (request.nextFiles && (request.nextFiles.snapshot.projectId !== request.snapshot.projectId || request.nextFiles.snapshot.revision < request.snapshot.revision)) {
       throw new Error('下一个节目的文件准备和当前工程版本对不上');
     }
     this.assertAdmission(request);

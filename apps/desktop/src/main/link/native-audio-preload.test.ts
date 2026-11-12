@@ -38,13 +38,21 @@ it('预填充不发设备指令，精确复用下一首音源；音量变化不�
   await f.lease.release(); expect(f.release).toHaveBeenCalledOnce(); expect(f.error).not.toHaveBeenCalled();
 });
 
-it.each(['project', 'revision', 'position'] as const)('切换 %s 后不能套用旧预填充', async change => {
+it.each(['project', 'audio', 'position'] as const)('切换 %s 后不能套用旧预填充', async change => {
   const f = await fixture(); f.preload.start('p.tblink', f.snapshot);
   await vi.waitFor(() => expect(f.measured).toHaveBeenCalled());
   expect(await f.preload.take(change === 'project' ? 'other.tblink' : 'p.tblink', {
-    ...f.snapshot, ...(change === 'revision' ? { revision: 8 } : {}), ...(change === 'position' ? { positionMs: 5000 } : {})
+    ...f.snapshot, ...(change === 'audio' ? { audio: { ...f.snapshot.audio, sha256: 'b'.repeat(64) } } : {}), ...(change === 'position' ? { positionMs: 5000 } : {})
   })).toBeNull();
   expect(f.release).toHaveBeenCalledOnce();
+});
+
+// 0.5.9 S8a: known by what the audio is, not by the project version that asked for it.
+it('拿着歌时只改了别的（比如在播那首的音量）：工程版本变了，下一首的音频没变，自动接下一首用上提前准备的', async () => {
+  const f = await fixture(); f.preload.start('p.tblink', f.snapshot);
+  await f.prepared(1);
+  expect(await f.preload.take('p.tblink', { ...f.snapshot, revision: 8 })).toBe(f.lease);
+  expect(f.prepare).toHaveBeenCalledOnce(); expect(f.release).not.toHaveBeenCalled();
 });
 
 it('音频原文件在预热后发生变化，释放缓存并明确阻止使用旧内容', async () => {

@@ -88,7 +88,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   // The window's playback keys while 联动台播放 plays the show (keys/key-router.ts): Escape stops, Space presses the
   // play button of the page on screen (its own registration; a page without one does nothing), ↑↓ go to the previous or
   // next song when that is turned on, a song's own shortcut plays that song.
-  const keys = controller && project ? { controller, project } : null;
+  const keys = controller && project ? { controller } : null;
   useKeyCommands('global', keys && {
     'transport.stop': () => void keys.controller.stop(),
     'transport.playPause': () => undefined
@@ -97,8 +97,10 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     'home.prevSong': () => void keys.controller.skip(-1),
     'home.nextSong': () => void keys.controller.skip(1)
   }, () => useIntegrationStore.getState().profile?.internalPlayer?.arrowKeyPlayback === true);
+  // A song's shortcut as the window has it now (0.5.9 S8a): `project` stays the one shown until 停止, and a song deleted,
+  // turned off or given another key meanwhile must not be played by its old key.
   useSongShortcuts(keys && {
-    find: key => keys.project.rundown.find((entry) => entry.enabled && entry.playback?.shortcut === key)?.id,
+    find: key => useDocumentStore.getState().project?.rundown.find((entry) => entry.enabled && entry.playback?.shortcut === key)?.id,
     play: itemId => void keys.controller.play(itemId)
   });
   const internal = coordinator !== null && project?.playbackSource === 'internal';

@@ -33,9 +33,11 @@ function historyStep(project: LinkProject, frame: HistoryFrame, direction: 'undo
 /**
  * A song on stage plays on with the version it started with (0.5.9 S8a, design 02 §3.5): an edit that changes its audio
  * itself (songAudioStructureKey) or deletes or disables it waits until it stops. The wait in showGate's words, with
- * the show as `show` has it; null when `next` may be committed. In P1 follow every song counts as on stage (showGate).
+ * the show as `show` has it; null when `next` may be committed. Only 联动台播放 holds a version: P1 follow and the
+ * editor's preview keep the rules they had before (onInternalStage).
  */
 function stageWait(before: LinkProject, next: LinkProject, show: ShowState): string | null {
+  if (!onInternalStage(show)) return null;
   const changes = songStructureChanges(before, next);
   const wait = (op: 'song.remove' | 'song.audio.edit', itemId: string): string | null => {
     const gate = showGate(op, show, itemId);
@@ -46,6 +48,9 @@ function stageWait(before: LinkProject, next: LinkProject, show: ShowState): str
   return null;
 }
 const currentShow = (): ShowState => useShowStateStore.getState().show;
+/** 联动台播放 holds a song (preparing, playing, paused, ended or stopping): the only show whose song keeps the version
+ * it started with. */
+function onInternalStage(show: ShowState): boolean { return show.phase !== 'idle' && show.source === 'internal'; }
 
 /** How a project entered the editor: as read from disk, upgraded in memory, or restored unsaved content. */
 export type DocumentOpening = { upgraded?: boolean; restored?: boolean };
@@ -248,10 +253,14 @@ export const selectCanRedo = (state: DocumentStoreState): boolean => state.futur
 
 /** Why undo (or redo) waits now: its step would change a song on stage in a way it cannot take (0.5.9 S8a), in
  * showGate's words; null when it may run. Worked out only while a song is on stage; a step that cannot be worked out
- * then says why instead. */
+ * then says why instead. Undo brings back the project as it was before its step (`frame.before`, which a rebase keeps
+ * up to date), so the buttons compare with that instead of running the step: running it after every edit made while a
+ * song plays cost a large project over 100 ms (a lighting edit validates the whole project). undo() itself still runs
+ * the step and checks what it makes; redo, which only follows an undo, runs it here too. */
 export function historyWait(state: Pick<DocumentStoreState, 'project' | 'past' | 'future'>, direction: 'undo' | 'redo', show: ShowState): string | null {
   const frame = direction === 'undo' ? state.past.at(-1) : state.future.at(-1);
-  if (!frame || !state.project || showGate('song.remove', show).kind === 'allow') return null;
+  if (!frame || !state.project || !onInternalStage(show) || showGate('song.remove', show).kind === 'allow') return null;
+  if (direction === 'undo') return stageWait(state.project, frame.before, show);
   let next: LinkProject;
   try { next = historyStep(state.project, frame, direction); } catch (error) { return toUserErrorMessage(error); }
   return stageWait(state.project, next, show);

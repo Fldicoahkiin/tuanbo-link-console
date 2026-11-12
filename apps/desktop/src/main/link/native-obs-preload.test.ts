@@ -32,9 +32,9 @@ it('选择节目仅预备资源；精确修订和起点接管后旧选择清理�
   expect(t.outputs.releaseOutputs).not.toHaveBeenCalled(); expect(t.create).toHaveBeenCalledTimes(1);
 });
 
-it.each(['修订', '起点', '所有者'] as const)('%s 改变后先释放旧资源，不复用旧画面', async change => {
+it.each(['内容', '起点', '所有者'] as const)('%s 改变后先释放旧资源，不复用旧画面', async change => {
   const t = setup(); await t.pool.preload(t.request);
-  const request = { ...t.request, snapshot: { ...t.request.snapshot, revision: change === '修订' ? 2 : 1 },
+  const request = { ...t.request, snapshot: { ...t.request.snapshot, ...change === '内容' ? { item: { ...t.request.snapshot.item, title: '改了画面' } } : {} },
     sessionId: change === '所有者' ? crypto.randomUUID() : t.request.sessionId };
   await t.pool.take(request, change === '起点' ? 900 : 500, () => undefined);
   expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(1); expect(t.create).toHaveBeenCalledTimes(2);
@@ -136,12 +136,29 @@ it.each([0, 1, 2, 3, 4, 5, 6, 7])('下一首提前准备刚失败、过 %i 个�
   expect(t.outputs.releaseOutputs).toHaveBeenCalledOnce(); expect(t.create).toHaveBeenCalledTimes(2);
 });
 
-it('下一首修订不匹配时清理其解码器，不能把旧预备结果当成新工程', async () => {
+// 0.5.9 S8a: the preparation is known by what the picture is, not by the project version that asked for it.
+it('拿着歌时只改了别的（比如在播那首的音量）：工程版本变了，下一首的画面没变，自动接下一首用上提前准备的', async () => {
   const t = setup();
   const next = { snapshot: { ...t.request.snapshot, item: { ...t.request.snapshot.item, id: 'next' } }, positionMs: 0 };
   await t.pool.prepareNext({ ...t.request, nextFiles: next }, () => undefined);
-  await t.pool.take({ ...t.request, snapshot: { ...next.snapshot, revision: 2 } }, 0, () => undefined);
+  expect(await t.pool.take({ ...t.request, generation: 3, snapshot: { ...next.snapshot, revision: 2 } }, 0, () => undefined)).toBe(t.outputs);
+  expect(t.outputs.releaseOutputs).not.toHaveBeenCalled(); expect(t.create).toHaveBeenCalledTimes(1);
+});
+
+it('下一首自己的画面改了：清理提前准备的解码器，按新的重新准备，不把旧的当成新的', async () => {
+  const t = setup();
+  const next = { snapshot: { ...t.request.snapshot, item: { ...t.request.snapshot.item, id: 'next' } }, positionMs: 0 };
+  await t.pool.prepareNext({ ...t.request, nextFiles: next }, () => undefined);
+  await t.pool.take({ ...t.request, snapshot: { ...next.snapshot, revision: 2, item: { ...next.snapshot.item, notes: '改了画面' } } }, 0, () => undefined);
   expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(1); expect(t.create).toHaveBeenCalledTimes(2);
+});
+
+it('下一首的准备比在播的这首还旧：不准备', async () => {
+  const t = setup();
+  const request = { ...t.request, snapshot: { ...t.request.snapshot, revision: 3 } };
+  await expect(t.pool.prepareNext({ ...request, nextFiles: { snapshot: { ...t.request.snapshot, revision: 2, item: { ...t.request.snapshot.item, id: 'next' } }, positionMs: 0 } }, () => undefined))
+    .rejects.toThrow('和当前工程版本对不上');
+  expect(t.create).not.toHaveBeenCalled();
 });
 
 it('下一首共用当前视频来源时不修改活动解码器', async () => {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { removeRundownItemCommand, setItemPlaybackCommand, setItemVolumeCommand, updateRundownItemCommand, type ShowState } from '@tb/core/link';
-import { createEmptyLinkProject, parseLinkProject, type RundownItem } from '@tb/schema';
+import { padSongCommand, padSongRender, removeRundownItemCommand, setItemPlaybackCommand, setItemVolumeCommand, setLightingCommand, updateRundownItemCommand, type ShowState } from '@tb/core/link';
+import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type LightingDocument, type ReferenceAudio, type RundownItem } from '@tb/schema';
 import { historyWait, useDocumentStore } from './document-store';
 import { useShowStateStore } from './show-state-store';
 
@@ -16,6 +16,16 @@ const REMOVE_WAIT = '演出还没停止，这首歌还在台上，停下它以�
 const onStage = (itemId: string | null): ShowState => ({ phase: 'running', source: itemId ? 'internal' : 'p1', itemId, program: null });
 const show = (state: ShowState) => useShowStateStore.setState({ show: state });
 const item = (id: string): RundownItem => useDocumentStore.getState().project!.rundown.find(entry => entry.id === id)!;
+/** Two seconds of blank time after the song's music, rendered as the main process would. */
+function padTail(id: string) {
+  const audio = item(id).referenceAudio!, plan = padSongRender(audio, 0, 2_000, '30');
+  const file = { assetId: `padded-${id}`, relativePath: `assets/reference-audio/padded-${id}.wav`, sha256: 'b'.repeat(64), durationMs: plan.durationMs! };
+  const rendered: ReferenceAudio = { ...file, timeline: { source: file, segments: [{ id: `padded-${id}`, startMs: 0, sourceOffsetMs: 0, durationMs: file.durationMs }], tracks: plan.tracks, durationMs: plan.durationMs! } };
+  return padSongCommand(id, { baseAudioSha256: audio.sha256, leadDeltaMs: 0, tailMs: 2_000, rendered });
+}
+/** A lighting document whose console timeline starts at `timeOriginMs`: a song without its own MTC start plays from there. */
+const origin = (timeOriginMs: number): LightingDocument => ({ ...createLightingDocument(), ma2Bindings: [{ id: 'binding', timecode: 7, name: '灯光 7',
+  readAt: '2026-11-11T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [], mappings: [], playback: 'editable', timeOriginMs }] });
 
 beforeEach(() => {
   useDocumentStore.getState().setProject(parseLinkProject({ ...createEmptyLinkProject('现场'), playbackSource: 'internal', rundown: [song('a'), song('b')] }), null);
@@ -50,9 +60,29 @@ describe('在台上的歌：音频本身、删除、停用等它停下', () => {
     expect(useDocumentStore.getState().project?.rundown.map(entry => entry.id)).toEqual(['a']);
   });
 
-  it('P1 跟随说不出在放哪首：每首都算在台上（照 showGate）', () => {
-    show(onStage(null));
-    expect(() => useDocumentStore.getState().execute(setItemPlaybackCommand('b', { ...playback, endMs: 30_000 }))).toThrow(AUDIO_WAIT);
+  it('加、减空白（padSongCommand）改的是台上那首就等；改别的歌照常', () => {
+    const store = useDocumentStore.getState();
+    show(onStage('a'));
+    expect(() => store.execute(padTail('a'))).toThrow(AUDIO_WAIT);
+    expect(item('a').referenceAudio?.durationMs).toBe(60_000);
+    store.execute(padTail('b'));
+    expect(item('b').referenceAudio?.durationMs).toBe(62_000);
+  });
+
+  it('只有联动台播放照开始那一版播：P1 跟随（说不出在放哪首）改 MTC 起始码、灯光时间线起点照常提交；联动台播放时照旧要等', () => {
+    useDocumentStore.getState().setProject(parseLinkProject({ ...createEmptyLinkProject('现场'), schemaVersion: 2, playbackSource: 'internal',
+      rundown: [song('a'), { id: 'c', title: 'c', lighting: origin(0) }] }), null);
+    const store = useDocumentStore.getState();
+    show({ phase: 'held', source: 'p1', itemId: null, reason: 'p1-waiting', program: null });
+    store.execute(setItemPlaybackCommand('a', { ...playback, mtcOffsetMs: 3_610_000 }));
+    store.execute(setLightingCommand('c', origin(5_000)));
+    expect(item('a').playback?.mtcOffsetMs).toBe(3_610_000);
+    expect(item('c').lighting?.ma2Bindings?.[0]?.timeOriginMs).toBe(5_000);
+    expect(historyWait(useDocumentStore.getState(), 'undo', { phase: 'held', source: 'p1', itemId: null, reason: 'p1-waiting', program: null })).toBeNull();
+    show(onStage('a'));
+    expect(() => store.execute(setItemPlaybackCommand('a', { ...playback, mtcOffsetMs: 3_620_000 }))).toThrow(AUDIO_WAIT);
+    show({ phase: 'running', source: 'internal', itemId: 'c', program: null });
+    expect(() => store.execute(setLightingCommand('c', origin(9_000)))).toThrow(AUDIO_WAIT);
   });
 
   it('撤销、重做碰到在台上的歌：按钮事先就说要等；按了也不动，写明要等', () => {

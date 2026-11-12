@@ -87,7 +87,7 @@ function program(opened: LinkProject) {
   const gain = async (): Promise<number> => { await settle(); return Math.round((status?.gain ?? Number.NaN) * 100); };
   /** The engine played the song to its end. */
   const ended = async (): Promise<void> => { emit({ status: 'ended' }); await settle(); await settle(); };
-  return { player, api, gain, ended, settle, notice, lighting: output, state: () => state };
+  return { player, api, gain, ended, settle, emit, notice, lighting: output, state: () => state };
 }
 
 describe('音量：在播的歌保存的音量改了当即生效', () => {
@@ -149,6 +149,29 @@ describe('播完后：它自己的“播完后”当即生效，别的修改不�
     const { endAction, ...rest } = own; void endAction;
     f.player.updateProject(edited(v2, '甲', item => ({ ...item, playback: { ...rest } as NonNullable<RundownItem['playback']> })), 5, 'C:/show/拿着歌时改.tblink');
     expect(f.state().endAction).toBe('stop');
+  });
+});
+
+describe('它自己的播完后改了以后：定位、循环回来都还是改过的', () => {
+  it('改成“停”以后定位：还是停', async () => {
+    const v1 = project(), f = program(v1);
+    await f.player.play('甲');
+    f.player.updateProject(edited(v1, '甲', withPlayback({ endAction: 'stop' })), 2, 'C:/show/拿着歌时改.tblink');
+    expect(f.state().endAction).toBe('stop');
+    await f.player.seek(2000);
+    expect(f.state().endAction).toBe('stop');
+    expect(f.api.prepareNativePlayback.mock.lastCall![0].nextSnapshot).toBeUndefined();
+  });
+
+  it('改成“循环”：播完回到开头，再播完还循环', async () => {
+    const v1 = project(), f = program(v1);
+    await f.player.play('甲');
+    f.player.updateProject(edited(v1, '甲', withPlayback({ endAction: 'loop' })), 2, 'C:/show/拿着歌时改.tblink');
+    await f.ended();
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: '甲', endAction: 'loop' });
+    expect(f.api.prepareNativePlayback.mock.lastCall![0].snapshot).toMatchObject({ itemId: '甲', revision: 1 });
+    await f.ended();
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: '甲', endAction: 'loop' });
   });
 });
 
@@ -235,14 +258,55 @@ describe('下一首按最新的一版找', () => {
     expect(f.api.prepareNativePlayback.mock.lastCall![0].snapshot).toMatchObject({ itemId: '乙', revision: 3 });
   });
 
-  it('给引擎和 OBS 的“下一首”准备只在同一版时给；改过以后不给（白准备不会放错）', async () => {
+  it('改过以后定位：照样给引擎和 OBS 下一首的准备，按最新的一版（主进程按内容认，不按版本号）', async () => {
     const v1 = project(), f = program(v1);
     await f.player.play('甲');
     expect(f.api.prepareNativePlayback.mock.lastCall![0].nextSnapshot).toMatchObject({ itemId: '乙', revision: 1 });
     f.player.updateProject(edited(v1, '乙', item => ({ ...item, title: '改了下一首' })), 2, 'C:/show/拿着歌时改.tblink');
     await f.player.seek(2000);
-    expect(f.api.prepareNativePlayback.mock.lastCall![0].nextSnapshot).toBeUndefined();
-    expect(f.api.prepareNativeObs.mock.lastCall![0].nextFiles).toBeUndefined();
+    const prepared = f.api.prepareNativePlayback.mock.lastCall![0];
+    expect(prepared.snapshot).toMatchObject({ itemId: '甲', revision: 1 });
+    expect(prepared.nextSnapshot).toMatchObject({ itemId: '乙', revision: 2 });
+    expect(f.api.prepareNativeObs.mock.lastCall![0]).toMatchObject({ snapshot: { revision: 1, item: { id: '甲' } },
+      nextFiles: { snapshot: { revision: 2, item: { id: '乙', title: '改了下一首' } } } });
+  });
+
+  it('退回上一首时在播的这首已被删掉：接着它原来位置前面最新一版还有的那首', async () => {
+    const v1 = project(), f = program(v1);
+    await f.player.play('乙');
+    f.player.updateProject(edited(v1, '乙', () => null), 2, 'C:/show/拿着歌时改.tblink');
+    await f.player.skip(-1);
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: '甲' });
+  });
+
+  it('要播的歌在最新一版里已经删掉或停用（快捷键、旧界面）：不播，在播的歌照常，什么都不动', async () => {
+    const v1 = project(), f = program(v1);
+    await f.player.play('甲');
+    const before = f.state(), prepared = f.api.prepareNativePlayback.mock.calls.length, sent = f.api.controlNativePlayback.mock.calls.length;
+    const v2 = edited(edited(v1, '乙', () => null), '丙', item => ({ ...item, enabled: false }));
+    f.player.updateProject(v2, 2, 'C:/show/拿着歌时改.tblink');
+    await f.player.play('乙');
+    await f.player.play('丙');
+    await f.settle();
+    expect(f.state()).toMatchObject({ status: 'playing', itemId: '甲', positionMs: before.positionMs, error: null });
+    expect(f.api.prepareNativePlayback.mock.calls.length).toBe(prepared);
+    expect(f.api.controlNativePlayback.mock.calls.length).toBe(sent);
+    expect(f.notice).toHaveBeenCalledWith('要播的歌已经删掉或停用了，没有播放；正在播的歌照常播放', '甲');
+  });
+
+  it('出错以后再播：开始前就按最新的一版，不再拿出错那一遍的旧版本', async () => {
+    const v1 = project(), f = program(v1);
+    await f.player.play('甲');
+    f.emit({ status: 'error', audioError: '声卡断开' });
+    await f.settle();
+    expect(f.state().status).toBe('error');
+    const v2 = edited(v1, '甲', withPlayback({ startMs: 1000 }));
+    f.player.updateProject(v2, 2, 'C:/show/拿着歌时改.tblink');
+    const playing = f.player.play('甲');
+    expect(f.state().status).toBe('preparing');
+    expect(f.player.currentProject()).toBe(v2);
+    await playing;
+    expect(f.api.prepareNativePlayback.mock.lastCall![0].snapshot).toMatchObject({ itemId: '甲', revision: 2, startMs: 1000 });
   });
 });
 

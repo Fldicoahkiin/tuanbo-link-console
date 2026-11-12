@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import type { NativePlayerPrepare, NativePlayerStatus } from '@tb/schema';
+import { nativePlayerPrepareSchema, type NativePlayerPrepare, type NativePlayerStatus } from '@tb/schema';
 import { NativePlaybackRequests } from './native-playback-requests';
 
 function request(): NativePlayerPrepare {
@@ -68,4 +68,14 @@ it('窗口的准备请求在文件检查拒绝时不派发；检查期间被停�
   await gateway.control({ version: 1, sessionId: input.sessionId, generation: 2, kind: 'stop' });
   checking.release(); await cancelled;
   expect(engine.prepare).not.toHaveBeenCalled();
+});
+
+// 0.5.9 S8a: the next song plays the newest version, which may be newer than the song held (an edit while it plays).
+it('下一首的准备可以比在播的这首新，不能更旧，也不能是别的工程或别的采样率', () => {
+  const input = request(), next = (patch: Partial<NativePlayerPrepare['snapshot']>) => ({ ...input, nextSnapshot: { ...input.snapshot, itemId: 'next', ...patch } });
+  expect(nativePlayerPrepareSchema.safeParse(next({ revision: 1 })).success).toBe(true);
+  expect(nativePlayerPrepareSchema.safeParse(next({ revision: 3 })).success).toBe(true);
+  expect(nativePlayerPrepareSchema.safeParse({ ...next({ revision: 1 }), snapshot: { ...input.snapshot, revision: 2 } }).success).toBe(false);
+  expect(nativePlayerPrepareSchema.safeParse(next({ projectId: 'other' })).success).toBe(false);
+  expect(nativePlayerPrepareSchema.safeParse(next({ sampleRate: 44100 })).success).toBe(false);
 });

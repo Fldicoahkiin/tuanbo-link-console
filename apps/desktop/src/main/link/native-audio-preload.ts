@@ -114,7 +114,9 @@ function letGoFailure(error: unknown): string {
   return `下一首提前准备的音频已放下，放下时出了错，这份音频不会再用。如果反复出现，请导出诊断包发给售后。原因：${reason(error)}`;
 }
 
+/** What the next song's audio is, not which project version asked for it (0.5.9 S8a): an edit to another song while
+ * this one is held leaves the next song's prepared audio usable. */
 function audioIdentity(snapshot: PlaybackSnapshot): string {
-  return JSON.stringify([snapshot.projectId, snapshot.itemId, snapshot.revision, snapshot.audio.relativePath,
+  return JSON.stringify([snapshot.projectId, snapshot.itemId, snapshot.audio.relativePath,
     snapshot.audio.sha256, snapshot.audio.durationMs, snapshot.sampleRate, snapshot.positionMs]);
 }

@@ -202,15 +202,19 @@ export class NativeProgramPlayer {
     const onAir = this.onAir;
     return onAir && itemId === onAir.itemId && this.holding() && this.state.itemId === itemId ? onAir : { project: this.project, revision: this.revision };
   }
-  /** The song after `itemId` in the newest version's playlist (0.5.9 S8a). A held song no longer there (deleted or
-   * disabled) is found where it stood in the version it started with: the next song after it the newest version plays. */
-  private nextAfter(itemId: string): RundownItem | undefined {
+  /** The song after `itemId` in the newest version's playlist (0.5.9 S8a). */
+  private nextAfter(itemId: string): RundownItem | undefined { return this.beside(itemId, 1); }
+  /** The song after (1) or before (-1) `itemId` in the newest version's playlist, without going round. A held song no
+   * longer there (deleted or disabled) is found where it stood in the version it started with: the nearest song on that
+   * side of it the newest version still plays. */
+  private beside(itemId: string, direction: -1 | 1): RundownItem | undefined {
     const items = this.items(), index = items.findIndex(item => item.id === itemId);
-    if (index >= 0) return items[index + 1];
+    if (index >= 0) return items[index + direction];
     if (this.onAir?.itemId !== itemId) return undefined;
     const order = playlistItems(this.onAir.project, this.state.playlistId ?? 'all').map(item => item.id), at = order.indexOf(itemId);
     if (at < 0) return undefined;
-    for (const id of order.slice(at + 1)) { const found = items.find(item => item.id === id); if (found) return found; }
+    const side = direction === 1 ? order.slice(at + 1) : order.slice(0, at).reverse();
+    for (const id of side) { const found = items.find(item => item.id === id); if (found) return found; }
     return undefined;
   }
   /** The window selected a song, or the project changed: its picture is prepared. Asked again for the same song after
@@ -262,8 +266,18 @@ export class NativeProgramPlayer {
 
   /** Every song starts with its timecode (2026-10-26); `programStart` decides what joins it. */
   play(itemId: string, positionMs?: number, paused = false): Promise<void> {
+    // The song held plays on with the version it started with, also when it is placed again (a seek, a loop, a restart).
+    const kept = itemId === this.state.itemId && this.holding() && this.onAir?.itemId === itemId ? this.onAir : null;
+    // Any other song plays as the newest version has it: one it no longer has, or has turned off, is not played, and
+    // nothing of the song on stage changes (0.5.9 S8a). A window or a key may still show it from an older version.
+    if (!kept && !this.project.rundown.some(item => item.id === itemId && item.enabled)) {
+      this.reportUnavailable(this.holding() ? '要播的歌已经删掉或停用了，没有播放；正在播的歌照常播放' : '要播的歌已经删掉或停用了，没有播放');
+      return Promise.resolve();
+    }
     const settings = this.dependencies.configuration(), token = ++this.epoch;
     this.cancelPreloadRefresh();
+    // Until this start runs, the song in the player follows the newest version (songVersion, updateProject).
+    if (!kept) this.onAir = null;
     // A run starts from stopped on the sound card set now; the songs and seeks of the same run stay on it.
     if (!this.holding() || !this.runOutput) this.runOutput = { outputDeviceId: settings.outputDeviceId, audioSampleRate: settings.audioSampleRate ?? 48000 };
     const config = { ...settings, ...this.runOutput };
@@ -272,8 +286,6 @@ export class NativeProgramPlayer {
     if (this.selectedPreload?.itemId !== itemId) this.selectedPreload = null;
     this.mtcSuppressed = !this.state.mtcEnabled;
     const reuseSession = itemId === this.state.itemId && ['playing', 'paused'].includes(this.state.status);
-    // The song held plays on with the version it started with, also when it is placed again (a seek, a loop, a restart).
-    const kept = itemId === this.state.itemId && this.holding() && this.onAir?.itemId === itemId ? this.onAir : null;
     if (this.state.itemId !== itemId && this.state.status === 'playing') this.markPlayed();
     this.cancelScheduled(); this.runtimePrepared = false; this.timecodeOutput = idleTimecodeOutput; this.boundary('seek');
     this.start = { leftover: null, obs: null, fault: null }; this.carried = null;
@@ -308,16 +320,20 @@ export class NativeProgramPlayer {
       this.loopStart = loop?.enabled && loop.startMs < loop.endMs && loop.startMs >= snapshot.startMs && loop.endMs <= snapshot.endMs && snapshot.positionMs < loop.endMs ? loop.startMs : null;
       if (this.loopStart !== null && loop) snapshot.endMs = loop.endMs;
       // This run's end action: the song's own, else the player bar's (播完后), which the song's own never replaces (0.5.9 S5).
+      // Like its volume, it is the song's own as saved now, also when the song is placed again: only a version that no
+      // longer has the song leaves it the one it started with (0.5.9 S8a).
+      const saved = this.project.rundown.find(entry => entry.id === itemId) ?? item;
       this.update({ positionMs: snapshot.positionMs, durationMs: snapshot.endMs, volume: level * 100,
-        endAction: item.playback?.endAction ?? this.defaultEndAction(), mtcPositionMs: this.allowMtc ? snapshot.positionMs + snapshot.offsetMs : null });
+        endAction: saved.playback?.endAction ?? this.defaultEndAction(), mtcPositionMs: this.allowMtc ? snapshot.positionMs + snapshot.offsetMs : null });
       let nextSnapshot: ProgramStart['snapshot'] | undefined;
       if (config.preload !== false) {
-        // The song again plays this version; another song plays the newest one, which the engine takes beside this song
-        // only when they are the same version (a different one would never be taken: not prepared).
+        // The song again plays this version; another song plays the newest one, prepared as the newest version has it.
+        // The main process takes it at the next song's start when that song's audio is still the same (its revision
+        // aside), so an edit to another song made meanwhile does not make it a cold start.
         const again = this.loopStart !== null || this.state.endAction === 'loop';
-        const next = again ? item : this.state.endAction === 'next' && version.revision === this.revision ? this.nextAfter(itemId) : undefined;
+        const next = again ? item : this.state.endAction === 'next' ? this.nextAfter(itemId) : undefined;
         if (next) try {
-          nextSnapshot = nativeProgramSnapshot(again ? version.project : this.project, next.id, version.revision,
+          nextSnapshot = nativeProgramSnapshot(again ? version.project : this.project, next.id, again ? version.revision : this.revision,
             this.loopStart ?? undefined, config.audioSampleRate).snapshot;
         } catch (error) { this.reportUnavailable(`下一个节目无法提前准备：${toUserErrorMessage(error)}`); }
       }
@@ -551,8 +567,9 @@ export class NativeProgramPlayer {
   }
   skip(direction: -1 | 1): Promise<void> {
     const items = this.items(), index = items.findIndex(item => item.id === this.state.itemId);
-    // A held song the newest version no longer plays: the next one after where it stood.
-    const next = index < 0 && direction === 1 && this.state.itemId ? this.nextAfter(this.state.itemId) ?? items[0] : items[(index + direction + items.length) % items.length];
+    // A held song the newest version no longer plays: the nearest one on that side of where it stood, else round.
+    const next = index < 0 && this.state.itemId ? this.beside(this.state.itemId, direction) ?? items.at(direction === 1 ? 0 : -1)
+      : items[(index + direction + items.length) % items.length];
     return next ? this.play(next.id) : Promise.resolve();
   }
   /** The player bar's 播完后: what this song does when it ends, and every later song without its own end action. */
@@ -704,8 +721,8 @@ export class NativeProgramPlayer {
     finally { if (this.obsSession === envelope) this.obsPreparing = false; }
   }
   private nextObsFiles(itemId: string): NativeObsPrepare['nextFiles'] {
-    // The next song plays the newest version; files of it beside this song's picture only when they are the same version.
-    if (this.dependencies.configuration().preload === false || this.state.endAction !== 'next' || this.songVersion(itemId).revision !== this.revision) return undefined;
+    // The next song plays the newest version: its files as that version has them, beside this song's picture.
+    if (this.dependencies.configuration().preload === false || this.state.endAction !== 'next') return undefined;
     const next = this.nextAfter(itemId);
     if (!next) return undefined;
     try {

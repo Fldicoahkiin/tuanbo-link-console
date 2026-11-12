@@ -88,9 +88,9 @@ it('正式画面准备被停止中断：传给素材准备的检查按取消结�
   expect(failures).toEqual([]);
 });
 
-it('跨工程或跨修订的下一节目不能随当前节目准备', async () => {
+it('跨工程或比当前节目更旧修订的下一节目不能随当前节目准备', async () => {
   const test = setup();
-  test.request.nextFiles = { snapshot: { ...test.request.snapshot, revision: 5 }, positionMs: 0 };
+  test.request.nextFiles = { snapshot: { ...test.request.snapshot, revision: test.request.snapshot.revision - 1 }, positionMs: 0 };
   await expect(test.host.prepare(test.request)).rejects.toThrow('和当前工程版本对不上');
   expect(test.execute).not.toHaveBeenCalled(); expect(test.prepareNextFiles).not.toHaveBeenCalled();
 });

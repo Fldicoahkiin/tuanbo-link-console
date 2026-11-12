@@ -94,8 +94,8 @@ export const nativePlayerPrepareSchema = z.object({ ...playerSession, projectPat
   /** The operator's timecode send mode: true sends quarter frames only. */
   mtcQuarterFramesOnly: z.boolean().optional() }).strict()
   .refine(value => !value.nextSnapshot || value.nextSnapshot.projectId === value.snapshot.projectId
-    && value.nextSnapshot.revision === value.snapshot.revision && value.nextSnapshot.sampleRate === value.snapshot.sampleRate,
-  '下一节目必须属于同一工程修订和音频采样率');
+    && value.nextSnapshot.revision >= value.snapshot.revision && value.nextSnapshot.sampleRate === value.snapshot.sampleRate,
+  '下一节目必须属于同一工程、不早于当前节目的修订，并使用相同的音频采样率');
 export type NativePlayerPrepare = z.infer<typeof nativePlayerPrepareSchema>;
 export const nativePlayerControlSchema = z.discriminatedUnion('kind', [
   z.object({ ...playerSession, kind: z.literal('play') }).strict(),

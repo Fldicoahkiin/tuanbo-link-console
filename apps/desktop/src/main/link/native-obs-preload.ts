@@ -29,7 +29,8 @@ export class NativeObsPreloadPool {
   async prepareNext(request: NativeObsPrepare, assertCurrent: () => void): Promise<boolean> {
     const next = request.nextFiles;
     if (!next) return false;
-    if (next.snapshot.projectId !== request.snapshot.projectId || next.snapshot.revision !== request.snapshot.revision) {
+    // The next song plays the newest version: never one older than the song now on air.
+    if (next.snapshot.projectId !== request.snapshot.projectId || next.snapshot.revision < request.snapshot.revision) {
       throw new Error('下一个节目的准备和当前工程版本对不上');
     }
     if (next.snapshot.item.id === request.snapshot.item.id) return false;
@@ -159,8 +160,11 @@ export class NativeObsPreloadPool {
   }
 }
 
+/** What the picture is, not which project version asked for it (0.5.9 S8a): the outputs are built from the song's
+ * content only (projectFromObsSnapshot has no revision), and the session and its status take the revision of the
+ * request that takes them over. */
 function resourceKey(request: NativeObsPrepare, positionMs: number): string {
-  return JSON.stringify([request.projectPath, request.preciseSeeking, request.snapshot, positionMs]);
+  return JSON.stringify([request.projectPath, request.preciseSeeking, { ...request.snapshot, revision: null }, positionMs]);
 }
 
 function errorText(error: unknown): string {
