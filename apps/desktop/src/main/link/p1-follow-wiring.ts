@@ -5,7 +5,7 @@ import { p1FollowRequestSchema, parseLinkProject, type IntegrationProfile, type 
 import type { LightingOffService } from './lighting-off-service';
 import type { ClosedProgramFaults } from './main-process-errors';
 import type { MidiPortBroker } from './midi-port-broker';
-import { NativeMidiHost, type ActionMidiRecovery } from './native-midi-host';
+import { actionMidiRecoveredEntry, NativeMidiHost } from './native-midi-host';
 import { P1FollowHost, type P1FollowOutputSet } from './p1-follow-host';
 import { P1FollowOutputList } from './p1-follow-outputs';
 import { P1MidiOutput } from './p1-midi-output';
@@ -122,13 +122,6 @@ async function prepareSong(dependencies: Pick<P1FollowWiringDependencies, 'autho
   const item = project.rundown.find(entry => entry.id === itemId);
   if (!item) throw new Error('P1 放的这首歌不在这个工程里，请在 P1 打开这个工程生成的联动 .hia');
   if (!item.enabled) throw new Error(`「${item.title}」已停用，跟随 P1 时不跟这首歌`);
-}
-
-/** The action MIDI line of the run log after its port came back, as the native program writes it. */
-export function actionMidiRecoveredEntry(report: ActionMidiRecovery, projectId: string, itemId: string): LinkLogInput {
-  return { level: 'warning', category: 'device', device: '动作 MIDI', projectId, itemId,
-    message: `动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）：从下一个动作起照常发送，中断期间跳过了 ${report.skippedActions} 个动作，不补发`,
-    details: { portName: report.portName, interruptedAt: report.interruptedAt, recoveredAt: report.recoveredAt, durationMs: report.durationMs, skippedActions: report.skippedActions } };
 }
 
 /** One follow's outputs: the action MIDI on its own NativeMidiHost, built as the native program builds its own

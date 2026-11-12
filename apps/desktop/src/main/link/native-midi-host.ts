@@ -4,6 +4,7 @@ import { NativeMidiPorts } from './native-midi-ports';
 import { MidiOutputFailure } from './native-midi-output';
 import { MidiPortRecovery, type PortRecoveryReport } from './midi-port-recovery';
 import type { MidiClaim } from './midi-port-broker';
+import type { LinkLogInput } from './run-logger';
 
 type Identity = Pick<NativePlayerStatus, 'sessionId' | 'generation' | 'itemId'>;
 /** Where a song is now: the audio player's status (`audio()`), or what the source of a clock that is not the player's says. */
@@ -16,6 +17,13 @@ type Source = () => MidiSongNow | null;
 export type MidiClockSource = { now: Source; opening: ((message: string) => void) | null };
 /** The action MIDI port came back: the outage, how many actions it skipped, and the red message it showed. */
 export type ActionMidiRecovery = PortRecoveryReport & { skippedActions: number; fault: string };
+
+/** The action MIDI line of the run log after its port came back: the one for 联动台播放 and for P1 follow alike. */
+export function actionMidiRecoveredEntry(report: ActionMidiRecovery, projectId: string, itemId: string): LinkLogInput {
+  return { level: 'warning', category: 'device', device: '动作 MIDI', projectId, itemId,
+    message: `动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）：从下一个动作起照常发送，中断期间跳过了 ${report.skippedActions} 个动作，不补发`,
+    details: { portName: report.portName, interruptedAt: report.interruptedAt, recoveredAt: report.recoveredAt, durationMs: report.durationMs, skippedActions: report.skippedActions } };
+}
 export type NativeMidiChannelState = Identity & { state: 'preparing' | 'ready' | 'running' | 'stopped' | 'failed'; reason: string | null;
   currentCueId: string | null };
 type Ports = Pick<NativeMidiPorts, 'prepare' | 'send' | 'close'>;

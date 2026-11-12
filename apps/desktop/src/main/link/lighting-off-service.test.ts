@@ -147,10 +147,8 @@ describe('试听和节目用同一张清单', () => {
     f.status.state = 'connected';
     await f.service.receive({ version: 1, source: 'preview', phase: 'stop', document: document([]), song: null });
     expect(f.playMa2Cue).not.toHaveBeenCalled();
-    // Following P1, stop in the app switches the song off and sends what is still owed, without stopping P1.
-    await f.service.receive({ version: 1, source: 'p1', phase: 'stop', document: document(['1.106']), song: { itemId: 'p', title: 'P1 的歌' } });
-    expect(f.executors()).toEqual(['1.106', '1.101', '1.105']);
-    expect(f.service.owed()).toEqual([]);
+    // Following P1 is the main process's own (0.5.9 P4): the window has no P1 stop to send here any more.
+    await expect(f.service.receive({ version: 1, source: 'p1', phase: 'stop', document: document(['1.106']), song: { itemId: 'p', title: 'P1 的歌' } })).rejects.toThrow();
     f.service.close();
   });
 

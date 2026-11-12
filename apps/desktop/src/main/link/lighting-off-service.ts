@@ -79,8 +79,8 @@ export class LightingOffService implements ProgramLightingOutput {
     return this.deliver(sends);
   }
 
-  /** The operator stopped following P1 (or the follow closed): `song`'s executors go off, as for a stop in the window
-   * (source 'p1'), and every Off still owed goes once more. P1 itself plays on. */
+  /** The operator stopped following P1 (or the follow closed): `song`'s executors go off, and every Off still owed goes
+   * once more (00-order §8 item 4). P1 itself plays on. */
   followStop(song: LitSong | null, cause: 'stop' | 'close'): Promise<LightingOffOutcome> {
     this.ledger.use('p1', []);
     const sends = song ? this.ledger.owe(litReleaseActions(song), song.song, cause, null) : [];
@@ -95,9 +95,7 @@ export class LightingOffService implements ProgramLightingOutput {
     // that stops a song on the same executors.
     this.ledger.use('window', []);
     if (request.phase === 'pause') { this.changed(); return { failed: [] }; }
-    const sends = this.ledger.owe(lightingReleaseActions(request.document), request.song, request.source === 'p1' ? 'stop' : 'preview', null);
-    // Following P1, stop in the app is the operator's stop: it also sends what is still owed (00-order §8 item 4).
-    return this.deliver([...sends, ...request.source === 'p1' ? this.ledger.resendOnStop() : []]);
+    return this.deliver(this.ledger.owe(lightingReleaseActions(request.document), request.song, 'preview', null));
   }
 
   /** The window's page is gone (its renderer exited, or it reloaded) and what it ran died with it: nothing there will

@@ -122,7 +122,8 @@ export function LinkApp(): JSX.Element {
 
   useDocumentStateReport(notify);
 
-  useRuntimeCloseProtection(internalPlayer.state.status === 'preparing' ? 'preflight' : runtimeState, notify);
+  // Only 联动台播放's: the main process knows of its own P1 follow (0.5.9 P4).
+  useRuntimeCloseProtection(project?.playbackSource !== 'internal' ? 'idle' : internalPlayer.state.status === 'preparing' ? 'preflight' : runtimeState, notify);
 
   useDocumentErrorNotification(documentError, notify);
   useUpdateAvailableNotice(notify);
