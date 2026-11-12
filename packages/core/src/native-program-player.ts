@@ -172,6 +172,13 @@ export class NativeProgramPlayer {
     }
     this.cancelPreloadRefresh(); this.preloadNow(itemId);
   }
+  /** OBS is back after it dropped (0.5.9 R7): the selected song's picture, prepared on the OBS that went away, is
+   * prepared again now instead of at the next edit or play. A held song restores its own picture (NativeObsHost). */
+  obsReconnected(): void {
+    const selected = this.selectedPreload;
+    if (!selected || this.disposed || !this.projectPath || this.holding() || this.dependencies.configuration().preload === false) return;
+    this.refreshPreload(selected.itemId);
+  }
   private refreshPreload(itemId: string): void {
     this.cancelPreloadRefresh();
     this.preloadRefresh = setTimeout(() => {

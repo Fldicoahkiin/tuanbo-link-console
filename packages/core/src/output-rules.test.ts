@@ -250,3 +250,45 @@ describe('规则 4：只有整条通道坏了才停整路', () => {
     expect(picture.find(file => file.path.endsWith('obs-program-session.ts'))?.text).toMatch(/recordPictureRepair\(|'picture\.drift'/);
   });
 });
+
+// ---- OBS reconnecting by itself and the picture at the current position (rule 5, 0.5.9 R7, design 01 §4.7) ----
+
+describe('规则 5：OBS 断了自己重连，连上后画面按当前位置恢复', () => {
+  it('OBS 重新连上：按此刻该有的画面补一次，断着时错过的切换不重放；之后照时间线往下切', async () => {
+    let online = true;
+    const show = pictureSession(camerasShow(['全景', '特写', '中景', '全景']), () => online ? Promise.resolve() : Promise.reject(new Error('OBS 已断开')), { connected: () => online });
+    await show.session.prepare(0); await show.advance(0, 500);
+    // OBS away from 0.6 s to 2.4 s: the cuts at 1 s and 2 s fail and are not repaired while it is away.
+    online = false; await show.advance(600, 2400);
+    const away = show.sent.length;
+    expect(show.scenes()).toEqual(['全景', '特写', '中景']);
+    online = true; await show.session.recover(() => Promise.resolve());
+    // Back: the camera of now (中景) once, not 特写 again; then the timeline goes on.
+    expect(show.scenes().slice(3)).toEqual(['中景']);
+    await show.advance(2500, 2900);
+    expect(show.sent.slice(away).filter(entry => entry.kind === 'obs.setProgramScene')).toHaveLength(1);
+    await show.advance(3000, 3200);
+    expect(show.scenes().at(-1)).toBe('全景');
+    expect(show.session.error).toBeNull();
+  });
+
+  it('源码：重连的等待和次数、恢复画面的次数只在 output-recovery.ts；连接只有一处，重连器自己不开定时器', () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+    const read = (path: string): string => readFileSync(join(root, path), 'utf8');
+    const recovery = read('packages/core/src/output-recovery.ts');
+    for (const row of ['obs.reconnect', 'obs.restore']) expect(recovery).toContain(`'${row}'`);
+    expect(recovery).toContain('OBS_RECONNECT_DELAYS_MS');
+    const reconnector = read('apps/desktop/src/main/link/obs-reconnector.ts');
+    expect(reconnector).toContain('obsReconnectDelayMs(');
+    expect(reconnector).toContain("OUTPUT_RECOVERY_RULES['obs.reconnect']");
+    // No wait or count of its own: no number in the code but 0 and 1, and its timer is the one link-main gives it.
+    const code = reconnector.split('\n').filter(line => !/^\s*(\/\/|\/?\*)/.test(line)).join('\n');
+    expect((code.match(/\b\d+\b/g) ?? []).filter(number => !['0', '1'].includes(number))).toEqual([]);
+    expect(/\bset(Timeout|Interval)\(/.test(reconnector)).toBe(false);
+    expect(read('apps/desktop/src/main/link/native-obs-host.ts')).toContain("OUTPUT_RECOVERY_RULES['obs.restore']");
+    // The operator's connect and the automatic one are one connect; a paused song is not prepared again around it.
+    const main = read('apps/desktop/src/main/link-main.ts');
+    expect(main.match(/\bobs\.connect\(/g)).toHaveLength(1);
+    expect(main).not.toContain('program.seek(positionMs)');
+  });
+});

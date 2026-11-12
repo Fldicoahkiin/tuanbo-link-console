@@ -170,6 +170,17 @@ export class CueRuntime {
     return this.update();
   }
 
+  /** Armed and not started yet: the start moves to `sample`, ahead of where it was armed (internal playback only). A
+   * picture prepared while the music went on joins it there (0.5.9 R7); what lies before it is not executed. */
+  moveStart(sample: MtcSample): RuntimeUpdate {
+    if (this.state !== 'armed' || this.project.playbackSource !== 'internal' || this.executionOwner !== 'local') return this.fail(`只有待命时才能改开始的位置，当前状态：${this.state}`);
+    if (sample.frameRate !== this.project.timebase.frameRate) return this.fail(`MTC 帧率不一致：应为 ${this.project.timebase.frameRate}，收到的是 ${sample.frameRate}`);
+    if (sample.totalFrames < this.previousFrame) return this.fail('播放起点和准备的位置对不上，请重新定位后播放');
+    this.previousFrame = sample.totalFrames; this.lastSample = sample; this.armedAtMs = null;
+    this.markCuesThroughAsMissed(sample.totalFrames);
+    return this.update();
+  }
+
   ingest(sample: MtcSample): RuntimeUpdate {
     if (this.state === 'idle' || this.state === 'preflight' || this.state === 'error' || this.state === 'stopping') {
       return this.update();

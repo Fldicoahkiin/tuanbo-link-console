@@ -49,6 +49,23 @@ describe('OBS 已确认的账：只记 OBS 回应或报告过的', () => {
     expect(state.shows.get(show.key)).toMatchObject({ state: 'unknown', last: { enabled: true, sourceName: '字幕' } });
   });
 
+  it('重连后确认停了的解码器还是停的；停止被拒绝或没回应的仍可能在播（R7）', () => {
+    const ledger = new ObsPictureLedger();
+    const other: LedgerWrite = { element: 'decoder', key: 'M2', value: { clipId: 'c2', mode: 'stopped', offsetMs: 0 }, target: 'c2:stopped' };
+    ledger.sent(decoder('c1', 'stopped'), 1); ledger.ack(decoder('c1', 'stopped'), 2);
+    ledger.sent(other, 1); ledger.fail(other, '被拒绝');
+    ledger.invalidate('OBS 重新连接');
+    expect(ledger.state().decoders.get('M1')).toMatchObject({ state: 'confirmed', value: { clipId: 'c1', mode: 'stopped' } });
+    expect(ledger.state().decoders.get('M2')).toMatchObject({ state: 'unknown', last: { clipId: 'c2', mode: 'stopped' } });
+  });
+
+  it('解码器按最后一次换上的片段排先后：换了片段的排到最后，同一个片段的暂停、停止不挪位置（R7）', () => {
+    const ledger = new ObsPictureLedger();
+    const on = (key: string, clipId: string, mode: 'playing' | 'paused' | 'stopped' = 'playing'): LedgerWrite => ({ element: 'decoder', key, value: { clipId, mode, offsetMs: 0 }, target: `${clipId}:${mode}` });
+    for (const write of [on('M1', 'a'), on('M2', 'b'), on('M1', 'a', 'paused'), on('M1', 'c'), on('M2', 'b', 'stopped')]) { ledger.sent(write, 1); ledger.ack(write, 2); }
+    expect([...ledger.state().decoders.keys()]).toEqual(['M2', 'M1']);
+  });
+
   it('手动接管记下当时的应有画面；联动台切过去被确认后接管结束', () => {
     const ledger = new ObsPictureLedger();
     ledger.takeOver('手动场景', '机位甲', 5);

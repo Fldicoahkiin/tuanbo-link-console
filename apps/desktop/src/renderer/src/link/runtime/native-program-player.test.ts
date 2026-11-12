@@ -1332,6 +1332,23 @@ describe('节目换上新的一版工程', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('OBS 重新连上以后，选中的那首歌马上重新准备画面（同一版也准备）；正在播放时不另准备（R7）', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture(); f.project.obsOutputMode = 'scenes';
+      f.player.obsReconnected(); await vi.advanceTimersByTimeAsync(300);
+      expect(f.api.preloadNativeObs).not.toHaveBeenCalled();
+      f.player.preloadSelected('song-0'); expect(f.api.preloadNativeObs).toHaveBeenCalledTimes(1);
+      f.player.obsReconnected(); await vi.advanceTimersByTimeAsync(300);
+      expect(f.api.preloadNativeObs).toHaveBeenCalledTimes(2);
+      expect(f.api.preloadNativeObs.mock.calls[1]?.[0]).toMatchObject({ snapshot: { item: { id: 'song-0' }, revision: 7 } });
+      await f.player.play('song-0');
+      f.player.obsReconnected(); await vi.advanceTimersByTimeAsync(300);
+      expect(f.api.preloadNativeObs).toHaveBeenCalledTimes(2);
+      await f.player.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('开始播放时取消还没做的重新准备：不在播放中另准备画面', async () => {
     vi.useFakeTimers();
     try {

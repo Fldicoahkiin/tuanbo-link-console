@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { createObsProgramSnapshot, emptyInternalPlayerState, NativeProgramPlayer, ObsPictureLeftover, type InternalPlayerState, type LinkDesktopApi } from '@tb/core/link';
 import { createEmptyLinkProject, parseLinkProject, type LinkAction, type NativePlayerControl, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus, type NativeObsStop } from '@tb/schema';
-import { NativeObsHost } from './native-obs-host';
+import { NativeObsHost, type PictureRecoveryLog } from './native-obs-host';
 import { NativeObsRequests } from './native-obs-requests';
 import { NativeObsPreloadPool } from './native-obs-preload';
 import { ObsPreparationCancelled, type NativeObsOutputs } from './native-obs-outputs';
@@ -23,16 +23,17 @@ function setup(prepareNextFiles = vi.fn<(request: NativeObsPrepare, assertCurren
   let now = 0;
   const execute = vi.fn<(action: LinkAction) => Promise<void>>(() => Promise.resolve()), releaseOutputs = vi.fn(() => Promise.resolve()), failures: string[] = [], states: NativeObsStatus[] = [];
   const restoreScenes = vi.fn<(assertCurrent: () => void) => Promise<void>>(() => Promise.resolve());
+  const prepareOutputs = vi.fn<(assertCurrent: () => void) => Promise<void>>(() => Promise.resolve()), recoveries: PictureRecoveryLog[] = [];
   const request: NativeObsPrepare = { version: 1, sessionId: audio.sessionId, generation: 1, preciseSeeking: false, projectPath: 'C:/shows/test.tblink', snapshot: createObsProgramSnapshot(project, 'song', 4) };
   const host = new NativeObsHost({ audio: () => audio, changed: state => states.push(state), error: message => failures.push(message),
-    prepareNextFiles,
+    prepareNextFiles, recovered: entry => recoveries.push(entry),
     outputs: () => ({ executor: { id: 'test', supports: () => true, execute },
       guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
-      prepareOutputs: () => Promise.resolve(), releaseOutputs, restoreScenes,
+      prepareOutputs, releaseOutputs, restoreScenes,
       now: () => now, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now }) }) });
   const observe = (patch: Partial<NativePlayerStatus>, time: number, ageMs = 0) => { now = time; audio = { ...audio, ...patch }; host.observe(audio, ((process.hrtime.bigint() - BigInt(ageMs) * 1000000n) / 100n).toString()); };
-  return { host, request, execute, releaseOutputs, restoreScenes, failures, states, observe, prepareNextFiles, time: (value: number) => { now = value; }, audio: () => audio, change: (patch: Partial<NativePlayerStatus>) => { audio = { ...audio, ...patch }; },
+  return { host, request, execute, releaseOutputs, restoreScenes, prepareOutputs, recoveries, failures, states, observe, prepareNextFiles, time: (value: number) => { now = value; }, audio: () => audio, change: (patch: Partial<NativePlayerStatus>) => { audio = { ...audio, ...patch }; },
     song: (itemId: string, generation: number): NativeObsPrepare => ({ ...request, generation, snapshot: createObsProgramSnapshot(project, itemId, 4) }) };
 }
 
@@ -202,9 +203,9 @@ it('画面按项列在状态里：一项补了还不行只标这一项，这首�
   // The counts as output-recovery.ts keeps them: this item's one, and the song's 1 of 20.
   expect(test.host.status?.recoveries).toEqual([{ row: 'picture.element', key: 'program@["机位0","cue-0"]', count: 1, max: 1, exhausted: false },
     { row: 'picture.song', key: 'song', count: 1, max: 20, exhausted: false }]);
-  // OBS drops: the connection is listed on its own, first; nothing is repaired while it is down.
+  // OBS drops: the connection is listed on its own, first, as waiting (R7); nothing is repaired while it is down.
   test.host.disconnect('网络断开');
-  expect(test.host.status?.items?.[0]).toMatchObject({ id: 'obs.connection', scope: 'channel', state: 'failed' });
+  expect(test.host.status?.items?.[0]).toMatchObject({ id: 'obs.connection', scope: 'waiting', state: 'waiting' });
   test.execute.mockImplementation(() => Promise.reject(new Error('OBS 连接已断开')));
   for (let time = 620; time <= 1400; time += 20) { test.observe({ status: 'playing', positionMs: time }, time); await flush(); }
   const calls = test.execute.mock.calls.length;
@@ -245,19 +246,22 @@ it('直播中 OBS 拒绝动作标红，按当时应有的画面补一次，通�
   expect(test.host.status?.state).toBe('running');
 });
 
-it('初始化在途时音频先启动，立即作废准备，迟到结果不能继续加入', async () => {
+// 设计 01 §3.2 第 13 行（R7）：画面还没准备好音乐就开始了，不再“这一首不联动画面”，准备好以后按当前位置接上。
+it('初始化在途时音频先启动：画面照常准备完，到音乐的下一个位置按当前位置重建接上，不整首没画面', async () => {
   const test = setup(); test.change({ positionMs: 500 });
   let sent: () => void = () => { throw new Error('未初始化'); };
   let release: () => void = () => { throw new Error('未开始'); };
   const started = new Promise<void>(resolve => { sent = resolve; });
   test.execute.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; sent(); }));
-  const preparing = expect(test.host.prepare(test.request)).rejects.toThrow('已取消');
+  const preparing = test.host.prepare(test.request);
   await started;
   test.observe({ status: 'playing', generation: 2 }, 10);
-  expect(test.host.status?.state).toBe('stopped');
-  expect(test.host.status?.reason).toContain('这一首不联动画面');
-  release(); await preparing; await test.host.stop();
-  expect(test.execute).toHaveBeenCalledTimes(1);
+  expect(test.host.status?.state).toBe('preparing');
+  release(); await expect(preparing).resolves.toMatchObject({ state: 'ready' });
+  test.observe({ status: 'playing', generation: 2, positionMs: 1200 }, 710); await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(2));
+  expect(test.execute.mock.calls.map(([action]) => action.kind === 'obs.setProgramScene' ? action.sceneName : action.kind)).toEqual(['机位0', '机位1']);
+  expect(test.host.status).toMatchObject({ state: 'running', fault: 'OBS 已重新连接，画面已按当前位置恢复（1 项）' });
+  await test.host.stop();
 });
 
 it('旧准备的停止不得取消新节目；播放中断线标红但画面通道保留，重新连接后继续', async () => {
@@ -322,18 +326,66 @@ it('重新连接 OBS 后恢复画面途中这首歌停了：恢复按取消结�
   await vi.waitFor(() => expect(gate.reached()).toBe(true));
   const stopping = test.host.stop(); gate.release(); await stopping; await reconnecting;
   expect(checked).toBeInstanceOf(ObsPreparationCancelled); expect(materials).toEqual([]);
-  expect(test.failures).toEqual(['OBS 连接中断：OBS 网络断开。重新连上 OBS 之前画面动作都不会执行，连上后从下一个画面动作继续']);
+  expect(test.failures).toEqual(['OBS 断开了：OBS 网络断开。音乐和时间码照常，画面先停在这里，OBS 重新连上后按当前位置接上']);
 });
 
-it('准备阶段断线仍取消本轮画面，不带着未就绪的画面开播', async () => {
+const flushHost = (): Promise<unknown> => new Promise(resolve => setTimeout(resolve, 0));
+const LOST = 'OBS 断开了，这首歌的画面还没准备好。音乐和时间码照常，OBS 重新连上后按当前位置准备好画面接上';
+
+// 设计 01 §3.2 第 10 行、§4.7（R7）：准备中断线不再取消这首歌的画面，算等待；OBS 回来以后按当前位置准备好接上。
+it('准备阶段 OBS 断了：不取消，这首歌照常开播、画面标红等 OBS；连上后按当前位置重新准备，到音乐的下一个位置接上，算一次“重连后恢复画面”', async () => {
   const test = setup();
-  let release: () => void = () => { throw new Error('未开始'); };
-  test.execute.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
-  test.change({ positionMs: 500 });
-  const preparing = expect(test.host.prepare(test.request)).rejects.toThrow();
-  await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(1));
-  test.host.disconnect('OBS 网络断开'); release(); await preparing;
-  expect(test.host.status?.state).toBe('failed');
+  let fail: () => void = () => { throw new Error('未开始'); };
+  test.prepareOutputs.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = () => reject(new Error('OBS 已断开，准备好的画面不能用了')); }));
+  const preparing = test.host.prepare(test.request);
+  await vi.waitFor(() => expect(test.prepareOutputs).toHaveBeenCalled());
+  test.host.disconnect('OBS 网络断开'); fail();
+  await expect(preparing).resolves.toMatchObject({ state: 'ready', fault: LOST });
+  expect(test.host.status?.items).toEqual([{ id: 'obs.connection', scope: 'waiting', state: 'waiting', detail: 'OBS 断开了：OBS 网络断开。音乐和时间码照常，画面先停在这里，OBS 重新连上后按当前位置接上' }]);
+  test.observe({ status: 'playing', generation: 2, positionMs: 0 }, 0);
+  for (let time = 100; time <= 1200; time += 100) { test.observe({ positionMs: time }, time); await flushHost(); }
+  expect(test.execute).not.toHaveBeenCalled(); expect(test.host.status).toMatchObject({ state: 'running', fault: LOST });
+  await test.host.reconnected();
+  expect(test.prepareOutputs).toHaveBeenCalledTimes(2);
+  expect(test.host.status?.recoveries).toEqual([{ row: 'obs.restore', key: 'song', count: 1, max: 5, exhausted: false }]);
+  expect(test.recoveries).toEqual([{ level: 'warning', message: 'OBS 重新连上了，按当前位置恢复这首歌的画面（第 1 次，最多 5 次）', result: 'succeeded',
+    projectId: test.request.snapshot.projectId, itemId: 'song', details: { channel: 'obs', item: 'obs.restore', recoveries: [{ row: 'obs.restore', key: 'song', count: 1, max: 5 }] } }]);
+  test.observe({ positionMs: 1300 }, 1300);
+  await vi.waitFor(() => expect(test.host.status?.fault).toBe('OBS 已重新连接，画面已按当前位置恢复（1 项）'));
+  expect(test.execute.mock.calls.map(([action]) => action.kind === 'obs.setProgramScene' ? action.sceneName : action.kind).at(-1)).toBe('机位1');
+  expect(test.host.status?.state).toBe('running'); expect(test.host.status?.items).toEqual([]);
+  for (let time = 1400; time <= 2000; time += 100) { test.observe({ positionMs: time }, time); await flushHost(); }
+  expect(test.host.status?.state).toBe('running');
+  await test.host.stop();
+});
+
+it('准备好了还没开播时 OBS 断了又连上：不马上动，开播时先补回自有场景再按当前位置重建（R7）', async () => {
+  const test = setup(); await test.host.prepare(test.request);
+  test.host.disconnect('OBS 网络断开'); await test.host.reconnected();
+  expect(test.restoreScenes).not.toHaveBeenCalled(); expect(test.host.status?.state).toBe('ready');
+  test.observe({ status: 'playing', generation: 2, positionMs: 0 }, 0);
+  await vi.waitFor(() => expect(test.host.status?.fault).toBe('OBS 已重新连接，画面已按当前位置恢复（1 项）'));
+  expect(test.restoreScenes).toHaveBeenCalledOnce();
+  await test.host.stop();
+});
+
+it('一首歌里 OBS 重连后恢复画面最多 5 次：第 6 次不再恢复，标红写明，记一条错误日志；音乐照常（R7，output-recovery.ts obs.restore）', async () => {
+  const test = setup(); await test.host.prepare(test.request);
+  test.observe({ status: 'playing', generation: 2, positionMs: 0 }, 0);
+  for (let time = 50; time <= 500; time += 50) { test.observe({ positionMs: time }, time); await flushHost(); }
+  for (let round = 1; round <= 6; round++) { test.host.disconnect('OBS 网络断开'); await test.host.reconnected(); }
+  expect(test.restoreScenes).toHaveBeenCalledTimes(5);
+  const limit = 'OBS 重连后恢复画面的次数已到上限，这首歌的画面不再自动恢复，音乐和时间码照常';
+  expect(test.host.status).toMatchObject({ state: 'running', fault: limit });
+  expect(test.host.status?.items).toContainEqual({ id: 'obs.restore', scope: 'item', state: 'limit', detail: limit });
+  expect(test.host.status?.recoveries?.[0]).toEqual({ row: 'obs.restore', key: 'song', count: 5, max: 5, exhausted: true });
+  expect(test.recoveries.map(entry => [entry.level, entry.details.recoveries[0]!.count])).toEqual([['warning', 1], ['warning', 2], ['warning', 3], ['warning', 4], ['warning', 5], ['error', 5]]);
+  // The next song starts again from 0.
+  test.change({ generation: 3, itemId: 'next', status: 'ready', positionMs: 0 });
+  await test.host.prepare(test.song('next', 3));
+  test.host.disconnect('OBS 网络断开'); await test.host.reconnected();
+  expect(test.recoveries.at(-1)).toMatchObject({ level: 'warning', itemId: 'next', details: { recoveries: [{ count: 1 }] } });
+  await test.host.stop();
 });
 
 it('暂停请求准入即取消排队画面，迟到的播放状态不能重新触发；确认后才显示暂停', async () => {

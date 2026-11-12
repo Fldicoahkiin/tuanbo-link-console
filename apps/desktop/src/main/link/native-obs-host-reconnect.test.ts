@@ -79,7 +79,8 @@ it('OBS 重连后重新准备场景时按了暂停：不算恢复失败，继续
   expect(test.host.status?.state).toBe('running');
 });
 
-it('OBS 重连恰好在按下暂停之后、音频报告暂停之前完成：继续时同样先准备场景，再补上当前机位', async () => {
+// R7（设计 01 §4.7）：暂停中重连不再等继续，马上补回自有场景、按暂停的位置恢复画面。
+it('OBS 重连恰好在按下暂停之后、音频报告暂停之前完成：马上补回场景、按暂停的位置补上当前机位，继续时不再重复', async () => {
   const test = setup();
   await test.playIntoOutage();
   test.observe({ positionMs: 1500 }, 1500); await tick();
@@ -87,9 +88,10 @@ it('OBS 重连恰好在按下暂停之后、音频报告暂停之前完成：继
   const reconnecting = test.host.reconnected(); await tick();
   test.observe({ status: 'paused', generation: 3, positionMs: 1500 }, 1510); await tick();
   test.release(); await reconnecting; await tick();
-  expect(test.fault()).toBe('OBS 已重新连接；节目暂停了，继续播放时按当前位置恢复画面');
-  expect(test.restoreScenes).not.toHaveBeenCalled();
+  expect(test.fault()).toBe('OBS 已重新连接，画面已按当前位置恢复（1 项）');
+  expect(test.restoreScenes).toHaveBeenCalledOnce(); expect(test.shown()).toBe('机位1');
   await test.resume(4); await tick();
   expect(test.restoreScenes).toHaveBeenCalledOnce();
-  expect(test.shown()).toBe('机位1'); expect(test.fault()).toBe('画面已按继续播放的位置恢复（1 项）');
+  expect(test.shown()).toBe('机位1'); expect(test.fault()).toBe('OBS 已重新连接，画面已按当前位置恢复（1 项）');
+  expect(test.host.status?.state).toBe('running');
 });

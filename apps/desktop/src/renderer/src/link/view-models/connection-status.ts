@@ -31,6 +31,11 @@ export function ma2EditingConnectionStatus(input: {
 /** Live transport state wins over results of an earlier connection/inventory check. */
 export function obsConnectionStatus(obs: LinkObsSnapshot): ConnectionStatus {
   if (obs.status === 'connected') return { state: 'ready', value: '已连接', detail: 'OBS 已连接；预览和场景清单另外检查' };
+  // OBS reconnecting by itself after it dropped (R7): waiting, not red, until the limit.
+  const auto = obs.autoReconnect;
+  if (auto?.state === 'gave-up') return { state: 'error', value: '自动重连没成功', detail: auto.text };
+  if (auto) return { state: 'checking', value: `自动重连（第 ${auto.attempt} 次）`,
+    detail: `OBS 断开了，正在自动重连（第 ${auto.attempt} 次，最多 ${auto.max} 次）。连上后画面按当前位置接上；要马上重试，点连接` };
   if (obs.status === 'connecting' || obs.status === 'reconnecting') return { state: 'checking', value: '连接中', detail: '正在连接 OBS' };
   return { state: obs.error ? 'error' : 'idle', value: '未连接', detail: obs.error ?? 'OBS 还没连接' };
 }

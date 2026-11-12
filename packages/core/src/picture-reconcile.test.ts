@@ -200,15 +200,16 @@ describe('补的是现在该有的画面：失败补一次，过了切点作废�
 });
 
 describe('OBS 状态不确定时按此刻应有的全量恢复（01 设计 4.4、4.7）', () => {
-  it('重连后场景、叠加、解码器和显示来源全部按应有的发一次，记为恢复；确认隐藏过的来源不再隐藏', () => {
+  it('重连后场景、叠加、解码器和显示来源全部按应有的发一次，记为恢复；确认隐藏过的来源不再隐藏，确认停过的解码器不再停', () => {
     const ledger = new ObsPictureLedger();
     settle(ledger, pictureAt(60), context());
     settle(ledger, pictureAt(150), context());
     settle(ledger, pictureAt(250), context());
     ledger.invalidate('OBS 重新连接');
     const plan = planPictureReconcile(pictureAt(250), ledger.state(), context());
+    // R7: a decoder OBS confirmed stopped stays stopped across the reconnect, like a confirmed hide: no second stop.
     expect(plan.ops.map(op => [op.kind, op.reason])).toEqual([
-      ['decoder.stop', 'restore'], ['composition.update', 'restore'], ['program.switch', 'restore'],
+      ['composition.update', 'restore'], ['program.switch', 'restore'],
       ['decoder.start', 'restore'], ['decoder.start', 'restore'], ['decoder.start', 'restore']]);
     // The subtitle's hide was confirmed before the reconnect: no second hide (it would go to the scene now on program).
     expect(plan.ops.some(op => op.kind === 'show.set')).toBe(false);

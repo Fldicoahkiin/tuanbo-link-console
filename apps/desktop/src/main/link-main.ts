@@ -184,6 +184,7 @@ import { LightingOffService } from './link/lighting-off-service';
 import { followWindowPage } from './link/window-page';
 import { NativePlaybackRequests } from './link/native-playback-requests';
 import { NativeObsHost } from './link/native-obs-host';
+import { ObsReconnector } from './link/obs-reconnector';
 import { NativeObsRequests } from './link/native-obs-requests';
 import { NativeObsPreloadPool } from './link/native-obs-preload';
 import { createNativeObsOutputs } from './link/native-obs-outputs';
@@ -252,6 +253,10 @@ let nativePlayerShutdown: Promise<void> | null = null;
 /** The audio engine whose close failed (0.5.9 S6): kept, never killed, and never replaced while its process is there. */
 let heldEngine: { player: NativePlayerService; reason: string } | null = null;
 let nativeObs: NativeObsHost | null = null;
+/** OBS reconnecting by itself after it dropped (0.5.9 R7): the operator's connects and disconnects go through it. */
+let obsReconnector: ObsReconnector | null = null;
+/** An OBS connection state as the windows see it: with the automatic reconnect's state. */
+const obsWithReconnect = (snapshot: LinkObsSnapshot): LinkObsSnapshot => ({ ...snapshot, autoReconnect: obsReconnector?.state ?? null });
 let nativeObsPreload: NativeObsPreloadPool | null = null;
 let nativeProgram: NativeProgramService | null = null;
 /** The show state's one live source (show-state-service.ts); built with the program it follows. */
@@ -409,7 +414,7 @@ async function bootstrap(): Promise<void> {
   // OBS connection changes are logged here, whether or not a window is open.
   let obsStatus = obs.getSnapshot().status;
   obs.subscribe((snapshot) => {
-    sendToRenderer('link:obs-status', snapshot);
+    sendToRenderer('link:obs-status', obsWithReconnect(snapshot));
     const entry = obsStatusLogEntry(obsStatus, snapshot);
     obsStatus = snapshot.status;
     if (entry) void logger.record({ ...entry, category: 'device', device: 'obs' }).catch((error: unknown) => console.error('OBS 连接状态日志未能保存', error));
@@ -657,6 +662,7 @@ function registerIpc(
         details: { elapsedMs: performance.now() - started, decoderPrepared } });
     },
     changed: status => { sendToRenderer('link:native-obs-status', status); for (const listener of programObsListeners) listener(status); },
+    recovered: entry => { void logger.record({ ...entry, category: 'device', device: 'obs' }).catch((error: unknown) => console.error('画面恢复日志写入失败', error)); },
     error: message => { void logger.record({ level: 'error', category: 'device', device: '后台画面', message, result: 'failed',
       details: { requests: obs.getRequestDiagnostics() } })
       .catch((error: unknown) => console.error('后台画面日志写入失败', error)); }
@@ -667,16 +673,11 @@ function registerIpc(
   handle('link:native-obs-prepare', (_event, value: unknown) => obsRequests.prepare(value, checkObsFiles), 'listener');
   handle('link:native-obs-stop', (_event, value: unknown) => obsRequests.stop(value));
   handle('link:native-obs-status', () => nativeObs?.status ?? null);
-  // Recovery rule B when the operator reconnects OBS during a song: playing rebuilds
-  // the picture at the current position; paused prepares the song again in place.
+  // OBS back, by the operator or by itself (R7, design 01 §4.7): the song's picture is restored at the current position,
+  // playing or paused (NativeObsHost), and the selected song's picture is prepared again.
   const recoverNativeObs = async (): Promise<void> => {
-    const picture = nativeObs?.status?.state, program = nativeProgramHost?.controller, positionMs = nativePlayer?.status?.positionMs;
-    if (picture === 'running') { await nativeObs!.reconnected(); return; }
-    if (picture !== 'paused' || !program || positionMs === undefined) return;
-    await program.seek(positionMs);
-    const message = 'OBS 已重新连接，画面已按暂停位置恢复';
-    program.reportFault(message);
-    await logger.record({ level: 'warning', category: 'device', device: '后台画面', message });
+    nativeProgramHost?.controller.obsReconnected();
+    await nativeObs?.reconnected();
   };
   let obsConnected = obs.getSnapshot().status === 'connected';
   obs.subscribe(state => {
@@ -686,6 +687,8 @@ function registerIpc(
       message: `OBS 已重新连接，但画面恢复失败：${String(error)}`, result: 'failed' }).catch((failure: unknown) => console.error('画面恢复日志写入失败', failure)); });
     if (state.status === 'connected') return;
     nativeObs?.disconnect(state.error || 'OBS 已断开');
+    // After the song is told OBS is gone: a loss nobody asked for is reconnected by itself.
+    obsReconnector?.observe(state);
     void obsPreload.close().catch((error: unknown) => { void logger.record({ level: 'error', category: 'device', device: '后台画面', message: `关闭节目准备失败：${String(error)}`, result: 'failed' })
       .catch((failure: unknown) => console.error('节目预备清理日志写入失败', failure)); });
   });
@@ -1893,7 +1896,9 @@ function registerIpc(
       };
     }
   });
-  const connectObs = async (): Promise<LinkObsSnapshot> => {
+  /** The operator's connect and the automatic reconnect's: this computer's address, and the password from safeStorage
+   * (never in plain text). An automatic attempt's failure is logged by the reconnector, with its number. */
+  const connectWith = async (logFailure: boolean): Promise<LinkObsSnapshot> => {
     const profile = await requireProfile(profileStore);
     let connected: LinkObsSnapshot;
     try {
@@ -1901,7 +1906,7 @@ function registerIpc(
       knownSecrets.add(password);
       connected = await obs.connect(profile.obs.webSocketUrl, password, profile.obs.startupTimeoutMs);
     } catch (error) {
-      await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed',
+      if (logFailure) await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed',
         message: `OBS 连接失败：${error instanceof Error ? error.message : String(error)}`, details: { address: profile.obs.webSocketUrl } });
       throw error;
     }
@@ -1914,8 +1919,14 @@ function registerIpc(
     }
     return connected;
   };
-  handle('link:obs-disconnect', () => obs.disconnect());
-  handle('link:obs-snapshot', () => obs.getSnapshot());
+  const reconnector = new ObsReconnector({ connect: () => connectWith(false), now: () => performance.now(),
+    schedule: (ms, run) => { const timer = setTimeout(run, ms); return () => clearTimeout(timer); },
+    log: entry => { void logger.record({ ...entry, category: 'device', device: 'obs' }).catch((error: unknown) => console.error('OBS 自动重连日志未能保存', error)); },
+    changed: () => sendToRenderer('link:obs-status', obsWithReconnect(obs.getSnapshot())) });
+  obsReconnector = reconnector;
+  const connectObs = (): Promise<LinkObsSnapshot> => reconnector.manual(() => connectWith(true));
+  handle('link:obs-disconnect', () => reconnector.manualDisconnect(() => obs.disconnect()));
+  handle('link:obs-snapshot', () => obsWithReconnect(obs.getSnapshot()));
   let inventoryWarningKey = '';
   handle('link:obs-inventory', async (): Promise<LinkObsInventory> => {
     const inventory = await obs.readInventory();
@@ -2026,9 +2037,9 @@ function registerIpc(
     }
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) }); throw error; }
   });
-  handle('link:obs-connect', connectObs);
+  handle('link:obs-connect', () => connectObs());
   let localObsConnecting = false;
-  handle('link:obs-connect-local', async () => {
+  handle('link:obs-connect-local', () => reconnector.manual(async () => {
     if (runtimeActive) throw new Error('请先停止节目再连接 OBS');
     if (localObsConnecting) throw new Error('正在自动连接 OBS，请稍等');
     localObsConnecting = true;
@@ -2068,13 +2079,14 @@ function registerIpc(
       const listeningPid = targetPid === null ? null : await findLocalObsPid(local.address);
       if (targetPid !== null && listeningPid === null) throw obsEndpointNotListening(local.address, targetPid);
       if (targetPid === null || listeningPid !== targetPid) throw new Error('OBS 的连接端口和选定的 OBS 程序对不上，请检查是不是同时开了多个 OBS（密码还没发送）');
-      const snapshot = await connectObs();
+      // Already the operator's connect: not counted as a second one.
+      const snapshot = await connectWith(true);
       return localObsConnectionResultSchema.parse({ version: 1, address: local.address, password: local.password, snapshot });
     } catch (error) {
       await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: `本机 OBS 自动连接失败：${error instanceof Error ? error.message : String(error)}` });
       throw error;
     } finally { localObsConnecting = false; }
-  });
+  }));
   let liveBridgeInstalled = false;
   let liveBridgeInstallation: Promise<'installed' | 'unchanged'> | null = null;
   const ensureLiveBridge = async (): Promise<void> => {
@@ -2121,8 +2133,8 @@ function registerIpc(
       if (runtimeActive) throw new Error('请先停止播放，再修复 OBS 组件');
       const profile = await requireProfile(profileStore);
       if (obs.getSnapshot().status !== 'connected') await connectObs();
-      await processManager.stop('obs', profile.obs.shutdownTimeoutMs);
-      await obs.disconnect();
+      // The repair closes OBS itself: not reconnected until the repair connects it again.
+      await reconnector.manualDisconnect(async () => { await processManager.stop('obs', profile.obs.shutdownTimeoutMs); await obs.disconnect(); });
       nativeSeek.reset();
     },
     start: async () => {
@@ -2230,6 +2242,8 @@ function registerIpc(
     const id = linkExternalApplicationIdSchema.parse(idValue);
     const profile = await requireProfile(profileStore);
     const configuration = processConfiguration(profile, id);
+    // The operator closing OBS is their disconnect: it is not reconnected by itself.
+    if (id === 'obs') return reconnector.manualDisconnect(() => processManager.stop(id, configuration.shutdownTimeoutMs));
     return processManager.stop(id, configuration.shutdownTimeoutMs);
   });
   handle('link:process-snapshots', async () => {
@@ -2421,6 +2435,8 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
       try { await closeEngine(); } finally { await monitor; }
     },
     finish: async closeIds => {
+      // Quitting: OBS is not reconnected any more, whether it is closed now or kept.
+      await obsReconnector?.manualDisconnect(() => Promise.resolve());
       if (closeIds.length > 0) {
         const profile = await requireProfile(profileStore);
         const failures: string[] = [];

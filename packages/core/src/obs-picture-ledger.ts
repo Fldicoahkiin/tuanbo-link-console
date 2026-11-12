@@ -150,11 +150,14 @@ export class ObsPictureLedger {
     this.program = { state: 'confirmed', value: { sceneName, cueId: null }, at: now };
   }
 
-  /** Everything OBS holds is unknown again (reconnect); a hand switch from before no longer counts. */
+  /** Everything OBS holds is unknown again (reconnect); a hand switch from before no longer counts.
+   * A decoder OBS confirmed stopped stays stopped: OBS kept it stopped, or restarted with nothing
+   * playing (R7). One whose stop was refused or not answered may still play, and is unknown. */
   invalidate(reason: string): void {
     this.program = forget(this.program, reason);
     this.takenOver = null;
-    forgetAll(this.compositions, reason); forgetAll(this.decoders, reason);
+    forgetAll(this.compositions, reason);
+    for (const [key, known] of this.decoders) if (known.state !== 'confirmed' || known.value.mode !== 'stopped') this.decoders.set(key, forget(known, reason));
     for (const [key, known] of this.shows) this.shows.set(key, forgetShow(known, reason));
     this.failures.clear(); this.before.clear();
   }
@@ -183,7 +186,13 @@ export class ObsPictureLedger {
     switch (write.element) {
       case 'program': this.program = make(write.value); return;
       case 'composition': this.compositions.set(write.key, make(write.value)); return;
-      case 'decoder': this.decoders.set(write.key, make(write.value)); return;
+      case 'decoder': {
+        // A decoder taking another clip goes last: the decoders are in the order their clips were last given to them,
+        // which is the order the song's stop and the drift check go through them (R7, in place of the session's own list).
+        const previous = this.decoders.get(write.key), held = previous && (previous.state === 'unknown' ? previous.last : previous.value);
+        if (previous && held?.clipId !== write.value.clipId) this.decoders.delete(write.key);
+        this.decoders.set(write.key, make(write.value)); return;
+      }
       case 'show': this.shows.set(write.key, make(write.value)); return;
     }
   }

@@ -8,7 +8,7 @@ import { compileManagedMediaTimeline, MANAGED_OBS_SCENE_NAME, type ManagedMediaE
 import { ObsPictureLedger, pictureElementKey, showKey, showMayBeOn, type DecoderState, type Known, type LedgerWrite } from './obs-picture-ledger';
 import type { OnAirPicture } from './on-air-picture';
 import { OUTPUT_RECOVERY_RULES, OutputRecovery, pictureRepairAllowed, pictureRepairKey, recordPictureRepair, type RecoveryBudgetView, type RecoveryResult, type RecoveryRow } from './output-recovery';
-import { COMPOSITION_GROUP_STARTS, DECODER_GROUP_STARTS, pictureOpWrites, planPictureReconcile, whilePaused, type PictureOp, type ReconcilePlan } from './picture-reconcile';
+import { COMPOSITION_GROUP_STARTS, DECODER_GROUP_STARTS, decoderTarget, pictureOpWrites, planPictureReconcile, whilePaused, type PictureOp, type ReconcilePlan } from './picture-reconcile';
 import type { SceneOutputTimeline } from './scene-output-timeline';
 
 export type ObsProgramSessionDependencies = ManagedOutputRuntimeDependencies & {
@@ -133,7 +133,7 @@ export function obsRecoveryText(recovery: ObsRecovery, reconnect: boolean): stri
 /** The clip a decoder may still play or hold paused, as far as the ledger knows: one it
  * confirmed or was sent; one whose start, pause, resume or stop OBS refused (it may be on
  * air all the same); after a reconnect or a request not answered, the last one written, also
- * a stop (whether it was confirmed is the session's: see `sentStarts`). */
+ * a stop that was not confirmed. A confirmed stop holds nothing, also after a reconnect (the ledger keeps it). */
 function mayHold(known: Known<DecoderState> | undefined): string | null {
   if (!known) return null;
   switch (known.state) {
@@ -141,6 +141,11 @@ function mayHold(known: Known<DecoderState> | undefined): string | null {
     case 'failed': return known.value.clipId;
     case 'unknown': return known.last ? known.last.clipId : null;
   }
+}
+/** A clip's decoder located and kept paused (OBS reconnected while the song was paused): the same clip and place, not playing. */
+function pausedDecoder(write: LedgerWrite | undefined): LedgerWrite | undefined {
+  if (write?.element !== 'decoder' || write.value.mode === 'stopped') return write;
+  return { ...write, value: { ...write.value, mode: 'paused' }, target: decoderTarget(write.value.clipId, 'paused') };
 }
 /** What a Cue's report means for the ledger: refused if any action was, answered if any went out, otherwise not sent. */
 function cueOutcome(report: CueExecutionReport): Outcome {
@@ -191,11 +196,6 @@ export class ObsProgramSession {
   private readonly stops = new Map<string, ManagedMediaEvent>();
   /** Every clip event of the song, for the boundaries a clock step crossed. */
   private readonly mediaEvents: readonly ManagedMediaEvent[];
-  /** The start each decoder was last sent this run (or located at, from the middle or on a
-   * rebuild), most recent last, until OBS confirmed its stop. Not what OBS holds, which is the
-   * ledger's: kept so the drift check and the song's stop act on the clip as it was sent, in
-   * the order it was, and so a stop OBS refused still counts after a reconnect forgot it. */
-  private readonly sentStarts = new Map<string, ManagedMediaEvent>();
   private readonly fps: number;
   private tail: Promise<void> = Promise.resolve();
   /** Clock steps not yet completely sent, oldest first. One goes out as crossed; several
@@ -233,6 +233,8 @@ export class ObsProgramSession {
   private failure: Error | null = null;
   private closed = false;
   private stopping: Promise<void> | null = null;
+  /** The next clock starts the song where the music is then (`joinNextClock`). */
+  private joining = false;
 
   constructor(private readonly project: LinkProject, projectPath: string, private readonly itemId: string,
     private readonly dependencies: ObsProgramSessionDependencies) {
@@ -271,6 +273,10 @@ export class ObsProgramSession {
   get pendingCount(): number { return this.queued; }
   get nextCueId(): string | null { return this.runtime.getNextCueId(this.frame); }
   settled(): Promise<void> { return this.tail; }
+  /** Prepared while the music went on (OBS came back, or the music started first; R7): the next clock starts the song
+   * where the music is then, not where it was prepared, with nothing before it sent. The caller then rebuilds the
+   * picture there (`recover`). */
+  joinNextClock(): void { if (this.prepared && !this.closed && !this.failure && this.runtime.getState() === 'armed') this.joining = true; }
   abort(reason: string): void { this.fail(new Error(reason)); }
 
   async prepare(positionMs: number): Promise<void> {
@@ -333,7 +339,9 @@ export class ObsProgramSession {
     try {
       const age = this.dependencies.now() - observedAt;
       if (!Number.isFinite(age) || age < 0) throw new Error(`播放位置的时间无效（已过 ${age} ms），画面联动已停止`);
-      const sample = this.sample(positionMs, observedAt), previousFrame = this.frame;
+      const sample = this.sample(positionMs, observedAt);
+      if (this.joining) { this.joining = false; this.requireUpdate(this.runtime.moveStart(sample)); this.frame = sample.totalFrames; this.settleMedia(sample.totalFrames); }
+      const previousFrame = this.frame;
       let update: RuntimeUpdate, resumed = false;
       if (this.runtime.getState() === 'paused') {
         update = this.runtime.resumeMedia(sample);
@@ -415,7 +423,7 @@ export class ObsProgramSession {
       if (this.queuedRebuilds) return;
       let rebuilt: ObsRecovery | null;
       // Not tried again by itself: the next send is the whole picture then.
-      try { rebuilt = await this.recover(); }
+      try { rebuilt = await this.restorePicture(); }
       catch (error) { this.dropQueued(); this.lost = false; this.partial = true; this.fault(`画面动作出错：${errorText(error)}`); return; }
       finally { this.restoring = this.lost; }
       if (!rebuilt) return;
@@ -594,22 +602,23 @@ export class ObsProgramSession {
       ...place('start', frame, 2), ...place('after', frame + 1, 1)].sort((left, right) => left.frame - right.frame || left.priority - right.priority);
   }
 
-  /** Recovery rule B after OBS reconnects: from now on what OBS shows is unknown,
-   * and it forgot the owned scenes. Once in-flight decoder preparation settles,
-   * `restore` prepares the owned scenes again and the picture is rebuilt at the
-   * latest position, while the song plays: a pause cancels them and the resume
-   * does them, in that order. Resolves with what was rebuilt, or null when a
-   * pause or stop came first. A restore that fails is not tried again: the
-   * cameras and shown sources are rebuilt anyway and the result says why the
-   * scenes were not prepared. The channel keeps running. */
-  rebuild(restore: () => Promise<void>): Promise<ObsRecovery | null> {
+  /** Recovery rule B after OBS reconnects (R7, design 01 §4.7): from now on what OBS shows is
+   * unknown (`invalidate`), and it may have forgotten the owned scenes. Once in-flight decoder
+   * preparation settles, `restore` prepares the owned scenes again and the picture is rebuilt
+   * at the latest position: while the song plays, as it plays; while it is paused, the clips
+   * are located there and kept paused, and the resume plays them. A pause that comes while a
+   * playing song's picture is rebuilt cancels it and the resume does it, in that order.
+   * Resolves with what was rebuilt, or null when a pause or stop came first. A restore that
+   * fails is not tried again: the cameras and shown sources are rebuilt anyway and the result
+   * says why the scenes were not prepared. The channel keeps running. */
+  recover(restore: () => Promise<void>): Promise<ObsRecovery | null> {
     const state = this.runtime.getState();
     if (!this.prepared || this.closed || this.failure || (state !== 'running' && state !== 'paused')) return Promise.resolve({ sent: 0, succeeded: 0, failed: [], failure: null });
     this.lost = true; this.losses++; this.pendingRestore = restore; this.restoring = true; this.queuedRebuilds++;
     this.ledger.invalidate('OBS 重新连接');
     const operation = this.tail.then(async () => {
       this.queuedRebuilds--;
-      try { return await this.recover(); }
+      try { return await this.restorePicture(state === 'paused'); }
       catch (error) {
         // Not tried again by itself: the next send is the whole picture then.
         if (this.lost && !this.pendingRestore) { this.lost = false; this.partial = true; }
@@ -623,40 +632,49 @@ export class ObsProgramSession {
     this.tail = operation.then(() => undefined, () => undefined);
     return operation;
   }
-  /** Prepares the owned scenes again when a reconnect left that to do, then
-   * rebuilds the picture, only while the song plays. A pause cancels either step;
-   * the resume starts again from the step it cancelled. A failed restore is
+  /** Prepares the owned scenes again when a reconnect left that to do, then rebuilds the
+   * picture while the song plays, or, `paused`, while it is still paused from the reconnect:
+   * the clips located and kept paused. A pause cancels a playing rebuild, a resume a paused
+   * one; the step it cancelled starts again once the song plays. A failed restore is
    * reported and not tried again; the picture is still rebuilt. */
-  private async recover(): Promise<ObsRecovery | null> {
+  private async restorePicture(paused = false): Promise<ObsRecovery | null> {
     await this.preloadWork;
-    while (this.playing()) {
+    for (;;) {
+      const state = this.runtime.getState();
+      const holding = paused && state === 'paused';
+      if (!this.playing() && !(holding && !this.closed && !this.failure)) return null;
+      // A resume ends the paused rebuild: from then on the picture is rebuilt as the song plays.
+      if (!holding) paused = false;
+      const generation = this.generation;
+      const still = (): boolean => generation === this.generation && !this.closed && !this.failure && this.runtime.getState() === state;
       const restore = this.pendingRestore;
       if (restore) {
-        const generation = this.generation;
         try { await restore(); }
         catch (error) {
-          // A pause came first (the host refuses while paused): done again once the song plays.
-          if (generation !== this.generation || !this.playing()) continue;
+          // A pause or resume came first (the host refuses then): done again in the song's new state.
+          if (!still()) continue;
           this.restoreFailure = errorText(error);
         }
+        // Done while the song changed state: done again in its new state, so what OBS holds is the restore's then.
+        if (!still()) continue;
         if (this.pendingRestore === restore) this.pendingRestore = null;
       }
-      const generation = this.generation;
-      const rebuilt = await this.rebuildPicture(() => generation === this.generation && this.playing());
+      const rebuilt = await this.rebuildPicture(still, holding);
       if (rebuilt === null) continue;
       const failure = this.restoreFailure; this.restoreFailure = null;
       return { ...rebuilt, failure };
     }
-    return null;
   }
   /** The picture at the current position from nothing, like a start from the
    * middle: camera and shown sources first, clips on air located at the music,
    * then played together. A part that does not come back (a clip that cannot be
    * located among them) does not stop the rest; the result says which and why, and
    * whoever reports the rebuild says it once. Ticks still queued go out after this
-   * as what changed since this picture, so their point Cues are not lost. Null when
-   * a pause or stop came first: the picture stays lost, and unknown. */
-  private async rebuildPicture(current: () => boolean): Promise<Omit<ObsRecovery, 'failure'> | null> {
+   * as what changed since this picture, so their point Cues are not lost. `paused`: the
+   * song is paused, so the clips are located and kept paused (located is paused in OBS) and
+   * the resume plays them. Null when a pause, resume or stop came first: the picture stays
+   * lost, and unknown. */
+  private async rebuildPicture(current: () => boolean, paused: boolean): Promise<Omit<ObsRecovery, 'failure'> | null> {
     if (!current()) return null;
     const losses = this.losses;
     const cancelled = (): null => { this.ledger.invalidate('OBS 重新连接后恢复画面被打断'); return null; };
@@ -665,21 +683,25 @@ export class ObsProgramSession {
     const frame = this.frame, entries = this.layout(this.translate(this.plan(frame, 'running', true), frame, true), [], frame, true);
     const targets = entries.filter((entry): entry is MediaEntry => entry.kind === 'media' && entry.event.phase === 'start');
     const parts = entries.filter(entry => !targets.includes(entry as MediaEntry));
-    this.locate(targets, parts, frame);
+    this.locate(targets, parts, frame, paused);
     const tally: Tally = { succeeded: 0, failed: [] };
     if (!(await this.send(parts, current, null, false, tally)).complete) return cancelled();
     for (const entry of targets) {
       if (!current()) return cancelled();
-      for (const write of entry.writes) this.ledger.sent(write, this.dependencies.now());
-      const [, ...program] = entry.writes;
-      try { await this.dependencies.guardOutput(current, () => this.dependencies.seekMedia(entry.event)); tally.succeeded++; this.settle(program, 'ok'); }
+      const [decoder, ...program] = entry.writes, located = paused && entry.event.assetKind !== 'image' ? pausedDecoder(decoder) : decoder;
+      for (const write of [located, ...program]) if (write) this.ledger.sent(write, this.dependencies.now());
+      try {
+        await this.dependencies.guardOutput(current, () => this.dependencies.seekMedia(entry.event)); tally.succeeded++; this.settle(program, 'ok');
+        // Paused, a located clip is what OBS holds now: paused there, which the resume plays.
+        if (paused && located !== decoder && located?.element === 'decoder') this.ledger.observe({ element: 'decoder', key: located.key, value: located.value }, this.dependencies.now());
+      }
       catch (error) {
         if (!current()) return cancelled();
         tally.failed.push({ label: `素材“${entry.event.assetName}”对准音乐的位置`, reason: errorText(error) });
-        this.settle(entry.writes, { failed: errorText(error) });
+        this.settle([located, ...program].filter((write): write is LedgerWrite => write !== undefined), { failed: errorText(error) });
       }
     }
-    const playing = targets.filter(entry => entry.event.assetKind !== 'image');
+    const playing = paused ? [] : targets.filter(entry => entry.event.assetKind !== 'image');
     for (const entry of targets) if (entry.event.assetKind === 'image') this.settle(entry.writes.slice(0, 1), 'ok');
     if (playing.length && current()) {
       let report: CueExecutionReport;
@@ -789,8 +811,6 @@ export class ObsProgramSession {
       }
       const event = entry.event;
       const report = await this.dependencies.guardOutput(canSend, () => absent ? this.managed.skippedMedia(event, MEDIA_NOT_STARTED) : this.managed.sendMedia(event, 'live', canSend));
-      if (event.phase === 'start' && report.status !== 'skipped') this.sentStart(event);
-      else if (report.status === 'succeeded' && this.sentStarts.get(event.sourceName)?.clipId === event.clipId) this.sentStarts.delete(event.sourceName);
       if (absent && report.status === 'skipped') for (const write of entry.writes) {
         if (write.element === 'decoder') this.ledger.observe({ element: 'decoder', key: write.key, value: write.value }, this.dependencies.now());
       } else this.settle(entry.writes, report.status === 'succeeded' ? 'ok' : report.status === 'failed'
@@ -971,29 +991,28 @@ export class ObsProgramSession {
    * (again), so what this run sent before no longer plays, and the stops a rebuild would send
    * find nothing to stop. Each clip located counts as sent from here, so that a cancellation
    * before its seek still stops it with the song. */
-  private locate(targets: readonly MediaEntry[], parts: readonly Entry[], frame: number): void {
-    this.managed.resetExecution(); this.settleMedia(frame); this.sentStarts.clear();
+  private locate(targets: readonly MediaEntry[], parts: readonly Entry[], frame: number, paused = false): void {
+    this.managed.resetExecution(); this.settleMedia(frame);
     const now = this.dependencies.now();
     for (const entry of parts) {
       const [write] = entry.writes;
       if (entry.kind === 'media' && write?.element === 'decoder') this.ledger.observe({ element: 'decoder', key: write.key, value: write.value }, now);
     }
     for (const entry of targets) {
-      const [write] = entry.writes;
-      this.sentStart(entry.event);
+      const write = paused && entry.event.assetKind !== 'image' ? pausedDecoder(entry.writes[0]) : entry.writes[0];
       if (write?.element === 'decoder') this.ledger.sent(write, now);
     }
   }
-  private sentStart(event: ManagedMediaEvent): void {
-    this.sentStarts.delete(event.sourceName); this.sentStarts.set(event.sourceName, event);
-  }
-  /** Whether the ledger says this decoder may still hold the clip this run sent it. */
+  /** Whether the ledger says this decoder may still hold this clip: the one place that says so, with `onAir`. */
   private held(sourceName: string, clipId: string): boolean {
-    return this.sentStarts.get(sourceName)?.clipId === clipId && mayHold(this.ledger.state().decoders.get(sourceName)) === clipId;
+    return mayHold(this.ledger.state().decoders.get(sourceName)) === clipId;
   }
-  /** The clips that may be on air, as each was sent, in the order they were. */
+  /** The clips that may be on air, as the ledger knows them: the drift check and the song's stop act on these. */
   private onAir(): ManagedMediaEvent[] {
-    return [...this.sentStarts.values()].filter(event => this.held(event.sourceName, event.clipId));
+    return [...this.ledger.state().decoders].flatMap(([sourceName, known]) => {
+      const clipId = mayHold(known), start = clipId === null ? undefined : this.starts.get(clipId);
+      return start ? [{ ...start, sourceName }] : [];
+    });
   }
   private align(event: ManagedMediaEvent, frame: number): ManagedMediaEvent {
     return alignManagedMediaEvent(event, this.starts.get(event.clipId) ?? event, frame, this.project.timebase.frameRate);
@@ -1184,6 +1203,8 @@ export class ObsProgramSession {
   private requireCurrent(generation: number): void {
     if (generation !== this.generation || this.closed || this.failure) throw new Error('画面准备已取消');
   }
+  /** A lost timecode ends the picture too: on the internal clock it only comes from a position that jumped, and nothing
+   * brings that clock back, so as waiting the picture would stay frozen without a word (R7 left design 01 §3.2 row 2 here). */
   private requireUpdate(update: RuntimeUpdate): void {
     this.dependencies.state(update);
     if (update.state === 'error' || update.state === 'timecodeLost') throw new Error(update.reason ?? '画面计时已失效');

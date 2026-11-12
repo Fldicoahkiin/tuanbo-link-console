@@ -21,6 +21,15 @@ it('顶部视频只使用实际 OBS 连接，清单检查不能覆盖连接状�
   expect(obsConnectionStatus({ ...base, status: 'disconnected' })).toMatchObject({ state: 'idle', value: '未连接' });
   expect(obsConnectionStatus({ ...base, status: 'reconnecting' })).toMatchObject({ state: 'checking' });
 });
+it('OBS 自己断了、正在自动重连：OBS 那一行写第几次，算等待不标红；到上限标红，写明怎么办（R7）', () => {
+  const lost = { obsVersion: null, webSocketVersion: null, error: 'OBS 连接已关闭', status: 'disconnected' as const };
+  expect(obsConnectionStatus({ ...lost, autoReconnect: { state: 'waiting', attempt: 3, max: 10 } })).toEqual({ state: 'checking', value: '自动重连（第 3 次）',
+    detail: 'OBS 断开了，正在自动重连（第 3 次，最多 10 次）。连上后画面按当前位置接上；要马上重试，点连接' });
+  expect(obsConnectionStatus({ ...lost, status: 'connecting', autoReconnect: { state: 'connecting', attempt: 1, max: 10 } })).toMatchObject({ state: 'checking', value: '自动重连（第 1 次）' });
+  expect(obsConnectionStatus({ ...lost, autoReconnect: { state: 'gave-up', attempts: 10, max: 10, text: 'OBS 自动重连没成功，请检查 OBS 后点连接' } }))
+    .toEqual({ state: 'error', value: '自动重连没成功', detail: 'OBS 自动重连没成功，请检查 OBS 后点连接' });
+  expect(obsConnectionStatus({ ...lost, autoReconnect: null })).toMatchObject({ state: 'error', value: '未连接', detail: 'OBS 连接已关闭' });
+});
 it('Windows 独有 USB 接口可用时亮绿，不宣称控台已出灯；拔出则未连接', () => {
   const input = { required: true, portName: 'USB MIDI Interface', available: true, open: false, native: true, check: undefined, systemError: '浏览器未读取到 MIDI' };
   expect(midiConnectionStatus(input)).toMatchObject({ state: 'ready', value: '可用' });
