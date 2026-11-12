@@ -182,6 +182,7 @@ import { NativeProgramHost } from './link/native-program-host';
 import { NativeProgramService } from './link/native-program-service';
 import { ShowStateService } from './link/show-state-service';
 import { LightingOffService } from './link/lighting-off-service';
+import { wireP1Follow, type P1FollowWiring } from './link/p1-follow-wiring';
 import { followWindowPage } from './link/window-page';
 import { NativePlaybackRequests } from './link/native-playback-requests';
 import { NativeObsHost } from './link/native-obs-host';
@@ -267,6 +268,8 @@ let lightingOff: LightingOffService | null = null;
 let nativeProgramHost: NativeProgramHost | null = null;
 /** Every MIDI port the window uses is opened here, in main, and only while it is in use. */
 let midiPorts: MidiPortBroker | null = null;
+/** P1 followed in the main process (0.5.9 P3f, p1-follow-wiring.ts); the window does not use it before P4. */
+let p1Follow: P1FollowWiring | null = null;
 
 /** The audio engine and what plays with it, once no program is left. Only an engine that could not close fails this
  * (closeEngineOutputs): a failed close keeps the owned instance (heldEngine), and no other engine opens on the same
@@ -299,6 +302,7 @@ function releaseGonePage(): Promise<InternalPlayerState | null> {
   // P1 following and the previews the page reported end with it; a program that plays on stays in the show.
   showState?.pageGone();
   lightingOff?.pageGone();
+  void p1Follow?.pageGone().catch((error: unknown) => console.error('P1 跟随没能随页面结束', error));
   return releasePage(nativeProgram, { stopMonitor: () => musicMonitor?.stop(),
     teardown: async () => { await closeEngine(); await releaseRendererRuntime(); } }, programFaults);
 }
@@ -710,7 +714,7 @@ function registerIpc(
     },
     // The editor previews send a whole lighting state at once.
     createOutput: failed => new NativeMidiOutput(engineExecutable, failed, 256),
-    createInput: (receive, failed, invalid) => new NativeMidiInput(engineExecutable, receive, failed, invalid),
+    createInput: (receive, failed, invalid, idle) => new NativeMidiInput(engineExecutable, receive, failed, invalid, idle),
     emit: event => sendToRenderer('link:midi-event', event),
     log: (level, message) => { void logger.record({ level, category: 'device', device: 'MIDI', message, result: level === 'info' ? 'succeeded' : 'failed' })
       .catch((error: unknown) => console.error('MIDI 日志写入失败', error)); }
@@ -1114,6 +1118,14 @@ function registerIpc(
   showState = new ShowStateService(nativeProgram, show => { sendToRenderer('link:show-state', show); ma2Network.showChanged(); }, lightsOff);
   handle('link:show-state-get', () => showState!.current());
   handle('link:show-activity', (_event, value: unknown) => { showState!.report(value); });
+  // P1 followed in the main process (0.5.9 P3f): everything of it is wired in p1-follow-wiring.ts.
+  const follow = wireP1Follow({ handle: (channel, listener) => handle(channel, listener), send: sendToRenderer, broker: midiPortBroker,
+    executable: engineExecutable, authorize: () => authorizeOutput(), midiOutputs: async () => (await player().devices('all', true)).midiOutputs,
+    checkFiles: async (projectPath, project) => { await projectAccess.assetFiles(projectPath, projectFileReferences(project).map(file => file.relativePath)); },
+    lights: lightsOff, faults: programFaults, record: entry => logger.record(entry), showChanged: () => showState?.p1Changed(),
+    running: running => programOutputs.followRunningChanged(running) });
+  p1Follow = follow;
+  showState.followP1({ input: () => follow.showInput() });
   // Session registration captures cancellation synchronously; output adapters
   // validate and authorize every actual audio, OBS, MIDI and lighting request.
   handle('link:native-program-open', async (_event, value: unknown) => {
@@ -2433,7 +2445,7 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
     program: nativeProgram,
     // What the quit asks about is the lights-off list itself (R13): what the program's close owed and did not send, and
     // any Off still owed from before (a stop, a song change, a preview), once every Off on its way was answered.
-    faults: { collect: async during => { await during(); await lightingOff?.settled(); return lightingOff?.quitMessages() ?? []; } },
+    faults: { collect: async during => { await during(); await p1Follow?.dispose(); await lightingOff?.settled(); return lightingOff?.quitMessages() ?? []; } },
     quitWithLightsOn: async lightsLeftOn => {
       // Asked like the audition's (2026-11-10); it is logged and shown in red as well.
       recordQuitStep('节目的灯光没能关闭', { error: lightsLeftOn.join('\n') });

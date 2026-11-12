@@ -70,6 +70,23 @@ export class LightingOffService implements ProgramLightingOutput {
     this.changed();
   }
 
+  /** P1 followed in the main process (0.5.9 P3f): `next` is the song whose timecode P1 sends now, in place of `previous`.
+   * As a song change of the program: the executors only `previous` used go off, those of `next` are in use. */
+  followChange(previous: LitSong | null, next: LitSong | null): Promise<LightingOffOutcome> {
+    this.ledger.use('p1', litExecutors(next));
+    const sends = previous ? this.ledger.owe(litChangeOffs(previous, next), previous.song, 'song-change', null) : [];
+    this.changed();
+    return this.deliver(sends);
+  }
+
+  /** The operator stopped following P1 (or the follow closed): `song`'s executors go off, as for a stop in the window
+   * (source 'p1'), and every Off still owed goes once more. P1 itself plays on. */
+  followStop(song: LitSong | null, cause: 'stop' | 'close'): Promise<LightingOffOutcome> {
+    this.ledger.use('p1', []);
+    const sends = song ? this.ledger.owe(litReleaseActions(song), song.song, cause, null) : [];
+    return this.deliver([...sends, ...this.ledger.resendOnStop()]);
+  }
+
   /** What the window runs itself (link:lighting-off). */
   async receive(value: unknown): Promise<LightingOffResult> {
     const request = lightingOffRequestSchema.parse(value);

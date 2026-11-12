@@ -12,7 +12,8 @@ const OWNER = '6f1c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f';
 const OTHER = '7f1c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f';
 
 function fixture(project: LinkProject, options: { prepare?: (itemId: string) => Promise<void>; claim?: () => Promise<void> } = {}) {
-  const calls: string[] = [], states: P1FollowState[] = [], logs: string[] = [], clocks: ProgramClock[] = [];
+  const calls: string[] = [], states: P1FollowState[] = [], logs: string[] = [], clocks: ProgramClock[] = [], lights: string[] = [];
+  let actionMidi: P1FollowState['outputs']['actionMidi'] = null, outputChanged: () => void = () => undefined;
   const claims: { name: string; listener: MidiInputListener; release: ReturnType<typeof vi.fn> }[] = [];
   const prepareSong = vi.fn((_project: LinkProject, itemId: string) => options.prepare?.(itemId) ?? Promise.resolve());
   const host = new P1FollowHost({
@@ -22,17 +23,24 @@ function fixture(project: LinkProject, options: { prepare?: (itemId: string) => 
       claims.push({ name, listener, release });
       return { owner: 'P1 时间码', release } satisfies MidiInputClaim;
     },
-    openProject: () => project,
-    outputs: () => ({
-      observe: clock => { calls.push(`observe:${clock.state}`); clocks.push(clock); },
-      hold: () => { calls.push('hold'); },
-      reconcileAt: clock => { calls.push(`reconcileAt:${clock.state}`); clocks.push(clock); }
-    }),
+    openProject: () => Promise.resolve(project),
+    outputs: (_project, _options, changed) => {
+      outputChanged = changed;
+      return {
+        outputs: {
+          observe: clock => { calls.push(`observe:${clock.state}`); clocks.push(clock); },
+          hold: () => { calls.push('hold'); },
+          reconcileAt: clock => { calls.push(`reconcileAt:${clock.state}`); clocks.push(clock); }
+        },
+        lights: { change: (previous, next) => { lights.push(`change:${previous ?? '-'}>${next}`); }, stop: (itemId, cause) => { lights.push(`${cause}:${itemId}`); } },
+        state: () => ({ actionMidi })
+      };
+    },
     prepareSong, changed: state => { states.push(state); }, log: (level, message) => { logs.push(`${level}:${message}`); }
   });
   const send = (command: P1FollowCommand, ownerId = OWNER) => host.command({ version: 1, ownerId, command });
   const start = (mode: 'manual' | 'auto' = 'manual') => send({ kind: 'start', projectPath: 'C:/show.tblink', sessionId: OWNER, revision: 1, document: '{}',
-    mode, runMode: 'live', inputPortName: 'loopMIDI Port' });
+    mode, runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null });
   /** P1 playing on the claimed input, on the interface's clock. */
   const play = (fromFrame: number, frames: number, startMs: number) => {
     const listener = claims.at(-1)!.listener;
@@ -48,7 +56,9 @@ function fixture(project: LinkProject, options: { prepare?: (itemId: string) => 
     }
     return { endMs: startMs + frames * FRAME_MS, lastSampleMs };
   };
-  return { host, calls, states, logs, clocks, claims, prepareSong, send, start, play };
+  /** An output reports its own state. */
+  const report = (state: P1FollowState['outputs']['actionMidi']) => { actionMidi = state; outputChanged(); };
+  return { host, calls, states, logs, clocks, claims, prepareSong, send, start, play, lights, report };
 }
 
 describe('P1 跟随宿主', () => {
@@ -133,6 +143,42 @@ describe('P1 跟随宿主', () => {
     const refused = fixture(manualProject(), { claim: () => Promise.reject(new Error('MIDI 接口「loopMIDI Port」正在用作P1 时间码')) });
     await expect(refused.start()).rejects.toThrow('正在用作P1 时间码');
     expect(refused.host.state.phase).toBe('closed');
+  });
+
+  it('输出自己报的状态马上告诉界面，状态里写着是哪个界面在跟随（P3f）', async () => {
+    const f = fixture(manualProject());
+    await f.start(); await f.send({ kind: 'arm', itemId: 'song' });
+    expect(f.host.state).toMatchObject({ ownerId: OWNER, outputs: { actionMidi: null } });
+    const before = f.states.length;
+    const red = { itemId: 'song', state: 'failed' as const, reason: 'MIDI 输出设置不存在或有重复：out', fault: null };
+    f.report(red);
+    expect(f.states).toHaveLength(before + 1);
+    expect(f.states.at(-1)).toMatchObject({ ownerId: OWNER, outputs: { actionMidi: red } });
+    await f.send({ kind: 'close' });
+    expect(f.host.state).toMatchObject({ ownerId: null, outputs: { actionMidi: null } });
+    // A closed follow's outputs say nothing more.
+    const after = f.states.length;
+    f.report({ ...red, state: 'running' });
+    expect(f.states).toHaveLength(after);
+  });
+
+  it('关灯：第一个位置起告诉灯这首；按停止关这首、关闭跟随也关；界面没了、退出算关闭（P3f）', async () => {
+    const f = fixture(manualProject());
+    await f.start(); await f.send({ kind: 'arm', itemId: 'song' });
+    expect(f.lights).toEqual([]);
+    f.play(0, 30, 1_000);
+    expect(f.lights).toEqual(['change:->song']);
+    await f.send({ kind: 'stop' });
+    expect(f.lights).toEqual(['change:->song', 'stop:song']);
+    await f.send({ kind: 'arm', itemId: 'song' });
+    f.play(0, 30, 3_000);
+    await f.host.pageGone(OWNER);
+    expect(f.lights).toEqual(['change:->song', 'stop:song', 'change:->song', 'close:song']);
+    await f.start(); await f.send({ kind: 'arm', itemId: 'song' });
+    f.play(0, 30, 5_000);
+    await f.host.dispose();
+    expect(f.lights.at(-1)).toBe('close:song');
+    expect(f.host.state.phase).toBe('closed');
   });
 });
 

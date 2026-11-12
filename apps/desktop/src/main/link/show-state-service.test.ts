@@ -106,3 +106,24 @@ it('停下的节目还有关灯指令在发时算在停止，发完回到空闲'
   sending = false; changed();
   expect(show.current()).toMatchObject({ phase: 'idle' });
 });
+
+// 0.5.9 P3f：主进程跟随 P1 时，节目状态里的 P1 由它定；它没在跟随时照旧用界面上报的（到 P4 界面那条路去掉为止）。
+it('主进程跟随 P1 时由它定 P1：等下一首算拿着、跟丢了算断码；没跟随时照旧用界面上报的', () => {
+  const program = new NativeProgramService(vi.fn(), vi.fn(), () => Promise.resolve(), () => undefined, closedProgramFaultReporter(() => Promise.resolve(), vi.fn()));
+  const published: LinkShowState[] = [];
+  const show = new ShowStateService(program, value => published.push(linkShowStateSchema.parse(value)));
+  show.report({ version: 1, p1: { state: 'running', itemId: 'window-song' }, preview: false });
+  let input: ReturnType<Parameters<ShowStateService['followP1']>[0]['input']>;
+  show.followP1({ input: () => input });
+  expect(show.current()).toMatchObject({ phase: 'running', source: 'p1', itemId: 'window-song' });
+  input = { state: 'armed', itemId: 'song' }; show.p1Changed();
+  expect(show.current()).toMatchObject({ phase: 'held', source: 'p1', itemId: 'song' });
+  input = { state: 'timecodeLost', itemId: 'song' }; show.p1Changed();
+  expect(show.current()).toMatchObject({ phase: 'held', source: 'p1', itemId: 'song', reason: 'timecode-lost' });
+  expect(published.at(-1)).toMatchObject({ reason: 'timecode-lost' });
+  // Following, but not armed: the window's report does not stand in for it.
+  input = null; show.p1Changed();
+  expect(show.current()).toMatchObject({ phase: 'idle' });
+  input = undefined; show.p1Changed();
+  expect(show.current()).toMatchObject({ phase: 'running', itemId: 'window-song' });
+});

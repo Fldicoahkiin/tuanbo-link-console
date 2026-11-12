@@ -12,12 +12,13 @@ const FRAME_MS = 1000 / FPS;
 type Call = { kind: 'observe'; clock: ProgramClock } | { kind: 'reconcileAt'; clock: ProgramClock; playsOn: boolean } | { kind: 'hold' };
 
 function fixture(project: LinkProject, mode: 'manual' | 'auto') {
-  const calls: Call[] = [], prepares: { itemId: string; sessionId: string }[] = [];
+  const calls: Call[] = [], prepares: { itemId: string; sessionId: string }[] = [], lights: string[] = [];
   const session = new P1FollowSession(project, mode, {
+    lights: { change: (previous, next) => lights.push(`change:${previous ?? '-'}>${next}`), stop: (itemId, cause) => lights.push(`${cause}:${itemId}`) },
     outputs: { observe: clock => calls.push({ kind: 'observe', clock }), hold: () => calls.push({ kind: 'hold' }), reconcileAt: (clock, playsOn) => calls.push({ kind: 'reconcileAt', clock, playsOn }) },
     prepare: (itemId, sessionId) => prepares.push({ itemId, sessionId })
   });
-  return { session, calls, prepares, shape: () => calls.map(call => call.kind === 'hold' ? 'hold' : `${call.kind}:${call.clock.state}`) };
+  return { session, calls, prepares, lights, shape: () => calls.map(call => call.kind === 'hold' ? 'hold' : `${call.kind}:${call.clock.state}`) };
 }
 
 describe('P1 跟随会话 · 手动模式（协调器 armFromStart / resyncCurrentTime / rearmFromStart / stop）', () => {
@@ -52,7 +53,7 @@ describe('P1 跟随会话 · 手动模式（协调器 armFromStart / resyncCurre
     expect(() => f.session.takeover()).toThrow('只有时间码中断后才能手动接管');
     play(f.session, 120, 30, again.endMs);
     expect(f.shape().slice(2).every(kind => kind === 'observe:running')).toBe(true);
-    f.session.stop();
+    f.session.stop('stop');
     expect(f.calls.at(-1)).toMatchObject({ kind: 'observe', clock: { state: 'stopped', reason: '操作员请求停止', observedAtMs: null } });
     expect(f.session.view.phase).toBe('standby');
     // Arm again after a stop: a new session.
@@ -99,7 +100,7 @@ describe('P1 跟随会话 · 手动模式（协调器 armFromStart / resyncCurre
     expect(f.calls).toEqual([]);
     expect(() => f.session.resync()).toThrow('只有时间码中断后才能重新同步');
     expect(() => f.session.rearm()).toThrow('只有时间码中断后才能从头重新待命');
-    f.session.stop();
+    f.session.stop('stop');
     expect(f.shape()).toEqual(['observe:stopped']);
   });
 

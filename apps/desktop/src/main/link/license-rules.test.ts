@@ -105,6 +105,20 @@ describe('后台节目的关灯和运行状态，按 link-main 的接法（progr
     f.wiring.runningChanged(false);
     await expect(f.access.requireOutput()).rejects.toThrow('有效授权');
   });
+
+  it('主进程的 P1 跟随也拿着授权（0.5.9 P3f）：跟随和节目哪个还在跑都不放手，两个都停了才放手', async () => {
+    let status = valid;
+    const f = programConsole(() => status);
+    f.wiring.followRunningChanged(true); await f.access.setActive(true);
+    status = lapsed.到期!; await f.access.setActive(false);
+    await expect(f.access.requireOutput()).resolves.toBeUndefined();
+    f.wiring.runningChanged(true); f.wiring.runningChanged(false);
+    await expect(f.access.requireOutput()).resolves.toBeUndefined();
+    f.wiring.runningChanged(true); f.wiring.followRunningChanged(false);
+    await expect(f.access.requireOutput()).resolves.toBeUndefined();
+    f.wiring.runningChanged(false);
+    await expect(f.access.requireOutput()).rejects.toThrow('有效授权');
+  });
 });
 
 function program() {

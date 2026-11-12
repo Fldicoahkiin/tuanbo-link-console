@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { integrationProfileSchema } from './integration-profile';
 import { mtcFrameRateSchema, smpteTimecodeSchema } from './link-project';
 
 /*
@@ -16,6 +17,8 @@ const itemIdSchema = z.string().min(1).max(200);
 /**
  * - `start`: follow this project (as saved: P1 follow takes edits after a stop, design 02 §3.5) with the MTC from
  *   the named input. Opens the input; nothing follows until `arm`. Also opens it again after it was unplugged.
+ *   `lightingProfile`: this computer's device settings whose MIDI ports the song's actions name, as the native program
+ *   takes them (nativeProgramConfigurationSchema); null when there are none.
  * - `arm`: manual, wait for P1 to play this song from its head; auto, `itemId` null: listen for the song P1 plays.
  * - `resync`: manual, after the timecode froze: go on from where P1 is now; what was passed is not sent later.
  * - `rearm`: after the timecode froze: wait for the song's head again (auto: for P1's next song).
@@ -30,7 +33,8 @@ export const p1FollowCommandSchema = z.discriminatedUnion('kind', [
     kind: z.literal('start'), projectPath: z.string().max(4096), sessionId: z.string().uuid(), revision: z.number().int().nonnegative(),
     // Large documents cross contextBridge as text, as for the native program (native-program.ts).
     document: z.string().min(1).max(128 * 1024 * 1024),
-    mode: p1FollowModeSchema, runMode: z.enum(['rehearsal', 'live']), inputPortName: z.string().min(1).max(256)
+    mode: p1FollowModeSchema, runMode: z.enum(['rehearsal', 'live']), inputPortName: z.string().min(1).max(256),
+    lightingProfile: integrationProfileSchema.nullable()
   }).strict(),
   z.object({ kind: z.literal('arm'), itemId: itemIdSchema.nullable() }).strict(),
   z.object({ kind: z.literal('resync') }).strict(),
@@ -62,9 +66,20 @@ export type P1FollowPhase = z.infer<typeof p1FollowPhaseSchema>;
 /** Why the follow froze; the same causes as core `P1FreezeCause` (p1-clock.ts). */
 export const p1FollowFreezeCauseSchema = z.enum(['lost', 'jump', 'unknown-range', 'not-from-start', 'frame-rate']);
 
+/** The action MIDI of the song this follow holds, as its host says (native-midi-host.ts NativeMidiChannelState): only
+ * what the host reported, never assumed. `reason`: why it failed; `fault`: the last red text of this song (actions late,
+ * refused, skipped, or the port gone), cleared when the port came back or another song is prepared. */
+export const p1FollowActionMidiSchema = z.object({
+  itemId: itemIdSchema, state: z.enum(['preparing', 'ready', 'running', 'stopped', 'failed']),
+  reason: z.string().max(8192).nullable(), fault: z.string().max(8192).nullable()
+}).strict();
+export type P1FollowActionMidi = z.infer<typeof p1FollowActionMidiSchema>;
+
 export const p1FollowStateSchema = z.object({
   version: z.literal(1),
   phase: p1FollowPhaseSchema,
+  /** The page that started this follow (its request `ownerId`); only it acts on this state. Null while closed. */
+  ownerId: z.string().uuid().nullable(),
   /** Null while closed. */
   projectId: z.string().min(1).nullable(),
   mode: p1FollowModeSchema.nullable(),
@@ -87,10 +102,14 @@ export const p1FollowStateSchema = z.object({
    * while one came within 500 ms, `stable` after 500 ms without a gap, jump or frame rate change. */
   mtc: z.object({
     timecode: smpteTimecodeSchema.strict(), frameRate: mtcFrameRateSchema, receiving: z.boolean(), stable: z.boolean()
-  }).strict().nullable()
+  }).strict().nullable(),
+  /** What each output of the follow is doing, as its own host reports it; null for one that reported nothing yet. The
+   * picture joins here with its own field. */
+  outputs: z.object({ actionMidi: p1FollowActionMidiSchema.nullable() }).strict()
 }).strict().superRefine((state, context) => {
   const closed = state.phase === 'closed';
-  if (closed !== (state.projectId === null) || closed !== (state.mode === null) || closed !== (state.runMode === null) || closed !== (state.input === null)) {
+  if (closed !== (state.projectId === null) || closed !== (state.mode === null) || closed !== (state.runMode === null) || closed !== (state.input === null)
+    || closed !== (state.ownerId === null)) {
     context.addIssue({ code: 'custom', message: '只有没跟随时工程、方式和输入口才是空的', path: ['phase'] });
   }
   if ((state.phase === 'frozen') !== (state.cause !== null)) context.addIssue({ code: 'custom', message: '只有冻结时才有冻结原因', path: ['cause'] });

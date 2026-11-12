@@ -37,6 +37,25 @@ function fixture() {
 afterEach(() => { vi.useRealTimers(); });
 
 describe('换歌关灯（第 4 题）', () => {
+  it('主进程跟随 P1（0.5.9 P3f）：换歌只关上一首独有的；跟着的歌在用的不被别人的停止关掉；停止关这首的并补发欠着的', async () => {
+    const f = fixture();
+    await expect(f.service.followChange(null, lit('a', '开场', ['1.101', '1.102']))).resolves.toEqual({ failed: [] });
+    expect(f.playMa2Cue).not.toHaveBeenCalled();
+    await f.service.followChange(lit('a', '开场', ['1.101', '1.102']), lit('b', '返场', ['1.102', '1.103']));
+    expect(f.executors()).toEqual(['1.101']);
+    // The program stopping a song on 1.103 does not switch off what P1's song runs.
+    await f.service.stop(lit('x', '串场', ['1.103', '1.104']), 'stop');
+    expect(f.executors()).toEqual(['1.101', '1.104']);
+    f.status.state = 'disconnected';
+    await f.service.followStop(lit('b', '返场', ['1.102', '1.103']), 'stop');
+    expect(f.service.owed().map(entry => [entry.executor, entry.cause])).toEqual([['1.102', 'stop'], ['1.103', 'stop']]);
+    f.status.state = 'connected';
+    // Nothing lit: the stop sends only what is still owed.
+    await f.service.followStop(null, 'close');
+    expect(f.executors()).toEqual(['1.101', '1.104', '1.102', '1.103']);
+    expect(f.service.owed()).toEqual([]);
+  });
+
   it('Off 等于上一首用到的减去下一首也用的；先发上一首独有的，同一个期限、停止优先', async () => {
     const f = fixture();
     await f.service.change(null, lit('a', '开场', ['1.101', '1.102']));

@@ -3,11 +3,14 @@ import { createEmptyLinkProject, parseLinkProject, type LinkProject } from '@tb/
 import { frameNumberToTimecode } from './mtc-timecode';
 import { allocateP1TimecodeRanges } from './p1-auto-follow';
 import { P1Clock, type P1ClockEvent } from './p1-clock';
-import { nativePlayerStatusSchema, type LinkAction, type NativePlayerStatus } from '@tb/schema';
+import { createLightingDocument, lightingDocumentSchema, lightingMa2BindingSchema, lightingTrackSchema, nativePlayerStatusSchema, type LightingDocument, type LinkAction,
+  type Ma2PlaybackAction, type NativePlayerStatus } from '@tb/schema';
 import { MidiMessageSkipped } from './midi-late-rule';
 import { MidiProgramSession } from './midi-program';
+import { litChangeOffs, litReleaseActions } from './lighting-off-ledger';
+import type { LitSong } from './program-player';
 import type { OutputMode } from './output-failure';
-import { P1FollowSession, type P1FollowOutputs } from './p1-follow-session';
+import { P1FollowSession, type P1FollowLights, type P1FollowOutputs } from './p1-follow-session';
 import { clockFromNativeStatus, type ProgramClock } from './program-clock';
 
 /**
@@ -20,6 +23,10 @@ import { clockFromNativeStatus, type ProgramClock } from './program-clock';
 
 const FPS = 30;
 const FRAME_MS = 1000 / FPS;
+/** For the rules where the lights do not matter. */
+const NO_LIGHTS: P1FollowLights = { change: () => undefined, stop: () => undefined };
+/** For the rules where the outputs do not matter. */
+const NO_OUTPUTS: P1FollowOutputs = { observe: () => undefined, hold: () => undefined, reconcileAt: () => undefined };
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -200,7 +207,7 @@ describe('P1 跟随规则 · 共用一套输出（03 §7.1 ⑦，动作 MIDI）'
   it('⑦ 同一个工程、同一串位置：经 P1 的时间码和经联动台播放的时钟，动作 MIDI 发出去的完全一样', async () => {
     const project = midiProject();
     const p1 = midiOutput(project, 'live');
-    const follow = new P1FollowSession(project, 'manual', { outputs: p1.outputs, prepare: () => undefined });
+    const follow = new P1FollowSession(project, 'manual', { outputs: p1.outputs, prepare: () => undefined, lights: NO_LIGHTS });
     follow.arm('song');
     playFollow(follow, 0, 120, 1_000);
     await p1.settled();
@@ -224,7 +231,7 @@ describe('P1 跟随规则 · 重同步和同位置继续不补点动作（03 §7
   it('⑧ 手动：断码期间一条不发，时间码回来也不发；重同步以后，过去的动作不补，后面的照发', async () => {
     const project = midiProject();
     const out = midiOutput(project, 'live');
-    const follow = new P1FollowSession(project, 'manual', { outputs: out.outputs, prepare: () => undefined });
+    const follow = new P1FollowSession(project, 'manual', { outputs: out.outputs, prepare: () => undefined, lights: NO_LIGHTS });
     follow.arm('song');
     const first = playFollow(follow, 0, 30, 1_000);
     follow.idle(at(first.lastSampleMs + 600));
@@ -243,7 +250,7 @@ describe('P1 跟随规则 · 重同步和同位置继续不补点动作（03 §7
     const project = midiProject(true);
     const out = midiOutput(project, 'live');
     const prepares: string[] = [];
-    const follow = new P1FollowSession(project, 'auto', { outputs: out.outputs, prepare: (_itemId, sessionId) => { prepares.push(sessionId); } });
+    const follow = new P1FollowSession(project, 'auto', { outputs: out.outputs, prepare: (_itemId, sessionId) => { prepares.push(sessionId); }, lights: NO_LIGHTS });
     follow.arm(null);
     const start = project.p1AutoFollow!.ranges[0]!.startSeconds * FPS;
     // Prepared right after the first position (a slow preparation makes the opening actions late: see the late rule).
@@ -263,7 +270,7 @@ describe('P1 跟随规则 · 重同步和同位置继续不补点动作（03 §7
     const lines: string[] = [];
     const out = midiOutput(project, 'live', () => false, line => { lines.push(line); });
     const prepares: string[] = [];
-    const follow = new P1FollowSession(project, 'auto', { outputs: out.outputs, prepare: (_itemId, sessionId) => { prepares.push(sessionId); } });
+    const follow = new P1FollowSession(project, 'auto', { outputs: out.outputs, prepare: (_itemId, sessionId) => { prepares.push(sessionId); }, lights: NO_LIGHTS });
     follow.arm(null);
     const start = project.p1AutoFollow!.ranges[0]!.startSeconds * FPS;
     // The preparation takes a second: P1 is at frame 32 when 联动台 follows, past the Note On at 0 and the CC at 15.
@@ -288,7 +295,56 @@ describe('P1 跟随规则 · 重同步和同位置继续不补点动作（03 §7
 });
 
 describe('P1 跟随规则 · 换歌关灯（03 §7.1 ⑨）', () => {
-  it.todo('⑨ P1 换歌只关上一首独有的执行器；在联动台按停止关这首的执行器、P1 照放；P1 自己停、断码、等下一首都不关（已定，P3f 接 lighting-off-service.ts）');
+  it('⑨ 自动选歌：P1 换歌只关上一首独有的执行器；P1 自己停、断码、等下一首都不关；在联动台按停止关这首的，P1 照放', () => {
+    const project = autoProject();
+    const lights = lightsOn({ a: ['1.101', '1.102'], b: ['1.102', '1.103'] });
+    const prepares: string[] = [];
+    const follow = new P1FollowSession(project, 'auto', { outputs: NO_OUTPUTS, prepare: (_itemId, sessionId) => { prepares.push(sessionId); }, lights: lights.lights });
+    // Waiting for P1's song sends nothing.
+    follow.arm(null);
+    expect(lights.offs).toEqual([]);
+    const a = playFollow(follow, songFrame(project, 'a'), 30, 1_000);
+    follow.prepared(prepares[0]!);
+    expect(follow.view).toMatchObject({ phase: 'running', itemId: 'a' });
+    // P1 stops by itself: the timecode is lost, nothing goes off; the input going away neither.
+    follow.idle(at(a.lastSampleMs + 600));
+    expect(follow.view.phase).toBe('frozen');
+    expect(lights.offs).toEqual([]);
+    // P1 plays song b from its head: only what a has alone goes off.
+    const b = playFollow(follow, songFrame(project, 'b'), 30, a.lastSampleMs + 2_000);
+    follow.prepared(prepares[1]!);
+    expect(follow.view).toMatchObject({ phase: 'running', itemId: 'b' });
+    expect(lights.offs).toEqual([['1.101']]);
+    // P1 replays b from its head: the same song, nothing it uses goes off.
+    const replay = playFollow(follow, songFrame(project, 'b'), 30, b.endMs + 1_000);
+    follow.prepared(prepares[2]!);
+    expect(lights.offs).toEqual([['1.101']]);
+    // The operator stops following in 联动台: b's executors go off; P1 plays on and nothing more is sent.
+    follow.stop('stop');
+    expect(lights.offs).toEqual([['1.101'], ['1.102', '1.103']]);
+    playFollow(follow, songFrame(project, 'b') + 30, 30, replay.endMs);
+    follow.inputGone();
+    expect(lights.offs).toEqual([['1.101'], ['1.102', '1.103']]);
+    expect(lights.causes).toEqual(['stop']);
+  });
+
+  it('⑨ 手动：待命不关；第一个位置起控台跑这首；断码、重新待命都不关；关掉跟随关这首的；停在待命时什么都不关', () => {
+    const lights = lightsOn({ song: ['1.201'] });
+    const follow = new P1FollowSession(manualProject(), 'manual', { outputs: NO_OUTPUTS, prepare: () => undefined, lights: lights.lights });
+    follow.arm('song');
+    follow.stop('stop');
+    expect(lights.calls).toEqual([]);
+    follow.arm('song');
+    const first = playFollow(follow, 0, 30, 1_000);
+    expect(lights.calls).toEqual(['change null→song']);
+    follow.idle(at(first.lastSampleMs + 600));
+    follow.rearm();
+    playFollow(follow, 0, 30, first.lastSampleMs + 2_000);
+    expect(lights.offs).toEqual([]);
+    follow.stop('close');
+    expect(lights.offs).toEqual([['1.201']]);
+    expect(lights.causes).toEqual(['close']);
+  });
 });
 
 describe('P1 跟随规则 · 排练和直播（03 §7.1 ⑩，AGENTS §4.8）', () => {
@@ -296,7 +352,7 @@ describe('P1 跟随规则 · 排练和直播（03 §7.1 ⑩，AGENTS §4.8）', 
     const run = async (mode: OutputMode) => {
       const project = midiProject();
       const out = midiOutput(project, mode, bytes => bytes[0] === 0xb1);
-      const follow = new P1FollowSession(project, 'manual', { outputs: out.outputs, prepare: () => undefined });
+      const follow = new P1FollowSession(project, 'manual', { outputs: out.outputs, prepare: () => undefined, lights: NO_LIGHTS });
       follow.arm('song');
       playFollow(follow, 0, 120, 1_000);
       await out.settled();
@@ -389,4 +445,31 @@ function midiOutput(project: LinkProject, mode: OutputMode, refuse: (bytes: read
     reconcileAt: clock => { open(clock, false); tick(clock); }
   };
   return { sent, problems, settled: () => tail, outputs };
+}
+
+/** The follow's lights as the main process turns them into Offs (p1-follow-wiring.ts followLights, through the one
+ * ledger's rules): `executors` is what each song's console timeline runs. */
+function lightsOn(executors: Record<string, string[]>) {
+  const offs: string[][] = [], causes: string[] = [], calls: string[] = [];
+  const song = (itemId: string): LitSong => ({ document: lightingWith(executors[itemId] ?? []), song: { itemId, title: itemId } });
+  const names = (actions: readonly Ma2PlaybackAction[]): string[] => actions.flatMap(action => action.target === 'executor' ? [action.executor] : []);
+  const lights: P1FollowLights = {
+    change: (previous, next) => {
+      calls.push(`change ${previous ?? 'null'}→${next}`);
+      if (previous === null) return;
+      const sends = names(litChangeOffs(song(previous), song(next)));
+      if (sends.length > 0) offs.push(sends);
+    },
+    stop: (itemId, cause) => { calls.push(`stop ${itemId}`); causes.push(cause); offs.push(names(litReleaseActions(song(itemId)))); }
+  };
+  return { lights, offs, causes, calls };
+}
+
+function lightingWith(executors: string[]): LightingDocument {
+  const track = (index: number) => lightingTrackSchema.parse({ id: `track-${index}`, name: `Track ${index}`, kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false,
+    locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [] });
+  const binding = lightingMa2BindingSchema.parse({ id: 'binding', timecode: 1, name: '歌曲', readAt: '2026-11-11T00:00:00.000Z', sourceXml: '<MA/>',
+    baselineTracks: executors.map((_executor, index) => track(index)), mappings: [],
+    trackMappings: executors.map((executor, index) => ({ trackId: `track-${index}`, path: `Track ${index}`, executor, subtracks: [] })) });
+  return lightingDocumentSchema.parse({ ...createLightingDocument(), ma2Bindings: [binding] });
 }

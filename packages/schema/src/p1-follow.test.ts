@@ -5,13 +5,13 @@ const ownerId = '6f1c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f';
 const request = (command: unknown) => ({ version: 1, ownerId, command });
 
 const standby: P1FollowState = {
-  version: 1, phase: 'standby', projectId: 'project', mode: 'manual', runMode: 'live', itemId: null, sessionId: null, generation: 0,
-  positionMs: null, cause: null, reason: null, input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null
+  version: 1, phase: 'standby', ownerId, projectId: 'project', mode: 'manual', runMode: 'live', itemId: null, sessionId: null, generation: 0,
+  positionMs: null, cause: null, reason: null, input: { portName: 'loopMIDI Port', state: 'open', reason: null }, mtc: null, outputs: { actionMidi: null }
 };
 
 describe('P1 跟随的 IPC 契约（0.5.9 P3a）', () => {
   it('收下设计里的每一条命令，外加离开工程时的 close；手动 GO、重试动作和单步测试不在这里（P3d）', () => {
-    const start = { kind: 'start', projectPath: 'C:/Shows/show.tblink', sessionId: ownerId, revision: 3, document: '{}', mode: 'auto', runMode: 'live', inputPortName: 'loopMIDI Port' };
+    const start = { kind: 'start', projectPath: 'C:/Shows/show.tblink', sessionId: ownerId, revision: 3, document: '{}', mode: 'auto', runMode: 'live', inputPortName: 'loopMIDI Port', lightingProfile: null };
     const commands = [start, { kind: 'arm', itemId: 'song' }, { kind: 'arm', itemId: null }, { kind: 'resync' }, { kind: 'rearm' }, { kind: 'manualTakeover' },
       { kind: 'stop' }, { kind: 'close' }];
     for (const command of commands) expect(p1FollowRequestSchema.parse(request(command)).command).toEqual(command);
@@ -32,7 +32,7 @@ describe('P1 跟随的 IPC 契约（0.5.9 P3a）', () => {
 
   it('状态：只有没跟随时才没有工程和输入口；只有冻结时才有冻结原因', () => {
     expect(p1FollowStateSchema.parse(standby)).toEqual(standby);
-    const closed = { ...standby, phase: 'closed', projectId: null, mode: null, runMode: null, input: null };
+    const closed = { ...standby, phase: 'closed', ownerId: null, projectId: null, mode: null, runMode: null, input: null };
     expect(p1FollowStateSchema.parse(closed)).toEqual(closed);
     expect(p1FollowStateSchema.safeParse({ ...standby, phase: 'closed' }).success).toBe(false);
     expect(p1FollowStateSchema.safeParse({ ...closed, phase: 'standby' }).success).toBe(false);
@@ -42,5 +42,16 @@ describe('P1 跟随的 IPC 契约（0.5.9 P3a）', () => {
       mtc: { timecode: { hours: 1, minutes: 0, seconds: 1, frames: 6 }, frameRate: '30', receiving: true, stable: false } };
     expect(p1FollowStateSchema.parse(frozen)).toEqual(frozen);
     expect(p1FollowStateSchema.safeParse({ ...frozen, positionMs: -1 }).success).toBe(false);
+  });
+
+  it('状态带着跟随它的页面和每一路输出自己报的状态（P3f）：没跟随时没有页面', () => {
+    expect(p1FollowStateSchema.safeParse({ ...standby, ownerId: null }).success).toBe(false);
+    const closed = { ...standby, phase: 'closed', ownerId: null, projectId: null, mode: null, runMode: null, input: null };
+    expect(p1FollowStateSchema.safeParse({ ...closed, ownerId }).success).toBe(false);
+    const red = { ...standby, phase: 'running', itemId: 'song', sessionId: 's', generation: 1, positionMs: 100,
+      outputs: { actionMidi: { itemId: 'song', state: 'running', reason: null, fault: 'MIDI 动作晚了超过 100 ms，没有补发：开场' } } };
+    expect(p1FollowStateSchema.parse(red)).toEqual(red);
+    expect(p1FollowStateSchema.safeParse({ ...red, outputs: { actionMidi: { ...red.outputs.actionMidi, state: 'fine' } } }).success).toBe(false);
+    expect(p1FollowStateSchema.safeParse({ ...red, outputs: {} }).success).toBe(false);
   });
 });

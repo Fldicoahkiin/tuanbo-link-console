@@ -92,8 +92,9 @@ export type LightingReadBackResult = { executor: string; song: LightingReleaseSo
  * again, in use again or owed afresh. */
 export type LightingOffCheck = { running: { executor: string; song: LightingReleaseSong | null }[];
   unconfirmed: { executor: string; song: LightingReleaseSong | null; reason: string }[] };
-/** Who runs executors from its timecode: the program, or what the window runs itself (a preview, P1 following). */
-export type LightingUser = 'program' | 'window';
+/** Who runs executors from its timecode: the program, what the window runs itself (a preview, P1 following on the page),
+ * or P1 followed in the main process (0.5.9 P3f, p1-follow-host.ts). */
+export type LightingUser = 'program' | 'window' | 'p1';
 
 const resendRow = 'lighting.offResend' as const;
 

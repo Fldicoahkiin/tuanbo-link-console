@@ -11,6 +11,10 @@ export type ShowProgramSource = {
 /** The lights-off ledger as the show reads it (LightingOffService): an Off on its way keeps a stopped program stopping. */
 export type ShowLightingSource = { sending(): boolean; onChanged(listener: () => void): () => void };
 
+/** P1 followed in the main process (p1-follow-wiring.ts, 0.5.9 P3f): its state as the show's P1 input while the host has
+ * a follow; `undefined` while it has none, and what the window reports stands (until the window's own P1 path goes, P4). */
+export type ShowP1Source = { input(): ShowInputs['p1'] | undefined };
+
 const noActivity: LinkShowActivity = { version: 1, p1: null, preview: false };
 
 /**
@@ -24,6 +28,7 @@ const noActivity: LinkShowActivity = { version: 1, p1: null, preview: false };
  */
 export class ShowStateService {
   private activity: LinkShowActivity = noActivity;
+  private p1: ShowP1Source | null = null;
   private show: ShowState;
   private published: string;
 
@@ -45,6 +50,10 @@ export class ShowStateService {
     this.update();
   }
 
+  /** The main process follows P1 itself from now on (`source`); `p1Changed` says when its state changed. */
+  followP1(source: ShowP1Source): void { this.p1 = source; this.update(); }
+  p1Changed(): void { this.update(); }
+
   /** The window's page is gone (its renderer exited, or a new page replaced it): what it reported is gone with it. */
   pageGone(): void {
     this.activity = noActivity;
@@ -55,7 +64,9 @@ export class ShowStateService {
     const program = this.program.snapshot();
     const internal: ShowInputs['internal'] = program ? { status: program.state.status, itemId: program.state.itemId,
       positionMs: program.state.positionMs, durationMs: program.state.durationMs, lightingOffOwed: this.lighting?.sending() ?? false } : null;
-    const p1 = this.activity.p1 && this.activity.p1.state !== 'idle' ? { state: this.activity.p1.state, itemId: this.activity.p1.itemId } : null;
+    const followed = this.p1?.input();
+    const reported = this.activity.p1 && this.activity.p1.state !== 'idle' ? { state: this.activity.p1.state, itemId: this.activity.p1.itemId } : null;
+    const p1 = followed !== undefined ? followed : reported;
     return deriveShowState({ internal, p1, preview: this.activity.preview,
       program: program ? { projectPath: program.projectPath, projectId: program.projectId, watched: program.watched } : null });
   }

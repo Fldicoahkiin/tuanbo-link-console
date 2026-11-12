@@ -25,16 +25,21 @@ export type ProgramMa2 = { ready: Promise<void>; status(): Ma2NetworkStatus; sen
  *   request checked like the window's on link:ma2-play-cue, so an Off goes out with an expired license, an ended offline
  *   lease or a clock turned back, while a Go or Goto stays licensed.
  * - `runningChanged`: NativeProgramService reports whether the program prepares, plays or pauses the show; the show keeps
- *   the license the window checked while it does. */
+ *   the license the window checked while it does.
+ * - `followRunningChanged`: the main process's P1 follow reports whether it runs the show (armed until stopped,
+ *   p1-follow-wiring.ts followRuns, 0.5.9 P3f); either of the two running keeps the license as the program alone did. */
 export function programLicense(gate: LicenseGate, ma2: ProgramMa2): {
   network: Pick<LinkDesktopApi, 'getMa2NetworkStatus' | 'playMa2Cue'>;
   runningChanged: (running: boolean) => void;
+  followRunningChanged: (running: boolean) => void;
 } {
+  let program = false, follow = false;
   return {
     network: {
       getMa2NetworkStatus: async () => { await ma2.ready; return ma2.status(); },
       playMa2Cue: async request => { await authorizeRequest(gate, 'link:ma2-play-cue', request); await ma2.send(request); }
     },
-    runningChanged: running => gate.access.setProgramRunning(running)
+    runningChanged: running => { program = running; gate.access.setProgramRunning(program || follow); },
+    followRunningChanged: running => { follow = running; gate.access.setProgramRunning(program || follow); }
   };
 }

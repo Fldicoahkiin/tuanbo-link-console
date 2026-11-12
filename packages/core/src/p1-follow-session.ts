@@ -13,8 +13,9 @@ import type { ProgramClock } from './program-clock';
  * The move adds no behaviour: every rule below is the page's P1 path as of b0461fe2, named where it comes from:
  * `link-runtime-coordinator.ts` (the coordinator), `p1-auto-follow-controller.ts` (the controller), `cue-runtime.ts`
  * (CueRuntime) and `mtc-stability-tracker.ts`. Where the outputs are told something, the shared outputs decide what it
- * does to the picture and the action MIDI (P3d and the picture part); nothing here sends a light Off, as the page's P1
- * path sends none.
+ * does to the picture and the action MIDI (P3d and the picture part). The lights are the one addition, decided on
+ * 2026-11-11 (docs/LIGHTING_WORKFLOW.md 换歌关灯): the page's P1 path sent no Off; here `P1FollowLights` is told which
+ * song the console runs from P1's timecode, and when the operator stops it.
  */
 
 /** The outputs of a P1 follow, the same ones the internal player drives (design 03 §4.1.4): they only ever see a
@@ -31,8 +32,21 @@ export type P1FollowOutputs = {
   reconcileAt(clock: ProgramClock, playsOn: boolean): void;
 };
 
+/** The console runs a song's lighting from P1's timecode by itself; the follow says which song that is and when the
+ * operator lets it go (docs/LIGHTING_WORKFLOW.md 换歌关灯和欠着的关灯, 2026-11-11):
+ * - `change(previous, next)`: P1 plays `next` now (auto: P1 played it from its head; manual: the first position after
+ *   arming). `previous`, the song before it in this follow (null: none), switches off only what it has alone.
+ * - `stop(itemId, cause)`: the operator stopped following (`stop`), or the follow closed (`close`): that song's
+ *   executors go off; P1 itself plays on.
+ * P1 stopping by itself, a lost timecode and waiting for the next song tell it nothing. */
+export type P1FollowLights = {
+  change(previous: string | null, next: string): void;
+  stop(itemId: string, cause: 'stop' | 'close'): void;
+};
+
 export type P1FollowDependencies = {
   outputs: P1FollowOutputs;
+  lights: P1FollowLights;
   /** Auto-follow: P1 started this song; get its outputs ready. The host answers with `prepared` or `preparationFailed`
    * for this `sessionId` (the controller's `prepare`). */
   prepare(itemId: string, sessionId: string): void;
@@ -74,6 +88,8 @@ export class P1FollowSession {
   private pending: { itemId: string; sessionId: string } | null = null;
   /** Auto-follow: the song that could not start, while failed. */
   private failedItemId: string | null = null;
+  /** The song whose lighting the console runs from P1's timecode, as `lights` was last told. */
+  private lit: string | null = null;
   private stableSince: number | null = null;
 
   constructor(project: LinkProject, readonly mode: P1FollowMode, private readonly dependencies: P1FollowDependencies) {
@@ -128,13 +144,16 @@ export class P1FollowSession {
   }
 
   /** Stop following; P1 is not stopped. The outputs let the song go (coordinator `stop`: the page's outputs were
-   * cleaned up). Auto-follow listens again only after `arm` (the controller's `suspend`). */
-  stop(): void {
+   * cleaned up), then the lights of the song the console ran go off. Auto-follow listens again only after `arm` (the
+   * controller's `suspend`). `cause`: the operator's stop, or the follow closing. */
+  stop(cause: 'stop' | 'close'): void {
     if (this.phase === 'standby') return;
     this.clock.stop();
     this.pending = null;
     this.release(OPERATOR_STOP);
     this.phase = 'standby'; this.cause = null; this.reason = null;
+    const lit = this.lit; this.lit = null;
+    if (lit) this.dependencies.lights.stop(lit, cause);
   }
 
   /** Auto-follow: the song P1 started is ready. Its outputs start from its head at the latest position, if P1 is still
@@ -200,6 +219,7 @@ export class P1FollowSession {
    * one is prepared; in a takeover or after a failed song too (the controller listens on through both). */
   private song(itemId: string, sessionId: string): void {
     this.release(SONG_CHANGE_STOP);
+    this.light(itemId);
     this.pending = { itemId, sessionId };
     this.phase = 'preparing'; this.cause = null; this.reason = null;
     this.dependencies.prepare(itemId, sessionId);
@@ -207,7 +227,7 @@ export class P1FollowSession {
 
   private running(clock: P1ClockObservation): void {
     // Manual: the first position after arming. Auto keeps the latest while preparing; `prepared` takes it.
-    if (this.phase === 'waiting' && this.mode === 'manual') { this.start(clock); return; }
+    if (this.phase === 'waiting' && this.mode === 'manual') { this.light(clock.itemId); this.start(clock); return; }
     if (this.phase !== 'running' || this.held?.sessionId !== clock.sessionId) return;
     this.held = clock;
     this.dependencies.outputs.observe(clock);
@@ -238,6 +258,12 @@ export class P1FollowSession {
     this.held = clock;
     this.dependencies.outputs.reconcileAt(clock, playsOn);
     this.phase = 'running'; this.cause = null; this.reason = null;
+  }
+
+  /** The console runs `itemId`'s lighting from P1's timecode from now on. */
+  private light(itemId: string): void {
+    const previous = this.lit; this.lit = itemId;
+    this.dependencies.lights.change(previous, itemId);
   }
 
   private release(reason: string): void {

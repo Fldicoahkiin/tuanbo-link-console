@@ -1,5 +1,5 @@
 import { linkActionSchema, linkManagedMediaExecutionPayloadSchema, ma2PlaybackRequestSchema, type LicenseStatus } from '@tb/schema';
-import { nativePlayerControlSchema } from '@tb/schema';
+import { nativePlayerControlSchema, p1FollowRequestSchema } from '@tb/schema';
 
 const publicCalls = new Set([
   'link:ma2-audition-control', 'link:ma2-play-cancel',
@@ -21,7 +21,9 @@ const publicCalls = new Set([
   // The lights-off ledger: the window's previews say what they use and what they owe; it only ever sends Off.
   'link:lighting-off',
   // What its read-back found (M8), read only.
-  'link:lighting-off-check-get'
+  'link:lighting-off-check-get',
+  // P1 follow's state, read only (0.5.9 P3f).
+  'link:p1-follow-state-get'
 ]);
 
 const workspaceSaveCalls = new Set(['link:save-project', 'link:write-recovery-copy', 'link:discard-recovery-copy',
@@ -39,6 +41,8 @@ export function needsProductLicense(channel: string, value: unknown): boolean {
   // A stopped song switches its executors off; Go and Goto light them.
   if (channel === 'link:ma2-play-cue') return ma2PlaybackRequestSchema.parse(value).action.action !== 'off';
   if (channel === 'link:set-runtime-active') return value !== false;
+  // Stopping a P1 follow and leaving it end what a checked follow started (0.5.9 P3f).
+  if (channel === 'link:p1-follow') { const kind = p1FollowRequestSchema.parse(value).command.kind; return kind !== 'stop' && kind !== 'close'; }
   if (channel === 'link:obs-execute-managed-media') return linkManagedMediaExecutionPayloadSchema.parse(value).event.phase === 'start';
   if (channel === 'link:obs-execute') {
     const action = linkActionSchema.parse(value);

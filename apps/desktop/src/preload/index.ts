@@ -7,7 +7,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { z } from 'zod';
 import { ma2RenameRequestSchema, ma2RenameResultSchema } from '@tb/schema';
 import { linkDocumentStateSchema, linkSaveRequestSchema, linkUnsavedChangesDecisionSchema } from '@tb/schema';
-import { linkShowActivitySchema, linkShowStateSchema } from '@tb/schema';
+import { linkShowActivitySchema, linkShowStateSchema, p1FollowRequestSchema, p1FollowStateSchema } from '@tb/schema';
 import { lightingOffCheckSchema, lightingOffRequestSchema, lightingOffResultSchema } from '@tb/schema';
 import { ma2LayoutReadRequestSchema, ma2LayoutSnapshotSchema, ma2NewCueRequestSchema, ma2NewCueResultSchema } from '@tb/schema';
 import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema, ma2CueDeletePlanSchema, ma2CueDeleteResultSchema } from '@tb/schema';
@@ -196,6 +196,13 @@ const tbLink: LinkDesktopBridgeApi = {
     const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(linkShowStateSchema.parse(value));
     ipcRenderer.on('link:show-state', receive);
     return () => ipcRenderer.removeListener('link:show-state', receive);
+  },
+  p1Follow: async request => p1FollowStateSchema.parse(await invoke('link:p1-follow', p1FollowRequestSchema.parse(request))),
+  getP1FollowState: async () => p1FollowStateSchema.parse(await invoke('link:p1-follow-state-get')),
+  onP1FollowState: listener => {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(p1FollowStateSchema.parse(value));
+    ipcRenderer.on('link:p1-follow-state', receive);
+    return () => ipcRenderer.removeListener('link:p1-follow-state', receive);
   },
   getLightingOffCheck: async () => lightingOffCheckSchema.parse(await invoke('link:lighting-off-check-get')),
   onLightingOffCheck: listener => {

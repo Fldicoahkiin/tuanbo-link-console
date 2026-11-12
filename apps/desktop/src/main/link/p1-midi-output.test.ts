@@ -180,7 +180,8 @@ function live(mode: 'manual' | 'auto') {
     fault: message => faults.push(message), outputs, recovered: report => recovered.push(report) });
   const output = new P1MidiOutput(project, host, (level, message) => { logs.push(`${level}:${message}`); });
   const prepares: string[] = [];
-  const follow = new P1FollowSession(project, mode, { outputs: output, prepare: (_itemId, sessionId) => { prepares.push(sessionId); } });
+  const follow = new P1FollowSession(project, mode, { outputs: output, prepare: (_itemId, sessionId) => { prepares.push(sessionId); },
+    lights: { change: () => undefined, stop: () => undefined } });
   const start = mode === 'auto' ? project.p1AutoFollow!.ranges[0]!.startSeconds * FPS : 0;
   /** P1 playing `frames` frames from the song's frame `fromFrame`; the main process gets its turn after each whole timecode,
    * as when the quarter frames arrive over time. */

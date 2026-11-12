@@ -324,6 +324,12 @@ export type LinkDesktopApi = {
   /** The lights-off read-back (M8) as the main process's ledger holds it; the window mirrors it beside the show state. */
   getLightingOffCheck(): Promise<import('./lighting-off-ledger').LightingOffCheck>;
   onLightingOffCheck(listener: (check: import('./lighting-off-ledger').LightingOffCheck) => void): () => void;
+  /** P1 followed in the main process (0.5.9 P3f, p1-follow-host.ts): a command of this page (`ownerId`) and the state
+   * after it; stop and close never wait for a license. The state is pushed on every change (`onP1FollowState`, for the
+   * page whose `ownerId` it names) and read once by a new page. */
+  p1Follow(request: import('@tb/schema').P1FollowRequest): Promise<import('@tb/schema').P1FollowState>;
+  getP1FollowState(): Promise<import('@tb/schema').P1FollowState>;
+  onP1FollowState(listener: (state: import('@tb/schema').P1FollowState) => void): () => void;
   /** What only the window knows about the show: P1 following and its own previews. */
   reportShowActivity(activity: import('@tb/schema').LinkShowActivity): Promise<void>;
   controlWindow(action: 'minimize' | 'toggleMaximize' | 'close'): Promise<void>;
