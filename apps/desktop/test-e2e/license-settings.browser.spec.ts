@@ -2,17 +2,21 @@ import { test, expect, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { notesUpTo, readReleaseNotes } from '../../../scripts/release-notes.mjs';
+import { z } from 'zod';
 
 let script = '';
 let styles = '';
 test.beforeAll(async () => {
+  const { version } = z.object({ version: z.string() }).parse(JSON.parse(await readFile('package.json', 'utf8')));
   const result = await build({
     stdin: { contents: `import React from 'react'; import { createRoot } from 'react-dom/client'; import { LicenseSettings } from './src/renderer/src/link/components/LicenseSettings'; import { LicenseGate } from './src/renderer/src/link/components/LicenseGate';
       const root = createRoot(document.getElementById('root'));
       window.renderLicense = active => root.render(React.createElement('main', { className: 'settings-page', 'data-density': 'comfortable' }, React.createElement(LicenseSettings, { runtimeActive: active }))); window.renderLicense(false);
       window.renderGate = () => root.render(React.createElement(LicenseGate, null, React.createElement('div', { 'data-testid': 'workspace' }, '付费工作区')));`, resolveDir: process.cwd(), loader: 'jsx' },
     bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic', loader: { '.webp': 'dataurl' },
-    alias: { '@tb/schema': resolve('../../packages/schema/src/index.ts') }
+    alias: { '@tb/schema': resolve('../../packages/schema/src/index.ts') },
+    define: { __TBLINK_RELEASE_NOTES__: JSON.stringify(notesUpTo(readReleaseNotes(resolve('../../release-notes')), version)) }
   });
   script = result.outputFiles[0]!.text;
   styles = (await Promise.all(['styles/layers.css', 'styles/tokens.css', 'link/ui/ui.css', 'link/components/settings-page.css', ...['link.css', 'project-workspace.css', 'appearance.css', 'home-layout.css', 'settings-content.css', 'lighting.css', 'properties.css', 'timeline-editing.css', 'interface.css'].map(file => `link/${file}`)].map(file => readFile(resolve('src/renderer/src', file), 'utf8')))).join('\n');
@@ -193,6 +197,31 @@ test('激活页保持标题栏可拖动、窗口按钮可用，小窗口可滚�
   await page.screenshot({ path: info.outputPath('activation-light.png') });
 });
 
+test('激活页带完整更新日志时两栏首屏可见，激活码不被标签挤窄', async ({ page }, info) => {
+  await page.evaluate('window.renderGate()');
+  for (const viewport of [{ width: 1280, height: 720 }, { width: 1024, height: 640 }]) {
+    await page.setViewportSize(viewport);
+    await page.locator('.license-page-scroll').evaluate(element => { element.scrollTop = 0; });
+    await page.screenshot({ path: info.outputPath(`activation-${viewport.width}.png`) });
+    await expect(page.locator('.license-introduction h1')).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole('img', { name: /团播联动台真实界面/ })).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole('button', { name: '激活本机', exact: true })).toBeInViewport({ ratio: 1 });
+    const input = await page.getByLabel('激活码', { exact: true }).boundingBox();
+    expect(input?.width).toBeGreaterThanOrEqual(280);
+    expect(await page.locator('.license-page-scroll').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  }
+  // 1280 × 720 at 200% scale leaves a 640 × 360 CSS viewport.
+  for (const viewport of [{ width: 640, height: 360 }, { width: 480, height: 640 }]) {
+    await page.setViewportSize(viewport);
+    await page.getByLabel('激活码', { exact: true }).fill('TBA-INVALID');
+    await page.getByRole('button', { name: '激活本机', exact: true }).scrollIntoViewIfNeeded();
+    await expect(page.getByLabel('激活码', { exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole('button', { name: '激活本机', exact: true })).toBeInViewport({ ratio: 1 });
+    expect(await page.locator('.license-page-scroll').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`activation-${viewport.width}.png`) });
+  }
+});
+
 test('非有效授权不显示成功、不清除输入，也不进入工作区', async ({ page }) => {
   await page.evaluate(() => {
     Object.defineProperty(window.tbLink, 'activateLicenseCode', { value: async () => ({
@@ -254,12 +283,17 @@ test('未配置购买时明确提示，保留手工激活入口且不展示测�
   await expect(page.getByLabel('激活码', { exact: true })).toBeEnabled();
 });
 
-test('确认服务器价格后建单，显式打开付款页和领取，不自动绑定企业席位', async ({ page }, info) => {
+for (const entry of ['设置页', '激活页'] as const) test(`${entry}确认服务器价格后建单，显式打开付款页和领取，不自动绑定企业席位`, async ({ page }, info) => {
   await configurePurchase(page, 'success');
+  if (entry === '激活页') {
+    await page.setViewportSize({ width: 1024, height: 640 });
+    await page.evaluate('window.renderGate()');
+  }
   await page.locator('.license-disclosure').filter({ has: page.getByText('购买授权与查询订单', { exact: true }) }).evaluate(element => { if (element instanceof HTMLDetailsElement) element.open = true; });
   await page.getByRole('button', { name: '查看可售授权' }).click();
   await page.getByLabel('购买主体').selectOption('company');
   await page.getByLabel('授权客户名称').fill('浏览器测试企业');
+  if (entry === '激活页') expect((await page.getByLabel('授权客户名称').boundingBox())?.width).toBeGreaterThanOrEqual(280);
   await page.getByLabel('机器数量', { exact: true }).fill('2');
   await expect(page.getByText(/含税总价 ¥2.00/)).toBeVisible();
   await expect(page.getByRole('button', { name: '创建购买订单' })).toBeDisabled();

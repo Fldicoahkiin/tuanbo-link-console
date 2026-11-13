@@ -65,7 +65,7 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
     <Card title={onAuthorized ? '激活你的工作区' : '一台主机，一份授权'} description="已有激活码？粘贴后就能在这台电脑上用。" actions={<StatusBadge name="本机授权" status={badge} />}>
       {status ? <>
         <form className="settings-stack" onSubmit={event => { event.preventDefault(); if (!locked) void run('activate'); }}>
-          <Field label="激活码">{props => <PasswordInput {...props} ref={codeInput} secret="激活码" aria-label="激活码" aria-invalid={error ? true : undefined} maxLength={36} value={code} placeholder="TBA- 开头的完整激活码" disabled={locked} onChange={event => setCode(event.target.value.trim())} />}</Field>
+          <Field label="激活码" stacked={Boolean(onAuthorized)}>{props => <PasswordInput {...props} ref={codeInput} secret="激活码" aria-label="激活码" aria-invalid={error ? true : undefined} maxLength={36} value={code} placeholder="TBA- 开头的完整激活码" disabled={locked} onChange={event => setCode(event.target.value.trim())} />}</Field>
           <div className="settings-actions-row">
             <Button type="submit" variant="primary" icon={KeyRound} disabled={locked || !code.trim()}>激活本机</Button>
             <Button type="button" variant="secondary" icon={RefreshCw} disabled={locked} onClick={() => void run('online')}>联网验证授权</Button>
@@ -84,10 +84,10 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
     </Card>
     {status ? <>
       <Disclosure className="license-disclosure" title="购买授权与查询订单">
-        <PurchaseSettings runtimeActive={runtimeActive || busy || !status.onlineAvailable} license={claims ?? null} onSelectCode={value => { setCode(value); codeInput.current?.focus(); }} />
+        <PurchaseSettings runtimeActive={runtimeActive || busy || !status.onlineAvailable} stacked={Boolean(onAuthorized)} license={claims ?? null} onSelectCode={value => { setCode(value); codeInput.current?.focus(); }} />
       </Disclosure>
       <Disclosure className="license-disclosure" title="本机信息与授权文件">
-        <Field label="本机机器码">{props => <TextInput {...props} aria-label="本机机器码" readOnly value={status.machineCode} onFocus={event => event.currentTarget.select()} />}</Field>
+        <Field label="本机机器码" stacked={Boolean(onAuthorized)}>{props => <TextInput {...props} aria-label="本机机器码" readOnly value={status.machineCode} onFocus={event => event.currentTarget.select()} />}</Field>
         <p>{status.message}</p>
         <div className="settings-actions-row">
           <Button variant="secondary" icon={Download} disabled={busy} onClick={() => void run('export')}>导出授权申请</Button>
