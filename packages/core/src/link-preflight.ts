@@ -176,7 +176,8 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
     }
   }
 
-  checks.push(versionCheck('version.obs', 'OBS 版本', context.obs.version, profile.acceptedVersions.obs));
+  // The saved OBS version is an operator's test record, not a compatibility allowlist.
+  checks.push(versionCheck('version.obs', 'OBS 版本', context.obs.version, profile.acceptedVersions.obs, true));
   if (context.mtcRequirement !== 'internal') {
   checks.push(p1AudioCheck(profile, context.obs));
   checks.push(context.processes.p1.running
@@ -361,8 +362,10 @@ function versionCheck(
   warningOnly = false
 ): PreflightCheck {
   if (actual === expected) return passed(id, label, actual);
+  if (warningOnly && actual !== null) return warning(id, label,
+    `本机记录的 ${label}是 ${expected}，当前是 ${actual}；请在开播前确认画面播放、切换和停止正常`);
   const detail = `期望 ${expected}，检测到 ${actual ?? '未知'}`;
-  return warningOnly ? warning(id, label, detail) : blocking(id, label, detail);
+  return blocking(id, label, detail);
 }
 
 function report(context: PreflightContext, checks: PreflightCheck[]): PreflightReport {

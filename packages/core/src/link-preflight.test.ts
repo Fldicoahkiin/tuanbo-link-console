@@ -31,6 +31,38 @@ describe('团播联动台预检', () => {
     expect(report.checks.some((check) => check.status === 'blocking')).toBe(false);
   });
 
+  for (const mtcRequirement of ['internal', 'running'] as const) {
+    for (const mode of ['live', 'rehearsal'] as const) {
+      it.each(['33.0.0', '33.0.1', '31.1.2'])(`${mtcRequirement}/${mode}：OBS %s 与本机版本记录不同只提醒，不拒绝画面联动`, (version) => {
+        const value = context(); value.mtcRequirement = mtcRequirement; value.mode = mode;
+        value.obs.version = version;
+        const report = runLinkPreflight(value);
+        expect(report.passed).toBe(true);
+        expect(report.checks.find(check => check.id === 'version.obs')).toMatchObject({
+          status: 'warning', detail: `本机记录的 OBS 版本是 32.2.2，当前是 ${version}；请在开播前确认画面播放、切换和停止正常`
+        });
+        expect(value.profile.acceptedVersions.obs).toBe('32.2.2');
+      });
+    }
+  }
+
+  it('OBS 版本与本机记录一致时通过；版本未知时仍明确报出', () => {
+    const value = context();
+    expect(runLinkPreflight(value).checks.find(check => check.id === 'version.obs')).toMatchObject({ status: 'passed' });
+    value.obs.version = null;
+    expect(runLinkPreflight(value).checks.find(check => check.id === 'version.obs')).toMatchObject({ status: 'blocking', detail: '期望 32.2.2，检测到 未知' });
+  });
+
+  it('OBS 升级后的版本提醒不掩盖连接或场景缺失，也不放宽 P1 的检查', () => {
+    const value = context(); value.obs.version = '33.0.1';
+    value.obs.authenticated = false;
+    expect(runLinkPreflight(value).checks.find(check => check.id === 'obs.authentication')).toMatchObject({ status: 'blocking' });
+    value.obs.authenticated = true; value.obs.scenes = [];
+    expect(runLinkPreflight(value).checks.find(check => check.id === 'target.action-scene')).toMatchObject({ status: 'blocking' });
+    value.obs.scenes = ['Program']; value.processes.p1.version = '2.0.0';
+    expect(runLinkPreflight(value).checks.find(check => check.id === 'version.p1')).toMatchObject({ status: 'blocking' });
+  });
+
   it('显式关闭内部时间码只跳过其端口，仍阻断 Cue 实际需要的 MIDI 输出', () => {
     const value = context(); value.mtcRequirement = 'internal'; value.project.playbackSource = 'internal';
     value.internalMtcOutputEnabled = false;

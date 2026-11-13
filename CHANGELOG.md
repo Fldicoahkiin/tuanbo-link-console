@@ -2,6 +2,12 @@
 
 本文件由 `pnpm changelog` 根据 [release-notes/](release-notes/) 生成，不要直接修改。写法和发版时的用法见 [release-notes/README.md](release-notes/README.md)。
 
+## 0.5.10（未发布）
+
+### 修复
+
+- **OBS 升级后画面联动**：修复 OBS 版本与本机“已测试的程序版本”记录不同时，画面联动被阻断的问题。现在版本不同只提醒确认画面，连接失败和素材缺失仍会明确报出。
+
 ## 0.5.9
 
 ### 快捷键变了，升级后先看这里
