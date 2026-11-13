@@ -59,7 +59,7 @@
 
 清单 `Cache-Control: no-store`；带版本的安装包不可变、长期缓存。不开目录浏览，未匹配路径 404。服务器、CF 记录和探测命令见 [COMMERCIAL_DEPLOYMENT.md](COMMERCIAL_DEPLOYMENT.md)。
 
-2026-11-04 起 `updates.tuanbo-link.jinhefilm.com` 经腾讯云 CDN（中国境内）下载，Cloudflare 上是指向 CDN 的 CNAME，仍只做解析。源站就是上面这个 Nginx 目录，没有变化：CDN 不缓存 `latest.yml`，安装包和 blockmap 缓存 365 天，多段 Range 原样支持；用量封顶四条（超出返回 404）。缓存后实测约 11.8 MB/s；每个新版本第一次被取时要从服务器回源，这一段仍是约 470 KB/s。CDN 用 `updates.` 的专用证书，每天由 `tblink-cdn-certificate.timer` 核对，结果在后台「运行与维护」。安装记录、费用和回退见 [CDN 安装](SERVER_INSTALL_CDN_20261026.md)。
+2026-11-04 起 `updates.tuanbo-link.jinhefilm.com` 经腾讯云 CDN（中国境内）下载，Cloudflare 上是指向 CDN 的 CNAME，仍只做解析。源站就是上面这个 Nginx 目录，没有变化：CDN 不缓存 `latest.yml`，安装包和 blockmap 缓存 365 天，多段 Range 原样支持；用量封顶四条（超出返回 404）；IP 访问限频单 IP 每秒 200 次（超出返回 514，2026-11-13 从 10 改为 200）。缓存后实测约 11.8 MB/s；每个新版本第一次被取时要从服务器回源，这一段仍是约 470 KB/s。CDN 用 `updates.` 的专用证书，每天由 `tblink-cdn-certificate.timer` 核对，结果在后台「运行与维护」。安装记录、费用和回退见 [CDN 安装](SERVER_INSTALL_CDN_20261026.md)。
 
 Git、版本标识、构建位置与服务部署关系见 [完整链路核查](RELEASE_CHAIN.md)。
 
@@ -145,6 +145,7 @@ Git、版本标识、构建位置与服务部署关系见 [完整链路核查](R
 - TLS 失败：核查多级子域名证书、DNS、CAA、云防火墙以及灰云/橙云方式。
 - 摘要不匹配：停止交付，检查文件被覆盖、上传不完整、代理缓存或被篡改；不关闭校验来恢复下载。
 - 下载慢：经 CDN 后，新版本第一次被下载时仍要从服务器回源（4Mbps 共享带宽）；先看响应头 `X-Cache-Lookup` 是否命中缓存，再看服务器带宽和并发。不能承诺国内一定秒下。
+- 更新报 `status 514`：是 CDN 的 IP 访问限频挡的，不是服务器或安装包坏了。差分更新每段变化发一次请求，小段多时一秒能发几十次。先看 CDN 域名「访问控制」里的 IP 访问限频是不是还在每秒 200 次；同一出口有好几台电脑同时更新时再调高。
 - 突然全部 404：先看腾讯云 CDN 用量封顶是否触发（会有告警）。急需恢复时按 [CDN 安装第 9 步](SERVER_INSTALL_CDN_20261026.md#9-回退) 把 DNS 切回服务器。
 - 客户端仍访问 GitHub：核对实际安装版本和包内配置，按迁移流程处理。
 
