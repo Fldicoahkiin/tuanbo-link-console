@@ -1,4 +1,6 @@
 import { chromium, expect } from '../apps/desktop/node_modules/@playwright/test/index.mjs';
+import { fileURLToPath } from 'node:url';
+const sceneSchemaUrl = `/@fs/${fileURLToPath(new URL('../packages/schema/src/obs-live-canvas.ts', import.meta.url)).replaceAll('\\', '/')}`;
 const browser = await chromium.launch({headless:true,channel:'msedge'});
 const page = await browser.newPage({viewport:{width:1180,height:800}});
 const {OBSWebSocket}=await import('../apps/desktop/node_modules/obs-websocket-js/dist/json.js');
@@ -10,18 +12,18 @@ try {
  await page.exposeFunction('editLiveScene',async(edit)=>{await ws.call('SetSceneItemTransform',{sceneName:edit.sceneName,sceneItemId:edit.sceneItemId,sceneItemTransform:edit.transform});});
  await page.route('**/__timeline-menu', route=>route.fulfill({contentType:'text/html',body:'<div id="test"></div>'}));
  await page.goto('http://localhost:5173/__timeline-menu');
- await page.evaluate(async()=>{
+ await page.evaluate(async(sceneSchemaUrl)=>{
   const refresh=await import('/@react-refresh');refresh.injectIntoGlobalHook(globalThis);globalThis.$RefreshReg$=()=>{};globalThis.$RefreshSig$=()=>type=>type;
   const source=await(await fetch('/src/main.tsx')).text();
   const {default:React}=await import(source.match(/from "([^"]*deps\/react\.js[^"]*)"/)[1]);
   const {default:{createRoot}}=await import(source.match(/from "([^"]*deps\/react-dom_client.js[^"]*)"/)[1]);
   await import('/src/link/link.css');await import('/src/link/appearance.css');await import('/src/link/timeline-editing.css');
   const {ObsLiveSelection}=await import('/src/link/components/ObsLiveSelection.tsx');
-  const {obsLiveSceneSchema}=await import('/@fs/C:/Users/WYZB/Documents/ChatGPT/团播切片/packages/schema/src/obs-live-canvas.ts');
+  const {obsLiveSceneSchema}=await import(sceneSchemaUrl);
   const root=createRoot(globalThis.document.getElementById('test'));
   globalThis.renderScene=async()=>{const scene=obsLiveSceneSchema.parse(await globalThis.readLiveScene());globalThis.scene=scene;root.render(React.createElement('div',{className:'obs-live-canvas',style:{position:'relative',width:640,height:360}},React.createElement(ObsLiveSelection,{scene,selected:scene.items[0].sceneItemId,onSelect:()=>{},onEdit:(edit,dragging)=>{if(!dragging)globalThis.commit=globalThis.editLiveScene(edit);}})));};
   await globalThis.renderScene();
- });
+ }, sceneSchemaUrl);
  const source=page.locator('.obs-live-source').first();await expect(source).toBeVisible();const before=await source.boundingBox();
  await page.mouse.move(before.x+30,before.y+30);await page.mouse.down();await page.mouse.move(before.x+80,before.y+50,{steps:6});await page.mouse.up();await page.evaluate(()=>globalThis.commit);
  const initial=await page.evaluate(()=>globalThis.scene);const id=initial.items[0].sceneItemId;const original=initial.items[0].sceneItemTransform;
