@@ -77,12 +77,12 @@ describe('时间线上标出的画面', () => {
     expect(pictureMarks({ kind: 'timeline' }, current)).toEqual({ onAirtime: current.airtime, pending: NO_PENDING_PICTURE_EDITS, notice: null });
   });
 
-  it('播放中没改：高亮按 OBS 在播那一版；提示条一直留着，写明规则（R9：这一遍就用上）', () => {
+  it('播放中没改：高亮按 OBS 在播那一版，不显示常驻说明', () => {
     const project = started(), current = songPicture(project, 'song')!;
     const marks = pictureMarks(pictureOnAir('song', true, holding('paused', 'song', project)), current);
     expect(marks.onAirtime).toEqual(current.airtime);
     expect(marks.pending).toEqual(NO_PENDING_PICTURE_EDITS);
-    expect(marks.notice).toEqual({ tone: 'info', text: '播放中改画面，这一遍就用上', detail: '改过的部分送到 OBS 之前用虚线框标出来，送到以后照改过的播，不用停下重播。' });
+    expect(marks.notice).toBeNull();
   });
 
   it('播放中挪了机位：在播的高亮跟着 OBS 那一版，挪过的标“正在送到 OBS”不高亮，提示条是说明、不用停下（R9）', () => {

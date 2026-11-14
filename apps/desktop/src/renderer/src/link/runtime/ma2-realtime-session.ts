@@ -31,6 +31,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
   if (readMa2Method() !== 'network') {
     for (const song of Object.values(useMa2SyncStore.getState().songs)) stopMa2SongSync(song.itemId);
     verifiedSource = '';
+    if (ma2SyncActive()) setSession('waiting', '请在设备设置中通过网络连接 MA2，再同步到控台');
     return false;
   }
   const state = useDocumentStore.getState();
@@ -45,10 +46,14 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
   // Off, each song keeps what its last pass found; turning sync off already stopped what was running.
   if (!ma2SyncActive()) return false;
   // The session check reads the console: it waits only while the program moves, prepares or stops (showGate, S3b).
-  if (currentShowWait('ma2.sync.read') !== null) return false;
-  if (!state.project || !state.path || useMa2MaterialReadStore.getState().busy) return false;
+  const wait = currentShowWait('ma2.sync.read');
+  if (wait !== null) { setSession('waiting', wait); return false; }
+  if (!state.project) { setSession('waiting', '请先打开工程'); return false; }
+  if (!state.path) { setSession('waiting', '请先保存工程，再同步到控台'); return false; }
+  if (useMa2MaterialReadStore.getState().busy) { setSession('waiting', '正在读取控台素材，读完后继续同步'); return false; }
   const material = state.project.ma2MaterialLibrary;
-  if (!material?.library || material.library.sourceUnverified) return false;
+  if (!material?.library) { setSession('waiting', '请先读取控台素材，再同步到控台'); return false; }
+  if (material.library.sourceUnverified) { setSession('waiting', '上次读取还没确认，请重新读取控台素材'); return false; }
   const current = (): boolean => useDocumentStore.getState().documentId === state.documentId
     && ma2SyncActive() && readMa2Method() === 'network' && !useMa2MaterialReadStore.getState().busy;
   preparing = true;

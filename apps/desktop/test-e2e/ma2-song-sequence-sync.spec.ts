@@ -72,7 +72,7 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
       expect((await savedProject()).ma2MaterialLibrary?.userLibrary?.consoleWorkspace?.executorPage).toBeUndefined();
       await song.getByLabel('默认创建按钮页').fill(String(targetPage));
       await song.getByRole('button', { name: '保存默认', exact: true }).click();
-      await expect(song).toContainText(`默认第 ${targetPage} 页，保存工程后写入工程文件`);
+      await expect(song).toContainText(`已设置：按钮第 ${targetPage} 页`);
       await saveProject(page);
       expect((await savedProject()).ma2MaterialLibrary?.userLibrary?.consoleWorkspace?.executorPage).toBe(targetPage);
       await page.reload();

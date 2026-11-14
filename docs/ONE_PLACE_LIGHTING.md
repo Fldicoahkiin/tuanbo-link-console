@@ -12,9 +12,13 @@
 
 只看时间码节目编号和 MTC 起始码（`packages/core/src/ma2-pairing-state.ts`）
 
+2026-11-14 修复首次配对只显示“对上”、Cue 没进歌曲：完整的控台读取结果与歌曲起始码唯一匹配时，配对步骤就通过原有导入命令把 Cue 放进歌曲。先读控台再改起始码、先有歌曲再读控台都一样，与这次改动一起撤销。已关联的不重复导入，不覆盖本地编辑；目录未读完整、来源未确认、转换失败、起点重复或操作员已解除关联的先不自动导入。导入失败保留原编排和起始码，原因记在对应时间线上，其他编辑不触发重试。回归：`packages/core/src/ma2-timeline-switch.test.ts`。
+
 ## MA2 同步
 
 方式 1、方式 2 和改名走同一个逐首同步、同一份状态（`runtime/ma2-song-sync.ts`、`stores/ma2-sync-store.ts`）
+
+2026-11-14：新歌写入位置统一取 `ma2-song-sync.ts` 的 `ma2SongSyncSettings`，两个界面入口共用 `Ma2SongDestination.tsx` 保存工程里的按钮页和起始序列编号。同步等待的原因由 `prepareMa2RealtimeSession` 给出，不能无提示返回；手动同步也展示原因及控台确认后的实际序列、Timecode 和按钮位置。测试：`ma2-realtime-session.test.ts`、`apps/desktop/test-e2e/editor-transport.browser.spec.ts`。
 
 ## 执行器按键和推杆走哪条通道
 

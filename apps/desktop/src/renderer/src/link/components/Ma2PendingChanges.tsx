@@ -16,6 +16,7 @@ import { useRecoveryCopyStore } from '../recovery-copy-writer';
 import { confirmReplaceDocument, saveDocument } from '../project-document';
 import { convertMa2LegacyNames, legacyMa2ConsoleNames } from '../runtime/ma2-legacy-names';
 import { Button, ChoiceGroup, Dialog, IconButton, Notice, Popover, Switch, type Choice } from '../ui';
+import { Ma2SongDestinationDialog } from './Ma2SongDestination';
 import './lighting-sync.css';
 
 /** The write modes of 2026-11-04, after the sync dialog the user showed from another program. */
@@ -30,6 +31,12 @@ const CONSOLE_CHANGES: readonly Choice<Ma2ConsoleChanges>[] = [
 ];
 const WRITE_LABEL: Record<Ma2WriteMode, string> = { merge: '合并', overwrite: '覆盖', direct: '直接写入' };
 const CHANGES_LABEL: Record<Ma2ConsoleChanges, string> = { 'read-back': '读回控台改动', software: '以联动台为准' };
+
+function chooseMa2WriteMode(mode: Ma2WriteMode, confirmed: boolean, confirm: (value: boolean) => void): void {
+  // Overwriting deletes Cues on the console, so it is confirmed once.
+  if (mode === 'overwrite' && !confirmed) { confirm(true); return; }
+  confirm(false); setMa2WriteMode(mode); recheckMa2Songs();
+}
 
 /**
  * A song that does not match the console yet. A stopped way-1 song has two ways out (2026-11-11): each
@@ -79,6 +86,7 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
   const [archives, setArchives] = useState<ProjectArchiveResult['entries']>([]);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [destinationOpen, setDestinationOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [archivingOff, setArchivingOff] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
@@ -98,7 +106,7 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
   // Real-time sync off is a way of working too (2026-11-04): edits wait for 同步一次, and what that pass found stays shown.
   const manual = !active && once === null;
   const status = recoveryError ? '恢复副本需要处理' : failed ? '同步失败' : blocked ? '控台需要核对' : moving?.progress ? `同步中 ${Math.floor(moving.progress.completed / moving.progress.total * 100)}%` : working ? '同步中'
-    : manual ? count ? `待同步 ${count}` : '实时同步已关' : once !== null ? '正在同步一次' : songs.some(song => song.waitingForConnection) ? '等待连接' : count ? `待同步 ${count}` : confirmed ? '已同步' : '同步已开启';
+    : manual ? count ? `待同步 ${count}` : '实时同步已关' : songs.some(song => song.waitingForConnection) ? '等待连接' : session.status === 'waiting' ? '等待同步' : once !== null ? '正在同步一次' : count ? `待同步 ${count}` : confirmed ? '已同步' : '同步已开启';
   const state = blocked ? 'blocked' : working ? 'writing' : count ? 'staged' : confirmed ? 'verified' : 'waiting';
   const run = async (action: () => Promise<void> | void): Promise<void> => {
     if (busy) return;
@@ -107,11 +115,7 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
     catch (error) { const message = error instanceof Error ? error.message : String(error); setNotice(message); setDetailOpen(true); notify(message, 'error'); }
     finally { setBusy(false); }
   };
-  const chooseWriteMode = (mode: Ma2WriteMode): void => {
-    // Overwriting deletes Cues on the console, so it is confirmed first.
-    if (mode === 'overwrite' && !confirmOverwrite) { setConfirmOverwrite(true); return; }
-    setConfirmOverwrite(false); setMa2WriteMode(mode); recheckMa2Songs();
-  };
+  const chooseWriteMode = (mode: Ma2WriteMode): void => chooseMa2WriteMode(mode, confirmOverwrite, setConfirmOverwrite);
   const chooseConsoleChanges = (choice: Ma2ConsoleChanges): void => { setMa2ConsoleChanges(choice); recheckMa2Songs(); };
   const toggle = (): void => {
     setNotice('');
@@ -167,10 +171,11 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
     <Button ref={setStatusAnchor} variant="ghost" className="lighting-sync-status" icon={blocked || count ? CircleAlert : Check} aria-label="同步状态详情" aria-expanded={detailOpen} aria-haspopup="dialog" data-state={state} onClick={openDetails}>
       <span>{status}</span><ChevronRight aria-hidden="true" />
     </Button>
+    <Button variant="ghost" size="sm" onClick={() => { setDestinationOpen(true); setDetailOpen(false); setModesOpen(false); }}>写入位置</Button>
     <div className="lighting-sync-actions">
-      {active ? <Button variant="secondary" size="sm" icon={RefreshCw} title="立即读取控台，把和时间线不一致的地方按现在的同步方式同步一次" onClick={() => { setNotice(''); refreshMa2RealtimeSession(); }}>刷新同步</Button>
+      {active ? <Button variant="secondary" size="sm" icon={RefreshCw} title="立即读取控台，把和时间线不一致的地方按现在的同步方式同步一次" onClick={() => { setNotice(''); setDetailOpen(true); refreshMa2RealtimeSession(); }}>刷新同步</Button>
         : once !== null ? <Button variant="secondary" size="sm" icon={CircleStop} title="停下这次同步，没写完的修改留在联动台" onClick={() => { setNotice(''); pauseMa2RealtimeSession(); }}>停止同步</Button>
-        : <Button variant="secondary" size="sm" icon={RefreshCw} title="读取控台，把联动台和控台不一样的地方按现在的同步方式同步一次；实时同步保持关闭" onClick={() => { setNotice(''); syncMa2Once(); }}>同步一次</Button>}
+        : <Button variant="secondary" size="sm" icon={RefreshCw} title="读取控台，把联动台和控台不一样的地方按现在的同步方式同步一次；实时同步保持关闭" onClick={() => { setNotice(''); setDetailOpen(true); syncMa2Once(); }}>同步一次</Button>}
       <Button variant="secondary" size="sm" icon={Save} disabled={busy} title="保存工程并创建存档" onClick={() => void run(save)}>保存</Button>
       <Button variant="secondary" size="sm" icon={FolderArchive} disabled={busy} title="查看和恢复存档" onClick={() => archiveOpen ? setArchiveOpen(false) : void run(loadArchives)}>存档</Button>
     </div>
@@ -192,10 +197,11 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
       {recoveryError ? <p role="alert">{recoveryError}</p> : null}
       {archivingOff ? <p>已关闭存档，写入前不再备份。</p> : null}
       <p>同步方式：{WRITE_LABEL[writeMode]} · {CHANGES_LABEL[consoleChanges]}</p>
-      <p role={session.status === 'blocked' ? 'alert' : 'status'}>{notice || (manual ? '实时同步已关，修改先留在联动台。点“同步一次”写到控台。' : once !== null ? '正在按现在的同步方式把每首歌同步一次，完成后实时同步保持关闭。' : !useDocumentStore.getState().path ? '请先保存工程，保存后自动同步。' : session.status !== 'ready' || !songs.length ? session.message : unsettled.length ? '这些歌和控台还对不上，或者正在同步：' : `${settled} 首歌都和控台一致。`)}</p>
+      <p role={session.status === 'blocked' ? 'alert' : 'status'}>{notice || (manual ? '实时同步已关，修改先留在联动台。点“同步一次”写到控台。' : session.status !== 'ready' ? session.message : once !== null ? '正在按现在的同步方式把每首歌同步一次，完成后实时同步保持关闭。' : !songs.length ? session.message : unsettled.length ? '这些歌和控台还对不上，或者正在同步：' : `${settled} 首歌都和控台一致。`)}</p>
       {unsettled.map(song => <UnsettledSong key={song.itemId} song={song} title={project.rundown.find(item => item.id === song.itemId)?.title ?? song.name}
         stopped={song.state === 'blocked' && imported(song.itemId)} disabled={busy || working || syncGate.kind === 'wait'} busy={busy} choose={side => run(async () => setNotice(side === 'console' ? await takeMa2SongFromConsole(song.itemId) : writeMa2SongFromSoftware(song.itemId)))} />)}
       {unsettled.length && settled ? <p>其余 {settled} 首歌和控台一致。</p> : null}
+      {songs.filter(song => song.state === 'verified').map(song => <p key={song.itemId}>{project.rundown.find(item => item.id === song.itemId)?.title ?? song.name}：{song.message}</p>)}
       {syncGate.kind === 'wait' ? <p>{syncGate.message}</p> : null}
       {names.state !== 'idle' && names.state !== 'verified' && names.message ? <p role={names.state === 'blocked' ? 'alert' : 'status'}>改名：{names.message}</p> : null}
       {renames.map(change => <p key={ma2RenameKey(change)}>序列 {change.sequence}{change.kind === 'single' ? ` · Cue ${change.cue}` : ''}：{change.confirmedName} → {change.name}</p>)}
@@ -205,6 +211,7 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
       {unbound.map(item => <p key={item.itemId}>{item.title} · {item.count} 个 Cue → 按钮第 {item.page} 页的空格。</p>)}
       {showless.length ? <><p>有 {showless.length} 首歌要同步到控台才能演出：{showless.map(item => item.title).join('、')}。同步会为每首歌在控台上建立自己的时间码节目。</p><Button variant="secondary" size="sm" disabled={busy || working} onClick={() => { setNotice(''); writeMissingConsoleShows(); }}>同步到控台</Button></> : null}
     </Popover> : null}
+    {destinationOpen ? <Ma2SongDestinationDialog onClose={() => setDestinationOpen(false)} /> : null}
     {archiveOpen ? <Dialog title="灯光工程存档" description="保存整个工程和原始 XML，同步前会自动存一份。恢复时写回原工程位置，恢复前的工程也会另存一份。" onClose={() => setArchiveOpen(false)}
       actions={<Button variant="secondary" icon={FolderOpen} onClick={() => void run(() => reveal())}>打开存档位置</Button>}>
       {!archives.length ? <p>还没有存档，点“保存”创建。</p> : <ul className="lighting-sync-archives">{archives.slice(0, 100).map(entry => <li key={entry.name}>

@@ -5,6 +5,7 @@ import { LinkRuntimeCoordinator } from './link-runtime-coordinator';
 import { useRuntimeStore } from '../stores/runtime-store';
 
 const mocks = vi.hoisted(() => ({
+  obsStatus: 'connected',
   activateManagedObsOutput: vi.fn(() => Promise.resolve()),
   executeObsAction: vi.fn<(action: LinkAction) => Promise<void>>(),
   executeMidiAction: vi.fn<(action: LinkAction) => Promise<void>>(() => Promise.resolve()),
@@ -25,7 +26,7 @@ vi.mock('../view-models/link-desktop-view-model', () => ({
 }));
 vi.mock('../stores/integration-store', () => ({
   useIntegrationStore: { getState: () => ({
-    obs: { status: 'connected' },
+    obs: { status: mocks.obsStatus },
     setMidiPorts: () => undefined,
     profile: { p1: { mtcInputPortProfileId: 'mtc', expectedFrameRate: '30' }, midiPortProfiles: [] }
   }) }
@@ -41,9 +42,22 @@ vi.mock('../../registry/link-midi-adapter', () => ({
   }
 }));
 
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); mocks.executeObsAction.mockReset(); mocks.executeManagedMediaEvent.mockReset(); mocks.seekManagedMedia.mockReset(); useRuntimeStore.getState().reset(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); mocks.obsStatus = 'connected'; mocks.executeObsAction.mockReset(); mocks.executeManagedMediaEvent.mockReset(); mocks.seekManagedMedia.mockReset(); useRuntimeStore.getState().reset(); });
 
 describe('LinkRuntimeCoordinator', () => {
+  it('只有音乐和灯光的歌：编辑器定位不要求 OBS 或工程保存位置，不发送任何画面请求', async () => {
+    mocks.obsStatus = 'disconnected'; mocks.prepareObsMediaScenes.mockClear(); mocks.recordLog.mockClear();
+    const project = parseLinkProject({ ...createEmptyLinkProject('只用灯光'), playbackSource: 'internal',
+      rundown: [{ id: 'song', title: '歌曲', referenceAudio: { assetId: 'audio', relativePath: 'song.wav', sha256: 'a'.repeat(64), durationMs: 10000 } }] });
+    const coordinator = new LinkRuntimeCoordinator(project, null);
+    try {
+      for (const position of [1000, 2000, 3000]) await expect(coordinator.previewEditor('song', position, false)).resolves.toBeUndefined();
+      expect(mocks.executeObsAction).not.toHaveBeenCalled();
+      expect(mocks.prepareObsMediaScenes).not.toHaveBeenCalled();
+      expect(mocks.seekManagedMedia).not.toHaveBeenCalled();
+      expect(mocks.recordLog.mock.calls.some(([entry]) => entry.level === 'error')).toBe(false);
+    } finally { coordinator.dispose(); }
+  });
   it('内部停止与暂停记录具体原因，不记为操作员动作；操作员停止照旧记录', async () => {
     vi.stubGlobal('window', globalThis); mocks.recordLog.mockClear();
     const project = parseLinkProject({ ...createEmptyLinkProject('停止来源'), playbackSource: 'internal', obsOutputMode: 'scenes',

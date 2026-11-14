@@ -125,7 +125,7 @@ export function startMa2SongSync(itemId: string, name: string, settings: Ma2Layo
   noteMa2LocalEdits();
 }
 /** One destination policy for the header, automatic startup and the song panel. */
-export function ma2SongSyncSettings(project: NonNullable<ReturnType<typeof useDocumentStore.getState>['project']>, itemId: string): Ma2LayoutSettings {
+export function ma2SongSyncSettings(project: NonNullable<ReturnType<typeof useDocumentStore.getState>['project']>, itemId?: string): Ma2LayoutSettings {
   const binding = project.rundown.find(item => item.id === itemId)?.lighting?.consoleSong;
   const saved = projectLightingLibrary(project).consoleWorkspace;
   return {
@@ -183,7 +183,7 @@ function confirmedMessage(binding: Ma2SongBinding, edits?: Ma2SongConsoleEdits):
   const location = binding.executor ? ma2ExecutorLocationLabel(Number(binding.executor.split('.')[0]), Number(binding.executor.split('.')[1])) : `Layout ${binding.layout}`;
   const taken = edits ? [edits.moved.length ? `挪了 ${edits.moved.length} 个` : '', edits.removed.length ? `删了 ${edits.removed.length} 个` : '', edits.added.length ? `加了 ${edits.added.length} 个` : ''].filter(Boolean) : [];
   const chosen = edits?.conflicts ? ` · ${ma2LatestChoiceText('这首歌', edits.conflicts.count, edits.conflicts.winner)}` : '';
-  return `${location} · 序列 ${binding.sequence} · ${binding.points.length} 步已确认${taken.length ? ` · 控台上${taken.join('、')} Cue，已同步到联动台` : ''}${chosen}`;
+  return `${location} · 序列 ${binding.sequence}${binding.timecode ? ` · Timecode ${binding.timecode.number}` : ''} · ${binding.points.length} 步已确认${taken.length ? ` · 控台上${taken.join('、')} Cue，已同步到联动台` : ''}${chosen}`;
 }
 function canContinue(entry: SongSync): boolean {
   const document = useDocumentStore.getState();

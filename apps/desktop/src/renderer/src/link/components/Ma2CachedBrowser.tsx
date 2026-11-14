@@ -37,7 +37,7 @@ function showStartText(entry: Entry, frameRate: LinkProject['timebase']['frameRa
  * Which song runs with this console show, picked by hand (2026-11-04). Pairing stays by the MTC start:
  * picking a song gives it the show's start, and the song changes over to this show.
  */
-function ShowSongPicker({ project, row, disabled, notify }: { project: LinkProject; row: Row; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element | null {
+function ShowSongPicker({ project, row, disabled, notify, selectSong }: { project: LinkProject; row: Row; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void; selectSong: (itemId: string) => void }): JSX.Element | null {
   const target = row.entry.target;
   const [choice, setChoice] = useState(row.song?.id ?? '');
   const frameRate = project.timebase.frameRate;
@@ -52,6 +52,7 @@ function ShowSongPicker({ project, row, disabled, notify }: { project: LinkProje
       useDocumentStore.getState().execute(pairSongWithMa2ShowCommand(item.id, target));
       const after = useDocumentStore.getState().project;
       const placed = after?.rundown.find(value => value.id === item.id)?.lighting?.ma2Bindings?.some(binding => binding.timecode === target);
+      if (placed) selectSong(item.id);
       const reason = after ? ma2SongPairs(after).unresolved.find(value => value.target === target)?.reason : undefined;
       notify(placed ? `「${item.title}」的起始码改成了 MTC ${start}，现在用 Timecode ${target} 跑灯` : `「${item.title}」的起始码改成了 MTC ${start}，但 Cue 没有换过来：${reason ?? '原因见这条时间线'}`, placed ? 'info' : 'error');
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
@@ -124,7 +125,7 @@ export function Ma2CachedBrowser({ disabled, onClose, notify }: { disabled: bool
       {row && entry ? <article><h4>Timecode {entry.target} · {entry.name}</h4><p>{entry.frameFormat} · 节目起点 <strong className="ma2-browser-mtc">MTC {showStart === null ? entry.offset : formatMtcOffset(showStart * 1000 / 30, frameRate)}</strong> · {entry.slot}</p>
         <p className="ma2-browser-match" data-state={row.state}>{row.state === 'matched' && row.song ? `和「${row.song.title}」的 MTC 起始码一样，播放这首歌时控台跑这条时间线` : row.reason ?? row.text}</p>
         {row.song && origin !== undefined && row.state !== 'matched' ? <p>「{row.song.title}」的起始码是 <strong className="ma2-browser-mtc">MTC {formatMtcOffset(origin, frameRate)}</strong></p> : null}
-        <ShowSongPicker key={`${entry.target}:${row.song?.id ?? ''}`} project={project} row={row} disabled={disabled || busy} notify={notify} />
+        <ShowSongPicker key={`${entry.target}:${row.song?.id ?? ''}`} project={project} row={row} disabled={disabled || busy} notify={notify} selectSong={selectSong} />
         {entry.conversionError || originError ? <p role="alert">{entry.conversionError ?? originError}</p> : null}
         {row.bound && row.song ? <div className="ma2-browser-tools"><button onClick={() => { selectSong(row.song!.id); onClose(); }}>查看歌曲 Cue 与音频</button><button disabled={disabled || busy} title="控台连着时重新读这条时间线；没连上时用上次读到的" onClick={() => void refresh(row.song!.id, entry.target)}>从控台刷新</button><button disabled={disabled || busy} onClick={() => archive(false, row.song!.id, entry.target)}>解除关联并归档编排</button></div> : null}
         {row.bound && row.song && conflict === entry.target ? <p role="alert">本地编排和控台上的版本不一致。<button onClick={() => setConflict(null)}>保留本地</button><button disabled={disabled || busy} onClick={() => void refresh(row.song!.id, entry.target, true)}>归档本地，采用控台版本</button></p> : null}

@@ -41,7 +41,7 @@ describe('R9 规则：播放中改画面，这一遍就用上', () => {
     const marks = pictureMarks(pictureOnAir('song', true, holding('playing', edited)), songPicture(edited, 'song')!);
     expect(marks.pending).toEqual(NO_PENDING_PICTURE_EDITS);
     expect(marks.onAirtime).toEqual(songPicture(edited, 'song')!.airtime);
-    expect(marks.notice).toEqual({ tone: 'info', text: '播放中改画面，这一遍就用上', detail: '改过的部分送到 OBS 之前用虚线框标出来，送到以后照改过的播，不用停下重播。' });
+    expect(marks.notice).toBeNull();
   });
 
   it('跟随 P1 时照旧：不标正在送、没有提示条，高亮按时间线本身', () => {

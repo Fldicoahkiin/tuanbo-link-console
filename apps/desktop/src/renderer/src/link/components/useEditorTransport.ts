@@ -68,7 +68,9 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
         seekQueue.current = new LatestPosition(
           target => previewCoordinator.previewEditor(itemId, target, useDisplayPreferences.getState().preciseSeeking),
           () => { seekQueue.current = null; setSeeking(false); if (resumeAfterSeek.current) void player.controller?.play(itemId, cursorRef.current).catch(report); },
-          error => { resumeAfterSeek.current = false; report(error); });
+          // A failed picture preview must not cancel the operator's play. The program owns audio and
+          // timecode and reports its picture separately; pause/stop still cancel the pending play.
+          report);
       }
       seekQueue.current.push(position);
       return;

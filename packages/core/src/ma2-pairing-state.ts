@@ -66,12 +66,31 @@ function storedPairs(match: Ma2StartMatch, catalog: Ma2Catalog): Pick<Ma2ReadSta
  * to date; the same object when they already are. A song whose start moved onto another show changes
  * over to it here, inside the edit that moved the start, so undo takes both back (2026-11-04).
  */
-function withStoredPairs(project: LinkProject): LinkProject {
+function withStoredPairs(project: LinkProject, previous: LinkProject = project): LinkProject {
   if (!project.ma2ReadState) return project;
   let current = project;
   let match = matchMa2Programs(current, current.ma2ReadState!.catalog, failedSwitches(current.ma2ReadState!));
-  if (match.switches.length) {
-    current = switchMa2Timelines(current, match.switches);
+  const read = current.ma2ReadState!;
+  const before = previous.ma2ReadState;
+  const previousPairs = ma2SongPairs(previous).pairs;
+  // A first match needs its Cues too, whether the read or the song's start arrived last. Use the same
+  // import as a switch; an explicit detach stays detached and an earlier failure is never retried here.
+  const first: Ma2TimelineSwitch[] = read.catalog.incomplete || read.catalog.sourceUnverified ? [] : Object.entries(match.pairs).flatMap(([number, itemId]) => {
+    const target = Number(number);
+    const entry = read.catalog.entries.find(value => value.target === target);
+    const oldEntry = before?.catalog.entries.find(value => value.target === target);
+    const newlyMatched = previousPairs[target] !== itemId;
+    const newlyRead = !before || before.catalog.incomplete || before.catalog.sourceUnverified
+      || oldEntry?.preview?.readAt !== entry?.preview?.readAt || oldEntry?.error || oldEntry?.conversionError;
+    // Unrelated edits and an explicit single-show import must not also import other cached shows.
+    if (!newlyMatched && !newlyRead) return [];
+    if (!entry?.preview || entry.error || entry.conversionError || read.failures.some(failure => failure.target === target)
+      || current.rundown.some(item => item.lighting?.ma2Bindings?.some(binding => binding.timecode === target))
+      || read.detachedBindings?.some(value => value.itemId === itemId && value.binding.timecode === target)) return [];
+    return [{ itemId, from: [], to: target }];
+  });
+  if (match.switches.length || first.length) {
+    current = switchMa2Timelines(current, [...match.switches, ...first]);
     match = matchMa2Programs(current, current.ma2ReadState!.catalog, failedSwitches(current.ma2ReadState!));
   }
   const state = current.ma2ReadState!;
@@ -153,7 +172,7 @@ export function reconcileMa2ReadState(project: LinkProject, source: string, cata
 
 /** Every project edit keeps the stored pairs in step with the starts, inside the same undoable step. */
 export function withMa2Pairings(command: LinkCommand): LinkCommand {
-  return { ...command, execute(project) { return withStoredPairs(command.execute(project)); } };
+  return { ...command, execute(project) { return withStoredPairs(command.execute(project), project); } };
 }
 
 /**

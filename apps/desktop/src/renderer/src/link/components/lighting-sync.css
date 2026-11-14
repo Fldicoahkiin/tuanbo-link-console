@@ -28,7 +28,7 @@
   .lighting-sync-heading h2 { flex: 1; }
   .lighting-sync-modes[aria-expanded='true'] { color: var(--color-text); background: var(--color-input); }
 
-  .lighting-sync-details { display: grid; gap: var(--space-1); width: 320px; padding: var(--space-2); }
+  .lighting-sync-details { display: grid; gap: var(--space-1); width: 320px; padding: var(--space-2); max-height: calc(100vh - var(--space-4)); overflow: auto; }
   .lighting-sync-modes-panel.lighting-sync-details { width: 360px; max-height: calc(100vh - 32px); overflow: auto; }
   .lighting-sync-details h4 { margin: var(--space-1) 0 0; color: var(--color-text-secondary); font: 600 var(--type-caption)/1.4 var(--font-ui); }
   .lighting-sync-modes-panel .ui-choices { grid-template-columns: minmax(0, 1fr); gap: var(--space-half); }
@@ -40,6 +40,11 @@
   /* A stopped way-1 song and its two ways out (2026-11-11). */
   .lighting-sync-song { display: grid; gap: var(--space-1); }
   .lighting-sync-song-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+  .lighting-song-destination, .lighting-song-locations, .lighting-song-locations > div { display: grid; gap: var(--space-2); }
+  .lighting-song-destination p, .lighting-song-locations p { margin: 0; color: var(--color-text-secondary); font-size: var(--type-caption); line-height: 1.5; }
+  .lighting-song-destination p[role='alert'] { color: var(--color-danger); }
+  .lighting-song-destination .ui-button, .lighting-song-locations .ui-button { justify-self: start; }
+  .lighting-song-locations { margin-top: var(--space-3); }
 
   .lighting-sync-archives { display: grid; gap: 2px; max-height: 50vh; margin: 0; padding: 0; overflow: auto; list-style: none; }
   .lighting-sync-archives li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-1); min-height: 36px; padding: 0 var(--space-1); border-radius: var(--radius-sm); }

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type LinkProject, type Ma2Catalog, type Ma2TimecodePreview } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { importMa2TimecodeCommand } from './ma2-import';
-import { ma2SongPairs, pairSongWithMa2ShowCommand, reconcileMa2ReadState, refreshMa2BindingCommand, withMa2Pairings } from './ma2-pairing-state';
+import { detachMa2BindingCommand, ma2SongPairs, pairSongWithMa2ShowCommand, reconcileMa2ReadState, refreshMa2BindingCommand, withMa2Pairings } from './ma2-pairing-state';
+import { saveMa2ReadStateCommand } from './ma2-program-import';
 import { matchMa2Programs } from './ma2-program-matching';
 
 /** A console show starting at `startMs` with one Goto `atMs` after its start. */
@@ -33,6 +34,60 @@ function fixture(entries = [entry(112, 60_000), entry(121, 70_000)]): LinkProjec
 const edit = (change: (project: LinkProject) => void): LinkCommand => withMa2Pairings({ id: 'edit', label: '改动', execute: value => { const next = structuredClone(value); change(next); return next; }, undo: before => before });
 const startA = (ms: number) => edit(next => { next.rundown[0]!.playback!.mtcOffsetMs = ms; });
 const song = (project: LinkProject) => project.rundown[0]!.lighting!;
+
+describe('首次按起始码配对就放进控台 Cue', () => {
+  it('先读控台后改歌曲起始码：首次匹配也导入 Cue，同一步撤销，后续编辑不重复导入', () => {
+    const before = fixture();
+    const command = edit(next => { next.rundown[1]!.playback!.mtcOffsetMs = 70_000; });
+    const paired = command.execute(before);
+    expect(ma2SongPairs(paired).pairs[121]).toBe('B');
+    expect(paired.rundown[1]!.lighting?.ma2Bindings?.map(binding => binding.timecode)).toEqual([121]);
+    expect(paired.rundown[1]!.lighting?.tracks.flatMap(track => track.clips.flatMap(clip => clip.events))).toMatchObject([{ label: 'Cue 121', at: 1000 }]);
+    expect(command.undo(before)).toEqual(before);
+    const renamed = edit(next => { next.rundown[1]!.title = '改名'; }).execute(paired);
+    expect(renamed.rundown[1]!.lighting).toEqual(paired.rundown[1]!.lighting);
+  });
+
+  it('歌曲先有起始码：完整读取结果进工程时放入 Cue，不需要再连接或点一次导入', () => {
+    const before = fixture(); before.rundown[1]!.playback!.mtcOffsetMs = 70_000;
+    const read = before.ma2ReadState!; delete before.ma2ReadState;
+    const paired = withMa2Pairings(saveMa2ReadStateCommand(read)).execute(before);
+    expect(paired.rundown[1]!.lighting?.ma2Bindings?.map(binding => binding.timecode)).toEqual([121]);
+  });
+
+  it('目录未读完整、时间线未转换成功、起点重复或用户已解除关联时不自动导入', () => {
+    const incomplete = fixture(); incomplete.ma2ReadState!.catalog.incomplete = '读取中';
+    const unverified = fixture(); unverified.ma2ReadState!.catalog.sourceUnverified = true;
+    const unread = fixture([entry(112, 60_000), entry(121, 70_000, false)]);
+    const broken = fixture(); broken.ma2ReadState!.catalog.entries[1]!.conversionError = '转换未完成';
+    const duplicate = fixture([entry(112, 60_000), entry(121, 70_000), entry(130, 70_000)]);
+    for (const before of [incomplete, unverified, unread, broken, duplicate]) {
+      const after = edit(next => { next.rundown[1]!.playback!.mtcOffsetMs = 70_000; }).execute(before);
+      expect(after.rundown[1]!.lighting).toBeUndefined();
+    }
+    const detached = withMa2Pairings(detachMa2BindingCommand('A', 112)).execute(fixture());
+    expect(song(detached).ma2Bindings).toEqual([]);
+    expect(song(edit(next => { next.rundown[0]!.title = '改名'; }).execute(detached)).ma2Bindings).toEqual([]);
+  });
+
+  it('首次导入失败保留原有编排和起始码，记下原因，不因其他编辑重试', () => {
+    const before = fixture();
+    const remote = before.ma2ReadState!.catalog.entries[1]!.preview!;
+    remote.timeOriginMs = 69_000; remote.document.tracks[0]!.clips[0]!.timeLock = 'beat';
+    const after = edit(next => { next.rundown[1]!.playback!.mtcOffsetMs = 70_000; }).execute(before);
+    expect(after.rundown[1]!.playback!.mtcOffsetMs).toBe(70_000);
+    expect(after.rundown[1]!.lighting).toBeUndefined();
+    expect(song(after)).toEqual(song(before));
+    expect(after.ma2ReadState!.failures).toEqual([{ target: 121, message: 'MA2 导入必须使用绝对时间片段' }]);
+    // Even after its cached data is repaired, an unrelated edit does not retry the failed import.
+    const later = edit(next => {
+      next.rundown[1]!.title = '改名';
+      next.ma2ReadState!.catalog.entries[1]!.preview!.document.tracks[0]!.clips[0]!.timeLock = 'time';
+    }).execute(after);
+    expect(later.rundown[1]!.lighting).toBeUndefined();
+    expect(later.ma2ReadState!.failures).toEqual(after.ma2ReadState!.failures);
+  });
+});
 
 describe('换了 MTC 起始码，灯光时间线跟着换（2026-11-04）', () => {
   it('起始码改成另一条控台时间线的起点：自动换用它，原来的 Cue 归档；改回来时恢复原来的和本地改动', () => {
@@ -107,7 +162,8 @@ describe('控台时间线页面里选「给哪首歌用」', () => {
     const project = fixture();
     const shared = withMa2Pairings(pairSongWithMa2ShowCommand('B', 121)).execute(project);
     expect(() => pairSongWithMa2ShowCommand('A', 121).execute(shared)).toThrow('请先在那首歌上解除关联');
-    const sameStart = edit(next => { next.rundown[1]!.playback!.mtcOffsetMs = 70_000; }).execute(project);
+    // A file whose starts already match, before its Cues have been imported.
+    const sameStart = structuredClone(project); sameStart.rundown[1]!.playback!.mtcOffsetMs = 70_000;
     expect(() => pairSongWithMa2ShowCommand('A', 121).execute(sameStart)).toThrow('两首歌同一个起点分不清');
   });
 });

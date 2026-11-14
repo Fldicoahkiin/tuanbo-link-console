@@ -1,4 +1,4 @@
-import { playbackFramesPerSecond, SceneOutputTimeline, type LinkDesktopApi } from '@tb/core/link';
+import { itemNeedsObs, playbackFramesPerSecond, SceneOutputTimeline, type LinkDesktopApi } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
 import { internalSample } from './internal-timeline';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -17,7 +17,7 @@ export class EditorScenePreview {
     const generation = this.generation;
     const current = () => generation === this.generation && !this.failed && isCurrent();
     const operation = pending.then(async () => {
-      if (!current()) return;
+      if (!current() || !itemNeedsObs(project, itemId)) return;
       if (!projectPath) throw new Error('请先保存工程，再定位 OBS 画面');
       if (useIntegrationStore.getState().obs.status !== 'connected') throw new Error('OBS 没有连接，画面无法跟随时间线');
       await previewEditorScene(project, projectPath, itemId, positionMs, preciseSeeking, linkDesktopViewModel, current);

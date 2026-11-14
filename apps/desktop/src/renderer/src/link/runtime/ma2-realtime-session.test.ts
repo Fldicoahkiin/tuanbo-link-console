@@ -1,12 +1,13 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, lightingDocumentSchema, type Ma2SongBinding, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
-import { legacyMa2Renames, ma2SongPoints, pendingMa2Renames, renameConsoleCueCommand, setLightingCommand, SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
+import { legacyMa2Renames, ma2SongPoints, pendingMa2Renames, projectLightingLibrary, renameConsoleCueCommand, setLightingCommand, setLightingLibraryCommand, SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { useShowStateStore } from '../stores/show-state-store';
 import { startMa2SongSync, stopMa2SongSync, tickMa2SongSync, ma2SongSyncSettings, markPendingMa2Songs, flushPendingMa2Songs } from './ma2-song-sync';
 import { useProgramSelectionStore } from '../stores/program-selection-store';
 import { useMtcStartAllocationStore } from '../stores/mtc-start-allocation-store';
+import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 import { setMa2ConsoleChanges, setMa2WriteMode, useMa2RealtimePreference } from './ma2-realtime-preference';
 import { prepareMa2RealtimeSession, pauseMa2RealtimeSession, recheckMa2Songs, refreshMa2RealtimeSession, retryMa2RealtimeSession, pendingSongSummary, songsWithoutConsoleShow, syncMa2Once, writeMissingConsoleShows } from './ma2-realtime-session';
 import { convertMa2LegacyNames, legacyMa2ConsoleNames } from './ma2-legacy-names';
@@ -53,6 +54,21 @@ beforeEach(() => {
   useDocumentStore.getState().setProject(project(), 'song.tblink');
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+it.each([
+  ['没有保存工程', '请先保存工程', () => useDocumentStore.setState({ path: null })],
+  ['没有读取素材', '请先读取控台素材', () => { const value = project(); delete value.ma2MaterialLibrary; useDocumentStore.getState().setProject(value, 'song.tblink'); }],
+  ['素材来源尚未确认', '请重新读取控台素材', () => { const value = project(); value.ma2MaterialLibrary!.library!.sourceUnverified = true; useDocumentStore.getState().setProject(value, 'song.tblink'); }],
+  ['素材正在读取', '正在读取控台素材', () => useMa2MaterialReadStore.setState({ busy: true })],
+  ['没有选网络连接', '网络连接 MA2', () => storage.set('tblink.ma2-connection-method.v1', 'midi')]
+])('点击同步但%s：显示原因，不假装写入', async (_label, message, setup) => {
+  setup();
+  try {
+    expect(await prepareMa2RealtimeSession()).toBe(false);
+    expect(useMa2SyncStore.getState().session.message).toContain(message);
+    expect(sync).not.toHaveBeenCalled();
+  } finally { useMa2MaterialReadStore.setState({ busy: false }); }
+});
 
 it('默认开启后整曲进入歌曲序列同步，不再调用隐式 Timecode 9999 创建', async () => {
   await prepareMa2RealtimeSession();
@@ -324,6 +340,33 @@ it('没有起始码的歌连上控台就按控台节目分配起点，撤销也�
   expect(useDocumentStore.getState().past).toHaveLength(0);
   useDocumentStore.getState().undo();
   expect(useDocumentStore.getState().project!.rundown[0]!.playback?.mtcOffsetMs).toBe(810_000);
+});
+it('新编多步 Cue 没有起始码：同步使用刚保存的位置、分配时间码并记录控台确认的位置', async () => {
+  const value = project();
+  value.rundown[0]!.referenceAudio = { assetId: 'audio', relativePath: 'a.wav', sha256: 'a'.repeat(64), durationMs: 120_000 };
+  const events = value.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events;
+  events.push({ ...events[0]!, id: 'point-second-step', at: 2000 });
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  const ranges = vi.fn().mockResolvedValue({ show: 'Show', entries: [] });
+  status.mockResolvedValue({ state: 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, passwordSaved: true, version: '3.7.0.5', error: '' });
+  // Page refresh is a separate read after the song was confirmed.
+  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, readMa2EffectLibrary: metadata, syncMa2Song: sync, ma2TimecodeRanges: ranges,
+    readMa2ExecutorPage: vi.fn().mockResolvedValue({ page: 2000, name: '歌曲', readAt: new Date().toISOString(), items: [{ slot: 103, width: 1, name: 'first', sequence: 8001, kind: 'sequence', button: null, reference: [] }] }) } });
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  const current = useDocumentStore.getState();
+  current.execute(setLightingLibraryCommand({ ...projectLightingLibrary(current.project!), consoleWorkspace: { layout: 999, name: '歌曲 Cue', columns: 8, executorPage: 2000, nextSequence: 8000 } }));
+  sync.mockImplementation((request: Ma2SongSyncRequest): Promise<Ma2SongSyncResult> => Promise.resolve({
+    binding: { endpoint: '192.0.2.1:30000', show: 'Show', sequence: 8001, executor: '2000.103', layout: null, name: request.name, baselineXml: '<baseline/>',
+      points: request.points.map((point, index) => ({ id: point.id, cue: `${index + 1}.000`, atMs: point.atMs })),
+      timecode: { number: 8001, offset: request.timecodeStartMs! * 30 / 1000, slot: 'TC Slot 2', revision: 'b'.repeat(64) } },
+    changed: true, layout: null, backupFile: '', library: value.ma2MaterialLibrary!.library!
+  }));
+  await tickMa2SongSync();
+  expect(sync).toHaveBeenCalledTimes(1);
+  expect(sync.mock.calls[0]![0]).toMatchObject({ settings: { executorPage: 2000, nextSequence: 8000 }, timecodeStartMs: 60_000, points: [{ atMs: 0 }, { atMs: 2000 }] });
+  expect(useDocumentStore.getState().project?.rundown[0]?.lighting?.consoleSong).toMatchObject({ sequence: 8001, executor: '2000.103', timecode: { number: 8001, offset: 1800 } });
+  expect(useMa2SyncStore.getState().songs.first?.state).toBe('verified');
+  expect(useMa2SyncStore.getState().songs.first?.message).toContain('序列 8001 · Timecode 8001 · 2 步已确认');
 });
 it('还没加 Cue 的歌连上控台就分配 MTC 起点；没编灯、已配对的歌不动；分配失败显示原因、不挡其他歌，30 秒后再试', async () => {
   vi.useFakeTimers();

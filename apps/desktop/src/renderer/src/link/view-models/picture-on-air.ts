@@ -112,9 +112,9 @@ const NOT_FOLLOWING: PictureNotice = { tone: 'warning', text: '这首歌的画�
   detail: `原因见状态面板「这首歌的画面」。${REPLAY}，就按改过的放。` };
 
 /** Information, not a warning (R9): an edit goes to OBS by itself and is used in this pass; nothing to do. */
-function versionNotice(edits: PendingPictureEdits): PictureNotice {
+function versionNotice(edits: PendingPictureEdits): PictureNotice | null {
   const changed = edits.changed.size, removed = edits.removed;
-  if (!changed && !removed) return { tone: 'info', text: '播放中改画面，这一遍就用上', detail: '改过的部分送到 OBS 之前用虚线框标出来，送到以后照改过的播，不用停下重播。' };
+  if (!changed && !removed) return null;
   const counts = [changed ? `改了 ${changed} 处` : '', removed ? `删了 ${removed} 处` : ''].filter(Boolean).join('、');
   return { tone: 'info', text: `播放中${counts}，正在送到 OBS`,
     detail: `送到以前 OBS 照上一版播${removed ? `，删掉的 ${removed} 处也还在播` : ''}。送到以后这一遍就按改过的播，不用停下重播。` };
