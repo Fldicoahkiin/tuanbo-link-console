@@ -5,6 +5,14 @@ allowBuilds:
   electron: true
   esbuild: true
   ffmpeg-static: true
+packageExtensions:
+  # Bind desktop icons to their consumer's React types instead of the admin site's hoisted React 19 types.
+  'lucide-react@0.460.0':
+    peerDependencies:
+      '@types/react': '*'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
 overrides:
   'js-yaml': '4.3.2'
   'ws': '8.21.0'

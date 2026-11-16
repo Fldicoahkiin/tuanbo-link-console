@@ -24,6 +24,8 @@ overrides:
   use-sync-external-store@1: 1.6.0
   jiti@2: 2.6.1
 
+packageExtensionsChecksum: sha256-XbTV894XLkyf/ZItpPZ0jx5zU37kLQOLRFs7tuHYCUo=
+
 patchedDependencies:
   extract-zip@2.0.1:
     hash: 8e2d6471ecaed86d71c5943215ef9ce9a97496901b022fa24f51ea9cccc64b89
@@ -92,7 +94,7 @@ importers:
         version: 5.3.0
       lucide-react:
         specifier: ^0.460.0
-        version: 0.460.0(react@18.3.1)
+        version: 0.460.0(@types/react@18.3.28)(react@18.3.1)
       obs-websocket-js:
         specifier: 5.0.8
         version: 5.0.8(bufferutil@4.1.0)(utf-8-validate@6.0.6)
@@ -2478,7 +2480,11 @@ packages:
   lucide-react@0.460.0:
     resolution: {integrity: sha512-BVtq/DykVeIvRTJvRAgCsOwaGL8Un3Bxh8MbDxMhEWlZay3T4IpEKDEpwt5KZ0KJMHzgm6jrltxlT5eXOWXDHg==}
     peerDependencies:
+      '@types/react': '*'
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0-rc
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
 
   lucide-react@1.60.0:
     resolution: {integrity: sha512-UqxOW0FgAfDyb9VmjKb6/BkOzW6yfhf/QNboKtS2NDsscnNRW2CDzlyhbMKBQ1ontmcxuIDqHJ2AVgFR3NI+GA==}
@@ -5822,9 +5828,11 @@ snapshots:
     dependencies:
       yallist: 4.0.0
 
-  lucide-react@0.460.0(react@18.3.1):
+  lucide-react@0.460.0(@types/react@18.3.28)(react@18.3.1):
     dependencies:
       react: 18.3.1
+    optionalDependencies:
+      '@types/react': 18.3.28
 
   lucide-react@1.60.0(@types/react@19.3.0)(react@19.3.1):
     dependencies:
