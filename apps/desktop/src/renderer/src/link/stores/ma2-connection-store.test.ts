@@ -1,6 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { checkNetworkMa2, connectDiscoveredMa2, connectLocalMa2, useLocalMa2Store } from './ma2-connection-store';
 
+// The imported mode store reads browser storage during module initialization.
+vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null }); });
+
 afterEach(() => { vi.unstubAllGlobals(); useLocalMa2Store.setState({ status: 'disconnected', directory: '', error: null }); });
 it('首次唯一识别到 MA2 时自动准备网络、保存并连接，无需填写 IP', async () => {
   const settings = { host: '10.39.15.200', port: 30000, monitorPort: 30001, username: 'administrator', autoConnect: true };
