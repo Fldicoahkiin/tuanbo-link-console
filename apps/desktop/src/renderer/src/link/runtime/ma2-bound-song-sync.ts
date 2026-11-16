@@ -1,4 +1,4 @@
-import { applyMa2ReadbackCommand, ma2BindingHold, ma2LatestChoiceText, ma2LatestSide, ma2PendingChanges, sameMa2Content, type LinkCommand, type Ma2PendingChange, type Ma2SyncPreview } from '@tb/core/link';
+import { applyMa2ReadbackCommand, ma2BindingHold, ma2LatestChoiceText, ma2LatestSide, ma2PendingChanges, ma2TrackRoutingIssue, sameMa2Content, type LinkCommand, type Ma2PendingChange, type Ma2SyncPreview } from '@tb/core/link';
 import { ma2ApplyResultSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2ApplyRequest, type Ma2ConsoleChanges, type Ma2ApplyResult, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
 
 /** What one pass over a way-1 song (its `ma2Bindings`, the console's own Timecode shows) needs. */
@@ -49,6 +49,8 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
   const item = project?.rundown.find(entry => entry.id === pass.itemId);
   if (!project || !item?.lighting?.ma2Bindings?.length) throw new Error('这首歌已不存在，或已没有控台时间码');
   const writable = item.lighting.ma2Bindings.filter(binding => ma2BindingHold(project, item.id, binding.timecode) === null);
+  const routingIssue = ma2TrackRoutingIssue(item.lighting);
+  if (writable.length && routingIssue) throw new Error(routingIssue);
   const invalid = ma2PendingChanges(project).find(change => change.itemId === item.id && change.error && ma2BindingHold(project, item.id, change.target) === null);
   if (invalid) throw new Error(`Timecode ${invalid.target}：${invalid.error}`);
   const duplicate = sharedTimecode(project, item.id, writable.map(binding => binding.timecode));

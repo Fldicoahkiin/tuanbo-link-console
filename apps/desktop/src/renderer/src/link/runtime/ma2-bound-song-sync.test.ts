@@ -88,6 +88,20 @@ it('没有修改的歌：读一次控台核对一致就停下，不写控台、�
   expect(useDocumentStore.getState().past).toEqual([]);
   expect(song()).toMatchObject({ state: 'verified', message: 'Timecode 9902 和控台一致' });
 });
+
+it('新增轨道去向不明确时不能误报整首歌已同步，原有时间线不被写入', async () => {
+  const lighting = structuredClone(useDocumentStore.getState().project!.rundown[0]!.lighting!);
+  const unassigned = structuredClone(lighting.tracks[0]!);
+  unassigned.id = 'unassigned'; unassigned.name = '尚未关联';
+  unassigned.clips = [unassigned.clips[0]!]; unassigned.clips[0]!.id = 'unassigned-clip';
+  unassigned.clips[0]!.events = [{ id: 'empty', kind: 'empty-cue', at: 1000, label: '待编辑' }];
+  lighting.tracks.push(unassigned);
+  useDocumentStore.getState().execute(setLightingCommand('song', lighting, '新增灯光轨道'));
+  start(); await tick();
+  expect(song()).toMatchObject({ state: 'blocked' });
+  expect(song().message).toContain('尚未关联');
+  expect(previewMa2).not.toHaveBeenCalled(); expect(applyMa2).not.toHaveBeenCalled();
+});
 it('写入结果不确定时停下，不自动重试；修改留在本地，说明可能已写入和备份位置', async () => {
   start(); edit(); await tick(); await tick();
   expect(applyMa2).toHaveBeenCalledOnce();

@@ -82,12 +82,26 @@ local function cmd(command)
   if after then after() end
 end
 
+-- Advance only the timers that existed at the start of this tick. Newly
+-- scheduled finite timers belong to the next tick, as on the native console.
+FAKE.tick = function()
+  local pending = FAKE.timers
+  FAKE.timers = {}
+  for _,timer in ipairs(pending) do
+    timer.fn()
+    if timer.count == 0 or timer.count > 1 then
+      if timer.count > 1 then timer.count = timer.count - 1 end
+      FAKE.timers[#FAKE.timers + 1] = timer
+    elseif timer.cleanup then timer.cleanup() end
+  end
+end
+
 gma = {
   cmd = cmd,
   echo = function(text) FAKE.echo[#FAKE.echo + 1] = text end,
   feedback = function(text) FAKE.feedback[#FAKE.feedback + 1] = text end,
   gettime = function() return FAKE.now end,
-  timer = function(fn, interval, count) FAKE.timers[#FAKE.timers + 1] = { fn = fn, interval = interval, count = count } end,
+  timer = function(fn, interval, count, cleanup) FAKE.timers[#FAKE.timers + 1] = { fn = fn, interval = interval, count = count, cleanup = cleanup } end,
   show = {
     getvar = function(name) return FAKE.vars[name] end,
     getobj = {

@@ -64,6 +64,12 @@
 
 `packages/core/src/ma2-track-routing.ts` 决定已有绑定内新增轨道的去向，唯一目标登记待写入，歧义明确提示。`packages/core/src/ma2-track-routing.test.ts` 检查归属与未同步统计。
 
+未关联轨道没有 Timecode 归属，不能伪造为第一条绑定的差异。`ma2PendingChanges` 只比较已绑定内容；`ma2TrackRoutingIssue` 在歌曲状态和同步前置检查中说明未关联轨道，仍阻止把遗漏的 Cue 确认为已同步。`ma2-pending-changes.test.ts`、`song-lighting-status.test.ts` 和 `runtime/ma2-bound-song-sync.test.ts` 守住计数不重复、问题可见、未关联内容不误确认。
+
 ## 灯光编号换新
 
 `packages/core/src/lighting-ids.ts` 的 `withNewLightingIds`（2026-11-12）：复制歌曲、把灯光导入空白歌曲、追加导入都经同一张编号表换新，轨道、片段、点、组合、标记、段落、控台绑定和基线、控台点一起换，引用跟着换；素材库模板和素材引用不换。配对、待同步和 MTC 区间提示和换之前一样（`lighting-ids.test.ts` 守着）
+
+## 控台连接插件任务的生命周期（2026-11-16）
+
+网络桥空闲时不启动常驻 Lua 定时任务。只有按住 Flash、Temp、Swop 等需要断线自动松开的按键时，`tools/ma2/tblink_bridge.lua` 才启动单次看门任务；有按键仍按住才继续下一次，松开、租约过期、桥换代或停止时释放按键并退出。文件桥的请求轮询同样使用单次任务，停止或换代后不续行。正常的 Go/Goto、同步和读取不新增常驻任务。旧版无限任务的现场清理由诊断确认目标后单独处理，自动连接流程不发送全局 Off、Off Plugin 或 ReloadPlugins，不能影响其他插件。测试：`apps/desktop/src/main/link/ma2-bridge-timers.test.ts`。

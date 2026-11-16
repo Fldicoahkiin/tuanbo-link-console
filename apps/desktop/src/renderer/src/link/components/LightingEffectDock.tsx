@@ -1,7 +1,6 @@
 import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Layers, ListTree } from 'lucide-react';
-import { Disclosure } from '../ui';
 import type { LightingDocument } from '@tb/schema';
 import { LightingUserLibrary, type LibraryDraft } from './LightingUserLibrary';
 import { Ma2SequencePreview } from './Ma2SequencePreview';
@@ -17,10 +16,10 @@ import { LightingCustomCategories } from './LightingCustomCategories';
 import { Ma2LayoutPanel } from './Ma2LayoutPanel';
 
 export const EFFECT_DRAG = 'application/x-tblink-lighting-effect';
-export function LightingEffectDock({ itemId, onCreated, document, disabled, onChange, eventId, playhead, durationMs, onNew, externalPanel, onLibrary, pointDetails, cueSelectionVersion, sidebarHost, playbackSettings, onAuditionTemplate, onStamp, notify }: {
+export function LightingEffectDock({ itemId, onCreated, document, disabled, onChange, eventId, playhead, durationMs, onNew, externalPanel, onLibrary, pointDetails, cueSelectionVersion, sidebarHost, onAuditionTemplate, onStamp, notify }: {
   itemId: string;
   onCreated: (document: LightingDocument, id: string) => void;
-  sidebarHost: HTMLDivElement | null; playbackSettings: ReactNode; onAuditionTemplate: (id: string) => void; auditionStatus: string;
+  sidebarHost: HTMLDivElement | null; onAuditionTemplate: (id: string) => void;
   pointDetails: boolean; cueSelectionVersion: number; externalPanel?: ReactNode; onLibrary: () => void; document: LightingDocument; disabled: boolean; eventId?: string | undefined; playhead: EditorPlayhead; durationMs: number; onNew: () => void;
   onStamp: (id: string) => void; onChange: (document: LightingDocument, label: string) => boolean | void;
   notify: (message: string, tone?: 'info' | 'error') => void;
@@ -83,7 +82,7 @@ export function LightingEffectDock({ itemId, onCreated, document, disabled, onCh
     <button data-section="timelines" aria-pressed={browserOpen} onClick={() => useMa2ReadStore.setState({ browserOpen: true })}><ListTree/><span>控台时间线</span></button>
     <LightingCustomCategories selected={showingLibrary ? customCategory : null} selectedSection={!customCategory && showingLibrary && section !== 'console' ? section : null} onSection={value=>{setSection(value);setCustomCategory(null);showLibrary();}} onSelect={id=>{setCustomCategory(id);setSection(id?'effect':'console');showLibrary();}}/>
   </nav>;
-  const sidebar = <div className="lighting-workbench-nav effect-library-actions">{navigation}<Disclosure className="lighting-playback-settings" title="试听设置">{playbackSettings}</Disclosure></div>;
+  const sidebar = <div className="lighting-workbench-nav effect-library-actions">{navigation}</div>;
   return <section className="lighting-effect-dock lighting-material-layout" style={split.style} aria-label="灯光效果库" data-editor={!browserOpen && (editorOpen || layoutOpen)} data-sidebar={Boolean(sidebarHost)} data-panel={Boolean(externalPanel && !browserOpen)}>
     {sidebarHost ? createPortal(sidebar, sidebarHost) : sidebar}
     {!browserOpen && externalPanel || <>

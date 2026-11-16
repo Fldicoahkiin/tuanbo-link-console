@@ -45,3 +45,18 @@ it('发送前验证会话，只接受关联回执，对象不存在明确失败'
   await expect(playMa2Cue({ command }, action, () => { throw new Error('已取消'); })).rejects.toThrow('已取消');
   await expect(playMa2Cue({ command: () => Promise.resolve('MISSING') }, action, beforeSend)).rejects.toThrow('控台上已经没有');
 });
+
+it('独占试听立即释放，不修改正式播放或 Cue 自身的渐变时间', async () => {
+  const lines: string[] = [];
+  const command = vi.fn((line: string, match: (response: string) => string | null, beforeSend?: (queued: Ma2QueueWait) => void) => {
+    beforeSend?.(wait); lines.push(line);
+    const marker = /TBLINK_PLAY_[a-f0-9]{32}/.exec(line)?.[0];
+    return Promise.resolve(match(`${marker}:SENT\r\n`)!);
+  });
+  await playMa2Cue({ command }, {target:'sequence',sequence:19,action:'off'}, ()=>undefined, 'stop', {immediateOff:true});
+  await playMa2Cue({ command }, {target:'executor',executor:'1.101',action:'off'}, ()=>undefined, 'stop', {immediateOff:true});
+  await playMa2Cue({ command }, {target:'sequence',sequence:19,cue:'2',action:'goto'}, ()=>undefined, 'playback', {immediateOff:true});
+  expect(lines[0]).toContain("Off Sequence 19 Fade 0");
+  expect(lines[1]).toContain("Off Executor 1.101 Fade 0");
+  expect(lines[2]).not.toContain('Fade 0');
+});

@@ -16,7 +16,7 @@ function fixture() {
   const desktop = { prepareObsMediaScenes: vi.fn<LinkDesktopApi['prepareObsMediaScenes']>().mockResolvedValue(),
     executeObsAction: vi.fn<LinkDesktopApi['executeObsAction']>().mockResolvedValue(),
     setObsProgramSourceEnabled: vi.fn<LinkDesktopApi['setObsProgramSourceEnabled']>().mockResolvedValue(),
-    seekManagedMedia: vi.fn<LinkDesktopApi['seekManagedMedia']>(async payload => { linkManagedMediaExecutionPayloadSchema.parse(payload); }) };
+    seekManagedMedia: vi.fn<LinkDesktopApi['seekManagedMedia']>(payload => { linkManagedMediaExecutionPayloadSchema.parse(payload); return Promise.resolve(); }) };
   const preview = (position: number, current = () => true) => previewEditorScene(project, 'C:\\show\\show.tblink', 'song', position, false, desktop, current);
   return { project, desktop, preview };
 }

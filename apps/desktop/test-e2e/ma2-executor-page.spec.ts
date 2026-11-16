@@ -199,8 +199,8 @@ test('控台时间线切换保持顶部工具栏位置，显示完整目录并�
     await expect(dialog.getByLabel('MTC 起始码', { exact: true })).toHaveValue('00:01:00:00');
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();
     await page.screenshot({ path: info.outputPath('timeline-integrated.png') });
-    await page.getByText('试听设置', { exact: true }).click();
-    await expect(page.getByRole('switch', { name: '选中 Cue 实时播放', exact: true })).toBeVisible();
+    await expect(page.getByText('试听设置', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('switch', { name: '选中 Cue 实时播放', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '控台布局 / 新建 Cue', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '导入 / 导出', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: '灯光', exact: true }).click();
@@ -217,6 +217,14 @@ test('控台时间线切换保持顶部工具栏位置，显示完整目录并�
 
     await pool.getByRole('button', { name: '多步', exact: true }).click();
     await expect(browser).toHaveCount(0); expect(await toolbar.boundingBox()).toEqual(before);
+    await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
+    await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
+    await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
+    const audition = page.getByRole('switch', { name: '时间线选中 Cue 试听', exact: true });
+    await expect(audition).toBeChecked();
+    await audition.uncheck();
+    expect(await page.evaluate(() => localStorage.getItem('tblink.audition-timeline-cue'))).toBe('false');
+    await audition.check();
     expect(errors).toEqual([]);
   } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

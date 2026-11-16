@@ -73,3 +73,15 @@ it('只改歌名：结果里的歌名跟着变，不重算', () => {
   expect(ma2PendingChanges(renamed).find(change => change.itemId === '甲')).toMatchObject({ title: '新歌名', target: 7, error: null });
   expect(snapshots).not.toHaveBeenCalled();
 });
+
+it('未关联轨道不冒充第一条 Timecode 的改动，也不重复计算已有改动', () => {
+  const value = project();
+  const document = value.rundown[0]!.lighting!;
+  const unassigned = track(0); unassigned.id = 'unassigned'; unassigned.name = '未关联轨道';
+  unassigned.clips[0]!.id = 'unassigned-clip'; unassigned.clips[0]!.events[0]!.id = 'unassigned-cue';
+  document.tracks.push(unassigned);
+  const pending = ma2PendingChanges(value).filter(change => change.itemId === '甲');
+  expect(pending).toHaveLength(1);
+  expect(pending[0]).toMatchObject({ target: 7, error: null });
+  expect(pending[0]!.changes).toHaveLength(1);
+});

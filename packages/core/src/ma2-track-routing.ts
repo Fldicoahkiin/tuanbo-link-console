@@ -7,6 +7,12 @@ export function unboundMa2Tracks(document: LightingDocument): LightingTrack[] {
   return document.tracks.filter(track => !bound.has(track.id) && track.clips.some(clip => clip.events.some(event => ['ma2', 'ma2-fader', 'empty-cue'].includes(event.kind))));
 }
 
+/** A song-level issue: an unassigned track must never be attributed to an arbitrary Timecode. */
+export function ma2TrackRoutingIssue(document: LightingDocument): string | null {
+  const tracks = unboundMa2Tracks(document);
+  return tracks.length ? `还有 ${tracks.length} 条灯光轨道没有确定控台位置（${tracks.map(track => track.name).join('、')}）。请在控台同步中关联这些轨道的执行器；这些 Cue 尚未写入控台` : null;
+}
+
 /** Called inside the lighting command: auto-route only an unambiguous executor to the one selected show. */
 export function routeMa2Tracks(document: LightingDocument): LightingDocument {
   if (document.ma2Bindings?.length !== 1) return document;

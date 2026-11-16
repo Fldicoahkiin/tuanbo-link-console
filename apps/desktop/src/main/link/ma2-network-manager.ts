@@ -256,7 +256,7 @@ export class Ma2NetworkManager {
   }
   get connectionGeneration():number { return this.generation; }
   /** Resolves with how long the command waited for the console line and what held it (M1: a lights-off's wait). */
-  async playCue(input: Ma2PlaybackRequest, options?:{beforeSend?:()=>void;priority?:Ma2CommandPriority}): Promise<Ma2QueueWait> {
+  async playCue(input: Ma2PlaybackRequest, options?:{beforeSend?:()=>void;priority?:Ma2CommandPriority;immediateOff?:boolean}): Promise<Ma2QueueWait> {
     const request = ma2PlaybackRequestSchema.parse(input);
     const settings = this.settings; const connection = this.connection; const generation = this.generation;
     if (!settings || !connection || connection.state !== 'connected') throw new Error('序列池播放需要先在设备设置连接 MA2 网络');
@@ -268,7 +268,7 @@ export class Ma2NetworkManager {
     };
     current();
     // An Off passes queued sync reads and writes, so stopping a song switches its lights off first.
-    return playMa2Cue(connection, request.action, ()=>{current();options?.beforeSend?.();},options?.priority ?? (request.action.action === 'off' ? 'stop' : 'playback'));
+    return playMa2Cue(connection, request.action, ()=>{current();options?.beforeSend?.();},options?.priority ?? (request.action.action === 'off' ? 'stop' : 'playback'), options);
   }
   private credentialId(settings: Ma2NetworkSettings): string { return `ma2-${createHash('sha256').update(`${settings.host}:${settings.port}:${settings.username}`).digest('hex')}`; }
   async readCatalog(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal, targets?: readonly number[], checkpoint?: (catalog: Ma2Catalog, entry?: Ma2Catalog['entries'][number]) => Promise<void>, expectedSource?: Ma2CatalogRequest['expectedSource']): Promise<Ma2Catalog> {

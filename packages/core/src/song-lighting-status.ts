@@ -3,6 +3,7 @@ import { ma2PendingChanges } from './ma2-pending-changes';
 import { ma2SongPairs } from './ma2-pairing-state';
 import { ma2SongPoints } from './ma2-song-sequence';
 import { programTimeOrigin } from './ma2-time-origin';
+import { ma2TrackRoutingIssue } from './ma2-track-routing';
 
 export type SongLightingStatus =
   /** No console show is known to start where the song starts; `reason` says why when there is one. */
@@ -37,6 +38,8 @@ export function songLightingStatus(project: LinkProject, itemId: string): SongLi
   const timecode = Number(target);
   const pending = ma2PendingChanges(project).filter(change => change.itemId === itemId);
   const problems = pending.flatMap(change => change.error ? [`控台 Timecode ${change.target}：${change.error}`] : []);
+  const routingIssue = item.lighting && ma2TrackRoutingIssue(item.lighting);
+  if (routingIssue) problems.push(routingIssue);
   for (const value of match.unresolved) if (bound.has(value.target)) problems.push(value.reason);
   const format = project.ma2ReadState?.catalog.entries.find(entry => entry.target === timecode)?.frameFormat;
   return { state: 'matched', timecode, startMs: programTimeOrigin(item), frameRate: consoleFrameRate(format),

@@ -7,6 +7,7 @@ import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
 import { selectMa2Timeline, changeMa2TimelineProperties } from '../runtime/ma2-timeline-actions';
 import { ma2TimelineRows, type Ma2TimelineRow } from '../view-models/ma2-timeline-list';
+import { ownKeys } from '../keys/key-owner';
 import { Button, Dialog, Field, Menu, MenuItem, TextInput } from '../ui';
 import { Ma2SequenceTimeline } from './Ma2SequenceTimeline';
 import { scanMa2, useMa2ReadStore } from '../stores/ma2-read-store';
@@ -66,7 +67,7 @@ function Ma2TimelineWorkspace({ itemId, disabled, onClose, notify, query = '', e
           <div className="ma2-timeline-list-heading"><strong>{browsing ? `全部控台时间线 · ${visible.length} 条` : '当前节目时间线'}</strong>{browsing ? <small>选择一条查看或关联</small> : null}</div>
           <div className="ma2-timeline-list-scroll">
             <div className="ma2-timeline-columns" aria-hidden="true"><span>编号</span><span>名称</span><span>MTC 起始码</span><span>Cue</span><span>状态</span></div>
-            <div className="ma2-timeline-list" role="listbox" aria-label={browsing ? '控台所有时间线' : '当前节目时间线'}>
+            <div className="ma2-timeline-list" role="listbox" {...ownKeys('ArrowUp', 'ArrowDown', 'Home', 'End')} aria-label={browsing ? '控台所有时间线' : '当前节目时间线'}>
               {visible.map((value, index) => <button role="option" className="ma2-timeline-row" key={value.target} aria-label={`Timecode ${value.target} · ${value.name}`} aria-selected={row?.target === value.target} tabIndex={row?.target === value.target || index === 0 && !visible.some(entry => entry.target === row?.target) ? 0 : -1} title={`${value.name} · ${code(value)}`} onClick={() => selectRow(value)} onKeyDown={event => {
                 const next = event.key === 'ArrowDown' ? Math.min(index + 1, visible.length - 1) : event.key === 'ArrowUp' ? Math.max(index - 1, 0) : event.key === 'Home' ? 0 : event.key === 'End' ? visible.length - 1 : null;
                 if (next === null) return; event.preventDefault(); selectRow(visible[next]!); (event.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();

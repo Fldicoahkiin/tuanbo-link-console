@@ -691,7 +691,7 @@ local executor_functions = {
   [12318]={'ToFull',false},[12319]={'ToZero',false}
 }
 local function release_executor_key(key)
-  if key.momentary and gma.show.getvar('SHOWFILE') == key.show and gma.show.getobj.handle(key.address) == key.handle then
+  if key.momentary and not key.expired and gma.show.getvar('SHOWFILE') == key.show and gma.show.getobj.handle(key.address) == key.handle then
     gma.cmd(key.name .. ' Off ' .. key.address)
   end
 end
@@ -701,6 +701,25 @@ local function expire_executor_keys()
       release_executor_key(key); key.expired=true
     end
     if gma.gettime()>key.expires+600 then executor_keys[id]=nil end
+  end
+end
+-- No permanent timer in network mode. Only a held Flash/Temp/Swop needs a
+-- watchdog; each tick finishes and schedules another only while a key is held.
+-- Invalidated generations release their keys on the last tick, then disappear
+-- from the console's running-plugin list instead of leaving an infinite task.
+local key_timer_pending = false
+local function watch_executor_keys()
+  if key_timer_pending then return end
+  for _,key in pairs(executor_keys) do
+    if key.momentary and not key.expired then
+      key_timer_pending = true
+      gma.timer(function()
+        key_timer_pending = false
+        expire_executor_keys()
+        watch_executor_keys()
+      end, 0.25, 1)
+      return
+    end
   end
 end
 _G.TBLINK_EXEC_RELEASE_ALL = function()
@@ -714,6 +733,7 @@ _G.TBLINK_EXEC_INPUT = function(token,id,page,slot,button,pressed,code,sequence,
       return (value:gsub('..',function(pair)return string.char(tonumber(pair,16))end))
     end
     assert(type(id)=='string' and #id==32 and id:match('^[a-f0-9]+$'),'Invalid press identity')
+    expire_executor_keys()
     local key = executor_keys[id]
     if not pressed then
       if key then release_executor_key(key);key.expired=true;key.expires=gma.gettime()
@@ -750,26 +770,41 @@ _G.TBLINK_EXEC_INPUT = function(token,id,page,slot,button,pressed,code,sequence,
     assert(buttons[button+1]==code,'Executor function changed')
     gma.cmd(fn[1]..(fn[2] and ' On ' or ' ')..address)
     executor_keys[id]={address=address,handle=handle,name=fn[1],code=code,button=button,momentary=fn[2],show=gma.show.getvar('SHOWFILE'),expires=gma.gettime()+2}
+    watch_executor_keys()
     return 'SENT'
   end)
   local response=ok and result or 'ERR:'..hex(tostring(result))
   gma.echo('TBLINK_EXEC_'..token..':'..response)
   return response
 end
+local poll_pending = false
+local function watch_request_file()
+  if poll_pending or not active or _G.TBLINK_BRIDGE_GENERATION ~= generation then return end
+  poll_pending = true
+  gma.timer(function()
+    poll_pending = false
+    if not active or _G.TBLINK_BRIDGE_GENERATION ~= generation then return end
+    poll()
+    watch_request_file()
+  end, 0.1, 1)
+end
 local function main(mode)
-  if active then active = false; _G.TBLINK_BRIDGE_READY = false; gma.feedback('TBLINK bridge stopped'); return end
+  if active then
+    active = false
+    expire_executor_keys()
+    if _G.TBLINK_BRIDGE_GENERATION == generation then _G.TBLINK_BRIDGE_READY = false end
+    gma.feedback('TBLINK bridge stopped'); return
+  end
   if mode == 'network' then
     active = true
     _G.TBLINK_BRIDGE_READY = true
-    gma.timer(expire_executor_keys, 0.25, 0)
     return
   end
   -- A restart must not replay a previously sent write with an uncertain outcome.
   os.rename(request_file, root .. '/temp/tblink_bridge_abandoned_' .. generation .. '.txt')
   active = true
   _G.TBLINK_BRIDGE_READY = true
-  gma.timer(expire_executor_keys, 0.25, 0)
-  gma.timer(poll, 0.1, 0)
+  watch_request_file()
   gma.feedback('TBLINK local onPC bridge ready')
 end
 return main

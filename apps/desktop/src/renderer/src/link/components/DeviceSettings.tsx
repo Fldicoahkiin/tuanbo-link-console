@@ -3,9 +3,10 @@ import { ArrowRight, RefreshCw } from 'lucide-react';
 import type { LinkObsInventory } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { useIntegrationStore } from '../stores/integration-store';
+import { useDisplayPreferences } from '../stores/display-preferences-store';
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
 import { legacyAudioDeviceNotice, playerEngineLabel } from '../view-models/internal-audio-engine';
-import { Button, Card, Disclosure, Field, Notice, Select } from '../ui';
+import { Button, Card, Disclosure, Field, Notice, Select, Switch } from '../ui';
 import { IntegrationFooter } from './IntegrationOverview';
 import { LightingPortField, MscDeviceField } from './LightingMidiSettings';
 import { Ma2ConnectionSettings } from './Ma2ConnectionSettings';
@@ -71,6 +72,7 @@ export function AudioMidiSettings({ internal, disabled, notify, onBusy, onRefres
 /** MA2 控台: how this computer reaches the console. Reading songs from it is saved in the project. */
 export function Ma2Settings({ disabled, notify, onBusy, onNavigate }: Common & { onNavigate: (category: SettingsCategory) => void }): JSX.Element {
   const method = useMa2ModeStore(state => state.method);
+  const auditionTimelineCue = useDisplayPreferences(state => state.auditionTimelineCue);
   const [maintenanceHost, setMaintenanceHost] = useState<HTMLDivElement | null>(null);
   const openMaintenance = (): void => {
     const details = maintenanceHost?.closest('details');
@@ -79,6 +81,12 @@ export function Ma2Settings({ disabled, notify, onBusy, onNavigate }: Common & {
   };
   return <>
     <Ma2ConnectionSettings disabled={disabled} notify={notify} maintenanceHost={maintenanceHost} onMaintenance={openMaintenance} onAudioSettings={() => onNavigate('audio')} />
+    <Card title="Cue 试听">
+      <Switch label="时间线选中 Cue 试听" help="默认开启。选中时间线上的灯光 Cue 时立即试听，修改后保存在本机。" checked={auditionTimelineCue} onChange={event => {
+        try { useDisplayPreferences.getState().setAuditionTimelineCue(event.currentTarget.checked); }
+        catch (error) { notify(`没有保存试听设置：${String(error)}`, 'error'); }
+      }} />
+    </Card>
     <Disclosure title="控台 MIDI 地址" description="用 MIDI 触发控台 Cue 时的 MSC 设置"><MscDeviceField disabled={disabled} notify={notify} onBusy={onBusy} /></Disclosure>
     {method !== 'midi' ? <Disclosure title="高级连接与插件维护"><div ref={setMaintenanceHost} /></Disclosure> : null}
   </>;

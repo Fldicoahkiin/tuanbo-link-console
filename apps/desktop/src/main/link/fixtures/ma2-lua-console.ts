@@ -80,7 +80,7 @@ export class Ma2LuaConsole {
   /** The local onPC file bridge: hands one request file to the plugin's poll timer and returns its response file. */
   poll(request: string): string | null {
     const [response] = this.lua(`FAKE.files[FAKE.vars.PATH .. '/temp/tblink_bridge_request.txt'] = REQUEST
-      for _, timer in ipairs(FAKE.timers) do timer.fn() end
+      FAKE.tick()
       local response = FAKE.files[FAKE.vars.PATH .. '/temp/tblink_bridge_response.txt']; FAKE.files[FAKE.vars.PATH .. '/temp/tblink_bridge_response.txt'] = nil
       return response`, { REQUEST: request });
     return response?.length ? response.toString('utf8') : null;

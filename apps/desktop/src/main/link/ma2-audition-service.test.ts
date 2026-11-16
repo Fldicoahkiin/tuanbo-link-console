@@ -9,12 +9,12 @@ function fixture(){
   const api:AuditionNetwork={connectionGeneration:0,cancelPlayback:id=>cancelled.add(id),playCue:vi.fn<AuditionNetwork['playCue']>((input,options)=>Promise.resolve().then(()=>{if(cancelled.has(input.sessionId))throw new Error('取消');options?.beforeSend?.();actions.push(input);}))};
   return {api,actions,cancelled,service:new Ma2AuditionService(api)};
 }
-it('跨页面目标去重关闭，包括执行器；正式输出未登记的不关闭，停止后可再次试听',async()=>{
+it('跨页面切换先关闭上一条试听，包括执行器；不关闭未登记的正式输出，停止后可再次试听',async()=>{
   const f=fixture();await f.service.play(request(1));await f.service.play(request(1));await f.service.play(request(2));
   await f.service.play({...request(3),action:{target:'executor',executor:'99.101',action:'go'}});
   await f.api.playCue({...request(80),action:{target:'sequence',sequence:80,action:'go'}});
   const result=await f.service.stop();expect(result.phase).toBe('sent');expect(result.targets).toEqual([]);
-  expect(f.actions.filter(value=>value.action.action==='off').map(value=>value.action)).toEqual([{target:'sequence',sequence:1,action:'off'},{target:'sequence',sequence:2,action:'off'},{target:'executor',executor:'99.101',action:'off'}]);
+  expect(f.actions.filter(value=>value.action.action==='off').map(value=>value.action)).toEqual([{target:'sequence',sequence:1,action:'off'},{target:'sequence',sequence:1,action:'off'},{target:'sequence',sequence:2,action:'off'},{target:'executor',executor:'99.101',action:'off'}]);
   await expect(f.service.play(request(3))).rejects.toThrow('已停止');await f.service.play(request(3,result.generation));expect(f.service.status().targets).toHaveLength(1);
 });
 it('停止取消未发送 Cue，合并重复点击，先于排队查询；迟到结果不重新点灯',async()=>{
@@ -28,7 +28,7 @@ it('停止取消未发送 Cue，合并重复点击，先于排队查询；迟到
   expect(order).toEqual(['goto:1','off:1','query']);expect(f.service.status().targets).toEqual([]);
 });
 it('结果不明保留；某个 Off 失败不阻断其他目标，重连不向新连接发旧 Off',async()=>{
-  const f=fixture();await f.service.play(request(1));await f.service.play(request(2));
+  const f=fixture();const first=request(1);await f.service.play(first);await f.service.play({...request(2),sessionId:first.sessionId});
   const send=f.api.playCue;f.api.playCue=async(input,options)=>{if(input.action.action==='off'&&input.action.target==='sequence'&&input.action.sequence===1)throw new Error('断网');return send(input,options);};
   const result=await f.service.stop();expect(result.phase).toBe('failed');expect(result.targets).toHaveLength(1);expect(result.targets[0]?.error).toBe('断网');
   const count=f.actions.length;Object.defineProperty(f.api,'connectionGeneration',{value:1});await f.service.stop();expect(f.actions).toHaveLength(count);expect(f.service.status().targets[0]?.error).toContain('连接变了');
@@ -61,7 +61,7 @@ it('切换连接先停止输出，直至切换结束拒绝新试听；停止失�
   await expect(f.service.beforeConnectionChange()).rejects.toThrow('没能停止试听');
   expect(f.service.status().targets).toHaveLength(1);
   f.api.playCue=send;await f.service.play(request(3,2));
-  expect(f.service.status().targets).toHaveLength(2);
+  expect(f.service.status().targets.map(target=>target.action)).toEqual([{target:'sequence',sequence:3,action:'off'}]);
 });
 it('Off 永不回包时按超时标记失败，停止状态一定结束，可再次停止',async()=>{
   vi.useFakeTimers();
@@ -82,4 +82,37 @@ it('状态发布失败不会把试听卡在停止中，也不会拦下关灯指�
   await expect(Promise.resolve().then(()=>service.stop())).rejects.toThrow('窗口已关闭');
   expect(f.actions.at(-1)?.action).toEqual({target:'sequence',sequence:1,action:'off'});
   expect(service.status().phase).toBe('sent');expect(service.status().targets).toEqual([]);
+});
+
+it('切换不同序列先关后开，组合素材成员同组保留；多步 Go 不重启序列',async()=>{
+  const f=fixture();const group=request(1);
+  await f.service.play(group);await f.service.play({...request(2),sessionId:group.sessionId});
+  expect(f.service.status().targets).toHaveLength(2);
+  await f.service.play(request(3));
+  expect(f.actions.map(value=>`${value.action.action}:${value.action.target==='sequence'?value.action.sequence:value.action.executor}`)).toEqual(['goto:1','goto:2','off:1','off:2','goto:3']);
+  const go={...request(3),action:{target:'sequence' as const,sequence:3,action:'go' as const}};
+  await f.service.play(go);await f.service.play({...go,sessionId:crypto.randomUUID()});
+  expect(f.actions.slice(-2).map(value=>value.action.action)).toEqual(['go','go']);
+  await f.service.stop();expect(f.actions.at(-1)?.action).toEqual({target:'sequence',sequence:3,action:'off'});
+});
+it('快速连点的完整切换串行执行，最终只保留最后一条试听',async()=>{
+  const f=fixture();await Promise.all([f.service.play(request(1)),f.service.play(request(2)),f.service.play(request(3))]);
+  expect(f.actions.map(value=>`${value.action.action}:${value.action.target==='sequence'?value.action.sequence:value.action.executor}`)).toEqual(['goto:1','off:1','goto:2','off:2','goto:3']);
+  expect(f.service.status().targets.map(value=>value.action)).toEqual([{target:'sequence',sequence:3,action:'off'}]);
+});
+it('关闭上次试听失败时保留目标，不发送新 Cue；用户再点可完成切换',async()=>{
+  const f=fixture();await f.service.play(request(1));const send=f.api.playCue;
+  f.api.playCue=async(input,options)=>{if(input.action.action==='off')throw new Error('断网');return send(input,options);};
+  await expect(f.service.play(request(2))).rejects.toThrow('断网');
+  expect(f.actions).toHaveLength(1);expect(f.service.status().targets[0]?.state).toBe('failed');
+  f.api.playCue=send;await f.service.play(request(2));
+  expect(f.actions.map(value=>value.action.action)).toEqual(['goto','off','goto']);
+});
+it('切换的 Off 未返回时按停止，共用这次 Off，取消之后的新 Cue',async()=>{
+  const f=fixture();await f.service.play(request(1));const send=f.api.playCue;
+  let release=()=>undefined as void;const gate=new Promise<void>(resolve=>{release=resolve;});
+  f.api.playCue=async(input,options)=>{await send(input,options);if(input.action.action==='off')await gate;};
+  const switching=f.service.play(request(2));const rejected=expect(switching).rejects.toThrow('取消旧 Cue');
+  await Promise.resolve();const stopping=f.service.stop();release();await rejected;await stopping;
+  expect(f.actions.map(value=>value.action.action)).toEqual(['goto','off']);expect(f.service.status().targets).toEqual([]);
 });

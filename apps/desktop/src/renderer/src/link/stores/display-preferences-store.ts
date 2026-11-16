@@ -10,6 +10,8 @@ const SPECTRUM_KEY = 'tblink.home-spectrum';
 export const useDisplayPreferences = create<{
   lowPower: boolean;
   preciseSeeking: boolean;
+  auditionTimelineCue: boolean;
+  setAuditionTimelineCue: (enabled: boolean) => void;
   setPreciseSeeking: (enabled: boolean) => void;
   /** The spectrum next to the home player; hidden unless the operator asks for it (2026-10-30). */
   homeSpectrum: boolean;
@@ -20,6 +22,11 @@ export const useDisplayPreferences = create<{
 }>((set, get) => ({
   lowPower: false,
   preciseSeeking: true,
+  auditionTimelineCue: true,
+  setAuditionTimelineCue: (auditionTimelineCue) => {
+    localStorage.setItem('tblink.audition-timeline-cue', String(auditionTimelineCue));
+    set({ auditionTimelineCue });
+  },
   setPreciseSeeking: (preciseSeeking) => {
     localStorage.setItem('tblink.precise-seeking', String(preciseSeeking));
     set({ preciseSeeking });
@@ -32,7 +39,7 @@ export const useDisplayPreferences = create<{
   loaded: false,
   load: () => {
     if (get().loaded) return;
-    set({ lowPower: localStorage.getItem(KEY) === 'low', preciseSeeking: localStorage.getItem('tblink.precise-seeking') !== 'false', homeSpectrum: localStorage.getItem(SPECTRUM_KEY) === 'true', loaded: true });
+    set({ auditionTimelineCue: localStorage.getItem('tblink.audition-timeline-cue') !== 'false', lowPower: localStorage.getItem(KEY) === 'low', preciseSeeking: localStorage.getItem('tblink.precise-seeking') !== 'false', homeSpectrum: localStorage.getItem(SPECTRUM_KEY) === 'true', loaded: true });
   },
   setLowPower: (lowPower) => {
     localStorage.setItem(KEY, lowPower ? 'low' : 'normal');

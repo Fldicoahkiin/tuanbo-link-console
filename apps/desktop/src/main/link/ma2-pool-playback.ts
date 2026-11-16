@@ -14,8 +14,10 @@ export function ma2PlaybackCommand(input: Ma2PlaybackAction): { command: string;
 
 /** Numeric DTOs only. The receipt confirms command dispatch, not physical fixture output. Resolves with how long
  * the command waited for the console line. */
-export async function playMa2Cue(connection: Pick<Ma2Telnet, 'command'>, action: Ma2PlaybackAction, beforeSend: () => void, priority: Ma2CommandPriority = 'playback'): Promise<Ma2QueueWait> {
-  const { command, object } = ma2PlaybackCommand(action);
+export async function playMa2Cue(connection: Pick<Ma2Telnet, 'command'>, action: Ma2PlaybackAction, beforeSend: () => void, priority: Ma2CommandPriority = 'playback', options?: { immediateOff?: boolean }): Promise<Ma2QueueWait> {
+  const { command: nativeCommand, object } = ma2PlaybackCommand(action);
+  // Audition handoff releases immediately; native song stops retain their timing.
+  const command = `${nativeCommand}${action.action === 'off' && options?.immediateOff ? ' Fade 0' : ''}`;
   const marker = `TBLINK_PLAY_${randomBytes(16).toString('hex')}`;
   // Off is idempotent: a deleted/missing target must not trap audition cleanup.
   // Still dispatch the exact Off command and require its receipt; disconnects

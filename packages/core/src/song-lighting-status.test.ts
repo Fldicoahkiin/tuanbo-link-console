@@ -17,6 +17,20 @@ const track = (at: number): LightingTrack => ({ id: 'track', name: '灯光', kin
   clips: [{ id: 'clip', name: '原编排', start: 0, duration: 40000, timeLock: 'time', muted: false, events: [{ id: 'cue', kind: 'ma2', at, sequence: 1, executor: '1.101', cue: '1', action: 'goto', label: '开场' }] }] });
 const matched = { state: 'matched', timecode: 2, startMs: 480000, frameRate: '30', pending: 0, problems: [], notes: [] };
 
+it('未关联轨道单独提示，已同步的 Timecode 不产生虚假的待写入数量', () => {
+  const { project } = fixture();
+  const lighting = createLightingDocument();
+  const unassigned = track(1000); unassigned.id = 'unassigned'; unassigned.name = '新灯光';
+  unassigned.clips[0]!.id = 'unassigned-clip'; unassigned.clips[0]!.events[0]!.id = 'unassigned-cue';
+  lighting.tracks = [track(0), unassigned];
+  lighting.ma2Bindings = [{ id: 'binding', timecode: 2, name: '歌曲甲', readAt: '2026-10-22T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [track(0)], mappings: [], playback: 'editable', timeOriginMs: 480000 }];
+  project.rundown[0]!.lighting = lighting;
+  const status = songLightingStatus(project, '歌曲甲');
+  expect(status).toMatchObject({ state: 'matched', timecode: 2, pending: 0 });
+  if (status.state !== 'matched') throw new Error('没有匹配时间线');
+  expect(status.problems).toEqual([expect.stringContaining('新灯光')]);
+});
+
 it('起始码对上就是对上，不用确认；没有控台节目的歌是未对上；给出控台节目、起始码和帧率', () => {
   const { project } = fixture();
   expect(songLightingStatus(project, '歌曲乙')).toEqual({ state: 'unmatched', reason: null });

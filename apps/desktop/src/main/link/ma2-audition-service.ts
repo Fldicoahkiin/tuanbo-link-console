@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { ma2AuditionRequestSchema, ma2AuditionStateSchema, type Ma2AuditionRequest, type Ma2AuditionState, type Ma2PlaybackRequest } from '@tb/schema';
-type Target=Ma2AuditionState['targets'][number]&{epoch:number;possiblySent:boolean;pending:number};
+type Target=Ma2AuditionState['targets'][number]&{epoch:number;possiblySent:boolean;pending:number;sessionId:string;off?:Promise<void>};
 /** Upper bound per Off, beyond the 7 s send deadline the transport already enforces. */
 const offTimeoutMs=8000;
-export type AuditionNetwork={readonly connectionGeneration:number;cancelPlayback:(id:string)=>void;playCue:(request:Ma2PlaybackRequest,options?:{beforeSend?:()=>void;priority?:'normal'|'stop'})=>Promise<unknown>};
+export type AuditionNetwork={readonly connectionGeneration:number;cancelPlayback:(id:string)=>void;playCue:(request:Ma2PlaybackRequest,options?:{beforeSend?:()=>void;priority?:'normal'|'stop';immediateOff?:boolean})=>Promise<unknown>};
 /** App-lifetime ownership of audition outputs. Component cancellation never forgets lit targets. */
 export class Ma2AuditionService {
   private targets=new Map<string,Target>();private sessions=new Map<string,number>();
+  private playing:Promise<void>|null=null;
   private generation=0;private revision=0;private phase:Ma2AuditionState['phase']='idle';private stopping:Promise<Ma2AuditionState>|null=null;private connectionChanging=false;
   constructor(private readonly network:AuditionNetwork,private readonly publish:(state:Ma2AuditionState)=>void=()=>undefined){}
   status():Ma2AuditionState{return ma2AuditionStateSchema.parse({version:1,revision:this.revision,generation:this.generation,phase:this.phase,targets:[...this.targets.values()].map(({id,network,action,state,error,epoch})=>({id,network,action,state,error,connectionChanged:epoch!==this.network.connectionGeneration}))});}
@@ -32,10 +33,34 @@ export class Ma2AuditionService {
   async play(input:Ma2AuditionRequest):Promise<void>{
     const request=ma2AuditionRequestSchema.parse(input);
     if(this.stopping||this.connectionChanging||request.generation!==this.generation)throw new Error('试听已停止或正在切换连接，请重新点击 Cue');
+    // Serialize the whole handoff, not only individual wire commands. A second
+    // click cannot light its target while the previous click is still releasing.
+    const result=this.playing?this.playing.then(()=>this.playSelected(request)):this.playSelected(request);
+    const turn=result.then(()=>undefined,()=>undefined);
+    this.playing=turn;
+    void turn.then(()=>{if(this.playing===turn)this.playing=null;});
+    return result;
+  }
+  private async playSelected(request:Ma2AuditionRequest):Promise<void>{
     const epoch=this.network.connectionGeneration;const action=request.action;
+    const current=()=>{if(this.stopping||this.connectionChanging||request.generation!==this.generation||epoch!==this.network.connectionGeneration)throw new Error('试听已停止，取消旧 Cue');};
+    current();
     const off=action.target==='sequence'?{target:'sequence' as const,sequence:action.sequence,action:'off' as const}:{target:'executor' as const,executor:action.executor,action:'off' as const};
     const id=JSON.stringify([request.network.host,request.network.port,request.network.monitorPort,request.network.username,epoch,off]);
-    const target=this.targets.get(id)??{id,epoch,network:request.network,action:off,state:'pending' as const,error:null,possiblySent:false,pending:0};
+    if(action.action!=='off'){
+      // A material can contain several Cues: one session is one explicit
+      // selection. Only its members may sound together. Go on the same target
+      // still advances the native sequence instead of restarting it.
+      for(const previous of [...this.targets.values()]){
+        if(previous.epoch!==epoch||previous.sessionId===request.sessionId||(previous.id===id&&action.action==='go'))continue;
+        try{await this.sendOff(previous);this.targets.delete(previous.id);}
+        catch(error){previous.state='failed';previous.error=error instanceof Error?error.message:String(error);this.phase='failed';this.changed();throw error;}
+        current();
+      }
+    }
+    current();
+    const target=this.targets.get(id)??{id,epoch,network:request.network,action:off,state:'pending' as const,error:null,possiblySent:false,pending:0,sessionId:request.sessionId};
+    target.sessionId=request.sessionId;
     target.pending++;this.targets.set(id,target);this.sessions.set(request.sessionId,(this.sessions.get(request.sessionId)??0)+1);this.phase='active';this.changed();
     try{
       const {generation,network,action,sessionId,deadlineAt}=request;
@@ -72,10 +97,15 @@ export class Ma2AuditionService {
       return this.status();
     }).finally(()=>{this.stopping=null;});return this.stopping;
   }
-  private async sendOff(target:Target):Promise<void>{
+  private sendOff(target:Target):Promise<void>{
+    if(target.off)return target.off;
+    const off=this.dispatchOff(target).finally(()=>{if(target.off===off)delete target.off;});
+    target.off=off;return off;
+  }
+  private async dispatchOff(target:Target):Promise<void>{
     let timer:ReturnType<typeof setTimeout>|undefined;
     const timeout=new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error(`停止指令发出 ${offTimeoutMs/1000} 秒后还没确认关闭，灯光可能还亮着。请再停一次，或到控台上确认`)),offTimeoutMs);});
-    try{await Promise.race([this.network.playCue({network:target.network,action:target.action,sessionId:randomUUID(),deadlineAt:Date.now()+7000},{priority:'stop',beforeSend:()=>{if(target.epoch!==this.network.connectionGeneration)throw new Error('控台连接变了，停止指令没有发送');}}),timeout]);}
+    try{await Promise.race([this.network.playCue({network:target.network,action:target.action,sessionId:randomUUID(),deadlineAt:Date.now()+7000},{priority:'stop',immediateOff:true,beforeSend:()=>{if(target.epoch!==this.network.connectionGeneration)throw new Error('控台连接变了，停止指令没有发送');}}),timeout]);}
     finally{clearTimeout(timer);}
   }
 }

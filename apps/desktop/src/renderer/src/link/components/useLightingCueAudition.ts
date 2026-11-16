@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import type { LightingDocument, RundownItem } from '@tb/schema';
 import { LightingCueAudition } from '../../registry/lighting-cue-audition';
+import { useDisplayPreferences } from '../stores/display-preferences-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { recordRuntimeOperator, reportCoordinatorError } from '../runtime/runtime-action-log';
 import { readMa2Method } from '../stores/ma2-mode-store';
 
 export function useLightingCueAudition(document: LightingDocument, projectId: string | undefined, item: RundownItem | null, notify: (message: string, tone?: 'info' | 'error') => void) {
   const [output] = useState(() => new LightingCueAudition());
-  const [enabled, setEnabled] = useState(true);
+  const enabled = useDisplayPreferences(state => state.auditionTimelineCue);
   const [status, setStatus] = useState('选中灯光 Cue 即发送到控台');
   useEffect(() => () => output.cancel(), [output, projectId, item?.id, enabled]);
   useEffect(() => () => output.close(), [output]);
@@ -29,5 +30,5 @@ export function useLightingCueAudition(document: LightingDocument, projectId: st
       setStatus(message); notify(message, 'error'); reportCoordinatorError(message, failure => notify(failure, 'error'));
     });
   };
-  return { enabled, setEnabled, status, select: (id: string) => select(id), selectTemplate: (id: string) => select(id, true) };
+  return { enabled, status, select: (id: string) => select(id), selectTemplate: (id: string) => select(id, true) };
 }
