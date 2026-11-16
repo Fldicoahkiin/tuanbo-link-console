@@ -14,6 +14,8 @@
 
 ## 拖动、修剪时落在哪
 
+2026-11-16：场景和素材片段单击时定位到点击处；只有松手时确认没有移动才作为点击定位，拖动、修剪、取消拖动和右键菜单不触发画面。锁定轨道只限制编辑，仍可点击定位；键盘激活定位到片段开头。位置限制在片段内部，不吸到片段结束后的下一帧。实现仍在 `components/ContentTracks.tsx` 和 `components/useTimelineItemDrag.ts`，浏览器回归见 `apps/desktop/test-e2e/editor-picture.browser.spec.ts`。
+
 `apps/desktop/src/renderer/src/link/components/drag-preview.ts`（2026-11-11）：按下时拍一份快照（时间线在屏幕上的位置、每条轨道的位置、吸附点），之后每帧用 `dragTarget`、`trimTarget` 算一次，直接写到页面上，松手才发一条命令；放置和修剪的规则仍只在 `content-timeline.ts`。音频片段、灯光点的拖动和框选用 `useFramedDrag` 每帧算一次。拖着的时候给人看的提示也在这里每帧算、直接写到页面上：吸附线和它的颜色（`snapGuideAt`）、修剪时的时长和碰到边界（`trimFrame`）、要不要提示「放到新轨道」（`showsNewTrackAbove`）、拖到左右边上自己滚（`EdgeScroll`，经 `useTimelineViewport` 的 `scrollLeftTo` 滚）。按住 Alt 不吸附从指针事件的 `altKey` 读，不听按键；播放中不吸播放头；吸附关着或按住 Alt 时仍落在整帧上。编辑器的吸附开关记在这台电脑（`stores/timeline-view-store.ts`），以后时间线的界面偏好也放这里。不再用 `elementFromPoint` 找轨道，不在每次鼠标移动时更新 React 状态（`drag-preview.test.ts` 和 `editor-rules.test.ts` 规则 10 守着）
 
 ## 时间线滚动到哪

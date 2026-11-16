@@ -1,9 +1,10 @@
-import { parseLinkProject, ma2TimecodePreviewSchema, type LinkProject, type Ma2Catalog, type Ma2ReadState, type Ma2TimecodePreview } from '@tb/schema';
+import { createLightingDocument, parseLinkProject, ma2TimecodePreviewSchema, type LinkProject, type Ma2Catalog, type Ma2ReadState, type Ma2TimecodePreview } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { ma2ShowStartTicks, matchMa2Programs, sameMtcStart, type Ma2StartMatch, type Ma2TimelineSwitch } from './ma2-program-matching';
 import { importMa2TimecodeCommand } from './ma2-import';
 import { formatMtcOffset } from './mtc-timecode';
-import { MA2_FRAME_MS, programTimeOrigin } from './ma2-time-origin';
+import { MA2_FRAME_MS, programTimeOrigin, withMa2TimeOrigin } from './ma2-time-origin';
+import { lightingIdMap, withNewLightingIds } from './lighting-ids';
 
 const noMatch: Ma2StartMatch = { pairs: {}, unresolved: [], duplicateStarts: {}, notes: [], switches: [] };
 const matches = new WeakMap<LinkProject, Ma2StartMatch>();
@@ -182,19 +183,26 @@ export function withMa2Pairings(command: LinkCommand): LinkCommand {
  * song holding none takes this show's Cues in the same step. A switch to this show that failed before
  * is tried again.
  */
-export function pairSongWithMa2ShowCommand(itemId: string, target: number): LinkCommand {
+export function pairSongWithMa2ShowCommand(itemId: string, target: number, fresh?: Ma2TimecodePreview): LinkCommand {
+  const read = fresh ? ma2TimecodePreviewSchema.parse(fresh) : undefined;
+  if (read && read.target !== target) throw new Error('读回的控台时间线编号不一致');
   return { id: crypto.randomUUID(), label: '让歌曲用这条控台时间线', execute(project) {
     const state = project.ma2ReadState;
-    const entry = state?.catalog.entries.find(value => value.target === target);
+    const cached = state?.catalog.entries.find(value => value.target === target) ?? (read && state?.catalog.directory.entries.some(value => value.target === target) ? {
+      target, name: read.name, frameFormat: read.timing?.frameFormat ?? null, slot: null, offset: read.timing?.offsetNative ?? null,
+      events: [], warnings: read.warnings, error: null, eventCount: null
+    } : undefined);
+    const entry = cached && read ? { ...cached, name: read.name, preview: read, sourceXml: read.sourceXml, error: null, conversionError: undefined,
+      offset: read.timing?.offsetNative ?? cached.offset, eventCount: read.document.tracks.reduce((sum, track) => sum + track.clips.reduce((count, clip) => count + clip.events.length, 0), 0) + read.unconverted.length } : cached;
     const item = project.rundown.find(value => value.id === itemId);
     if (!state || !entry) throw new Error(`控台读取结果里没有 Timecode ${target}`);
+    if (state.catalog.sourceUnverified) throw new Error('控台读取来源尚未确认，请重新读取后选择时间线');
     if (!item) throw new Error('这首歌已不存在');
     if (!item.referenceAudio) throw new Error(`「${item.title}」没有音频，配不上控台时间线`);
-    if (item.lighting?.consoleSong) throw new Error(`「${item.title}」用的是联动台给它建的控台序列，不换用控台上的其他时间线`);
     const ticks = entry.error ? null : ma2ShowStartTicks(entry);
     if (ticks === null) throw new Error(`控台 Timecode ${target} 的起点读不懂，没法对上歌曲`);
     const frameRate = project.timebase.frameRate;
-    const owner = project.rundown.find(value => value.id !== itemId && value.lighting?.ma2Bindings?.some(binding => binding.timecode === target));
+    const owner = project.rundown.find(value => value.id !== itemId && (value.lighting?.ma2Bindings?.some(binding => binding.timecode === target) || value.lighting?.consoleSong?.timecode?.number === target || value.lighting?.timelineDestination?.timecode === target));
     if (owner) throw new Error(`Timecode ${target} 的 Cue 已经放在「${owner.title}」里，请先在那首歌上解除关联`);
     const startMs = Math.ceil(ticks * 1000 / 30);
     const sharing = project.rundown.find(value => {
@@ -203,15 +211,55 @@ export function pairSongWithMa2ShowCommand(itemId: string, target: number): Link
       catch { return false; }
     });
     if (sharing) throw new Error(`「${sharing.title}」的起始码也是 ${formatMtcOffset(startMs, frameRate)}，两首歌同一个起点分不清；请先改开它的起始码`);
+    if (!entry.preview || entry.conversionError) throw new Error(entry.conversionError ?? `Timecode ${target} 还没读取完整，请刷新控台时间线`);
     const next = structuredClone(project);
+    if (read) next.ma2ReadState!.catalog.entries = [...next.ma2ReadState!.catalog.entries.filter(value => value.target !== target), entry];
     const song = next.rundown.find(value => value.id === itemId)!;
+    // Explicit selection replaces the active lighting (2026-11-16). The caller archives the entire
+    // project first; bound shows additionally keep their editable history for switching back.
+    for (const binding of [...song.lighting?.ma2Bindings ?? []]) archiveBinding(next, itemId, binding.timecode);
+    if (song.lighting) song.lighting = { ...song.lighting, tracks: [], ma2Bindings: [], consoleSong: undefined, timelineDestination: undefined };
     song.playback = { ...song.playback ?? { volume: song.p1Media?.volume ?? 100, startMs: 0, endMs: 0, shortcut: song.p1Media?.shortcut ?? '' }, mtcOffsetMs: startMs };
-    next.ma2ReadState = { ...state, failures: state.failures.filter(failure => failure.target !== target) };
-    if (!song.lighting?.ma2Bindings?.length && !restoreArchivedBinding(next, itemId, target)) {
-      if (!entry.preview || entry.conversionError) throw new Error(entry.conversionError ?? `Timecode ${target} 还没读取完整，请先“只补读未完成项”`);
+    next.ma2ReadState!.failures = state.failures.filter(failure => failure.target !== target);
+    if (!song.lighting?.ma2Bindings?.length && (read || !restoreArchivedBinding(next, itemId, target))) {
       return importMa2TimecodeCommand(itemId, entry.preview).execute(parseLinkProject({ ...next, updatedAt: new Date().toISOString() }));
     }
     return parseLinkProject({ ...next, updatedAt: new Date().toISOString() });
+  }, undo: before => parseLinkProject(before) };
+}
+
+/** Copy Cue positions into the current show; append never selects a second playback timeline. */
+export function appendMa2TimelineCuesCommand(itemId: string, target: number): LinkCommand {
+  return { id: crypto.randomUUID(), label: '追加控台时间线的 Cue', scope: 'lighting', execute(project) {
+    if (project.ma2ReadState?.catalog.sourceUnverified) throw new Error('控台读取来源尚未确认，请重新读取后追加 Cue');
+    const entry = project.ma2ReadState?.catalog.entries.find(value => value.target === target);
+    if (!entry?.preview || entry.error || entry.conversionError) throw new Error(entry?.conversionError ?? entry?.error ?? '这条控台时间线还没读完整');
+    if (entry.preview.unconverted.length) throw new Error('这条时间线含有只能由控台保留的动作，请用“替换当前灯光”完整关联');
+    const ticks = ma2ShowStartTicks(entry);
+    if (ticks === null) throw new Error('这条控台时间线的起点读不懂');
+    const next = structuredClone(project);
+    const song = next.rundown.find(value => value.id === itemId);
+    if (!song?.referenceAudio) throw new Error('请先为这首歌添加音频');
+    const current = song.lighting ?? createLightingDocument();
+    if ((current.ma2Bindings?.length ?? 0) > 1) throw new Error('这首歌关联了多条控台时间线，请先替换为要继续使用的一条，再追加 Cue');
+    const preview = withMa2TimeOrigin(entry.preview, Math.ceil(ticks * 1000 / 30));
+    const ids = lightingIdMap();
+    const tracks = withNewLightingIds(preview.document, ids).tracks;
+    const binding = current.ma2Bindings?.[0];
+    if (binding) {
+      const additions = preview.document.tracks.map(track => {
+        const executors = [...new Set(preview.mappings.filter(mapping => mapping.trackId === track.id).map(mapping => mapping.executor))];
+        const executor = preview.trackMappings?.find(mapping => mapping.trackId === track.id)?.executor ?? (executors.length === 1 ? executors[0] : undefined);
+        if (!executor) throw new Error('追加轨道的执行器没有读清楚，请重新读取控台');
+        return { trackId: ids(track.id), executor, executorName: track.name };
+      });
+      binding.pendingTracks = [...binding.pendingTracks ?? [], ...additions];
+      binding.cueCatalog = [...new Map([...(binding.cueCatalog ?? []), ...(preview.cueCatalog ?? [])].map(sequence => [sequence.sequence, sequence])).values()];
+    } else if (tracks.some(track => track.clips.some(clip => clip.events.some(event => event.kind !== 'ma2' || event.action !== 'goto')))) {
+      throw new Error('新歌只能追加指定 Cue；这条时间线含执行器或推杆动作，请用“替换当前灯光”');
+    }
+    song.lighting = { ...current, tracks: [...current.tracks, ...tracks] };
+    return parseLinkProject({ ...next, schemaVersion: Math.max(next.schemaVersion, 2), updatedAt: new Date().toISOString() });
   }, undo: before => parseLinkProject(before) };
 }
 

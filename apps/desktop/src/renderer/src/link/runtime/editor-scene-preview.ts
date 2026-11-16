@@ -5,6 +5,7 @@ import { useIntegrationStore } from '../stores/integration-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { reportCoordinatorError } from './runtime-action-log';
 import { executeObsCueAction } from './obs-ipc-executor';
+import { currentShowGate } from '../stores/show-state-store';
 
 type PreviewDesktop = Pick<LinkDesktopApi, 'prepareObsMediaScenes' | 'executeObsAction' | 'setObsProgramSourceEnabled' | 'seekManagedMedia'>;
 
@@ -15,10 +16,9 @@ export class EditorScenePreview {
   enqueue(pending: Promise<void>, project: LinkProject, projectPath: string | null,
     itemId: string, positionMs: number, preciseSeeking: boolean, isCurrent: () => boolean) {
     const generation = this.generation;
-    const current = () => generation === this.generation && !this.failed && isCurrent();
+    const current = () => generation === this.generation && !this.failed && isCurrent() && currentShowGate('editor.preview').kind === 'allow';
     const operation = pending.then(async () => {
       if (!current() || !itemNeedsObs(project, itemId)) return;
-      if (!projectPath) throw new Error('请先保存工程，再定位 OBS 画面');
       if (useIntegrationStore.getState().obs.status !== 'connected') throw new Error('OBS 没有连接，画面无法跟随时间线');
       await previewEditorScene(project, projectPath, itemId, positionMs, preciseSeeking, linkDesktopViewModel, current);
     }).catch((error: unknown) => {
@@ -32,7 +32,7 @@ export class EditorScenePreview {
 }
 
 /** Explicit stopped-cursor preview: OBS renders the frame; no audio clock or Cue session is armed. */
-export async function previewEditorScene(project: LinkProject, projectPath: string, itemId: string,
+export async function previewEditorScene(project: LinkProject, projectPath: string | null, itemId: string,
   positionMs: number, preciseSeeking: boolean, desktop: PreviewDesktop, current: () => boolean): Promise<void> {
   if (!Number.isFinite(positionMs) || positionMs < 0) throw new Error('画面定位时间无效');
   const frame = internalSample(project, positionMs).totalFrames;
@@ -42,6 +42,7 @@ export async function previewEditorScene(project: LinkProject, projectPath: stri
       : Math.round(Math.max(0, frame - event.frameNumber) * 1000 / playbackFramesPerSecond(project.timebase.frameRate))) }));
   if (!current()) return;
   if (media.length) {
+    if (!projectPath) throw new Error('请先保存工程，再定位素材画面');
     const assetIds = new Set(media.map(event => event.assetId));
     await desktop.prepareObsMediaScenes(projectPath, { ...project,
       rundown: project.rundown.filter(item => item.id === itemId).map(item => ({ ...item,
@@ -54,6 +55,7 @@ export async function previewEditorScene(project: LinkProject, projectPath: stri
   }
   for (const event of media) {
     if (!current()) return;
+    if (!projectPath) throw new Error('请先保存工程，再定位素材画面');
     await desktop.seekManagedMedia({ projectPath, event });
   }
 }

@@ -36,6 +36,11 @@ describe('控台上这首歌的触发点：只看控台上已有的版本', () =
     lighting.ma2Bindings = [{ id: 'binding', timecode: 7, name: '灯光 7', readAt: '2026-10-30T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [track(1000, '2')], mappings: [], playback: 'editable', timeOriginMs: START_MS }];
     value.rundown[0]!.lighting = lighting;
     expect(consoleTriggers(value, '甲')).toEqual({ triggers: [{ atMs: 3000, executor: '1.101', action: 'goto', cue: '2', label: '主歌' }] });
+    lighting.ma2Bindings[0]!.baselineTracks[0]!.muted = true;
+    expect(consoleTriggers(value, '甲')).toEqual({ triggers: [] });
+    lighting.ma2Bindings[0]!.baselineTracks[0]!.muted = false;
+    lighting.ma2Bindings[0]!.baselineTracks[0]!.clips[0]!.muted = true;
+    expect(consoleTriggers(value, '甲')).toEqual({ triggers: [] });
     lighting.ma2Bindings[0]!.timeOriginMs = START_MS + 1000;
     const held = consoleTriggers(value, '甲');
     expect('reason' in held && held.reason).toContain('起点');
@@ -92,7 +97,9 @@ describe('控台在不在跟', () => {
     expect(consoleFollowVerdict(goto, { running: false, cue: '', name: 'Song' })).toEqual({ following: false, detail: '执行器 1000.101 没在跑，按时间线这时应该在跑“副歌”' });
     expect(consoleFollowVerdict(goto, null).following).toBe(false);
     // Running without a readable Cue number is not called a miss.
-    expect(consoleFollowVerdict(goto, { running: true, cue: '', name: 'Song' })).toEqual({ following: true, detail: '执行器 1000.101 在跑（读不出当前 Cue 编号）' });
+    const unreadable = consoleFollowVerdict(goto, { running: true, cue: '', name: 'Song' });
+    expect(unreadable).toEqual({ following: null, detail: '执行器 1000.101 在跑，但读不出当前 Cue 编号，无法确认是否跟随' });
+    expect(nextConsoleFollow({ state: 'following', detail: '旧状态', misses: 0 }, unreadable)).toMatchObject({ state: 'unknown', misses: 0 });
   });
   it('关闭点：执行器应该已经停了', () => {
     const off: ConsoleTrigger = { ...goto, action: 'off', cue: null, label: '收' };

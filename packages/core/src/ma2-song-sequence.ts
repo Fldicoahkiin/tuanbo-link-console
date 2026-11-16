@@ -1,20 +1,28 @@
 import { lightingDocumentSchema, lightingTrackSchema, type LightingDocument, type LightingEvent, type Ma2SongConsoleEdits, type Ma2SongPoint, type Ma2SongSyncResult } from '@tb/schema';
 import { LightingTempoMap, lightingClipSpan, lightingEventTime } from './lighting-edit';
 import { consoleLabelText } from './ma2-console-label';
+import { lightingTrackEnabled } from './lighting-track-state';
+
+/** A song joins console sync only after association or an explicit new-timeline destination. */
+export function hasMa2SongSyncTarget(document: LightingDocument | undefined): boolean {
+  return Boolean(document && (document.consoleSong || document.timelineDestination || document.ma2Bindings?.length));
+}
 
 /** Song positions are stable identities; pool Cue numbers are never inferred from labels. */
 export function ma2SongPoints(document: LightingDocument): Ma2SongPoint[] {
   const map = new LightingTempoMap(document.tempos);
-  const groups = new Map<string, { name: string; atMs: number; values: Array<{ event: LightingEvent; ms: number }> }>();
+  const groups = new Map<string, { name: string; atMs: number; enabled: boolean; values: Array<{ event: LightingEvent; ms: number }> }>();
   for (const track of document.tracks) for (const clip of track.clips) for (const event of clip.events) {
     if (event.kind !== 'ma2' && event.kind !== 'empty-cue') continue;
     if (event.kind === 'ma2' && (event.action !== 'goto' || event.preparation)) throw new Error('歌曲序列只同步指定 Cue；埋步和执行器动作请保留在原时间线');
     const id = event.effectGroupId ?? event.id; const ms = lightingEventTime(clip, event, map);
-    const group = groups.get(id) ?? { name: event.label, atMs: ms, values: [] };
+    const enabled = lightingTrackEnabled(document, track) && !clip.muted;
+    const group = groups.get(id) ?? { name: event.label, atMs: ms, enabled, values: [] };
+    if (group.enabled !== enabled) throw new Error('组合 Cue 的成员启用状态不同，请把组合放在同一条轨道和片段里再同步');
     group.atMs = Math.min(group.atMs, ms); if (event.id === id) group.name = event.label;
     group.values.push({ event, ms }); groups.set(id, group);
   }
-  return [...groups].map(([id, group]) => ({ id, name: group.name, atMs: group.atMs, cues: group.values.flatMap(({ event, ms }) => event.kind === 'ma2' && event.sequence && event.cue ? [{ sequence: event.sequence, cue: event.cue, delayMs: ms - group.atMs }] : []) })).sort((a, b) => a.atMs - b.atMs);
+  return [...groups].map(([id, group]) => ({ id, name: group.name, atMs: group.atMs, ...(!group.enabled ? { enabled: false } : {}), cues: group.values.flatMap(({ event, ms }) => event.kind === 'ma2' && event.sequence && event.cue ? [{ sequence: event.sequence, cue: event.cue, delayMs: ms - group.atMs }] : []) })).sort((a, b) => a.atMs - b.atMs);
 }
 
 /**
@@ -76,7 +84,8 @@ export function applyMa2SongReadback(source: LightingDocument, observed: Ma2Song
   // A moved point is still the one this request observed: it takes its Cue below like any other.
   const mapping = new Map(result.binding.points.map(point => [point.id, point.cue]));
   const cues = result.library.sequences.find(value => value.sequence === result.binding.sequence)?.cues ?? [];
-  return lightingDocumentSchema.parse({ ...document, version: 2, consoleSong: result.binding, tracks: document.tracks.map(track => ({ ...track, clips: track.clips.map(clip => ({ ...clip, events: clip.events.flatMap((event): LightingEvent[] => {
+  return lightingDocumentSchema.parse({ ...document, version: 2, consoleSong: result.binding,
+    ...(document.timelineDestination ? { timelineDestination: { ...document.timelineDestination, sequence: result.binding.sequence, executor: result.binding.executor ?? document.timelineDestination.executor, timecode: result.binding.timecode?.number ?? document.timelineDestination.timecode } } : {}), tracks: document.tracks.map(track => ({ ...track, clips: track.clips.map(clip => ({ ...clip, events: clip.events.flatMap((event): LightingEvent[] => {
     const id = event.effectGroupId ?? event.id;
     if (!unchanged.has(id)) return [event];
     const cue = mapping.get(id); if (!cue || event.kind !== 'ma2' && event.kind !== 'empty-cue') return [event];

@@ -35,9 +35,6 @@ for (const name of ['bin', 'data', 'obs-plugins']) await cp(join(resolve(source)
 const previewBridge = resolve(process.env.TBLINK_TEST_OBS_BRIDGE ?? 'tools/obs/native-preview/tblink-realtime-preview.dll');
 const previewBridgeSha256 = createHash('sha256').update(await readFile(previewBridge)).digest('hex');
 await cp(previewBridge, join(obsDirectory, 'obs-plugins/64bit/tblink-realtime-preview.dll'));
-await cp(resolve('artifacts/beauty-prototype/plugin/tblink-beauty.dll'), join(obsDirectory, 'obs-plugins/64bit/tblink-beauty.dll'));
-await mkdir(join(obsDirectory, 'data/obs-plugins/tblink-beauty'), { recursive: true });
-await cp(resolve('artifacts/beauty-prototype/plugin/beauty.effect'), join(obsDirectory, 'data/obs-plugins/tblink-beauty/beauty.effect'));
 let diagnosticMedia = null;
 if (process.env.TBLINK_TEST_OBS_MEDIA_MODULE) {
   assert(process.env.TBLINK_MEASURE_FRAME_POSITION === '1' || process.env.TBLINK_MEASURE_AUDIO_PRIME === '1',

@@ -32,10 +32,10 @@ export class LinkRuntimeCoordinator {
   }
   cancelEditorPreview(): void { this.executionGeneration += 1; this.editorPreview.reset(); }
 
-  previewEditor(itemId: string, positionMs: number, preciseSeeking: boolean): Promise<void> {
+  previewEditor(itemId: string, positionMs: number, preciseSeeking: boolean, current: () => boolean = () => true): Promise<void> {
     const generation = this.executionGeneration;
     const queued = this.editorPreview.enqueue(this.cueExecutionTail, this.project, this.projectPath, itemId, positionMs, preciseSeeking,
-      () => !this.disposed && generation === this.executionGeneration && this.runtime.getState() === 'idle');
+      () => current() && !this.disposed && generation === this.executionGeneration && this.runtime.getState() === 'idle');
     this.cueExecutionTail = queued.tail;
     return queued.operation;
   }

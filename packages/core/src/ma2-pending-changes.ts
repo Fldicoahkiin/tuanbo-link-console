@@ -1,5 +1,6 @@
 import { snapshotMa2LightingBinding } from './ma2-lighting-snapshot';
 import type { LightingDocument, LinkProject, Ma2SyncObject } from '@tb/schema';
+import { unboundMa2Tracks } from './ma2-track-routing';
 
 export type Ma2PendingChange = {
   itemId: string; title: string; bindingId: string; target: number;
@@ -45,6 +46,9 @@ function songChanges(lighting: LightingDocument): readonly BindingChange[] {
       return changes.length ? [{ ...entry, changes, error: null }] : [];
     } catch (error) { return [{ ...entry, changes: [], error: error instanceof Error ? error.message : String(error) }]; }
   });
+  const unbound = unboundMa2Tracks(lighting);
+  const target = lighting.ma2Bindings?.[0];
+  if (unbound.length && target) result.push({ bindingId: target.id, target: target.timecode, changes: [], error: `还有 ${unbound.length} 条灯光轨道没有确定控台位置（${unbound.map(track => track.name).join('、')}）。请在控台同步中关联这些轨道的执行器；这些 Cue 尚未写入控台` });
   bySong.set(lighting, result);
   return result;
 }

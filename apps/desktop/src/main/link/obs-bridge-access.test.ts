@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { toUserErrorMessage } from '@tb/core/link';
 import { ObsNativeSeek } from './obs-native-seek';
 import { ObsLivePreview } from './obs-live-preview';
-import { beautyPipeAccessDeniedMessage } from './obs-bridge-access';
 
 // Windows ERROR_ACCESS_DENIED on a named pipe reaches Node as EPERM.
 vi.mock('node:net', () => ({
@@ -32,10 +31,5 @@ describe('OBS 内置组件通道被 Windows 拒绝访问', () => {
     expect(message).toContain('同一个 Windows 账户');
     expect(toUserErrorMessage(message)).toBe(message);
     preview.close();
-  });
-
-  it('美颜组件尚未升级，说明美颜暂不支持管理员身份的 OBS，界面原样显示', () => {
-    expect(beautyPipeAccessDeniedMessage).toContain('以管理员身份运行');
-    expect(toUserErrorMessage(beautyPipeAccessDeniedMessage)).toBe(beautyPipeAccessDeniedMessage);
   });
 });

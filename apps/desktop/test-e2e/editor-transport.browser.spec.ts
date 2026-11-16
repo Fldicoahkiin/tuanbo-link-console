@@ -23,6 +23,9 @@ test.beforeAll(async () => {
       import { Ma2PendingChanges } from './src/renderer/src/link/components/Ma2PendingChanges';
       import { ma2SongSyncSettings } from './src/renderer/src/link/runtime/ma2-song-sync';
       import { useMa2RealtimePreference } from './src/renderer/src/link/runtime/ma2-realtime-preference';
+      import { linkDesktopViewModel } from './src/renderer/src/link/view-models/link-desktop-view-model';
+      import { useMa2ReadStore } from './src/renderer/src/link/stores/ma2-read-store';
+      import { useMa2SyncStore } from './src/renderer/src/link/stores/ma2-sync-store';
       const project = parseLinkProject({ ...createEmptyLinkProject('只有音乐和灯光'), playbackSource: 'internal',
         rundown: [{ id: 'song', title: '歌曲', referenceAudio: { assetId: 'audio', relativePath: 'song.wav', sha256: 'a'.repeat(64), durationMs: 10000 } }] });
       const lighting = createLightingDocument();
@@ -38,6 +41,31 @@ test.beforeAll(async () => {
       useDocumentStore.setState({ project, path: 'C:/show/project.tblink' });
       localStorage.setItem('tblink.ma2-connection-method.v1', 'network');
       useMa2RealtimePreference.setState({ enabled: false, once: null });
+      window.timelineSyncState = (state) => {
+        useMa2RealtimePreference.setState({ enabled: true });
+        useMa2SyncStore.setState({ songs: { song: { sessionId: 'test', itemId: 'song', documentId: 0, name: '歌曲', settings: ma2SongSyncSettings(useDocumentStore.getState().project, 'song'), state, message: state === 'blocked' ? '控台读取失败' : state } } });
+      };
+      window.syncSummaryFixture = (mode) => {
+        const next = structuredClone(useDocumentStore.getState().project);
+        const draft = createLightingDocument();
+        draft.tracks = structuredClone(lighting.tracks);
+        draft.tracks[0].clips[0].events = Array.from({ length: 18 }, (_, index) => ({ id: 'draft-' + index, kind: 'empty-cue', at: index * 100, label: 'Cue ' + index }));
+        if (mode === 'planned') { draft.timelineDestination = { name: '新建空时间线', sequence: 9200, timecode: 9200, executor: '1000.108' }; draft.tracks[0].clips[0].events = []; }
+        if (mode === 'showless') draft.consoleSong = { endpoint: '192.0.2.1:30000', show: 'Show', sequence: 9200, name: '第二首歌', executor: '1000.108', layout: null, baselineXml: '<MA/>', points: [] };
+        next.rundown[1].lighting = draft;
+        useDocumentStore.setState({ project: next });
+        window.timelineSyncState('verified');
+        useMa2SyncStore.setState({ session: { status: 'ready', message: '已连接' } });
+        if (mode === 'showless') useMa2SyncStore.setState(state => ({ songs: { ...state.songs, second: { ...state.songs.song, itemId: 'second', name: '第二首歌', state: 'pending', message: '等待创建 Timecode' } } }));
+      };
+      linkDesktopViewModel.projectArchiveSettings = () => Promise.resolve({ settings: { enabled: true } });
+      window.timelineDirectory = () => {
+        const next = structuredClone(useDocumentStore.getState().project);
+        next.ma2ReadState.catalog.directory.entries.push(...Array.from({ length: 149 }, (_, index) => ({ target: index + 100, name: '其他时间线 ' + index })));
+        useDocumentStore.setState({ project: next });
+      };
+      window.consoleTimeline = preview;
+      window.tbLink = { getMa2NetworkStatus: async () => ({ state: 'disconnected' }) };
       window.syncSettings = () => ma2SongSyncSettings(useDocumentStore.getState().project, 'song');
       const calls = [];
       const call = (kind, position) => { calls.push({ kind, position }); return Promise.resolve(); };
@@ -48,6 +76,7 @@ test.beforeAll(async () => {
       function Harness() {
         const [error, setError] = useState('');
         const [browserOpen, setBrowserOpen] = useState(false);
+        const requestedBrowser = useMa2ReadStore(state => state.browserOpen);
         const [selected] = useSelectedProgram(setError);
         const item = useDocumentStore(state => state.project.rundown.find(item => item.id === selected) ?? state.project.rundown[0]);
         const lights = useLightingDocument(item);
@@ -60,7 +89,7 @@ test.beforeAll(async () => {
           <button onClick={() => useDocumentStore.getState().undo()}>撤销</button>
           <button onClick={() => setBrowserOpen(true)}>控台时间线</button>
           <output aria-label="当前歌曲">{item.title}</output>
-          {browserOpen ? <Ma2CachedBrowser disabled={false} notify={setError} onClose={() => setBrowserOpen(false)} /> : null}
+          {browserOpen || requestedBrowser ? <Ma2CachedBrowser disabled={false} notify={setError} onClose={() => setBrowserOpen(false)} /> : null}
           <Ma2PendingChanges notify={setError} />
           <LightingLanes document={lights} selectedClipId={null} onSelect={() => {}} onChange={() => {}} pixelsPerSecond={100} scrollLeft={0} viewportWidth={1000}
             playhead={transport.playhead} onSeek={transport.setPlayheadMs} timeAtClientX={x => x * 10} /></>;
@@ -84,14 +113,6 @@ test('首次改起始码配对：灯光时间线立即显示控台 Cue，撤销�
   await expect(cue).toHaveAttribute('title', /1\.000 秒/);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect(cue).toHaveCount(0);
-});
-
-test('用这条时间线：选择另一首歌后切到该歌曲并显示导入的 Cue', async ({ page }) => {
-  await page.getByRole('button', { name: '控台时间线', exact: true }).click();
-  await page.getByRole('combobox', { name: 'Timecode 7 给哪首歌用' }).selectOption('second');
-  await page.getByRole('button', { name: '用这条时间线', exact: true }).click();
-  await expect(page.getByLabel('当前歌曲')).toHaveText('第二首歌');
-  await expect(page.getByRole('button', { name: '灯光点 控台第一步', exact: true })).toBeVisible();
 });
 
 test('控台同步旁选择新歌位置：保存后所有同步入口使用同一页与起始编号', async ({ page }, testInfo) => {
@@ -138,4 +159,149 @@ for (const action of ['暂停', '停止']) test(`定位期间按播放后再${ac
   await page.getByRole('button', { name: '画面失败', exact: true }).click();
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
   expect(await page.evaluate('window.transportCalls()')).toEqual(action === '停止' ? [{ kind: 'stop' }] : []);
+});
+
+
+test('时间线列表默认选中当前匹配；新建空时间线立即显示并可进入编辑', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1260, height: 800 });
+  await page.addStyleTag({ content: 'body { margin: 0; background: #08080a; color: #e8e9ec; font-family: "Microsoft YaHei", sans-serif; } .ma2-cached-browser { box-sizing: border-box; height: auto; min-height: 400px; }' });
+  await page.getByRole('button', { name: '修改起始码', exact: true }).click();
+  await page.evaluate('window.timelineDirectory()');
+  await page.getByRole('button', { name: '控台时间线', exact: true }).click();
+  const browser = page.getByRole('region', { name: '控台时间线与歌曲', exact: true });
+  await expect(browser.getByRole('status', { name: '时间线状态', exact: true })).toContainText('已匹配当前节目');
+  await expect(browser.getByRole('option')).toHaveCount(1);
+  await browser.getByRole('button', { name: '全部时间线（150）', exact: true }).click();
+  await expect(browser.getByRole('option')).toHaveCount(150);
+  await browser.getByRole('button', { name: '返回当前节目', exact: true }).click();
+  await expect(browser.getByRole('option')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '灯光点 控台第一步', exact: true })).toBeVisible();
+  await expect(browser.getByRole('option', { name: 'Timecode 7 · 控台歌曲', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(browser.getByRole('button', { name: '重新读取 Cue', exact: true })).toBeEnabled();
+  await expect(browser.getByRole('button', { name: /读入|追加|替换/ })).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('timeline-auto-match.png'), fullPage: true });
+  await browser.getByRole('button', { name: '编辑 Cue', exact: true }).click();
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await page.getByRole('button', { name: '控台时间线', exact: true }).click();
+  await browser.getByRole('button', { name: '新建时间线', exact: true }).click();
+  await page.getByRole('dialog', { name: '新建时间线', exact: true }).getByLabel('时间线名称', { exact: true }).fill('新编排');
+  await page.getByRole('dialog', { name: '新建时间线', exact: true }).getByLabel('MTC 起始码', { exact: true }).fill('00:03:00:00');
+  await page.getByRole('dialog', { name: '新建时间线', exact: true }).getByLabel('Timecode 编号', { exact: true }).fill('9100');
+  await page.getByRole('dialog', { name: '新建时间线', exact: true }).getByLabel('多步 Cue 序列编号', { exact: true }).fill('9200');
+  await page.getByRole('dialog', { name: '新建时间线', exact: true }).getByLabel('执行器位置（页.格）', { exact: true }).fill('1000.108');
+  await page.screenshot({ path: info.outputPath('timeline-new.png'), fullPage: true });
+  await page.setViewportSize({ width: 760, height: 800 });
+  expect(await browser.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.getByRole('dialog', { name: '新建时间线', exact: true }).getByRole('button', { name: '新建时间线', exact: true }).click();
+  await expect(browser.getByRole('heading', { name: '新编排', exact: true })).toBeVisible();
+  await expect(browser.getByRole('option', { name: 'Timecode 9100 · 新编排', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(browser).toContainText('等待控台创建');
+  await expect(browser.getByRole('button', { name: '同步当前时间线', exact: true })).toBeEnabled();
+  await expect(browser).toContainText('Timecode 9100');
+  await expect(browser).toContainText('序列 9200 · 执行器 1000.108');
+  await expect(browser).toContainText('00:03:00:00');
+});
+
+
+test('列表手动关联：对齐起始码并显示 Cue，保持本页且可撤销', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.addStyleTag({ content: 'body { margin: 0; background: #08080a; color: #e8e9ec; font-family: "Microsoft YaHei", sans-serif; } .ma2-cached-browser { box-sizing: border-box; height: auto; }' });
+  await page.getByRole('button', { name: '控台时间线', exact: true }).click();
+  const browser = page.getByRole('region', { name: '控台时间线与歌曲', exact: true });
+  await expect(browser.getByRole('option')).toHaveCount(0);
+  await browser.getByRole('button', { name: '关联已有时间线', exact: true }).click();
+  await expect(browser.getByRole('option')).toHaveCount(1);
+  await browser.getByRole('option', { name: 'Timecode 7 · 控台歌曲', exact: true }).click();
+  await expect(browser).toContainText('MTC 00:01:00:00');
+  await browser.getByRole('button', { name: '用于当前节目', exact: true }).click();
+  await expect(browser.getByRole('status', { name: '时间线状态', exact: true })).toContainText('已匹配当前节目');
+  await expect(browser.getByRole('option', { name: 'Timecode 7 · 控台歌曲', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(browser.getByRole('button', { name: '重新读取 Cue', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: '灯光点 控台第一步', exact: true })).toBeVisible();
+  const status = browser.getByRole('status', { name: '时间线状态', exact: true });
+  await expect(status).toContainText('已匹配当前节目');
+  await expect(status).toContainText('同步暂停');
+  await page.evaluate('window.timelineSyncState("verified")');
+  await expect(status).toContainText('已同步');
+  await page.screenshot({ path: info.outputPath('timeline-manual-sync.png'), fullPage: true });
+  for (const [state, label] of [['pending', '待同步'], ['syncing', '同步中'], ['blocked', '同步失败'], ['paused', '同步暂停']]) {
+    await page.evaluate(value => (window as unknown as { timelineSyncState: (state: string) => void }).timelineSyncState(value!), state);
+    await expect(status).toContainText('已匹配当前节目');
+    await expect(status).toContainText(label!);
+  }
+  await page.setViewportSize({ width: 640, height: 720 });
+  expect(await browser.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect(browser).toContainText('当前节目尚未关联时间线');
+  await expect(browser.getByRole('option')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '灯光点 控台第一步', exact: true })).toHaveCount(0);
+});
+
+
+test('手动匹配现读控台，不再只用旧缓存的 Cue', async ({ page }) => {
+  await page.evaluate(() => {
+    const host = window as unknown as { consoleTimeline: Record<string, unknown>; tbLink: Record<string, unknown> };
+    host.tbLink.getMa2NetworkStatus = () => Promise.resolve({ state: 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' } });
+    host.tbLink.previewMa2 = () => {
+      const read = structuredClone(host.consoleTimeline) as unknown as { document: { tracks: { clips: { events: { at: number; label: string }[] }[] }[] } };
+      read.document.tracks[0]!.clips[0]!.events[0]!.at = 2500;
+      read.document.tracks[0]!.clips[0]!.events[0]!.label = '刚从控台读取的 Cue';
+      return Promise.resolve(read);
+    };
+  });
+  await page.getByRole('button', { name: '控台时间线', exact: true }).click();
+  const browser = page.getByRole('region', { name: '控台时间线与歌曲', exact: true });
+  await browser.getByRole('button', { name: '关联已有时间线', exact: true }).click();
+  await browser.getByRole('option', { name: 'Timecode 7 · 控台歌曲', exact: true }).click();
+  await browser.getByRole('button', { name: '用于当前节目', exact: true }).click();
+  await expect(page.getByRole('button', { name: '灯光点 刚从控台读取的 Cue', exact: true })).toHaveAttribute('title', /2\.500 秒/);
+  await expect(page.getByRole('button', { name: '灯光点 控台第一步', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('alert').first()).toContainText('载入 1 个 Cue（刚从控台读取）');
+});
+
+
+test('新建时间线右键修改名称和 MTC，Cue 编辑仍进入原编辑器', async ({ page }) => {
+  await page.getByRole('button', { name: '控台时间线', exact: true }).click();
+  const browser = page.getByRole('region', { name: '控台时间线与歌曲', exact: true });
+  await browser.getByRole('button', { name: '新建时间线', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新建时间线', exact: true });
+  await dialog.getByLabel('时间线名称', { exact: true }).fill('新编排');
+  await dialog.getByLabel('MTC 起始码', { exact: true }).fill('00:03:00:00');
+  await dialog.getByRole('button', { name: '新建时间线', exact: true }).click();
+  await browser.getByRole('option', { name: /新编排/ }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '修改名称 / MTC', exact: true }).click();
+  const edit = page.getByRole('dialog', { name: '修改时间线', exact: true });
+  await edit.getByLabel('时间线名称', { exact: true }).fill('修改后的灯光');
+  await edit.getByLabel('MTC 起始码', { exact: true }).fill('00:04:00:00');
+  await edit.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect(browser.getByRole('option', { name: /修改后的灯光/ })).toContainText('00:04:00:00');
+  await browser.getByRole('button', { name: '编辑 Cue', exact: true }).click();
+  await expect(browser).toHaveCount(0);
+});
+
+
+test('当前节目已同步时，其他未关联草稿显示待关联，不再假报待同步', async ({ page }, info) => {
+  await page.getByRole('button', { name: '修改起始码', exact: true }).click();
+  await page.evaluate('window.syncSummaryFixture("unlinked")');
+  const status = page.getByRole('button', { name: '同步状态详情', exact: true });
+  await expect(status).toHaveText('已同步');
+  await page.getByRole('button', { name: '控台时间线', exact: true }).click();
+  await expect(page.getByRole('status', { name: '时间线状态', exact: true })).toContainText('已同步');
+  await status.click();
+  const details = page.getByRole('dialog', { name: '同步状态详情', exact: true });
+  await expect(details).toContainText('全工程 · 已同步');
+  await expect(details).toContainText('当前节目 · 歌曲');
+  await expect(details).toContainText('第二首歌 · 18 个 Cue · 尚未关联时间线');
+  await expect(details).not.toContainText('按钮第 1000 页的空格');
+  await page.screenshot({ path: info.outputPath('sync-summary-unlinked.png') });
+  await details.getByRole('button', { name: '为「第二首歌」选择时间线', exact: true }).click();
+  await expect(page.getByRole('status', { name: '时间线状态', exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('当前歌曲', { exact: true })).toHaveText('第二首歌');
+  await expect(page.getByRole('region', { name: '控台时间线与歌曲', exact: true })).toBeVisible();
+});
+
+for (const mode of ['planned', 'showless']) test(`真实等待创建的节目仍计入待同步且只计一次：${mode}`, async ({ page }) => {
+  await page.getByRole('button', { name: '修改起始码', exact: true }).click();
+  await page.evaluate(value => (window as unknown as { syncSummaryFixture: (value: string) => void }).syncSummaryFixture(value), mode);
+  await expect(page.getByRole('button', { name: '同步状态详情', exact: true })).toHaveText('待同步 1');
 });

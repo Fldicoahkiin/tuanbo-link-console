@@ -1,10 +1,10 @@
-import { allocateMissingMtcStarts, saveMa2MaterialLibraryCommand, setAllocatedMtcStartsCommand, songsNeedingMtcStart } from '@tb/core/link';
-import { ma2EffectLibrarySchema } from '@tb/schema';
+import { hasMa2SongSyncTarget, allocateMissingMtcStarts, ma2SongPairs, pendingMa2Renames, saveMa2MaterialLibraryCommand, setAllocatedMtcStartsCommand, songsNeedingMtcStart } from '@tb/core/link';
+import { ma2EffectLibrarySchema, type LightingDocument } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 import { ma2SongSyncSettings, startMa2SongSync, stopMa2SongSync } from './ma2-song-sync';
-import { ma2SyncActive, setMa2RealtimeEnabled, useMa2RealtimePreference } from './ma2-realtime-preference';
+import { ma2SongSyncActive, ma2SyncActive, setMa2RealtimeEnabled, useMa2RealtimePreference } from './ma2-realtime-preference';
 import { useMa2SyncStore, type Ma2SessionCheck } from '../stores/ma2-sync-store';
 import { currentShowWait } from '../stores/show-state-store';
 import { useMtcStartAllocationStore } from '../stores/mtc-start-allocation-store';
@@ -123,15 +123,23 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     if (!project) return false;
     // Way 1 (the console's own Timecode show) and way 2 (the song's own Sequence) share one sync job per song.
     for (const item of project.rundown) {
-      if (!item.lighting) continue;
+      if (!item.lighting || !ma2SongSyncActive(item.id)) continue;
       const existing = useMa2SyncStore.getState().songs[item.id];
       if (existing && (existing.state !== 'paused' || existing.requestId)) continue;
-      const events = item.lighting.tracks.flatMap(track => track.clips.flatMap(clip => clip.events));
-      if (!item.lighting.ma2Bindings?.length && !item.lighting.consoleSong && !events.some(event => event.kind === 'ma2' || event.kind === 'empty-cue')) continue;
-      startMa2SongSync(item.id, item.lighting.consoleSong?.name ?? item.title, ma2SongSyncSettings(project, item.id));
+      if (!hasMa2SongSyncTarget(item.lighting)) continue;
+      startMa2SongSync(item.id, item.lighting.consoleSong?.name ?? item.lighting.timelineDestination?.name ?? item.title, ma2SongSyncSettings(project, item.id));
     }
     // The whole check succeeded: a problem it reported earlier is over. A song's own failure stays on that song.
     blockedContext = '';
+    const songs = Object.values(useMa2SyncStore.getState().songs).filter(song => song.documentId === state.documentId && song.state !== 'paused');
+    if (!songs.length && !pendingMa2Renames(project).length) {
+      const readFailure = project.ma2ReadState?.failures[0];
+      const unmatched = ma2SongPairs(project).unresolved[0];
+      setSession('waiting', readFailure ? `Cue 还没放进歌曲：${readFailure.message}`
+        : unmatched ? `还没有可同步的歌曲：${unmatched.reason}`
+        : '尚未匹配控台时间线；请确认 MTC 起始码，或新建时间线并指定位置');
+      return false;
+    }
     setSession('ready', '已连上控台，修改会自动同步到控台');
     return true;
   } catch (cause) {
@@ -205,10 +213,10 @@ export function refreshMa2RealtimeSession(itemId?: string): void {
  * 同步一次 (2026-11-04, sync by hand): with real-time sync off, every song is read in full and written
  * where it differs, once; real-time sync stays off and nothing runs again until the next 同步一次.
  */
-export function syncMa2Once(): void {
-  if (useMa2RealtimePreference.getState().enabled) { refreshMa2RealtimeSession(); return; }
-  useMa2RealtimePreference.setState({ once: Date.now() });
-  checkEverySong();
+export function syncMa2Once(itemId?: string): void {
+  if (useMa2RealtimePreference.getState().enabled) { refreshMa2RealtimeSession(itemId); return; }
+  useMa2RealtimePreference.setState({ once: Date.now(), onceItemId: itemId ?? null });
+  checkEverySong(itemId);
 }
 
 /**
@@ -259,11 +267,24 @@ export function writeMissingConsoleShows(): void {
   void prepareMa2RealtimeSession();
 }
 
+/** New timelines with an explicit destination, including empty ones, wait for console creation. */
 export function pendingSongSummary(project: ReturnType<typeof useDocumentStore.getState>['project']): Array<{ itemId: string; title: string; count: number; page: number }> {
   if (!project) return [];
   return project.rundown.flatMap(item => {
-    if (!item.lighting || item.lighting.consoleSong || item.lighting.ma2Bindings?.length) return [];
-    const count = new Set(item.lighting.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => event.kind === 'ma2' || event.kind === 'empty-cue').map(event => event.effectGroupId ?? event.id)))).size;
-    return count ? [{ itemId: item.id, title: item.title, count, page: ma2SongSyncSettings(project, item.id).executorPage ?? 1000 }] : [];
+    if (!hasMa2SongSyncTarget(item.lighting) || !item.lighting?.timelineDestination || item.lighting.consoleSong || item.lighting.ma2Bindings?.length) return [];
+    return [{ itemId: item.id, title: item.title, count: songCueCount(item.lighting), page: ma2SongSyncSettings(project, item.id).executorPage ?? 1000 }];
   });
+}
+
+/** Local Cue drafts without a destination need association; pressing sync cannot write them yet. */
+export function unlinkedSongSummary(project: ReturnType<typeof useDocumentStore.getState>['project']): Array<{ itemId: string; title: string; count: number }> {
+  return project?.rundown.flatMap(item => {
+    if (!item.lighting || hasMa2SongSyncTarget(item.lighting)) return [];
+    const count = songCueCount(item.lighting);
+    return count ? [{ itemId: item.id, title: item.title, count }] : [];
+  }) ?? [];
+}
+
+function songCueCount(document: LightingDocument): number {
+  return new Set(document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => event.kind === 'ma2' || event.kind === 'empty-cue').map(event => event.effectGroupId ?? event.id)))).size;
 }

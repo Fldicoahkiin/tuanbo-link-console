@@ -10,6 +10,10 @@
 
 ## 某一帧该显示什么
 
+同日实机日志确认的根因：`ManagedMediaEvent.transform` 原本允许省略（保留 OBS 中的样子），但 `packages/schema/src/link-ipc.ts` 的 `linkManagedMediaEventSchema` 错误地要求它必填，导致普通素材定位被拒绝并冻结后续预览。契约已改成可选，不填默认变换去覆盖用户样子；`packages/schema/src/link-ipc.test.ts` 和使用真实 IPC 校验的 `editor-scene-preview.test.ts` 守着。未播放的 P1 工程也使用同一定位入口，演出已经占用画面时问 `showGate('editor.preview')`，旧准备完成后再次检查，不抢画面。
+
+2026-11-16 编辑器点击与定位（用户要求未播放时同样跟随）：点击场景或素材片段，把播放头定位到点击处并显示该位置按上下层规则应有的画面；锁定轨道仍能定位，拖动、修剪和右键菜单不触发定位。停止时经 `runtime/editor-scene-preview.ts` 使用同一个 `SceneOutputTimeline`，已有 OBS 场景不要求先保存工程，涉及本地素材才需要工程路径。暂停和播放中的歌仍交给原来的播放器定位。快速连续定位由 `runtime/latest-position.ts` 只保留最后目标，取消或新目标到来后，旧定位在准备完成时不得继续切画面；已经发给 OBS 的请求仍等待返回，不并行抢写。重复的按下/松手位置不重复排队，完成后再次点击同一位置仍会重新定位。回归：`apps/desktop/src/renderer/src/link/runtime/editor-scene-preview.test.ts`、`apps/desktop/src/renderer/src/link/runtime/latest-position.test.ts`、`apps/desktop/src/renderer/src/link/runtime/link-runtime-coordinator.test.ts`、`apps/desktop/test-e2e/editor-picture.browser.spec.ts`。浏览器回归通过，尚未在真实 OBS 测量切换延迟。
+
 `packages/core/src/scene-output-timeline.ts` 的 `pictureAt`（2026-11-11）：上层盖住下层，机位是整个画面，音效不算画面，没有画面时留着最后结束的机位；显示来源按自己的区间开着。正式播出（`at`）、离线预览（`picture`）、时间线变暗（`airtime`）、预载和编辑器舞台（`TimelineStateIndex`）都从它读，类型在 `on-air-picture.ts`。别处不再自己判断哪段素材在画面里（`output-rules.test.ts` 规则 1 守着）。输出放不了的片段（没分轨道、素材不存在）由 `collectManagedMediaTimeline` 列出原因：编辑器照常打开，开播前检查和正式播放照旧挡住
 
 ## 素材在 OBS 里的样子

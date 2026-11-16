@@ -1,5 +1,6 @@
 import { lightingDocumentSchema, ma2SyncSnapshotSchema, type LightingDocument, type LightingEvent, type LightingTrack, type Ma2SyncObject, type Ma2SyncSnapshot } from '@tb/schema';
 import { LightingTempoMap, lightingEventTime } from './lighting-edit';
+import { lightingTrackEnabled } from './lighting-track-state';
 
 /** Project the bound programme data into the shared three-way comparison model. */
 export function snapshotMa2LightingBinding(document: LightingDocument, bindingId: string, metadata: { consoleVersion: string; baselineRevision: string; localRevision: string }): { base: Ma2SyncSnapshot; local: Ma2SyncSnapshot } {
@@ -15,7 +16,7 @@ export function snapshotMa2LightingBinding(document: LightingDocument, bindingId
     const objects: Ma2SyncObject[] = [root];
     for (const [order, track] of tracks.entries()) {
       // Imported track titles describe the referenced executor; local lane labels do not rename it.
-      objects.push({ id: track.id, kind: 'track', parentId: root.id, order, properties: { name: local ? nativeTrackNames.get(track.id) ?? track.name : track.name, muted: String(track.muted) } });
+      objects.push({ id: track.id, kind: 'track', parentId: root.id, order, properties: { name: local ? nativeTrackNames.get(track.id) ?? track.name : track.name, muted: String(local ? !lightingTrackEnabled(parsed, track) : track.muted) } });
       for (const clip of track.clips) for (const event of clip.events) {
         if (event.kind !== 'ma2' && event.kind !== 'ma2-fader') throw new Error(`MA2 绑定轨道“${track.name}”里有还不支持的 ${event.kind} 事件`);
         objects.push({ id: event.id, kind: 'event', parentId: track.id, order: 0,

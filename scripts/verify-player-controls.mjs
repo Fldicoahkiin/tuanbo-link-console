@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { launchPackagedDesktop } from '../tools/obs/beauty/verify-packaged-desktop.mjs';
+import { launchPackagedDesktop } from './verify-packaged-desktop.mjs';
 import { ownTestWindowScript } from './own-test-window.mjs';
 
 const [executable, output] = process.argv.slice(2);

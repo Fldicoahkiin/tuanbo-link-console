@@ -45,7 +45,7 @@ describe('编辑器按 OBS 在播的那一版标时间线', () => {
   it('这首歌的画面没有联动（失败了、没有画面会话）：播放器这么说，编辑器就写这一遍用不上，挪过的标停下重播才生效（R9）', () => {
     const playing = started(), editing = moved(playing);
     const output = sceneOutput(editing, 'song', { status: 'playing', itemId: 'song', pictureTakesEdits: false }, playing);
-    expect(output.marks.notice).toMatchObject({ tone: 'warning', text: '这首歌的画面现在没有联动，播放中改的画面这一遍用不上' });
+    expect(output.marks.notice).toBeNull();
     expect(output.marks.pendingMark?.text).toBe('停下重播才生效');
   });
 

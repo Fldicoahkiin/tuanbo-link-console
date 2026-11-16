@@ -10,8 +10,8 @@ import { PENDING_REPLAY, PENDING_THIS_PASS, pictureMarks, pictureOnAir, songPict
  * the edited part says 「正在送到 OBS」 as information, never as a warning and never with advice to stop and replay; the
  * on-air highlight follows the version the picture runs. Following P1 nothing of it applies.
  * When the held song's picture does not follow edits now (the player says so, `pictureTakesEdits`: no picture session,
- * failed or stopped, past its restore limit, or a version refused), the window says what is true: a warning that the
- * edit is not used in this pass, why is in the status panel, and the edited parts say 「停下重播才生效」 as before R9.
+ * failed or stopped, past its restore limit, or a version refused), the reason stays in the status panel and edited
+ * parts say 「停下重播才生效」. The user removed the persistent not-following banner on 2026-11-16.
  */
 
 const at = (seconds: number) => ({ hours: 0, minutes: 0, seconds, frames: 0 });
@@ -49,7 +49,7 @@ describe('R9 规则：播放中改画面，这一遍就用上', () => {
     expect(pictureMarks(pictureOnAir('song', false, holding('playing', playing)), current)).toEqual({ onAirtime: current.airtime, pending: NO_PENDING_PICTURE_EDITS, notice: null });
   });
 
-  it('这首歌的画面现在没有联动：提示是警告，说清这一遍用不上、原因在哪看、怎么让它生效；改过的部分标“停下重播才生效”', () => {
+  it('这首歌的画面现在没有联动：不显示常驻提示条；改过的部分仍标“停下重播才生效”', () => {
     const playing = started(), edited = moved(playing);
     for (const status of ['playing', 'paused', 'preparing'] as const) {
       const player: PlayerVersion = { state: { status, itemId: 'song', pictureTakesEdits: false }, project: playing, outdated: false };
@@ -57,8 +57,7 @@ describe('R9 规则：播放中改画面，这一遍就用上', () => {
       expect([...marks.pending.changed]).toEqual(['cue:b']);
       expect(marks.pendingMark).toBe(PENDING_REPLAY);
       expect(PENDING_REPLAY.text).toBe('停下重播才生效');
-      expect(marks.notice).toEqual({ tone: 'warning', text: '这首歌的画面现在没有联动，播放中改的画面这一遍用不上',
-        detail: '原因见状态面板「这首歌的画面」。点方块按钮“停止播放”（或按 Esc）后重新播放，就按改过的放。' });
+      expect(marks.notice).toBeNull();
     }
     // A player that does not say: as before, the edit is on its way.
     expect(pictureMarks(pictureOnAir('song', true, holding('playing', playing)), songPicture(edited, 'song')!).pendingMark).toBe(PENDING_THIS_PASS);

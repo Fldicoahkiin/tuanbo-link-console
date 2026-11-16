@@ -94,3 +94,16 @@ it('部分扫描失败不显示全部完成，乱序元数据不产生重复工�
   read.mockResolvedValue({ ...snapshot(4), sequences: [...sequences].reverse() }); await loadMa2ExecutorPage(4);
   expect(useDocumentStore.getState().revision).toBe(revision);
 });
+
+
+it('控台确认页面不存在后清除旧执行器和读取错误，仍停在用户选择的页', async () => {
+  selectMa2ExecutorBandPage('upper', 100);
+  await loadMa2ExecutorPage(100);
+  useMa2ExecutorPageStore.setState({ pageErrors: { 100: '旧读取错误' } });
+  read.mockResolvedValueOnce({ page: 100, name: '', readAt: new Date().toISOString(), exists: false, items: [] });
+  await loadMa2ExecutorPage(100);
+  const state = useMa2ExecutorPageStore.getState();
+  expect(state.pages[100]).toMatchObject({ exists: false, items: [] });
+  expect(state.pageErrors[100]).toBe('');
+  expect(state.bandPages.upper).toBe(100);
+});

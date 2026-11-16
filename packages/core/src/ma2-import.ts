@@ -3,6 +3,7 @@ import type { LinkCommand } from './link-command';
 import { withSchemaVersion } from './project-schema-version';
 import { LightingTempoMap } from './lighting-edit';
 import { MA2_FRAME_MS, programTimeOrigin, withMa2TimeOrigin } from './ma2-time-origin';
+import { lightingTrackEnabled } from './lighting-track-state';
 
 export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePreview, initialDocument?: LightingDocument): LinkCommand {
   const input = ma2TimecodePreviewSchema.parse(value);
@@ -102,7 +103,7 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
       if (additions.length) clips.push({ ...structuredClone(clip), id: crypto.randomUUID(), events: structuredClone(additions) });
     }
     const baselineName = binding.baselineTracks.find((track) => track.id === remote.id)?.name;
-    updated.set(remote.id, { ...current, name: current.name !== baselineName ? current.name : remote.name, muted: remote.muted, clips });
+    updated.set(remote.id, { ...current, name: current.name !== baselineName ? current.name : remote.name, muted: remote.muted === !lightingTrackEnabled(expected, current) ? current.muted : remote.muted, clips });
   }
   const ordered = confirmed.document.tracks.map((track) => updated.get(track.id)!);
   let index = 0;

@@ -332,7 +332,10 @@ local function start(data)
     if op == 'TCRANGES' then
       assert(body == '', 'Range request must be empty')
       local obj = gma.show.getobj
-      local count = assert(obj.amount(assert(obj.handle('Timecode'), 'Object pool unavailable')), 'Timecode enumeration unavailable')
+      -- assert returns all of its arguments on success. Do not pass its error text as a second
+      -- argument to MA's native amount(), which rejects that call on onPC 3.7.
+      local pool = assert(obj.handle('Timecode'), 'Object pool unavailable')
+      local count = assert(obj.amount(pool), 'Timecode enumeration unavailable')
       assert(count >= 0 and count <= 100000, 'Timecode directory exceeds limit')
       local function quote(value)
         return '"' .. tostring(value):gsub('[%z\1-\31\\"]', function(char) return string.format('\\u%04x', string.byte(char)) end) .. '"'
@@ -541,7 +544,22 @@ end
 local lanes = { bg = nil, fg = nil }
 local foreground = { PING = true, PAGES = true, PAGE = true, LIST = true, LISTSEQ = true, EXECUTOR = true }
 local snapshot_cache = nil
-local function hex(data) return (data:gsub('.', function(c) return string.format('%02x', string.byte(c)) end)) end
+-- MA's Lua instruction budget makes a callback per byte very slow. gsub table replacement
+-- does the same exact byte conversion in native code, without changing the wire protocol.
+local hex_bytes, raw_bytes = {}, {}
+for byte = 0, 255 do
+  local raw, encoded = string.char(byte), string.format('%02x', byte)
+  hex_bytes[raw] = encoded; raw_bytes[encoded] = raw
+end
+local function hex(data) return (data:gsub('.', hex_bytes)) end
+local function clear_transfer(net)
+  if net and net.file then assert(os.remove(net.file), 'Could not remove local response'); net.file = nil end
+  if net and net.input then
+    local f = io.open(net.input, 'rb')
+    if f then f:close(); assert(os.remove(net.input), 'Could not remove local request') end
+    net.input = nil
+  end
+end
 local function idle(net) return not net or gma.gettime() > net.expires end
 -- The request's answer is ready: keep it for 'read' and say how long it is.
 local function finished(network)
@@ -559,7 +577,12 @@ local function finished(network)
       network.response = id .. '\nOK\n' .. #compact .. '\n' .. compact
     end
   end
-  return 'DONE:' .. #network.response
+  if network.local_file and #network.response >= 8192 then
+    network.file = root .. '/temp/tblink_network_' .. id .. '.bin'
+    write(network.file, network.response)
+    return 'FILE:' .. #network.response .. ':' .. hex(network.file)
+  end
+  return 'DONE:' .. #network.response .. (#network.response >= 8192 and ':batch' or '')
 end
 -- One step of the request: STEP:<steps done> while more remain, DONE:<size> after the last.
 local function proceed(network)
@@ -567,7 +590,7 @@ local function proceed(network)
   if network.job.response then return finished(network) end
   return 'STEP:' .. network.job.done
 end
-_G.TBLINK_NET = function(token, action, id, a, b, c, lane)
+_G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport)
   if not token:match('^[a-f0-9]+$') or #token ~= 32 then return end
   local ok, result = pcall(function()
     assert(active and _G.TBLINK_BRIDGE_GENERATION == generation, 'Bridge is stopped')
@@ -584,6 +607,7 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane)
       assert(type(b) == 'number' and b >= 1 and b <= 99999 and b == math.floor(b), 'Invalid target')
       assert(type(c) == 'number' and c >= 0 and c <= 33554432 and c == math.floor(c), 'Invalid payload size')
       assert(lane == nil or lane == 'bg' or lane == 'fg', 'Invalid lane')
+      assert(transport == nil or transport == 'file', 'Invalid transport')
       -- Only reads go on 'fg', and none that leaves state for a later request (a snapshot for beginsync).
       assert(lane ~= 'fg' or (action == 'begin' and foreground[a]), 'Operation not allowed on the foreground lane')
       local named = lane ~= nil
@@ -591,7 +615,12 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane)
       assert(idle(lanes[lane]) and (named or idle(lanes.fg)), 'Another network request is pending')
       local other = lanes[lane == 'bg' and 'fg' or 'bg']
       assert(not other or other.id ~= id, 'Request already pending')
-      lanes[lane] = { id = id, op = a, target = b, size = c, bytes = 0, chunks = {}, base = base, expires = gma.gettime() + 120 }
+      clear_transfer(lanes[lane])
+      lanes[lane] = { id = id, op = a, target = b, size = c, bytes = 0, chunks = {}, base = base, local_file = transport == 'file', expires = gma.gettime() + 120 }
+      if transport == 'file' and c >= 8192 then
+        lanes[lane].input = root .. '/temp/tblink_network_' .. id .. '.input.bin'
+        return 'ACK:lanes:file:' .. hex(lanes[lane].input)
+      end
       -- A program that names the lane learns from the answer that this bridge has two.
       return named and 'ACK:lanes' or 'ACK'
     end
@@ -601,12 +630,18 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane)
     if action == 'chunk' then
       assert(not network.done and a == #network.chunks + 1, 'Invalid chunk order')
       assert(type(b) == 'string' and #b > 0 and #b <= 512 and #b % 2 == 0 and not b:find('[^a-f0-9]'), 'Invalid chunk')
-      local data = b:gsub('..', function(pair) return string.char(tonumber(pair, 16)) end)
+      local data = b:gsub('..', raw_bytes)
       assert(network.bytes + #data <= network.size, 'Payload exceeds declared size')
       network.chunks[#network.chunks + 1] = data; network.bytes = network.bytes + #data
       return 'ACK'
     end
     if action == 'run' then
+      if network.input then
+        local data = assert(read(network.input), 'Local request unavailable')
+        assert(#data == network.size, 'Local request length mismatch')
+        assert(os.remove(network.input), 'Could not remove local request'); network.input = nil
+        network.chunks = {data}; network.bytes = #data
+      end
       assert(not network.done and network.bytes == network.size, 'Incomplete or already executed request')
       network.done = true
       local body = table.concat(network.chunks); network.chunks = nil
@@ -622,13 +657,24 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane)
       assert(network.done and network.job and not network.response, 'No step pending')
       return proceed(network)
     end
+    if action == 'readbatch' then
+      assert(network.done and network.response, 'No response available')
+      assert(type(a) == 'number' and a >= 0 and a < #network.response and a == math.floor(a), 'Invalid response offset')
+      assert(type(b) == 'number' and b >= 1 and b <= 32 and b == math.floor(b) and a + (b - 1) * 256 < #network.response, 'Invalid response batch')
+      local prefix = 'TBLINK_RPC_' .. token:sub(1, 28)
+      for index = 0, b - 1 do
+        local offset = a + index * 256
+        gma.echo(prefix .. string.format('%04x', index) .. ':DATA:' .. hex(network.response:sub(offset + 1, offset + 256)))
+      end
+      return 'BATCH'
+    end
     if action == 'read' then
       assert(network.done and network.response, 'No response available')
       assert(type(a) == 'number' and a >= 0 and a < #network.response and a == math.floor(a), 'Invalid response offset')
       return 'DATA:' .. hex(network.response:sub(a + 1, a + 256))
     end
     -- Releases this request's lane only; the other lane's request goes on.
-    if action == 'release' then lanes[lanes.bg == network and 'bg' or 'fg'] = nil; return 'ACK' end
+    if action == 'release' then clear_transfer(network); lanes[lanes.bg == network and 'bg' or 'fg'] = nil; return 'ACK' end
     error('Unknown network action')
   end)
   gma.echo('TBLINK_RPC_' .. token .. ':' .. (ok and result or 'ERR:' .. hex(tostring(result))))

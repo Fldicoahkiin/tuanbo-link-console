@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto';
+import { open, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute } from 'node:path';
 import { Ma2BridgeFailure, type Ma2Lane, type Ma2Operation, type Ma2TransferProgress, type Ma2Wire } from './ma2-onpc-bridge';
 import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
 
@@ -7,7 +9,7 @@ export class Ma2NetworkWire implements Ma2Wire {
   private snapshot: { id: string; target: number; content: Buffer } | null = null;
   private readonly unreleased = new Set<string>();
   private twoLanes: boolean | null = null;
-  constructor(private readonly connection: Pick<Ma2Telnet, 'command'>) {}
+  constructor(private readonly connection: Pick<Ma2Telnet, 'command'>, private readonly localFiles = false) {}
   /** The requests this wire began on the console and has not released, one per lane; the plugin keeps each for 120 s. */
   get unreleasedRequests(): string[] { return [...this.unreleased]; }
   /** Whether the running plugin keeps a foreground lane beside the background one: learned from the first 'begin'
@@ -21,10 +23,12 @@ export class Ma2NetworkWire implements Ma2Wire {
     const token = randomBytes(16).toString('hex');
     // The console lost the bridge's globals (a Show was loaded or the console restarted).
     // The bridge is installed at login only, so the way back is to connect again.
-    const missing = Buffer.from('控台连接组件没在运行，可能是控台换过 Show 或重启过。没在播放时，到设置里把控台断开再连接一次，联动台会把它装回去').toString('hex');
     const prefix = `TBLINK_RPC_${token}:`;
-    const line = `Lua "if TBLINK_NET then TBLINK_NET('${token}','${action}','${id}'${argumentsText}) else gma.echo('${prefix}ERR:${missing}') end"`;
+    // Keep even a full 256-byte chunk below the native console's command-line limit.
+    // The human explanation belongs here, not as hundreds of hex bytes in every command.
+    const line = `Lua "if TBLINK_NET then TBLINK_NET('${token}','${action}','${id}'${argumentsText}) else gma.echo('${prefix}MISSING') end"`;
     const result = await this.connection.command(line, (text) => ma2ResponseLine(text, prefix));
+    if (result === 'MISSING') throw new Error('控台连接组件没在运行，可能是控台换过 Show 或重启过。没在播放时，到设置里把控台断开再连接一次，联动台会把它装回去');
     if (result.startsWith('ERR:')) {
       const encoded = result.slice(4);
       if (!/^(?:[a-f0-9]{2})+$/.test(encoded)) throw new Error('MA2 插件错误响应格式无效');
@@ -48,12 +52,20 @@ export class Ma2NetworkWire implements Ma2Wire {
     let releaseAttempted = false;
     try {
       if (reference && lane !== 'bg') throw new Error('无效的 MA2 网络请求');
-      const begun = await this.call(reference ? 'beginsync' : 'begin', id, `,'${reference ?? operation}',${target},${data.length},'${lane}'`);
-      if (begun !== 'ACK' && begun !== 'ACK:lanes') throw new Error('MA2 未确认传输开始');
+      const begun = await this.call(reference ? 'beginsync' : 'begin', id, `,'${reference ?? operation}',${target},${data.length},'${lane}'${this.localFiles ? ",'file'" : ''}`);
+      const upload = /^ACK:lanes:file:((?:[a-f0-9]{2})+)$/.exec(begun);
+      if (begun !== 'ACK' && begun !== 'ACK:lanes' && !upload) throw new Error('MA2 未确认传输开始');
       acquired = true; this.unreleased.add(id);
       // A plugin from before lanes holds one request for both: this one is it, whatever lane was asked for.
-      this.twoLanes = begun === 'ACK:lanes';
-      for (let offset = 0; offset < data.length; offset += 256) {
+      this.twoLanes = begun.startsWith('ACK:lanes');
+      if (upload) {
+        if (!this.localFiles) throw new Error('远程控台不能使用本机文件传输');
+        const path = Buffer.from(upload[1]!, 'hex').toString('utf8');
+        this.validateLocalPath(path, id, '.input');
+        signal?.throwIfAborted();
+        await writeFile(path, data, { flag: 'wx', signal });
+        progress?.();
+      } else for (let offset = 0; offset < data.length; offset += 256) {
         signal?.throwIfAborted();
         if (await this.call('chunk', id, `,${offset / 256 + 1},'${data.subarray(offset, offset + 256).toString('hex')}'`) !== 'ACK') throw new Error('MA2 未确认数据片段');
         progress?.();
@@ -70,13 +82,20 @@ export class Ma2NetworkWire implements Ma2Wire {
         signal?.throwIfAborted(); await beforeStep?.(done); signal?.throwIfAborted();
         reply = await this.call('step', id);
       }
-      const receipt = /^DONE:(\d+)$/.exec(reply);
-      const size = Number(receipt?.[1]);
+      const receipt = /^DONE:(\d+)(:batch)?$/.exec(reply);
+      const fileReceipt = /^FILE:(\d+):((?:[a-f0-9]{2})+)$/.exec(reply);
+      const size = Number(receipt?.[1] ?? fileReceipt?.[1]);
       if (!Number.isInteger(size) || size < 1 || size > 33554500) throw new Error('MA2 响应长度无效');
       const chunks: Buffer[] = [];
-      for (let offset = 0; offset < size; offset += 8192) {
+      if (fileReceipt) {
+        if (!this.localFiles) throw new Error('远程控台不能使用本机文件传输');
         signal?.throwIfAborted();
-        chunks.push(await this.readBatch(id, offset, size));
+        chunks.push(await this.readLocalResponse(Buffer.from(fileReceipt[2]!, 'hex').toString('utf8'), id, size));
+        signal?.throwIfAborted();
+        progress?.({ completed: size, total: size });
+      } else for (let offset = 0; offset < size; offset += 8192) {
+        signal?.throwIfAborted();
+        chunks.push(await this.readBatch(id, offset, size, Boolean(receipt?.[2])));
         progress?.({ completed: Math.min(offset + 8192, size), total: size });
       }
       const response = Buffer.concat(chunks).toString('utf8');
@@ -98,10 +117,33 @@ export class Ma2NetworkWire implements Ma2Wire {
       throw new Ma2BridgeFailure(message, id, sent, { cause: error });
     }
   }
-  private async readBatch(id: string, offset: number, size: number): Promise<Buffer> {
+  private validateLocalPath(path: string, id: string, suffix = ''): void {
+    if (!isAbsolute(path) || basename(path) !== `tblink_network_${id}${suffix}.bin` || basename(dirname(path)) !== 'temp') throw new Error('本机控台返回的数据文件位置无效');
+  }
+  private async readLocalResponse(path: string, id: string, size: number): Promise<Buffer> {
+    this.validateLocalPath(path, id);
+    const file = await open(path, 'r');
+    try {
+      const info = await file.stat();
+      if (!info.isFile() || info.size !== size) throw new Error('本机控台返回的数据文件长度不一致');
+      // Bound allocation even if another process changes the file after stat.
+      const data = Buffer.alloc(size + 1);
+      let offset = 0;
+      while (offset < data.length) {
+        const { bytesRead } = await file.read(data, offset, data.length - offset, offset);
+        if (!bytesRead) break;
+        offset += bytesRead;
+      }
+      if (offset !== size) throw new Error('本机控台返回的数据文件不完整');
+      return data.subarray(0, size);
+    } finally { await file.close(); }
+  }
+  private async readBatch(id: string, offset: number, size: number, nativeBatch: boolean): Promise<Buffer> {
     const token = randomBytes(14).toString('hex');
     const count = Math.min(32, Math.ceil((size - offset) / 256));
-    const line = `Lua "for i=0,${count - 1} do TBLINK_NET('${token}'..string.format('%04x',i),'read','${id}',${offset}+i*256) end"`;
+    const line = nativeBatch
+      ? `Lua "TBLINK_NET('${token}0000','readbatch','${id}',${offset},${count})"`
+      : `Lua "for i=0,${count - 1} do TBLINK_NET('${token}'..string.format('%04x',i),'read','${id}',${offset}+i*256) end"`;
     const value = await this.connection.command(line, text => {
       const parts: string[] = [];
       for (let i = 0; i < count; i++) {

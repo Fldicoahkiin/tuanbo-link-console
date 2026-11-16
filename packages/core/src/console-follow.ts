@@ -42,7 +42,7 @@ export function consoleTriggers(project: LinkProject, itemId: string): { trigger
   if (own) {
     if (!own.timecode || !own.executor) return { reason: '控台上还没有这首歌的时间码节目' };
     const executor = own.executor;
-    return { triggers: own.points.flatMap(point => point.atMs === undefined ? [] : [{ atMs: point.atMs, executor, action: 'goto' as const, cue: point.cue, label: `Cue ${point.cue}` }]) };
+    return { triggers: own.points.flatMap(point => point.atMs === undefined || point.enabled === false ? [] : [{ atMs: point.atMs, executor, action: 'goto' as const, cue: point.cue, label: `Cue ${point.cue}` }]) };
   }
   const status = songLightingStatus(project, itemId);
   if (status.state === 'duplicate') return { reason: `控台上 Timecode ${status.timecodes.join('、')} 的起点和这首歌相同，分不清控台跑的是哪一个` };
@@ -51,7 +51,7 @@ export function consoleTriggers(project: LinkProject, itemId: string): { trigger
   if (binding) {
     const held = ma2BindingHold(project, itemId, binding.timecode);
     if (held) return { reason: held };
-    return { triggers: binding.baselineTracks.flatMap(track => track.clips.flatMap(clip => clip.events.flatMap(event =>
+    return { triggers: binding.baselineTracks.filter(track => !track.muted).flatMap(track => track.clips.filter(clip => !clip.muted).flatMap(clip => clip.events.flatMap(event =>
       event.kind === 'ma2' && event.executor ? [{ atMs: clip.start + event.at, executor: event.executor, action: event.action, cue: event.cue ?? null, label: event.label }] : []))) };
   }
   const entry = project.ma2ReadState?.catalog.entries.find(value => value.target === status.timecode);
@@ -86,7 +86,7 @@ function cueNumber(text: string): number | null {
 }
 
 /** Whether the executor shows what the trigger should have done. */
-export function consoleFollowVerdict(trigger: ConsoleTrigger, observed: ExecutorObservation): { following: boolean; detail: string } {
+export function consoleFollowVerdict(trigger: ConsoleTrigger, observed: ExecutorObservation): { following: boolean | null; detail: string } {
   const where = `执行器 ${trigger.executor}`;
   if (!observed) return { following: false, detail: `${where} 上没有东西，按时间线这里应该跑“${trigger.label}”` };
   if (trigger.action === 'off') return observed.running
@@ -96,12 +96,13 @@ export function consoleFollowVerdict(trigger: ConsoleTrigger, observed: Executor
   if (trigger.action === 'go' || trigger.cue === null) return { following: true, detail: `${where} 在跑` };
   const current = cueNumber(observed.cue);
   // An executor that runs but shows no readable Cue number is not called a miss: no false alarm mid-show.
-  if (current === null) return { following: true, detail: `${where} 在跑（读不出当前 Cue 编号）` };
+  if (current === null) return { following: null, detail: `${where} 在跑，但读不出当前 Cue 编号，无法确认是否跟随` };
   if (current === Number(trigger.cue)) return { following: true, detail: `${where} 在 Cue ${trigger.cue}，和时间线一致` };
   return { following: false, detail: `${where} 现在在 Cue ${current}，按时间线应该在 Cue ${trigger.cue}（${trigger.label}）` };
 }
 
-export function nextConsoleFollow(previous: ConsoleFollow, verdict: { following: boolean; detail: string }): ConsoleFollow {
+export function nextConsoleFollow(previous: ConsoleFollow, verdict: { following: boolean | null; detail: string }): ConsoleFollow {
+  if (verdict.following === null) return { state: 'unknown', detail: verdict.detail, misses: 0 };
   if (verdict.following) return { state: 'following', detail: verdict.detail, misses: 0 };
   const misses = previous.misses + 1;
   return misses >= CONSOLE_FOLLOW_MISSES ? { state: 'not-following', detail: verdict.detail, misses }

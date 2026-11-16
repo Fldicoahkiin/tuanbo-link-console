@@ -12,15 +12,15 @@ const stored = (name: string): string | null => typeof localStorage === 'undefin
  * too, kept the same way; first use merges and reads console edits back, as before. `once`: when the
  * one pass asked for while real-time sync is off began, until every song was synced once.
  */
-export const useMa2RealtimePreference = create<{ enabled: boolean; once: number | null; writeMode: Ma2WriteMode; consoleChanges: Ma2ConsoleChanges }>(() => ({
+export const useMa2RealtimePreference = create<{ enabled: boolean; once: number | null; onceItemId: string | null; writeMode: Ma2WriteMode; consoleChanges: Ma2ConsoleChanges }>(() => ({
   enabled: stored(key) !== 'false',
-  once: null,
+  once: null, onceItemId: null,
   writeMode: ma2WriteModeSchema.catch('merge').parse(stored(writeKey)),
   consoleChanges: ma2ConsoleChangesSchema.catch('read-back').parse(stored(changesKey))
 }));
 export function setMa2RealtimeEnabled(enabled: boolean): void {
   localStorage.setItem(key, String(enabled));
-  useMa2RealtimePreference.setState({ enabled, once: null });
+  useMa2RealtimePreference.setState({ enabled, once: null, onceItemId: null });
 }
 export function setMa2WriteMode(writeMode: Ma2WriteMode): void {
   localStorage.setItem(writeKey, writeMode);
@@ -46,4 +46,10 @@ export function setMa2KeyChannelChoice(choice: Ma2ExecutorChannelKind): void {
 export function ma2SyncActive(): boolean {
   const preference = useMa2RealtimePreference.getState();
   return preference.enabled || preference.once !== null;
+}
+
+/** A manual request from a song page stays on that song; the sidebar still requests all songs. */
+export function ma2SongSyncActive(itemId: string): boolean {
+  const preference = useMa2RealtimePreference.getState();
+  return preference.enabled || preference.once !== null && (!preference.onceItemId || preference.onceItemId === itemId);
 }

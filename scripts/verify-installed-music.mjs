@@ -4,7 +4,7 @@ import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPackagedDesktop } from '../tools/obs/beauty/verify-packaged-desktop.mjs';
+import { launchPackagedDesktop } from './verify-packaged-desktop.mjs';
 import { musicWorkerFiles, verifyMusicRelease } from '../tools/music-analysis/release-pin.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');

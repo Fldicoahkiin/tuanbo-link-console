@@ -65,12 +65,13 @@ it('带控台专有参数的 Cue 在软件里可改时间（参数原样保留�
   const removed = structuredClone(lighting); removed.tracks.splice(2, 1);
   expect(() => prepareMa2MergedEvents(removed, bindingId, readback, new Map(), [withSequence(xml)])).toThrow('要删掉整条轨道，请在控台上删');
 });
-it('不推断未验证帧率，原始目录与XML仍保留', async () => {
+it('25 FPS 显示格式保留原始目录和 XML，并正常转换 Cue', async () => {
   const xml = meiNanXml.replace('30 FPS', '25 FPS');
   const directory = { show: 'reconstruction', version: '3.7.0.5', generation: '1', entries: [{ target: 2, name: 'mei-nan' }] };
   const catalog = await readMa2Catalog({ request: vi.fn().mockResolvedValueOnce(JSON.stringify(directory)).mockResolvedValueOnce(xml).mockResolvedValueOnce(xml).mockResolvedValueOnce(JSON.stringify(directory)) }, showStopped, meiNanSequences[0]);
   expect(catalog.entries[0]?.error).toBeNull();
-  expect(catalog.entries[0]?.conversionError).toContain('30 FPS');
+  expect(catalog.entries[0]?.conversionError).toBeUndefined();
+  expect(catalog.entries[0]?.preview?.timing?.frameFormat).toBe('25 FPS');
   expect(catalog.entries[0]?.sourceXml).toBe(xml);
 });
 it('取消保留已完成对象，按目标补读只请求失败项，复核使用目录而非全Show', async () => {

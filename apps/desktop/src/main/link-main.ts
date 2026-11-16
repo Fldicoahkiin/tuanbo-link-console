@@ -1,3 +1,5 @@
+import { ma2TimelineEditRequestSchema } from '@tb/schema';
+import { editMa2Timeline } from './link/ma2-timeline-edit';
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
 import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema, ma2ExecutorChannelChoiceRequestSchema } from '@tb/schema';
@@ -32,10 +34,6 @@ import { prepareLocalObsConnection, readObsCommandLine } from './link/obs-local-
 import { localObsConnectionResultSchema } from '@tb/schema';
 import { obsEndpointNotListening, waitForObsEndpoint } from './link/obs-startup';
 import { obsLiveEditSchema, obsMediaPreparationSchema } from '@tb/schema';
-import { beautyApplySchema, beautyBasicValuesSchema, beautyTargetSchema, beautyStartSchema } from '@tb/schema';
-import { BeautyRuntime } from './link/beauty-runtime';
-import { BeautyOutputController } from './link/beauty-output-controller';
-import { BeautyComparison } from './link/beauty-comparison';
 import { ObsLivePreview } from './link/obs-live-preview';
 import { ObsNativeSeek } from './link/obs-native-seek';
 import { obsSourceCreateSchema, obsSourceNameSchema, obsSourceApplySchema, ma2BridgeRequestSchema, ma2ReadRequestSchema, ma2CompareRequestSchema, ma2ApplyRequestSchema, ma2CreateRequestSchema } from '@tb/schema';
@@ -1371,6 +1369,15 @@ function registerIpc(
       throw error;
     }
   });
+  handle('link:ma2-timeline-edit', async (_event, value: unknown) => {
+    const request = ma2TimelineEditRequestSchema.parse(value);
+    const { bridge } = await getMa2Connection(request);
+    try {
+      const result = await editMa2Timeline(bridge, request);
+      if (result.backupFile) await ma2ConsoleBackups.record(bridge, { console: ma2ConsoleKey(request), object: `Timecode ${request.target}`, files: [result.backupFile] });
+      return result;
+    } catch (error) { await recordMa2Failure('修改控台时间线', String(error), error); throw error; }
+  });
   handle('link:ma2-create', async (_event, value: unknown) => {
     const request = ma2CreateRequestSchema.parse(value);
     await logger.record({ level: 'info', category: 'operator', device: 'MA2', message: `新建 Timecode ${request.target}`, result: 'running' });
@@ -2016,50 +2023,8 @@ function registerIpc(
   obs.liveEditor.subscribe(() => sendToRenderer('link:obs-live-changed', null));
   handle('link:obs-output-status', () => obs.readOutputStatus());
   handle('link:obs-live-scene', () => obs.liveEditor.read());
-  const beautyRuntime = new BeautyRuntime(app.isPackaged ? join(process.resourcesPath, 'beauty') : join(__dirname, '../../../../artifacts/beauty-prototype'),
-    join(app.getPath('userData'), 'beauty-reports'), obs.beauty, message => {
-      void logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message }).catch((error: unknown) => console.error('美颜日志写入失败', error));
-    });
-  handle('link:beauty-install', async () => {
-    try { return await beautyRuntime.install(); }
-    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) }); throw error; }
-  });
-  handle('link:beauty-start', (_event, value: unknown) => beautyRuntime.start(beautyStartSchema.parse(value).sourceName));
-  handle('link:beauty-stop', () => beautyRuntime.stop());
-  const beautyOutput = new BeautyOutputController(beautyRuntime, obs.beauty, message => {
-    void logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message }).catch((error: unknown) => console.error('美颜日志写入失败', error));
-  });
-  obs.subscribe(state => beautyOutput.connection(state.status === 'connected'));
-  obs.subscribeProgramScene(() => beautyOutput.sceneChanged());
   // A scene switched in OBS during a song: the song's picture decides whether it was taken over by hand (R8).
   obs.subscribeProgramScene(sceneName => nativeObs?.programSceneChanged(sceneName));
-  handle('link:beauty-output', (_event, value: unknown) => beautyOutput.configure(beautyBasicValuesSchema.parse(value)));
-  handle('link:beauty-status', () => beautyOutput.status());
-  const beautyComparison = new BeautyComparison(async target => {
-    const profile = await requireProfile(profileStore);
-    const pid = await findLocalObsPid(profile.obs.webSocketUrl);
-    if (pid === null) throw new Error('美颜对比需要连接本机 OBS');
-    return obs.beauty.comparisonPipe(target, pid);
-  });
-  handle('link:beauty-comparison-frame', async (_event, value: unknown) => {
-    if (obs.getSnapshot().status !== 'connected') throw new Error('OBS 未连接');
-    try { return await beautyComparison.next(beautyTargetSchema.parse(value)); }
-    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: `美颜对比失败：${String(error)}` }); throw error; }
-  });
-  handle('link:beauty-comparison-close', () => beautyComparison.close());
-  mainWindow?.on('hide', () => beautyComparison.close());
-  mainWindow?.on('minimize', () => beautyComparison.close());
-  app.on('will-quit', () => beautyComparison.close());
-  obs.subscribe(state => { if (state.status !== 'connected') beautyComparison.close(); });
-  app.on('will-quit', () => beautyRuntime.close());
-  handle('link:obs-beauty-read', async (_event, value: unknown) => {
-    try { return await obs.beauty.read(beautyTargetSchema.parse(value)); }
-    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) }); throw error; }
-  });
-  handle('link:obs-beauty-apply', async (_event, value: unknown) => {
-    try { return await obs.beauty.apply(beautyApplySchema.parse(value)); }
-    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) }); throw error; }
-  });
   handle('link:obs-live-edit', async (_event, value: unknown) => {
     try { await obs.liveEditor.edit(obsLiveEditSchema.parse(value)); }
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) }); throw error; }

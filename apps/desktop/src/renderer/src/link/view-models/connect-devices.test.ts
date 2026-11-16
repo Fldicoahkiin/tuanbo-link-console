@@ -8,12 +8,14 @@ import { showGate, type ShowState } from '@tb/core/link';
 import { createDefaultIntegrationProfile } from './local-integration-profile';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
 import { useIntegrationStore } from '../stores/integration-store';
+import { useDocumentStore } from '../stores/document-store';
 
 const api = vi.hoisted(() => ({
   detectLocalIntegrations: vi.fn<LinkDesktopApi['detectLocalIntegrations']>(),
   saveIntegrationProfile: vi.fn<LinkDesktopApi['saveIntegrationProfile']>(),
   loopMidi: vi.fn<LinkDesktopApi['loopMidi']>(),
   startExternalApplication: vi.fn<LinkDesktopApi['startExternalApplication']>(),
+  refreshExternalApplication: vi.fn<LinkDesktopApi['refreshExternalApplication']>(),
   connectObs: vi.fn<LinkDesktopApi['connectObs']>(),
   connectLocalObs: vi.fn<LinkDesktopApi['connectLocalObs']>(),
   loadIntegrationProfile: vi.fn<LinkDesktopApi['loadIntegrationProfile']>(),
@@ -26,11 +28,15 @@ const api = vi.hoisted(() => ({
   recordLog: vi.fn<LinkDesktopApi['recordLog']>(),
   getNativePlaybackDevices: vi.fn<LinkDesktopApi['getNativePlaybackDevices']>(),
   checkNativeMidiOutput: vi.fn<LinkDesktopApi['checkNativeMidiOutput']>(),
-  checkNetwork: vi.fn(() => Promise.resolve())
+  checkNetwork: vi.fn(() => Promise.resolve()),
+  method: vi.fn<() => 'local' | 'network'>(() => 'network'),
+  connectLocal: vi.fn<LinkDesktopApi['connectMa2Network']>(),
+  prepareEditing: vi.fn<(connection: unknown, documentId: number) => Promise<string>>()
 }));
 vi.mock('./link-desktop-view-model', () => ({ linkDesktopViewModel: api }));
-vi.mock('../stores/ma2-mode-store', () => ({ readMa2Method: () => 'network' }));
-vi.mock('../stores/ma2-connection-store', () => ({ checkNetworkMa2: api.checkNetwork, connectDiscoveredMa2: () => api.connectMa2Network(), connectLocalMa2: vi.fn() }));
+vi.mock('../stores/ma2-mode-store', () => ({ readMa2Method: api.method }));
+vi.mock('../stores/ma2-connection-store', () => ({ checkNetworkMa2: api.checkNetwork, connectDiscoveredMa2: () => api.connectMa2Network(), connectLocalMa2: api.connectLocal }));
+vi.mock('../runtime/ma2-editing-session', () => ({ prepareMa2Editing: api.prepareEditing }));
 
 function snapshot(id: LinkProcessSnapshot['id']): LinkProcessSnapshot {
   return { id, status: 'running', pid: 1, processName: id, executablePath: null, startTime: null, windowTitle: null, fileVersion: null, owned: false, error: null };
@@ -132,6 +138,9 @@ it('onPC 启动失败即停止：不登录控台、不启动 MA 3D，之前的 O
 });
 beforeEach(() => {
   vi.resetAllMocks();
+  api.method.mockReturnValue('network');
+  api.prepareEditing.mockResolvedValue('2 条已关联，节目 Cue 已读取');
+  useDocumentStore.setState({ project: null });
   api.checkNativeMidiOutput.mockResolvedValue();
   // Profiles without an engine choice play with Windows native audio.
   api.getNativePlaybackDevices.mockResolvedValue({ protocol: 4, audio: [{ id: 'native-default', name: '默认播放设备', isDefault: true }], midiOutputs: [], midiInputs: [] });
@@ -153,6 +162,21 @@ beforeEach(() => {
   api.connectMa2Network.mockResolvedValue(network); api.checkNetwork.mockResolvedValue();
 });
 afterEach(() => vi.unstubAllGlobals());
+
+it.each(['local', 'network'] as const)('%s 一键连接通过后读取当前工程 Cue，插件失败时不读取', async method => {
+  const config = options();
+  useDocumentStore.getState().setProject(config.project, 'test.tblink');
+  api.method.mockReturnValue(method);
+  api.connectLocal.mockResolvedValue({ ...(await api.connectMa2Network()), settings: { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'operator', autoConnect: false } });
+  await connectDevices(config);
+  expect(api.prepareEditing).toHaveBeenCalledExactlyOnceWith({ dataDirectory: '', network: { host: method === 'local' ? '127.0.0.1' : '192.168.1.2', port: 30000, monitorPort: 30001, username: method === 'local' ? 'operator' : 'administrator' } }, useDocumentStore.getState().documentId);
+  expect(useConnectionCheckStore.getState().checks['ma2-read']).toMatchObject({ state: 'ready', detail: '2 条已关联，节目 Cue 已读取' });
+  api.prepareEditing.mockClear();
+  api.checkNetwork.mockRejectedValueOnce(new Error('插件没有响应'));
+  await connectDevices(config);
+  expect(api.prepareEditing).not.toHaveBeenCalled();
+  expect(useConnectionCheckStore.getState().checks['ma2-read']?.state).toBe('blocked');
+});
 
 it('OBS 场景清单未通过即停止：控制已连接，但不再检查预览和后续设备', async () => {
   api.readObsInventory.mockRejectedValue(new Error('显示器采集尺寸不可用'));
@@ -351,4 +375,19 @@ it('配置失败保留诊断原文并脱敏密码，不只记录通用提示', a
   expect(entry?.details?.technicalError).toBe('DataCloneError [REDACTED] field invalid');
   expect(JSON.stringify(entry)).not.toContain(config.password);
   expect(useConnectionCheckStore.getState().checks.profile?.detail).toContain('DataCloneError');
+});
+
+it('MA 3D 已从另一安装目录运行时复核并复用，保留启动配置且不重复拉起', async () => {
+  const config = options();
+  config.draft.ma3d = maProgram('D:/MA/MA3D.exe');
+  const detected = nothingDetected();
+  detected.applications.ma3d = { id: 'ma3d', executablePath: 'C:/MA/MA3D.exe', workingDirectory: 'C:/MA', processName: 'MA3D.exe', windowTitle: 'MA 3D', version: '3.7.0.5', running: true };
+  api.detectLocalIntegrations.mockResolvedValue(detected);
+  api.refreshExternalApplication.mockResolvedValue({ ...snapshot('ma3d'), pid: 40524, executablePath: 'C:/MA/MA3D.exe', windowTitle: 'MA 3D', startTime: '2026-11-16T10:00:00Z' });
+  await connectDevices(config);
+  expect(api.refreshExternalApplication).toHaveBeenCalledWith('ma3d');
+  expect(api.startExternalApplication).not.toHaveBeenCalledWith('ma3d');
+  expect(useIntegrationStore.getState().processes.ma3d.pid).toBe(40524);
+  expect(useIntegrationStore.getState().profile?.ma3d?.executablePath).toBe('D:/MA/MA3D.exe');
+  expect(useConnectionCheckStore.getState().checks.ma3d?.state).toBe('ready');
 });

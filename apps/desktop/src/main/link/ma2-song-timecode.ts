@@ -41,13 +41,17 @@ const revision = (xml: string): string => createHash('sha256').update(xml.replac
  * number instead of leaving it behind and creating another.
  */
 export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'>, song: {
-  previous: Ma2SongTimecode | undefined; sequence: number; executor: string; startMs: number; lengthMs: number | undefined; name: string; version: string;
+  previous: Ma2SongTimecode | undefined; requestedNumber?: number | undefined; sequence: number; executor: string; startMs: number; lengthMs: number | undefined; name: string; version: string;
   cues: ReadonlyArray<{ atMs: number; cueIndex: number; number: string; name: string | null }>;
   created: (timecode: Ma2SongTimecode) => Promise<void>;
 }): Promise<{ timecode: Ma2SongTimecode; backup: string | null }> {
   const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
   const taken = (target: number): boolean => directory.entries.some(entry => entry.target === target);
-  let number = song.previous?.number;
+  let number = song.previous?.number ?? song.requestedNumber;
+  if (!song.previous && number !== undefined) {
+    while (taken(number) && number < 99999) number++;
+    if (taken(number)) throw new Error('指定编号之后没有空闲的 Timecode 编号');
+  }
   let current: string;
   const timecode = (target: number, xml: string): Ma2SongTimecode => ({ number: target, offset: frames(song.startMs), slot: MA2_SONG_TIMECODE_SLOT, revision: revision(xml) });
   if (number !== undefined && taken(number)) current = await bridge.request('READ', number);

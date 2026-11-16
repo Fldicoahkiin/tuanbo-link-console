@@ -67,7 +67,7 @@ apps/desktop/
 apps/licensing-server/          授权、购买、官网（web/）、运营后台（console/）、部署工具（deploy/）
 packages/schema/                .tblink、本机设备设置和授权的 Zod 契约
 packages/core/                  Command、MTC、Cue、灯光与 MA2 规则、内容时间线等领域逻辑
-tools/                          原生组件：播放引擎、OBS 预览桥和美颜、MA2 Lua 桥、IBT、进程识别等
+tools/                          原生组件：播放引擎、OBS 预览桥、MA2 Lua 桥、IBT、进程识别等
 scripts/                        发版、搬运、校验和更新日志脚本
 release-notes/                  每个版本更新日志的唯一来源
 docs/                           设计、实施、验收和服务器安装说明
@@ -132,6 +132,9 @@ docs/                           设计、实施、验收和服务器安装说明
 | 一首歌多长 | `packages/core/src/audio-edit.ts` 的 `songDurationMs`：别处不自己取“最晚片段的结尾”当歌的长度 | `packages/core/src/audio-edit.test.ts` | [播放、节目和工程的版本](./docs/ONE_PLACE_PLAYBACK.md#一首歌多长) |
 | 一首歌前后的空白 | `packages/core/src/song-padding.ts` 的 `padSongCommand`：一条命令、一步撤销，别处不自己整首平移 | `packages/core/src/song-padding-rules.test.ts` | [播放、节目和工程的版本](./docs/ONE_PLACE_PLAYBACK.md#一首歌前后的空白) |
 | 灯光编号换新 | `packages/core/src/lighting-ids.ts` 的 `withNewLightingIds` | `packages/core/src/lighting-ids.test.ts` | [灯光和 MA2](./docs/ONE_PLACE_LIGHTING.md#灯光编号换新) |
+| 整套 Cue 的首次放置 | `packages/core/src/lighting-template-steps.ts` | `apps/desktop/src/renderer/src/link/components/lighting-sequence-placement.test.ts` | [灯光和 MA2](./docs/ONE_PLACE_LIGHTING.md#整套-cue-的首次放置) |
+| 轨道是否参与灯光 | `packages/core/src/lighting-track-state.ts` | `packages/core/src/ma2-song-sequence.test.ts`、`apps/desktop/src/main/link/ma2-layout-service.test.ts` | [灯光和 MA2](./docs/ONE_PLACE_LIGHTING.md#轨道是否参与灯光) |
+| 新增轨道写到哪里 | `packages/core/src/ma2-track-routing.ts` | `packages/core/src/ma2-track-routing.test.ts` | [灯光和 MA2](./docs/ONE_PLACE_LIGHTING.md#新增轨道写到哪里) |
 
 同一次复盘定下的另外几条：
 

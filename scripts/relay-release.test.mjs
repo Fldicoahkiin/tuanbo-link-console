@@ -17,7 +17,7 @@ test('只搬运附件齐全的 vX.Y.Z 草稿，版本高的在前', () => {
   const releases = [
     draft('0.5.1'), draft('0.5.10'), draft('0.5.2', files('0.5.2').slice(1)),
     draft('0.5.3', files('0.5.3').map(asset => ({ ...asset, state: 'starter' }))),
-    { ...draft('0.5.4'), draft: false }, draft('build-assets-beauty-2dfd72cfcae9'.replace(/^v/, ''))
+    { ...draft('0.5.4'), draft: false }, draft('build-assets-music-analysis-2dfd72cfcae9'.replace(/^v/, ''))
   ];
   assert.deepEqual(pendingDrafts(releases).map(release => release.tag_name), ['v0.5.10', 'v0.5.1']);
   assert.deepEqual(incompleteDrafts([...releases, draft('0.5.11', [])]), [{ tag: 'v0.5.2', files: 3 }, { tag: 'v0.5.3', files: 0 }, { tag: 'v0.5.11', files: 0 }]);

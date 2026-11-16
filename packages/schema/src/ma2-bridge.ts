@@ -1,4 +1,5 @@
 import { z } from 'zod';
+export const ma2TimecodeFrameFormatSchema = z.enum(['24 FPS', '25 FPS', '30 FPS']);
 export const ma2NetworkSettingsSchema = z.object({
   host: z.ipv4(), port: z.number().int().min(1).max(65535).default(30000), monitorPort: z.number().int().min(1).max(65535).default(30001),
   username: z.string().trim().min(1).max(256).regex(/^[^"\\\u0000-\u001f\u007f]+$/),
@@ -66,7 +67,7 @@ export const ma2ExecutorPreviewSchema = z.object({
 }).strict().refine((value) => value.cueCatalog.length === 1, '执行器必须对应一个明确序列');
 export type Ma2ExecutorPreview = z.infer<typeof ma2ExecutorPreviewSchema>;
 export const ma2TimecodePreviewSchema = z.object({
-  timing: z.object({ frameFormat: z.literal('30 FPS'), unit: z.literal('frames-30'), offsetNative: z.string(), absoluteEventTimesMs: z.array(z.number().finite().nonnegative()) }).strict().optional(),
+  timing: z.object({ frameFormat: ma2TimecodeFrameFormatSchema, unit: z.literal('frames-30'), offsetNative: z.string(), absoluteEventTimesMs: z.array(z.number().finite().nonnegative()) }).strict().optional(),
   timeOriginMs: z.number().int().min(0).max(86399999).optional(),
   target: z.number().int().min(1).max(99999), name: z.string(), readAt: z.string().datetime(),
   document: lightingDocumentSchema, sourceXml: z.string().min(1).max(32 * 1024 * 1024),
@@ -124,3 +125,14 @@ export const ma2PreviewStateSchema = z.object({
   ])
 }).strict();
 export type Ma2PreviewState = z.infer<typeof ma2PreviewStateSchema>;
+
+
+export const ma2TimelineEditRequestSchema = ma2ReadRequestSchema.extend({
+  name: z.string().trim().min(1).max(512).regex(/^[^\u0000-\u001f"\\]+$/),
+  startMs: z.number().int().min(0).max(86399999),
+  expectedName: z.string().max(512), expectedOffset: z.number().finite().nonnegative(),
+  expectedSource: z.object({ show: z.string().min(1), generation: z.string().min(1), version: z.string().min(1) }).strict()
+}).strict();
+export type Ma2TimelineEditRequest = z.infer<typeof ma2TimelineEditRequestSchema>;
+export const ma2TimelineEditResultSchema = z.object({ name: z.string(), startMs: z.number(), backupFile: z.string().nullable() }).strict();
+export type Ma2TimelineEditResult = z.infer<typeof ma2TimelineEditResultSchema>;

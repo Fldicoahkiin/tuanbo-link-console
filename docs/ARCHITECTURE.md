@@ -25,7 +25,7 @@
 | 播放引擎 | `tools/playback-engine/`（C，随软件发布的一个可执行文件） | 声卡出声（WASAPI）和发 MIDI 时间码；同一个文件换参数还负责动作 MIDI 输出、MIDI 输入和设备列表。主进程经 `native-playback-client.ts`、`native-midi-output.ts`、`native-midi-input.ts` 各起各的进程 |
 | 领域规则 | `packages/core/src/` | 不依赖 Electron 和 Node 的纯规则：命令、时间线、Cue、时间码、画面该是什么、恢复次数、演出状态。主进程和界面都用它 |
 | 契约 | `packages/schema/src/` | `.tblink` 工程格式、本机设置、IPC 传的每一种数据的 Zod 定义 |
-| OBS 组件 | `tools/obs/` | 实时画布用的原生预览桥和美颜，装进 OBS |
+| OBS 组件 | `tools/obs/` | 实时画布用的原生预览桥，装进 OBS |
 | MA2 插件 | `tools/ma2/tblink_bridge.lua` | 装进控台的 Lua 插件，联动台经它读写时间线 |
 | 服务端 | `apps/licensing-server/` | 授权、购买、官网、运营后台、问题反馈 |
 

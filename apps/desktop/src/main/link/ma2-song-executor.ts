@@ -13,7 +13,7 @@ import { holdForShow, type ShowGateReader } from '@tb/core/link';
  * page 1000 full continues on 1001), up to nine pages on.
  */
 export type Ma2SongExecutorPlan = { address: string; slot: number; pageExists: boolean; assigned: boolean };
-export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, show: ShowGateReader): Promise<Ma2SongExecutorPlan> {
+export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, show: ShowGateReader, fromRequested = false): Promise<Ma2SongExecutorPlan> {
   const stopped = (): void => { holdForShow(show, 'ma2.executor.mutate', '执行器位置没有改。'); };
   stopped();
   const request = { network: source.network, expectedSource: source.expectedSource };
@@ -25,18 +25,22 @@ export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>
   if (existing) {
     const [oldPage, oldSlot] = existing.split('.').map(Number);
     if (oldPage === page && items.some(item => item.slot === oldSlot && item.sequence === sequence)) return { address: existing, slot: oldSlot!, pageExists: true, assigned: true };
-    if (current) return { address: `${page}.${current.slot}`, slot: current.slot, pageExists: true, assigned: true };
+    if (!fromRequested && current) return { address: `${page}.${current.slot}`, slot: current.slot, pageExists: true, assigned: true };
     if (oldPage === page && !covers(oldSlot!)) return { address: existing, slot: oldSlot!, pageExists: snapshot !== null, assigned: false };
   }
-  let slot = 101; while (slot <= 190 && covers(slot)) slot++;
-  if (slot <= 190) return { address: `${page}.${slot}`, slot, pageExists: snapshot !== null, assigned: false };
-  for (let next = page + 1; next <= Math.min(page + 9, 9999); next++) {
+  const requestedSlot = fromRequested && existing ? Number(existing.split('.')[1]) : 101;
+  const firstSlot = requestedSlot >= 201 ? 201 : requestedSlot >= 101 ? 101 : 1;
+  const lastSlot = firstSlot === 201 ? 240 : firstSlot === 101 ? 190 : 90;
+  let slot = requestedSlot; while (slot <= lastSlot && covers(slot)) slot++;
+  if (slot <= lastSlot) return { address: `${page}.${slot}`, slot, pageExists: snapshot !== null, assigned: false };
+  const lastPage = fromRequested ? 9999 : Math.min(page + 9, 9999);
+  for (let next = page + 1; next <= lastPage; next++) {
     const items = directory.pages.some(value => value.page === next) ? (await readMa2ExecutorPage(bridge, { ...request, page: next })).items : null;
     stopped();
-    let free = 101; while (free <= 190 && items?.some(item => free >= item.slot && free < item.slot + item.width)) free++;
-    if (free <= 190) return { address: `${next}.${free}`, slot: free, pageExists: items !== null, assigned: false };
+    let free = firstSlot; while (free <= lastSlot && items?.some(item => free >= item.slot && free < item.slot + item.width)) free++;
+    if (free <= lastSlot) return { address: `${next}.${free}`, slot: free, pageExists: items !== null, assigned: false };
   }
-  throw new Error(`按钮第 ${page}–${Math.min(page + 9, 9999)} 页的 101–190 都已放满了，请选另一页（原有内容没有被覆盖）`);
+  throw new Error(`按钮第 ${page}–${lastPage} 页的 ${firstSlot}–${lastSlot} 都已放满了，请选另一页（原有内容没有被覆盖）`);
 }
 
 /**

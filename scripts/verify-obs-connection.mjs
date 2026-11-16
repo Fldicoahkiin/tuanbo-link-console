@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createConnection, createServer } from 'node:net';
-import { launchPackagedDesktop } from '../tools/obs/beauty/verify-packaged-desktop.mjs';
+import { launchPackagedDesktop } from './verify-packaged-desktop.mjs';
 import { closeOwnedObsTest } from './close-owned-obs-test.mjs';
 import { ownTestWindowScript } from './own-test-window.mjs';
 

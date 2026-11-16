@@ -12,6 +12,8 @@ import { applyDetectedLightingMidiPorts, applyDetectedP1MidiPorts } from './loca
 import { midiConnectionTargets, usesNativeMidiOutput } from './connection-targets';
 import { obsPreviewSession } from './obs-preview-session';
 import { assertAudioOutputAvailable } from './audio-output-route';
+import { useDocumentStore } from '../stores/document-store';
+import { prepareMa2Editing } from '../runtime/ma2-editing-session';
 
 export type DeviceConnectionOptions = {
   draft: IntegrationProfile;
@@ -27,11 +29,11 @@ export type DeviceConnectionOptions = {
 };
 // Execution order. Saving the profile needs the MIDI inventory; OBS precedes
 // lighting so a lighting fault does not hide whether video is usable.
-const tasks = ['discovery', 'loop', 'midi', 'profile', 'obs', 'obs-inventory', 'preview', 'audio', 'p1', 'ma2-app', 'ma2', 'bridge', 'ma3d'];
+const tasks = ['discovery', 'loop', 'midi', 'profile', 'obs', 'obs-inventory', 'preview', 'audio', 'p1', 'ma2-app', 'ma2', 'bridge', 'ma2-read', 'ma3d'];
 const stepDeadlineMs = 60_000;
 /** A dead saved address is followed by a search of up to 45 s and one more login. */
 const ma2StepDeadlineMs = 100_000;
-type ConnectionStep = <T>(id: string, label: string, operation: () => Promise<T>, detail?: string, deadlineMs?: number) => Promise<{ value: T } | null>;
+type ConnectionStep = <T>(id: string, label: string, operation: () => Promise<T>, detail?: string | ((value: T) => string), deadlineMs?: number) => Promise<{ value: T } | null>;
 
 /** The operation is not cancelled; the step fails and reports that it may still be running. */
 function withDeadline<T>(operation: Promise<T>, deadlineMs: number, label: string): Promise<T> {
@@ -42,6 +44,28 @@ function withDeadline<T>(operation: Promise<T>, deadlineMs: number, label: strin
   return Promise.race([operation, deadline]).finally(() => clearTimeout(timer));
 }
 
+async function connectMa2Devices(project: LinkProject | null, documentId: number, run: ConnectionStep, skip: (id: string, detail: string) => void, stopped: () => boolean): Promise<void> {
+  const method = readMa2Method();
+  if (method === 'midi') { skip('ma2', '没有启用网络连接，当前用 MIDI'); skip('bridge', '仅 MIDI 时不需要读写控台'); skip('ma2-read', '仅 MIDI 时不读取控台'); return; }
+  let moved = '';
+  const connected = await run('ma2', 'MA2 网络', async () => {
+    const status = ma2NetworkStatusSchema.parse(await (method === 'local' ? connectLocalMa2() : connectDiscoveredMa2(undefined, undefined, notice => { moved = notice; })));
+    if (status.state !== 'connected') throw new Error(status.error ?? '控台没有登录成功');
+    // The connection this result stands on, as main just read it back (check-basis.ts).
+    useMa2NetworkStatusStore.setState({ status, error: null });
+    return status;
+  }, status => moved || `控台 ${status.settings?.host ?? ''} 登录成功`, ma2StepDeadlineMs);
+  // 2026-11-09: a check refused during a show stayed as 读写异常 for good; it is only not run yet. 2026-11-10 第 3 题: it
+  // waits only while the program moves; paused, paused at the end or P1 waiting for the next song, it checks.
+  const show = currentShowGate('connections.check');
+  if (!stopped() && show.kind === 'wait') { useConnectionCheckStore.getState().waitForShow('bridge', show.message); return; }
+  await run('bridge', 'MA2 工程通信', async () => { await checkNetworkMa2(); return projectMa2ShowNote(project); }, note => note ? `控台读写通信正常。${note}` : '控台读写通信正常');
+  const target = connected?.value.settings; // The target this explicit connection confirmed.
+  if (project && target && useDocumentStore.getState().project?.projectId === project.projectId) {
+    await run('ma2-read', '读取节目 Cue', () => prepareMa2Editing({ dataDirectory: '', network: { host: target.host, port: target.port, monitorPort: target.monitorPort, username: target.username } }, documentId), message => message, 15 * 60_000);
+  } else skip('ma2-read', '打开工程后可以读取节目 Cue');
+}
+
 /** A Show saved under a new name is normal (2026-10-28): reported with the check, never a failed connection. */
 async function projectMa2ShowNote(project: LinkProject | null): Promise<string | null> {
   const expected = project ? [...new Set(project.rundown.flatMap(item => expectedMa2Shows(project, item.id)))] : [];
@@ -49,17 +73,21 @@ async function projectMa2ShowNote(project: LinkProject | null): Promise<string |
   return ma2ShowMismatch(expected, await desktop.getMa2CurrentShow());
 }
 
-async function startMaPrograms(profile: IntegrationProfile, detected: Partial<Record<'ma2' | 'ma3d', string>>, run: ConnectionStep, skip: (id: string, detail: string) => void, connect: () => Promise<void>): Promise<void> {
+async function startMaPrograms(profile: IntegrationProfile, detected: Partial<Record<'ma2' | 'ma3d', { path: string; running: boolean }>>, run: ConnectionStep, skip: (id: string, detail: string) => void, connect: () => Promise<void>): Promise<void> {
   const start = async (id: 'ma2' | 'ma3d'): Promise<boolean> => {
     const key = id === 'ma2' ? 'ma2-app' : 'ma3d';
     const label = id === 'ma2' ? 'MA2 onPC' : 'MA 3D';
     if (!profile[id]?.connectOnDemand) {
-      const found = detected[id];
+      const found = detected[id]?.path;
       skip(key, profile[id] ? '已关闭一键启动' : found ? `已找到 ${found}，但没有启用；在 MA2 设置里选择并启用后，一键连接才会启动它` : '没有设置本机程序，可以在 MA2 设置里选择');
       return true;
     }
     const result = await run(key, label, async () => {
-      const snapshot = await desktop.startExternalApplication(id);
+      // Discovery has already identified the live executable and main process.
+      // Recheck that instance before considering the configured startup path,
+      // which may point to another installation of this singleton MA program.
+      const current = detected[id]?.running ? await desktop.refreshExternalApplication(id) : null;
+      const snapshot = current?.status === 'running' ? current : await desktop.startExternalApplication(id);
       useIntegrationStore.getState().setProcess(snapshot);
       if (snapshot.status !== 'running') throw new Error(snapshot.error ?? `${label} 未运行`);
     }, `${label} 已运行；控台通信另外检查`, (profile[id]?.startupTimeoutMs ?? 30_000) + stepDeadlineMs);
@@ -94,29 +122,10 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
     }
   };
   let profile = options.draft;
-  const detectedMaPrograms: Partial<Record<'ma2' | 'ma3d', string>> = {};
+  const detectedMaPrograms: Partial<Record<'ma2' | 'ma3d', { path: string; running: boolean }>> = {};
   const internal = options.project?.playbackSource === 'internal';
-  const connectMa2 = async (): Promise<void> => {
-    const method = readMa2Method();
-    if (method === 'midi') { skip('ma2', '没有启用网络连接，当前用 MIDI'); skip('bridge', '仅 MIDI 时不需要读写控台'); return; }
-    if (method === 'local') {
-      skip('ma2', '当前使用本机 onPC');
-      await run('bridge', 'MA2 工程通信', async () => connectLocalMa2((await desktop.getMa2DataDirectory()) ?? ''), '本机控台通信正常'); return;
-    }
-    let moved = '';
-    await run('ma2', 'MA2 网络', async () => {
-      const status = ma2NetworkStatusSchema.parse(await connectDiscoveredMa2(undefined, undefined, notice => { moved = notice; }));
-      if (status.state !== 'connected') throw new Error(status.error ?? '控台没有登录成功');
-      // The connection this result stands on, as main just read it back (check-basis.ts).
-      useMa2NetworkStatusStore.setState({ status, error: null });
-      return status;
-    }, status => moved || `控台 ${status.settings?.host ?? ''} 登录成功`, ma2StepDeadlineMs);
-    // 2026-11-09: a check refused during a show stayed as 读写异常 for good; it is only not run yet. 2026-11-10 第 3 题: it
-    // waits only while the program moves; paused, paused at the end or P1 waiting for the next song, it checks.
-    const show = currentShowGate('connections.check');
-    if (!stoppedBy && show.kind === 'wait') { checks.waitForShow('bridge', show.message); return; }
-    await run('bridge', 'MA2 工程通信', async () => { await checkNetworkMa2(); return projectMa2ShowNote(options.project); }, note => note ? `控台读写通信正常。${note}` : '控台读写通信正常');
-  };
+  const documentId = useDocumentStore.getState().documentId;
+
   try {
     const detection = await run('discovery', '程序识别', () => desktop.detectLocalIntegrations());
     if (detection) {
@@ -129,7 +138,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
       // Detection reports MA programs only; registering one to start is the operator's choice.
       for (const id of ['ma2', 'ma3d'] as const) {
         const path = detection.value.applications[id]?.executablePath;
-        if (path) detectedMaPrograms[id] = path;
+        if (path) detectedMaPrograms[id] = { path, running: detection.value.applications[id]?.running === true };
       }
     }
     const loop = await run('loop', '虚拟 MIDI', async () => {
@@ -232,7 +241,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
     }, '播放设备可用，播放时开始输出声音');
     await portsTask();
     await p1Task();
-    await startMaPrograms(profile, detectedMaPrograms, run, skip, connectMa2);
+    await startMaPrograms(profile, detectedMaPrograms, run, skip, () => connectMa2Devices(options.project, documentId, run, skip, () => stoppedBy !== null));
   } finally {
     for (const id of useConnectionCheckStore.getState().pending) skip(id, '未执行');
     checks.end(); options.onIssues([...issues]);

@@ -60,6 +60,9 @@ it.runIf(Boolean(process.env.TBLINK_MA2_HARDWARE_HOST))('实体控台自动部�
     await writeFile(resolve(directory, 'sequence-directory.json'), sequences);
     expect(JSON.parse(timecodes)).toHaveProperty('entries');
     expect(JSON.parse(sequences)).toHaveProperty('entries');
+    const ranges = ma2TimecodeRangesSchema.parse(JSON.parse(await wire.exchange(randomBytes(16).toString('hex'), 'TCRANGES', 1, '', () => undefined)));
+    expect(ranges.entries.map(entry => entry.target)).toEqual(ma2ObjectDirectorySchema.parse(JSON.parse(timecodes)).entries.map(entry => entry.target));
+    await writeFile(resolve(directory, 'timecode-ranges.json'), JSON.stringify(ranges, null, 2));
     await writeFile(resolve(directory, 'bridge-acceptance.json'), JSON.stringify({ version, memoryBridge: true, ping: true, timecodeDirectory: true, sequenceDirectory: true, at: new Date().toISOString() }, null, 2));
   } finally { connection.disconnect(); }
 }, 120000);
@@ -84,6 +87,28 @@ it.runIf(process.env.TBLINK_MA2_HARDWARE_WRITE === '1')('实体控台专属空�
     const sample = await bridge.request('READ', 1);
     await writeFile(resolve('artifacts/ma2-hardware-diagnostics/timecode-1.xml'), sample);
     await writeFile(resolve('artifacts/ma2-hardware-diagnostics/write-acceptance.json'), JSON.stringify({ target: 9905, emptyTestObjectOnly: true, written: true, restored: true, backup: `tblink_backup_${receipt.requestId}.xml`, existingTimecodeRead: 1 }, null, 2));
+  } finally { connection.disconnect(); }
+}, 120000);
+
+it.runIf(process.env.TBLINK_MA2_SEQUENCE_READ_PROBE === '1')('onPC 多步 Cue 无损传输速度只读测量', async () => {
+  const connection = new Ma2Telnet({ host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001 });
+  try {
+    await connection.connect(process.env.TBLINK_MA2_HARDWARE_USER ?? 'administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
+    await ensureMa2NetworkBridge(connection, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
+    const measured = { command: async (...args: Parameters<Ma2Telnet['command']>): Promise<string> => {
+      const start = performance.now();
+      try { return await connection.command(...args); }
+      finally { if (performance.now() - start > 500) console.info(JSON.stringify({ action: /'(begin|chunk|run|step|pack|read|release)'/.exec(args[0])?.[1] ?? 'command', ms: Math.round(performance.now() - start) })); }
+    } };
+    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(measured, true), showStopped);
+    let wireBytes = 0;
+    const started = performance.now();
+    const xml = await bridge.request('SEQCUES', 8999, Array.from({ length: 14 }, (_, index) => `${index + 1}.000`).join(','), '', undefined, value => { if (value) wireBytes = value.total; });
+    const measurement = { ms: Math.round(performance.now() - started), xmlBytes: Buffer.byteLength(xml), wireBytes, cues: inspectMa2SequenceXml(xml).sequences[0]!.cues.length };
+    await writeFile(resolve('artifacts/ma2-hardware-diagnostics/sequence-transfer.json'), JSON.stringify(measurement, null, 2));
+    console.info(JSON.stringify(measurement));
+    expect(measurement.cues).toBe(14);
+    expect(wireBytes).toBeGreaterThan(measurement.xmlBytes);
   } finally { connection.disconnect(); }
 }, 120000);
 
@@ -156,7 +181,7 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
   try {
     await raw.connect(process.env.TBLINK_MA2_HARDWARE_USER ?? 'administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
     await ensureMa2NetworkBridge(raw, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
-    const native = new Ma2OnpcBridge(new Ma2NetworkWire(connection), showStopped);
+    const native = new Ma2OnpcBridge(new Ma2NetworkWire(connection, process.env.TBLINK_MA2_HARDWARE_HOST === '127.0.0.1'), showStopped);
     const timed = async <T extends string | { response: string }>(label: string, run: () => Promise<T>): Promise<T> => {
       const before = { ...traffic }; const started = performance.now();
       try { const value = await run(); operations.push({ label, ms: Math.round(performance.now() - started), commands: traffic.commands - before.commands, received: Buffer.byteLength(typeof value === 'string' ? value : value.response) }); return value; }

@@ -5,7 +5,7 @@ flowchart TD
   end
   subgraph cloud["GitHub 云端 · Release Windows（windows-latest）"]
     verify["verify 作业<br/>版本高于已有标签和线上 latest.yml · 类型检查 · 单测 · lint"]
-    assets[("固定资产 release<br/>build-assets-beauty-… · build-assets-music-analysis-…<br/>分卷 tar + build-assets.json（各卷 sha256）")]
+    assets[("固定资产 release<br/>build-assets-music-analysis-…<br/>分卷 tar + build-assets.json（各卷 sha256）")]
     build["build 作业<br/>再查一次版本 · 下载固定资产逐卷核对 · 打包<br/>afterPack 按 release-pin.json 逐文件核对<br/>用 secret TBLINK_RELEASE_SIGNING_KEY 签 latest.yml · 写 release-manifest.json"]
     draft[("草稿 GitHub Release vX.Y.Z<br/>安装包 · blockmap · latest.yml · release-manifest.json")]
     cloudlog["日志 · Actions › Release Windows › 这次运行的日志"]

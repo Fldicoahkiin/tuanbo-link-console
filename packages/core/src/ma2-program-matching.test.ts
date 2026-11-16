@@ -77,3 +77,10 @@ it('已放进 Cue 的节目：起点仍和歌曲、放 Cue 时的起点一致才
   const missing = matchMa2Programs(project, { ...catalog, entries: [] });
   expect(missing.unresolved).toEqual([{ target: 1, reason: expect.stringContaining('新读取的控台里没有 Timecode 1') as string }]);
 });
+
+it('空控台时间线也按相同 MTC 匹配；新建的目标不被旧控台数据接管', () => {
+  const { project, catalog } = setup([{ id: 'A', startMs: 60000 }], [{ target: 10, offset: '1800', times: [] }]);
+  expect(matchMa2Programs(project, catalog).pairs).toEqual({ 10: 'A' });
+  project.rundown[0]!.lighting = { ...createLightingDocument(), timelineDestination: { name: '新时间线', timecode: 9000, sequence: 9000, executor: '1000.101' } };
+  expect(matchMa2Programs(project, catalog).pairs).toEqual({});
+});

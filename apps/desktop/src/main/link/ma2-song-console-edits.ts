@@ -36,7 +36,7 @@ export function mergeMa2SongConsoleEdits(binding: Ma2SongBinding, points: Points
   };
   const own = (point: Points[number], cue: string): boolean => point.cues.length === 1 && point.cues[0]!.sequence === binding.sequence && milli(point.cues[0]!.cue) === milli(cue) && point.cues[0]!.delayMs === 0;
   const timeKept = (point: Points[number], old: Ma2SongBinding['points'][number]): boolean => old.atMs === undefined || frames(point.atMs) === frames(old.atMs);
-  const untouched = (point: Points[number], old: Ma2SongBinding['points'][number]): boolean => own(point, old.cue) && sameName(point, old.cue) && timeKept(point, old);
+  const untouched = (point: Points[number], old: Ma2SongBinding['points'][number]): boolean => own(point, old.cue) && sameName(point, old.cue) && timeKept(point, old) && (point.enabled !== false) === (old.enabled !== false);
 
   // Times the song's own show fires each Cue of its Sequence, in frames; only read when the show changed.
   const fired = new Map<number, number[]>();
@@ -62,7 +62,7 @@ export function mergeMa2SongConsoleEdits(binding: Ma2SongBinding, points: Points
     const point = local.get(old.id);
     if (!point) continue;
     if (!onConsole.has(milli(old.cue))) { remove(point, old); continue; }
-    if (!show || old.atMs === undefined) continue;
+    if (!show || old.atMs === undefined || old.enabled === false) continue;
     const times = fired.get(milli(old.cue)) ?? [];
     if (!times.length) { remove(point, old); continue; }
     if (times.length !== 1 || Math.round(times[0]!) === frames(old.atMs)) continue;

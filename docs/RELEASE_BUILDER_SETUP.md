@@ -51,7 +51,7 @@ pnpm release:relay
 | `D:\tblink-release-signing\release-2026-10-a.pem` | 发布签名私钥（日常） | 读进 GitHub secret；第一次云端签名成功后删除本机副本（见[下文](#删除本机日常密钥)） |
 | `D:\tblink-release-signing\release-2026-10-b.pem` | 发布签名私钥（备用） | 暂时留在这里（2026-10-24 没有 U 盘，用户决定先不另外备份）；有 U 盘后拷过去离线保存，再删本机副本 |
 | `D:\tblink-release-signing\upload\` | 上传到服务器的 SSH 私钥和 known_hosts | 留在工位电脑，计划任务以 WYZB 读取 |
-| `D:\tblink-release-assets\` | 固定版本的美颜构建和音乐分析运行时 | 上传到 `build-assets-*` release 一次（见[固定资产](#固定资产)），之后不再需要 |
+| `D:\tblink-release-assets\` | 固定版本的音乐分析运行时 | 上传到 `build-assets-*` release 一次（见[固定资产](#固定资产)），之后不再需要 |
 | `C:\Program Files\Git\usr\bin\ssh.exe` | Git for Windows 自带的 OpenSSH，上传用它 | Windows 自带的 `ssh.exe`（9.5p2）发送大量标准输入时，约 100 KB 后就停住 |
 
 两把签名私钥在 `D:\tblink-release-signing\`，目录只允许 WYZB、SYSTEM 和管理员访问。文件权限挡不住以 WYZB 运行的程序，所以第一次云端签名成功后尽快删掉日常密钥 a 的本机副本。
@@ -64,9 +64,9 @@ pnpm release:relay
 <a id="固定资产"></a>
 ## 固定资产（一次，会话做）
 
-美颜构建和离线音乐分析运行时不在 git 里。云端 build 作业从两个专门的 GitHub release 下载它们：`build-assets-beauty-<指纹前 12 位>` 和 `build-assets-music-analysis-<指纹前 12 位>`，指纹来自仓库里的 `release-pin.json`。每个 release 里是一份压缩后分卷的 tar（每卷小于 GitHub 单个附件 2 GiB 的上限）和一份列出各卷 sha256 的 `build-assets.json`。下载时逐卷核对，afterPack 再按 `release-pin.json` 核对每个文件。
+离线音乐分析运行时不在 git 里。云端 build 作业从专门的 GitHub release 下载它：`build-assets-music-analysis-<指纹前 12 位>`，指纹来自仓库里的 `release-pin.json`。每个 release 里是一份压缩后分卷的 tar（每卷小于 GitHub 单个附件 2 GiB 的上限）和一份列出各卷 sha256 的 `build-assets.json`。下载时逐卷核对，afterPack 再按 `release-pin.json` 核对每个文件。
 
-gh 登录之后，会话在工位电脑上把 `D:\tblink-release-assets\` 下的两份资产上传一次（`scripts/build-assets.mjs` 的 `pack` 和 `publish`，用 `gh auth token` 作为 `GITHUB_TOKEN`，经本机代理上传）。资产重新构建、`release-pin.json` 的指纹变了，就要再上传一份新指纹的 release；旧的留着，旧标签的构建仍然可以重跑。
+gh 登录之后，会话在工位电脑上把 `D:\tblink-release-assets\` 下的资产上传一次（`scripts/build-assets.mjs` 的 `pack` 和 `publish`，用 `gh auth token` 作为 `GITHUB_TOKEN`，经本机代理上传）。资产重新构建、`release-pin.json` 的指纹变了，就要再上传一份新指纹的 release；旧的留着，旧标签的构建仍然可以重跑。
 
 <a id="3-给-runner-账号开权限"></a>
 ## 已取消的 runner 方案

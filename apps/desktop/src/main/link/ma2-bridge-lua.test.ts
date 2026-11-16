@@ -32,6 +32,49 @@ const sequenceXml = (number: number, color = '', extra = ''): string => `<?xml v
 </MA>
 `;
 const executorXml = (sequence: number): string => `<MA><Exec offset_from_first="0"><Assignment name="A"><No>25</No><No>1</No><No>${sequence}</No></Assignment><AssignmentExec><Button>12299</Button></AssignmentExec></Exec></MA>`;
+
+it('本机上传文件完整后才执行，大小错误不执行并可释放', async () => {
+  const ma2 = new Ma2LuaConsole(bridgeSource); const id = requestId(1);
+  const call = async (action: string, args = ''): Promise<string> => await ma2.command(`Lua "TBLINK_NET('${id}','${action}','${id}'${args})"`, text => ma2ResponseLine(text, `TBLINK_RPC_${id}:`));
+  const body = '灯具数据'.repeat(1000); const size = Buffer.byteLength(body);
+  const path = `/fake/temp/tblink_network_${id}.input.bin`;
+  expect(await call('begin', `,'PING',1,${size},'bg','file'`)).toBe(`ACK:lanes:file:${hex(path)}`);
+  ma2.lua('FAKE.files[PATH] = BODY', { PATH: path, BODY: 'short' });
+  expect(await call('run')).toMatch(/^ERR:/); expect(ma2.commands()).toEqual([]);
+  await call('release'); expect(ma2.file(path)).toBeNull();
+  await call('begin', `,'PING',1,${size},'bg','file'`);
+  ma2.lua('FAKE.files[PATH] = BODY', { PATH: path, BODY: body });
+  expect(await call('run')).toMatch(/^DONE:/); expect(ma2.file(path)).toBeNull();
+  await call('release');
+});
+it('本机大响应写入本次请求文件，释放后移除，过期请求在复用通道时清理', async () => {
+  const ma2 = new Ma2LuaConsole(bridgeSource);
+  const xml = sequenceXml(9901).replace('<CueData value="1"/>', '<CueData value="1"/>'.repeat(1000));
+  ma2.set('Sequence 9901', { xml, name: '序列 9901' });
+  const id = requestId(1); const next = requestId(2);
+  const call = async (action: string, identity = id, args = ''): Promise<string> => await ma2.command(`Lua "TBLINK_NET('${id}','${action}','${identity}'${args})"`, text => ma2ResponseLine(text, `TBLINK_RPC_${id}:`));
+  await call('begin', id, ",'SEQUENCE',9901,0,'bg','file'");
+  const receipt = await call('run');
+  expect(receipt).toMatch(/^FILE:\d+:/);
+  const path = `/fake/temp/tblink_network_${id}.bin`;
+  expect(ma2.file(path)?.toString()).toContain(xml.replace('@EXPORT@', '1'));
+  await call('release'); expect(ma2.file(path)).toBeNull();
+  await call('begin', next, ",'SEQUENCE',9901,0,'bg','file'"); await call('run', next);
+  ma2.lua('FAKE.now = FAKE.now + 121');
+  await call('begin', requestId(3), ",'PING',1,0,'bg','file'");
+  expect(ma2.file(`/fake/temp/tblink_network_${next}.bin`)).toBeNull();
+});
+it('大序列用字节查表传输，完整灯具数据与中文名称逐字保留', async () => {
+  const ma2 = new Ma2LuaConsole(bridgeSource);
+    const xml = sequenceXml(9901).replace('<CueData value="1"/>', '<CueData value="1" fixture="灯具一"/>'.repeat(10000));
+    ma2.set('Sequence 9901', { xml, name: '序列 9901' });
+    let downloaded = 0;
+    const wire = new Ma2NetworkWire(ma2);
+    const result = await wire.exchange(requestId(1), 'SEQCUES', 9901, '1.000,2.500', () => undefined, undefined, value => { if (value) downloaded = value.total; });
+    expect(result).toContain('<CueData value="1" fixture="灯具一"/>'.repeat(10000));
+    expect(downloaded).toBeGreaterThan(Buffer.byteLength(xml) - 100);
+    expect(ma2.lines.some(line => line.includes("'readbatch'"))).toBe(true);
+});
 const pageXml = `<MA major_vers="3"><Page index="7"><Exec xsi:nil="true" /><Exec offset_from_first="0"><Assignment name="A"><No>25</No><No>1</No><No>9901</No></Assignment></Exec><Exec offset_from_first="0"><Assignment name="B"><No>25</No><No>1</No><No>9903</No></Assignment></Exec><Exec offset_from_first="0"><Assignment name="C"><No>25</No><No>1</No><No>9901</No></Assignment></Exec></Page></MA>`;
 
 /** A small show: Timecodes 9902 (one Sequence) and 9910 (three), Sequences 9901 and 9903–9905, page 7. */
@@ -207,6 +250,14 @@ async function record(source: string, setup: ((ma2: Ma2LuaConsole) => void) | un
 }
 const flow = (name: string): Flow['run'] => { const found = flows.find(entry => entry.name === name); if (!found) throw new Error(name); return found.run; };
 const sequential = (requests: Request[]): Flow['run'] => async exchange => { for (const request of requests) await exchange(request); };
+
+it('TCRANGES 给控台原生 amount 只传一个句柄，不把 assert 的错误文字作为第二个参数', async () => {
+  const result = await record(bridgeSource, ma2 => {
+    ma2.lua("local amount = gma.show.getobj.amount; gma.show.getobj.amount = function(...) if select('#', ...) ~= 1 then return nil end; return amount(...) end");
+  }, sequential([{ operation: 'TCRANGES', target: 1 }]));
+  expect(result.results[0]).toMatch(/^OK /);
+  expect(result.results[0]).toContain('"entries"');
+});
 
 describe('插件真实代码：和一次做完的旧插件结果逐字节一样', () => {
   it.each(scenarios)('$name', async scenario => {

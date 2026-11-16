@@ -81,7 +81,7 @@ function ownShowStatus(item: Item, lighting: Lighting, song: ConsoleSong, timeco
   for (const point of points) {
     const stored = written.get(point.id);
     const own = stored && point.cues.length === 1 && point.cues[0]!.sequence === song.sequence && Number(point.cues[0]!.cue) === Number(stored.cue);
-    if (!stored || !own || stored.atMs === undefined || frames(stored.atMs) !== frames(point.atMs)) pending += 1;
+    if (!stored || !own || stored.atMs === undefined || frames(stored.atMs) !== frames(point.atMs) || (stored.enabled !== false) !== (point.enabled !== false)) pending += 1;
   }
   pending += song.points.filter(point => !points.some(local => local.id === point.id)).length;
   return { state: 'matched', timecode: timecode.number, startMs, frameRate: '30', pending, problems: [], notes: [] };

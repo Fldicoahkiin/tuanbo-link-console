@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { previewMa2BoundSync, type Ma2SyncPreview } from '@tb/core/link';
-import { lightingDocumentSchema, ma2TimecodePreviewSchema, type LightingDocument, type Ma2ConsoleChanges, type Ma2TimecodePreview } from '@tb/schema';
+import { lightingDocumentSchema, ma2TimecodePreviewSchema, ma2TimecodeFrameFormatSchema, type LightingDocument, type Ma2ConsoleChanges, type Ma2TimecodePreview } from '@tb/schema';
 import { inspectMa2TimecodeXml, validateMa2TimecodeWrite } from './ma2-timecode-xml';
 
 export function compareMa2LightingReadback(documentInput: LightingDocument, bindingId: string, readbackInput: Ma2TimecodePreview, consoleChanges: Ma2ConsoleChanges = 'read-back'): Ma2SyncPreview {
@@ -26,7 +26,7 @@ function verifySnapshotSource(xml: string, target: number, tracks: LightingDocum
   const report = inspectMa2TimecodeXml(xml);
   const timecode = report.timecodes[0];
   if (report.timecodes.length !== 1 || timecode?.index !== target - 1) throw new Error('同步 XML 与绑定的 Timecode 不一致');
-  if (timecode.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(timecode.attributes.offset ?? '0')) throw new Error('同步 XML 的时间基准还没经过验证');
+  if (!ma2TimecodeFrameFormatSchema.safeParse(timecode.attributes.frame_format).success || !/^\d+(?:\.\d+)?$/.test(timecode.attributes.offset ?? '0')) throw new Error('同步 XML 的时间基准还没经过验证');
   const source = new Map(timecode.tracks.flatMap((track) => track.subtracks.flatMap((subtrack) => subtrack.events.map((event) => [event.path, { event, subtrack, executor: track.executorAddress.slice(2).join('.') }] as const))));
   const mapped = new Set<string>();
   for (const mapping of mappings) {

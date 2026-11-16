@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { DOMParser, XMLSerializer, type Element as XmlElement } from '@xmldom/xmldom';
 import { z } from 'zod';
-import { ma2CueAttributesSchema, ma2LayoutSnapshotSchema, type Ma2CueAttributes, type Ma2LayoutSnapshot } from '@tb/schema';
+import { ma2CueAttributesSchema, ma2LayoutSnapshotSchema, ma2TimecodeFrameFormatSchema, type Ma2CueAttributes, type Ma2LayoutSnapshot } from '@tb/schema';
 import { inspectMa2CueContent } from './ma2-cue-content';
 import { ma2ExecutorPageSchema, type Ma2ExecutorPage } from '@tb/schema';
 
@@ -187,6 +187,14 @@ export function editMa2SongSequence(xml: string, name: string, changes: readonly
   // solely by the displayed Number. Leaving a hole after a deletion can assign
   // the following step's Part name to the wrong Cue.
   const numbered = children(sequence, 'Cue').filter(cue => singleChild(cue, 'Number'));
+  // An exported zero-Cue Sequence has no reserved first element. MA2 Import
+  // consumes that element as its zero slot regardless of the explicit indices;
+  // without the placeholder, the first authored Cue disappears on readback.
+  if (numbered.length && !children(sequence, 'Cue').some(cue => !singleChild(cue, 'Number'))) {
+    const zero = document.createElementNS(MA_NAMESPACE, 'Cue');
+    zero.setAttributeNS('http://www.w3.org/2001/XMLSchema-instance', 'xsi:nil', 'true');
+    sequence.insertBefore(zero, sequence.firstChild);
+  }
   const displayNumber = (cue: XmlElement): number => {
     const value = singleChild(cue, 'Number')!;
     return Number(value.getAttribute('number')) * 1000 + Number(value.getAttribute('sub_number') ?? 0);
@@ -595,7 +603,7 @@ export function prepareMa2TimecodeEvents(xml: string, expectedSha256: string, ta
   const report = inspectMa2TimecodeXml(xml);
   const tc = report.timecodes[0];
   if (report.timecodes.length !== 1 || tc?.index !== target - 1) throw new Error('写入目标 Timecode 与 XML 不一致');
-  if (!['3.3.4', '3.7.0'].includes(report.version) || tc.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(tc.attributes.offset ?? '0')) throw new Error('这个 Timecode 格式或时间基准还没验证过');
+  if (!['3.3.4', '3.7.0'].includes(report.version) || !ma2TimecodeFrameFormatSchema.safeParse(tc.attributes.frame_format).success || !/^\d+(?:\.\d+)?$/.test(tc.attributes.offset ?? '0')) throw new Error('这个 Timecode 格式或时间基准还没验证过');
   const edits = z.array(ma2EventEditSchema).parse(input);
   for (const edit of edits) {
     if (edit.kind === 'delete') continue;
@@ -729,7 +737,7 @@ export function resetMa2TimecodeShow(xml: string, target: number, show: { name: 
   validateMa2TimecodeWrite(xml);
   const report = inspectMa2TimecodeXml(xml);
   if (report.timecodes.length !== 1 || report.timecodes[0]?.index !== target - 1) throw new Error('自有 Timecode 与写入目标不一致');
-  if (!['3.3.4', '3.7.0'].includes(report.version) || report.timecodes[0].attributes.frame_format !== '30 FPS') throw new Error('这个 MA2 版本或时间格式还没验证过');
+  if (!['3.3.4', '3.7.0'].includes(report.version) || !ma2TimecodeFrameFormatSchema.safeParse(report.timecodes[0].attributes.frame_format).success) throw new Error('这个 MA2 版本或时间格式还没验证过');
   if (!Number.isSafeInteger(show.offset) || show.offset < 0 || show.offset >= 2592000) throw new Error('歌曲起始时间超出 24 小时');
   const { document, root } = parse(xml);
   const timecode = indexedChildren(root, 'Timecode')[0]!;
@@ -752,7 +760,7 @@ export function extendMa2TimecodeLength(xml: string, target: number, coverTicks 
   const report = inspectMa2TimecodeXml(xml);
   const timecode = report.timecodes[0];
   if (report.timecodes.length !== 1 || timecode?.index !== target - 1) throw new Error('播放长度目标与 Timecode 不一致');
-  if (!['3.3.4', '3.7.0'].includes(report.version) || timecode.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(timecode.attributes.offset ?? '0')) throw new Error('这个 MA2 版本或时间基准的播放长度还没验证过');
+  if (!['3.3.4', '3.7.0'].includes(report.version) || !ma2TimecodeFrameFormatSchema.safeParse(timecode.attributes.frame_format).success || !/^\d+(?:\.\d+)?$/.test(timecode.attributes.offset ?? '0')) throw new Error('这个 MA2 版本或时间基准的播放长度还没验证过');
   const length = timecode.attributes.lenght ?? '0';
   if (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length))) throw new Error('MA2 播放长度无效，未写入控台');
   let required = coverTicks;
@@ -830,3 +838,13 @@ function address(element: XmlElement | null): string[] {
   return element ? children(element, 'No').map((child) => child.textContent ?? '') : [];
 }
 function eventPath(...elements: XmlElement[]): string { return elements.map((element) => `${element.localName}:${indexOf(element)}`).join('/'); }
+
+
+/** Only these two root attributes change; tracks, native actions and event times stay intact. */
+export function editMa2TimecodeMetadata(xml: string, target: number, name: string, startMs: number): string {
+  const { document, root } = parse(xml);
+  const timecode = singleChild(root, 'Timecode');
+  if (!timecode || indexOf(timecode) + 1 !== target) throw new Error('控台时间线编号不一致');
+  timecode.setAttribute('name', name); timecode.setAttribute('offset', String(Math.round(startMs * 30 / 1000)));
+  return new XMLSerializer().serializeToString(document);
+}

@@ -102,3 +102,9 @@ export * from './ma2-song-sequence';
 export * from './ma2-executor-change';
 export { ma2ExecutorFunctions } from './ma2-executor-functions';
 export * from './show-state';
+export * from './lighting-template-steps';
+export * from './ma2-track-routing';
+
+export { newMa2TimelineCommand } from './ma2-new-timeline';
+
+export { editMa2TimelinePropertiesCommand } from './ma2-timeline-properties';

@@ -30,6 +30,7 @@ type Options = {
   focusTimeline: () => void;
   onSelectClip: (clipId: string) => void;
   onSelectCue: (cueId: string) => void;
+  onActivate: (ref: ContentRef, clientX: number) => void;
   onMoveClip: (clipId: string, startMs: number, layerId?: string | null) => void;
   onMoveCue: (cueId: string, startMs: number, layerId?: string | null) => void;
   frames?: FrameScheduler;
@@ -105,7 +106,8 @@ export function useTimelineItemDrag(options: Options): {
     if (!current || drag?.pointerId !== event.pointerId) return;
     const completed = current.preview.release(pointer(current, event));
     session.end();
-    if (!completed?.moved) return;
+    if (!completed) return;
+    if (!completed.moved) { options.onActivate(drag, event.clientX); return; }
     const layerId = completed.layerId;
     if (options.layers.find((layer) => layer.id === layerId)?.locked) return;
     if (drag.kind === 'clip') options.onMoveClip(drag.id, completed.startMs, layerId);

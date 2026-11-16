@@ -147,7 +147,8 @@ export function TimelineToolbar(props: Props): JSX.Element {
   return <div className="timeline-toolbar" onClick={giveKeysBack}>
     <div className="timeline-edit-controls" role="group" aria-label="时间线剪辑工具">
       {props.stampControls}
-      {props.tools ?? <>{props.recordingControl}
+      {props.recordingControl}
+      {props.tools ?? <>
         <MenuButton label="定位" menuLabel="跳到剪辑点" title="跳到上一个或下一个剪辑点">{(close) => <>
           <MenuItem icon={ArrowLeftToLine} shortcut={commandKeyLabel('transport.prevEditPoint', 'timeline')} onSelect={() => { close(); seekTo(previousEditPoint(props.editPoints, playhead.read(), props.frameRate)); }}>上一剪辑点</MenuItem>
           <MenuItem icon={ArrowRightToLine} shortcut={commandKeyLabel('transport.nextEditPoint', 'timeline')} onSelect={() => { close(); seekTo(nextEditPoint(props.editPoints, playhead.read(), props.frameRate, props.durationMs)); }}>下一剪辑点</MenuItem>

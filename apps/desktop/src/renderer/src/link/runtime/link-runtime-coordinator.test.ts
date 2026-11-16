@@ -3,6 +3,7 @@ import { createEmptyLinkProject, parseLinkProject, type LinkAction } from '@tb/s
 import type { LinkDesktopApi } from '@tb/core/link';
 import { LinkRuntimeCoordinator } from './link-runtime-coordinator';
 import { useRuntimeStore } from '../stores/runtime-store';
+import { LatestPosition } from './latest-position';
 
 const mocks = vi.hoisted(() => ({
   obsStatus: 'connected',
@@ -45,6 +46,29 @@ vi.mock('../../registry/link-midi-adapter', () => ({
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); mocks.obsStatus = 'connected'; mocks.executeObsAction.mockReset(); mocks.executeManagedMediaEvent.mockReset(); mocks.seekManagedMedia.mockReset(); useRuntimeStore.getState().reset(); });
 
 describe('LinkRuntimeCoordinator', () => {
+  it('快速改位置：旧素材准备完成后不切旧画面，直接切最后点击的场景', async () => {
+    let ready = (): void => { throw new Error('尚未准备'); };
+    const preparing = new Promise<void>(resolve => { ready = resolve; });
+    mocks.prepareObsMediaScenes.mockImplementationOnce(() => preparing);
+    mocks.executeObsAction.mockResolvedValue();
+    const project = parseLinkProject({ ...createEmptyLinkProject('快速定位'), playbackSource: 'internal', obsOutputMode: 'scenes',
+      mediaAssets: [{ id: 'video', name: 'video', kind: 'video', relativePath: 'video.mp4', sha256: 'a'.repeat(64), byteLength: 10, durationMs: 10000, width: 360, height: 640 }],
+      rundown: [{ id: 'song', title: '节目', visualLayers: [{ id: 'camera-layer', name: '机位' }, { id: 'video-layer', name: '视频' }],
+        referenceMediaClips: [{ id: 'video-clip', assetId: 'video', label: '视频', layerId: 'video-layer', startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 10000 }],
+        cues: [{ id: 'camera', name: '机位', layerId: 'camera-layer', timecode: { hours: 0, minutes: 0, seconds: 6, frames: 0 }, durationMs: 2000,
+          actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: 'Camera' }] }] }] });
+    const coordinator = new LinkRuntimeCoordinator(project, 'C:/show/project.tblink');
+    const settled = vi.fn(), failed = vi.fn();
+    const queue = new LatestPosition((position, current) => coordinator.previewEditor('song', position, false, current), settled, failed);
+    try {
+      queue.push(1000); await Promise.resolve();
+      queue.push(3000); queue.push(7000); ready();
+      await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+      expect(mocks.seekManagedMedia).not.toHaveBeenCalled();
+      expect(mocks.executeObsAction).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sceneName: 'Camera' }));
+      expect(failed).not.toHaveBeenCalled();
+    } finally { coordinator.dispose(); }
+  });
   it('只有音乐和灯光的歌：编辑器定位不要求 OBS 或工程保存位置，不发送任何画面请求', async () => {
     mocks.obsStatus = 'disconnected'; mocks.prepareObsMediaScenes.mockClear(); mocks.recordLog.mockClear();
     const project = parseLinkProject({ ...createEmptyLinkProject('只用灯光'), playbackSource: 'internal',

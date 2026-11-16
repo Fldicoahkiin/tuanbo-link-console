@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState, type DragEvent, type HTMLAttributes, type MouseEvent, type PointerEvent } from 'react';
-import { contentPlaceTaken, contentTrimBounds, millisecondsToFrameNumber, resolveTimelineClipSpan, timecodeToMilliseconds, type ContentRef, type ResolvedTimelineState, type TimelineSpan } from '@tb/core/link';
+import { contentPlaceTaken, contentTrimBounds, millisecondsToFrameNumber, playbackFramesPerSecond, resolveTimelineClipSpan, timecodeToMilliseconds, type ContentRef, type ResolvedTimelineState, type TimelineSpan } from '@tb/core/link';
 import type { LinkCue, LinkMediaAsset, LinkProject, MtcFrameRate, ReferenceMediaClip, RundownItem, VisualLayer } from '@tb/schema';
 import { MEDIA_DRAG_TYPE, OBS_DRAG_TYPE, type ObsResource } from './ResourceLibrary';
 import { parseObsResource } from './resource-library-model';
@@ -89,6 +89,7 @@ export type ContentTracksProps = {
   onOpenMenu: (target: TimelineTarget, x: number, y: number) => void;
   onSelectClip: (clipId: string) => void;
   onSelectCue: (cueId: string) => void;
+  onSeek: (positionMs: number) => void;
   onMoveClip: (clipId: string, startMs: number, layerId?: string | null) => void;
   onMoveCue: (cueId: string, startMs: number, layerId?: string | null) => void;
   onTrim: (ref: ContentRef, startMs: number, durationMs: number) => void;
@@ -115,6 +116,14 @@ function partAt(event: { target: EventTarget | null; currentTarget: Element }): 
 export function ContentTracks(props: ContentTracksProps): JSX.Element {
   const { viewport, snap } = props;
   const select = (ref: ContentRef): void => { if (ref.kind === 'clip') props.onSelectClip(ref.id); else props.onSelectCue(ref.id); };
+  const activate = (ref: ContentRef, clientX?: number): void => {
+    const span = partSpan(ref, props);
+    if (!span) return;
+    const frameMs = 1000 / playbackFramesPerSecond(props.frameRate);
+    // Stay inside the clicked part: snapping to its exclusive end would show the next scene.
+    const at = clientX === undefined ? span.startMs : viewport.timeAtClientX(clientX);
+    props.onSeek(Math.max(span.startMs, Math.min(at, span.startMs + Math.max(0, span.durationMs - frameMs))));
+  };
   // The playhead to snap to, read when asked: none while the song plays.
   const playing = useRef(props.playing);
   playing.current = props.playing;
@@ -160,7 +169,7 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
     label: (ref, startMs) => partLabel(ref, startMs, undefined, props),
     dropNote: () => dropNote.current,
     focusTimeline: props.focusTimeline,
-    onSelectClip: props.onSelectClip, onSelectCue: props.onSelectCue, onMoveClip: props.onMoveClip, onMoveCue: props.onMoveCue
+    onSelectClip: props.onSelectClip, onSelectCue: props.onSelectCue, onActivate: activate, onMoveClip: props.onMoveClip, onMoveCue: props.onMoveCue
   });
   const trim = useContentTrim({
     // A trimmed edge snaps to every other part's edges, the playhead and the song's beats, fixed at the press.
@@ -191,6 +200,7 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
   };
   // The parts' events, on their track (TimelineItems): a press moves or trims a part, or else moves the playhead.
   const pressPart = (event: PointerEvent<HTMLElement>, layer: VisualLayer): void => {
+    if (event.button !== 0) return;
     const hit = partAt(event);
     if (!hit) { props.lanePointer.onPointerDown?.(event); return; }
     if (hit.handle && hit.edge) {
@@ -199,7 +209,7 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
       if (span) trim.begin(event, hit.ref, span, hit.edge, hit.handle, hit.part);
       return;
     }
-    if (layer.locked) { event.stopPropagation(); select(hit.ref); return; }
+    if (layer.locked) { event.stopPropagation(); select(hit.ref); activate(hit.ref, event.clientX); return; }
     const originLayerId = hit.ref.kind === 'clip' ? props.clips.find((clip) => clip.id === hit.ref.id)?.layerId : props.cues.find((cue) => cue.id === hit.ref.id)?.layerId;
     itemDrag.begin(event, { ref: hit.ref, originMs: partStart(hit.ref, props), originLayerId }, hit.part);
   };
@@ -208,7 +218,7 @@ export function ContentTracks(props: ContentTracksProps): JSX.Element {
     onPointerMove: (event) => { itemDrag.move(event); trim.move(event); props.lanePointer.onPointerMove?.(event); },
     onPointerUp: (event) => { itemDrag.end(event); trim.end(event); props.lanePointer.onPointerUp?.(event); },
     onPointerCancel: (event) => { itemDrag.cancel(event); trim.cancel(event); props.lanePointer.onPointerCancel?.(event); },
-    onClick: (event) => { const hit = partAt(event); if (hit) select(hit.ref); },
+    onClick: (event) => { const hit = partAt(event); if (hit) { select(hit.ref); if (event.detail === 0 && !hit.handle) activate(hit.ref); } },
     onContextMenu: (event: MouseEvent<HTMLElement>) => {
       const hit = partAt(event);
       if (!hit) return;

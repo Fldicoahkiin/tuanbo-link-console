@@ -5,10 +5,13 @@ import { lightingDocumentSchema, type LightingDocument, type LightingEvent, type
 import type { LightingTimelineProps } from './LightingTimeline';
 import { ma2SequenceLibrary } from '../view-models/ma2-sequence-library';
 import { useDocumentStore } from '../stores/document-store';
+import { lightingTemplateSteps } from '@tb/core/link';
+import { useLightingSequencePlacement } from '../stores/lighting-sequence-placement-store';
 
-type Source = { id: string; name: string; events: LightingEvent[] };
+type Source = { id: string; name: string; events: LightingEvent[]; error?: string };
 export function LightingMusicBatch({ lighting, playheadMs, durationMs, markerId, range, onPreview }: { lighting: LightingTimelineProps; playheadMs: number; durationMs: number; markerId: string | null; range: { start: number; end: number } | null; onPreview: (next: LightingDocument, changes: CuePositionChange[], label: string) => void }): JSX.Element {
   const document = lighting.document; const project = useDocumentStore(state => state.project);
+  const sequenceInterval = useLightingSequencePlacement(state => state.intervalBeats);
   const [operation, setOperation] = useState('place'); const [sourceMode, setSourceMode] = useState('selected');
   const [routes, setRoutes] = useState<Record<string,string>>({});
   const [sourceIds, setSourceIds] = useState<string[]>([]); const [query, setQuery] = useState('');
@@ -24,11 +27,13 @@ export function LightingMusicBatch({ lighting, playheadMs, durationMs, markerId,
     if (sourceMode === 'selected') return document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => selectedIds.includes(event.id) && event.kind === 'ma2').map(event => ({ id: event.id, name: event.kind === 'ma2' ? event.label : track.name, events: [{ ...event, at: 0 }] }))));
     if (sourceMode === 'library') return document.templates.flatMap(template => {
       const stamp = template.track.cueStamp; if (stamp?.mode !== 'fixed') return [];
-      const members = template.members ?? [{ ...stamp, name: template.name, delayMs: 0 }];
+      let members: ReturnType<typeof lightingTemplateSteps>;
+      try { members = lightingTemplateSteps(document, template, ma2SequenceLibrary(project, document), start, sequenceInterval); }
+      catch (cause) { return [{ id: template.id, name: template.name, events: [], error: cause instanceof Error ? cause.message : String(cause) }]; }
       return [{ id: template.id, name: template.name, events: members.map(member => ({ id: crypto.randomUUID(), kind: 'ma2' as const, action: 'goto' as const, label: member.name, at: member.delayMs, executor: member.executor, sequence: member.sequence, cue: member.cue, librarySource: { id: template.id, revision: template.libraryRevision ?? 1 } })) }];
     });
     return ma2SequenceLibrary(project, document).flatMap(sequence => sequence.cues.map(cue => ({ id: `${sequence.sequence}:${cue.number}`, name: `${sequence.name ?? sequence.sequence} · ${cue.number} ${cue.name ?? ''}`, events: [{ id: crypto.randomUUID(), kind: 'ma2' as const, action: 'goto' as const, label: cue.name ?? `Cue ${cue.number}`, executor: '', sequence: sequence.sequence, cue: cue.number, at: 0 }] })));
-  }, [document, project, sourceMode, selectedIds]);
+  }, [document, project, sourceMode, selectedIds, start, sequenceInterval]);
   const visibleSources = sources.filter(source => source.name.toLowerCase().includes(query.toLowerCase()));
   const chosen = sourceMode === 'selected' ? sources : sourceIds.flatMap(id => sources.filter(source => source.id === id));
   const preview = (): void => {
@@ -43,6 +48,7 @@ export function LightingMusicBatch({ lighting, playheadMs, durationMs, markerId,
         onPreview(moveMusicCues(document, changes, durationMs), changes, operation === 'marker' ? '选中 Cue 对齐音乐标记' : '整组移动 Cue'); return;
       }
       if (!chosen.length) throw new Error('请选择需要放置的 Cue');
+      const invalid = chosen.find(source => source.error); if (invalid) throw new Error(invalid.error);
       if (sourceMode === 'library' && project) for (const source of chosen) { const entry=projectLightingLibrary(project).entries.find(value=>value.id===source.id); if(!entry)throw new Error('这个分类素材已经不存在了');const issue=libraryReferenceIssue(project,entry);if(issue)throw new Error(issue); }
       if (sourceMode === 'console' && project?.ma2MaterialLibrary?.library?.sourceUnverified) throw new Error('控台素材的来源还没确认，暂时不能使用');
 
@@ -56,7 +62,8 @@ export function LightingMusicBatch({ lighting, playheadMs, durationMs, markerId,
       const track: LightingTrack = target ?? { id: crypto.randomUUID(), name: '灯光', kind: 'ma2', color: '#ba8fff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [] };
       const events: LightingEvent[] = []; const changes: CuePositionChange[] = [];
       times.forEach((ms, index) => {
-        const source = chosen[index % chosen.length]!; const groupId = source.events.length > 1 ? crypto.randomUUID() : undefined;
+        const source = chosen[index % chosen.length]!; const independent = sourceMode === 'library' && document.templates.find(template => template.id === source.id)?.nativeSequence;
+        const groupId = source.events.length > 1 && !independent ? crypto.randomUUID() : undefined;
         source.events.forEach(event => {
           const id = crypto.randomUUID(); const at = ms + event.at;
           if (at < 0 || at >= durationMs) throw new Error('Cue 超出了歌曲范围，没有添加');

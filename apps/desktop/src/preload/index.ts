@@ -1,3 +1,4 @@
+import { ma2TimelineEditRequestSchema, ma2TimelineEditResultSchema } from '@tb/schema';
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutDirectorySchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
 import { ma2ExecutorPageDirectorySchema, ma2ExecutorPageSchema, ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorUpdateResultSchema, ma2ExecutorInputSchema, ma2ExecutorChannelSchema, ma2ExecutorChannelChoiceRequestSchema } from '@tb/schema';
 import { ma2ButtonLiveRequestSchema, ma2ButtonLiveSchema, ma2WebRemoteStateSchema } from '@tb/schema';
@@ -168,6 +169,7 @@ const tbLink: LinkDesktopBridgeApi = {
   ma2TimecodeRanges: async network => ma2TimecodeRangesSchema.parse(await invoke('link:ma2-timecode-ranges', ma2NetworkTargetSchema.parse(network))),
   createMa2Cue: async payload => ma2NewCueResultSchema.parse(await invoke('link:ma2-new-cue', ma2NewCueRequestSchema.parse(payload))),
   cancelMa2Read: (id) => invoke('link:ma2-read-cancel', id),
+  editMa2Timeline: async payload => ma2TimelineEditResultSchema.parse(await invoke('link:ma2-timeline-edit', ma2TimelineEditRequestSchema.parse(payload))),
   createMa2: (payload) => invoke('link:ma2-create', payload),
   readMa2Executor: (payload) => invoke('link:ma2-executor', payload),
   compareMa2: (payload) => invoke('link:ma2-compare', payload),
@@ -291,15 +293,6 @@ const tbLink: LinkDesktopBridgeApi = {
   prepareObsMediaScenes: (projectPath, project, preciseSeeking) => invoke('link:obs-media-scenes-prepare', projectPath, project, preciseSeeking),
   readObsOutputStatus: () => invoke('link:obs-output-status'),
   readObsLiveScene: () => invoke('link:obs-live-scene'),
-  readObsBeauty: target => invoke('link:obs-beauty-read', target),
-  applyObsBeauty: payload => invoke('link:obs-beauty-apply', payload),
-  installBeautyRuntime: () => invoke('link:beauty-install'),
-  startBeautyRuntime: payload => invoke('link:beauty-start', payload),
-  stopBeautyRuntime: () => invoke('link:beauty-stop'),
-  readBeautyRuntime: () => invoke('link:beauty-status'),
-  syncBeautyOutput: values => invoke('link:beauty-output', values),
-  readBeautyComparison: target => invoke('link:beauty-comparison-frame', target),
-  closeBeautyComparison: () => invoke('link:beauty-comparison-close'),
   editObsLiveScene: (edit) => invoke('link:obs-live-edit', edit),
   onObsLiveChanged: (listener) => { const notify = (): void => listener(); ipcRenderer.on('link:obs-live-changed', notify); return () => { ipcRenderer.removeListener('link:obs-live-changed', notify); }; },
   getObsLiveFrame: () => invoke('link:obs-live-frame'),

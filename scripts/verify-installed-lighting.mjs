@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPackagedDesktop } from '../tools/obs/beauty/verify-packaged-desktop.mjs';
+import { launchPackagedDesktop } from './verify-packaged-desktop.mjs';
 
 if (process.argv.length !== 5) throw new Error('参数：安装后的 EXE、原生绑定测试工程、新证据目录');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');

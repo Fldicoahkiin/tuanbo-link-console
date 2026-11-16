@@ -65,3 +65,11 @@ it('第 1000 页 101–190 放满时放到 1001 页，原有内容不覆盖（20
   expect(script).toContain('Store Page 1001 /nc'); expect(script).toContain('Assign Sequence 9300 At Executor 1001.101');
   expect(script).not.toContain('1000.');
 });
+
+it('用户指定格位被占用时向后顺延，空位保持原地址', async () => {
+  const f = fixture(true);
+  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.101', showStopped, true)).toMatchObject({ address: '1000.102', assigned: false });
+  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.201', showStopped, true)).toMatchObject({ address: '1000.202', assigned: false });
+  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.150', showStopped, true)).toMatchObject({ address: '1000.150', assigned: false });
+  expect(f.connection.command).not.toHaveBeenCalled();
+});

@@ -7,6 +7,7 @@ import { Ma2PendingChanges } from './Ma2PendingChanges';
 import { lightingEditHandler } from './lighting-edit-handler';
 import { useStoppedRuntimeRecovery } from './useStoppedRuntimeRecovery';
 import { LightingEffectDock } from './LightingEffectDock';
+import { useMa2ReadStore } from '../stores/ma2-read-store';
 import { useLightingLibrarySplit } from './LightingLibrarySplitter';
 import { useLightingEffectStamp } from './useLightingEffectStamp';
 import { useSongWaveformSource } from './ReferenceWaveform';
@@ -40,7 +41,7 @@ import {
   updateVisualLayerCommand,
   type LinkCommand
 } from '@tb/core/link';
-import { Clock3, FileVideo2, MonitorPlay, FolderInput } from 'lucide-react';
+import { Clock3, FileVideo2, MonitorPlay } from 'lucide-react';
 import { type LightingDocument, type LinkProject } from '@tb/schema';
 import { LightingTimelineTools, type LightingTool } from './LightingTimelineTools';
 import { useRuntimeStore } from '../stores/runtime-store';
@@ -114,7 +115,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
   const [pointDetails, setPointDetails] = useState(false); const { open: analysisOpen, setOpen: setAnalysisOpen, host: analysisHost, setHost: setAnalysisHost, show: openMusic } = useMusicPanel(lightingWorkspace, Boolean(selectedCueId || selectedClipId), () => setLightingTool(null), () => { setLightingSelection(null); setSelectedCueId(null); setSelectedClipId(null); audioEditor.select(null); });
   const [cueSelectionVersion, setCueSelectionVersion] = useState(0);
   const showCommonProperties = (): void => { setAnalysisOpen(false); audioEditor.select(null); setLightingSelection(null); setSelectedCueId(null); setSelectedClipId(null); setLightingTool(null); setPointDetails(false); };
-  const openLightingTool = (tool: LightingTool): void => { if (tool === 'tempo') showCommonProperties(); else { setPointDetails(false); setLightingTool(tool); } };
+  const openLightingTool = (tool: LightingTool): void => { if (tool === 'tempo') showCommonProperties(); else { setAnalysisOpen(false); setPointDetails(false); if (lightingWorkspace) useMa2ReadStore.setState({ browserOpen: false }); setLightingTool(tool); } };
   const assetAvailability = useAssetAvailability(projectPath, project, notify);
   const workspaceLayout = useWorkspaceLayout(notify);
   const runCommand = createCommandRunner(execute, notify);
@@ -246,7 +247,7 @@ export function CueWorkspace({ workspace = 'visual', syncHost, player, playbackP
           onDeleteClip={removeClip}
           onDeleteCue={removeCue}
         /> : <div className="empty-panel studio-empty"><MonitorPlay /><h3>先选择当前节目</h3><p>然后把本地素材或 OBS 场景、来源拖到时间线上。</p></div>}
-        {lightingWorkspace && item ? <LightingEffectDock itemId={item.id} onCreated={selectCreatedCue} onAuditionTemplate={audition.selectTemplate} auditionStatus={audition.enabled ? audition.status : '已关闭选中即播放'} sidebarHost={sidebarHost} key={item.id} pointDetails={pointDetails} cueSelectionVersion={cueSelectionVersion} onLibrary={() => { setAnalysisOpen(false); setLightingTool(null); setPointDetails(false); }} externalPanel={analysisOpen ? <div className="music-analysis-host" ref={setAnalysisHost} /> : lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools inline tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null} playbackSettings={<Switch className="lighting-audition-switch" label="时间线选中 Cue 试听" aria-label="选中 Cue 实时播放" help={audition.enabled ? audition.status : '已关闭选中即播放'} checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />} headerActions={<Button variant="ghost" size="sm" icon={FolderInput} aria-pressed={lightingTool === 'files'} aria-label="导入 / 导出" onClick={() => openLightingTool('files')} disabled={playing || runtimeState !== 'idle'}>导入与导出</Button>} eventId={lightingSelection?.eventId} playhead={playhead} durationMs={timelineReferenceAudio?.durationMs ?? 0} onNew={showCommonProperties} document={lightingDocument} disabled={false} onStamp={id => effectStamp.stamp(id, externalTransport && playing && clock?.read().ready ? clock.read().positionMs : playhead.read())} onChange={changeLighting} notify={notify} /> : null}
+        {lightingWorkspace && item ? <LightingEffectDock itemId={item.id} onCreated={selectCreatedCue} onAuditionTemplate={audition.selectTemplate} auditionStatus={audition.enabled ? audition.status : '已关闭选中即播放'} sidebarHost={sidebarHost} key={item.id} pointDetails={pointDetails} cueSelectionVersion={cueSelectionVersion} onLibrary={() => { setAnalysisOpen(false); setLightingTool(null); setPointDetails(false); }} externalPanel={analysisOpen ? <div className="music-analysis-host" ref={setAnalysisHost} /> : lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools inline tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null} playbackSettings={<Switch className="lighting-audition-switch" label="时间线选中 Cue 试听" aria-label="选中 Cue 实时播放" help={audition.enabled ? audition.status : '已关闭选中即播放'} checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />} eventId={lightingSelection?.eventId} playhead={playhead} durationMs={timelineReferenceAudio?.durationMs ?? 0} onNew={showCommonProperties} document={lightingDocument} disabled={false} onStamp={id => effectStamp.stamp(id, externalTransport && playing && clock?.read().ready ? clock.read().positionMs : playhead.read())} onChange={changeLighting} notify={notify} /> : null}
       </main>
 
     </div>

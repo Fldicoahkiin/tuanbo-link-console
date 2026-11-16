@@ -12,7 +12,7 @@
    - 打了 tag 但没发布出去的版本（打包失败，GitHub 上没有它的 release 或草稿，更新源也没有它），修好后在修复提交上再触发一次，标签挪过去，版本号不变（用户 2026-10-26 要求不跳号）。已有草稿或已发布的版本，tag 作业拒绝挪动。
    - 推 master 后 Verify Desktop 在 Linux 上检查类型、lint、单测，以及正式模式构建不带本机开发测试通道（这类问题以前要到打包时才发现，0.5.3 第一次就是这样失败的）。Windows 上的全部单测不再每次推都跑（2026-11-12，省 Actions 额度）：发版时 Release Windows 的 verify 会跑；动了只在 Windows 上能跑的东西时，发版前先手动触发一次 Verify Desktop。
 3. 之后全部自动（2026-10-24 用户定下：在 GitHub 云端打包，工位电脑只负责把包搬到服务器；不用 Cloudflare）：
-   - Release Windows 的 verify 和 build 作业在 GitHub 云端 Windows 上同时跑（2026-10-29 起，以前 build 要等 verify 结束，多约 15 分钟）：verify 检查版本、类型、单测、lint；build 下载美颜和音乐分析的固定资产，打包、签名，等 verify 通过（`scripts/wait-for-job.mjs`）后才把四个文件放进这个标签的草稿 GitHub Release。verify 没通过就没有草稿，tag 仍能挪到修复提交，版本号不跳。
+   - Release Windows 的 verify 和 build 作业在 GitHub 云端 Windows 上同时跑（2026-10-29 起，以前 build 要等 verify 结束，多约 15 分钟）：verify 检查版本、类型、单测、lint；build 下载音乐分析的固定资产，打包、签名，等 verify 通过（`scripts/wait-for-job.mjs`）后才把四个文件放进这个标签的草稿 GitHub Release。verify 没通过就没有草稿，tag 仍能挪到修复提交，版本号不跳。
    - 搬运：工位电脑的计划任务每 10 分钟（以及登录、联网时）跑一次 `scripts/relay-release.mjs`，Mac 也可以手动 `pnpm release:relay`，二选一，重复运行安全。它下载草稿、按构建清单核对，上传到服务器 staging；服务器上已有或正在上传就不重复传。[服务器安装](SERVER_INSTALL_DELTA_UPLOAD_20261029.md)之后只下载、上传更新源当前版没有的块（0.5.4 到 0.5.5 上传 8.4 MB，原来 982 MB），服务器拼出完整安装包再核对；拼不出来就改传完整安装包。
    - 服务器：发布脚本重新做全部校验（签名、manifest、sha256、版本高于更新源、这个版本没发布过），通过就上线。
    - 搬运脚本看到更新源换成这个版本后，把草稿转为正式 Release，标为 Latest。
@@ -59,7 +59,7 @@
 - **想快一点**：工位计划任务每 10 分钟跑一次，草稿建好后最多等 10 分钟。急的话在 Mac 上立刻 `pnpm release:relay`，两边同时跑也不会重复上传。
 - **工位电脑不在线**：计划任务只在 WYZB 登录时运行（要用 WYZB 的 gh 登录）。关机时在 Mac 上跑 `pnpm release:relay`，它用 Mac 自己的上传密钥。
 - **GitHub 身份**：在工位电脑的 SSH 会话里读不到 gh 登录（token 在 Windows 凭据管理器里）。需要 GitHub 身份的事走计划任务，或者在 Mac 上做；不要在机器之间搬运 token。
-- **固定资产**：美颜或音乐分析重新构建、`release-pin.json` 的指纹变了，就要再上传一份 `build-assets-*` release。资产目录只在工位电脑上，所以上传要放进 WYZB 的交互会话里跑（像搬运那样做成一次性计划任务，或者让用户在工位电脑的窗口里运行），上传可以续传。
+- **固定资产**：音乐分析重新构建、`release-pin.json` 的指纹变了，就要再上传一份 `build-assets-*` release。资产目录只在工位电脑上，所以上传要放进 WYZB 的交互会话里跑（像搬运那样做成一次性计划任务，或者让用户在工位电脑的窗口里运行），上传可以续传。
 - **工位电脑的网络**：上传服务器必须用 Git for Windows 的 ssh，Windows 自带的 ssh.exe 输入一大就停。本机代理 127.0.0.1:7890 偶尔会断开连接，搬运下一轮会接着做。
 - **大文件上传 GitHub**：必须从文件流式发送，一次写入整个安装包在 Windows 上会失败（就是 0.5.1 的问题）。
 - **改草稿 release**：通过 API 修改草稿时要带上 `tag_name`，否则 GitHub 会把它的标签名改成 `untagged-…`。

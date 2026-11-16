@@ -51,7 +51,7 @@ describe('授权失效时停止、关灯照常发出', () => {
       { kind: 'obs.setInputMute', inputName: '音乐', muted: true }, { kind: 'obs.setSceneItemEnabled', sceneName: '场景', sourceName: '素材', enabled: false }]) {
       await expect(access.authorize('link:obs-execute', obs(action))).resolves.toBeUndefined();
     }
-    for (const channel of ['link:native-obs-stop', 'link:native-obs-preload-cancel', 'link:ma2-play-cancel', 'link:ma2-audition-control', 'link:beauty-stop']) {
+    for (const channel of ['link:native-obs-stop', 'link:native-obs-preload-cancel', 'link:ma2-play-cancel', 'link:ma2-audition-control']) {
       await expect(access.authorize(channel, undefined)).resolves.toBeUndefined();
     }
     await expect(access.setActive(false)).resolves.toBeUndefined();

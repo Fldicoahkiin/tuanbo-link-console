@@ -4,6 +4,7 @@ import {
   linkLogFilterSchema,
   linkLogRecordSchema,
   linkMediaAssetImportPayloadSchema,
+  linkManagedMediaExecutionPayloadSchema,
   linkObsSourcePreviewPayloadSchema,
   linkProjectNameSchema,
   linkReferenceAudioImportPayloadSchema,
@@ -13,6 +14,16 @@ import {
 } from './link-ipc';
 
 describe('联动台 IPC Zod 契约', () => {
+  it('素材定位保留 OBS 原样时允许没有变换；提供的变换仍严格校验', () => {
+    const payload = { projectPath: 'C:/Shows/show.tblink', event: {
+      id: 'start', phase: 'start', frameNumber: 0, itemId: 'song', clipId: 'clip', layerId: 'layer', layerIndex: 0, layerCount: 1,
+      sourceName: '团播联动台·素材·视频·来源', sceneName: '团播联动台·素材·视频', assetId: 'video', assetName: '视频', assetKind: 'video',
+      relativePath: 'video.mp4', sourceOffsetMs: 1000, embeddedAudioEnabled: false
+    } };
+    expect(linkManagedMediaExecutionPayloadSchema.parse(payload)).toEqual(payload);
+    expect(linkManagedMediaExecutionPayloadSchema.parse({ ...payload, event: { ...payload.event, transform: undefined } }).event.transform).toBeUndefined();
+    for (const transform of [null, 1, { x: Infinity }]) expect(linkManagedMediaExecutionPayloadSchema.safeParse({ ...payload, event: { ...payload.event, transform } }).success).toBe(false);
+  });
   it('波形生成只接收应用素材令牌和有界时长', () => {
     const payload = { projectPath: 'C:/Shows/show.tblink', sha256: 'a'.repeat(64), url: 'tblink-asset://local/12345678-abcd-4321-abcd-123456789abc', durationMs: 3605000, rebuild: false };
     expect(linkWaveformGeneratePayloadSchema.parse(payload)).toEqual(payload);

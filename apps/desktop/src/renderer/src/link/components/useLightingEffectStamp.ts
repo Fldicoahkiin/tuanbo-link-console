@@ -1,20 +1,24 @@
-import { assertMusicCueConflicts, removeLightingEffects, setLightingCommand, lightingEventTime, LightingTempoMap, libraryReferenceIssue, libraryTemplates, projectLightingLibrary, placeConsoleCue } from '@tb/core/link';
+import { assertMusicCueConflicts, removeLightingEffects, setLightingCommand, lightingEventTime, LightingTempoMap, libraryReferenceIssue, libraryTemplates, projectLightingLibrary, placeConsoleCue, lightingTemplateSteps, type LightingTemplateSequence } from '@tb/core/link';
 import { lightingDocumentSchema, type LightingDocument } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { consoleCueDragSchema, type ConsoleCueDrag } from './lighting-material-drag';
+import { ma2SequenceLibrary } from '../view-models/ma2-sequence-library';
+import { useLightingSequencePlacement } from '../stores/lighting-sequence-placement-store';
+import { lightingSequenceSteps } from '@tb/core/link';
 
-type Stamp = { effectId: string; ms: number; id: string; groupId?: string };
-export function placeEffect(document: LightingDocument, stamp: Stamp, durationMs: number): LightingDocument {
+type Stamp = { effectId: string; ms: number; id: string; groupId?: string | undefined };
+export function placeEffect(document: LightingDocument, stamp: Stamp, durationMs: number, sequences: readonly LightingTemplateSequence[] = [], intervalBeats = 1): LightingDocument {
   if (!Number.isFinite(stamp.ms) || stamp.ms < 0 || stamp.ms >= durationMs) throw new Error('Cue 超出歌曲范围');
   const effect = document.templates.find(entry => entry.id === stamp.effectId);
   const binding = effect?.track.cueStamp;
   if (!effect || binding?.mode !== 'fixed') throw new Error('请先绑定灯光效果');
   if (binding.executor && !/^[1-9]\d*\.[1-9]\d*$/.test(binding.executor)) throw new Error('这个素材还没绑定执行器，请在素材设置里填写“页号.执行器编号”');
-  if (effect.members) {
-    if (effect.members.some(member => stamp.ms + member.delayMs >= durationMs)) throw new Error('组合效果超出了音频结尾，请往前放');
-    return [...effect.members].sort((a, b) => a.delayMs - b.delayMs).reduce((result, member, index) => {
-      const temporary = { ...effect, name: member.name, members: undefined, track: { ...effect.track, cueStamp: { mode: 'fixed' as const, sequence: member.sequence, cue: member.cue, executor: member.executor } } };
-      const value = placeEffect({ ...result, templates: result.templates.map(entry => entry.id === effect.id ? temporary : entry) }, { ...stamp, ms: stamp.ms + member.delayMs, id: index === 0 ? stamp.id : crypto.randomUUID(), groupId: stamp.id }, durationMs);
+  if (effect.members || effect.nativeSequence) {
+    const steps = lightingTemplateSteps(document, effect, sequences, stamp.ms, intervalBeats);
+    if (steps.some(member => stamp.ms + member.delayMs >= durationMs)) throw new Error('整套 Cue 超出了歌曲结尾，请减小每步间隔或往前放');
+    return [...steps].sort((a, b) => a.delayMs - b.delayMs).reduce((result, member, index) => {
+      const temporary = { ...effect, name: member.name, nativeSequence: false, members: undefined, track: { ...effect.track, cueStamp: { mode: 'fixed' as const, sequence: member.sequence, cue: member.cue, executor: member.executor } } };
+      const value = placeEffect({ ...result, templates: result.templates.map(entry => entry.id === effect.id ? temporary : entry) }, { ...stamp, ms: stamp.ms + member.delayMs, id: index === 0 ? stamp.id : crypto.randomUUID(), groupId: effect.nativeSequence ? undefined : stamp.id }, durationMs);
       return { ...value, templates: document.templates };
     }, document);
   }
@@ -43,7 +47,7 @@ export function useLightingEffectStamp(itemId: string | null, document: Lighting
         for (const track of base.tracks) for (const clip of track.clips) { const old = clip.events.find(event => event.id === replaceId); if (old) ms = lightingEventTime(clip, old, map); }
         base = removeLightingEffects(base, [replaceId]);
       }
-      const value = placeEffect(base, { effectId, ms, id: crypto.randomUUID() }, durationMs);
+      const value = placeEffect(base, { effectId, ms, id: crypto.randomUUID() }, durationMs, ma2SequenceLibrary(state.project, base), useLightingSequencePlacement.getState().intervalBeats);
       commit(itemId, value);
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
   };
@@ -57,7 +61,13 @@ export function useLightingEffectStamp(itemId: string | null, document: Lighting
       if (!item) throw new Error('歌曲已删除，请重新选择');
       const pool = state.project?.ma2MaterialLibrary?.library;
       if (!pool || pool.sourceUnverified || !pool.sequences.some(sequence => sequence.sequence === reference.sequence && sequence.cues.some(cue => cue.number === reference.cue))) throw new Error('控台素材已经变了或还没确认，请重新读取后再拖入');
-      commit(itemId, placeConsoleCue(item.lighting ?? document, reference, ms, durationMs));
+      const base = item.lighting ?? document;
+      if (reference.wholeSequence) {
+        const sequence = ma2SequenceLibrary(state.project, base).find(value => value.sequence === reference.sequence);
+        if (!sequence) throw new Error('这套 Cue 还没有读取，请重新读取控台素材');
+        const steps = lightingSequenceSteps(base, sequence, reference.executor, ms, useLightingSequencePlacement.getState().intervalBeats);
+        commit(itemId, steps.reduce((value, step) => placeConsoleCue(value, { sequence: step.sequence, cue: step.cue, name: step.name, executor: step.executor }, ms + step.delayMs, durationMs), base));
+      } else commit(itemId, placeConsoleCue(base, reference, ms, durationMs));
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
   };
   return { stamp, stampConsoleCue };

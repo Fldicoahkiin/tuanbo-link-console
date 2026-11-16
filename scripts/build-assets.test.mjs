@@ -20,10 +20,10 @@ test('分卷按上限切开，拼回去与原文件逐字节相同，每卷带�
 
 test('build-assets.json 必须与仓库里的指纹一致', () => {
   const pin = 'a'.repeat(64);
-  const parts = [{ name: 'beauty.tar.gz.001', size: 1, sha256: 'b'.repeat(64) }];
-  assert.equal(assetTag('beauty', pin), 'build-assets-beauty-aaaaaaaaaaaa');
-  assert.deepEqual(checkDescriptor({ version: 1, kind: 'beauty', pin, parts }, 'beauty', pin), parts);
-  for (const descriptor of [{ version: 1, kind: 'beauty', pin: 'c'.repeat(64), parts }, { version: 1, kind: 'music-analysis', pin, parts }, { version: 1, kind: 'beauty', pin, parts: [] }, null]) {
-    assert.throws(() => checkDescriptor(descriptor, 'beauty', pin), /不一致/);
+  const parts = [{ name: 'music-analysis.tar.gz.001', size: 1, sha256: 'b'.repeat(64) }];
+  assert.equal(assetTag('music-analysis', pin), 'build-assets-music-analysis-aaaaaaaaaaaa');
+  assert.deepEqual(checkDescriptor({ version: 1, kind: 'music-analysis', pin, parts }, 'music-analysis', pin), parts);
+  for (const descriptor of [{ version: 1, kind: 'music-analysis', pin: 'c'.repeat(64), parts }, { version: 1, kind: 'other', pin, parts }, { version: 1, kind: 'music-analysis', pin, parts: [] }, null]) {
+    assert.throws(() => checkDescriptor(descriptor, 'music-analysis', pin), /不一致/);
   }
 });

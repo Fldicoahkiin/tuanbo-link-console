@@ -155,7 +155,7 @@ test('一层读取异常保留其它层与换页操作，恢复后继续回读',
     const fader = page.locator('[data-executor-band="fader"]');
     await expect(upper.getByRole('button', { name: '执行器 4.101 · xws', exact: true })).toBeVisible();
     await app.evaluate(() => { process.env.TBLINK_EXECUTOR_READ_FAILURE = '4'; });
-    await expect(upper.getByRole('button', { name: '等待控台确认', exact: true })).toHaveAttribute('title', /此页暂未读回/);
+    await expect(upper.getByRole('button', { name: '读取失败，点击刷新', exact: true })).toHaveAttribute('title', /此页暂未读回/);
     await expect(fader.getByRole('button', { name: '执行器 100.1 · 面光_Long_Sequence_Name', exact: true })).toBeVisible();
     await page.getByLabel('上层按钮页码', { exact: true }).fill('5'); await page.getByLabel('上层按钮页码', { exact: true }).press('Enter');
     await expect(upper.getByRole('button', { name: '执行器 5.101 · 蓝色', exact: true })).toBeVisible();
@@ -163,6 +163,96 @@ test('一层读取异常保留其它层与换页操作，恢复后继续回读',
     await expect(page.getByLabel('下层按钮页码', { exact: true })).toHaveValue('100');
     await app.evaluate(() => { delete process.env.TBLINK_EXECUTOR_READ_FAILURE; process.env.TBLINK_EXECUTOR_REMOTE_NAME = '恢复后控台改名'; });
     await expect(fader.getByRole('button', { name: '执行器 100.1 · 恢复后控台改名', exact: true })).toBeVisible();
+    await app.evaluate(() => { process.env.TBLINK_EXECUTOR_MISSING_PAGE = '100'; });
+    await expect(fader.getByText('此页尚未创建', { exact: true })).toBeVisible();
+    await expect(fader.getByRole('button', { name: /执行器 100\.1 ·/ })).toHaveCount(0);
+    await expect(page.getByLabel('中层执行器页码', { exact: true })).toHaveValue('100');
+    expect(await app.evaluate(() => process.env.TBLINK_EXECUTOR_ACTIONS)).toBe('[]');
+    expect(await app.evaluate(() => process.env.TBLINK_EXECUTOR_INPUTS)).toBe('[]');
+    await page.screenshot({ path: info.outputPath('executor-missing-page.png') });
+    expect(errors).toEqual([]);
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
+});
+
+
+test('控台时间线切换保持顶部工具栏位置，显示完整目录并支持右键修改', async ({}, info) => {
+  const { app, page, pool, errors } = await launchExecutorFixture(info, true);
+  try {
+    const tab = pool.getByRole('button', { name: '控台时间线', exact: true });
+    await expect(tab).toBeVisible();
+    const toolbar = pool.locator('.ma2-material-menubar');
+    const before = await toolbar.boundingBox(); const buttonBefore = await tab.boundingBox();
+    await tab.click();
+    await expect(tab).toHaveAttribute('aria-pressed', 'true');
+    const browser = pool.getByRole('region', { name: '控台时间线与歌曲', exact: true });
+    await expect(browser).toContainText('当前节目尚未关联时间线');
+    await expect(browser.getByRole('option')).toHaveCount(0);
+    await browser.getByRole('button', { name: '关联已有时间线', exact: true }).click();
+    await expect(browser.getByRole('option')).toHaveCount(2);
+    expect(await toolbar.boundingBox()).toEqual(before); expect(await tab.boundingBox()).toEqual(buttonBefore);
+    await browser.getByRole('option', { name: 'Timecode 902 · 未读取时间线', exact: true }).click();
+    await expect(browser).toContainText('尚未读取 Cue');
+    await browser.getByRole('option', { name: 'Timecode 901 · 已读取时间线', exact: true }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: '修改名称 / MTC', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '修改时间线', exact: true });
+    await expect(dialog.getByLabel('时间线名称', { exact: true })).toHaveValue('已读取时间线');
+    await expect(dialog.getByLabel('MTC 起始码', { exact: true })).toHaveValue('00:01:00:00');
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await page.screenshot({ path: info.outputPath('timeline-integrated.png') });
+    await page.getByText('试听设置', { exact: true }).click();
+    await expect(page.getByRole('switch', { name: '选中 Cue 实时播放', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '控台布局 / 新建 Cue', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '导入 / 导出', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '灯光', exact: true }).click();
+    await page.getByRole('menuitem', { name: '导入与导出', exact: true }).click();
+    const fileTools = page.getByRole('region', { name: '导入与导出', exact: true });
+    await expect(fileTools.getByRole('button', { name: '导入灯光', exact: true })).toBeVisible();
+    await expect(fileTools.getByRole('button', { name: '导出 MIDI', exact: true })).toBeVisible();
+    await expect(browser).toHaveCount(0);
+    await fileTools.getByRole('button', { name: '关闭灯光工具', exact: true }).click();
+    await pool.getByRole('button', { name: '控台页面', exact: true }).click();
+    await pool.getByRole('button', { name: '新建 Cue', exact: true }).click();
+    await expect(page.getByRole('complementary', { name: '控台 Layout', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '关闭 Layout', exact: true }).click();
+
+    await pool.getByRole('button', { name: '多步', exact: true }).click();
+    await expect(browser).toHaveCount(0); expect(await toolbar.boundingBox()).toEqual(before);
+    expect(errors).toEqual([]);
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
+});
+
+
+test('150 条控台时间线使用紧凑列表，列表滚动不移动工具栏和右侧操作区', async ({}, info) => {
+  const { app, page, pool, errors } = await launchExecutorFixture(info, 150);
+  try {
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1280, 800));
+    await pool.getByRole('button', { name: '控台时间线', exact: true }).click();
+    const browser = pool.getByRole('region', { name: '控台时间线与歌曲', exact: true });
+    await browser.getByRole('button', { name: '关联已有时间线', exact: true }).click();
+    await expect(browser.getByRole('option')).toHaveCount(150);
+    await browser.getByRole('option').first().click();
+    await browser.getByRole('option').first().press('ArrowDown');
+    await expect(browser.getByRole('option').nth(1)).toBeFocused();
+    await expect(browser.getByRole('option').nth(1)).toHaveAttribute('aria-selected', 'true');
+    const panel = browser.getByRole('complementary', { name: '所选时间线', exact: true });
+    const toolbar = pool.locator('.ma2-material-menubar');
+    const panelBefore = await panel.boundingBox(), toolbarBefore = await toolbar.boundingBox();
+    expect((await browser.getByRole('option').first().boundingBox())!.height).toBeLessThanOrEqual(36);
+    const scroll = browser.locator('.ma2-timeline-list-scroll');
+    expect(await scroll.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
+    await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await expect(browser.getByRole('option').last()).toBeInViewport();
+    expect(await panel.boundingBox()).toEqual(panelBefore);
+    expect(await toolbar.boundingBox()).toEqual(toolbarBefore);
+    await browser.getByRole('option').last().click();
+    await expect(panel).toContainText('Timecode 1050');
+    await page.screenshot({ path: info.outputPath('timeline-150-fixed-panel.png') });
+    await pool.getByPlaceholder('搜索名称 / 编号').fill('1050');
+    await expect(browser.getByRole('option')).toHaveCount(1);
+    await browser.getByRole('button', { name: '返回当前节目', exact: true }).click();
+    await expect(browser).toContainText('当前节目尚未关联时间线');
+    await expect(pool.getByPlaceholder('搜索名称 / 编号')).toHaveValue('');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(errors).toEqual([]);
   } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

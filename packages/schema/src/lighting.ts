@@ -1,4 +1,4 @@
-import { ma2SongBindingSchema } from './ma2-song-binding';
+import { ma2SongBindingSchema, ma2TimelineDestinationSchema } from './ma2-song-binding';
 import { z } from 'zod';
 import { lightingMusicSchema, musicMarkerKinds } from './lighting-music';
 import { musicStructureSchema } from './music-structure';
@@ -87,6 +87,7 @@ export const lightingMa2BindingSchema = z.object({
 }).strict();
 export const lightingDocumentSchema = z.object({
   consoleSong: ma2SongBindingSchema.optional(),
+  timelineDestination: ma2TimelineDestinationSchema.optional(),
   musicAnalysis: musicStructureSchema.optional(),
   ma2Library: z.object({ show: z.string(), readAt: z.string().datetime(), sequences: lightingMa2CueCatalogSchema }).strict().optional(),
   autoCueSource: z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/), durationMs: z.number().finite().positive() }).strict().optional(),

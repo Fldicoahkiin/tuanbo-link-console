@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, linkManagedMediaExecutionPayloadSchema, parseLinkProject } from '@tb/schema';
 import type { LinkDesktopApi } from '@tb/core/link';
 import { previewEditorScene } from './editor-scene-preview';
 vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: {} }));
@@ -16,12 +16,20 @@ function fixture() {
   const desktop = { prepareObsMediaScenes: vi.fn<LinkDesktopApi['prepareObsMediaScenes']>().mockResolvedValue(),
     executeObsAction: vi.fn<LinkDesktopApi['executeObsAction']>().mockResolvedValue(),
     setObsProgramSourceEnabled: vi.fn<LinkDesktopApi['setObsProgramSourceEnabled']>().mockResolvedValue(),
-    seekManagedMedia: vi.fn<LinkDesktopApi['seekManagedMedia']>().mockResolvedValue() };
+    seekManagedMedia: vi.fn<LinkDesktopApi['seekManagedMedia']>(async payload => { linkManagedMediaExecutionPayloadSchema.parse(payload); }) };
   const preview = (position: number, current = () => true) => previewEditorScene(project, 'C:\\show\\show.tblink', 'song', position, false, desktop, current);
   return { project, desktop, preview };
 }
 
 describe('停止状态时间线画面定位', () => {
+  it('未保存工程也能直接切已有场景；需要本地素材时才要求保存', async () => {
+    const { project, desktop } = fixture();
+    await previewEditorScene(project, null, 'song', 7000, false, desktop, () => true);
+    expect(desktop.executeObsAction).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sceneName: 'Camera' }));
+    await expect(previewEditorScene(project, null, 'song', 3000, false, desktop, () => true)).rejects.toThrow('请先保存工程');
+    expect(desktop.prepareObsMediaScenes).not.toHaveBeenCalled();
+    expect(desktop.seekManagedMedia).not.toHaveBeenCalled();
+  });
   it('29.97df 编辑预览与正式播放使用同一实际帧时长', async () => {
     const { project, desktop, preview } = fixture();
     project.timebase.frameRate = '29.97df';

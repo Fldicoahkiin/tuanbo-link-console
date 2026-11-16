@@ -35,3 +35,26 @@ it('uses only exported appearance and button functions, including the two button
   expect(item.softLtp).toBe(true);
   expect(item.revision).toMatch(/^[a-f0-9]{64}$/);
 });
+
+
+it('未创建的执行器页核对目录后返回明确空页，不发出创建或切页命令', async () => {
+  const source = inspectMa2ExecutorPageXml(xml, 99).source!;
+  const request = { network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, expectedSource: source, page: 100 };
+  const directory = { ...source, buttonPage: 100, faderPage: 100, pages: [{ page: 99, name: '原页面' }] };
+  const bridge = { request: vi.fn().mockRejectedValueOnce(new Error('MA2：[string tblink_bridge]:157: Executor Page does not exist')).mockResolvedValueOnce(JSON.stringify(directory)) };
+  expect(await readMa2ExecutorPage(bridge, request)).toMatchObject({ page: 100, exists: false, items: [], source });
+  expect(bridge.request.mock.calls).toEqual([['PAGE', 100], ['PAGES', 1]]);
+});
+
+it('断线、来源变化和目录仍有这一页时不能伪装为空页', async () => {
+  const source = inspectMa2ExecutorPageXml(xml, 99).source!;
+  const request = { network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, expectedSource: source, page: 100 };
+  const disconnected = { request: vi.fn().mockRejectedValue(new Error('连接中断')) };
+  await expect(readMa2ExecutorPage(disconnected, request)).rejects.toThrow('连接中断');
+  expect(disconnected.request).toHaveBeenCalledTimes(1);
+  const directory = { ...source, buttonPage: 100, faderPage: 100, pages: [{ page: 100, name: '已存在' }] };
+  const bridge = { request: vi.fn().mockRejectedValueOnce(new Error('Executor Page does not exist')).mockResolvedValueOnce(JSON.stringify(directory)) };
+  await expect(readMa2ExecutorPage(bridge, request)).rejects.toThrow('读取期间发生变化');
+  bridge.request.mockRejectedValueOnce(new Error('Executor Page does not exist')).mockResolvedValueOnce(JSON.stringify({ ...directory, generation: 'changed', pages: [] }));
+  await expect(readMa2ExecutorPage(bridge, request)).rejects.toThrow('Show 或连接变了');
+});

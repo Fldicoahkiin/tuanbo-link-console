@@ -24,6 +24,7 @@ export const ma2ExecutorPageDirectorySchema = z.object({
 export const ma2ExecutorPageSchema = z.object({
   page: z.number().int().min(1).max(9999), name: z.string().max(512), readAt: z.string().datetime(),
   source: ma2LayoutDirectoryRequestSchema.shape.expectedSource.optional(),
+  exists: z.boolean().optional(),
   sequences: ma2EffectLibrarySchema.shape.sequences.default([]),
   items: z.array(ma2ExecutorPageItemSchema).max(240)
 }).strict();

@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { dirname, resolve, join, relative, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { launchPackagedDesktop } from '../tools/obs/beauty/verify-packaged-desktop.mjs';
+import { launchPackagedDesktop } from './verify-packaged-desktop.mjs';
 
 const [executable, source, output] = process.argv.slice(2);
 if (!output) throw new Error('需提供安装程序、原工程和独立验收目录');

@@ -2,6 +2,7 @@ import { lightingDocumentSchema, parseLinkProject, validateLinkProjectRelations,
 import type { LinkCommand } from './link-command';
 import { withSchemaVersion } from './project-schema-version';
 import { libraryTemplates, projectLightingLibrary, updateLibraryTemplates } from './lighting-library';
+import { routeMa2Tracks } from './ma2-track-routing';
 
 export function setLightingCommand(itemId: string, lighting: LightingDocument, label = '编辑灯光'): LinkCommand {
   const validated = lightingDocumentSchema.parse(lighting);
@@ -16,7 +17,7 @@ export function setLightingCommand(itemId: string, lighting: LightingDocument, l
     const item = { ...original };
     const next = { ...base, rundown:base.rundown.map(entry=>entry.id===itemId ? item : entry) };
     const previous = item.lighting;
-    item.lighting = structuredClone(validated);
+    item.lighting = routeMa2Tracks(structuredClone(validated));
     // A drag changes the anchor too. Tempo edits already supply their new anchors.
     if (previous && JSON.stringify(previous.tempos) === JSON.stringify(validated.tempos) && (previous.music?.firstBeatMs ?? 0) === (validated.music?.firstBeatMs ?? 0)) {
       const map = new LightingTempoMap(validated.tempos); const origin = validated.music?.firstBeatMs ?? 0;

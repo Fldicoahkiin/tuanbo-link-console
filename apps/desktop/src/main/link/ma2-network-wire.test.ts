@@ -1,10 +1,68 @@
 import { expect, it } from 'vitest';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Ma2NetworkWire } from './ma2-network-wire';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2CommandQueue } from './ma2-command-queue';
 import { showStopped } from './fixtures/show-gates';
 
 const id = '1234567890abcdef1234567890abcdef';
+it('本机大请求完整写入专用文件后才执行，上传不占用逐段命令', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'tblink-upload-'));
+  try {
+    const temp = join(folder, 'temp'); await mkdir(temp);
+    const path = join(temp, `tblink_network_${id}.input.bin`);
+    const body = '完整中文 Cue 数据'.repeat(1000);
+    const actions: string[] = []; let sent = false;
+    const response = Buffer.from(`${id}\nOK\n2\nok`);
+    const server = { command: async (line: string, match: (text: string) => string | null): Promise<string> => {
+      const call = /TBLINK_NET\('([a-f0-9]{32})','([a-z]+)'/.exec(line)!;
+      const action = call[2]!; actions.push(action);
+      let reply = 'ACK';
+      if (action === 'begin') reply = `ACK:lanes:file:${Buffer.from(path).toString('hex')}`;
+      if (action === 'run') {
+        expect(sent).toBe(true); expect(await readFile(path, 'utf8')).toBe(body);
+        reply = `DONE:${response.length}`;
+      }
+      if (line.startsWith('Lua "for i=')) throw new Error('Unexpected batch format');
+      if (action === 'release') await rm(path);
+      return match(`TBLINK_RPC_${call[1]}:${reply}\r\n`)!;
+    } };
+    // Stop at beforeSend: no write to the console is allowed after the show starts,
+    // and release still cleans the uploaded file.
+    await expect(new Ma2NetworkWire(server, true).exchange(id, 'APPLY', 9000, body, () => { sent = true; throw new Error('播放开始'); })).rejects.toThrow('播放开始');
+    expect(actions).toEqual(['begin', 'release']);
+    await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
+it('本机大响应直接读文件，仍校验身份、大小与位置；远程不读取本机文件', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'tblink-wire-'));
+  try {
+    const temp = join(folder, 'temp'); await mkdir(temp);
+    const path = join(temp, `tblink_network_${id}.bin`);
+    const value = '中文完整灯具数据'.repeat(1000);
+    const response = `${id}\nOK\n${Buffer.byteLength(value)}\n${value}`;
+    await writeFile(path, response);
+    let replyPath = path; let declared = Buffer.byteLength(response);
+    const actions: string[] = [];
+    const server = { command: (line: string, match: (text: string) => string | null): Promise<string> => {
+      const call = /TBLINK_NET\('([a-f0-9]{32})','([a-z]+)'/.exec(line)!;
+      actions.push(call[2]!);
+      return Promise.resolve(match(`TBLINK_RPC_${call[1]}:${call[2] === 'run' ? `FILE:${declared}:${Buffer.from(replyPath).toString('hex')}` : 'ACK'}\r\n`)!);
+    } };
+    await expect(new Ma2NetworkWire(server, true).exchange(id, 'SEQUENCE', 8999, '', () => undefined)).resolves.toBe(value);
+    expect(actions).toEqual(['begin', 'run', 'release']);
+    await expect(new Ma2NetworkWire(server).exchange(id, 'SEQUENCE', 8999, '', () => undefined)).rejects.toThrow('远程控台');
+    declared += 1;
+    await expect(new Ma2NetworkWire(server, true).exchange(id, 'SEQUENCE', 8999, '', () => undefined)).rejects.toThrow('长度不一致');
+    declared -= 1; replyPath = join(temp, 'another.bin');
+    await expect(new Ma2NetworkWire(server, true).exchange(id, 'SEQUENCE', 8999, '', () => undefined)).rejects.toThrow('位置无效');
+    replyPath = path; await writeFile(path, response.replace(id, 'f'.repeat(32)));
+    await expect(new Ma2NetworkWire(server, true).exchange(id, 'SEQUENCE', 8999, '', () => undefined)).rejects.toThrow('数据对不上');
+    expect(actions.at(-1)).toBe('release');
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
 function peer(options: { value?: string; wrongId?: boolean; truncate?: boolean; failRun?: boolean; steps?: number; stepNumbers?: number[] } = {}) {
   const actions: string[] = [];
   let step = 0;
@@ -14,6 +72,7 @@ function peer(options: { value?: string; wrongId?: boolean; truncate?: boolean; 
   return {
     actions, received,
     command: (line: string, match: (text: string) => string | null): Promise<string> => {
+      expect(Buffer.byteLength(line)).toBeLessThanOrEqual(1024);
       if (line.startsWith('Lua "for i=')) {
         const batch = /for i=0,(\d+) do TBLINK_NET\('([a-f0-9]{28})'.*,'read','[a-f0-9]{32}',(\d+)\+i\*256/.exec(line);
         if (!batch) throw new Error('Malformed batch');

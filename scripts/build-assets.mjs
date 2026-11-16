@@ -1,4 +1,4 @@
-// The pinned beauty build and music-analysis runtime are not in git. Each lives once in a GitHub release of its own,
+// The pinned music-analysis runtime is not in git. It lives once in a GitHub release of its own,
 // build-assets-<kind>-<first 12 of its pin>, as a gzip tar split into parts below GitHub's 2 GiB asset limit and a
 // build-assets.json that lists them. The cloud build fetches them into artifacts/; afterPack then checks the files
 // against release-pin.json, so a wrong upload fails the build.
@@ -16,7 +16,6 @@ import { REPOSITORY, downloadAsset, github, uploadAsset } from './github-release
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const ASSETS = {
-  beauty: { pin: 'tools/obs/beauty/release-pin.json', target: 'artifacts/beauty-prototype' },
   'music-analysis': { pin: 'tools/music-analysis/release-pin.json', target: 'artifacts/music-analysis' }
 };
 const PART_BYTES = 1900 * 1024 * 1024;

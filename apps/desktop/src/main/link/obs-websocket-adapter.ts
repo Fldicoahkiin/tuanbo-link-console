@@ -1,5 +1,4 @@
 import { ObsLiveEditor } from './obs-live-editor';
-import { ObsBeauty } from './obs-beauty';
 import { ObsRequestScheduler } from './obs-request-scheduler';
 import { encodeObsAudioWindow, selectObsAudioWindow } from './obs-audio-window';
 import { ObsSourceManager } from './obs-source-manager';
@@ -80,7 +79,6 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 2_000;
 export class ObsWebSocketAdapter implements LinkActionExecutor {
   readonly id = 'obs-websocket-5';
   readonly liveEditor: ObsLiveEditor;
-  readonly beauty: ObsBeauty;
   readonly sources: ObsSourceManager;
   readonly mediaScenes: ObsMediaScenes;
   private readonly client: OBSWebSocket;
@@ -128,7 +126,6 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     });
     this.liveEditor = new ObsLiveEditor(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation),
       (sceneName, sceneItemId) => this.mediaScenes.beforeLiveTransform(sceneName, sceneItemId));
-    this.beauty = new ObsBeauty(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
     this.sources = new ObsSourceManager(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
     // Material scenes put the song's picture on air: the `program` tier (OBS 请求谁先发).
     // Prepared inside `preparePlaybackMedia` they stay in `background`.

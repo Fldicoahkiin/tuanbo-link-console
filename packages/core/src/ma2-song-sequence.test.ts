@@ -2,6 +2,21 @@ import { expect, it } from 'vitest';
 import { createLightingDocument, type Ma2SongSyncResult } from '@tb/schema';
 import { applyMa2SongReadback, ma2SongPoints } from './ma2-song-sequence';
 
+it('静音、片段静音和独奏只禁用触发，保留全部 Cue 内容供解除静音后复用', () => {
+  const { document } = sample();
+  const original = ma2SongPoints(document);
+  document.tracks[0]!.muted = true;
+  expect(ma2SongPoints(document)).toEqual(original.map(point => ({ ...point, enabled: false })));
+  document.tracks[0]!.muted = false;
+  document.tracks[0]!.clips[0]!.muted = true;
+  expect(ma2SongPoints(document).every(point => point.enabled === false)).toBe(true);
+  document.tracks[0]!.clips[0]!.muted = false;
+  document.tracks.push({ ...document.tracks[0]!, id: 'solo', solo: true, clips: [] });
+  expect(ma2SongPoints(document).every(point => point.enabled === false)).toBe(true);
+  document.tracks[1]!.solo = false;
+  expect(ma2SongPoints(document)).toEqual(original);
+});
+
 function sample() {
   const document = createLightingDocument();
   document.tracks = [{ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {}, clips: [{
@@ -21,6 +36,18 @@ it('回读后每步都关联本曲控台序列的 Cue；控台上改过的名称
   const merged = ma2SongPoints(applyMa2SongReadback(document, ma2SongPoints(document), result));
   expect(merged[0]).toMatchObject({ name: '控台名称', cues: [{ sequence: 9000, cue: '1.000' }] });
   expect(merged[1]?.cues).toEqual([{ sequence: 9000, cue: '2.000', delayMs: 0 }]);
+});
+it('写入和重复确认沿用编辑后的不等间隔位置，不按初始拍距重排或重复添加', () => {
+  const { document, result } = sample();
+  const clip = document.tracks[0]!.clips[0]!;
+  clip.start = 700;
+  clip.events[0]!.at = 133;
+  clip.events[1]!.at = 2689;
+  const points = ma2SongPoints(document);
+  expect(points.map(point => point.atMs)).toEqual([833, 3389]);
+  const confirmed = applyMa2SongReadback(document, points, result);
+  const again = applyMa2SongReadback(confirmed, points, result);
+  expect(ma2SongPoints(again).map(point => [point.id, point.atMs])).toEqual([['first', 833], ['second', 3389]]);
 });
 it('等待回读期间的新编辑保留，不被旧请求覆盖', () => {
   const { document, result } = sample();
@@ -61,4 +88,13 @@ it('控台上把点挪到片段起点之前：片段跟着提前，其他点时�
   result.consoleEdits = { moved: [{ id: 'second', atMs: 200 }], removed: [], added: [] };
   const merged = ma2SongPoints(applyMa2SongReadback(document, observed, result));
   expect(merged.map(point => [point.id, point.atMs])).toEqual([['second', 200], ['first', 1000]]);
+});
+
+it('顺延后的实际序列、Timecode 和执行器回填计划，Cue 内容和相对时间保留', () => {
+  const { document, result } = sample();
+  document.timelineDestination = { name: '新歌', sequence: 1, timecode: 1, executor: '1000.101' };
+  result.binding = { ...result.binding, executor: '1001.101', timecode: { number: 9001, offset: 1800, slot: 'TC Slot 1', revision: 'a'.repeat(64) } };
+  const after = applyMa2SongReadback(document, ma2SongPoints(document), result);
+  expect(after.timelineDestination).toEqual({ name: '新歌', sequence: 9000, timecode: 9001, executor: '1001.101' });
+  expect(ma2SongPoints(after).map(point => point.atMs)).toEqual([0, 1000]);
 });

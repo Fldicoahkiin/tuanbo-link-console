@@ -17,6 +17,17 @@ const track = (at: number): LightingTrack => ({ id: 'track', name: '灯光', kin
   clips: [{ id: 'clip', name: '原编排', start: 0, duration: 40000, timeLock: 'time', muted: false, events: [{ id: 'cue', kind: 'ma2', at, sequence: 1, executor: '1.101', cue: '1', action: 'goto', label: '开场' }] }] });
 const port = { portName: '团播联动台 P1 MTC', ports: ['团播联动台 P1 MTC'] };
 
+it('明确选择一条后仍提示同起点的其他时间线可能一起跑灯', () => {
+  const project = fixture();
+  const catalog = project.ma2ReadState!.catalog;
+  catalog.entries.push({ ...catalog.entries[0]!, target: 3, name: '另一条' });
+  const lighting = createLightingDocument();
+  lighting.tracks = [track(0)];
+  lighting.ma2Bindings = [{ id: 'binding', timecode: 2, name: '歌曲甲', readAt: catalog.readAt, sourceXml: '<MA/>', baselineTracks: [track(0)], mappings: [], playback: 'editable', timeOriginMs: 480000 }];
+  project.rundown[0]!.lighting = lighting;
+  expect(lightingStartCheck(project, '歌曲甲', port)).toContain('控台上还有同起点的时间线');
+});
+
 it('没有控台节目的歌直接播放；对上且端口、帧率都对时直接播放；没选端口不拦（引擎准备时会报）', () => {
   const project = fixture();
   expect(lightingStartCheck(project, '串场', { portName: null, ports: [] })).toBeNull();

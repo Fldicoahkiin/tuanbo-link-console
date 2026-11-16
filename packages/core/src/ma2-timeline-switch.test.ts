@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type LinkProject, type Ma2Catalog, type Ma2TimecodePreview } from '@tb/schema';
+import { editMa2TimelinePropertiesCommand } from './ma2-timeline-properties';
 import type { LinkCommand } from './link-command';
 import { importMa2TimecodeCommand } from './ma2-import';
-import { detachMa2BindingCommand, ma2SongPairs, pairSongWithMa2ShowCommand, reconcileMa2ReadState, refreshMa2BindingCommand, withMa2Pairings } from './ma2-pairing-state';
+import { appendMa2TimelineCuesCommand, detachMa2BindingCommand, ma2SongPairs, pairSongWithMa2ShowCommand, reconcileMa2ReadState, refreshMa2BindingCommand, withMa2Pairings } from './ma2-pairing-state';
 import { saveMa2ReadStateCommand } from './ma2-program-import';
 import { matchMa2Programs } from './ma2-program-matching';
 
@@ -34,6 +35,14 @@ function fixture(entries = [entry(112, 60_000), entry(121, 70_000)]): LinkProjec
 const edit = (change: (project: LinkProject) => void): LinkCommand => withMa2Pairings({ id: 'edit', label: '改动', execute: value => { const next = structuredClone(value); change(next); return next; }, undo: before => before });
 const startA = (ms: number) => edit(next => { next.rundown[0]!.playback!.mtcOffsetMs = ms; });
 const song = (project: LinkProject) => project.rundown[0]!.lighting!;
+
+it('来源未确认时替换和追加都保留原编排', () => {
+  const before = fixture(); before.ma2ReadState!.catalog.sourceUnverified = true;
+  const original = structuredClone(before);
+  expect(() => pairSongWithMa2ShowCommand('A', 121).execute(before)).toThrow('来源尚未确认');
+  expect(() => appendMa2TimelineCuesCommand('A', 121).execute(before)).toThrow('来源尚未确认');
+  expect(before).toEqual(original);
+});
 
 describe('首次按起始码配对就放进控台 Cue', () => {
   it('先读控台后改歌曲起始码：首次匹配也导入 Cue，同一步撤销，后续编辑不重复导入', () => {
@@ -147,6 +156,52 @@ describe('换了 MTC 起始码，灯光时间线跟着换（2026-11-04）', () =
 });
 
 describe('控台时间线页面里选「给哪首歌用」', () => {
+  it('替换移走原来的未绑定点和自建序列，保留音乐、画面和节拍；整步可以撤销', () => {
+    const before = fixture();
+    const lighting = song(before);
+    lighting.consoleSong = { endpoint: 'console', show: 'show', name: '自建', sequence: 9000, layout: null, executor: '1000.101', baselineXml: '<MA/>', points: [] };
+    const loose = structuredClone(lighting.tracks[0]!); loose.id = 'loose'; loose.clips[0]!.id = 'loose-clip'; loose.clips[0]!.events[0]!.id = 'loose-event';
+    lighting.tracks.push(loose);
+    const command = withMa2Pairings(pairSongWithMa2ShowCommand('A', 121));
+    const after = command.execute(before);
+    expect(song(after).tracks).toHaveLength(1);
+    expect(song(after).ma2Bindings?.map(binding => binding.timecode)).toEqual([121]);
+    expect(song(after).consoleSong).toBeUndefined();
+    expect(song(after).tempos).toEqual(lighting.tempos);
+    expect(after.rundown[0]!.referenceAudio).toEqual(before.rundown[0]!.referenceAudio);
+    expect(after.rundown[0]!.visualLayers).toEqual(before.rundown[0]!.visualLayers);
+    expect(command.undo(before)).toEqual(before);
+  });
+
+  it('同起点多条时间线时，明确选择只使用选中的编号，不自动叠加其他时间线', () => {
+    const before = fixture([entry(112, 60_000), entry(121, 60_000)]);
+    const after = withMa2Pairings(pairSongWithMa2ShowCommand('A', 121)).execute(before);
+    expect(ma2SongPairs(after).pairs).toEqual({ 121: 'A' });
+    expect(song(after).ma2Bindings?.map(binding => binding.timecode)).toEqual([121]);
+    expect(song(after).tracks).toHaveLength(1);
+  });
+
+  it('追加保留当前目标和起始码，复制为新轨道并登记到当前时间线；原时间线不被接管', () => {
+    const before = fixture();
+    const after = withMa2Pairings(appendMa2TimelineCuesCommand('A', 121)).execute(before);
+    expect(after.rundown[0]!.playback!.mtcOffsetMs).toBe(60_000);
+    expect(song(after).ma2Bindings?.map(binding => binding.timecode)).toEqual([112]);
+    expect(song(after).tracks).toHaveLength(2);
+    const added = song(after).tracks[1]!;
+    expect(added.id).not.toBe('track-121');
+    expect(added.clips[0]!.events[0]!.at).toBe(1000);
+    expect(song(after).ma2Bindings![0]!.pendingTracks).toEqual([{ trackId: added.id, executor: '1.101', executorName: added.name }]);
+    expect(song(before).tracks).toHaveLength(1);
+  });
+
+  it('新歌追加 Cue 不关联素材的时间线，交给歌曲同步创建自己的时间线', () => {
+    const before = fixture(); delete before.rundown[1]!.playback;
+    const after = withMa2Pairings(appendMa2TimelineCuesCommand('B', 121)).execute(before);
+    expect(after.rundown[1]!.playback).toBeUndefined();
+    expect(after.rundown[1]!.lighting?.ma2Bindings).toBeUndefined();
+    expect(after.rundown[1]!.lighting?.tracks[0]!.clips[0]!.events[0]).toMatchObject({ kind: 'ma2', at: 1000, sequence: 721 });
+  });
+
   it('选了就把歌曲起始码改成这条时间线的起点；放过别的时间线 Cue 的歌换过去，没放过的直接放进这条的 Cue', () => {
     const project = fixture();
     const switched = withMa2Pairings(pairSongWithMa2ShowCommand('A', 121)).execute(project);
@@ -191,4 +246,75 @@ describe('用控台上的灯光（2026-11-11）', () => {
   it('读到的不是这条时间线：不换', () => {
     expect(() => refreshMa2BindingCommand('A', 112, true, preview(121, 70_000, 1000))).toThrow('不是 Timecode 112');
   });
+});
+
+
+it('手动同步控台时间线后清除新建目标，后续修改仍匹配所选编号且可撤销', () => {
+  const before = fixture();
+  song(before).timelineDestination = { name: '新建计划', timecode: 9000, sequence: 9000, executor: '1000.101' };
+  const command = withMa2Pairings(pairSongWithMa2ShowCommand('A', 121));
+  const after = command.execute(before);
+  expect(song(after).timelineDestination).toBeUndefined();
+  expect(song(after).ma2Bindings?.map(binding => binding.timecode)).toEqual([121]);
+  expect(ma2SongPairs(after).pairs[121]).toBe('A');
+  expect(after.rundown[0]!.playback!.mtcOffsetMs).toBe(70_000);
+  const edited = edit(next => { song(next).tracks[0]!.clips[0]!.events[0]!.at = 2000; }).execute(after);
+  expect(ma2SongPairs(edited).pairs[121]).toBe('A');
+  expect(song(edited).tracks[0]!.clips[0]!.events[0]!.at).toBe(2000);
+  expect(command.undo(before)).toEqual(before);
+});
+
+it('手动同步不能接管其他歌曲已创建或已预留的时间线', () => {
+  for (const created of [false, true]) {
+    const before = fixture();
+    const lighting = createLightingDocument();
+    if (created) lighting.consoleSong = { endpoint: 'console', show: 'show', name: '歌曲B', sequence: 9000, layout: null, executor: '1000.101', baselineXml: '<MA/>', points: [], timecode: { number: 121, offset: 2100, slot: 'TC Slot 2', revision: 'b'.repeat(64) } };
+    else lighting.timelineDestination = { name: '歌曲B', timecode: 121, sequence: 9000, executor: '1000.101' };
+    before.rundown[1]!.lighting = lighting;
+    const original = structuredClone(before);
+    expect(() => pairSongWithMa2ShowCommand('A', 121).execute(before)).toThrow('歌曲B');
+    expect(before).toEqual(original);
+  }
+});
+
+
+it('手动重新读取采用新鲜 Cue 和 MTC，不恢复旧的空编排', () => {
+  const before = fixture();
+  const read = preview(112, 80_000, 2500);
+  read.timing = { frameFormat: '30 FPS', unit: 'frames-30', offsetNative: '2400', absoluteEventTimesMs: [82500] };
+  const command = withMa2Pairings(pairSongWithMa2ShowCommand('A', 112, read));
+  const after = command.execute(before);
+  expect(after.rundown[0]!.playback!.mtcOffsetMs).toBe(80_000);
+  expect(song(after).tracks[0]!.clips[0]!.events[0]!.at).toBe(2500);
+  expect(after.ma2ReadState!.catalog.entries.find(entry => entry.target === 112)?.offset).toBe('2400');
+  expect(ma2SongPairs(after).pairs[112]).toBe('A');
+  expect(command.undo(before)).toEqual(before);
+});
+
+it('修改导入时间线名称和 MTC 后保留相对 Cue 位置，并仍关联同一编号', () => {
+  const before = fixture(); const fresh = preview(112, 90000, 1000); fresh.name = 'Updated';
+  const command = editMa2TimelinePropertiesCommand(112, 'Updated', 90000, fresh);
+  const after = withMa2Pairings(command).execute(before);
+  expect(after.rundown[0]!.playback!.mtcOffsetMs).toBe(90000);
+  expect(song(after).ma2Bindings?.[0]).toMatchObject({ timecode: 112, name: 'Updated', timeOriginMs: 90000 });
+  expect(song(after).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).map(event => event.at)).toEqual([1000]);
+  expect(ma2SongPairs(after).pairs[112]).toBe('A');
+  expect(command.undo(before)).toEqual(before);
+});
+it('属性编辑预检拒绝与其他节目相同的起始码，原 Cue 和关联保持', () => {
+  const before = fixture();
+  expect(() => editMa2TimelinePropertiesCommand(112, 'Updated', 160000, preview(112, 160000, 1000)).execute(before)).toThrow('重复');
+  expect(song(before).ma2Bindings?.[0]?.timecode).toBe(112);
+});
+
+it('只有控台目录的时间线，手动选择现读后补入完整条目和 Cue', () => {
+  const before = fixture();
+  before.ma2ReadState!.catalog.entries = before.ma2ReadState!.catalog.entries.filter(entry => entry.target !== 121);
+  const fresh = preview(121, 70000, 2500);
+  fresh.timing = { frameFormat: '30 FPS', unit: 'frames-30', offsetNative: '2100', absoluteEventTimesMs: [72500] };
+  const after = withMa2Pairings(pairSongWithMa2ShowCommand('A', 121, fresh)).execute(before);
+  expect(after.ma2ReadState!.catalog.entries.find(entry => entry.target === 121)).toMatchObject({ offset: '2100', eventCount: 1, preview: fresh });
+  expect(song(after).ma2Bindings?.[0]).toMatchObject({ timecode: 121, timeOriginMs: 70000 });
+  expect(song(after).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).map(event => event.at)).toEqual([2500]);
+  expect(ma2SongPairs(after).pairs[121]).toBe('A');
 });

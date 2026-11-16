@@ -299,6 +299,7 @@ export type LinkDesktopApi = {
   ma2TimecodeRanges(network: import('@tb/schema').Ma2NetworkTarget): Promise<import('@tb/schema').Ma2TimecodeRanges>;
   createMa2Cue(payload: import('@tb/schema').Ma2NewCueRequest): Promise<import('@tb/schema').Ma2NewCueResult>;
   cancelMa2Read(id: string): Promise<void>;
+  editMa2Timeline(payload: import('@tb/schema').Ma2TimelineEditRequest): Promise<import('@tb/schema').Ma2TimelineEditResult>;
   createMa2(payload: import('@tb/schema').Ma2CreateRequest): Promise<import('@tb/schema').Ma2TimecodePreview>;
   readMa2Executor(payload: import('@tb/schema').Ma2ExecutorReadRequest): Promise<import('@tb/schema').Ma2ExecutorPreview>;
   compareMa2(payload: import('@tb/schema').Ma2CompareRequest): Promise<import('./ma2-sync').Ma2SyncPreview>;
@@ -419,15 +420,6 @@ export type LinkDesktopApi = {
   prepareObsMediaScenes(projectPath: string, project: LinkProject, preciseSeeking: boolean): Promise<void>;
   readObsOutputStatus(): Promise<{ streaming: boolean; recording: boolean }>;
   readObsLiveScene(): Promise<ObsLiveScene>;
-  readObsBeauty(target: import('@tb/schema').BeautyTarget): Promise<import('@tb/schema').BeautyFilterState>;
-  applyObsBeauty(payload: import('@tb/schema').BeautyApply): Promise<import('@tb/schema').BeautyFilterState>;
-  installBeautyRuntime(): Promise<string>;
-  startBeautyRuntime(payload: import('@tb/schema').BeautyStart): Promise<import('@tb/schema').BeautyRuntimeState>;
-  stopBeautyRuntime(): Promise<void>;
-  readBeautyRuntime(): Promise<import('@tb/schema').BeautyRuntimeState>;
-  syncBeautyOutput(values: import('@tb/schema').BeautyApply['values']): Promise<import('@tb/schema').BeautyFilterState | null>;
-  readBeautyComparison(target: import('@tb/schema').BeautyTarget): Promise<import('@tb/schema').BeautyComparisonFrame>;
-  closeBeautyComparison(): Promise<void>;
   editObsLiveScene(edit: ObsLiveEdit): Promise<void>;
   onObsLiveChanged(listener: () => void): () => void;
   getWindowVisible(): Promise<boolean>;

@@ -479,7 +479,7 @@ export class Ma2NetworkManager {
     this.scheduleReconnect();
   }
   private openServices(connection: Ma2Telnet): void {
-    const wire = new Ma2NetworkWire(connection); this.wire = wire;
+    const wire = new Ma2NetworkWire(connection, this.settings?.host === '127.0.0.1' || this.settings?.host === '::1'); this.wire = wire;
     const bridge = new Ma2OnpcBridge(wire, this.show);
     this.services = { bridge, service: new Ma2ApplyService(bridge, this.show) };
     this.bridgeIssue = null;

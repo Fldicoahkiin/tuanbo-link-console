@@ -1,6 +1,5 @@
 import { create } from 'zustand';
-import { useIntegrationStore } from './integration-store';
-import { ma2LocalDirectoryMismatch } from '../view-models/ma2-local-directory';
+import { setMa2Method } from './ma2-mode-store';
 import { useConnectionCheckStore } from './connection-check-store';
 import { useMa2NetworkStatusStore } from './ma2-network-status-store';
 import { ma2DiscoverySchema, ma2NetworkStatusSchema, type Ma2Discovery, type Ma2NetworkStatus } from '@tb/schema';
@@ -78,16 +77,27 @@ export function checkNetworkMa2(): Promise<Ma2NetworkStatus> {
   return networkCheck;
 }
 
-export async function connectLocalMa2(directory: string): Promise<void> {
+/** Local onPC uses the same login, bundled plugin and sync as a console on the LAN.
+ * Selecting local is an explicit target choice, never a fallback to another console. */
+export async function connectLocalMa2(): Promise<Ma2NetworkStatus> {
   if (useLocalMa2Store.getState().status === 'connecting') throw new Error('本机 MA2 正在连接，请稍候');
-  useLocalMa2Store.setState({ directory, status: 'connecting', error: null });
+  useLocalMa2Store.setState({ directory: '', status: 'connecting', error: null });
   try {
-    if (!directory.trim()) throw new Error('请在 MA2 设置里选择或一键识别本机 onPC 数据目录');
-    const mismatch = ma2LocalDirectoryMismatch(directory.trim(), useIntegrationStore.getState().processes.ma2);
-    if (mismatch) throw new Error(mismatch);
-    await window.tbLink.exchangeMa2({ dataDirectory: directory.trim(), target: 1, operation: 'PING', expected: '', desired: '' });
+    const current = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());
+    const saved = current.settings?.host === '127.0.0.1' ? current.settings
+      : [...current.profiles ?? []].reverse().find(profile => profile.host === '127.0.0.1');
+    if (!saved || current.settings !== saved) {
+      await window.tbLink.saveMa2Network({ settings: saved ?? { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'administrator', autoConnect: false },
+        ...(saved ? {} : { password: 'admin' }) });
+    }
+    const connected = ma2NetworkStatusSchema.parse(await window.tbLink.connectMa2Network());
+    if (connected.state !== 'connected' || connected.settings?.host !== '127.0.0.1') throw new Error(connected.error ?? '本机 onPC 没有连上，请确认已启动，并在 onPC 中开启 Telnet（Login Enabled）');
+    const checked = await checkNetworkMa2();
+    if (checked.settings?.host !== '127.0.0.1') throw new Error('连接目标变了，请重新连接本机 onPC');
+    // Persist the working transport: all reads, sync jobs and follow checks now use this connection.
+    await setMa2Method('network');
     useLocalMa2Store.setState({ status: 'ready' });
-    if (!useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('bridge', 'ready', '本机控台读写通信正常');
+    return checked;
   } catch (error) {
     useLocalMa2Store.setState({ status: 'error', error: error instanceof Error ? error.message : String(error) });
     throw error;

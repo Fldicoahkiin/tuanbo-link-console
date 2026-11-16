@@ -102,14 +102,10 @@ export function pictureMarks(onAir: PictureOnAir, current: SongPicture): Picture
     case 'version': {
       const pending = pendingPictureEdits(onAir.song, current);
       return { onAirtime: onAir.song?.airtime ?? NO_AIRTIME, pending, pendingMark: onAir.takesEdits ? PENDING_THIS_PASS : PENDING_REPLAY,
-        notice: onAir.takesEdits ? versionNotice(pending) : NOT_FOLLOWING };
+        notice: onAir.takesEdits ? versionNotice(pending) : null };
     }
   }
 }
-
-/** The held song's picture does not follow edits now (R9): why is in the status panel, and a replay plays them. */
-const NOT_FOLLOWING: PictureNotice = { tone: 'warning', text: '这首歌的画面现在没有联动，播放中改的画面这一遍用不上',
-  detail: `原因见状态面板「这首歌的画面」。${REPLAY}，就按改过的放。` };
 
 /** Information, not a warning (R9): an edit goes to OBS by itself and is used in this pass; nothing to do. */
 function versionNotice(edits: PendingPictureEdits): PictureNotice | null {

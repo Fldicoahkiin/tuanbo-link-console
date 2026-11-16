@@ -27,8 +27,7 @@ const REPOSITORY = fileURLToPath(new URL('../../../../../../../', import.meta.ur
  */
 const ALLOWED: Readonly<Record<string, string>> = {
   'link/components/ResourceLibrary.tsx': '搜索输入框',
-  'link/components/LightingMidiSettings.tsx': '数字输入框：Enter 确认',
-  'link/components/BeautyControls.tsx': '数字输入框，在人像美颜里（整页 ownKeys("*")）'
+  'link/components/LightingMidiSettings.tsx': '数字输入框：Enter 确认'
 };
 
 function sourceFiles(directory: string, extensions: readonly string[]): string[] {

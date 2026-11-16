@@ -32,6 +32,15 @@ it('控台上没改：什么都不读回', () => {
   expect(merged.points).toEqual(local());
 });
 
+it('静音点没有时间码触发时不当作控台删除，其他点的移动照常读回', () => {
+  const muted = structuredClone(binding); muted.points[1]!.enabled = false;
+  const points = local(); points[1]!.enabled = false;
+  const merged = mergeMa2SongConsoleEdits(muted, points, baseXml, show(baseXml, [['1', 0], ['3', 2500]]), 'remote');
+  expect(merged.edits.removed).toEqual([]);
+  expect(merged.points.find(point => point.id === 'b')).toEqual(points[1]);
+  expect(merged.edits.moved).toEqual([{ id: 'c', atMs: 2500 }]);
+});
+
 it('控台上挪了时间、删了触发、给控台新录的 Cue 加了触发：联动台跟着挪、删、加；只删触发的 Cue 留在序列里', () => {
   const remote = sequence([['1.000', 'KaiChang'], ['2.000', 'FuGe'], ['3.000', 'JieWei'], ['4.000', 'XinDeng']]);
   const merged = mergeMa2SongConsoleEdits(binding, local(), remote, show(remote, [['1', 0], ['2', 1500], ['4', 3000]]), 'remote', () => 'new');

@@ -17,7 +17,7 @@ export function lightingStartCheck(project: LinkProject, itemId: string, mtc: { 
     case 'unmatched': return status.reason ? `${status.reason}；时间码照常发送` : null;
     case 'duplicate': return `控台上 Timecode ${status.timecodes.join('、')} 的起点和这首歌相同，同一段时间码会让它们一起跑灯；时间码照常发送`;
     case 'matched': {
-      const problems = [...status.problems];
+      const problems = [...status.problems, ...status.notes];
       if (mtc.portName && mtc.ports && !mtc.ports.includes(mtc.portName)) problems.push(`找不到时间码输出端口：${mtc.portName}`);
       const prepared = nativeProgramSnapshot(project, itemId, 0, undefined, 48000);
       if (!prepared.allowMtc) problems.push(prepared.notice ?? '这次不能发送时间码');

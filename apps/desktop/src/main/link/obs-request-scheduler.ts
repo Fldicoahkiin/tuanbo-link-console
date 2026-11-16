@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 /** OBS 请求谁先发（2026-11-10）. `program` is the song's picture going on air:
  * scene switches, material scenes, shown sources, and the drift check the picture
- * session waits for. `control` is the live canvas, beauty and source management;
+ * session waits for. `control` is the live canvas and source management;
  * `background` prepares ahead and reads inventories; `preview` takes screenshots. */
 export type ObsRequestPriority = 'urgent' | 'program' | 'control' | 'background' | 'preview';
 export type ObsOperationRunner = <T>(operation: () => Promise<T>) => Promise<T>;

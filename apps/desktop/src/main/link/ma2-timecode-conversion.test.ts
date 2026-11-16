@@ -4,9 +4,27 @@ import { importMa2TimecodeCommand, matchMa2Readback } from '@tb/core/link';
 import { createEmptyLinkProject, parseLinkProject, serializeLinkProject } from '@tb/schema';
 import { convertMa2Snapshot, convertMa2Timecode } from './ma2-timecode-conversion';
 import { editMa2TimecodeEvents, inspectMa2TimecodeXml, inspectMa2SequenceXml, resolveMa2CueReference, validateMa2TimecodeWrite } from './ma2-timecode-xml';
+import { compareMa2LightingReadback } from './ma2-comparison';
+import { prepareMa2MergedEvents } from './ma2-event-write';
 
 const timecode = await readFile(new URL('./fixtures/ma2-timecode-fractional-3.3.xml', import.meta.url), 'utf8');
 const sequence = await readFile(new URL('./fixtures/ma2-sequence-fractional-3.3.xml', import.meta.url), 'utf8');
+
+it.each(['24 FPS', '25 FPS', '30 FPS'])('%s 显示格式读、比较、改时间、写回仍使用同一原生时间单位', format => {
+  const xml = timecode.replace('30 FPS', format);
+  const read = convertMa2Timecode(xml, [sequence], 9902);
+  const project = createEmptyLinkProject('帧率回归');
+  project.rundown = [{ id: 'song', title: '歌', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [] }];
+  const lighting = importMa2TimecodeCommand('song', read).execute(project).rundown[0]!.lighting!;
+  const bindingId = lighting.ma2Bindings![0]!.id;
+  const original = lighting.tracks[0]!.clips[0]!.events[0]!;
+  original.at += 1000;
+  expect(compareMa2LightingReadback(lighting, bindingId, read).local).toBeDefined();
+  const write = prepareMa2MergedEvents(lighting, bindingId, read, new Map(), [sequence], 'nearest-frame');
+  const reread = convertMa2Timecode(write.desiredXml, [sequence], 9902);
+  expect(reread.timing?.frameFormat).toBe(format);
+  expect(reread.document.tracks[0]!.clips[0]!.events[0]!.at).toBeCloseTo(original.at, 5);
+});
 
 describe('MA2 本机实测小数 Cue 引用转换', () => {
   it('原生省略 active 表示静音，未知状态不得按启用读取', () => {
@@ -96,7 +114,7 @@ describe('MA2 本机实测小数 Cue 引用转换', () => {
     expect(() => resolveMa2CueReference(['25', '9901', '1'], [report])).toThrow('结构');
     expect(() => inspectMa2SequenceXml(sequence.replace('sub_number="250"', 'sub_number="1250"'))).toThrow('编号无效');
     expect(() => inspectMa2SequenceXml(sequence.replace('index="2"', 'index="1"'))).toThrow('重复');
-    expect(() => convertMa2Timecode(timecode.replace('30 FPS', '25 FPS'), [sequence], 9902)).toThrow('30 FPS');
+    expect(() => convertMa2Timecode(timecode.replace('30 FPS', 'invalid'), [sequence], 9902)).toThrow('显示格式尚不支持');
     expect(() => convertMa2Timecode(timecode.replace('slot="TC Slot 1"', 'slot="TC Slot 1" offset="-30"'), [sequence], 9902)).toThrow('偏移');
     expect(() => convertMa2Timecode(timecode, [sequence], 9901)).toThrow('没有绑定');
   });

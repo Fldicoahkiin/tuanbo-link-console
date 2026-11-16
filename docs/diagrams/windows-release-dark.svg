@@ -86,14 +86,14 @@ chore(release): X.Y.Z 推 master，等 CI 全绿" data-shape="rectangle">
   <text x="640.0604999999997" y="377.32500000000005" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="640.0604999999997" dy="-3.9000000000000012">verify 作业</tspan><tspan x="640.0604999999997" dy="16.900000000000002">版本高于已有标签和线上 latest.yml · 类型检查 · 单测 · lint</tspan></text>
 </g>
 <g class="node" data-id="assets" data-label="固定资产 release
-build-assets-beauty-… · build-assets-music-analysis-…
+build-assets-music-analysis-…
 分卷 tar + build-assets.json（各卷 sha256）" data-shape="cylinder">
   <rect x="56" y="357.42500000000007" width="355.39299999999986" height="70.7" fill="var(--_node-fill)" stroke="none" />
   <line x1="56" y1="357.42500000000007" x2="56" y2="428.12500000000006" stroke="var(--_node-stroke)" stroke-width="0.75" />
   <line x1="411.39299999999986" y1="357.42500000000007" x2="411.39299999999986" y2="428.12500000000006" stroke="var(--_node-stroke)" stroke-width="0.75" />
   <ellipse cx="233.69649999999993" cy="428.12500000000006" rx="177.69649999999993" ry="7" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
   <ellipse cx="233.69649999999993" cy="357.42500000000007" rx="177.69649999999993" ry="7" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="233.69649999999993" y="392.7750000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="233.69649999999993" dy="-12.350000000000001">固定资产 release</tspan><tspan x="233.69649999999993" dy="16.900000000000002">build-assets-beauty-… · build-assets-music-analysis-…</tspan><tspan x="233.69649999999993" dy="16.900000000000002">分卷 tar + build-assets.json（各卷 sha256）</tspan></text>
+  <text x="233.69649999999993" y="392.7750000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="233.69649999999993" dy="-12.350000000000001">固定资产 release</tspan><tspan x="233.69649999999993" dy="16.900000000000002">build-assets-music-analysis-…</tspan><tspan x="233.69649999999993" dy="16.900000000000002">分卷 tar + build-assets.json（各卷 sha256）</tspan></text>
 </g>
 <g class="node" data-id="build" data-label="build 作业
 再查一次版本 · 下载固定资产逐卷核对 · 打包

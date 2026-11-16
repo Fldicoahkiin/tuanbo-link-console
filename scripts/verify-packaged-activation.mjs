@@ -5,7 +5,7 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPackagedDesktop } from '../tools/obs/beauty/verify-packaged-desktop.mjs';
+import { launchPackagedDesktop } from './verify-packaged-desktop.mjs';
 
 if (process.argv.length !== 4) throw new Error('用法：node scripts/verify-packaged-activation.mjs <win-unpacked\\团播联动台.exe> <输出目录>');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');

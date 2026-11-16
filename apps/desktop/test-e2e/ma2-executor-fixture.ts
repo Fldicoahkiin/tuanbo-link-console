@@ -1,4 +1,6 @@
-import { writeFile } from 'node:fs/promises';
+import { reconcileMa2ReadState } from '@tb/core/link';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron, type TestInfo } from '@playwright/test';
 import {
@@ -7,7 +9,7 @@ import {
   type Ma2ExecutorUpdateRequest, type Ma2ExecutorUpdateResult
 } from '@tb/schema';
 
-export async function launchExecutorFixture(info: TestInfo) {
+export async function launchExecutorFixture(info: TestInfo, timelines: boolean | number = false) {
   const source = { show: '三层执行器验收', generation: 'executor-fixture', version: '3.7.0.5' };
   const names = ['xws', 'Sequ', '定点', '蓝色', '轮廓', '前区', '双色', '面光_Long_Sequence_Name', '摇头', '收光'];
   const sequences = names.map((name, index) => ({
@@ -37,9 +39,16 @@ export async function launchExecutorFixture(info: TestInfo) {
   const project = createEmptyLinkProject('三层执行器验收'); project.schemaVersion = 2;
   project.rundown = [{ id: 'song', title: '灯光编排验收', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting: createLightingDocument() }];
   project.ma2MaterialLibrary = { version: 1, source: '192.0.2.1:30000', library };
+  if (timelines) project.ma2ReadState = reconcileMa2ReadState(project, '192.0.2.1:30000', {
+    directory: { ...source, entries: Array.from({ length: typeof timelines === 'number' ? timelines : 2 }, (_, index) => ({ target: 901 + index, name: index === 0 ? '已读取时间线' : index === 1 ? '未读取时间线' : `演出灯光时间线 ${index + 1}` })) }, readAt: library.readAt,
+    entries: [{ target: 901, name: '已读取时间线', eventCount: 0, frameFormat: '30 FPS', slot: 'TC Slot 1', offset: '1800', events: [], warnings: [], error: null,
+      preview: { target: 901, name: '已读取时间线', readAt: library.readAt, document: createLightingDocument(), sourceXml: '<MA/>', mappings: [], warnings: [], unconverted: [], timeOriginMs: 60000 } }]
+  });
   const file = info.outputPath('executor.tblink'); await writeFile(file, JSON.stringify(parseLinkProject(project)));
+  // Keep Windows Chromium profiles short and unique; long test names can exceed native path limits.
+  const profile = await mkdtemp(join(tmpdir(), 'tblink-executor-'));
   const app = await electron.launch({
-    args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')],
+    args: [`--user-data-dir=${profile}`, join(process.cwd(), 'out/main/index.cjs')],
     env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' }
   });
   const page = await app.firstWindow();
@@ -73,6 +82,7 @@ export async function launchExecutorFixture(info: TestInfo) {
     replace('link:ma2-executor-page', (_event, request: Ma2ExecutorPageRequest): Ma2ExecutorPage => {
       append('TBLINK_EXECUTOR_READS', request.page);
       if (process.env.TBLINK_EXECUTOR_READ_FAILURE === String(request.page)) throw new Error('验收：此页暂未读回');
+      if (process.env.TBLINK_EXECUTOR_MISSING_PAGE === String(request.page)) return { page: request.page, name: '', readAt: new Date().toISOString(), source, exists: false, items: [], sequences: [] };
       const value = snapshot(request.page);
       if (process.env.TBLINK_EXECUTOR_DENSE && (request.page === 4 || request.page === 100)) {
         const shortNames = ['面光', 'xws', '定点', '蓝色', '轮廓', '前区', '双色', '跟随长名称的灯光效果', '摇头', '收光'];

@@ -24,7 +24,6 @@ export * from './purchase';
 export * from './playback-engine';
 export * from './midi-port';
 export * from './live-cue-edit';
-export * from './beauty';
 export * from './project-document';
 export * from './obs-playback';
 export * from './obs-address';

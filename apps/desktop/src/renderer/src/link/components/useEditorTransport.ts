@@ -9,6 +9,7 @@ import { useDisplayPreferences } from '../stores/display-preferences-store';
 import { EditorPlayhead } from './editor-playhead';
 import { editorPlayRequest } from './play-buttons';
 import { songInPlayer } from '../view-models/picture-on-air';
+import { currentShowGate } from '../stores/show-state-store';
 
 export function useEditorProgram(player: ProjectPlayer, external: boolean, notify: (message: string, tone?: 'info' | 'error') => void): string | null {
   const [selected, select] = useSelectedProgram(notify);
@@ -59,15 +60,17 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
   const setPlayheadMs = (position: number): void => {
     cursorRef.current = position;
     if (!followRef.current) playhead.set(position);
-    if (!external || !itemId) return;
+    if (!itemId || !external && localPlaying) return;
     if (!active) {
       if (!previewCoordinator) return;
+      const gate = currentShowGate('editor.preview');
+      if (gate.kind === 'wait') { notify(gate.message, 'info'); return; }
       showSeek(position);
       if (!seekQueue.current) {
         resumeAfterSeek.current = false;
         seekQueue.current = new LatestPosition(
-          target => previewCoordinator.previewEditor(itemId, target, useDisplayPreferences.getState().preciseSeeking),
-          () => { seekQueue.current = null; setSeeking(false); if (resumeAfterSeek.current) void player.controller?.play(itemId, cursorRef.current).catch(report); },
+          (target, current) => previewCoordinator.previewEditor(itemId, target, useDisplayPreferences.getState().preciseSeeking, current),
+          () => { seekQueue.current = null; setSeeking(false); if (resumeAfterSeek.current) setPlaying(true); },
           // A failed picture preview must not cancel the operator's play. The program owns audio and
           // timecode and reports its picture separately; pause/stop still cancel the pending play.
           report);

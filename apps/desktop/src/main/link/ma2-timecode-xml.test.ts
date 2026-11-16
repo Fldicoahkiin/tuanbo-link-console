@@ -314,3 +314,17 @@ it('多来源合成接受只带预设时间的 Part（3.7 每个 Cue 都有）�
   const parts = exported.replace('<CuePart index="0">', '<CuePart index="1"/><CuePart index="0">');
   expect(() => editMa2SongSequence(song, '歌曲', [{ cue: '1.000', name: '组合', sources: sources(parts) }], [])).toThrow('多 Part');
 });
+
+
+it('原生零步序列首次加 Cue 补回保留槽，导入不会吞掉第一步', () => {
+  // onPC 3.7 exports an empty Sequ without even <Cue xsi:nil="true"/>.
+  const xml = '<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" major_vers="3" minor_vers="7" stream_vers="0"><Sequ index="2" name="empty"/></MA>';
+  const changes = Array.from({ length: 5 }, (_, index) => ({ cue: `${index + 1}.000`, name: `Cue ${index + 1}`, sources: [] }));
+  const added = editMa2SongSequence(xml, 'song', changes, []);
+  const slots = [...added.matchAll(/<Cue(?:\s[^>]*?)?\/?>(?:[\s\S]*?<\/Cue>)?/g)].map(match => match[0]);
+  expect(slots[0]).toContain('xsi:nil="true"');
+  expect(added.indexOf('xsi:nil="true"')).toBeLessThan(added.indexOf('<Number'));
+  expect(inspectMa2SequenceXml(added).sequences[0]?.cues.map(cue => cue.number)).toEqual(changes.map(cue => cue.cue));
+  const again = editMa2SongSequence(added, 'song', [{ cue: '6.000', name: 'Cue 6', sources: [] }], []);
+  expect(again.match(/xsi:nil="true"/g)).toHaveLength(1);
+});

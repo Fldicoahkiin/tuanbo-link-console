@@ -127,7 +127,7 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
             <span className="ma2-executor-band-name" title={snapshot?.name}>{snapshot?.name}</span>
             {band.id !== 'fader' && keyChannel.state ? <Ma2KeyChannelMenu state={keyChannel.state} start={start} onChoose={keyChannel.choose} onError={setNotice}/> : null}
             <button aria-label={`${band.input}目录`} title="选择页面" onClick={() => setPicker(picker === band.id ? null : band.id)}><List/></button>
-            <BandStatus error={error ?? ''} read={Boolean(snapshot)} note={model.note} refreshWaits={refreshGate.kind === 'wait'} onRefresh={refresh}/>
+            <BandStatus missing={snapshot?.exists === false} error={error ?? ''} read={Boolean(snapshot)} note={model.note} refreshWaits={refreshGate.kind === 'wait'} onRefresh={refresh}/>
           </header>
           <div className="ma2-executor-grid" aria-label={`${band.input} ${page ?? ''}`} data-stale={Boolean(error)}>
             {model.cells.map(cell => {
@@ -211,11 +211,11 @@ function draggedExecutor(data: string, scope: string): { page: number; item: Pag
 }
 
 /** A band's read state in its header: a page read that waits for the show says so plainly, a failed one offers to read again. */
-function BandStatus({ error, read, note, refreshWaits, onRefresh }: { error: string; read: boolean; note: Ma2ConsoleBand['note']; refreshWaits: boolean; onRefresh: () => void }): JSX.Element {
+function BandStatus({ error, read, missing, note, refreshWaits, onRefresh }: { missing: boolean; error: string; read: boolean; note: Ma2ConsoleBand['note']; refreshWaits: boolean; onRefresh: () => void }): JSX.Element {
   const failure = error ? ma2ConsoleReadNote(error) : null;
   return <>
     {failure?.kind === 'wait' ? <small className="ma2-console-wait" role="status" title={failure.text}>在等节目</small>
-      : failure ? <button className="ma2-executor-read-state" title={failure.text} disabled={refreshWaits} onClick={onRefresh}>等待控台确认</button> : !read ? <small role="status">读取中…</small> : null}
+      : failure ? <button className="ma2-executor-read-state" title={failure.text} disabled={refreshWaits} onClick={onRefresh}>读取失败，点击刷新</button> : missing ? <small role="status">此页尚未创建</small> : !read ? <small role="status">读取中…</small> : null}
     {note ? <small className="ma2-console-wait" data-tone={note.tone} title={note.text}>{note.text}</small> : null}
   </>;
 }

@@ -7,12 +7,6 @@
   "apps/desktop/src/main/link/automatic-music-service.ts": {
     "队列": 1
   },
-  "apps/desktop/src/main/link/beauty-comparison.ts": {
-    "通道": 1
-  },
-  "apps/desktop/src/main/link/beauty-runtime.ts": {
-    "通道": 1
-  },
   "apps/desktop/src/main/link/local-test-license.ts": {
     "通道": 1
   },
@@ -42,12 +36,6 @@
   },
   "apps/desktop/src/main/link/native-midi-ports.ts": {
     "会话": 1
-  },
-  "apps/desktop/src/main/link/obs-beauty.ts": {
-    "通道": 2
-  },
-  "apps/desktop/src/main/link/obs-bridge-access.ts": {
-    "通道": 1
   },
   "apps/desktop/src/main/link/p1-project-service.ts": {
     "camelCase": 2

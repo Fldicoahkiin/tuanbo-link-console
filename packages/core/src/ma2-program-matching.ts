@@ -62,7 +62,7 @@ export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog, fail
   const notes: Ma2StartMatch['notes'] = [];
   const frameRate = project.timebase.frameRate;
   const songs = project.rundown.flatMap(item => {
-    if (!item.referenceAudio || item.p1UnavailableSourceKey || !item.p1Media && !item.playback || item.lighting?.consoleSong) return [];
+    if (!item.referenceAudio || item.p1UnavailableSourceKey || !item.p1Media && !item.playback || item.lighting?.consoleSong || item.lighting?.timelineDestination) return [];
     try { return [{ item, start: programTimeOrigin(item) }]; }
     catch { return []; }
   });
@@ -73,7 +73,7 @@ export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog, fail
   for (const entry of catalog.entries) {
     if (own.has(entry.target)) continue;
     const owner = bound.get(entry.target);
-    if (!owner && entry.eventCount === 0) continue;
+
     if (entry.error) { unresolved.push({ target: entry.target, reason: entry.error }); continue; }
     const start = ma2ShowStartTicks(entry);
     if (start === null) { unresolved.push({ target: entry.target, reason: `控台写的起点“${entry.offset ?? ''}”读不懂，没有对歌曲` }); continue; }
@@ -115,7 +115,15 @@ export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog, fail
       targets.splice(0, targets.length, ...held);
       if (!targets.length) continue;
     }
-    const sorted = targets.sort((a, b) => a - b);
+    let sorted = targets.sort((a, b) => a - b);
+    // An explicit selection already supplies the show number. Other shows at the same start
+    // must not turn that selection back into an ambiguous automatic match.
+    const selected = sorted.filter(target => bound.get(target) === itemId);
+    if (selected.length === 1 && sorted.length > 1) {
+      for (const target of sorted.filter(value => value !== selected[0])) unresolved.push({ target, reason: `这首歌已选择 Timecode ${selected[0]}；要更换，请选择这条时间线` });
+      notes.push({ target: selected[0]!, text: '控台上还有同起点的时间线，请确认只让本曲要用的时间线跟随时间码' });
+      sorted = selected;
+    }
     if (sorted.length > 1) {
       duplicateStarts[itemId] = sorted;
       const title = project.rundown.find(item => item.id === itemId)?.title ?? itemId;

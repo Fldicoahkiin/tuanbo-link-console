@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { withMa2TimeOrigin } from '@tb/core/link';
-import { createLightingDocument, ma2TimecodePreviewSchema, type Ma2TimecodePreview, type LightingEvent } from '@tb/schema';
+import { createLightingDocument, ma2TimecodePreviewSchema, ma2TimecodeFrameFormatSchema, type Ma2TimecodePreview, type LightingEvent } from '@tb/schema';
 import { extractMa2TimecodeXml, inspectMa2SequenceXml, inspectMa2TimecodeXml, resolveMa2CueReference, validateMa2TimecodeSnapshot, type Ma2SequenceReport } from './ma2-timecode-xml';
 
 export type Ma2TimecodeConversion = Ma2TimecodePreview;
@@ -24,7 +24,8 @@ export function convertMa2TimecodeReferences(xml: string, sequences: readonly Ma
   if (!Number.isSafeInteger(target) || target < 1) throw new Error('Timecode 编号无效');
   const timecode = report.timecodes.find((entry) => entry.index === target - 1);
   if (!timecode) throw new Error('XML 中没有绑定的 Timecode');
-  if (timecode.attributes.frame_format !== '30 FPS') throw new Error('当前仅验证了 30 FPS Timecode 数据转换');
+  const format = ma2TimecodeFrameFormatSchema.safeParse(timecode.attributes.frame_format);
+  if (!format.success) throw new Error('这个 Timecode 显示格式尚不支持，请在控台选择 24、25 或 30 FPS');
   const rawOffset = timecode.attributes.offset ?? '0';
   if (!/^\d+(?:\.0+)?$/.test(rawOffset) || !Number.isSafeInteger(Number(rawOffset)) || Number(rawOffset) >= 2592000) throw new Error('MA2 偏移必须是完整原生时间单位且小于 24 小时');
   const offsetMs = Number(rawOffset) * 1000 / 30;
@@ -91,6 +92,6 @@ export function convertMa2TimecodeReferences(xml: string, sequences: readonly Ma
   }
   const nativeTimes = timecode.tracks.flatMap(track => track.subtracks.flatMap(subtrack => subtrack.events.map(event => event.attributes.time ?? '0')));
   if (nativeTimes.some(time => !/^\d+(?:\.\d+)?$/.test(time) || !Number.isFinite(Number(time)))) throw new Error('控台事件的时间无效，原样保留，但无法确认它在歌曲里的位置');
-  result.timing = { frameFormat: '30 FPS', unit: 'frames-30', offsetNative: rawOffset, absoluteEventTimesMs: nativeTimes.map(time => (Number(time) + Number(rawOffset)) * 1000 / 30) };
+  result.timing = { frameFormat: format.data, unit: 'frames-30', offsetNative: rawOffset, absoluteEventTimesMs: nativeTimes.map(time => (Number(time) + Number(rawOffset)) * 1000 / 30) };
   return withMa2TimeOrigin(ma2TimecodePreviewSchema.parse(result), timeOriginMs);
 }

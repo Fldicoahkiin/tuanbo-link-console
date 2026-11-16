@@ -8,7 +8,7 @@ name: Release Windows
 #   - Push a vX.Y.Z tag.
 #   tag     dispatched runs only, see above.
 #   verify  GitHub-hosted: version, typecheck, tests, lint.
-#   build   GitHub-hosted, beside verify: fetches the pinned beauty and music-analysis assets from their own releases,
+#   build   GitHub-hosted, beside verify: fetches the pinned music-analysis asset from its own release,
 #           packages, signs latest.yml with the release key (secret), waits for verify to pass
 #           (scripts/wait-for-job.mjs) and only then puts the four files into a draft release on the tag. A version
 #           whose checks fail never gets a draft, so its tag can still move. Running beside verify saves its quarter
@@ -153,13 +153,11 @@ jobs:
           node scripts/verify-release-version.mjs --release "$env:RELEASE_TAG"
           if ($LASTEXITCODE -ne 0) { throw 'Release version check failed' }
 
-      - name: Fetch the pinned beauty build and music-analysis runtime
+      - name: Fetch the pinned music-analysis runtime
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          node scripts/build-assets.mjs fetch beauty
-          if ($LASTEXITCODE -ne 0) { throw 'Beauty assets failed' }
           node scripts/build-assets.mjs fetch music-analysis
           if ($LASTEXITCODE -ne 0) { throw 'Music-analysis assets failed' }
 

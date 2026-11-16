@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { resolve, join } from 'node:path';
-import { launchPackagedDesktop } from '../tools/obs/beauty/verify-packaged-desktop.mjs';
+import { launchPackagedDesktop } from './verify-packaged-desktop.mjs';
 
 const [executable, output] = process.argv.slice(2);
 const directory = resolve(output); await mkdir(directory);

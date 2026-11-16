@@ -38,7 +38,7 @@ function drawn(project: LinkProject, onAirtime: Airtime | null, pending: Readonl
     viewport: { viewportRef: { current: null }, pixelsPerSecond: 50, scroll: new TimelineScroll(), view: { left: 0, width: 2_000, top: 0, height: 600 }, timeAtClientX: () => 0, scrollLeftTo: vi.fn(), maxScrollLeft: () => 0 },
     tracks: { start: 0, lightingIndex: item.visualLayers.length, lightingHeight: 0, coveredTop: 0 }, snap: { enabled: false, thresholdMs: 0 }, lanePointer: {},
     focusTimeline: vi.fn(), onOpenMenu: vi.fn(), onSelectClip: vi.fn(), onSelectCue: vi.fn(), onMoveClip: vi.fn(), onMoveCue: vi.fn(), onTrim: vi.fn(),
-    onDropAsset: vi.fn(), onDropObsResource: vi.fn()
+    onDropAsset: vi.fn(), onDropObsResource: vi.fn(), onSeek: vi.fn()
   };
   const html = renderToStaticMarkup(React.createElement(ContentTracks, props));
   return new Map([...html.matchAll(/<button[^>]* class="(timeline-(?:cue|clip)[^"]*)"[^>]*>.*?<span>([^<]+)<\/span>/g)]
