@@ -1,5 +1,3 @@
-import { useMa2ReadStore } from './ma2-read-store';
-import { useMa2MaterialReadStore } from './ma2-material-read-store';
 import { create } from 'zustand';
 import type { Ma2LayoutSettings, Ma2ReadProgress } from '@tb/schema';
 
@@ -63,9 +61,4 @@ export function updateMa2Song(entry: SongSync, patch: Partial<SongSync>): void {
 export function ma2ConsoleWriting(): boolean {
   const state = useMa2SyncStore.getState();
   return Boolean(state.names.writing) || Object.values(state.songs).some(song => song.writing || Boolean(song.requestId));
-}
-
-/** A foreground read or playback preparation owns the console until it releases its read job. */
-export function ma2ConsoleReading(): boolean {
-  return useMa2ReadStore.getState().busy || useMa2MaterialReadStore.getState().busy;
 }
