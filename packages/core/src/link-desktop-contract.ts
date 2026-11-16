@@ -266,6 +266,7 @@ export type LinkDesktopApi = {
   disconnectMa2Network(): Promise<import('@tb/schema').Ma2NetworkStatus>;
   exchangeMa2(payload: import('@tb/schema').Ma2BridgeRequest): Promise<string>;
   previewMa2(payload: import('@tb/schema').Ma2ReadRequest): Promise<import('@tb/schema').Ma2TimecodePreview>;
+  prepareMa2Playback(network: import('@tb/schema').Ma2NetworkTarget): Promise<boolean>;
   readMa2Catalog(payload: import('@tb/schema').Ma2CatalogRequest, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<import('@tb/schema').Ma2Catalog>;
   readMa2EffectLibrary(payload: import('@tb/schema').Ma2CatalogRequest, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<import('@tb/schema').Ma2EffectLibrary>;
   listMa2Layouts(payload: import('@tb/schema').Ma2LayoutDirectoryRequest): Promise<import('@tb/schema').Ma2LayoutDirectory>;

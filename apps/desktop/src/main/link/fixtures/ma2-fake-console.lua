@@ -103,6 +103,7 @@ gma = {
   gettime = function() return FAKE.now end,
   timer = function(fn, interval, count, cleanup) FAKE.timers[#FAKE.timers + 1] = { fn = fn, interval = interval, count = count, cleanup = cleanup } end,
   show = {
+    property = { get = function(handle, key) return handle and handle.properties and handle.properties[key] or nil end },
     getvar = function(name) return FAKE.vars[name] end,
     getobj = {
       handle = function(address)

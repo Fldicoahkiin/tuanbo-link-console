@@ -1,3 +1,4 @@
+import { ma2SongDirectory } from '@tb/core/link';
 import { ma2CatalogSchema, ma2ObjectDirectorySchema, type Ma2Catalog, type Ma2CatalogRequest, type Ma2ReadProgressUpdate } from '@tb/schema';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { inspectMa2SequenceXml, inspectMa2TimecodeXml, resolveMa2CueReference, type Ma2SequenceReport } from './ma2-timecode-xml';
@@ -20,7 +21,7 @@ export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, sho
   };
   if (signal?.aborted) throw new Error('扫描已取消');
   holdForShow(show, 'ma2.sync.read');
-  const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await request('LIST', 1)));
+  const directory = ma2SongDirectory(ma2ObjectDirectorySchema.parse(JSON.parse(await request('LIST', 1))));
   if (options?.expectedSource && Object.entries(options.expectedSource).some(([key, value]) => Reflect.get(directory, key) !== value)) throw new Error('控台的 Show 或连接变了，旧缓存已保留，请重新读取');
   const readAt = new Date().toISOString();
   const checkpointCatalog = (): Ma2Catalog => ({ directory, readAt, entries: [], sourceUnverified: false, incomplete: '读取还没完成' });
@@ -88,7 +89,7 @@ export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, sho
   else if (!incomplete && !signal?.aborted) {
     onProgress?.({ phase: 'timecodes', completed: entries.length, total: objects.length + 1, detail: '检查控台时间线目录' });
     try {
-      const verified = ma2ObjectDirectorySchema.parse(JSON.parse(await request('LIST', 1)));
+      const verified = ma2SongDirectory(ma2ObjectDirectorySchema.parse(JSON.parse(await request('LIST', 1))));
       if (JSON.stringify(directory) !== JSON.stringify(verified)) { sourceUnverified = true; incomplete = '控台 Show、插件或目录有变化；下面是之前读取的内容，请重新读取控台确认'; }
     } catch (error) { sourceUnverified = true; incomplete = `目录复核未完成：${error instanceof Error ? error.message : String(error)}`; }
   } else incomplete ??= '读取已取消，保留已读取对象';

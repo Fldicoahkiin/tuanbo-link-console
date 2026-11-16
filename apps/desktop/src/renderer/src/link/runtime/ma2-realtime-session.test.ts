@@ -1,3 +1,4 @@
+import { useMa2ReadStore } from '../stores/ma2-read-store';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, lightingDocumentSchema, type Ma2SongBinding, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
 import { legacyMa2Renames, ma2SongPoints, pendingMa2Renames, projectLightingLibrary, renameConsoleCueCommand, setLightingCommand, setLightingLibraryCommand, SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
@@ -60,7 +61,7 @@ it.each([
   ['没有保存工程', '请先保存工程', () => useDocumentStore.setState({ path: null })],
   ['没有读取素材', '请先读取控台素材', () => { const value = project(); delete value.ma2MaterialLibrary; useDocumentStore.getState().setProject(value, 'song.tblink'); }],
   ['素材来源尚未确认', '请重新读取控台素材', () => { const value = project(); value.ma2MaterialLibrary!.library!.sourceUnverified = true; useDocumentStore.getState().setProject(value, 'song.tblink'); }],
-  ['素材正在读取', '正在读取控台素材', () => useMa2MaterialReadStore.setState({ busy: true })],
+  ['素材正在读取', '正在读取或准备控台', () => useMa2MaterialReadStore.setState({ busy: true })],
   ['没有选网络连接', '网络连接 MA2', () => storage.set('tblink.ma2-connection-method.v1', 'midi')]
 ])('点击同步但%s：显示原因，不假装写入', async (_label, message, setup) => {
   setup();
@@ -872,4 +873,14 @@ it('一键连接重读目录期间暂时失去已确认素材，只等待，不�
   expect(sync).not.toHaveBeenCalled();
   expect(recordLog.mock.calls.some(([entry]) => entry.level === 'error')).toBe(false);
   useDocumentStore.setState({ project: original });
+});
+
+it('明确读取时间线或准备选曲期间，后台同步等待且不消耗失败次数', async () => {
+  useMa2ReadStore.setState({ busy: true });
+  try {
+    expect(await prepareMa2RealtimeSession()).toBe(false);
+    await tickMa2SongSync();
+    expect(useMa2SyncStore.getState().session.message).toContain('正在读取或准备控台');
+    expect(sync).not.toHaveBeenCalled();
+  } finally { useMa2ReadStore.setState({ busy: false }); }
 });

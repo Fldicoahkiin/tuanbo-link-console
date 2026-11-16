@@ -320,7 +320,7 @@ local function start(data)
           local number = tonumber(obj.number(child))
           assert(number and number >= 1 and number <= 99999 and number == math.floor(number) and not seen[number], 'Invalid Timecode directory number')
           seen[number] = true
-          entries[#entries + 1] = '{"target":' .. number .. ',"name":' .. quote(assert(obj.name(child), 'Timecode name unavailable')) .. '}'
+          entries[#entries + 1] = '{"target":' .. number .. ',"name":' .. quote(assert(obj.name(child), 'Timecode name unavailable')) .. (gma.show.property.get(child, 'Info') == 'TBLINK_MTC_SELECTOR_V1' and ',"internal":true' or '') .. '}'
           assert(#entries <= 10000, 'Occupied Timecode directory exceeds limit')
         end
       end
@@ -358,12 +358,12 @@ local function start(data)
             local tag = xml:match('<Timecode%s[^>]*>') or ''
             local function attribute(key) return tag:match('%s' .. key .. '="([^"]*)"') end
             local last = nil
-            for value in xml:gmatch('<Event%s[^>]-time="([%d%.]+)"') do
-              local time = tonumber(value)
+            for event in xml:gmatch('<Event%s[^>]*>') do
+              local time = tonumber(event:match('%stime="([%d%.]+)"') or '0')
               if time and (not last or time > last) then last = time end
             end
             entries[#entries + 1] = '{"target":' .. number .. ',"name":' .. quote(attribute('name') or '') .. ',"offset":' .. quote(attribute('offset') or '0') .. ',"length":' .. quote(attribute('lenght') or '')
-              .. ',"slot":' .. quote(attribute('slot') or '') .. ',"frame":' .. quote(attribute('frame_format') or '') .. ',"last":' .. quote(last and tostring(last) or '') .. '}'
+              .. ',"slot":' .. quote(attribute('slot') or '') .. ',"frame":' .. quote(attribute('frame_format') or '') .. ',"last":' .. quote(last and tostring(last) or '') .. (gma.show.property.get(child, 'Info') == 'TBLINK_MTC_SELECTOR_V1' and ',"internal":true' or '') .. '}'
             assert(#entries <= 10000, 'Occupied Timecode directory exceeds limit')
             if index <= count - 1 then return step(ranges) end
           end

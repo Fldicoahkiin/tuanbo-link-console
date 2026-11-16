@@ -1,3 +1,6 @@
+import { Ma2MtcSelectionService } from './ma2-mtc-selection';
+import { editMa2Timeline } from './ma2-timeline-edit';
+import { ma2SongDirectory } from '@tb/core/link';
 import { ma2PlaybackRequestSchema, type Ma2PlaybackRequest, type Ma2Catalog, type Ma2CatalogRequest, ma2ObjectDirectorySchema, type Ma2ObjectDirectory } from '@tb/schema';
 import { playMa2Cue } from './ma2-pool-playback';
 import { readFile } from 'node:fs/promises';
@@ -101,7 +104,7 @@ export class Ma2NetworkManager {
   private songWatch: Ma2SongWatch | null = null;
   /** Read-only: where every console Timecode show sits in time, for placing a song that has no start yet. */
   async timecodeRanges(network: Ma2NetworkTarget): Promise<import('@tb/schema').Ma2TimecodeRanges> {
-    return ma2TimecodeRangesSchema.parse(JSON.parse(await this.get(network).bridge.request('TCRANGES', 1)));
+    return ma2SongDirectory(ma2TimecodeRangesSchema.parse(JSON.parse(await this.get(network).bridge.request('TCRANGES', 1))));
   }
   async checkSong(request: import('@tb/schema').Ma2SongCheckRequest): Promise<boolean> {
     const { bridge } = this.get(request.network);
@@ -120,6 +123,20 @@ export class Ma2NetworkManager {
   private layouts(): Ma2LayoutService {
     if (!this.consoleBackups) throw new Error('控台备份记录还没准备好');
     return this.layoutService ??= new Ma2LayoutService(`${this.path}.layouts.json`, this.show, this.consoleBackups);
+  }
+  private mtcSelection: Ma2MtcSelectionService | null = null;
+  async prepareMtcPlayback(network: Ma2NetworkTarget, force = true, targets: readonly number[] = []): Promise<boolean> {
+    const { bridge } = this.get(network);
+    if (!this.connection) throw new Error('请先连接控台');
+    if (!this.consoleBackups) throw new Error('控台备份记录还没准备好');
+    this.mtcSelection ??= new Ma2MtcSelectionService(this.show, this.consoleBackups);
+    return this.mtcSelection.prepare(this.connection, bridge, network, force, targets);
+  }
+  async editTimeline(request: import('@tb/schema').Ma2TimelineEditRequest) {
+    if (!request.network) throw new Error('请先连接控台');
+    const result = await editMa2Timeline(this.get(request.network).bridge, request);
+    await this.prepareMtcPlayback(request.network, false, [request.target]);
+    return result;
   }
   private consoleBackups: Ma2ConsoleBackups | null = null;
   setConsoleBackups(backups: Ma2ConsoleBackups): void { this.consoleBackups = backups; }
@@ -219,7 +236,9 @@ export class Ma2NetworkManager {
         return false;
       }
     };
-    return this.layouts().syncSong(connection, bridge, request, report, signal, { consoleBaseline: baseline, adoptReadback });
+    const result = await this.layouts().syncSong(connection, bridge, request, report, signal, { consoleBaseline: baseline, adoptReadback });
+    await this.prepareMtcPlayback(request.network, false, result.changed && result.binding.timecode ? [result.binding.timecode.number] : []);
+    return result;
   }
   async newCue(request: import('@tb/schema').Ma2NewCueRequest): Promise<import('@tb/schema').Ma2NewCueResult> {
     const {bridge}=this.get(request.network); const connection=this.connection;
@@ -481,7 +500,11 @@ export class Ma2NetworkManager {
   private openServices(connection: Ma2Telnet): void {
     const wire = new Ma2NetworkWire(connection, this.settings?.host === '127.0.0.1' || this.settings?.host === '::1'); this.wire = wire;
     const bridge = new Ma2OnpcBridge(wire, this.show);
-    this.services = { bridge, service: new Ma2ApplyService(bridge, this.show) };
+    this.mtcSelection?.invalidate();
+    this.services = { bridge, service: new Ma2ApplyService(bridge, this.show, async target => {
+      if (!this.settings) throw new Error('控台连接已变化');
+      await this.prepareMtcPlayback(this.settings, false, [target]);
+    }) };
     this.bridgeIssue = null;
     this.reconnectAllowed = true; this.reconnectDelay = 1000;
   }

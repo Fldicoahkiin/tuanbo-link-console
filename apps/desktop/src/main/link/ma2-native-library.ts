@@ -1,3 +1,4 @@
+import { ma2SongDirectory } from '@tb/core/link';
 import { randomBytes } from 'node:crypto';
 import { ma2EffectLibrarySchema, ma2ObjectDirectorySchema, type Ma2CatalogRequest, type Ma2EffectLibrary, type Ma2ObjectDirectory, type Ma2ReadProgressUpdate } from '@tb/schema';
 import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
@@ -11,7 +12,7 @@ import { holdForShow, isShowWait, type ShowGateReader } from '@tb/core/link';
 export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, show: ShowGateReader, onProgress?: (progress: Ma2ReadProgressUpdate) => void | Promise<void>, phase: 'library' | 'verification' = 'library', signal?: AbortSignal, targets?: readonly number[], measure?: (bytes: number) => void, sessionDirectory?: Ma2ObjectDirectory, expectedSource?: Ma2CatalogRequest['expectedSource']): Promise<Ma2EffectLibrary> {
   if (signal?.aborted) throw new Error('素材读取已取消');
   // A catalog session owns the final directory verification when reusing this snapshot.
-  const directory = sessionDirectory ?? ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
+  const directory = (sessionDirectory ? ma2SongDirectory(sessionDirectory) : undefined) ?? ma2SongDirectory(ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1))));
   if (signal?.aborted) throw new Error('素材读取已取消');
   if (expectedSource && Object.entries(expectedSource).some(([key, value]) => Reflect.get(directory, key) !== value)) throw new Error('控台的 Show 或连接变了，缓存已保留，请重新读取');
   const readAt = new Date().toISOString();
@@ -66,7 +67,7 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
   }
   if (signal?.aborted) throw new Error('素材读取已取消');
   await onProgress?.({ phase, completed: sequences.length + errors.length, total: directory.entries.length + 1, detail: '检查控台序列目录' });
-  const verified = sessionDirectory ?? ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
+  const verified = (sessionDirectory ? ma2SongDirectory(sessionDirectory) : undefined) ?? ma2SongDirectory(ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1))));
   if (signal?.aborted) throw new Error('素材读取已取消');
   holdForShow(show, 'ma2.sync.read', '序列都读完了，还没核对控台序列目录，停下后会重新检查。');
   if (JSON.stringify(directory) !== JSON.stringify(verified)) throw new Error('控台的 Show 或序列有变化，请重新读取');

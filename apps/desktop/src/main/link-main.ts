@@ -1260,6 +1260,10 @@ function registerIpc(
     finally { task.finish(); }
   });
   handle('link:ma2-song-check', async (_event, value: unknown) => ma2Network.checkSong(ma2SongCheckRequestSchema.parse(value)));
+  handle('link:ma2-prepare-playback', async (_event, value: unknown) => {
+    try { return await ma2Network.prepareMtcPlayback(ma2NetworkTargetSchema.parse(value)); }
+    catch (error) { await recordMa2Failure('准备控台选曲', `控台选曲没有准备完成：${String(error)}`, error); throw error; }
+  });
   handle('link:ma2-timecode-ranges', async (_event, value: unknown) => {
     try { return await ma2Network.timecodeRanges(ma2NetworkTargetSchema.parse(value)); }
     catch (error) { await recordMa2Failure('读取控台时间码节目范围', `读取控台时间码节目范围失败：${String(error)}`, error); throw error; }
@@ -1373,7 +1377,7 @@ function registerIpc(
     const request = ma2TimelineEditRequestSchema.parse(value);
     const { bridge } = await getMa2Connection(request);
     try {
-      const result = await editMa2Timeline(bridge, request);
+      const result = request.network ? await ma2Network.editTimeline(request) : await editMa2Timeline(bridge, request);
       if (result.backupFile) await ma2ConsoleBackups.record(bridge, { console: ma2ConsoleKey(request), object: `Timecode ${request.target}`, files: [result.backupFile] });
       return result;
     } catch (error) { await recordMa2Failure('修改控台时间线', String(error), error); throw error; }

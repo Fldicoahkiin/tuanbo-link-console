@@ -31,9 +31,26 @@ beforeEach(() => {
   useMa2SyncStore.setState({ songs: {} });
   useMa2ReadStore.setState({ busy: false });
   readCatalog.mockResolvedValue(catalog);
-  vi.stubGlobal('window', { tbLink: { readMa2Catalog: readCatalog } });
+  vi.stubGlobal('window', { tbLink: { prepareMa2Playback: vi.fn().mockResolvedValue(false), readMa2Catalog: readCatalog } });
 });
 afterEach(() => vi.unstubAllGlobals());
+
+it('明确连接的选曲准备期间占用读取任务，失败也释放，不开始缓存读回', async () => {
+  vi.mocked(window.tbLink.prepareMa2Playback).mockImplementation(() => {
+    expect(useMa2ReadStore.getState().busy).toBe(true);
+    return Promise.reject(new Error('控台未确认'));
+  });
+  await expect(prepareMa2Editing(connection, useDocumentStore.getState().documentId)).rejects.toThrow('控台未确认');
+  expect(useMa2ReadStore.getState().busy).toBe(false);
+  expect(readCatalog).not.toHaveBeenCalled();
+});
+
+it('选曲准备改动原时间线设置后重新读取，不复用旧播放属性', async () => {
+  vi.mocked(window.tbLink.prepareMa2Playback).mockResolvedValue(true);
+  await prepareMa2Editing(connection, useDocumentStore.getState().documentId);
+  expect(scanMa2).toHaveBeenCalledOnce();
+  expect(readCatalog).not.toHaveBeenCalled();
+});
 
 it('重新连接核对目录并复用缓存，等待明确开始同步', async () => {
   const message = await prepareMa2Editing(connection, useDocumentStore.getState().documentId);

@@ -142,6 +142,7 @@ const tbLink: LinkDesktopBridgeApi = {
   disconnectMa2Network: () => invoke('link:ma2-network-disconnect'),
   exchangeMa2: (payload) => invoke('link:ma2-exchange', payload),
   previewMa2: (payload) => invoke('link:ma2-preview', payload),
+  prepareMa2Playback: async network => z.boolean().parse(await invoke('link:ma2-prepare-playback', ma2NetworkTargetSchema.parse(network))),
   readMa2Catalog: (payload, onProgress) => readMa2('link:ma2-catalog', payload, onProgress),
   readMa2EffectLibrary: (payload, onProgress) => readMa2('link:ma2-effect-library', payload, onProgress),
   listMa2Layouts: async payload => ma2LayoutDirectorySchema.parse(await invoke('link:ma2-layouts', ma2LayoutDirectoryRequestSchema.parse(payload))),

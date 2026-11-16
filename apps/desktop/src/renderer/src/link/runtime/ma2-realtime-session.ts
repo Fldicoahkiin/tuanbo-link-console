@@ -2,10 +2,9 @@ import { hasMa2SongSyncTarget, allocateMissingMtcStarts, ma2SongPairs, pendingMa
 import { ma2EffectLibrarySchema, type LightingDocument } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { readMa2Method } from '../stores/ma2-mode-store';
-import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 import { ma2SongSyncSettings, startMa2SongSync, stopMa2SongSync } from './ma2-song-sync';
 import { ma2SongSyncActive, ma2SyncActive, setMa2RealtimeEnabled, useMa2RealtimePreference } from './ma2-realtime-preference';
-import { useMa2SyncStore, type Ma2SessionCheck } from '../stores/ma2-sync-store';
+import { ma2ConsoleReading, useMa2SyncStore, type Ma2SessionCheck } from '../stores/ma2-sync-store';
 import { currentShowWait } from '../stores/show-state-store';
 import { useMtcStartAllocationStore } from '../stores/mtc-start-allocation-store';
 import { reportCoordinatorError } from './runtime-action-log';
@@ -50,12 +49,12 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
   if (wait !== null) { setSession('waiting', wait); return false; }
   if (!state.project) { setSession('waiting', '请先打开工程'); return false; }
   if (!state.path) { setSession('waiting', '请先保存工程，再同步到控台'); return false; }
-  if (useMa2MaterialReadStore.getState().busy) { setSession('waiting', '正在读取控台素材，读完后继续同步'); return false; }
+  if (ma2ConsoleReading()) { setSession('waiting', '正在读取或准备控台，完成后继续同步'); return false; }
   const material = state.project.ma2MaterialLibrary;
   if (!material?.library) { setSession('waiting', '请先读取控台素材，再同步到控台'); return false; }
   if (material.library.sourceUnverified) { setSession('waiting', '上次读取还没确认，请重新读取控台素材'); return false; }
   const current = (): boolean => useDocumentStore.getState().documentId === state.documentId
-    && ma2SyncActive() && readMa2Method() === 'network' && !useMa2MaterialReadStore.getState().busy;
+    && ma2SyncActive() && readMa2Method() === 'network' && !ma2ConsoleReading();
   preparing = true;
   let context = '';
   try {

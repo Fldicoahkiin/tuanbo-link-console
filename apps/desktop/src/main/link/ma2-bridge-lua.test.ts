@@ -33,6 +33,15 @@ const sequenceXml = (number: number, color = '', extra = ''): string => `<?xml v
 `;
 const executorXml = (sequence: number): string => `<MA><Exec offset_from_first="0"><Assignment name="A"><No>25</No><No>1</No><No>${sequence}</No></Assignment><AssignmentExec><Button>12299</Button></AssignmentExec></Exec></MA>`;
 
+it('内部选曲对象保留占位标记，第零帧的事件计入时间范围', async () => {
+  const ma2 = new Ma2LuaConsole(bridgeSource);
+  ma2.set('Timecode 9900', { name: 'TBLINK_MTC_SELECTION', xml: '<MA><Timecode index="9899" slot="TC Slot 2"><Track><SubTrack><Event index="0" command="Goto" /></SubTrack></Track></Timecode></MA>' });
+  ma2.lua("FAKE.objects['Timecode 9900'].properties = { Info = 'TBLINK_MTC_SELECTOR_V1' }");
+  const wire = new Ma2NetworkWire(ma2);
+  expect(JSON.parse(await wire.exchange(requestId(1), 'LIST', 1, '', () => undefined))).toMatchObject({ entries: [{ target: 9900, internal: true }] });
+  expect(JSON.parse(await wire.exchange(requestId(2), 'TCRANGES', 1, '', () => undefined))).toMatchObject({ entries: [{ target: 9900, internal: true, last: '0' }] });
+});
+
 it('本机上传文件完整后才执行，大小错误不执行并可释放', async () => {
   const ma2 = new Ma2LuaConsole(bridgeSource); const id = requestId(1);
   const call = async (action: string, args = ''): Promise<string> => await ma2.command(`Lua "TBLINK_NET('${id}','${action}','${id}'${args})"`, text => ma2ResponseLine(text, `TBLINK_RPC_${id}:`));

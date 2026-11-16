@@ -3,13 +3,13 @@ import { holdForShow, MA2_SONG_COLLISION, resolveMa2Sync, type ShowGateReader } 
 import { Ma2BridgeFailure, type Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { confirmMa2MergedEvents, prepareMa2MergedEvents } from './ma2-event-write';
 import { convertMa2Snapshot } from './ma2-timecode-conversion';
-import { referencedMa2Sequences, sameMa2XmlObjects } from './ma2-timecode-xml';
+import { ma2MtcPlaybackSettings, referencedMa2Sequences, sameMa2XmlObjects } from './ma2-timecode-xml';
 import { compareMa2LightingReadback } from './ma2-comparison';
 
 /** One complete read/validate/write/verify session. No automatic retries. */
 export class Ma2ApplyService {
   private busy = false;
-  constructor(private readonly bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'>, private readonly show: ShowGateReader) {}
+  constructor(private readonly bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'>, private readonly show: ShowGateReader, private readonly preparePlayback?: (target: number) => Promise<void>) {}
 
   async apply(input: Ma2ApplyRequest): Promise<Ma2ApplyResult> {
     if (this.busy) return { status: 'incomplete', stage: 'preflight', message: '已有 MA2 同步正在进行', mayHaveWritten: false, backupFile: null };
@@ -43,12 +43,17 @@ export class Ma2ApplyService {
         stage = 'preflight';
       }
       const prepared = prepareMa2MergedEvents(request.document, request.bindingId, request.readback, new Map(request.conflicts), [snapshot], request.timeAlignment ?? 'exact', request.consoleChanges);
+      if (this.preparePlayback) prepared.desiredXml = ma2MtcPlaybackSettings(prepared.desiredXml, false);
       this.requireStopped();
-      if (sameMa2XmlObjects(prepared.desiredXml, current.sourceXml)) return ma2ApplyResultSchema.parse({ status: 'verified', confirmed: confirmMa2MergedEvents(prepared, current.sourceXml, [snapshot]), backupFile: null });
+      if (sameMa2XmlObjects(prepared.desiredXml, current.sourceXml)) {
+        await this.preparePlayback?.(binding.timecode);
+        return ma2ApplyResultSchema.parse({ status: 'verified', confirmed: confirmMa2MergedEvents(prepared, current.sourceXml, [snapshot]), backupFile: null });
+      }
       stage = 'write'; mayHaveWritten = true;
       const receipt = await this.bridge.exchange('SYNC', binding.timecode, snapshot, prepared.desiredXml);
       backupFile = `tblink_backup_${receipt.requestId}.xml`;
       stage = 'verify';
+      await this.preparePlayback?.(binding.timecode);
       const after = await this.bridge.request('SNAPSHOT', binding.timecode);
       const verified = convertMa2Snapshot(after, binding.timecode, [], binding.timeOriginMs);
       const confirmed = confirmMa2MergedEvents(prepared, verified.sourceXml, [after]);

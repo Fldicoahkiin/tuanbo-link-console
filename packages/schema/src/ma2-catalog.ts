@@ -16,7 +16,7 @@ const ma2ReadProgressBaseSchema = z.object({
 }).strict().refine(value => value.completed <= value.total, '读取进度超过总数');
 export const ma2ObjectDirectorySchema = z.object({
   show: z.string().min(1).max(4096), generation: z.string().min(1).max(128), version: z.string().min(1).max(128),
-  entries: z.array(z.object({ target: z.number().int().min(1).max(99999), name: z.string().max(4096) }).strict()).max(10000)
+  entries: z.array(z.object({ target: z.number().int().min(1).max(99999), name: z.string().max(4096), internal: z.literal(true).optional() }).strict()).max(10000)
 }).strict().refine(value => new Set(value.entries.map(entry => entry.target)).size === value.entries.length, '控台目录包含重复 Timecode');
 export type Ma2ObjectDirectory = z.infer<typeof ma2ObjectDirectorySchema>;
 export const ma2CatalogEntrySchema = z.object({
@@ -39,7 +39,7 @@ export const ma2CatalogSchema = z.object({ directory: ma2ObjectDirectorySchema, 
 export type Ma2Catalog = z.infer<typeof ma2CatalogSchema>;
 /** Where each console Timecode show sits in time, as the console's own export says (values as written there). */
 export const ma2TimecodeRangesSchema = z.object({ show: z.string().min(1).max(4096), entries: z.array(z.object({
-  target: z.number().int().min(1).max(99999), name: z.string().max(1024), offset: z.string().max(32), length: z.string().max(32), slot: z.string().max(64), frame: z.string().max(64), last: z.string().max(32)
+  target: z.number().int().min(1).max(99999), name: z.string().max(1024), offset: z.string().max(32), length: z.string().max(32), slot: z.string().max(64), frame: z.string().max(64), last: z.string().max(32), internal: z.literal(true).optional()
 }).strict()).max(10000) }).strict();
 export type Ma2TimecodeRanges = z.infer<typeof ma2TimecodeRangesSchema>;
 export const ma2ReadProgressSchema = ma2ReadProgressBaseSchema.safeExtend({

@@ -848,3 +848,14 @@ export function editMa2TimecodeMetadata(xml: string, target: number, name: strin
   timecode.setAttribute('name', name); timecode.setAttribute('offset', String(Math.round(startMs * 30 / 1000)));
   return new XMLSerializer().serializeToString(document);
 }
+
+/** Only metadata changes. Native tracks, events and fixture content are not rewritten. */
+export function ma2MtcPlaybackSettings(xml: string, automatic: boolean): string {
+  validateMa2TimecodeWrite(xml);
+  const { document } = parse(xml);
+  const timecode = document.getElementsByTagName('Timecode').item(0);
+  if (!timecode) throw new Error('控台选曲数据缺少时间线');
+  if (automatic) timecode.setAttribute('m_autostart', 'true'); else timecode.removeAttribute('m_autostart');
+  timecode.removeAttribute('no_status_call'); timecode.removeAttribute('no_switch_off');
+  return new XMLSerializer().serializeToString(document);
+}

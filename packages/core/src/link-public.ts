@@ -86,6 +86,7 @@ export * from './ma2-console-label';
 export * from './ma2-pending-changes';
 export * from './song-lighting-status';
 export * from './mtc-start';
+export * from './ma2-mtc-selection';
 export * from './p1-import-report';
 export * from './lighting-start-check';
 export * from './lighting-music';

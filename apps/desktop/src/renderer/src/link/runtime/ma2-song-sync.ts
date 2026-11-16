@@ -5,12 +5,11 @@ import { requireSavedProjectPath } from '../project-document';
 import { acceptCreatedMa2Layout, currentMa2LayoutScope } from '../stores/ma2-layout-store';
 import { locateMa2Executor, ma2ExecutorLocationLabel, loadMa2ExecutorPage } from '../stores/ma2-executor-page-store';
 import { recordRuntimeOperator, reportCoordinatorError } from './runtime-action-log';
-import { updateMa2Song as update, useMa2SyncStore, type NameSync, type SongSync } from '../stores/ma2-sync-store';
+import { ma2ConsoleReading, updateMa2Song as update, useMa2SyncStore, type NameSync, type SongSync } from '../stores/ma2-sync-store';
 import { currentShowWait } from '../stores/show-state-store';
 import { confirmMa2Edit, consoleSeenAt, editTimes, noteMa2LocalEdits, songSignature, songStart, type Program } from './ma2-edit-times';
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { ma2SongSyncActive, ma2SyncActive, useMa2RealtimePreference } from './ma2-realtime-preference';
-import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 import { useProgramSelectionStore } from '../stores/program-selection-store';
 import { syncBoundSong } from './ma2-bound-song-sync';
 import { runMa2NameSync } from './ma2-name-sync';
@@ -208,9 +207,9 @@ async function reachConsole(entry: SongSync): Promise<SongConsole | null> {
     return null;
   }
   const materials = useDocumentStore.getState().project?.ma2MaterialLibrary;
-  if (useMa2MaterialReadStore.getState().busy || !materials?.library || materials.library.sourceUnverified) {
+  if (ma2ConsoleReading() || !materials?.library || materials.library.sourceUnverified) {
     update(entry, { state: 'pending', checking: false, waitingForConnection: false, nextCheckAt: Date.now() + 1000,
-      message: useMa2MaterialReadStore.getState().busy ? '正在读取控台素材，读完后继续同步' : '等待确认控台素材，读取完成后继续同步' });
+      message: ma2ConsoleReading() ? '正在读取或准备控台，完成后继续同步' : '等待确认控台素材，读取完成后继续同步' });
     return null;
   }
   const { host, port, monitorPort, username } = status.settings;
@@ -302,7 +301,7 @@ async function syncNames(): Promise<void> {
 export async function tickMa2SongSync(): Promise<void> {
   // The pass starts from the latest marks, not from a comparison still waiting for an idle moment.
   flushPendingMa2Songs();
-  if (running || readMa2Method() !== 'network' || !ma2SyncActive() || useMa2MaterialReadStore.getState().busy) return;
+  if (running || readMa2Method() !== 'network' || !ma2SyncActive() || ma2ConsoleReading()) return;
   running = true;
   try {
     if (!useMa2RealtimePreference.getState().onceItemId) await syncNames();

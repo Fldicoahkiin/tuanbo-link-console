@@ -97,6 +97,7 @@ docs/                           设计、实施、验收和服务器安装说明
 | --- | --- | --- | --- |
 | 开一首歌做什么 | `packages/core/src/program-start.ts`：只有没有音频的歌放不了，其余只是某一路输出参不参加 | `packages/core/src/program-start.test.ts` | [播放、节目和工程的版本](./docs/ONE_PLACE_PLAYBACK.md#开一首歌做什么) |
 | 时间码怎么发 | 原生播放引擎一条路径，从歌曲的 MTC 起始码发（`packages/core/src/native-program-snapshot.ts`） | `packages/core/src/lighting-workflow-rules.test.ts`、`packages/core/src/program-time-origin.test.ts` | [播放、节目和工程的版本](./docs/ONE_PLACE_PLAYBACK.md#时间码怎么发) |
+| MIDI 选曲隔离 | 规则 `packages/core/src/ma2-mtc-selection.ts`，安装与读回 `apps/desktop/src/main/link/ma2-mtc-selection.ts`，播放仍只发 MTC | `packages/core/src/ma2-mtc-selection.test.ts`、`apps/desktop/src/main/link/ma2-mtc-selection.test.ts` | [灯光和 MA2](./docs/ONE_PLACE_LIGHTING.md#midi-选曲隔离) |
 | 怎么认控台 | 只按编号认（`packages/core/src/ma2-console-identity.ts`） | `packages/core/src/ma2-console-identity.test.ts` | [灯光和 MA2](./docs/ONE_PLACE_LIGHTING.md#怎么认控台) |
 | 歌和控台时间线怎么配对 | 只看时间码节目编号和 MTC 起始码（`packages/core/src/ma2-pairing-state.ts`） | `packages/core/src/ma2-pairing-state.test.ts`、`packages/core/src/lighting-workflow-rules.test.ts` | [灯光和 MA2](./docs/ONE_PLACE_LIGHTING.md#歌和控台时间线怎么配对) |
 | MA2 同步 | 同一个逐首同步、同一份状态（`apps/desktop/src/renderer/src/link/runtime/ma2-song-sync.ts`、`apps/desktop/src/renderer/src/link/stores/ma2-sync-store.ts`） | `apps/desktop/src/renderer/src/link/runtime/ma2-bound-song-sync.test.ts`、`packages/core/src/lighting-workflow-rules.test.ts` | [灯光和 MA2](./docs/ONE_PLACE_LIGHTING.md#ma2-同步) |

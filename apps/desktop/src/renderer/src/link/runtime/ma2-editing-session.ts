@@ -23,6 +23,12 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   if (!current().project?.rundown.length) return 'MA2 已连接。导入 P1 歌曲后重新连接，就能载入对应的 Cue';
   if (useMa2ReadStore.getState().busy) throw new Error('正在读取控台，请等这次完成');
   if (ma2ConsoleWriting()) throw new Error('正在写入控台并确认，请完成后再连接或刷新');
+  if (connection.network) {
+    useMa2ReadStore.setState({ busy: true, message: '正在准备控台选曲' });
+    try { if (await window.tbLink.prepareMa2Playback(connection.network)) refresh = true; }
+    finally { useMa2ReadStore.setState({ busy: false }); }
+  }
+  current();
   const cached = current().project?.ma2ReadState;
   const source = connection.network ? `${connection.network.host}:${connection.network.port}` : '本机 onPC';
   let reuse = false;

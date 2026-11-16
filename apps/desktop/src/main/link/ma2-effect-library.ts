@@ -1,3 +1,4 @@
+import { ma2SongDirectory } from '@tb/core/link';
 import { ma2EffectLibrarySchema, ma2ObjectDirectorySchema, type Ma2CatalogRequest, type Ma2EffectLibrary, type Ma2ReadProgressUpdate } from '@tb/schema';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { readMa2AttributeCatalog } from './ma2-attribute-catalog';
@@ -10,7 +11,7 @@ export async function readMa2EffectLibrary(bridge: Pick<Ma2OnpcBridge, 'request'
   if (signal?.aborted) throw new Error('素材读取已取消');
   holdForShow(show, 'ma2.sync.read');
   await onProgress?.({ phase: 'connecting', completed: 0, total: 0, detail: '正在获取控台序列目录' });
-  const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
+  const directory = ma2SongDirectory(ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1))));
   if (signal?.aborted) throw new Error('素材读取已取消');
   if (expectedSource && Object.entries(expectedSource).some(([key, value]) => Reflect.get(directory, key) !== value)) throw new Error('控台的 Show 或连接变了，缓存已保留，请重新读取');
   if(targets?.some(target=>!directory.entries.some(entry=>entry.target===target)))throw new Error('所选序列已不存在，请重新读取目录');
@@ -56,7 +57,7 @@ export async function readMa2EffectLibrary(bridge: Pick<Ma2OnpcBridge, 'request'
   }
   await onProgress?.({ phase: 'library', completed: selected.length + 1, total: selected.length + 2, detail: '检查控台序列目录' });
   if (groups && JSON.stringify(groups) !== JSON.stringify(await readMa2AttributeCatalog(connection!, guard))) throw new Error('读取过程中控台的属性分组变了，请重新读取');
-  const verified = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
+  const verified = ma2SongDirectory(ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1))));
   if (signal?.aborted) throw new Error('素材读取已取消');
   holdForShow(show, 'ma2.sync.read', '序列都读完了，还没核对控台序列目录，停下后重新读取确认。');
   if (JSON.stringify(directory) !== JSON.stringify(verified)) throw new Error('Show 或序列有变化，请重新读取');
