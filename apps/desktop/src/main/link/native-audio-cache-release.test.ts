@@ -97,6 +97,8 @@ it('解码进程不肯退出：同一音源明确说正在释放、不开新的�
   await expect(cache.prepare(input, signal)).rejects.toThrow('正在释放');
   expect(decoders).toHaveLength(started);
   decoder.exit({ ok: false, error: new Error('音频解码已取消') }); await decoder.finished;
+  // Process exit starts asynchronous cleanup; the cache remains owned until it finishes.
+  await vi.waitFor(async () => expect(await exists(first.path)).toBe(false));
   const again = await cache.prepare(input, signal);
   expect(decoders).toHaveLength(started + 1);
   await again.release(); await first.release();
@@ -104,7 +106,7 @@ it('解码进程不肯退出：同一音源明确说正在释放、不开新的�
 });
 
 it('下一首还在预填充时换歌，解码进程不肯退出：运行日志里有这一条；同一音源说正在释放，进程退出后可以再准备', async () => {
-  const { cache, input, signal } = await fixture();
+  const { cache, input, signal, directory } = await fixture();
   const error = vi.fn();
   const preload = new NativeAudioPreload({ cache, resolveAudio: () => input.sourcePath, error });
   const snapshot: PlaybackSnapshot = { version: 1, projectId: 'p', itemId: 'next', revision: 1,
@@ -122,6 +124,8 @@ it('下一首还在预填充时换歌，解码进程不肯退出：运行日志�
   prefill.held = false;
   await expect(cache.prepare(input, signal)).rejects.toThrow('正在释放');
   decoder.exit({ ok: false, error: new Error('音频解码已取消') }); await decoder.finished;
+  // Await the released decoder's file cleanup, not only its exit notification.
+  await vi.waitFor(async () => expect(await readdir(directory)).toEqual([]));
   await (await cache.prepare(input, signal)).release();
 });
 
