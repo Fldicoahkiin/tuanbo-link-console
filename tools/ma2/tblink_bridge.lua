@@ -50,6 +50,93 @@ local function canonical(xml)
   local result = xml:gsub('(<MA[^>]*>%s*)<Info[^>]*/>', '%1')
   return result
 end
+-- Sequence fixture data can be hundreds of MB. Scan bounded XML tokens on the console,
+-- never load/transfer a complete Sequence merely to prepare its Cue triggers.
+local function sequence_stream(path, strip_triggers, visit)
+  local file = assert(io.open(path, 'rb'), 'Sequence export unavailable')
+  local buffer, cursor, ended, stack = '', 1, false, {}
+  local function token()
+    while true do
+      if cursor <= #buffer then
+        local finish
+        if buffer:sub(cursor, cursor) == '<' then
+          finish = buffer:find('>', cursor + 1, true)
+          assert(finish or #buffer - cursor < 65536, 'Sequence XML tag too large')
+        else finish = (buffer:find('<', cursor, true) or (#buffer + 1)) - 1 end
+        if finish then local value = buffer:sub(cursor, finish); cursor = finish + 1; return value end
+      end
+      if ended then assert(cursor > #buffer, 'Incomplete Sequence XML'); return nil end
+      local part = file:read(32768)
+      if part then buffer = buffer:sub(cursor) .. part; cursor = 1 else ended = true end
+    end
+  end
+  local function next_part()
+    while true do
+      local value = token()
+      if not value then assert(#stack == 0, 'Incomplete Sequence XML'); return nil end
+      local parent = stack[#stack]
+      if value:sub(1, 1) == '<' then
+        local closing, name = value:match('^<(/?)([%w_:%-]+)')
+        if name then
+          local empty = value:match('/%s*>$') ~= nil
+          if visit then visit(value, name, closing == '/', parent, empty) end
+          if closing == '/' then assert(parent == name, 'Invalid Sequence XML nesting'); stack[#stack] = nil
+          elseif not empty then stack[#stack + 1] = name end
+          -- Only the export stamp and direct Cue Trigger are excluded; all fixture,
+          -- fade, delay, command and sequence bytes are compared unchanged.
+          local stamp = name == 'Info' and parent == 'MA'
+          local trigger = name == 'Trigger' and parent == 'Cue'
+          assert(not (stamp or trigger) or empty, 'Unsupported Sequence metadata element')
+          if not stamp and not (strip_triggers and trigger) then return value end
+        else return value end
+      elseif not (value:match('^%s*$') and (parent == 'MA' or parent == 'Sequ' or parent == 'Cue')) then return value end
+    end
+  end
+  return next_part, function() file:close() end
+end
+local function sequence_triggers(path, target)
+  local cues, number, changed, count, sequences = {}, nil, false, 0, 0
+  local next_part, close = sequence_stream(path, false, function(value, name, closing, parent, empty)
+    if name == 'Sequ' and parent == 'MA' and not closing then
+      sequences = sequences + 1
+      assert(tonumber(value:match('%sindex="(%d+)"')) == target - 1, 'Sequence export number mismatch')
+    end
+    if name == 'Cue' and parent == 'Sequ' and not closing and not empty then number = nil; changed = false end
+    if name == 'Number' and parent == 'Cue' and not closing then
+      local whole = tonumber(value:match('%snumber="(%d+)"'))
+      local fraction = tonumber(value:match('%ssub_number="(%d+)"') or '0')
+      assert(whole and whole <= 999999 and fraction <= 999, 'Invalid Sequence Cue number')
+      number = string.format('%d.%03d', whole, fraction)
+    end
+    if name == 'Trigger' and parent == 'Cue' and not closing then
+      local kind = assert(value:match('%stype="([^"]*)"'), 'Cue Trigger type unavailable')
+      if kind ~= 'Go' then changed = true end
+    end
+    if name == 'Cue' and closing then
+      count = count + 1; assert(count <= 100000, 'Sequence Cue count exceeds limit')
+      if changed then assert(number, 'Cue number unavailable'); cues[#cues + 1] = number end
+    end
+  end)
+  local ok, err = pcall(function() while next_part() do end; assert(sequences == 1, 'Sequence export missing or ambiguous') end); close(); assert(ok, err)
+  return cues
+end
+local function same_sequence_files(left, right, strip_triggers)
+  local a, close_a = sequence_stream(left, strip_triggers)
+  local ok_open, b, close_b = pcall(sequence_stream, right, strip_triggers)
+  if not ok_open then close_a(); error(b) end
+  local ok, equal = pcall(function()
+    local x, y, i, j = a(), b(), 1, 1
+    while x and y do
+      local n = math.min(#x - i + 1, #y - j + 1)
+      if x:sub(i, i + n - 1) ~= y:sub(j, j + n - 1) then return false end
+      i = i + n; j = j + n
+      if i > #x then x = a(); i = 1 end
+      if j > #y then y = b(); j = 1 end
+    end
+    return x == nil and y == nil
+  end)
+  close_a(); close_b(); assert(ok, equal); return equal
+end
 local function export(tc, name)
   gma.cmd('Export Timecode ' .. tc .. ' "' .. name .. '" /o')
   return assert(read(root .. '/importexport/' .. name .. '.xml'), 'Export unavailable')
@@ -373,6 +460,35 @@ local function start(data)
       end
       return ranges()
     end
+    if op == 'SEQGO' then
+      local show_hex, generation_hex = body:match('^([a-f0-9]+)\n([a-f0-9]+)$')
+      assert(show_hex and #show_hex % 2 == 0 and #generation_hex % 2 == 0, 'Invalid Cue trigger preparation source')
+      local function unhex(value) return value:gsub('..', function(pair) return string.char(tonumber(pair, 16)) end) end
+      local function check_source()
+        assert(gma.show.getvar('SHOWFILE') == unhex(show_hex) and generation == unhex(generation_hex), 'Show or session changed during trigger preparation')
+      end
+      check_source()
+      assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
+      local name = 'tblink_library_' .. id
+      local path = root .. '/importexport/' .. name .. '.xml'
+      gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
+      local cues = sequence_triggers(path, tc)
+      return step(function()
+        -- This step is atomic with respect to cancellation/show gates: once a write
+        -- starts it always performs its readback; the original export is the backup.
+        check_source()
+        gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+        assert(same_sequence_files(path, root .. '/importexport/' .. name .. '_verify.xml', false), 'Sequence changed before trigger preparation; backup ' .. name)
+        discard(name .. '_verify')
+        if #cues == 0 then discard(name); return answer('{"changed":false,"cues":0}') end
+        gma.cmd('Assign Sequence ' .. tc .. ' Cue ' .. table.concat(cues, ' + ') .. ' /Trig=Go')
+        gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+        local check = root .. '/importexport/' .. name .. '_verify.xml'
+        assert(#sequence_triggers(check, tc) == 0 and same_sequence_files(path, check, true), 'Sequence changed after trigger preparation; backup ' .. name)
+        discard(name .. '_verify')
+        answer('{"changed":true,"cues":' .. #cues .. '}')
+      end)
+    end
     if op == 'SEQUENCE' then
       assert(body == '' or body == 'keep', 'Sequence request must be empty or keep')
       assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
@@ -603,7 +719,7 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport)
         base = snapshot_cache.xml
         a = 'SYNC'
       end
-      assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'SEQCUES' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'ASSIGNSEQ' or a == 'LABEL' or a == 'DISCARD' or a == 'TCRANGES', 'Invalid operation')
+      assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'SEQGO' or a == 'SEQCUES' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'ASSIGNSEQ' or a == 'LABEL' or a == 'DISCARD' or a == 'TCRANGES', 'Invalid operation')
       assert(type(b) == 'number' and b >= 1 and b <= 99999 and b == math.floor(b), 'Invalid target')
       assert(type(c) == 'number' and c >= 0 and c <= 33554432 and c == math.floor(c), 'Invalid payload size')
       assert(lane == nil or lane == 'bg' or lane == 'fg', 'Invalid lane')

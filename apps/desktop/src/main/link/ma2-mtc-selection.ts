@@ -1,16 +1,16 @@
 import { randomBytes } from 'node:crypto';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { z } from 'zod';
-import { holdForShow, ma2MtcSelectionCommand, ma2MtcSelections, MA2_SONG_TIMECODE_SLOT, type Ma2MtcSong, type ShowGateReader } from '@tb/core/link';
-import { ma2ObjectDirectorySchema, ma2TimecodeRangesSchema, type Ma2NetworkTarget, type Ma2TimecodeRanges } from '@tb/schema';
+import { holdForShow, isShowWait, ma2MtcSelectionCommand, ma2MtcSelections, MA2_SONG_TIMECODE_SLOT, type Ma2MtcSong, type ShowGateReader } from '@tb/core/link';
+import { ma2ObjectDirectorySchema, ma2TimecodeRangesSchema, type Ma2NetworkTarget, type Ma2TimecodeRanges, type Ma2ReadProgressUpdate } from '@tb/schema';
 import type { Ma2Telnet } from './ma2-telnet';
-import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { ma2SequenceGoResultSchema, type Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
 import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
 import { createMa2TimecodeXml } from './ma2-create';
 import { ma2SongTimecodeXml } from './ma2-song-timecode';
 import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor';
-import { emptyMa2SequenceXml, inspectMa2SequenceXml, inspectMa2TimecodeXml, sameMa2XmlObjects, ma2MtcPlaybackSettings, ma2SequenceCueFingerprints } from './ma2-timecode-xml';
+import { emptyMa2SequenceXml, inspectMa2SequenceXml, inspectMa2TimecodeXml, sameMa2XmlObjects, ma2MtcPlaybackSettings } from './ma2-timecode-xml';
 
 export const MA2_MTC_SELECTOR_MARK = 'TBLINK_MTC_SELECTOR_V1';
 const selectorName = 'TBLINK_MTC_SELECTION';
@@ -69,6 +69,7 @@ export function ma2MtcSequenceSettings(xml: string): { xml: string; cues: string
   return { xml: changed.length ? new XMLSerializer().serializeToString(document) : xml, cues: changed };
 }
 
+export type Ma2MtcPreparationTask = { report?: ((progress: Ma2ReadProgressUpdate) => void) | undefined; signal?: AbortSignal | undefined };
 type Bridge = Pick<Ma2OnpcBridge, 'request' | 'exchange'>;
 type Connection = Pick<Ma2Telnet, 'command'>;
 export type Ma2ConfirmedTimecode = { number: number; xml: string; show: string; generation: string };
@@ -95,16 +96,34 @@ export class Ma2MtcSelectionService {
   private knownRanges: { show: string; generation: string; entries: Ma2TimecodeRanges['entries'] } | null = null;
   constructor(private readonly show: ShowGateReader, private readonly backups: Pick<Ma2ConsoleBackups, 'record'>) {}
   invalidate(): void { this.prepared = null; this.knownRanges = null; }
-  prepare(connection: Connection, bridge: Bridge, network: Ma2NetworkTarget, force = false, targets: readonly number[] = [], verifiedSequence?: { number: number; xml: string }, verifiedTimecode?: Ma2ConfirmedTimecode): Promise<boolean> {
-    const work = this.queue.then(() => this.install(connection, bridge, network, force, targets, verifiedSequence, verifiedTimecode));
+  prepare(connection: Connection, bridge: Bridge, network: Ma2NetworkTarget, force = false, targets: readonly number[] = [], verifiedSequence?: { number: number; xml: string }, verifiedTimecode?: Ma2ConfirmedTimecode, task?: Ma2MtcPreparationTask): Promise<boolean> {
+    const work = this.queue.then(() => this.install(connection, bridge, network, force, targets, verifiedSequence, verifiedTimecode, task));
     // Each caller receives its own failure. Releasing the queue is not a retry of that operation.
     this.queue = work.then(() => undefined, () => undefined);
     return work;
   }
-  private async install(connection: Connection, bridge: Bridge, network: Ma2NetworkTarget, force: boolean, targets: readonly number[], verifiedSequence?: { number: number; xml: string }, verifiedTimecode?: Ma2ConfirmedTimecode): Promise<boolean> {
+  private async install(connection: Connection, sourceBridge: Bridge, network: Ma2NetworkTarget, force: boolean, targets: readonly number[], verifiedSequence?: { number: number; xml: string }, verifiedTimecode?: Ma2ConfirmedTimecode, task?: Ma2MtcPreparationTask): Promise<boolean> {
     const endpoint = `${network.host}:${network.port}`;
     if (!force && !targets.length && this.prepared === endpoint) return false;
-    const gate = () => holdForShow(this.show, 'ma2.sync.write');
+    let completed = 0, total = 0, detail = '读取控台时间线目录';
+    const report = (message = detail) => task?.report?.({ phase: 'selection', completed, total, detail: message.slice(0, 128) });
+    const gate = () => { task?.signal?.throwIfAborted(); holdForShow(this.show, 'ma2.sync.write'); };
+    const bridge: Bridge = {
+      request: async (...args) => (await bridge.exchange(...args)).response,
+      exchange: async (operation, target, expected = '', desired = '', signal, progress, behind) => {
+        gate();
+        const operationName = operation === 'SEQGO' ? `检查序列 ${target} 的触发方式` : operation === 'READ' ? `读取时间线 ${target}` : operation === 'TCRANGES' ? '读取歌曲时间范围' : detail;
+        let steps = 0;
+        report(operationName);
+        try { return await sourceBridge.exchange(operation, target, expected, desired, task?.signal ?? signal, download => {
+          steps += 1;
+          report(download ? `${operationName} · 已收到 ${download.completed} / ${download.total} 字节` : `${operationName} · 控台已完成 ${steps} 步`);
+          progress?.(download);
+        }, behind); }
+        catch (error) { if (isShowWait(error) || task?.signal?.aborted) throw error; throw new Error(`${operationName}未完成：${error instanceof Error ? error.message : String(error)}`, { cause: error }); }
+      }
+    };
+    report();
     let changed = false;
     const known = !force && this.prepared === endpoint ? this.knownRanges : null;
     gate(); this.invalidate();
@@ -194,7 +213,10 @@ export class Ma2MtcSelectionService {
       }
       // Install and verify the selector first. Only then let it own the songs' start/stop.
       const checkedSequences = new Set<number>();
-      for (const candidate of candidates.filter(entry => !incremental || refreshing.has(entry.target))) {
+      const checking = candidates.filter(entry => !incremental || refreshing.has(entry.target));
+      total = checking.length; report();
+      for (const candidate of checking) {
+        detail = `检查时间线 ${candidate.target}`; report();
         gate();
         const xml = freshXml.get(candidate.target) ?? await bridge.request('READ', candidate.target), desired = ma2MtcPlaybackSettings(xml, false);
         const timecode = inspectMa2TimecodeXml(xml).timecodes[0]!;
@@ -212,26 +234,24 @@ export class Ma2MtcSelectionService {
           // Reuse that one transaction's evidence for Go-only Cues instead of exporting and reading
           // megabytes of fixture values again after every timeline move. Never retained across syncs.
           if (verifiedSequence?.number === sequence && !ma2MtcSequenceSettings(verifiedSequence.xml).cues.length) continue;
-          const readback = await bridge.exchange('SEQUENCE', sequence, 'keep');
-          const file = `tblink_library_${readback.requestId}`;
-          const settings = ma2MtcSequenceSettings(readback.response);
-          if (!settings.cues.length) { await bridge.request('DISCARD', 1, file); continue; }
-          await this.backups.record(bridge, { console: endpoint, object: `Sequence ${sequence}`, files: [file] });
-          // Native Assign changes only the trigger; fixture data, fades and command content remain byte-for-byte verified.
-          await run(`local p=gma.show.getvar('PATH')..'/importexport/';local function read(n)local f=assert(io.open(p..n..'.xml','rb'));local s=f:read('*a');f:close();return s end;local function canonical(s)return s:gsub('<Info[^>]*/>',''):gsub('>[%s]+<','><') end;gma.cmd('Export Sequence ${sequence} ${file}_check /o');assert(canonical(read('${file}_check'))==canonical(read('${file}')),'Song changed during trigger preparation');os.remove(p..'${file}_check.xml');gma.cmd('Assign Sequence ${sequence} Cue ${settings.cues.map(Number).join(' + ')} /Trig=Go');return 'prepared'`);
-          const actual = await bridge.request('SEQUENCE', sequence);
-          if (JSON.stringify([...ma2SequenceCueFingerprints(settings.xml)]) !== JSON.stringify([...ma2SequenceCueFingerprints(actual)])) throw new Error(`Sequence ${sequence} 的时间线触发读回不一致，请检查控台`);
-          changed = true;
+          const readback = await bridge.exchange('SEQGO', sequence, `${Buffer.from(source.show).toString('hex')}\n${Buffer.from(source.generation).toString('hex')}`);
+          const result = ma2SequenceGoResultSchema.parse(JSON.parse(readback.response));
+          if (result.changed) {
+            await this.backups.record(bridge, { console: endpoint, object: `Sequence ${sequence}`, files: [`tblink_library_${readback.requestId}`] });
+            changed = true;
+          }
         }
-        if (sameMa2XmlObjects(xml, desired)) continue;
+        if (sameMa2XmlObjects(xml, desired)) { completed += 1; report(); continue; }
         changed = true;
         const receipt = await bridge.exchange('APPLY', candidate.target, xml, desired);
         await this.backups.record(bridge, { console: endpoint, object: `Timecode ${candidate.target}`, files: [`tblink_backup_${receipt.requestId}`] });
+        completed += 1; report();
       }
       // Existing running shows must not survive the transition from all-autostart; the native selector owns the next MTC.
       if (changed) await run(`gma.cmd('Off Timecode ${[position.number, ...numbers].join(' + ')}');return 'prepared'`);
       this.knownRanges = { show: source.show, generation: source.generation, entries: candidates };
       this.prepared = endpoint;
+      report('控台选曲检查完成');
       return changed;
     } catch (error) { this.invalidate(); throw error; }
   }

@@ -3,10 +3,12 @@ import { ma2NetworkTargetSchema, ma2TimecodePreviewSchema } from './ma2-bridge';
 import { lightingMa2CueCatalogSchema, lightingMa2BindingSchema, lightingTrackSchema } from './lighting';
 
 export const ma2CatalogRequestSchema = z.object({ details: z.literal('attributes').optional(), dataDirectory: z.string().max(4096), network: ma2NetworkTargetSchema.optional(), progressId: z.string().uuid().optional(), projectPath: z.string().max(4096).optional(), projectId: z.string().min(1).optional(), expectedSource: z.object({ show: z.string(), generation: z.string(), version: z.string() }).strict().optional(), targets: z.array(z.number().int().min(1).max(99999)).max(10000).optional() }).strict();
+export const ma2PlaybackPrepareSchema = z.object({ network: ma2NetworkTargetSchema, progressId: z.string().uuid() }).strict();
+export type Ma2PlaybackPrepare = z.infer<typeof ma2PlaybackPrepareSchema>;
 export type Ma2CatalogRequest = z.infer<typeof ma2CatalogRequestSchema>;
 const ma2ReadProgressBaseSchema = z.object({
   id: z.string().uuid(),
-  phase: z.enum(['connecting', 'library', 'timecodes', 'verification', 'previews', 'raw']),
+  phase: z.enum(['selection', 'connecting', 'library', 'timecodes', 'verification', 'previews', 'raw']),
   completed: z.number().int().nonnegative(),
   total: z.number().int().nonnegative(),
   detail: z.string().max(128),

@@ -1,4 +1,4 @@
-import { Ma2MtcSelectionService, type Ma2ConfirmedTimecode } from './ma2-mtc-selection';
+import { Ma2MtcSelectionService, type Ma2ConfirmedTimecode, type Ma2MtcPreparationTask } from './ma2-mtc-selection';
 import { editMa2Timeline } from './ma2-timeline-edit';
 import { ma2SongDirectory } from '@tb/core/link';
 import { ma2PlaybackRequestSchema, type Ma2PlaybackRequest, type Ma2Catalog, type Ma2CatalogRequest, ma2ObjectDirectorySchema, type Ma2ObjectDirectory } from '@tb/schema';
@@ -127,12 +127,12 @@ export class Ma2NetworkManager {
     return this.layoutService ??= new Ma2LayoutService(`${this.path}.layouts.json`, this.show, this.consoleBackups);
   }
   private mtcSelection: Ma2MtcSelectionService | null = null;
-  async prepareMtcPlayback(network: Ma2NetworkTarget, force = true, targets: readonly number[] = [], verifiedSequence?: { number: number; xml: string }, verifiedTimecode?: Ma2ConfirmedTimecode): Promise<boolean> {
+  async prepareMtcPlayback(network: Ma2NetworkTarget, force = true, targets: readonly number[] = [], verifiedSequence?: { number: number; xml: string }, verifiedTimecode?: Ma2ConfirmedTimecode, task?: Ma2MtcPreparationTask): Promise<boolean> {
     const { bridge } = this.get(network);
     if (!this.connection) throw new Error('请先连接控台');
     if (!this.consoleBackups) throw new Error('控台备份记录还没准备好');
     this.mtcSelection ??= new Ma2MtcSelectionService(this.show, this.consoleBackups);
-    return this.mtcSelection.prepare(this.connection, bridge, network, force, targets, verifiedSequence, verifiedTimecode);
+    return this.mtcSelection.prepare(this.connection, bridge, network, force, targets, verifiedSequence, verifiedTimecode, task);
   }
   async editTimeline(request: import('@tb/schema').Ma2TimelineEditRequest) {
     if (!request.network) throw new Error('请先连接控台');

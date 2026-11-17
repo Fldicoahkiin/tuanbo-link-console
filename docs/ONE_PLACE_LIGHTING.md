@@ -82,6 +82,8 @@
 
 ## MIDI 选曲隔离
 
+2026-11-18 连接读取回退修复：`ma2-mtc-selection.ts` 不再为检查歌曲触发方式通过网络取回完整 Sequence。`tools/ma2/tblink_bridge.lua` 的 SEQGO 在控台内流式读取完整导出，确认编号，第二次导出比较；需要修改时保留原完整备份、原位 Assign Trigger、再次导出逐字比较除直接 Cue Trigger 和导出时间戳外的内容，只返回是否修改与 Cue 数。每次明确连接重新核对，同次共用序列去重，不缓存跨次的“已确认”。准备任务复用 `ma2ReadProgress` 和取消通道，切换工程取消，任何退出都释放任务。`ma2-sequence-trigger-read.test.ts`、`ma2-mtc-selection.test.ts`、`runtime/ma2-editing-session.test.ts` 覆盖大序列、30 条时间线、并发变动和取消；实体 3.3.4.3 验收仍与本机 3.7 分开记录。
+
 2026-11-17 本机联调补充：重写辅助选曲序列的全部 Cue 时，onPC 会解除原执行器关联。因此执行器位置必须在序列写入并读回后重新检查，不能沿用写入前的“已分配”判断；否则辅助时间线的 Object 引用变空，读回校验失败且歌曲不会按 MTC 启动。由 `ma2-mtc-selection.ts` 复用原执行器分配规则处理，`ma2-mtc-selection.test.ts` 模拟清空后解除关联并检查重新分配。
 
 2026-11-17：用户要求播放继续使用 MIDI MTC，只运行当前歌曲，前后定位和共用执行器切歌不串灯。时间区间及原生选曲命令只在 `packages/core/src/ma2-mtc-selection.ts` 编译；辅助 Timecode/Sequence 的创建、备份、复用、读回只在 `apps/desktop/src/main/link/ma2-mtc-selection.ts`。明确连接编辑与两种歌曲同步共用这个服务，播放端不发送网络选曲或逐 Cue 命令。内部目录保留占用编号，但不参与配对、歌曲列表或素材试听。完整规则见 LIGHTING_WORKFLOW.md「2026-11-17 MIDI 播放只选择当前歌曲」。测试由 `packages/core/src/ma2-mtc-selection.test.ts`、`apps/desktop/src/main/link/ma2-mtc-selection.test.ts`、`apps/desktop/src/main/link/ma2-bridge-lua.test.ts` 守住。

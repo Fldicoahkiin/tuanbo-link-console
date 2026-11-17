@@ -24,9 +24,17 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   if (useMa2ReadStore.getState().busy) throw new Error('正在读取控台，请等这次完成');
   if (ma2ConsoleWriting()) throw new Error('正在写入控台并确认，请完成后再连接或刷新');
   if (connection.network) {
-    useMa2ReadStore.setState({ busy: true, message: '正在准备控台选曲' });
-    try { if (await window.tbLink.prepareMa2Playback(connection.network)) refresh = true; }
-    finally { useMa2ReadStore.setState({ busy: false }); }
+    const progressId = crypto.randomUUID();
+    useMa2ReadStore.setState({ busy: true, activeId: progressId, progress: null, message: '正在准备控台选曲' });
+    const unsubscribe = useDocumentStore.subscribe(state => {
+      if (state.documentId !== documentId) void window.tbLink.cancelMa2Read(progressId).catch(error => useMa2ReadStore.setState({ message: String(error) }));
+    });
+    try {
+      if (await window.tbLink.prepareMa2Playback({ network: connection.network, progressId }, progress => useMa2ReadStore.setState({ progress }))) refresh = true;
+    } catch (error) {
+      useMa2ReadStore.setState({ message: `控台选曲检查未完成：${error instanceof Error ? error.message : String(error)}` });
+      throw error;
+    } finally { unsubscribe(); useMa2ReadStore.setState({ busy: false, activeId: null, progress: null }); }
   }
   current();
   const cached = current().project?.ma2ReadState;

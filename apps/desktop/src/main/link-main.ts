@@ -40,7 +40,7 @@ import { obsSourceCreateSchema, obsSourceNameSchema, obsSourceApplySchema, ma2Br
 import { createMa2Timecode } from './link/ma2-create';
 import { renameMa2Object } from './link/ma2-rename-service';
 import { ma2RenameRequestSchema } from '@tb/schema';
-import { ma2CatalogRequestSchema, ma2ReadProgressSchema, linkP1ProjectImportProgressSchema, type Ma2ReadProgressUpdate, type LinkP1ProjectImportProgress } from '@tb/schema';
+import { ma2PlaybackPrepareSchema, ma2CatalogRequestSchema, ma2ReadProgressSchema, linkP1ProjectImportProgressSchema, type Ma2ReadProgressUpdate, type LinkP1ProjectImportProgress } from '@tb/schema';
 import { readMa2Catalog } from './link/ma2-catalog';
 import { Ma2ReadRecovery } from './link/ma2-read-recovery';
 import { Ma2MaterialRecovery } from './link/ma2-material-recovery';
@@ -1260,9 +1260,16 @@ function registerIpc(
     finally { task.finish(); }
   });
   handle('link:ma2-song-check', async (_event, value: unknown) => ma2Network.checkSong(ma2SongCheckRequestSchema.parse(value)));
-  handle('link:ma2-prepare-playback', async (_event, value: unknown) => {
-    try { return await ma2Network.prepareMtcPlayback(ma2NetworkTargetSchema.parse(value)); }
-    catch (error) { await recordMa2Failure('准备控台选曲', `控台选曲没有准备完成：${String(error)}`, error); throw error; }
+  handle('link:ma2-prepare-playback', async (event, value: unknown) => {
+    const request = ma2PlaybackPrepareSchema.parse(value);
+    const task = beginMa2Read(event, request.progressId);
+    const started = performance.now();
+    try {
+      const changed = await ma2Network.prepareMtcPlayback(request.network, true, [], undefined, undefined, task);
+      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `控台选曲检查完成，用了 ${Math.round(performance.now() - started)} ms`, details: { elapsedMs: Math.round(performance.now() - started), changed } });
+      return changed;
+    } catch (error) { await recordMa2Failure('准备控台选曲', `控台选曲没有准备完成：${String(error)}`, error); throw error; }
+    finally { task.finish(); }
   });
   handle('link:ma2-timecode-ranges', async (_event, value: unknown) => {
     try { return await ma2Network.timecodeRanges(ma2NetworkTargetSchema.parse(value)); }

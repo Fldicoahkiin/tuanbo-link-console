@@ -9,9 +9,49 @@ import { Ma2LuaConsole } from './fixtures/ma2-lua-console';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2NetworkWire } from './ma2-network-wire';
 import { showRunning, showStopped } from './fixtures/show-gates';
+import type { Ma2ReadProgressUpdate } from '@tb/schema';
 
 const network = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'test' };
 const native = readFileSync(new URL('./fixtures/ma2-timecode-onpc-3.7-100.xml', import.meta.url), 'utf8');
+
+it('30 条时间线共用大序列只检查一次，连接和再次连接不传灯具数据', async () => {
+  const console = new Ma2LuaConsole();
+  const numbers = Array.from({ length: 30 }, (_, index) => index + 1);
+  const name = 'TBLINK_MTC_SELECTION';
+  const songs = numbers.map(number => ({ timecode: number, start: number * 600, end: number * 600 + 300 }));
+  const points = ma2MtcSelections(songs);
+  for (const song of songs) {
+    console.set(`Timecode ${song.timecode}`, { name: `Song ${song.timecode}`, xml: ma2MtcPlaybackSettings(ma2SongTimecodeXml(native.replace('index="9906"', `index="${song.timecode - 1}"`), song.timecode,
+      { name: `Song ${song.timecode}`, startMs: song.start * 1000 / 30, lengthMs: 10000, executor: '1.101', executorName: 'Songs', sequence: 3, cues: [{ atMs: 1000, cueIndex: 1, number: '1', name: null }] }), false) });
+  }
+  console.set('Sequence 3', { name: 'Songs', xml: `<MA><Sequ index="2"><Cue index="1"><Number number="1"/><CuePart index="0"><Data>${'x'.repeat(33 * 1024 * 1024)}</Data></CuePart></Cue></Sequ></MA>` });
+  console.set('Sequence 9900', { name, label: name, xml: ma2MtcSelectorSequence(9900, '3.7.0.5', points.map(point => ma2MtcSelectionCommand(numbers, point.timecode))) });
+  console.set('Timecode 9900', { name, label: name, xml: ma2MtcPlaybackSettings(ma2SongTimecodeXml(native.replace('index="9906"', 'index="9899"'), 9900,
+    { name, startMs: 0, executor: '1000.190', executorName: `${name} 1000.190`, sequence: 9900, automatic: true,
+      cues: points.map((point, index) => ({ atMs: point.at * 1000 / 30, cueIndex: index + 1, number: String(index + 1), name: null })) }), true) });
+  console.lua(`for _,a in ipairs({'Sequence 9900','Timecode 9900'}) do FAKE.objects[a].properties={Info='TBLINK_MTC_SELECTOR_V1'} end
+    local original=gma.cmd;gma.cmd=function(command)
+      local name=command:match('^Export Sequence 3 "([%w_]+)" /o$')
+      if name then FAKE.log[#FAKE.log+1]=command;FAKE.files['/fake/importexport/'..name..'.xml']=FAKE.objects['Sequence 3'].xml else original(command) end
+    end`);
+  const header = '<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" major_vers="3" minor_vers="7" stream_vers="0">';
+  console.set('Page 1000', { name: 'Songs', xml: `${header}<Page index="999">${'<Exec xsi:nil="true"/>'.repeat(189)}<Exec offset_from_first="0"><Assignment><No>25</No><No>1</No><No>9900</No></Assignment></Exec></Page></MA>` });
+  console.set('Executor 1000.190', { name, label: name, xml: `${header}<Exec offset_from_first="0"><Assignment name="${name}"><No>25</No><No>1</No><No>9900</No></Assignment></Exec></MA>` });
+  const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(console), showStopped);
+  const service = new Ma2MtcSelectionService(showStopped, { record: vi.fn() });
+  for (let run = 0; run < 2; run += 1) {
+    const before = console.lines.length;
+    const progress: Ma2ReadProgressUpdate[] = [];
+    await expect(service.prepare(console, bridge, network, true, [], undefined, undefined, { report: value => progress.push(value) })).resolves.toBe(false);
+    const sent = console.lines.slice(before);
+    expect(sent.filter(line => line.includes("'SEQGO',3,"))).toHaveLength(1);
+    expect(sent.some(line => line.includes("'SEQUENCE',3,"))).toBe(false);
+    expect(sent.length).toBeLessThan(450);
+    expect(progress.at(-1)).toMatchObject({ completed: 30, total: 30, detail: '控台选曲检查完成' });
+    expect(progress.some(value => value.detail.includes('检查序列 3'))).toBe(true);
+  }
+  expect(console.commands().every(command => command.startsWith('Export'))).toBe(true);
+}, 60_000);
 
 it.each([false, true])('只移歌曲内的点复用当次读回；末点越过曲尾时更新选曲截止帧；原生清空解除执行器=%s', async detachExecutor => {
   const console = new Ma2LuaConsole();

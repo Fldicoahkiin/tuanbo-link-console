@@ -56,7 +56,8 @@ export function TaskSidebarProgress({ notify }: { notify: Notify }): JSX.Element
     {attributes.busy && attributes.activeId ? <Button variant="secondary" size="sm" onClick={() => cancelAttributes(attributes.activeId!)}>取消读取</Button> : null}
     {scanning ? <Progress compact label="控台页面读取进度" title="读取全部 Cue 位置" value={scanned} max={pages || 1} status={pages ? `${scanned} / ${pages} 页` : '正在获取页数'} detail="扫描控台上每一页执行器，找出每个 Cue 放在哪里；不会切换控台当前页" /> : null}
     {materials.documentId === documentId && materials.busy ? <Ma2ReadProgress compact progress={materials.progress} waiting="连接控台并读取素材"/> : null}
-    {catalog.busy ? <Ma2ReadProgress compact progress={catalog.progress} waiting="读取控台时间线"/> : null}
+    {catalog.busy ? <Ma2ReadProgress compact progress={catalog.progress} waiting={catalog.message || "读取控台时间线"}/> : null}
+    {catalog.busy && catalog.activeId ? <Button variant="secondary" size="sm" onClick={() => cancelAttributes(catalog.activeId!)}>取消读取</Button> : null}
     {music ? <MusicAnalysisProgress sidebar job={music} submitting={false}/> : null}
     {error ? <details><summary>任务状态读取失败</summary><p>{error}</p></details> : null}
   </div>;

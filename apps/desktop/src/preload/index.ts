@@ -21,7 +21,7 @@ import { musicMonitorRequestSchema, musicMonitorStatusSchema } from '@tb/schema'
 import { projectArchiveRequestSchema, projectArchiveResultSchema, projectArchiveSettingsActionSchema, projectArchiveSettingsStatusSchema, recoveryCopyContentSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema } from '@tb/schema';
 import { linkProjectAssetFilesPayloadSchema, linkProjectAssetRelinkPayloadSchema, linkProjectAssetRelinkResultSchema } from '@tb/schema';
 import { toUserErrorMessage } from '@tb/core/link';
-import { ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
+import { ma2PlaybackPrepareSchema, ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
 import { nativePlaybackDevicesSchema, nativePlayerPrepareSchema, nativePlayerControlSchema, nativePlayerStatusSchema, nativeMidiCheckSchema } from '@tb/schema';
 import { midiPortEventSchema, midiPortHandleSchema, midiPortListRequestSchema, midiPortListSchema, midiPortOpenSchema, midiPortSendSchema } from '@tb/schema';
 import { nativeObsPrepareSchema, nativeObsPreloadSchema, nativeObsStopSchema, nativeObsStatusSchema, obsMediaPreparationSchema } from '@tb/schema';
@@ -142,7 +142,7 @@ const tbLink: LinkDesktopBridgeApi = {
   disconnectMa2Network: () => invoke('link:ma2-network-disconnect'),
   exchangeMa2: (payload) => invoke('link:ma2-exchange', payload),
   previewMa2: (payload) => invoke('link:ma2-preview', payload),
-  prepareMa2Playback: async network => z.boolean().parse(await invoke('link:ma2-prepare-playback', ma2NetworkTargetSchema.parse(network))),
+  prepareMa2Playback: async (request, onProgress) => z.boolean().parse(await readMa2('link:ma2-prepare-playback', ma2PlaybackPrepareSchema.parse(request), onProgress)),
   readMa2Catalog: (payload, onProgress) => readMa2('link:ma2-catalog', payload, onProgress),
   readMa2EffectLibrary: (payload, onProgress) => readMa2('link:ma2-effect-library', payload, onProgress),
   listMa2Layouts: async payload => ma2LayoutDirectorySchema.parse(await invoke('link:ma2-layouts', ma2LayoutDirectoryRequestSchema.parse(payload))),
