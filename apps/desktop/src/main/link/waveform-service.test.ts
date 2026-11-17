@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import ffmpeg from 'ffmpeg-static';
 import type { LinkWaveform, LinkWaveformResult } from '@tb/schema';
 import { decodeWaveform, WaveformAccumulator, WaveformService, waveformSourceMatches, type DecodedWaveform } from './waveform-service';
 import { decodeWaveformFile, encodeWaveformFile, WAVEFORM_LEVEL_FACTOR, waveformFromBase, WaveformLevelsAccumulator, type WaveformBase } from './waveform-levels';
@@ -131,7 +134,7 @@ describe('多级峰值（E10）', () => {
     expect(decodeWaveformFile(bytes, SONG, 30 * 60_000)).toBeNull();
     expect(decodeWaveformFile(bytes.subarray(0, bytes.length - 1), SONG, 3000)).toBeNull();
     expect(decodeWaveformFile(Buffer.from('[0.1,0.2]\n'), SONG, 3000)).toBeNull();
-    const otherFormat = Buffer.from(bytes); otherFormat.write('{"format":2', 8, 'utf8');
+    const otherFormat = Buffer.from(bytes); otherFormat.write('{"format":9', 8, 'utf8');
     expect(decodeWaveformFile(otherFormat, SONG, 3000)).toBeNull();
   });
 });
@@ -172,6 +175,13 @@ test('real FFmpeg streams the first channel and reports invalid media', async ()
   expect(finest.spectrum.frames).toBe(100);
   const invalid = join(directory, 'invalid.wav'); await writeFile(invalid, 'invalid');
   await expect(decodeWaveform(invalid, 1000, worker)).rejects.toThrow('波形解码失败');
+  if (!ffmpeg) throw new Error('测试缺少 FFmpeg');
+  const shifted = join(directory, 'shifted.m4a');
+  await promisify(execFile)(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-n', '-i', path, '-af', 'asetpts=PTS+0.05/TB', '-c:a', 'aac', shifted], { windowsHide: true });
+  const offset = await decodeWaveform(shifted, 1050, worker);
+  expect(offset.base.sampleCount / 48).toBeGreaterThanOrEqual(1049);
+  expect([...offset.base.wave.subarray(0, 20)].every(value => value === 0)).toBe(true);
+  expect(bandPeak(waveformFromBase(offset.base), 'wave', 200, 800)).toBeGreaterThan(0.2);
 });
 
 test('coarse waveform cache is regenerated for precise editing', async () => {
@@ -230,6 +240,21 @@ test('a song with levels is never decoded again, even after 0.5.8 rewrote its ol
   const service = new WaveformService(cache, decode, matches);
   for (const rebuild of [false, true]) expect(stateOf(await service.ensure('show.tblink', 'song.wav', SONG, 1000, rebuild))).toEqual(['verified', 0.3]);
   expect(decode).not.toHaveBeenCalled(); expect(matches).not.toHaveBeenCalled(); expect(cache.saveWaveformCache).not.toHaveBeenCalled();
+});
+
+test('波形旧版本重新生成一次，与原生播放采用相同音频起点', async () => {
+  const cache = memoryCache({ peaks: Array.from({ length: 4800 }, () => 0.1), sourceVerified: true });
+  const old = encodeWaveformFile(SONG, decodedWaveform(1000, 0.3).base);
+  const headerLength = old.readUInt32LE(4);
+  const header = old.toString('utf8', 8, 8 + headerLength).replace('"format":2', '"format":1');
+  old.write(header, 8, headerLength, 'utf8'); cache.store.levels = old;
+  expect(decodeWaveformFile(old, SONG, 1000)).toBeNull();
+  const decode = vi.fn().mockResolvedValue(decodedWaveform(1000, 0.7));
+  const service = new WaveformService(cache, decode, () => Promise.resolve(true));
+  expect(stateOf(await service.ensure('show.tblink', 'song.wav', SONG, 1000, false))).toEqual(['unverified', 0.1]);
+  expect(stateOf(await service.ensure('show.tblink', 'song.wav', SONG, 1000, true))).toEqual(['verified', 0.7]);
+  expect(stateOf(await service.ensure('show.tblink', 'song.wav', SONG, 1000, true))).toEqual(['verified', 0.7]);
+  expect(decode).toHaveBeenCalledTimes(1);
 });
 
 test('a failed rebuild keeps the old cache, is reported once and not tried again in this run', async () => {

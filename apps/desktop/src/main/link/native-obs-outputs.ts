@@ -373,7 +373,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       if (!profile) throw new Error('本机连接设置还没保存');
       address = profile.obs.webSocketUrl;
       const opening = new SceneOutputTimeline(project, request.snapshot.item.id).at(millisecondsToFrameNumber(positionMs, request.snapshot.frameRate));
-      const openingDecoders = new Map(opening.media.filter(event => event.assetKind !== 'image')
+      const openingDecoders = new Map(preload.initialEntries(millisecondsToFrameNumber(positionMs, request.snapshot.frameRate))
         .map(event => [event.sourceName, event]));
       // Selection can warm quietly in sequence. At an explicit cold playback
       // admission, two independent decoders overlap so four layers do not

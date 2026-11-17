@@ -54,6 +54,7 @@ export function ma2MtcSelectorCommands(xml: string): string[] {
 /** Timecode owns the Cue times. A copied Time/Follow trigger must not advance the sequence early. */
 export function ma2MtcSequenceSettings(xml: string): { xml: string; cues: string[] } {
   const report = inspectMa2SequenceXml(xml);
+  if (!/<Trigger\b/.test(xml)) return { xml, cues: [] };
   const document = parse(xml);
   const changed: string[] = [];
   for (const cue of Array.from(document.getElementsByTagName('Cue'))) {
@@ -65,11 +66,23 @@ export function ma2MtcSequenceSettings(xml: string): { xml: string; cues: string
     changed.push(number);
     for (const trigger of triggers) cue.removeChild(trigger);
   }
-  return { xml: new XMLSerializer().serializeToString(document), cues: changed };
+  return { xml: changed.length ? new XMLSerializer().serializeToString(document) : xml, cues: changed };
 }
 
 type Bridge = Pick<Ma2OnpcBridge, 'request' | 'exchange'>;
 type Connection = Pick<Ma2Telnet, 'command'>;
+export type Ma2ConfirmedTimecode = { number: number; xml: string; show: string; generation: string };
+const timecodeRange = (target: number, xml: string): Ma2TimecodeRanges['entries'][number] => {
+  const tc = inspectMa2TimecodeXml(xml).timecodes[0]!;
+  const events = tc.tracks.flatMap(track => track.subtracks.flatMap(subtrack => subtrack.events));
+  const last = events.length ? events.reduce((max, event) => Math.max(max, Number(event.attributes.time ?? 0)), 0) : null;
+  return { target, name: tc.attributes.name ?? '', offset: tc.attributes.offset ?? '0', length: tc.attributes.lenght ?? '',
+    slot: tc.attributes.slot ?? '', frame: tc.attributes.frame_format ?? '', last: last === null ? '' : String(last) };
+};
+const selectionPoints = (entries: Ma2TimecodeRanges['entries']) => ma2MtcSelections(entries.filter(entry => entry.last !== '').map((entry): Ma2MtcSong => {
+  const start = Number(entry.offset), length = Math.max(Number(entry.length || 0), Number(entry.last) + 1);
+  return { timecode: entry.target, start, end: start + length };
+}));
 const positionSchema = z.object({ number: z.number().int().min(1).max(99999), exists: z.boolean() }).strict();
 
 /**
@@ -82,13 +95,13 @@ export class Ma2MtcSelectionService {
   private knownRanges: { show: string; generation: string; entries: Ma2TimecodeRanges['entries'] } | null = null;
   constructor(private readonly show: ShowGateReader, private readonly backups: Pick<Ma2ConsoleBackups, 'record'>) {}
   invalidate(): void { this.prepared = null; this.knownRanges = null; }
-  prepare(connection: Connection, bridge: Bridge, network: Ma2NetworkTarget, force = false, targets: readonly number[] = []): Promise<boolean> {
-    const work = this.queue.then(() => this.install(connection, bridge, network, force, targets));
+  prepare(connection: Connection, bridge: Bridge, network: Ma2NetworkTarget, force = false, targets: readonly number[] = [], verifiedSequence?: { number: number; xml: string }, verifiedTimecode?: Ma2ConfirmedTimecode): Promise<boolean> {
+    const work = this.queue.then(() => this.install(connection, bridge, network, force, targets, verifiedSequence, verifiedTimecode));
     // Each caller receives its own failure. Releasing the queue is not a retry of that operation.
     this.queue = work.then(() => undefined, () => undefined);
     return work;
   }
-  private async install(connection: Connection, bridge: Bridge, network: Ma2NetworkTarget, force: boolean, targets: readonly number[]): Promise<boolean> {
+  private async install(connection: Connection, bridge: Bridge, network: Ma2NetworkTarget, force: boolean, targets: readonly number[], verifiedSequence?: { number: number; xml: string }, verifiedTimecode?: Ma2ConfirmedTimecode): Promise<boolean> {
     const endpoint = `${network.host}:${network.port}`;
     if (!force && !targets.length && this.prepared === endpoint) return false;
     const gate = () => holdForShow(this.show, 'ma2.sync.write');
@@ -96,6 +109,19 @@ export class Ma2MtcSelectionService {
     const known = !force && this.prepared === endpoint ? this.knownRanges : null;
     gate(); this.invalidate();
     try {
+      // A point moved inside the same song interval does not change the native selector. Use the
+      // Timecode this sync actually read back, so moving the end, muting all points or changing the
+      // MTC origin still rebuilds selection even when the Sequence itself was not edited.
+      if (known && verifiedTimecode && known.show === verifiedTimecode.show && known.generation === verifiedTimecode.generation
+        && targets.length === 1 && targets[0] === verifiedTimecode.number && known.entries.some(entry => entry.target === verifiedTimecode.number)
+        && verifiedSequence && !ma2MtcSequenceSettings(verifiedSequence.xml).cues.length
+        && sameMa2XmlObjects(verifiedTimecode.xml, ma2MtcPlaybackSettings(verifiedTimecode.xml, false))) {
+        const fresh = timecodeRange(verifiedTimecode.number, verifiedTimecode.xml);
+        const entries = known.entries.map(entry => entry.target === fresh.target ? fresh : entry);
+        if (fresh.slot === MA2_SONG_TIMECODE_SLOT && JSON.stringify(selectionPoints(entries)) === JSON.stringify(selectionPoints(known.entries))) {
+          this.knownRanges = { ...known, entries }; this.prepared = endpoint; return false;
+        }
+      }
       const source = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
       const refreshing = new Set(targets);
       let ranges: Ma2TimecodeRanges;
@@ -107,13 +133,10 @@ export class Ma2MtcSelectionService {
           const previous = known.entries.find(entry => entry.target === object.target);
           if (previous && !refreshing.has(object.target)) { entries.push(previous); continue; }
           gate();
-          const xml = await bridge.request('READ', object.target);
+          const xml = verifiedTimecode?.number === object.target && verifiedTimecode.show === source.show && verifiedTimecode.generation === source.generation
+            ? verifiedTimecode.xml : await bridge.request('READ', object.target);
           freshXml.set(object.target, xml); refreshing.add(object.target);
-          const tc = inspectMa2TimecodeXml(xml).timecodes[0]!;
-          const events = tc.tracks.flatMap(track => track.subtracks.flatMap(subtrack => subtrack.events));
-          const last = events.length ? events.reduce((max, event) => Math.max(max, Number(event.attributes.time ?? 0)), 0) : null;
-          entries.push({ target: object.target, name: tc.attributes.name ?? '', offset: tc.attributes.offset ?? '0', length: tc.attributes.lenght ?? '',
-            slot: tc.attributes.slot ?? '', frame: tc.attributes.frame_format ?? '', last: last === null ? '' : String(last) });
+          entries.push(timecodeRange(object.target, xml));
         }
         ranges = { show: source.show, entries };
       } else ranges = ma2TimecodeRangesSchema.parse(JSON.parse(await bridge.request('TCRANGES', 1)));
@@ -123,16 +146,11 @@ export class Ma2MtcSelectionService {
       // Marker belongs to the native Show, so another computer reuses the same selector.
       const owned = Number(await run(`local o=gma.show.getobj;local found=0;for _,kind in ipairs({'Sequence','Timecode'}) do local pool=o.handle(kind);for i=0,o.amount(pool)-1 do local h=o.child(pool,i);if h and gma.show.property.get(h,'Info')=='${MA2_MTC_SELECTOR_MARK}' then local n=tonumber(o.number(h));assert(found==0 or found==n,'Duplicate MTC selector');found=n end end end;return found`));
       const candidates = ranges.entries.filter(entry => entry.target !== owned && entry.slot === MA2_SONG_TIMECODE_SLOT);
-      const songs: Ma2MtcSong[] = candidates.filter(entry => entry.last !== '').map(entry => {
-        const start = Number(entry.offset), length = Math.max(Number(entry.length || 0), Number(entry.last) + 1);
-        return { timecode: entry.target, start, end: start + length };
-      });
-      if (!songs.length && !owned) { this.prepared = endpoint; return false; }
-      const points = ma2MtcSelections(songs), numbers = candidates.map(entry => entry.target);
+      if (!candidates.some(entry => entry.last !== '') && !owned) { this.prepared = endpoint; return false; }
+      const points = selectionPoints(candidates), numbers = candidates.map(entry => entry.target);
       const commands = points.map(point => numbers.length ? ma2MtcSelectionCommand(numbers, point.timecode) : `Off Timecode ${owned}`);
       const position = positionSchema.parse(JSON.parse(await run(`local o=gma.show.getobj;local n=${owned};local exists=n>0 and o.handle('Sequence '..n)~=nil;if exists then assert(o.label(o.handle('Sequence '..n))=='${selectorName}','Selector sequence changed') elseif n==0 then for i=9900,99999 do if not o.handle('Sequence '..i) and not o.handle('Timecode '..i) then n=i;break end end;assert(n>0,'No free selector object') end;return '{"number":'..n..',"exists":'..tostring(exists)..'}'`)));
       const context = { network, expectedSource: { show: source.show, generation: source.generation, version: source.version } };
-      const destination = await planMa2SongExecutor(bridge, context, position.number, 1000, '1000.190', this.show);
       const desiredSequence = ma2MtcSelectorSequence(position.number, source.version, commands);
       let currentSequence: string | null = null;
       if (position.exists) currentSequence = await bridge.request('SEQUENCE', position.number);
@@ -149,6 +167,9 @@ export class Ma2MtcSelectionService {
         const actual = await bridge.request('SEQUENCE', position.number);
         if (JSON.stringify(ma2MtcSelectorCommands(actual)) !== JSON.stringify(commands)) throw new Error('控台选曲指令读回不一致，同步没有完成');
       }
+      // Removing all selector Cues can detach its executor on native MA2. Read the assignment
+      // after importing the replacement Sequence; a pre-import plan is no longer evidence.
+      const destination = await planMa2SongExecutor(bridge, context, position.number, 1000, '1000.190', this.show);
       changed ||= !destination.assigned;
       const executor = await assignMa2SongExecutor(connection, bridge, context, position.number, destination, this.show);
       // CREATE refuses an occupied Timecode; an existing selector must carry its own marker.
@@ -187,6 +208,10 @@ export class Ma2MtcSelectionService {
           if (checkedSequences.has(sequence)) continue;
           checkedSequences.add(sequence);
           gate();
+          // syncSong has just compared this complete readback with its intended Cue contents.
+          // Reuse that one transaction's evidence for Go-only Cues instead of exporting and reading
+          // megabytes of fixture values again after every timeline move. Never retained across syncs.
+          if (verifiedSequence?.number === sequence && !ma2MtcSequenceSettings(verifiedSequence.xml).cues.length) continue;
           const readback = await bridge.exchange('SEQUENCE', sequence, 'keep');
           const file = `tblink_library_${readback.requestId}`;
           const settings = ma2MtcSequenceSettings(readback.response);

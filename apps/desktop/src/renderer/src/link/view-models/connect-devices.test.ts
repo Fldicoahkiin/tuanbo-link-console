@@ -83,7 +83,7 @@ it('系统 MIDI 未通过即停止：后续步骤全部标为未执行，不连�
   expect(state.pending).toEqual([]); expect(state.completed).toBe(state.total); expect(state.running).toBe(false);
 });
 
-it('单步超过截止时间记为失败并停止，说明操作可能仍在后台进行', async () => {
+it('OBS 超时只停止画面检查，音乐和灯光继续检查', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   api.connectObs.mockImplementation(() => new Promise(() => undefined));
   const running = connectDevices(options());
@@ -92,7 +92,8 @@ it('单步超过截止时间记为失败并停止，说明操作可能仍在后�
   expect(state.checks.obs?.state).toBe('error');
   expect(state.checks.obs?.detail).toContain('OBS 控制超过 60 秒还没完成，可能仍在后台进行');
   expect(state.checks.preview?.detail).toBe('没有执行，因为“OBS 控制”没通过');
-  expect(api.checkNetwork).not.toHaveBeenCalled(); expect(state.running).toBe(false);
+  expect(api.checkNetwork).toHaveBeenCalledOnce(); expect(state.running).toBe(false);
+  expect(state.checks.audio?.state).toBe('ready');
   vi.useRealTimers();
 });
 
@@ -178,14 +179,14 @@ it.each(['local', 'network'] as const)('%s 一键连接通过后读取当前工�
   expect(useConnectionCheckStore.getState().checks['ma2-read']?.state).toBe('blocked');
 });
 
-it('OBS 场景清单未通过即停止：控制已连接，但不再检查预览和后续设备', async () => {
+it('OBS 场景清单失败只跳过预览，继续检查音乐和灯光', async () => {
   api.readObsInventory.mockRejectedValue(new Error('显示器采集尺寸不可用'));
   await connectDevices(options());
   expect(useIntegrationStore.getState().obs.status).toBe('connected');
   expect(useConnectionCheckStore.getState().checks.obs?.state).toBe('ready');
   expect(useConnectionCheckStore.getState().checks['obs-inventory']?.state).toBe('error');
   expect(useConnectionCheckStore.getState().checks.preview?.detail).toBe('没有执行，因为“OBS 场景清单”没通过');
-  expect(api.getObsLiveFrame).not.toHaveBeenCalled(); expect(api.checkNetwork).not.toHaveBeenCalled();
+  expect(api.getObsLiveFrame).not.toHaveBeenCalled(); expect(api.checkNetwork).toHaveBeenCalledOnce();
 });
 
 it('原生 MTC 端口不被浏览器一键连接提前占用，浏览器漏枚举不误报 USB 未连接', async () => {
@@ -245,11 +246,13 @@ it('原生引擎的灯光 Cue 使用独立 USB 端口时，也按 Windows 原生
 
 it('自动连接不使用误填的地址和旧密码，读取 OBS 当前配置后更新显示', async () => {
   const config = options(); config.draft.obs.connectionMethod = 'automatic';
+  const detection = nothingDetected(); detection.applications.obs.running = true;
+  api.detectLocalIntegrations.mockResolvedValue(detection);
   config.draft.obs.webSocketUrl = 'ws://wrong-target';
   config.password = 'outdated';
   config.onObsPassword = vi.fn();
   const saved = createDefaultIntegrationProfile(); saved.obs.webSocketUrl = 'ws://127.0.0.1:4567';
-  api.connectLocalObs.mockResolvedValue({ version: 1, address: saved.obs.webSocketUrl, password: 'from-obs', snapshot: { status: 'connected', obsVersion: '32.1.1', webSocketVersion: '5', error: null } });
+  api.connectLocalObs.mockResolvedValue({ version: 1, address: saved.obs.webSocketUrl, password: 'from-obs', snapshot: { status: 'connected', obsVersion: '32.1.1', webSocketVersion: '5', error: null, connection: 2, autoReconnect: null } });
   api.loadIntegrationProfile.mockResolvedValue(saved);
   await connectDevices(config);
   expect(api.connectLocalObs).toHaveBeenCalledOnce();
@@ -269,13 +272,42 @@ it('全部步骤通过时依次完成 OBS、真实预览、音频、MIDI 接口�
   expect(config.openMidiPorts).toHaveBeenCalledWith(['custom-input'], 'input');
   expect(api.loopMidi).toHaveBeenCalledWith('start');
 });
-it('OBS 连接失败即停止：预览不误报就绪，控台与 MIDI 接口均未执行', async () => {
+it('OBS 连接失败时预览不误报就绪，控台与 MIDI 接口继续检查', async () => {
   api.connectObs.mockRejectedValueOnce(new Error('OBS 无法连接'));
   const config = options(); await connectDevices(config);
-  expect(api.getObsLiveFrame).not.toHaveBeenCalled(); expect(api.checkNetwork).not.toHaveBeenCalled();
-  expect(config.openMidiPorts).not.toHaveBeenCalled();
+  expect(api.getObsLiveFrame).not.toHaveBeenCalled(); expect(api.checkNetwork).toHaveBeenCalledOnce();
+  expect(config.openMidiPorts).toHaveBeenCalledWith(['custom-input'], 'input');
   expect(useConnectionCheckStore.getState().checks.preview).toMatchObject({ state: 'blocked', detail: '没有执行，因为“OBS 控制”没通过' });
-  expect(useConnectionCheckStore.getState().checks['port:custom-input']?.state).toBe('blocked');
+  expect(useConnectionCheckStore.getState().checks['port:custom-input']?.state).toBe('ready');
+});
+
+it.each(['control', 'inventory', 'preview'] as const)('OBS %s 失败后，原生 MIDI MTC 仍真正检查并通过', async failure => {
+  const config = options();
+  config.draft.internalPlayer = { audioEngine: 'native', audioOutputDeviceId: 'default', mtcOutputPortProfileId: 'lights' };
+  config.draft.midiPortProfiles.push({ id: 'lights', direction: 'output', portName: 'USB MIDI' });
+  api.getNativePlaybackDevices.mockResolvedValue({ protocol: 4, audio: [{ id: 'default', name: '声音', isDefault: true }], midiOutputs: [{ id: 0, name: 'USB MIDI' }], midiInputs: [] });
+  useIntegrationStore.getState().setNativeDevices(await api.getNativePlaybackDevices(), null);
+  const error = new Error('OBS 测试故障');
+  if (failure === 'control') api.connectObs.mockRejectedValue(error);
+  if (failure === 'inventory') api.readObsInventory.mockRejectedValue(error);
+  if (failure === 'preview') api.getObsLiveFrame.mockRejectedValue(error);
+  await connectDevices(config);
+  expect(api.checkNativeMidiOutput).toHaveBeenCalledExactlyOnceWith({ version: 1, portName: 'USB MIDI' });
+  const state = useConnectionCheckStore.getState();
+  for (const id of ['audio', 'port:lights', 'ma2']) expect(state.checks[id]?.state).toBe('ready');
+  expect(Object.values(state.checks).some(check => check.state === 'error' && check.detail.includes('OBS 测试故障'))).toBe(true);
+  expect(state.pending).toEqual([]);
+});
+
+it('无画面工程在未安装 OBS 的电脑自动连接，跳过 OBS 并继续音乐和灯光', async () => {
+  const config = options(); config.draft.obs.connectionMethod = 'automatic';
+  await connectDevices(config);
+  expect(api.connectLocalObs).not.toHaveBeenCalled();
+  expect(api.startExternalApplication).not.toHaveBeenCalledWith('obs');
+  expect(api.readObsInventory).not.toHaveBeenCalled();
+  const checks = useConnectionCheckStore.getState().checks;
+  for (const id of ['obs', 'obs-inventory', 'preview']) expect(checks[id]?.state).toBe('skipped');
+  for (const id of ['audio', 'port:custom-input', 'ma2']) expect(checks[id]?.state).toBe('ready');
 });
 it('控台当前 Show 名和上次读取的不一样：工程通信照样通过并附上说明，继续启动 MA 3D（2026-10-28）', async () => {
   const track = lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false,
@@ -340,13 +372,15 @@ it('首次检查挂起时连续点击不重复启动连接', async () => {
   await connectDevices(config); expect(api.detectLocalIntegrations).toHaveBeenCalledOnce();
   release(); await first; expect(api.connectObs).toHaveBeenCalledOnce();
 });
-it('P1 模式启动播放器并建立时间码监听，不发送播放命令', async () => {
+it.each([false, true])('P1 模式在 OBS 故障=%s 时仍启动播放器并建立时间码监听', async obsFailed => {
   const config = options(); config.project = createEmptyLinkProject('P1 跟随');
+  if (obsFailed) api.connectObs.mockRejectedValue(new Error('OBS 无法连接'));
   config.readMidiPorts = vi.fn(() => Promise.resolve((['input', 'output'] as const).flatMap(direction => [
     { id: `p1-${direction}`, name: 'HirenderP1', manufacturer: '', direction, state: 'connected' as const, connection: 'closed' as const },
     ...direction === 'input' ? [{ id: 'keyboard', name: '遥控键盘', manufacturer: '', direction, state: 'connected' as const, connection: 'closed' as const }] : []])));
   await connectDevices(config);
-  expect(Object.values(useConnectionCheckStore.getState().checks).filter(check => check.state === 'error')).toEqual([]);
+  const errors = Object.values(useConnectionCheckStore.getState().checks).filter(check => check.state === 'error');
+  expect(errors).toHaveLength(obsFailed ? 1 : 0);
   expect(api.startExternalApplication).toHaveBeenCalledWith('p1'); expect(config.listenToP1).toHaveBeenCalledOnce();
   expect(useConnectionCheckStore.getState().checks.p1?.detail).toContain('等待 P1 开始播放');
 });

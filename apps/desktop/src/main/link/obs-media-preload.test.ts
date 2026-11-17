@@ -52,6 +52,25 @@ function mocked(project: LinkProject) {
   return { preload, scenes, native, events: new SceneOutputTimeline(project, 'song').preloadEntries() };
 }
 
+it('开头机位很快露出视频：开播前预热实际出现的位置，首个边界直接播放，不临时补播', async () => {
+  const t = mocked(song([[0, 12000]], [0, 0.1]));
+  const initial = t.preload.initialEntries(0);
+  expect(initial).toHaveLength(1);
+  expect(initial[0]).toMatchObject({ clipId: 'clip-0', frameNumber: 3, sourceOffsetMs: 100 });
+  await t.preload.prime(initial[0]!, current);
+  expect(t.native.seek).toHaveBeenCalledWith(initial[0]!.sourceName, 100);
+  expect(t.scenes.execute).not.toHaveBeenCalled();
+  await expect(t.preload.execute(initial[0]!, path)).resolves.toBeUndefined();
+  expect(t.scenes.execute).toHaveBeenCalledOnce();
+});
+
+it('开播预热沿用十秒范围，每个素材只占一个位置；中途起播优先当前片段', () => {
+  const t = mocked(song([[0, 12000], [12, 12000], [24, 12000]], [0, 11]));
+  expect(t.preload.initialEntries(0)).toEqual([]);
+  expect(t.preload.initialEntries(60)).toEqual([expect.objectContaining({ clipId: 'clip-0', frameNumber: 330, sourceOffsetMs: 11000 })]);
+  expect(t.preload.initialEntries(390)).toEqual([expect.objectContaining({ clipId: 'clip-1' })]);
+});
+
 type FakeInput = { scene: string; item: number; state: string; base: number; since: number; muted: boolean; enabled: boolean; look?: Record<string, unknown> };
 /** A write of a scene item's look: whose, to what, and whether the audience saw that item then. */
 type LookWrite = { sceneName: string; input: string; look: Record<string, unknown>; onAir: boolean };

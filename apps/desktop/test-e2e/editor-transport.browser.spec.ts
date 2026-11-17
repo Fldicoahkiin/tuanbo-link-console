@@ -185,7 +185,7 @@ test('时间线列表默认选中当前匹配；新建空时间线立即显示�
   await page.getByRole('button', { name: '控台时间线', exact: true }).click();
   await browser.getByRole('button', { name: '新建时间线', exact: true }).click();
   await page.getByRole('dialog', { name: '新建时间线', exact: true }).getByLabel('时间线名称', { exact: true }).fill('新编排');
-  await page.getByRole('dialog', { name: '新建时间线', exact: true }).getByLabel('MTC 起始码', { exact: true }).fill('00:03:00:00');
+  await page.getByRole('dialog', { name: '新建时间线', exact: true }).getByLabel('MTC 起始码', { exact: true }).fill('00:03:00');
   await page.getByRole('dialog', { name: '新建时间线', exact: true }).getByLabel('Timecode 编号', { exact: true }).fill('9100');
   await page.getByRole('dialog', { name: '新建时间线', exact: true }).getByLabel('多步 Cue 序列编号', { exact: true }).fill('9200');
   await page.getByRole('dialog', { name: '新建时间线', exact: true }).getByLabel('执行器位置（页.格）', { exact: true }).fill('1000.108');
@@ -199,7 +199,7 @@ test('时间线列表默认选中当前匹配；新建空时间线立即显示�
   await expect(browser.getByRole('button', { name: '同步当前时间线', exact: true })).toBeEnabled();
   await expect(browser).toContainText('Timecode 9100');
   await expect(browser).toContainText('序列 9200 · 执行器 1000.108');
-  await expect(browser).toContainText('00:03:00:00');
+  await expect(browser).toContainText('00:03:00');
 });
 
 
@@ -212,7 +212,7 @@ test('列表手动关联：对齐起始码并显示 Cue，保持本页且可撤�
   await browser.getByRole('button', { name: '关联已有时间线', exact: true }).click();
   await expect(browser.getByRole('option')).toHaveCount(1);
   await browser.getByRole('option', { name: 'Timecode 7 · 控台歌曲', exact: true }).click();
-  await expect(browser).toContainText('MTC 00:01:00:00');
+  await expect(browser).toContainText('MTC 00:01:00');
   await browser.getByRole('button', { name: '用于当前节目', exact: true }).click();
   await expect(browser.getByRole('status', { name: '时间线状态', exact: true })).toContainText('已匹配当前节目');
   await expect(browser.getByRole('option', { name: 'Timecode 7 · 控台歌曲', exact: true })).toHaveAttribute('aria-selected', 'true');
@@ -266,15 +266,15 @@ test('新建时间线右键修改名称和 MTC，Cue 编辑仍进入原编辑器
   await browser.getByRole('button', { name: '新建时间线', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '新建时间线', exact: true });
   await dialog.getByLabel('时间线名称', { exact: true }).fill('新编排');
-  await dialog.getByLabel('MTC 起始码', { exact: true }).fill('00:03:00:00');
+  await dialog.getByLabel('MTC 起始码', { exact: true }).fill('00:03:00');
   await dialog.getByRole('button', { name: '新建时间线', exact: true }).click();
   await browser.getByRole('option', { name: /新编排/ }).click({ button: 'right' });
   await page.getByRole('menuitem', { name: '修改名称 / MTC', exact: true }).click();
   const edit = page.getByRole('dialog', { name: '修改时间线', exact: true });
   await edit.getByLabel('时间线名称', { exact: true }).fill('修改后的灯光');
-  await edit.getByLabel('MTC 起始码', { exact: true }).fill('00:04:00:00');
+  await edit.getByLabel('MTC 起始码', { exact: true }).fill('00:04:00');
   await edit.getByRole('button', { name: '保存修改', exact: true }).click();
-  await expect(browser.getByRole('option', { name: /修改后的灯光/ })).toContainText('00:04:00:00');
+  await expect(browser.getByRole('option', { name: /修改后的灯光/ })).toContainText('00:04:00');
   await browser.getByRole('button', { name: '编辑 Cue', exact: true }).click();
   await expect(browser).toHaveCount(0);
 });

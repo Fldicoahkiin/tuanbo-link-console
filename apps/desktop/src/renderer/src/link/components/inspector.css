@@ -4,12 +4,60 @@
  * inputs, switches and buttons are the shared ones of link/ui; this file only places them.
  */
 @layer pages {
-  .cue-inspector .layout-preset-row { display: flex; flex-wrap: wrap; gap: var(--space-half); }
+  /* Content determines row height. Help, validation and disclosures never share fixed grid rows. */
+  .cue-inspector { container-name: editor-properties; }
+  .cue-inspector :is(.inspector-body, .common-properties, .lighting-inspector-host) { padding: var(--space-2); scrollbar-gutter: stable; overflow-wrap: anywhere; }
+  .cue-inspector :is(.ui-input, .ui-select, .ui-unit) { max-width: none; }
+  .cue-inspector :is(.ui-input, .ui-select > select) { font-size: var(--type-control); }
+  .cue-inspector .ui-unit > .ui-input { padding-inline-end: var(--space-4); }
+  .cue-inspector :is(.ui-switch-text, .ui-field-label, .ui-field-note) { white-space: normal; overflow-wrap: anywhere; }
+  .cue-inspector .common-properties-program { display: flex; align-items: start; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); color: var(--color-text-secondary); font-size: var(--type-caption); }
+  .cue-inspector .common-properties-program > span { flex: none; }
+  .cue-inspector .common-properties-program > strong { min-width: 0; font-weight: 400; text-align: end; overflow-wrap: anywhere; }
+  .cue-inspector .common-properties-fields { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: var(--space-3); min-width: 0; padding: 0; margin: 0; border: 0; }
+  .cue-inspector :is(.arrangement-property-group, .song-properties) { display: grid; align-content: start; align-items: start; gap: var(--space-2); min-width: 0; }
+  .cue-inspector .common-properties h3 { grid-column: 1 / -1; margin: 0; color: var(--color-text); font: 500 var(--type-control)/1.5 var(--font-ui); }
+  .cue-inspector .common-properties label:not(.ui-switch), .cue-inspector .tempo-signature-field { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-half); min-width: 0; margin: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.5 var(--font-ui); }
+  .cue-inspector .common-properties label > span:first-child { min-width: 0; white-space: normal; }
+  .cue-inspector .common-properties label > span:first-child > small { display: block; margin-top: var(--space-half); white-space: normal; overflow-wrap: anywhere; }
+  .cue-inspector .song-properties { grid-template-columns: repeat(2, minmax(0, 1fr)); padding-top: var(--space-3); border-top: 1px solid var(--color-separator); }
+  .cue-inspector .song-properties > :is(.song-volume-field, .song-end-action, .mtc-offset-field, .song-advanced) { grid-column: 1 / -1; }
+  .cue-inspector .song-advanced > .ui-disclosure-body { padding-inline-start: 0; }
+  .cue-inspector .song-properties .mtc-offset-field > :is([role='alert'], [role='status']) { white-space: normal; line-height: 1.5; }
+  .cue-inspector .song-properties .mtc-offset-field > [role='alert'] { color: var(--color-danger); }
+  .cue-inspector .tempo-properties { display: grid; gap: var(--space-1); min-width: 0; margin: 0; padding: 0; border: 0; }
+  .cue-inspector :is(.tempo-properties, .loop-properties) > legend { display: none; }
+  .cue-inspector .tempo-primary-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .cue-inspector .lighting-tempo-signature { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: var(--space-half); min-width: 0; }
+  .cue-inspector .loop-properties { display: grid; gap: var(--space-1); min-width: 0; margin: 0; padding: 0; border: 0; }
+  .cue-inspector .lighting-loop-toggle { justify-content: start; gap: var(--space-2); }
+  .cue-inspector .loop-range-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .cue-inspector .tempo-points { min-width: 0; }
+  .cue-inspector .tempo-points > .ui-disclosure-body { padding-inline-start: 0; }
+  .cue-inspector .tempo-points .ui-disclosure-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1); }
+  .cue-inspector .tempo-point { padding-block: var(--space-1); border-top: 1px solid var(--color-separator); }
+  .cue-inspector .tempo-point-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-1); margin-bottom: var(--space-1); }
+  .cue-inspector .tempo-point-heading strong { font-size: var(--type-caption); font-weight: 500; }
+  .cue-inspector .tempo-point-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .cue-inspector .common-properties .lighting-marker-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) auto; align-items: end; gap: var(--space-1); padding-block: var(--space-1); }
+  .cue-inspector .lighting-marker-settings > label:first-child { grid-column: 1 / -1; }
+  .cue-inspector .lighting-template-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1); }
+  .cue-inspector .lighting-template-row > span { grid-column: 1 / -1; white-space: normal; overflow-wrap: anywhere; }
+  .cue-inspector .lighting-template-row > .ui-button { justify-self: start; }
+  .cue-inspector .lighting-arrangement-list + .lighting-arrangement-list { margin-top: var(--space-1); }
+  .cue-inspector .audio-inspector > header { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--space-half) var(--space-1); margin-bottom: var(--space-2); }
+  .cue-inspector .audio-inspector > header strong { min-width: 0; overflow-wrap: anywhere; font: 500 var(--type-body)/1.5 var(--font-ui); }
+  .cue-inspector .audio-inspector > header span { grid-column: 2; margin: 0; }
+  .cue-inspector .audio-beat-properties { margin-top: var(--space-3); padding-top: var(--space-2); border-top: 1px solid var(--color-separator); }
+  .cue-inspector .inspector-hero strong { white-space: normal; overflow-wrap: anywhere; }
+  .cue-inspector .ui-button { max-width: 100%; min-height: var(--space-4); height: auto; padding-block: var(--space-half); white-space: normal; line-height: 1.4; }
+  .cue-inspector .ui-button > span { min-width: 0; overflow-wrap: anywhere; }
+
+  .cue-inspector .layout-preset-row { display: flex; flex-wrap: wrap; gap: var(--space-1); }
   .cue-inspector .visual-layout-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1) var(--space-2); }
-  .cue-inspector .layout-number { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; gap: var(--space-1); min-width: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
-  .cue-inspector .layout-number > .ui-unit { max-width: 160px; }
+  .cue-inspector .layout-number { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: var(--space-half); min-width: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
   .cue-inspector .layout-opacity { display: grid; grid-template-columns: 52px minmax(0, 1fr) 40px; align-items: center; gap: var(--space-1); color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
-  .cue-inspector .layout-opacity input { width: 100%; margin: 0; accent-color: var(--color-accent); }
+  .cue-inspector .layout-opacity input { width: 100%; min-height: var(--space-4); margin: 0; padding: 0; border: 0; background: transparent; accent-color: var(--color-accent); }
   .cue-inspector .layout-opacity output { text-align: right; font-family: var(--font-numeric); }
   .cue-inspector .visual-toggle { min-width: 0; font-size: var(--type-caption); }
 
@@ -19,7 +67,7 @@
   .cue-inspector .timecode-editor { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-1); max-width: 420px; }
   .cue-inspector .timecode-editor label { display: grid; gap: var(--space-half); min-width: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
   .cue-inspector .timecode-editor .ui-input { max-width: none; }
-  .cue-inspector .cue-notes { height: 32px; min-height: 32px; padding-block: 8px; }
+  .cue-inspector .cue-notes { height: auto; min-height: calc(var(--space-4) + var(--space-2)); padding-block: var(--space-1); resize: vertical; }
 
   .cue-inspector .audio-inspector fieldset { display: grid; gap: var(--space-1); min-width: 0; margin: 0; padding: 0; border: 0; }
   .cue-inspector .audio-inspector fieldset > .ui-button { justify-self: start; }
@@ -27,7 +75,7 @@
   .cue-inspector .audio-beat-properties { display: grid; gap: var(--space-1); }
   .cue-inspector .audio-beat-properties h3 { margin: 0; }
   .cue-inspector .audio-beat-properties > .ui-button { justify-self: start; }
-  .cue-inspector .audio-segment-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-2); }
+  .cue-inspector .audio-segment-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: var(--space-2); }
   .cue-inspector .audio-segment-fields label { display: grid; gap: var(--space-half); min-width: 0; color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
   .cue-inspector :is(.audio-edit-actions, .audio-beat-levels) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-half); }
 
@@ -39,10 +87,10 @@
   @media (hover: hover) and (pointer: fine) {
     .cue-inspector .action-delete:hover:not(:disabled) { color: var(--color-danger); background: var(--color-danger-soft); }
   }
-  .cue-inspector .action-card .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-2); }
+  .cue-inspector .action-card .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: var(--space-2); }
 
   /* A lighting point or track (2026-11-01): the audition switch, then the point's or track's fields. */
-  .cue-inspector .lighting-inspector-host { display: grid; align-content: start; gap: var(--space-2); min-height: 0; padding: var(--space-2) var(--space-3) var(--space-3); overflow: auto; }
+  .cue-inspector .lighting-inspector-host { display: grid; align-content: start; gap: var(--space-2); min-height: 0; overflow: auto; }
   .cue-inspector .lighting-audition-switch { padding-bottom: var(--space-2); border-bottom: 1px solid var(--color-separator); }
   .cue-inspector .lighting-audition-switch small { overflow-wrap: anywhere; }
   .cue-inspector .lighting-inspector { display: grid; align-content: start; gap: var(--space-2); min-width: 0; height: auto; padding: 0; overflow: visible; }
@@ -51,10 +99,10 @@
   .cue-inspector .lighting-inspector-header { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-2); min-width: 0; }
   .cue-inspector .lighting-inspector-header > div { display: grid; flex: 1; gap: var(--space-half); min-width: 0; }
   .cue-inspector .lighting-inspector-eyebrow { color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
-  .cue-inspector .lighting-inspector-header strong { overflow: hidden; color: var(--color-text-strong); font: 500 var(--type-body)/1.4 var(--font-ui); white-space: nowrap; text-overflow: ellipsis; }
+  .cue-inspector .lighting-inspector-header strong { color: var(--color-text-strong); font: 500 var(--type-body)/1.4 var(--font-ui); overflow-wrap: anywhere; }
   .cue-inspector .lighting-inspector-name { max-width: none; font-weight: 500; }
   .cue-inspector .lighting-inspector-header > :is(output, .lighting-inspector-count) { flex: none; padding-bottom: 8px; color: var(--color-text-secondary); font: 400 var(--type-control)/1 var(--font-numeric); }
-  .cue-inspector .lighting-inspector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--space-2); min-width: 0; }
+  .cue-inspector .lighting-inspector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr)); gap: var(--space-2); min-width: 0; }
   .cue-inspector .lighting-inspector-grid .ui-input[type='number'] { max-width: none; }
   .cue-inspector .lighting-inspector-value { display: grid; align-content: start; gap: var(--space-half); min-width: 0; }
   .cue-inspector .lighting-inspector-value > span { color: var(--color-text-secondary); font: 400 var(--type-caption)/1.4 var(--font-ui); }
@@ -67,9 +115,23 @@
   .cue-inspector .lighting-track-more > .ui-disclosure-body > .ui-button { justify-self: start; }
   .cue-inspector .lighting-track-color { box-sizing: border-box; width: 48px; height: 32px; padding: 2px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-input); cursor: pointer; }
 
-  @container (max-width: 380px) {
+  @container editor-properties (min-width: 740px) {
+    .cue-inspector .common-properties-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cue-inspector .song-properties { border-top: 0; border-inline-start: 1px solid var(--color-separator); padding-top: 0; padding-inline-start: var(--space-3); }
+  }
+  @container editor-properties (min-width: 380px) {
+    .cue-inspector .common-properties .tempo-primary-fields > label, .cue-inspector .tempo-primary-fields > .tempo-signature-field { grid-template-columns: var(--space-4) minmax(0, 1fr); align-items: center; gap: var(--space-1); }
+    .cue-inspector .loop-properties { grid-template-columns: auto minmax(0, 1fr); align-items: end; gap: var(--space-2); }
+    .cue-inspector .common-properties .song-properties > :is(.song-volume-field, .mtc-offset-field) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: var(--space-1) var(--space-2); }
+    .cue-inspector .song-properties .mtc-offset-field > :is([role='alert'], [role='status']) { grid-column: 1 / -1; }
+    .cue-inspector .common-properties .song-properties > .song-end-action { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: var(--space-2); }
+  }
+  @container editor-properties (max-width: 380px) {
     .cue-inspector .visual-layout-grid { grid-template-columns: minmax(0, 1fr); }
     .cue-inspector .cue-detail-header { flex-wrap: wrap; }
     .cue-inspector .cue-detail-header > .title-input { flex-basis: 100%; }
+    .cue-inspector .lighting-inspector-header { flex-wrap: wrap; }
+    .cue-inspector .timecode-editor { gap: var(--space-half); }
+    .cue-inspector .timecode-editor .ui-input { padding-inline: var(--space-half); }
   }
 }

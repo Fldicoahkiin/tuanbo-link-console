@@ -1,4 +1,4 @@
-import { Ma2MtcSelectionService } from './ma2-mtc-selection';
+import { Ma2MtcSelectionService, type Ma2ConfirmedTimecode } from './ma2-mtc-selection';
 import { editMa2Timeline } from './ma2-timeline-edit';
 import { ma2SongDirectory } from '@tb/core/link';
 import { ma2PlaybackRequestSchema, type Ma2PlaybackRequest, type Ma2Catalog, type Ma2CatalogRequest, ma2ObjectDirectorySchema, type Ma2ObjectDirectory } from '@tb/schema';
@@ -11,6 +11,7 @@ import { SecureProfileStore } from './secure-profile-store';
 import { writeFileAtomically } from './atomic-file';
 import { Ma2LoginRefusedError, Ma2Telnet, Ma2UnreachableError, ma2ResponseLine, type Ma2ConnectedPeer } from './ma2-telnet';
 import { Ma2NetworkWire } from './ma2-network-wire';
+import { Ma2RequestJournal } from './ma2-request-journal';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2ApplyService } from './ma2-apply-service';
 import { ensureMa2NetworkBridge, readMa2NetworkBridge, type Ma2BridgeState } from './ma2-bridge-installer';
@@ -87,6 +88,7 @@ export class Ma2NetworkManager {
   private readonly relogin: Ma2Relogin<Ma2NetworkSettings>;
   private services: { bridge: Ma2OnpcBridge; service: Ma2ApplyService } | null = null;
   private wire: Ma2NetworkWire | null = null;
+  private requestJournal: Ma2RequestJournal | undefined;
   /** Plugin transactions (one per lane) left open by a dropped connection, released once on the next login to the same console. */
   private unreleased: { ids: string[]; settings: Ma2NetworkSettings } | null = null;
   private keepUnreleased(): void {
@@ -125,12 +127,12 @@ export class Ma2NetworkManager {
     return this.layoutService ??= new Ma2LayoutService(`${this.path}.layouts.json`, this.show, this.consoleBackups);
   }
   private mtcSelection: Ma2MtcSelectionService | null = null;
-  async prepareMtcPlayback(network: Ma2NetworkTarget, force = true, targets: readonly number[] = []): Promise<boolean> {
+  async prepareMtcPlayback(network: Ma2NetworkTarget, force = true, targets: readonly number[] = [], verifiedSequence?: { number: number; xml: string }, verifiedTimecode?: Ma2ConfirmedTimecode): Promise<boolean> {
     const { bridge } = this.get(network);
     if (!this.connection) throw new Error('请先连接控台');
     if (!this.consoleBackups) throw new Error('控台备份记录还没准备好');
     this.mtcSelection ??= new Ma2MtcSelectionService(this.show, this.consoleBackups);
-    return this.mtcSelection.prepare(this.connection, bridge, network, force, targets);
+    return this.mtcSelection.prepare(this.connection, bridge, network, force, targets, verifiedSequence, verifiedTimecode);
   }
   async editTimeline(request: import('@tb/schema').Ma2TimelineEditRequest) {
     if (!request.network) throw new Error('请先连接控台');
@@ -236,8 +238,11 @@ export class Ma2NetworkManager {
         return false;
       }
     };
-    const result = await this.layouts().syncSong(connection, bridge, request, report, signal, { consoleBaseline: baseline, adoptReadback });
-    await this.prepareMtcPlayback(request.network, false, result.changed && result.binding.timecode ? [result.binding.timecode.number] : []);
+    let verifiedTimecode: Ma2ConfirmedTimecode | undefined;
+    const result = await this.layouts().syncSong(connection, bridge, request, report, signal, { consoleBaseline: baseline, adoptReadback,
+      timecodeConfirmed: value => { verifiedTimecode = { ...value, show: request.expectedSource.show, generation: request.expectedSource.generation }; } });
+    await this.prepareMtcPlayback(request.network, false, result.binding.timecode ? [result.binding.timecode.number] : [],
+      { number: result.binding.sequence, xml: result.binding.baselineXml }, verifiedTimecode);
     return result;
   }
   async newCue(request: import('@tb/schema').Ma2NewCueRequest): Promise<import('@tb/schema').Ma2NewCueResult> {
@@ -498,7 +503,7 @@ export class Ma2NetworkManager {
     this.scheduleReconnect();
   }
   private openServices(connection: Ma2Telnet): void {
-    const wire = new Ma2NetworkWire(connection, this.settings?.host === '127.0.0.1' || this.settings?.host === '::1'); this.wire = wire;
+    const wire = new Ma2NetworkWire(connection, this.settings?.host === '127.0.0.1' || this.settings?.host === '::1', this.requestJournal); this.wire = wire;
     const bridge = new Ma2OnpcBridge(wire, this.show);
     this.mtcSelection?.invalidate();
     this.services = { bridge, service: new Ma2ApplyService(bridge, this.show, async target => {
@@ -511,8 +516,12 @@ export class Ma2NetworkManager {
   /** Plugin transactions a dropped line left open, released once on the next login to the same console (a short command each). */
   private async releaseAbandoned(connection: Ma2Telnet): Promise<void> {
     const abandoned = this.unreleased; this.unreleased = null;
-    if (abandoned && this.sameTarget(abandoned.settings)) for (const id of abandoned.ids) {
-      try { await new Ma2NetworkWire(connection).releaseAbandoned(id); this.notice?.('info', `已释放上次断线时未完成的控台请求 ${id}`); }
+    if (!this.settings) throw new Error('控台连接目标已改变');
+    const key = createHash('sha256').update(consoleScope(this.settings)).digest('hex');
+    const journal = new Ma2RequestJournal(`${this.path}.requests/${key}.json`); this.requestJournal = journal;
+    const ids = new Set([...journal.pending(), ...(abandoned && this.sameTarget(abandoned.settings) ? abandoned.ids : [])]);
+    for (const id of ids) {
+      try { await new Ma2NetworkWire(connection, false, journal).releaseAbandoned(id); this.notice?.('info', `已释放上次断线时未完成的控台请求 ${id}`); }
       catch (cause) { this.notice?.('warning', `上次断线时未完成的控台请求 ${id} 未能释放：${cause instanceof Error ? cause.message : String(cause)}；控台插件会在 2 分钟内自动释放`); }
     }
   }

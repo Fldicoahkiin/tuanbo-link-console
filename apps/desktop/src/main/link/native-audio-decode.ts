@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { watchOutputGrowth } from './ffmpeg-deadline';
+import { audioSourceInputArgs, audioSourceTimeFilter } from './audio-source-time';
 
 export type DecodeResult = { ok: true } | { ok: false; error: Error };
 type Options = { executable: string; source: string; output: string; rate: number; baseMs: number; maximumBytes: number };
@@ -17,8 +18,11 @@ export class NativeAudioDecode {
 
   constructor(private readonly options: Options) {
     this.child = spawn(options.executable, ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-filter_threads', '1', '-n',
-      '-readrate', '8', '-readrate_initial_burst', '5', '-ss', String(options.baseMs / 1000), '-i', options.source,
-      '-map', '0:a:0', '-vn', '-ac', '2', '-ar', String(options.rate), '-f', 's16le', '-fs', String(options.maximumBytes + 4), options.output],
+      '-readrate', '8', '-readrate_initial_burst', '5', ...audioSourceInputArgs(options.baseMs), '-i', options.source,
+      // Preserve container time zero, including AAC edit-list lead-in. A seek
+      // starts at the same sample as a full decode, not source start_time + seek.
+      '-map', '0:a:0', '-vn', '-af', audioSourceTimeFilter(options.rate, options.baseMs),
+      '-ac', '2', '-ar', String(options.rate), '-f', 's16le', '-fs', String(options.maximumBytes + 4), options.output],
     { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     // A decoder whose file stops growing is stuck (for example a source on a drive that stopped
     // answering): its readers fail at once, and it is asked to quit like a cancel, not ended.

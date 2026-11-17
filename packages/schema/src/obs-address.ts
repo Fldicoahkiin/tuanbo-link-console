@@ -27,9 +27,22 @@ export const obsWebSocketUrlSchema = z.string().trim().transform((input, context
   return `${url.protocol}//${host}${url.pathname === '/' && !url.search ? '' : url.pathname}${url.search}`;
 });
 
+export const obsAutoReconnectSchema = z.union([
+  z.object({ state: z.enum(['waiting', 'connecting']), attempt: z.number().int().positive(), max: z.number().int().positive() }).strict(),
+  z.object({ state: z.literal('gave-up'), attempts: z.number().int().nonnegative(), max: z.number().int().positive(), text: z.string() }).strict()
+]);
+export type ObsAutoReconnect = z.infer<typeof obsAutoReconnectSchema>;
+
+export const linkObsSnapshotSchema = z.object({
+  status: z.enum(['disconnected', 'connecting', 'connected', 'reconnecting', 'error']),
+  obsVersion: z.string().nullable(), webSocketVersion: z.string().nullable(), error: z.string().nullable(),
+  /** A new number for each confirmed connection; old checks must not survive reconnects. */
+  connection: z.number().int().nonnegative().optional(),
+  autoReconnect: obsAutoReconnectSchema.nullable().optional()
+}).strict();
+export type LinkObsSnapshot = z.infer<typeof linkObsSnapshotSchema>;
+
 export const localObsConnectionResultSchema = z.object({
-  version: z.literal(1), address: obsWebSocketUrlSchema, password: z.string().max(4096),
-  snapshot: z.object({ status: z.enum(['disconnected', 'connecting', 'connected', 'reconnecting', 'error']),
-    obsVersion: z.string().nullable(), webSocketVersion: z.string().nullable(), error: z.string().nullable() }).strict()
+  version: z.literal(1), address: obsWebSocketUrlSchema, password: z.string().max(4096), snapshot: linkObsSnapshotSchema
 }).strict();
 export type LocalObsConnectionResult = z.infer<typeof localObsConnectionResultSchema>;

@@ -228,7 +228,8 @@ export function waveformFromLegacyPeaks(peaks: readonly number[], durationMs: nu
  * another format or for another length of song is not an error: it is generated again.
  */
 const MAGIC = 'TBWL';
-const WAVEFORM_FILE_FORMAT = 1;
+// Format 2 uses container time zero, matching native playback for AAC lead-in.
+const WAVEFORM_FILE_FORMAT = 2;
 const headerSchema = z.object({
   format: z.literal(WAVEFORM_FILE_FORMAT), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/), sampleRate: z.literal(WAVEFORM_SAMPLE_RATE),
   samplesPerBucket: z.number().int().positive(), sampleCount: z.number().int().positive(), buckets: z.number().int().positive().max(2_000_000),

@@ -5,7 +5,7 @@ import type { Ma2NewCueRequest, Ma2SongSyncRequest, Ma2SongSyncResult } from '@t
 import { ma2StepGate, type Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
-import { editMa2SongSequence, emptyMa2SequenceXml, inspectMa2CueData, inspectMa2SequenceXml, inspectMa2TimecodeXml, emptyMa2LayoutXml, inspectMa2LayoutXml } from './ma2-timecode-xml';
+import { editMa2SongSequence, emptyMa2SequenceXml, inspectMa2CueData, inspectMa2SequenceXml, inspectMa2TimecodeXml, emptyMa2LayoutXml, inspectMa2LayoutXml, ma2SequenceCueFingerprints } from './ma2-timecode-xml';
 import { planMa2SongSync } from './ma2-song-plan';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile } from 'node:fs/promises';
@@ -59,6 +59,8 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
   const pending = new Map<string, Buffer[]>(); const copies = new Map<string, Array<{ xml: string; cue: string }>>(); const keeps: string[] = [];
   const canonical = (xml: string): string => xml.replace(/<Info\b[^>]*\/>/g, '').replace(/>\s+</g, '><').trim();
   const run = (script: string): string => {
+    const timecodeExists = /return gma\.show\.getobj\.handle\('Timecode (\d+)'\)~=nil/.exec(script);
+    if (timecodeExists) return String(timecodes.has(Number(timecodeExists[1])));
     const writer = /(TBLINK_W_[a-f0-9]{24})=function/.exec(script)?.[1];
     const opened = /importexport\/(\w+)\.xml';local f=assert\(io\.open\(p,'wb'\)\)/.exec(script);
     if (writer && opened) { files.set(opened[1]!, Buffer.alloc(0)); writers.set(writer, opened[1]!); return 'prepared'; }
@@ -71,13 +73,27 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
     if (copied) { files.set(copied[2]!, files.get(copied[1]!)!); return 'copied'; }
     // Copy /o replaces the Cue with its source, /merge adds the source's rows; names come from Label.
     const song = (target: number) => inspectMa2SequenceXml(sequences.get(target)!).sequences[0]!;
+    if (script.includes("return 'empties'")) {
+      const imported = /Import (\w+)_empty.xml At Sequence (\d+) \/nc/.exec(script)!;
+      const xml = files.get(`${imported[1]}_empty`)!.toString('utf8');
+      for (const match of script.matchAll(/Copy Sequence (\d+) Cue ([\d.]+) At Sequence (\d+) Cue ([\d.]+) \/o \/nc/g)) {
+        const [, from, cue, to, at] = match;
+        if (!song(Number(to)).cues.length) throw new Error('Native Copy into a completely empty Sequence can crash onPC');
+        expect(from).toBe(imported[2]);
+        const copied = inspectMa2SequenceXml(xml).sequences[0]!.cues.find(value => Number(value.number) === Number(cue))!;
+        sequences.set(Number(to), editMa2SongSequence(sequences.get(Number(to))!, song(Number(to)).name ?? '', [{ cue: at!, name: copied.name ?? '', sources: [{ xml, cue: cue! }] }], []));
+      }
+      return 'empties';
+    }
     // Keeping a combined Cue's attributes: later /merge copies rebuild its data from the sources alone.
     const kept = /_attrs\.xml'[\s\S]*Copy Sequence \d+ Cue [\d.]+ At Sequence (\d+) Cue ([\d.]+) \/o \/nc/.exec(script);
     if (kept) { copies.set(`${kept[1]}/${Number(kept[2])}`, []); keeps.push(`${kept[1]}/${Number(kept[2])}`); return 'kept'; }
     const copy = /gma\.cmd\('Copy Sequence (\d+) Cue ([\d.]+) At Sequence (\d+) Cue ([\d.]+) \/(o|merge) \/nc'\)/.exec(script);
     if (copy) {
       const [, from, cue, to, at, mode] = copy; const key = `${to}/${Number(at)}`;
-      copies.set(key, [...mode === 'merge' ? copies.get(key) ?? [] : [], { xml: sequences.get(Number(from))!, cue: cue! }]);
+      if (!song(Number(to)).cues.length) throw new Error('Native Copy into a completely empty Sequence can crash onPC');
+      const snapshot = script.includes('_source.xml') ? /io\.open\(p\.\.'(\w+)\.xml','rb'\)/.exec(script)?.[1] : undefined;
+      copies.set(key, [...mode === 'merge' ? copies.get(key) ?? [] : [], { xml: snapshot ? files.get(snapshot)!.toString('utf8') : sequences.get(Number(from))!, cue: cue! }]);
       const target = song(Number(to));
       sequences.set(Number(to), editMa2SongSequence(sequences.get(Number(to))!, target.name ?? '', [{ cue: at!, name: target.cues.find(value => Number(value.number) === Number(at))?.name ?? '', sources: copies.get(key)! }], []));
     }
@@ -295,9 +311,11 @@ it('没有改动的同步：写前读到的控台导出直接交给复查当基�
   adoptReadback.mockClear();
   const baseline = 'tblink_watch_0123456789abcdef';
   fake.files.set(baseline, Buffer.from(sequences.get(9000)!));
+  fake.ops.length = 0;
   const copied = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: unchanged.binding,
     points: song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: unchanged.binding.points[index]!.cue, delayMs: 0 }] })) }, undefined, undefined, { consoleBaseline: baseline, adoptReadback });
   expect(copied.changed).toBe(false);
+  expect(fake.ops).toEqual(['LISTSEQ 1']);
   expect(adoptReadback).not.toHaveBeenCalled();
   expect(noBackups.record).toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ object: 'Sequence 9000', files: [expect.stringMatching(/^tblink_library_[a-f0-9]{32}$/)] }));
 });
@@ -318,7 +336,10 @@ it('带起始码同步时在序列之后写本曲时间码节目；改时间后�
   expect(show.tracks[0]!.subtracks[0]!.events.map(event => [event.attributes.time ?? '0', event.cueAddress[2]])).toEqual(first.binding.points.map((point, index) => [String(index * 30), String(report.cues.find(cue => Number(cue.number) === Number(point.cue))!.index)]));
   expect(noBackups.record).toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ object: 'Timecode 9000' }));
   const later = song.points.map((point, index) => ({ ...point, atMs: point.atMs + 500, cues: [{ sequence: 9000, cue: first.binding.points[index]!.cue, delayMs: 0 }] }));
+  fake.ops.length = 0;
   const second = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: first.binding, timecodeStartMs: 480000, points: later });
+  expect(fake.ops.filter(op => op === 'LIST 1')).toHaveLength(0);
+  expect(fake.ops.filter(op => op === 'READ 9000')).toHaveLength(1);
   expect(second.binding.timecode!.number).toBe(9000); expect(second.binding.timecode!.revision).not.toBe(first.binding.timecode!.revision);
   expect(inspectMa2TimecodeXml(fake.timecodes.get(9000)!).timecodes[0]!.tracks[0]!.subtracks[0]!.events[1]!.attributes.time).toBe('45');
   fake.timecodes.set(9000, fake.timecodes.get(9000)!.replace('name="GeQu', 'name="控台改过 GeQu'));
@@ -329,6 +350,26 @@ it('带起始码同步时在序列之后写本曲时间码节目；改时间后�
   expect(inspectMa2TimecodeXml(fake.timecodes.get(9000)!).timecodes[0]!.tracks[0]!.subtracks[0]!.events[1]!.attributes.time).toBe('48');
   expect(noBackups.record).toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ object: 'Timecode 9000' }));
 }, 20000);
+it('复用本次 Timecode 读回后，控台在写入前再改时间线仍拒绝覆盖', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), showStopped, noBackups);
+  const first = await service.syncSong(fake.connection, fake.bridge, { ...song, timecodeStartMs: 480000 });
+  const before = fake.timecodes.get(9000)!;
+  const remoteEdit = before.replace('name="GeQu', 'name="ChangedOnConsole GeQu');
+  const exchange = fake.bridge.exchange.getMockImplementation()!;
+  fake.bridge.exchange.mockImplementation(async (...args) => {
+    if (args[0] === 'APPLY') {
+      expect(args[2]).toBe(before);
+      fake.timecodes.set(9000, remoteEdit);
+    }
+    return exchange(...args);
+  });
+  const points = song.points.map(point => ({ ...point, atMs: point.atMs + 500,
+    cues: [{ sequence: 9000, cue: first.binding.points.find(value => value.id === point.id)!.cue, delayMs: 0 }] }));
+  await expect(service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: first.binding, timecodeStartMs: 480000, points })).rejects.toThrow('Timecode changed after preview');
+  expect(fake.timecodes.get(9000)).toBe(remoteEdit);
+});
 it('静音只去掉时间码触发；解除静音恢复原 Cue，不删除或重编号序列内容', async () => {
   const { song, sequences } = boundSong();
   const fake = songConsole(sequences);
@@ -529,6 +570,47 @@ it('已绑定歌曲新增一个点位：Copy 直接建出新 Cue 编号；清空
   expect([...fake.files.keys()].some(name => name.startsWith('tblink_song_'))).toBe(true);
   expect(fake.lines.some(line => line.includes('Copy Sequence'))).toBe(false);
   expect(inspectMa2CueData(sequences.get(9000)!, inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.cues[1]!.index).size).toBe(0);
+}, 20000);
+it('大歌曲插入多个空 Cue 只传空结构，原 Cue 指纹和编号不变，时间码写入新增点', async () => {
+  const { song, sequences } = boundSong();
+  const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), showStopped, noBackups);
+  const first = songConsole(sequences);
+  const prepared = await service.syncSong(first.connection, first.bridge, song);
+  const before = sequences.get(9000)!.replace('</Sequ>', `<!--${'large unchanged snapshot '.repeat(90000)}--></Sequ>`);
+  sequences.set(9000, before);
+  const points = song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: prepared.binding.points[index]!.cue, delayMs: 0 }] }));
+  const added = [500, 1500, 2500, 8500, 9500, 10500].map((atMs, index) => ({ id: `empty-${index}`, name: `Empty ${index}`, atMs, cues: [] }));
+  const fake = songConsole(sequences, undefined, true);
+  const result = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: { ...prepared.binding, baselineXml: before },
+    points: [...points, ...added].sort((a, b) => a.atMs - b.atMs), timecodeStartMs: 480000, timecodeLengthMs: 20000 });
+  const after = sequences.get(9000)!;
+  const hashes = ma2SequenceCueFingerprints(after);
+  for (const [cue, hash] of ma2SequenceCueFingerprints(before)) expect(hashes.get(cue)).toBe(hash);
+  expect(hashes.size).toBe(14);
+  const uploads = [...fake.files].filter(([name]) => name.startsWith('tblink_song_'));
+  expect(uploads).toHaveLength(1);
+  expect(uploads[0]![0]).toMatch(/_empty$/);
+  expect(uploads[0]![1].length).toBeLessThan(4096);
+  const report = inspectMa2SequenceXml(after).sequences[0]!;
+  for (const point of added) {
+    const cue = result.binding.points.find(value => value.id === point.id)!;
+    expect(inspectMa2CueData(after, report.cues.find(value => Number(value.number) === Number(cue.cue))!.index).size).toBe(0);
+  }
+  expect(result.binding.points.map(point => point.atMs)).toEqual([...points, ...added].map(point => point.atMs).sort((a, b) => a - b));
+}, 20000);
+it('给已有 Cue 叠加素材时从写前导出取自身内容，不整首上传，也不把清空后的 Cue 当来源', async () => {
+  const { song, sourceNumber, sequences } = boundSong();
+  const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), showStopped, noBackups);
+  const initial = songConsole(sequences);
+  const prepared = await service.syncSong(initial.connection, initial.bridge, song);
+  const before = sequences.get(9000)!;
+  const points = song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: prepared.binding.points[index]!.cue, delayMs: 0 }] }));
+  points[0]!.cues.push({ sequence: sourceNumber, cue: '1.000', delayMs: 0 });
+  const fake = songConsole(sequences);
+  await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: prepared.binding, points });
+  expect([...fake.files.keys()].some(name => name.startsWith('tblink_song_'))).toBe(false);
+  expect(fake.keeps).toContain('9000/1');
+  expect(inspectMa2CueData(sequences.get(9000)!, 1)).toEqual(inspectMa2CueData(before, 1));
 }, 20000);
 it('控台上整条本曲序列被删掉：不再整读，按上次确认的内容和时间线重建同一序列', async () => {
   const { song, sourceNumber, sequences } = boundSong();
@@ -758,6 +840,23 @@ it('明确新建遇到占用顺延，后续同步和丢失回执恢复都保持�
   expect(sequences.size).toBe(2); expect(fake.timecodes.size).toBe(2);
 }, 20000);
 
+
+it('空时间线第一次添加整套素材先初始化原生步骤，保留编号、执行器及逐点时间', async () => {
+  const { sourceNumber, sequences } = boundSong(); sequences.delete(9000);
+  const fake = songConsole(sequences);
+  const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-empty-sequence-')), 'layouts.json'), showStopped, noBackups);
+  const request: Ma2SongSyncRequest = { ...songRequest(), timecodeStartMs: 180000, name: 'EmptyTimeline',
+    destination: { name: 'EmptyTimeline', sequence: 9000, timecode: 9200, executor: '1000.108' }, points: [] };
+  const first = await service.syncSong(fake.connection, fake.bridge, request);
+  const next = await service.syncSong(fake.connection, fake.bridge, { ...request, requestId: randomUUID(), binding: first.binding,
+    points: [0, 500, 1000, 1500].map((atMs, index) => ({ id: `step-${index}`, name: `Step ${index + 1}`, atMs, cues: [{ sequence: sourceNumber, cue: '1.000', delayMs: 0 }] })) });
+  expect(next.binding).toMatchObject({ sequence: 9000, executor: '1000.108', timecode: { number: 9200 } });
+  expect(next.binding.points.map(point => point.atMs)).toEqual([0, 500, 1000, 1500]);
+  const cues = inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.cues;
+  expect(cues).toHaveLength(4);
+  for (const cue of cues) expect(inspectMa2CueData(sequences.get(9000)!, cue.index)).toEqual(inspectMa2CueData(sequences.get(sourceNumber)!, 1));
+  expect(fake.timecodes.size).toBe(1);
+});
 
 it('显式新建立即创建空序列和固定 Timecode，第一条 Cue 继续写同一位置', async () => {
   const sequences = new Map<number, string>(); const fake = songConsole(sequences);

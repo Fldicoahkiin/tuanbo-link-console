@@ -10,7 +10,7 @@ import { decodeToleranceFrames } from './native-playback-range';
 const requestSchema = z.object({ sourcePath: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
   sampleRate: z.union([z.literal(44100), z.literal(48000)]), expectedDurationMs: z.number().finite().positive().max(86_400_000),
   positionMs: z.number().finite().nonnegative().default(0) }).strict().refine(value => value.positionMs < value.expectedDurationMs);
-const keyPattern = /^[a-f0-9]{64}-(44100|48000)-\d+$/;
+const keyPattern = /^[a-f0-9]{64}-(44100|48000)-\d+(-pts1)?$/;
 const manifestSchema = z.object({ version: z.literal(2), key: z.string().regex(keyPattern),
   sourceSha256: z.string().regex(/^[a-f0-9]{64}$/), pcmSha256: z.string().regex(/^[a-f0-9]{64}$/), baseFrame: z.number().int().nonnegative(),
   frames: z.number().int().positive(), sampleRate: z.union([z.literal(44100), z.literal(48000)]), bytes: z.number().int().positive(), lastUsed: z.number().finite() }).strict();
@@ -32,7 +32,7 @@ const writing = new Set<string>();
 const reported = new Set<string>();
 /** Says into the run log that a decode file could not be removed: which file, and the file error code. */
 export type NativeAudioCacheWarn = (message: string, details: { path: string; code: string }) => void;
-const decodeFile = /^[a-f0-9]{64}-(44100|48000)-\d+\.[a-f0-9-]+\.partial$/;
+const decodeFile = /^[a-f0-9]{64}-(44100|48000)-\d+(-pts1)?\.[a-f0-9-]+\.partial$/;
 
 /** Original audio is fingerprinted before output. A private growing PCM file
  * starts playback after a two-second prefill, independently of total duration.
@@ -65,13 +65,15 @@ export class NativeAudioCache {
       measured('音源校验');
       // Retain source coordinates even when decoding begins near a cold seek.
       const baseFrame = Math.floor(request.positionMs / 1000) * request.sampleRate;
-      const key = `${request.sourceSha256}-${request.sampleRate}-${baseFrame}`;
+      // Decoder semantics belong to cache identity. Earlier PCM omitted AAC
+      // lead-in; retain it for normal budget eviction, never reuse it for audio.
+      const key = `${request.sourceSha256}-${request.sampleRate}-${baseFrame}-pts1`;
       const path = join(this.directory, `${key}.pcm`), metadata = join(this.directory, `${key}.json`);
       const existing = this.active.get(key);
       if (existing) {
         if (existing.releasing) throw new Error('这个音源正在释放，请等清理完成后重新准备');
         if (existing.durationMs !== request.expectedDurationMs) throw new Error('同一音源的节目时长声明不一致');
-        const neededFrames = Math.min(existing.frames, Math.ceil(request.positionMs * request.sampleRate / 1000) - baseFrame + request.sampleRate * 2);
+        const neededFrames = Math.min(Math.max(1, existing.frames - decodeToleranceFrames(request.sampleRate)), Math.ceil(request.positionMs * request.sampleRate / 1000) - baseFrame + request.sampleRate * 2);
         await existing.decoder.readyThrough(neededFrames * 4, signal); signal.throwIfAborted();
         // A release can run while disk prefill awaits. Do not resurrect it.
         if (existing.releasing || this.active.get(key) !== existing) throw new Error('音源预填充期间租约已释放');
@@ -105,7 +107,7 @@ export class NativeAudioCache {
       this.active.set(key, active); this.leases.set(key, 1); writing.add(temporary);
       active.completion = this.validateDecode(active, request, initial, baseFrame, frames, reserve);
       try {
-        const neededFrames = Math.min(frames, Math.ceil(request.positionMs * request.sampleRate / 1000) - baseFrame + request.sampleRate * 2);
+        const neededFrames = Math.min(Math.max(1, frames - decodeToleranceFrames(request.sampleRate)), Math.ceil(request.positionMs * request.sampleRate / 1000) - baseFrame + request.sampleRate * 2);
         await decoder.readyThrough(neededFrames * 4, signal); signal.throwIfAborted();
         measured('解码预填充');
       } catch (error) { await this.releaseActive(active); throw error; }
@@ -119,7 +121,11 @@ export class NativeAudioCache {
     try {
       const source = await stat(request.sourcePath), pcm = await stat(active.path);
       if (initial.size !== source.size || initial.mtimeMs !== source.mtimeMs || initial.ino !== source.ino) throw new Error('解码过程中音频文件变了，这次结果不能用');
-      if (!pcm.size || pcm.size % 4 || pcm.size > reserve || pcm.size / 4 < expectedFrames - decodeToleranceFrames(request.sampleRate)) throw new Error('解码出的音频长度和工程记录对不上');
+      if (!pcm.size || pcm.size % 4 || pcm.size > reserve) throw new Error('音频解码结果不完整，不能继续播放。请在歌曲属性里点“更换音频”重新导入；仍然失败时请导出诊断包发给售后');
+      if (pcm.size / 4 < expectedFrames - decodeToleranceFrames(request.sampleRate)) {
+        const actualMs = (baseFrame + pcm.size / 4) * 1000 / request.sampleRate;
+        throw new Error(`音频实际只有 ${(actualMs / 1000).toFixed(3)} 秒，工程记录为 ${(request.expectedDurationMs / 1000).toFixed(3)} 秒，播放已停止。请在歌曲属性里点“更换音频”重新导入；仍然失败时请导出诊断包发给售后`);
+      }
       active.manifest = { version: 2, key: active.key, sourceSha256: request.sourceSha256, baseFrame,
         pcmSha256: await digest(active.path, new AbortController().signal), frames: pcm.size / 4, sampleRate: request.sampleRate, bytes: pcm.size, lastUsed: Date.now() };
       const handle = await open(active.path, 'r+'); try { await handle.sync(); } finally { await handle.close(); }
@@ -196,8 +202,8 @@ export class NativeAudioCache {
         if (!failure) continue;
         kept ??= failure;
       }
-      if (/^[a-f0-9]{64}-(44100|48000)-\d+(\.pcm|\.[a-f0-9-]+\.partial)$/.test(name)) used += await sizeOf(join(this.directory, name));
-      if (!/^[a-f0-9]{64}-(44100|48000)-\d+\.json$/.test(name)) continue;
+      if (/^[a-f0-9]{64}-(44100|48000)-\d+(-pts1)?(\.pcm|\.[a-f0-9-]+\.partial)$/.test(name)) used += await sizeOf(join(this.directory, name));
+      if (!/^[a-f0-9]{64}-(44100|48000)-\d+(-pts1)?\.json$/.test(name)) continue;
       if ((await stat(join(this.directory, name))).size > 16384) throw new Error('音频缓存元数据超过容量');
       const entry = manifestSchema.parse(JSON.parse(await readFile(join(this.directory, name), 'utf8')));
       if (`${entry.key}.json` !== name) throw new Error('音频缓存身份不一致'); entries.push(entry);

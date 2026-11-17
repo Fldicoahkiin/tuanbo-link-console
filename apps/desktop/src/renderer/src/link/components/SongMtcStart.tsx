@@ -1,5 +1,5 @@
 import { RefreshCw, TriangleAlert } from 'lucide-react';
-import { formatMtcOffset, readSongMtcStart, songLightingStatus, songMtcOverlapNames, songMtcOverlaps, songsNeedingMtcStart, type SongLightingStatus, type SongMtcOverlap } from '@tb/core/link';
+import { formatMtcStart, readSongMtcStart, songLightingStatus, songMtcOverlapNames, songMtcOverlaps, songsNeedingMtcStart, type SongLightingStatus, type SongMtcOverlap } from '@tb/core/link';
 import type { LinkProject, RundownItem } from '@tb/schema';
 import { useMtcStartAllocationStore } from '../stores/mtc-start-allocation-store';
 import '../song-mtc-start.css';
@@ -47,14 +47,14 @@ export function songMtcView(project: LinkProject, item: RundownItem, allocationE
         ? '连上控台后自动分配，避开控台已有的时间码节目和其他歌曲'
         : '开始编灯后连上控台自动分配；也可以在歌曲属性里填写，和控台上节目的起点一样就会自动对上' };
     case 'set': {
-      const code = formatMtcOffset(reading.startMs, frameRate);
+      const code = formatMtcStart(reading.startMs, frameRate);
       const text = `MTC ${code}`;
       const sends = `本曲从 ${code} 开始发送时间码`;
       const warnings: string[] = [];
       const others = overlapsOf(project).get(item.id);
       if (others) warnings.push(`和${songMtcOverlapNames(project, item, others).join('、')}的 MTC 范围重叠，这段时间码会同时跑两首歌的控台节目，请改开其中一首的起点`);
       const own = item.lighting?.consoleSong;
-      if (own?.timecode && own.timecode.offset !== consoleFrames(reading.startMs)) warnings.push(`控台 Timecode ${own.timecode.number} 的起点还是 ${formatMtcOffset(own.timecode.offset * 1000 / 30, frameRate)}，下次同步改成 ${code}`);
+      if (own?.timecode && own.timecode.offset !== consoleFrames(reading.startMs)) warnings.push(`控台 Timecode ${own.timecode.number} 的起点还是 ${formatMtcStart(own.timecode.offset * 1000 / 30, frameRate)}，下次同步改成 ${code}`);
       const status = item.referenceAudio ? statusOf(project, item.id) : { state: 'unmatched' as const, reason: null };
       switch (status.state) {
         case 'duplicate': warnings.push(`控台上 Timecode ${status.timecodes.join('、')} 的起点都是 ${code}，分不清用哪一个，请在控台上改开它们的起点或删掉多余的`); break;

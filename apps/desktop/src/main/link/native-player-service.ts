@@ -246,7 +246,7 @@ export class NativePlayerService {
     if (this.closing) return Promise.reject(new Error('音频服务正在关闭'));
     if (request.kind === 'stop' || request.kind === 'stop-mtc') this.stopRecovery();
     if (request.kind === 'stop' && this.stopping?.epoch === this.epoch && this.stopping.sessionId === request.sessionId) {
-      this.patch({ generation: request.generation }); return this.stopping.task;
+      this.state = { ...state, generation: request.generation }; return this.stopping.task;
     }
     if (request.kind !== 'stop' && this.queued >= 32) return Promise.reject(new Error('音频控制排队已满，这次操作没有执行'));
     if (request.kind !== 'stop' && (state.status === 'error' || state.status === 'stopped' || state.status === 'preparing' || !this.lease)) return Promise.reject(new Error('音频还没准备好或已停止，请重新播放这首歌'));
@@ -258,7 +258,10 @@ export class NativePlayerService {
     const epoch = this.epoch;
     if (request.kind === 'seek') this.abort = new AbortController();
     const signal = this.abort?.signal;
-    this.patch({ generation: request.generation });
+    // This is command bookkeeping, not a new engine observation. Publishing
+    // the previous failure with the stop's generation would fail the program
+    // again before that stop can finish. Publish its actual result below.
+    this.state = { ...state, generation: request.generation };
     const operation = this.pending.then(async () => {
       this.requireEpoch(epoch);
       if (!this.client) {
@@ -300,9 +303,15 @@ export class NativePlayerService {
       }
       this.requireEpoch(epoch);
       if (request.kind === 'volume') this.volume = request.volume;
-      if (request.kind === 'stop-mtc' || request.kind === 'stop') this.patch({ mtcPortName: null });
+      if (request.kind === 'stop-mtc') this.patch({ mtcPortName: null });
       // The next song prepared ahead is only let go: a failed cleanup of it is reported, not this stop's failure.
-      if (request.kind === 'stop') { this.patch({ status: 'stopped' }); await this.preload.discard(); await this.releaseLease(); }
+      if (request.kind === 'stop') {
+        await this.preload.discard(); await this.releaseLease();
+        this.requireEpoch(epoch);
+        // A confirmed stop has no active decoder failure. Leaving the old
+        // audioError here makes the program fail again and keeps editing locked.
+        this.patch({ status: 'stopped', audioError: null, mtcPortName: null });
+      }
       if (request.kind === 'play' && this.source?.nextSnapshot) this.preload.start(this.source.projectPath, this.source.nextSnapshot);
     });
     const result = this.finish(operation, epoch);

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { formatMtcOffset, newMa2TimelineCommand, parseMtcOffset, programTimeOrigin } from '@tb/core/link';
+import { formatMtcStart, newMa2TimelineCommand, parseMtcStart, programTimeOrigin } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { ma2SongSyncSettings, stopMa2SongSync } from '../runtime/ma2-song-sync';
@@ -12,7 +12,7 @@ export function Ma2SequenceTimeline({ itemId, disabled, notify }: { itemId: stri
   const project = useDocumentStore(state => state.project);
   const item = project?.rundown.find(value => value.id === itemId);
   const [name, setName] = useState(item?.title ?? '');
-  const [start, setStart] = useState(() => { try { return project && item ? formatMtcOffset(programTimeOrigin(item), project.timebase.frameRate) : '00:00:00:00'; } catch { return ''; } });
+  const [start, setStart] = useState(() => { try { return project && item ? formatMtcStart(programTimeOrigin(item), project.timebase.frameRate) : '00:00:00'; } catch { return ''; } });
   const defaults = project ? ma2SongSyncSettings(project, itemId) : null;
   const [timecode, setTimecode] = useState(String(defaults?.nextSequence ?? 9000));
   const [sequence, setSequence] = useState(String(defaults?.nextSequence ?? 9000));
@@ -30,7 +30,7 @@ export function Ma2SequenceTimeline({ itemId, disabled, notify }: { itemId: stri
         return sync?.requestId || sync?.checking || sync?.writing ? '当前节目正在同步，请等待完成' : currentShowWait('ma2.sync.write');
       };
       const wait = blocked(); if (wait) throw new Error(wait);
-      const command = newMa2TimelineCommand(itemId, { name: name.trim(), timecode: Number(timecode), sequence: Number(sequence), executor }, parseMtcOffset(start, project.timebase.frameRate));
+      const command = newMa2TimelineCommand(itemId, { name: name.trim(), timecode: Number(timecode), sequence: Number(sequence), executor }, parseMtcStart(start, project.timebase.frameRate));
       command.execute(project);
       if (item.lighting && (item.lighting.tracks.length || item.lighting.consoleSong || item.lighting.ma2Bindings?.length)) {
         if (!await archiveMa2Project(before.documentId, project, 'manual')) throw new Error('原编排未能存档，未创建新时间线');
@@ -50,7 +50,7 @@ export function Ma2SequenceTimeline({ itemId, disabled, notify }: { itemId: stri
     <h4>新建一条空时间线</h4><p>填写名称、MTC 和起始位置。Cue 会同步为控台上的多步序列。</p>
     <div className="ma2-sequence-fields">
       <Field label="时间线名称" stacked>{props => <TextInput {...props} required value={name} disabled={disabled || busy} onChange={event => setName(event.target.value)} />}</Field>
-      <Field label="MTC 起始码" stacked>{props => <TextInput {...props} required placeholder="00:00:00:00" value={start} disabled={disabled || busy} onChange={event => setStart(event.target.value)} />}</Field>
+      <Field label="MTC 起始码" stacked>{props => <TextInput {...props} required placeholder="00:00:00" value={start} disabled={disabled || busy} onChange={event => setStart(event.target.value)} />}</Field>
       <Field label="Timecode 编号" stacked>{props => <TextInput {...props} required type="number" min="1" max="99999" value={timecode} disabled={disabled || busy} onChange={event => setTimecode(event.target.value)} />}</Field>
       <Field label="多步 Cue 序列编号" stacked>{props => <TextInput {...props} required type="number" min="1" max="99999" value={sequence} disabled={disabled || busy} onChange={event => setSequence(event.target.value)} />}</Field>
       <Field label="执行器位置（页.格）" stacked>{props => <TextInput {...props} required placeholder="1000.101" value={executor} disabled={disabled || busy} onChange={event => setExecutor(event.target.value)} />}</Field>

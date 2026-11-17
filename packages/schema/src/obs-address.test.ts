@@ -1,5 +1,14 @@
 import { expect, it } from 'vitest';
-import { obsWebSocketUrlSchema } from './obs-address';
+import { localObsConnectionResultSchema, obsWebSocketUrlSchema } from './obs-address';
+
+it('本机 OBS 连接结果保留连接编号和重连状态，仍拒绝未知字段', () => {
+  const value = { version: 1, address: '4455', password: '', snapshot: { status: 'connected', obsVersion: '33.0.1', webSocketVersion: '5', error: null, connection: 2, autoReconnect: null } };
+  expect(localObsConnectionResultSchema.parse(value).snapshot).toEqual(value.snapshot);
+  const retry = { ...value, snapshot: { ...value.snapshot, status: 'reconnecting', autoReconnect: { state: 'waiting', attempt: 1, max: 3 } } };
+  expect(localObsConnectionResultSchema.parse(retry).snapshot.autoReconnect).toEqual(retry.snapshot.autoReconnect);
+  expect(localObsConnectionResultSchema.safeParse({ ...value, snapshot: { ...value.snapshot, unexpected: true } }).success).toBe(false);
+  expect(localObsConnectionResultSchema.safeParse({ ...value, snapshot: { ...value.snapshot, connection: -1 } }).success).toBe(false);
+});
 
 it.each([
   ['4455', 'ws://127.0.0.1:4455'],

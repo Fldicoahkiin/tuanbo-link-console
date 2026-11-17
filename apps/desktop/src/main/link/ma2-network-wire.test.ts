@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,8 +6,40 @@ import { Ma2NetworkWire } from './ma2-network-wire';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2CommandQueue } from './ma2-command-queue';
 import { showStopped } from './fixtures/show-gates';
+import { Ma2RequestJournal } from './ma2-request-journal';
 
 const id = '1234567890abcdef1234567890abcdef';
+it('不能保存请求归属时不发送；明确拒绝的 begin 不遗留待释放记录', async () => {
+  const command = vi.fn().mockResolvedValue('ACK');
+  const released = vi.fn();
+  const journal = { begin: () => { throw new Error('磁盘不可写'); }, released };
+  await expect(new Ma2NetworkWire({ command }, false, journal).exchange(id, 'LIST', 1, '', () => undefined)).rejects.toThrow('磁盘不可写');
+  expect(command).not.toHaveBeenCalled();
+  command.mockResolvedValue(`ERR:${Buffer.from('Another network request is pending').toString('hex')}`);
+  await expect(new Ma2NetworkWire({ command }, false, { begin: () => undefined, released }).exchange(id, 'LIST', 1, '', () => undefined)).rejects.toThrow('pending');
+  expect(command).toHaveBeenCalledTimes(1);
+  expect(released).toHaveBeenCalledExactlyOnceWith(id);
+});
+it('begin 的回答丢失后重启仍能释放本次占用，不重发原操作', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'ma2-lost-ack-'));
+  try {
+    const path = join(folder, 'requests.json');
+    const journal = new Ma2RequestJournal(path);
+    const wire = new Ma2NetworkWire({ command: () => {
+      expect(new Ma2RequestJournal(path).pending()).toEqual([id]);
+      return Promise.reject(new Error('connection closed after begin'));
+    } }, false, journal);
+    await expect(wire.exchange(id, 'LIST', 1, '', () => undefined)).rejects.toThrow('connection closed');
+    const restarted = new Ma2RequestJournal(path);
+    expect(restarted.pending()).toEqual([id]);
+    const actions: string[] = [];
+    const next = new Ma2NetworkWire({ command: (line) => { actions.push(line); return Promise.resolve('ACK'); } }, false, restarted);
+    await next.releaseAbandoned(id);
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toContain(`'release','${id}'`);
+    expect(new Ma2RequestJournal(path).pending()).toEqual([]);
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
 it('本机大请求完整写入专用文件后才执行，上传不占用逐段命令', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'tblink-upload-'));
   try {

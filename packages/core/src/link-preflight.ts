@@ -23,6 +23,9 @@ export type PreflightReport = {
 
 export type PreflightContext = {
   mode: PreflightMode;
+  /** Transport/follow checks keep picture faults as advisories. The OBS host's
+   * own preparation remains strict (the default), so it never reports a broken picture as ready. */
+  pictureRequirement?: 'required' | 'optional';
   mtcRequirement: 'running' | 'start-on-go' | 'awaiting-external-start' | 'internal';
   internalMtcOutputEnabled?: boolean;
   project: LinkProject;
@@ -369,6 +372,9 @@ function versionCheck(
 }
 
 function report(context: PreflightContext, checks: PreflightCheck[]): PreflightReport {
+  if (context.pictureRequirement === 'optional') checks = checks.map(check => check.status === 'blocking'
+    && (/^(obs\.|target\.|media\.timeline\.|asset\.media\.)/.test(check.id) || check.id === 'security.credentials' || check.id === 'version.obs')
+    ? { ...check, status: 'warning' as const, detail: `${check.detail}；不影响音乐和灯光，需要画面时再处理` } : check);
   return {
     checkedAt: context.now?.() ?? new Date().toISOString(),
     mode: context.mode,

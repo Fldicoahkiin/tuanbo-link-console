@@ -1,4 +1,4 @@
-import { collectCueMidiOutputProfileIds, expectedMa2Shows, preflightLogEntries, runLinkPreflight, type PreflightMode, type PreflightReport } from '@tb/core/link';
+import { collectCueMidiOutputProfileIds, expectedMa2Shows, preflightLogEntries, runLinkPreflight, type PreflightCheck, type PreflightMode, type PreflightReport } from '@tb/core/link';
 import { ma2NetworkStatusSchema } from '@tb/schema';
 import type { LinkMidiAdapter } from '../../registry/link-midi-adapter';
 import { recordRuntimeOperator } from '../runtime/runtime-action-log';
@@ -34,8 +34,13 @@ export async function runDesktopPreflight(
   const rundown = mtcRequirement === 'internal' ? document.project.rundown.filter((item) => item.id === selectedId) : document.project.rundown;
   const mediaIds = new Set(rundown.flatMap((item) => item.referenceMediaClips.map((clip) => clip.assetId)));
   const inspectedProject = mtcRequirement === 'internal' ? { ...document.project, rundown, mediaAssets: document.project.mediaAssets.filter((asset) => mediaIds.has(asset.id)) } : document.project;
+  const pictureProblems: PreflightCheck[] = [];
+  const pictureFailed = (id: string, label: string, error: unknown): void => {
+    pictureProblems.push({ id, label, status: 'warning', detail: `${error instanceof Error ? error.message : String(error)}；不影响音乐和灯光，需要画面时再处理` });
+  };
   if (integration.obs.status === 'connected' && inspectedProject.mediaAssets.length) {
-    await linkDesktopViewModel.prepareObsMediaScenes(document.path, inspectedProject, useDisplayPreferences.getState().preciseSeeking);
+    await linkDesktopViewModel.prepareObsMediaScenes(document.path, inspectedProject, useDisplayPreferences.getState().preciseSeeking)
+      .catch((error: unknown) => pictureFailed('obs.preparation', 'OBS 素材准备', error));
     assertCurrent();
   }
   const needsMidi = mtcRequirement !== 'internal'
@@ -47,7 +52,7 @@ export async function runDesktopPreflight(
     linkDesktopViewModel.inspectProjectAssets(document.path, inspectedProject),
     linkDesktopViewModel.getSecurityPreflight(),
     integration.obs.status === 'connected'
-      ? linkDesktopViewModel.readObsInventory()
+      ? linkDesktopViewModel.readObsInventory().catch((error: unknown) => { pictureFailed('obs.inventory', 'OBS 场景读取', error); return emptyInventory(); })
       : Promise.resolve(integration.inventory ?? emptyInventory()),
     // Auto-follow invokes this only after a real P1 sample. The established
     // connection supplies process identity/version; the sample proves liveness.
@@ -69,6 +74,7 @@ export async function runDesktopPreflight(
   const currentMidiPorts = useIntegrationStore.getState().midiPorts;
   const report = runLinkPreflight({
     mode,
+    pictureRequirement: 'optional',
     mtcRequirement,
     ...options,
     project: document.project,
@@ -100,6 +106,7 @@ export async function runDesktopPreflight(
     logRedactionReady: security.logRedactionReady,
     ...(ma2Show !== undefined ? { ma2Show } : {})
   });
+  report.checks.push(...pictureProblems);
   // One summary with every result in its details; blocking checks every time, advisories once per run.
   for (const entry of preflightLogEntries(report.checks, notedAdvisories, document.project.projectId)) {
     assertCurrent();

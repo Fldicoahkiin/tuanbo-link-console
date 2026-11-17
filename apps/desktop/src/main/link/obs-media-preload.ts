@@ -97,6 +97,17 @@ export class ObsMediaPreload {
     return { timeline, starts: timeline.preloadEntries(), clips: new Map(events.filter(event => event.phase === 'start').map(event => [event.clipId,
       { start: event.frameNumber, end: ends.get(event.clipId) ?? Infinity, sourceOffsetMs: event.sourceOffsetMs }])) };
   }
+  /** Warm the first visible clip of each material inside the normal lookahead,
+   * including a clip revealed just after an opening camera. Nothing goes on air. */
+  initialEntries(frame: number): ManagedMediaEvent[] {
+    const first = new Map(this.timeline.at(frame).media.filter(event => event.assetKind !== 'image').map(event => [event.sourceName, event]));
+    for (const event of this.starts) {
+      if (event.frameNumber <= frame) continue;
+      if (event.frameNumber > frame + this.lookaheadFrames) break;
+      if (!first.has(event.sourceName)) first.set(event.sourceName, event);
+    }
+    return [...first.values()];
+  }
   /** A newer plan of the song on air (0.5.9 R9). A prepared decoder whose clip keeps its material, start and place in its
    * file is kept: an edit elsewhere does not prepare it again. One prepared for a clip the plan no longer has there gives
    * its slot up and stays owned and paused, as for a clip that ended unplayed (`expire`): never one on air, and a decoder

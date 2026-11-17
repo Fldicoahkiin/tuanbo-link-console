@@ -37,7 +37,7 @@ function fixture() {
         case 'play': patch.status = 'playing'; break;
         case 'pause': patch.status = 'paused'; break;
         case 'seek': patch.status = 'paused'; patch.positionMs = command.positionMs; break;
-        case 'stop': patch.status = 'stopped'; break;
+        case 'stop': patch.status = 'stopped'; patch.audioError = null; break;
         case 'stop-mtc': patch.mtcPortName = null; break;
         case 'volume': patch.gain = command.volume; break;
       }
@@ -53,6 +53,16 @@ function fixture() {
   const player = new NativeProgramPlayer(project, 'C:/test/project.tblink', 7, deps, api, lighting);
   return { player, project, deps, api, lighting, emit, state: () => state };
 }
+
+it('音频解码失败后明确停止：清除旧错误并解除歌曲占用，不再把已停止状态判为失败', async () => {
+  const f = fixture();
+  await f.player.play('song-0');
+  f.emit({ status: 'error', audioError: '音频时长不符' });
+  expect(f.state()).toMatchObject({ status: 'error', error: '音频时长不符' });
+  await f.player.stop();
+  expect(f.state()).toMatchObject({ status: 'stopped', error: null, errorTitle: null, positionMs: 0 });
+  await f.player.dispose();
+});
 
 it('随时可播放：有画面动作的歌画面准备失败时照常放音乐、发时间码，画面标红；纯音频的歌只提示（第 9 条取代 10-19 的决定）', async () => {
   const f = fixture(); f.project.obsOutputMode = 'scenes';

@@ -6,6 +6,7 @@ import type {
   LinkMediaAsset,
   LinkMediaKind,
   LinkProject,
+  LinkObsSnapshot,
   P1MediaBinding,
   P1PlaylistBinding,
   ReferenceAudio,
@@ -111,20 +112,7 @@ export type LinkP1ProjectExportResult = {
   itemBindings: Array<{ itemId: string; p1Media: P1MediaBinding }>;
 };
 
-export type LinkObsSnapshot = {
-  status: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error';
-  obsVersion: string | null;
-  webSocketVersion: string | null;
-  error: string | null;
-  /** Which connection this is (main's adapter counts each time OBS becomes connected). */
-  connection?: number;
-  /** Main reconnecting OBS by itself after it dropped (obs-reconnector.ts, R7); absent or null when it is not. */
-  autoReconnect?: ObsAutoReconnect | null;
-};
-/** The automatic OBS reconnect (0.5.9 R7): waiting before attempt `attempt` of `max`, in it, or given up after
- * `attempts` with the red text that says what to do. */
-export type ObsAutoReconnect = { state: 'waiting' | 'connecting'; attempt: number; max: number }
-  | { state: 'gave-up'; attempts: number; max: number; text: string };
+export type { LinkObsSnapshot, ObsAutoReconnect } from '@tb/schema';
 
 export type LinkObsInventory = {
   scenes: string[];

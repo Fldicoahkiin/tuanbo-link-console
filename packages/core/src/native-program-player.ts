@@ -424,7 +424,10 @@ export class NativeProgramPlayer {
       if (!this.current(token)) return;
       if (!this.current(token)) return;
       // The console runs the lighting from the timecode; nothing of it is prepared here.
-      await Promise.all([this.prepareRuntime(itemId, snapshot.positionMs, reuseSession, token, pass), this.prepareObs(itemId, token)]);
+      // WASAPI places audio on an actual sample (e.g. a fractional millisecond
+      // seek at 44.1 kHz). All outputs start from that confirmed position, not
+      // the unrounded request that would fail the MIDI host's identity check.
+      await Promise.all([this.prepareRuntime(itemId, result.positionMs, reuseSession, token, pass), this.prepareObs(itemId, token)]);
       if (!this.current(token)) return;
       // The volume may have changed while the song was prepared: it starts at the volume it has now. A pause or resume
       // pressed while it was prepared decides whether it plays (0.5.9 S5), also one pressed while this is sent.
@@ -521,7 +524,7 @@ export class NativeProgramPlayer {
     return this.enqueue(token, async () => { await stopping; await this.releaseLighting('stop'); await this.optionalRuntime(() => this.cancelPreload(), '节目准备没清理干净');
       // The picture stays on its last frame (R14): nothing to wait for; the next song's picture takes it off.
       void this.stopObs().catch((error: unknown) => this.pictureNotStopped(error, '画面清理失败')); await this.dependencies.stop(); this.runtimePrepared = false;
-      if (this.current(token)) { this.boundary('pause'); this.update({ positionMs: 0, mtcSentPositionMs: null }); } });
+      if (this.current(token)) { this.boundary('pause'); this.update({ positionMs: 0, mtcSentPositionMs: null, error: null, errorTitle: null }); } });
   }
   /** The stop pressed tells the ledger once the timecode stopped: the song's executors go off, and every Off still owed
    * is sent once more. What did not go out stays owed in the ledger (it resends once after the console connects). */

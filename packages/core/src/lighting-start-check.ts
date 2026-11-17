@@ -22,7 +22,7 @@ export function lightingStartCheck(project: LinkProject, itemId: string, mtc: { 
       const prepared = nativeProgramSnapshot(project, itemId, 0, undefined, 48000);
       if (!prepared.allowMtc) problems.push(prepared.notice ?? '这次不能发送时间码');
       if (status.frameRate && project.timebase.frameRate !== status.frameRate) problems.push(`帧率不一致：工程是 ${project.timebase.frameRate} FPS，控台 Timecode ${status.timecode} 是 ${status.frameRate} FPS`);
-      const pending = status.pending ? `控台上还是上一版：这首歌还有 ${status.pending} 项改动没同步到控台，这次时间码触发的是控台上现有的灯光；停止播放后会自动同步` : '';
+      const pending = status.pending ? `控台上还是上一版：还有 ${status.pending} 项灯光改动没同步，这次按控台现有的灯光播放。请停止播放，在「灯光工作台」点“同步当前时间线”，显示“已同步”后再播放` : '';
       return [pending, problems.length ? `这首歌可以播放，但${problems.join('；')}` : ''].filter(Boolean).join('；') || null;
     }
   }

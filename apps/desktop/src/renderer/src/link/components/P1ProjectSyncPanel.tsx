@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { AudioLines, Download, FolderOpen, Upload } from 'lucide-react';
 import { Button, Disclosure, Progress, StatusBadge } from '../ui';
 import type { ConnectionStatus } from '../view-models/connection-status';
-import { allocateP1TimecodeRanges, configureP1AutoFollowCommand, applyP1ProjectExportCommand, formatMtcOffset, p1ImportReport, setItemPlaybackCommand, synchronizeP1ProjectCommand, setPlaybackSourceCommand, withP1MtcStart, type P1SameNameSong } from '@tb/core/link';
+import { allocateP1TimecodeRanges, configureP1AutoFollowCommand, applyP1ProjectExportCommand, formatMtcStart, p1ImportReport, setItemPlaybackCommand, synchronizeP1ProjectCommand, setPlaybackSourceCommand, withP1MtcStart, type P1SameNameSong } from '@tb/core/link';
 import { SongMtcStart } from './SongMtcStart';
 import { assertDocumentSession, useDocumentStore } from '../stores/document-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
@@ -221,7 +221,7 @@ function P1ImportDetails({ project, songs }: { project: LinkProject; songs: read
  * a song lit on its own console timeline is only explained, since its start moves that timeline.
  */
 function P1SameNameList({ project, entries, disabled, notify }: { project: LinkProject; entries: P1SameNameSong[]; disabled: boolean; notify: Props['notify'] }): JSX.Element {
-  const code = (ms: number): string => formatMtcOffset(ms, project.timebase.frameRate);
+  const code = (ms: number): string => formatMtcStart(ms, project.timebase.frameRate);
   const adopt = (entry: P1SameNameSong): void => {
     const local = project.rundown.find(item => item.id === entry.localId);
     if (!local) { notify(`节目单里已经没有「${entry.localTitle}」`, 'error'); return; }

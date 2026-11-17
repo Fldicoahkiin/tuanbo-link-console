@@ -25,7 +25,6 @@ import { P1ProjectSyncPanel } from './P1ProjectSyncPanel';
 import { IntegrationHero } from './IntegrationOverview';
 import { type SettingsCategory } from './settings-navigation';
 import { IntegrationSettingsDialog } from './IntegrationSettings';
-import { prepareLoopMidi } from '../view-models/loop-midi';
 
 type Props = {
   quickConnectHost: HTMLDivElement | null;
@@ -73,17 +72,6 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
     draftBaseline.current = storedProfile;
     setDraft((current) => mergeIntegrationDraft(previous, current, storedProfile));
   }, [storedProfile]);
-  const persistDraft = async (): Promise<IntegrationProfile> => {
-    const latest = useIntegrationStore.getState().profile;
-    const next = { ...(latest ? mergeIntegrationDraft(draftBaseline.current, draft, latest) : draft), updatedAt: new Date().toISOString() };
-    await linkDesktopViewModel.saveIntegrationProfile({
-      profile: next,
-      ...(!storedProfile || password !== '' ? { obsPassword: password } : {})
-    });
-    useIntegrationStore.getState().setProfile(next);
-    setPassword('');
-    return next;
-  };
   const persistPrograms = (): Promise<IntegrationProfile> => saveProgramSettings(draft);
   const save = async (): Promise<void> => {
     setBusy(true);
@@ -130,16 +118,13 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
   const launchSequence = async (): Promise<void> => {
     setBusy(true);
     try {
-      const profile = await persistDraft();
-      await prepareLoopMidi(profile);
-      useIntegrationStore.getState().setProcess(await linkDesktopViewModel.startExternalApplication('obs'));
-      useIntegrationStore.getState().setObs(await linkDesktopViewModel.connectObs());
-      useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory());
-      if (internal) { notify('OBS 已连接，请到“工程与节目单”点击歌曲。'); return; }
-      useIntegrationStore.getState().setProcess(await linkDesktopViewModel.startExternalApplication('p1'));
-      await midiMonitor.waitForConnectedInput(profile.p1.mtcInputPortProfileId, profile.p1.startupTimeoutMs, ports => useIntegrationStore.getState().setMidiPorts(ports));
-      // The main process takes P1's timecode from here (0.5.9 P4); auto-follow listens for P1's song right away.
-      await followP1();
+      // Use the same device connection path as the top bar. OBS is a separate
+      // output there; its failure must not prevent P1's timecode listener.
+      await localIntegration.connect();
+      setBusy(true);
+      if (internal) { notify('请到节目单点击歌曲，音乐和灯光不需要 OBS。'); return; }
+      const p1Check = useConnectionCheckStore.getState().checks.p1;
+      if (p1Check?.state !== 'ready') throw new Error(p1Check?.detail ?? 'P1 还没连接，请检查时间码输入接口');
       if (useDocumentStore.getState().project?.p1AutoFollow?.enabled) {
         notify('P1 自动监听已恢复，请直接点击 P1 歌曲。');
         return;
@@ -160,7 +145,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
     }
   };
   return (<div className="settings-content">
-      {quickConnectHost ? createPortal(<Button variant="primary" icon={ScanSearch} aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '按顺序连接已启用的设备，某一步没通过就会停下，后面的步骤不再执行'} disabled={busy || runtimeActive} onClick={localIntegration.connect}>{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</Button>, quickConnectHost) : null}
+      {quickConnectHost ? createPortal(<Button variant="primary" icon={ScanSearch} aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '依次检查设备；OBS 失败只影响画面，音乐和灯光继续检查'} disabled={busy || runtimeActive} onClick={() => void localIntegration.connect()}>{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</Button>, quickConnectHost) : null}
       {settingsOpen ? <IntegrationSettingsDialog
         key={revision} category={category} onNavigate={onCategoryChange} onCreate={onCreate} onOpen={onOpen} onBusy={setBusy} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable}
         notify={notify}

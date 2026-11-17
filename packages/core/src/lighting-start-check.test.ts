@@ -47,7 +47,7 @@ it('控台节目没同步最新改动或放 Cue 时的起点对不上时只提�
   const project = fixture(), lighting = createLightingDocument(); lighting.tracks = [track(500)];
   lighting.ma2Bindings = [{ id: 'binding', timecode: 2, name: '歌曲甲', readAt: '2026-10-22T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [track(0)], mappings: [], playback: 'editable', timeOriginMs: 480000 }];
   project.rundown[0]!.lighting = lighting;
-  expect(lightingStartCheck(project, '歌曲甲', port)).toBe('控台上还是上一版：这首歌还有 1 项改动没同步到控台，这次时间码触发的是控台上现有的灯光；停止播放后会自动同步');
+  expect(lightingStartCheck(project, '歌曲甲', port)).toBe('控台上还是上一版：还有 1 项灯光改动没同步，这次按控台现有的灯光播放。请停止播放，在「灯光工作台」点“同步当前时间线”，显示“已同步”后再播放');
   const placed = structuredClone(project); placed.rundown[0]!.lighting!.ma2Bindings![0]!.timeOriginMs = 0;
   expect(lightingStartCheck(placed, '歌曲甲', port)).toMatch(/对不上.*；时间码照常发送$/);
 });

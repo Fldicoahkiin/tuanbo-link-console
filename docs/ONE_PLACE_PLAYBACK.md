@@ -6,11 +6,23 @@
 
 ## 开一首歌做什么
 
+2026-11-17 本机 OBS 连接返回的状态统一在 `packages/schema/src/obs-address.ts` 的 `linkObsSnapshotSchema` 定义，桌面契约复用推断类型，包含连接编号和自动重连状态。避免 OBS 实际已连上却被旧返回校验拒绝、界面地址和保存结果不更新。回归：`packages/schema/src/obs-address.test.ts`、`view-models/connect-devices.test.ts`。
+
 `packages/core/src/program-start.ts`。只有没有音频的歌放不了，其余都只是某一路输出参不参加
+
+2026-11-17 用户再次确认：只需要音乐和灯光的电脑不要求安装、运行或连接 OBS。`view-models/connect-devices.ts` 的 OBS 控制、场景清单、预览失败只阻断依赖它的画面检查，音频、MIDI MTC、P1 和 MA2 继续检查；自动连接时无画面需求且未发现 OBS 则跳过画面步骤。设置页启动沿用同一个连接流程。P1 开播前检查通过 `link-preflight.ts` 的 `pictureRequirement: 'optional'` 将画面问题明确记为提示，读取场景或准备素材失败同样记录，不取消时间码监听；OBS 自身准备仍使用默认严格检查，不能把坏画面冒充就绪。音频、MIDI、P1 和工程本身的故障仍按原规则处理。回归：`connect-devices.test.ts`、`link-preflight-view-model.test.ts`、`packages/core/src/link-preflight.test.ts`；播放器输出隔离仍由 `native-program-player.test.ts` 守着。
 
 2026-11-14 修复编辑器入口：只用音乐和灯光的歌，停着时定位不检查 OBS（`runtime/editor-scene-preview.ts` 复用 `itemNeedsObs`）；有画面的歌定位失败仍显示、记录原因，但不能取消定位期间操作员按下的播放（`components/useEditorTransport.ts`）。暂停和停止照旧取消待执行的播放。节目单、编辑器和灯光工作台仍使用同一个后台播放器，不需要 OBS 才能放音乐、发时间码。回归：`apps/desktop/src/renderer/src/link/runtime/link-runtime-coordinator.test.ts`、`apps/desktop/test-e2e/editor-transport.browser.spec.ts`；后台画面失败继续播放由 `apps/desktop/src/renderer/src/link/runtime/native-program-player.test.ts` 守着。
 
 ## 时间码怎么发
+
+2026-11-17 用户要求：歌曲及控台时间线的 MTC 起始码输入、显示只保留 `时:分:秒`，解析/格式化统一用 `mtc-timecode.ts` 的 `parseMtcStart` / `formatMtcStart`，允许中文冒号和六位数字。实际 MIDI MTC 和 Cue 定位继续保留工程帧率；29.97 DF 的整分钟使用该秒首个有效帧。既有精确起点不因显示或只改时间线名称而重写。输入草稿复用 `useFieldDraft`，外部起点更新不重建输入框、不丢焦点，换歌才重置；是否可改仍由 `showGate('song.audio.edit')` 决定并显示等待原因。回归：`mtc-timecode.test.ts`、`apps/desktop/test-e2e/mtc-start.browser.spec.ts`。
+
+同日修复 M4A 起始时间偏移：`native-audio-decode.ts` 使用 `audio-source-time.ts` 保留源文件时间戳、按绝对时间定位，`aresample` 从所请求的样本位置对齐 PCM。非零开始时间不再被省略，完整解码和中途定位使用同一个时间零点；不放宽 `native-audio-cache.ts` 的长度及源文件校验。预填充和完整校验使用同一个 1 ms 取整容差。新解码缓存身份带 `pts1`，旧缓存不再用于播放，但仍纳入容量回收。真实截短仍报实际/记录时长及重新导入位置。回归：`native-audio-cache.test.ts` 的 AAC 非零起始时间、取整与缓存升级用例。
+
+解码失败后明确停止：`native-player-service.ts` 只有停止及音频清理成功才清掉旧 `audioError`；接收停止命令时不把旧故障包装为新操作的结果发布。`native-program-player.ts` 完成停止后清除旧播放错误，恢复节目编辑；新的停止/清理失败照常报告。回归：`native-player-service.test.ts` 的真实 WASAPI 解码失败停止用例、`apps/desktop/src/renderer/src/link/runtime/native-program-player.test.ts`。
+
+同日本机定位发现：44.1 kHz 音频只能停在整采样上，请求的小数毫秒与引擎读回会差不到一个采样。`native-program-player.ts` 准备动作 MIDI 时使用这次准备确认的 `result.positionMs`，不再使用未取整的请求值；`native-program-host.ts` 的精确身份和位置校验保留。回归：`native-program-host.test.ts` 的真实 44.1 kHz 任意位置播放、拖动和恢复用例。
 
 原生播放引擎一条路径，从歌曲的 MTC 起始码发（`packages/core/src/native-program-snapshot.ts`）
 
@@ -53,6 +65,8 @@
 `packages/core/src/song-beats.ts` 的 `songBeats`（2026-11-11）：每首歌一份，按音乐的源文件存在 `rundownItem.music`，编辑器和灯光工作台都从它读，经音频片段换算到歌曲时间，剪切、移动音频不用重新识别。只用 `setSongMusicCommand` 改；旧工程的两种节拍只在 `document-store.setProject` 打开时搬一次（`song-music-migration.ts`）。显示疏密只在显示时定，不存进工程；包络分析（“分析音乐”）不出节拍。识别是编辑器和灯光工作台共用的一次（`components/useMusicBeatSegments.ts`，按歌记着，哪一页看到结果就写一次）；节拍的写入在播放中或运行时在忙时都等停了再写。没装识别组件的电脑才给“简易检测”（IBT），点了才跑，写入守同一条规矩；编辑器不再有自己的检测。手动踩点（Ctrl+J，2026-11-12）也写进这一份：只经 `addSongBeats`（`editMusicStructure` 的 `add-beats`，50 ms 以内已经有拍点就不重复加），播放中踩的先记在 `useMusicBeatSegments.ts`，停了一起写、算一步。编辑器吸附的节拍只在 `components/timeline-snap-points.ts` 的 `songBeatSnapPoints` 算：当前疏密下显示出来的节拍加段落的边，看得见的才吸，按下时放进拖动和修剪的快照；灯光工作台照旧吸全部节拍（`editor-rules.test.ts` 规则 7、8、9 守着）
 
 ## 波形
+
+2026-11-17：波形与原生播放使用 `apps/desktop/src/main/link/audio-source-time.ts` 中相同的文件时间起点，保留 AAC 开头偏移。波形文件格式升为 2，旧波形沿既有流程重新生成一次，避免新播放器和旧波形错位；`waveform-service.test.ts` 覆盖真实 AAC 解码和旧缓存重建。
 
 主进程 `apps/desktop/src/main/link/waveform-service.ts`（2026-11-11）：一次解码出多级峰值、45–180 Hz 节奏波形和频谱（`waveform-levels.ts`），按 sha256 存在工程的 `cache/waveforms/<sha>.levels.bin`；`<sha>.json` 照旧写成 0.5.8 能读的纯数组，不改它的格式。界面只用 `useSongWaveform` 拿、`WaveformCanvas`（`view-models/waveform-draw.ts`）画，不解码整首音频，不引入波形库（`editor-rules.test.ts` 规则 5 守着）
 

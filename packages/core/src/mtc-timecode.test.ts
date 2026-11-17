@@ -4,6 +4,8 @@ import {
   MtcQuarterFrameDecoder,
   formatMtcOffset,
   parseMtcOffset,
+  parseMtcStart,
+  formatMtcStart,
   frameNumberToTimecode,
   millisecondsToFrameNumber,
   timecodeToFrameNumber,
@@ -12,6 +14,15 @@ import {
 import { encodeMediaTimecode } from './mtc-output';
 
 describe('MTC timecode', () => {
+  it.each(['24', '25', '29.97df', '30'] as const)('起始码只填时分秒，输出仍使用正确的 MTC 帧：%s', rate => {
+    for (const input of ['00:01:00', '01:02:03', '23:59:59']) {
+      const ms = parseMtcStart(input, rate);
+      expect(formatMtcStart(ms, rate)).toBe(input);
+      expect(encodeMediaTimecode(ms, rate).fullFrame.slice(6, 8)).toEqual(input.split(':').slice(1).map(Number));
+    }
+    expect(parseMtcStart(' 0：20：0 ', rate)).toBe(parseMtcStart('002000', rate));
+    for (const input of ['', '00:20', '24:00:00', '00:60:00', '00:00:60', '00:20:00:00', 'abcdef']) expect(() => parseMtcStart(input, rate)).toThrow();
+  });
   it.each(['24', '25', '29.97df', '30'] as const)('偏移保存到毫秒后输出同一帧：%s', (rate) => {
     for (const input of ['00:00:00:01', '01:02:03:17', '00:10:00:00']) {
       const ms = parseMtcOffset(input, rate);

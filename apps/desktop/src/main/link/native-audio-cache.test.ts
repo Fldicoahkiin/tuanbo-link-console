@@ -1,8 +1,10 @@
 import { expect, it } from 'vitest';
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import ffmpeg from 'ffmpeg-static';
 import { NativeAudioCache } from './native-audio-cache';
 
@@ -50,15 +52,73 @@ it('未完成的后台解码显式取消并退出，不发布残缺缓存；下�
   expect((await stat(input.sourcePath)).size).toBe(44 + 30 * 192000);
 });
 
+it('旧解码缓存不参与播放，仍纳入容量回收；新缓存按源时间戳重新生成', async () => {
+  if (!ffmpeg) throw new Error('测试缺少 FFmpeg');
+  const directory = await mkdtemp(join(tmpdir(), 'native-pcm-upgrade-'));
+  const input = await source(directory, 512), cachePath = join(directory, 'cache');
+  await mkdir(cachePath);
+  const key = `${input.sourceSha256}-48000-0`, oldPcm = Buffer.alloc(384000);
+  await writeFile(join(cachePath, `${key}.pcm`), oldPcm);
+  await writeFile(join(cachePath, `${key}.json`), JSON.stringify({ version: 2, key, sourceSha256: input.sourceSha256,
+    pcmSha256: createHash('sha256').update(oldPcm).digest('hex'), baseFrame: 0, frames: 96000, sampleRate: 48000, bytes: oldPcm.length, lastUsed: 0 }));
+  const cache = new NativeAudioCache(cachePath, ffmpeg, 1024 * 1024, 1);
+  const lease = await cache.prepare(input, new AbortController().signal);
+  expect(lease.streaming).toBe(true); expect(await lease.completion).toEqual({ ok: true });
+  expect((await readFile(lease.path)).readInt16LE(0)).toBe(512);
+  await lease.release();
+  await expect(stat(join(cachePath, `${key}.pcm`))).rejects.toMatchObject({ code: 'ENOENT' });
+  const restored = await cache.prepare(input, new AbortController().signal);
+  expect(restored.streaming).toBe(false); await restored.release();
+});
+
 it('预填充完成不能把声明时长错误的音源冒充完整缓存', async () => {
   if (!ffmpeg) throw new Error('测试缺少 FFmpeg');
   const directory = await mkdtemp(join(tmpdir(), 'native-pcm-truncated-'));
   const input = await source(directory, 144);
   const lease = await new NativeAudioCache(join(directory, 'cache'), ffmpeg).prepare({ ...input, expectedDurationMs: 4000 }, new AbortController().signal);
   const result = await lease.completion; expect(result.ok).toBe(false);
-  if (!result.ok) expect(result.error.message).toContain('长度和工程记录对不上');
+  if (!result.ok) expect(result.error.message).toContain('音频实际只有 2.000 秒，工程记录为 4.000 秒');
   await lease.release(); expect(lease.path).toMatch(/\.partial$/);
 });
+
+it('短音频或靠近结尾的定位，预填充和完整校验使用同一个毫秒取整容差', async () => {
+  if (!ffmpeg) throw new Error('测试缺少 FFmpeg');
+  const directory = await mkdtemp(join(tmpdir(), 'native-pcm-rounded-'));
+  const original = await source(directory, 144, 1);
+  const input = { ...original, expectedDurationMs: 1001 };
+  const cache = new NativeAudioCache(join(directory, 'cache'), ffmpeg);
+  const lease = await cache.prepare(input, new AbortController().signal);
+  expect(await lease.completion).toEqual({ ok: true });
+  expect(lease.availableMs).toBe(1000);
+  const same = await cache.prepare({ ...input, positionMs: 999 }, new AbortController().signal);
+  expect(await same.completion).toEqual({ ok: true });
+  await same.release(); await lease.release();
+});
+
+it.each([44100, 48000] as const)('AAC 非零起始时间保留在 PCM，转为 %i Hz 后完整解码和中途定位使用同一时间零点', async sampleRate => {
+  if (!ffmpeg) throw new Error('测试缺少 FFmpeg');
+  const directory = await mkdtemp(join(tmpdir(), 'native-pcm-aac-'));
+  const wav = await source(directory, 700, 3);
+  const sourcePath = join(directory, 'offset.m4a');
+  await promisify(execFile)(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-n', '-i', wav.sourcePath, '-af', 'asetpts=PTS+0.05/TB', '-c:a', 'aac', sourcePath], { windowsHide: true });
+  const input = { sourcePath, sourceSha256: createHash('sha256').update(await readFile(sourcePath)).digest('hex'), expectedDurationMs: 3050, sampleRate };
+  const cache = new NativeAudioCache(join(directory, 'cache'), ffmpeg);
+  const full = await cache.prepare(input, new AbortController().signal);
+  expect(await full.completion).toEqual({ ok: true });
+  const pcm = await readFile(full.path);
+  const bytesPerMs = sampleRate * 4 / 1000;
+  expect(pcm.length / bytesPerMs).toBeGreaterThanOrEqual(3049);
+  expect(pcm.subarray(0, 20 * bytesPerMs).every(byte => byte === 0)).toBe(true);
+  await full.release();
+  const seek = await cache.prepare({ ...input, positionMs: 2000 }, new AbortController().signal);
+  expect(await seek.completion).toEqual({ ok: true });
+  const tail = await readFile(seek.path);
+  expect(tail.length).toBe(pcm.length - 2000 * bytesPerMs);
+  // Decoder preroll may differ immediately after a compressed seek; the
+  // remainder must align sample-for-sample, with no extra leading offset.
+  expect(tail.subarray(100 * bytesPerMs)).toEqual(pcm.subarray(2100 * bytesPerMs));
+  await seek.release();
+}, 20_000);
 
 it('缓存容量不足不能淘汰播放租约；释放后只回收解码结果，源文件和预取消任务不变', async () => {
   if (!ffmpeg) throw new Error('测试缺少 FFmpeg');

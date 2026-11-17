@@ -42,11 +42,14 @@ const revision = (xml: string): string => createHash('sha256').update(xml.replac
  */
 export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'>, song: {
   previous: Ma2SongTimecode | undefined; requestedNumber?: number | undefined; sequence: number; executor: string; startMs: number; lengthMs: number | undefined; name: string; version: string;
+  /** This sync's read used for the three-way merge; APPLY still compares it on the console before writing. */
+  currentTimecode?: { number: number; xml: string } | undefined;
   cues: ReadonlyArray<{ atMs: number; cueIndex: number; number: string; name: string | null }>;
   created: (timecode: Ma2SongTimecode) => Promise<void>;
-}): Promise<{ timecode: Ma2SongTimecode; backup: string | null }> {
-  const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
-  const taken = (target: number): boolean => directory.entries.some(entry => entry.target === target);
+}): Promise<{ timecode: Ma2SongTimecode; backup: string | null; xml: string }> {
+  const confirmed = song.currentTimecode?.number === song.previous?.number ? song.currentTimecode : undefined;
+  const directory = confirmed ? null : ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
+  const taken = (target: number): boolean => confirmed?.number === target || Boolean(directory?.entries.some(entry => entry.target === target));
   let number = song.previous?.number ?? song.requestedNumber;
   if (!song.previous && number !== undefined) {
     while (taken(number) && number < 99999) number++;
@@ -54,7 +57,8 @@ export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request'
   }
   let current: string;
   const timecode = (target: number, xml: string): Ma2SongTimecode => ({ number: target, offset: frames(song.startMs), slot: MA2_SONG_TIMECODE_SLOT, revision: revision(xml) });
-  if (number !== undefined && taken(number)) current = await bridge.request('READ', number);
+  if (confirmed) { number = confirmed.number; current = confirmed.xml; }
+  else if (number !== undefined && taken(number)) current = await bridge.request('READ', number);
   else {
     if (number === undefined) { number = song.sequence; while (taken(number) && number < 99999) number += 1; }
     if (taken(number)) throw new Error('从本曲序列号往后没有空的 Timecode 编号');
@@ -65,7 +69,7 @@ export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request'
   const executorName = inspectMa2ExecutorXml(await bridge.request('EXECUTOR', Number(page), slot)).executorName;
   if (!executorName) throw new Error(`读不到执行器 ${song.executor} 的名称，没有写入时间码节目`);
   const desired = ma2SongTimecodeXml(current, number, { name: song.name, startMs: song.startMs, executor: song.executor, executorName, sequence: song.sequence, cues: song.cues, ...song.lengthMs === undefined ? {} : { lengthMs: song.lengthMs } });
-  if (sameMa2XmlObjects(desired, current)) return { timecode: timecode(number, current), backup: null };
+  if (sameMa2XmlObjects(desired, current)) return { timecode: timecode(number, current), backup: null, xml: current };
   const written = await bridge.exchange('APPLY', number, current, desired);
-  return { timecode: timecode(number, written.response), backup: `tblink_backup_${written.requestId}` };
+  return { timecode: timecode(number, written.response), backup: `tblink_backup_${written.requestId}`, xml: written.response };
 }

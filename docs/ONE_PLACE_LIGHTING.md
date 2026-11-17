@@ -18,7 +18,11 @@
 
 ## MA2 同步
 
+2026-11-17 重启占用修复：`ma2-request-journal.ts` 在请求开始前把本端请求编号保存在本机，正常释放后移除。`ma2-network-manager.ts` 重新登录同一控台时读取并只释放这些编号；不重放读写或按键，不清除其他客户端请求。覆盖退出和 begin 回答丢失，避免重启后要等插件两分钟过期。`ma2-request-journal.test.ts`、`ma2-network-wire.test.ts` 验证持久归属、丢失回答后的释放以及未能保存记录时不发送。
+
 方式 1、方式 2 和改名走同一个逐首同步、同一份状态（`runtime/ma2-song-sync.ts`、`stores/ma2-sync-store.ts`）
+
+2026-11-17 同步速度回归：`ma2-layout-service.ts` 新增空 Cue 只上传空结构，导入已确认空闲的临时序列后在控台 Copy；同曲 Cue 参与组合时从本次写前导出取原内容，不从已部分改写的序列复制，也不上传整首数据。原内容备份、并发检查、未改 Cue 指纹和新增 Cue 内容核对保留。复查已确认序列和执行器均未变时复用该次执行器位置；已知 Timecode 编号只检查该对象是否存在，同次合并读回交给写入作为并发比较的基线，不再重复遍历目录和读取。`ma2-timecode-xml.ts` 的只读检查按完整 XML 复用解析结果，上限两份、合计 8 MiB 输入；大序列只留小的派生结果（编号/指纹各八份，属性/灯具各两份），返回独立对象，编辑始终独立解析，不缓存控台是否变化。`ma2-mtc-selection.ts` 复用同次同步刚确认的歌曲序列和 Timecode；只移动区间内的点不重建选曲，末点、静音、起始码或歌曲长度改变选择区间时仍更新。测试在 `ma2-layout-service.test.ts`、`ma2-timecode-xml.test.ts`、`ma2-mtc-selection.test.ts`。点击 Cue 的小于 3 px 指针抖动不作为拖动，避免吸附意外挪点，由 `WaveformCuePoints.test.ts` 守住。
 
 2026-11-16 同步速度：`ma2-network-wire.ts` 在同一请求协议中处理批量响应和本机临时文件响应，只有明确的回环地址启用本机文件，远程仍按网络传输；请求身份、完整长度、写入后读回确认都保留。`ma2-layout-service.ts` 新建序列原生复制不再重复下载来源，目标完整读回负责发现来源在复制期间变化。`ma2-network-wire.test.ts`、`ma2-bridge-lua.test.ts`、`ma2-layout-service.test.ts` 守着；实际速度和协议见 `tools/ma2/README.md`。
 
@@ -54,6 +58,8 @@
 
 ## 整套 Cue 的首次放置
 
+2026-11-17：首次添加整套序列经 `packages/core/src/ma2-new-timeline.ts` 的 `addMa2SequenceCommand` 同时保留完整编排并预留控台目标，调用现有 `syncMa2Once(itemId)`；已有绑定不换位置。目标占用仍在同一新建分配规则内顺延，MTC 仍由逐首同步分配。素材点击和拖入都传入歌曲实际拍点，后续同步只取已编辑的 Cue 时间。`ma2-new-timeline.test.ts` 与 `lighting-sequence-placement.test.ts` 覆盖首次创建、重复添加、撤销、时间保留和真实入口触发同步。
+
 `packages/core/src/lighting-template-steps.ts` 统一展开整套序列，默认每步 1 拍；用户编辑后不再经过这个展开步骤。素材组合保留成员已编辑的相对时间。`apps/desktop/src/renderer/src/link/components/lighting-sequence-placement.test.ts` 检查完整展开、组合时间、逐步编辑和歌曲范围。
 
 ## 轨道是否参与灯光
@@ -75,5 +81,7 @@
 网络桥空闲时不启动常驻 Lua 定时任务。只有按住 Flash、Temp、Swop 等需要断线自动松开的按键时，`tools/ma2/tblink_bridge.lua` 才启动单次看门任务；有按键仍按住才继续下一次，松开、租约过期、桥换代或停止时释放按键并退出。文件桥的请求轮询同样使用单次任务，停止或换代后不续行。正常的 Go/Goto、同步和读取不新增常驻任务。旧版无限任务的现场清理由诊断确认目标后单独处理，自动连接流程不发送全局 Off、Off Plugin 或 ReloadPlugins，不能影响其他插件。测试：`apps/desktop/src/main/link/ma2-bridge-timers.test.ts`。
 
 ## MIDI 选曲隔离
+
+2026-11-17 本机联调补充：重写辅助选曲序列的全部 Cue 时，onPC 会解除原执行器关联。因此执行器位置必须在序列写入并读回后重新检查，不能沿用写入前的“已分配”判断；否则辅助时间线的 Object 引用变空，读回校验失败且歌曲不会按 MTC 启动。由 `ma2-mtc-selection.ts` 复用原执行器分配规则处理，`ma2-mtc-selection.test.ts` 模拟清空后解除关联并检查重新分配。
 
 2026-11-17：用户要求播放继续使用 MIDI MTC，只运行当前歌曲，前后定位和共用执行器切歌不串灯。时间区间及原生选曲命令只在 `packages/core/src/ma2-mtc-selection.ts` 编译；辅助 Timecode/Sequence 的创建、备份、复用、读回只在 `apps/desktop/src/main/link/ma2-mtc-selection.ts`。明确连接编辑与两种歌曲同步共用这个服务，播放端不发送网络选曲或逐 Cue 命令。内部目录保留占用编号，但不参与配对、歌曲列表或素材试听。完整规则见 LIGHTING_WORKFLOW.md「2026-11-17 MIDI 播放只选择当前歌曲」。测试由 `packages/core/src/ma2-mtc-selection.test.ts`、`apps/desktop/src/main/link/ma2-mtc-selection.test.ts`、`apps/desktop/src/main/link/ma2-bridge-lua.test.ts` 守住。

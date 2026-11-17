@@ -1,13 +1,15 @@
-import type { InputHTMLAttributes } from 'react';
+import { useState, type InputHTMLAttributes } from 'react';
 import { PropertyNumberInput } from './PropertyNumberInput';
-import { defaultItemPlayback, formatMtcOffset, parseMtcOffset, programTimeOrigin, savedSongVolume, setItemPlaybackCommand, setItemVolumeCommand } from '@tb/core/link';
+import { defaultItemPlayback, formatMtcStart, parseMtcStart, programTimeOrigin, savedSongVolume, setItemPlaybackCommand, setItemVolumeCommand } from '@tb/core/link';
 import type { RundownItem } from '@tb/schema';
 import { chordLabel, chordOf } from '../keys/key-chord';
 import { songKeyNote, songKeyProblem } from '../keys/key-settings';
 import { useDocumentStore } from '../stores/document-store';
 import { currentKeymap, useKeyNames } from '../stores/shortcut-store';
-import { Disclosure, Select, WithUnit } from '../ui';
+import { Disclosure, Select, TextInput, WithUnit } from '../ui';
 import { ownKeys } from '../keys/key-owner';
+import { useFieldDraft } from './useFieldDraft';
+import { useShowGate } from '../stores/show-state-store';
 
 type Playback = NonNullable<RundownItem['playback']>;
 type Notify = (message: string, tone?: 'error' | 'info') => void;
@@ -20,7 +22,7 @@ function useSongPlayback(item: RundownItem, notify: Notify) {
   catch (error) { originError = error instanceof Error ? error.message : String(error); }
   // A song without its own end action follows the player's 播放方式.
   const value: Playback = item.playback ?? defaultItemPlayback(item, originMs);
-  const offset = originError ? item.p1Media?.midiStartTime ?? '' : formatMtcOffset(value.mtcOffsetMs, frameRate);
+  const offset = originError ? item.p1Media?.midiStartTime ?? '' : formatMtcStart(value.mtcOffsetMs, frameRate);
   const commit = (next: Playback): boolean => {
     try { useDocumentStore.getState().execute(setItemPlaybackCommand(item.id, next)); return true; }
     catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); return false; }
@@ -34,25 +36,36 @@ function useSongPlayback(item: RundownItem, notify: Notify) {
 }
 
 /**
- * The song's MTC start (时:分:秒:帧), saved in the project on Enter or when focus leaves; Escape puts
+ * The song's MTC start (时:分:秒), saved in the project on Enter or when focus leaves; Escape puts
  * the saved value back. Used by the song properties and the 时间码 settings page.
  */
-export function SongMtcStartInput({ item, notify, ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, 'defaultValue' | 'onBlur' | 'onKeyDown' | 'onInput'> & { item: RundownItem; notify: Notify }): JSX.Element {
+type MtcStartInputProps = Omit<InputHTMLAttributes<HTMLInputElement>, 'width' | 'defaultValue' | 'value' | 'onChange' | 'onBlur' | 'onKeyDown' | 'onInput'> & { item: RundownItem; notify: Notify };
+export function SongMtcStartInput(props: MtcStartInputProps): JSX.Element {
+  return <SongMtcDraftInput key={props.item.id} {...props} />;
+}
+function SongMtcDraftInput({ item, notify, ...props }: MtcStartInputProps): JSX.Element {
   const { frameRate, originError, offset, save } = useSongPlayback(item, notify);
-  return <input {...props} key={`${item.id}:${frameRate}:${offset}`} aria-invalid={Boolean(originError)} defaultValue={offset} placeholder="00:00:00:00" spellCheck={false} {...ownKeys('Escape')}
-    onInput={(event) => event.currentTarget.setCustomValidity('')}
+  const draft = useFieldDraft(offset);
+  const [error, setError] = useState('');
+  const gate = useShowGate('song.audio.edit', item.id);
+  const waiting = gate.kind === 'wait' ? gate.message : props.disabled ? '请停止播放后修改起始时间。' : null;
+  return <><TextInput {...props} disabled={Boolean(props.disabled || waiting)} title={waiting ?? '时:分:秒，例如 00:20:00；回车保存，Esc 取消'} aria-invalid={Boolean(originError || error)} value={draft.shown} placeholder="00:00:00" spellCheck={false} {...ownKeys('Escape')}
+    onChange={event => { draft.type(event.currentTarget.value); setError(''); }}
     onKeyDown={(event) => {
+      if (event.nativeEvent.isComposing) return;
       if (event.key !== 'Enter' && event.key !== 'Escape') return;
       event.preventDefault();
-      if (event.key === 'Escape') { event.currentTarget.value = offset; event.currentTarget.setCustomValidity(''); }
+      if (event.key === 'Escape') { event.currentTarget.value = offset; draft.end(); setError(''); }
       event.currentTarget.blur();
     }}
     onBlur={(event) => {
       const input = event.currentTarget;
-      if (input.value === offset) return;
-      try { if (!save({ mtcOffsetMs: parseMtcOffset(input.value, frameRate) })) input.value = offset; }
-      catch (error) { const message = error instanceof Error ? error.message : String(error); input.value = offset; input.setCustomValidity(message); input.reportValidity(); notify(message, 'error'); }
-    }} />;
+      if (input.value === offset) { draft.end(); return; }
+      try {
+        if (save({ mtcOffsetMs: parseMtcStart(input.value, frameRate) })) { draft.end(); setError(''); }
+        else setError('起始时间没有保存，请停止播放后再按回车保存。');
+      } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    }} />{error ? <small role="alert">{error}</small> : waiting ? <small role="status">{waiting}</small> : null}</>;
 }
 
 /**
@@ -64,19 +77,19 @@ export function SongVolumeField({ item, notify, disabled = false }: { item: Rund
     try { useDocumentStore.getState().execute(setItemVolumeCommand(item.id, volume, crypto.randomUUID())); return true; }
     catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); return false; }
   };
-  return <label title="仅影响这首音频，随工程保存。0% 为静音，100% 为原始音量。"><span>音量<small>只用于联动台播放；P1 跟随时由 P1 控制音量</small></span><WithUnit unit="%"><PropertyNumberInput className="ui-input" label="歌曲音量" min={0} max={100} disabled={disabled} value={savedSongVolume(item)} onCommit={commit} /></WithUnit></label>;
+  return <label className="song-volume-field" title="仅影响这首音频，随工程保存。0% 为静音，100% 为原始音量。"><span>音量<small>只用于联动台播放；P1 跟随时由 P1 控制音量</small></span><WithUnit unit="%"><PropertyNumberInput className="ui-input" label="歌曲音量" min={0} max={100} disabled={disabled} value={savedSongVolume(item)} onCommit={commit} /></WithUnit></label>;
 }
 
 /** `withVolume` false: the volume is shown apart (SongVolumeField), outside a fieldset locked while a song plays. */
 export function SongPlaybackProperties({ item, notify, collapseAdvanced = false, withVolume = true }: { collapseAdvanced?: boolean; item: RundownItem; notify: Notify; withVolume?: boolean }): JSX.Element {
-  const { frameRate, originError, value, commit, save } = useSongPlayback(item, notify);
-  const timecode = <label className="mtc-offset-field" title={originError ?? `歌曲播放位置 + MTC 起始时间 = 输出时间码。${item.p1Media ? `P1 导入原值：${item.p1Media.midiStartTime}（秒或时:分:秒）。` : ''}修改后下次播放生效。`}><span>MTC 起始时间<small>时:分:秒:帧 · {frameRate}</small></span><SongMtcStartInput item={item} notify={notify} className="ui-input" aria-label="MTC 起始时间（时:分:秒:帧）" /></label>;
+  const { originError, value, commit, save } = useSongPlayback(item, notify);
+  const timecode = <label className="mtc-offset-field" title={originError ?? `歌曲播放位置 + MTC 起始时间 = 输出时间码。${item.p1Media ? `P1 导入原值：${item.p1Media.midiStartTime}（秒或时:分:秒）。` : ''}修改后下次播放生效。`}><span>MTC 起始时间<small>时:分:秒 · 回车保存，Esc 取消</small></span><SongMtcStartInput item={item} notify={notify} className="ui-input" aria-label="MTC 起始时间（时:分:秒）" /></label>;
   // What the shortcut takes away or does not get (Space is also play and pause, a page's own key comes first there),
   // said under the field as long as it is set (keys/key-settings.ts `songKeyNote`, K10).
   useKeyNames();
   const shortcutNote = value.shortcut ? songKeyNote(currentKeymap(), value.shortcut) : null;
   const advanced = <>
-    <label><span>快捷键{shortcutNote ? <small>{shortcutNote}</small> : null}</span><input className="ui-input" aria-label="歌曲快捷键" {...ownKeys('*')} value={value.shortcut ? chordLabel(value.shortcut) : ''} readOnly placeholder="未设置" onKeyDown={(event) => {
+    <label className="song-shortcut-field"><span>快捷键{shortcutNote ? <small>{shortcutNote}</small> : null}</span><TextInput aria-label="歌曲快捷键" {...ownKeys('*')} value={value.shortcut ? chordLabel(value.shortcut) : ''} readOnly placeholder="未设置" onKeyDown={(event) => {
       if (event.key === 'Tab') return;
       event.preventDefault();
       if (event.key === 'Backspace' || event.key === 'Delete') { save({ shortcut: '' }); return; }
@@ -91,7 +104,7 @@ export function SongPlaybackProperties({ item, notify, collapseAdvanced = false,
   </>;
   return <>
     {withVolume ? <SongVolumeField item={item} notify={notify} /> : null}
-    <label><span>播完动作</span><Select aria-label="逐曲播完动作" value={value.endAction ?? ''} onChange={(event) => {
+    <label className="song-end-action"><span>播完动作</span><Select aria-label="逐曲播完动作" value={value.endAction ?? ''} onChange={(event) => {
       const endAction = event.currentTarget.value;
       if (endAction === 'next' || endAction === 'loop' || endAction === 'pause' || endAction === 'stop') save({ endAction });
       else if (endAction === '' && value.endAction) { const { volume, startMs, endMs, mtcOffsetMs, shortcut } = value; commit({ volume, startMs, endMs, mtcOffsetMs, shortcut }); }

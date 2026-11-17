@@ -9,6 +9,7 @@ local function reader(data)
   local position = 1
   return {
     read = function(_, count)
+      if count == '*a' then local part = data:sub(position); position = #data + 1; return part end
       if position > #data and count > 0 then return nil end
       local part = data:sub(position, position + count - 1); position = position + count; return part
     end,

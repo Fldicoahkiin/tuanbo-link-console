@@ -64,7 +64,7 @@ windowsTest('真实 WASAPI 播放期间预填充下一首，曲尾接管不再�
 }, 10000);
 
 windowsTest('已经开始播放后解码失败会停止音频；不会将失败留在后台继续空跑', async () => {
-  const { options, request, failures } = await fixture();
+  const { options, request, failures, states } = await fixture();
   let complete: ((result: DecodeResult) => void) | undefined;
   const completion = new Promise<DecodeResult>(resolve => { complete = resolve; });
   const player = new NativePlayerService({ ...options, cache: { prepare: async (input, signal) => ({ ...await options.cache.prepare(input, signal), completion }) } });
@@ -79,6 +79,10 @@ windowsTest('已经开始播放后解码失败会停止音频；不会将失败�
     const frozen = player.status!.positionMs;
     await new Promise(resolve => setTimeout(resolve, 200));
     expect(player.status!.positionMs).toBe(frozen); expect(failures).toEqual(['测试：后台解码中途失败']);
+    const stopped = await player.control({ version: 1, sessionId: request.sessionId, generation: 4, kind: 'stop' });
+    expect(stopped).toMatchObject({ status: 'stopped', audioError: null });
+    expect(states.filter(state => state.generation === 4 && state.audioError)).toEqual([]);
+    expect(failures).toEqual(['测试：后台解码中途失败']);
   } finally { await player.close(); }
 }, 10000);
 async function fixture() {
@@ -201,6 +205,29 @@ windowsTest('设备准备失败保持失败状态，只有明确重新准备才�
   } finally { await player.close(); }
 }, 20000);
 
+windowsTest('停止等待音频清理时切到新歌，旧停止不能把新歌标成已停止', async () => {
+  const { options, request, failures, states } = await fixture();
+  let release: (() => void) | undefined, entered = false, first = true;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const player = new NativePlayerService({ ...options, cache: { prepare: async (input, signal) => {
+    const lease = await options.cache.prepare(input, signal);
+    if (!first) return lease;
+    first = false;
+    return { ...lease, release: async () => { entered = true; await gate; await lease.release(); } };
+  } } });
+  try {
+    await player.prepare(request);
+    const stopping = player.control({ version: 1, sessionId: request.sessionId, generation: 2, kind: 'stop' });
+    const cancelled = expect(stopping).rejects.toThrow('取消');
+    await expect.poll(() => entered).toBe(true);
+    const next = player.prepare({ ...request, sessionId: randomUUID(), snapshot: { ...request.snapshot, itemId: 'song-b' } });
+    release!(); await cancelled; await next;
+    expect(player.status).toMatchObject({ itemId: 'song-b', status: 'ready', audioError: null });
+    expect(states.filter(state => state.itemId === 'song-b').some(state => state.status === 'stopped')).toBe(false);
+    expect(failures).toEqual([]);
+  } finally { release!(); await player.close(); }
+}, 10000);
+
 windowsTest('控制队列有界，停止可以取消满队列且不会在停止后补发', async () => {
   const { options, request, failures } = await fixture();
   const player = new NativePlayerService(options);
@@ -217,7 +244,7 @@ windowsTest('控制队列有界，停止可以取消满队列且不会在停止�
     expect(completed).toHaveLength(40);
     expect(completed.every(result => result.status === 'rejected')).toBe(true);
     const errors = completed.flatMap(result => result.status === 'rejected' && result.reason instanceof Error ? [result.reason.message] : []);
-    expect(errors.filter(message => message.includes('队列已满'))).toHaveLength(8);
+    expect(errors.filter(message => message.includes('排队已满'))).toHaveLength(8);
     expect(errors.filter(message => message.includes('取消'))).toHaveLength(32);
     expect(stopped.status).toBe('stopped'); expect(stopped.generation).toBe(4); expect(failures).toEqual([]);
   } finally { await player.close(); }

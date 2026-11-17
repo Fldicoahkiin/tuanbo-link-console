@@ -13,6 +13,14 @@ const memory = vi.hoisted(() => ({
   file: null as string | null, lines: [] as string[], connects: 0, version: '3.3.4.3', show: 'TEST', generation: 'one',
   login: 'ok' as 'ok' | 'unreachable' | 'refused' | 'silent', drop: (): void => undefined, bridge: 'ready' as 'ready' | 'missing' | 'old' | 'foreign', installs: 0
 }));
+const journals = vi.hoisted(() => new Map<string, Set<string>>());
+beforeEach(() => journals.clear());
+vi.mock('./ma2-request-journal', () => ({ Ma2RequestJournal: class {
+  constructor(private readonly path: string) {}
+  pending(): string[] { return [...(journals.get(this.path) ?? [])]; }
+  begin(id: string): void { journals.set(this.path, new Set([...this.pending(), id])); }
+  released(id: string): void { journals.get(this.path)?.delete(id); }
+} }));
 vi.mock('node:fs/promises', () => ({ readFile: () => memory.file === null ? Promise.reject(Object.assign(new Error('Missing'), { code: 'ENOENT' })) : Promise.resolve(memory.file) }));
 vi.mock('./atomic-file', () => ({ writeFileAtomically: (_path: string, value: string) => { memory.file = value; return Promise.resolve(); } }));
 vi.mock('./ma2-bridge-installer', () => ({

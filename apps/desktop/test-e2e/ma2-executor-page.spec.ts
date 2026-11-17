@@ -196,7 +196,7 @@ test('控台时间线切换保持顶部工具栏位置，显示完整目录并�
     await page.getByRole('menuitem', { name: '修改名称 / MTC', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '修改时间线', exact: true });
     await expect(dialog.getByLabel('时间线名称', { exact: true })).toHaveValue('已读取时间线');
-    await expect(dialog.getByLabel('MTC 起始码', { exact: true })).toHaveValue('00:01:00:00');
+    await expect(dialog.getByLabel('MTC 起始码', { exact: true })).toHaveValue('00:01:00');
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();
     await page.screenshot({ path: info.outputPath('timeline-integrated.png') });
     await expect(page.getByText('试听设置', { exact: true })).toHaveCount(0);

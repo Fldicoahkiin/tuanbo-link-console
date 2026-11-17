@@ -8,9 +8,9 @@ import { TimelineScroll } from './timeline-scroll';
 // The renderer's TSX compiles to React.createElement here.
 vi.stubGlobal('React', React);
 /** The drag the Cue points draw: set by each test, as the real drag session (drag-session.test.ts) would. */
-const held = vi.hoisted(() => ({ drag: null as { id: string; x: number; ms: number; target: number; snapped: boolean } | null }));
+const held = vi.hoisted(() => ({ drag: null as { id: string; x: number; ms: number; target: number; snapped: boolean; moved?: boolean } | null, updates: vi.fn() }));
 vi.mock('./useDragSession', () => ({
-  useDragSession: () => ({ drag: held.drag, current: () => held.drag, begin: () => undefined, update: () => undefined, end: () => undefined })
+  useDragSession: () => ({ drag: held.drag, current: () => held.drag, begin: () => undefined, update: held.updates, end: () => undefined })
 }));
 
 /** One Cue point, at 30 s, on a song of a minute. */
@@ -41,4 +41,28 @@ it('拖着的 Cue 点拖出看得见的范围也照样画着：它握着指针�
   // And past the right edge, with the view at the start of the song.
   held.drag = { id: 'point', x: 3_000, ms: 30_000, target: 59_000, snapped: false };
   expect(drawn(0)).toEqual(['5900px']);
+});
+
+it('单击时两像素内的抖动不吸附、不改时间，开始拖动后仍可拖回起点', () => {
+  let move: React.PointerEventHandler<HTMLButtonElement> | undefined;
+  const create = (type: Parameters<typeof React.createElement>[0], props: (React.Attributes & Record<string, unknown>) | null, ...children: React.ReactNode[]) => {
+    if (type === 'button' && props?.className === 'waveform-cue-point') move = (props as React.ButtonHTMLAttributes<HTMLButtonElement>).onPointerMove;
+    return React.createElement(type, props, ...children);
+  };
+  vi.stubGlobal('React', { ...React, createElement: create });
+  const snapTime = vi.fn((ms: number) => Math.round(ms / 40) * 40);
+  held.drag = { id: 'point', x: 100, ms: 30015, target: 30015, snapped: false, moved: false };
+  held.updates.mockClear();
+  try {
+    renderToStaticMarkup(React.createElement(WaveformCuePoints, { mode: 'seek', height: 120, lighting: { ...lighting(), snapTime }, frameRate: '25', pixelsPerSecond: 100, top: 0,
+      view: { left: 2500, width: 1000 }, scroll: new TimelineScroll(2500), viewportWidth: 1000, durationMs: 60000, disabled: false }));
+    expect(move).toBeDefined();
+    for (const clientX of [100, 101, 102]) move!({ clientX } as React.PointerEvent<HTMLButtonElement>);
+    expect(snapTime).not.toHaveBeenCalled(); expect(held.updates).not.toHaveBeenCalled();
+    move!({ clientX: 104 } as React.PointerEvent<HTMLButtonElement>);
+    expect(held.updates).toHaveBeenLastCalledWith(expect.objectContaining({ moved: true, target: 30040 }));
+    held.drag = { ...held.drag, moved: true };
+    move!({ clientX: 100 } as React.PointerEvent<HTMLButtonElement>);
+    expect(held.updates).toHaveBeenCalledTimes(2);
+  } finally { held.drag = null; vi.stubGlobal('React', React); }
 });

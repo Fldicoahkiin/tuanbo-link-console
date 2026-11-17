@@ -3,13 +3,16 @@ import { open, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute } from 'node:path';
 import { Ma2BridgeFailure, type Ma2Lane, type Ma2Operation, type Ma2TransferProgress, type Ma2Wire } from './ma2-onpc-bridge';
 import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
+import type { Ma2RequestJournal } from './ma2-request-journal';
+
+class Ma2RpcRefusal extends Error {}
 
 /** Chunked RPC over an authenticated command channel; uncertain writes are never replayed. */
 export class Ma2NetworkWire implements Ma2Wire {
   private snapshot: { id: string; target: number; content: Buffer } | null = null;
   private readonly unreleased = new Set<string>();
   private twoLanes: boolean | null = null;
-  constructor(private readonly connection: Pick<Ma2Telnet, 'command'>, private readonly localFiles = false) {}
+  constructor(private readonly connection: Pick<Ma2Telnet, 'command'>, private readonly localFiles = false, private readonly journal?: Pick<Ma2RequestJournal, 'begin' | 'released'>) {}
   /** The requests this wire began on the console and has not released, one per lane; the plugin keeps each for 120 s. */
   get unreleasedRequests(): string[] { return [...this.unreleased]; }
   /** Whether the running plugin keeps a foreground lane beside the background one: learned from the first 'begin'
@@ -17,7 +20,12 @@ export class Ma2NetworkWire implements Ma2Wire {
   get lanes(): boolean | null { return this.twoLanes; }
   /** Releases only the given request id; the plugin refuses any other client's transaction. */
   async releaseAbandoned(id: string): Promise<void> {
-    if (await this.call('release', id) !== 'ACK') throw new Error('控台未确认释放');
+    try { if (await this.call('release', id) !== 'ACK') throw new Error('控台未确认释放'); }
+    catch (error) {
+      // An expired or absent ID no longer owns a slot. Never release another ID instead.
+      if (!(error instanceof Ma2RpcRefusal && error.message.includes('Network request expired or mismatched'))) throw error;
+    }
+    this.journal?.released(id);
   }
   private async call(action: string, id: string, argumentsText = ''): Promise<string> {
     const token = randomBytes(16).toString('hex');
@@ -32,7 +40,7 @@ export class Ma2NetworkWire implements Ma2Wire {
     if (result.startsWith('ERR:')) {
       const encoded = result.slice(4);
       if (!/^(?:[a-f0-9]{2})+$/.test(encoded)) throw new Error('MA2 插件错误响应格式无效');
-      throw new Error(`MA2：${Buffer.from(encoded, 'hex').toString('utf8')}`);
+      throw new Ma2RpcRefusal(`MA2：${Buffer.from(encoded, 'hex').toString('utf8')}`);
     }
     return result;
   }
@@ -52,6 +60,7 @@ export class Ma2NetworkWire implements Ma2Wire {
     let releaseAttempted = false;
     try {
       if (reference && lane !== 'bg') throw new Error('无效的 MA2 网络请求');
+      this.journal?.begin(id); this.unreleased.add(id);
       const begun = await this.call(reference ? 'beginsync' : 'begin', id, `,'${reference ?? operation}',${target},${data.length},'${lane}'${this.localFiles ? ",'file'" : ''}`);
       const upload = /^ACK:lanes:file:((?:[a-f0-9]{2})+)$/.exec(begun);
       if (begun !== 'ACK' && begun !== 'ACK:lanes' && !upload) throw new Error('MA2 未确认传输开始');
@@ -104,14 +113,16 @@ export class Ma2NetworkWire implements Ma2Wire {
       releaseAttempted = true;
       if (await this.call('release', id) !== 'ACK') throw new Error('MA2 未确认传输结束');
       this.unreleased.delete(id);
+      this.journal?.released(id);
       if (match[2] !== 'OK') throw new Error(`MA2：${match[4]}`);
       if (operation === 'SNAPSHOT' || operation === 'SCOPE') this.snapshot = { id, target, content: Buffer.from(match[4] ?? '') };
       return match[4] ?? '';
     } catch (error) {
       let message = error instanceof Error ? error.message : String(error);
+      if (!acquired && error instanceof Ma2RpcRefusal) { this.journal?.released(id); this.unreleased.delete(id); }
       // Release only this transaction. Never execute it again or clear another client's request.
       if (acquired && !releaseAttempted) {
-        try { if (await this.call('release', id) !== 'ACK') throw new Error('控台未确认释放'); this.unreleased.delete(id); }
+        try { if (await this.call('release', id) !== 'ACK') throw new Error('控台未确认释放'); this.unreleased.delete(id); this.journal?.released(id); }
         catch (cleanupError) { message += `；传输清理未确认：${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`; }
       }
       throw new Ma2BridgeFailure(message, id, sent, { cause: error });

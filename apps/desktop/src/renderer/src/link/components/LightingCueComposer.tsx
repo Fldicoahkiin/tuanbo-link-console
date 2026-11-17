@@ -3,7 +3,7 @@ import { PropertyNumberInput } from './PropertyNumberInput';
 import { X, Check, Save, Layers } from 'lucide-react';
 import { LightingTempoMap, lightingEventTime, removeLightingEffects, placeEmptyLightingCue } from '@tb/core/link';
 import { lightingDocumentSchema, lightingTrackSchema, type LightingDocument, type LightingEvent } from '@tb/schema';
-import { placeEffect } from './useLightingEffectStamp';
+import { placeLightingTemplate } from '@tb/core/link';
 import { CONSOLE_CUE_DRAG } from './lighting-material-drag';
 import { Ma2ConsoleName } from './Ma2ConsoleName';
 import { Button } from '../ui';
@@ -47,7 +47,7 @@ export function saveCueIngredients(document: LightingDocument, ingredients: CueI
   const track = first?.track ?? lightingTrackSchema.parse({ id: crypto.randomUUID(), name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [] });
   const temporary = { ...first, id: crypto.randomUUID(), name: name.trim() || 'Cue 素材', track: { ...track, cueStamp: { mode: 'fixed' as const, sequence: ingredient.sequence, cue: ingredient.cue, executor: ingredient.executor } }, members: ingredients.length > 1 ? ingredients.map(({ name, sequence, cue, executor, delayMs }) => ({ name, sequence, cue, executor, delayMs })) : undefined };
   const id = eventId ?? crypto.randomUUID();
-  const placed = placeEffect({ ...base, templates: [...base.templates, temporary] }, { effectId: temporary.id, ms, id }, durationMs);
+  const placed = placeLightingTemplate({ ...base, templates: [...base.templates, temporary] }, { effectId: temporary.id, ms, id }, durationMs);
   const result = retainCueLocations(document, placed, id, ms, map);
   return lightingDocumentSchema.parse({ ...result, templates: document.templates, tracks: result.tracks.map(track => ({ ...track, clips: track.clips.map(clip => ({ ...clip, events: clip.events.map(event => {
     if (event.kind !== 'ma2' || (event.id !== id && event.effectGroupId !== id)) return event;

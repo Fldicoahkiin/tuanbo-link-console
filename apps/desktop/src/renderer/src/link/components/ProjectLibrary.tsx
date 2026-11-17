@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp, Check, Copy, FileAudio, Film, LayoutGrid, List, Plus, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import {
   duplicateRundownItemCommand,
+  formatMtcStart,
   editProgramPlaylistCommand,
   moveVisibleProgramsCommand,
   neighbourGap,
@@ -238,16 +239,7 @@ function ProgramContextMenu(props: {
   </Menu>;
 }
 
-function formatMilliseconds(milliseconds: number): string {
-  const totalCentiseconds = Math.max(0, Math.floor(milliseconds / 10));
-  const hours = Math.floor(totalCentiseconds / 360_000);
-  const minutes = Math.floor(totalCentiseconds / 6_000) % 60;
-  const seconds = Math.floor(totalCentiseconds / 100) % 60;
-  const centiseconds = totalCentiseconds % 100;
-  return [hours, minutes, seconds, centiseconds].map((value) => String(value).padStart(2, '0')).join(':');
-}
-
 function internalStart(project: LinkProject, itemId: string): string {
-  try { const item = project.rundown.find((entry) => entry.id === itemId); return formatMilliseconds(item?.playback || item?.p1Media ? programTimeOrigin(item) : 0); }
+  try { const item = project.rundown.find((entry) => entry.id === itemId); return formatMtcStart(item?.playback || item?.p1Media ? programTimeOrigin(item) : 0, project.timebase.frameRate); }
   catch (error) { return error instanceof Error ? error.message : String(error); }
 }

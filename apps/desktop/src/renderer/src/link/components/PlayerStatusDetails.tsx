@@ -25,8 +25,8 @@ export function PlayerStatusDetails({ error, errorTitle, notice, fault, engine }
       <header><strong>播放状态</strong><button type="button" aria-label="关闭播放状态详情" onClick={close}><X /></button></header>
       <p>播放引擎：{engine}</p>
       {error ? <p className="player-error" role="alert">{errorTitle ? <strong>{errorTitle}：</strong> : null}{error}</p> : null}
-      {fault ? <p className="player-error"><strong>输出出错（播放没有中断）：</strong>{fault}</p> : null}
-      {notice ? <p className="player-notice" role="status">{notice}</p> : null}
+      {fault && fault !== error ? <p className="player-error"><strong>输出出错（播放没有中断）：</strong>{fault}</p> : null}
+      {notice && notice !== error && notice !== fault ? <p className="player-notice" role="status">{notice}</p> : null}
       {!error && !fault && !notice ? <p>播放正常</p> : null}
     </div>
   </details>;

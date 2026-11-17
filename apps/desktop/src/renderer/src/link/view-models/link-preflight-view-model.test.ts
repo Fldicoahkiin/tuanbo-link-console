@@ -11,20 +11,27 @@ import { LinkMidiAdapter } from '../../registry/link-midi-adapter';
 import { useDocumentStore } from '../stores/document-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useRuntimeStore } from '../stores/runtime-store';
+import type { LinkDesktopApi } from '@tb/core/link';
 
-const mocks = vi.hoisted(() => ({ recordLog: vi.fn<(entry: { category: string; message: string; details?: Readonly<Record<string, unknown>> }) => Promise<void>>(() => Promise.resolve()) }));
+const mocks = vi.hoisted(() => ({
+  recordLog: vi.fn<(entry: { category: string; message: string; details?: Readonly<Record<string, unknown>> }) => Promise<void>>(() => Promise.resolve()),
+  readObsInventory: vi.fn<LinkDesktopApi['readObsInventory']>(),
+  prepareObsMediaScenes: vi.fn<LinkDesktopApi['prepareObsMediaScenes']>()
+}));
 vi.mock('./link-desktop-view-model', () => ({ linkDesktopViewModel: {
   recordLog: mocks.recordLog,
   inspectProjectAssets: vi.fn(() => Promise.resolve({ referenceAudio: { song: { audioAvailable: true, waveformAvailable: true } }, media: {} })),
   getSecurityPreflight: vi.fn(() => Promise.resolve({ credentialDecryptable: true, logRedactionReady: true, error: null })),
   getExternalSnapshots: vi.fn(() => Promise.resolve([])),
   getAppInfo: vi.fn(() => Promise.resolve({ version: '0.4.25', availableDiskBytes: 10_000_000_000 })),
-  saveIntegrationProfile: vi.fn(() => Promise.resolve())
+  saveIntegrationProfile: vi.fn(() => Promise.resolve()),
+  readObsInventory: mocks.readObsInventory, prepareObsMediaScenes: mocks.prepareObsMediaScenes
 } }));
 
 const midiRequest = vi.fn(() => Promise.reject(new Error('测试：系统 MIDI 枚举不可用')));
 let midi: LinkMidiAdapter | undefined;
 beforeEach(() => {
+  useIntegrationStore.getState().setObs({ status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null });
   midiRequest.mockClear();
   stubMidi(midiRequest);
   useRuntimeStore.getState().reset();
@@ -46,6 +53,17 @@ function setup(actions: LinkAction[] = [], selected = 'song') {
   return midi;
 }
 const lightingAction: LinkAction = { id: 'light-action', label: '灯光', kind: 'midi.noteOn', portProfileId: 'lighting-output', channel: 1, note: 60, velocity: 100 };
+
+it('OBS 已连接但读取场景失败时仍完成检查，明确提示画面问题', async () => {
+  const adapter = setup();
+  useIntegrationStore.getState().setObs({ status: 'connected', obsVersion: '33.0.1', webSocketVersion: '5', error: null });
+  mocks.readObsInventory.mockRejectedValueOnce(new Error('OBS 场景读取超时'));
+  const report = await runDesktopPreflight(adapter, 'live', 'internal', false, { internalMtcOutputEnabled: false });
+  expect(report.passed).toBe(true);
+  expect(report.checks.find(check => check.id === 'obs.inventory')?.status).toBe('warning');
+  expect(report.checks.find(check => check.id === 'obs.inventory')?.detail).toContain('OBS 场景读取超时');
+  expect(mocks.recordLog.mock.calls.some(([entry]) => entry.category === 'preflight' && entry.message.includes('OBS 场景读取超时'))).toBe(true);
+});
 
 it('内部播放关闭时间码后，无 MIDI Cue 的节目不触发系统枚举', async () => {
   const report = await runDesktopPreflight(setup(), 'live', 'internal', false, { internalMtcOutputEnabled: false });

@@ -5,6 +5,14 @@ import { SHOW_WAIT_SHOW_ON, type ShowState } from '@tb/core/link';
 import { idleShow, pausedShow, runningShow, showReader, showStopped } from './fixtures/show-gates';
 
 const memory = vi.hoisted(() => ({ file: null as string | null, localAddress: undefined as string | undefined, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true', show: '', pause: null as Promise<void> | null, drop: () => undefined, rpc: [] as string[], dropOnRun: false, priorities: [] as (string | undefined)[] }));
+const journals = vi.hoisted(() => new Map<string, Set<string>>());
+beforeEach(() => journals.clear());
+vi.mock('./ma2-request-journal', () => ({ Ma2RequestJournal: class {
+  constructor(private readonly path: string) {}
+  pending(): string[] { return [...(journals.get(this.path) ?? [])]; }
+  begin(id: string): void { journals.set(this.path, new Set([...this.pending(), id])); }
+  released(id: string): void { journals.get(this.path)?.delete(id); }
+} }));
 vi.mock('node:fs/promises', () => ({ readFile: () => memory.file === null ? Promise.reject(Object.assign(new Error('Missing'), { code: 'ENOENT' })) : Promise.resolve(memory.file) }));
 vi.mock('./atomic-file', () => ({ writeFileAtomically: (_path: string, value: string) => { memory.file = value; return Promise.resolve(); } }));
 vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typeof import('./ma2-telnet')>(), Ma2Telnet: class {

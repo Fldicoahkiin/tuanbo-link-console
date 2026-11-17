@@ -34,20 +34,20 @@ const canonical = (xml: string): string => xml.replace(/<Info\b[^>]*\/>/g, '').r
 /** Lua that removes app-generated upload and comparison files once the command that needed them succeeded. */
 const removeFiles = (...names: string[]): string => names.map(name => `os.remove(gma.show.getvar('PATH')..'/importexport/${name}.xml');`).join('');
 /**
- * Lua that empties a Cue's data but keeps every attribute it has on the console (fade, delay, trigger …):
- * the Cue is taken from the write-before export without CueDatas (the header keeps the empty Cue 0 slot
- * MA2 needs to import a Sequence), imported into a scratch Sequence,
- * copied back with /o, and the scratch Sequence is deleted. Sources merged afterwards keep these attributes.
+ * Copy a Cue from the write-before export through a checked scratch Sequence. With `empty`, remove
+ * CueDatas but retain fade, delay, trigger and Part attributes before merging new sources. Otherwise
+ * retain the original content even when a previous step has already changed the live source Cue.
+ * The header retains the empty Cue 0 slot required by MA2; the scratch Sequence is removed afterwards.
  */
-const keepCueAttributes = (exportName: string, target: number, cue: string, scratch: number, file: string): string => {
+const copyExportedCue = (exportName: string, target: number, cue: string, destination: string, scratch: number, file: string, mode: 'o' | 'merge', empty = false): string => {
   const [whole, fraction = ''] = cue.split('.');
   return `local p=gma.show.getvar('PATH')..'/importexport/';local f=assert(io.open(p..'${exportName}.xml','rb'));local x=f:read('*a');f:close();`
     + `local i=assert(x:find('<Number number="${Number(whole)}" sub_number="${Number(fraction.padEnd(3, '0'))}"',1,true),'Cue missing from the write-before export');`
     + `local a=1;while true do local j=x:find('<Cue index=',a,true);if not j or j>i then break end;a=j+1 end;`
-    + `local c=x:sub(a-1,assert(x:find('</Cue>',i,true),'Cue end missing')+5):gsub('<CueDatas>.-</CueDatas>',''):gsub('<CueDatas%s*/>',''):gsub('<Cue index="%d+"','<Cue index="1"',1);`
+    + `local c=x:sub(a-1,assert(x:find('</Cue>',i,true),'Cue end missing')+5)${empty ? ":gsub('<CueDatas>.-</CueDatas>',''):gsub('<CueDatas%s*/>','')" : ''}:gsub('<Cue index="%d+"','<Cue index="1"',1);`
     + `local o=assert(io.open(p..'${file}.xml','wb'));o:write(x:sub(1,x:find('<Cue index=',1,true)-1)..c..'</Sequ></MA>');o:close();`
     + `assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence occupied');gma.cmd('Import ${file}.xml At Sequence ${scratch} /nc');`
-    + `local ok=gma.show.getobj.handle('Sequence ${scratch} Cue ${cue}')~=nil;if ok then gma.cmd('Copy Sequence ${scratch} Cue ${cue} At Sequence ${target} Cue ${cue} /o /nc') end;`
+    + `local ok=gma.show.getobj.handle('Sequence ${scratch} Cue ${cue}')~=nil;if ok then gma.cmd('Copy Sequence ${scratch} Cue ${cue} At Sequence ${target} Cue ${destination} /${mode} /nc') end;`
     + `gma.cmd('Delete Sequence ${scratch} /nc');os.remove(p..'${file}.xml');assert(ok,'Cue attributes import failed');assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence not removed');`;
 };
 
@@ -189,7 +189,7 @@ export class Ma2LayoutService {
    * consumed the file, otherwise the file joins this Sequence's backup rotation.
    */
   async syncSong(rawConnection: Connection, rawBridge: SongBridge, input: Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, externalSignal?: AbortSignal,
-    { consoleBaseline = null, adoptReadback }: { consoleBaseline?: string | null; adoptReadback?: (exportFile: string, result: Ma2SongSyncResult) => Promise<boolean> } = {}): Promise<Ma2SongSyncResult> {
+    { consoleBaseline = null, adoptReadback, timecodeConfirmed }: { consoleBaseline?: string | null; adoptReadback?: (exportFile: string, result: Ma2SongSyncResult) => Promise<boolean>; timecodeConfirmed?: (value: { number: number; xml: string }) => void } = {}): Promise<Ma2SongSyncResult> {
     const request = ma2SongSyncRequestSchema.parse(input);
     // The plan converts the song and Cue names it writes; the Layout name is only ever written.
     request.settings.name = toConsoleLabel(request.settings.name);
@@ -321,7 +321,12 @@ export class Ma2LayoutService {
       const key = `${endpoint}/${directory.show}/${target}`;
       if (request.binding && owners.some(value => value.key === key && (value.projectId !== request.projectId || value.itemId !== request.itemId))) throw new Error('这个位置已经关联了另一首歌，请检查歌曲绑定');
       // Confirm the destination before importing or renaming any song content.
-      const destination = executorPage ? await planMa2SongExecutor(bridge, request, target, executorPage, request.binding?.executor ?? request.destination?.executor, this.show, Boolean(request.destination && !request.binding)) : null;
+      // The same-call song check compares both the Sequence and its executor export. A time-only
+      // edit can keep that confirmed assignment without enumerating every page and its buttons again.
+      const confirmedExecutor = consoleBaseline && request.binding?.executor;
+      const destination = executorPage ? confirmedExecutor && Number(confirmedExecutor.split('.')[0]) === executorPage
+        ? { address: confirmedExecutor, slot: Number(confirmedExecutor.split('.')[1]), pageExists: true, assigned: true }
+        : await planMa2SongExecutor(bridge, request, target, executorPage, request.binding?.executor ?? request.destination?.executor, this.show, Boolean(request.destination && !request.binding)) : null;
       // With 'keep', SEQUENCE leaves its native export as importexport/tblink_library_<request id>.xml
       // on the console; the write guard and the backup use that file instead of uploading the XML again.
       // When the song check confirmed the console still equals the saved baseline, that check's export
@@ -337,17 +342,23 @@ export class Ma2LayoutService {
         await this.call(connection, `${this.guard(layoutRequest)}local p=gma.show.getvar('PATH')..'/importexport/';local f=assert(io.open(p..'${consoleBaseline}.xml','rb'));local s=f:read('*a');f:close();local o=assert(io.open(p..'tblink_library_${requestId}.xml','wb'));o:write(s);o:close();return 'copied'`);
         remote = { response: request.binding.baselineXml, requestId };
       } else if (request.binding) { remote = await readSequence(target, 'connecting', `读取控台序列 ${target}`); readOverTelnet = true; }
-      const remoteXml = remote?.response ?? null;
+      // Use the same representation returned in the binding, so the next time-only edit reuses
+      // inspections of this very snapshot instead of parsing whitespace-only export differences.
+      const remoteXml = remote ? canonical(remote.response) : null;
       // Edits made on the console since the last confirmed sync come into this sync first (2026-10-26):
       // moved and deleted points, and triggers added for the song's Cues, so the write never undoes them.
       // When the operator chose the timeline over the console (2026-11-04) they are written over instead.
       let consoleEdits: Ma2SongSyncResult['consoleEdits'];
+      let currentTimecode: { number: number; xml: string } | undefined;
       if (request.binding && remoteXml && request.consoleChanges !== 'software') {
         let showXml: string | null = null;
         const show = request.timecodeStartMs === undefined ? undefined : request.binding.timecode;
-        if (show && ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1))).entries.some(entry => entry.target === show.number)) {
+        // We already know this song's number. Check that exact object instead of scanning every
+        // Timecode slot (sparse pools can span ten thousand entries for a handful of songs).
+        if (show && await this.call(connection, `${this.guard(layoutRequest)}return gma.show.getobj.handle('Timecode ${show.number}')~=nil`) === 'true') {
           progress('connecting', 1, 1, `读取这首歌的时间码节目 ${show.number}`);
           showXml = await bridge.request('READ', show.number);
+          currentTimecode = { number: show.number, xml: showXml };
         }
         // This sync is the first to see the console changed unless an earlier check saw it (2026-11-11).
         const latest = ma2LatestSide({ localEditedAt: request.localEditedAt, consoleSeenAt: request.consoleSeenAt ?? Date.now() });
@@ -433,13 +444,18 @@ export class Ma2LayoutService {
         // A resumed create may now contain added, removed or cleared steps.
         // Replace its verified native snapshot atomically in that case, retaining
         // all untouched console Cue data instead of pretending Copy creates empties.
-        const nativeCopy = !remoteXml && Boolean(executorPage) && plan.changes.every(change => (change.refs ?? []).every(ref => !fromSnapshot(change, ref)));
+        const previousNumbers = new Set(remoteXml ? inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.map(cue => Number(cue.number)) : []);
+        // onPC 3.7 can crash when Copy adds the first Cue to an imported, completely empty
+        // Sequence. Initialize its native Cue slots with a small empty structure before Copy,
+        // just as for a new song; retain the existing Sequence attributes and executor.
+        const nativeCopy = previousNumbers.size === 0 && Boolean(executorPage) && plan.changes.every(change => (change.refs ?? []).every(ref => !fromSnapshot(change, ref)));
         const clearing = remoteXml && plan.deletions.length > 0 && inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.every(cue => plan.deletions.includes(cue.number));
-        // A bound song copies changed Cues into its console Sequence the same way; Copy creates a missing
-        // Cue number. Content kept only in the local baseline, Cues taken from this same Sequence, an
-        // emptied Cue and a full clear have nothing on the console to copy, so they import the snapshot.
-        const copyInPlace = remoteXml !== null && !clearing && plan.changes.every(change => !change.restore && (change.refs === undefined || change.refs.length > 0 && change.refs.every(ref => ref.sequence !== target)));
-        const uploaded = nativeCopy ? editMa2SongSequence(emptyMa2SequenceXml(target, directory.version), plan.name, changes.map(change => ({ cue: change.cue, name: change.name, sources: [] })), removed) : desired;
+        // A bound song copies changed Cues inside MA2, including self-references from its write-before
+        // export and newly inserted empty steps. Locally restored data and a full clear still need Import.
+        const newEmptyCues = plan.changes.filter(change => !change.restore && change.refs?.length === 0
+          && (!previousNumbers.has(Number(change.cue)) || plan.deletions.some(cue => Number(cue) === Number(change.cue))));
+        const copyInPlace = remoteXml !== null && previousNumbers.size > 0 && !clearing && plan.changes.every(change => !change.restore && (change.refs === undefined || newEmptyCues.includes(change) || change.refs.length > 0));
+        const uploaded = nativeCopy ? editMa2SongSequence(remoteXml ?? emptyMa2SequenceXml(target, directory.version), plan.name, changes.map(change => ({ cue: change.cue, name: change.name, sources: [] })), removed) : desired;
         copiedOnConsole = copyInPlace;
         if (!copyInPlace) await this.prepareXml(connection, layoutRequest, file, uploaded, (completed, total) => progress('raw', completed, total, '传输歌曲结构'));
         const previousSteps = remoteXml ? inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.map(cue => cue.number) : [];
@@ -485,12 +501,30 @@ export class Ma2LayoutService {
           // onPC 3.7 refused to create Sequence 9990 and above (99999 included); the free number right
           // after the song's own Sequence was created there, so the scratch Sequence goes next to it.
           let scratch = target + 1; while (directory.entries.some(entry => entry.target === scratch)) scratch += 1;
+          // Empty points have no source Cue to Copy. Upload just their empty structure to a checked
+          // scratch Sequence, then Copy inside MA2; never retransmit the song's fixture data for an insertion.
+          // Creating and removing the scratch object is one guarded step, including failure cleanup.
+          if (copyInPlace && newEmptyCues.length) {
+            const emptyFile = `${file}_empty`;
+            const emptyXml = editMa2SongSequence(emptyMa2SequenceXml(scratch, directory.version), plan.name,
+              newEmptyCues.map(change => ({ cue: change.cue, name: change.name, sources: [] })), ['1.000']);
+            await this.prepareXml(connection, layoutRequest, emptyFile, emptyXml);
+            const copy = newEmptyCues.map(change => `assert(gma.show.getobj.handle('Sequence ${scratch} Cue ${change.cue}'),'Empty Cue missing');gma.cmd('Copy Sequence ${scratch} Cue ${change.cue} At Sequence ${target} Cue ${change.cue} /o /nc');`).join('');
+            await this.call(connection, `${this.guard(layoutRequest)}assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence occupied');gma.cmd('Import ${emptyFile}.xml At Sequence ${scratch} /nc');local ok,err=pcall(function()${copy}end);gma.cmd('Delete Sequence ${scratch} /nc');${removeFiles(emptyFile)}assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence not removed');assert(ok,err);return 'empties'`);
+          }
           for (const [changeIndex, change] of plan.changes.entries()) {
+            if (copyInPlace && newEmptyCues.includes(change)) continue;
             // A number taken over from a deleted point was deleted above and starts fresh.
             const keep = remoteExport !== null && (change.refs?.length ?? 0) > 1 && consoleCues.has(Number(change.cue)) && !plan.deletions.some(cue => Number(cue) === Number(change.cue));
-            if (keep) await this.call(connection, `${this.guard(layoutRequest)}${keepCueAttributes(remoteExport, target, change.cue, scratch, `${file}_attrs`)}return 'kept'`);
+            if (keep) await this.call(connection, `${this.guard(layoutRequest)}${copyExportedCue(remoteExport, target, change.cue, change.cue, scratch, `${file}_attrs`, 'o', true)}return 'kept'`);
             for (const [index, ref] of (change.refs ?? []).entries()) {
-              await this.call(connection, `${this.guard(layoutRequest)}assert(gma.show.getobj.handle('Sequence ${ref.sequence} Cue ${ref.cue}'),'Source Cue missing');gma.cmd('Copy Sequence ${ref.sequence} Cue ${ref.cue} At Sequence ${target} Cue ${change.cue} /${index || keep ? 'merge' : 'o'} /nc');gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'copied'`);
+              const mode = index || keep ? 'merge' : 'o';
+              // A merge may already have cleared or changed this song's Cue. Read self-references
+              // from the guarded write-before export, never from the partially written Sequence.
+              const copy = ref.sequence === target && remoteExport
+                ? copyExportedCue(remoteExport, target, ref.cue, change.cue, scratch, `${file}_source`, mode)
+                : `assert(gma.show.getobj.handle('Sequence ${ref.sequence} Cue ${ref.cue}'),'Source Cue missing');gma.cmd('Copy Sequence ${ref.sequence} Cue ${ref.cue} At Sequence ${target} Cue ${change.cue} /${mode} /nc');`;
+              await this.call(connection, `${this.guard(layoutRequest)}${copy}gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'copied'`);
             }
             await this.call(connection, `${this.guard(layoutRequest)}gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'labelled'`);
             progress('previews', changeIndex + 1, plan.changes.length, `已写入 Sequence ${target} Cue ${change.cue}`);
@@ -513,7 +547,7 @@ export class Ma2LayoutService {
       const readback = changed ? await readSequence(target, 'verification', `读取序列 ${target}`) : null;
       const readbackFile = readback ? `tblink_library_${readback.requestId}` : null;
       // Without a write the console still holds the Sequence as read before it.
-      const verifiedXml = readback ? readback.response : remoteXml;
+      const verifiedXml = readback ? canonical(readback.response) : remoteXml;
       if (verifiedXml === null) throw new Error('没有读回歌曲序列');
       const report = inspectMa2SequenceXml(verifiedXml).sequences[0]!;
       if (report.number !== target || report.name !== plan.name) throw new Error('控台上歌曲序列的名称和写入的不一致');
@@ -575,7 +609,7 @@ export class Ma2LayoutService {
       const times = new Map(request.points.map(point => [point.id, point.atMs]));
       const enabled = new Map(request.points.map(point => [point.id, point.enabled !== false]));
       const journal = (binding: Ma2SongSyncResult['binding']): Promise<void> => writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, requestedDestination, binding }]));
-      const written = await writeMa2SongTimecode(bridge, { previous: previousTimecode, requestedNumber: request.destination?.timecode, sequence: target, executor, startMs: request.timecodeStartMs, lengthMs: request.timecodeLengthMs, name: report.name ?? toConsoleLabel(request.name), version: directory.version,
+      const written = await writeMa2SongTimecode(bridge, { previous: previousTimecode, requestedNumber: request.destination?.timecode, currentTimecode, sequence: target, executor, startMs: request.timecodeStartMs, lengthMs: request.timecodeLengthMs, name: report.name ?? toConsoleLabel(request.name), version: directory.version,
         cues: result.binding.points.filter(point => enabled.get(point.id) !== false).map(point => {
           const cue = report.cues.find(value => Number(value.number) === Number(point.cue));
           if (!cue) throw new Error(`这首歌的时间码节目没有写入：控台的序列 ${target} 里没有 Cue ${point.cue}`);
@@ -584,6 +618,7 @@ export class Ma2LayoutService {
       const timed = ma2SongSyncResultSchema.parse({ ...result, binding: { ...result.binding, timecode: written.timecode, points: result.binding.points.map(point => ({ ...point, atMs: times.get(point.id)!, ...(enabled.get(point.id) === false ? { enabled: false } : { enabled: undefined }) })) } });
       await journal(timed.binding);
       if (written.backup) await this.backups.record(rawBridge, { console: endpoint, object: `Timecode ${written.timecode.number}`, files: [written.backup] });
+      timecodeConfirmed?.({ number: written.timecode.number, xml: written.xml });
       return timed;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);

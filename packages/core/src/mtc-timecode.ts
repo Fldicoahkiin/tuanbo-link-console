@@ -144,6 +144,23 @@ export function formatMtcOffset(milliseconds: number, frameRate: MtcFrameRate): 
   return [tc.hours, tc.minutes, tc.seconds, tc.frames].map((part) => String(part).padStart(2, '0')).join(':');
 }
 
+/** Song/console start fields use hours, minutes and seconds; transport and Cue
+ * positions retain frames. DF uses the first valid frame of the named second. */
+export function parseMtcStart(text: string, frameRate: MtcFrameRate): number {
+  const normalized = text.trim().replaceAll('：', ':');
+  const parts = /^\d{6}$/.test(normalized) ? [normalized.slice(0, 2), normalized.slice(2, 4), normalized.slice(4)]
+    : /^\d{1,2}:\d{1,2}:\d{1,2}$/.test(normalized) ? normalized.split(':') : null;
+  if (!parts) throw new Error('请填写时:分:秒，例如 00:20:00，也可以直接输入 002000');
+  const [hours, minutes, seconds] = parts.map(Number);
+  if (hours! > 23 || minutes! > 59 || seconds! > 59) throw new Error('小时请填 00–23，分钟和秒请填 00–59，例如 00:20:00');
+  const frames = frameRate === '29.97df' && minutes! % 10 !== 0 && seconds === 0 ? '02' : '00';
+  return parseMtcOffset(`${parts.map(part => part.padStart(2, '0')).join(':')}:${frames}`, frameRate);
+}
+
+export function formatMtcStart(milliseconds: number, frameRate: MtcFrameRate): string {
+  return formatMtcOffset(milliseconds, frameRate).slice(0, 8);
+}
+
 export function timecodeToFrameNumber(timecode: SmpteTimecode, frameRate: MtcFrameRate): number {
   const fps = nominalFramesPerSecond(frameRate);
   const nominal = (((timecode.hours * 60 + timecode.minutes) * 60 + timecode.seconds) * fps) + timecode.frames;

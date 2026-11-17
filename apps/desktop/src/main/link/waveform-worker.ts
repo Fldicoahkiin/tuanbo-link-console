@@ -4,6 +4,7 @@ import { ffmpegDeadline } from './ffmpeg-deadline';
 import { WaveformAccumulator, waveformBucketCount } from './waveform-accumulator';
 import { WaveformLevelsAccumulator, type WaveformBase } from './waveform-levels';
 import { waveformWorkerRequestSchema, waveformWorkerResultSchema } from './waveform-worker-contract';
+import { audioSourceInputArgs, audioSourceTimeFilter } from './audio-source-time';
 
 /** PCM reduction must never run on Electron's control/event loop. The service admits one job at a time;
  * this worker retains the reduced levels, one spectrum window and one partial float, never the song. */
@@ -12,8 +13,8 @@ async function decode(): Promise<{ peaks: number[]; base: WaveformBase }> {
   const accumulator = new WaveformAccumulator(Math.round(request.durationMs * 48), waveformBucketCount(request.durationMs));
   const levels = new WaveformLevelsAccumulator(request.durationMs);
   return new Promise((resolve, reject) => {
-    const child = spawn(request.executable, ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-filter_threads', '1', '-i', request.sourcePath,
-      '-map', '0:a:0', '-vn', '-af', 'pan=mono|c0=c0', '-ar', '48000', '-f', 'f32le', 'pipe:1'],
+    const child = spawn(request.executable, ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-filter_threads', '1', ...audioSourceInputArgs(0), '-i', request.sourcePath,
+      '-map', '0:a:0', '-vn', '-af', `${audioSourceTimeFilter(48000)},pan=mono|c0=c0`, '-ar', '48000', '-f', 'f32le', 'pipe:1'],
     { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     ffmpegDeadline(child, '生成波形', 10 * 60_000, reject);
     let errorOutput = '', failure: Error | null = null;

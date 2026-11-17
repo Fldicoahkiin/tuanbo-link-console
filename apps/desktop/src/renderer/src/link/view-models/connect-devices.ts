@@ -1,4 +1,4 @@
-import { expectedMa2Shows, ma2ShowMismatch, toUserErrorMessage, type LinkLocalIntegrationDetection } from '@tb/core/link';
+import { expectedMa2Shows, itemNeedsObs, ma2ShowMismatch, toUserErrorMessage, type LinkLocalIntegrationDetection } from '@tb/core/link';
 import { loopMidiStatusSchema, ma2NetworkStatusSchema, obsWebSocketUrlSchema, localObsConnectionResultSchema, type IntegrationProfile, type LinkProject } from '@tb/schema';
 import type { MidiPortSnapshot } from '../../registry/link-midi-adapter';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -30,6 +30,7 @@ export type DeviceConnectionOptions = {
 // Execution order. Saving the profile needs the MIDI inventory; OBS precedes
 // lighting so a lighting fault does not hide whether video is usable.
 const tasks = ['discovery', 'loop', 'midi', 'profile', 'obs', 'obs-inventory', 'preview', 'audio', 'p1', 'ma2-app', 'ma2', 'bridge', 'ma2-read', 'ma3d'];
+const pictureTasks = new Set(['obs', 'obs-inventory', 'preview']);
 const stepDeadlineMs = 60_000;
 /** A dead saved address is followed by a search of up to 45 s and one more login. */
 const ma2StepDeadlineMs = 100_000;
@@ -98,16 +99,21 @@ async function startMaPrograms(profile: IntegrationProfile, detected: Partial<Re
   await start('ma3d');
 }
 
-/** Steps run one at a time in a fixed order with one explicit attempt each.
- * The first failure stops the run; every later step reports it was not run. */
+/** Steps run one at a time with one explicit attempt each. OBS failures block
+ * only the dependent picture steps; music, MIDI and MA2 do not depend on OBS. */
 export async function connectDevices(options: DeviceConnectionOptions): Promise<void> {
   const checks = useConnectionCheckStore.getState();
   if (!checks.begin(tasks)) return;
   const issues: string[] = [];
   let stoppedBy: string | null = null;
-  const skip = (id: string, detail: string): void => stoppedBy ? checks.finish(id, 'blocked', `没有执行，因为“${stoppedBy}”没通过`) : checks.finish(id, 'skipped', detail);
+  let pictureStoppedBy: string | null = null;
+  const blockedBy = (id: string): string | null => stoppedBy ?? (pictureTasks.has(id) ? pictureStoppedBy : null);
+  const skip = (id: string, detail: string): void => {
+    const blocker = blockedBy(id);
+    checks.finish(id, blocker ? 'blocked' : 'skipped', blocker ? `没有执行，因为“${blocker}”没通过` : detail);
+  };
   const run = async <T>(id: string, label: string, operation: () => Promise<T>, detail: string | ((value: T) => string) = '检查通过', deadlineMs = stepDeadlineMs): Promise<{ value: T } | null> => {
-    if (stoppedBy) { skip(id, ''); return null; }
+    if (blockedBy(id)) { skip(id, ''); return null; }
     checks.checking(id);
     try {
       const value = await withDeadline(operation(), deadlineMs, label); checks.finish(id, 'ready', typeof detail === 'string' ? detail : detail(value)); return { value };
@@ -116,7 +122,8 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
       const technicalError = options.password ? raw.replaceAll(options.password, '[REDACTED]') : raw;
       const message = `${label}：${toUserErrorMessage(technicalError)}`;
       checks.finish(id, 'error', message); issues.push(message); options.onIssues([...issues]);
-      stoppedBy = label;
+      if (pictureTasks.has(id)) pictureStoppedBy = label;
+      else stoppedBy = label;
       await desktop.recordLog({ level: 'warning', category: 'device', message, result: 'failed', details: { step: id, technicalError } }).catch(console.error);
       return null;
     }
@@ -170,6 +177,13 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
       useIntegrationStore.getState().setProfile(profile); options.onProfile(profile);
     });
     const obsTask = async (): Promise<void> => {
+      const obs = detection?.value.applications.obs;
+      const project = options.project;
+      if (project && !project.rundown.some(item => item.enabled && itemNeedsObs(project, item.id))
+        && profile.obs.connectionMethod !== 'manual' && obs && !obs.running && !obs.executablePath) {
+        for (const id of pictureTasks) skip(id, '当前工程没有画面，也未找到 OBS；音乐和灯光可独立使用');
+        return;
+      }
       await run('obs', 'OBS 控制', async () => {
         if (useIntegrationStore.getState().obs.status !== 'connected') {
           let snapshot;

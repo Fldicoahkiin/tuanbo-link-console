@@ -3,6 +3,25 @@ import { createLightingDocument, lightingTrackSchema, type IntegrationProfile, t
 import { runLinkPreflight, type PreflightContext } from './link-preflight';
 
 describe('团播联动台预检', () => {
+  it.each(['internal', 'awaiting-external-start', 'running'] as const)('%s：OBS 完全不可用也不阻断音乐和时间码，画面单独检查时仍阻断', mtcRequirement => {
+    const value = context(); value.mtcRequirement = mtcRequirement;
+    value.obs = { authenticated: false, version: null, scenes: [], inputs: [], inputAudioStates: {}, sceneItems: {}, filters: {}, transitions: [] };
+    value.credentialsDecryptable = false;
+    expect(runLinkPreflight(value).passed).toBe(false);
+    value.pictureRequirement = 'optional';
+    const report = runLinkPreflight(value);
+    expect(report.passed).toBe(true);
+    for (const id of ['obs.authentication', 'security.credentials', 'version.obs']) {
+      expect(report.checks.find(check => check.id === id)?.status).toBe('warning');
+      expect(report.checks.find(check => check.id === id)?.detail).toContain('不影响音乐和灯光');
+    }
+    value.midi.ports = [];
+    if (mtcRequirement === 'internal') value.profile.internalPlayer = { mtcOutputPortProfileId: 'p1-output', audioOutputDeviceId: 'default' };
+    expect(runLinkPreflight(value).passed).toBe(false);
+    value.midi.ports = context().midi.ports;
+    value.referenceAssets.item!.audioAvailable = false;
+    expect(runLinkPreflight(value).checks.find(check => check.id === 'asset.audio.item')?.status).toBe('blocking');
+  });
   it('内部单曲播放不被另一首未完成节目的音频阻断，切到该节目仍阻断', () => {
     const value = context(); value.mtcRequirement = 'internal'; value.project.playbackSource = 'internal';
     const original = value.project.rundown[0]!;

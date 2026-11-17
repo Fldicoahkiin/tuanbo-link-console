@@ -97,6 +97,14 @@ windowsTest('44.1kHz 真实引擎曲尾不在整采样上时，灯光按引擎�
   });
   host.controller.toggleMtc();
   try {
+    await host.controller.play('song', 700.123, true);
+    expect(service.status?.positionMs).not.toBe(700.123);
+    expect(Math.abs((service.status?.positionMs ?? 0) - 700.123)).toBeLessThan(1000 / 44100);
+    expect(notices.filter(message => /MIDI Cue/.test(message))).toEqual([]);
+    await host.controller.resume();
+    await host.controller.scrub('song', 900.123);
+    await host.controller.resume();
+    expect(notices.filter(message => /MIDI Cue/.test(message))).toEqual([]);
     await host.controller.play('song');
     await expect.poll(() => state.status, { timeout: 4000 }).toBe('paused');
     expect(service.status?.positionMs).not.toBe(1203);

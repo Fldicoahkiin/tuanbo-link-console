@@ -1,5 +1,5 @@
 import { Plus, Repeat2, Trash2 } from 'lucide-react';
-import { Button, IconButton, Switch, TextInput } from '../ui';
+import { Button, IconButton, Switch, TextInput, WithUnit } from '../ui';
 import { LightingTempoSettings } from './LightingTempoSettings';
 import { ownKeys } from '../keys/key-owner';
 import type { LightingDocument } from '@tb/schema';
@@ -9,7 +9,7 @@ export function LightingArrangementSettings({ document, onChange }: { document: 
   return <>
     <LightingTempoSettings document={document} onChange={onChange} />
     <fieldset className="loop-properties"><legend><Repeat2 aria-hidden="true" />循环范围</legend><Switch className="lighting-loop-toggle" label="循环" aria-label="启用循环" checked={document.loop.enabled} onChange={(e) => onChange({ ...document, loop: { ...document.loop, enabled: e.target.checked } }, '切换循环')} />
-      <div className="loop-range-fields">{(['startMs', 'endMs'] as const).map((key) => <label key={key}><span className="loop-range-label">{key === 'startMs' ? '起点（秒）' : '终点（秒）'}</span><CommitNumber label={key === 'startMs' ? '灯光循环起点' : '灯光循环终点'} min={0} step={0.001} value={document.loop[key] / 1000} validate={(value) => (key === 'startMs' ? value * 1000 >= document.loop.endMs : value * 1000 <= document.loop.startMs) ? '循环终点必须晚于起点' : null} onCommit={(value) => onChange({ ...document, loop: { ...document.loop, [key]: Math.round(value * 1000) } }, '修改循环范围')} /><small className="loop-range-unit">s</small></label>)}</div>
+      <div className="loop-range-fields">{(['startMs', 'endMs'] as const).map((key) => <label key={key}><span className="loop-range-label">{key === 'startMs' ? '起点（秒）' : '终点（秒）'}</span><WithUnit unit="秒"><CommitNumber label={key === 'startMs' ? '灯光循环起点' : '灯光循环终点'} min={0} step={0.001} value={document.loop[key] / 1000} validate={(value) => (key === 'startMs' ? value * 1000 >= document.loop.endMs : value * 1000 <= document.loop.startMs) ? '循环终点必须晚于起点' : null} onCommit={(value) => onChange({ ...document, loop: { ...document.loop, [key]: Math.round(value * 1000) } }, '修改循环范围')} /></WithUnit></label>)}</div>
     </fieldset>
     {document.markers.length ? <fieldset className="lighting-arrangement-list"><legend>标记与区域</legend>{document.markers.map((marker) => <div className="lighting-marker-settings" key={marker.id}>
       <label><span>名称</span><TextInput aria-label="标记名称" key={marker.name} defaultValue={marker.name} onBlur={(input) => {

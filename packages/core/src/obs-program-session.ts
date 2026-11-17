@@ -1188,7 +1188,13 @@ export class ObsProgramSession {
       // Refused before any of it went out: started late once its decoder is ready (`startLate`).
       if (event.phase === 'start' && report.status === 'failed' && verdictOf({ failed: '', ...(report.outcome ? { step: report.outcome } : {}) }).kind === 'failed') this.refusedStarts.add(event.clipId);
       if (entry.lateMs !== null && report.status !== 'skipped') this.lateReady.delete(event.clipId);
-      if (entry.lateMs !== null && report.status === 'succeeded') this.fault(`素材准备得晚了，已按当前位置开始播放：${event.assetName}（晚了 ${entry.lateMs} ms）`);
+      if (entry.lateMs !== null && report.status === 'succeeded') {
+        // settle has cleared the repaired part. Keep the missed boundary in the
+        // run log without turning successful recovery back into a current fault.
+        void this.dependencies.recordLog({ level: 'warning', category: 'action', device: 'obs', projectId: this.project.projectId, itemId: this.itemId,
+          message: `素材已按当前位置恢复播放：${event.assetName}（起播晚了 ${entry.lateMs} ms），不用处理`, result: 'succeeded',
+          details: { clipId: event.clipId, lateMs: entry.lateMs } }).catch(error => this.fault(`记录素材恢复结果失败：${errorText(error)}`));
+      }
       return null;
     } catch (error) {
       this.settle(entry.writes, current() ? { failed: errorText(error) } : 'withdrawn');
@@ -1304,7 +1310,7 @@ export class ObsProgramSession {
     const item = this.items.get(id);
     if (!item) return;
     this.items.delete(id);
-    if (item.state === 'repairing' || item.state === 'limit') this.dependencies.clearFault?.(item.detail);
+    this.dependencies.clearFault?.(item.detail);
     this.publishItems();
   }
   private publishItems(): void {

@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { expect, it, vi } from 'vitest';
-import { ma2MtcSelectionCommand, ma2SongDirectory } from '@tb/core/link';
+import { ma2ObjectDirectorySchema } from '@tb/schema';
+import { ma2MtcSelectionCommand, ma2MtcSelections, ma2SongDirectory } from '@tb/core/link';
 import { Ma2MtcSelectionService, ma2MtcSelectorCommands, ma2MtcSelectorSequence, ma2MtcSequenceSettings } from './ma2-mtc-selection';
-import { inspectMa2TimecodeXml, ma2MtcPlaybackSettings } from './ma2-timecode-xml';
+import { emptyMa2SequenceXml, inspectMa2TimecodeXml, ma2MtcPlaybackSettings } from './ma2-timecode-xml';
+import { ma2SongTimecodeXml } from './ma2-song-timecode';
 import { Ma2LuaConsole } from './fixtures/ma2-lua-console';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2NetworkWire } from './ma2-network-wire';
@@ -10,6 +12,50 @@ import { showRunning, showStopped } from './fixtures/show-gates';
 
 const network = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'test' };
 const native = readFileSync(new URL('./fixtures/ma2-timecode-onpc-3.7-100.xml', import.meta.url), 'utf8');
+
+it.each([false, true])('只移歌曲内的点复用当次读回；末点越过曲尾时更新选曲截止帧；原生清空解除执行器=%s', async detachExecutor => {
+  const console = new Ma2LuaConsole();
+  const song = (ms: number) => ma2SongTimecodeXml(native.replace('index="9906"', 'index="2"'), 3,
+    { name: 'Song', startMs: 10000, lengthMs: 10000, executor: '1.101', executorName: 'Song 1.101', sequence: 3, cues: [{ atMs: ms, cueIndex: 1, number: '1', name: null }] });
+  const points = ma2MtcSelections([{ timecode: 3, start: 300, end: 600 }]);
+  const name = 'TBLINK_MTC_SELECTION';
+  const commands = points.map(point => ma2MtcSelectionCommand([3], point.timecode));
+  const selector = ma2SongTimecodeXml(native.replace('index="9906"', 'index="9899"'), 9900,
+    { name, startMs: 0, executor: '1000.190', executorName: `${name} 1000.190`, sequence: 9900, automatic: true,
+      cues: points.map((point, index) => ({ atMs: point.at * 1000 / 30, cueIndex: index + 1, number: String(index + 1), name: null })) });
+  const sequence = emptyMa2SequenceXml(3, '3.7.0.5');
+  console.set('Sequence 3', { name: 'Song', xml: sequence });
+  console.set('Timecode 3', { name: 'Song', xml: song(1000) });
+  console.set('Sequence 9900', { name, label: name, xml: ma2MtcSelectorSequence(9900, '3.7.0.5', commands) });
+  console.set('Timecode 9900', { name, label: name, xml: selector });
+  console.lua("for _,a in ipairs({'Sequence 9900','Timecode 9900'}) do FAKE.objects[a].properties={Info='TBLINK_MTC_SELECTOR_V1'} end");
+  const header = '<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" major_vers="3" minor_vers="7" stream_vers="0">';
+  console.set('Page 1000', { name: 'Songs', xml: `${header}<Page index="999">${'<Exec xsi:nil="true"/>'.repeat(189)}<Exec offset_from_first="0"><Assignment><No>25</No><No>1</No><No>9900</No></Assignment></Exec></Page></MA>` });
+  console.set('Executor 1000.190', { name, label: name, xml: `${header}<Exec offset_from_first="0"><Assignment name="${name}"><No>25</No><No>1</No><No>9900</No></Assignment></Exec></MA>` });
+  const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(console), showStopped);
+  const service = new Ma2MtcSelectionService(showStopped, { record: vi.fn() });
+  await service.prepare(console, bridge, network);
+  const source = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
+  const before = console.lines.length;
+  await expect(service.prepare(console, bridge, network, false, [3], { number: 3, xml: sequence }, { number: 3, xml: song(2000), ...source })).resolves.toBe(false);
+  expect(console.lines).toHaveLength(before);
+  if (detachExecutor) console.lua(`local original=gma.cmd;local assignedPage=FAKE.objects['Page 1000'].xml;gma.cmd=function(command)
+    original(command)
+    if command:match('^Delete Sequence 9900 Cue ') then
+      FAKE.objects['Executor 1000.190']=nil
+      FAKE.objects['Page 1000'].xml=EMPTY_PAGE
+    end
+    local file=command:match('^Import ([%w_]+%.xml) At Sequence 9900 ')
+    if file then FAKE.objects['Sequence 9900'].xml=assert(FAKE.files['/fake/importexport/'..file]) end
+    if command=='Assign Sequence 9900 At Executor 1000.190 /nc' then FAKE.objects['Page 1000'].xml=assignedPage end
+  end`, { EMPTY_PAGE: `${header}<Page index="999"/></MA>` });
+  if (detachExecutor) console.set('Timecode 4', { name: 'Second song', xml: song(1000).replace('index="2"', 'index="3"').replace('offset="300"', 'offset="700"').replace('lenght="300"', 'lenght="100"') });
+  console.set('Timecode 3', { name: 'Song', xml: song(12000) });
+  await expect(service.prepare(console, bridge, network, false, [3], { number: 3, xml: sequence }, { number: 3, xml: song(12000), ...source })).resolves.toBe(true);
+  const written = inspectMa2TimecodeXml(await bridge.request('READ', 9900)).timecodes[0]!;
+  expect(written.tracks[0]!.subtracks[0]!.events.at(-1)!.attributes.time).toBe(detachExecutor ? '800' : '661');
+  if (detachExecutor) expect(console.commands()).toContain('Assign Sequence 9900 At Executor 1000.190 /nc');
+});
 
 it('时间线接管 Time/Follow 触发，保留灯具、渐变、延迟和命令', () => {
   const base = ma2MtcSelectorSequence(3, '3.7.0.5', ['Go Timecode 3', 'Off Timecode 3']);

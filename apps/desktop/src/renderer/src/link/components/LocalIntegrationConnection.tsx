@@ -23,15 +23,15 @@ type LocalConnectionOptions = {
 export function useLocalIntegrationConnection(options: LocalConnectionOptions): {
   detection: LinkLocalIntegrationDetection | null;
   issues: string[];
-  connect: () => void;
+  connect: () => Promise<void>;
 } {
   const connecting = useRef(false);
   const [detection, setDetection] = useState<LinkLocalIntegrationDetection | null>(null);
   const [issues, setIssues] = useState<string[]>([]);
-  const connect = (): void => {
+  const connect = async (): Promise<void> => {
     if (connecting.current) return;
     connecting.current = true; setIssues([]); options.onBusyChange(true);
-    void connectDevices({ ...options, project: useDocumentStore.getState().project,
+    await connectDevices({ ...options, project: useDocumentStore.getState().project,
       onDetection: setDetection, onIssues: setIssues,
       onProfile: profile => { options.onDraft(profile); options.onPasswordCleared(); }
     }).catch((error: unknown) => { const message = toUserErrorMessage(error); setIssues(previous => [...previous, message]); options.notify(message, 'error'); })

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { editMa2SongSequence, editMa2TimecodeEvents, emptyMa2SequenceXml, extendMa2TimecodeLength, inspectMa2CueData, inspectMa2SequenceXml, inspectMa2TimecodeXml, patchMa2EventTimes, prepareMa2TimecodeEvents, resolveMa2CueNumber, sameMa2XmlObjects, validateMa2TimecodeSnapshot } from './ma2-timecode-xml';
+import { editMa2SongSequence, editMa2TimecodeEvents, emptyMa2SequenceXml, extendMa2TimecodeLength, inspectMa2CueAttributes, inspectMa2CueFixtures, inspectMa2CueData, inspectMa2SequenceXml, inspectMa2TimecodeXml, ma2SequenceCueFingerprints, patchMa2EventTimes, prepareMa2TimecodeEvents, resolveMa2CueNumber, sameMa2XmlObjects, validateMa2TimecodeSnapshot } from './ma2-timecode-xml';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { convertMa2Timecode } from './ma2-timecode-conversion';
 import { showStopped } from './fixtures/show-gates';
@@ -9,6 +9,37 @@ import { showStopped } from './fixtures/show-gates';
 const source = readFileSync(fileURLToPath(new URL('./fixtures/ma2-timecode-3.7.xml', import.meta.url)), 'utf8');
 const native = readFileSync(fileURLToPath(new URL('./fixtures/ma2-timecode-fractional-3.3.xml', import.meta.url)), 'utf8');
 const sequence = readFileSync(fileURLToPath(new URL('./fixtures/ma2-sequence-fractional-3.3.xml', import.meta.url)), 'utf8');
+
+it('重复检查同一序列不受编辑或调用者修改影响，改变后的 XML 仍重新验证', () => {
+  const xml = emptyMa2SequenceXml(3, '3.7.0.5');
+  const original = inspectMa2SequenceXml(xml);
+  const changed = editMa2SongSequence(xml, 'Edited', [{ cue: '1.000', name: 'Changed' }], []);
+  const returned = inspectMa2SequenceXml(xml);
+  returned.sequences[0]!.cues[0]!.name = 'Caller mutation';
+  expect(inspectMa2SequenceXml(xml)).toEqual(original);
+  expect(inspectMa2SequenceXml(changed).sequences[0]!.name).toBe('Edited');
+  expect(inspectMa2SequenceXml(xml)).toEqual(original);
+  expect(() => inspectMa2SequenceXml(xml.replace('</Sequ>', '<Broken></Sequ>'))).toThrow('解析失败');
+});
+
+it('复用解析结果不混淆读回时间、灯具内容和名称，也不共享可修改的返回值', () => {
+  const xml = readFileSync(new URL('./fixtures/ma2-cue-attributes-3.7.xml', import.meta.url), 'utf8');
+  const firstTime = '2026-11-17T00:00:00.000Z', secondTime = '2026-11-17T00:01:00.000Z';
+  const expected = inspectMa2CueAttributes(xml, firstTime, true);
+  const result = inspectMa2CueAttributes(xml, secondTime, true);
+  expect(result).toEqual(expected.map(value => ({ ...value, readAt: secondTime })));
+  result[0]!.attributes.length = 0;
+  expect(inspectMa2CueAttributes(xml, firstTime, true)).toEqual(expected);
+  const fixtures = inspectMa2CueFixtures(xml);
+  inspectMa2CueFixtures(xml)[0]!.fixtureIds.length = 0;
+  expect(inspectMa2CueFixtures(xml)).toEqual(fixtures);
+  const hashes = ma2SequenceCueFingerprints(xml);
+  ma2SequenceCueFingerprints(xml).clear();
+  expect(ma2SequenceCueFingerprints(xml)).toEqual(hashes);
+  const renamed = editMa2SongSequence(xml, 'Renamed', [{ cue: '1.000', name: 'New label' }], []);
+  expect(ma2SequenceCueFingerprints(renamed)).not.toEqual(hashes);
+  expect(ma2SequenceCueFingerprints(renamed, false)).toEqual(ma2SequenceCueFingerprints(xml, false));
+});
 
 describe('MA2 原生 Cue 写回编辑', () => {
   it('真实 onPC 3.7.0.5 导出：200 秒长度为 6000 原生帧，移动末点后延长一帧', () => {

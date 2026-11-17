@@ -213,7 +213,7 @@ export function inspectMa2CueData(xml: string, cueIndex: number): Map<string,Rec
 /** Parse the song once, rather than reparsing all fixture values for every step. */
 export function inspectMa2SequenceCueData(xml: string, cueIndices: readonly number[]): Map<number, Map<string,Record<string,string>>> {
   inspectMa2SequenceXml(xml);
-  const {root}=parse(xml);const sequence=singleChild(root,'Sequ');
+  const {root}=readSequenceXml(xml);const sequence=singleChild(root,'Sequ');
   const cues = new Map((sequence ? children(sequence, 'Cue') : []).map(value => [Number(value.getAttribute('index')), value]));
   return new Map(cueIndices.map(index => {
     const cue = cues.get(index);
@@ -266,9 +266,12 @@ export type Ma2SequenceReport = {
 
 /** Only explicitly stored channels; does not resolve tracking, output or programmer state. */
 export function inspectMa2CueAttributes(xml: string, readAt: string, fullExport = false): Ma2CueAttributes[] {
+  const key = `${hash(xml)}:${fullExport}`;
+  const cached = sequenceAttributes.get(key);
+  if (cached) return structuredClone(cached).map(value => ({ ...value, readAt }));
   inspectMa2SequenceXml(xml);
-  const { root } = parse(xml);
-  return indexedChildren(root, 'Sequ').flatMap(sequence => {
+  const { root } = readSequenceXml(xml);
+  const result = indexedChildren(root, 'Sequ').flatMap(sequence => {
     const cues = children(sequence, 'Cue').filter(cue => cue.hasAttribute('index') && cue.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance', 'nil') !== 'true');
     const contents = cues.map(cue => inspectMa2CueContent(cue, 'none', fullExport));
     // Tracking can wrap from the last step back to the first. Without executor
@@ -292,12 +295,17 @@ export function inspectMa2CueAttributes(xml: string, readAt: string, fullExport 
       return ma2CueAttributesSchema.parse({ sequence: indexOf(sequence) + 1, cueIndex: indexOf(cue), attributes: [...attributes].sort(), fixtureIds: [...fixtureIds].sort((a,b) => a-b), unknownChannels, hasEffects, content, readAt });
     });
   });
+  rememberInspection(sequenceAttributes, key, structuredClone(result), 2);
+  return result;
 }
 
 /** Explicit fixture references only. Tracking and programmer state are not inferred. */
 export function inspectMa2CueFixtures(xml: string): { sequence: number; cueIndex: number; fixtureIds: number[] }[] {
-  const { root } = parse(xml);
-  return indexedChildren(root, 'Sequ').flatMap(sequence => children(sequence, 'Cue').filter(cue => cue.hasAttribute('index')).map(cue => {
+  const key = hash(xml);
+  const cached = sequenceFixtures.get(key);
+  if (cached) return structuredClone(cached);
+  const { root } = readSequenceXml(xml);
+  const result = indexedChildren(root, 'Sequ').flatMap(sequence => children(sequence, 'Cue').filter(cue => cue.hasAttribute('index')).map(cue => {
     const fixtureIds = new Set<number>();
     const channels = cue.getElementsByTagNameNS(MA_NAMESPACE, 'Channel');
     for (let index = 0; index < channels.length; index++) {
@@ -308,10 +316,18 @@ export function inspectMa2CueFixtures(xml: string): { sequence: number; cueIndex
     }
     return { sequence: indexOf(sequence) + 1, cueIndex: indexOf(cue), fixtureIds: [...fixtureIds].sort((a, b) => a - b) };
   }));
+  rememberInspection(sequenceFixtures, key, structuredClone(result), 2);
+  return result;
 }
 
 export function inspectMa2SequenceXml(xml: string, allowEmpty = false): Ma2SequenceReport {
-  const { root } = parse(xml);
+  const key = hash(xml);
+  const cached = sequenceReports.get(key);
+  if (cached) {
+    if (!cached.sequences.length && !allowEmpty) throw new Error('文件中没有 MA2 Sequence 对象');
+    return structuredClone(cached);
+  }
+  const { root } = readSequenceXml(xml);
   const version = ['major_vers', 'minor_vers', 'stream_vers'].map((name) => required(root, name)).join('.');
   if (!['3.3.4', '3.7.0'].includes(version)) throw new Error('这个 MA2 序列 XML 版本还没验证过');
   const sequences = indexedChildren(root, 'Sequ').map((sequence) => {
@@ -331,13 +347,18 @@ export function inspectMa2SequenceXml(xml: string, allowEmpty = false): Ma2Seque
     return { number: indexOf(sequence) + 1, name: sequence.getAttribute('name'), cues };
   });
   if (!sequences.length && !allowEmpty) throw new Error('文件中没有 MA2 Sequence 对象');
-  return { version, sequences };
+  const report = { version, sequences };
+  rememberInspection(sequenceReports, key, report);
+  return structuredClone(report);
 }
 
 /** Compare all surviving Cue metadata and Parts while allowing MA2 to reindex internal steps. */
 export function ma2SequenceCueFingerprints(xml: string, includeNames = true): Map<string, string> {
+  const key = `${hash(xml)}:${includeNames}`;
+  const cached = sequenceFingerprints.get(key);
+  if (cached) return new Map(cached);
   const report = inspectMa2SequenceXml(xml);
-  const { root } = parse(xml);
+  const { root } = readSequenceXml(xml);
   const result = new Map<string, string>();
   for (const sequence of indexedChildren(root, 'Sequ')) for (const cue of children(sequence, 'Cue')) {
     if (cue.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance', 'nil') === 'true') continue;
@@ -369,6 +390,7 @@ export function ma2SequenceCueFingerprints(xml: string, includeNames = true): Ma
     }
     result.set(number, hash(JSON.stringify(canonicalElement(clone))));
   }
+  rememberInspection(sequenceFingerprints, key, new Map(result));
   return result;
 }
 
@@ -782,6 +804,32 @@ function assertMasterFader(subtrack: XmlElement, version: string): void {
   if (version !== '3.3.4' || subtrack.getAttribute('fader_command') !== 'Master') throw new Error('该推杆类型或 MA2 版本还没验证过');
 }
 
+// A single sync validates the same multi-megabyte Sequence for numbering, content, fingerprints,
+// fixtures and UI attributes. Reuse only the parsed immutable input, never a console read or an
+// editing document. Exact XML is the key; a changed byte still goes through the strict parser.
+// Keep at most two inputs, with a combined 8 MiB UTF-8 size; large Shows cannot grow this unbounded.
+const sequenceReads = new Map<string, { parsed: ReturnType<typeof parse>; bytes: number }>();
+// Small derived results remain useful even when the full DOM exceeds the input cache limit.
+// Keys are complete input digests, and callers receive independent objects/maps.
+const sequenceReports = new Map<string, Ma2SequenceReport>();
+const sequenceFingerprints = new Map<string, Map<string, string>>();
+const sequenceAttributes = new Map<string, Ma2CueAttributes[]>();
+const sequenceFixtures = new Map<string, Array<{ sequence: number; cueIndex: number; fixtureIds: number[] }>>();
+function rememberInspection<T>(cache: Map<string, T>, key: string, result: T, limit = 8): void {
+  if (cache.size >= limit) cache.delete(cache.keys().next().value!);
+  cache.set(key, result);
+}
+function readSequenceXml(xml: string): ReturnType<typeof parse> {
+  const cached = sequenceReads.get(xml);
+  if (cached) { sequenceReads.delete(xml); sequenceReads.set(xml, cached); return cached.parsed; }
+  const parsed = parse(xml), bytes = Buffer.byteLength(xml);
+  if (bytes > 8 * 1024 * 1024) return parsed;
+  while (sequenceReads.size >= 2 || [...sequenceReads.values()].reduce((sum, value) => sum + value.bytes, bytes) > 8 * 1024 * 1024) {
+    sequenceReads.delete(sequenceReads.keys().next().value!);
+  }
+  sequenceReads.set(xml, { parsed, bytes });
+  return parsed;
+}
 function parse(xml: string) {
   if (Buffer.byteLength(xml, 'utf8') > 32 * 1024 * 1024) throw new Error('MA2 XML 超过 32 MB');
   if (/<!DOCTYPE|<!ENTITY/i.test(xml)) throw new Error('MA2 XML 不允许 DTD 或实体声明');
