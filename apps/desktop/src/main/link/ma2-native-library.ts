@@ -42,7 +42,7 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
       "local function page(k)local h=o.handle('Sequence '..k);if not h then return 'missing' end;",
       "local n=o.amount(h);local t={tostring(n),hex(o.label(h) or '')};",
       `for i=${offset},math.min(n-1,${offset + 31}) do local c=o.child(h,i);if c then t[#t+1]=i..','..tostring(o.number(c))..','..hex(o.label(c) or '') end end;return table.concat(t,';') end;`,
-      `local a={};for _,k in ipairs({${numbers.join(',')}}) do local ok,r=pcall(page,k);a[#a+1]=not ok and 'invalid' or ${numbers.length > 1 ? "#r>8192 and 'large' or " : ''}r end;`,
+      `local a={};for _,k in ipairs({${numbers.join(',')}}) do local ok,r=pcall(page,k);a[#a+1]=not ok and 'invalid' or ${numbers.length > 1 ? `#r>${Math.floor(65536 / numbers.length)} and 'large' or ` : ''}r end;`,
       `local r=table.concat(a,'/');for p=1,#r,700 do gma.echo('${prefix}'..p..':'..r:sub(p,p+699)) end;gma.echo('${prefix}END:'..#r)`
     ].join('');
     const response = await connection.command(`Lua "${script}"`, text => readNativeCueChunks(text, prefix), gate);
@@ -52,8 +52,9 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
     if (rows.length !== numbers.length) throw new Error('控台返回的序列数量对不上');
     return rows;
   };
-  for (let index = 0; index < selected.length; index += 8) {
-    const group = selected.slice(index, index + 8);
+  const groupSize = 16;
+  for (let index = 0; index < selected.length; index += groupSize) {
+    const group = selected.slice(index, index + groupSize);
     const numbers = group.map(entry => entry.target);
     const first = await read(numbers, 0);
     const second = await read(numbers, 0);

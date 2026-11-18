@@ -219,7 +219,28 @@ local function start(data)
   assert(id and #id == 32 and id ~= last, 'Invalid or already processed request')
   last = id
   local job = { id = id, steps = {}, done = 0 }
-  local function step(fn) job.steps[#job.steps + 1] = fn end
+  local inventory = op == 'LIST' or op == 'LISTSEQ' or op == 'TCRANGES'
+  local source = inventory and gma.show.getvar('SHOWFILE')
+  local function step(fn)
+    if not inventory then job.steps[#job.steps + 1] = fn; return end
+    -- MA yields Lua at its instruction quota. Scanning 10,000 mostly empty
+    -- slots used to wait a console tick at every quota. Resume the same read
+    -- within a short budget; return a bridge step so playback can interrupt.
+    local scan = coroutine.create(fn)
+    local function resume()
+      assert(gma.show.getvar('SHOWFILE') == source and _G.TBLINK_BRIDGE_GENERATION == generation, 'Show or session changed during directory read')
+      local deadline = gma.gettime() + 0.025
+      local resumes = 0
+      repeat
+        local ok, error_text = coroutine.resume(scan)
+        assert(ok, error_text)
+        if coroutine.status(scan) == 'dead' then return end
+        resumes = resumes + 1
+      until not job.exporting and (resumes >= 128 or gma.gettime() >= deadline)
+      table.insert(job.steps, 1, resume)
+    end
+    job.steps[#job.steps + 1] = resume
+  end
   local function answer(value) job.result = value end
   step(function()
     local tc = tonumber(target)
@@ -407,8 +428,9 @@ local function start(data)
       return search()
     end
     if op == 'LIST' or op == 'LISTSEQ' then
-      local scoped = op == 'LISTSEQ' and body ~= ''
-      assert(body == '' or scoped and #body <= 60000 and not body:find('[^%d,]'), 'Invalid directory scope')
+      local markers = body == 'selector'
+      local scoped = op == 'LISTSEQ' and body ~= '' and not markers
+      assert(body == '' or markers or scoped and #body <= 60000 and not body:find('[^%d,]'), 'Invalid directory scope')
       local obj = gma.show.getobj
       local pool = assert(obj.handle(op == 'LISTSEQ' and 'Sequence' or 'Timecode'), 'Object pool unavailable')
       local count = assert(obj.amount(pool), 'Timecode enumeration unavailable')
@@ -421,11 +443,13 @@ local function start(data)
       local entries, seen = {}, {}
       local function append(child, expected)
         if child then
+          local internal = gma.show.property.get(child, 'Info') == 'TBLINK_MTC_SELECTOR_V1'
+          if markers and not internal then return end
           local number = tonumber(obj.number(child))
           assert(number and number >= 1 and number <= 99999 and number == math.floor(number) and not seen[number], 'Invalid Timecode directory number')
           assert(not expected or number == expected, 'Sequence number changed')
           seen[number] = true
-          entries[#entries + 1] = '{"target":' .. number .. ',"name":' .. quote(assert(obj.name(child), 'Timecode name unavailable')) .. (gma.show.property.get(child, 'Info') == 'TBLINK_MTC_SELECTOR_V1' and ',"internal":true' or '') .. '}'
+          entries[#entries + 1] = '{"target":' .. number .. ',"name":' .. quote(assert(obj.name(child), 'Timecode name unavailable')) .. (internal and ',"internal":true' or '') .. '}'
           assert(#entries <= 10000, 'Occupied Timecode directory exceeds limit')
         end
       end
@@ -439,7 +463,10 @@ local function start(data)
         end
       else
         -- Native pools are sparse: amount is the indexed span, not occupied slots.
-        for index = 0, count - 1 do append(obj.child(pool, index)) end
+        for index = 0, count - 1 do
+          append(obj.child(pool, index))
+          if index % 256 == 255 then coroutine.yield() end
+        end
       end
       assert(obj.amount(pool) == count, 'Timecode directory changed during read')
       return answer('{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. ',"generation":' .. quote(generation) .. ',"version":' .. quote(assert(gma.show.getvar('VERSION'))) .. ',"entries":[' .. table.concat(entries, ',') .. ']}')
@@ -477,14 +504,19 @@ local function start(data)
           local child
           if wanted then child = obj.handle('Timecode ' .. wanted[index + 1]) else child = obj.child(pool, index) end
           index = index + 1
+          if not child and index % 256 == 0 then coroutine.yield() end
           if child then
             local number = tonumber(obj.number(child))
             assert(number and number >= 1 and number <= 99999 and number == math.floor(number), 'Invalid Timecode directory number')
             assert(not wanted or wanted[index] == number, 'Timecode number changed')
             local name = 'tblink_tcrange_' .. id
+            -- Finish this single native export and close its file before a
+            -- cancellation can release the request at a network step boundary.
+            job.exporting = true; job.close = function() discard(name) end
             gma.cmd('Export Timecode ' .. number .. ' "' .. name .. '" /o')
             local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Timecode export unavailable')
             discard(name)
+            job.close = nil; job.exporting = nil
             local tag = xml:match('<Timecode%s[^>]*>') or ''
             local function attribute(key) return tag:match('%s' .. key .. '="([^"]*)"') end
             local last = nil
@@ -788,12 +820,23 @@ local function finished(network)
   return 'DONE:' .. #network.response .. (#network.response >= 8192 and ':batch' or '')
 end
 -- One step of the request: STEP:<steps done> while more remain, DONE:<size> after the last.
-local function proceed(network)
+local function proceed(network, token)
   advance(network.job)
-  if network.job.response then return finished(network) end
+  if network.job.response then
+    local receipt = finished(network)
+    local response = network.response
+    if network.inline and #response < 8192 then
+      for offset = 1, #response, 256 do
+        gma.echo('TBLINK_INLINE_' .. token .. '_' .. string.format('%04x', (offset - 1) / 256) .. ':DATA:' .. hex(response:sub(offset, offset + 255)))
+      end
+      clear_transfer(network); lanes[lanes.bg == network and 'bg' or 'fg'] = nil
+      return 'INLINE:' .. #response
+    end
+    return receipt
+  end
   return 'STEP:' .. network.job.done .. (network.job.confirming and ':verify' or '')
 end
-_G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport)
+_G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now)
   if not token:match('^[a-f0-9]+$') or #token ~= 32 then return end
   local ok, result = pcall(function()
     assert(active and _G.TBLINK_BRIDGE_GENERATION == generation, 'Bridge is stopped')
@@ -811,6 +854,7 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport)
       assert(type(c) == 'number' and c >= 0 and c <= 33554432 and c == math.floor(c), 'Invalid payload size')
       assert(lane == nil or lane == 'bg' or lane == 'fg', 'Invalid lane')
       assert(transport == nil or transport == 'file', 'Invalid transport')
+      assert(read_now == nil or (read_now == 'read' and action == 'begin' and a == 'READ' and c == 0 and lane == 'bg'), 'Invalid immediate read')
       -- Only reads go on 'fg', and none that leaves state for a later request (a snapshot for beginsync).
       assert(lane ~= 'fg' or (action == 'begin' and foreground[a]), 'Operation not allowed on the foreground lane')
       local named = lane ~= nil
@@ -820,6 +864,16 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport)
       assert(not other or other.id ~= id, 'Request already pending')
       clear_transfer(lanes[lane])
       lanes[lane] = { id = id, op = a, target = b, size = c, bytes = 0, chunks = {}, base = base, local_file = transport == 'file', expires = gma.gettime() + 120 }
+      if read_now then
+        local net = lanes[lane]
+        local completed, receipt = pcall(function()
+          net.done = true; net.chunks = nil; net.inline = true
+          net.job = start(id .. '\nREAD\n' .. b .. '\n0\n')
+          return proceed(net, token)
+        end)
+        if not completed then clear_transfer(net); lanes[lane] = nil; error(receipt) end
+        return receipt
+      end
       if transport == 'file' and c >= 8192 then
         lanes[lane].input = root .. '/temp/tblink_network_' .. id .. '.input.bin'
         return 'ACK:lanes:file:' .. hex(lanes[lane].input)
@@ -853,25 +907,15 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport)
       -- With 'steps' the first step runs now and the program sends 'step' for each next one.
       -- Without it (an older program, or the bridge upgrade check) every step runs now, as before.
       if a == 'steps' then
-        local receipt = proceed(network)
-        -- An ordinary short Timecode fits in one monitor reply. Only a completed,
-        -- read-only export may release its lane here; writes keep their own receipt.
-        local response = network.response
-        if b == 'inline' and network.op == 'READ' and response and #response < 8192 then
-          for offset = 1, #response, 256 do
-            gma.echo('TBLINK_INLINE_' .. token .. '_' .. string.format('%04x', (offset - 1) / 256) .. ':DATA:' .. hex(response:sub(offset, offset + 255)))
-          end
-          clear_transfer(network); lanes[lanes.bg == network and 'bg' or 'fg'] = nil
-          return 'INLINE:' .. #response
-        end
-        return receipt
+        network.inline = b == 'inline' and (network.op == 'READ' or network.op == 'LIST' or network.op == 'LISTSEQ' or network.op == 'TCRANGES')
+        return proceed(network, token)
       end
       repeat advance(network.job) until network.job.response
       return finished(network)
     end
     if action == 'step' then
       assert(network.done and network.job and not network.response, 'No step pending')
-      return proceed(network)
+      return proceed(network, token)
     end
     if action == 'readbatch' then
       assert(network.done and network.response, 'No response available')

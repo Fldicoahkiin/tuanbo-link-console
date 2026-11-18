@@ -6,6 +6,7 @@ import { ma2Lane, Ma2OnpcBridge, parseMa2Ping, type Ma2Lane, type Ma2Operation }
 import { ensureMa2NetworkBridge } from './ma2-bridge-installer';
 import { showStopped } from './fixtures/show-gates';
 import { ma2ResponseLine } from './ma2-telnet';
+import { ma2ObjectDirectorySchema, ma2TimecodeRangesSchema } from '@tb/schema';
 
 // The real tools/ma2/tblink_bridge.lua runs here in a Lua 5.3 interpreter against a fake console
 // (fixtures/ma2-fake-console.lua). The baseline is the plugin as it was before it answered step by
@@ -42,7 +43,39 @@ it('内部选曲对象保留占位标记，第零帧的事件计入时间范围'
   expect(JSON.parse(await wire.exchange(requestId(2), 'TCRANGES', 1, '', () => undefined))).toMatchObject({ entries: [{ target: 9900, internal: true, last: '0' }] });
 });
 
-it('首次扫描和同步读回都用本次控台导出，短时间线两次网络往返即可读全并释放，长时间线逐字一致', async () => {
+it('50 条时间线分散到 9999：跨空号和分步边界，范围、编号和每个 Cue 都读全', async () => {
+  const ma2 = new Ma2LuaConsole();
+  const numbers = Array.from({ length: 50 }, (_, index) => index === 49 ? 9999 : index * 203 + 1);
+  for (const n of numbers) ma2.set(`Timecode ${n}`, { name: `TC${n}`, xml: timecodeXml(n, [[7, n]]).replace('@EXPORT@', 'fixed') });
+  // This native pool's amount is its span. It costs time even to look at an empty slot.
+  ma2.lua(`local o=gma.show.getobj;local handle,amount,child=o.handle,o.amount,o.child
+    o.handle=function(a) if a=='Timecode' then return {sparse=true} end;return handle(a) end
+    o.amount=function(h) if h.sparse then return 9999 end;return amount(h) end
+    o.child=function(h,i) if h.sparse then FAKE.now=FAKE.now+0.00002;return FAKE.objects['Timecode '..(i+1)] end;return child(h,i) end`);
+  const wire = new Ma2NetworkWire(ma2);
+  const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await wire.exchange(requestId(1), 'LIST', 1, '', () => undefined)));
+  expect(directory.entries.map(entry => entry.target)).toEqual(numbers);
+  expect(ma2.lines.some(line => line.includes("'step'"))).toBe(true);
+  const ranges = ma2TimecodeRangesSchema.parse(JSON.parse(await wire.exchange(requestId(2), 'TCRANGES', 1, '', () => undefined)));
+  expect(ranges.entries.map(entry => [entry.target, entry.last])).toEqual(numbers.map(n => [n, '15']));
+  for (const n of numbers) {
+    expect(await wire.exchange(requestId(100 + n), 'READ', n, '', () => undefined)).toBe(timecodeXml(n, [[7, n]]).replace('@EXPORT@', 'fixed'));
+  }
+  expect(wire.unreleasedRequests).toEqual([]);
+  expect(ma2.exportFiles()).toEqual([]);
+});
+
+it('跨步枚举遇到换 Show 拒绝半份目录，已占用的请求能释放', async () => {
+  const ma2 = new Ma2LuaConsole();
+  ma2.lua(`local o=gma.show.getobj;o.amount=function() return 9999 end
+    o.child=function() FAKE.now=FAKE.now+0.0002;return nil end`);
+  const wire = new Ma2NetworkWire(ma2);
+  ma2.beforeLine = line => { if (line.includes("'step'")) ma2.lua("FAKE.vars.SHOWFILE='other'"); };
+  await expect(wire.exchange(requestId(1), 'LISTSEQ', 1, '', () => undefined)).rejects.toThrow('Show or session changed');
+  expect(wire.unreleasedRequests).toEqual([]);
+});
+
+it('首次扫描和同步读回都用本次控台导出，短时间线一次网络往返即可读全并释放，长时间线逐字一致', async () => {
   const ma2 = new Ma2LuaConsole();
   const wire = new Ma2NetworkWire(ma2);
   for (const [index, length] of [100, 2500, 3000].entries()) {
@@ -51,10 +84,24 @@ it('首次扫描和同步读回都用本次控台导出，短时间线两次网�
     const before = ma2.lines.length;
     const actual = await wire.exchange(requestId(index + 1), 'READ', 9902, '', () => undefined);
     expect(actual).toBe(xml);
-    if (length < 3000) expect(ma2.lines.length - before).toBe(2);
+    if (length < 3000) expect(ma2.lines.length - before).toBe(1);
     else expect(ma2.lines.length - before).toBeGreaterThan(2);
     expect(wire.unreleasedRequests).toEqual([]);
   }
+});
+
+it('单次读取仍在发送前检查播放状态，旧组件先确认再导出，写入不能借用此入口', async () => {
+  const current = new Ma2LuaConsole();
+  const wire = new Ma2NetworkWire(current);
+  await expect(wire.exchange(requestId(1), 'READ', 9999, '', () => undefined, undefined, undefined, () => { throw new Error('播放开始'); })).rejects.toThrow('播放开始');
+  expect(current.lines).toEqual([]);
+  expect(await rpc(current, 'begin', requestId(2), ",'APPLY',9999,0,'bg',nil,'read'")).toMatch(/^ERR:/);
+  expect(current.commands()).toEqual([]);
+  const old = new Ma2LuaConsole(singleRunBridgeSource);
+  const xml = timecodeXml(9999, [[5, 2]]).replace('@EXPORT@', 'fixed');
+  old.set('Timecode 9999', { xml });
+  expect(await new Ma2NetworkWire(old).exchange(requestId(3), 'READ', 9999, '', () => undefined)).toBe(xml);
+  expect(old.commands().filter(command => command.startsWith('Export Timecode 9999 '))).toHaveLength(1);
 });
 
 it('本机上传文件完整后才执行，大小错误不执行并可释放', async () => {

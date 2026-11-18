@@ -5,6 +5,7 @@ import type { Ma2Telnet } from './ma2-telnet';
 import type { Ma2ReadProgressUpdate } from '@tb/schema';
 import { showMovingWhen, showRunning, showStopped } from './fixtures/show-gates';
 import { SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
+import { Ma2LuaConsole } from './fixtures/ma2-lua-console';
 
 const directory = { show: '实机工程', generation: '1', version: '3.3.4.3', entries: [{ target: 7, name: '灯光序列 7 7' }] };
 function connection(replies: string[]): Pick<Ma2Telnet, 'command'> {
@@ -108,16 +109,32 @@ it('最终复核时开始播放与目录真的变化分别报告，不把播放�
   await expect(readMa2NativeLibrary(connection([row, row]), { request: changed }, showStopped)).rejects.toThrow('控台的 Show 或序列有变化');
 });
 
-it('695 个短序列按组双读，一共 174 条 Cue 查询；每条序列仍独立核对', async () => {
+it('695 个短序列按组双读，一共 88 条 Cue 查询；每条序列仍独立核对', async () => {
   const entries = Array.from({ length: 695 }, (_, index) => ({ target: index + 1, name: String(index + 1) }));
   const replies: string[] = [];
-  for (let index = 0; index < entries.length; index += 8) {
-    const rows = entries.slice(index, index + 8).map(entry => `2;;1,${entry.target},61`).join('/');
+  for (let index = 0; index < entries.length; index += 16) {
+    const rows = entries.slice(index, index + 16).map(entry => `2;;1,${entry.target},61`).join('/');
     replies.push(rows, rows);
   }
   const peer = connection(replies);
   const result = await readMa2NativeLibrary(peer, { request: vi.fn().mockResolvedValue(JSON.stringify({ ...directory, entries })) }, showStopped);
   expect(result.errors).toEqual([]);
   expect(result.sequences.map(item => item.cues[0]!.number)).toEqual(entries.map(entry => entry.target + '.000'));
-  expect(peer.command).toHaveBeenCalledTimes(174);
+  expect(peer.command).toHaveBeenCalledTimes(88);
+});
+
+it('16 个五位数编号中夹有长中文 Cue，超出组内容量的序列单独双读', async () => {
+  const console = new Ma2LuaConsole();
+  const entries = Array.from({ length: 16 }, (_, index) => ({ target: 99984 + index, name: '序列' + index }));
+  const longLabel = '暖场灯光'.repeat(32);
+  for (const [index, entry] of entries.entries()) {
+    const cues = Array.from({ length: index === 15 ? 20 : 1 }, (_, j) => ({ number: String(j + 1), label: index === 15 ? longLabel : entry.name }));
+    console.set('Sequence ' + entry.target, { name: entry.name, label: entry.name, cues });
+  }
+  const result = await readMa2NativeLibrary(console, { request: vi.fn().mockResolvedValue(JSON.stringify({ ...directory, entries })) }, showStopped);
+  expect(result.errors).toEqual([]);
+  expect(result.sequences.map(s => s.sequence)).toEqual(entries.map(entry => entry.target));
+  expect(result.sequences.at(-1)?.cues).toEqual(Array.from({ length: 20 }, (_, j) => ({ number: `${j + 1}.000`, index: j, name: longLabel })));
+  expect(console.lines).toHaveLength(4);
+  expect(console.lines.every(line => Buffer.byteLength(line) <= 1024)).toBe(true);
 });

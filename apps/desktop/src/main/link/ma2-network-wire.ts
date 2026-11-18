@@ -56,9 +56,9 @@ export class Ma2NetworkWire implements Ma2Wire {
     const line = `Lua "if TBLINK_NET then TBLINK_NET('${token}','${action}','${id}'${argumentsText}) else gma.echo('${prefix}MISSING') end"`;
     const result = await this.connection.command(line, text => {
       const receipt = ma2ResponseLine(text, prefix);
-      if (action !== 'run' || !receipt?.startsWith('INLINE:')) return receipt;
+      if (!receipt?.startsWith('INLINE:') || !['begin', 'run', 'step'].includes(action)) return receipt;
       const size = Number(receipt.slice(7));
-      if (!Number.isInteger(size) || size < 1 || size >= 8192) throw new Error('控台返回的时间线长度无效');
+      if (!Number.isInteger(size) || size < 1 || size >= 8192) throw new Error('控台返回的数据长度无效');
       const chunks = responseChunks(text, 'TBLINK_INLINE_' + token + '_', 0, size);
       return chunks === null ? null : 'INLINE:' + chunks;
     });
@@ -88,13 +88,20 @@ export class Ma2NetworkWire implements Ma2Wire {
     let releaseAttempted = false;
     try {
       if (reference && lane !== 'bg') throw new Error('无效的 MA2 网络请求');
+      const readNow = operation === 'READ' && data.length === 0 && lane === 'bg';
+      if (readNow) { await beforeStep?.(0); checkCancellation(); beforeSend(); }
       this.journal?.begin(id); this.unreleased.add(id);
-      const begun = await this.call(reference ? 'beginsync' : 'begin', id, `,'${reference ?? operation}',${target},${data.length},'${lane}'${this.localFiles ? ",'file'" : ''}`);
+      const transport = this.localFiles ? ",'file'" : readNow ? ',nil' : '';
+      if (readNow) sent = true;
+      const begun = await this.call(reference ? 'beginsync' : 'begin', id, `,'${reference ?? operation}',${target},${data.length},'${lane}'${transport}${readNow ? ",'read'" : ''}`);
+      // Older bridges ignore the final argument and ACK their reservation. Only
+      // that ACK needs a subsequent run; a completed export is never replayed.
+      const beganWithRead = readNow && /^(?:INLINE|DONE|FILE|STEP):/.test(begun);
       const upload = /^ACK:lanes:file:((?:[a-f0-9]{2})+)$/.exec(begun);
-      if (begun !== 'ACK' && begun !== 'ACK:lanes' && !upload) throw new Error('MA2 未确认传输开始');
+      if (!beganWithRead && begun !== 'ACK' && begun !== 'ACK:lanes' && !upload) throw new Error('MA2 未确认传输开始');
       acquired = true; this.unreleased.add(id);
       // A plugin from before lanes holds one request for both: this one is it, whatever lane was asked for.
-      this.twoLanes = begun.startsWith('ACK:lanes');
+      this.twoLanes = beganWithRead || begun.startsWith('ACK:lanes');
       if (upload) {
         if (!this.localFiles) throw new Error('远程控台不能使用本机文件传输');
         const path = Buffer.from(upload[1]!, 'hex').toString('utf8');
@@ -107,20 +114,15 @@ export class Ma2NetworkWire implements Ma2Wire {
         if (await this.call('chunk', id, `,${offset / 256 + 1},'${data.subarray(offset, offset + 256).toString('hex')}'`) !== 'ACK') throw new Error('MA2 未确认数据片段');
         progress?.();
       }
-      checkCancellation(); await beforeStep?.(0); checkCancellation(); beforeSend(); sent = true;
       // The plugin does one console Export or Import per line and answers STEP:<steps done> until the
       // last, so stop and playback commands queued meanwhile go out between two steps. A plugin from
       // before steps ignores 'steps' and answers DONE at once, which is the same protocol.
-      const inlineRead = operation === 'READ' && data.length === 0;
-      let reply = await this.call('run', id, inlineRead ? ",'steps','inline'" : ",'steps'");
-      if (inlineRead && reply.startsWith('INLINE:')) {
-        // The console returned all bytes and released this read in the same step.
-        releaseAttempted = true;
-        this.unreleased.delete(id); this.journal?.released(id);
-        checkCancellation();
-        const result = decodeResponse(Buffer.from(reply.slice(7), 'hex'), id);
-        if (!result.ok) throw new Error(`MA2：${result.value}`);
-        return result.value;
+      const inlineRead = operation === 'READ' || operation === 'LIST' || operation === 'LISTSEQ' || operation === 'TCRANGES';
+      let reply = begun;
+      if (!beganWithRead) {
+        checkCancellation(); await beforeStep?.(0); checkCancellation();
+        if (!sent) { beforeSend(); sent = true; }
+        reply = await this.call('run', id, inlineRead ? ",'steps','inline'" : ",'steps'");
       }
       for (let done = 0, step = /^STEP:(\d+)(:verify)?$/.exec(reply); step; step = /^STEP:(\d+)(:verify)?$/.exec(reply)) {
         if (Number(step[1]) !== done + 1) throw new Error('控台分步执行的回答对不上');
@@ -133,6 +135,15 @@ export class Ma2NetworkWire implements Ma2Wire {
         // still prevent all writes up to this point. Never replay the write.
         checkCancellation(); if (!confirming) await beforeStep?.(done); checkCancellation();
         reply = await this.call('step', id);
+      }
+      if (inlineRead && reply.startsWith('INLINE:')) {
+        // The console returned all bytes and released this read in the same step.
+        releaseAttempted = true;
+        this.unreleased.delete(id); this.journal?.released(id);
+        checkCancellation();
+        const result = decodeResponse(Buffer.from(reply.slice(7), 'hex'), id);
+        if (!result.ok) throw new Error(`MA2：${result.value}`);
+        return result.value;
       }
       const receipt = /^DONE:(\d+)(:batch)?$/.exec(reply);
       const fileReceipt = /^FILE:(\d+):((?:[a-f0-9]{2})+)$/.exec(reply);

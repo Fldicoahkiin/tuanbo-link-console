@@ -55,6 +55,17 @@ it('30 条时间线共用大序列只检查一次，连接和再次连接不传�
   expect(console.commands().every(command => command.startsWith('Export'))).toBe(true);
 }, 60_000);
 
+it('两个不同编号带有选曲标记时，先报告冲突，避免覆盖已有序列或时间线', async () => {
+  const console = new Ma2LuaConsole();
+  console.set('Sequence 9998', { name: '已有序列' });
+  console.set('Timecode 9999', { name: '已有时间线', xml: native.replace('index="9906"', 'index="9998"') });
+  console.lua("for _,a in ipairs({'Sequence 9998','Timecode 9999'}) do FAKE.objects[a].properties={Info='TBLINK_MTC_SELECTOR_V1'} end");
+  const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(console), showStopped);
+  const service = new Ma2MtcSelectionService(showStopped, { record: vi.fn() });
+  await expect(service.prepare(console, bridge, network, true)).rejects.toThrow('多组选曲对象');
+  expect(console.commands().every(cmd => cmd.startsWith('Export'))).toBe(true);
+});
+
 it.each([false, true])('只移歌曲内的点复用当次读回；末点越过曲尾时更新选曲截止帧；原生清空解除执行器=%s', async detachExecutor => {
   const console = new Ma2LuaConsole();
   const song = (ms: number) => ma2SongTimecodeXml(native.replace('index="9906"', 'index="2"'), 3,

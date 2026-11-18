@@ -185,7 +185,17 @@ export class Ma2MtcSelectionService {
       const run = (body: string) => runMa2GuardedLua(connection, guard + body, gate);
       // Marker belongs to the native Show, so another computer reuses the same selector.
       stage('正在查找控台上负责按时间码选歌的序列');
-      const owned = Number(await run(`local o=gma.show.getobj;local found=0;for _,kind in ipairs({'Sequence','Timecode'}) do local pool=o.handle(kind);for i=0,o.amount(pool)-1 do local h=o.child(pool,i);if h and gma.show.property.get(h,'Info')=='${MA2_MTC_SELECTOR_MARK}' then local n=tonumber(o.number(h));assert(found==0 or found==n,'Duplicate MTC selector');found=n end end end;return found`));
+      const markers = new Set<number>();
+      for (const kind of ['LISTSEQ', 'LIST'] as const) {
+        const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request(kind, 1, 'selector')));
+        if (directory.show !== source.show || directory.generation !== source.generation || directory.version !== source.version) throw new Error('控台 Show 或连接已切换，没有确认选曲');
+        for (const entry of directory.entries) {
+          if (!entry.internal) throw new Error('控台选曲对象的标记无法确认');
+          markers.add(entry.target);
+        }
+      }
+      if (markers.size > 1) throw new Error('控台上有多组选曲对象，请核对后再连接');
+      const owned = [...markers][0] ?? 0;
       const candidates = ranges.entries.filter(entry => entry.target !== owned && entry.slot === MA2_SONG_TIMECODE_SLOT);
       if (!candidates.some(entry => entry.last !== '') && !owned) { this.prepared = endpoint; return false; }
       const points = selectionPoints(candidates), numbers = candidates.map(entry => entry.target);

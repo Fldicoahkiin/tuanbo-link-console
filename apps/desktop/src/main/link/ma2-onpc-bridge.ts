@@ -142,7 +142,8 @@ export class Ma2OnpcBridge {
     if (operation === 'SEQUENCE' && (!['', 'keep'].includes(expected) || desired)) throw new Error('序列读取请求格式无效');
     if (operation === 'SEQCUES' && (!/^\d+\.\d{3}(?:,\d+\.\d{3})*$/.test(expected) || expected.length > 65536 || desired)) throw new Error('序列 Cue 读取范围无效');
     if (operation === 'TCRANGES' && (target !== 1 || expected.length > 60009 || expected && !/^playback:[1-9]\d{0,4}(?:,[1-9]\d{0,4})*$/.test(expected) || desired)) throw new Error('时间码范围读取请求格式无效');
-    if (operation === 'LISTSEQ' && (desired || expected.length > 60000 || expected && expected !== '0' && !/^[1-9]\d{0,4}(?:,[1-9]\d{0,4})*$/.test(expected))) throw new Error('序列目录读取范围无效');
+    if (operation === 'LIST' && (desired || expected && expected !== 'selector')) throw new Error('时间线目录读取范围无效');
+    if (operation === 'LISTSEQ' && (desired || expected.length > 60000 || expected && expected !== '0' && expected !== 'selector' && !/^[1-9]\d{0,4}(?:,[1-9]\d{0,4})*$/.test(expected))) throw new Error('序列目录读取范围无效');
     if (operation === 'DISCARD' && (!/^tblink_(?:backup|label|library)_[a-f0-9]{32}(?:,tblink_(?:backup|label|library)_[a-f0-9]{32})*$/.test(expected) || expected.length > 4096 || desired)) throw new Error('控台备份清理列表无效');
     if (operation === 'EXECUTOR' && (!/^[1-9]\d*$/.test(expected) || Number(expected) > 99999 || desired !== '')) throw new Error('执行器编号无效');
     const requestedSequences = operation === 'SCOPE' ? expected.split(',').map(Number) : [];
@@ -160,7 +161,7 @@ export class Ma2OnpcBridge {
     const id = randomUUID().replaceAll('-', '');
     let sent = false;
     try {
-      const body = writing ? `${Buffer.byteLength(expected)}\n${expected}${desired}` : operation === 'EXECUTOR' || operation === 'SEQCUES' || operation === 'SEQUENCE' || operation === 'LISTSEQ' || operation === 'TCRANGES' || operation === 'DISCARD' || assigning ? expected : operation === 'SCOPE' ? requestedSequences.sort((a, b) => a - b).join(',') : '';
+      const body = writing ? `${Buffer.byteLength(expected)}\n${expected}${desired}` : operation === 'EXECUTOR' || operation === 'SEQCUES' || operation === 'SEQUENCE' || operation === 'LIST' || operation === 'LISTSEQ' || operation === 'TCRANGES' || operation === 'DISCARD' || assigning ? expected : operation === 'SCOPE' ? requestedSequences.sort((a, b) => a - b).join(',') : '';
       if (Buffer.byteLength(body) > 32 * 1024 * 1024) throw new Error('MA2 交换数据超过 32 MB');
       const validate = (result: string): { response: string; requestId: string } => {
         if (operation === 'PING') return { response: parseMa2Ping(result).version, requestId: id };
