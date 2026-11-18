@@ -1,5 +1,5 @@
-import { applyMa2ReadbackCommand, ma2BindingHold, ma2LatestChoiceText, ma2LatestSide, ma2PendingChanges, ma2TrackRoutingIssue, sameMa2Content, type LinkCommand, type Ma2SyncPreview } from '@tb/core/link';
-import { ma2ApplyResultSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2ApplyRequest, type Ma2ConsoleChanges, type Ma2ApplyResult, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
+import { applyMa2ReadbackCommand, ma2BindingHold, ma2LatestChoiceText, ma2LatestSide, ma2PendingChanges, ma2TrackRoutingIssue, ma2PoolSequencesToRoute, routeMa2Tracks, setLightingCommand, sameMa2Content, type LinkCommand, type Ma2SyncPreview } from '@tb/core/link';
+import { ma2ApplyResultSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2PoolRoute, type Ma2ExecutorReadRequest, type Ma2ExecutorPreview, type Ma2ApplyRequest, type Ma2ConsoleChanges, type Ma2ApplyResult, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
 
 /** What one pass over a way-1 song (its `ma2Bindings`, the console's own Timecode shows) needs. */
 export type BoundSongPass = {
@@ -11,6 +11,9 @@ export type BoundSongPass = {
   project: () => LinkProject | null;
   /** False once the song's sync was paused, the document changed or playback started. */
   current: () => boolean;
+  executor: (request: Ma2ExecutorReadRequest) => Promise<Ma2ExecutorPreview>;
+  assign: (sequence: number) => Promise<Ma2PoolRoute>;
+  route: (command: LinkCommand) => void;
   read: (request: Ma2ReadRequest) => Promise<Ma2TimecodePreview>;
   compare: (request: Ma2CompareRequest) => Promise<Ma2SyncPreview>;
   apply: (request: Ma2ApplyRequest) => Promise<Ma2ApplyResult>;
@@ -49,10 +52,6 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
   const item = project?.rundown.find(entry => entry.id === pass.itemId);
   if (!project || !item?.lighting?.ma2Bindings?.length) throw new Error('这首歌已不存在，或已没有控台时间码');
   const writable = item.lighting.ma2Bindings.filter(binding => ma2BindingHold(project, item.id, binding.timecode) === null);
-  const routingIssue = ma2TrackRoutingIssue(item.lighting);
-  if (writable.length && routingIssue) throw new Error(routingIssue);
-  const invalid = ma2PendingChanges(project).find(change => change.itemId === item.id && change.error && ma2BindingHold(project, item.id, change.target) === null);
-  if (invalid) throw new Error(`Timecode ${invalid.target}：${invalid.error}`);
   const duplicate = sharedTimecode(project, item.id, writable.map(binding => binding.timecode));
   if (duplicate) throw new Error(duplicate);
   const lighting = () => pass.project()?.rundown.find(entry => entry.id === pass.itemId)?.lighting;
@@ -60,6 +59,43 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
   const interrupted = (message: string): BoundSongOutcome => ({ kind: 'interrupted', message });
   const stopped = '播放或同步状态有变化，停止播放并编辑完后会重新同步';
   let archived = false;
+  if (writable.length) {
+    const original = item.lighting;
+    let routed = routeMa2Tracks(original);
+    const sequences = ma2PoolSequencesToRoute(routed);
+    const assignments: Ma2PoolRoute[] = [];
+    if (sequences.length) {
+      await pass.archive(); archived = true;
+      for (const sequence of sequences) {
+        if (!pass.current() || lighting() !== original) return interrupted(stopped);
+        assignments.push(await pass.assign(sequence));
+      }
+      if (!pass.current() || lighting() !== original) return interrupted(stopped);
+      routed = routeMa2Tracks(routed, assignments);
+    }
+    for (const binding of routed.ma2Bindings ?? []) {
+      if (!writable.some(value => value.id === binding.id)) continue;
+      for (const pending of binding.pendingTracks ?? []) {
+        if (pending.executorName !== `执行器 ${pending.executor}`) continue;
+        if (!pass.current() || lighting() !== original) return interrupted(stopped);
+        const confirmed = await pass.executor({ ...pass.connection, target: binding.timecode, executor: pending.executor });
+        if (!pass.current() || lighting() !== original) return interrupted(stopped);
+        const track = routed.tracks.find(value => value.id === pending.trackId);
+        if (confirmed.executor !== pending.executor || track?.clips.some(clip => clip.events.some(event => event.kind === 'ma2' && event.action === 'goto' && event.sequence !== confirmed.cueCatalog[0]?.sequence))) throw new Error(`执行器 ${pending.executor} 使用的序列和轨道上的 Cue 不一致，请核对控台素材`);
+        if (routed === original) routed = structuredClone(original);
+        const lane = routed.ma2Bindings?.find(value => value.id === binding.id)?.pendingTracks?.find(value => value.trackId === pending.trackId);
+        if (lane) lane.executorName = confirmed.executorName;
+      }
+    }
+    if (routed !== original) {
+      // Routing is console bookkeeping. Undo must still reach the operator's placement in one step.
+      pass.route({ ...setLightingCommand(item.id, routed, '关联新增灯光轨道'), historyRebaseKey: `ma2-pool-route:${item.id}`, rebaseHistory: before => before });
+    }
+    const routingIssue = ma2TrackRoutingIssue(routed);
+    if (routingIssue) throw new Error(routingIssue);
+    const invalid = ma2PendingChanges(pass.project()).find(change => change.itemId === item.id && change.error && writable.some(binding => binding.timecode === change.target));
+    if (invalid) throw new Error(`Timecode ${invalid.target}：${invalid.error}`);
+  }
   let wrote = false;
   const chosen: string[] = [];
   for (const bindingId of writable.map(binding => binding.id)) {
@@ -68,7 +104,14 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
     const binding = source?.ma2Bindings?.find(entry => entry.id === bindingId);
     // Unbound or switched to another show meanwhile: an edit, synced on its own pass.
     if (!source || !binding) return interrupted('这首歌的控台时间线刚换过，稍后再同步');
-    const readback = ma2TimecodePreviewSchema.parse(await pass.read({ ...pass.connection, target: binding.timecode, timeOriginMs: binding.timeOriginMs }));
+    const changes = ma2PendingChanges(pass.project()).find(change => change.itemId === item.id && change.bindingId === binding.id);
+    const knownSequences = new Set(binding.mappings.map(mapping => mapping.sequence));
+    const syncSequences = changes?.changes.flatMap(change => {
+      const sequence = Number(change.after?.properties.sequence);
+      return change.after?.kind === 'event' && sequence > 0 && !knownSequences.has(sequence) ? [sequence] : [];
+    });
+    const readback = ma2TimecodePreviewSchema.parse(await pass.read({ ...pass.connection, target: binding.timecode, timeOriginMs: binding.timeOriginMs,
+      ...(syncSequences && { syncSequences: [...new Set(syncSequences)].sort((a, b) => a - b) }) }));
     if (!pass.current()) return interrupted(stopped);
     if (lighting() !== source) return interrupted('还在编辑，稍后再同步');
     const comparison = await pass.compare({ document: source, bindingId: binding.id, readback, consoleChanges: pass.consoleChanges });

@@ -173,6 +173,7 @@ const tbLink: LinkDesktopBridgeApi = {
   editMa2Timeline: async payload => ma2TimelineEditResultSchema.parse(await invoke('link:ma2-timeline-edit', ma2TimelineEditRequestSchema.parse(payload))),
   createMa2: (payload) => invoke('link:ma2-create', payload),
   readMa2Executor: (payload) => invoke('link:ma2-executor', payload),
+  assignMa2PoolSequence: payload => invoke('link:ma2-pool-route', payload),
   compareMa2: (payload) => invoke('link:ma2-compare', payload),
   applyMa2: (payload) => invoke('link:ma2-apply', payload),
   renameMa2Object: async payload => ma2RenameResultSchema.parse(await invoke('link:ma2-rename', ma2RenameRequestSchema.parse(payload))),

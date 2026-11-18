@@ -17,11 +17,37 @@ type PlaybackPreparation = {
 /** One complete read/validate/write/verify session. No automatic retries. */
 export class Ma2ApplyService {
   private busy = false;
-  constructor(private readonly bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'>, private readonly show: ShowGateReader, private readonly playback?: PlaybackPreparation) {}
+  constructor(private readonly bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'> & Partial<Pick<Ma2OnpcBridge, 'hasSnapshot'>>, private readonly show: ShowGateReader, private readonly playback?: PlaybackPreparation) {}
+
+  private confirmedRead?: { preview: Ma2TimecodePreview; snapshot: string } | undefined;
+  private editRead?: { preview: Ma2TimecodePreview; snapshot: string; sequences: string; at: number } | undefined;
+
+  private readSnapshot(target: number, additional: readonly number[]): Promise<string> {
+    return additional.length ? this.bridge.request('SCOPE', target, additional.join(',')) : this.bridge.request('SNAPSHOT', target);
+  }
+
+  /** Read once for three-way comparison and the following native compare-and-write. */
+  async previewEdit(target: number, origin: number | undefined, additional: readonly number[], readLive?: () => Promise<Ma2TimecodePreview>): Promise<Ma2TimecodePreview> {
+    this.editRead = undefined;
+    holdForShow(this.show, 'ma2.sync.read');
+    const last = this.confirmedRead;
+    if (!additional.length && last?.preview.target === target && (last.preview.timeOriginMs ?? 0) === (origin ?? 0) && readLive && this.bridge.hasSnapshot?.(target, last.snapshot)) {
+      const fresh = await readLive();
+      if (sameMa2XmlObjects(fresh.sourceXml, last.preview.sourceXml) && previewContent(fresh) === previewContent(last.preview)) {
+        this.editRead = { preview: fresh, snapshot: last.snapshot, sequences: '', at: Date.now() };
+        return fresh;
+      }
+    }
+    const snapshot = await this.readSnapshot(target, additional);
+    const preview = convertMa2Snapshot(snapshot, target, additional, origin);
+    this.editRead = { preview, snapshot, sequences: additional.join(','), at: Date.now() };
+    return preview;
+  }
 
   async apply(input: Ma2ApplyRequest): Promise<Ma2ApplyResult> {
     if (this.busy) return { status: 'incomplete', stage: 'preflight', message: '已有 MA2 同步正在进行', mayHaveWritten: false, backupFile: null };
     this.busy = true;
+    this.confirmedRead = undefined;
     let stage: 'preflight' | 'read' | 'write' | 'verify' = 'preflight';
     let mayHaveWritten = false; let backupFile: string | null = null;
     try {
@@ -31,9 +57,6 @@ export class Ma2ApplyService {
       if (!binding || binding.timecode !== request.readback.target) throw new Error('节目与 MA2 绑定不一致');
       stage = 'read';
       const source = await this.playback?.source();
-      let snapshot = await this.bridge.request('SNAPSHOT', binding.timecode);
-      const current = convertMa2Snapshot(snapshot, binding.timecode, [], binding.timeOriginMs);
-      if (!sameMa2XmlObjects(request.readback.sourceXml, current.sourceXml) || previewContent(request.readback) !== previewContent(current)) throw new Error(`${MA2_SONG_COLLISION}：预览之后控台的 Timecode ${binding.timecode} 或它用的序列变了，这次没有写入；重新读取控台后再同步`);
       stage = 'preflight';
       const merged = resolveMa2Sync(compareMa2LightingReadback(request.document, request.bindingId, request.readback, request.consoleChanges), new Map(request.conflicts));
       const desiredSequences = new Set<number>();
@@ -42,15 +65,17 @@ export class Ma2ApplyService {
         if (!/^[1-9]\d*$/.test(value) || Number(value) > 99999) throw new Error('调用指定 Cue 必须填写有效序列');
         desiredSequences.add(Number(value));
       }
-      const existing = new Set(referencedMa2Sequences(snapshot));
-      const additional = [...desiredSequences].filter((number) => !existing.has(number)).sort((a, b) => a - b);
-      if (additional.length) {
-        stage = 'read';
-        snapshot = await this.bridge.request('SCOPE', binding.timecode, additional.join(','));
-        const scoped = convertMa2Snapshot(snapshot, binding.timecode, additional, binding.timeOriginMs);
-        if (!sameMa2XmlObjects(current.sourceXml, scoped.sourceXml) || previewContent(current) !== previewContent(scoped)) throw new Error(`${MA2_SONG_COLLISION}：读取新加 Cue 的序列时控台有变化，这次没有写入；重新读取控台后再同步`);
-        stage = 'preflight';
-      }
+      const existing = new Set(referencedMa2Sequences(request.readback.sourceXml));
+      const additional = [...desiredSequences].filter(number => !existing.has(number)).sort((a, b) => a - b);
+      stage = 'read';
+      const saved = this.editRead;
+      this.editRead = undefined;
+      const cached = saved && Date.now() - saved.at < 10000 && saved.sequences === additional.join(',') && saved.preview.target === binding.timecode
+        && saved.preview.timeOriginMs === request.readback.timeOriginMs && saved.preview.readAt === request.readback.readAt && saved.preview.sourceXml === request.readback.sourceXml ? saved : undefined;
+      let snapshot = cached?.snapshot ?? await this.readSnapshot(binding.timecode, additional);
+      const current = cached?.preview ?? convertMa2Snapshot(snapshot, binding.timecode, additional, binding.timeOriginMs);
+      if (!sameMa2XmlObjects(request.readback.sourceXml, current.sourceXml) || previewContent(request.readback) !== previewContent(current)) throw new Error(`${MA2_SONG_COLLISION}：预览之后控台的 Timecode ${binding.timecode} 或它用的序列变了，这次没有写入；重新读取控台后再同步`);
+      stage = 'preflight';
       const prepared = prepareMa2MergedEvents(request.document, request.bindingId, request.readback, new Map(request.conflicts), [snapshot], request.timeAlignment ?? 'exact', request.consoleChanges);
       if (this.playback) prepared.desiredXml = ma2MtcPlaybackSettings(prepared.desiredXml, false);
       this.requireStopped();
@@ -64,6 +89,12 @@ export class Ma2ApplyService {
         stage = 'verify';
         snapshot = await this.bridge.request('SNAPSHOT', binding.timecode);
         verified = convertMa2Snapshot(snapshot, binding.timecode, [], binding.timeOriginMs);
+      } else if (cached) {
+        // SYNC normally checks the native snapshot immediately before Import. A read-only merge
+        // has no such operation, so only a new console read can confirm it.
+        snapshot = await this.bridge.request('SNAPSHOT', binding.timecode);
+        verified = convertMa2Snapshot(snapshot, binding.timecode, [], binding.timeOriginMs);
+        if (previewContent(current) !== previewContent(verified) || !sameMa2XmlObjects(current.sourceXml, verified.sourceXml)) throw new Error(`${MA2_SONG_COLLISION}：控台在核对期间有变化，请重新同步`);
       }
       stage = 'verify';
       if (source && this.playback) {
@@ -84,10 +115,17 @@ export class Ma2ApplyService {
         }
       }
       const confirmed = confirmMa2MergedEvents(prepared, verified.sourceXml, [snapshot]);
+      if (this.bridge.hasSnapshot?.(binding.timecode, snapshot)) this.confirmedRead = { preview: verified, snapshot };
       return ma2ApplyResultSchema.parse({ status: 'verified', confirmed, backupFile });
     } catch (error) {
       if (stage === 'write' && error instanceof Ma2BridgeFailure) { mayHaveWritten = error.sent; backupFile = error.backupFile; }
-      return { status: 'incomplete', stage, message: error instanceof Error ? error.message : String(error), mayHaveWritten, backupFile };
+      const message = error instanceof Error ? error.message : String(error);
+      // The native bridge explicitly rejected the compare, before Import. Its lane may already
+      // have accepted the request, so transport-level 'sent' alone cannot classify these cases.
+      if (stage === 'write' && /(?:Timecode or Sequence changed after preview|Timecode changed before write|Snapshot reference expired or mismatched|Sequence changed during snapshot|Timecode changed during snapshot)/.test(message)) {
+        return { status: 'incomplete', stage: 'preflight', message: `${MA2_SONG_COLLISION}：写入前控台已有改动，正在重新核对`, mayHaveWritten: false, backupFile };
+      }
+      return { status: 'incomplete', stage, message, mayHaveWritten, backupFile };
     } finally { this.busy = false; }
   }
 

@@ -3,6 +3,7 @@ import { createEmptyLinkProject, createLightingUserLibrary, createLightingDocume
 import { placeLightingTemplate as placeEffect, lightingSequenceSteps, ma2SongPoints } from '@tb/core/link';
 import { useLightingEffectStamp } from './useLightingEffectStamp';
 import { useDocumentStore } from '../stores/document-store';
+import { useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
 import { syncMa2Once } from '../runtime/ma2-realtime-session';
 import * as sequenceLibrary from '../view-models/ma2-sequence-library';
 
@@ -41,6 +42,20 @@ it('实际添加入口首次创建后请求同一逐首同步，再添加只更�
   expect(notify).not.toHaveBeenCalled();
   expect(ma2SongPoints(useDocumentStore.getState().project!.rundown[0]!.lighting!)).toHaveLength(6);
   expect(syncMa2Once).toHaveBeenCalledTimes(1);
+  useDocumentStore.getState().setProject(project, 'C:/test/project.tblink');
+  useLightingEffectStamp('song', lighting, 60000, notify).stampConsoleCue({ sequence: 10, cue: '2.000', name: '第 2 步', executor: '' }, 7000);
+  const single = useDocumentStore.getState().project!.rundown[0]!.lighting!;
+  expect(single.timelineDestination?.timecode).toBe(9000);
+  expect(ma2SongPoints(single)).toMatchObject([{ atMs: 7000, cues: [{ sequence: 10, cue: '2.000' }] }]);
+  expect(syncMa2Once).toHaveBeenLastCalledWith('song');
+  useDocumentStore.getState().setProject(project, 'C:/test/project.tblink');
+  useMa2RealtimePreference.setState({ enabled: false });
+  try {
+    vi.mocked(syncMa2Once).mockClear();
+    useLightingEffectStamp('song', lighting, 60000, notify).stampConsoleCue({ sequence: 10, cue: '2.000', name: '第二步', executor: '' }, 7500);
+    expect(useDocumentStore.getState().project!.rundown[0]!.lighting!.timelineDestination?.timecode).toBe(9000);
+    expect(syncMa2Once).not.toHaveBeenCalled();
+  } finally { useMa2RealtimePreference.setState({ enabled: true }); }
   vi.restoreAllMocks();
 });
 it('可调间隔按节拍图换算；未读完整或放不下时整个操作失败，原编排不变', () => {

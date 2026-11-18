@@ -6,7 +6,7 @@ import { ma2Lane, Ma2OnpcBridge, parseMa2Ping, type Ma2Lane, type Ma2Operation }
 import { ensureMa2NetworkBridge } from './ma2-bridge-installer';
 import { showStopped } from './fixtures/show-gates';
 import { ma2ResponseLine } from './ma2-telnet';
-import { ma2ObjectDirectorySchema, ma2TimecodeRangesSchema } from '@tb/schema';
+import { ma2PoolRouteSchema, ma2ObjectDirectorySchema, ma2TimecodeRangesSchema } from '@tb/schema';
 
 // The real tools/ma2/tblink_bridge.lua runs here in a Lua 5.3 interpreter against a fake console
 // (fixtures/ma2-fake-console.lua). The baseline is the plugin as it was before it answered step by
@@ -375,6 +375,30 @@ async function record(source: string, setup: ((ma2: Ma2LuaConsole) => void) | un
 }
 const flow = (name: string): Flow['run'] => { const found = flows.find(entry => entry.name === name); if (!found) throw new Error(name); return found.run; };
 const sequential = (requests: Request[]): Flow['run'] => async exchange => { for (const request of requests) await exchange(request); };
+
+it('分配素材序列后读回实际执行器名称，重试复用同一位置', async () => {
+  const ma2 = new Ma2LuaConsole(bridgeSource); show(ma2);
+  const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(ma2, false, undefined, true), showStopped);
+  const body = assign() + '\nname';
+  const first = ma2PoolRouteSchema.parse(JSON.parse(await bridge.request('ASSIGNSEQ', 9901, body)));
+  expect(first).toMatchObject({ sequence: 9901, executor: '999.101', executorName: 'Executor 999.101' });
+  expect(JSON.parse(await bridge.request('ASSIGNSEQ', 9901, body))).toEqual(first);
+  expect(ma2.commands().filter(command => command.startsWith('Assign Sequence 9901 '))).toHaveLength(1);
+});
+
+it('复用已核对的快照仍逐个导出当前序列；控台并发修改会阻止写入', async () => {
+  const ma2 = new Ma2LuaConsole(bridgeSource); show(ma2);
+  const wire = new Ma2NetworkWire(ma2, false, undefined, true);
+  const first = await wire.exchange(requestId(1), 'SNAPSHOT', 9910, '', () => undefined);
+  const count = ma2.commands().length;
+  const second = await wire.exchange(requestId(2), 'SNAPSHOT', 9910, '', () => undefined);
+  expect(ma2.commands().slice(count).filter(command => command.startsWith('Export Sequence '))).toHaveLength(3);
+  expect(second).toContain('<Sequ index="9902"');
+  ma2.set('Sequence 9903', { name: 'Changed', xml: sequenceXml(9903).replace('序列 9903', 'Changed') });
+  await expect(wire.exchange(requestId(3), 'SYNC', 9910, syncBody(second, timecodeXml(9910, [[9903, 1]])), () => undefined)).rejects.toThrow('changed');
+  expect(first).toContain('<Timecode');
+  expect(ma2.commands().some(command => command.startsWith('Import '))).toBe(false);
+});
 
 it('TCRANGES 给控台原生 amount 只传一个句柄，不把 assert 的错误文字作为第二个参数', async () => {
   const result = await record(bridgeSource, ma2 => {

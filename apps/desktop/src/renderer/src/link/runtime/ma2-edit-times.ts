@@ -1,4 +1,4 @@
-import { ma2PendingChanges, ma2SongPoints, programTimeOrigin } from '@tb/core/link';
+import { unboundMa2Tracks, ma2PendingChanges, ma2SongPoints, programTimeOrigin } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { updateMa2Song, useMa2SyncStore, type SongSync } from '../stores/ma2-sync-store';
 import { clearMa2SongShift, noteMa2SongsShifted } from './ma2-song-shift';
@@ -31,7 +31,8 @@ function localEditKey(entry: SongSync, item: Program): string | null {
   if (!project || !item.lighting) return null;
   if (item.lighting.ma2Bindings?.length) {
     const changes = ma2PendingChanges(project).filter(change => change.itemId === item.id);
-    return changes.length ? JSON.stringify(changes.map(change => [change.target, change.error, change.changes.map(value => value.after)])) : null;
+    const unbound = unboundMa2Tracks(item.lighting);
+    return changes.length || unbound.length ? JSON.stringify([changes.map(change => [change.target, change.error, change.changes.map(value => value.after)]), unbound]) : null;
   }
   let signature: string;
   try { signature = songSignature(ma2SongPoints(item.lighting), item.lighting.consoleSong?.name ?? entry.name, songStart(item)); }

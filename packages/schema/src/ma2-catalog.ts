@@ -1,8 +1,13 @@
 import { z } from 'zod';
-import { ma2NetworkTargetSchema, ma2TimecodePreviewSchema } from './ma2-bridge';
+import { ma2NetworkTargetSchema, ma2SequenceAssignmentSchema, ma2TimecodePreviewSchema } from './ma2-bridge';
 import { lightingMa2CueCatalogSchema, lightingMa2BindingSchema, lightingTrackSchema } from './lighting';
 
 export const ma2CatalogRequestSchema = z.object({ details: z.enum(['attributes', 'source']).optional(), dataDirectory: z.string().max(4096), network: ma2NetworkTargetSchema.optional(), progressId: z.string().uuid().optional(), projectPath: z.string().max(4096).optional(), projectId: z.string().min(1).optional(), expectedSource: z.object({ show: z.string(), generation: z.string(), version: z.string() }).strict().optional(), targets: z.array(z.number().int().min(1).max(99999)).max(10000).optional() }).strict();
+/** Resolve one pool reference in this verified Show without touching operator-owned executors. */
+export const ma2PoolRouteRequestSchema = ma2CatalogRequestSchema.pick({ network: true, dataDirectory: true, projectId: true, expectedSource: true }).required({ projectId: true, expectedSource: true }).extend({ sequence: z.number().int().min(1).max(99999) });
+export type Ma2PoolRouteRequest = z.infer<typeof ma2PoolRouteRequestSchema>;
+export const ma2PoolRouteSchema = ma2SequenceAssignmentSchema.extend({ executorName: z.string().min(1).max(512) });
+export type Ma2PoolRoute = z.infer<typeof ma2PoolRouteSchema>;
 export const ma2PlaybackPrepareSchema = z.object({ network: ma2NetworkTargetSchema, progressId: z.string().uuid() }).strict();
 export type Ma2PlaybackPrepare = z.infer<typeof ma2PlaybackPrepareSchema>;
 export type Ma2CatalogRequest = z.infer<typeof ma2CatalogRequestSchema>;

@@ -73,7 +73,7 @@ local function cmd(command)
       if page then FAKE.objects['Page ' .. page] = { number = page, label = page_label } end
       local sequence, executor = command:match('^Assign Sequence (%d+) At Executor ([%d%.]+) /nc$')
       if sequence then
-        FAKE.objects['Executor ' .. executor] = { number = executor:match('%.(%d+)$'), label = '',
+        FAKE.objects['Executor ' .. executor] = { name = 'Executor ' .. executor, number = executor:match('%.(%d+)$'), label = '',
           xml = '<MA><Exec><Assignment name="x"><No>25</No><No>1</No><No>' .. sequence .. '</No></Assignment></Exec></MA>' }
       end
     end

@@ -517,7 +517,7 @@ export class Ma2NetworkManager {
     if (!this.settings) throw new Error('控台连接已变化');
     const { host, port, monitorPort, username } = this.settings;
     const target = { host, port, monitorPort, username };
-    const wire = new Ma2NetworkWire(connection, ma2UsesLocalFiles(host), this.requestJournal); this.wire = wire;
+    const wire = new Ma2NetworkWire(connection, ma2UsesLocalFiles(host), this.requestJournal, Boolean(this.bundledBridge)); this.wire = wire;
     const bridge = new Ma2OnpcBridge(wire, this.show);
     this.mtcSelection?.invalidate();
     this.services = { bridge, service: new Ma2ApplyService(bridge, this.show, {

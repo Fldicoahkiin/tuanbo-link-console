@@ -1,7 +1,7 @@
 import { createLightingDocument, lightingDocumentSchema, ma2ExecutorPreviewSchema, ma2TimecodePreviewSchema, parseLinkProject, type LightingDocument, type LightingTrack, type Ma2ExecutorPreview, type Ma2TimecodePreview } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { withSchemaVersion } from './project-schema-version';
-import { LightingTempoMap } from './lighting-edit';
+import { LightingTempoMap, lightingEventTime } from './lighting-edit';
 import { MA2_FRAME_MS, programTimeOrigin, withMa2TimeOrigin } from './ma2-time-origin';
 import { lightingTrackEnabled } from './lighting-track-state';
 
@@ -89,7 +89,11 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
         used.add(event.id);
         const annotated = (event.kind === 'ma2' || event.kind === 'ma2-fader') && event.label !== nativeNames.get(event.id);
         const keepLabel = event.kind === next.event.kind && (next.event.kind === 'ma2-fader' ? annotated : next.event.kind === 'ma2' && (next.event.action !== 'goto' || annotated));
-        return [{ ...next, event: keepLabel && 'label' in event && 'label' in next.event ? { ...next.event, label: event.label } : next.event }];
+        const restored = keepLabel && 'label' in event && 'label' in next.event ? { ...next.event, label: event.label } : next.event;
+        const sameCue = event.kind === 'ma2' && restored.kind === 'ma2' && event.action === restored.action && event.sequence === restored.sequence && Number(event.cue) === Number(restored.cue);
+        return [{ ...next, event: { ...restored, ...(sameCue && event.librarySource && { librarySource: event.librarySource }),
+          ...(sameCue && event.effectGroupId && { effectGroupId: event.effectGroupId }),
+          ...(event.beatAnchor !== undefined && Math.abs(lightingEventTime(clip, event, map) - next.ms) <= 1000 / 60 + 1e-6 && { beatAnchor: event.beatAnchor }) } }];
       });
       const positions = retained.map((entry) => clip.timeLock === 'time' ? entry.ms : map.msToBeat(entry.ms));
       // Moving before the old clip start extends the clip without moving its other points.
@@ -118,9 +122,23 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
     baselineTracks: structuredClone(confirmed.document.tracks), mappings: structuredClone(confirmed.mappings), trackMappings: structuredClone(confirmed.trackMappings), cueCatalog: [...new Map([...(entry.cueCatalog ?? []), ...(confirmed.cueCatalog ?? [])].map((sequence) => [sequence.sequence, structuredClone(sequence)])).values()]
   } : entry) });
   const confirmedBinding = lighting.ma2Bindings!.find(entry => entry.id === bindingId)!;
+  const routes = new Map(confirmedBinding.mappings.filter(mapping => mapping.sequence).map(mapping => [mapping.eventId, mapping]));
+  const historyTrack = (track: LightingTrack): LightingTrack => {
+    const needsRoute = track.clips.some(clip => clip.events.some(event => event.kind === 'ma2' && !event.executor && routes.get(event.id)?.trackId === track.id));
+    if (!needsRoute) return track;
+    const next = structuredClone(track);
+    for (const clip of next.clips) for (const event of clip.events) {
+      if (event.kind !== 'ma2' || event.executor) continue;
+      const route = routes.get(event.id);
+      if (!route || route.trackId !== track.id || route.sequence !== event.sequence) continue;
+      event.executor = route.executor;
+      if (next.cueStamp?.mode === 'fixed' && !next.cueStamp.executor && next.cueStamp.sequence === route.sequence) next.cueStamp.executor = route.executor;
+    }
+    return next;
+  };
   return { id: crypto.randomUUID(), label: '应用 MA2 同步结果', historyRebaseKey: `ma2:${itemId}:${bindingId}`, rebaseHistory: project => ({
     ...project, rundown: project.rundown.map(item => item.id !== itemId || !item.lighting ? item : {
-      ...item, lighting: { ...item.lighting, ma2Bindings: item.lighting.ma2Bindings?.map(entry => entry.id === bindingId ? confirmedBinding : entry) }
+      ...item, lighting: { ...item.lighting, tracks: item.lighting.tracks.map(historyTrack), ma2Bindings: item.lighting.ma2Bindings?.map(entry => entry.id === bindingId ? confirmedBinding : entry) }
     })
   }), execute(project) {
     const next = structuredClone(project);

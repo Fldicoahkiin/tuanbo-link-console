@@ -178,7 +178,7 @@ end
 -- program can send other commands (lights off, a Cue) between two steps. Writing is one step as a
 -- whole: backup export, compare, write the file, Import. Steps run one per 'step' call, or all at
 -- once for the local file bridge and for a 'run' without 'steps'. The state lives on the request.
-local function snapshot(step, tc, id, additional, done)
+local function snapshot(step, tc, id, additional, done, previous)
   local xml = export_scratch(tc, 'tblink_snapshot_' .. id)
   local numbers, seen = references(xml), {}
   for _, number in ipairs(numbers) do seen[number] = true end
@@ -188,33 +188,48 @@ local function snapshot(step, tc, id, additional, done)
   end
   table.sort(numbers)
   local parts = {}
-  for _, number in ipairs(numbers) do
-    local name = 'tblink_sequence_' .. id .. '_' .. number
-    local full
-    step(function()
-      assert(gma.show.getobj.handle('Sequence ' .. number), 'Referenced Sequence is missing')
-      gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '" /o')
-      full = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
-      local object = assert(full:match('(<Sequ%s.-</Sequ>)'), 'Sequence XML unavailable')
-      parts[#parts + 1] = object
-    end)
-    step(function()
-      -- Verify references were not edited while assembling the snapshot.
-      gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '_verify" /o')
-      local check = assert(read(root .. '/importexport/' .. name .. '_verify.xml'))
-      assert(canonical(full) == canonical(check), 'Sequence changed during snapshot')
-      discard(name); discard(name .. '_verify')
-    end)
+  local known = {}
+  if previous then
+    for object in previous:gmatch('(<Sequ%s.-</Sequ>)') do
+      local index = tonumber(object:match('^<Sequ%s[^>]-index="(%d+)"'))
+      if index then known[index + 1] = object end
+    end
   end
-  step(function()
+  local function finish()
     assert(canonical(xml) == canonical(export(tc, 'tblink_snapshot_verify_' .. id)), 'Timecode changed during snapshot')
     discard('tblink_snapshot_verify_' .. id)
     local result, replaced = xml:gsub('</MA>%s*$', function() return table.concat(parts, '\n') .. '\n</MA>' end)
     assert(replaced == 1 and #result <= 33554432, 'Snapshot XML invalid or too large')
     done(result)
-  end)
+  end
+  local function next_sequence(i)
+    local number = numbers[i]
+    if not number then return step(finish) end
+    local name = 'tblink_sequence_' .. id .. '_' .. number
+    step(function()
+      assert(gma.show.getobj.handle('Sequence ' .. number), 'Referenced Sequence is missing')
+      gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '" /o')
+      local full = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
+      local object = assert(full:match('(<Sequ%s.-</Sequ>)'), 'Sequence XML unavailable')
+      parts[#parts + 1] = object
+      -- Every Sequence is freshly exported. An exact match with its previously verified native
+      -- object is already the second identical observation, even when fixture values are present.
+      if known[number] == object then
+        discard(name)
+        return next_sequence(i + 1)
+      end
+      step(function()
+        gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '_verify" /o')
+        local check = assert(read(root .. '/importexport/' .. name .. '_verify.xml'))
+        assert(canonical(full) == canonical(check), 'Sequence changed during snapshot')
+        discard(name); discard(name .. '_verify')
+        next_sequence(i + 1)
+      end)
+    end)
+  end
+  next_sequence(1)
 end
-local function start(data)
+local function start(data, previous)
   local id, op, target, size, body = data:match('^([a-f0-9]+)\n([A-Z]+)\n(%d+)\n(%d+)\n(.*)$')
   assert(id and #id == 32 and id ~= last, 'Invalid or already processed request')
   last = id
@@ -363,10 +378,16 @@ local function start(data)
       return answer('{"sequence":' .. tc .. ',"kind":' .. quote(kind) .. ',"cue":' .. quote(cue) .. ',"show":' .. quote(show) .. ',"generation":' .. quote(session) .. ',"name":' .. quote(label()) .. ',"backupFile":' .. quote(backup .. '.xml') .. '}')
     end
     if op == 'ASSIGNSEQ' then
+      local with_name = body:sub(-5) == '\nname'
+      if with_name then body = body:sub(1, -6) end
       local owner, show_hex, session_hex = body:match('^([a-f0-9]+)\n([a-f0-9]+)\n([a-f0-9]+)$')
       assert(owner and #owner == 24 and #show_hex % 2 == 0 and #session_hex % 2 == 0, 'Invalid automatic assignment')
       local function decode(value) return value:gsub('..', function(pair) return string.char(tonumber(pair, 16)) end) end
-      assert(decode(show_hex) == gma.show.getvar('SHOWFILE') and decode(session_hex) == generation, 'Show or session changed')
+      local show, session = decode(show_hex), decode(session_hex)
+      local function same_show()
+        assert(show == gma.show.getvar('SHOWFILE') and session == generation and _G.TBLINK_BRIDGE_GENERATION == generation, 'Show or session changed')
+      end
+      same_show()
       local obj = gma.show.getobj
       assert(obj.handle('Sequence ' .. tc), 'Sequence missing')
       local label = 'TBLINK_' .. owner
@@ -381,12 +402,22 @@ local function start(data)
         local values = {}; for number in assignment:gmatch('<No>%s*(%d+)%s*</No>') do values[#values + 1] = tonumber(number) end
         return #values == 3 and values[1] == 25 and values[2] == 1 and values[3] or nil
       end
+      local function reply(address)
+        same_show()
+        local name = ''
+        if with_name then
+          local value = assert(obj.name(assert(obj.handle('Executor ' .. address))), 'Executor name unavailable')
+          name = ',"executorName":"' .. value:gsub('[%z\1-\31\\"]', function(c) return string.format('\\u%04x', c:byte()) end) .. '"'
+        end
+        answer('{"sequence":' .. tc .. ',"executor":"' .. address .. '"' .. name .. '}')
+      end
       local function confirm()
         assert(obj.handle('Executor ' .. free_address) and assigned(free_address) == tc, 'Sequence assignment unconfirmed')
-        answer('{"sequence":' .. tc .. ',"executor":"' .. free_address .. '"}')
+        reply(free_address)
       end
       -- The write is one step: page creation, the checks and the Assign; the readback is the next.
       local function assign()
+        same_show()
         if not free_address then
           assert(free_page, 'No empty page available for automatic sync')
           assert(not obj.handle('Page ' .. free_page), 'Page became occupied')
@@ -416,7 +447,7 @@ local function start(data)
               if not free_address then free_address = address; free_exec = page end
             else
               if assigned(address) == tc then
-                return answer('{"sequence":' .. tc .. ',"executor":"' .. address .. '"}')
+                return reply(address)
               end
               return step(search)
             end
@@ -699,7 +730,7 @@ local function start(data)
     end
     assert(gma.show.getobj.handle('Timecode ' .. tc), 'Timecode does not exist')
     if op == 'READ' then return answer(export_scratch(tc, 'tblink_read_' .. id)) end
-    if op == 'SNAPSHOT' then return snapshot(step, tc, id, nil, answer) end
+    if op == 'SNAPSHOT' then return snapshot(step, tc, id, nil, answer, previous) end
     if op == 'SCOPE' then
       assert(#body > 0 and not body:find('[^%d,]') and not body:find(',,') and body:sub(1, 1) ~= ',' and body:sub(-1) ~= ',', 'Invalid Sequence scope')
       local additional, seen = {}, {}
@@ -708,7 +739,7 @@ local function start(data)
         assert(number and number >= 1 and number <= 99999 and not seen[number], 'Invalid Sequence scope')
         seen[number] = true; additional[#additional + 1] = number
       end
-      return snapshot(step, tc, id, additional, answer)
+      return snapshot(step, tc, id, additional, answer, previous)
     end
     assert(op == 'APPLY' or op == 'SYNC', 'Unknown operation')
     local length, rest = body:match('^(%d+)\n(.*)$')
@@ -739,7 +770,7 @@ local function start(data)
       return snapshot(step, tc, id .. '_preflight', references(desired), function(current)
         assert(canonical(current) == canonical(expected), 'Timecode or Sequence changed after preview')
         step(write_step)
-      end)
+      end, previous)
     end
     write_step()
   end)
@@ -900,7 +931,7 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
       assert(transport == nil or transport == 'file', 'Invalid transport')
       assert(read_now == nil or (read_now == 'read' and action == 'begin' and a == 'READ' and c == 0 and lane == 'bg'), 'Invalid immediate read')
       assert(delta_size == nil or (action == 'beginsync' and transport == nil and c <= 524288 and type(delta_size) == 'number' and delta_size == math.floor(delta_size) and delta_size > 0 and delta_size < c), 'Invalid snapshot delta size')
-      assert(query == nil or (action == 'begin' and (a == 'LIST' or a == 'LISTSEQ' or a == 'TCRANGES' or a == 'SEQGO' and lane == 'bg') and type(query) == 'string' and c <= 320 and #query == c * 2 and not query:find('[^a-f0-9]')), 'Invalid inline query')
+      assert(query == nil or (action == 'begin' and (a == 'LIST' or a == 'LISTSEQ' or a == 'TCRANGES' or lane == 'bg' and (a == 'SEQGO' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'ASSIGNSEQ')) and type(query) == 'string' and c <= 320 and #query == c * 2 and not query:find('[^a-f0-9]')), 'Invalid inline query')
       assert(previous_read == nil or (read_now == 'read' and type(previous_read) == 'string' and #previous_read == 32 and previous_read:match('^[a-f0-9]+$')), 'Invalid read reference')
       -- Only reads go on 'fg', and none that leaves state for a later request (a snapshot for beginsync).
       assert(lane ~= 'fg' or (action == 'begin' and foreground[a]), 'Operation not allowed on the foreground lane')
@@ -921,7 +952,8 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
           net.done = true; net.chunks = nil; net.inline = true
           if previous_read and last_read and last_read.id == previous_read and last_read.target == b then net.previous = last_read end
           local input = query and query:gsub('..', raw_bytes) or ''
-          net.job = start(id .. '\n' .. a .. '\n' .. b .. '\n' .. #input .. '\n' .. input)
+          local previous = (a == 'SNAPSHOT' or a == 'SCOPE') and snapshot_cache and snapshot_cache.target == b and snapshot_cache.xml
+          net.job = start(id .. '\n' .. a .. '\n' .. b .. '\n' .. #input .. '\n' .. input, previous)
           return proceed(net, token)
         end)
         if not completed then clear_transfer(net); lanes[lane] = nil; error(receipt) end
@@ -957,11 +989,12 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
       local body = table.concat(network.chunks); network.chunks = nil
       if network.delta_base then body = expand_delta(network.delta_base, body, network.desired_size); network.delta_base = nil end
       if network.base then body = #network.base .. '\n' .. network.base .. body; network.base = nil end
-      network.job = start(id .. '\n' .. network.op .. '\n' .. network.target .. '\n' .. #body .. '\n' .. body)
+      local previous = b == 'checked' and snapshot_cache and snapshot_cache.target == network.target and snapshot_cache.xml
+      network.job = start(id .. '\n' .. network.op .. '\n' .. network.target .. '\n' .. #body .. '\n' .. body, previous)
       -- With 'steps' the first step runs now and the program sends 'step' for each next one.
       -- Without it (an older program, or the bridge upgrade check) every step runs now, as before.
       if a == 'steps' then
-        network.inline = b == 'inline' and (network.op == 'READ' or network.op == 'LIST' or network.op == 'LISTSEQ' or network.op == 'TCRANGES'
+        network.inline = (b == 'inline' or b == 'checked') and (network.op == 'READ' or network.op == 'LIST' or network.op == 'LISTSEQ' or network.op == 'TCRANGES' or network.op == 'ASSIGNSEQ'
           or network.op == 'SNAPSHOT' or network.op == 'SCOPE' or network.op == 'SYNC' or network.op == 'SEQGO')
         return proceed(network, token)
       end

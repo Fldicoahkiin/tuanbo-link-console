@@ -442,7 +442,7 @@ it.skipIf(!process.env.MA2_ONPC_AUTO_SYNC_ACCEPTANCE)('真实 onPC 自动写回�
   let value = createEmptyLinkProject('自动同步真实验收');
   value.rundown = [{ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [] }];
   value = importMa2TimecodeCommand('song', convertMa2Snapshot(await bridge.request('SNAPSHOT', target), target)).execute(value);
-  const pass = () => syncBoundSong({ itemId: 'song', connection, consoleChanges: 'read-back', project: () => value, current: () => true,
+  const pass = () => syncBoundSong({ executor: () => { throw new Error('意外读取执行器'); }, assign: () => { throw new Error('意外分配执行器'); }, route: command => { value = command.execute(value); }, itemId: 'song', connection, consoleChanges: 'read-back', project: () => value, current: () => true,
     read: async request => convertMa2Snapshot(await bridge.request('SNAPSHOT', request.target), request.target, [], request.timeOriginMs),
     compare: request => Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback)), apply: request => service.apply(request),
     archive: () => Promise.resolve(), confirm: command => { value = command.execute(value); }, writing: () => undefined, localEditedAt: () => undefined, consoleSeen: () => Date.now() });

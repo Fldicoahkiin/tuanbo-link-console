@@ -46,7 +46,10 @@ export class Ma2NetworkWire implements Ma2Wire {
   private lastRead: ReadBaseline | undefined;
   private readonly unreleased = new Set<string>();
   private twoLanes: boolean | null = null;
-  constructor(private readonly connection: Pick<Ma2Telnet, 'command'>, private readonly localFiles = false, private readonly journal?: Pick<Ma2RequestJournal, 'begin' | 'released'>) {}
+  constructor(private readonly connection: Pick<Ma2Telnet, 'command'>, private readonly localFiles = false, private readonly journal?: Pick<Ma2RequestJournal, 'begin' | 'released'>, private readonly verifiedSnapshots = false) {}
+  hasSnapshot(target: number, snapshot: string): boolean {
+    return this.snapshot?.target === target && this.snapshot.content.equals(Buffer.from(snapshot));
+  }
   /** The requests this wire began on the console and has not released, one per lane; the plugin keeps each for 120 s. */
   get unreleasedRequests(): string[] { return [...this.unreleased]; }
   /** Whether the running plugin keeps a foreground lane beside the background one: learned from the first 'begin'
@@ -116,7 +119,8 @@ export class Ma2NetworkWire implements Ma2Wire {
       if (reference && lane !== 'bg') throw new Error('无效的 MA2 网络请求');
       // SEQGO's first step only exports the sequence. Its native write remains a
       // separate, gated step after the second export and comparison.
-      const shortQuery = (operation === 'LIST' || operation === 'LISTSEQ' || operation === 'TCRANGES' || operation === 'SEQGO' && lane === 'bg' && data.length > 0) && data.length <= 320;
+      const snapshotQuery = this.verifiedSnapshots && lane === 'bg' && ['SNAPSHOT', 'SCOPE', 'ASSIGNSEQ'].includes(operation);
+      const shortQuery = (snapshotQuery || operation === 'LIST' || operation === 'LISTSEQ' || operation === 'TCRANGES' || operation === 'SEQGO' && lane === 'bg' && data.length > 0) && data.length <= 320;
       const readNow = operation === 'READ' && data.length === 0 && lane === 'bg' || shortQuery;
       if (readNow) { await beforeStep?.(0); checkCancellation(); beforeSend(); }
       this.journal?.begin(id); this.unreleased.add(id);
@@ -148,12 +152,13 @@ export class Ma2NetworkWire implements Ma2Wire {
       // The plugin does one console Export or Import per line and answers STEP:<steps done> until the
       // last, so stop and playback commands queued meanwhile go out between two steps. A plugin from
       // before steps ignores 'steps' and answers DONE at once, which is the same protocol.
-      const inlineResult = ['READ', 'LIST', 'LISTSEQ', 'TCRANGES', 'SNAPSHOT', 'SCOPE', 'SYNC', 'SEQGO'].includes(operation);
+      const inlineResult = ['READ', 'LIST', 'LISTSEQ', 'TCRANGES', 'SNAPSHOT', 'SCOPE', 'SYNC', 'SEQGO', 'ASSIGNSEQ'].includes(operation);
       let reply = begun;
       if (!beganWithRead) {
         checkCancellation(); await beforeStep?.(0); checkCancellation();
         if (!sent) { beforeSend(); sent = true; }
-        reply = await this.call('run', id, inlineResult ? ",'steps','inline'" : ",'steps'");
+        const checked = this.verifiedSnapshots && ['SNAPSHOT', 'SCOPE', 'SYNC'].includes(operation);
+        reply = await this.call('run', id, checked ? ",'steps','checked'" : inlineResult ? ",'steps','inline'" : ",'steps'");
       }
       for (let done = 0, step = /^STEP:(\d+)(:verify)?$/.exec(reply); step; step = /^STEP:(\d+)(:verify)?$/.exec(reply)) {
         if (Number(step[1]) !== done + 1) throw new Error('控台分步执行的回答对不上');

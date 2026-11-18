@@ -36,11 +36,11 @@ import { obsEndpointNotListening, waitForObsEndpoint } from './link/obs-startup'
 import { obsLiveEditSchema, obsMediaPreparationSchema } from '@tb/schema';
 import { ObsLivePreview } from './link/obs-live-preview';
 import { ObsNativeSeek } from './link/obs-native-seek';
-import { obsSourceCreateSchema, obsSourceNameSchema, obsSourceApplySchema, ma2BridgeRequestSchema, ma2ReadRequestSchema, ma2CompareRequestSchema, ma2ApplyRequestSchema, ma2CreateRequestSchema } from '@tb/schema';
+import { obsSourceCreateSchema, obsSourceNameSchema, obsSourceApplySchema, ma2BridgeRequestSchema, ma2PreviewRequestSchema, ma2CompareRequestSchema, ma2ApplyRequestSchema, ma2CreateRequestSchema } from '@tb/schema';
 import { createMa2Timecode } from './link/ma2-create';
 import { renameMa2Object } from './link/ma2-rename-service';
 import { ma2RenameRequestSchema } from '@tb/schema';
-import { ma2PlaybackPrepareSchema, ma2CatalogRequestSchema, ma2ReadProgressSchema, linkP1ProjectImportProgressSchema, type Ma2ReadProgressUpdate, type LinkP1ProjectImportProgress } from '@tb/schema';
+import { ma2PoolRouteRequestSchema, ma2PlaybackPrepareSchema, ma2CatalogRequestSchema, ma2ReadProgressSchema, linkP1ProjectImportProgressSchema, type Ma2ReadProgressUpdate, type LinkP1ProjectImportProgress } from '@tb/schema';
 import { readMa2Catalog } from './link/ma2-catalog';
 import { Ma2ReadRecovery } from './link/ma2-read-recovery';
 import { Ma2MaterialRecovery } from './link/ma2-material-recovery';
@@ -60,6 +60,7 @@ import { ma2PlaybackRequestSchema, ma2NetworkSaveSchema, ma2LiveConnectSchema, m
 import ma2PluginLua from '../../../../tools/ma2/tblink_bridge.lua?raw';
 import ma2PluginXml from '../../../../tools/ma2/tblink_bridge.xml?raw';
 import ma2PluginInstructions from '../../../../tools/ma2/README.md?raw';
+import { assignMa2PoolSequence } from './link/ma2-pool-route';
 import { compareMa2LightingReadback } from './link/ma2-comparison';
 import { convertMa2Snapshot } from './link/ma2-timecode-conversion';
 import { readFile, stat, statfs, mkdtemp, writeFile, mkdir } from 'node:fs/promises';
@@ -1184,7 +1185,12 @@ function registerIpc(
     return (await getMa2Connection(request)).bridge.request(request.operation, request.target, request.expected, request.desired);
   });
   handle('link:ma2-preview', async (_event, value: unknown) => {
-    const request = ma2ReadRequestSchema.parse(value);
+    const request = ma2PreviewRequestSchema.parse(value);
+    if (request.syncSequences) {
+      const { service } = await getMa2Connection(request);
+      const network = request.network;
+      return service.previewEdit(request.target, request.timeOriginMs, request.syncSequences, network && (() => ma2Network.preview(network, request.target, request.timeOriginMs)));
+    }
     if (request.network) { await ma2NetworkReady; return ma2Network.preview(request.network, request.target, request.timeOriginMs); }
     const snapshot = await (await getMa2Connection(request)).bridge.request('SNAPSHOT', request.target);
     return convertMa2Snapshot(snapshot, request.target, [], request.timeOriginMs);
@@ -1422,6 +1428,11 @@ function registerIpc(
       await recordMa2Failure(`读取执行器 ${request.executor}`, error instanceof Error ? error.message : String(error), error);
       throw error;
     }
+  });
+  handle('link:ma2-pool-route', async (_event, value: unknown) => {
+    const request = ma2PoolRouteRequestSchema.parse(value);
+    const { bridge } = await getMa2Connection(request);
+    return assignMa2PoolSequence(bridge, request);
   });
   handle('link:ma2-compare', (_event, value: unknown) => {
     const request = ma2CompareRequestSchema.parse(value);

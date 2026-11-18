@@ -839,6 +839,19 @@ it('只手动同步：关掉实时同步后点“同步一次”，按选的同�
   expect(sync).toHaveBeenCalledTimes(2);
   expect(useMa2SyncStore.getState().songs.first?.state).toBe('pending');
 });
+it('实时同步开启时刷新当前节目，其他歌曲保留确认结果及下次检查时间', async () => {
+  useDocumentStore.getState().setProject(bothBound(), 'song.tblink');
+  sync.mockImplementation(answerOwn); check.mockResolvedValue(false);
+  await prepareMa2RealtimeSession();
+  await tickMa2SongSync();
+  const other = useMa2SyncStore.getState().songs.first;
+  sync.mockClear();
+  refreshMa2RealtimeSession('second');
+  await tickMa2SongSync();
+  expect(sync).toHaveBeenCalledTimes(1);
+  expect(useMa2SyncStore.getState().songs.first).toBe(other);
+  expect(useMa2SyncStore.getState().songs.second?.state).toBe('verified');
+});
 it('同步一次时控台没连上：一直等到连上再同步，不算结束；暂停可以取消（2026-11-04）', async () => {
   pauseMa2RealtimeSession();
   status.mockResolvedValue({ state: 'disconnected' });

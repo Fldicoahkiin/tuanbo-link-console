@@ -62,7 +62,7 @@
 
 ## 整套 Cue 的首次放置
 
-2026-11-17：首次添加整套序列经 `packages/core/src/ma2-new-timeline.ts` 的 `addMa2SequenceCommand` 同时保留完整编排并预留控台目标，调用现有 `syncMa2Once(itemId)`；已有绑定不换位置。目标占用仍在同一新建分配规则内顺延，MTC 仍由逐首同步分配。素材点击和拖入都传入歌曲实际拍点，后续同步只取已编辑的 Cue 时间。`ma2-new-timeline.test.ts` 与 `lighting-sequence-placement.test.ts` 覆盖首次创建、重复添加、撤销、时间保留和真实入口触发同步。
+2026-11-17：首次从素材放入一个控台 Cue（2026-11-19）或整套序列经 `packages/core/src/ma2-new-timeline.ts` 的 `addMa2SequenceCommand` 同时保留完整编排并预留控台目标，调用现有 `syncMa2Once(itemId)`；已有绑定不换位置。目标占用仍在同一新建分配规则内顺延，MTC 仍由逐首同步分配。素材点击和拖入都传入歌曲实际拍点，后续同步只取已编辑的 Cue 时间。`ma2-new-timeline.test.ts` 与 `lighting-sequence-placement.test.ts` 覆盖首次创建、重复添加、撤销、时间保留和真实入口触发同步。
 
 `packages/core/src/lighting-template-steps.ts` 统一展开整套序列，默认每步 1 拍；用户编辑后不再经过这个展开步骤。素材组合保留成员已编辑的相对时间。`apps/desktop/src/renderer/src/link/components/lighting-sequence-placement.test.ts` 检查完整展开、组合时间、逐步编辑和歌曲范围。
 
@@ -72,7 +72,7 @@
 
 ## 新增轨道写到哪里
 
-`packages/core/src/ma2-track-routing.ts` 决定已有绑定内新增轨道的去向，唯一目标登记待写入，歧义明确提示。无需分配时返回原灯光对象，实时同步省去整首灯光数据的复制和比较。`packages/core/src/ma2-track-routing.test.ts` 检查归属与未同步统计。
+`packages/core/src/ma2-track-routing.ts` 决定已有绑定内新增轨道的去向，唯一目标登记待写入。在一条已关联时间线上首次放入仅有序列号和 Cue 号的控台素材时，逐首同步通过 ASSIGNSEQ 在工程专用页复用或分配空执行器，读回实际序列和名称后再写入该时间线；旧工程中尚未写出的素材沿用同一流程。多个目标或缺少可识别的 Cue 时明确提示。无需分配时返回原灯光对象，实时同步省去整首灯光数据的复制和比较。`packages/core/src/ma2-track-routing.test.ts` 检查归属与未同步统计。
 
 未关联轨道没有 Timecode 归属，不能伪造为第一条绑定的差异。`ma2PendingChanges` 只比较已绑定内容；`ma2TrackRoutingIssue` 在歌曲状态和同步前置检查中说明未关联轨道，仍阻止把遗漏的 Cue 确认为已同步。`ma2-pending-changes.test.ts`、`song-lighting-status.test.ts` 和 `runtime/ma2-bound-song-sync.test.ts` 守住计数不重复、问题可见、未关联内容不误确认。
 

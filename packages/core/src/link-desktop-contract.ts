@@ -291,6 +291,7 @@ export type LinkDesktopApi = {
   editMa2Timeline(payload: import('@tb/schema').Ma2TimelineEditRequest): Promise<import('@tb/schema').Ma2TimelineEditResult>;
   createMa2(payload: import('@tb/schema').Ma2CreateRequest): Promise<import('@tb/schema').Ma2TimecodePreview>;
   readMa2Executor(payload: import('@tb/schema').Ma2ExecutorReadRequest): Promise<import('@tb/schema').Ma2ExecutorPreview>;
+  assignMa2PoolSequence(payload: import('@tb/schema').Ma2PoolRouteRequest): Promise<import('@tb/schema').Ma2PoolRoute>;
   compareMa2(payload: import('@tb/schema').Ma2CompareRequest): Promise<import('./ma2-sync').Ma2SyncPreview>;
   applyMa2(payload: import('@tb/schema').Ma2ApplyRequest): Promise<import('@tb/schema').Ma2ApplyResult>;
   renameMa2Object(payload: import('@tb/schema').Ma2RenameRequest): Promise<import('@tb/schema').Ma2RenameResult>;

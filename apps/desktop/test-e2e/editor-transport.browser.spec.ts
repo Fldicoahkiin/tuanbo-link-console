@@ -319,6 +319,15 @@ test('新建时间线右键修改名称和 MTC，Cue 编辑仍进入原编辑器
 });
 
 
+test('侧栏刷新只展开当前节目的结果，其他节目的草稿不出现在本次刷新里', async ({ page }) => {
+  await page.getByRole('button', { name: '修改起始码', exact: true }).click();
+  await page.evaluate('window.syncSummaryFixture("unlinked")');
+  await page.getByRole('button', { name: '刷新同步', exact: true }).click();
+  const details = page.getByRole('dialog', { name: '同步状态详情', exact: true });
+  await expect(details.getByRole('heading', { name: '同步 · 歌曲', exact: true })).toBeVisible();
+  await expect(details).not.toContainText('第二首歌');
+});
+
 test('当前节目已同步时，其他未关联草稿显示待关联，不再假报待同步', async ({ page }, info) => {
   await page.getByRole('button', { name: '修改起始码', exact: true }).click();
   await page.evaluate('window.syncSummaryFixture("unlinked")');

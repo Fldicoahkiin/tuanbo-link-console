@@ -56,7 +56,8 @@ export const ma2BridgeRequestSchema = z.object({
 }).strict();
 export type Ma2BridgeRequest = z.infer<typeof ma2BridgeRequestSchema>;
 export const ma2ReadRequestSchema = ma2BridgeRequestSchema.pick({ dataDirectory: true, network: true, target: true }).extend({ timeOriginMs: z.number().int().min(0).max(86399999).optional() });
-export type Ma2ReadRequest = z.infer<typeof ma2ReadRequestSchema>;
+export const ma2PreviewRequestSchema = ma2ReadRequestSchema.extend({ syncSequences: z.array(z.number().int().min(1).max(99999)).max(10000).optional() });
+export type Ma2ReadRequest = z.infer<typeof ma2PreviewRequestSchema>;
 export const ma2CreateRequestSchema = ma2ReadRequestSchema.extend({ name: z.string().trim().min(1).max(512).regex(/^[^\u0000-\u001f]+$/) });
 export type Ma2CreateRequest = z.infer<typeof ma2CreateRequestSchema>;
 export const ma2ExecutorReadRequestSchema = ma2ReadRequestSchema.extend({ executor: z.string().regex(/^[1-9]\d{0,4}\.[1-9]\d{0,4}$/) });

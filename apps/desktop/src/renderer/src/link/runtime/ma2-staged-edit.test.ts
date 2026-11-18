@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, type Ma2ApplyRequest, type Ma2CompareRequest } from '@tb/schema';
-import { importMa2TimecodeCommand, ma2PendingChanges, setLightingCommand, SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
+import { createEmptyLinkProject, type Ma2ApplyRequest, type Ma2CompareRequest, type Ma2PoolRouteRequest } from '@tb/schema';
+import { importMa2TimecodeCommand, ma2PendingChanges, placeConsoleCue, setLightingCommand, SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
 import { convertMa2Snapshot, convertMa2Timecode } from '../../../../main/link/ma2-timecode-conversion';
 import { compareMa2LightingReadback } from '../../../../main/link/ma2-comparison';
 import { Ma2ApplyService } from '../../../../main/link/ma2-apply-service';
@@ -56,8 +56,12 @@ const IDLE = { phase: 'idle', program: null } as const;
 /** The console at Timecode 9902 is `native`; the real apply service writes it, checks it before writing and reads it back. */
 function setup(initial = xml) {
   let native = initial;
+  const nativeSnapshot = (includePool = false) => {
+    const base = snapshot(native);
+    return includePool || native.includes('<No>9899</No>') ? base.replace('</MA>', sequenceObject.replace('index="9900"', 'index="9898"') + '</MA>') : base;
+  };
   const bridge = {
-    request: vi.fn(() => Promise.resolve(snapshot(native))),
+    request: vi.fn((op?: string) => Promise.resolve(nativeSnapshot(op === 'SCOPE'))),
     exchange: vi.fn((_operation: string, _target: number, _expected: string, desired: string) => {
       native = desired;
       return Promise.resolve({ response: native, requestId: 'a'.repeat(32) });
@@ -67,7 +71,8 @@ function setup(initial = xml) {
   const service = new Ma2ApplyService(bridge, op => currentShowGate(op));
   const api = {
     getMa2NetworkStatus: vi.fn(() => Promise.resolve({ state: 'connected', settings: { ...network, autoConnect: false } })),
-    previewMa2: vi.fn(() => Promise.resolve(convertMa2Snapshot(snapshot(native), 9902))),
+    assignMa2PoolSequence: vi.fn((request: Ma2PoolRouteRequest) => Promise.resolve({ sequence: request.sequence, executor: '999.101', executorName: '素材 9899' })),
+    previewMa2: vi.fn(() => Promise.resolve(convertMa2Snapshot(nativeSnapshot(), 9902))),
     compareMa2: vi.fn((request: Ma2CompareRequest) => Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback))),
     applyMa2: vi.fn((request: Ma2ApplyRequest) => service.apply(request))
   };
@@ -334,4 +339,24 @@ it('存档失败阻止写入，并保留本地修改且不重试', async () => {
   await test.tick(); await test.tick();
   expect(test.bridge.exchange).not.toHaveBeenCalled(); expect(pending()).toHaveLength(1);
   expect(test.song().state).toBe('blocked'); expect(test.song().message).toContain('存档');
+});
+
+it('素材池新 Cue 写入原时间线并读回；一步撤销和重做都再次写回，保留素材身份', async () => {
+  const test = setup(); test.stop(); await test.tick();
+  const store = useDocumentStore.getState;
+  const doc = () => store().project!.rundown[0]!.lighting!;
+  const edit = placeConsoleCue(doc(), { sequence: 9899, cue: '1.250', name: '现场素材', executor: '' }, 500, 10000);
+  const event = edit.tracks.at(-1)!.clips[0]!.events[0]!;
+  event.librarySource = { id: 'pool-cue', revision: 1 };
+  store().execute(setLightingCommand('song', edit));
+  await test.tick();
+  expect(test.song().message).toContain('已写入控台并回读确认');
+  expect(test.console()).toContain('<No>9899</No>');
+  expect(doc().tracks.at(-1)!.clips[0]!.events[0]).toMatchObject({ id: event.id, executor: '999.101', librarySource: event.librarySource });
+  expect(store().past).toHaveLength(1);
+  store().undo(); await test.tick();
+  expect(test.song().state).toBe('verified'); expect(test.console()).not.toContain('<No>9899</No>');
+  store().redo(); await test.tick();
+  expect(test.song().state).toBe('verified'); expect(test.console()).toContain('<No>9899</No>');
+  expect(doc().tracks.at(-1)!.clips[0]!.events[0]).toMatchObject({ id: event.id, executor: '999.101', librarySource: event.librarySource });
 });

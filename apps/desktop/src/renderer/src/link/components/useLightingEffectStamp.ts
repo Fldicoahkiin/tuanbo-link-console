@@ -5,6 +5,7 @@ import { consoleCueDragSchema, type ConsoleCueDrag } from './lighting-material-d
 import { ma2SequenceLibrary } from '../view-models/ma2-sequence-library';
 import { useLightingSequencePlacement } from '../stores/lighting-sequence-placement-store';
 import { ma2SongSyncSettings } from '../runtime/ma2-song-sync';
+import { useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
 import { syncMa2Once } from '../runtime/ma2-realtime-session';
 
 export function useLightingEffectStamp(itemId: string | null, document: LightingDocument, durationMs: number, notify: (message: string, tone?: 'info' | 'error') => void) {
@@ -13,10 +14,10 @@ export function useLightingEffectStamp(itemId: string | null, document: Lighting
     const state = useDocumentStore.getState(); const project = state.project;
     const item = project?.rundown.find(entry => entry.id === id);
     if (!project || !item) throw new Error('歌曲已删除，请重新选择');
-    const create = wholeSequence && !hasMa2SongSyncTarget(item.lighting);
+    const create = !hasMa2SongSyncTarget(item.lighting);
     const settings = ma2SongSyncSettings(project, id);
-    state.execute(wholeSequence ? addMa2SequenceCommand(id, value, { name: item.title, sequence: settings.nextSequence, timecode: settings.nextSequence, executor: `${settings.executorPage ?? 1000}.101` }) : setLightingCommand(id, value, '添加灯光点'));
-    if (create) syncMa2Once(id);
+    state.execute(create || wholeSequence ? addMa2SequenceCommand(id, value, { name: item.title, sequence: settings.nextSequence, timecode: settings.nextSequence, executor: `${settings.executorPage ?? 1000}.101` }, wholeSequence ? '添加整套 Cue' : '添加灯光点') : setLightingCommand(id, value, '添加灯光点'));
+    if (create && (wholeSequence || useMa2RealtimePreference.getState().enabled)) syncMa2Once(id);
   };
   const stamp = (effectId: string, ms: number, replaceId?: string): void => {
     if (!itemId || !durationMs) return;

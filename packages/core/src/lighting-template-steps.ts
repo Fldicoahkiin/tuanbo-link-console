@@ -1,4 +1,5 @@
 import { lightingDocumentSchema, type LightingDocument } from '@tb/schema';
+import { materialCueTrack } from './lighting-cue-placement';
 import { assertMusicCueConflicts } from './lighting-music';
 import { LightingTempoMap } from './lighting-edit';
 import type { SongBeats } from './song-beats';
@@ -52,9 +53,9 @@ export function placeLightingTemplate(document: LightingDocument, stamp: Stamp, 
       return { ...value, templates: document.templates };
     }, document);
   }
-  const existing = document.tracks.find(track => track.group === 'effect-canvas' && track.cueStamp?.mode === 'fixed' && track.cueStamp.executor === binding.executor && (binding.executor || track.cueStamp.sequence === binding.sequence) && !track.locked);
+  const existing = materialCueTrack(document, binding);
   const track = existing ?? { ...effect.track, id: crypto.randomUUID(), name: '灯光', group: 'effect-canvas', clips: [] };
-  const event = { id: stamp.id, librarySource: { id: effect.id, revision: effect.libraryRevision ?? 1 }, ...(stamp.groupId ? { effectGroupId: stamp.groupId } : {}), kind: 'ma2' as const, action: 'goto' as const, label: effect.name, at: stamp.ms, executor: binding.executor, sequence: binding.sequence, cue: binding.cue };
+  const event = { id: stamp.id, librarySource: { id: effect.id, revision: effect.libraryRevision ?? 1 }, ...(stamp.groupId ? { effectGroupId: stamp.groupId } : {}), kind: 'ma2' as const, action: 'goto' as const, label: effect.name, at: stamp.ms, executor: track.cueStamp?.mode === 'fixed' ? track.cueStamp.executor : binding.executor, sequence: binding.sequence, cue: binding.cue };
   const clip = track.clips.find(entry => entry.timeLock === 'time' && entry.start === 0 && !entry.muted);
   const updatedClip = clip ? { ...clip, duration: Math.max(clip.duration, stamp.ms + 1), events: [...clip.events, event] } : { id: crypto.randomUUID(), name: effect.name, start: 0, duration: Math.max(durationMs, stamp.ms + 1), timeLock: 'time' as const, muted: false, events: [event] };
   const updated = { ...track, clips: [...track.clips.filter(entry => entry.id !== clip?.id), updatedClip] };

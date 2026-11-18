@@ -48,7 +48,7 @@ export function ma2SyncActive(): boolean {
   return preference.enabled || preference.once !== null;
 }
 
-/** A manual request from a song page stays on that song; the sidebar still requests all songs. */
+/** A manual request stays on the selected song, including from the sidebar. */
 export function ma2SongSyncActive(itemId: string): boolean {
   const preference = useMa2RealtimePreference.getState();
   return preference.enabled || preference.once !== null && (!preference.onceItemId || preference.onceItemId === itemId);

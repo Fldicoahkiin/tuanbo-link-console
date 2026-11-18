@@ -18,7 +18,7 @@ import { archiveBeforeSync } from './ma2-sync-archive';
 import { archiveMa2Project } from './ma2-project-archive';
 import { readMa2SongFromConsole } from './ma2-console-version';
 import { ma2ConsoleChangesFor, ma2SongShifted } from './ma2-song-shift';
-import { routeMa2Tracks } from '@tb/core/link';
+import { unboundMa2Tracks } from '@tb/core/link';
 
 /**
  * Failed attempts in a row before a sync stops and waits for an edit or 刷新同步. Way 2 (the song's
@@ -93,7 +93,7 @@ function checkPendingMa2Songs(): void {
 }
 function pendingReason(project: NonNullable<ReturnType<typeof useDocumentStore.getState>['project']>, entry: SongSync, item: Program, lighting: NonNullable<Program['lighting']>): string | null {
   // Way 1 keeps the baseline the console confirmed in the song, so any difference from it is an edit to sync.
-  if (lighting.ma2Bindings?.length) return ma2PendingChanges(project).some(change => change.itemId === item.id) ? '修改已暂存，等待同步' : null;
+  if (lighting.ma2Bindings?.length) return unboundMa2Tracks(lighting).length || ma2PendingChanges(project).some(change => change.itemId === item.id) ? '修改已暂存，等待同步' : null;
   try {
     return entry.acknowledged !== songSignature(ma2SongPoints(lighting), lighting.consoleSong?.name ?? entry.name, songStart(item)) ? '修改已暂存，等待同步' : null;
   } catch (cause) {
@@ -224,15 +224,13 @@ async function syncImportedSong(entry: SongSync): Promise<void> {
   if (wait) { update(entry, { state: 'pending', checking: false, message: wait }); return; }
   update(entry, entry.state === 'verified' ? { checking: true } : { checking: true, state: 'syncing', message: '正在读取这首歌的控台时间码…' });
   const project = () => { const state = useDocumentStore.getState(); return state.documentId === entry.documentId ? state.project : null; };
-  const lighting = project()?.rundown.find(item => item.id === entry.itemId)?.lighting;
-  if (lighting) {
-    const routed = routeMa2Tracks(lighting);
-    if (routed !== lighting) useDocumentStore.getState().executeForDocument(entry.documentId, setLightingCommand(entry.itemId, routed, '关联新增灯光轨道'));
-  }
   const outcome = await syncBoundSong({
     // A song moved as a whole (blank time before its music) is written, not read back, until the console confirms it.
     itemId: entry.itemId, connection: { dataDirectory: '', network: place.network }, project, consoleChanges: ma2ConsoleChangesFor(entry, useMa2RealtimePreference.getState().consoleChanges),
     current: () => canContinue(entry) && currentShowWait('ma2.sync.write') === null,
+    executor: request => window.tbLink.readMa2Executor(request),
+    assign: sequence => window.tbLink.assignMa2PoolSequence({ dataDirectory: '', network: place.network, expectedSource: place.source, projectId: project()!.projectId, sequence }),
+    route: command => confirmMa2Edit(() => useDocumentStore.getState().executeForDocument(entry.documentId, command)),
     read: request => window.tbLink.previewMa2(request),
     compare: request => window.tbLink.compareMa2(request),
     apply: request => window.tbLink.applyMa2(request),

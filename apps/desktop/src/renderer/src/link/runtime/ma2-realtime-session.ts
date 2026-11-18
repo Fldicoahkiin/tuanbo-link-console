@@ -135,7 +135,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     if (!current()) return false;
     const unallocated = useDocumentStore.getState().project;
     if (!unallocated) return false;
-    if (songsNeedingMtcStart(unallocated).length && !await allocateMtcStarts(connection.network, state.documentId, sourceKey, current)) return false;
+    if (!useMa2RealtimePreference.getState().onceItemId && songsNeedingMtcStart(unallocated).length && !await allocateMtcStarts(connection.network, state.documentId, sourceKey, current)) return false;
     const project = useDocumentStore.getState().project;
     if (!project) return false;
     setSongsWaitingForConnection(state.documentId, false);
@@ -149,7 +149,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     }
     // The whole check succeeded: a problem it reported earlier is over. A song's own failure stays on that song.
     blockedContext = '';
-    const songs = Object.values(useMa2SyncStore.getState().songs).filter(song => song.documentId === state.documentId && song.state !== 'paused');
+    const songs = Object.values(useMa2SyncStore.getState().songs).filter(song => song.documentId === state.documentId && ma2SongSyncActive(song.itemId) && song.state !== 'paused');
     if (!songs.length && !pendingMa2Renames(project).length) {
       const readFailure = project.ma2ReadState?.failures[0];
       const unmatched = ma2SongPairs(project).unresolved[0];

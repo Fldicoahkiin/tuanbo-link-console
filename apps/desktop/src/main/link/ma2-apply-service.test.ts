@@ -202,10 +202,10 @@ describe('本机 MA2 同步服务', () => {
   });
   it('空轨道新增指定 Cue 自动补读所需序列，并把额外序列交给写前核对', async () => {
     const { request, bridge, empty } = setupEmpty();
-    bridge.request.mockResolvedValueOnce(empty).mockResolvedValueOnce(snapshot(empty));
+    bridge.request.mockResolvedValueOnce(snapshot(empty));
     const result = await new Ma2ApplyService(bridge, showStopped).apply(request);
     if (result.status !== 'verified') throw new Error(result.message);
-    expect(bridge.request).toHaveBeenNthCalledWith(2, 'SCOPE', 9902, '9901');
+    expect(bridge.request).toHaveBeenNthCalledWith(1, 'SCOPE', 9902, '9901');
     expect(bridge.exchange).toHaveBeenCalledWith('SYNC', 9902, snapshot(empty), expect.stringContaining('Cue 1.25'));
     expect(result.confirmed.document.tracks[0]?.clips[0]?.events[0]).toMatchObject({ id: 'added', cue: '1.250', sequence: 9901, at: 500 });
   });
@@ -213,10 +213,10 @@ describe('本机 MA2 同步服务', () => {
     for (const failure of ['timecode', 'missing', 'renumbered'] as const) {
       const { request, bridge, empty } = setupEmpty();
       const scoped = failure === 'timecode' ? snapshot(empty.replace('TBLINK_FRACTIONAL_TIMECODE', 'CHANGED')) : failure === 'missing' ? empty : snapshot(empty, sequence.replace('sub_number="250"', 'sub_number="251"'));
-      bridge.request.mockResolvedValueOnce(empty).mockResolvedValueOnce(scoped);
+      bridge.request.mockResolvedValueOnce(scoped);
       expect(await new Ma2ApplyService(bridge, showStopped).apply(request)).toMatchObject({ status: 'incomplete', mayHaveWritten: false });
       expect(bridge.exchange).not.toHaveBeenCalled();
-      expect(bridge.request).toHaveBeenCalledTimes(2);
+      expect(bridge.request).toHaveBeenCalledTimes(1);
     }
   });
   it('完成新快照复核、写入、再次回读并返回稳定身份与备份名称', async () => {
@@ -228,6 +228,35 @@ describe('本机 MA2 同步服务', () => {
     expect(result.confirmed.document.tracks[0]?.clips[0]?.events[0]).toMatchObject({ id: request.document.tracks[0]!.clips[0]!.events[0]!.id, at: 500 });
     expect(bridge.request).toHaveBeenCalledTimes(2);
     expect(bridge.exchange).toHaveBeenCalledWith('SYNC', 9902, expect.stringContaining('<Sequ '), expect.stringContaining('time="15"'));
+  });
+  it('编辑预览复用原生快照，只有控台通过写前比较并回读才确认', async () => {
+    const { bridge, request } = setup();
+    const service = new Ma2ApplyService(bridge, showStopped);
+    request.readback = await service.previewEdit(9902, undefined, []);
+    request.document.tracks[0]!.clips[0]!.events[0]!.at = 500;
+    const applied = await service.apply(request);
+    expect(applied.status).toBe('verified');
+    expect(bridge.request).toHaveBeenCalledTimes(2);
+    expect(bridge.exchange).toHaveBeenCalledExactlyOnceWith('SYNC', 9902, expect.stringContaining('<Sequ'), expect.stringContaining('time="15"'));
+  });
+  it('再次编辑只复用仍在同一连接的快照；控台写前拒绝后重新读实物', async () => {
+    const { bridge, request } = setup();
+    const service = new Ma2ApplyService({ ...bridge, hasSnapshot: () => true }, showStopped);
+    request.document.tracks[0]!.clips[0]!.events[0]!.at = 500;
+    const first = await service.apply(request);
+    if (first.status !== 'verified') throw new Error(first.message);
+    const live = vi.fn(() => Promise.resolve(first.confirmed));
+    bridge.request.mockClear();
+    const again = await service.previewEdit(9902, undefined, [], live);
+    expect(live).toHaveBeenCalledOnce();
+    expect(bridge.request).not.toHaveBeenCalled();
+    bridge.exchange.mockRejectedValueOnce(new Error('Timecode or Sequence changed after preview'));
+    request.document.tracks[0]!.clips[0]!.events[0]!.at = 1000;
+    const rejected = await service.apply({ ...request, readback: again, conflicts: [[request.document.tracks[0]!.clips[0]!.events[0]!.id, 'local']] });
+    if (rejected.status !== 'incomplete') throw new Error('控台同时修改时应重新核对');
+    expect(rejected.mayHaveWritten).toBe(false); expect(rejected.message).toContain('控台同时在改');
+    await service.previewEdit(9902, undefined, [], live);
+    expect(bridge.request).toHaveBeenCalledOnce();
   });
   it('内容不变仅核对并返回基线，不写入控台', async () => {
     const { request, bridge } = setup();

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { holdForShow, isShowWait, type ShowGateReader, type ShowOperation } from '@tb/core/link';
 import { ma2ExecutorPageDirectorySchema } from '@tb/schema';
 import { inspectMa2ExecutorPageXml } from './ma2-timecode-xml';
-import { ma2ObjectDirectorySchema, ma2SequenceAssignmentSchema, ma2RenameResultSchema, ma2LabelSchema, ma2TimecodeRangesSchema } from '@tb/schema';
+import { ma2ObjectDirectorySchema, ma2PoolRouteSchema, ma2SequenceAssignmentSchema, ma2RenameResultSchema, ma2LabelSchema, ma2TimecodeRangesSchema } from '@tb/schema';
 import { readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { inspectMa2SequenceXml, inspectMa2ExecutorXml, inspectMa2TimecodeXml, referencedMa2Sequences, sameMa2XmlObjects, validateMa2TimecodeSnapshot, validateMa2TimecodeWrite } from './ma2-timecode-xml';
@@ -19,6 +19,7 @@ export type Ma2Wire = {
   exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: (done: number) => void | Promise<void>, lane?: Ma2Lane): Promise<string>;
   /** True once the running plugin is known to keep a foreground lane; false or null (not known yet): one lane only. */
   readonly lanes?: boolean | null;
+  hasSnapshot?(target: number, snapshot: string): boolean;
 };
 
 /**
@@ -98,6 +99,9 @@ export class Ma2OnpcBridge {
   constructor(private readonly dataDirectory: string | Ma2Wire, private readonly show: ShowGateReader) {
     if (typeof dataDirectory === 'string' && !isAbsolute(dataDirectory)) throw new Error('MA2 数据目录必须是绝对路径');
   }
+  hasSnapshot(target: number, snapshot: string): boolean {
+    return typeof this.dataDirectory !== 'string' && this.dataDirectory.hasSnapshot?.(target, snapshot) === true;
+  }
   /** `behind: 'bg'` queues a foreground read behind the background lane anyway: a read that a console change made
    * straight on the Telnet line follows, so that change waits for a running sync instead of jumping ahead of it. */
   async request(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: Ma2TransferProgress, behind?: 'bg'): Promise<string> {
@@ -134,7 +138,7 @@ export class Ma2OnpcBridge {
       if (desired || parts.length !== 6 || !['single', 'sequence'].includes(parts[0]!) || !/^\d+(?:\.\d{1,3})?$/.test(parts[1]!) || parts.slice(2).some(value => !/^(?:[a-f0-9]{2})*$/.test(value)) || expected.length > 16384) throw new Error('控台改名请求格式无效');
       ma2LabelSchema.parse(Buffer.from(parts[5]!, 'hex').toString('utf8'));
     }
-    if (operation === 'ASSIGNSEQ' && (!/^[a-f0-9]{24}\n(?:[a-f0-9]{2}){1,4096}\n(?:[a-f0-9]{2}){1,256}$/.test(expected) || desired)) throw new Error('自动关联请求格式无效');
+    if (operation === 'ASSIGNSEQ' && (!/^[a-f0-9]{24}\n(?:[a-f0-9]{2}){1,4096}\n(?:[a-f0-9]{2}){1,256}(?:\nname)?$/.test(expected) || desired)) throw new Error('自动关联请求格式无效');
     // Writing the Timecode show, renaming and assigning a Sequence are all syncing the console (第 3 题).
     const hold = (reached = ''): void => { if (writing || assigning) holdForShow(this.show, 'ma2.sync.write', reached); };
     hold();
@@ -167,7 +171,7 @@ export class Ma2OnpcBridge {
         if (operation === 'PING') return { response: parseMa2Ping(result).version, requestId: id };
         if (operation === 'LABEL') { const label = ma2RenameResultSchema.parse(JSON.parse(result)); if (label.sequence !== target) throw new Error('控台名称回读序列不一致'); }
         else if (operation === 'SEQGO') { ma2SequenceGoResultSchema.parse(JSON.parse(result)); }
-        else if (assigning) { const assigned = ma2SequenceAssignmentSchema.parse(JSON.parse(result)); if (assigned.sequence !== target) throw new Error('控台自动关联序列不一致'); }
+        else if (assigning) { const assigned = (expected.endsWith('\nname') ? ma2PoolRouteSchema : ma2SequenceAssignmentSchema).parse(JSON.parse(result)); if (assigned.sequence !== target) throw new Error('控台自动关联序列不一致'); }
         else if (operation === 'PAGES') ma2ExecutorPageDirectorySchema.parse(JSON.parse(result));
         else if (operation === 'PAGE') inspectMa2ExecutorPageXml(result, target);
         else if (operation === 'LIST' || operation === 'LISTSEQ') ma2ObjectDirectorySchema.parse(JSON.parse(result));

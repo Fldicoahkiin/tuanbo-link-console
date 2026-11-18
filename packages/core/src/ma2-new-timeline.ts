@@ -61,8 +61,8 @@ function reserveDestination(project: LinkProject, destination: Ma2TimelineDestin
 }
 
 /** Whole-sequence placement also plans the first console timeline, without replacing edited Cues. */
-export function addMa2SequenceCommand(itemId: string, lighting: LightingDocument, destination: Ma2TimelineDestination): LinkCommand {
-  const edit = setLightingCommand(itemId, lighting, '添加整套 Cue');
+export function addMa2SequenceCommand(itemId: string, lighting: LightingDocument, destination: Ma2TimelineDestination, label = '添加整套 Cue'): LinkCommand {
+  const edit = setLightingCommand(itemId, lighting, label);
   const requested = ma2TimelineDestinationSchema.parse(destination);
   return { ...edit, execute(project) {
     const item = project.rundown.find(value => value.id === itemId);
