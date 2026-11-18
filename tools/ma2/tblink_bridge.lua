@@ -52,28 +52,46 @@ local function canonical(xml)
 end
 -- Sequence fixture data can be hundreds of MB. Scan bounded XML tokens on the console,
 -- never load/transfer a complete Sequence merely to prepare its Cue triggers.
-local function sequence_stream(path, strip_triggers, visit)
+local function sequence_stream(path, strip_triggers, visit, work)
   local file = assert(io.open(path, 'rb'), 'Sequence export unavailable')
+  if work then work.files[file] = true end
   local buffer, cursor, ended, stack = '', 1, false, {}
   local function token()
     while true do
       if cursor <= #buffer then
         local finish
-        if buffer:sub(cursor, cursor) == '<' then
+        local opaque = stack[#stack] == 'CueDatas'
+        local closing = '</CueDatas>'
+        if opaque and buffer:sub(cursor, cursor + #closing - 1) ~= closing then
+          -- Fixture payload is opaque: retain and compare every byte, but never
+          -- run Lua for its millions of Channel/Value tags. Keep a delimiter tail
+          -- when the closing tag straddles two reads.
+          local ending = buffer:find(closing, cursor, true)
+          finish = ending and ending - 1 or #buffer - #closing + 1
+          if finish >= cursor then
+            local value = buffer:sub(cursor, finish); cursor = finish + 1; return value, true
+          end
+          finish = nil
+        elseif buffer:sub(cursor, cursor) == '<' then
           finish = buffer:find('>', cursor + 1, true)
           assert(finish or #buffer - cursor < 65536, 'Sequence XML tag too large')
         else finish = (buffer:find('<', cursor, true) or (#buffer + 1)) - 1 end
         if finish then local value = buffer:sub(cursor, finish); cursor = finish + 1; return value end
       end
       if ended then assert(cursor > #buffer, 'Incomplete Sequence XML'); return nil end
-      local part = file:read(32768)
+      -- MA throttles interpreted Lua instructions. Large native reads keep the
+      -- opaque payload work proportional to MiB blocks, not fixture nodes.
+      local part = file:read(stack[#stack] == 'CueDatas' and 1048576 or 32768)
+      if part and work then work.checkpoint(#part, 0) end
       if part then buffer = buffer:sub(cursor) .. part; cursor = 1 else ended = true end
     end
   end
   local function next_part()
     while true do
-      local value = token()
+      if work then work.checkpoint(0, 1) end
+      local value, opaque = token()
       if not value then assert(#stack == 0, 'Incomplete Sequence XML'); return nil end
+      if opaque then return value end
       local parent = stack[#stack]
       if value:sub(1, 1) == '<' then
         local closing, name = value:match('^<(/?)([%w_:%-]+)')
@@ -92,9 +110,9 @@ local function sequence_stream(path, strip_triggers, visit)
       elseif not (value:match('^%s*$') and (parent == 'MA' or parent == 'Sequ' or parent == 'Cue')) then return value end
     end
   end
-  return next_part, function() file:close() end
+  return next_part, function() file:close(); if work then work.files[file] = nil end end
 end
-local function sequence_triggers(path, target)
+local function sequence_triggers(path, target, work)
   local cues, number, changed, count, sequences = {}, nil, false, 0, 0
   local next_part, close = sequence_stream(path, false, function(value, name, closing, parent, empty)
     if name == 'Sequ' and parent == 'MA' and not closing then
@@ -116,13 +134,13 @@ local function sequence_triggers(path, target)
       count = count + 1; assert(count <= 100000, 'Sequence Cue count exceeds limit')
       if changed then assert(number, 'Cue number unavailable'); cues[#cues + 1] = number end
     end
-  end)
+  end, work)
   local ok, err = pcall(function() while next_part() do end; assert(sequences == 1, 'Sequence export missing or ambiguous') end); close(); assert(ok, err)
   return cues
 end
-local function same_sequence_files(left, right, strip_triggers)
-  local a, close_a = sequence_stream(left, strip_triggers)
-  local ok_open, b, close_b = pcall(sequence_stream, right, strip_triggers)
+local function same_sequence_files(left, right, strip_triggers, work)
+  local a, close_a = sequence_stream(left, strip_triggers, nil, work)
+  local ok_open, b, close_b = pcall(sequence_stream, right, strip_triggers, nil, work)
   if not ok_open then close_a(); error(b) end
   local ok, equal = pcall(function()
     local x, y, i, j = a(), b(), 1, 1
@@ -471,23 +489,54 @@ local function start(data)
       assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
       local name = 'tblink_library_' .. id
       local path = root .. '/importexport/' .. name .. '.xml'
-      gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
-      local cues = sequence_triggers(path, tc)
-      return step(function()
-        -- This step is atomic with respect to cancellation/show gates: once a write
-        -- starts it always performs its readback; the original export is the backup.
-        check_source()
+      local bytes, tokens, cues = 0, 0, nil
+      local work = { files = {} }
+      work.checkpoint = function(size, count)
+        bytes = bytes + size; tokens = tokens + count
+        if bytes >= 4194304 or tokens >= 256 then coroutine.yield('tblink_step') end
+      end
+      job.close = function()
+        for file in pairs(work.files) do file:close(); work.files[file] = nil end
+      end
+      local scan = coroutine.create(function()
+        gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
+        coroutine.yield('tblink_step')
+        cues = sequence_triggers(path, tc, work)
         gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
-        assert(same_sequence_files(path, root .. '/importexport/' .. name .. '_verify.xml', false), 'Sequence changed before trigger preparation; backup ' .. name)
+        coroutine.yield('tblink_step')
+        assert(same_sequence_files(path, root .. '/importexport/' .. name .. '_verify.xml', false, work), 'Sequence changed before trigger preparation; backup ' .. name)
         discard(name .. '_verify')
         if #cues == 0 then discard(name); return answer('{"changed":false,"cues":0}') end
-        gma.cmd('Assign Sequence ' .. tc .. ' Cue ' .. table.concat(cues, ' + ') .. ' /Trig=Go')
-        gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+        coroutine.yield('tblink_write')
         local check = root .. '/importexport/' .. name .. '_verify.xml'
-        assert(#sequence_triggers(check, tc) == 0 and same_sequence_files(path, check, true), 'Sequence changed after trigger preparation; backup ' .. name)
+        assert(#sequence_triggers(check, tc, work) == 0 and same_sequence_files(path, check, true, work), 'Sequence changed after trigger preparation; backup ' .. name)
         discard(name .. '_verify')
         answer('{"changed":true,"cues":' .. #cues .. '}')
       end)
+      local function resume()
+        check_source(); bytes = 0; tokens = 0
+        local until_time = gma.gettime() + 0.1
+        -- MA itself also yields coroutines at its instruction quota. Do not turn
+        -- each of those tiny pauses into a network round trip. Still bound each
+        -- request by elapsed console time as well as bytes/metadata tokens.
+        repeat
+          local ok, result = coroutine.resume(scan)
+          assert(ok, result)
+          if result == 'tblink_write' then
+            -- Keep the sole write outside the scan coroutine: MA's own implicit
+            -- yields must never split Assign from the phase acknowledgement.
+            -- Preflight's final chunk and this write remain the same RPC step.
+            check_source()
+            gma.cmd('Assign Sequence ' .. tc .. ' Cue ' .. table.concat(cues, ' + ') .. ' /Trig=Go')
+            job.confirming = true
+            gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+            break
+          end
+          if result == 'tblink_step' then break end
+        until coroutine.status(scan) == 'dead' or gma.gettime() >= until_time
+        if coroutine.status(scan) ~= 'dead' then step(resume) end
+      end
+      return resume()
     end
     if op == 'SEQUENCE' then
       assert(body == '' or body == 'keep', 'Sequence request must be empty or keep')
@@ -633,6 +682,7 @@ local function advance(job)
   local ok, result = pcall(table.remove(job.steps, 1))
   job.done = job.done + 1
   if ok and #job.steps > 0 then return end
+  if job.close then job.close(); job.close = nil end
   job.steps = {}
   local output = tostring(ok and job.result or result)
   job.response = job.id .. '\n' .. (ok and 'OK' or 'ERROR') .. '\n' .. #output .. '\n' .. output
@@ -669,6 +719,7 @@ for byte = 0, 255 do
 end
 local function hex(data) return (data:gsub('.', hex_bytes)) end
 local function clear_transfer(net)
+  if net and net.job and net.job.close then net.job.close(); net.job.close = nil end
   if net and net.file then assert(os.remove(net.file), 'Could not remove local response'); net.file = nil end
   if net and net.input then
     local f = io.open(net.input, 'rb')
@@ -704,7 +755,7 @@ end
 local function proceed(network)
   advance(network.job)
   if network.job.response then return finished(network) end
-  return 'STEP:' .. network.job.done
+  return 'STEP:' .. network.job.done .. (network.job.confirming and ':verify' or '')
 end
 _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport)
   if not token:match('^[a-f0-9]+$') or #token ~= 32 then return end

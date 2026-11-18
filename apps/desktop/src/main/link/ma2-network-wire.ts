@@ -44,10 +44,12 @@ export class Ma2NetworkWire implements Ma2Wire {
     }
     return result;
   }
-  /** `beforeStep` runs before every plugin step, the first included, with the number of steps done; throwing stops
-   * before that step and releases the request, whatever the show (the release is never held). */
+  /** `beforeStep` runs before each interruptible step, the first included, with the steps done. Once SEQGO
+   * acknowledges its write, only readback remains; finish it even if cancelled, then release the request. */
   async exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: (done: number) => void | Promise<void>, lane: Ma2Lane = 'bg'): Promise<string> {
-    signal?.throwIfAborted();
+    let confirming = false;
+    const checkCancellation = () => { if (!confirming) signal?.throwIfAborted(); };
+    checkCancellation();
     if (!/^[a-f0-9]{32}$/.test(id) || !Number.isInteger(target) || target < 1 || target > 99999) throw new Error('无效的 MA2 网络请求');
     let data = Buffer.from(body);
     if (data.length > 32 * 1024 * 1024) throw new Error('MA2 交换数据超过 32 MB');
@@ -71,24 +73,29 @@ export class Ma2NetworkWire implements Ma2Wire {
         if (!this.localFiles) throw new Error('远程控台不能使用本机文件传输');
         const path = Buffer.from(upload[1]!, 'hex').toString('utf8');
         this.validateLocalPath(path, id, '.input');
-        signal?.throwIfAborted();
+        checkCancellation();
         await writeFile(path, data, { flag: 'wx', signal });
         progress?.();
       } else for (let offset = 0; offset < data.length; offset += 256) {
-        signal?.throwIfAborted();
+        checkCancellation();
         if (await this.call('chunk', id, `,${offset / 256 + 1},'${data.subarray(offset, offset + 256).toString('hex')}'`) !== 'ACK') throw new Error('MA2 未确认数据片段');
         progress?.();
       }
-      signal?.throwIfAborted(); await beforeStep?.(0); signal?.throwIfAborted(); beforeSend(); sent = true;
+      checkCancellation(); await beforeStep?.(0); checkCancellation(); beforeSend(); sent = true;
       // The plugin does one console Export or Import per line and answers STEP:<steps done> until the
       // last, so stop and playback commands queued meanwhile go out between two steps. A plugin from
       // before steps ignores 'steps' and answers DONE at once, which is the same protocol.
       let reply = await this.call('run', id, ",'steps'");
-      for (let done = 0, step = /^STEP:(\d+)$/.exec(reply); step; step = /^STEP:(\d+)$/.exec(reply)) {
+      for (let done = 0, step = /^STEP:(\d+)(:verify)?$/.exec(reply); step; step = /^STEP:(\d+)(:verify)?$/.exec(reply)) {
         if (Number(step[1]) !== done + 1) throw new Error('控台分步执行的回答对不上');
+        if ((step[2] && operation !== 'SEQGO') || (confirming && !step[2])) throw new Error('控台写入确认阶段的回答对不上');
+        confirming = Boolean(step[2]);
         done += 1;
         progress?.();
-        signal?.throwIfAborted(); await beforeStep?.(done); signal?.throwIfAborted();
+        // SEQGO may verify a very large backup in bounded chunks. Once its single
+        // Assign has completed, finish only that readback; cancellation/show gates
+        // still prevent all writes up to this point. Never replay the write.
+        checkCancellation(); if (!confirming) await beforeStep?.(done); checkCancellation();
         reply = await this.call('step', id);
       }
       const receipt = /^DONE:(\d+)(:batch)?$/.exec(reply);
@@ -98,12 +105,12 @@ export class Ma2NetworkWire implements Ma2Wire {
       const chunks: Buffer[] = [];
       if (fileReceipt) {
         if (!this.localFiles) throw new Error('远程控台不能使用本机文件传输');
-        signal?.throwIfAborted();
+        checkCancellation();
         chunks.push(await this.readLocalResponse(Buffer.from(fileReceipt[2]!, 'hex').toString('utf8'), id, size));
-        signal?.throwIfAborted();
+        checkCancellation();
         progress?.({ completed: size, total: size });
       } else for (let offset = 0; offset < size; offset += 8192) {
-        signal?.throwIfAborted();
+        checkCancellation();
         chunks.push(await this.readBatch(id, offset, size, Boolean(receipt?.[2])));
         progress?.({ completed: Math.min(offset + 8192, size), total: size });
       }

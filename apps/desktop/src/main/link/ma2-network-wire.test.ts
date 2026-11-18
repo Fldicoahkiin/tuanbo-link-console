@@ -95,7 +95,7 @@ it('本机大响应直接读文件，仍校验身份、大小与位置；远程�
     expect(actions.at(-1)).toBe('release');
   } finally { await rm(folder, { recursive: true, force: true }); }
 });
-function peer(options: { value?: string; wrongId?: boolean; truncate?: boolean; failRun?: boolean; steps?: number; stepNumbers?: number[] } = {}) {
+function peer(options: { value?: string; wrongId?: boolean; truncate?: boolean; failRun?: boolean; steps?: number; stepNumbers?: number[]; verifyingSteps?: number[] } = {}) {
   const actions: string[] = [];
   let step = 0;
   const received: Buffer[] = [];
@@ -129,7 +129,7 @@ function peer(options: { value?: string; wrongId?: boolean; truncate?: boolean; 
       // A stepping plugin: 'run' with 'steps' does the first step, each 'step' one more.
       if ((action === 'run' && args === ",'steps'" || action === 'step') && options.steps) {
         step += 1;
-        result = step < options.steps ? `STEP:${options.stepNumbers?.[step - 1] ?? step}` : `DONE:${response.length}`;
+        result = step < options.steps ? `STEP:${options.stepNumbers?.[step - 1] ?? step}${options.verifyingSteps?.includes(step) ? ':verify' : ''}` : `DONE:${response.length}`;
       }
       if (action === 'read') {
         const offset = Number(args.slice(1));
@@ -268,6 +268,29 @@ it('插件报的步数对不上就停下释放，不接着发', async () => {
   const server = peer({ steps: 4, stepNumbers: [1, 3] });
   await expect(new Ma2NetworkWire(server).exchange(id, 'SNAPSHOT', 9901, '', () => undefined)).rejects.toMatchObject({ sent: true, message: '控台分步执行的回答对不上' });
   expect(server.actions).toEqual(['begin', 'run', 'step', 'release']);
+});
+it('只允许 SEQGO 进入只读确认阶段，进入后不允许退回写入阶段', async () => {
+  for (const operation of ['SYNC', 'SEQGO'] as const) {
+    const server = peer({ steps: 4, verifyingSteps: [1] });
+    await expect(new Ma2NetworkWire(server).exchange(id, operation, 3, '', () => undefined)).rejects.toThrow('确认阶段');
+    expect(server.actions.filter(action => action === 'run')).toHaveLength(1);
+    expect(server.actions.at(-1)).toBe('release');
+  }
+});
+it('SEQGO 已完成写入后，取消或播放开始仍完成分批读回，不重新提交写入', async () => {
+  const server = peer({ steps: 5, verifyingSteps: [2, 3, 4], value: 'verified' });
+  const controller = new AbortController();
+  let gates = 0;
+  const command = async (...args: Parameters<typeof server.command>) => {
+    const reply = await server.command(...args);
+    if (reply.includes(':verify')) controller.abort(new Error('已取消'));
+    return reply;
+  };
+  await expect(new Ma2NetworkWire({ command }).exchange(id, 'SEQGO', 3, '', () => undefined, controller.signal, undefined, () => { gates++; })).resolves.toBe('verified');
+  expect(gates).toBe(2);
+  expect(server.actions.filter(action => action === 'run')).toHaveLength(1);
+  expect(server.actions.filter(action => action === 'step')).toHaveLength(4);
+  expect(server.actions.at(-1)).toBe('release');
 });
 it('步与步之间排着的关灯先发，再发下一步', async () => {
   const queue = new Ma2CommandQueue();
