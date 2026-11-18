@@ -1,7 +1,7 @@
-import { ma2CatalogSchema, type Ma2CatalogRequest } from '@tb/schema';
+import { ma2CatalogSchema, ma2EffectLibrarySchema, type Ma2ObjectDirectory, type Ma2CatalogRequest } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { importCachedMa2, scanMa2, useMa2ReadStore } from '../stores/ma2-read-store';
-import { ma2PendingChanges } from '@tb/core/link';
+import { ma2PendingChanges, saveMa2ReadStateCommand, saveMa2MaterialLibraryCommand } from '@tb/core/link';
 import { ma2ConsoleWriting } from '../stores/ma2-sync-store';
 import { scanMa2Materials } from '../stores/ma2-material-read-store';
 
@@ -23,6 +23,7 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   if (!current().project?.rundown.length) return 'MA2 已连接。导入 P1 歌曲后重新连接，就能载入对应的 Cue';
   if (useMa2ReadStore.getState().busy) throw new Error('正在读取控台，请等这次完成');
   if (ma2ConsoleWriting()) throw new Error('正在写入控台并确认，请完成后再连接或刷新');
+  let refreshTimelines = refresh;
   if (connection.network) {
     const progressId = crypto.randomUUID();
     useMa2ReadStore.setState({ busy: true, activeId: progressId, progress: null, message: '正在准备控台选曲' });
@@ -30,7 +31,7 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
       if (state.documentId !== documentId) void window.tbLink.cancelMa2Read(progressId).catch(error => useMa2ReadStore.setState({ message: String(error) }));
     });
     try {
-      if (await window.tbLink.prepareMa2Playback({ network: connection.network, progressId }, progress => useMa2ReadStore.setState({ progress }))) refresh = true;
+      if (await window.tbLink.prepareMa2Playback({ network: connection.network, progressId }, progress => useMa2ReadStore.setState({ progress }))) refreshTimelines = true;
     } catch (error) {
       useMa2ReadStore.setState({ message: `控台选曲检查未完成：${error instanceof Error ? error.message : String(error)}` });
       throw error;
@@ -40,11 +41,15 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   const cached = current().project?.ma2ReadState;
   const source = connection.network ? `${connection.network.host}:${connection.network.port}` : '本机 onPC';
   let reuse = false;
-  if (!refresh && cached?.source === source && !cached.catalog.incomplete && !cached.catalog.sourceUnverified) {
+  if (!refreshTimelines && cached?.source === source && !cached.catalog.incomplete && !cached.catalog.sourceUnverified
+    && coversDirectory(cached.catalog.directory, cached.catalog.entries.filter(entry => !entry.error).map(entry => entry.target))) {
     // A reconnect verifies the Show identity, without rereading every Timecode.
     const directory = ma2CatalogSchema.parse(await window.tbLink.readMa2Catalog({ ...connection, targets: [] }));
-    current();
-    reuse = !directory.incomplete && !directory.sourceUnverified && JSON.stringify(directory.directory) === JSON.stringify(cached.catalog.directory);
+    const latest = current();
+    reuse = !directory.incomplete && !directory.sourceUnverified && latest.project?.ma2ReadState === cached && sameDirectory(directory.directory, cached.catalog.directory);
+    if (reuse && directory.directory.generation !== cached.catalog.directory.generation) {
+      latest.executeForDocument(documentId, saveMa2ReadStateCommand({ ...cached, catalog: { ...cached.catalog, directory: directory.directory } }));
+    }
   }
   if (!reuse) await scanMa2(connection, retry);
   current();
@@ -52,11 +57,22 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   let libraryNotice = '';
   const read = current().project?.ma2ReadState;
   const pool = current().project?.ma2MaterialLibrary;
-  const completePool = pool?.library && pool.source === source && pool.library.directory.show === read?.catalog.directory.show
-    && pool.library.directory.generation === read.catalog.directory.generation && !pool.library.incomplete && !pool.library.sourceUnverified && !pool.library.errors.length;
-  if (read && !read.catalog.incomplete && !read.catalog.sourceUnverified && (!reuse || !completePool)) {
-    try { await scanMa2Materials(connection, retry && pool?.source === source); }
-    catch (error) { libraryNotice = `；控台素材没有读全：${error instanceof Error ? error.message : String(error)}。已读到的歌曲 Cue 会保留`; }
+  if (read && !read.catalog.incomplete && !read.catalog.sourceUnverified) {
+    try {
+      let reusePool = false;
+      if (!refresh && pool?.source === source && pool.library && !pool.library.incomplete && !pool.library.sourceUnverified && !pool.library.errors.length
+        && coversDirectory(pool.library.directory, pool.library.sequences.map(entry => entry.sequence)) && pool.library.directory.show === read.catalog.directory.show
+        && pool.library.directory.version === read.catalog.directory.version) {
+        const checked = ma2EffectLibrarySchema.parse(await window.tbLink.readMa2EffectLibrary({ ...connection, targets: [] }));
+        const latest = current();
+        reusePool = latest.project?.ma2MaterialLibrary === pool && !checked.incomplete && !checked.sourceUnverified
+          && checked.directory.generation === read.catalog.directory.generation && sameDirectory(checked.directory, pool.library.directory);
+        if (reusePool && checked.directory.generation !== pool.library.directory.generation) {
+          latest.executeForDocument(documentId, saveMa2MaterialLibraryCommand(source, { ...pool.library, directory: checked.directory }));
+        }
+      }
+      if (!reusePool) await scanMa2Materials(connection, retry && pool?.source === source);
+    } catch (error) { libraryNotice = `；控台素材没有读全：${error instanceof Error ? error.message : String(error)}。已读到的歌曲 Cue 会保留`; }
     current();
   }
   const project = current().project;
@@ -71,4 +87,15 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
     : edited ? `。有 ${edited} 条时间线带着连接前做的本地修改：同步时先读控台比对，两边改了同一处以联动台为准，控台上的旧版本写入前备份在控台上`
     : !bindings.length ? '。还没有已关联的时间线' : '';
   return `${summary}${note}。灯光工作台左下角的“实时同步”开着时，停止播放后每次改完都会自动写入控台并回读确认`;
+}
+
+// The bridge gets a new generation when it is installed again. The cached Cue data
+// keeps its original read time. The sync service still reads the actual song before writing.
+function sameDirectory(fresh: Ma2ObjectDirectory, saved: Ma2ObjectDirectory): boolean {
+  return fresh.show === saved.show && fresh.version === saved.version && JSON.stringify(fresh.entries) === JSON.stringify(saved.entries);
+}
+
+function coversDirectory(directory: Ma2ObjectDirectory, numbers: number[]): boolean {
+  const available = new Set(numbers);
+  return available.size === directory.entries.length && directory.entries.every(entry => available.has(entry.target));
 }

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { expect, it, vi } from 'vitest';
 import { ma2ObjectDirectorySchema } from '@tb/schema';
 import { ma2MtcSelectionCommand, ma2MtcSelections, ma2SongDirectory } from '@tb/core/link';
-import { Ma2MtcSelectionService, ma2MtcSelectorCommands, ma2MtcSelectorSequence, ma2MtcSequenceSettings } from './ma2-mtc-selection';
+import { Ma2MtcSelectionService, ma2SelectorXmlLiteral, ma2MtcSelectorCommands, ma2MtcSelectorSequence, ma2MtcSequenceSettings } from './ma2-mtc-selection';
 import { emptyMa2SequenceXml, inspectMa2TimecodeXml, ma2MtcPlaybackSettings } from './ma2-timecode-xml';
 import { ma2SongTimecodeXml } from './ma2-song-timecode';
 import { Ma2LuaConsole } from './fixtures/ma2-lua-console';
@@ -46,7 +46,9 @@ it('30 条时间线共用大序列只检查一次，连接和再次连接不传�
     const sent = console.lines.slice(before);
     expect(sent.filter(line => line.includes("'SEQGO',3,"))).toHaveLength(1);
     expect(sent.some(line => line.includes("'SEQUENCE',3,"))).toBe(false);
-    expect(sent.length).toBeLessThan(450);
+    expect(sent.filter(line => numbers.some(number => line.includes(`'READ',${number},`)))).toHaveLength(0);
+    expect(sent.filter(line => line.includes("'TCRANGES',1,"))).toHaveLength(2);
+    expect(sent.length).toBeLessThan(300);
     expect(progress.at(-1)).toMatchObject({ completed: 30, total: 30, detail: '控台选曲检查完成' });
     expect(progress.some(value => value.detail.includes('检查序列 3'))).toBe(true);
   }
@@ -155,4 +157,14 @@ it('时间区间重叠时写入前拒绝，不修改已有歌曲', async () => {
     if (result.status === 'rejected') expect(String(result.reason)).toContain('重叠');
   }
   expect(console.commands().every(command => command.startsWith('Export '))).toBe(true);
+});
+
+it('57 首歌的辅助选曲序列只传一次重复内容，在控台还原后与写前和写后使用的 XML 逐字节相同', () => {
+  const numbers = Array.from({ length: 57 }, (_, index) => 100 + index);
+  const xml = ma2MtcSelectorSequence(9900, '3.3.4.3', numbers.map(number => ma2MtcSelectionCommand(numbers, number)));
+  const lua = new Ma2LuaConsole();
+  const literal = ma2SelectorXmlLiteral(xml);
+  const [result] = lua.lua(`local function unhex(h)return (h:gsub('..',function(x)return string.char(tonumber(x,16))end))end;return ${literal}`);
+  expect(result).toEqual(Buffer.from(xml));
+  expect(literal.length).toBeLessThan(Buffer.byteLength(xml));
 });

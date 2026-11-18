@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { importMa2ProgramsCommand, ma2SongPairs, reconcileMa2ReadState, saveMa2ReadStateCommand } from '@tb/core/link';
-import { ma2CatalogSchema, type Ma2CatalogRequest, type Ma2ReadProgress, type Ma2ReadState } from '@tb/schema';
+import { ma2CatalogSchema, type Ma2Catalog, type Ma2CatalogRequest, type Ma2ReadProgress, type Ma2ReadState } from '@tb/schema';
+import { ma2ReadCheckpoints } from './ma2-read-checkpoints';
 import { useDocumentStore } from './document-store';
 import { readMa2Programs, type Ma2ImportFailure } from '../view-models/read-ma2-programs';
 import { requireProjectLocation } from '../project-document';
@@ -43,17 +44,28 @@ async function runScan(source: Ma2CatalogRequest, retry: boolean): Promise<void>
   const unsubscribe = useDocumentStore.subscribe(state => {
     if (state.documentId !== before.documentId) void window.tbLink.cancelMa2Read(progressId).catch(error => useMa2ReadStore.setState({ message: String(error) }));
   });
+  const pending = new Map<number, Ma2Catalog['entries'][number]>();
+  let checkpoint: Ma2ReadProgress['checkpoint'];
+  const publications = ma2ReadCheckpoints(() => {
+    const current = useDocumentStore.getState();
+    if (!checkpoint || current.documentId !== before.documentId || !current.project) return;
+    const { directory, readAt } = checkpoint;
+    const old = current.project.ma2ReadState;
+    const same = old?.source === sourceName && old.catalog.directory.show === directory.show && old.catalog.directory.generation === directory.generation;
+    const entries = new Map(same ? old.catalog.entries.map(entry => [entry.target, entry]) : []);
+    for (const [number, entry] of pending) entries.set(number, entry);
+    pending.clear();
+    const catalog = { directory, readAt, entries: directory.entries.flatMap(entry => entries.get(entry.target) ?? []),
+      incomplete: '读取中，已读完的条目已保存，中断后可以接着读', sourceUnverified: false };
+    current.executeForDocument(before.documentId, saveMa2ReadStateCommand(reconcileMa2ReadState(current.project, sourceName, catalog), progressId));
+  });
   try {
     const read = ma2CatalogSchema.parse(await window.tbLink.readMa2Catalog({ ...source, progressId, projectPath: before.path, projectId: before.project.projectId, ...(targets && cached ? { targets, expectedSource: { show: cached.catalog.directory.show, generation: cached.catalog.directory.generation, version: cached.catalog.directory.version } } : {}) }, progress => {
       useMa2ReadStore.setState({ progress });
-      const checkpoint = progress.checkpoint;
-      const current = useDocumentStore.getState();
-      if (!checkpoint?.entry || current.documentId !== before.documentId || !current.project) return;
-      const old = current.project.ma2ReadState;
-      const same = old?.source === sourceName && old.catalog.directory.show === checkpoint.directory.show && old.catalog.directory.generation === checkpoint.directory.generation;
-      const entries = same ? old.catalog.entries.filter(entry => entry.target !== checkpoint.entry!.target && checkpoint.directory.entries.some(value => value.target === entry.target)) : [];
-      const catalog = { directory: checkpoint.directory, readAt: checkpoint.readAt, entries: [...entries, checkpoint.entry], incomplete: '读取中，已读完的条目已保存，中断后可以接着读', sourceUnverified: false };
-      current.executeForDocument(before.documentId, saveMa2ReadStateCommand(reconcileMa2ReadState(current.project, sourceName, catalog), progressId));
+      if (!progress.checkpoint?.entry || useDocumentStore.getState().documentId !== before.documentId) return;
+      checkpoint = progress.checkpoint;
+      pending.set(progress.checkpoint.entry.target, progress.checkpoint.entry);
+      publications.changed();
     }));
     const current = useDocumentStore.getState();
     if (current.documentId !== before.documentId || !current.project) throw new Error('工程已切换，读取结果没有写进别的工程');
@@ -66,7 +78,7 @@ async function runScan(source: Ma2CatalogRequest, retry: boolean): Promise<void>
     const message = state.message;
     current.executeForDocument(before.documentId, saveMa2ReadStateCommand(state, progressId));
     useMa2ReadStore.setState({ message });
-  } catch (error) { useMa2ReadStore.setState({ message: `读取未完成：${error instanceof Error ? error.message : String(error)}` }); throw error; }
+  } catch (error) { publications.flush(); useMa2ReadStore.setState({ message: `读取未完成：${error instanceof Error ? error.message : String(error)}` }); throw error; }
   finally { unsubscribe(); useMa2ReadStore.setState({ busy: false, activeId: null, progress: null }); }
 }
 
@@ -83,6 +95,7 @@ export async function importCachedMa2(target?: number): Promise<{ imported: stri
   if (state.catalog.sourceUnverified || state.catalog.incomplete && state.catalog.sourceUnverified === undefined) throw new Error('控台目录还没确认，已读的内容可以查看；读完整后才能放进歌曲');
   const bound = (number: number): boolean => project.rundown.some(item => item.lighting?.ma2Bindings?.some(binding => binding.timecode === number));
   const pairs = Object.entries(ma2SongPairs(project).pairs).filter(([number]) => (target === undefined || Number(number) === target) && !bound(Number(number)));
+  if (!pairs.length) return { imported: [], failures: [] };
   const result = await readMa2Programs(project, pairs, number => {
     const entry = state.catalog.entries.find(value => value.target === number);
     const pairedItem = pairs.find(([key]) => Number(key) === number)?.[1];

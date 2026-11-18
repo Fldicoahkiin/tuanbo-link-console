@@ -78,7 +78,7 @@ export async function runMa2NameSync(connection: Ma2CatalogRequest, documentId: 
     });
     const outstanding = pendingMa2Renames(project()).length;
     if (outcome.kind === 'interrupted') { setNames({ state: 'pending', writing: false, nextCheckAt: 0, message: currentShowWait('ma2.sync.write') ?? '同步状态有变化，稍后接着同步名称' }); return; }
-    setNames({ state: outstanding ? 'pending' : 'verified', writing: false, blockedRevision: undefined, nextCheckAt: outcome.moved ? Date.now() + 1000 : 0,
+    setNames({ state: outstanding ? 'pending' : 'verified', writing: false, blockedNames: undefined, nextCheckAt: outcome.moved ? Date.now() + 1000 : 0,
       message: outcome.moved ? MOVED_RENAMES : outstanding ? '上一个名称已确认，继续同步后面的改名' : '名称已写入控台并回读确认' });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -93,7 +93,7 @@ export async function runMa2NameSync(connection: Ma2CatalogRequest, documentId: 
       setNames({ state: 'pending', writing: false, nextCheckAt: Date.now() + 1000, message: disconnected ? `等待连接恢复后继续同步名称：${message}` : showWait ?? '' });
       return;
     }
-    setNames({ state: 'blocked', writing: false, blockedRevision: useDocumentStore.getState().revision,
+    setNames({ state: 'blocked', writing: false, blockedNames: JSON.stringify(pendingMa2Renames(project())),
       message: `名称同步失败，没有自动重试：${message}。新名称保留在工程里，处理好后点“刷新同步”` });
     reportCoordinatorError(message, reason => setNames({ message: reason }));
   }
@@ -130,7 +130,7 @@ export async function requestMa2NameSync(documentId: number): Promise<void> {
   if (useMa2SyncStore.getState().names.state === 'syncing') return;
   if (readMa2Method() === 'network') {
     const paused = !useMa2RealtimePreference.getState().enabled;
-    setNames({ state: 'pending', blockedRevision: undefined, nextCheckAt: 0, message: paused ? MA2_NAMES_PAUSED : '等待把新名称写到控台' });
+    setNames({ state: 'pending', blockedNames: undefined, nextCheckAt: 0, message: paused ? MA2_NAMES_PAUSED : '等待把新名称写到控台' });
     return;
   }
   await writeNames(documentId, current);

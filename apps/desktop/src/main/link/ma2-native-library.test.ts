@@ -62,7 +62,7 @@ it('播放状态阻止发送任何素材读取命令', async () => {
 it('一条序列损坏保留错误并继续其他序列，不把整个素材库清空', async () => {
   const two = { ...directory, entries: [...directory.entries, { target: 8, name: '可用序列' }] };
   const updates: Ma2ReadProgressUpdate[] = [];
-  const result = await readMa2NativeLibrary(connection(['missing', 'missing', '2;;1,1.1,61', '2;;1,1.1,61']), { request: vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify(two)) }, showStopped, update => { updates.push(update); });
+  const result = await readMa2NativeLibrary(connection(['missing/2;;1,1.1,61', 'missing/2;;1,1.1,61']), { request: vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify(two)) }, showStopped, update => { updates.push(update); });
   expect(result.sequences[0]?.sequence).toBe(8);
   expect(result.sequences[0]?.cues[0]?.number).toBe('1.100');
   expect(result.errors[0]?.sequence).toBe(7);
@@ -78,7 +78,7 @@ it('读取指定引用时不查询其他序列，不传输灯具数据', async (
 it('每条序列经双读核对后立即报告，取消后不再读取下一条', async () => {
   const two = { ...directory, entries: [{ target: 7, name: '第一条' }, { target: 8, name: '第二条' }] };
   const request = vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify(two));
-  const peer = connection(['2;;1,1,61', '2;;1,1,61']);
+  const peer = connection(['2;;1,1,61/2;;1,1,62', '2;;1,1,61/2;;1,1,62']);
   const controller = new AbortController();
   const updates: Ma2ReadProgressUpdate[] = [];
   await expect(readMa2NativeLibrary(peer, { request }, showStopped, update => {
@@ -106,4 +106,18 @@ it('最终复核时开始播放与目录真的变化分别报告，不把播放�
   await expect(readMa2NativeLibrary(connection([row, row]), { request }, showMovingWhen(() => playing))).rejects.toThrow(new RegExp(`^${SHOW_WAIT_CLOCK_MOVING}.*还没核对控台序列目录`));
   const changed = vi.fn<Ma2OnpcBridge['request']>().mockResolvedValueOnce(JSON.stringify(directory)).mockResolvedValueOnce(JSON.stringify({ ...directory, entries: [...directory.entries, { target: 8, name: '新序列' }] }));
   await expect(readMa2NativeLibrary(connection([row, row]), { request: changed }, showStopped)).rejects.toThrow('控台的 Show 或序列有变化');
+});
+
+it('695 个短序列按组双读，一共 174 条 Cue 查询；每条序列仍独立核对', async () => {
+  const entries = Array.from({ length: 695 }, (_, index) => ({ target: index + 1, name: String(index + 1) }));
+  const replies: string[] = [];
+  for (let index = 0; index < entries.length; index += 8) {
+    const rows = entries.slice(index, index + 8).map(entry => `2;;1,${entry.target},61`).join('/');
+    replies.push(rows, rows);
+  }
+  const peer = connection(replies);
+  const result = await readMa2NativeLibrary(peer, { request: vi.fn().mockResolvedValue(JSON.stringify({ ...directory, entries })) }, showStopped);
+  expect(result.errors).toEqual([]);
+  expect(result.sequences.map(item => item.cues[0]!.number)).toEqual(entries.map(entry => entry.target + '.000'));
+  expect(peer.command).toHaveBeenCalledTimes(174);
 });

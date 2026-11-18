@@ -120,3 +120,19 @@ it('含软件不转换的控台动作的时间线照样可写回，动作原样�
   expect(summary).toContain('1 条含控台原样动作'); expect(summary).not.toContain('还没有可以写回控台的时间线');
   expect(importCachedMa2).toHaveBeenCalledOnce(); expect(useMa2SyncStore.getState().songs).toEqual({});
 });
+
+it('重新打开工程，插件换代但两份目录仍相同，只核对目录并保留 Cue 的读取时间', async () => {
+  const directory = { ...catalog.directory, generation: 'previous', entries: [{ target: 1, name: '步骤' }] };
+  const saved = { directory, readAt: catalog.readAt, sequences: [{ sequence: 1, name: '步骤', cues: [] }], fixtureUsage: [], errors: [] };
+  const project = useDocumentStore.getState().project!;
+  useDocumentStore.getState().setProject({ ...project, ma2MaterialLibrary: { version: 1, source: project.ma2ReadState!.source, library: saved } }, 'test.tblink');
+  const changedGeneration = 'new-bridge';
+  readCatalog.mockResolvedValue({ ...catalog, directory: { ...catalog.directory, generation: changedGeneration } });
+  window.tbLink.readMa2EffectLibrary = vi.fn().mockResolvedValue({ ...saved, directory: { ...directory, generation: changedGeneration }, sequences: [] });
+  await prepareMa2Editing(connection, useDocumentStore.getState().documentId);
+  expect(readCatalog).toHaveBeenCalledExactlyOnceWith({ ...connection, targets: [] });
+  expect(window.tbLink.readMa2EffectLibrary).toHaveBeenCalledExactlyOnceWith({ ...connection, targets: [] });
+  expect(scanMa2).not.toHaveBeenCalled();
+  expect(scanMa2Materials).not.toHaveBeenCalled();
+  expect(useDocumentStore.getState().project?.ma2MaterialLibrary?.library).toMatchObject({ readAt: saved.readAt, sequences: saved.sequences, directory: { generation: changedGeneration } });
+});

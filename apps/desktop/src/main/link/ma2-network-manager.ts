@@ -310,7 +310,9 @@ export class Ma2NetworkManager {
       if (missing.length) {
         const start = performance.now();
         sequenceDirectory ??= ma2ObjectDirectorySchema.parse(JSON.parse(await measuredBridge.request('LISTSEQ', 1)));
-        const library = await readMa2NativeLibrary(connection, measuredBridge, this.show, undefined, 'library', signal, missing, bytes => { metrics.requests += 1; metrics.bytes += bytes; }, sequenceDirectory);
+        const library = await readMa2NativeLibrary(connection, measuredBridge, this.show, undefined, 'library', signal, missing, {
+          sessionDirectory: sequenceDirectory, measure: bytes => { metrics.requests += 1; metrics.bytes += bytes; }
+        });
         metrics.phases.sequences = (metrics.phases.sequences ?? 0) + performance.now() - start;
 
         for (const sequence of library.sequences) cache.set(sequence.sequence, { number: sequence.sequence, name: sequence.name, cues: sequence.cues });
@@ -339,13 +341,23 @@ export class Ma2NetworkManager {
       this.get(target);
       holdForShow(this.show, 'ma2.sync.read');
       return bridge.request('READ', timecode);
-    }, targets => readMa2NativeLibrary(connection, bridge, this.show, undefined, 'library', undefined, targets));
+    }, targets => readMa2NativeLibrary(connection, bridge, this.show, undefined, 'library', undefined, targets, { referencedOnly: true }));
   }
   async readLibrary(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void | Promise<void>, phase: 'library' | 'verification' = 'library', signal?: AbortSignal, targets?: readonly number[], expectedSource?: Ma2CatalogRequest['expectedSource'], details?: Ma2CatalogRequest['details']): Promise<import('@tb/schema').Ma2EffectLibrary> {
     const { bridge } = this.get(target);
     if (!this.connection) throw new Error('请先连接控台');
+    if (details === 'source') {
+      if (targets?.length !== 0) throw new Error('核对来源时不能读取序列内容');
+      signal?.throwIfAborted();
+      holdForShow(this.show, 'ma2.sync.read');
+      const source = await readMa2ShowSource(this.connection);
+      signal?.throwIfAborted();
+      holdForShow(this.show, 'ma2.sync.read');
+      const directory = ma2ObjectDirectorySchema.parse({ ...source, entries: [] });
+      return { directory, sequences: [], fixtureUsage: [], errors: [], fixtureDetails: 'unavailable', readAt: new Date().toISOString() };
+    }
     if (details === 'attributes') return readMa2EffectLibrary(bridge, this.show, onProgress, signal, targets, expectedSource, details, this.connection);
-    return readMa2NativeLibrary(this.connection, bridge, this.show, onProgress, phase, signal, targets, undefined, undefined, expectedSource);
+    return readMa2NativeLibrary(this.connection, bridge, this.show, onProgress, phase, signal, targets, { expectedSource });
   }
   async initialize(): Promise<void> {
     try {
@@ -503,12 +515,15 @@ export class Ma2NetworkManager {
     this.scheduleReconnect();
   }
   private openServices(connection: Ma2Telnet): void {
-    const wire = new Ma2NetworkWire(connection, this.settings?.host === '127.0.0.1' || this.settings?.host === '::1', this.requestJournal); this.wire = wire;
+    if (!this.settings) throw new Error('控台连接已变化');
+    const { host, port, monitorPort, username } = this.settings;
+    const target = { host, port, monitorPort, username };
+    const wire = new Ma2NetworkWire(connection, host === '127.0.0.1' || host === '::1', this.requestJournal); this.wire = wire;
     const bridge = new Ma2OnpcBridge(wire, this.show);
     this.mtcSelection?.invalidate();
-    this.services = { bridge, service: new Ma2ApplyService(bridge, this.show, async target => {
-      if (!this.settings) throw new Error('控台连接已变化');
-      await this.prepareMtcPlayback(this.settings, false, [target]);
+    this.services = { bridge, service: new Ma2ApplyService(bridge, this.show, async timecode => {
+      if (this.connection !== connection || this.services?.bridge !== bridge) throw new Error('控台连接已变化');
+      await this.prepareMtcPlayback(target, false, [timecode]);
     }) };
     this.bridgeIssue = null;
     this.reconnectAllowed = true; this.reconnectDelay = 1000;

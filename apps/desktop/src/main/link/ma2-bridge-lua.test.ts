@@ -42,6 +42,21 @@ it('内部选曲对象保留占位标记，第零帧的事件计入时间范围'
   expect(JSON.parse(await wire.exchange(requestId(2), 'TCRANGES', 1, '', () => undefined))).toMatchObject({ entries: [{ target: 9900, internal: true, last: '0' }] });
 });
 
+it('首次扫描和同步读回都用本次控台导出，短时间线两次网络往返即可读全并释放，长时间线逐字一致', async () => {
+  const ma2 = new Ma2LuaConsole();
+  const wire = new Ma2NetworkWire(ma2);
+  for (const [index, length] of [100, 2500, 3000].entries()) {
+    const xml = timecodeXml(9902, [[1, 1]], '灯'.repeat(length)).replace('@EXPORT@', '固定');
+    ma2.set('Timecode 9902', { xml });
+    const before = ma2.lines.length;
+    const actual = await wire.exchange(requestId(index + 1), 'READ', 9902, '', () => undefined);
+    expect(actual).toBe(xml);
+    if (length < 3000) expect(ma2.lines.length - before).toBe(2);
+    else expect(ma2.lines.length - before).toBeGreaterThan(2);
+    expect(wire.unreleasedRequests).toEqual([]);
+  }
+});
+
 it('本机上传文件完整后才执行，大小错误不执行并可释放', async () => {
   const ma2 = new Ma2LuaConsole(bridgeSource); const id = requestId(1);
   const call = async (action: string, args = ''): Promise<string> => await ma2.command(`Lua "TBLINK_NET('${id}','${action}','${id}'${args})"`, text => ma2ResponseLine(text, `TBLINK_RPC_${id}:`));

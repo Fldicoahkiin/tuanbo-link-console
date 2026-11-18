@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Ma2LayoutSettings, Ma2ReadProgress } from '@tb/schema';
+import type { LinkProject, Ma2LayoutSettings, Ma2ReadProgress } from '@tb/schema';
 
 /**
  * One console sync per song, whichever way it was lit: way 1 writes back to the console's own
@@ -12,7 +12,7 @@ export type SongSync = {
   sessionId: string; itemId: string; documentId: number; name: string; settings: Ma2LayoutSettings;
   state: 'pending' | 'syncing' | 'verified' | 'blocked' | 'paused'; message: string;
   requestId?: string | null; progress?: Ma2ReadProgress | null; checking?: boolean; writing?: boolean;
-  acknowledged?: string; remoteRevision?: string | undefined; blockedRevision?: number | undefined; recheckRevision?: number | undefined;
+  acknowledged?: string; remoteRevision?: string | undefined; failedItem?: LinkProject['rundown'][number] | undefined; recheckRevision?: number | undefined;
   nextCheckAt?: number; checkedAt?: number; waitingForConnection?: boolean;
   consecutiveFailures?: number; consecutiveCollisions?: number; archivedSignature?: string; rewriteLegacyNames?: boolean;
   /** When a pass last took this song up; a one-time sync ends once every song was taken up after it began. */
@@ -34,7 +34,7 @@ export type SongSync = {
 };
 
 /** Console objects renamed in the project; sent by the same pass as the songs, under the same failure policy. */
-export type NameSync = { state: 'idle' | 'pending' | 'syncing' | 'verified' | 'blocked'; message: string; writing?: boolean; blockedRevision?: number | undefined; nextCheckAt?: number };
+export type NameSync = { state: 'idle' | 'pending' | 'syncing' | 'verified' | 'blocked'; message: string; writing?: boolean; blockedNames?: string | undefined; nextCheckAt?: number };
 
 /** The session check: the console the project last read is reachable and still the same console. */
 export type Ma2SessionCheck = { status: 'waiting' | 'ready' | 'blocked'; message: string };

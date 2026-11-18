@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, createLightingDocument, type Ma2Catalog } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, type Ma2Catalog, type Ma2CatalogRequest, type Ma2ReadProgress } from '@tb/schema';
 import { useDocumentStore } from './document-store';
-import { importCachedMa2, useMa2ReadStore } from './ma2-read-store';
+import { importCachedMa2, scanMa2, useMa2ReadStore } from './ma2-read-store';
 
 const saveProjectDocument = vi.hoisted(() => vi.fn());
 vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: {} }));
@@ -51,7 +51,9 @@ it('没有 MTC 起始码的歌不对上；指定节目时只放这一条；已�
   expect(await importCachedMa2(4)).toEqual({ imported: ['乙'], failures: [] });
   expect(useDocumentStore.getState().project!.rundown.map(item => item.lighting?.ma2Bindings?.map(binding => binding.timecode))).toEqual([undefined, undefined, [4]]);
   expect(await importCachedMa2()).toEqual({ imported: ['甲'], failures: [] });
+  const revision = useDocumentStore.getState().revision;
   expect(await importCachedMa2()).toEqual({ imported: [], failures: [] });
+  expect(useDocumentStore.getState().revision).toBe(revision);
 });
 
 it('控台事件在歌曲结束之后：照样放进歌曲，不丢事件，也不改歌曲起点', async () => {
@@ -60,4 +62,21 @@ it('控台事件在歌曲结束之后：照样放进歌曲，不丢事件，也�
   const item = useDocumentStore.getState().project!.rundown[0]!;
   expect(item.playback?.mtcOffsetMs).toBe(0);
   expect(item.lighting?.ma2Bindings?.map(binding => binding.timecode)).toEqual([4]);
+});
+
+it('连续收到多条时间线只分批改工程，断线时最后几条也会保留', async () => {
+  open('连续读取', [], () => []);
+  const revision = useDocumentStore.getState().revision;
+  const readAt = new Date().toISOString();
+  const entries = Array.from({ length: 12 }, (_, i) => show(i + 1, '0', readAt));
+  const directory = { show: 'Show', generation: 'new', version: '3.7.0.5', entries: entries.map(({ target, name }) => ({ target, name })) };
+  vi.stubGlobal('window', { tbLink: { readMa2Catalog: (request: Ma2CatalogRequest, report: (progress: Ma2ReadProgress) => void) => {
+    for (const entry of entries) report({ id: request.progressId!, phase: 'timecodes', total: 12, completed: entry.target, detail: '', checkpoint: { readAt, directory, entry } });
+    throw new Error('断线');
+  } } });
+  await expect(scanMa2({ dataDirectory: '' })).rejects.toThrow('断线');
+  const state = useDocumentStore.getState();
+  expect(state.revision - revision).toBe(2);
+  expect(state.project?.ma2ReadState?.catalog.entries.map(entry => entry.target)).toEqual(entries.map(entry => entry.target));
+  expect(useMa2ReadStore.getState().busy).toBe(false);
 });

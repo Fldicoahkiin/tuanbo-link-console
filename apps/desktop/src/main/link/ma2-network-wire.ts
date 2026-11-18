@@ -7,6 +7,25 @@ import type { Ma2RequestJournal } from './ma2-request-journal';
 
 class Ma2RpcRefusal extends Error {}
 
+function responseChunks(text: string, prefix: string, offset: number, size: number): string | null {
+  const count = Math.min(32, Math.ceil((size - offset) / 256));
+  const parts: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const result = ma2ResponseLine(text, prefix + i.toString(16).padStart(4, '0') + ':');
+    if (result === null) return null;
+    const encoded = /^DATA:((?:[a-f0-9]{2})+)$/.exec(result)?.[1];
+    if (!encoded || encoded.length !== Math.min(256, size - offset - i * 256) * 2) throw new Error('控台读回的数据缺失或无效');
+    parts.push(encoded);
+  }
+  return parts.join('');
+}
+
+function decodeResponse(bytes: Buffer, id: string): { ok: boolean; value: string } {
+  const match = /^([a-f0-9]{32})\n(OK|ERROR)\n(\d+)\n([\s\S]*)$/.exec(bytes.toString('utf8'));
+  if (!match || match[1] !== id || Buffer.byteLength(match[4] ?? '') !== Number(match[3])) throw new Error('控台读回的数据对不上');
+  return { ok: match[2] === 'OK', value: match[4] ?? '' };
+}
+
 /** Chunked RPC over an authenticated command channel; uncertain writes are never replayed. */
 export class Ma2NetworkWire implements Ma2Wire {
   private snapshot: { id: string; target: number; content: Buffer } | null = null;
@@ -35,7 +54,14 @@ export class Ma2NetworkWire implements Ma2Wire {
     // Keep even a full 256-byte chunk below the native console's command-line limit.
     // The human explanation belongs here, not as hundreds of hex bytes in every command.
     const line = `Lua "if TBLINK_NET then TBLINK_NET('${token}','${action}','${id}'${argumentsText}) else gma.echo('${prefix}MISSING') end"`;
-    const result = await this.connection.command(line, (text) => ma2ResponseLine(text, prefix));
+    const result = await this.connection.command(line, text => {
+      const receipt = ma2ResponseLine(text, prefix);
+      if (action !== 'run' || !receipt?.startsWith('INLINE:')) return receipt;
+      const size = Number(receipt.slice(7));
+      if (!Number.isInteger(size) || size < 1 || size >= 8192) throw new Error('控台返回的时间线长度无效');
+      const chunks = responseChunks(text, 'TBLINK_INLINE_' + token + '_', 0, size);
+      return chunks === null ? null : 'INLINE:' + chunks;
+    });
     if (result === 'MISSING') throw new Error('控台连接组件没在运行，可能是控台换过 Show 或重启过。没在播放时，到设置里把控台断开再连接一次，联动台会把它装回去');
     if (result.startsWith('ERR:')) {
       const encoded = result.slice(4);
@@ -85,7 +111,17 @@ export class Ma2NetworkWire implements Ma2Wire {
       // The plugin does one console Export or Import per line and answers STEP:<steps done> until the
       // last, so stop and playback commands queued meanwhile go out between two steps. A plugin from
       // before steps ignores 'steps' and answers DONE at once, which is the same protocol.
-      let reply = await this.call('run', id, ",'steps'");
+      const inlineRead = operation === 'READ' && data.length === 0;
+      let reply = await this.call('run', id, inlineRead ? ",'steps','inline'" : ",'steps'");
+      if (inlineRead && reply.startsWith('INLINE:')) {
+        // The console returned all bytes and released this read in the same step.
+        releaseAttempted = true;
+        this.unreleased.delete(id); this.journal?.released(id);
+        checkCancellation();
+        const result = decodeResponse(Buffer.from(reply.slice(7), 'hex'), id);
+        if (!result.ok) throw new Error(`MA2：${result.value}`);
+        return result.value;
+      }
       for (let done = 0, step = /^STEP:(\d+)(:verify)?$/.exec(reply); step; step = /^STEP:(\d+)(:verify)?$/.exec(reply)) {
         if (Number(step[1]) !== done + 1) throw new Error('控台分步执行的回答对不上');
         if ((step[2] && operation !== 'SEQGO') || (confirming && !step[2])) throw new Error('控台写入确认阶段的回答对不上');
@@ -114,22 +150,23 @@ export class Ma2NetworkWire implements Ma2Wire {
         chunks.push(await this.readBatch(id, offset, size, Boolean(receipt?.[2])));
         progress?.({ completed: Math.min(offset + 8192, size), total: size });
       }
-      const response = Buffer.concat(chunks).toString('utf8');
-      const match = /^([a-f0-9]{32})\n(OK|ERROR)\n(\d+)\n([\s\S]*)$/.exec(response);
-      if (!match || match[1] !== id || Buffer.byteLength(match[4] ?? '') !== Number(match[3])) throw new Error('控台读回的数据对不上');
+      const result = decodeResponse(Buffer.concat(chunks), id);
       releaseAttempted = true;
       if (await this.call('release', id) !== 'ACK') throw new Error('MA2 未确认传输结束');
       this.unreleased.delete(id);
       this.journal?.released(id);
-      if (match[2] !== 'OK') throw new Error(`MA2：${match[4]}`);
-      if (operation === 'SNAPSHOT' || operation === 'SCOPE') this.snapshot = { id, target, content: Buffer.from(match[4] ?? '') };
-      return match[4] ?? '';
+      if (!result.ok) throw new Error(`MA2：${result.value}`);
+      if (operation === 'SNAPSHOT' || operation === 'SCOPE') this.snapshot = { id, target, content: Buffer.from(result.value) };
+      return result.value;
     } catch (error) {
       let message = error instanceof Error ? error.message : String(error);
       if (!acquired && error instanceof Ma2RpcRefusal) { this.journal?.released(id); this.unreleased.delete(id); }
       // Release only this transaction. Never execute it again or clear another client's request.
       if (acquired && !releaseAttempted) {
-        try { if (await this.call('release', id) !== 'ACK') throw new Error('控台未确认释放'); this.unreleased.delete(id); this.journal?.released(id); }
+        try {
+          await this.releaseAbandoned(id);
+          this.unreleased.delete(id);
+        }
         catch (cleanupError) { message += `；传输清理未确认：${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`; }
       }
       throw new Ma2BridgeFailure(message, id, sent, { cause: error });
@@ -162,17 +199,7 @@ export class Ma2NetworkWire implements Ma2Wire {
     const line = nativeBatch
       ? `Lua "TBLINK_NET('${token}0000','readbatch','${id}',${offset},${count})"`
       : `Lua "for i=0,${count - 1} do TBLINK_NET('${token}'..string.format('%04x',i),'read','${id}',${offset}+i*256) end"`;
-    const value = await this.connection.command(line, text => {
-      const parts: string[] = [];
-      for (let i = 0; i < count; i++) {
-        const result = ma2ResponseLine(text, `TBLINK_RPC_${token}${i.toString(16).padStart(4, '0')}:`);
-        if (result === null) return null;
-        const encoded = /^DATA:((?:[a-f0-9]{2})+)$/.exec(result)?.[1];
-        if (!encoded || encoded.length !== Math.min(256, size - offset - i * 256) * 2) throw new Error('控台读回的数据缺失或无效');
-        parts.push(encoded);
-      }
-      return parts.join('');
-    });
+    const value = await this.connection.command(line, text => responseChunks(text, 'TBLINK_RPC_' + token, offset, size));
     return Buffer.from(value, 'hex');
   }
 }

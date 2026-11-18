@@ -407,7 +407,8 @@ local function start(data)
       return search()
     end
     if op == 'LIST' or op == 'LISTSEQ' then
-      assert(body == '', 'Directory request must be empty')
+      local scoped = op == 'LISTSEQ' and body ~= ''
+      assert(body == '' or scoped and #body <= 60000 and not body:find('[^%d,]'), 'Invalid directory scope')
       local obj = gma.show.getobj
       local pool = assert(obj.handle(op == 'LISTSEQ' and 'Sequence' or 'Timecode'), 'Object pool unavailable')
       local count = assert(obj.amount(pool), 'Timecode enumeration unavailable')
@@ -418,16 +419,27 @@ local function start(data)
         end) .. '"'
       end
       local entries, seen = {}, {}
-      for index = 0, count - 1 do
-        -- Native pools are sparse: amount is the indexed span, not occupied slots.
-        local child = obj.child(pool, index)
+      local function append(child, expected)
         if child then
           local number = tonumber(obj.number(child))
           assert(number and number >= 1 and number <= 99999 and number == math.floor(number) and not seen[number], 'Invalid Timecode directory number')
+          assert(not expected or number == expected, 'Sequence number changed')
           seen[number] = true
           entries[#entries + 1] = '{"target":' .. number .. ',"name":' .. quote(assert(obj.name(child), 'Timecode name unavailable')) .. (gma.show.property.get(child, 'Info') == 'TBLINK_MTC_SELECTOR_V1' and ',"internal":true' or '') .. '}'
           assert(#entries <= 10000, 'Occupied Timecode directory exceeds limit')
         end
+      end
+      if scoped then
+        if body ~= '0' then
+          for value in (body .. ','):gmatch('(.-),') do
+            local number = tonumber(value)
+            assert(number and number >= 1 and number <= 99999 and tostring(number) == value, 'Invalid sequence number')
+            append(obj.handle('Sequence ' .. value), number)
+          end
+        end
+      else
+        -- Native pools are sparse: amount is the indexed span, not occupied slots.
+        for index = 0, count - 1 do append(obj.child(pool, index)) end
       end
       assert(obj.amount(pool) == count, 'Timecode directory changed during read')
       return answer('{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. ',"generation":' .. quote(generation) .. ',"version":' .. quote(assert(gma.show.getvar('VERSION'))) .. ',"entries":[' .. table.concat(entries, ',') .. ']}')
@@ -435,7 +447,18 @@ local function start(data)
     -- Where every Timecode show sits in time: offset, length, slot, frame format and the last event,
     -- read from an export made and removed on the console, so no event data crosses the network.
     if op == 'TCRANGES' then
-      assert(body == '', 'Range request must be empty')
+      local wanted
+      if body ~= '' then
+        local targets = assert(body:match('^playback:([%d,]+)$'), 'Invalid playback range request')
+        assert(#targets <= 60000, 'Too many playback targets')
+        wanted = {}
+        local seen = {}
+        for value in (targets .. ','):gmatch('(.-),') do
+          local n = tonumber(value)
+          assert(n and n >= 1 and n <= 99999 and tostring(n) == value and not seen[n], 'Invalid playback target')
+          seen[n] = true; wanted[#wanted + 1] = n
+        end
+      end
       local obj = gma.show.getobj
       -- assert returns all of its arguments on success. Do not pass its error text as a second
       -- argument to MA's native amount(), which rejects that call on onPC 3.7.
@@ -447,15 +470,17 @@ local function start(data)
       end
       local entries = {}
       -- One export per Timecode show, one step each; the pool is looked up again in every step.
-      local index = 0
+      local index, limit = 0, wanted and #wanted or count
       local function ranges()
         local pool = assert(obj.handle('Timecode'), 'Object pool unavailable')
-        while index <= count - 1 do
-          local child = obj.child(pool, index)
+        while index < limit do
+          local child
+          if wanted then child = obj.handle('Timecode ' .. wanted[index + 1]) else child = obj.child(pool, index) end
           index = index + 1
           if child then
             local number = tonumber(obj.number(child))
             assert(number and number >= 1 and number <= 99999 and number == math.floor(number), 'Invalid Timecode directory number')
+            assert(not wanted or wanted[index] == number, 'Timecode number changed')
             local name = 'tblink_tcrange_' .. id
             gma.cmd('Export Timecode ' .. number .. ' "' .. name .. '" /o')
             local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Timecode export unavailable')
@@ -467,14 +492,25 @@ local function start(data)
               local time = tonumber(event:match('%stime="([%d%.]+)"') or '0')
               if time and (not last or time > last) then last = time end
             end
+            -- Only report the cheap no-change case for ordinary native XML. If the
+            -- shape is unfamiliar or any playback attribute is present, the desktop
+            -- reads the complete object through its normal validation/write path.
+            local ready = ''
+            if wanted and tonumber(attribute('index')) == number - 1 and not xml:find('<!', 1, true)
+              and xml:find('xmlns="http://schemas.malighting.de/grandma2/xml/MA"', 1, true)
+              and not xml:find('<[%w_%-]+:') and not xml:find('<Cue/>', 1, true) and not xml:find('<Cue%s[^>]-/>') and not xml:find('<Timecode%s', (xml:find('<Timecode%s') or 0) + 1)
+              and not attribute('m_autostart') and not attribute('no_status_call') and not attribute('no_switch_off') then
+              local ok, refs = pcall(references, xml)
+              if ok and #refs <= 10000 then ready = ',"readySequences":[' .. table.concat(refs, ',') .. ']' end
+            end
             entries[#entries + 1] = '{"target":' .. number .. ',"name":' .. quote(attribute('name') or '') .. ',"offset":' .. quote(attribute('offset') or '0') .. ',"length":' .. quote(attribute('lenght') or '')
-              .. ',"slot":' .. quote(attribute('slot') or '') .. ',"frame":' .. quote(attribute('frame_format') or '') .. ',"last":' .. quote(last and tostring(last) or '') .. (gma.show.property.get(child, 'Info') == 'TBLINK_MTC_SELECTOR_V1' and ',"internal":true' or '') .. '}'
+              .. ',"slot":' .. quote(attribute('slot') or '') .. ',"frame":' .. quote(attribute('frame_format') or '') .. ',"last":' .. quote(last and tostring(last) or '') .. ready .. (gma.show.property.get(child, 'Info') == 'TBLINK_MTC_SELECTOR_V1' and ',"internal":true' or '') .. '}'
             assert(#entries <= 10000, 'Occupied Timecode directory exceeds limit')
-            if index <= count - 1 then return step(ranges) end
+            if index < limit then return step(ranges) end
           end
         end
         assert(obj.amount(pool) == count, 'Timecode directory changed during read')
-        answer('{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. ',"entries":[' .. table.concat(entries, ',') .. ']}')
+        answer('{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. (wanted and ',"generation":' .. quote(generation) or '') .. ',"entries":[' .. table.concat(entries, ',') .. ']}')
       end
       return ranges()
     end
@@ -816,7 +852,20 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport)
       network.job = start(id .. '\n' .. network.op .. '\n' .. network.target .. '\n' .. #body .. '\n' .. body)
       -- With 'steps' the first step runs now and the program sends 'step' for each next one.
       -- Without it (an older program, or the bridge upgrade check) every step runs now, as before.
-      if a == 'steps' then return proceed(network) end
+      if a == 'steps' then
+        local receipt = proceed(network)
+        -- An ordinary short Timecode fits in one monitor reply. Only a completed,
+        -- read-only export may release its lane here; writes keep their own receipt.
+        local response = network.response
+        if b == 'inline' and network.op == 'READ' and response and #response < 8192 then
+          for offset = 1, #response, 256 do
+            gma.echo('TBLINK_INLINE_' .. token .. '_' .. string.format('%04x', (offset - 1) / 256) .. ':DATA:' .. hex(response:sub(offset, offset + 255)))
+          end
+          clear_transfer(network); lanes[lanes.bg == network and 'bg' or 'fg'] = nil
+          return 'INLINE:' .. #response
+        end
+        return receipt
+      end
       repeat advance(network.job) until network.job.response
       return finished(network)
     end

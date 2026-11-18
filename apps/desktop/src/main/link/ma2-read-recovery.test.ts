@@ -28,3 +28,24 @@ it('中断后从逐条检查点恢复；一条损坏不丢其余结果，另一�
   expect(JSON.parse(await readFile(`${path}.before-ma2-workflow.bak`, 'utf8'))).toEqual(project);
   expect((await service.open(path)).ma2ReadState?.catalog.entries).toHaveLength(2);
 });
+
+it('全量扫描已经完成，重开尚未保存读取结果的工程仍能复用；缺少条目继续标记未读全', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tblink-reopen-'));
+  const path = join(root, 'show.tblink');
+  const project = createEmptyLinkProject('完整读取');
+  const service = new LinkProjectService();
+  await service.save(path, project);
+  const directory = { show: '测试', generation: 'same', version: '3.3.4.3', entries: [{ target: 1, name: 'A' }, { target: 2, name: 'B' }] };
+  const catalog = { directory, readAt: new Date().toISOString(), entries: [], sourceUnverified: false };
+  for (const count of [2, 1]) {
+    const recovery = new Ma2ReadRecovery(path, project.projectId, 'console');
+    await recovery.checkpoint({ ...catalog, incomplete: '读取中' });
+    for (const object of directory.entries.slice(0, count)) {
+      await recovery.checkpoint(catalog, { ...object, eventCount: 0, frameFormat: null, offset: '0', slot: null, events: [], error: null, warnings: [] });
+    }
+    await recovery.checkpoint(catalog);
+    const restored = (await service.open(path)).ma2ReadState!.catalog;
+    expect(restored.entries).toHaveLength(count);
+    expect(Boolean(restored.incomplete)).toBe(count !== directory.entries.length);
+  }
+});

@@ -607,7 +607,7 @@ it('会话检查持续失败时保持待核对，不来回跳也不重复写日�
 it('歌曲自己的同步失败不会被会话检查成功清掉', async () => {
   vi.useFakeTimers();
   await prepareMa2RealtimeSession();
-  useMa2SyncStore.setState(state => ({ songs: { ...state.songs, first: { ...state.songs.first!, state: 'blocked', message: 'Timecode 1 有 1 处冲突', blockedRevision: 0 } } }));
+  useMa2SyncStore.setState(state => ({ songs: { ...state.songs, first: { ...state.songs.first!, state: 'blocked', message: 'Timecode 1 有 1 处冲突', failedItem: useDocumentStore.getState().project?.rundown.find(item => item.id === 'first') } } }));
   vi.advanceTimersByTime(5001);
   await prepareMa2RealtimeSession();
   expect(metadata).toHaveBeenCalledTimes(2);
@@ -883,4 +883,18 @@ it('明确读取时间线或准备选曲期间，后台同步等待且不消耗�
     expect(useMa2SyncStore.getState().session.message).toContain('正在读取或准备控台');
     expect(sync).not.toHaveBeenCalled();
   } finally { useMa2ReadStore.setState({ busy: false }); }
+});
+
+it('控台已确认后的定时检查只询问 Show 和连接，读取遇到播放时显示等待', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  vi.setSystemTime(Date.now() + 6000);
+  metadata.mockClear();
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  expect(metadata.mock.calls).toHaveLength(1);
+  expect(metadata.mock.calls[0]?.[0]).toMatchObject({ details: 'source', targets: [] });
+  vi.setSystemTime(Date.now() + 6000);
+  metadata.mockRejectedValueOnce(new Error(SHOW_WAIT_CLOCK_MOVING));
+  expect(await prepareMa2RealtimeSession()).toBe(false);
+  expect(useMa2SyncStore.getState().session).toMatchObject({ status: 'waiting' });
 });

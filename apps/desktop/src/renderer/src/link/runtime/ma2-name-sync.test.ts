@@ -34,9 +34,9 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 it('实时同步开着时，右键改名交给下一轮同步；停下的改名同步也重新开始', async () => {
-  useMa2SyncStore.setState({ names: { state: 'blocked', message: '结果未知', blockedRevision: useDocumentStore.getState().revision } });
+  useMa2SyncStore.setState({ names: { state: 'blocked', message: '结果未知', blockedNames: 'previous' } });
   await requestMa2NameSync(useDocumentStore.getState().documentId);
-  expect(useMa2SyncStore.getState().names).toMatchObject({ state: 'pending', blockedRevision: undefined, nextCheckAt: 0 });
+  expect(useMa2SyncStore.getState().names).toMatchObject({ state: 'pending', blockedNames: undefined, nextCheckAt: 0 });
   expect(readCatalog).not.toHaveBeenCalled(); expect(rename).not.toHaveBeenCalled();
 });
 it('实时同步暂停时，右键改名留在工程里不写控台；点“同步名称”才写一次', async () => {

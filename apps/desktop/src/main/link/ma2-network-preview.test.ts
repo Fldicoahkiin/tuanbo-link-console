@@ -14,6 +14,8 @@ it('网络预览仅请求引用序列的目录，保留小数 Cue，并拒绝读
   expect(library).toHaveBeenCalledWith([9901]); expect(read).toHaveBeenCalledTimes(2);
   expect(result.unconverted).toEqual([]);
   expect(result.document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.map(event => event.kind === 'ma2' ? event.cue : '')))).toEqual(['1.250', '7.500']);
+  library.mockResolvedValueOnce({ ...metadata, errors: [{ sequence: 9901, message: '步骤数量已改变' }], sequences: [] });
+  await expect(readMa2NetworkPreview(9902, 0, read, library)).rejects.toThrow('序列 9901 的 Cue 没有读全');
   read.mockResolvedValueOnce(xml).mockResolvedValueOnce(xml.replace('time="45"', 'time="46"'));
   await expect(readMa2NetworkPreview(9902, 0, read, library)).rejects.toThrow('发生变化');
 });

@@ -4,6 +4,7 @@ import { ma2NetworkStatusSchema } from '@tb/schema';
 import { create } from 'zustand';
 import { saveMa2MaterialLibraryCommand, toUserErrorMessage } from '@tb/core/link';
 import { ma2EffectLibrarySchema, type Ma2CatalogRequest, type Ma2EffectLibrary, type Ma2ReadProgress } from '@tb/schema';
+import { ma2ReadCheckpoints } from './ma2-read-checkpoints';
 import { useDocumentStore } from './document-store';
 import { requireProjectLocation } from '../project-document';
 
@@ -15,6 +16,7 @@ export async function scanMa2Materials(source: Ma2CatalogRequest, retry = false)
   if (!before.project) throw new Error('请先打开联动工程');
   useMa2MaterialReadStore.setState({ documentId: before.documentId, busy: true, error: '', message: '', progress: null });
   let unsubscribe: (() => void) | undefined;
+  let flush: (() => void) | undefined;
   try {
     // Read checkpoints are kept beside the project file; the library itself stays in memory.
     const path = await requireProjectLocation('读取控台素材');
@@ -31,6 +33,12 @@ export async function scanMa2Materials(source: Ma2CatalogRequest, retry = false)
       if (state.documentId !== before.documentId) void window.tbLink.cancelMa2Read(progressId).catch(error => useMa2MaterialReadStore.setState({ error: toUserErrorMessage(error) }));
     });
     let partial: Ma2EffectLibrary | null = null;
+    const publications = ma2ReadCheckpoints(() => {
+      if (partial && useDocumentStore.getState().documentId === before.documentId) {
+        useDocumentStore.getState().executeForDocument(before.documentId, saveMa2MaterialLibraryCommand(sourceName, partial, progressId));
+      }
+    });
+    flush = publications.flush;
     const result = ma2EffectLibrarySchema.parse(await window.tbLink.readMa2EffectLibrary({ ...source, progressId, projectPath: path, projectId: before.project.projectId, ...(targets && cached ? { targets, expectedSource: { show: cached.library.directory.show, generation: cached.library.directory.generation, version: cached.library.directory.version } } : {}) }, update => {
       const current = useDocumentStore.getState();
       if (current.documentId !== before.documentId) return;
@@ -44,13 +52,13 @@ export async function scanMa2Materials(source: Ma2CatalogRequest, retry = false)
       const sequences = update.sequences ?? [];
       const failed = update.libraryError;
       partial = { ...partial, sequences: [...partial.sequences.filter(sequence => !sequences.some(entry => entry.sequence === sequence.sequence) && sequence.sequence !== failed?.sequence), ...sequences], errors: [...partial.errors.filter(error => error.sequence !== failed?.sequence && !sequences.some(entry => entry.sequence === error.sequence)), ...failed ? [failed] : []] };
-      current.executeForDocument(before.documentId, saveMa2MaterialLibraryCommand(sourceName, partial, progressId));
+      publications.changed();
     }));
     if (useDocumentStore.getState().documentId !== before.documentId) throw new Error('工程已切换，素材没有写进别的工程');
     const library = targets && cached ? { ...result, sequences: [...cached.library.sequences.filter(sequence => !targets.includes(sequence.sequence) && result.directory.entries.some(entry => entry.target === sequence.sequence)), ...result.sequences] } : result;
     useDocumentStore.getState().executeForDocument(before.documentId, saveMa2MaterialLibraryCommand(sourceName, library, progressId));
     useMa2MaterialReadStore.setState({ message: library.sourceUnverified || library.incomplete ? `读取未完成：${library.incomplete || '来源还没确认'}；已读取 ${library.sequences.length} 个序列` : `读取完成 · ${library.sequences.length} 个序列 · ${library.sequences.reduce((count, sequence) => count + sequence.cues.length, 0)} 个 Cue · ${library.errors.length} 项失败` });
-  } catch (error) { useMa2MaterialReadStore.setState({ error: toUserErrorMessage(error) }); throw error; }
+  } catch (error) { flush?.(); useMa2MaterialReadStore.setState({ error: toUserErrorMessage(error) }); throw error; }
   finally { unsubscribe?.(); useMa2MaterialReadStore.setState({ busy: false, activeId: null, progress: null }); }
 }
 

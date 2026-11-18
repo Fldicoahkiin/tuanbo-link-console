@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { ma2NetworkTargetSchema } from '@tb/schema';
+import { convertMa2Timecode } from './ma2-timecode-conversion';
+import { ma2MtcPlaybackSettings } from './ma2-timecode-xml';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { Ma2NetworkManager } from './ma2-network-manager';
 import { meiNanXml, meiNanCues } from './fixtures/ma2-mei-nan-reconstruction';
@@ -273,4 +277,36 @@ it('检查控台连接听演出状态：节目在走时等，写明原因，不�
   manager.disconnect(); await manager.connect();
   expect(manager.status()).toMatchObject({ state: 'connected' });
   expect(manager.status().connection).not.toBe(first);
+});
+
+it.each([false, true])('绑定时间线同步完成选曲核对，只传本次连接目标，启动自动连接=%s', async autoConnect => {
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore());
+  await manager.save({ settings: { ...settings, autoConnect } });
+  await manager.connect();
+  try {
+    const { service, bridge } = manager.get(settings);
+    const prepare = vi.spyOn(manager, 'prepareMtcPlayback').mockImplementation(network => {
+      expect(ma2NetworkTargetSchema.parse(network)).toMatchObject({ host: settings.host });
+      return Promise.resolve(false);
+    });
+    const original = ma2MtcPlaybackSettings(readFileSync(new URL('./fixtures/ma2-timecode-fractional-3.3.xml', import.meta.url), 'utf8'), false);
+    const sequence = readFileSync(new URL('./fixtures/ma2-sequence-fractional-3.3.xml', import.meta.url), 'utf8');
+    let xml = original;
+    vi.spyOn(bridge, 'request').mockImplementation(() => Promise.resolve(xml.replace('</MA>', sequence.match(/<Sequ\s[\s\S]*<\/Sequ>/)![0] + '</MA>')));
+    const write = vi.spyOn(bridge, 'exchange').mockImplementation((_op, _tc, _expected, desired) => {
+      xml = desired!;
+      return Promise.resolve({ requestId: 'a'.repeat(32), response: xml });
+    });
+    const readback = convertMa2Timecode(xml, [sequence], 9902);
+    const document = structuredClone(readback.document);
+    document.ma2Bindings = [{ id: 'bound', timecode: 9902, name: readback.name, readAt: readback.readAt, sourceXml: xml,
+      baselineTracks: structuredClone(document.tracks), mappings: readback.mappings }];
+    const apply = () => service.apply({ dataDirectory: '', document, bindingId: 'bound', readback, conflicts: [] });
+    expect(await apply()).toMatchObject({ status: 'verified' });
+    expect(write).not.toHaveBeenCalled();
+    document.tracks[0]!.clips[0]!.events[0]!.at = 500;
+    expect(await apply()).toMatchObject({ status: 'verified' });
+    expect(write).toHaveBeenCalledOnce();
+    expect(prepare).toHaveBeenCalledTimes(2);
+  } finally { manager.disconnect(); }
 });

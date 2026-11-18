@@ -16,13 +16,12 @@ export class Ma2ReadRecovery {
   constructor(private readonly projectPath: string, private readonly projectId: string, private readonly source: string) {}
   async checkpoint(catalog: Ma2Catalog, entry?: Ma2Catalog['entries'][number]): Promise<void> {
     const root = `${this.projectPath}.ma2-recovery`;
-    const header = headerSchema.parse({ version: 1, id: this.id, projectId: this.projectId, source: this.source, catalog: { ...catalog, entries: [] } });
-    if (!this.initialized) {
+    if (!this.initialized || !entry) {
+      const header = headerSchema.parse({ version: 1, id: this.id, projectId: this.projectId, source: this.source, catalog: { ...catalog, entries: [] } });
       await writeFileAtomically(join(root, 'active.json'), JSON.stringify(header));
       this.initialized = true;
     }
     if (entry) await writeFileAtomically(join(root, this.id, `${entry.target}.json`), JSON.stringify(ma2CatalogEntrySchema.parse(entry)));
-    else await writeFileAtomically(join(root, 'active.json'), JSON.stringify(header));
   }
 }
 
@@ -34,6 +33,12 @@ export async function recoverMa2Read(projectPath: string, project: LinkProject):
   if (header.projectId !== project.projectId) return project;
   const saved = project.ma2ReadState;
   if (saved && saved.catalog.readAt > header.catalog.readAt) return project;
+  if (saved?.source === header.source && saved.catalog.readAt === header.catalog.readAt && !saved.catalog.incomplete && !saved.catalog.sourceUnverified
+    && !header.catalog.incomplete && !header.catalog.sourceUnverified && saved.catalog.directory.show === header.catalog.directory.show
+    && saved.catalog.directory.version === header.catalog.directory.version && JSON.stringify(saved.catalog.directory.entries) === JSON.stringify(header.catalog.directory.entries)) {
+    const available = new Set(saved.catalog.entries.filter(entry => !entry.error).map(entry => entry.target));
+    if (header.catalog.directory.entries.every(entry => available.has(entry.target))) return project;
+  }
   let files: string[];
   try { files = await readdir(join(root, header.id)); }
   catch (error) { if (missing(error)) return project; throw error; }
@@ -52,9 +57,13 @@ export async function recoverMa2Read(projectPath: string, project: LinkProject):
   }
   if (!entries.length) return project;
   const sameSource = saved?.source === header.source && saved.catalog.directory.show === header.catalog.directory.show && saved.catalog.directory.generation === header.catalog.directory.generation;
-  if (sameSource && saved.catalog.sourceUnverified === header.catalog.sourceUnverified && entries.every(entry => saved.catalog.entries.some(old => old.target === entry.target && old.readAt === entry.readAt && old.sourceXml === entry.sourceXml && old.error === entry.error))) return project;
+  if (sameSource && saved.catalog.readAt === header.catalog.readAt && saved.catalog.incomplete === header.catalog.incomplete && saved.catalog.sourceUnverified === header.catalog.sourceUnverified && entries.every(entry => saved.catalog.entries.some(old => old.target === entry.target && old.readAt === entry.readAt && old.sourceXml === entry.sourceXml && old.error === entry.error))) return project;
   const retained = sameSource ? saved.catalog.entries.filter(old => !entries.some(entry => entry.target === old.target) && header.catalog.directory.entries.some(entry => entry.target === old.target)) : [];
-  const catalog = ma2CatalogSchema.parse({ ...header.catalog, entries: [...retained, ...entries], incomplete: '已恢复中断前保存的读取结果；请检查后补读没读完的部分' });
+  const byTarget = new Map([...retained, ...entries].map(entry => [entry.target, entry]));
+  const ordered = header.catalog.directory.entries.flatMap(entry => byTarget.get(entry.target) ?? []);
+  const complete = !header.catalog.incomplete && !header.catalog.sourceUnverified && ordered.length === header.catalog.directory.entries.length && ordered.every(entry => !entry.error);
+  const catalog = ma2CatalogSchema.parse({ ...header.catalog, entries: ordered,
+    incomplete: complete ? undefined : '已恢复中断前保存的读取结果；请检查后补读没读完的部分' });
   const state = reconcileMa2ReadState(project, header.source, catalog);
   return saveMa2ReadStateCommand(state).execute(project);
 }

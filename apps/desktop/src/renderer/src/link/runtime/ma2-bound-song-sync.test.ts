@@ -471,3 +471,22 @@ it('方式 1 的歌整首挪过（加了前空白）：到控台确认之前按�
   edit(useDocumentStore.getState().project!.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[0]!.at + 100); await tick();
   expect(applyMa2.mock.calls.at(-1)?.[0]).toMatchObject({ consoleChanges: 'read-back' });
 });
+
+it('两首歌失败后，其他节目的修改和读回不触发重写；只改其中一首只重新同步这首', async () => {
+  const data = project();
+  const other = structuredClone(data.rundown[0]!);
+  other.id = 'second'; other.title = '第二首';
+  other.lighting!.ma2Bindings![0]!.timecode = 9903;
+  data.rundown.push(other);
+  useDocumentStore.getState().setProject(data, 'song.tblink');
+  previewMa2.mockRejectedValue(new Error('控台响应不完整'));
+  start(); start('second'); await tick();
+  expect(song().state).toBe('blocked'); expect(song('second').state).toBe('blocked');
+  expect(previewMa2).toHaveBeenCalledTimes(2);
+  useDocumentStore.getState().execute({ id: 'note', label: '修改工程名称', execute: value => ({ ...value, name: '另一个名称' }), undo: before => before });
+  await tick();
+  expect(previewMa2).toHaveBeenCalledTimes(2);
+  edit(1500); await tick();
+  expect(previewMa2).toHaveBeenCalledTimes(3);
+  expect(previewMa2.mock.calls.at(-1)?.[0].target).toBe(9902);
+});

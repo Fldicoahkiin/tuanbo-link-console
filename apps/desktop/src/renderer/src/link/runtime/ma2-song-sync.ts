@@ -153,7 +153,7 @@ export async function takeMa2SongFromConsole(itemId: string): Promise<string> {
   if (after.documentId !== entry.documentId) throw new Error('工程已经换了，没有改动歌曲');
   confirmMa2Edit(() => after.executeForDocument(entry.documentId, command));
   const message = `已换成控台上的 ${timecodes.map(target => `Timecode ${target}`).join('、')}；联动台原来没写到控台的改动已存档`;
-  update(entry, { state: 'verified', checking: false, writing: false, blockedRevision: undefined, consecutiveFailures: 0, checkedAt: Date.now(), nextCheckAt: Date.now() + BACKGROUND_RECHECK_MS,
+  update(entry, { state: 'verified', checking: false, writing: false, consecutiveFailures: 0, checkedAt: Date.now(), nextCheckAt: Date.now() + BACKGROUND_RECHECK_MS,
     localEditedAt: undefined, consoleSeen: undefined, ...succeeded, message });
   const project = useDocumentStore.getState().project;
   if (project) void recordRuntimeOperator(project.projectId, project.rundown.find(value => value.id === itemId), message).catch((cause: unknown) => update(entry, { message: `${message}；运行日志写入失败：${cause instanceof Error ? cause.message : String(cause)}` }));
@@ -169,7 +169,7 @@ export function writeMa2SongFromSoftware(itemId: string): string {
   const entry = useMa2SyncStore.getState().songs[itemId];
   if (!entry) throw new Error('这首歌没有在同步');
   const message = ma2SyncActive() ? '按联动台的写到控台…' : '点“同步一次”时按联动台的写到控台';
-  useMa2SyncStore.setState(state => ({ songs: { ...state.songs, [itemId]: { ...entry, state: 'pending', blockedRevision: undefined, consecutiveFailures: 0, nextCheckAt: 0, consoleChangesOnce: 'software', message } } }));
+  useMa2SyncStore.setState(state => ({ songs: { ...state.songs, [itemId]: { ...entry, state: 'pending', failedItem: undefined, consecutiveFailures: 0, nextCheckAt: 0, consoleChangesOnce: 'software', message } } }));
   return message;
 }
 
@@ -241,7 +241,7 @@ async function syncImportedSong(entry: SongSync): Promise<void> {
   const lighting = project()?.rundown.find(item => item.id === entry.itemId)?.lighting;
   if (lighting) {
     const routed = routeMa2Tracks(lighting);
-    if (JSON.stringify(routed) !== JSON.stringify(lighting)) useDocumentStore.getState().executeForDocument(entry.documentId, setLightingCommand(entry.itemId, routed, '关联新增灯光轨道'));
+    if (routed !== lighting) useDocumentStore.getState().executeForDocument(entry.documentId, setLightingCommand(entry.itemId, routed, '关联新增灯光轨道'));
   }
   const outcome = await syncBoundSong({
     // A song moved as a whole (blank time before its music) is written, not read back, until the console confirms it.
@@ -272,7 +272,7 @@ async function syncImportedSong(entry: SongSync): Promise<void> {
 }
 
 /** What a successful pass clears: a failure after it is reported again, and a one-time 用联动台的 is used up. */
-const succeeded = { loggedFailure: undefined, announcedFailure: undefined, consoleChangesOnce: undefined } as const;
+const succeeded = { failedItem: undefined, loggedFailure: undefined, announcedFailure: undefined, consoleChangesOnce: undefined } as const;
 
 function setNames(patch: Partial<NameSync>): void {
   useMa2SyncStore.setState(state => ({ names: { ...state.names, ...patch } }));
@@ -281,13 +281,14 @@ function setNames(patch: Partial<NameSync>): void {
 async function syncNames(): Promise<void> {
   const names = useMa2SyncStore.getState().names;
   const document = useDocumentStore.getState();
-  if (!pendingMa2Renames(document.project).length) {
+  const pending = pendingMa2Renames(document.project);
+  if (!pending.length) {
     // Undone, or confirmed by an explicit request meanwhile.
-    if (names.state === 'pending' || names.state === 'blocked') setNames({ state: 'idle', message: '', blockedRevision: undefined });
+    if (names.state === 'pending' || names.state === 'blocked') setNames({ state: 'idle', message: '', blockedNames: undefined });
     return;
   }
   if (names.state === 'syncing') return;
-  if (names.state === 'blocked' && names.blockedRevision === document.revision) return;
+  if (names.state === 'blocked' && names.blockedNames === JSON.stringify(pending)) return;
   if (names.state !== 'blocked' && names.nextCheckAt && Date.now() < names.nextCheckAt) return;
   const wait = currentShowWait('ma2.sync.write');
   if (wait) { setNames({ state: 'pending', message: wait }); return; }
@@ -315,11 +316,12 @@ export async function tickMa2SongSync(): Promise<void> {
     for (const entry of Object.values(useMa2SyncStore.getState().songs).sort((a, b) => rank(a) - rank(b))) {
       if (entry.documentId !== useDocumentStore.getState().documentId) { stopMa2SongSync(entry.itemId); continue; }
       if (entry.state === 'paused' || !ma2SongSyncActive(entry.itemId)) continue;
-      if (entry.state === 'blocked' && entry.blockedRevision === useDocumentStore.getState().revision) continue;
+      const attemptedItem = useDocumentStore.getState().project?.rundown.find(item => item.id === entry.itemId);
+      if (entry.state === 'blocked' && entry.failedItem === attemptedItem) continue;
       // An edit made while this pass was checking other songs is synced on the next pass, before them.
       if (entry.state === 'verified' && useDocumentStore.getState().revision !== startRevision) break;
       const due = dueAt(entry);
-      if (due && Date.now() < due && (!entry.consecutiveFailures || entry.blockedRevision === useDocumentStore.getState().revision)) continue;
+      if (due && Date.now() < due && (!entry.consecutiveFailures || entry.failedItem === attemptedItem)) continue;
       // A confirmed song's check waits for the show too; it has nothing to send, so it stays confirmed.
       const wait = currentShowWait(entry.state === 'verified' ? 'ma2.sync.read' : 'ma2.sync.write');
       if (wait) { if (entry.state !== 'verified') update(entry, { state: 'pending', message: wait }); continue; }
@@ -478,7 +480,7 @@ export async function tickMa2SongSync(): Promise<void> {
         const reported = latestEntry?.sessionId === entry.sessionId ? latestEntry : entry;
         // A wait for the show is no failure: it is neither logged nor counted as the text already reported.
         const log = showWait === null && reason !== reported.loggedFailure;
-        update(entry, { state: exhausted ? 'blocked' : 'pending', blockedRevision: useDocumentStore.getState().revision, consecutiveFailures, consecutiveCollisions: collisions,
+        update(entry, { state: exhausted ? 'blocked' : 'pending', failedItem: waiting ? undefined : attemptedItem, consecutiveFailures, consecutiveCollisions: collisions,
           nextCheckAt: Date.now() + (collided ? FOCUSED_RECHECK_MS : waiting ? 1000 : 1000 * consecutiveFailures),
           waitingForConnection: disconnected, checking: false, writing: false, recheckRevision: undefined, requestId: null, progress: null,
           // 用联动台的 chosen once holds through a wait (console away, the show, the console being edited); a real failure uses it up.
@@ -500,9 +502,9 @@ export async function tickMa2SongSync(): Promise<void> {
 function finishMa2SyncOnce(): void {
   const { once, enabled, onceItemId } = useMa2RealtimePreference.getState();
   if (once === null || enabled) return;
-  const { documentId, revision } = useDocumentStore.getState();
+  const { documentId, project } = useDocumentStore.getState();
   const state = useMa2SyncStore.getState();
   const songs = Object.values(state.songs).filter(song => song.documentId === documentId && (!onceItemId || song.itemId === onceItemId));
   if (!onceItemId && (state.names.state === 'syncing' || state.names.state === 'pending') || songs.some(song => song.requestId)) return;
-  if (songs.every(song => song.state === 'paused' || song.state === 'verified' && (song.checkedAt ?? 0) >= once || song.state === 'blocked' && song.blockedRevision === revision)) useMa2RealtimePreference.setState({ once: null, onceItemId: null });
+  if (songs.every(song => song.state === 'paused' || song.state === 'verified' && (song.checkedAt ?? 0) >= once || song.state === 'blocked' && song.failedItem === project?.rundown.find(item => item.id === song.itemId))) useMa2RealtimePreference.setState({ once: null, onceItemId: null });
 }

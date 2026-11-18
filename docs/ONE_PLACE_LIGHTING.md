@@ -18,6 +18,8 @@
 
 ## MA2 同步
 
+2026-11-18，0.5.16 现场修复。绑定时间线的写后选曲核对使用发起该次同步的连接目标，连接已更换时停止。某首歌失败后只由本曲编辑或操作员刷新唤起，其他歌曲读回和素材检查点不触发该曲重写。编辑提交直接唤起同一个逐首同步；一次写入未结束时接着改，等它完成后按最新修改再核对。周期核对询问 Show、版本和组件会话，来源改变时再取序列目录；遇到播放显示等待。单曲预览只查实际引用的序列，读不全不确认。普通连接逐项核对工程保存的时间线、素材目录并保留历史读取时间，手动更新仍完整读取。由 `ma2-network-manager.test.ts`、`ma2-bound-song-sync.test.ts`、`ma2-realtime-session.test.ts`、`ma2-editing-session.test.ts` 和 `ma2-read-recovery.test.ts` 验证。
+
 2026-11-17 重启占用修复：`ma2-request-journal.ts` 在请求开始前把本端请求编号保存在本机，正常释放后移除。`ma2-network-manager.ts` 重新登录同一控台时读取并只释放这些编号；不重放读写或按键，不清除其他客户端请求。覆盖退出和 begin 回答丢失，避免重启后要等插件两分钟过期。`ma2-request-journal.test.ts`、`ma2-network-wire.test.ts` 验证持久归属、丢失回答后的释放以及未能保存记录时不发送。
 
 方式 1、方式 2 和改名走同一个逐首同步、同一份状态（`runtime/ma2-song-sync.ts`、`stores/ma2-sync-store.ts`）
@@ -68,7 +70,7 @@
 
 ## 新增轨道写到哪里
 
-`packages/core/src/ma2-track-routing.ts` 决定已有绑定内新增轨道的去向，唯一目标登记待写入，歧义明确提示。`packages/core/src/ma2-track-routing.test.ts` 检查归属与未同步统计。
+`packages/core/src/ma2-track-routing.ts` 决定已有绑定内新增轨道的去向，唯一目标登记待写入，歧义明确提示。无需分配时返回原灯光对象，实时同步省去整首灯光数据的复制和比较。`packages/core/src/ma2-track-routing.test.ts` 检查归属与未同步统计。
 
 未关联轨道没有 Timecode 归属，不能伪造为第一条绑定的差异。`ma2PendingChanges` 只比较已绑定内容；`ma2TrackRoutingIssue` 在歌曲状态和同步前置检查中说明未关联轨道，仍阻止把遗漏的 Cue 确认为已同步。`ma2-pending-changes.test.ts`、`song-lighting-status.test.ts` 和 `runtime/ma2-bound-song-sync.test.ts` 守住计数不重复、问题可见、未关联内容不误确认。
 
@@ -81,6 +83,8 @@
 网络桥空闲时不启动常驻 Lua 定时任务。只有按住 Flash、Temp、Swop 等需要断线自动松开的按键时，`tools/ma2/tblink_bridge.lua` 才启动单次看门任务；有按键仍按住才继续下一次，松开、租约过期、桥换代或停止时释放按键并退出。文件桥的请求轮询同样使用单次任务，停止或换代后不续行。正常的 Go/Goto、同步和读取不新增常驻任务。旧版无限任务的现场清理由诊断确认目标后单独处理，自动连接流程不发送全局 Off、Off Plugin 或 ReloadPlugins，不能影响其他插件。测试：`apps/desktop/src/main/link/ma2-bridge-timers.test.ts`。
 
 ## MIDI 选曲隔离
+
+2026-11-18，0.5.16 现场修复。明确连接仍做选曲核对。第二次导出时间线时，可识别且播放属性已就绪的时间线只回传当前区间与序列引用。其他时间线取完整 XML；修改、备份及序列触发的读回照常执行。辅助选曲 XML 传输中重复的标签和编号列表只传一份，在控台原样还原后比较和写入。`ma2-mtc-selection.test.ts` 覆盖重复连接和无损还原。
 
 2026-11-18 现场再次反馈后的补充：SEQGO 对 CueDatas 按原始字节块读取比较，外围元数据解析与完整比较分批执行；`ma2-network-wire.ts` 仅接受 SEQGO 的只读确认阶段标志，已经写入后继续读回，不重发 Assign。MA 内部协程短暂停顿合并到有处理量和时间上限的批次；取消、失败和释放关闭扫描文件。`ma2-sequence-trigger-read.test.ts`、`ma2-network-wire.test.ts` 覆盖密集灯具、4096 Cue、标签跨块、内部暂停、取消前后、非法阶段标志和文件关闭。实际耗时见专项记录。
 

@@ -16,9 +16,11 @@ export function ma2TrackRoutingIssue(document: LightingDocument): string | null 
 /** Called inside the lighting command: auto-route only an unambiguous executor to the one selected show. */
 export function routeMa2Tracks(document: LightingDocument): LightingDocument {
   if (document.ma2Bindings?.length !== 1) return document;
+  const unbound = new Set(unboundMa2Tracks(document).map(track => track.id));
+  if (!unbound.size) return document;
   const next = structuredClone(document);
   const binding = next.ma2Bindings![0]!;
-  for (const track of unboundMa2Tracks(next)) {
+  for (const track of next.tracks.filter(value => unbound.has(value.id))) {
     const events = track.clips.flatMap(clip => clip.events);
     const executors = events.map(event => {
       if (event.kind !== 'ma2' && event.kind !== 'ma2-fader') return null;
@@ -36,5 +38,5 @@ export function routeMa2Tracks(document: LightingDocument): LightingDocument {
     const executorName = binding.baselineTracks.find(value => value.id === knownTrack)?.name ?? `执行器 ${executor}`;
     binding.pendingTracks = [...binding.pendingTracks ?? [], { trackId: track.id, executor, executorName }];
   }
-  return next;
+  return binding.pendingTracks?.length === document.ma2Bindings[0]!.pendingTracks?.length ? document : next;
 }

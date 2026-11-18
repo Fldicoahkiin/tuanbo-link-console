@@ -9,65 +9,95 @@ import { holdForShow, isShowWait, type ShowGateReader } from '@tb/core/link';
  * Read object metadata only. Never export fixture values merely to display a Cue list. `show` is asked before each console
  * command: paused it reads (第 3 题); a program that starts moving stops it before the next command, with a wait.
  */
-export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, show: ShowGateReader, onProgress?: (progress: Ma2ReadProgressUpdate) => void | Promise<void>, phase: 'library' | 'verification' = 'library', signal?: AbortSignal, targets?: readonly number[], measure?: (bytes: number) => void, sessionDirectory?: Ma2ObjectDirectory, expectedSource?: Ma2CatalogRequest['expectedSource']): Promise<Ma2EffectLibrary> {
+export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, show: ShowGateReader, onProgress?: (progress: Ma2ReadProgressUpdate) => void | Promise<void>, phase: 'library' | 'verification' = 'library', signal?: AbortSignal, targets?: readonly number[], options: { measure?: (bytes: number) => void; sessionDirectory?: Ma2ObjectDirectory; expectedSource?: Ma2CatalogRequest['expectedSource']; referencedOnly?: boolean } = {}): Promise<Ma2EffectLibrary> {
   if (signal?.aborted) throw new Error('素材读取已取消');
+  const { measure, sessionDirectory, expectedSource } = options;
   // A catalog session owns the final directory verification when reusing this snapshot.
-  const directory = (sessionDirectory ? ma2SongDirectory(sessionDirectory) : undefined) ?? ma2SongDirectory(ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1))));
+  const readDirectory = async () => {
+    holdForShow(show, 'ma2.sync.read');
+    const scope = options.referencedOnly && targets ? targets.join(',') || '0' : '';
+    const raw = sessionDirectory ?? ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1, scope)));
+    return ma2SongDirectory(raw);
+  };
+  const directory = await readDirectory();
   if (signal?.aborted) throw new Error('素材读取已取消');
   if (expectedSource && Object.entries(expectedSource).some(([key, value]) => Reflect.get(directory, key) !== value)) throw new Error('控台的 Show 或连接变了，缓存已保留，请重新读取');
   const readAt = new Date().toISOString();
   await onProgress?.({ phase, completed: 0, total: directory.entries.length + 1, detail: '读取序列与 Cue', show: directory.show, checkpoint: { directory, readAt } });
   const sequences: Ma2EffectLibrary['sequences'] = [];
   const errors: Ma2EffectLibrary['errors'] = [];
-  const read = async (target: number, offset: number): Promise<string> => {
-    holdForShow(show, 'ma2.sync.read', `已读完 ${sequences.length + errors.length} 个序列，接着读会从没读的开始。`);
-    const prefix = `TBLINK_CUES_${randomBytes(16).toString('hex')}:`;
-    // The native monitor truncates long echo lines (observed on 3.7.0.5 with
-    // 32 Chinese Cue names). Keep each line bounded without truncating names.
-    const script = `local o=gma.show.getobj;local h=o.handle('Sequence ${target}');local r='missing';local function hex(s)return s:gsub('.',function(b)return string.format('%02x',string.byte(b))end)end;if h then local n=o.amount(h);local t={tostring(n),(hex(o.label(h) or ''))};for i=${offset},math.min(n-1,${offset + 31}) do local c=o.child(h,i);if c then local v=tostring(o.number(c));t[#t+1]=i..','..v..','..hex(o.label(c) or '') end end;r=table.concat(t,';') end;for p=1,#r,700 do gma.echo('${prefix}'..p..':'..r:sub(p,p+699)) end;gma.echo('${prefix}END:'..#r)`;
-    const response = await connection.command(`Lua "${script}"`, text => readNativeCueChunks(text, prefix));
-    measure?.(Buffer.byteLength(response, 'utf8'));
-    return response;
-  };
-  if (targets?.some(target => !directory.entries.some(entry => entry.target === target))) throw new Error('时间线引用的序列已不存在');
-  for (const entry of directory.entries.filter(entry => !targets || targets.includes(entry.target))) {
+  const selected = directory.entries.filter(entry => !targets || targets.includes(entry.target));
+  if (targets?.some(target => !selected.some(entry => entry.target === target))) throw new Error('时间线引用的序列已不存在');
+  const gate = () => {
     if (signal?.aborted) throw new Error('素材读取已取消');
-    try {
-      const cues: Ma2EffectLibrary['sequences'][number]['cues'] = [];
-      let sequenceName: string | null = null;
-      let count = 1;
-      for (let offset = 0; offset < count; offset += 32) {
-        if (signal?.aborted) throw new Error('素材读取已取消');
-        const response = await read(entry.target, offset);
-        if (signal?.aborted) throw new Error('素材读取已取消');
-        if (response !== await read(entry.target, offset)) throw new Error(`序列 ${entry.target} 在读取期间发生变化，请重新读取`);
-        if (signal?.aborted) throw new Error('素材读取已取消');
-        const [total, nameHex, ...rows] = response.split(';');
-        if (!/^\d+$/.test(total ?? '') || Number(total) > 100000) throw new Error(`序列 ${entry.target} 的素材目录无效`);
-        if (nameHex === undefined || !/^(?:[a-f0-9]{2})*$/.test(nameHex)) throw new Error(`序列 ${entry.target} 的名称无效`);
-        const name = Buffer.from(nameHex, 'hex').toString('utf8') || null;
-        if (offset && sequenceName !== name) throw new Error('控台序列名称发生变化，请重新读取');
-        sequenceName = name;
-        if (offset && count !== Number(total)) throw new Error('控台 Cue 数量发生变化，请重新读取');
-        count = Number(total);
-        for (const row of rows) {
-          const match = /^(\d+),(\d+(?:\.\d{1,3})?),((?:[a-f0-9]{2})*)$/.exec(row);
-          if (!match) throw new Error(`序列 ${entry.target} 返回了不支持的 Cue 编号`);
-          if (Number(match[2]) === 0) continue;
-          const [whole, fraction = ''] = match[2]!.split('.');
-          cues.push({ index: Number(match[1]), number: `${Number(whole)}.${fraction.padEnd(3, '0')}`, name: Buffer.from(match[3]!, 'hex').toString('utf8') || null });
+    holdForShow(show, 'ma2.sync.read', `已读完 ${sequences.length + errors.length} 个序列，接着读会从没读的开始。`);
+  };
+  const read = async (numbers: readonly number[], offset: number): Promise<string[]> => {
+    gate();
+    const prefix = `TBLINK_CUES_${randomBytes(16).toString('hex')}:`;
+    // Each row contains only numbers, delimiters and hex. Large pages get a dedicated
+    // response so grouping small sequences cannot overflow the native monitor.
+    const script = [
+      "local o=gma.show.getobj;local function hex(s)return (s:gsub('.',function(b)return string.format('%02x',string.byte(b))end))end;",
+      "local function page(k)local h=o.handle('Sequence '..k);if not h then return 'missing' end;",
+      "local n=o.amount(h);local t={tostring(n),hex(o.label(h) or '')};",
+      `for i=${offset},math.min(n-1,${offset + 31}) do local c=o.child(h,i);if c then t[#t+1]=i..','..tostring(o.number(c))..','..hex(o.label(c) or '') end end;return table.concat(t,';') end;`,
+      `local a={};for _,k in ipairs({${numbers.join(',')}}) do local ok,r=pcall(page,k);a[#a+1]=not ok and 'invalid' or ${numbers.length > 1 ? "#r>8192 and 'large' or " : ''}r end;`,
+      `local r=table.concat(a,'/');for p=1,#r,700 do gma.echo('${prefix}'..p..':'..r:sub(p,p+699)) end;gma.echo('${prefix}END:'..#r)`
+    ].join('');
+    const response = await connection.command(`Lua "${script}"`, text => readNativeCueChunks(text, prefix), gate);
+    gate();
+    measure?.(Buffer.byteLength(response, 'utf8'));
+    const rows = response.split('/');
+    if (rows.length !== numbers.length) throw new Error('控台返回的序列数量对不上');
+    return rows;
+  };
+  for (let index = 0; index < selected.length; index += 8) {
+    const group = selected.slice(index, index + 8);
+    const numbers = group.map(entry => entry.target);
+    const first = await read(numbers, 0);
+    const second = await read(numbers, 0);
+    for (const [position, entry] of group.entries()) {
+      gate();
+      try {
+        const cues: Ma2EffectLibrary['sequences'][number]['cues'] = [];
+        let sequenceName: string | null = null;
+        let count = 1;
+        for (let offset = 0; offset < count; offset += 32) {
+          if (signal?.aborted) throw new Error('素材读取已取消');
+          const dedicated = offset > 0 || first[position] === 'large' && second[position] === 'large';
+          const response = dedicated ? (await read([entry.target], offset))[0]! : first[position]!;
+          const verified = dedicated ? (await read([entry.target], offset))[0]! : second[position]!;
+          if (response !== verified) throw new Error(`序列 ${entry.target} 在读取期间发生变化，请重新读取`);
+          if (signal?.aborted) throw new Error('素材读取已取消');
+          const [total, nameHex, ...rows] = response.split(';');
+          if (!/^\d+$/.test(total ?? '') || Number(total) > 100000) throw new Error(`序列 ${entry.target} 的素材目录无效`);
+          if (nameHex === undefined || !/^(?:[a-f0-9]{2})*$/.test(nameHex)) throw new Error(`序列 ${entry.target} 的名称无效`);
+          const name = Buffer.from(nameHex, 'hex').toString('utf8') || null;
+          if (offset && sequenceName !== name) throw new Error('控台序列名称发生变化，请重新读取');
+          sequenceName = name;
+          if (offset && count !== Number(total)) throw new Error('控台 Cue 数量发生变化，请重新读取');
+          count = Number(total);
+          for (const row of rows) {
+            const match = /^(\d+),(\d+(?:\.\d{1,3})?),((?:[a-f0-9]{2})*)$/.exec(row);
+            if (!match) throw new Error(`序列 ${entry.target} 返回了不支持的 Cue 编号`);
+            if (Number(match[2]) === 0) continue;
+            const [whole, fraction = ''] = match[2]!.split('.');
+            cues.push({ index: Number(match[1]), number: `${Number(whole)}.${fraction.padEnd(3, '0')}`, name: Buffer.from(match[3]!, 'hex').toString('utf8') || null });
+          }
         }
+        sequences.push(ma2EffectLibrarySchema.shape.sequences.parse([{ sequence: entry.target, name: sequenceName, cues }])[0]!);
+      } catch (cause) {
+        if (signal?.aborted || isShowWait(cause)) throw cause;
+        errors.push({ sequence: entry.target, message: cause instanceof Error ? cause.message : String(cause) });
       }
-      sequences.push(ma2EffectLibrarySchema.shape.sequences.parse([{ sequence: entry.target, name: sequenceName, cues }])[0]!);
-    } catch (cause) {
-      if (signal?.aborted || isShowWait(cause)) throw cause;
-      errors.push({ sequence: entry.target, message: cause instanceof Error ? cause.message : String(cause) });
+      await onProgress?.({ phase, completed: sequences.length + errors.length, total: directory.entries.length + 1, detail: `已检查序列 ${entry.target}`, sequences: sequences.at(-1)?.sequence === entry.target ? [sequences.at(-1)!] : [], ...(errors.at(-1)?.sequence === entry.target ? { libraryError: errors.at(-1)! } : {}) });
     }
-    await onProgress?.({ phase, completed: sequences.length + errors.length, total: directory.entries.length + 1, detail: `已检查序列 ${entry.target}`, sequences: sequences.at(-1)?.sequence === entry.target ? [sequences.at(-1)!] : [], ...(errors.at(-1)?.sequence === entry.target ? { libraryError: errors.at(-1)! } : {}) });
   }
   if (signal?.aborted) throw new Error('素材读取已取消');
   await onProgress?.({ phase, completed: sequences.length + errors.length, total: directory.entries.length + 1, detail: '检查控台序列目录' });
-  const verified = (sessionDirectory ? ma2SongDirectory(sessionDirectory) : undefined) ?? ma2SongDirectory(ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1))));
+  holdForShow(show, 'ma2.sync.read', '序列都读完了，还没核对控台序列目录，停下后会重新检查。');
+  const verified = await readDirectory();
   if (signal?.aborted) throw new Error('素材读取已取消');
   holdForShow(show, 'ma2.sync.read', '序列都读完了，还没核对控台序列目录，停下后会重新检查。');
   if (JSON.stringify(directory) !== JSON.stringify(verified)) throw new Error('控台的 Show 或序列有变化，请重新读取');

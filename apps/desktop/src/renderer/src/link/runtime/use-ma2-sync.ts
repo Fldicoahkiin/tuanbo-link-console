@@ -30,33 +30,49 @@ export function announceMa2Sync(notify: Notify, state: ReturnType<typeof useMa2S
  */
 export function useMa2Sync(notify: Notify): void {
   const notifyRef = useRef(notify); notifyRef.current = notify;
-  useEffect(() => {
-    let active = true;
-    let busy = false;
-    let changedAt = 0;
-    const tick = async (): Promise<void> => {
-      if (busy || !active || performance.now() - changedAt < 250) return;
-      busy = true;
-      try {
-        const ready = await prepareMa2RealtimeSession();
-        if (ready && active && useMa2ModeStore.getState().method === 'network' && ma2SyncActive()) await tickMa2SongSync();
-      } finally { busy = false; }
-    };
-    const documents = useDocumentStore.subscribe((state, previous) => { if (state.project !== previous.project) { changedAt = performance.now(); markPendingMa2Songs(); } });
-    const preferences = useMa2RealtimePreference.subscribe(() => { void tick(); });
-    const modes = useMa2ModeStore.subscribe(() => { void prepareMa2RealtimeSession(); });
-    const sync = useMa2SyncStore.subscribe((state, previous) => { announceMa2Sync(notifyRef.current, state, previous); });
-    // The program pausing or stopping carries on from the step a pass stopped at, without waiting for the next poll.
-    // That is no retry: nothing failed, the sync only waited (02 §4.4).
-    let gate = currentShowGate('ma2.sync.write').kind;
-    const show = useShowStateStore.subscribe(() => {
-      const next = currentShowGate('ma2.sync.write').kind;
-      if (next === gate) return;
-      gate = next;
-      if (next === 'allow') void tick();
-    });
-    const poll = setInterval(() => { void tick(); }, 500);
-    void tick();
-    return () => { active = false; clearInterval(poll); documents(); preferences(); modes(); sync(); show(); };
-  }, []);
+  useEffect(() => subscribeMa2Sync((message, tone) => notifyRef.current(message, tone)), []);
+}
+
+export function subscribeMa2Sync(notify: Notify): () => void {
+  let active = true;
+  let busy = false;
+  let requested = false;
+  const wake = () => {
+    if (requested || !active) return;
+    requested = true;
+    if (!busy) queueMicrotask(() => { void tick(); });
+  };
+  const tick = async (): Promise<void> => {
+    if (busy || !active) return;
+    requested = false;
+    busy = true;
+    try {
+      const ready = await prepareMa2RealtimeSession();
+      if (ready && active && useMa2ModeStore.getState().method === 'network' && ma2SyncActive()) await tickMa2SongSync();
+    } finally {
+      busy = false;
+      if (requested && active) queueMicrotask(() => { void tick(); });
+    }
+  };
+  const documents = useDocumentStore.subscribe((state, previous) => {
+    if (state.project === previous.project) return;
+    markPendingMa2Songs();
+    if (state.project?.rundown !== previous.project?.rundown
+      || state.project?.ma2MaterialLibrary?.userLibrary?.consoleRenames !== previous.project?.ma2MaterialLibrary?.userLibrary?.consoleRenames) wake();
+  });
+  const preferences = useMa2RealtimePreference.subscribe(wake);
+  const modes = useMa2ModeStore.subscribe(wake);
+  const sync = useMa2SyncStore.subscribe((state, previous) => { announceMa2Sync(notify, state, previous); });
+  // The program pausing or stopping carries on from the step a pass stopped at, without waiting for the next poll.
+  // That is no retry: nothing failed, the sync only waited (02 §4.4).
+  let gate = currentShowGate('ma2.sync.write').kind;
+  const show = useShowStateStore.subscribe(() => {
+    const next = currentShowGate('ma2.sync.write').kind;
+    if (next === gate) return;
+    gate = next;
+    if (next === 'allow') wake();
+  });
+  const poll = setInterval(() => { void tick(); }, 500);
+  void tick();
+  return () => { active = false; clearInterval(poll); documents(); preferences(); modes(); sync(); show(); };
 }

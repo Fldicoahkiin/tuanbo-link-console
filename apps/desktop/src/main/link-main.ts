@@ -1219,6 +1219,7 @@ function registerIpc(
   handle('link:ma2-effect-library', async (event, value: unknown) => {
     const request = ma2CatalogRequestSchema.parse(value);
     if (request.projectPath) projectAccess.requireShown(request.projectPath);
+    if (request.details === 'source' && (!request.network || request.targets?.length !== 0 || request.projectPath || request.expectedSource)) throw new Error('核对来源的请求无效');
     const directoryCheck = request.targets?.length === 0;
     const task = beginMa2Read(event, request.progressId);
     try {

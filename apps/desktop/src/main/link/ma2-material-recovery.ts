@@ -69,5 +69,9 @@ export async function recoverMa2Material(projectPath: string, project: LinkProje
   if (saved?.library && saved.source === header.source && saved.library.directory.show === library.directory.show && saved.library.directory.generation === library.directory.generation) {
     library.sequences.push(...saved.library.sequences.filter(sequence => library.directory.entries.some(entry => entry.target === sequence.sequence) && !library.sequences.some(entry => entry.sequence === sequence.sequence) && !library.errors.some(entry => entry.sequence === sequence.sequence)));
   }
+  const recovered = new Set([...library.sequences, ...library.errors].map(entry => entry.sequence));
+  if (library.directory.entries.some(entry => !recovered.has(entry.target))) {
+    library.incomplete ??= '部分序列的读取记录缺失，请补读';
+  }
   return saveMa2MaterialLibraryCommand(header.source, library).execute(project);
 }
