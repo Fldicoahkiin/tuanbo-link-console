@@ -17,10 +17,24 @@ let blockedContext = '';
 let verifiedSource = '';
 let nextSourceCheck = 0;
 /** Changes the session check's state only when it differs, so a steady state does not wake its readers every tick. */
-function setSession(status: Ma2SessionCheck['status'], message: string): void {
+function setSession(status: Ma2SessionCheck['status'], message: string, waitFor?: Ma2SessionCheck['waitFor']): void {
   const session = useMa2SyncStore.getState().session;
-  if (session.status !== status || session.message !== message) useMa2SyncStore.setState({ session: { status, message } });
+  if (session.status !== status || session.message !== message || session.waitFor !== waitFor) useMa2SyncStore.setState({ session: { status, message, ...(waitFor && { waitFor }) } });
 }
+
+/** Update the queue once per connection change, including songs still waiting their turn after reconnect. */
+function setSongsWaitingForConnection(documentId: number, waiting: boolean): void {
+  useMa2SyncStore.setState(state => {
+    const changed = Object.values(state.songs).filter(song => song.documentId === documentId && song.state !== 'paused' && Boolean(song.waitingForConnection) !== waiting);
+    if (!changed.length) return state;
+    const songs = { ...state.songs };
+    for (const song of changed) songs[song.itemId] = waiting
+      ? { ...song, state: 'pending', waitingForConnection: true, checking: false, nextCheckAt: Date.now() + 1000, message: '等待控台连接，可以继续编辑，连上后会接着同步' }
+      : { ...song, waitingForConnection: false, nextCheckAt: 0, message: '控台已连接，等待核对这首歌' };
+    return { songs };
+  });
+}
+
 /**
  * Checks that the console the project last read is reachable and the same console, moves the
  * project's references when it was saved under another Show name or reached at another address,
@@ -31,59 +45,56 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
   if (readMa2Method() !== 'network') {
     for (const song of Object.values(useMa2SyncStore.getState().songs)) stopMa2SongSync(song.itemId);
     verifiedSource = '';
-    if (ma2SyncActive()) setSession('waiting', '请在设备设置中通过网络连接 MA2，再同步到控台');
+    if (ma2SyncActive()) setSession('waiting', '请在设备设置中通过网络连接 MA2，再同步到控台', 'connection');
     return false;
   }
   const state = useDocumentStore.getState();
   if (sessionDocument !== state.documentId) {
     sessionDocument = state.documentId;
-    verifiedSource = ''; nextSourceCheck = 0;
+    blockedContext = ''; verifiedSource = ''; nextSourceCheck = 0;
     for (const song of Object.values(useMa2SyncStore.getState().songs)) if (song.documentId !== state.documentId) stopMa2SongSync(song.itemId);
     useMa2SyncStore.setState(value => ({ songs: Object.fromEntries(Object.entries(value.songs).filter(([, song]) => song.documentId === state.documentId)) }));
     useMa2SyncStore.setState({ names: { state: 'idle', message: '' } });
-    setSession('waiting', '实时同步已开启，等待连接控台和打开工程');
+    setSession('waiting', '实时同步已开启，等待连接控台和打开工程', 'connection');
   }
   // Off, each song keeps what its last pass found; turning sync off already stopped what was running.
   if (!ma2SyncActive()) return false;
   // The session check reads the console: it waits only while the program moves, prepares or stops (showGate, S3b).
   const wait = currentShowWait('ma2.sync.read');
-  if (wait !== null) { setSession('waiting', wait); return false; }
-  if (!state.project) { setSession('waiting', '请先打开工程'); return false; }
-  if (!state.path) { setSession('waiting', '请先保存工程，再同步到控台'); return false; }
-  if (ma2ConsoleReading()) { setSession('waiting', '正在读取或准备控台，完成后继续同步'); return false; }
+  if (wait !== null) { setSession('waiting', wait, 'show'); return false; }
+  if (!state.project) { setSession('waiting', '请先打开工程', 'project'); return false; }
+  if (!state.path) { setSession('waiting', '请先保存工程，再同步到控台', 'save'); return false; }
+  if (ma2ConsoleReading()) { setSession('waiting', '正在读取或准备控台，完成后继续同步', 'reading'); return false; }
   const material = state.project.ma2MaterialLibrary;
-  if (!material?.library) { setSession('waiting', '请先读取控台素材，再同步到控台'); return false; }
-  if (material.library.sourceUnverified) { setSession('waiting', '上次读取还没确认，请重新读取控台素材'); return false; }
+  if (!material?.library) { setSession('waiting', '请先读取控台素材，再同步到控台', 'library'); return false; }
+  if (material.library.sourceUnverified) { setSession('waiting', '上次读取还没确认，请重新读取控台素材', 'verify-library'); return false; }
   const current = (): boolean => useDocumentStore.getState().documentId === state.documentId
     && ma2SyncActive() && readMa2Method() === 'network' && !ma2ConsoleReading();
   preparing = true;
   let context = '';
   try {
     const status = await window.tbLink.getMa2NetworkStatus();
+    if (!current()) return false;
     if (status.state !== 'connected' || !status.settings) {
       blockedContext = ''; verifiedSource = ''; nextSourceCheck = 0;
-      setSession('waiting', '等待控台连接，可以继续编辑和保存');
-      useMa2SyncStore.setState(value => ({ songs: Object.fromEntries(Object.entries(value.songs).map(([key, song]) => [key,
-        song.documentId === state.documentId && song.state !== 'paused'
-          ? { ...song, state: 'pending' as const, waitingForConnection: true, checking: false, nextCheckAt: Date.now() + 1000, message: '等待控台连接，可以继续编辑，连上后会接着同步' }
-          : song])) }));
+      setSession('waiting', '等待控台连接，可以继续编辑和保存', 'connection');
+      setSongsWaitingForConnection(state.documentId, true);
       return false;
     }
     const { host, port, monitorPort, username } = status.settings;
     const endpoint = `${host}:${port}`;
-    context = JSON.stringify([state.documentId, state.revision, material.source, material.library.directory.show, material.library.directory.generation, material.library.directory.version, host, port]);
-    if (!current()) return false;
     const connection = { dataDirectory: '', network: { host, port, monitorPort, username } };
     const sourceKey = JSON.stringify([state.documentId, endpoint, material.source, material.library.directory.show, material.library.directory.generation, material.library.directory.version]);
+    context = sourceKey;
     if (verifiedSource !== sourceKey || Date.now() >= nextSourceCheck) {
       if (!verifiedSource && Date.now() < nextSourceCheck) return false;
-      // Periodic checks only need the live Show and bridge generation. Read every pool
-      // number when a source actually moves, before reconciling the saved references.
-      const sourceOnly = verifiedSource === sourceKey;
+      // The foreground read already saved the directory. On startup at the same endpoint,
+      // check the live identity first; only a changed identity needs a new directory.
+      const sourceOnly = verifiedSource === sourceKey || (material.source === endpoint && !material.library.incomplete);
       let metadata = ma2EffectLibrarySchema.parse(await window.tbLink.readMa2EffectLibrary({ ...connection, targets: [], ...(sourceOnly ? { details: 'source' as const } : {}) }));
       if (!current()) return false;
       const saved = material.library.directory;
-      if (sourceOnly && (metadata.directory.show !== saved.show || metadata.directory.version !== saved.version || metadata.directory.generation !== saved.generation)) {
+      if (sourceOnly && (!metadata.directory.generation || metadata.directory.show !== saved.show || metadata.directory.version !== saved.version || metadata.directory.generation !== saved.generation)) {
         metadata = ma2EffectLibrarySchema.parse(await window.tbLink.readMa2EffectLibrary({ ...connection, targets: [] }));
       }
       if (!current()) return false;
@@ -112,7 +123,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
           ...(cache.library.cueAttributes ? { cueAttributes: cache.library.cueAttributes.filter(entry => exists(entry.sequence)) } : {}),
           errors: cache.library.errors.filter(entry => exists(entry.sequence))
         }));
-        setSession('waiting', '已重新连上控台，正在从原来的位置继续');
+        setSession('waiting', '已重新连上控台，正在从原来的位置继续', 'check');
         for (const song of Object.values(useMa2SyncStore.getState().songs)) {
           if (song.documentId !== state.documentId || song.requestId || song.state === 'paused') continue;
           useMa2SyncStore.setState(value => ({ songs: { ...value.songs, [song.itemId]: { ...song, nextCheckAt: 0, consecutiveFailures: 0 } } }));
@@ -127,6 +138,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     if (songsNeedingMtcStart(unallocated).length && !await allocateMtcStarts(connection.network, state.documentId, sourceKey, current)) return false;
     const project = useDocumentStore.getState().project;
     if (!project) return false;
+    setSongsWaitingForConnection(state.documentId, false);
     // Way 1 (the console's own Timecode show) and way 2 (the song's own Sequence) share one sync job per song.
     for (const item of project.rundown) {
       if (!item.lighting || !ma2SongSyncActive(item.id)) continue;
@@ -143,7 +155,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
       const unmatched = ma2SongPairs(project).unresolved[0];
       setSession('waiting', readFailure ? `Cue 还没放进歌曲：${readFailure.message}`
         : unmatched ? `还没有可同步的歌曲：${unmatched.reason}`
-        : '尚未匹配控台时间线；请确认 MTC 起始码，或新建时间线并指定位置');
+        : '尚未匹配控台时间线；请确认 MTC 起始码，或新建时间线并指定位置', readFailure ? 'song-read' : unmatched ? 'unmatched' : 'empty');
       return false;
     }
     setSession('ready', '已连上控台，修改会自动同步到控台');
@@ -152,13 +164,13 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     if (current()) {
       const message = cause instanceof Error ? cause.message : String(cause);
       const wait = isShowWait(cause) ? toUserErrorMessage(cause) : currentShowWait('ma2.sync.read');
-      if (wait) { setSession('waiting', wait); return false; }
+      if (wait) { setSession('waiting', wait, 'show'); return false; }
       verifiedSource = ''; nextSourceCheck = Date.now() + 1000;
       const errorContext = `${context}:${message}`;
       const reported = blockedContext === errorContext;
       blockedContext = errorContext;
       setSession('blocked', message);
-      if (!reported) reportCoordinatorError(message, reason => { setSession('blocked', reason); });
+      if (!reported) reportCoordinatorError(message, reason => { if (blockedContext === errorContext && current()) setSession('blocked', reason); });
     }
     return false;
   } finally { preparing = false; }
@@ -196,7 +208,7 @@ function retryNames(): void {
 
 export function retryMa2RealtimeSession(): void {
   setMa2RealtimeEnabled(true);
-  setSession('waiting', '正在重新检查控台'); retryNames();
+  setSession('waiting', '正在重新检查控台', 'check'); retryNames();
   for (const song of Object.values(useMa2SyncStore.getState().songs)) {
     if (song.state !== 'blocked' && song.state !== 'paused') continue;
     if (song.requestId) continue;
@@ -239,7 +251,7 @@ export function recheckMa2Songs(): void {
 }
 
 function checkEverySong(itemId?: string): void {
-  setSession('waiting', '正在重新检查控台'); if (itemId === undefined) retryNames();
+  setSession('waiting', '正在重新检查控台', 'check'); if (itemId === undefined) retryNames();
   const project = useDocumentStore.getState().project;
   for (const song of Object.values(useMa2SyncStore.getState().songs)) {
     if (song.requestId || itemId !== undefined && song.itemId !== itemId) continue;

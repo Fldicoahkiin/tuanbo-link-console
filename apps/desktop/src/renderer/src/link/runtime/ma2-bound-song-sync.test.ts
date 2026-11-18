@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type LightingTrack, type LinkProject, type Ma2ApplyRequest, type Ma2ApplyResult, type Ma2CompareRequest, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
-import { importMa2TimecodeCommand, ma2PendingChanges, padSongCommand, padSongRender, setLightingCommand, SHOW_WAIT_CLOCK_MOVING, type Ma2SyncPreview } from '@tb/core/link';
+import { importMa2TimecodeCommand, ma2PendingChanges, padSongCommand, padSongRender, setItemPlaybackCommand, setLightingCommand, SHOW_WAIT_CLOCK_MOVING, type Ma2SyncPreview } from '@tb/core/link';
 import { convertMa2Snapshot, convertMa2Timecode } from '../../../../main/link/ma2-timecode-conversion';
 import { compareMa2LightingReadback } from '../../../../main/link/ma2-comparison';
 import { Ma2OnpcBridge } from '../../../../main/link/ma2-onpc-bridge';
@@ -192,6 +192,21 @@ it('歌曲 MTC 起始码改了以后，本地拖动先留在联动台，不写�
   start(); edit(); await tick(); await tick();
   expect(previewMa2).not.toHaveBeenCalled(); expect(applyMa2).not.toHaveBeenCalled();
   expect(song().state).toBe('pending'); expect(song().message).toContain('Cue 是按起点');
+});
+it('没有编辑 Cue 但起始码对不上时，不把跳过核对的时间线计为已同步；对齐后再确认', async () => {
+  const value = project();
+  const startMs = value.rundown[0]!.lighting!.ma2Bindings![0]!.timeOriginMs ?? 0;
+  const playback = { volume: 100, endAction: 'stop' as const, startMs: 0, endMs: 0, mtcOffsetMs: startMs + 5000, shortcut: '' };
+  value.rundown[0]!.playback = playback;
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  start(); await tick();
+  expect(previewMa2).not.toHaveBeenCalled();
+  expect(song()).toMatchObject({ state: 'pending', recheckRevision: useDocumentStore.getState().revision });
+  expect(song().message).toContain('起始码对上后会自动同步');
+  useDocumentStore.getState().execute(setItemPlaybackCommand('song', { ...playback, mtcOffsetMs: startMs }));
+  await tick();
+  expect(previewMa2).toHaveBeenCalledOnce();
+  expect(song().state).toBe('verified');
 });
 it('音源或长度变化的既有绑定起点未变时，仍先核对三方基线再同步；起点改了才把修改留在本地', async () => {
   const value = project();

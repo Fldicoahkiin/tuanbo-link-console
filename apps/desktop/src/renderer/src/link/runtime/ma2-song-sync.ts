@@ -252,7 +252,7 @@ async function syncImportedSong(entry: SongSync): Promise<void> {
   if (chosen && latest.project) void recordRuntimeOperator(latest.project.projectId, latest.project.rundown.find(value => value.id === entry.itemId), chosen).catch((cause: unknown) => update(entry, { message: `${chosen}；运行日志写入失败：${cause instanceof Error ? cause.message : String(cause)}` }));
   update(entry, { checking: false, writing: false, waitingForConnection: false, checkedAt: Date.now(), nextCheckAt: Date.now() + BACKGROUND_RECHECK_MS, consecutiveFailures: 0, consecutiveCollisions: 0, ...succeeded,
     ...outcome.held ? { state: 'pending' as const, recheckRevision: useDocumentStore.getState().revision, message: outcome.held }
-      : { state: 'verified' as const, recheckRevision: undefined, message: shows ? `${shows} ${outcome.wrote ? '已写入控台并回读确认' : '和控台一致'}${chosen ? `；${chosen}` : ''}` : '这首歌的控台时间码起点和歌曲不一致，暂不核对；起始码对上后会自动同步' } });
+      : { state: 'verified' as const, recheckRevision: undefined, message: `${shows} ${outcome.wrote ? '已写入控台并回读确认' : '和控台一致'}${chosen ? `；${chosen}` : ''}` } });
   // An edit made while this song was being written waits for its own sync instead of the next check.
   markPendingMa2SongsNow();
 }

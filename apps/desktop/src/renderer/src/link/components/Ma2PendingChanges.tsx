@@ -1,8 +1,8 @@
 import { setMa2ConsoleChanges, setMa2WriteMode, useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
 import { pauseMa2RealtimeSession, pendingSongSummary, unlinkedSongSummary, recheckMa2Songs, refreshMa2RealtimeSession, retryMa2RealtimeSession, songsWithoutConsoleShow, syncMa2Once, writeMissingConsoleShows } from '../runtime/ma2-realtime-session';
 import { useCallback, useMemo, useState } from 'react';
-import { Check, ChevronRight, CircleAlert, CircleStop, FolderArchive, FolderOpen, RefreshCw, Save, SlidersHorizontal } from 'lucide-react';
-import type { Ma2ConsoleChanges, Ma2WriteMode, ProjectArchiveResult } from '@tb/schema';
+import { Check, ChevronRight, Circle, CircleStop, Clock3, FolderArchive, FolderOpen, RefreshCw, Save, SlidersHorizontal } from 'lucide-react';
+import type { LinkProject, Ma2ConsoleChanges, Ma2WriteMode, ProjectArchiveResult } from '@tb/schema';
 import { hasMa2SongSyncTarget, ma2PendingChanges } from '@tb/core/link';
 import { writeMa2NamesNow } from '../runtime/ma2-name-sync';
 import { useMa2SyncStore, type SongSync } from '../stores/ma2-sync-store';
@@ -10,6 +10,8 @@ import { currentShowWait, useShowGate } from '../stores/show-state-store';
 import { takeMa2SongFromConsole, writeMa2SongFromSoftware } from '../runtime/ma2-song-sync';
 import { archiveMa2Project } from '../runtime/ma2-project-archive';
 import { useSelectedProgram } from '../useSelectedProgram';
+import { ma2WorkbenchSyncStatus } from '../view-models/ma2-workbench-sync-status';
+import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 import { useMa2ReadStore } from '../stores/ma2-read-store';
 import { useDocumentStore } from '../stores/document-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
@@ -33,6 +35,7 @@ const CONSOLE_CHANGES: readonly Choice<Ma2ConsoleChanges>[] = [
 ];
 const WRITE_LABEL: Record<Ma2WriteMode, string> = { merge: '合并', overwrite: '覆盖', direct: '直接写入' };
 const CHANGES_LABEL: Record<Ma2ConsoleChanges, string> = { 'read-back': '读回控台改动', software: '以联动台为准' };
+const STATUS_ICONS = { verified: Check, idle: Circle, writing: Clock3 };
 
 function chooseMa2WriteMode(mode: Ma2WriteMode, confirmed: boolean, confirm: (value: boolean) => void): void {
   // Overwriting deletes Cues on the console, so it is confirmed once.
@@ -53,7 +56,7 @@ async function revealArchives(name?: string): Promise<void> {
 function UnsettledSong({ song, title, stopped, disabled, busy, choose }: { song: SongSync; title: string; stopped: boolean; disabled: boolean; busy: boolean; choose: (side: 'console' | 'software') => Promise<void> }): JSX.Element {
   const [asking, setAsking] = useState<'console' | 'software' | null>(null);
   return <div className="lighting-sync-song">
-    <p role={song.state === 'blocked' ? 'alert' : 'status'}>{title}：{song.progress?.detail ?? song.message}</p>
+    <p role={song.state === 'blocked' ? 'alert' : 'status'}>{title}：{song.state === 'blocked' ? song.message : song.progress?.detail ?? song.message}</p>
     {stopped ? <div className="lighting-sync-song-actions">
       <Button variant="secondary" size="sm" disabled={disabled} title="读控台上这首歌现在的时间线，换掉联动台里的；联动台没写到控台的改动先存档" onClick={() => setAsking('console')}>用控台上的</Button>
       <Button variant="secondary" size="sm" disabled={disabled} title="按联动台的时间线写到控台，控台上的改动写回去；控台上的版本写入前会备份" onClick={() => setAsking('software')}>用联动台的</Button>
@@ -65,12 +68,26 @@ function UnsettledSong({ song, title, stopped, disabled, busy, choose }: { song:
   </div>;
 }
 
+function ConfirmedSongs({ songs, itemId, rundown, total }: { songs: SongSync[]; itemId: string | null; rundown: LinkProject['rundown']; total: number }): JSX.Element {
+  const selected = songs.find(song => song.itemId === itemId);
+  const others = songs.filter(song => song !== selected);
+  const titles = new Map(rundown.map(item => [item.id, item.title]));
+  return <>
+    {total ? <p>{songs.length === total ? `${songs.length} 首歌都和控台一致` : `已确认 ${songs.length}/${total} 首`}</p> : null}
+    {selected ? <p>当前节目 · {titles.get(selected.itemId) ?? selected.name}：{selected.message}</p> : null}
+    {others.length ? <details className="lighting-sync-confirmed"><summary>{others.length} 首歌已在控台确认</summary>
+      {others.map(song => <p key={song.itemId}>{titles.get(song.itemId) ?? song.name}：{song.message}</p>)}
+    </details> : null}
+  </>;
+}
+
 /** 第 3 题 (S3b): the sync waits only while the program moves, prepares or stops; restoring an archive replaces the
  * project, which waits until the show has stopped. Both say why in showGate's own words. */
 export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element | null {
   const syncGate = useShowGate('ma2.sync.write'), replaceGate = useShowGate('document.replace');
   const project = useDocumentStore(state => state.project);
   const documentId = useDocumentStore(state => state.documentId);
+  const targetIds = useMemo(() => new Set(project?.rundown.filter(item => hasMa2SongSyncTarget(item.lighting)).map(item => item.id)), [project?.rundown]);
   const [itemId, selectProgram] = useSelectedProgram(notify);
   const unlinked = useMemo(() => unlinkedSongSummary(project), [project]);
   const pending = useMemo(() => ma2PendingChanges(project), [project]);
@@ -87,12 +104,11 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
   const [modesAnchor, setModesAnchor] = useState<HTMLButtonElement | null>(null);
   const [confirmOverwrite, setConfirmOverwrite] = useState(false);
   const closeModes = useCallback(() => { setModesOpen(false); setConfirmOverwrite(false); }, []);
+  const timelineRead = useMa2ReadStore(state => state.busy ? (state.progress?.phase === 'selection' ? '正在检查选曲' : '正在读取时间线') : null);
+  const readingMaterials = useMa2MaterialReadStore(state => state.busy && state.documentId === documentId);
   const recoveryError = useRecoveryCopyStore(state => state.error);
   const songSync = useMa2SyncStore(state => state.songs);
-  const songs = Object.values(songSync).filter(song => song.documentId === documentId && (hasMa2SongSyncTarget(project?.rundown.find(item => item.id === song.itemId)?.lighting) || song.requestId));
-  // 2026-11-09: the details list only what does not match the console; matching songs are one count.
-  const unsettled = songs.filter(song => song.state !== 'verified');
-  const settled = songs.length - unsettled.length;
+  const songs = Object.values(songSync).filter(song => song.documentId === documentId && (targetIds.has(song.itemId) || song.requestId));
   const [busy, setBusy] = useState(false);
   const [archives, setArchives] = useState<ProjectArchiveResult['entries']>([]);
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -108,17 +124,15 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
   // One count per song, either way it was lit. A way 1 song keeps the baseline the console confirmed,
   // so its edits are counted from that: an undo back to it leaves nothing to sync, also while playing.
   const imported = (itemId: string): boolean => Boolean(project.rundown.find(item => item.id === itemId)?.lighting?.ma2Bindings?.length);
-  const pendingIds = new Set([...unbound, ...showless, ...pending, ...songs.filter(song => song.state === 'pending')].map(song => song.itemId));
+  const pendingIds = new Set([...unbound, ...showless, ...pending, ...songs.filter(song => song.localEditedAt !== undefined)].map(song => song.itemId));
+  const unsettled = songs.filter(song => song.state !== 'verified');
+  const settled = songs.filter(song => song.state === 'verified' && !pendingIds.has(song.itemId));
   const count = pendingIds.size + renames.length;
-  const failed = names.state === 'blocked' || songs.some(song => song.state === 'blocked');
-  const blocked = session.status === 'blocked' || failed;
-  const moving = songs.find(song => song.requestId && song.progress?.total);
-  const confirmed = songs.length ? songs.every(song => song.state === 'verified') : names.state === 'verified';
-  // Real-time sync off is a way of working too (2026-11-04): edits wait for 同步一次, and what that pass found stays shown.
   const manual = !active && once === null;
-  const status = recoveryError ? '恢复副本需要处理' : failed ? '同步失败' : blocked ? '控台需要核对' : moving?.progress ? `同步中 ${Math.floor(moving.progress.completed / moving.progress.total * 100)}%` : working ? '同步中'
-    : manual ? count ? `待同步 ${count}` : '实时同步已关' : songs.some(song => song.waitingForConnection) ? '等待连接' : !songs.length && unlinked.length && !count ? '待关联时间线' : session.status === 'waiting' ? '等待同步' : once !== null ? '正在同步一次' : count ? `待同步 ${count}` : confirmed ? '已同步' : unlinked.length ? '待关联时间线' : '同步已开启';
-  const state = blocked ? 'blocked' : working ? 'writing' : count ? 'staged' : confirmed ? 'verified' : 'waiting';
+  const { label: status, tone } = ma2WorkbenchSyncStatus({
+    songs, targetCount: targetIds.size + songs.filter(song => !targetIds.has(song.itemId)).length, names: names.state, session, localCount: count, recoveryError, manual,
+    reading: timelineRead !== null || readingMaterials
+  });
   const run = async (action: () => Promise<void> | void): Promise<void> => {
     if (busy) return;
     setBusy(true);
@@ -128,11 +142,6 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
   };
   const chooseWriteMode = (mode: Ma2WriteMode): void => chooseMa2WriteMode(mode, confirmOverwrite, setConfirmOverwrite);
   const chooseConsoleChanges = (choice: Ma2ConsoleChanges): void => { setMa2ConsoleChanges(choice); recheckMa2Songs(); };
-  const toggle = (): void => {
-    setNotice('');
-    if (active) pauseMa2RealtimeSession();
-    else retryMa2RealtimeSession();
-  };
   const save = async (): Promise<void> => {
     const state = useDocumentStore.getState();
     if (!state.project) return;
@@ -172,10 +181,13 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
       <IconButton ref={setModesAnchor} size="sm" className="lighting-sync-modes" icon={SlidersHorizontal} label="同步方式" title={`同步方式：${WRITE_LABEL[writeMode]} · ${CHANGES_LABEL[consoleChanges]}`}
         aria-expanded={modesOpen} aria-haspopup="dialog" onClick={() => { setModesOpen(value => !value); setDetailOpen(false); setConfirmOverwrite(false); }} />
       <Switch className="lighting-sync-switch" label="实时同步" aria-label="实时同步" aria-checked={active} checked={active} disabled={busy || (working && !active)}
-        title="编辑完成后自动检查、存档、写入控台并确认；节目在走时先暂存，暂停或停止后再同步" onChange={() => void run(toggle)} />
+        title="编辑完成后自动检查、存档、写入控台并确认；节目在走时先暂存，暂停或停止后再同步" onChange={() => {
+          setNotice('');
+          void run(active ? pauseMa2RealtimeSession : retryMa2RealtimeSession);
+        }} />
     </header>
-    <Button ref={setStatusAnchor} variant="ghost" className="lighting-sync-status" icon={blocked || count ? CircleAlert : Check} aria-label="同步状态详情" aria-expanded={detailOpen} aria-haspopup="dialog" data-state={state} onClick={openDetails}>
-      <span>{status}</span><ChevronRight aria-hidden="true" />
+    <Button ref={setStatusAnchor} variant="ghost" className="lighting-sync-status" icon={STATUS_ICONS[tone]} aria-label="同步状态详情" aria-expanded={detailOpen} aria-haspopup="dialog" data-state={tone} title={status ?? '查看同步详情'} onClick={openDetails}>
+      <span>同步详情</span><span className="lighting-sync-result" aria-live="polite" aria-atomic="true">{status}</span><ChevronRight aria-hidden="true" />
     </Button>
     <Button variant="ghost" size="sm" onClick={() => { setDestinationOpen(true); setDetailOpen(false); setModesOpen(false); }}>写入位置</Button>
     <div className="lighting-sync-actions">
@@ -199,15 +211,17 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
       <p>{active ? '实时同步开着：改完自动同步。关掉后，只在点“同步一次”时写到控台。' : '实时同步关着：改动先留在联动台，点“同步一次”才写到控台。'}改了同步方式，每首歌下次同步时按新的方式重新检查一遍。</p>
     </Popover> : null}
     {detailOpen ? <Popover anchor={statusAnchor} placement="right-end" label="同步状态详情" className="lighting-sync-details" onClose={closeDetails}>
-      <h3>全工程 · {status}</h3>
+      <h3>{status ? `全工程 · ${status}` : '全工程同步详情'}</h3>
       {recoveryError ? <p role="alert">{recoveryError}</p> : null}
       {archivingOff ? <p>已关闭存档，写入前不再备份。</p> : null}
       <p>同步方式：{WRITE_LABEL[writeMode]} · {CHANGES_LABEL[consoleChanges]}</p>
-      <p role={session.status === 'blocked' ? 'alert' : 'status'}>{notice || (manual ? '实时同步已关，修改先留在联动台。点“同步一次”写到控台。' : session.status !== 'ready' ? session.message : once !== null ? '正在按现在的同步方式把每首歌同步一次，完成后实时同步保持关闭。' : !songs.length ? session.message : unsettled.length ? '这些歌和控台还对不上，或者正在同步：' : `${settled} 个已关联节目已同步。`)}</p>
+      {notice ? <p role="status">{notice}</p> : null}
+      {timelineRead || readingMaterials ? <p>{timelineRead ?? '正在读取灯光素材'}</p> : null}
+      {session.status === 'blocked' ? <p role="alert">{session.message}</p> : manual ? <p>实时同步已关，修改先留在联动台。点“同步一次”写到控台。</p>
+        : session.status === 'waiting' || !songs.length ? <p>{session.message}</p> : null}
       {unsettled.map(song => <UnsettledSong key={song.itemId} song={song} title={project.rundown.find(item => item.id === song.itemId)?.title ?? song.name}
         stopped={song.state === 'blocked' && imported(song.itemId)} disabled={busy || working || syncGate.kind === 'wait'} busy={busy} choose={side => run(async () => setNotice(side === 'console' ? await takeMa2SongFromConsole(song.itemId) : writeMa2SongFromSoftware(song.itemId)))} />)}
-      {unsettled.length && settled ? <p>其余 {settled} 首歌和控台一致。</p> : null}
-      {songs.filter(song => song.state === 'verified').map(song => <p key={song.itemId}>{song.itemId === itemId ? '当前节目 · ' : ''}{project.rundown.find(item => item.id === song.itemId)?.title ?? song.name}：{song.message}</p>)}
+      <ConfirmedSongs songs={settled} total={targetIds.size} itemId={itemId} rundown={project.rundown} />
       {syncGate.kind === 'wait' ? <p>{syncGate.message}</p> : null}
       {names.state !== 'idle' && names.state !== 'verified' && names.message ? <p role={names.state === 'blocked' ? 'alert' : 'status'}>改名：{names.message}</p> : null}
       {renames.map(change => <p key={ma2RenameKey(change)}>序列 {change.sequence}{change.kind === 'single' ? ` · Cue ${change.cue}` : ''}：{change.confirmedName} → {change.name}</p>)}

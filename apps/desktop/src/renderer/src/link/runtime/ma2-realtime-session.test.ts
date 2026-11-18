@@ -78,8 +78,42 @@ it('默认开启后整曲进入歌曲序列同步，不再调用隐式 Timecode 
   expect(useMa2SyncStore.getState().songs.first?.settings.executorPage).toBe(1000);
   expect(useMa2SyncStore.getState().session.status).toBe('ready');
   expect(catalog).not.toHaveBeenCalled();
-  expect(metadata).toHaveBeenCalledExactlyOnceWith({ dataDirectory: '', network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, targets: [] });
+  expect(metadata).toHaveBeenCalledExactlyOnceWith({ dataDirectory: '', network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, targets: [], details: 'source' });
   expect(pendingSongSummary(useDocumentStore.getState().project)).toHaveLength(2);
+});
+
+it('同一控台核对错误只记一次，其他工程修改不重复报错；恢复后能识别新的故障', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  metadata.mockRejectedValue(new Error('控台暂时不能确认素材目录'));
+  const errors = () => recordLog.mock.calls.filter(([entry]) => entry.level === 'error');
+  expect(await prepareMa2RealtimeSession()).toBe(false);
+  expect(useMa2SyncStore.getState().session.status).toBe('blocked');
+  useDocumentStore.setState(state => ({ revision: state.revision + 1 }));
+  vi.advanceTimersByTime(1500);
+  expect(await prepareMa2RealtimeSession()).toBe(false);
+  expect(errors()).toHaveLength(1);
+  metadata.mockResolvedValue(project().ma2MaterialLibrary!.library);
+  vi.advanceTimersByTime(1500);
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  expect(useMa2SyncStore.getState().session.status).toBe('ready');
+  vi.advanceTimersByTime(5500);
+  metadata.mockRejectedValue(new Error('控台暂时不能确认素材目录'));
+  expect(await prepareMa2RealtimeSession()).toBe(false);
+  expect(errors()).toHaveLength(2);
+});
+
+it('断线的等待状态保持稳定，重连确认控台后所有歌曲马上结束等待连接', async () => {
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  status.mockResolvedValue({ state: 'disconnected' });
+  await prepareMa2RealtimeSession();
+  const waiting = useMa2SyncStore.getState().songs;
+  await prepareMa2RealtimeSession();
+  expect(useMa2SyncStore.getState().songs).toBe(waiting);
+  expect(Object.values(waiting).every(song => song.waitingForConnection)).toBe(true);
+  status.mockResolvedValue({ state: 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' } });
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  expect(Object.values(useMa2SyncStore.getState().songs).every(song => !song.waitingForConnection && song.state === 'pending')).toBe(true);
+  expect(sync).not.toHaveBeenCalled();
 });
 it('连接正常但没有 Cue 或关联时，点同步说明没有可同步的灯光', async () => {
   const value = project();
@@ -662,6 +696,9 @@ it('控台上 Show 另存了新名字（或重启后打开）：不用重新读�
   useDocumentStore.getState().setProject(value, 'song.tblink');
   metadata.mockResolvedValue({ ...value.ma2MaterialLibrary!.library, directory: { ...source, show: 'Show 10.28', generation: 'other', entries: [{ target: 9000, name: 'first' }] } });
   expect(await prepareMa2RealtimeSession()).toBe(true);
+  expect(metadata).toHaveBeenCalledTimes(2);
+  expect(metadata.mock.calls[0]?.[0]).toMatchObject({ details: 'source', targets: [] });
+  expect(metadata.mock.calls[1]?.[0]).not.toHaveProperty('details');
   const after = useDocumentStore.getState().project!;
   expect(after.ma2MaterialLibrary?.library?.directory.show).toBe('Show 10.28');
   expect(after.rundown[0]!.lighting!.consoleSong).toMatchObject({ show: 'Show 10.28', sequence: 9000 });

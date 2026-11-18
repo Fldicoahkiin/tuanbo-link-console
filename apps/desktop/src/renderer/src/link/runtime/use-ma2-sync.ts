@@ -6,6 +6,9 @@ import { useMa2ModeStore } from '../stores/ma2-mode-store';
 import { useDocumentStore } from '../stores/document-store';
 import { useProgramSelectionStore } from '../stores/program-selection-store';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
+import { useMa2ReadStore } from '../stores/ma2-read-store';
+import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
+import { ma2ConsoleReading } from './ma2-console-reading';
 import { currentShowGate, useShowStateStore } from '../stores/show-state-store';
 
 type Notify = (message: string, tone?: 'info' | 'error') => void;
@@ -67,6 +70,11 @@ export function subscribeMa2Sync(notify: Notify): () => void {
     if (id && state.byProject[id] !== previous.byProject[id]) wake();
   });
   const modes = useMa2ModeStore.subscribe(wake);
+  const onRead = (state: { busy: boolean }, previous: { busy: boolean }): void => {
+    if (previous.busy && !state.busy && !ma2ConsoleReading() && ma2SyncActive()) wake();
+  };
+  const timelines = useMa2ReadStore.subscribe(onRead);
+  const materials = useMa2MaterialReadStore.subscribe(onRead);
   const sync = useMa2SyncStore.subscribe((state, previous) => { announceMa2Sync(notify, state, previous); });
   // The program pausing or stopping carries on from the step a pass stopped at, without waiting for the next poll.
   // That is no retry: nothing failed, the sync only waited (02 §4.4).
@@ -79,5 +87,5 @@ export function subscribeMa2Sync(notify: Notify): () => void {
   });
   const poll = setInterval(() => { void tick(); }, 500);
   void tick();
-  return () => { active = false; clearInterval(poll); documents(); selection(); preferences(); modes(); sync(); show(); };
+  return () => { active = false; clearInterval(poll); documents(); selection(); preferences(); modes(); timelines(); materials(); sync(); show(); };
 }

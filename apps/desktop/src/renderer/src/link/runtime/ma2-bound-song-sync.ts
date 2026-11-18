@@ -1,4 +1,4 @@
-import { applyMa2ReadbackCommand, ma2BindingHold, ma2LatestChoiceText, ma2LatestSide, ma2PendingChanges, ma2TrackRoutingIssue, sameMa2Content, type LinkCommand, type Ma2PendingChange, type Ma2SyncPreview } from '@tb/core/link';
+import { applyMa2ReadbackCommand, ma2BindingHold, ma2LatestChoiceText, ma2LatestSide, ma2PendingChanges, ma2TrackRoutingIssue, sameMa2Content, type LinkCommand, type Ma2SyncPreview } from '@tb/core/link';
 import { ma2ApplyResultSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2ApplyRequest, type Ma2ConsoleChanges, type Ma2ApplyResult, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
 
 /** What one pass over a way-1 song (its `ma2Bindings`, the console's own Timecode shows) needs. */
@@ -30,7 +30,7 @@ export type BoundSongPass = {
 };
 
 export type BoundSongOutcome =
-  /** Every show the song may write now matches the console. `held`: edits kept in the software because the song's start moved. */
+  /** Every checked show matches the console. `held` explains which bindings could not be checked because their start moved. */
   | { kind: 'confirmed'; wrote: boolean; timecodes: number[]; held: string | null; chosen: string[] }
   /** An edit, playback or a pause ended the pass before anything uncertain happened; nothing failed. */
   | { kind: 'interrupted'; message: string };
@@ -94,7 +94,10 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
     pass.confirm(applyMa2ReadbackCommand(item.id, binding.id, source, result.confirmed, same(comparison.base, comparison.remote)));
   }
   const latest = pass.project();
-  return { kind: 'confirmed', wrote, timecodes: writable.map(binding => binding.timecode), held: latest ? heldMessage(latest, item.id) : null, chosen };
+  if (!latest) return interrupted('工程已经切换');
+  const held = heldMessage(latest, item.id);
+  if (!writable.length && !held) return interrupted('这首歌的控台时间线刚换过，稍后再同步');
+  return { kind: 'confirmed', wrote, timecodes: writable.map(binding => binding.timecode), held, chosen };
 }
 
 /** A Timecode show bound to two songs, or twice to one, is never written automatically. */
@@ -113,8 +116,7 @@ function sharedTimecode(project: LinkProject, itemId: string, timecodes: readonl
  * of a song whose start moved stay in the software, and that song plays as usual.
  */
 function heldMessage(project: LinkProject, itemId: string): string | null {
-  const held: Ma2PendingChange[] = ma2PendingChanges(project).filter(change => change.itemId === itemId && ma2BindingHold(project, itemId, change.target) !== null);
-  if (!held.length) return null;
-  const reasons = [...new Set(held.flatMap(change => ma2BindingHold(project, itemId, change.target) ?? []))];
-  return `${reasons.join('；')}。这些改动先留在联动台，没有写到控台；起始码对上后会自动同步`;
+  const bindings = project.rundown.find(item => item.id === itemId)?.lighting?.ma2Bindings ?? [];
+  const reasons = new Set(bindings.flatMap(binding => ma2BindingHold(project, itemId, binding.timecode) ?? []));
+  return reasons.size ? `${[...reasons].join('；')}。编辑的改动先留在联动台，起始码对上后会自动同步` : null;
 }

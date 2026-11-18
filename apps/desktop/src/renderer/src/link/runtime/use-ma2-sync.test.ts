@@ -4,6 +4,8 @@ import { useDocumentStore } from '../stores/document-store';
 import { useMa2SyncStore, type SongSync } from '../stores/ma2-sync-store';
 import { noticeText } from '../notice-text';
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
+import { useMa2ReadStore } from '../stores/ma2-read-store';
+import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 import { prepareMa2RealtimeSession } from './ma2-realtime-session';
 import { tickMa2SongSync } from './ma2-song-sync';
 import { announceMa2Sync, subscribeMa2Sync } from './use-ma2-sync';
@@ -68,4 +70,23 @@ it('同一轮的改动直接同步，控台未答复时的新改动在答复后�
     await vi.advanceTimersByTimeAsync(0);
     expect(titles).toEqual(['一', '三', '四']);
   } finally { stop(); replies.shift()?.(); vi.useRealTimers(); }
+});
+
+it('首次时间线和素材读取结束就接着逐首同步，不等下一次半秒轮询', async () => {
+  vi.useFakeTimers();
+  useMa2ModeStore.setState({ method: 'network' });
+  useMa2ReadStore.setState({ busy: true });
+  useMa2MaterialReadStore.setState({ busy: true });
+  vi.mocked(prepareMa2RealtimeSession).mockImplementation(() => Promise.resolve(!useMa2ReadStore.getState().busy && !useMa2MaterialReadStore.getState().busy));
+  vi.mocked(tickMa2SongSync).mockReset().mockResolvedValue(undefined);
+  const stop = subscribeMa2Sync(vi.fn());
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    useMa2ReadStore.setState({ busy: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tickMa2SongSync).not.toHaveBeenCalled();
+    useMa2MaterialReadStore.setState({ busy: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tickMa2SongSync).toHaveBeenCalledOnce();
+  } finally { stop(); useMa2ReadStore.setState({ busy: false }); useMa2MaterialReadStore.setState({ busy: false }); vi.useRealTimers(); }
 });

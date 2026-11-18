@@ -45,6 +45,7 @@ test.beforeAll(async () => {
         useMa2RealtimePreference.setState({ enabled: true });
         useMa2SyncStore.setState({ songs: { song: { sessionId: 'test', itemId: 'song', documentId: 0, name: '歌曲', settings: ma2SongSyncSettings(useDocumentStore.getState().project, 'song'), state, message: state === 'blocked' ? '控台读取失败' : state } } });
       };
+      window.patchSyncSong = patch => useMa2SyncStore.setState(({ songs }) => ({ songs: { ...songs, song: { ...songs.song, ...patch } } }));
       window.syncSummaryFixture = (mode) => {
         const next = structuredClone(useDocumentStore.getState().project);
         const draft = createLightingDocument();
@@ -284,7 +285,7 @@ test('当前节目已同步时，其他未关联草稿显示待关联，不再�
   await page.getByRole('button', { name: '修改起始码', exact: true }).click();
   await page.evaluate('window.syncSummaryFixture("unlinked")');
   const status = page.getByRole('button', { name: '同步状态详情', exact: true });
-  await expect(status).toHaveText('已同步');
+  await expect(status.locator('.lighting-sync-result')).toHaveText('已同步');
   await page.getByRole('button', { name: '控台时间线', exact: true }).click();
   await expect(page.getByRole('status', { name: '时间线状态', exact: true })).toContainText('已同步');
   await status.click();
@@ -303,5 +304,31 @@ test('当前节目已同步时，其他未关联草稿显示待关联，不再�
 for (const mode of ['planned', 'showless']) test(`真实等待创建的节目仍计入待同步且只计一次：${mode}`, async ({ page }) => {
   await page.getByRole('button', { name: '修改起始码', exact: true }).click();
   await page.evaluate(value => (window as unknown as { syncSummaryFixture: (value: string) => void }).syncSummaryFixture(value), mode);
-  await expect(page.getByRole('button', { name: '同步状态详情', exact: true })).toHaveText('待同步 1');
+  await expect(page.getByRole('button', { name: '同步状态详情', exact: true })).toContainText('正在同步');
+  await page.getByRole('button', { name: '同步状态详情', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '同步状态详情' })).toContainText('已确认 1/2 首');
+});
+
+test('左下角在日常核对时保持已同步，写入、个别歌曲出错和恢复均有明确结果', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.getByRole('button', { name: '修改起始码', exact: true }).click();
+  await page.evaluate('window.syncSummaryFixture("unlinked")');
+  const badge = page.getByRole('button', { name: '同步状态详情', exact: true });
+  const patch = (change: Record<string, unknown>) => page.evaluate(value => (window as unknown as { patchSyncSong: (value: Record<string, unknown>) => void }).patchSyncSong(value), change);
+  for (const completed of [1, 2, 3]) {
+    await patch({ checking: true, requestId: 'read', progress: { completed, total: 4, detail: '正在核对时间线' } });
+    await expect(badge.locator('.lighting-sync-result')).toHaveText('已同步');
+  }
+  await patch({ state: 'syncing', writing: true, message: '正在写入时间线' });
+  await expect(badge.locator('.lighting-sync-result')).toHaveText('正在同步');
+  await patch({ state: 'blocked', writing: false, checking: false, requestId: null, message: '控台时间线已被删除' });
+  await expect(badge).toHaveText('同步详情');
+  await badge.click();
+  const details = page.getByRole('dialog', { name: '同步状态详情' });
+  await expect(details.getByRole('alert')).toContainText('歌曲：控台时间线已被删除');
+  await expect(details.getByRole('button', { name: '用控台上的', exact: true })).toBeVisible();
+  await patch({ state: 'verified', progress: null, message: 'Timecode 7 和控台一致' });
+  await expect(badge.locator('.lighting-sync-result')).toHaveText('已同步');
+  await expect(details).toContainText('当前节目 · 歌曲：Timecode 7 和控台一致');
+  await expect(details.getByRole('alert')).toHaveCount(0);
 });

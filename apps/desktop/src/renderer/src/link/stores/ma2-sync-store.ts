@@ -37,7 +37,8 @@ export type SongSync = {
 export type NameSync = { state: 'idle' | 'pending' | 'syncing' | 'verified' | 'blocked'; message: string; writing?: boolean; blockedNames?: string | undefined; nextCheckAt?: number };
 
 /** The session check: the console the project last read is reachable and still the same console. */
-export type Ma2SessionCheck = { status: 'waiting' | 'ready' | 'blocked'; message: string };
+export type Ma2SessionWait = 'connection' | 'project' | 'save' | 'reading' | 'library' | 'verify-library' | 'show' | 'check' | 'unmatched' | 'empty' | 'song-read';
+export type Ma2SessionCheck = { waitFor?: Ma2SessionWait; status: 'waiting' | 'ready' | 'blocked'; message: string };
 
 /**
  * `previewPlaying`: the editor's or the lighting workbench's own preview plays. It is only this window's report to the
@@ -45,7 +46,7 @@ export type Ma2SessionCheck = { status: 'waiting' | 'ready' | 'blocked'; message
  * never read from here (S3b, 2026-11-11).
  */
 export const useMa2SyncStore = create<{ songs: Record<string, SongSync>; names: NameSync; session: Ma2SessionCheck; previewPlaying: boolean }>(() => ({
-  songs: {}, names: { state: 'idle', message: '' }, session: { status: 'waiting', message: '等待连接控台并打开工程' }, previewPlaying: false
+  songs: {}, names: { state: 'idle', message: '' }, session: { status: 'waiting', waitFor: 'connection', message: '等待连接控台并打开工程' }, previewPlaying: false
 }));
 
 /** Patches a song's sync state while the same session holds it; a paused song stays paused. */

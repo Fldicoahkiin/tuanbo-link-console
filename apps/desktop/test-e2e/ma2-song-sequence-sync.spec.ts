@@ -119,7 +119,11 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
     await expect(composer.getByLabel('Cue 名称', { exact: true })).toHaveValue('电脑修改开场');
     await page.screenshot({ path: info.outputPath('song-40-cues.png') });
     await app.evaluate(() => { process.env.TBLINK_SONG_OFFLINE = 'true'; });
-    await expect(page.getByRole('button', { name: '同步状态详情' })).toContainText('等待连接');
+    const syncDetails = page.getByRole('button', { name: '同步状态详情' });
+    await expect(syncDetails).toHaveText('同步详情');
+    await syncDetails.click();
+    await expect(page.getByRole('dialog', { name: '同步状态详情' })).toContainText('等待控台连接');
+    await syncDetails.click();
     await composer.getByLabel('Cue 名称', { exact: true }).fill('断线期间继续修改');
     await composer.getByLabel('Cue 名称', { exact: true }).press('Tab');
     await expect(page.getByRole('button', { name: '撤销', exact: true })).toBeEnabled();
