@@ -747,6 +747,20 @@ it('断线后进入等待，保持待同步修改且不尝试写控台', async (
   expect(Object.values(useMa2SyncStore.getState().songs).every(song => song.state === 'pending' && song.waitingForConnection)).toBe(true);
   expect(archive).not.toHaveBeenCalled(); expect(sync).not.toHaveBeenCalled();
 });
+it('正在收发歌曲时主动停止，结束进度、保留修改，不记为同步失败', async () => {
+  await prepareMa2RealtimeSession();
+  stopMa2SongSync('second');
+  sync.mockImplementationOnce(() => {
+    stopMa2SongSync('first');
+    return Promise.reject(new Error('已按要求停止控台操作'));
+  });
+  await tickMa2SongSync();
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(useMa2SyncStore.getState().songs.first).toMatchObject({
+    state: 'paused', requestId: null, progress: null, message: '已停止同步，改动已保留'
+  });
+  expect(recordLog.mock.calls.some(([entry]) => entry.level === 'error')).toBe(false);
+});
 it('开始播放中断写入时保留待同步状态，不把歌曲永久锁住', async () => {
   await prepareMa2RealtimeSession();
   stopMa2SongSync('second');

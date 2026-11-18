@@ -8,6 +8,9 @@ import { encodeMa2SnapshotDelta } from './ma2-snapshot-delta';
 
 class Ma2RpcRefusal extends Error {}
 
+/** Only the loopback transport shares the onPC filesystem. A LAN address always uses the wire. */
+export const ma2UsesLocalFiles = (host: string): boolean => host === '127.0.0.1' || host === '::1';
+
 function responseChunks(text: string, prefix: string, offset: number, size: number): string | null {
   const count = Math.min(32, Math.ceil((size - offset) / 256));
   const parts: string[] = [];

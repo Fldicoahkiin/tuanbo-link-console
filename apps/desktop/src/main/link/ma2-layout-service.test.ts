@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest';
+import { Ma2LuaConsole } from './fixtures/ma2-lua-console';
 import { randomUUID } from 'node:crypto';
 import { Ma2LayoutService } from './ma2-layout-service';
 import type { Ma2NewCueRequest, Ma2SongSyncRequest, Ma2SongSyncResult } from '@tb/schema';
@@ -56,14 +57,29 @@ it('按钮第 1000 页起连续 10 页都放满时，不导入也不改名任何
 function songConsole(sequences: Map<number, string>, slowRead?: { target: number; ms: number }, nativeStepTable = false) {
   const files = new Map<string, Buffer>(); const lines: string[] = []; const ops: string[] = []; const slow = { started: false, done: false };
   const timecodes = new Map<number, string>();
+  let fileConsole: Ma2LuaConsole | undefined;
   const pending = new Map<string, Buffer[]>(); const copies = new Map<string, Array<{ xml: string; cue: string }>>(); const keeps: string[] = [];
   const canonical = (xml: string): string => xml.replace(/<Info\b[^>]*\/>/g, '').replace(/>\s+</g, '><').trim();
   const run = (script: string): string => {
+    const label = /local h=assert\(o.handle\('Sequence (\d+)'\),'Sequence missing'\);return o.label\(h\)/.exec(script);
+    if (label) return inspectMa2SequenceXml(sequences.get(Number(label[1]))!).sequences[0]!.name ?? '';
     const timecodeExists = /return gma\.show\.getobj\.handle\('Timecode (\d+)'\)~=nil/.exec(script);
     if (timecodeExists) return String(timecodes.has(Number(timecodeExists[1])));
-    const writer = /(TBLINK_W_[a-f0-9]{24})=function/.exec(script)?.[1];
+    const writer = /local k='(TBLINK_W_[a-f0-9]{24})'/.exec(script)?.[1];
     const opened = /importexport\/(\w+)\.xml';local f=assert\(io\.open\(p,'wb'\)\)/.exec(script);
-    if (writer && opened) { files.set(opened[1]!, Buffer.alloc(0)); writers.set(writer, opened[1]!); return 'prepared'; }
+    if (writer && opened) {
+      fileConsole ??= new Ma2LuaConsole(null);
+      fileConsole.lua("FAKE.vars.SHOWFILE='test';TBLINK_BRIDGE_GENERATION='one';FAKE.echo={}");
+      fileConsole.lua(script);
+      expect(fileConsole.lua('return FAKE.echo[1]')[0]?.toString()).toContain('OK:prepared');
+      files.set(opened[1]!, Buffer.alloc(0)); writers.set(writer, opened[1]!);
+      return 'prepared';
+    }
+    if (writer && writers.has(writer)) {
+      fileConsole!.lua(script);
+      expect(fileConsole!.lua('return FAKE.echo[#FAKE.echo]')[0]?.toString()).toContain('OK:ready');
+      return 'ready';
+    }
     let match = /importexport\/(\w+)\.xml','wb'\)/.exec(script);
     if (match) { files.set(match[1]!, Buffer.alloc(0)); return 'prepared'; }
     match = /importexport\/(\w+)\.xml','ab'\)\);f:write\(unhex\('([a-f0-9]*)'\)\)/.exec(script);
@@ -150,13 +166,22 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
   const command = vi.fn<Ma2Telnet['command']>((line, match) => {
     lines.push(line);
     const body = /^Lua "(.*)"$/.exec(line)![1]!;
+    if (body.includes(':D:OK')) {
+      fileConsole ??= new Ma2LuaConsole(null);
+      expect(Buffer.byteLength(line)).toBeLessThan(1024);
+      return fileConsole.command(line, match);
+    }
     const chunk = /^if (TBLINK_W_[a-f0-9]{24}) then \1\((\d+),'([a-f0-9]*)'(,1)?\)/.exec(body);
     if (chunk) {
       const file = writers.get(chunk[1]!);
       if (!file) return Promise.resolve(match(`${chunk[1]}:${chunk[2]}:ERR:missing\r\n`)!);
-      files.set(file, Buffer.concat([files.get(file)!, Buffer.from(chunk[3]!, 'hex')]));
-      if (chunk[4]) writers.delete(chunk[1]!);
-      return Promise.resolve(match(`${chunk[1]}:${chunk[2]}:OK\r\n`)!);
+      return fileConsole!.command(line, match).then(reply => {
+        if (chunk[4]) {
+          files.set(file, fileConsole!.file(`/fake/importexport/${file}.xml`)!);
+          writers.delete(chunk[1]!);
+        }
+        return reply;
+      });
     }
     let script = body; let prefix = /TBLINK_(?:LAYOUT|CUE)_[a-f0-9]{24}:/.exec(body)?.[0];
     const key = /(TBLINK_(?:LAYOUT|CUE)_[a-f0-9]{24})=\{\}/.exec(body)?.[1];
@@ -553,7 +578,7 @@ it('已绑定歌曲把已有 Cue 换成两个来源的组合：先用控台导�
   expect([...inspectMa2CueData(sequences.get(9000)!, written.index).keys()].map(key => /":attribute_name","(\w+)"/.exec(key)?.[1]).sort()).toEqual(['DIM', 'PAN']);
   expect([...fake.files.keys()].some(name => name.startsWith('tblink_song_'))).toBe(false);
 });
-it('已绑定歌曲新增一个点位：Copy 直接建出新 Cue 编号；清空一个 Cue 时控台上没有可 Copy 的内容，仍整首导入', async () => {
+it('已绑定歌曲新增点位或清空已有 Cue，只写对应的 Cue 并读回确认', async () => {
   const { song, sourceNumber, sequences } = boundSong();
   const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), showStopped, noBackups);
   const first = songConsole(sequences);
@@ -567,8 +592,9 @@ it('已绑定歌曲新增一个点位：Copy 直接建出新 Cue 编号；清空
   const self = (index: number) => [{ sequence: 9000, cue: added.binding.points[index]!.cue, delayMs: 0 }];
   await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: added.binding,
     points: [...song.points, { id: 'point-new', name: '新段落', atMs: 9000, cues: self(8) }].map((point, index) => ({ ...point, cues: index === 1 ? [] : self(index) })) });
-  expect([...fake.files.keys()].some(name => name.startsWith('tblink_song_'))).toBe(true);
-  expect(fake.lines.some(line => line.includes('Copy Sequence'))).toBe(false);
+  const patches = [...fake.files.entries()].filter(([name]) => name.startsWith('tblink_song_'));
+  expect(patches).toHaveLength(1);
+  expect(inspectMa2SequenceXml(patches[0]![1].toString('utf8')).sequences[0]!.cues.map(cue => cue.number)).toEqual([added.binding.points[1]!.cue]);
   expect(inspectMa2CueData(sequences.get(9000)!, inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.cues[1]!.index).size).toBe(0);
 }, 20000);
 it('大歌曲插入多个空 Cue 只传空结构，原 Cue 指纹和编号不变，时间码写入新增点', async () => {
@@ -688,7 +714,7 @@ it('控台上 Show 另存了新名字、换了 IP：已绑定的歌按序列编�
   const { song, sequences } = boundSong();
   const fake = songConsole(sequences);
   const renamed = { ...source, show: 'test 10.28' };
-  let sequenceName = song.binding!.name;
+  let sequenceName = `${song.binding!.name} 9000`;
   // The console reports the Show under its new name everywhere; Sequence 9000 carries `sequenceName`.
   const exchange = vi.fn<Ma2OnpcBridge['exchange']>(async (...args) => {
     const result = await fake.bridge.exchange(...args);
@@ -705,6 +731,9 @@ it('控台上 Show 另存了新名字、换了 IP：已绑定的歌按序列编�
   const moved = { ...song, expectedSource: renamed, network: { ...song.network, host: '192.0.2.9' } };
   const result = await service.syncSong(fake.connection, bridge, moved);
   expect(result.binding).toMatchObject({ endpoint: '192.0.2.9:30000', show: 'test 10.28', sequence: 9000 });
+  // A real native label ending in the number belongs to a different song despite the same directory text.
+  sequences.set(9000, editMa2SongSequence(sequences.get(9000)!, sequenceName, [], []));
+  await expect(service.syncSong(fake.connection, bridge, { ...moved, requestId: randomUUID() })).rejects.toThrow('现在叫“歌曲 9000”');
   sequenceName = '别的歌';
   await expect(service.syncSong(fake.connection, bridge, { ...moved, requestId: randomUUID() })).rejects.toThrow('控台上序列 9000 现在叫“别的歌”，不是这首歌写过的“歌曲”');
 });
@@ -745,7 +774,7 @@ it('同步到一半节目开始走：正在发的这一步发完（分几段发�
 it('分几段写的文件是一步：节目开始走时写完这个文件再停，不在控台上留半个文件（M3）', async () => {
   const { song, sequences } = boundSong();
   // A new Cue imported from the song's own snapshot: the Sequence XML is written in parts before the write.
-  const changed = { ...song, points: song.points.map((point, index) => index === 1 ? { ...point, cues: [] } : point) };
+  const changed = { ...song, points: song.points.map((point, index) => index > 0 ? { ...point, cues: [] } : point) };
   const straight = songConsole(new Map(sequences));
   await new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), showStopped, noBackups).syncSong(straight.connection, straight.bridge, changed);
   const writerLines = straight.lines.map((line, index) => [line, index] as const).filter(([line]) => /^Lua "if TBLINK_W_/.test(line)).map(([, index]) => index);
@@ -893,3 +922,36 @@ it('修复原生步骤表错位后 Cue 编号、名称和触发一致，再同�
   expect(again.changed).toBe(false);
   expect(inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.cues).toEqual(report.cues);
 }, 20000);
+
+it('整首首次创建时只传压缩后的 Cue，不重复改名；文件传坏就停在导入之前', async () => {
+  const request = { ...songRequest(), points: Array.from({ length: 80 }, (_, index) => ({
+    id: `point-${index}`, name: `Step ${index + 1}`, atMs: index * 1000, cues: []
+  })) };
+  const run = async (corrupt: boolean) => {
+    const sequences = new Map<number, string>();
+    const fake = songConsole(sequences);
+    const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), showStopped, noBackups);
+    const transfer = { parts: 0, wire: 0 };
+    const connection: Pick<Ma2Telnet, 'command'> = { command: (line, match) => {
+      const data = /^Lua "if TBLINK_W_.*?\(\d+,'([a-f0-9]+)'/.exec(line);
+      if (data) {
+        transfer.parts++; transfer.wire += data[1]!.length / 2;
+        if (corrupt && transfer.parts === 2) line = line.replace(data[1]!, 'ffff' + data[1]!.slice(4));
+      }
+      return fake.connection.command(line, match);
+    } };
+    const sync = service.syncSong(connection, fake.bridge, request);
+    if (corrupt) {
+      await expect(sync).rejects.toThrow('控台没有确认文件写入');
+      expect(sequences.size).toBe(0);
+    } else {
+      const result = await sync;
+      expect(result.binding.points.length).toBe(80);
+      expect(transfer.wire).toBeLessThan(Buffer.byteLength(result.binding.baselineXml) / 2);
+      expect(fake.lines.every(line => Buffer.byteLength(line) <= 1024)).toBe(true);
+      expect(transfer.parts).toBeGreaterThan(1);
+      expect(fake.lines.filter(line => line.includes("return 'labelled'"))).toHaveLength(0);
+    }
+  };
+  await run(false); await run(true);
+});

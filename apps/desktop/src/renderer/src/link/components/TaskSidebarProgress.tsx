@@ -48,8 +48,8 @@ export function TaskSidebarProgress({ notify }: { notify: Notify }): JSX.Element
   const pages = useMa2ExecutorPageStore(state => state.total);
   const cancelAttributes = (id: string): void => { void window.tbLink.cancelMa2Read(id).catch((cause: unknown) => notify(`取消读取没有成功：${cause instanceof Error ? cause.message : String(cause)}`, 'error')); };
   return <div className="sidebar-task-progress" aria-label="后台任务进度">
-    {Object.values(songs).filter(song => song.documentId === documentId && song.state === 'syncing').map(song => <Progress key={song.itemId} compact label="歌曲同步阶段进度" title="同步歌曲 Cue"
-      status={song.progress?.total ? `${Math.floor(song.progress.completed / song.progress.total * 100)}%` : '检查中'} value={song.progress?.completed ?? 0} max={song.progress?.total || 1} detail={song.progress?.detail ?? song.message}>
+    {Object.values(songs).filter(song => song.documentId === documentId && song.state === 'syncing').map(song => <Progress key={song.itemId} compact label="歌曲同步阶段进度" title={song.name}
+      status="正在同步" value={song.progress?.completed ?? 0} max={song.progress?.total || 1} detail={song.progress?.detail ?? song.message}>
       <Button variant="secondary" size="sm" onClick={pauseMa2RealtimeSession}>停止同步</Button>
     </Progress>)}
     {attributes.busy ? <Ma2ReadProgress compact progress={attributes.progress} waiting="读取属性并分类"/> : null}

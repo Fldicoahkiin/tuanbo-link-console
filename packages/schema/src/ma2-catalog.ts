@@ -40,6 +40,8 @@ export const ma2CatalogSchema = z.object({ directory: ma2ObjectDirectorySchema, 
 }).strict();
 export type Ma2Catalog = z.infer<typeof ma2CatalogSchema>;
 /** Where each console Timecode show sits in time, as the console's own export says (values as written there). */
+export const ma2RangeSourceSchema = z.union([ma2NetworkTargetSchema, z.object({ dataDirectory: z.string().min(1).max(4096) }).strict()]);
+export type Ma2RangeSource = z.infer<typeof ma2RangeSourceSchema>;
 export const ma2TimecodeRangesSchema = z.object({ generation: z.string().min(1).max(128).optional(), show: z.string().min(1).max(4096), entries: z.array(z.object({
   target: z.number().int().min(1).max(99999), name: z.string().max(1024), offset: z.string().max(32), length: z.string().max(32), slot: z.string().max(64), frame: z.string().max(64), last: z.string().max(32), readySequences: z.array(z.number().int().min(1).max(99999)).max(10000).optional(), internal: z.literal(true).optional()
 }).strict()).max(10000) }).strict();

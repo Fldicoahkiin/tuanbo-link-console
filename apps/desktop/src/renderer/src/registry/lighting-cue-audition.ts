@@ -5,6 +5,8 @@ import { ma2NetworkStatusSchema, ma2PlaybackActionSchema, type Ma2PlaybackAction
 
 /** A click may wait behind a sync job already on the wire; past this it is dropped, never sent late. */
 const auditionDeadlineMs = 3000;
+/** The selected point can be edited before the network output is ready. No Cue was sent. */
+export class Ma2AuditionOffline extends Error {}
 
 /** Explicit operator selection only; never called when restoring editor selection. */
 export class LightingCueAudition {
@@ -73,7 +75,10 @@ export class LightingCueAudition {
       await requireOutputLicense();
       const status = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());
       if (generation !== this.generation) return 0;
-      if (status.state !== 'connected' || !status.settings) throw new Error('序列池里的 Cue 通过网络播放，请先连接 MA2 网络（不需要绑定推杆或按键）');
+      if (status.state !== 'connected' || !status.settings) {
+        if (status.error) throw new Error(status.error);
+        throw new Ma2AuditionOffline('控台连好后可以试听这个 Cue');
+      }
       const { host, port, monitorPort, username } = status.settings;
       const actions = compileLightingNetworkActions(preview);
       const sessionId = crypto.randomUUID(); this.networkSession = sessionId;

@@ -1,4 +1,4 @@
-import { hasMa2SongSyncTarget, MA2_SONG_COLLISION, allocateSongMtcStart, isShowWait, toUserErrorMessage, applyMa2SongReadback, consoleLabelText, ma2LatestChoiceText, ma2PendingChanges, ma2SongPoints, mergeMa2AttributesCommand, pendingMa2Renames, projectLightingLibrary, setAllocatedMtcStartsCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
+import { hasMa2SongSyncTarget, MA2_READ_CANCELLED, MA2_SONG_COLLISION, allocateSongMtcStart, isShowWait, toUserErrorMessage, applyMa2SongReadback, consoleLabelText, ma2LatestChoiceText, ma2PendingChanges, ma2SongPoints, mergeMa2AttributesCommand, pendingMa2Renames, projectLightingLibrary, setAllocatedMtcStartsCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
 import type { Ma2LayoutSettings, Ma2NetworkTarget, Ma2SongBinding, Ma2SongConsoleEdits } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { requireSavedProjectPath } from '../project-document';
@@ -433,6 +433,12 @@ export async function tickMa2SongSync(): Promise<void> {
         markPendingMa2SongsNow();
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
+        const current = useMa2SyncStore.getState().songs[entry.itemId];
+        if (current?.sessionId !== entry.sessionId) continue;
+        if (current.state === 'paused' && message === MA2_READ_CANCELLED) {
+          update(entry, { checking: false, writing: false, requestId: null, progress: null, message: '已停止同步，改动已保留' });
+          continue;
+        }
         // A transport loss is a wait state. After reconnect, the service reads
         // the native sequence and its durable journal before planning any write.
         let disconnected = false;

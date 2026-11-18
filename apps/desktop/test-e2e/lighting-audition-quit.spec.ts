@@ -19,6 +19,11 @@ test('退出时灯光试听未能停止：可返回软件处理，也可明确�
         const auth = /TBLINK_AUTH_[a-f0-9]{32}/.exec(line)?.[0], boot = /TBLINK_BOOT_[a-f0-9]{32}/.exec(line)?.[0];
         if (auth) { socket.write(`\r\n${auth}:3.9.60.74\r\n`); continue; }
         if (boot) { socket.write(`\r\n${boot}:ready\r\n`); continue; }
+        const show = /TBLINK_SHOWCHECK_[a-f0-9]{32}/.exec(line)?.[0];
+        if (show) {
+          socket.write(`\r\n${show}:${['audition', '1', '3.9.60.74'].map(value => 'H' + Buffer.from(value).toString('hex')).join(',')}\r\n`);
+          continue;
+        }
         const play = /TBLINK_PLAY_[a-f0-9]{32}/.exec(line)?.[0];
         // Goto is confirmed; Off never is, as when the console has dropped off the network.
         if (play) socket.write(`\r\n${play}:${line.includes("gma.cmd('Off ") ? 'LOST' : 'SENT'}\r\n`);

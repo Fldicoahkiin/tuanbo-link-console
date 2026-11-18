@@ -90,7 +90,6 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 .toast-stack .toast.info button { pointer-events: auto; }
 .toast-stack .toast { padding: 12px 16px; min-width: 0; border: 1px solid var(--separator); border-radius: var(--radius-panel); box-shadow: var(--shadow-popover); font-size: var(--text-control); line-height: 1.5; overflow-wrap: anywhere; }
 .toast-stack .toast.info { color: var(--text-primary); background: var(--surface-glass-strong); }
-.toast-stack .toast.error { color: var(--danger); background: var(--danger-soft); border-color: rgba(var(--danger-rgb), .22); }
 .toast button { flex: 0 0 28px; width: 28px; height: 28px; border-radius: 8px; color: inherit; }
 .media-thumbnail img, .media-thumbnail video { outline: 1px solid var(--image-outline); outline-offset: -1px; }
 .stage-frame, .stage-obs-layer { background: var(--color-canvas); }

@@ -1,3 +1,4 @@
+import { turnOffTimelineAudition } from './lighting-settings';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -23,9 +24,7 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await app.evaluate(({dialog}, path) => { dialog.showOpenDialog = () => Promise.resolve({canceled: false, filePaths: [path]}); }, file);
     await page.getByRole('button', {name: '打开工程', exact: true}).click();
     await page.getByRole('button', {name: '灯光工作台', exact: true}).click();
-    await page.locator('.lighting-playback-settings > summary').click();
-    await page.getByRole('switch', {name: '选中 Cue 实时播放', exact: true}).uncheck();
-    await page.locator('.lighting-playback-settings > summary').click();
+    await turnOffTimelineAudition(page);
     const navigation = page.getByRole('navigation', {name: '灯光素材主菜单'});
     await expect(navigation.getByRole('button')).toHaveText(['控台素材', '控台时间线', '面光', '轮廓', '效果', '分类管理', '新建分类']);
     await expect(page.getByRole('button', {name: '读取控台', exact: true})).toHaveCount(0);

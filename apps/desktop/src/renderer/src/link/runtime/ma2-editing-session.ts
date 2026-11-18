@@ -1,7 +1,7 @@
 import { ma2CatalogSchema, ma2EffectLibrarySchema, type Ma2ObjectDirectory, type Ma2CatalogRequest } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { importCachedMa2, scanMa2, useMa2ReadStore } from '../stores/ma2-read-store';
-import { ma2PendingChanges, saveMa2ReadStateCommand, saveMa2MaterialLibraryCommand } from '@tb/core/link';
+import { ma2MtcConflictTargets, ma2PendingChanges, saveMa2ReadStateCommand, saveMa2MaterialLibraryCommand } from '@tb/core/link';
 import { ma2ConsoleWriting } from '../stores/ma2-sync-store';
 import { scanMa2Materials } from '../stores/ma2-material-read-store';
 
@@ -24,6 +24,7 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   if (useMa2ReadStore.getState().busy) throw new Error('正在读取控台，请等这次完成');
   if (ma2ConsoleWriting()) throw new Error('正在写入控台并确认，请完成后再连接或刷新');
   let refreshTimelines = refresh;
+  let conflict = '';
   if (connection.network) {
     const progressId = crypto.randomUUID();
     useMa2ReadStore.setState({ busy: true, activeId: progressId, progress: null, message: '正在准备控台选曲' });
@@ -33,8 +34,12 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
     try {
       if (await window.tbLink.prepareMa2Playback({ network: connection.network, progressId }, progress => useMa2ReadStore.setState({ progress }))) refreshTimelines = true;
     } catch (error) {
-      useMa2ReadStore.setState({ message: `控台选曲检查未完成：${error instanceof Error ? error.message : String(error)}` });
-      throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      useMa2ReadStore.setState({ message: `控台选曲检查未完成：${reason}` });
+      if (!ma2MtcConflictTargets(reason)) throw error;
+      // Keep playback isolation unconfirmed. The operator needs the actual timelines to repair the conflict.
+      refreshTimelines = true;
+      conflict = reason;
     } finally { unsubscribe(); useMa2ReadStore.setState({ busy: false, activeId: null, progress: null }); }
   }
   current();
@@ -51,7 +56,7 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
       latest.executeForDocument(documentId, saveMa2ReadStateCommand({ ...cached, catalog: { ...cached.catalog, directory: directory.directory } }));
     }
   }
-  if (!reuse) await scanMa2(connection, retry);
+  if (!reuse) await scanMa2(connection, retry && !conflict);
   current();
   await importCachedMa2();
   let libraryNotice = '';
@@ -86,6 +91,7 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   const note = state.catalog.incomplete || state.catalog.sourceUnverified ? '。控台还没读完整，读到的 Cue 可以查看，没读到的部分不会写回'
     : edited ? `。有 ${edited} 条时间线带着连接前做的本地修改：同步时先读控台比对，两边改了同一处以联动台为准，控台上的旧版本写入前备份在控台上`
     : !bindings.length ? '。还没有已关联的时间线' : '';
+  if (conflict) return `${summary}${note}。控台选曲还没准备好：${conflict}`;
   return `${summary}${note}。灯光工作台左下角的“实时同步”开着时，停止播放后每次改完都会自动写入控台并回读确认`;
 }
 

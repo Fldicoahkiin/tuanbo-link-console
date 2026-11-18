@@ -2,7 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, ma2PlaybackRequestSchema, parseLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, lightingOffRequestSchema, ma2PlaybackRequestSchema, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
 import { stubMidiPorts } from './midi-ports';
 import { closeDiscarding } from './save-questions';
@@ -23,6 +23,11 @@ for (const scenario of ['timecode', 'no-port', 'empty'] as const) test(`灯光�
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   const calls: { cue: string; action: string; executor: string }[] = [];
   app.on('console', message => {
+    if (message.text().startsWith('LIGHTS_OFF_TEST:')) {
+      const request = lightingOffRequestSchema.parse(JSON.parse(message.text().slice('LIGHTS_OFF_TEST:'.length)));
+      if (request.phase === 'stop' && request.document.consoleSong?.executor) calls.push({ cue: '', action: 'off', executor: request.document.consoleSong.executor });
+      return;
+    }
     if (!message.text().startsWith('LIGHTING_PLAYBACK_TEST:')) return;
     const request = ma2PlaybackRequestSchema.parse(JSON.parse(message.text().slice('LIGHTING_PLAYBACK_TEST:'.length)));
     calls.push({ cue: 'cue' in request.action ? request.action.cue ?? '' : '', action: request.action.action, executor: request.action.target === 'executor' ? request.action.executor : '' });
@@ -35,6 +40,8 @@ for (const scenario of ['timecode', 'no-port', 'empty'] as const) test(`灯光�
       ipcMain.handle('link:ma2-network-status', () => ({ state: 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, passwordSaved: false, version: '3.9.60.74', error: null }));
       ipcMain.removeHandler('link:ma2-play-cue');
       ipcMain.handle('link:ma2-play-cue', (_event, value: unknown) => { console.log('LIGHTING_PLAYBACK_TEST:' + JSON.stringify(value)); });
+      ipcMain.removeHandler('link:lighting-off');
+      ipcMain.handle('link:lighting-off', (_event, request: unknown) => { console.log('LIGHTS_OFF_TEST:' + JSON.stringify(request)); return { failed: [] }; });
       ipcMain.removeHandler('link:ma2-play-cancel'); ipcMain.handle('link:ma2-play-cancel', () => undefined);
     });
     const midi = await stubMidiPorts(app, { outputs: ['Preview MTC'] });

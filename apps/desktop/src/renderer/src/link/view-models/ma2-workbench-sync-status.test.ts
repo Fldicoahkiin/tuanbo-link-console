@@ -38,3 +38,10 @@ describe('左下角只显示正在同步和已同步', () => {
     expect(status({ songs: [{ state: 'verified' }, { state: 'verified' }] }).label).toBe('已同步');
   });
 });
+
+it('工程只改了素材名称：控台确认以后保持已同步，断开或还有本地改动时不提前确认', () => {
+  const namesOnly: Input = { ...ready, songs: [], targetCount: 0, names: 'verified', session: { status: 'waiting', waitFor: 'empty', message: '' } };
+  expect(ma2WorkbenchSyncStatus(namesOnly).label).toBe('已同步');
+  expect(ma2WorkbenchSyncStatus({ ...namesOnly, localCount: 1 }).label).toBeNull();
+  expect(ma2WorkbenchSyncStatus({ ...namesOnly, session: { status: 'waiting', waitFor: 'connection', message: '' } }).label).toBeNull();
+});

@@ -117,6 +117,26 @@ export function emptyMa2LayoutXml(target: number, version: string): string {
   return sequence.replace(/<Sequ[\s\S]*<\/Sequ>/,`<Group index="${target-1}"><LayoutData index="0"/></Group>`);
 }
 
+/** Move just the requested native Cue blocks into a temporary Sequence for MA2 Copy /o. */
+export function ma2ScratchCueXml(xml: string, numbers: readonly string[], scratch: number, version: string): string {
+  const report = inspectMa2SequenceXml(xml).sequences[0]!;
+  const wanted = new Set(numbers.map(Number));
+  const indices = new Set(report.cues.filter(cue => wanted.has(Number(cue.number))).map(cue => cue.index));
+  if (indices.size !== wanted.size) throw new Error('歌曲中找不到要写入的 Cue');
+  const source = singleChild(readSequenceXml(xml).root, 'Sequ')!;
+  const { document, root } = parse(emptyMa2SequenceXml(scratch, version));
+  const dest = singleChild(root, 'Sequ')!;
+  dest.removeChild(children(dest, 'Cue')[1]!);
+  let index = 0;
+  for (const cue of children(source, 'Cue')) {
+    if (!cue.hasAttribute('index') || !indices.has(indexOf(cue))) continue;
+    const copy = document.importNode(cue, true);
+    copy.setAttribute('index', String(++index));
+    dest.appendChild(copy);
+  }
+  return new XMLSerializer().serializeToString(document);
+}
+
 /** Edit only the selected song sequence, retaining every untouched native Cue. */
 export function editMa2SongSequence(xml: string, name: string, changes: readonly { cue: string; name: string; sources?: readonly { xml: string; cue: string }[] }[], removed: readonly string[]): string {
   const report = inspectMa2SequenceXml(xml).sequences[0]!;

@@ -6,7 +6,7 @@ function stubMidi(request: () => Promise<unknown>): void { vi.mocked(requestMidi
 vi.mock('./license-output', () => ({ requireOutputLicense: vi.fn().mockResolvedValue(undefined) }));
 import { createLightingDocument, lightingTrackSchema } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../link/view-models/local-integration-profile';
-import { LightingCueAudition } from './lighting-cue-audition';
+import { LightingCueAudition, Ma2AuditionOffline } from './lighting-cue-audition';
 import { compileLightingNetworkActions } from '@tb/core/link';
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -20,6 +20,15 @@ function networkFixture() {
   return { ...f, play, status };
 }
 
+it('连接尚未就绪时选中已保存的 Cue 可以继续编辑，真正的连接错误保留原因', async () => {
+  const f = networkFixture();
+  const connected = await f.status();
+  vi.spyOn(window.tbLink, 'getMa2NetworkStatus').mockResolvedValueOnce({ ...connected, state: 'connecting' })
+    .mockResolvedValueOnce({ ...connected, state: 'disconnected', error: '控台监视端口已断开' });
+  await expect(f.audition.play(f.document, 'b', f.profile, true)).rejects.toBeInstanceOf(Ma2AuditionOffline);
+  await expect(f.audition.play(f.document, 'b', f.profile, true)).rejects.toThrow('控台监视端口已断开');
+  expect(f.play).not.toHaveBeenCalled();
+});
 it('多步序列发送 Go 和 Off 原命令，不根据缓存列表猜测下一 Cue 或自动补发', async () => {
   const f = networkFixture();
   expect(await f.audition.playAction({ target: 'sequence', sequence: 36, action: 'go' })).toBe(true);

@@ -40,9 +40,9 @@ test('改了 MTC 起始码，灯光自动换到同起点的控台时间线；控
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '当前工程', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '时间码', exact: true }).click();
     const start = page.getByRole('textbox', { name: 'trip 的 MTC 起始时间', exact: true });
-    await expect(start).toHaveValue('00:01:00:00');
-    await start.fill('00:01:10:00'); await start.press('Enter');
-    await expect(start).toHaveValue('00:01:10:00');
+    await expect(start).toHaveValue('00:01:00');
+    await start.fill('00:01:10'); await start.press('Enter');
+    await expect(start).toHaveValue('00:01:10');
 
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();

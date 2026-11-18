@@ -1,3 +1,4 @@
+import { turnOffTimelineAudition } from './lighting-settings';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -179,7 +180,8 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await page.screenshot({ path: info.outputPath('rename-synced.png') });
     await page.getByRole('switch', { name: '实时同步', exact: true }).click();
     await expect(page.locator('.cue-composer')).toHaveCount(0);
-    await page.locator('.lighting-playback-settings>summary').click();await page.getByLabel('选中 Cue 实时播放',{exact:true}).uncheck();
+    await turnOffTimelineAudition(page);
+    await navigation.getByRole('button', { name: '面光', exact: true }).click();
     await classified.locator('.classification-cell>button').first().click();
     await expect.poll(async()=>(JSON.parse(await application.evaluate(()=>process.env.TBLINK_LIBRARY_CALLS??'[]')) as unknown[]).length).toBe(beforeClassify+1);
     await expect(menu).toHaveCount(0);await expect(page.locator('.classification-detail')).toHaveCount(0);

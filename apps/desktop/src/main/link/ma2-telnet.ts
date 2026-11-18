@@ -104,8 +104,11 @@ export class Ma2Telnet {
       this.traffic.queueMs += performance.now() - queuedAt;
       if (epoch !== this.connectionEpoch || !this.socket) throw new Error('控台连接已改变，待发送请求已取消');
       beforeSend?.(wait);
+      if (epoch !== this.connectionEpoch || !this.socket) throw new Error('控台连接已改变，待发送请求已取消');
       for (const stream of this.streams) stream.buffer = '';
       const pending = this.waitFor(match);
+      // A response parser can reject during its initial check and close both sockets.
+      if (!this.socket) return pending;
       this.socket.write(`${line}\r\n`);
       this.traffic.wireCommands += 1; this.traffic.sentBytes += Buffer.byteLength(`${line}\r\n`, 'utf8');
       return pending;

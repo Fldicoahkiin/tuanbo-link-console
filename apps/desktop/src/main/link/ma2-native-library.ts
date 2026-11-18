@@ -39,11 +39,13 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
     // response so grouping small sequences cannot overflow the native monitor.
     const rowLimit = numbers.length > 1 ? Math.floor(65536 / numbers.length) : width > 32 ? 65536 : null;
     const script = [
-      "local o=gma.show.getobj;local function hex(s)return (s:gsub('.',function(b)return string.format('%02x',string.byte(b))end))end;",
+      "local o,C=gma.show.getobj,coroutine;local function hex(s)return (s:gsub('.',function(b)return ('%02x'):format(b:byte())end))end;",
       "local function page(k)local h=o.handle('Sequence '..k);if not h then return 'missing' end;",
-      "local n=o.amount(h);local t={tostring(n),hex(o.label(h) or '')};",
-      `for i=${offset},math.min(n-1,${offset + width - 1}) do local c=o.child(h,i);if c then t[#t+1]=i..','..tostring(o.number(c))..','..hex(o.label(c) or '') end end;return table.concat(t,';') end;`,
-      `local a={};for _,k in ipairs({${numbers.join(',')}}) do local ok,r=pcall(page,k);a[#a+1]=not ok and 'invalid' or ${rowLimit ? `#r>${rowLimit} and 'large' or ` : ''}r end;`,
+      "local n=o.amount(h);local t={n,hex(o.label(h) or '')};",
+      `for i=${offset},math.min(n-1,${offset + width - 1}) do local c=o.child(h,i);if c then t[#t+1]=i..','..o.number(c)..','..hex(o.label(c) or '') end end;return table.concat(t,';') end;`,
+      // MA yields every few thousand Lua instructions. Finish this bounded metadata page
+      // without waiting a console frame at each yield. Each row still reports its own error.
+      `local a={};for _,k in ipairs({${numbers.join(',')}}) do local co=C.create(page);local ok,r;repeat ok,r=C.resume(co,k) until not ok or C.status(co)=='dead';a[#a+1]=not ok and 'invalid' or ${rowLimit ? `#r>${rowLimit} and 'large' or ` : ''}r end;`,
       `local r=table.concat(a,'/');local id='${prefix}';for p=1,#r,700 do gma.echo(id..p..':'..r:sub(p,p+699)) end;gma.echo(id..'END:'..#r)`
     ].join('');
     const response = await connection.command(`Lua "${script}"`, text => readNativeCueChunks(text, prefix), gate);

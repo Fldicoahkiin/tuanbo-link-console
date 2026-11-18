@@ -26,6 +26,8 @@ export const MA2_SONG_TIMECODE_SLOT = 'TC Slot 2';
  * write: nothing was written and the next pass reads again, so it is a wait, not a failed attempt.
  */
 export const MA2_SONG_COLLISION = '控台同时在改';
+/** Exact operator cancellation across Electron IPC. A partial write adds its own confirmation warning. */
+export const MA2_READ_CANCELLED = '已按要求停止控台操作';
 
 /** A show whose length the console does not give still runs past its last event; this much is kept clear after it. */
 const LAST_EVENT_MARGIN_TICKS = 30 * 30;

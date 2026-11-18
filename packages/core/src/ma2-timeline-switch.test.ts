@@ -307,6 +307,20 @@ it('属性编辑预检拒绝与其他节目相同的起始码，原 Cue 和关�
   expect(song(before).ma2Bindings?.[0]?.timecode).toBe(112);
 });
 
+it('移动起始码时保留尚未同步的 Cue 和用于对比的原始 Cue', () => {
+  const before = fixture();
+  const local = song(before).tracks[0]!.clips[0]!;
+  local.duration = 3001;
+  local.events[0]!.at = 3000;
+  const fresh = preview(112, 90_000, 1000);
+  const originalXmlAtNewStart = '<MA><Timecode index="111" offset="2700"/></MA>';
+  const after = withMa2Pairings(editMa2TimelinePropertiesCommand(112, fresh.name, 90_000, fresh, originalXmlAtNewStart)).execute(before);
+  expect(song(after).tracks[0]!.clips[0]!.events[0]!.at).toBe(3000);
+  const binding = song(after).ma2Bindings![0]!;
+  expect(binding.baselineTracks[0]!.clips[0]!.events[0]!.at).toBe(1000);
+  expect(binding.sourceXml).toBe(originalXmlAtNewStart);
+});
+
 it('只有控台目录的时间线，手动选择现读后补入完整条目和 Cue', () => {
   const before = fixture();
   before.ma2ReadState!.catalog.entries = before.ma2ReadState!.catalog.entries.filter(entry => entry.target !== 121);

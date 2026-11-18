@@ -1,4 +1,5 @@
-import { editMa2TimelinePropertiesCommand, pairSongWithMa2ShowCommand, ma2PendingChanges } from '@tb/core/link';
+import { checkMa2TimelineStart, editMa2TimelinePropertiesCommand, ma2MtcConflictTargets, ma2TimelineOwner, pairSongWithMa2ShowCommand, songDurationMs } from '@tb/core/link';
+import { ma2LabelSchema, type LinkProject, type Ma2CatalogRequest, type Ma2TimecodeRanges } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { currentShowWait } from '../stores/show-state-store';
@@ -7,6 +8,7 @@ import { readMa2ShowNow } from './ma2-console-version';
 import { stopMa2SongSync } from './ma2-song-sync';
 import { ma2MaterialConnection } from '../stores/ma2-material-read-store';
 import { syncMa2Once } from './ma2-realtime-session';
+import { useMa2RealtimePreference } from './ma2-realtime-preference';
 
 export function timelineActionWait(itemId: string): string | null {
   const state = useMa2SyncStore.getState().songs[itemId];
@@ -39,31 +41,86 @@ export async function selectMa2Timeline(itemId: string, target: number): Promise
 }
 
 
-export async function changeMa2TimelineProperties(target: number, name: string, startMs: number): Promise<string> {
+function checkRangeSource(project: LinkProject, connection: Ma2CatalogRequest, ranges: Ma2TimecodeRanges): void {
+  const read = project.ma2ReadState;
+  const source = connection.network ? `${connection.network.host}:${connection.network.port}` : '本机 onPC';
+  if (read && (read.source !== source || read.catalog.directory.show !== ranges.show || read.catalog.directory.generation !== ranges.generation)) {
+    throw new Error('控台或 Show 已改变，请刷新控台时间线后再修改');
+  }
+}
+
+export async function readMa2EditingRanges(): Promise<Ma2TimecodeRanges> {
+  const before = useDocumentStore.getState();
+  const connection = await ma2MaterialConnection(true);
+  const ranges = await window.tbLink.ma2TimecodeRanges(connection.network ?? { dataDirectory: connection.dataDirectory });
+  const latest = useDocumentStore.getState();
+  if (!latest.project || latest.documentId !== before.documentId) throw new Error('工程已切换，请重新打开时间线');
+  checkRangeSource(latest.project, connection, ranges);
+  return ranges;
+}
+
+export async function changeMa2TimelineProperties(target: number, name: string, startMs: number, options?: { ranges?: Ma2TimecodeRanges; keepName?: boolean }): Promise<{ message: string; warning?: string }> {
   const before = useDocumentStore.getState(); const project = before.project;
   if (!project) throw new Error('请先打开工程');
-  const item = project.rundown.find(value => value.lighting?.consoleSong?.timecode?.number === target || value.lighting?.timelineDestination?.timecode === target || value.lighting?.ma2Bindings?.some(binding => binding.timecode === target));
+  const item = ma2TimelineOwner(project, target);
   const wait = timelineActionWait(item?.id ?? ''); if (wait) throw new Error(wait);
-  if (item?.lighting?.consoleSong || item?.lighting?.timelineDestination) {
+  const owned = item?.lighting?.consoleSong?.timecode?.number === target;
+  const reserved = item?.lighting?.timelineDestination?.timecode === target && !item.lighting.consoleSong?.timecode;
+  if (options?.ranges) checkMa2TimelineStart(project, options.ranges, target, startMs);
+  if (item && (reserved && !options?.ranges?.entries.some(entry => entry.target === target) || owned && !options?.ranges)) {
+    if (reserved && options?.ranges) {
+      const live = await readMa2EditingRanges();
+      if (live.show !== options.ranges.show || live.generation !== options.ranges.generation) throw new Error('控台或 Show 已改变，请重新检查起始码');
+      if (live.entries.some(entry => entry.target === target)) throw new Error(`控台刚占用了 Timecode ${target}，请刷新时间线后再修改`);
+      checkMa2TimelineStart(project, live, target, startMs);
+      if (useDocumentStore.getState().project !== project) throw new Error('工程已变化，请重试');
+    }
     before.execute(editMa2TimelinePropertiesCommand(target, name, startMs));
-    syncMa2Once(item.id); return '已保存修改，正在同步到原控台位置。';
+    syncMa2Once(item.id); return { message: '已保存修改，正在同步到原控台位置。' };
   }
-  if (ma2PendingChanges(project).some(change => change.itemId === item?.id && change.target === target)) throw new Error('当前 Cue 有未同步修改，请先同步 Cue 后再修改名称和起始码');
+  const binding = item?.lighting?.ma2Bindings?.find(value => value.timecode === target);
   const entry = project.ma2ReadState?.catalog.entries.find(value => value.target === target);
-  if (!entry || entry.error || !entry.preview || !project.ma2ReadState || project.ma2ReadState.catalog.sourceUnverified) throw new Error('请先刷新并完整读取这条控台时间线');
-  editMa2TimelinePropertiesCommand(target, name, startMs, entry.preview).execute(project);
+  const sourceEntry = options?.ranges?.entries.find(value => value.target === target) ?? entry;
+  if (!sourceEntry || !entry || !project.ma2ReadState || project.ma2ReadState.catalog.sourceUnverified) throw new Error('请先刷新并读取这条控台时间线');
+  ma2LabelSchema.parse(name);
   if (item && !await archiveMa2Project(before.documentId, project, 'manual')) throw new Error('原编排未能存档，未修改控台');
-  const connection = await ma2MaterialConnection();
-  if (useDocumentStore.getState().project !== project) throw new Error('工程已变化，请重试');
+  const connection = await ma2MaterialConnection(true);
+  if (options?.ranges) checkRangeSource(project, connection, options.ranges);
+  function currentDocument() {
+    const latest = useDocumentStore.getState();
+    if (!latest.project || latest.documentId !== before.documentId || ma2TimelineOwner(latest.project, target) !== item
+      || latest.project.ma2ReadState?.catalog.entries.find(value => value.target === target) !== entry
+      || latest.project.ma2ReadState?.catalog.directory !== project?.ma2ReadState?.catalog.directory) throw new Error('这条时间线或工程已改变，请重新打开后再修改');
+    return latest;
+  }
+  const currentProject = currentDocument().project;
+  if (currentProject && options?.ranges) checkMa2TimelineStart(currentProject, options.ranges, target, startMs);
   const waiting = timelineActionWait(item?.id ?? ''); if (waiting) throw new Error(waiting);
   const directory = project.ma2ReadState.catalog.directory;
+  const resume = item && useMa2RealtimePreference.getState().enabled && useMa2SyncStore.getState().songs[item.id]?.state !== 'paused';
   if (item) stopMa2SongSync(item.id);
-  await window.tbLink.editMa2Timeline({ ...connection, target, name, startMs, expectedName: entry.name, expectedOffset: Number(entry.offset ?? 0), expectedSource: { show: directory.show, generation: directory.generation, version: directory.version } });
+  let confirmed = false;
   try {
+    const result = await window.tbLink.editMa2Timeline({ ...connection, target, name, startMs, ...(options?.keepName ? { keepName: true } : {}),
+      bindingSourceXml: binding?.sourceXml, minimumDurationMs: item?.referenceAudio ? songDurationMs(item.referenceAudio) : 0,
+      expectedName: sourceEntry.name === '' ? '' : entry.preview?.name ?? entry.name, expectedOffset: Number(sourceEntry.offset ?? 0),
+      expectedSource: { show: directory.show, generation: directory.generation, version: directory.version } });
+    confirmed = true;
     const fresh = await window.tbLink.previewMa2({ ...connection, target, timeOriginMs: startMs });
-    const latest = useDocumentStore.getState();
-    if (latest.project !== project || latest.documentId !== before.documentId) throw new Error('工程在修改期间发生变化');
-    latest.execute(editMa2TimelinePropertiesCommand(target, name, startMs, fresh));
-    return '控台名称和 MTC 起始码已修改并读回确认。';
-  } catch (error) { throw new Error(`控台已修改，但软件尚未更新，请刷新时间线：${error instanceof Error ? error.message : String(error)}`); }
+    const latest = currentDocument();
+    const sameName = fresh.name === result.name || !result.name && fresh.name === `Timecode ${target}`;
+    if (fresh.timing?.offsetNative === undefined || Number(fresh.timing.offsetNative) !== Math.round(startMs * 30 / 1000) || !sameName) throw new Error('控台时间线又有改动');
+    latest.execute(editMa2TimelinePropertiesCommand(target, name, startMs, fresh, result.bindingSourceXml));
+    if (item && resume && useMa2RealtimePreference.getState().enabled) syncMa2Once(item.id);
+    if (!result.selectionWarning && useMa2RealtimePreference.getState().enabled) {
+      for (const song of Object.values(useMa2SyncStore.getState().songs)) {
+        if (song.state === 'blocked' && ma2MtcConflictTargets(song.message)?.includes(target)) syncMa2Once(song.itemId);
+      }
+    }
+    const saved = `Timecode ${target} 的修改已由控台确认。`;
+    return { message: saved, ...(result.selectionWarning ? { warning: `控台选曲尚未就绪：${result.selectionWarning}` } : {}) };
+  } catch (error) {
+    if (!confirmed) throw error;
+    throw new Error(`控台已修改，工程尚未更新，请刷新时间线：${error instanceof Error ? error.message : String(error)}`);
+  }
 }

@@ -657,6 +657,15 @@ describe('联动台装插件', () => {
     await expect(wire.exchange(requestId(2), 'SNAPSHOT', 9902, '', () => undefined)).resolves.toContain('<Sequ index="9900"');
     expect(ma2.lines.filter(line => line.includes("','step','")).length).toBeGreaterThan(0);
   });
+  it('大组件分段传输后交给 Lua 的 UTF-8 原文逐字节一致，每行仍在控台上限内', async () => {
+    const ma2 = new Ma2LuaConsole(null);
+    ma2.lua("local original=load;load=function(src,name,...) if name=='tblink_bridge' then TEST_BRIDGE_TEXT=src end;return original(src,name,...) end");
+    const source = '-- ' + '现场灯光：'.repeat(1200) + '\n' + bridgeSource;
+    await ensureMa2NetworkBridge(ma2, source);
+    expect(ma2.lua('return TEST_BRIDGE_TEXT')[0]).toEqual(Buffer.from(source));
+    expect(ma2.lines.filter(line => line.includes("local h='")).length).toBeLessThan(Math.ceil(Buffer.byteLength(source) / 350));
+    expect(ma2.lines.every(line => Buffer.byteLength(line) <= 1024)).toBe(true);
+  });
   it('控台上是分步以前的插件：用旧插件自己的锁核对后换成新插件', async () => {
     const ma2 = new Ma2LuaConsole(singleRunBridgeSource); show(ma2);
     ma2.lua(`TBLINK_BRIDGE_SOURCE = DIGEST`, { DIGEST: digest(singleRunBridgeSource) });

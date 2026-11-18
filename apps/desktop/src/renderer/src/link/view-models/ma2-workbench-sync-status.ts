@@ -23,7 +23,12 @@ export function ma2WorkbenchSyncStatus(input: Input): Status {
   if (session.status === 'blocked' || input.recoveryError) return idle;
   const wait = session.status === 'waiting' ? session.waitFor : undefined;
   if (!input.manual && (wait === 'reading' || wait === 'check')) return syncing;
-  if (!input.manual && session.status === 'waiting' && wait !== 'show') return idle;
+  if (!input.manual && session.status === 'waiting' && wait !== 'show') {
+    // A project can use console materials without pairing any song. A completed name
+    // write has its own readback and remains confirmed when there is no other edit to send.
+    if ((wait === 'empty' || wait === 'unmatched') && !input.targetCount && !localCount && !songs.length && names === 'verified') return confirmed;
+    return idle;
+  }
   if (songs.some(song => song.waitingForConnection)) return idle;
   if (names === 'syncing' || songs.some(song => song.writing)) return syncing;
   const canSync = !input.manual && session.status === 'ready';

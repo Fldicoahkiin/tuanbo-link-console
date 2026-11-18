@@ -22,8 +22,8 @@ io = {
       if FAKE.files[path] == nil then return nil, path .. ': No such file or directory', 2 end
       return reader(FAKE.files[path])
     end
-    assert(mode == 'wb', 'fake io.open: unsupported mode ' .. tostring(mode))
-    local parts = {}
+    assert(mode == 'wb' or mode == 'ab', 'fake io.open: unsupported mode ' .. tostring(mode))
+    local parts = { mode == 'ab' and FAKE.files[path] or '' }
     local file = {}
     file.write = function(self, data) parts[#parts + 1] = data; return self end
     file.close = function() FAKE.files[path] = table.concat(parts); return true end

@@ -8,7 +8,13 @@ const native = (await readFile(new URL('./fixtures/ma2-timecode-3.7.xml', import
 const source = { show: 'Show', generation: 'session', version: '3.7.0.5' };
 const input = { dataDirectory: '', network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, target: 904, name: 'Updated', startMs: 900000, expectedName: 'Original', expectedOffset: 0, expectedSource: source };
 function fixture() {
-  const request = vi.fn<Ma2OnpcBridge['request']>().mockImplementation(operation => Promise.resolve(operation === 'LIST' ? JSON.stringify({ ...source, entries: [{ target: 904, name: 'Original' }] }) : native));
+  const request = vi.fn<Ma2OnpcBridge['request']>().mockImplementation(operation => {
+    if (operation === 'LIST') return Promise.resolve(JSON.stringify({ ...source, entries: [{ target: 904, name: 'Original' }] }));
+    if (operation === 'TCRANGES') return Promise.resolve(JSON.stringify({ show: source.show, generation: source.generation, entries: [
+      { target: 904, name: 'Original', offset: '0', length: '300', slot: 'TC Slot 2', frame: '30 FPS', last: '150' }
+    ] }));
+    return Promise.resolve(native);
+  });
   const exchange = vi.fn<Ma2OnpcBridge['exchange']>().mockImplementation((_operation, _target, _expected, desired) => Promise.resolve({ requestId: 'test', response: desired! }));
   return { request, exchange };
 }
@@ -31,4 +37,14 @@ it('回读内容不一致不报告成功；写入前发生并发修改也不覆�
   await expect(editMa2Timeline(bridge, input)).rejects.toThrow('尚未确认');
   bridge.exchange.mockRejectedValueOnce(new Error('Timecode changed after preview'));
   await expect(editMa2Timeline(bridge, input)).rejects.toThrow('changed after preview');
+});
+
+it('保存前时段刚被另一条时间线占用，按整首歌长度重新核对并拒绝写入', async () => {
+  const bridge = fixture();
+  const row = { target: 904, name: 'Original', offset: '0', slot: 'TC Slot 2', length: '300', last: '150', frame: '30 FPS' };
+  bridge.request.mockResolvedValueOnce(JSON.stringify({ ...source, entries: [{ target: 904, name: row.name }] }))
+    .mockResolvedValueOnce(native).mockResolvedValueOnce(JSON.stringify({ generation: source.generation, show: source.show,
+      entries: [row, { ...row, target: 9999, offset: '27300' }] }));
+  await expect(editMa2Timeline(bridge, { ...input, minimumDurationMs: 12_000 })).rejects.toThrow('904 和 9999');
+  expect(bridge.exchange).not.toHaveBeenCalled();
 });

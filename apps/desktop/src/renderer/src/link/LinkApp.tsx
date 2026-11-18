@@ -1,7 +1,7 @@
 import { Button, Dialog, IconButton } from './ui';
 import './components/titlebar.css';
 import { useSettingsExit } from './useSettingsExit';
-import { isShowWait, toUserErrorMessage } from '@tb/core/link';
+import { toUserErrorMessage } from '@tb/core/link';
 import { useMa2ReadStore } from './stores/ma2-read-store';
 import { useDocumentShortcuts } from './useDocumentShortcuts';
 import { useMidiPortMonitor } from './useMidiPortMonitor';
@@ -39,6 +39,7 @@ import { useProjectPersistence } from './useProjectPersistence';
 import { useRecoveryCopyWriter } from './recovery-copy-writer';
 import { confirmReplaceDocument, showOpenedProject, useDocumentCommands, useDocumentStateReport } from './project-document';
 import { useP1AutoFollow } from './useP1AutoFollow';
+import { Ma2TimelineProperties } from './components/Ma2TimelineProperties';
 import { P1OrphanNotice } from './components/P1OrphanNotice';
 import { p1FollowClient, setMainErrorsShown } from './stores/p1-follow-store';
 import { useInternalPlayer } from './useInternalPlayer';
@@ -50,12 +51,11 @@ import { useMa2SyncStore } from './stores/ma2-sync-store';
 import { useMediaAudioPreparation } from './runtime/use-media-audio-preparation';
 import { useLicenseReminders } from './useLicenseReminders';
 import { TaskSidebarProgress } from './components/TaskSidebarProgress';
-import { recordErrorNotice } from './error-notice-log';
-import { noticeText, showMainProcessErrors } from './notice-text';
+import { type MtcConflict, useAppNotices } from './useAppNotices';
+import { showMainProcessErrors } from './notice-text';
 import { useKeyOverlay, useKeyRouter, usePageScope } from './keys/useKeyCommands';
 
 type Page = 'project' | 'cues' | 'lighting';
-type Notice = { id: string; message: string; tone: 'info' | 'error'; key?: string };
 type NavigationItem = { id: Page; label: string; caption: string; icon: typeof ListMusic };
 
 const NAVIGATION: NavigationItem[] = [
@@ -71,7 +71,8 @@ export function LinkApp(): JSX.Element {
   const [playlistHost, setPlaylistHost] = useState<HTMLDivElement | null>(null);
   const [page, setPage] = useState<Page>('project');
   const [coordinator, setCoordinator] = useState<LinkRuntimeCoordinator | null>(null);
-  const [notices, setNotices] = useState<Notice[]>([]);
+  const { notices, setNotices, notify } = useAppNotices();
+  const [repair, setRepair] = useState<MtcConflict | null>(null);
   const [licenseNotices, dismissLicenseNotice] = useLicenseReminders();
   const { newProjectOpen, setNewProjectOpen, newProjectName, setNewProjectName } = useNewProjectDialog();
   const [newProjectError, setNewProjectError] = useState<string | null>(null);
@@ -103,17 +104,6 @@ export function LinkApp(): JSX.Element {
   // playback keys wait and Escape there only closes the page (0.5.9; useKeyOverlay below).
   useKeyRouter();
   usePageScope(page);
-
-  /** `written`: the text is written for the operator already and is shown as it is (noticeText). */
-  const notify = useCallback((message: string, tone: 'info' | 'error' = 'info', key?: string, written = false) => {
-    const id = crypto.randomUUID();
-    // A wait is not a failure (AGENTS §4): never in red, also when the edit that hit it reports it as an error.
-    if (tone === 'error' && isShowWait(message)) tone = 'info';
-    const displayMessage = noticeText(message, tone, written);
-    if (tone === 'error' && message) recordErrorNotice(displayMessage, message);
-    setNotices((current) => [...current.filter(notice => notice.message !== displayMessage && (!key || notice.key !== key)), ...(message ? [{ id, message: displayMessage, tone, ...(key ? { key } : {}) }] : [])]);
-    if (tone === 'info') window.setTimeout(() => setNotices((current) => current.filter((notice) => notice.id !== id)), 5_000);
-  }, []);
 
   const midiMonitor = useDesktopIntegrationEvents(notify); useEffect(() => { try { useDisplayPreferences.getState().load(); } catch (error) { notify(`显示设置读取失败：${String(error)}`, 'error'); } }, [notify]);
   useMa2Sync(notify);
@@ -242,7 +232,12 @@ export function LinkApp(): JSX.Element {
       <section className={`app-workspace${connectionsOpen ? ' settings-workspace' : ''}`}>
         <main className="app-main" id="workspace-content" tabIndex={-1} aria-label={connectionsOpen ? '设置' : NAVIGATION.find(item => item.id === page)?.label}>
           <div className="content-scroll">{pageContent}<section ref={connectionsPanel} hidden={!connectionsOpen} className="connections-dialog" role="dialog" aria-modal="false" aria-label={settingsOpen ? '设置' : '连接与设备'}><div className="connections-content" ref={settingsLocator.ref}><IntegrationWorkspace quickConnectHost={connectHost} midiMonitor={midiMonitor} category={settingsCategory} onCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }} coordinator={coordinator} notify={notify} settingsOpen={connectionsOpen && settingsOpen} onSettingsOpen={openSettings} onCreate={() => leaveSettings(beginCreateProject)} onOpen={() => leaveSettings(() => void openProject())} /></div></section>
-      <div className="toast-stack" role="region" aria-label="通知"><div role="status" aria-live="polite">{licenseNotices.map((message, index) => <div className="toast info" key={`license-${index}`}><span>{message}</span><button aria-label="关闭授权提醒" onClick={() => dismissLicenseNotice(index)}><X aria-hidden="true" /></button></div>)}{notices.filter(notice => notice.tone === 'info').map((notice) => <div className="toast info" key={notice.id}><span>{notice.message}</span><button aria-label="关闭通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div><P1OrphanNotice notify={notify} /><div role="alert">{notices.filter(notice => notice.tone === 'error').map((notice) => <div className="toast error" key={notice.id}><span>{notice.message}</span><button aria-label="关闭错误通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div></div></div>
+      {repair && project && repair.documentId === documentId ? <Ma2TimelineProperties key={repair.targets.join('-')} project={project} targets={repair.targets}
+        onClose={() => setRepair(null)} onSaved={(message, warning) => {
+          setNotices(old => old.filter(notice => !notice.conflict || notice.conflict.documentId !== documentId || !notice.conflict.targets.every(number => repair.targets.includes(number))));
+          setRepair(null); notify(message); if (warning) notify(warning, 'error');
+        }} /> : null}
+      <div className="toast-stack" role="region" aria-label="通知"><div role="status" aria-live="polite">{licenseNotices.map((message, index) => <div className="toast info" key={`license-${index}`}><span>{message}</span><button aria-label="关闭授权提醒" onClick={() => dismissLicenseNotice(index)}><X aria-hidden="true" /></button></div>)}{notices.filter(notice => notice.tone === 'info').map((notice) => <div className="toast info" key={notice.id}><span>{notice.message}</span><button aria-label="关闭通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div><P1OrphanNotice notify={notify} /><div role="alert">{notices.filter(notice => notice.tone === 'error' && (!notice.conflict || notice.conflict.documentId === documentId)).map((notice) => <div className="toast error" key={notice.id}><div className="toast-error-copy"><span>{notice.message}</span>{notice.conflict ? <Button variant="secondary" size="sm" onClick={() => setRepair(notice.conflict ?? null)}>修改 MTC</Button> : null}</div><button aria-label="关闭错误通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div></div></div>
         </main>
       </section>
 

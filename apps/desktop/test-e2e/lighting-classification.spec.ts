@@ -39,7 +39,7 @@ for(const scaled of [false,true]) test(`${scaled ? '规定高负载' : '千条�
     await expect(page.locator('.timeline-shell')).toBeVisible();
     expect((await page.locator('.timeline-shell').boundingBox())!.height).toBeGreaterThan(100);
     const tabs=page.getByRole('navigation',{name:'灯光素材主菜单'});await tabs.getByRole('button',{name:'面光',exact:true}).click();
-    await expect(tabs.getByRole('button')).toHaveText(['控台素材','面光','轮廓','效果','分类管理','新建分类']);
+    await expect(tabs.getByRole('button')).toHaveText(['控台素材','控台时间线','面光','轮廓','效果','分类管理','新建分类']);
     await tabs.getByRole('button',{name:'效果',exact:true}).click();
     await expect(page.getByRole('group',{name:'效果分类视图'})).toHaveCount(0);
     await expect(page.getByRole('group',{name:'音乐用途',exact:true}).getByRole('button')).toHaveText(['重击','滚奏','渐强','爆发','停顿','段落切换','结尾','最后一击','自定义']);

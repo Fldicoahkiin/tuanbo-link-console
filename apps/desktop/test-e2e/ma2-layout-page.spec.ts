@@ -34,7 +34,7 @@ test('构造控台页面：顶部入口、999 页、翻页与失败清空、紧�
     const pool = page.getByRole('region', { name: 'MA2 序列预览' });
     const tab = pool.getByRole('button', { name: '控台页面', exact: true });
     const tabs = pool.getByRole('group', { name: '素材分类' });
-    await expect(tabs.getByRole('button')).toHaveText(['全部', '单步', '多步', '控台页面']);
+    await expect(tabs.getByRole('button')).toHaveText(['全部', '单步', '多步', '控台时间线', '控台页面']);
     await tab.click(); await expect(tab).toHaveAttribute('aria-pressed', 'true');
     await pool.getByLabel('控台页面类型').selectOption('layout');
     const view = pool.getByRole('region', { name: '控台页面', exact: true });

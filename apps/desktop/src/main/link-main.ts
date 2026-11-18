@@ -1,10 +1,10 @@
 import { ma2TimelineEditRequestSchema } from '@tb/schema';
-import { editMa2Timeline } from './link/ma2-timeline-edit';
+import { editMa2Timeline, readMa2MtcRanges } from './link/ma2-timeline-edit';
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
 import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema, ma2ExecutorChannelChoiceRequestSchema } from '@tb/schema';
-import { ma2NetworkTargetSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
-import { clockFromNativeStatus, firstTimeWarning, holdForShow, isShowWait, lightingReadBackLogs, materialSceneTargets, projectFileReferences, showGate, toUserErrorReason, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
+import { ma2RangeSourceSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
+import { clockFromNativeStatus, firstTimeWarning, holdForShow, isShowWait, lightingReadBackLogs, MA2_READ_CANCELLED, materialSceneTargets, projectFileReferences, showGate, toUserErrorReason, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
 import { assertMa2ConnectionOwner, isLocalMa2Address, waitForMa2Listener } from './link/ma2-connection-owner';
@@ -989,7 +989,7 @@ function registerIpc(
   handle('link:ma2-read-cancel', (event, value: unknown) => {
     const id = z.string().uuid().parse(value);
     const read = ma2Reads.get(id);
-    if (read?.senderId === event.sender.id) read.controller.abort();
+    if (read?.senderId === event.sender.id) read.controller.abort(new Error(MA2_READ_CANCELLED));
   });
   const ma2Discovery = new Ma2DiscoveryService();
   handle('link:ma2-network-setup-state', () => ma2NetworkSetup.state());
@@ -1273,7 +1273,11 @@ function registerIpc(
     finally { task.finish(); }
   });
   handle('link:ma2-timecode-ranges', async (_event, value: unknown) => {
-    try { return await ma2Network.timecodeRanges(ma2NetworkTargetSchema.parse(value)); }
+    try {
+      const source = ma2RangeSourceSchema.parse(value);
+      const { bridge } = await getMa2Connection('dataDirectory' in source ? source : { dataDirectory: '', network: source });
+      return await readMa2MtcRanges(bridge);
+    }
     catch (error) { await recordMa2Failure('读取控台时间码节目范围', `读取控台时间码节目范围失败：${String(error)}`, error); throw error; }
   });
   handle('link:ma2-song-sync', async (event, value: unknown) => {
@@ -1287,7 +1291,12 @@ function registerIpc(
         details: { elapsedMs: Math.round(performance.now() - started), changed: result.changed, points: request.points.length } });
       if (result.changed) await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `歌曲序列 ${result.binding.sequence} · ${result.binding.executor ? `执行器 ${result.binding.executor}` : `Layout ${result.binding.layout}`} 已写入控台并确认，备份 ${result.backupFile}`, result: 'succeeded' });
       return result;
-    } catch (error) { await recordMa2Failure('歌曲同步', `歌曲同步停止：${String(error)}`, error, request.itemId); throw error; }
+    } catch (error) {
+      if (task.signal.aborted && error instanceof Error && error.message === MA2_READ_CANCELLED) {
+        await logger.record({ level: 'info', category: 'device', device: 'MA2', itemId: request.itemId, message: '已按要求停止歌曲同步' });
+      } else await recordMa2Failure('歌曲同步', `歌曲同步停止：${String(error)}`, error, request.itemId);
+      throw error;
+    }
     finally { task.finish(); }
   });
   handle('link:ma2-layouts', async (_event, value: unknown) => ma2Network.listLayouts(ma2LayoutDirectoryRequestSchema.parse(value)));
@@ -1387,6 +1396,7 @@ function registerIpc(
     try {
       const result = request.network ? await ma2Network.editTimeline(request) : await editMa2Timeline(bridge, request);
       if (result.backupFile) await ma2ConsoleBackups.record(bridge, { console: ma2ConsoleKey(request), object: `Timecode ${request.target}`, files: [result.backupFile] });
+      if (result.selectionWarning) await recordMa2Failure('修改起始码后准备控台选曲', result.selectionWarning, result.selectionWarning);
       return result;
     } catch (error) { await recordMa2Failure('修改控台时间线', String(error), error); throw error; }
   });
@@ -2601,6 +2611,7 @@ const ipcFailures = new Map<string, { loggedAt: number; suppressed: number }>();
 /** The renderer only receives translated copy; the original stays in the run log.
  * Polled channels repeat the same failure, so one entry per cause per window. */
 function recordIpcFailure(channel: string, elapsedMs: number, error: unknown): void {
+  if (channel.startsWith('link:ma2-') && error instanceof Error && error.message === MA2_READ_CANCELLED) return;
   const technicalError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   if (!ipcLogger) { console.error(`IPC ${channel} 失败（运行日志尚未就绪）`, error); return; }
   const key = `${channel}\n${technicalError}`, now = Date.now(), previous = ipcFailures.get(key);

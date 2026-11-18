@@ -1,9 +1,10 @@
+import { turnOffTimelineAudition } from './lighting-settings';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, createLightingMusic, parseLinkProject } from '@tb/schema';
-import { closeDiscarding } from './save-questions';
+import { closeDiscarding, saveProject } from './save-questions';
 
 for (const dense of [false, true]) test(`底部时间线：${dense ? '密集' : '常规'} Cue 拖动、吸附、撤销，上方布局保持原样`, async ({}, info) => {
   const wav = Buffer.alloc(44 + 48000 * 51 * 2);
@@ -54,9 +55,7 @@ for (const dense of [false, true]) test(`底部时间线：${dense ? '密集' : 
     await timeline.screenshot({ path: info.outputPath('timeline-analysis.png') });
     await page.getByRole('button', { name: '关闭节拍分段', exact: true }).click();
     await expect(page.getByRole('region', { name: '音乐节拍分段', exact: true })).toHaveCount(0);
-    await page.locator('.lighting-playback-settings > summary').click();
-    await page.getByRole('switch', { name: '选中 Cue 实时播放', exact: true }).uncheck();
-    await page.locator('.lighting-playback-settings > summary').click();
+    await turnOffTimelineAudition(page);
     const lane = page.getByLabel('Cue 框选画布');
     if (dense) {
       await expect(page.locator('.waveform-cue-point')).toHaveCount(10);
@@ -86,10 +85,10 @@ for (const dense of [false, true]) test(`底部时间线：${dense ? '密集' : 
     await page.mouse.down();
     await page.mouse.move(marker.x + marker.width / 2 + 43, marker.y + 14, { steps: 10 });
     await page.mouse.up();
-    await page.keyboard.press('Control+s');
+    await saveProject(page);
     await expect.poll(async () => (await saved()).tracks[0]!.clips[0]!.events[0]!.at).toBeGreaterThan(1300);
     await page.getByRole('button', { name: '撤销', exact: true }).click();
-    await page.keyboard.press('Control+s');
+    await saveProject(page);
     await expect.poll(async () => (await saved()).tracks[0]!.clips[0]!.events.map(event => event.at)).toEqual(lighting.tracks[0]!.clips[0]!.events.map(event => event.at));
     expect((await saved()).tempos).toEqual(lighting.tempos);
     expect((await saved()).tracks[0]!.clips[0]!.events[0]).toMatchObject({ cue: '1.000' });
@@ -101,10 +100,10 @@ for (const dense of [false, true]) test(`底部时间线：${dense ? '密集' : 
       await page.mouse.down();
       await page.mouse.move(to.x + from.width / 2 - 4, from.y + 14, { steps: 10 });
       await page.mouse.up();
-      await page.keyboard.press('Control+s');
+      await saveProject(page);
       await expect.poll(async () => (await saved()).tracks[0]!.clips[0]!.events[0]!.at).toBe(6100);
       await page.getByRole('button', { name: '撤销', exact: true }).click();
-      await page.keyboard.press('Control+s');
+      await saveProject(page);
       await expect.poll(async () => (await saved()).tracks[0]!.clips[0]!.events[0]!.at).toBe(1300);
     }
     await page.setViewportSize({ width: 1180, height: 800 });

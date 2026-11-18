@@ -62,7 +62,7 @@ export async function scanMa2Materials(source: Ma2CatalogRequest, retry = false)
   finally { unsubscribe?.(); useMa2MaterialReadStore.setState({ busy: false, activeId: null, progress: null }); }
 }
 
-export async function ma2MaterialConnection(): Promise<Ma2CatalogRequest> {
+export async function ma2MaterialConnection(connectedOnly = false): Promise<Ma2CatalogRequest> {
   const method = readMa2Method();
   if (method === 'midi') throw new Error('当前是“仅 MIDI”模式，不读取控台灯光库');
   const local = useLocalMa2Store.getState();
@@ -70,7 +70,7 @@ export async function ma2MaterialConnection(): Promise<Ma2CatalogRequest> {
     if (local.status !== 'ready') throw new Error('请先在设备设置里连接本机 onPC');
     return { dataDirectory: local.directory };
   }
-  const network = ma2NetworkStatusSchema.parse(await connectDiscoveredMa2());
+  const network = ma2NetworkStatusSchema.parse(await (connectedOnly ? window.tbLink.getMa2NetworkStatus() : connectDiscoveredMa2()));
   if (network.state !== 'connected' || !network.settings) throw new Error('请先在设备设置里连接 MA2 控台');
   const { host, port, monitorPort, username } = network.settings;
   return { dataDirectory: '', network: { host, port, monitorPort, username } };

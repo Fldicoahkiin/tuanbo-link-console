@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { z } from 'zod';
-import { holdForShow, isShowWait, ma2MtcSelectionCommand, ma2MtcSelections, MA2_SONG_TIMECODE_SLOT, type Ma2MtcSong, type ShowGateReader } from '@tb/core/link';
+import { holdForShow, isShowWait, ma2MtcRange, ma2MtcSelectionCommand, ma2MtcSelections, MA2_SONG_TIMECODE_SLOT, type ShowGateReader } from '@tb/core/link';
 import { ma2ObjectDirectorySchema, ma2TimecodeRangesSchema, type Ma2NetworkTarget, type Ma2TimecodeRanges, type Ma2ReadProgressUpdate } from '@tb/schema';
 import type { Ma2Telnet } from './ma2-telnet';
 import { ma2SequenceGoResultSchema, type Ma2OnpcBridge } from './ma2-onpc-bridge';
@@ -99,10 +99,7 @@ const timecodeRange = (target: number, xml: string): Ma2TimecodeRanges['entries'
 function samePlaybackRange(a: Ma2TimecodeRanges['entries'][number], b: Ma2TimecodeRanges['entries'][number]): boolean {
   return a.target === b.target && Number(a.offset) === Number(b.offset) && Number(a.length || 0) === Number(b.length || 0) && a.slot === b.slot && a.last === b.last;
 }
-const selectionPoints = (entries: Ma2TimecodeRanges['entries']) => ma2MtcSelections(entries.filter(entry => !entry.internal && entry.slot === MA2_SONG_TIMECODE_SLOT && entry.last !== '').map((entry): Ma2MtcSong => {
-  const start = Number(entry.offset), length = Math.max(Number(entry.length || 0), Number(entry.last) + 1);
-  return { timecode: entry.target, start, end: start + length };
-}));
+const selectionPoints = (entries: Ma2TimecodeRanges['entries']) => ma2MtcSelections(entries.filter(entry => !entry.internal && entry.slot === MA2_SONG_TIMECODE_SLOT && entry.last !== '').map(ma2MtcRange));
 const positionSchema = z.object({ number: z.number().int().min(1).max(99999), exists: z.boolean() }).strict();
 
 /**
@@ -161,13 +158,18 @@ export class Ma2MtcSelectionService {
       // Timecode this sync actually read back, so moving the end, muting all points or changing the
       // MTC origin still rebuilds selection even when the Sequence itself was not edited.
       if (known && verifiedTimecode && known.show === verifiedTimecode.show && known.generation === verifiedTimecode.generation
-        && targets.length === 1 && targets[0] === verifiedTimecode.number && known.entries.some(entry => entry.target === verifiedTimecode.number && entry.slot === MA2_SONG_TIMECODE_SLOT)
-        && referencedMa2Sequences(verifiedTimecode.xml).every(number => goSequences.has(number))
-        && sameMa2XmlObjects(verifiedTimecode.xml, ma2MtcPlaybackSettings(verifiedTimecode.xml, false))) {
+        && targets.length === 1 && targets[0] === verifiedTimecode.number) {
         const fresh = timecodeRange(verifiedTimecode.number, verifiedTimecode.xml);
-        const entries = known.entries.map(entry => entry.target === fresh.target ? fresh : entry);
-        if (fresh.slot === MA2_SONG_TIMECODE_SLOT && JSON.stringify(selectionPoints(entries)) === JSON.stringify(selectionPoints(known.entries))) {
-          this.knownRanges = { ...known, entries }; this.prepared = endpoint; return false;
+        const previous = known.entries.find(entry => entry.target === fresh.target);
+        if (previous && previous.slot === fresh.slot) {
+          const entries = known.entries.map(entry => entry.target === fresh.target ? fresh : entry);
+          // The selector only owns Slot 2. Moving a Cue on a different slot cannot affect it.
+          if (fresh.slot !== MA2_SONG_TIMECODE_SLOT || (
+            referencedMa2Sequences(verifiedTimecode.xml).every(number => goSequences.has(number))
+            && sameMa2XmlObjects(verifiedTimecode.xml, ma2MtcPlaybackSettings(verifiedTimecode.xml, false))
+            && JSON.stringify(selectionPoints(entries)) === JSON.stringify(selectionPoints(known.entries)))) {
+            this.knownRanges = { ...known, entries }; this.prepared = endpoint; return false;
+          }
         }
       }
       task?.onConsoleCheck?.();
@@ -191,7 +193,7 @@ export class Ma2MtcSelectionService {
         }
         ranges = { show: source.show, entries };
       } else ranges = ma2TimecodeRangesSchema.parse(JSON.parse(await bridge.request('TCRANGES', 1)));
-      if (source.show !== ranges.show) throw new Error('控台 Show 已切换，没有准备选曲');
+      if (source.show !== ranges.show || (ranges.generation && ranges.generation !== source.generation)) throw new Error('控台 Show 已切换，没有准备选曲');
       const guard = `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(source.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(source.generation)},'Show or session changed');`;
       const run = (body: string) => runMa2GuardedLua(connection, guard + body, gate);
       // Marker belongs to the native Show, so another computer reuses the same selector.
@@ -208,7 +210,10 @@ export class Ma2MtcSelectionService {
       if (markers.size > 1) throw new Error('控台上有多组选曲对象，请核对后再连接');
       const owned = [...markers][0] ?? 0;
       const candidates = ranges.entries.filter(entry => entry.target !== owned && entry.slot === MA2_SONG_TIMECODE_SLOT);
-      if (!candidates.some(entry => entry.last !== '') && !owned) { this.prepared = endpoint; return false; }
+      if (!candidates.some(entry => entry.last !== '') && !owned) {
+        this.knownRanges = { show: source.show, generation: source.generation, entries: ranges.entries.filter(entry => !entry.internal) };
+        this.prepared = endpoint; return false;
+      }
       const points = selectionPoints(candidates), numbers = candidates.map(entry => entry.target);
       const commands = points.map(point => numbers.length ? ma2MtcSelectionCommand(numbers, point.timecode) : `Off Timecode ${owned}`);
       const position = positionSchema.parse(JSON.parse(await run(`local o=gma.show.getobj;local n=${owned};local exists=n>0 and o.handle('Sequence '..n)~=nil;if exists then assert(o.label(o.handle('Sequence '..n))=='${selectorName}','Selector sequence changed') elseif n==0 then for i=9900,99999 do if not o.handle('Sequence '..i) and not o.handle('Timecode '..i) then n=i;break end end;assert(n>0,'No free selector object') end;return '{"number":'..n..',"exists":'..tostring(exists)..'}'`)));

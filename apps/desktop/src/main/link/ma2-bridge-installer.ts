@@ -1,3 +1,4 @@
+import { ma2AdlerSums, ma2LzwDecoder, packMa2Bytes } from './ma2-transfer-codec';
 import { createHash, randomBytes } from 'node:crypto';
 import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
 import { runMa2GuardedLua } from './ma2-lua-command';
@@ -66,14 +67,35 @@ export async function ensureMa2NetworkBridge(connection: Pick<Ma2Telnet, 'comman
     ].join(''));
     if (begin !== 'ready') throw new Error('控台正在准备连接组件，请稍后连接');
     prepared = true;
+    const payload = packMa2Bytes(bytes, 8192);
+    if (payload !== bytes) {
+      // Expand each acknowledged chunk separately, below MA's native command-line limit.
+      // Independently check the decoded source before loading it, in addition to echoing every wire byte.
+      const decoder = await call([
+        `local b=assert(TBLINK_BOOTSTRAP);assert(b.id=='${id}');`,
+        ma2LzwDecoder,
+        "local part=b.part;function b.part(i,at,h)local echo=part(i,at,h);if echo~=h then return 'invalid' end;",
+        "b.parts[i],b.a,b.z=expand(b.parts[i]);return echo end;local r='ready'"
+      ].join(''));
+      if (decoder !== 'ready') throw new Error('控台没有确认组件传输准备');
+      // MA suspends long Lua byte loops at its instruction quota. Finish the same
+      // bounded 350-byte chunk before waiting for the next console/network tick.
+      const ready = await call(`local b=assert(TBLINK_BOOTSTRAP);assert(b.id=='${id}');local part=b.part;function b.part(i,at,h)local co=coroutine.create(function() return part(i,at,h) end);local ok,r;repeat ok,r=coroutine.resume(co);assert(ok,r) until coroutine.status(co)=='dead';return r end;local r='ready'`);
+      if (ready !== 'ready') throw new Error('控台没有确认组件传输准备');
+    }
     const chunkSize = 350; // The monitor echoes at most 700 hex characters, the same payload as a native Cue page line.
-    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-      const chunk = bytes.subarray(offset, offset + chunkSize);
+    for (let offset = 0; offset < payload.length; offset += chunkSize) {
+      const chunk = payload.subarray(offset, offset + chunkSize);
       const index = offset / chunkSize + 1;
       const encoded = chunk.toString('hex');
       const reply = await call(`local h='${encoded}';local b=TBLINK_BOOTSTRAP;local r=b and b.id=='${id}' and b.part(${index},${offset},h) or 'invalid'`);
       if (reply !== encoded) throw new Error('控台连接组件没有传完，已停止连接');
       if (acquired && index % 32 === 0 && !(await rpc('read', ',0')).startsWith('DATA:')) throw new Error('控台连接组件升级占用已失效');
+    }
+    if (payload !== bytes) {
+      const [a, b] = ma2AdlerSums(bytes);
+      const complete = await call(`local b=TBLINK_BOOTSTRAP;local r='invalid';if b and b.id=='${id}' and b.size==${payload.length} and b.a==${a} and b.z==${b} and #table.concat(b.parts)==${bytes.length} then b.size=${bytes.length};r='ready' end`);
+      if (complete !== 'ready') throw new Error('控台连接组件没有传完，已停止连接');
     }
     if (previousSource) {
       const pause = await runMa2GuardedLua(connection, `local b=assert(TBLINK_BOOTSTRAP);assert(b.id=='${id}' and b.size==${bytes.length},'Incomplete bridge');assert(TBLINK_BRIDGE_SOURCE=='${previousSource}','Bridge owner changed');b.factory=assert(load(table.concat(b.parts),'tblink_bridge','t'));b.previous={net=TBLINK_NET,input=TBLINK_EXEC_INPUT,release=TBLINK_EXEC_RELEASE_ALL,source=TBLINK_BRIDGE_SOURCE,generation=TBLINK_BRIDGE_GENERATION,ready=TBLINK_BRIDGE_READY};if TBLINK_EXEC_RELEASE_ALL then TBLINK_EXEC_RELEASE_ALL() end;TBLINK_BRIDGE_GENERATION='upgrade_${id}';TBLINK_BRIDGE_READY=false;return 'paused'`, () => undefined);

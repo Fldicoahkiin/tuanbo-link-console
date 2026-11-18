@@ -3,7 +3,7 @@ import { ma2LayoutDirectoryRequestSchema, ma2LayoutDirectorySchema, ma2LayoutUpd
 import { ma2ExecutorPageDirectorySchema, ma2ExecutorPageSchema, ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorUpdateResultSchema, ma2ExecutorInputSchema, ma2ExecutorChannelSchema, ma2ExecutorChannelChoiceRequestSchema } from '@tb/schema';
 import { ma2ButtonLiveRequestSchema, ma2ButtonLiveSchema, ma2WebRemoteStateSchema } from '@tb/schema';
 import { ma2ExecutorObservationSchema, ma2ExecutorObserveRequestSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, ma2LiveSnapshotSchema } from '@tb/schema';
-import { ma2NetworkTargetSchema, ma2TimecodeRangesSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, ma2SongSyncResultSchema } from '@tb/schema';
+import { ma2RangeSourceSchema, ma2TimecodeRangesSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, ma2SongSyncResultSchema } from '@tb/schema';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { z } from 'zod';
 import { ma2RenameRequestSchema, ma2RenameResultSchema } from '@tb/schema';
@@ -167,7 +167,7 @@ const tbLink: LinkDesktopBridgeApi = {
   commitMa2CueDeletion: async (payload, progress) => ma2CueDeleteResultSchema.parse(await readMa2('link:ma2-cue-delete-commit', ma2CueDeleteCommitSchema.parse(payload), progress)),
   syncMa2Song: async (payload, onProgress) => ma2SongSyncResultSchema.parse(await readMa2('link:ma2-song-sync', ma2SongSyncRequestSchema.parse(payload), onProgress)),
   checkMa2Song: async payload => z.boolean().parse(await invoke('link:ma2-song-check', ma2SongCheckRequestSchema.parse(payload))),
-  ma2TimecodeRanges: async network => ma2TimecodeRangesSchema.parse(await invoke('link:ma2-timecode-ranges', ma2NetworkTargetSchema.parse(network))),
+  ma2TimecodeRanges: async source => ma2TimecodeRangesSchema.parse(await invoke('link:ma2-timecode-ranges', ma2RangeSourceSchema.parse(source))),
   createMa2Cue: async payload => ma2NewCueResultSchema.parse(await invoke('link:ma2-new-cue', ma2NewCueRequestSchema.parse(payload))),
   cancelMa2Read: (id) => invoke('link:ma2-read-cancel', id),
   editMa2Timeline: async payload => ma2TimelineEditResultSchema.parse(await invoke('link:ma2-timeline-edit', ma2TimelineEditRequestSchema.parse(payload))),

@@ -28,6 +28,7 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
     await app.evaluate(({ ipcMain, dialog }, data) => {
       const status = { settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, state: 'connected', version: '3.3.4', passwordSaved: false, error: null };
       ipcMain.removeHandler('link:ma2-network-status'); ipcMain.handle('link:ma2-network-status', () => status);
+      ipcMain.removeHandler('link:ma2-prepare-playback'); ipcMain.handle('link:ma2-prepare-playback', () => false);
       ipcMain.removeHandler('link:ma2-network-save'); ipcMain.handle('link:ma2-network-save', () => status);
       ipcMain.removeHandler('link:ma2-catalog'); ipcMain.handle('link:ma2-catalog', () => data.catalog);
       ipcMain.removeHandler('link:ma2-preview'); ipcMain.handle('link:ma2-preview', () => process.env.TBLINK_EDIT_REQUEST ? data.confirmed : data.catalog.entries[0]!.preview);

@@ -1,5 +1,6 @@
 /* Layout of the settings pages (2026-10-30 rework). Controls come from link/ui; this file only places them. */
 @layer pages {
+  .ma2-discovery-list { max-block-size: calc(var(--space-6) * 5); overflow: auto; }
   .app-workspace.settings-workspace { flex-direction: row; background: var(--color-page); }
   .settings-workspace > .app-main { position: relative; flex: 1 1 0; min-width: 0; background: var(--color-page); }
   .settings-workspace .toast-stack { position: absolute; max-width: calc(100% - 32px); }

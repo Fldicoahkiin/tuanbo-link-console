@@ -3,13 +3,16 @@ import { moveMa2LayoutObjects } from './ma2-timecode-xml';
 import { ma2TimelineDestinationSchema, ma2SongBindingSchema, ma2SongSyncRequestSchema, ma2SongSyncResultSchema, ma2SongPointSchema, type Ma2SongSyncRequest, type Ma2SongSyncResult, type Ma2ReadProgressUpdate } from '@tb/schema';
 import { planMa2SongSync, type Ma2SongPlan } from './ma2-song-plan';
 import { editMa2SongSequence, ma2SequenceCueFingerprints, inspectMa2CueAttributes, inspectMa2CueFixtures, inspectMa2SequenceCueData } from './ma2-timecode-xml';
+import { ma2AdlerSums, ma2LzwDecoder, packMa2Bytes } from './ma2-transfer-codec';
 import { createHash, randomBytes } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { open, readFile, rm } from 'node:fs/promises';
+import { basename, join, win32 } from 'node:path';
+import { ma2UsesLocalFiles } from './ma2-network-wire';
 import { z } from 'zod';
 import { ma2LayoutReadRequestSchema, ma2NewCueRequestSchema, ma2NewCueResultSchema, ma2ObjectDirectorySchema, type Ma2LayoutReadRequest, type Ma2LayoutSnapshot, type Ma2NewCueRequest, type Ma2NewCueResult } from '@tb/schema';
 import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
-import { emptyMa2SequenceXml, emptyMa2LayoutXml, inspectMa2LayoutXml, inspectMa2SequenceXml, resolveMa2CueNumber, inspectMa2CueData } from './ma2-timecode-xml';
+import { emptyMa2SequenceXml, emptyMa2LayoutXml, inspectMa2LayoutXml, inspectMa2SequenceXml, resolveMa2CueNumber, inspectMa2CueData, ma2ScratchCueXml } from './ma2-timecode-xml';
 import { readMa2EffectLibrary } from './ma2-effect-library';
 import { toConsoleLabel } from '@tb/core/link';
 import { writeFileAtomically } from './atomic-file';
@@ -73,7 +76,7 @@ export class Ma2LayoutService {
   }
   private async script(connection: Connection, body: string): Promise<string> {
     const prefix = `TBLINK_LAYOUT_${randomBytes(12).toString('hex')}:`;
-    const script = `${decoder}local ok,r=pcall(function() ${body} end);if ok then gma.echo('${prefix}OK:'..tostring(r)) else gma.echo('${prefix}ERR:'..tostring(r)) end`;
+    const script = `${decoder}local ok,r=pcall(function() ${body} end);gma.echo('${prefix}'..(ok and 'OK:' or 'ERR:')..tostring(r))`;
     let command=script;
     // MA2's native command line truncates long Lua input; prepare app-owned code in bounded chunks.
     if(Buffer.byteLength(script)>900 || /["$|^\\\r\n]/.test(script)){
@@ -84,7 +87,7 @@ export class Ma2LayoutService {
       };
       await prepare(`${key}={}`);
       const bytes=Buffer.from(script);
-      for(let offset=0;offset<bytes.length;offset+=128)await prepare(`${decoder}${key}[#${key}+1]=unhex('${bytes.subarray(offset,offset+128).toString('hex')}')`);
+      for(let offset=0;offset<bytes.length;offset+=320)await prepare(`${decoder}${key}[#${key}+1]=unhex('${bytes.subarray(offset,offset+320).toString('hex')}')`);
       command=`local s=table.concat(${key});${key}=nil;local f=assert(load(s,'tblink_layout','t'));f()`;
     }
     const result = await connection.command(`Lua "${command}"`, text => ma2ResponseLine(text, prefix));
@@ -314,8 +317,15 @@ export class Ma2LayoutService {
       // (2026-10-30) while the song's Sequence there still carries the name the song wrote.
       if (request.binding && (request.binding.endpoint !== endpoint || request.binding.show !== directory.show)) {
         const there = directory.entries.find(entry => entry.target === target);
-        if (there && there.name !== request.binding.name && there.name !== toConsoleLabel(request.binding.name)) {
-          throw new Error(`控台上序列 ${target} 现在叫“${there.name}”，不是这首歌写过的“${request.binding.name}”，可能打开了另一个 Show。这首歌先不同步，请在控台上确认`);
+        if (there) {
+          const names = [request.binding.name, toConsoleLabel(request.binding.name)];
+          let observed = there.name;
+          // MA's object display name can append the pool number. Ask for the native label
+          // in that ambiguous case. An actual label ending in the number must remain distinct.
+          if (!names.includes(observed) && names.some(name => observed === `${name} ${target}`)) {
+            observed = await this.call(connection, `${this.guard(layoutRequest)}local o=gma.show.getobj;local h=assert(o.handle('Sequence ${target}'),'Sequence missing');return o.label(h) or ''`);
+          }
+          if (!names.includes(observed)) throw new Error(`控台上序列 ${target} 现在叫“${observed}”，不是这首歌写过的“${request.binding.name}”，可能打开了另一个 Show。这首歌先不同步，请在控台上确认`);
         }
       }
       const key = `${endpoint}/${directory.show}/${target}`;
@@ -452,18 +462,23 @@ export class Ma2LayoutService {
         const clearing = remoteXml && plan.deletions.length > 0 && inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.every(cue => plan.deletions.includes(cue.number));
         // A bound song copies changed Cues inside MA2, including self-references from its write-before
         // export and newly inserted empty steps. Locally restored data and a full clear still need Import.
-        const newEmptyCues = plan.changes.filter(change => !change.restore && change.refs?.length === 0
-          && (!previousNumbers.has(Number(change.cue)) || plan.deletions.some(cue => Number(cue) === Number(change.cue))));
-        const copyInPlace = remoteXml !== null && previousNumbers.size > 0 && !clearing && plan.changes.every(change => !change.restore && (change.refs === undefined || newEmptyCues.includes(change) || change.refs.length > 0));
+        const emptyCues = plan.changes.filter(change => change.refs?.length === 0);
+        const copyInPlace = remoteXml !== null && previousNumbers.size > 0 && !clearing && plan.changes.every(change => !change.restore);
         const uploaded = nativeCopy ? editMa2SongSequence(remoteXml ?? emptyMa2SequenceXml(target, directory.version), plan.name, changes.map(change => ({ cue: change.cue, name: change.name, sources: [] })), removed) : desired;
         copiedOnConsole = copyInPlace;
-        if (!copyInPlace) await this.prepareXml(connection, layoutRequest, file, uploaded, (completed, total) => progress('raw', completed, total, '传输歌曲结构'));
-        const previousSteps = remoteXml ? inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.map(cue => cue.number) : [];
         const desiredSteps = inspectMa2SequenceXml(desired).sequences[0]!.cues.map(cue => cue.number);
+        if (!copyInPlace) {
+          const size = (bytes: number): string => (bytes / 1024).toFixed(1);
+          await this.prepareXml(connection, layoutRequest, file, uploaded, (completed, total) => {
+            progress('raw', completed, total, `正在向控台发送这首歌的 ${desiredSteps.length} 个 Cue · ${size(completed)} / ${size(total)} KB`);
+          });
+        }
+        const previousSteps = remoteXml ? inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.map(cue => cue.number) : [];
         // Native Import /o retains the old step-number table. Inserting a Cue
         // before existing steps otherwise shifts names and invents fractional
         // numbers on each retry. Reset the table in the same guarded write,
         // preserving the Sequence object/executor and every Cue in desired.
+        if (!copyInPlace) progress('previews', 0, 1, `控台正在写入序列 ${target} 的 ${desiredSteps.length} 个 Cue`);
         const replacingSteps = !copyInPlace && previousSteps.length > 0 && desiredSteps.length > 0 && JSON.stringify(previousSteps) !== JSON.stringify(desiredSteps);
         if (replacingSteps) await this.prepareXml(connection, layoutRequest, `${file}_clear`, editMa2SongSequence(remoteXml!, plan.name, [], previousSteps));
         if (remoteExport) backupFile = `${remoteExport}.xml`;
@@ -500,20 +515,25 @@ export class Ma2LayoutService {
           const consoleCues = remoteXml && copyInPlace ? new Set(inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.map(cue => Number(cue.number))) : new Set<number>();
           // onPC 3.7 refused to create Sequence 9990 and above (99999 included); the free number right
           // after the song's own Sequence was created there, so the scratch Sequence goes next to it.
-          let scratch = target + 1; while (directory.entries.some(entry => entry.target === scratch)) scratch += 1;
+          const occupied = new Set(directory.entries.map(entry => entry.target));
+          occupied.add(target);
+          const scratchLimit = 9989;
+          let scratch = target < scratchLimit ? target + 1 : 1;
+          while (scratch <= scratchLimit && occupied.has(scratch)) scratch++;
+          if (scratch > scratchLimit) { scratch = 1; while (scratch < target && occupied.has(scratch)) scratch++; }
           // Empty points have no source Cue to Copy. Upload just their empty structure to a checked
           // scratch Sequence, then Copy inside MA2; never retransmit the song's fixture data for an insertion.
           // Creating and removing the scratch object is one guarded step, including failure cleanup.
-          if (copyInPlace && newEmptyCues.length) {
+          if (copyInPlace && emptyCues.length) {
+            if (occupied.has(scratch) || scratch > scratchLimit) throw new Error('控台没有空闲的临时序列位置，无法写入空 Cue');
             const emptyFile = `${file}_empty`;
-            const emptyXml = editMa2SongSequence(emptyMa2SequenceXml(scratch, directory.version), plan.name,
-              newEmptyCues.map(change => ({ cue: change.cue, name: change.name, sources: [] })), ['1.000']);
+            const emptyXml = ma2ScratchCueXml(desired, emptyCues.map(change => change.cue), scratch, directory.version);
             await this.prepareXml(connection, layoutRequest, emptyFile, emptyXml);
-            const copy = newEmptyCues.map(change => `assert(gma.show.getobj.handle('Sequence ${scratch} Cue ${change.cue}'),'Empty Cue missing');gma.cmd('Copy Sequence ${scratch} Cue ${change.cue} At Sequence ${target} Cue ${change.cue} /o /nc');`).join('');
+            const copy = emptyCues.map(change => `assert(gma.show.getobj.handle('Sequence ${scratch} Cue ${change.cue}'),'Empty Cue missing');gma.cmd('Copy Sequence ${scratch} Cue ${change.cue} At Sequence ${target} Cue ${change.cue} /o /nc');`).join('');
             await this.call(connection, `${this.guard(layoutRequest)}assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence occupied');gma.cmd('Import ${emptyFile}.xml At Sequence ${scratch} /nc');local ok,err=pcall(function()${copy}end);gma.cmd('Delete Sequence ${scratch} /nc');${removeFiles(emptyFile)}assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence not removed');assert(ok,err);return 'empties'`);
           }
           for (const [changeIndex, change] of plan.changes.entries()) {
-            if (copyInPlace && newEmptyCues.includes(change)) continue;
+            if (copyInPlace && emptyCues.includes(change)) continue;
             // A number taken over from a deleted point was deleted above and starts fresh.
             const keep = remoteExport !== null && (change.refs?.length ?? 0) > 1 && consoleCues.has(Number(change.cue)) && !plan.deletions.some(cue => Number(cue) === Number(change.cue));
             if (keep) await this.call(connection, `${this.guard(layoutRequest)}${copyExportedCue(remoteExport, target, change.cue, change.cue, scratch, `${file}_attrs`, 'o', true)}return 'kept'`);
@@ -526,7 +546,11 @@ export class Ma2LayoutService {
                 : `assert(gma.show.getobj.handle('Sequence ${ref.sequence} Cue ${ref.cue}'),'Source Cue missing');gma.cmd('Copy Sequence ${ref.sequence} Cue ${ref.cue} At Sequence ${target} Cue ${change.cue} /${mode} /nc');`;
               await this.call(connection, `${this.guard(layoutRequest)}${copy}gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'copied'`);
             }
-            await this.call(connection, `${this.guard(layoutRequest)}gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'labelled'`);
+            // The initial import names every Cue. A Copy sets its name in the same guarded command.
+            // Only an in-place rename without a source still needs a separate Label.
+            if (copyInPlace && !change.refs?.length) {
+              await this.call(connection, `${this.guard(layoutRequest)}gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'labelled'`);
+            }
             progress('previews', changeIndex + 1, plan.changes.length, `已写入 Sequence ${target} Cue ${change.cue}`);
           }
         }
@@ -640,18 +664,57 @@ export class Ma2LayoutService {
     return ma2Step(connection, () => this.writeXml(connection, request, file, xml, report));
   }
   private async writeXml(connection: Connection, request: Ma2LayoutReadRequest, file: string, xml: string, report?: (completed: number, total: number) => void): Promise<void> {
-    // One guarded command creates the file and a writer bound to it. Each data line then only calls
-    // that writer: 360 bytes per line instead of 128, and no Show name, so it stays under 900 bytes.
-    const writer = `TBLINK_W_${randomBytes(12).toString('hex')}`;
-    await this.call(connection, `${this.guard(request)}local p=gma.show.getvar('PATH')..'/importexport/${file}.xml';local f=assert(io.open(p,'wb'));f:close();${writer}=function(i,h,e)local ok,r=pcall(function()local f=assert(io.open(p,'ab'));f:write(unhex(h));f:close()end);if e then ${writer}=nil end;gma.echo('${writer}:'..i..':'..(ok and 'OK' or 'ERR:'..tostring(r)))end;return 'prepared'`);
     const bytes = Buffer.from(xml);
-    report?.(0, bytes.length);
-    for (let offset = 0, index = 0; offset < bytes.length; offset += 360, index++) {
-      const prefix = `${writer}:${index}:`;
-      const result = await connection.command(`Lua "if ${writer} then ${writer}(${index},'${bytes.subarray(offset, offset + 360).toString('hex')}'${offset + 360 >= bytes.length ? ',1' : ''}) else gma.echo('${prefix}ERR:missing') end"`, text => ma2ResponseLine(text, prefix));
-      if (result !== 'OK') throw new Error(`控台没有确认文件写入：${result.replace(/^ERR:/, '')}`);
-      report?.(Math.min(offset + 360, bytes.length), bytes.length);
+    if (bytes.length > 8192 && ma2UsesLocalFiles(request.network.host)) {
+      report?.(0, bytes.length);
+      await this.stageLocalXml(connection, request, file, bytes);
+      report?.(bytes.length, bytes.length);
+      return;
     }
+    const chunkSize = 360;
+    const packed = packMa2Bytes(bytes, 2048);
+    // The decoder setup also uses console lines. Use it only when it saves more lines than it costs.
+    const compressed = bytes.length - packed.length >= chunkSize * 4;
+    const payload = compressed ? packed : bytes;
+    const writer = `TBLINK_W_${randomBytes(12).toString('hex')}`;
+    report?.(0, payload.length);
+    // Create an app-owned staging file before accepting bytes. An interrupted transfer
+    // releases its decoder and partial file even if the client can no longer send cleanup.
+    await this.call(connection, `${this.guard(request)}local p=gma.show.getvar('PATH')..'/importexport/${file}.xml';local f=assert(io.open(p,'wb'));assert(f:close());local k='${writer}';local w={p=p,at=gma.gettime()};_G[k]=w;local function expire()if not _G[k] then return end;if gma.gettime()-w.at>=120 then _G[k]=nil;os.remove(p) else gma.timer(expire,120,1) end end;gma.timer(expire,120,1);return 'prepared'`);
+    if (compressed) {
+      const [a, z] = ma2AdlerSums(bytes);
+      const prefix = `${writer}:D:`;
+      // A decoder is private to this upload. Installing it in one short native line avoids
+      // sending the decoder's own code as many hex fragments before every small song.
+      const prepare = `${ma2LzwDecoder}local size=0;${writer}.expand=function(s,e)local co=coroutine.create(function()local x,a,z=expand(s);size=size+#x;if e then assert(size==${bytes.length} and a==${a} and z==${z},'Incomplete file') end;return x end);local ok,x;repeat ok,x=coroutine.resume(co);assert(ok,x) until coroutine.status(co)=='dead';return x end;`;
+      const reply = await connection.command(`Lua "${prepare}gma.echo('${prefix}OK')"`, text => ma2ResponseLine(text, prefix));
+      if (reply !== 'OK') throw new Error('控台没有准备好接收歌曲的 Cue');
+    }
+    const decode = compressed ? 'local decode=assert(w.expand);w.expand=nil;' : 'local decode=unhex;';
+    const data = compressed ? 'decode(unhex(h),e)' : 'decode(h)';
+    await this.call(connection, `local k='${writer}';local w=assert(_G[k]);${decode}local n=0;_G[k]=function(i,h,e)local ok,r=pcall(function()assert(i==n);local d=${data};local f=assert(io.open(w.p,'ab'));local ok,err=f:write(d);local c,msg=f:close();assert(ok,err);assert(c,msg);n=n+1;w.at=gma.gettime() end);if not ok then os.remove(w.p) end;if e or not ok then _G[k]=nil end;gma.echo(k..':'..i..':'..(ok and 'OK' or 'ERR:'..tostring(r)))end;return 'ready'`);
+    for (let offset = 0, index = 0; offset < payload.length; offset += chunkSize, index++) {
+      const prefix = `${writer}:${index}:`;
+      const end = Math.min(offset + chunkSize, payload.length);
+      const result = await connection.command(`Lua "if ${writer} then ${writer}(${index},'${payload.subarray(offset, end).toString('hex')}'${end === payload.length ? ',1' : ''}) else gma.echo('${prefix}ERR:missing') end"`, text => ma2ResponseLine(text, prefix));
+      if (result !== 'OK') throw new Error(`控台没有确认文件写入：${result.replace(/^ERR:/, '')}`);
+      report?.(end, payload.length);
+    }
+  }
+
+  /** onPC on this computer can open the same private file. Publish it only after onPC validates it. */
+  private async stageLocalXml(connection: Connection, request: Ma2LayoutReadRequest, file: string, bytes: Buffer): Promise<void> {
+    const guard = this.guard(request);
+    const folder = await this.call(connection, `${guard}return gma.show.getvar('PATH')..'/importexport'`);
+    if (!/^[a-z]:[\\/]/i.test(folder) || !win32.isAbsolute(folder) || basename(folder) !== 'importexport') throw new Error('本机控台返回的歌曲文件位置无效');
+    const temp = `tblink_stage_${randomBytes(16).toString('hex')}.tmp`;
+    const path = join(folder, temp);
+    const handle = await open(path, 'wx');
+    try {
+      try { await handle.writeFile(bytes); } finally { await handle.close(); }
+      await this.call(connection, `${guard}local p=gma.show.getvar('PATH')..'/importexport/';local tmp=p..'${temp}';local f=assert(io.open(tmp,'rb'));local size=f:seek('end');f:close();assert(size==${bytes.length},'Incomplete file');local dest=p..'${file}.xml';local old=io.open(dest,'rb');if old then old:close();error('Staging file already exists') end;assert(os.rename(tmp,dest));return 'ready'`);
+      if (!(await readFile(join(folder, `${file}.xml`))).equals(bytes)) throw new Error('控台收到的歌曲内容不完整，已停止写入');
+    } finally { await rm(path, { force: true }); }
   }
 
   async create(rawConnection: Connection, bridge: Bridge, input: Ma2NewCueRequest): Promise<Ma2NewCueResult> {

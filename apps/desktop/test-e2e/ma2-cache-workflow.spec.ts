@@ -35,6 +35,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
       });
       const status = { settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, state: 'connected', version: '3.7.0.5', passwordSaved: false, error: null };
       ipcMain.removeHandler('link:ma2-network-status'); ipcMain.handle('link:ma2-network-status', () => status);
+      ipcMain.removeHandler('link:ma2-prepare-playback'); ipcMain.handle('link:ma2-prepare-playback', () => false);
       ipcMain.removeHandler('link:ma2-network-save'); ipcMain.handle('link:ma2-network-save', () => {
         throw new Error('连接设置未修改，重新读取不应保存设置或中断现有连接');
       });

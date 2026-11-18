@@ -130,9 +130,15 @@ export type Ma2PreviewState = z.infer<typeof ma2PreviewStateSchema>;
 export const ma2TimelineEditRequestSchema = ma2ReadRequestSchema.extend({
   name: z.string().trim().min(1).max(512).regex(/^[^\u0000-\u001f"\\]+$/),
   startMs: z.number().int().min(0).max(86399999),
+  minimumDurationMs: z.number().finite().nonnegative().optional(),
+  keepName: z.literal(true).optional(),
+  bindingSourceXml: z.string().min(1).max(32 * 1024 * 1024).optional(),
   expectedName: z.string().max(512), expectedOffset: z.number().finite().nonnegative(),
   expectedSource: z.object({ show: z.string().min(1), generation: z.string().min(1), version: z.string().min(1) }).strict()
 }).strict();
 export type Ma2TimelineEditRequest = z.infer<typeof ma2TimelineEditRequestSchema>;
-export const ma2TimelineEditResultSchema = z.object({ name: z.string(), startMs: z.number(), backupFile: z.string().nullable() }).strict();
+export const ma2TimelineEditResultSchema = z.object({
+  name: z.string(), startMs: z.number(), backupFile: z.string().nullable(), selectionWarning: z.string().optional(),
+  bindingSourceXml: z.string().min(1).max(32 * 1024 * 1024).optional()
+}).strict();
 export type Ma2TimelineEditResult = z.infer<typeof ma2TimelineEditResultSchema>;

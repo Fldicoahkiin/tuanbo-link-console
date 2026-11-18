@@ -170,3 +170,11 @@ it('地址上没有任何程序接受连接时标为连不到，可去搜索；�
   expect(failure).not.toBeInstanceOf(Ma2UnreachableError);
   expect(String(failure)).toContain('TCP 已连通');
 });
+
+it('回执检查一开始就出错时返回格式错误，不发送命令，也不产生第二个异常', async () => {
+  const sent: string[] = [];
+  const connection = client(await peer((line, socket, monitor) => { sent.push(line); authenticate(line, socket, monitor); }));
+  await connection.connect('operator', 'test-value');
+  await expect(connection.command('MustNotSend', () => { throw new Error('无效的控台回执'); })).rejects.toThrow('MA2 网络响应格式无效');
+  expect(sent).not.toContain('MustNotSend');
+});

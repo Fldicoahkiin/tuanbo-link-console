@@ -24,11 +24,11 @@ test('MA2 设置分组及大量搜索结果保持紧凑', async ({}, info) => {
     const method = page.getByLabel('MA2 连接方式', { exact: true });
     await method.selectOption('local');
     await page.screenshot({ path: info.outputPath('ma2-local-top.png') });
-    await page.getByText('歌曲导入与同步', { exact: true }).click();
-    await page.locator('.ma2-catalog-settings > .ma2-advanced-settings > summary').click();
-    await page.locator('.ma2-catalog-settings > .ma2-advanced-settings').scrollIntoViewIfNeeded();
-    await page.screenshot({ path: info.outputPath('ma2-operation-groups.png') });
     await method.selectOption('network');
+    await page.getByText('歌曲导入与同步', { exact: true }).click();
+    await page.getByText('诊断与手动同步', { exact: true }).click();
+    await expect(page.getByText('诊断与手动同步', { exact: true })).toBeInViewport();
+    await page.screenshot({ path: info.outputPath('ma2-operation-groups.png') });
     await page.locator('.ma2-network-settings > .ma2-advanced-settings > summary').click();
     await expect(page.getByLabel('MA2 登录用户', { exact: true })).toHaveValue('administrator');
     await expect(page.getByLabel('MA2 登录密码', { exact: true })).toHaveValue('admin');

@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Check, Pencil, Plus, RefreshCw } from 'lucide-react';
-import { formatMtcStart, parseMtcStart, songLightingStatus } from '@tb/core/link';
+import { formatMtcStart, ma2MtcConflictTargets, songLightingStatus } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { useSelectedProgram } from '../useSelectedProgram';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
-import { selectMa2Timeline, changeMa2TimelineProperties } from '../runtime/ma2-timeline-actions';
+import { selectMa2Timeline } from '../runtime/ma2-timeline-actions';
 import { ma2TimelineRows, type Ma2TimelineRow } from '../view-models/ma2-timeline-list';
 import { ownKeys } from '../keys/key-owner';
-import { Button, Dialog, Field, Menu, MenuItem, TextInput } from '../ui';
+import { Button, Dialog, Menu, MenuItem } from '../ui';
+import { Ma2TimelineProperties } from './Ma2TimelineProperties';
 import { Ma2SequenceTimeline } from './Ma2SequenceTimeline';
 import { scanMa2, useMa2ReadStore } from '../stores/ma2-read-store';
 import { ma2MaterialConnection } from '../stores/ma2-material-read-store';
@@ -31,7 +32,7 @@ function Ma2TimelineWorkspace({ itemId, disabled, onClose, notify, query = '', e
   const read = useMa2ReadStore();
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<{ target: number; owner: string | null } | null>(null);
-  const [editing, setEditing] = useState<Ma2TimelineRow | null>(null);
+  const [editing, setEditing] = useState<number[] | null>(null);
   const [menu, setMenu] = useState<{ row: Ma2TimelineRow; x: number; y: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -46,6 +47,7 @@ function Ma2TimelineWorkspace({ itemId, disabled, onClose, notify, query = '', e
   const selection = browsing ? selected : null;
   const row = (selection ? rows.find(value => value.target === selection.target && value.owner === selection.owner) : undefined) ?? (selection?.owner ? rows.find(value => value.owner === selection.owner) : undefined) ?? rows.find(value => value.target === (selection?.target ?? target)) ?? null;
   const code = (value: Ma2TimelineRow): string => value.startMs === null ? '起始码未读取' : formatMtcStart(value.startMs, project.timebase.frameRate);
+  const conflict = ma2MtcConflictTargets(sync?.message || session.message);
   const current = row?.target === target;
   const attached = Boolean(item?.lighting?.consoleSong || item?.lighting?.timelineDestination || item?.lighting?.ma2Bindings?.some(binding => binding.timecode === target));
   const usedElsewhere = Boolean(row?.owner && row.owner !== itemId);
@@ -87,26 +89,15 @@ function Ma2TimelineWorkspace({ itemId, disabled, onClose, notify, query = '', e
         <p>{row.loaded ? `${row.count} 个 Cue` : 'Cue 尚未读取'}{row.count === 0 && row.loaded ? ' · 这是一条空时间线，可以进入编辑添加 Cue。' : ''}</p>
         {row.error ? <p role="alert">{row.error}</p> : null}
         {current ? <p role="status">{sync?.message || session.message}</p> : <p>用于当前节目时，会对齐节目 MTC 起始码并载入 Cue，原编排先存档。</p>}
-        <div className="ma2-timeline-detail-actions"><Button variant="primary" disabled={disabled || busy || read.busy || usedElsewhere || !item?.referenceAudio} onClick={() => use(row)}>{current ? row.pending || item?.lighting?.consoleSong ? '同步当前时间线' : '重新读取 Cue' : '用于当前节目'}</Button><Button disabled={disabled || busy || usedElsewhere || !item?.referenceAudio} onClick={() => use(row, true)}>编辑 Cue</Button><Button disabled={disabled || busy || read.busy} onClick={() => setEditing(row)}>修改名称 / MTC</Button></div>
+        <div className="ma2-timeline-detail-actions">{current && conflict ? <Button disabled={disabled || busy} onClick={() => setEditing(conflict)}>修改冲突的 MTC</Button> : null}<Button variant="primary" disabled={disabled || busy || read.busy || usedElsewhere || !item?.referenceAudio} onClick={() => use(row)}>{current ? row.pending || item?.lighting?.consoleSong ? '同步当前时间线' : '重新读取 Cue' : '用于当前节目'}</Button><Button disabled={disabled || busy || usedElsewhere || !item?.referenceAudio} onClick={() => use(row, true)}>编辑 Cue</Button><Button disabled={disabled || busy || read.busy} onClick={() => setEditing([row.target])}>修改名称 / MTC</Button></div>
         <small>{project.ma2ReadState ? `控台列表读取于 ${new Date(project.ma2ReadState.catalog.readAt).toLocaleString()}` : '新建记录已保存在当前节目中'}</small>
       </> : <p>选中时间线后，在这里查看状态、修改名称和 MTC，或进入 Cue 编辑。</p>}
       {error ? <p role="alert">{error}</p> : message ? <p role="status">{message}</p> : null}
       {read.busy ? <p role="status">{read.progress?.detail ?? read.message}</p> : null}
       </aside>
     </div>
-    {menu ? <Menu x={menu.x} y={menu.y} label="时间线右键菜单" title={`Timecode ${menu.row.target} · ${menu.row.name}`} onClose={() => setMenu(null)}><MenuItem icon={Check} disabled={busy || disabled || Boolean(menu.row.owner && menu.row.owner !== itemId) || !item?.referenceAudio} onSelect={() => use(menu.row)}>用于当前节目</MenuItem><MenuItem icon={Pencil} disabled={busy || disabled} onSelect={() => { setEditing(menu.row); setMenu(null); }}>修改名称 / MTC</MenuItem><MenuItem disabled={busy || disabled || Boolean(menu.row.owner && menu.row.owner !== itemId) || !item?.referenceAudio} onSelect={() => use(menu.row, true)}>编辑 Cue</MenuItem></Menu> : null}
+    {menu ? <Menu x={menu.x} y={menu.y} label="时间线右键菜单" title={`Timecode ${menu.row.target} · ${menu.row.name}`} onClose={() => setMenu(null)}><MenuItem icon={Check} disabled={busy || disabled || Boolean(menu.row.owner && menu.row.owner !== itemId) || !item?.referenceAudio} onSelect={() => use(menu.row)}>用于当前节目</MenuItem><MenuItem icon={Pencil} disabled={busy || disabled} onSelect={() => { setEditing([menu.row.target]); setMenu(null); }}>修改名称 / MTC</MenuItem><MenuItem disabled={busy || disabled || Boolean(menu.row.owner && menu.row.owner !== itemId) || !item?.referenceAudio} onSelect={() => use(menu.row, true)}>编辑 Cue</MenuItem></Menu> : null}
     {creating && itemId ? <Dialog title="新建时间线" onClose={() => setCreating(false)}><Ma2SequenceTimeline itemId={itemId} disabled={disabled} notify={(text, tone) => { notify(text, tone); if (tone !== 'error') { const next = useDocumentStore.getState().project?.rundown.find(song => song.id === itemId)?.lighting?.timelineDestination?.timecode; setSelected(next ? { target: next, owner: itemId } : null); setCreating(false); showCurrent(); setMessage(text); } }} /></Dialog> : null}
-    {editing ? <TimelineProperties row={editing} frameRate={project.timebase.frameRate} onClose={() => setEditing(null)} onSaved={text => { setEditing(null); setMessage(text); notify(text); }} /> : null}
+    {editing ? <Ma2TimelineProperties targets={editing} project={project} onClose={() => setEditing(null)} onSaved={(text, warning) => { setEditing(null); setMessage(text); notify(text); if (warning) notify(warning, 'error'); }} /> : null}
   </section>;
-}
-
-function TimelineProperties({ row, frameRate, onClose, onSaved }: { row: Ma2TimelineRow; frameRate: import('@tb/schema').MtcFrameRate; onClose: () => void; onSaved: (message: string) => void }): JSX.Element {
-  const [name, setName] = useState(row.name); const [start, setStart] = useState(row.startMs === null ? '' : formatMtcStart(row.startMs, frameRate));
-  const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  return <Dialog title="修改时间线" description={`Timecode ${row.target} · 修改名称和起始码，Cue 在歌曲内的相对位置保持不变。`} onClose={() => { if (!busy) onClose(); }}>
-    <form className="ma2-timeline-properties" onSubmit={event => { event.preventDefault(); setBusy(true); setError(''); void (async () => { try { onSaved(await changeMa2TimelineProperties(row.target, name, start === (row.startMs === null ? '' : formatMtcStart(row.startMs, frameRate)) && row.startMs !== null ? row.startMs : parseMtcStart(start, frameRate))); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } finally { setBusy(false); } })(); }}>
-      <Field label="时间线名称" stacked>{props => <TextInput {...props} required disabled={busy} value={name} onChange={event => setName(event.target.value)} />}</Field><Field label="MTC 起始码" stacked>{props => <TextInput {...props} required disabled={busy} placeholder="00:00:00" value={start} onChange={event => setStart(event.target.value)} />}</Field>
-      {error ? <p role="alert">{error}</p> : null}<Button type="submit" variant="primary" disabled={busy}>{busy ? '正在保存并确认…' : '保存修改'}</Button>
-    </form>
-  </Dialog>;
 }

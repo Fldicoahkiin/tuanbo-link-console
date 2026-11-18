@@ -36,7 +36,7 @@ test.beforeAll(async () => {
         mappings: [{ eventId: 'cue', trackId: 'track', clipId: 'clip', path: 'Timecode:7/Track:0/SubTrack:0/Event:0', sequence: 7, cueIndex: 1, executor: '1.101' }], warnings: [], unconverted: [] };
       const catalog = { directory: { show: 'show', generation: '1', version: '3.3.4', entries: [{ target: 7, name: '控台歌曲' }] }, readAt: preview.readAt,
         entries: [{ target: 7, name: '控台歌曲', eventCount: 1, frameFormat: '30 FPS', slot: 'TC Slot 2', offset: '1800', events: [{ path: '0', time: '30', action: 'Goto', executor: '1.101', cue: '1', name: null }], error: null, warnings: [], preview }] };
-      project.schemaVersion = 2; project.ma2ReadState = reconcileMa2ReadState(project, 'console', catalog);
+      project.schemaVersion = 2; project.ma2ReadState = reconcileMa2ReadState(project, '192.0.2.1:30000', catalog);
       project.rundown.push({ ...project.rundown[0], id: 'second', title: '第二首歌' });
       useDocumentStore.setState({ project, path: 'C:/show/project.tblink' });
       localStorage.setItem('tblink.ma2-connection-method.v1', 'network');
@@ -261,7 +261,45 @@ test('手动匹配现读控台，不再只用旧缓存的 Cue', async ({ page })
 });
 
 
+test('输入 MTC 时检查整段时长，空档相邻可保存，逐字输入只读一次控台', async ({ page }) => {
+  await page.evaluate(() => {
+    const host = window as unknown as { consoleTimeline: Record<string, unknown>; tbLink: Record<string, unknown>; rangeReads: number };
+    host.rangeReads = 0;
+    host.tbLink.getMa2NetworkStatus = () => Promise.resolve({ settings: { host: '192.0.2.1', username: 'test' }, state: 'connected', version: '3.3.4', error: null, passwordSaved: true });
+    const row = { target: 7, name: '控台歌曲', offset: '1800', length: '300', slot: 'TC Slot 2', frame: '30 FPS', last: '30' };
+    host.tbLink.ma2TimecodeRanges = () => {
+      host.rangeReads++;
+      return Promise.resolve({ show: 'show', generation: '1', entries: [row, { ...row, target: 9999, offset: '3600' }] });
+    };
+    host.tbLink.editMa2Timeline = () => Promise.resolve({ name: row.name, startMs: 130000, backupFile: 'backup' });
+    host.tbLink.previewMa2 = () => Promise.resolve({ ...host.consoleTimeline, timeOriginMs: 130000, timing: { frameFormat: '30 FPS', unit: 'frames-30', offsetNative: '3900', absoluteEventTimesMs: [131000] } });
+  });
+  await page.getByRole('button', { name: '控台时间线', exact: true }).click();
+  const browser = page.getByRole('region', { name: '控台时间线与歌曲' });
+  await browser.getByRole('button', { name: '关联已有时间线' }).click();
+  await browser.getByRole('option', { name: 'Timecode 7 · 控台歌曲' }).click();
+  await browser.getByRole('button', { name: '修改名称 / MTC' }).click();
+  const edit = page.getByRole('dialog', { name: '修改时间线' });
+  const mtc = edit.getByLabel('MTC 起始码', { exact: true });
+  await mtc.fill('00:01:51');
+  await expect(edit.getByRole('status')).toContainText('9999');
+  await expect(edit.getByRole('button', { name: '保存修改' })).toBeDisabled();
+  await mtc.fill('000210');
+  await expect(edit.getByRole('status')).toContainText('可用，整段时间都空闲');
+  await edit.getByRole('button', { name: '保存修改' }).click();
+  await expect(edit).toHaveCount(0);
+  await expect(browser.getByRole('option', { name: 'Timecode 7 · 控台歌曲' })).toContainText('00:02:10');
+  expect(await page.evaluate(() => (window as unknown as { rangeReads: number }).rangeReads)).toBe(1);
+});
+
 test('新建时间线右键修改名称和 MTC，Cue 编辑仍进入原编辑器', async ({ page }) => {
+  await page.evaluate(() => {
+    const bridge = (window as unknown as { tbLink: Record<string, unknown> }).tbLink;
+    bridge.getMa2NetworkStatus = () => Promise.resolve({ settings: { host: '192.0.2.1', username: 'test' }, state: 'connected', version: '3.3.4', error: null, passwordSaved: true });
+    bridge.ma2TimecodeRanges = () => Promise.resolve({ show: 'show', generation: '1', entries: [
+      { target: 7, name: '控台歌曲', offset: '1800', length: '300', slot: 'TC Slot 2', frame: '30 FPS', last: '30' }
+    ] });
+  });
   await page.getByRole('button', { name: '控台时间线', exact: true }).click();
   const browser = page.getByRole('region', { name: '控台时间线与歌曲', exact: true });
   await browser.getByRole('button', { name: '新建时间线', exact: true }).click();

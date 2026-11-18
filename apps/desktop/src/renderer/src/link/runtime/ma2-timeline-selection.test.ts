@@ -4,11 +4,14 @@ import { reconcileMa2ReadState, setLightingCommand } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { useShowStateStore } from '../stores/show-state-store';
-import { selectMa2Timeline } from './ma2-timeline-actions';
+import { changeMa2TimelineProperties, selectMa2Timeline } from './ma2-timeline-actions';
+import { syncMa2Once } from './ma2-realtime-session';
 
 vi.hoisted(() => { vi.stubGlobal('window', { tbLink: {} }); vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
 const { archive } = vi.hoisted(() => ({ archive: vi.fn<() => Promise<string | null>>() }));
 vi.mock('./ma2-project-archive', () => ({ archiveMa2Project: archive }));
+vi.mock('./ma2-realtime-session', () => ({ syncMa2Once: vi.fn() }));
+vi.mock('../stores/ma2-material-read-store', () => ({ ma2MaterialConnection: () => Promise.resolve({ dataDirectory: 'onPC' }) }));
 
 beforeEach(() => {
   vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: () => Promise.resolve({ state: 'disconnected' }) } });
@@ -34,6 +37,19 @@ it('替换先保存完整旧编排，再以一条可撤销的命令更换', asyn
   expect(useDocumentStore.getState().project?.rundown[0]?.lighting?.ma2Bindings?.map(binding => binding.timecode)).toEqual([10]);
   useDocumentStore.getState().undo();
   expect(useDocumentStore.getState().project).toEqual(before);
+});
+
+it('控台已改而最终读回中断时，保留工程并停止这首歌，避免自动把旧起点写回去', async () => {
+  await selectMa2Timeline('song', 10);
+  const before = useDocumentStore.getState().project;
+  vi.mocked(syncMa2Once).mockClear();
+  vi.stubGlobal('window', { tbLink: {
+    editMa2Timeline: () => Promise.resolve({ name: '控台时间线', startMs: 90_000, backupFile: 'backup' }),
+    previewMa2: () => Promise.reject(new Error('读取超时'))
+  } });
+  await expect(changeMa2TimelineProperties(10, '控台时间线', 90_000)).rejects.toThrow('控台已修改');
+  expect(useDocumentStore.getState().project).toBe(before);
+  expect(syncMa2Once).not.toHaveBeenCalled();
 });
 
 it.each([null, new Error('磁盘已满')])('存档未完成不替换，也不创建撤销记录：%s', async result => {

@@ -35,6 +35,8 @@
   .ma2-timeline-status [data-tone=error] { color: var(--color-danger); background: var(--color-danger-soft); }
   .ma2-timeline-status [data-tone=waiting] { color: var(--color-warning); background: var(--color-warning-soft); }
   .ma2-timeline-properties, .ma2-sequence-create { display: grid; gap: var(--space-2); }
+  .ma2-timeline-properties [data-availability="available"] { color: var(--color-success); }
+  .ma2-timeline-properties [data-availability="unavailable"] { color: var(--color-danger); }
   .ma2-sequence-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
   @container (max-width: 680px) { .ma2-timeline-pool-body { grid-template-columns: minmax(0, 1fr) 230px; } .ma2-timeline-details { padding: var(--space-1); } }
   @container (max-width: 520px) { .ma2-timeline-pool-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(120px, 1fr) minmax(120px, 1fr); } .ma2-timeline-details { border-inline-start: 0; border-block-start: 1px solid var(--color-border); } }

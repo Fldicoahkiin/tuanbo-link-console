@@ -1,3 +1,4 @@
+import { turnOffTimelineAudition } from './lighting-settings';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -26,8 +27,7 @@ test('旧工程里带埋步的 Cue：提示写不进控台，一键去掉并保�
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
-    if (!await page.getByLabel('选中 Cue 实时播放', { exact: true }).isVisible()) await page.locator('.lighting-playback-settings summary').click();
-    await page.getByLabel('选中 Cue 实时播放', { exact: true }).uncheck();
+    await turnOffTimelineAudition(page);
     await expect(page.locator('.waveform-cue-preparation')).toHaveCount(1);
     // A Cue without one shows nothing about 埋步 and has no way to add it.
     await page.getByRole('button', { name: '音频 Cue 2', exact: true }).click();

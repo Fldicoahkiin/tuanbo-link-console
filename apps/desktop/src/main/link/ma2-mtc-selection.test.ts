@@ -14,6 +14,25 @@ import type { Ma2ReadProgressUpdate } from '@tb/schema';
 const network = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'test' };
 const native = readFileSync(new URL('./fixtures/ma2-timecode-onpc-3.7-100.xml', import.meta.url), 'utf8');
 
+it('全是其他时码槽时，已确认的 Cue 编辑不重读整个 Show；时码槽改变须重新核对', async () => {
+  const console = new Ma2LuaConsole();
+  const original = native.replace('index="9906"', 'index="9998"');
+  console.set('Timecode 9999', { name: '现场', xml: original });
+  const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(console), showStopped);
+  const service = new Ma2MtcSelectionService(showStopped, { record: vi.fn() });
+  await expect(service.prepare(console, bridge, network, true)).resolves.toBe(false);
+  const source = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
+  const start = console.lines.length;
+  await expect(service.prepare(console, bridge, network, false, [9999], undefined, { ...source, number: 9999, xml: original })).resolves.toBe(false);
+  expect(console.lines).toHaveLength(start);
+  // An object entering the managed slot must go through the actual selector checks.
+  const check = vi.fn(() => { throw new Error('开始重新核对'); });
+  await expect(service.prepare(console, bridge, network, false, [9999], undefined, {
+    ...source, number: 9999, xml: original.replace('TC Slot 1', 'TC Slot 2')
+  }, { onConsoleCheck: check })).rejects.toThrow('开始重新核对');
+  expect(check).toHaveBeenCalledOnce();
+});
+
 it('30 条时间线共用大序列只检查一次，连接和再次连接不传灯具数据', async () => {
   const console = new Ma2LuaConsole();
   const numbers = Array.from({ length: 30 }, (_, index) => index + 1);

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { LightingDocument, RundownItem } from '@tb/schema';
-import { LightingCueAudition } from '../../registry/lighting-cue-audition';
+import { LightingCueAudition, Ma2AuditionOffline } from '../../registry/lighting-cue-audition';
 import { useDisplayPreferences } from '../stores/display-preferences-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { recordRuntimeOperator, reportCoordinatorError } from '../runtime/runtime-action-log';
@@ -27,7 +27,13 @@ export function useLightingCueAudition(document: LightingDocument, projectId: st
       await recordRuntimeOperator(projectId, item ?? undefined, '选中灯光 Cue，已发送调用指令', { eventId, count });
     }).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      setStatus(message); notify(message, 'error'); reportCoordinatorError(message, failure => notify(failure, 'error'));
+      setStatus(message);
+      if (!template && error instanceof Ma2AuditionOffline) {
+        notify(message, 'info');
+        void recordRuntimeOperator(projectId, item ?? undefined, message, { eventId }).catch((failure: unknown) => notify(String(failure), 'error'));
+        return;
+      }
+      notify(message, 'error'); reportCoordinatorError(message, failure => notify(failure, 'error'));
     });
   };
   return { enabled, status, select: (id: string) => select(id), selectTemplate: (id: string) => select(id, true) };

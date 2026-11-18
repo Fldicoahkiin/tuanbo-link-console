@@ -5,7 +5,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, ma2EffectLibrarySchema, parseLinkProject, type Ma2CatalogRequest } from '@tb/schema';
 import { savedValue } from './save-questions';
 
-const snapshot = join(process.cwd(), '../../artifacts/ma2-hardware-diagnostics/effect-library.json');
+const snapshot = process.env.TBLINK_MA2_LIBRARY_SNAPSHOT ?? join(process.cwd(), '../../artifacts/ma2-hardware-diagnostics/effect-library.json');
 
 test('构造数据：素材读取关闭窗口后继续、保存并重启恢复，不再次扫描', async ({}, info) => {
   const project = createEmptyLinkProject('素材任务生命周期'); project.schemaVersion = 2;
@@ -20,6 +20,7 @@ test('构造数据：素材读取关闭窗口后继续、保存并重启恢复�
       process.env.TBLINK_MATERIAL_READS = '0';
       process.env.TBLINK_MATERIAL_SOURCE_READS = '0';
       ipcMain.removeHandler('link:ma2-network-status'); ipcMain.handle('link:ma2-network-status', () => ({ settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, state: 'connected', version: '3.7.0.5', passwordSaved: false, error: null }));
+      ipcMain.removeHandler('link:ma2-prepare-playback'); ipcMain.handle('link:ma2-prepare-playback', () => false);
       ipcMain.removeHandler('link:ma2-catalog'); ipcMain.handle('link:ma2-catalog', () => ({ directory: { show: '构造素材 Show', generation: 'test', version: '3.7.0.5', entries: [] }, readAt: new Date().toISOString(), entries: [] }));
       ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', async (event, request: Ma2CatalogRequest) => {
         const directory = { show: '构造素材 Show', generation: 'test', version: '3.7.0.5', entries: [{ target: 36, name: '原序列名' }, { target: 37, name: '第二序列' }] };

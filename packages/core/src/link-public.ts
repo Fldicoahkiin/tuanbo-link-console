@@ -108,4 +108,4 @@ export * from './ma2-track-routing';
 
 export { newMa2TimelineCommand, addMa2SequenceCommand } from './ma2-new-timeline';
 
-export { editMa2TimelinePropertiesCommand } from './ma2-timeline-properties';
+export { checkMa2TimelineStart, editMa2TimelinePropertiesCommand, ma2TimelineOwner } from './ma2-timeline-properties';

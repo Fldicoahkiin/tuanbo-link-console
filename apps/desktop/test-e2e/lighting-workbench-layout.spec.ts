@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { test, expect, _electron as electron, type Page } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, createLightingUserLibrary, parseLinkProject, type LightingTrack } from '@tb/schema';
-import { closeDiscarding } from './save-questions';
+import { answerOlderFormatQuestion, closeDiscarding } from './save-questions';
 
 /** Elements that scroll sideways; the timeline scrolls along time on purpose. */
 const sidewaysScroll = (page: Page): Promise<string[]> => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.app-shell *')].filter(element => {
@@ -28,6 +28,7 @@ test('灯光工作台在 1280×720 和 1180×720 下：不横向滚动，时间�
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   const page = await app.firstWindow(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
+    await answerOlderFormatQuestion(app);
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
@@ -46,7 +47,7 @@ test('灯光工作台在 1280×720 和 1180×720 下：不横向滚动，时间�
       // The timeline keeps its toolbar, ruler, Cue rows and some waveform.
       expect((await timeline.boundingBox())!.height).toBeGreaterThanOrEqual(240);
       // The console reading buttons left the sidebar, so its menu fits above the sync controls.
-      await expect(page.locator('.app-sidebar').getByText('更多', { exact: true })).toBeInViewport({ ratio: 1 });
+      await expect(menu.getByRole('button', { name: '新建分类', exact: true })).toBeInViewport({ ratio: 1 });
       await expect(page.locator('.app-sidebar').getByRole('button', { name: '刷新素材目录' })).toHaveCount(0);
       await page.screenshot({ path: info.outputPath(`workbench-${width}x${height}.png`) });
     }

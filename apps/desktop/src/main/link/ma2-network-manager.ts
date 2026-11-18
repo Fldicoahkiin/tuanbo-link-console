@@ -1,16 +1,15 @@
 import { Ma2MtcSelectionService, type Ma2ConfirmedTimecode, type Ma2MtcPreparationTask } from './ma2-mtc-selection';
 import { editMa2Timeline } from './ma2-timeline-edit';
-import { ma2SongDirectory } from '@tb/core/link';
 import { ma2PlaybackRequestSchema, type Ma2PlaybackRequest, type Ma2Catalog, type Ma2CatalogRequest, ma2ObjectDirectorySchema, type Ma2ObjectDirectory } from '@tb/schema';
 import { playMa2Cue } from './ma2-pool-playback';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { ma2NetworkSettingsSchema, ma2NetworkSaveSchema, ma2NetworkCatalogSchema, ma2TimecodeRangesSchema, type Ma2Capabilities, type Ma2NetworkSettings, type Ma2NetworkSave, type Ma2NetworkStatus, type Ma2NetworkTarget, type Ma2ReadProgressUpdate } from '@tb/schema';
+import { ma2NetworkSettingsSchema, ma2NetworkSaveSchema, ma2NetworkCatalogSchema, type Ma2Capabilities, type Ma2NetworkSettings, type Ma2NetworkSave, type Ma2NetworkStatus, type Ma2NetworkTarget, type Ma2ReadProgressUpdate } from '@tb/schema';
 import { SecureProfileStore } from './secure-profile-store';
 import { writeFileAtomically } from './atomic-file';
 import { Ma2LoginRefusedError, Ma2Telnet, Ma2UnreachableError, ma2ResponseLine, type Ma2ConnectedPeer } from './ma2-telnet';
-import { Ma2NetworkWire } from './ma2-network-wire';
+import { Ma2NetworkWire, ma2UsesLocalFiles } from './ma2-network-wire';
 import { Ma2RequestJournal } from './ma2-request-journal';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2ApplyService } from './ma2-apply-service';
@@ -104,10 +103,6 @@ export class Ma2NetworkManager {
   private readonly path: string;
   private layoutService: Ma2LayoutService | null = null;
   private songWatch: Ma2SongWatch | null = null;
-  /** Read-only: where every console Timecode show sits in time, for placing a song that has no start yet. */
-  async timecodeRanges(network: Ma2NetworkTarget): Promise<import('@tb/schema').Ma2TimecodeRanges> {
-    return ma2SongDirectory(ma2TimecodeRangesSchema.parse(JSON.parse(await this.get(network).bridge.request('TCRANGES', 1))));
-  }
   async checkSong(request: import('@tb/schema').Ma2SongCheckRequest): Promise<boolean> {
     const { bridge } = this.get(request.network);
     if (!this.connection) throw new Error('请先连接控台');
@@ -137,7 +132,11 @@ export class Ma2NetworkManager {
   async editTimeline(request: import('@tb/schema').Ma2TimelineEditRequest) {
     if (!request.network) throw new Error('请先连接控台');
     const result = await editMa2Timeline(this.get(request.network).bridge, request);
-    await this.prepareMtcPlayback(request.network, false, [request.target]);
+    try { await this.prepareMtcPlayback(request.network, false, [request.target]); }
+    catch (error) {
+      // The metadata write was verified. Keep that outcome even when song selection still needs attention.
+      return { ...result, selectionWarning: error instanceof Error ? error.message : String(error) };
+    }
     return result;
   }
   private consoleBackups: Ma2ConsoleBackups | null = null;
@@ -518,7 +517,7 @@ export class Ma2NetworkManager {
     if (!this.settings) throw new Error('控台连接已变化');
     const { host, port, monitorPort, username } = this.settings;
     const target = { host, port, monitorPort, username };
-    const wire = new Ma2NetworkWire(connection, host === '127.0.0.1' || host === '::1', this.requestJournal); this.wire = wire;
+    const wire = new Ma2NetworkWire(connection, ma2UsesLocalFiles(host), this.requestJournal); this.wire = wire;
     const bridge = new Ma2OnpcBridge(wire, this.show);
     this.mtcSelection?.invalidate();
     this.services = { bridge, service: new Ma2ApplyService(bridge, this.show, {

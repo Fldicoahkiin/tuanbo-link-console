@@ -1,3 +1,4 @@
+import { turnOffTimelineAudition } from './lighting-settings';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -55,9 +56,7 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
     await page.reload();
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('button', { name: '灯光工作台', exact: true }).click();
-    await page.locator('.lighting-playback-settings > summary').click();
-    await page.getByRole('switch', { name: '选中 Cue 实时播放', exact: true }).uncheck();
-    await page.locator('.lighting-playback-settings > summary').click();
+    await turnOffTimelineAudition(page);
     const pool = page.getByRole('region', { name: 'MA2 序列预览' });
     await pool.getByRole('button', { name: '控台页面', exact: true }).click();
     await pool.getByRole('button', { name: '新建 Cue', exact: true }).click();
