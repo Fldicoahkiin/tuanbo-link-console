@@ -492,6 +492,13 @@ export function referencedMa2Sequences(xml: string): number[] {
   return [...references].sort((a, b) => a - b);
 }
 
+/** The verified native snapshot retains direct Cue triggers, even when the network omits fixture values. */
+export function ma2GoSequencesInSnapshot(xml: string): number[] {
+  const { root } = readSequenceXml(xml);
+  return children(root, 'Sequ').filter(sequence => children(sequence, 'Cue').every(cue =>
+    children(cue, 'Trigger').every(trigger => trigger.getAttribute('type') === 'Go'))).map(sequence => indexOf(sequence) + 1);
+}
+
 export function validateMa2TimecodeSnapshot(xml: string, additionalSequences: readonly number[] = []): void {
   const { root } = parse(xml);
   for (let child = root.firstChild; child; child = child.nextSibling) {

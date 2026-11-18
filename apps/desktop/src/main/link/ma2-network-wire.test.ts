@@ -127,7 +127,7 @@ function peer(options: { value?: string; wrongId?: boolean; truncate?: boolean; 
       }
       if (action === 'run') { if (options.failRun) throw new Error('Disconnected after write'); result = `DONE:${response.length}`; }
       // A stepping plugin: 'run' with 'steps' does the first step, each 'step' one more.
-      if ((action === 'run' && args === ",'steps'" || action === 'step') && options.steps) {
+      if ((action === 'run' && args.startsWith(",'steps'") || action === 'step') && options.steps) {
         step += 1;
         result = step < options.steps ? `STEP:${options.stepNumbers?.[step - 1] ?? step}${options.verifyingSteps?.includes(step) ? ':verify' : ''}` : `DONE:${response.length}`;
       }

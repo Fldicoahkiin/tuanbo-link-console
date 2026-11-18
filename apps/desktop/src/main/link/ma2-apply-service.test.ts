@@ -32,6 +32,22 @@ function setup(source = xml) {
   return { request, bridge };
 }
 
+it('改动只交给本次 Show 内核实过的选曲准备，换 Show 时停止写入', async () => {
+  const source = { show: '现场', version: '3.3.4.3', generation: '本次' };
+  const { bridge, request } = setup();
+  const event = request.document.tracks[0]!.clips[0]!.events[0]!;
+  event.at += 100;
+  const prepare = vi.fn().mockResolvedValue(false);
+  const verify = vi.fn().mockRejectedValueOnce(new Error('Show 已切换')).mockResolvedValue(undefined);
+  const service = new Ma2ApplyService(bridge, showStopped, { source: () => Promise.resolve(source), verify, prepare });
+  expect(await service.apply(request)).toMatchObject({ status: 'incomplete', mayHaveWritten: false });
+  expect(bridge.exchange).not.toHaveBeenCalled();
+  expect(prepare).not.toHaveBeenCalled();
+  expect(await service.apply(request)).toMatchObject({ status: 'verified' });
+  expect(bridge.exchange).toHaveBeenCalledTimes(1);
+  expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ ...source, number: 9902, goSequences: [9901] }), expect.any(Function));
+});
+
 function setupEmpty() {
   const result = setup();
   const report = inspectMa2TimecodeXml(xml);

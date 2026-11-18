@@ -32,18 +32,19 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
     if (signal?.aborted) throw new Error('素材读取已取消');
     holdForShow(show, 'ma2.sync.read', `已读完 ${sequences.length + errors.length} 个序列，接着读会从没读的开始。`);
   };
-  const read = async (numbers: readonly number[], offset: number): Promise<string[]> => {
+  const read = async (numbers: readonly number[], offset: number, width = 32): Promise<string[]> => {
     gate();
     const prefix = `TBLINK_CUES_${randomBytes(16).toString('hex')}:`;
     // Each row contains only numbers, delimiters and hex. Large pages get a dedicated
     // response so grouping small sequences cannot overflow the native monitor.
+    const rowLimit = numbers.length > 1 ? Math.floor(65536 / numbers.length) : width > 32 ? 65536 : null;
     const script = [
       "local o=gma.show.getobj;local function hex(s)return (s:gsub('.',function(b)return string.format('%02x',string.byte(b))end))end;",
       "local function page(k)local h=o.handle('Sequence '..k);if not h then return 'missing' end;",
       "local n=o.amount(h);local t={tostring(n),hex(o.label(h) or '')};",
-      `for i=${offset},math.min(n-1,${offset + 31}) do local c=o.child(h,i);if c then t[#t+1]=i..','..tostring(o.number(c))..','..hex(o.label(c) or '') end end;return table.concat(t,';') end;`,
-      `local a={};for _,k in ipairs({${numbers.join(',')}}) do local ok,r=pcall(page,k);a[#a+1]=not ok and 'invalid' or ${numbers.length > 1 ? `#r>${Math.floor(65536 / numbers.length)} and 'large' or ` : ''}r end;`,
-      `local r=table.concat(a,'/');for p=1,#r,700 do gma.echo('${prefix}'..p..':'..r:sub(p,p+699)) end;gma.echo('${prefix}END:'..#r)`
+      `for i=${offset},math.min(n-1,${offset + width - 1}) do local c=o.child(h,i);if c then t[#t+1]=i..','..tostring(o.number(c))..','..hex(o.label(c) or '') end end;return table.concat(t,';') end;`,
+      `local a={};for _,k in ipairs({${numbers.join(',')}}) do local ok,r=pcall(page,k);a[#a+1]=not ok and 'invalid' or ${rowLimit ? `#r>${rowLimit} and 'large' or ` : ''}r end;`,
+      `local r=table.concat(a,'/');local id='${prefix}';for p=1,#r,700 do gma.echo(id..p..':'..r:sub(p,p+699)) end;gma.echo(id..'END:'..#r)`
     ].join('');
     const response = await connection.command(`Lua "${script}"`, text => readNativeCueChunks(text, prefix), gate);
     gate();
@@ -52,7 +53,7 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
     if (rows.length !== numbers.length) throw new Error('控台返回的序列数量对不上');
     return rows;
   };
-  const groupSize = 16;
+  const groupSize = 32;
   for (let index = 0; index < selected.length; index += groupSize) {
     const group = selected.slice(index, index + groupSize);
     const numbers = group.map(entry => entry.target);
@@ -64,11 +65,22 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
         const cues: Ma2EffectLibrary['sequences'][number]['cues'] = [];
         let sequenceName: string | null = null;
         let count = 1;
-        for (let offset = 0; offset < count; offset += 32) {
+        let width = 32;
+        for (let offset = 0; offset < count; offset += width) {
           if (signal?.aborted) throw new Error('素材读取已取消');
-          const dedicated = offset > 0 || first[position] === 'large' && second[position] === 'large';
-          const response = dedicated ? (await read([entry.target], offset))[0]! : first[position]!;
-          const verified = dedicated ? (await read([entry.target], offset))[0]! : second[position]!;
+          let response = first[position]!, verified = second[position]!;
+          if (offset > 0) {
+            width = 128;
+            response = (await read([entry.target], offset, width))[0]!;
+            verified = (await read([entry.target], offset, width))[0]!;
+          }
+          // The console only returns this marker for a page that exceeds the wire
+          // budget. Read a smaller dedicated page at that exact index, twice.
+          if (response === 'large' && verified === 'large') {
+            width = 32;
+            response = (await read([entry.target], offset, width))[0]!;
+            verified = (await read([entry.target], offset, width))[0]!;
+          }
           if (response !== verified) throw new Error(`序列 ${entry.target} 在读取期间发生变化，请重新读取`);
           if (signal?.aborted) throw new Error('素材读取已取消');
           const [total, nameHex, ...rows] = response.split(';');

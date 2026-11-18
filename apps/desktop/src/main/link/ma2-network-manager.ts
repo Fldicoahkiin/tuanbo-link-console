@@ -15,7 +15,7 @@ import { Ma2RequestJournal } from './ma2-request-journal';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2ApplyService } from './ma2-apply-service';
 import { ensureMa2NetworkBridge, readMa2NetworkBridge, type Ma2BridgeState } from './ma2-bridge-installer';
-import { readMa2ShowSource, type Ma2ShowSource } from './ma2-show-probe';
+import { readMa2ShowSource, verifyMa2ShowSource, type Ma2ShowSource } from './ma2-show-probe';
 import { Ma2Relogin, Ma2ReloginStop, type Ma2ReloginClock, type Ma2ReloginLog, type Ma2ReloginPlan } from './ma2-relogin';
 import { readMa2NativeLibrary } from './ma2-native-library';
 import { readMa2EffectLibrary } from './ma2-effect-library';
@@ -521,9 +521,13 @@ export class Ma2NetworkManager {
     const wire = new Ma2NetworkWire(connection, host === '127.0.0.1' || host === '::1', this.requestJournal); this.wire = wire;
     const bridge = new Ma2OnpcBridge(wire, this.show);
     this.mtcSelection?.invalidate();
-    this.services = { bridge, service: new Ma2ApplyService(bridge, this.show, async timecode => {
-      if (this.connection !== connection || this.services?.bridge !== bridge) throw new Error('控台连接已变化');
-      await this.prepareMtcPlayback(target, false, [timecode]);
+    this.services = { bridge, service: new Ma2ApplyService(bridge, this.show, {
+      source: () => readMa2ShowSource(connection),
+      verify: source => verifyMa2ShowSource(connection, source),
+      prepare: (timecode, onConsoleCheck) => {
+        if (this.connection !== connection || this.services?.bridge !== bridge) throw new Error('控台连接已变化');
+        return this.prepareMtcPlayback(target, false, [timecode.number], undefined, timecode, { onConsoleCheck });
+      }
     }) };
     this.bridgeIssue = null;
     this.reconnectAllowed = true; this.reconnectDelay = 1000;

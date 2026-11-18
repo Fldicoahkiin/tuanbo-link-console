@@ -85,10 +85,10 @@ export function ma2MtcSequenceSettings(xml: string): { xml: string; cues: string
   return { xml: changed.length ? new XMLSerializer().serializeToString(document) : xml, cues: changed };
 }
 
-export type Ma2MtcPreparationTask = { report?: ((progress: Ma2ReadProgressUpdate) => void) | undefined; signal?: AbortSignal | undefined };
+export type Ma2MtcPreparationTask = { report?: ((progress: Ma2ReadProgressUpdate) => void) | undefined; signal?: AbortSignal | undefined; onConsoleCheck?: () => void };
 type Bridge = Pick<Ma2OnpcBridge, 'request' | 'exchange'>;
 type Connection = Pick<Ma2Telnet, 'command'>;
-export type Ma2ConfirmedTimecode = { number: number; xml: string; show: string; generation: string };
+export type Ma2ConfirmedTimecode = { number: number; xml: string; show: string; generation: string; goSequences?: readonly number[] };
 const timecodeRange = (target: number, xml: string): Ma2TimecodeRanges['entries'][number] => {
   const tc = inspectMa2TimecodeXml(xml).timecodes[0]!;
   const events = tc.tracks.flatMap(track => track.subtracks.flatMap(subtrack => subtrack.events));
@@ -111,17 +111,23 @@ const positionSchema = z.object({ number: z.number().int().min(1).max(99999), ex
  */
 export class Ma2MtcSelectionService {
   private queue: Promise<void> = Promise.resolve();
+  private pending = 0;
   private prepared: string | null = null;
   private knownRanges: { show: string; generation: string; entries: Ma2TimecodeRanges['entries'] } | null = null;
   constructor(private readonly show: ShowGateReader, private readonly backups: Pick<Ma2ConsoleBackups, 'record'>) {}
   invalidate(): void { this.prepared = null; this.knownRanges = null; }
   prepare(connection: Connection, bridge: Bridge, network: Ma2NetworkTarget, force = false, targets: readonly number[] = [], verifiedSequence?: { number: number; xml: string }, verifiedTimecode?: Ma2ConfirmedTimecode, task?: Ma2MtcPreparationTask): Promise<boolean> {
-    const work = this.queue.then(() => this.install(connection, bridge, network, force, targets, verifiedSequence, verifiedTimecode, task));
+    const queued = this.pending > 0;
+    this.pending++;
+    // A preparation ahead of this one may change the exact same Sequence or
+    // Timecode. Still require the caller's original Show, but read the objects again.
+    const work = this.queue.then(() => this.install(connection, bridge, network, force, targets, verifiedSequence, verifiedTimecode, task, queued))
+      .finally(() => { this.pending--; });
     // Each caller receives its own failure. Releasing the queue is not a retry of that operation.
     this.queue = work.then(() => undefined, () => undefined);
     return work;
   }
-  private async install(connection: Connection, sourceBridge: Bridge, network: Ma2NetworkTarget, force: boolean, targets: readonly number[], verifiedSequence?: { number: number; xml: string }, verifiedTimecode?: Ma2ConfirmedTimecode, task?: Ma2MtcPreparationTask): Promise<boolean> {
+  private async install(connection: Connection, sourceBridge: Bridge, network: Ma2NetworkTarget, force: boolean, targets: readonly number[], verifiedSequence?: { number: number; xml: string }, expectedTimecode?: Ma2ConfirmedTimecode, task?: Ma2MtcPreparationTask, queued = false): Promise<boolean> {
     const endpoint = `${network.host}:${network.port}`;
     if (!force && !targets.length && this.prepared === endpoint) return false;
     let completed = 0, total = 0, detail = '正在读取控台时间线目录，检查歌曲怎样按时间码启动';
@@ -148,12 +154,15 @@ export class Ma2MtcSelectionService {
     const known = !force && this.prepared === endpoint ? this.knownRanges : null;
     gate(); this.invalidate();
     try {
+      const verifiedTimecode = queued ? undefined : expectedTimecode;
+      const goSequences = new Set(verifiedTimecode?.goSequences);
+      if (!queued && verifiedSequence && !ma2MtcSequenceSettings(verifiedSequence.xml).cues.length) goSequences.add(verifiedSequence.number);
       // A point moved inside the same song interval does not change the native selector. Use the
       // Timecode this sync actually read back, so moving the end, muting all points or changing the
       // MTC origin still rebuilds selection even when the Sequence itself was not edited.
       if (known && verifiedTimecode && known.show === verifiedTimecode.show && known.generation === verifiedTimecode.generation
         && targets.length === 1 && targets[0] === verifiedTimecode.number && known.entries.some(entry => entry.target === verifiedTimecode.number && entry.slot === MA2_SONG_TIMECODE_SLOT)
-        && verifiedSequence && !ma2MtcSequenceSettings(verifiedSequence.xml).cues.length
+        && referencedMa2Sequences(verifiedTimecode.xml).every(number => goSequences.has(number))
         && sameMa2XmlObjects(verifiedTimecode.xml, ma2MtcPlaybackSettings(verifiedTimecode.xml, false))) {
         const fresh = timecodeRange(verifiedTimecode.number, verifiedTimecode.xml);
         const entries = known.entries.map(entry => entry.target === fresh.target ? fresh : entry);
@@ -161,7 +170,9 @@ export class Ma2MtcSelectionService {
           this.knownRanges = { ...known, entries }; this.prepared = endpoint; return false;
         }
       }
+      task?.onConsoleCheck?.();
       const source = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
+      if (expectedTimecode && (expectedTimecode.show !== source.show || expectedTimecode.generation !== source.generation)) throw new Error('控台 Show 或连接已切换，没有确认选曲');
       stage(`正在核对 ${source.entries.length} 条时间线的起止位置`);
       const refreshing = new Set(targets);
       let ranges: Ma2TimecodeRanges;
@@ -280,7 +291,7 @@ export class Ma2MtcSelectionService {
           // syncSong has just compared this complete readback with its intended Cue contents.
           // Reuse that one transaction's evidence for Go-only Cues instead of exporting and reading
           // megabytes of fixture values again after every timeline move. Never retained across syncs.
-          if (verifiedSequence?.number === sequence && !ma2MtcSequenceSettings(verifiedSequence.xml).cues.length) continue;
+          if (goSequences.has(sequence) && verifiedTimecode?.show === source.show && verifiedTimecode.generation === source.generation) continue;
           const readback = await bridge.exchange('SEQGO', sequence, `${Buffer.from(source.show).toString('hex')}\n${Buffer.from(source.generation).toString('hex')}`);
           const result = ma2SequenceGoResultSchema.parse(JSON.parse(readback.response));
           if (result.changed) {

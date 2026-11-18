@@ -11,7 +11,7 @@ import { currentShowWait } from '../stores/show-state-store';
 import { confirmMa2Edit, consoleSeenAt, editTimes, noteMa2LocalEdits, songSignature, songStart, type Program } from './ma2-edit-times';
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { ma2SongSyncActive, ma2SyncActive, useMa2RealtimePreference } from './ma2-realtime-preference';
-import { useProgramSelectionStore } from '../stores/program-selection-store';
+import { BACKGROUND_RECHECK_MS, dueAt, songSyncOrder } from './ma2-song-sync-order';
 import { syncBoundSong } from './ma2-bound-song-sync';
 import { runMa2NameSync } from './ma2-name-sync';
 import { archiveBeforeSync } from './ma2-sync-archive';
@@ -33,21 +33,7 @@ import { routeMa2Tracks } from '@tb/core/link';
 const MAX_ATTEMPTS = { own: 3, imported: 1 } as const;
 /** Console edits that collide with a write in a row before they count as a failed attempt. */
 const MAX_COLLISIONS = 5;
-// Each comparison exports the song on the console. The song open in the editor is compared often,
-// so console edits show up quickly; the others rarely, so they never hold up the next edit for long.
-const FOCUSED_RECHECK_MS = 2000;
-const BACKGROUND_RECHECK_MS = 30000;
-function focusedItemId(): string | null {
-  const project = useDocumentStore.getState().project;
-  return project ? useProgramSelectionStore.getState().byProject[project.projectId] ?? null : null;
-}
-/** When a song is next due: a confirmed song open in the editor comes back early, a reset to 0 always wins. */
-function dueAt(entry: SongSync): number | undefined {
-  // Parked until the project changes: any edit makes it due at once.
-  if (entry.recheckRevision !== undefined && entry.recheckRevision !== useDocumentStore.getState().revision) return 0;
-  if (entry.state !== 'verified' || entry.checkedAt === undefined || entry.itemId !== focusedItemId()) return entry.nextCheckAt;
-  return Math.min(entry.nextCheckAt ?? Number.POSITIVE_INFINITY, entry.checkedAt + FOCUSED_RECHECK_MS);
-}
+const COLLISION_RECHECK_MS = 2000;
 let running = false;
 /**
  * Confirmed songs whose local content no longer matches what the console confirmed wait for a sync again.
@@ -309,11 +295,10 @@ export async function tickMa2SongSync(): Promise<void> {
     if (!useMa2RealtimePreference.getState().onceItemId) await syncNames();
     // Songs with unconfirmed local edits go first; periodic checks of confirmed songs follow. Within
     // each, the song open in the editor goes first.
-    const order = { pending: 0, syncing: 0, blocked: 1, verified: 2, paused: 3 } as const;
-    const focus = focusedItemId();
-    const rank = (entry: SongSync): number => order[entry.state] * 2 + (entry.itemId === focus ? 0 : 1);
+    const order = songSyncOrder(flushPendingMa2Songs);
     const startRevision = useDocumentStore.getState().revision;
-    for (const entry of Object.values(useMa2SyncStore.getState().songs).sort((a, b) => rank(a) - rank(b))) {
+    for (const entry of order.songs) {
+      if (order.changed(entry)) break;
       if (entry.documentId !== useDocumentStore.getState().documentId) { stopMa2SongSync(entry.itemId); continue; }
       if (entry.state === 'paused' || !ma2SongSyncActive(entry.itemId)) continue;
       const attemptedItem = useDocumentStore.getState().project?.rundown.find(item => item.id === entry.itemId);
@@ -481,7 +466,7 @@ export async function tickMa2SongSync(): Promise<void> {
         // A wait for the show is no failure: it is neither logged nor counted as the text already reported.
         const log = showWait === null && reason !== reported.loggedFailure;
         update(entry, { state: exhausted ? 'blocked' : 'pending', failedItem: waiting ? undefined : attemptedItem, consecutiveFailures, consecutiveCollisions: collisions,
-          nextCheckAt: Date.now() + (collided ? FOCUSED_RECHECK_MS : waiting ? 1000 : 1000 * consecutiveFailures),
+          nextCheckAt: Date.now() + (collided ? COLLISION_RECHECK_MS : waiting ? 1000 : 1000 * consecutiveFailures),
           waitingForConnection: disconnected, checking: false, writing: false, recheckRevision: undefined, requestId: null, progress: null,
           // 用联动台的 chosen once holds through a wait (console away, the show, the console being edited); a real failure uses it up.
           ...waiting ? {} : { consoleChangesOnce: undefined },

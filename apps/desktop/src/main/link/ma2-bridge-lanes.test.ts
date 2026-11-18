@@ -119,7 +119,8 @@ describe('前台只读道（M4）', { timeout: 60000 }, () => {
     await bridge.request('SYNC', 9902, snapshot, desired);
     await Promise.all(queued);
     const released = linesOf(sync!).at(-1)!;
-    expect(ma2.lines[released]).toContain("','release','");
+    // A short verified SYNC releases inside its final step, before the next reservation.
+    expect(rpcOf(ma2.lines[released]!)?.action).toBe('step');
     const order = begun();
     for (const operation of ['LABEL', 'ASSIGNSEQ', 'PAGE']) {
       const entry = order.find(value => value.operation === operation)!;

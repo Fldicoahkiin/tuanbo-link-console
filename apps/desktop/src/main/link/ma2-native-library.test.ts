@@ -31,8 +31,8 @@ it('轻量读取保留真实索引、小数 Cue 和中文名，明确灯具详�
 
 it('分段读取超过控台单行长度的中文名称，保留全部 100 个 Cue', async () => {
   const replies: string[] = [];
-  for (let offset = 0; offset < 101; offset += 32) {
-    const rows = Array.from({ length: Math.min(32, 101 - offset) }, (_, index) => offset + index)
+  for (let offset = 0; offset < 101; offset += offset ? 128 : 32) {
+    const rows = Array.from({ length: Math.min(offset ? 128 : 32, 101 - offset) }, (_, index) => offset + index)
       .filter(index => index > 0).map(index => `${index},${index},${Buffer.from(`${index} 暖场灯光测试`).toString('hex')}`);
     const reply = `101;;${rows.join(';')}`;
     replies.push(reply, reply);
@@ -109,26 +109,26 @@ it('最终复核时开始播放与目录真的变化分别报告，不把播放�
   await expect(readMa2NativeLibrary(connection([row, row]), { request: changed }, showStopped)).rejects.toThrow('控台的 Show 或序列有变化');
 });
 
-it('695 个短序列按组双读，一共 88 条 Cue 查询；每条序列仍独立核对', async () => {
+it('695 个短序列按组双读，一共 44 条 Cue 查询；每条序列仍独立核对', async () => {
   const entries = Array.from({ length: 695 }, (_, index) => ({ target: index + 1, name: String(index + 1) }));
   const replies: string[] = [];
-  for (let index = 0; index < entries.length; index += 16) {
-    const rows = entries.slice(index, index + 16).map(entry => `2;;1,${entry.target},61`).join('/');
+  for (let index = 0; index < entries.length; index += 32) {
+    const rows = entries.slice(index, index + 32).map(entry => `2;;1,${entry.target},61`).join('/');
     replies.push(rows, rows);
   }
   const peer = connection(replies);
   const result = await readMa2NativeLibrary(peer, { request: vi.fn().mockResolvedValue(JSON.stringify({ ...directory, entries })) }, showStopped);
   expect(result.errors).toEqual([]);
   expect(result.sequences.map(item => item.cues[0]!.number)).toEqual(entries.map(entry => entry.target + '.000'));
-  expect(peer.command).toHaveBeenCalledTimes(88);
+  expect(peer.command).toHaveBeenCalledTimes(44);
 });
 
-it('16 个五位数编号中夹有长中文 Cue，超出组内容量的序列单独双读', async () => {
+it('32 个五位数编号中夹有长中文 Cue，超出组内容量的序列单独双读', async () => {
   const console = new Ma2LuaConsole();
-  const entries = Array.from({ length: 16 }, (_, index) => ({ target: 99984 + index, name: '序列' + index }));
+  const entries = Array.from({ length: 32 }, (_, index) => ({ target: 99968 + index, name: '序列' + index }));
   const longLabel = '暖场灯光'.repeat(32);
   for (const [index, entry] of entries.entries()) {
-    const cues = Array.from({ length: index === 15 ? 20 : 1 }, (_, j) => ({ number: String(j + 1), label: index === 15 ? longLabel : entry.name }));
+    const cues = Array.from({ length: index === 31 ? 20 : 1 }, (_, j) => ({ number: String(j + 1), label: index === 31 ? longLabel : entry.name }));
     console.set('Sequence ' + entry.target, { name: entry.name, label: entry.name, cues });
   }
   const result = await readMa2NativeLibrary(console, { request: vi.fn().mockResolvedValue(JSON.stringify({ ...directory, entries })) }, showStopped);
@@ -137,4 +137,13 @@ it('16 个五位数编号中夹有长中文 Cue，超出组内容量的序列单
   expect(result.sequences.at(-1)?.cues).toEqual(Array.from({ length: 20 }, (_, j) => ({ number: `${j + 1}.000`, index: j, name: longLabel })));
   expect(console.lines).toHaveLength(4);
   expect(console.lines.every(line => Buffer.byteLength(line) <= 1024)).toBe(true);
+});
+
+it('128 个 Cue 的后续页面太长时从同一位置分段双读，保留每一个编号和名称', async () => {
+  const console = new Ma2LuaConsole();
+  const cues = Array.from({ length: 166 }, (_, index) => ({ number: String(index + 1), label: index < 32 ? '开场' : '灯'.repeat(110) + index }));
+  console.set('Sequence 7', { label: '音乐', cues });
+  const result = await readMa2NativeLibrary(console, { request: vi.fn().mockResolvedValue(JSON.stringify(directory)) }, showStopped);
+  expect(result.errors).toEqual([]);
+  expect(result.sequences[0]?.cues).toEqual(cues.map((cue, index) => ({ index, number: cue.number + '.000', name: cue.label })));
 });

@@ -4,6 +4,7 @@ import { prepareMa2RealtimeSession } from './ma2-realtime-session';
 import { ma2SyncActive, useMa2RealtimePreference } from './ma2-realtime-preference';
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
 import { useDocumentStore } from '../stores/document-store';
+import { useProgramSelectionStore } from '../stores/program-selection-store';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { currentShowGate, useShowStateStore } from '../stores/show-state-store';
 
@@ -61,6 +62,10 @@ export function subscribeMa2Sync(notify: Notify): () => void {
       || state.project?.ma2MaterialLibrary?.userLibrary?.consoleRenames !== previous.project?.ma2MaterialLibrary?.userLibrary?.consoleRenames) wake();
   });
   const preferences = useMa2RealtimePreference.subscribe(wake);
+  const selection = useProgramSelectionStore.subscribe((state, previous) => {
+    const id = useDocumentStore.getState().project?.projectId;
+    if (id && state.byProject[id] !== previous.byProject[id]) wake();
+  });
   const modes = useMa2ModeStore.subscribe(wake);
   const sync = useMa2SyncStore.subscribe((state, previous) => { announceMa2Sync(notify, state, previous); });
   // The program pausing or stopping carries on from the step a pass stopped at, without waiting for the next poll.
@@ -74,5 +79,5 @@ export function subscribeMa2Sync(notify: Notify): () => void {
   });
   const poll = setInterval(() => { void tick(); }, 500);
   void tick();
-  return () => { active = false; clearInterval(poll); documents(); preferences(); modes(); sync(); show(); };
+  return () => { active = false; clearInterval(poll); documents(); selection(); preferences(); modes(); sync(); show(); };
 }

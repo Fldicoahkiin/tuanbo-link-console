@@ -58,7 +58,7 @@ it('取消、播放开始、Show 切换均在写入前停止，释放后可再�
     const wire = new Ma2NetworkWire(f.console);
     const bridge = new Ma2OnpcBridge(wire, operation => playing ? { kind: 'wait', message: '节目在走，请先停止', until: 'clock-stopped' } : showStopped(operation));
     f.console.beforeLine = line => {
-      if (!line.includes("'run'")) return;
+      if (!line.includes("'begin'") || !line.includes("'SEQGO'")) return;
       if (reason === 'cancel') controller.abort();
       if (reason === 'playing') playing = true;
     };

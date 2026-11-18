@@ -777,7 +777,31 @@ end
 -- check) takes 'bg' and needs both lanes free, as the one request it was before.
 local lanes = { bg = nil, fg = nil }
 local foreground = { PING = true, PAGES = true, PAGE = true, LIST = true, LISTSEQ = true, EXECUTOR = true }
-local snapshot_cache = nil
+local snapshot_cache, last_read = nil, nil
+-- Expand the optional wire representation before the ordinary full SYNC
+-- preflight, backup, import and readback. The frozen native XML remains its baseline.
+local function expand_delta(base, delta, size)
+  local pieces, pos, bytes = {}, 1, 0
+  while pos <= #delta do
+    local finish = assert(delta:find('\n', pos, true), 'Incomplete snapshot delta')
+    assert(finish - pos <= 24 and #pieces < 4096, 'Invalid snapshot delta')
+    local header = delta:sub(pos, finish - 1)
+    local from, count = header:match('^C(%d+),(%d+)$')
+    pos = finish + 1
+    if from then
+      from, count = tonumber(from), tonumber(count)
+      assert(count > 0 and from + count <= #base and bytes + count <= size, 'Invalid snapshot range')
+      pieces[#pieces + 1] = base:sub(from + 1, from + count)
+    else
+      count = tonumber(header:match('^L(%d+)$') or '')
+      assert(count and count > 0 and pos + count - 1 <= #delta and bytes + count <= size, 'Invalid snapshot literal')
+      pieces[#pieces + 1] = delta:sub(pos, pos + count - 1); pos = pos + count
+    end
+    bytes = bytes + count
+  end
+  assert(bytes == size, 'Incomplete desired Timecode')
+  return table.concat(pieces)
+end
 -- MA's Lua instruction budget makes a callback per byte very slow. gsub table replacement
 -- does the same exact byte conversion in native code, without changing the wire protocol.
 local hex_bytes, raw_bytes = {}, {}
@@ -801,6 +825,25 @@ local function finished(network)
   local id = network.id
   network.response = network.job.response; network.job = nil
   assert(#network.response <= 33554500, 'Response exceeds limit')
+  if network.op == 'READ' and network == lanes.bg then
+    local xml = #network.response <= 524350 and network.response:match('^[a-f0-9]+\nOK\n%d+\n(.*)$')
+    local previous = network.previous
+    network.previous = nil
+    last_read = xml and #xml <= 524288 and {id = id, target = network.target, xml = xml} or nil
+    if last_read and previous then
+      -- Each check still exports the live Timecode. Native exports often differ
+      -- only in their Info timestamp. Compare all remaining bytes and transmit
+      -- the actual new prefix so even the timestamp is returned exactly.
+      local old_end, new_end = 0, 0
+      if previous.xml ~= xml then
+        old_end = select(2, previous.xml:sub(1, 2048):find('<Info%s[^<>]-/>'))
+        new_end = select(2, xml:sub(1, 2048):find('<Info%s[^<>]-/>'))
+      end
+      if old_end and new_end and #previous.xml - old_end == #xml - new_end and (old_end == 0 or previous.xml:sub(old_end + 1) == xml:sub(new_end + 1)) then
+        network.response = id .. '\nCOPY\n' .. previous.id .. '\n' .. old_end .. '\n' .. #xml .. '\n' .. xml:sub(1, new_end)
+      end
+    end
+  end
   if network.op == 'SNAPSHOT' or network.op == 'SCOPE' then
     local content = network.response:match('^[a-f0-9]+\nOK\n%d+\n(.*)$')
     snapshot_cache = content and { id = id, target = network.target, xml = content } or nil
@@ -809,6 +852,7 @@ local function finished(network)
       -- export here for SYNC's exact preflight, but send only Cue metadata.
       -- Cue/CuePart attributes and Number remain unchanged for reference checks.
       local compact = content:gsub('<CueDatas%s*>.-</CueDatas>', '')
+      if #compact <= 1048576 then snapshot_cache.wire = compact end
       network.response = id .. '\nOK\n' .. #compact .. '\n' .. compact
     end
   end
@@ -836,7 +880,7 @@ local function proceed(network, token)
   end
   return 'STEP:' .. network.job.done .. (network.job.confirming and ':verify' or '')
 end
-_G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now)
+_G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, delta_size, query, previous_read)
   if not token:match('^[a-f0-9]+$') or #token ~= 32 then return end
   local ok, result = pcall(function()
     assert(active and _G.TBLINK_BRIDGE_GENERATION == generation, 'Bridge is stopped')
@@ -855,6 +899,9 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now)
       assert(lane == nil or lane == 'bg' or lane == 'fg', 'Invalid lane')
       assert(transport == nil or transport == 'file', 'Invalid transport')
       assert(read_now == nil or (read_now == 'read' and action == 'begin' and a == 'READ' and c == 0 and lane == 'bg'), 'Invalid immediate read')
+      assert(delta_size == nil or (action == 'beginsync' and transport == nil and c <= 524288 and type(delta_size) == 'number' and delta_size == math.floor(delta_size) and delta_size > 0 and delta_size < c), 'Invalid snapshot delta size')
+      assert(query == nil or (action == 'begin' and (a == 'LIST' or a == 'LISTSEQ' or a == 'TCRANGES' or a == 'SEQGO' and lane == 'bg') and type(query) == 'string' and c <= 320 and #query == c * 2 and not query:find('[^a-f0-9]')), 'Invalid inline query')
+      assert(previous_read == nil or (read_now == 'read' and type(previous_read) == 'string' and #previous_read == 32 and previous_read:match('^[a-f0-9]+$')), 'Invalid read reference')
       -- Only reads go on 'fg', and none that leaves state for a later request (a snapshot for beginsync).
       assert(lane ~= 'fg' or (action == 'begin' and foreground[a]), 'Operation not allowed on the foreground lane')
       local named = lane ~= nil
@@ -864,11 +911,17 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now)
       assert(not other or other.id ~= id, 'Request already pending')
       clear_transfer(lanes[lane])
       lanes[lane] = { id = id, op = a, target = b, size = c, bytes = 0, chunks = {}, base = base, local_file = transport == 'file', expires = gma.gettime() + 120 }
-      if read_now then
+      if delta_size and snapshot_cache.wire then
+        lanes[lane].delta_base = snapshot_cache.wire; lanes[lane].desired_size = c; lanes[lane].size = delta_size
+        return 'ACK:lanes:delta'
+      end
+      if read_now or query then
         local net = lanes[lane]
         local completed, receipt = pcall(function()
           net.done = true; net.chunks = nil; net.inline = true
-          net.job = start(id .. '\nREAD\n' .. b .. '\n0\n')
+          if previous_read and last_read and last_read.id == previous_read and last_read.target == b then net.previous = last_read end
+          local input = query and query:gsub('..', raw_bytes) or ''
+          net.job = start(id .. '\n' .. a .. '\n' .. b .. '\n' .. #input .. '\n' .. input)
           return proceed(net, token)
         end)
         if not completed then clear_transfer(net); lanes[lane] = nil; error(receipt) end
@@ -902,12 +955,14 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now)
       assert(not network.done and network.bytes == network.size, 'Incomplete or already executed request')
       network.done = true
       local body = table.concat(network.chunks); network.chunks = nil
+      if network.delta_base then body = expand_delta(network.delta_base, body, network.desired_size); network.delta_base = nil end
       if network.base then body = #network.base .. '\n' .. network.base .. body; network.base = nil end
       network.job = start(id .. '\n' .. network.op .. '\n' .. network.target .. '\n' .. #body .. '\n' .. body)
       -- With 'steps' the first step runs now and the program sends 'step' for each next one.
       -- Without it (an older program, or the bridge upgrade check) every step runs now, as before.
       if a == 'steps' then
-        network.inline = b == 'inline' and (network.op == 'READ' or network.op == 'LIST' or network.op == 'LISTSEQ' or network.op == 'TCRANGES')
+        network.inline = b == 'inline' and (network.op == 'READ' or network.op == 'LIST' or network.op == 'LISTSEQ' or network.op == 'TCRANGES'
+          or network.op == 'SNAPSHOT' or network.op == 'SCOPE' or network.op == 'SYNC' or network.op == 'SEQGO')
         return proceed(network, token)
       end
       repeat advance(network.job) until network.job.response

@@ -3,13 +3,21 @@ import { holdForShow, MA2_SONG_COLLISION, resolveMa2Sync, type ShowGateReader } 
 import { Ma2BridgeFailure, type Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { confirmMa2MergedEvents, prepareMa2MergedEvents } from './ma2-event-write';
 import { convertMa2Snapshot } from './ma2-timecode-conversion';
-import { ma2MtcPlaybackSettings, referencedMa2Sequences, sameMa2XmlObjects } from './ma2-timecode-xml';
+import { ma2GoSequencesInSnapshot, ma2MtcPlaybackSettings, referencedMa2Sequences, sameMa2XmlObjects } from './ma2-timecode-xml';
 import { compareMa2LightingReadback } from './ma2-comparison';
+import type { Ma2ShowSource } from './ma2-show-probe';
+import type { Ma2ConfirmedTimecode } from './ma2-mtc-selection';
+
+type PlaybackPreparation = {
+  source: () => Promise<Ma2ShowSource>;
+  verify: (source: Ma2ShowSource) => Promise<void>;
+  prepare: (timecode: Ma2ConfirmedTimecode, onConsoleCheck: () => void) => Promise<boolean>;
+};
 
 /** One complete read/validate/write/verify session. No automatic retries. */
 export class Ma2ApplyService {
   private busy = false;
-  constructor(private readonly bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'>, private readonly show: ShowGateReader, private readonly preparePlayback?: (target: number) => Promise<void>) {}
+  constructor(private readonly bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'>, private readonly show: ShowGateReader, private readonly playback?: PlaybackPreparation) {}
 
   async apply(input: Ma2ApplyRequest): Promise<Ma2ApplyResult> {
     if (this.busy) return { status: 'incomplete', stage: 'preflight', message: '已有 MA2 同步正在进行', mayHaveWritten: false, backupFile: null };
@@ -22,6 +30,7 @@ export class Ma2ApplyService {
       const binding = request.document.ma2Bindings?.find((entry) => entry.id === request.bindingId);
       if (!binding || binding.timecode !== request.readback.target) throw new Error('节目与 MA2 绑定不一致');
       stage = 'read';
+      const source = await this.playback?.source();
       let snapshot = await this.bridge.request('SNAPSHOT', binding.timecode);
       const current = convertMa2Snapshot(snapshot, binding.timecode, [], binding.timeOriginMs);
       if (!sameMa2XmlObjects(request.readback.sourceXml, current.sourceXml) || previewContent(request.readback) !== previewContent(current)) throw new Error(`${MA2_SONG_COLLISION}：预览之后控台的 Timecode ${binding.timecode} 或它用的序列变了，这次没有写入；重新读取控台后再同步`);
@@ -43,20 +52,38 @@ export class Ma2ApplyService {
         stage = 'preflight';
       }
       const prepared = prepareMa2MergedEvents(request.document, request.bindingId, request.readback, new Map(request.conflicts), [snapshot], request.timeAlignment ?? 'exact', request.consoleChanges);
-      if (this.preparePlayback) prepared.desiredXml = ma2MtcPlaybackSettings(prepared.desiredXml, false);
+      if (this.playback) prepared.desiredXml = ma2MtcPlaybackSettings(prepared.desiredXml, false);
       this.requireStopped();
-      if (sameMa2XmlObjects(prepared.desiredXml, current.sourceXml)) {
-        await this.preparePlayback?.(binding.timecode);
-        return ma2ApplyResultSchema.parse({ status: 'verified', confirmed: confirmMa2MergedEvents(prepared, current.sourceXml, [snapshot]), backupFile: null });
+      let verified = current;
+      if (!sameMa2XmlObjects(prepared.desiredXml, current.sourceXml)) {
+        if (source) await this.playback?.verify(source);
+        this.requireStopped();
+        stage = 'write'; mayHaveWritten = true;
+        const receipt = await this.bridge.exchange('SYNC', binding.timecode, snapshot, prepared.desiredXml);
+        backupFile = `tblink_backup_${receipt.requestId}.xml`;
+        stage = 'verify';
+        snapshot = await this.bridge.request('SNAPSHOT', binding.timecode);
+        verified = convertMa2Snapshot(snapshot, binding.timecode, [], binding.timeOriginMs);
       }
-      stage = 'write'; mayHaveWritten = true;
-      const receipt = await this.bridge.exchange('SYNC', binding.timecode, snapshot, prepared.desiredXml);
-      backupFile = `tblink_backup_${receipt.requestId}.xml`;
       stage = 'verify';
-      await this.preparePlayback?.(binding.timecode);
-      const after = await this.bridge.request('SNAPSHOT', binding.timecode);
-      const verified = convertMa2Snapshot(after, binding.timecode, [], binding.timeOriginMs);
-      const confirmed = confirmMa2MergedEvents(prepared, verified.sourceXml, [after]);
+      if (source && this.playback) {
+        await this.playback.verify(source);
+        let checkedConsole = false;
+        const wroteTimecode = mayHaveWritten;
+        const changed = await this.playback.prepare({ ...source, number: binding.timecode, xml: verified.sourceXml, goSequences: ma2GoSequencesInSnapshot(snapshot) }, () => {
+          checkedConsole = true;
+          mayHaveWritten = true;
+        });
+        mayHaveWritten = wroteTimecode || changed;
+        if (checkedConsole || changed) {
+          snapshot = await this.bridge.request('SNAPSHOT', binding.timecode);
+          verified = convertMa2Snapshot(snapshot, binding.timecode, [], binding.timeOriginMs);
+          await this.playback.verify(source);
+          const go = new Set(ma2GoSequencesInSnapshot(snapshot));
+          if (referencedMa2Sequences(verified.sourceXml).some(number => !go.has(number))) throw new Error(`${MA2_SONG_COLLISION}：检查选曲期间序列的触发方式变了，请重新核对`);
+        }
+      }
+      const confirmed = confirmMa2MergedEvents(prepared, verified.sourceXml, [snapshot]);
       return ma2ApplyResultSchema.parse({ status: 'verified', confirmed, backupFile });
     } catch (error) {
       if (stage === 'write' && error instanceof Ma2BridgeFailure) { mayHaveWritten = error.sent; backupFile = error.backupFile; }

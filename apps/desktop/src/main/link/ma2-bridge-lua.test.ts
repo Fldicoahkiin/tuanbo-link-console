@@ -104,6 +104,60 @@ it('单次读取仍在发送前检查播放状态，旧组件先确认再导出�
   expect(old.commands().filter(command => command.startsWith('Export Timecode 9999 '))).toHaveLength(1);
 });
 
+it('再次导出长时间线时只回传变化的文件头，返回本次的完整字节；改过的 Cue 使用实际新内容', async () => {
+  const ma2 = new Ma2LuaConsole();
+  const wire = new Ma2NetworkWire(ma2);
+  const base = timecodeXml(9902, [[3, 2]], '歌曲'.repeat(1800));
+  ma2.set('Timecode 9902', { xml: base });
+  const first = await wire.exchange(requestId(1), 'READ', 9902, '', () => undefined);
+  const start = ma2.lines.length;
+  const second = await wire.exchange(requestId(2), 'READ', 9902, '', () => undefined);
+  expect(first).toBe(base.replace('@EXPORT@', '1'));
+  expect(second).toBe(base.replace('@EXPORT@', '2'));
+  expect(ma2.lines.length - start).toBe(1);
+  ma2.set('Timecode 9902', { xml: base.replace('time="15"', 'time="21"') });
+  expect(await wire.exchange(requestId(3), 'READ', 9902, '', () => undefined)).toBe(base.replace('@EXPORT@', '3').replace('time="15"', 'time="21"'));
+  expect(ma2.commands().filter(cmd => cmd.startsWith('Export Timecode 9902 '))).toHaveLength(3);
+});
+
+it('引用快照传中文时间线的改动，损坏的复制范围在原生写入之前拒绝', async () => {
+  const ma2 = new Ma2LuaConsole();
+  const wire = new Ma2NetworkWire(ma2);
+  const xml = timecodeXml(9902, [[3, 1]], '灯光'.repeat(260));
+  ma2.set('Timecode 9902', { xml });
+  ma2.set('Sequence 3', { xml: sequenceXml(3) });
+  const snap = await wire.exchange(requestId(1), 'SNAPSHOT', 9902, '', () => undefined);
+  const desired = xml.replace('time="15"', 'time="27"').replace('灯光灯光', '开场灯光');
+  const bad = 'C9000000,20\n';
+  const id = requestId(2);
+  expect(await rpc(ma2, 'beginsync', id, `,'${requestId(1)}',9902,${Buffer.byteLength(desired)},'bg',nil,nil,${bad.length}`)).toBe('ACK:lanes:delta');
+  expect(await rpc(ma2, 'chunk', id, `,1,'${hex(bad)}'`)).toBe('ACK');
+  expect(rpcError(await rpc(ma2, 'run', id, ",'steps'"))).toContain('Invalid snapshot range');
+  expect(await rpc(ma2, 'release', id)).toBe('ACK');
+  expect(ma2.commands().some(cmd => cmd.startsWith('Import'))).toBe(false);
+  const start = ma2.lines.length;
+  const after = await wire.exchange(requestId(3), 'SYNC', 9902, Buffer.byteLength(snap) + '\n' + snap + desired, () => undefined);
+  expect(after).toContain('time="27"');
+  expect(after).toContain('开场灯光');
+  expect(ma2.lines.slice(start).filter(line => line.includes("'chunk'")).length).toBeLessThan(Math.ceil(Buffer.byteLength(desired) / 256));
+  expect(ma2.commands().filter(cmd => cmd.startsWith('Import'))).toHaveLength(1);
+});
+
+it('旧组件忽略差量参数时，同一次预约发送完整时间线，控台只写一次', async () => {
+  const ma2 = new Ma2LuaConsole();
+  ma2.lua('local net=TBLINK_NET;TBLINK_NET=function(token,action,id,a,b,c,lane,transport,read_now) return net(token,action,id,a,b,c,lane,transport,read_now) end');
+  const wire = new Ma2NetworkWire(ma2);
+  const xml = timecodeXml(9902, [[3, 1]], '灯光'.repeat(180));
+  ma2.set('Timecode 9902', { xml });
+  ma2.set('Sequence 3', { xml: sequenceXml(3) });
+  const snap = await wire.exchange(requestId(1), 'SNAPSHOT', 9902, '', () => undefined);
+  const desired = xml.replace('time="15"', 'time="27"');
+  const after = await wire.exchange(requestId(2), 'SYNC', 9902, Buffer.byteLength(snap) + '\n' + snap + desired, () => undefined);
+  expect(after).toContain('time="27"');
+  expect(ma2.lines.filter(line => line.includes("'beginsync'"))).toHaveLength(1);
+  expect(ma2.commands().filter(cmd => cmd.startsWith('Import'))).toHaveLength(1);
+});
+
 it('本机上传文件完整后才执行，大小错误不执行并可释放', async () => {
   const ma2 = new Ma2LuaConsole(bridgeSource); const id = requestId(1);
   const call = async (action: string, args = ''): Promise<string> => await ma2.command(`Lua "TBLINK_NET('${id}','${action}','${id}'${args})"`, text => ma2ResponseLine(text, `TBLINK_RPC_${id}:`));

@@ -54,14 +54,24 @@ export async function ensureMa2NetworkBridge(connection: Pick<Ma2Telnet, 'comman
       acquired = true;
       if (!/^DONE:\d+$/.test(await rpc('run'))) throw new Error('控台旧组件未确认只读核对');
     }
-    const begin = await call(`local r='busy';if not TBLINK_BOOTSTRAP or gma.gettime()>TBLINK_BOOTSTRAP.expires then TBLINK_BOOTSTRAP={id='${id}',parts={},size=0,expires=gma.gettime()+120};r='ready' end`);
+    // Install the chunk decoder once. Each later command can use most of the
+    // native line for source bytes, while still echoing the exact stored bytes.
+    const begin = await call([
+      "local r='busy';if not TBLINK_BOOTSTRAP or gma.gettime()>TBLINK_BOOTSTRAP.expires then ",
+      `local b={id='${id}',parts={},size=0,expires=gma.gettime()+120};`,
+      "local enc,dec={},{};for i=0,255 do local c=string.char(i);local h=string.format('%02x',i);enc[c]=h;dec[h]=c end;",
+      "function b.part(i,at,h) if #b.parts+1~=i or b.size~=at then return 'invalid' end;",
+      "local s=h:gsub('..',dec);b.parts[i]=s;b.size=at+#s;b.expires=gma.gettime()+120;return (s:gsub('.',enc)) end;",
+      "TBLINK_BOOTSTRAP=b;r='ready' end"
+    ].join(''));
     if (begin !== 'ready') throw new Error('控台正在准备连接组件，请稍后连接');
     prepared = true;
-    for (let offset = 0; offset < bytes.length; offset += 128) {
-      const chunk = bytes.subarray(offset, offset + 128);
-      const index = offset / 128 + 1;
+    const chunkSize = 350; // The monitor echoes at most 700 hex characters, the same payload as a native Cue page line.
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      const chunk = bytes.subarray(offset, offset + chunkSize);
+      const index = offset / chunkSize + 1;
       const encoded = chunk.toString('hex');
-      const reply = await call(`local b=TBLINK_BOOTSTRAP;local r='invalid';if b and b.id=='${id}' and #b.parts==${index - 1} and b.size==${offset} then local h='${encoded}';local s=h:gsub('..',function(x)return string.char(tonumber(x,16))end);b.parts[${index}]=s;b.size=b.size+#s;b.expires=gma.gettime()+120;r=(s:gsub('.',function(x)return string.format('%02x',string.byte(x))end)) end`);
+      const reply = await call(`local h='${encoded}';local b=TBLINK_BOOTSTRAP;local r=b and b.id=='${id}' and b.part(${index},${offset},h) or 'invalid'`);
       if (reply !== encoded) throw new Error('控台连接组件没有传完，已停止连接');
       if (acquired && index % 32 === 0 && !(await rpc('read', ',0')).startsWith('DATA:')) throw new Error('控台连接组件升级占用已失效');
     }

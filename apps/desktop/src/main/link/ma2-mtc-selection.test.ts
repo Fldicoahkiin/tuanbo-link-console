@@ -92,6 +92,16 @@ it.each([false, true])('只移歌曲内的点复用当次读回；末点越过�
   const before = console.lines.length;
   await expect(service.prepare(console, bridge, network, false, [3], { number: 3, xml: sequence }, { number: 3, xml: song(2000), ...source })).resolves.toBe(false);
   expect(console.lines).toHaveLength(before);
+  await expect(service.prepare(console, bridge, network, false, [3], undefined, { number: 3, xml: song(2000), ...source, goSequences: [3] })).resolves.toBe(false);
+  expect(console.lines).toHaveLength(before);
+  // Evidence about a different Sequence cannot confirm this song's Go triggers.
+  await expect(service.prepare(console, bridge, network, false, [3], undefined, { number: 3, xml: song(2000), ...source, goSequences: [7] })).resolves.toBe(false);
+  expect(console.lines.slice(before).some(line => line.includes("'SEQGO',3,"))).toBe(true);
+  const queuedAt = console.lines.length;
+  const confirmed = { number: 3, xml: song(2000), ...source, goSequences: [3] };
+  const prepare = () => service.prepare(console, bridge, network, false, [3], undefined, confirmed);
+  expect(await Promise.all([prepare(), prepare()])).toEqual([false, false]);
+  expect(console.lines.slice(queuedAt).some(line => line.includes("'READ',3,"))).toBe(true);
   if (detachExecutor) console.lua(`local original=gma.cmd;local assignedPage=FAKE.objects['Page 1000'].xml;gma.cmd=function(command)
     original(command)
     if command:match('^Delete Sequence 9900 Cue ') then

@@ -29,6 +29,8 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
   async connect(): Promise<string> { memory.connects += 1; await memory.pause; this.state = 'connected'; return memory.version; }
   async command(line: string, match: (text: string) => string | null, beforeSend?: (wait: { waitedMs: number; runningKind: string | null; sentBefore: number }) => void, priority?: string): Promise<string> {
     memory.priorities.push(priority); await memory.pause; beforeSend?.({ waitedMs: 2400, runningKind: 'plugin:run', sentBefore: 0 });
+    const identity = /TBLINK_SHOWCHECK_[a-f0-9]{32}/.exec(line)?.[0];
+    if (identity) return match(`${identity}:H53,H67,H${Buffer.from(memory.version).toString('hex')}\r\n`)!;
     const cuePrefix = /TBLINK_CUES_[a-f0-9]{32}:/.exec(line)?.[0];
     if (cuePrefix) {
       const row = `12;${Buffer.from('截图重建序列').toString('hex')};${meiNanCues.map((cue, index) => `${index + 1},${cue},${Buffer.from(`Cue ${cue}`).toString('hex')}`).join(';')}`;

@@ -185,7 +185,26 @@ function bothBound() {
   value.rundown[1]!.lighting!.consoleSong = { endpoint: '192.0.2.1:30000', show: source.show, sequence: 9001, name: 'second', executor: '1234.102', layout: null, baselineXml: '<baseline/>', points: [{ id: 'point-second', cue: '1.000' }] };
   return value;
 }
-it('已确认的歌：编辑器里打开的歌约 2 秒复查一次，其他歌 30 秒才复查一次', async () => {
+it('首轮有多首待同步时切歌，当前请求完成后按新的选择重新排队', async () => {
+  const value = bothBound();
+  const third = structuredClone(value.rundown[1]!);
+  third.id = third.title = 'third';
+  third.lighting!.consoleSong!.sequence = 9002;
+  third.lighting!.consoleSong!.executor = '1234.103';
+  value.rundown.push(third);
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  useProgramSelectionStore.getState().set(value.projectId, 'first');
+  sync.mockImplementationOnce((request: Ma2SongSyncRequest) => {
+    useProgramSelectionStore.getState().set(value.projectId, 'third');
+    return answerOwn(request);
+  }).mockImplementation(answerOwn);
+  await prepareMa2RealtimeSession();
+  await tickMa2SongSync();
+  expect(sync.mock.calls.map(call => (call[0] as Ma2SongSyncRequest).itemId)).toEqual(['first']);
+  await tickMa2SongSync();
+  expect(sync.mock.calls.map(call => (call[0] as Ma2SongSyncRequest).itemId)).toEqual(['first', 'third', 'second']);
+});
+it('已确认的歌：编辑器里打开的歌在下一轮半秒检查时即可复查，其他歌 30 秒才复查一次', async () => {
   vi.useFakeTimers();
   useDocumentStore.getState().setProject(boundFirst(), 'song.tblink');
   sync.mockImplementation(answerOwn); check.mockResolvedValue(false);
@@ -197,9 +216,9 @@ it('已确认的歌：编辑器里打开的歌约 2 秒复查一次，其他歌 
   vi.advanceTimersByTime(28000); await tickMa2SongSync();
   expect(check).toHaveBeenCalledTimes(1);
   useProgramSelectionStore.getState().set(useDocumentStore.getState().project!.projectId, 'first');
-  vi.advanceTimersByTime(1000); await tickMa2SongSync();
+  vi.advanceTimersByTime(299); await tickMa2SongSync();
   expect(check).toHaveBeenCalledTimes(1);
-  vi.advanceTimersByTime(1001); await tickMa2SongSync();
+  vi.advanceTimersByTime(201); await tickMa2SongSync();
   expect(check).toHaveBeenCalledTimes(2);
   expect(sync).toHaveBeenCalledTimes(1);
 });
