@@ -20,7 +20,7 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
     if (state.documentId !== documentId) throw new Error('工程已切换，没有把控台灯光载入或同步到新工程');
     return state;
   };
-  if (!current().project?.rundown.length) return 'MA2 已连接。导入 P1 歌曲后重新连接，就能载入对应的 Cue';
+  if (!current().project?.rundown.length) return 'MA2 已连接。可以在“歌曲导入与同步”里点“导入 P1 音乐并匹配控台 Cue”。';
   if (useMa2ReadStore.getState().busy) throw new Error('正在读取控台，请等这次完成');
   if (ma2ConsoleWriting()) throw new Error('正在写入控台并确认，请完成后再连接或刷新');
   let refreshTimelines = refresh;
