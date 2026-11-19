@@ -50,6 +50,7 @@ export const ma2SongConsoleEditsSchema = z.object({
   conflicts: z.object({ count: z.number().int().positive(), winner: z.enum(['local', 'remote']) }).strict().optional()
 }).strict();
 export const ma2SongSyncResultSchema = z.object({ binding: ma2SongBindingSchema, library: ma2EffectLibrarySchema, layout: ma2LayoutSnapshotSchema.nullable(),
+  libraryDirectoryScope: z.literal('song').optional(),
   backupFile: z.string(), changed: z.boolean(),
   remoteRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   consoleEdits: ma2SongConsoleEditsSchema.optional()

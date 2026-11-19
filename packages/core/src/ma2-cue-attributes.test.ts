@@ -50,6 +50,19 @@ it('uses console hierarchy for custom names and moved attributes, with complete 
   expect(classifyMa2Attributes({attributes:['X'],groups:[group('X','CUSTOM')],hasEffects:false})).toEqual({roles:['other'],unknown:[]});
   expect(classifyMa2Attributes({attributes:['SHUTTER'],groups:[group('SHUTTER','BEAM','SHUTTER')],hasEffects:true}).roles).toEqual(['beam','shutter','effect']);
 });
+it('同步单曲的局部目录时保留其他序列、灯具属性和错误记录', () => {
+  const original = fixture();
+  original.errors = [{ sequence: 2, message: '读取不完整' }];
+  const project = saveMa2MaterialLibraryCommand(source, original).execute(createEmptyLinkProject('test'));
+  const directory = { ...original.directory, entries: [{ target: 1, name: '改名' }] };
+  const result = { ...original, directory, sequences: original.sequences.slice(0, 1), errors: [] };
+  const merged = mergeMa2AttributesCommand(source, result, [1], false, 'song').execute(project).ma2MaterialLibrary!.library!;
+  expect(merged.directory.entries).toEqual([...directory.entries, original.directory.entries[1]]);
+  expect(merged.sequences).toContainEqual(original.sequences[1]);
+  expect(merged.errors).toEqual(original.errors);
+  const second = { ...original, directory: { ...original.directory, entries: [original.directory.entries[1]!] }, sequences: original.sequences.slice(1), cueAttributes: [] };
+  expect(mergeMa2AttributesCommand(source, second, [2], false, 'song').execute(project).ma2MaterialLibrary!.library!.cueAttributes).toContainEqual(original.cueAttributes![0]);
+});
 it('retains custom console categories and explicit review buckets after save and reread',()=>{
   const read=fixture();read.cueAttributes![0]={...read.cueAttributes![0]!,attributes:['SPECIAL'],groups:[group('SPECIAL','MY_PRESET')]};
   const before=saveMa2MaterialLibraryCommand(source,read).execute(createEmptyLinkProject('test'));

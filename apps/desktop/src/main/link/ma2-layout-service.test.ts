@@ -204,7 +204,10 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
       slow.done = true;
     }
     const requestId = randomUUID().replaceAll('-', '');
-    if (operation === 'LISTSEQ') return Promise.resolve({ requestId, response: JSON.stringify({ ...source, entries: [...sequences.keys()].map(number => ({ target: number, name: `S${number}` })) }) });
+    if (operation === 'LISTSEQ') {
+      const numbers = expected ? expected.split(',').map(Number) : [...sequences.keys()];
+      return { requestId, response: JSON.stringify({ ...source, entries: numbers.filter(number => sequences.has(number)).map(number => ({ target: number, name: `S${number}` })) }) };
+    }
     if (operation === 'SEQUENCE') {
       const xml = sequences.get(target)!; if (expected === 'keep') files.set(`tblink_library_${requestId}`, Buffer.from(xml));
       // The wire reports each 8 KB batch of a response as it arrives.
@@ -322,6 +325,9 @@ it('没有改动的同步：写前读到的控台导出直接交给复查当基�
   const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), showStopped, noBackups);
   const written = await service.syncSong(fake.connection, fake.bridge, song);
   fake.ops.length = 0; noBackups.record.mockClear();
+  expect(written.libraryDirectoryScope).toBe('song');
+  expect(written.library.directory.entries.map(entry => entry.target)).toEqual([9000]);
+  expect(fake.bridge.exchange.mock.calls.filter(([op]) => op === 'LISTSEQ').map(([, , scope]) => scope)).toEqual(['9000,9001', '9000']);
   const adoptReadback = vi.fn<(exportFile: string, result: Ma2SongSyncResult) => Promise<boolean>>(() => Promise.resolve(true));
   const unchanged = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: written.binding,
     points: song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: written.binding.points[index]!.cue, delayMs: 0 }] })) }, undefined, undefined, { adoptReadback });

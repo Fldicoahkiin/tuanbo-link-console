@@ -417,7 +417,7 @@ export async function tickMa2SongSync(): Promise<void> {
             const lighting = project.rundown.find(value => value.id === entry.itemId)?.lighting;
             if (!lighting) throw new Error('歌曲已不存在');
             if (JSON.stringify(lighting.ma2Bindings) !== JSON.stringify(item.lighting?.ma2Bindings) || locationIdentity(lighting.consoleSong) !== locationIdentity(item.lighting?.consoleSong)) throw new Error('这首歌已更换控台位置，旧同步结果没有写回，请重新核对当前时间线');
-            const merged = mergeMa2AttributesCommand(endpoint, result.library, [result.binding.sequence], false).execute(project);
+            const merged = mergeMa2AttributesCommand(endpoint, result.library, [result.binding.sequence], false, result.libraryDirectoryScope).execute(project);
             const acknowledged = applyMa2SongReadback(lighting, points, result);
             if (lighting.consoleSong && lighting.consoleSong.name !== item.lighting?.consoleSong?.name) acknowledged.consoleSong = { ...result.binding, name: lighting.consoleSong.name };
             const updated = setLightingCommand(entry.itemId, acknowledged, '读取歌曲 Cue').execute(merged);

@@ -49,10 +49,15 @@ function customPresetCategory(group: Ma2AttributeGroup): { id: string; name: str
 }
 
 /** Merges only selected, freshly verified sequences; other cached cues are preserved. */
-export function mergeMa2AttributesCommand(source: string, result: Ma2EffectLibrary, targets: number[], autoClassify: boolean): LinkCommand {
+export function mergeMa2AttributesCommand(source: string, result: Ma2EffectLibrary, targets: number[], autoClassify: boolean, directoryScope: 'all' | 'song' = 'all'): LinkCommand {
   return { id: crypto.randomUUID(), label: autoClassify ? '读取属性并自动分类' : '读取 Cue 属性', scope: 'lighting', execute(project) {
     const cache = project.ma2MaterialLibrary;
     if (!cache?.library || cache.source !== source || ['show', 'generation', 'version'].some(key => Reflect.get(cache.library!.directory, key) !== Reflect.get(result.directory, key)) || result.sourceUnverified) throw new Error('控台或 Show 变了，属性结果没有合并进来');
+    const directory = directoryScope === 'song' ? { ...result.directory, entries: [
+      ...cache.library.directory.entries.filter(entry => !targets.includes(entry.target)),
+      ...result.directory.entries.filter(entry => targets.includes(entry.target))
+    ].sort((a, b) => a.target - b.target) } : result.directory;
+    const present = new Set(directory.entries.map(entry => entry.target));
     const failed = new Set(result.errors.map(entry => entry.sequence));
     const byCue = new Map(result.cueAttributes?.map(value => [`${value.sequence}:${value.cueIndex}`, value]));
     const partial = result.sequences.filter(sequence => sequence.cues.some(cue => {
@@ -61,15 +66,15 @@ export function mergeMa2AttributesCommand(source: string, result: Ma2EffectLibra
     }));
     for (const sequence of partial) failed.add(sequence.sequence);
     const good = new Set(result.sequences.filter(sequence => targets.includes(sequence.sequence) && !failed.has(sequence.sequence)).map(entry => entry.sequence));
-    const keep = (sequence: number): boolean => !good.has(sequence) && result.directory.entries.some(entry => entry.target === sequence);
+    const keep = (sequence: number): boolean => !good.has(sequence) && present.has(sequence);
     const merge = <T extends { sequence: number }>(old: T[], incoming: T[]): T[] => {
       const previous = new Set(old.map(entry => entry.sequence));
       return [...old.filter(entry => keep(entry.sequence)), ...incoming.filter(entry => good.has(entry.sequence) || !previous.has(entry.sequence))];
     };
     const errors = [...result.errors, ...partial.filter(sequence => !result.errors.some(error => error.sequence === sequence.sequence)).map(sequence => ({ sequence: sequence.sequence, message: '部分属性数据不完整，已保留之前读取的结果和分类；请查看属性详情，手动补读' }))];
-    const merged: Ma2EffectLibrary = { ...cache.library, directory: result.directory, readAt: result.readAt,
+    const merged: Ma2EffectLibrary = { ...cache.library, directory, readAt: result.readAt,
       // Verified names and numbers remain useful even if fixture detail is incomplete.
-      sequences: [...cache.library.sequences.filter(sequence => !result.sequences.some(incoming => incoming.sequence === sequence.sequence && !result.errors.some(error => error.sequence === incoming.sequence)) && result.directory.entries.some(entry => entry.target === sequence.sequence)), ...result.sequences.filter(sequence => !result.errors.some(error => error.sequence === sequence.sequence))],
+      sequences: [...cache.library.sequences.filter(sequence => !result.sequences.some(incoming => incoming.sequence === sequence.sequence && !result.errors.some(error => error.sequence === incoming.sequence)) && present.has(sequence.sequence)), ...result.sequences.filter(sequence => !result.errors.some(error => error.sequence === sequence.sequence))],
       cueAttributes: merge(cache.library.cueAttributes ?? [], result.cueAttributes ?? []),
       fixtureUsage: merge(cache.library.fixtureUsage, result.fixtureUsage),
       errors: [...cache.library.errors.filter(entry => !targets.includes(entry.sequence) && keep(entry.sequence)), ...errors] };

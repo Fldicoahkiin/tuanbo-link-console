@@ -101,8 +101,8 @@ export class Ma2LayoutService {
     return `assert(gma.show.getvar('SHOWFILE')==${decode(request.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${decode(request.expectedSource.generation)},'Show or session changed');`;
   }
 
-  private async directory(bridge: Bridge, request: Ma2LayoutReadRequest) {
-    const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
+  private async directory(bridge: Bridge, request: Ma2LayoutReadRequest, targets?: number[]) {
+    const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1, targets?.join(','))));
     if (Object.entries(request.expectedSource).some(([key, value]) => Reflect.get(directory, key) !== value)) throw new Error('控台或 Show 已变化，请重新读取');
     return directory;
   }
@@ -236,7 +236,12 @@ export class Ma2LayoutService {
     let collision: 'changed' | 'occupied' | null = null;
     try {
       progress('connecting', 0, 1, '检查控台、歌曲关联和目标位置');
-      const directory = await this.directory(bridge, layoutRequest);
+      // An existing song already owns its Sequence. Check that slot and the preferred scratch slot
+      // directly, even when the pool's highest occupied number is 9999.
+      const scratchLimit = 9989;
+      const boundTarget = request.binding?.sequence;
+      const preferredScratch = target < scratchLimit ? target + 1 : 1;
+      const directory = await this.directory(bridge, layoutRequest, boundTarget ? [boundTarget, preferredScratch] : undefined);
       const ownership = `${this.ownershipFile}.songs.json`;
       const schema = z.array(z.object({ key: z.string(), projectId: z.string(), itemId: z.string(), inputHash: z.string().optional(), binding: ma2SongBindingSchema.optional(),
         pendingTimecode: z.literal(true).optional(),
@@ -566,9 +571,12 @@ export class Ma2LayoutService {
           const consoleCues = remoteXml && copyInPlace ? new Set(inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.map(cue => Number(cue.number))) : new Set<number>();
           // onPC 3.7 refused to create Sequence 9990 and above (99999 included); the free number right
           // after the song's own Sequence was created there, so the scratch Sequence goes next to it.
-          const occupied = new Set(directory.entries.map(entry => entry.target));
+          const needsScratch = copyInPlace && emptyCues.length > 0 || plan.changes.some(change =>
+            (change.refs?.length ?? 0) > 1 || change.refs?.some(ref => ref.sequence === target || selectedCopies.has(ref)));
+          const scratchDirectory = boundTarget && needsScratch && directory.entries.some(entry => entry.target === preferredScratch)
+            ? await this.directory(bridge, layoutRequest) : directory;
+          const occupied = new Set(scratchDirectory.entries.map(entry => entry.target));
           occupied.add(target);
-          const scratchLimit = 9989;
           let scratch = target < scratchLimit ? target + 1 : 1;
           while (scratch <= scratchLimit && occupied.has(scratch)) scratch++;
           if (scratch > scratchLimit) { scratch = 1; while (scratch < target && occupied.has(scratch)) scratch++; }
@@ -655,14 +663,18 @@ export class Ma2LayoutService {
       const afterLayout = executorPage ? null : changed ? await this.snapshot(connection, layoutRequest) : beforeLayout;
       if (!executorPage && !afterLayout?.value.items.some(item => item.sequence === target)) throw new Error('Layout 里没有读到这首歌的序列');
       // Without a write the directory read at the start still lists this Sequence as it is.
-      const verifiedDirectory = changed ? await this.directory(bridge, layoutRequest) : directory; const readAt = new Date().toISOString();
+      const after = changed ? await this.directory(bridge, layoutRequest, [target]) : directory;
+      const songEntry = after.entries.find(entry => entry.target === target);
+      if (!songEntry) throw new Error(`控台上没有读到刚核对的序列 ${target}，请重新确认这首歌`);
+      const verifiedDirectory = { ...after, entries: [songEntry] };
+      const readAt = new Date().toISOString();
       progress('verification', 1, 1, `${executor ? `执行器 ${executor}` : `Layout ${layoutRequest.layout}`} · 序列 ${target} 已确认`);
       const result = ma2SongSyncResultSchema.parse({ binding: { endpoint, show: directory.show, layout: executorPage ? null : layoutRequest.layout, ...(executor ? { executor } : {}), sequence: target, name: report.name, baselineXml: canonical(verifiedXml),
           // The Timecode show record and the times it fires stay until the show is written again below.
           points: plan.points.map(point => { const old = request.binding?.points.find(value => value.id === point.id); return { ...point, ...(old?.atMs === undefined ? {} : { atMs: old.atMs }), ...(old?.enabled === false ? { enabled: false } : {}) }; }),
           ...previousTimecode ? { timecode: previousTimecode } : {} },
         library: { directory: verifiedDirectory, readAt, sequences: [{ sequence: target, name: report.name, cues: report.cues }], errors: [], fixtureDetails: 'included', fixtureUsage: inspectMa2CueFixtures(verifiedXml), cueAttributes: inspectMa2CueAttributes(verifiedXml, readAt, true) },
-        layout: afterLayout?.value ?? null, backupFile, changed, ...consoleEdits ? { consoleEdits } : {},
+        libraryDirectoryScope: 'song', layout: afterLayout?.value ?? null, backupFile, changed, ...consoleEdits ? { consoleEdits } : {},
         remoteRevision: createHash('sha256').update(canonical(verifiedXml)).digest('hex') });
       // Persist the verified binding before returning. If the renderer closes or
       // saving the project fails, the next explicit check recovers this position.
