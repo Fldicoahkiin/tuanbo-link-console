@@ -17,6 +17,14 @@ local function discard(name)
   -- A copy that cannot be removed stays in importexport, as every copy did before this cleanup.
   if remove_scratch then os.remove(root .. '/importexport/' .. name .. '.xml') end
 end
+-- Register ownership before Export: failed reads and cancelled network steps use
+-- the same cleanup as successful reads. Only a verified, requested backup is kept.
+local function own_read_exports(job, name, keep)
+  job.close = function()
+    discard(name .. '_verify')
+    if not (keep and job.result) then discard(name) end
+  end
+end
 local function sequence_appearance(number, handle)
   local now = gma.gettime()
   local cached = appearance_cache[number]
@@ -1205,13 +1213,12 @@ local function start(data, previous)
       assert(body == '' or body == 'keep', 'Sequence request must be empty or keep')
       assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
       local name = 'tblink_library_' .. id
+      own_read_exports(job, name, body == 'keep')
       gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
       local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
       return step(function()
         gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
         assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
-        discard(name .. '_verify')
-        if body ~= 'keep' then discard(name) end
         answer(xml)
       end)
     end
@@ -1268,6 +1275,7 @@ local function start(data, previous)
       local obj = gma.show.getobj
       local sequence = assert(obj.handle('Sequence ' .. tc), 'Sequence missing')
       local name = 'tblink_library_' .. id
+      own_read_exports(job, name)
       local path = root .. '/importexport/' .. name
       -- When only this step's stored values were requested, export the live Cue itself.
       -- A tracked look still depends on earlier Cues and uses the full sequence below.
@@ -1295,7 +1303,6 @@ local function start(data, previous)
           local escaped = label:gsub('&', '&amp;'):gsub('"', '&quot;'):gsub('<', '&lt;'):gsub('>', '&gt;')
             :gsub('\r', '&#13;'):gsub('\n', '&#10;'):gsub('\t', '&#9;')
           local xml = head .. '<Sequ index="' .. (tc-1) .. '" name="' .. escaped .. '">' .. cue .. '</Sequ></MA>'
-          discard(name); discard(name .. '_verify')
           if token or names_show then return finish_material(xml) end
           return answer(xml)
         end)
@@ -1305,14 +1312,12 @@ local function start(data, previous)
       return step(function()
         gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
         assert(same_sequence_files(path .. '.xml', path .. '_verify.xml', false), 'Sequence changed during read')
-        discard(name .. '_verify')
         if status then
           local result = tracked_cues(tc, wanted, xml, 'tblink_status_' .. id)
-          discard(name)
           if token or names_show then return finish_material(result) end
           return answer(result)
         end
-        if token or names_show then discard(name); return finish_material(xml) end
+        if token or names_show then return finish_material(xml) end
         local head = assert(xml:match('^(.-<Sequ%s[^>]*>)'), 'Sequence XML unavailable')
         assert(head:sub(-2) ~= '/>', 'Sequence has no Cues')
         local parts, position = { head }, 1
@@ -1332,7 +1337,6 @@ local function start(data, previous)
           end
         end
         parts[#parts + 1] = '</Sequ></MA>'
-        discard(name)
         answer(table.concat(parts, '\n'))
       end)
     end
@@ -1342,6 +1346,7 @@ local function start(data, previous)
       local handle = assert(gma.show.getobj.handle(address), 'Executor does not exist')
       local executor_name = assert(gma.show.getobj.name(handle), 'Executor name unavailable')
       local name = 'tblink_executor_' .. id
+      own_read_exports(job, name)
       gma.cmd('Export ' .. address .. ' "' .. name .. '" /o')
       local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Executor export unavailable')
       assert(gma.show.getobj.handle(address), 'Executor disappeared during read')
@@ -1349,7 +1354,6 @@ local function start(data, previous)
         gma.cmd('Export ' .. address .. ' "' .. name .. '_verify" /o')
         local check = assert(read(root .. '/importexport/' .. name .. '_verify.xml'), 'Executor verification unavailable')
         assert(canonical(xml) == canonical(check), 'Executor changed during read')
-        discard(name); discard(name .. '_verify')
         assert(gma.show.getobj.name(assert(gma.show.getobj.handle(address))) == executor_name, 'Executor name changed during read')
         local escaped = executor_name:gsub('&', '&amp;'):gsub('"', '&quot;'):gsub('<', '&lt;'):gsub('>', '&gt;'):gsub('\r', '&#13;'):gsub('\n', '&#10;'):gsub('\t', '&#9;')
         local result, count = xml:gsub('<Exec%s', function() return '<Exec tblink_executor_name="' .. escaped .. '" ' end)

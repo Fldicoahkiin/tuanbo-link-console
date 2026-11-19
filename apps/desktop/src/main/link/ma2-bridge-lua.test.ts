@@ -13,7 +13,7 @@ import { ma2PoolRouteSchema, ma2ObjectDirectorySchema, ma2TimecodeRangesSchema }
 // The real tools/ma2/tblink_bridge.lua runs here in a Lua 5.3 interpreter against a fake console
 // (fixtures/ma2-fake-console.lua). The baseline is the plugin as it was before it answered step by
 // step (fixtures/tblink_bridge.single-run.lua): the same requests must give the same answers, run
-// the same console commands in the same order and leave the same files and objects behind.
+// the same console commands in the same order and leave the same persistent files and objects.
 
 const hex = (text: string): string => Buffer.from(text).toString('hex');
 const requestId = (index: number): string => index.toString(16).padStart(32, 'c');
@@ -276,7 +276,25 @@ it.each([
   desk.beforeLine = line => { if (line.includes("'step'")) desk.lua("FAKE.vars.SHOWFILE='other'"); };
   await expect(wire.exchange(requestId(1), operation, target, body, () => undefined)).rejects.toThrow('Show or session changed');
   expect(wire.unreleasedRequests).toEqual([]);
+  const base = '/fake/importexport/tblink_' + (operation === 'EXECUTOR' ? 'executor_' : 'library_') + requestId(1);
+  expect(desk.file(base + '.xml')).toBeNull();
+  expect(desk.file(base + '_verify.xml')).toBeNull();
   expect(desk.commands().some(line => line.startsWith('Import '))).toBe(false);
+});
+
+it('核对前取消读取会清理临时导出，同一对象上次已确认的备份仍保留', async () => {
+  const desk = new Ma2LuaConsole(); show(desk);
+  const wire = new Ma2NetworkWire(desk, false, undefined, true);
+  const saved = await wire.exchange(requestId(1), 'SEQUENCE', 9901, 'keep', () => undefined);
+  const id = requestId(2);
+  const path = '/fake/importexport/tblink_library_';
+  await rpc(desk, 'begin', id, ",'SEQUENCE',9901,0,'bg'");
+  expect(await rpc(desk, 'run', id, ",'steps'")).toMatch(/^STEP:/);
+  expect(desk.file(path + id + '.xml')).not.toBeNull();
+  expect(await rpc(desk, 'release', id)).toBe('ACK');
+  expect(desk.file(path + id + '.xml')).toBeNull();
+  expect(desk.file(path + requestId(1) + '.xml')?.toString()).toBe(saved);
+  expect(desk.file(path + requestId(1) + '_verify.xml')).toBeNull();
 });
 
 it.each(['beginsync', 'run'])('两个 Show 的编号和内容相同，在 %s 前切换也不能覆盖另一个 Show', async action => {
@@ -575,10 +593,21 @@ async function record(source: string, setup: ((ma2: Ma2LuaConsole) => void) | un
   const results: string[] = [];
   let index = 0;
   const exchange = async (request: Request): Promise<string> => {
+    const id = requestId(index++);
     try {
-      const value = await wire.exchange(requestId(index++), request.operation, request.target, request.body ?? '', () => undefined, undefined, undefined, undefined, lane);
+      const value = await wire.exchange(id, request.operation, request.target, request.body ?? '', () => undefined, undefined, undefined, undefined, lane);
       results.push(`OK ${value}`); return value;
-    } catch (error) { results.push(`ERROR ${normalize(error instanceof Error ? error.message : String(error))}`); return ''; }
+    } catch (error) {
+      const reason = normalize(error instanceof Error ? error.message : String(error));
+      // The frozen bridge left these two comparison exports behind on a mismatch.
+      // Check that exact historical difference before comparing all remaining files.
+      if (source === singleRunBridgeSource && (reason === 'MA2：Sequence changed during read' || reason === 'MA2：Executor changed during read')) {
+        const prefix = request.operation === 'EXECUTOR' ? 'executor' : 'library';
+        const base = `/fake/importexport/tblink_${prefix}_${id}`;
+        ma2.lua("assert(os.remove(BASE .. '.xml')); assert(os.remove(BASE .. '_verify.xml'))", { BASE: base });
+      }
+      results.push(`ERROR ${reason}`); return '';
+    }
   };
   await run(exchange, ma2);
   checkSteps(ma2, source === bridgeSource);
