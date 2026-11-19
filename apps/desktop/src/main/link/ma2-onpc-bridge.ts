@@ -153,7 +153,7 @@ export class Ma2OnpcBridge {
     if (operation === 'SEQGO' && (!/^(?:[a-f0-9]{2}){1,4096}\n(?:[a-f0-9]{2}){1,128}$/.test(expected) || desired)) throw new Error('控台触发检查请求无效');
     if (operation === 'SEQUENCE' && (!['', 'keep'].includes(expected) || desired)) throw new Error('序列读取请求格式无效');
     if (operation === 'SEQCUES' && (!/^(?:(?:names:(?:[a-f0-9]{2})+:(?:[a-f0-9]{2})+:|pick:[a-f0-9]{32}:[a-f0-9]+(?:\+[a-f0-9]+)*:(?:[a-f0-9]{2})+-(?:[a-f0-9]{2})+:))?(?:status:(?:[a-f0-9]{32}:)?|saved:[a-f0-9]{32}:)?\d+\.\d{3}(?:,\d+\.\d{3})*$/.test(expected) || expected.length > 65536 || desired)) throw new Error('序列 Cue 读取范围无效');
-    if (operation === 'TCRANGES' && (target !== 1 || expected.length > 60009 || expected && !/^playback:[1-9]\d{0,4}(?:,[1-9]\d{0,4})*$/.test(expected) || desired)) throw new Error('时间码范围读取请求格式无效');
+    if (operation === 'TCRANGES' && (target !== 1 || expected.length > 60009 || expected && expected !== 'editing' && !/^playback:[1-9]\d{0,4}(?:,[1-9]\d{0,4})*$/.test(expected) || desired)) throw new Error('时间码范围读取请求格式无效');
     if (operation === 'LIST' && (desired || expected && expected !== 'selector')) throw new Error('时间线目录读取范围无效');
     if (operation === 'LISTSEQ' && (desired || expected.length > 60000 || expected && expected !== '0' && expected !== 'selector' && !/^[1-9]\d{0,4}(?:,[1-9]\d{0,4})*$/.test(expected))) throw new Error('序列目录读取范围无效');
     if (operation === 'DISCARD' && (!/^tblink_(?:backup|label|library)_[a-f0-9]{32}(?:,tblink_(?:backup|label|library)_[a-f0-9]{32})*$/.test(expected) || expected.length > 4096 || desired)) throw new Error('控台备份清理列表无效');

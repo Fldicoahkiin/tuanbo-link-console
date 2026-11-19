@@ -816,7 +816,7 @@ export class Ma2LayoutService {
           if (!scratch) throw new Error('控台没有空闲序列，无法复制选中的灯具属性');
           selectedFiles.set(index, selected.file);
         }
-        const sourceXml = selected?.xml ?? (ref.includeTracking ? await bridge.request('SEQCUES', ref.sequence, 'status:' + Number(ref.cue).toFixed(3)) : await bridge.request('SEQUENCE', ref.sequence));
+        const sourceXml = selected?.xml ?? await bridge.request('SEQCUES', ref.sequence, (ref.includeTracking ? 'status:' : '') + Number(ref.cue).toFixed(3));
         const report = inspectMa2SequenceXml(sourceXml);
         const cue=resolveMa2CueNumber(ref.sequence, ref.cue, [report]);
         for(const [channel,layers] of inspectMa2CueData(sourceXml,cue.cueIndex))combined.set(channel,{...combined.get(channel),...layers});

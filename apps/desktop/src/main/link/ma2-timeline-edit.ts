@@ -4,7 +4,7 @@ import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { editMa2TimecodeMetadata, inspectMa2TimecodeXml, sameMa2XmlObjects } from './ma2-timecode-xml';
 
 export async function readMa2MtcRanges(bridge: Pick<Ma2OnpcBridge, 'request'>): Promise<Ma2TimecodeRanges> {
-  return ma2SongDirectory(ma2TimecodeRangesSchema.parse(JSON.parse(await bridge.request('TCRANGES', 1))));
+  return ma2SongDirectory(ma2TimecodeRangesSchema.parse(JSON.parse(await bridge.request('TCRANGES', 1, 'editing'))));
 }
 
 export async function editMa2Timeline(bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'>, input: Ma2TimelineEditRequest): Promise<Ma2TimelineEditResult> {

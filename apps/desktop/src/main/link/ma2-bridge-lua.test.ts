@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { bridgeSource, Ma2LuaConsole, singleRunBridgeSource } from './fixtures/ma2-lua-console';
 import { Ma2NetworkWire } from './ma2-network-wire';
+import { readMa2MtcRanges } from './ma2-timeline-edit';
 import { ma2Lane, Ma2OnpcBridge, parseMa2Ping, type Ma2Lane, type Ma2Operation } from './ma2-onpc-bridge';
 import { ensureMa2NetworkBridge } from './ma2-bridge-installer';
 import { showStopped } from './fixtures/show-gates';
@@ -16,6 +17,17 @@ import { ma2PoolRouteSchema, ma2ObjectDirectorySchema, ma2TimecodeRangesSchema }
 
 const hex = (text: string): string => Buffer.from(text).toString('hex');
 const requestId = (index: number): string => index.toString(16).padStart(32, 'c');
+
+it('修改 MTC 时用真实连接组件读回全目录和同一个控台会话', async () => {
+  const desk = new Ma2LuaConsole();
+  show(desk);
+  const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(desk), showStopped);
+  const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
+  const ranges = await readMa2MtcRanges(bridge);
+  expect(ranges.generation).toBe(directory.generation);
+  expect(ranges.show).toBe(directory.show);
+  expect(ranges.entries.map(entry => entry.target)).toEqual(directory.entries.map(entry => entry.target));
+});
 
 it('第一轨补收回执时重新核对原生 Cue，前面插入 Cue 不影响确认，同号换内容不会误报成功', async () => {
   const desk = new Ma2LuaConsole();
@@ -55,6 +67,25 @@ const sequenceXml = (number: number, color = '', extra = ''): string => `<?xml v
 \t</Sequ>
 </MA>
 `;
+it('大素材序列只传所选 Cue，时间线写前仍能发现其他 Cue 的灯具值变化', async () => {
+  const desk = new Ma2LuaConsole();
+  const wire = new Ma2NetworkWire(desk);
+  const original = sequenceXml(99).replace('<CueData value="1"/>', '<CueData value="1"/>'.repeat(16000));
+  const timeline = timecodeXml(5, [[99, 2]]);
+  desk.set('Timecode 5', { xml: timeline });
+  desk.set('Sequence 99', { xml: original });
+  const cue = await wire.exchange(requestId(1), 'SEQCUES', 99, '2.500', () => undefined);
+  expect(cue).toContain('<CueData value="2"/>');
+  expect(cue).not.toContain('<CueData value="1"/>');
+  const snap = await wire.exchange(requestId(2), 'SNAPSHOT', 5, '', () => undefined);
+  expect(snap.length).toBeLessThan(4096);
+  expect(snap).toContain('sub_number="500"');
+  desk.set('Sequence 99', { xml: original.replace('value="1"', 'value="9"') });
+  await expect(wire.exchange(requestId(3), 'SYNC', 5, syncBody(snap, timeline), () => undefined)).rejects.toThrow('Timecode or Sequence changed after preview');
+  expect(desk.commands().some(command => command.startsWith('Import '))).toBe(false);
+  const fresh = await wire.exchange(requestId(4), 'SNAPSHOT', 5, '', () => undefined);
+  await expect(wire.exchange(requestId(5), 'SYNC', 5, syncBody(fresh, timeline), () => undefined)).resolves.toContain('<Timecode');
+});
 it('只读取指定 Cue 的属性名，选中属性的所有灯具和层原样传送', async () => {
   const desk = new Ma2LuaConsole();
   const wire = new Ma2NetworkWire(desk);

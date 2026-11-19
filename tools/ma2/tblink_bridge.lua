@@ -32,12 +32,17 @@ local function sequence_appearance(number, handle)
   appearance_cache[number] = {handle=handle,show=gma.show.getvar('SHOWFILE'),at=now,color=color}
   return color
 end
-local function read(path)
+local function bounded_read(path, limit)
   local file = io.open(path, 'rb')
   if not file then return nil end
-  local data = file:read(33554433) or ''
+  local data = file:read(limit + 1) or ''
   file:close()
-  assert(#data <= 33554432, 'Bridge file exceeds limit')
+  if #data > limit then return nil, true end
+  return data
+end
+local function read(path)
+  local data, larger = bounded_read(path, 33554432)
+  assert(not larger, 'Bridge file exceeds limit')
   return data
 end
 local function write(path, data)
@@ -52,7 +57,7 @@ local function canonical(xml)
 end
 -- Sequence fixture data can be hundreds of MB. Scan bounded XML tokens on the console,
 -- never load/transfer a complete Sequence merely to prepare its Cue triggers.
-local function sequence_stream(path, strip_triggers, visit, work)
+local function sequence_stream(path, strip_triggers, visit, work, preserve_spacing)
   local file = assert(io.open(path, 'rb'), 'Sequence export unavailable')
   if work then work.files[file] = true end
   local buffer, cursor, ended, stack = '', 1, false, {}
@@ -91,7 +96,7 @@ local function sequence_stream(path, strip_triggers, visit, work)
       if work then work.checkpoint(0, 1) end
       local value, opaque = token()
       if not value then assert(#stack == 0, 'Incomplete Sequence XML'); return nil end
-      if opaque then return value end
+      if opaque then return value, true end
       local parent = stack[#stack]
       if value:sub(1, 1) == '<' then
         local closing, name = value:match('^<(/?)([%w_:%-]+)')
@@ -107,10 +112,43 @@ local function sequence_stream(path, strip_triggers, visit, work)
           assert(not (stamp or trigger) or empty, 'Unsupported Sequence metadata element')
           if not stamp and not (strip_triggers and trigger) then return value end
         else return value end
-      elseif not (value:match('^%s*$') and (parent == 'MA' or parent == 'Sequ' or parent == 'Cue')) then return value end
+      elseif preserve_spacing or not (value:match('^%s*$') and (parent == 'MA' or parent == 'Sequ' or parent == 'Cue')) then return value end
     end
   end
   return next_part, function() file:close(); if work then work.files[file] = nil end end
+end
+-- Keep sequence metadata, but retain fixture payload only for the requested Cue numbers.
+-- Native backup files and the full-file comparison always include every fixture byte.
+local function cue_selection(path, wanted, project_large)
+  if not project_large then
+    local small, larger = bounded_read(path, 262144)
+    if not larger then return assert(small, 'Sequence export unavailable') end
+  end
+  local selected, number_seen = false, false
+  local part, close = sequence_stream(path, false, function(value, name, closing, parent)
+    if not closing and name == 'Cue' and parent == 'Sequ' then selected, number_seen = false, false end
+    if not closing and name == 'Number' and parent == 'Cue' then
+      local whole = tonumber(value:match('%snumber="(%d+)"'))
+      local sub = tonumber(value:match('%ssub_number="(%d+)"') or '0')
+      assert(whole and sub, 'Invalid Sequence Cue number')
+      number_seen = true
+      selected = wanted[whole * 1000 + sub]
+    elseif not closing and name == 'CueDatas' then
+      assert(number_seen, 'Cue number missing before fixture data')
+    end
+  end, nil, true)
+  local ok, xml = pcall(function()
+    local parts = {}
+    while true do
+      local value, fixture = part()
+      if not value then break end
+      if not fixture or selected then parts[#parts + 1] = value end
+    end
+    return table.concat(parts)
+  end)
+  close()
+  assert(ok, xml)
+  return xml
 end
 local function sequence_triggers(path, target, work)
   local cues, number, changed, count, sequences = {}, nil, false, 0, 0
@@ -139,6 +177,25 @@ local function sequence_triggers(path, target, work)
   return cues
 end
 local function same_sequence_files(left, right, strip_triggers, work)
+  -- The common case is two native exports with equal-length timestamp fields. Compare native
+  -- blocks directly rather than tokenizing the same fixture data twice. For any difference
+  -- the canonical reader below still decides whether the change is meaningful.
+  if not strip_triggers and not work then
+    local a = assert(io.open(left, 'rb'), 'Sequence export unavailable')
+    local b = io.open(right, 'rb')
+    if not b then a:close(); error('Sequence verification export unavailable') end
+    local ok, equal = pcall(function()
+      local x, y = a:read(32768), b:read(32768)
+      if not x or not y or canonical(x) ~= canonical(y) then return false end
+      repeat
+        x, y = a:read(1048576), b:read(1048576)
+        if x ~= y then return false end
+      until not x
+      return true
+    end)
+    a:close(); b:close(); assert(ok, equal)
+    if equal then return true end
+  end
   local a, close_a = sequence_stream(left, strip_triggers, nil, work)
   local ok_open, b, close_b = pcall(sequence_stream, right, strip_triggers, nil, work)
   if not ok_open then close_a(); error(b) end
@@ -178,6 +235,7 @@ end
 -- program can send other commands (lights off, a Cue) between two steps. Writing is one step as a
 -- whole: backup export, compare, write the file, Import. Steps run one per 'step' call, or all at
 -- once for the local file bridge and for a 'run' without 'steps'. The state lives on the request.
+local snapshot_files = {}
 local function snapshot(step, tc, id, additional, done, previous)
   local xml = export_scratch(tc, 'tblink_snapshot_' .. id)
   local numbers, seen = references(xml), {}
@@ -188,6 +246,7 @@ local function snapshot(step, tc, id, additional, done, previous)
   end
   table.sort(numbers)
   local parts = {}
+  local inline_bytes = 0
   local known = {}
   if previous then
     for object in previous:gmatch('(<Sequ%s.-</Sequ>)') do
@@ -209,7 +268,38 @@ local function snapshot(step, tc, id, additional, done, previous)
     step(function()
       assert(gma.show.getobj.handle('Sequence ' .. number), 'Referenced Sequence is missing')
       gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '" /o')
-      local full = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
+      local dir = root .. '/importexport/'
+      local path = dir .. name .. '.xml'
+      local full, large = bounded_read(path, math.min(262144, 1048576 - inline_bytes))
+      if large then
+        -- The editor needs the step table. SYNC still compares the complete native file,
+        -- including every unrelated fixture, before accepting this revision.
+        local show = gma.show.getvar('SHOWFILE')
+        local prior = snapshot_files[number]
+        local function add(ref)
+          parts[#parts + 1] = ref.object
+          next_sequence(i + 1)
+        end
+        if prior and prior.show == show and same_sequence_files(path, dir .. prior.name .. '.xml', false) then
+          discard(name); return add(prior)
+        end
+        local projected = cue_selection(path, {}, true)
+        local object = assert(projected:match('(<Sequ%s.-</Sequ>)'), 'Sequence XML unavailable')
+        object = object:gsub('</Sequ>$', '<!--tblink-native-' .. id .. '--></Sequ>')
+        return step(function()
+          gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '_verify" /o')
+          local same = same_sequence_files(path, dir .. name .. '_verify.xml', false)
+          discard(name .. '_verify')
+          if not same then discard(name); error('Sequence changed during snapshot') end
+          local updated = {show=show, name=name, object=object}
+          local old = snapshot_files[number]
+          snapshot_files[number] = updated
+          if old then discard(old.name) end
+          add(updated)
+        end)
+      end
+      assert(full, 'Sequence export unavailable')
+      inline_bytes = inline_bytes + #full
       local object = assert(full:match('(<Sequ%s.-</Sequ>)'), 'Sequence XML unavailable')
       parts[#parts + 1] = object
       -- Every Sequence is freshly exported. An exact match with its previously verified native
@@ -265,7 +355,7 @@ local function tracked_cues(seq, wanted, source_xml, name)
     end
     assert(current() and obj.handle(address) == owned, 'Temporary sequence changed')
     gma.cmd('Export ' .. address .. ' ' .. name .. '_result /o')
-    local xml = assert(read(dir .. name .. '_result.xml'), 'Tracking readback unavailable')
+    local xml = cue_selection(dir .. name .. '_result.xml', wanted)
     local source_tag = assert(source_xml:match('(<Sequ%s[^>]+>)'))
     xml = xml:gsub('<Cue%s+index="[^"]+"[^>]*>.-</Cue>', function(cue)
       local n, sub = cue:match('<Number%s+number="(%d+)"%s+sub_number="(%d+)"')
@@ -287,7 +377,8 @@ end
 local function archived_tracked_cues(target, wanted, token, id)
   local dir = root .. '/importexport/'
   local file = 'tblink_archive_' .. token
-  local xml = assert(read(dir .. file .. '.xml'), 'Saved sequence unavailable')
+  local path = dir .. file .. '.xml'
+  local xml = cue_selection(path, {})
   local name = 'tblink_arch_' .. id
   local obj = gma.show.getobj
   local show = gma.show.getvar('SHOWFILE')
@@ -298,12 +389,24 @@ local function archived_tracked_cues(target, wanted, token, id)
   local address = 'Sequence ' .. scratch
   local owned
   local ok, result = pcall(function()
-    local temp, count = xml:gsub('<Sequ%s[^>]+>', function(tag)
-      assert(tonumber(tag:match('%sindex="(%d+)"')) == target-1, 'Saved sequence identity changed')
-      return (tag:gsub('%sname="[^"]*"', '', 1):gsub('^<Sequ%s', '<Sequ name="' .. name .. '" ', 1))
-    end, 1)
-    assert(count == 1 and current() and not obj.handle(address), 'Temporary sequence changed')
-    write(dir .. name .. '.xml', temp)
+    local out = assert(io.open(dir .. name .. '.xml', 'wb'))
+    local part, close = sequence_stream(path, false, nil, nil, true)
+    local copied, why = pcall(function()
+      local count = 0
+      while true do
+        local value, opaque = part()
+        if not value then break end
+        if not opaque and value:match('^<Sequ%s') then
+          assert(tonumber(value:match('%sindex="(%d+)"')) == target-1, 'Saved sequence identity changed')
+          value = value:gsub('%sname="[^"]*"', '', 1):gsub('^<Sequ%s', '<Sequ name="' .. name .. '" ', 1)
+          count = count + 1
+        end
+        assert(out:write(value))
+      end
+      assert(count == 1, 'Saved sequence unavailable')
+    end)
+    close(); assert(out:close()); assert(copied, why)
+    assert(current() and not obj.handle(address), 'Temporary sequence changed')
     gma.cmd('Import ' .. name .. '.xml At ' .. address .. ' /nc')
     owned = assert(obj.handle(address), 'Temporary sequence unavailable')
     assert(obj.label(owned) == name and current(), 'Temporary sequence changed')
@@ -454,9 +557,10 @@ local function first_track_cues(tc, id, body)
   local dir = root .. '/importexport/'
   local obj = gma.show.getobj
   local temp = 'tblink_first_' .. id
-  local function export(address, name, keep)
+  local function export(address, name, keep, wanted)
     gma.cmd('Export ' .. address .. ' ' .. name .. ' /o')
-    local xml = assert(read(dir .. name .. '.xml'), 'Object export unavailable')
+    local path = dir .. name .. '.xml'
+    local xml = wanted and cue_selection(path, wanted) or assert(read(path), 'Object export unavailable')
     if not keep then discard(name) end
     return xml
   end
@@ -521,10 +625,19 @@ local function first_track_cues(tc, id, body)
       end
     end
     backup = needs_write and ('tblink_backup_' .. id) or nil
-    local original = export(dest, backup or (temp .. '_check'), needs_write)
     local function number_key(number) return math.floor(tonumber(number)*1000 + 0.5) end
-    local before_cues = {}
-    for _, point in ipairs(list) do if point.existing then before_cues[number_key(point.existing)] = true end end
+    local before_cues, source_cues = {}, {[seq]={}}
+    for _, point in ipairs(list) do
+      if point.existing then
+        before_cues[number_key(point.existing)] = true
+        source_cues[seq][number_key(point.existing)] = true
+      end
+      for _, source in ipairs(point.sources) do
+        source_cues[source.seq] = source_cues[source.seq] or {}
+        source_cues[source.seq][number_key(source.cue)] = true
+      end
+    end
+    local original = export(dest, backup or (temp .. '_check'), needs_write, source_cues[seq])
     local source_data = first_cue_data(original, before_cues)
     for _, point in ipairs(list) do
       if point.witness then
@@ -542,7 +655,7 @@ local function first_track_cues(tc, id, body)
     end
     for number, wanted in pairs(requested) do
       guard()
-      local xml = number == seq and original or export('Sequence ' .. number, temp .. '_before')
+      local xml = number == seq and original or export('Sequence ' .. number, temp .. '_before', false, {})
       tracked_xml[number] = tracked_cues(number, wanted, xml, 'tblink_status_' .. id)
       tracked[number] = first_cue_data(tracked_xml[number])
     end
@@ -552,7 +665,7 @@ local function first_track_cues(tc, id, body)
         if source.mask then
           local xml = source.mode == 't' and tracked_xml[source.seq] or material_sources[source.seq]
           if not xml then
-            xml = source.seq == seq and original or export('Sequence ' .. source.seq, temp .. '_material')
+            xml = source.seq == seq and original or export('Sequence ' .. source.seq, temp .. '_material', false, source_cues[source.seq])
             material_sources[source.seq] = xml
           end
           source.projected = material_cue(xml, number_key(source.cue), source.mask)
@@ -627,7 +740,7 @@ local function first_track_cues(tc, id, body)
       if needs_write then
         after_cues = {}
         for _, point in ipairs(list) do after_cues[number_key(point.cue)] = true end
-        actual = first_cue_data(export(dest, temp .. '_read'), after_cues)
+        actual = first_cue_data(export(dest, temp .. '_read', false, after_cues), after_cues)
       end
       local sources = {[seq]=source_data}
       local function payload(index, number)
@@ -643,7 +756,7 @@ local function first_track_cues(tc, id, body)
             if source.projected then wanted = payload(first_cue_data(source.projected), source.cue)
             elseif source.mode == 't' then wanted = payload(tracked[source.seq], source.cue)
             else
-              sources[source.seq] = sources[source.seq] or first_cue_data(export('Sequence ' .. source.seq, temp .. '_src'))
+              sources[source.seq] = sources[source.seq] or first_cue_data(export('Sequence ' .. source.seq, temp .. '_src', false, source_cues[source.seq]))
               wanted = payload(sources[source.seq], source.cue)
             end
             if #point.sources > 1 then first_cue_layers(layers, wanted) end
@@ -806,7 +919,8 @@ local function start(data, previous)
       -- One step: the backup export, the checks and the Label belong together.
       local backup = 'tblink_label_' .. id
       gma.cmd('Export Sequence ' .. tc .. ' "' .. backup .. '" /o')
-      assert(read(root .. '/importexport/' .. backup .. '.xml'), 'Name backup unavailable')
+      local file = assert(io.open(root .. '/importexport/' .. backup .. '.xml', 'rb'), 'Name backup unavailable')
+      local first = file:read(1); file:close(); assert(first, 'Name backup empty')
       assert(obj.handle(address) == handle and (label() == previous or label() == name), 'Rename target changed during backup')
       assert(show == gma.show.getvar('SHOWFILE') and session == generation, 'Show changed during backup')
       if label() ~= name then gma.cmd('Label ' .. address .. ' "' .. name .. '"') end
@@ -945,7 +1059,7 @@ local function start(data, previous)
     -- read from an export made and removed on the console, so no event data crosses the network.
     if op == 'TCRANGES' then
       local wanted
-      if body ~= '' then
+      if body ~= '' and body ~= 'editing' then
         local targets = assert(body:match('^playback:([%d,]+)$'), 'Invalid playback range request')
         assert(#targets <= 60000, 'Too many playback targets')
         wanted = {}
@@ -1012,7 +1126,7 @@ local function start(data, previous)
           end
         end
         assert(obj.amount(pool) == count, 'Timecode directory changed during read')
-        answer('{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. (wanted and ',"generation":' .. quote(generation) or '') .. ',"entries":[' .. table.concat(entries, ',') .. ']}')
+        answer('{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. (body ~= '' and ',"generation":' .. quote(generation) or '') .. ',"entries":[' .. table.concat(entries, ',') .. ']}')
       end
       return ranges()
     end
@@ -1133,7 +1247,7 @@ local function start(data, previous)
       if archive then
         local xml
         if saved then
-          xml = assert(read(root .. '/importexport/tblink_archive_' .. archive .. '.xml'))
+          xml = cue_selection(root .. '/importexport/tblink_archive_' .. archive .. '.xml', wanted)
           assert(tonumber(xml:match('<Sequ%s[^>]-index="(%d+)"')) == tc-1, 'Saved sequence identity changed')
           discard('tblink_archive_' .. archive)
         else xml = archived_tracked_cues(tc, wanted, archive, id) end
@@ -1143,10 +1257,11 @@ local function start(data, previous)
       assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
       local name = 'tblink_library_' .. id
       gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
-      local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
+      local path = root .. '/importexport/' .. name
+      local xml = cue_selection(path .. '.xml', wanted)
       return step(function()
         gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
-        assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
+        assert(same_sequence_files(path .. '.xml', path .. '_verify.xml', false), 'Sequence changed during read')
         discard(name .. '_verify')
         if status then
           local result = tracked_cues(tc, wanted, xml, 'tblink_status_' .. id)
@@ -1627,6 +1742,7 @@ local function main(mode)
   if active then
     active = false
     expire_executor_keys()
+    for number, ref in pairs(snapshot_files) do discard(ref.name); snapshot_files[number] = nil end
     if _G.TBLINK_BRIDGE_GENERATION == generation then _G.TBLINK_BRIDGE_READY = false end
     gma.feedback('TBLINK bridge stopped'); return
   end
