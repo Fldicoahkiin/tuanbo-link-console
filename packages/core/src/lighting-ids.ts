@@ -28,6 +28,7 @@ export function remapEventGroup<Event extends LightingEvent>(event: Event, id: L
 export function remapMa2Binding(binding: Ma2Binding, id: LightingIdMap, track: (track: LightingTrack) => LightingTrack): Ma2Binding {
   return {
     ...structuredClone(binding), id: id(binding.id),
+    ...(binding.emptyCueSequence ? { emptyCueSequence: remapConsoleSong(binding.emptyCueSequence, id) } : {}),
     baselineTracks: binding.baselineTracks.map(track),
     ...(binding.trackMappings ? { trackMappings: binding.trackMappings.map(mapping => ({ ...mapping, trackId: id(mapping.trackId) })) } : {}),
     ...(binding.pendingTracks ? { pendingTracks: binding.pendingTracks.map(entry => ({ ...entry, trackId: id(entry.trackId) })) } : {}),

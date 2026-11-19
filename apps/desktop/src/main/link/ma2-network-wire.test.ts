@@ -7,6 +7,7 @@ import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2CommandQueue } from './ma2-command-queue';
 import { showStopped } from './fixtures/show-gates';
 import { Ma2RequestJournal } from './ma2-request-journal';
+import { MA2_BRIDGE_MISSING_BEFORE_REQUEST } from '@tb/core/link';
 
 const id = '1234567890abcdef1234567890abcdef';
 it('不能保存请求归属时不发送；明确拒绝的 begin 不遗留待释放记录', async () => {
@@ -20,6 +21,18 @@ it('不能保存请求归属时不发送；明确拒绝的 begin 不遗留待释
   expect(command).toHaveBeenCalledTimes(1);
   expect(released).toHaveBeenCalledExactlyOnceWith(id);
 });
+it('组件明确未接收 begin 时可重新核对，未确认的写入不重发，旧请求不再占用', async () => {
+  const command = vi.fn().mockResolvedValue('MISSING');
+  const journal = { begin: vi.fn(), released: vi.fn() };
+  const missing = vi.fn();
+  const wire = new Ma2NetworkWire({ command }, false, journal, false, missing);
+  await expect(wire.exchange(id, 'ASSIGNSEQ', 1, '', () => undefined)).rejects.toMatchObject({ sent: false, message: MA2_BRIDGE_MISSING_BEFORE_REQUEST });
+  expect(journal.released).toHaveBeenCalledWith(id);
+  expect(command).toHaveBeenCalledTimes(1);
+  await wire.releaseAbandoned(id);
+  expect(missing).toHaveBeenCalled();
+});
+
 it('begin 的回答丢失后重启仍能释放本次占用，不重发原操作', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'ma2-lost-ack-'));
   try {

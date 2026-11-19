@@ -1,5 +1,5 @@
-import { applyMa2ReadbackCommand, ma2BindingHold, ma2LatestChoiceText, ma2LatestSide, ma2PendingChanges, ma2TrackRoutingIssue, ma2PoolSequencesToRoute, routeMa2Tracks, setLightingCommand, sameMa2Content, type LinkCommand, type Ma2SyncPreview } from '@tb/core/link';
-import { ma2ApplyResultSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2PoolRoute, type Ma2ExecutorReadRequest, type Ma2ExecutorPreview, type Ma2ApplyRequest, type Ma2ConsoleChanges, type Ma2ApplyResult, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
+import { applyMa2ReadbackCommand, ma2BindingHold, ma2LatestChoiceText, ma2LatestSide, ma2PendingChanges, boundEmptyCuePoints, routeBoundEmptyCues, ma2TrackRoutingIssue, ma2PoolSequencesToRoute, routeMa2Tracks, setLightingCommand, sameMa2Content, type LinkCommand, type Ma2SyncPreview } from '@tb/core/link';
+import { ma2ApplyResultSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2SongPoint, type Ma2SongBinding, type Ma2PoolRoute, type Ma2ExecutorReadRequest, type Ma2ExecutorPreview, type Ma2ApplyRequest, type Ma2ConsoleChanges, type Ma2ApplyResult, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
 
 /** What one pass over a way-1 song (its `ma2Bindings`, the console's own Timecode shows) needs. */
 export type BoundSongPass = {
@@ -13,6 +13,7 @@ export type BoundSongPass = {
   current: () => boolean;
   executor: (request: Ma2ExecutorReadRequest) => Promise<Ma2ExecutorPreview>;
   assign: (sequence: number) => Promise<Ma2PoolRoute>;
+  emptySequence: (points: Ma2SongPoint[], timecode: number, previous?: Ma2SongBinding) => Promise<Ma2SongBinding>;
   route: (command: LinkCommand) => void;
   read: (request: Ma2ReadRequest) => Promise<Ma2TimecodePreview>;
   compare: (request: Ma2CompareRequest) => Promise<Ma2SyncPreview>;
@@ -61,11 +62,21 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
   let archived = false;
   if (writable.length) {
     const original = item.lighting;
-    let routed = routeMa2Tracks(original);
+    let prepared = original;
+    const empty = boundEmptyCuePoints(original);
+    if (empty.length) {
+      await pass.archive(); archived = true;
+      if (!pass.current() || lighting() !== original) return interrupted(stopped);
+      const binding = writable[0]!;
+      const result = await pass.emptySequence(empty, binding.timecode, binding.emptyCueSequence);
+      if (!pass.current() || lighting() !== original) return interrupted(stopped);
+      prepared = routeBoundEmptyCues(original, result);
+    }
+    let routed = routeMa2Tracks(prepared);
     const sequences = ma2PoolSequencesToRoute(routed);
     const assignments: Ma2PoolRoute[] = [];
     if (sequences.length) {
-      await pass.archive(); archived = true;
+      if (!archived) { await pass.archive(); archived = true; }
       for (const sequence of sequences) {
         if (!pass.current() || lighting() !== original) return interrupted(stopped);
         assignments.push(await pass.assign(sequence));

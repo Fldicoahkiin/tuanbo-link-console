@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { OUTPUT_RECOVERY_RULES, isShowWait, type ShowState } from '@tb/core/link';
+import { MA2_BRIDGE_MISSING_BEFORE_REQUEST, OUTPUT_RECOVERY_RULES, isShowWait, type ShowState } from '@tb/core/link';
 import { createLightingDocument, lightingDocumentSchema, lightingMa2BindingSchema, lightingTrackSchema, type LightingDocument } from '@tb/schema';
 import { Ma2NetworkManager } from './ma2-network-manager';
 import { LightingOffService } from './lighting-off-service';
@@ -316,6 +316,21 @@ describe('演出中控台断了只自动重新登录（M5，2026-11-10 第 2 题
 });
 
 describe('插件在演出中不装（M5）', () => {
+  it('网线仍连接但组件消失：并发来源核对只恢复一次，再返回控台实际会话', async () => {
+    const f = await rig({ bridge: 'bundled bridge source' });
+    try {
+      memory.bridge = 'missing'; memory.generation = '';
+      const before = memory.installs;
+      const read = () => f.manager.readLibrary(network, undefined, 'library', undefined, [], undefined, 'source');
+      const results = await Promise.all([read(), read()]);
+      expect(results.map(value => value.directory.generation)).toEqual(['installed', 'installed']);
+      await expect(f.manager.checkEditingSource(network, { show: 'TEST', version: '3.3.4.3', generation: 'one' })).rejects.toThrow(MA2_BRIDGE_MISSING_BEFORE_REQUEST);
+      await expect(f.manager.checkEditingSource(network, { show: 'TEST', version: '3.3.4.3', generation: 'installed' })).resolves.toBeUndefined();
+      expect(memory.installs).toBe(before + 1);
+      expect(memory.connects).toBe(1);
+      expect(f.manager.status().pluginWait).toBeUndefined();
+    } finally { f.manager.disconnect(); }
+  });
   it('重新登上时插件不见了：记下、状态写明是等待，用插件的先等着；演出停了才装，装好接着用', async () => {
     const f = await rig({ bridge: 'bundled bridge source' });
     try {

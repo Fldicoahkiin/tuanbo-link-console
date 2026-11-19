@@ -123,7 +123,18 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
   } : entry) });
   const confirmedBinding = lighting.ma2Bindings!.find(entry => entry.id === bindingId)!;
   const routes = new Map(confirmedBinding.mappings.filter(mapping => mapping.sequence).map(mapping => [mapping.eventId, mapping]));
+  const empties = confirmedBinding.emptyCueSequence;
+  const emptyCues = new Map(empties?.points.map(point => [point.id, point.cue]));
   const historyTrack = (track: LightingTrack): LightingTrack => {
+    if (empties?.executor && track.clips.some(clip => clip.events.some(event => event.kind === 'empty-cue'))) {
+      const executor = empties.executor;
+      track = { ...track, clips: track.clips.map(clip => ({ ...clip, events: clip.events.map(event => {
+        const route = routes.get(event.id);
+        if (event.kind !== 'empty-cue' || route?.trackId !== track.id || route.sequence !== empties.sequence) return event;
+        const cue = emptyCues.get(event.id);
+        return cue ? { ...event, kind: 'ma2', action: 'goto', sequence: empties.sequence, executor, cue } : event;
+      }) })) };
+    }
     const needsRoute = track.clips.some(clip => clip.events.some(event => event.kind === 'ma2' && !event.executor && routes.get(event.id)?.trackId === track.id));
     if (!needsRoute) return track;
     const next = structuredClone(track);

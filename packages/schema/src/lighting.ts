@@ -75,6 +75,7 @@ export const lightingMa2CueCatalogSchema = z.array(z.object({
   for (const entry of catalog) if (new Set(entry.cues.map((cue) => cue.index)).size !== entry.cues.length || new Set(entry.cues.map((cue) => Number(cue.number))).size !== entry.cues.length) ctx.addIssue({ code: 'custom', message: 'MA2 Cue 列表的编号或索引重复' });
 });
 export const lightingMa2BindingSchema = z.object({
+  emptyCueSequence: ma2SongBindingSchema.optional(),
   nativeEvents: z.array(z.object({ path: z.string(), reason: z.string() }).strict()).optional(),
   playback: z.enum(['native-timecode', 'editable']).optional(),
   timeOriginMs: z.number().int().min(0).max(86399999).optional(),

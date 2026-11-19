@@ -239,6 +239,19 @@ describe('本机 MA2 同步服务', () => {
     expect(bridge.request).toHaveBeenCalledTimes(2);
     expect(bridge.exchange).toHaveBeenCalledExactlyOnceWith('SYNC', 9902, expect.stringContaining('<Sequ'), expect.stringContaining('time="15"'));
   });
+  it('同一时间线和执行器新增了未触发过的 Cue，重新取实际序列供写入使用', async () => {
+    const { bridge, request } = setup();
+    const service = new Ma2ApplyService({ ...bridge, hasSnapshot: () => true }, showStopped);
+    request.document.tracks[0]!.clips[0]!.events[0]!.at = 500;
+    const first = await service.apply(request);
+    if (first.status !== 'verified') throw new Error(first.message);
+    const fresh = structuredClone(first.confirmed);
+    const catalog = fresh.cueCatalog![0]!;
+    catalog.cues.push({ ...catalog.cues[0]!, number: '99.000', index: 99 });
+    bridge.request.mockClear();
+    await service.previewEdit(9902, undefined, [], () => Promise.resolve(fresh));
+    expect(bridge.request).toHaveBeenCalledWith('SNAPSHOT', 9902);
+  });
   it('再次编辑只复用仍在同一连接的快照；控台写前拒绝后重新读实物', async () => {
     const { bridge, request } = setup();
     const service = new Ma2ApplyService({ ...bridge, hasSnapshot: () => true }, showStopped);

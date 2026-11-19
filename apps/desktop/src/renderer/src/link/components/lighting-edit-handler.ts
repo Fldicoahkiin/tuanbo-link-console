@@ -1,4 +1,5 @@
-import { setLightingCommand } from '@tb/core/link';
+import { commitLightingPlacement } from './useLightingEffectStamp';
+import { hasMa2SongSyncTarget, setLightingCommand } from '@tb/core/link';
 import type { LightingDocument, LinkProject } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 /** Editing only changes the saved document; the running output keeps its snapshot. */
@@ -7,7 +8,9 @@ export function lightingEditHandler({ itemId, project, notify }: { itemId: strin
     if (!itemId) { notify('请先选择要保存灯光素材的节目', 'error'); return false; }
     try {
       if (useDocumentStore.getState().project !== project) throw new Error('操作过程中工程被修改了，请重新操作');
-      useDocumentStore.getState().execute(setLightingCommand(itemId, document, label));
+      if (!hasMa2SongSyncTarget(document) && document.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.kind === 'empty-cue')))) {
+        commitLightingPlacement(itemId, document, label);
+      } else useDocumentStore.getState().execute(setLightingCommand(itemId, document, label));
       return true;
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); return false; }
   };

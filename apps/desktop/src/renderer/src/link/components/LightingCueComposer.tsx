@@ -58,7 +58,7 @@ export function saveCueIngredients(document: LightingDocument, ingredients: CueI
   }) })) })) });
 }
 
-/** Editing an imported Cue must retain its output route and MA2 event mapping. */
+/** Keep the original clip when it can still run the edited Cue on its native executor. */
 function retainCueLocations(before: LightingDocument, placed: LightingDocument, id: string, ms: number, map: LightingTempoMap): LightingDocument {
   const original = before.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.flatMap(event => event.id === id || event.effectGroupId === id ? [{ track, clip, event }] : [])))
     .sort((a, b) => Number(b.event.id === id) - Number(a.event.id === id));
@@ -66,8 +66,17 @@ function retainCueLocations(before: LightingDocument, placed: LightingDocument, 
   const generated = placed.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => event.id === id || event.effectGroupId === id)))
     .sort((a, b) => Number(b.id === id) - Number(a.id === id));
   const moved = new Map<string, { clipId: string; event: LightingEvent }>();
+  const boundExecutors = new Map(before.ma2Bindings?.flatMap(binding =>
+    [...binding.mappings, ...binding.trackMappings ?? [], ...binding.pendingTracks ?? []].map(route => [route.trackId, route.executor] as const)));
   generated.forEach((event, index) => {
     const slot = original[index]; if (!slot) return;
+    const executor = boundExecutors.get(slot.track.id);
+    if (executor && event.kind === 'ma2') {
+      // Changing material can change the executor. Keep the destination chosen by placement
+      // so the Timecode write moves the trigger to its new native track.
+      if (!event.executor && slot.event.kind === 'ma2' && slot.event.sequence === event.sequence && slot.event.executor === executor) event = { ...event, executor };
+      if (event.executor !== executor) return;
+    }
     const generatedMs = placed.tracks.flatMap(track=>track.clips.flatMap(clip=>clip.events.filter(value=>value.id===event.id).map(value=>lightingEventTime(clip,value,map))))[0] ?? ms;
     const at = (slot.clip.timeLock === 'time' ? generatedMs : map.msToBeat(generatedMs)) - slot.clip.start;
     if (at < 0) throw new Error('组合的开始时间早于片段起点，请先调整片段');
@@ -138,7 +147,7 @@ export function LightingCueComposer({ templateId, document, eventId, playhead, d
       </div></details>
     </div>)}</div>
     <div className="cue-drop-hint"><Layers /><span>{ingredients.length ? '拖入素材，或点素材上的 ＋' : '空 Cue · 拖入素材，或点素材上的 ＋'}</span></div>
-    {eventId ? <small>素材修改会自动保存；空 Cue 不发送灯光指令。</small> : null}
+    {eventId ? <small>素材修改会自动保存。空 Cue 同步后，可以在控台上录灯。</small> : null}
     {ingredients.some(entry => entry.preparation) ? <div className="cue-run-settings">
       {/* 2026-11-01: 埋步 only ran in the removed direct and network playback; the console timeline cannot hold it. */}
       <small>这个 Cue 还带着以前的埋步。埋步写不进控台，带埋步的歌同步不到控台，演出时不会亮灯。</small>

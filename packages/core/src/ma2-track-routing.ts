@@ -1,4 +1,40 @@
-import type { LightingDocument, LightingTrack, Ma2PoolRoute } from '@tb/schema';
+import type { LightingDocument, LightingTrack, Ma2PoolRoute, Ma2SongBinding, Ma2SongPoint } from '@tb/schema';
+
+import { lightingEventTime, LightingTempoMap } from './lighting-edit';
+
+/** Empty locations on an imported Timecode use a separate editable Sequence for this song. */
+export function boundEmptyCuePoints(document: LightingDocument): Ma2SongPoint[] {
+  if (document.ma2Bindings?.length !== 1 || !document.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.kind === 'empty-cue')))) return [];
+  const sequence = document.ma2Bindings[0]!.emptyCueSequence;
+  const saved = new Map(sequence?.points.map(point => [point.id, point.cue]));
+  const map = new LightingTempoMap(document.tempos);
+  return document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.flatMap(event => {
+    const cue = saved.get(event.id);
+    // Already recorded lights on these points are native self-references. Preserve their numbers
+    // and contents when the operator adds the next empty point.
+    if (event.kind !== 'empty-cue' && !(event.kind === 'ma2' && event.action === 'goto' && sequence && event.sequence === sequence.sequence && cue && Number(cue) === Number(event.cue))) return [];
+    return [{ id: event.id, name: event.label, atMs: lightingEventTime(clip, event, map),
+      cues: sequence && cue ? [{ sequence: sequence.sequence, cue, delayMs: 0 }] : [] }];
+  })));
+}
+
+/** Change only the placeholder, retaining its edit identity, source track, time and undo history. */
+export function routeBoundEmptyCues(document: LightingDocument, result: Ma2SongBinding): LightingDocument {
+  const executor = result.executor;
+  if (!executor || result.timecode || document.ma2Bindings?.length !== 1) throw new Error('控台没有确认这首歌空 Cue 的执行器');
+  const cues = new Map(result.points.map(point => [point.id, point.cue]));
+  const next = structuredClone(document);
+  next.ma2Bindings![0]!.emptyCueSequence = result;
+  for (const track of next.tracks) for (const clip of track.clips) {
+    clip.events = clip.events.map(event => {
+      if (event.kind !== 'empty-cue') return event;
+      const cue = cues.get(event.id);
+      if (!cue) throw new Error('控台没有读回时间线所需的空 Cue');
+      return { ...event, kind: 'ma2', action: 'goto', executor, sequence: result.sequence, cue };
+    });
+  }
+  return next;
+}
 
 /** All nonempty lighting tracks must have an explicit destination before a song can be confirmed. */
 export function unboundMa2Tracks(document: LightingDocument): LightingTrack[] {

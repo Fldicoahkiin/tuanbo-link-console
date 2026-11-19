@@ -86,7 +86,8 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     const connection = { dataDirectory: '', network: { host, port, monitorPort, username } };
     const sourceKey = JSON.stringify([state.documentId, endpoint, material.source, material.library.directory.show, material.library.directory.generation, material.library.directory.version]);
     context = sourceKey;
-    if (verifiedSource !== sourceKey || Date.now() >= nextSourceCheck) {
+    const waitingForSource = Object.values(useMa2SyncStore.getState().songs).filter(song => song.documentId === state.documentId && song.needsSourceCheck && ma2SongSyncActive(song.itemId));
+    if (waitingForSource.length || verifiedSource !== sourceKey || Date.now() >= nextSourceCheck) {
       if (!verifiedSource && Date.now() < nextSourceCheck) return false;
       // The foreground read already saved the directory. On startup at the same endpoint,
       // check the live identity first; only a changed identity needs a new directory.
@@ -128,6 +129,10 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
           if (song.documentId !== state.documentId || song.requestId || song.state === 'paused') continue;
           useMa2SyncStore.setState(value => ({ songs: { ...value.songs, [song.itemId]: { ...song, nextCheckAt: 0, consecutiveFailures: 0 } } }));
         }
+      }
+      for (const song of waitingForSource) {
+        const currentSong = useMa2SyncStore.getState().songs[song.itemId];
+        if (currentSong?.sessionId === song.sessionId) useMa2SyncStore.setState(value => ({ songs: { ...value.songs, [song.itemId]: { ...currentSong, needsSourceCheck: false, nextCheckAt: 0 } } }));
       }
       verifiedSource = JSON.stringify([state.documentId, endpoint, endpoint, directory.show, directory.generation, directory.version]);
       nextSourceCheck = Date.now() + 5000;

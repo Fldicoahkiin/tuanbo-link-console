@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { MA2_BRIDGE_MISSING_BEFORE_REQUEST, MA2_READ_CANCELLED } from '@tb/core/link';
 import type { LinkProject, Ma2LayoutSettings, Ma2ReadProgress } from '@tb/schema';
 
 /**
@@ -13,7 +14,7 @@ export type SongSync = {
   state: 'pending' | 'syncing' | 'verified' | 'blocked' | 'paused'; message: string;
   requestId?: string | null; progress?: Ma2ReadProgress | null; checking?: boolean; writing?: boolean;
   acknowledged?: string; remoteRevision?: string | undefined; failedItem?: LinkProject['rundown'][number] | undefined; recheckRevision?: number | undefined;
-  nextCheckAt?: number; checkedAt?: number; waitingForConnection?: boolean;
+  nextCheckAt?: number; checkedAt?: number; waitingForConnection?: boolean; needsSourceCheck?: boolean;
   consecutiveFailures?: number; consecutiveCollisions?: number; archivedSignature?: string; rewriteLegacyNames?: boolean;
   /** When a pass last took this song up; a one-time sync ends once every song was taken up after it began. */
   attemptedAt?: number;
@@ -56,6 +57,21 @@ export function updateMa2Song(entry: SongSync, patch: Partial<SongSync>): void {
     if (!current || current.sessionId !== entry.sessionId) return state;
     return { songs: { ...state.songs, [entry.itemId]: { ...current, ...patch, ...(current.state === 'paused' ? { state: 'paused' as const } : {}) } } };
   });
+}
+
+/** An interrupted request can await the next verified console session or finish a pause. */
+export function settleInterruptedMa2Song(entry: SongSync, message: string): boolean {
+  const current = useMa2SyncStore.getState().songs[entry.itemId];
+  if (current?.sessionId !== entry.sessionId) return true;
+  if (message === MA2_BRIDGE_MISSING_BEFORE_REQUEST && current.state !== 'paused') {
+    updateMa2Song(entry, { state: 'pending', message, needsSourceCheck: true, failedItem: undefined, checking: false, writing: false, requestId: null, progress: null, nextCheckAt: 0 });
+    return true;
+  }
+  if (message === MA2_READ_CANCELLED && current.state === 'paused') {
+    updateMa2Song(entry, { checking: false, writing: false, requestId: null, progress: null, message: '已停止同步，改动已保留' });
+    return true;
+  }
+  return false;
 }
 
 /** A write already sent to the console is still waiting for its confirmation. */

@@ -72,6 +72,8 @@
 
 ## 新增轨道写到哪里
 
+2026-11-19，`ma2-track-routing.ts` 收集原时间线上的空 Cue，逐首同步通过原有歌曲序列写入流程确认实际 Cue 和执行器，再通过同一时间线写入流程提交触发。只有原生序列和 Timecode 都读回后才确认。本曲下次打点继续引用已确认的 Cue。更换组合里的执行器时，实际触发随素材进入对应的轨道。`ma2-track-routing.test.ts` 和 `lighting-cue-composer.test.ts` 检查连续打点与跨执行器替换。
+
 `packages/core/src/ma2-track-routing.ts` 决定已有绑定内新增轨道的去向，唯一目标登记待写入。在一条已关联时间线上首次放入仅有序列号和 Cue 号的控台素材时，逐首同步通过 ASSIGNSEQ 在工程专用页复用或分配空执行器，读回实际序列和名称后再写入该时间线；旧工程中尚未写出的素材沿用同一流程。多个目标或缺少可识别的 Cue 时明确提示。无需分配时返回原灯光对象，实时同步省去整首灯光数据的复制和比较。`packages/core/src/ma2-track-routing.test.ts` 检查归属与未同步统计。
 
 未关联轨道没有 Timecode 归属，不能伪造为第一条绑定的差异。`ma2PendingChanges` 只比较已绑定内容；`ma2TrackRoutingIssue` 在歌曲状态和同步前置检查中说明未关联轨道，仍阻止把遗漏的 Cue 确认为已同步。`ma2-pending-changes.test.ts`、`song-lighting-status.test.ts` 和 `runtime/ma2-bound-song-sync.test.ts` 守住计数不重复、问题可见、未关联内容不误确认。

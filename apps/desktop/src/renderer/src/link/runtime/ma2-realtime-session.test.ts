@@ -82,6 +82,16 @@ it('默认开启后整曲进入歌曲序列同步，不再调用隐式 Timecode 
   expect(pendingSongSummary(useDocumentStore.getState().project)).toHaveLength(2);
 });
 
+it('控台会话在写入前变化，立即重新核对实际来源后再让这首歌继续', async () => {
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  const songs = useMa2SyncStore.getState().songs;
+  useMa2SyncStore.setState({ songs: { ...songs, first: { ...songs.first!, needsSourceCheck: true } } });
+  metadata.mockClear();
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  expect(metadata).toHaveBeenCalledOnce();
+  expect(useMa2SyncStore.getState().songs.first?.needsSourceCheck).toBe(false);
+});
+
 it('同一控台核对错误只记一次，其他工程修改不重复报错；恢复后能识别新的故障', async () => {
   vi.useFakeTimers({ toFake: ['Date'] });
   metadata.mockRejectedValue(new Error('控台暂时不能确认素材目录'));

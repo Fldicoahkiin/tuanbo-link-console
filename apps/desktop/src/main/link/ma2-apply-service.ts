@@ -33,7 +33,8 @@ export class Ma2ApplyService {
     const last = this.confirmedRead;
     if (!additional.length && last?.preview.target === target && (last.preview.timeOriginMs ?? 0) === (origin ?? 0) && readLive && this.bridge.hasSnapshot?.(target, last.snapshot)) {
       const fresh = await readLive();
-      if (sameMa2XmlObjects(fresh.sourceXml, last.preview.sourceXml) && previewContent(fresh) === previewContent(last.preview)) {
+      if (sameMa2XmlObjects(fresh.sourceXml, last.preview.sourceXml) && previewContent(fresh) === previewContent(last.preview)
+        && JSON.stringify(fresh.cueCatalog) === JSON.stringify(last.preview.cueCatalog)) {
         this.editRead = { preview: fresh, snapshot: last.snapshot, sequences: '', at: Date.now() };
         return fresh;
       }

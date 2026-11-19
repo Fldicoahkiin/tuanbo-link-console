@@ -4,9 +4,11 @@ import { basename, dirname, isAbsolute } from 'node:path';
 import { Ma2BridgeFailure, type Ma2Lane, type Ma2Operation, type Ma2TransferProgress, type Ma2Wire } from './ma2-onpc-bridge';
 import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
 import type { Ma2RequestJournal } from './ma2-request-journal';
+import { MA2_BRIDGE_MISSING_BEFORE_REQUEST } from '@tb/core/link';
 import { encodeMa2SnapshotDelta } from './ma2-snapshot-delta';
 
 class Ma2RpcRefusal extends Error {}
+class Ma2BridgeMissing extends Error {}
 
 /** Only the loopback transport shares the onPC filesystem. A LAN address always uses the wire. */
 export const ma2UsesLocalFiles = (host: string): boolean => host === '127.0.0.1' || host === '::1';
@@ -46,7 +48,7 @@ export class Ma2NetworkWire implements Ma2Wire {
   private lastRead: ReadBaseline | undefined;
   private readonly unreleased = new Set<string>();
   private twoLanes: boolean | null = null;
-  constructor(private readonly connection: Pick<Ma2Telnet, 'command'>, private readonly localFiles = false, private readonly journal?: Pick<Ma2RequestJournal, 'begin' | 'released'>, private readonly verifiedSnapshots = false) {}
+  constructor(private readonly connection: Pick<Ma2Telnet, 'command'>, private readonly localFiles = false, private readonly journal?: Pick<Ma2RequestJournal, 'begin' | 'released'>, private readonly verifiedSnapshots = false, private readonly onMissing?: () => void) {}
   hasSnapshot(target: number, snapshot: string): boolean {
     return this.snapshot?.target === target && this.snapshot.content.equals(Buffer.from(snapshot));
   }
@@ -60,14 +62,14 @@ export class Ma2NetworkWire implements Ma2Wire {
     try { if (await this.call('release', id) !== 'ACK') throw new Error('控台未确认释放'); }
     catch (error) {
       // An expired or absent ID no longer owns a slot. Never release another ID instead.
-      if (!(error instanceof Ma2RpcRefusal && error.message.includes('Network request expired or mismatched'))) throw error;
+      if (!(error instanceof Ma2BridgeMissing) && !(error instanceof Ma2RpcRefusal && error.message.includes('Network request expired or mismatched'))) throw error;
     }
     this.journal?.released(id);
   }
   private async call(action: string, id: string, argumentsText = ''): Promise<string> {
     const token = randomBytes(16).toString('hex');
     // The console lost the bridge's globals (a Show was loaded or the console restarted).
-    // The bridge is installed at login only, so the way back is to connect again.
+    // A positive MISSING reply is different from a lost acknowledgement.
     const prefix = `TBLINK_RPC_${token}:`;
     // Keep even a full 256-byte chunk below the native console's command-line limit.
     // The human explanation belongs here, not as hundreds of hex bytes in every command.
@@ -80,7 +82,10 @@ export class Ma2NetworkWire implements Ma2Wire {
       const chunks = responseChunks(text, 'TBLINK_INLINE_' + token + '_', 0, size);
       return chunks === null ? null : 'INLINE:' + chunks;
     });
-    if (result === 'MISSING') throw new Error('控台连接组件没在运行，可能是控台换过 Show 或重启过。没在播放时，到设置里把控台断开再连接一次，联动台会把它装回去');
+    if (result === 'MISSING') {
+      this.onMissing?.();
+      throw new Ma2BridgeMissing('控台连接组件没在运行，本次操作已中断');
+    }
     if (result.startsWith('ERR:')) {
       const encoded = result.slice(4);
       if (!/^(?:[a-f0-9]{2})+$/.test(encoded)) throw new Error('MA2 插件错误响应格式无效');
@@ -202,7 +207,10 @@ export class Ma2NetworkWire implements Ma2Wire {
       return received(Buffer.concat(chunks));
     } catch (error) {
       let message = error instanceof Error ? error.message : String(error);
-      if (!acquired && error instanceof Ma2RpcRefusal) { this.journal?.released(id); this.unreleased.delete(id); }
+      if (!acquired && (error instanceof Ma2RpcRefusal || error instanceof Ma2BridgeMissing)) {
+        this.journal?.released(id); this.unreleased.delete(id);
+        if (error instanceof Ma2BridgeMissing) { sent = false; message = MA2_BRIDGE_MISSING_BEFORE_REQUEST; }
+      }
       // Release only this transaction. Never execute it again or clear another client's request.
       if (acquired && !releaseAttempted) {
         try {

@@ -8,17 +8,20 @@ import { ma2SongSyncSettings } from '../runtime/ma2-song-sync';
 import { useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
 import { syncMa2Once } from '../runtime/ma2-realtime-session';
 
+export function commitLightingPlacement(id: string, value: LightingDocument, label: string, wholeSequence = false): void {
+  const state = useDocumentStore.getState(); const project = state.project;
+  const item = project?.rundown.find(entry => entry.id === id);
+  if (!project || !item) throw new Error('歌曲已删除，请重新选择');
+  const create = !hasMa2SongSyncTarget(item.lighting);
+  const settings = ma2SongSyncSettings(project, id);
+  state.execute(create || wholeSequence ? addMa2SequenceCommand(id, value, { name: item.title, sequence: settings.nextSequence, timecode: settings.nextSequence, executor: `${settings.executorPage ?? 1000}.101` }, label) : setLightingCommand(id, value, label));
+  if (create && (wholeSequence || useMa2RealtimePreference.getState().enabled)) syncMa2Once(id);
+}
+
 export function useLightingEffectStamp(itemId: string | null, document: LightingDocument, durationMs: number, notify: (message: string, tone?: 'info' | 'error') => void) {
   const documentId = useDocumentStore.getState().documentId;
-  const commit = (id: string, value: LightingDocument, wholeSequence = false): void => {
-    const state = useDocumentStore.getState(); const project = state.project;
-    const item = project?.rundown.find(entry => entry.id === id);
-    if (!project || !item) throw new Error('歌曲已删除，请重新选择');
-    const create = !hasMa2SongSyncTarget(item.lighting);
-    const settings = ma2SongSyncSettings(project, id);
-    state.execute(create || wholeSequence ? addMa2SequenceCommand(id, value, { name: item.title, sequence: settings.nextSequence, timecode: settings.nextSequence, executor: `${settings.executorPage ?? 1000}.101` }, wholeSequence ? '添加整套 Cue' : '添加灯光点') : setLightingCommand(id, value, '添加灯光点'));
-    if (create && (wholeSequence || useMa2RealtimePreference.getState().enabled)) syncMa2Once(id);
-  };
+  const commit = (id: string, value: LightingDocument, wholeSequence = false): void =>
+    commitLightingPlacement(id, value, wholeSequence ? '添加整套 Cue' : '添加灯光点', wholeSequence);
   const stamp = (effectId: string, ms: number, replaceId?: string): void => {
     if (!itemId || !durationMs) return;
     try {

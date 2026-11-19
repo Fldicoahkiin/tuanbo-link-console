@@ -1,11 +1,11 @@
-import { hasMa2SongSyncTarget, MA2_READ_CANCELLED, MA2_SONG_COLLISION, allocateSongMtcStart, isShowWait, toUserErrorMessage, applyMa2SongReadback, consoleLabelText, ma2LatestChoiceText, ma2PendingChanges, ma2SongPoints, mergeMa2AttributesCommand, pendingMa2Renames, projectLightingLibrary, setAllocatedMtcStartsCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
+import { hasMa2SongSyncTarget, MA2_SONG_COLLISION, allocateSongMtcStart, isShowWait, toUserErrorMessage, applyMa2SongReadback, consoleLabelText, ma2LatestChoiceText, ma2PendingChanges, ma2SongPoints, mergeMa2AttributesCommand, pendingMa2Renames, projectLightingLibrary, setAllocatedMtcStartsCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
 import type { Ma2LayoutSettings, Ma2NetworkTarget, Ma2SongBinding, Ma2SongConsoleEdits } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { requireSavedProjectPath } from '../project-document';
 import { acceptCreatedMa2Layout, currentMa2LayoutScope } from '../stores/ma2-layout-store';
 import { locateMa2Executor, ma2ExecutorLocationLabel, loadMa2ExecutorPage } from '../stores/ma2-executor-page-store';
 import { recordRuntimeOperator, reportCoordinatorError } from './runtime-action-log';
-import { updateMa2Song as update, useMa2SyncStore, type NameSync, type SongSync } from '../stores/ma2-sync-store';
+import { settleInterruptedMa2Song, updateMa2Song as update, useMa2SyncStore, type NameSync, type SongSync } from '../stores/ma2-sync-store';
 import { ma2ConsoleReading } from './ma2-console-reading';
 import { currentShowWait } from '../stores/show-state-store';
 import { confirmMa2Edit, consoleSeenAt, editTimes, noteMa2LocalEdits, songSignature, songStart, type Program } from './ma2-edit-times';
@@ -229,6 +229,18 @@ async function syncImportedSong(entry: SongSync): Promise<void> {
     itemId: entry.itemId, connection: { dataDirectory: '', network: place.network }, project, consoleChanges: ma2ConsoleChangesFor(entry, useMa2RealtimePreference.getState().consoleChanges),
     current: () => canContinue(entry) && currentShowWait('ma2.sync.write') === null,
     executor: request => window.tbLink.readMa2Executor(request),
+    emptySequence: async (points, timecode, previous) => {
+      const current = project();
+      if (!current) throw new Error('工程已经切换');
+      const settings = ma2SongSyncSettings(current, entry.itemId);
+      const result = await window.tbLink.syncMa2Song({
+        network: place.network, expectedSource: place.source, projectId: current.projectId,
+        itemId: `${entry.itemId}:timecode:${timecode}:empty`, requestId: crypto.randomUUID(),
+        name: previous?.name ?? `TC ${timecode} Cue`, settings: { ...settings, executorPage: settings.executorPage ?? 1000 },
+        points, binding: previous, writeMode: 'direct', consoleChanges: 'read-back'
+      });
+      return result.binding;
+    },
     assign: sequence => window.tbLink.assignMa2PoolSequence({ dataDirectory: '', network: place.network, expectedSource: place.source, projectId: project()!.projectId, sequence }),
     route: command => confirmMa2Edit(() => useDocumentStore.getState().executeForDocument(entry.documentId, command)),
     read: request => window.tbLink.previewMa2(request),
@@ -300,7 +312,7 @@ export async function tickMa2SongSync(): Promise<void> {
       if (entry.documentId !== useDocumentStore.getState().documentId) { stopMa2SongSync(entry.itemId); continue; }
       if (entry.state === 'paused' || !ma2SongSyncActive(entry.itemId)) continue;
       const attemptedItem = useDocumentStore.getState().project?.rundown.find(item => item.id === entry.itemId);
-      if (entry.state === 'blocked' && entry.failedItem === attemptedItem) continue;
+      if (entry.needsSourceCheck || entry.state === 'blocked' && entry.failedItem === attemptedItem) continue;
       // An edit made while this pass was checking other songs is synced on the next pass, before them.
       if (entry.state === 'verified' && useDocumentStore.getState().revision !== startRevision) break;
       const due = dueAt(entry);
@@ -431,12 +443,7 @@ export async function tickMa2SongSync(): Promise<void> {
         markPendingMa2SongsNow();
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
-        const current = useMa2SyncStore.getState().songs[entry.itemId];
-        if (current?.sessionId !== entry.sessionId) continue;
-        if (current.state === 'paused' && message === MA2_READ_CANCELLED) {
-          update(entry, { checking: false, writing: false, requestId: null, progress: null, message: '已停止同步，改动已保留' });
-          continue;
-        }
+        if (settleInterruptedMa2Song(entry, message)) continue;
         // A transport loss is a wait state. After reconnect, the service reads
         // the native sequence and its durable journal before planning any write.
         let disconnected = false;

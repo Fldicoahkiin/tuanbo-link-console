@@ -1431,6 +1431,7 @@ function registerIpc(
   });
   handle('link:ma2-pool-route', async (_event, value: unknown) => {
     const request = ma2PoolRouteRequestSchema.parse(value);
+    if (request.network) await ma2Network.checkEditingSource(request.network, request.expectedSource);
     const { bridge } = await getMa2Connection(request);
     return assignMa2PoolSequence(bridge, request);
   });

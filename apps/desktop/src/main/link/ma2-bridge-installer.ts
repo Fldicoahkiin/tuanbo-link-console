@@ -18,7 +18,7 @@ function bootCall(connection: Pick<Ma2Telnet, 'command'>): (body: string) => Pro
     return connection.command(`Lua "${body};gma.echo('${prefix}'..r)"`, (text) => ma2ResponseLine(text, prefix));
   };
 }
-const probe = (digest: string): string => `local r='missing';if type(TBLINK_NET)=='function' then if TBLINK_BRIDGE_SOURCE=='${digest}' and TBLINK_BRIDGE_READY==true then r='ready' elseif type(TBLINK_BRIDGE_SOURCE)=='string' and #TBLINK_BRIDGE_SOURCE==64 and TBLINK_BRIDGE_SOURCE:gsub('[a-f0-9]','')=='' then r='replace:'..TBLINK_BRIDGE_SOURCE else r='foreign' end end`;
+const probe = (digest: string): string => `local r='missing';if type(TBLINK_NET)=='function' then if TBLINK_BRIDGE_SOURCE=='${digest}' and TBLINK_BRIDGE_READY==true and type(TBLINK_BRIDGE_GENERATION)=='string' and #TBLINK_BRIDGE_GENERATION>0 then r='ready' elseif type(TBLINK_BRIDGE_SOURCE)=='string' and #TBLINK_BRIDGE_SOURCE==64 and TBLINK_BRIDGE_SOURCE:gsub('[a-f0-9]','')=='' then r='replace:'..TBLINK_BRIDGE_SOURCE else r='foreign' end end`;
 
 /** Only looks (M5: logging in again during the show): one short command, the same check the install starts with; it never
  * installs, replaces or stops anything. */

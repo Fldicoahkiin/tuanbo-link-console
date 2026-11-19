@@ -1,7 +1,8 @@
 import { expect, it } from 'vitest';
 import { createLightingDocument, type LightingTrack } from '@tb/schema';
 import { placeConsoleCue } from './lighting-cue-placement';
-import { ma2PoolSequencesToRoute, routeMa2Tracks, unboundMa2Tracks } from './ma2-track-routing';
+import { boundEmptyCuePoints, ma2PoolSequencesToRoute, routeBoundEmptyCues, routeMa2Tracks, unboundMa2Tracks } from './ma2-track-routing';
+import { placeEmptyLightingCue } from './lighting-empty-cue';
 
 function fixture() {
   const document = createLightingDocument();
@@ -25,6 +26,25 @@ it('混合执行器、空 Cue 和多条目标都不猜去向，仍能列出遗�
   expect(unboundMa2Tracks(routeMa2Tracks(document)).map(track => track.id)).toEqual(['new']);
   const multiple = fixture(); multiple.ma2Bindings!.push({ ...multiple.ma2Bindings![0]!, id: 'second', timecode: 9 });
   expect(routeMa2Tracks(multiple)).toEqual(multiple);
+});
+
+it('第二个空 Cue 沿用本曲序列，原 Cue 引用控台实际内容，素材照原目标运行', () => {
+  const first = placeEmptyLightingCue(fixture(), 'a', 2400, 10000);
+  expect(boundEmptyCuePoints(first)).toEqual([{ id: 'a', name: '', atMs: 2400, cues: [] }]);
+  const sequence = { endpoint: 'console:30000', show: 'Show', name: 'TC 8 Cue', layout: null, sequence: 9510, executor: '1000.102',
+    baselineXml: '<MA/>', points: [{ id: 'a', cue: '1.500' }] };
+  const routed = routeBoundEmptyCues(first, sequence);
+  const second = placeEmptyLightingCue(routed, 'b', 3300, 10000);
+  expect(boundEmptyCuePoints(second)).toEqual([
+    { id: 'a', name: '', atMs: 2400, cues: [{ sequence: 9510, cue: '1.500', delayMs: 0 }] },
+    { id: 'b', name: '', atMs: 3300, cues: [] }
+  ]);
+  expect(() => routeBoundEmptyCues(second, sequence)).toThrow('没有读回');
+  const done = routeBoundEmptyCues(second, { ...sequence, points: [...sequence.points, { id: 'b', cue: '2' }] });
+  expect(done.tracks[0]).toEqual(first.tracks[0]);
+  expect(boundEmptyCuePoints(done)).toEqual([]);
+  expect(done.ma2Bindings?.[0]?.timecode).toBe(8);
+  expect(done.tracks.at(-1)?.clips[0]?.events.at(-1)).toMatchObject({ id: 'b', at: 3300, executor: '1000.102', sequence: 9510, cue: '2' });
 });
 
 it('旧工程六条素材轨道按各自的序列找到执行器；同一素材再次拖入沿用已确认轨道', () => {

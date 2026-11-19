@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingUserLibrary, createLightingDocument, parseLinkProject, type LightingTrack } from '@tb/schema';
-import { placeLightingTemplate as placeEffect, lightingSequenceSteps, ma2SongPoints } from '@tb/core/link';
+import { placeEmptyLightingCue, placeLightingTemplate as placeEffect, lightingSequenceSteps, ma2SongPoints } from '@tb/core/link';
+import { lightingEditHandler } from './lighting-edit-handler';
 import { useLightingEffectStamp } from './useLightingEffectStamp';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
@@ -55,6 +56,15 @@ it('实际添加入口首次创建后请求同一逐首同步，再添加只更�
     useLightingEffectStamp('song', lighting, 60000, notify).stampConsoleCue({ sequence: 10, cue: '2.000', name: '第二步', executor: '' }, 7500);
     expect(useDocumentStore.getState().project!.rundown[0]!.lighting!.timelineDestination?.timecode).toBe(9000);
     expect(syncMa2Once).not.toHaveBeenCalled();
+    useDocumentStore.getState().setProject(project, 'C:/test/project.tblink');
+    const blank = placeEmptyLightingCue(lighting, 'blank', 8000, 60000);
+    expect(lightingEditHandler({ itemId: 'song', project: useDocumentStore.getState().project, notify })(blank, '添加空 Cue')).toBe(true);
+    expect(useDocumentStore.getState().project!.rundown[0]!.lighting!.timelineDestination?.timecode).toBe(9000);
+    expect(syncMa2Once).not.toHaveBeenCalled();
+    useMa2RealtimePreference.setState({ enabled: true });
+    useDocumentStore.getState().setProject(project, 'C:/test/project.tblink');
+    expect(lightingEditHandler({ itemId: 'song', project: useDocumentStore.getState().project, notify })(blank, '添加空 Cue')).toBe(true);
+    expect(syncMa2Once).toHaveBeenCalledExactlyOnceWith('song');
   } finally { useMa2RealtimePreference.setState({ enabled: true }); }
   vi.restoreAllMocks();
 });

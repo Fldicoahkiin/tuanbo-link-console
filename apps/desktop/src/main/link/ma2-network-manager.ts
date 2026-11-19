@@ -14,6 +14,7 @@ import { Ma2RequestJournal } from './ma2-request-journal';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2ApplyService } from './ma2-apply-service';
 import { ensureMa2NetworkBridge, readMa2NetworkBridge, type Ma2BridgeState } from './ma2-bridge-installer';
+import { MA2_BRIDGE_MISSING_BEFORE_REQUEST } from '@tb/core/link';
 import { readMa2ShowSource, verifyMa2ShowSource, type Ma2ShowSource } from './ma2-show-probe';
 import { Ma2Relogin, Ma2ReloginStop, type Ma2ReloginClock, type Ma2ReloginLog, type Ma2ReloginPlan } from './ma2-relogin';
 import { readMa2NativeLibrary } from './ma2-native-library';
@@ -80,7 +81,8 @@ export class Ma2NetworkManager {
   private armed: Ma2NetworkSettings | null = null;
   /** The console and Show that connection was made on: its version, and the Show and plugin session when they could be read. */
   private identity: { version: string; source: Ma2ShowSource | null } | null = null;
-  /** Logged in, but the plugin is missing or old (`wait`: it is installed when the show has stopped) or could not be installed. */
+  private bridgeInstall: Promise<void> | null = null;
+  /** Logged in, but the plugin is missing or old (`wait`: install when idle), or its installation failed. */
   private bridgeIssue: { wait: boolean; message: string } | null = null;
   private readonly reloginLogs = new Set<(entry: Ma2ReloginLog) => void>();
   /** M5: the Telnet line, dropped by itself while the show is not idle, logs in again on its own (`ma2-relogin.ts`). */
@@ -221,6 +223,7 @@ export class Ma2NetworkManager {
     return this.layouts().read(connection,bridge,request);
   }
   async syncSong(request: import('@tb/schema').Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal): Promise<import('@tb/schema').Ma2SongSyncResult> {
+    await this.checkEditingSource(request.network, request.expectedSource);
     const { bridge } = this.get(request.network); const connection = this.connection;
     if (!connection) throw new Error('请先连接控台');
     // A cached song check that still matches the console saves reading the whole Sequence again.
@@ -240,7 +243,9 @@ export class Ma2NetworkManager {
     let verifiedTimecode: Ma2ConfirmedTimecode | undefined;
     const result = await this.layouts().syncSong(connection, bridge, request, report, signal, { consoleBaseline: baseline, adoptReadback,
       timecodeConfirmed: value => { verifiedTimecode = { ...value, show: request.expectedSource.show, generation: request.expectedSource.generation }; } });
-    await this.prepareMtcPlayback(request.network, false, result.binding.timecode ? [result.binding.timecode.number] : [],
+    // A Sequence-only write has no song range yet. The Timecode writer that references it
+    // will prepare and verify that specific range once its events are actually on the console.
+    if (result.binding.timecode) await this.prepareMtcPlayback(request.network, false, [result.binding.timecode.number],
       { number: result.binding.sequence, xml: result.binding.baselineXml }, verifiedTimecode);
     return result;
   }
@@ -342,14 +347,41 @@ export class Ma2NetworkManager {
       return bridge.request('READ', timecode);
     }, targets => readMa2NativeLibrary(connection, bridge, this.show, undefined, 'library', undefined, targets, { referencedOnly: true }));
   }
+  private async editingSource(target: Ma2NetworkTarget): Promise<Ma2ShowSource> {
+    this.target(target);
+    if (this.bridgeIssue?.wait) await this.installDeferred();
+    this.get(target);
+    const connection = this.connection;
+    if (!connection) throw new Error('请先连接控台');
+    const observed = await readMa2ShowSource(connection);
+    if (connection !== this.connection) throw new Error('控台连接已变化');
+    if (observed.generation) return observed;
+    this.bridgeMissing(connection);
+    await this.installDeferred();
+    if (connection !== this.connection) throw new Error('控台连接已变化');
+    this.get(target);
+    const restored = await readMa2ShowSource(connection);
+    if (connection !== this.connection || !restored.generation) throw new Error('控台没有确认连接组件已启动，请重新连接控台');
+    return restored;
+  }
+  /** No native write has started. The coordinator must adopt the live directory before this edit can run. */
+  async checkEditingSource(target: Ma2NetworkTarget, expected: Ma2ShowSource): Promise<void> {
+    holdForShow(this.show, 'ma2.sync.read');
+    const source = await this.editingSource(target);
+    if (source.show !== expected.show || source.version !== expected.version || source.generation !== expected.generation) {
+      throw new Error(MA2_BRIDGE_MISSING_BEFORE_REQUEST);
+    }
+  }
   async readLibrary(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void | Promise<void>, phase: 'library' | 'verification' = 'library', signal?: AbortSignal, targets?: readonly number[], expectedSource?: Ma2CatalogRequest['expectedSource'], details?: Ma2CatalogRequest['details']): Promise<import('@tb/schema').Ma2EffectLibrary> {
+    this.target(target);
+    if (this.bridgeIssue?.wait) await this.installDeferred();
     const { bridge } = this.get(target);
     if (!this.connection) throw new Error('请先连接控台');
     if (details === 'source') {
       if (targets?.length !== 0) throw new Error('核对来源时不能读取序列内容');
       signal?.throwIfAborted();
       holdForShow(this.show, 'ma2.sync.read');
-      const source = await readMa2ShowSource(this.connection);
+      const source = await this.editingSource(target);
       signal?.throwIfAborted();
       holdForShow(this.show, 'ma2.sync.read');
       const directory = ma2ObjectDirectorySchema.parse({ ...source, entries: [] });
@@ -517,7 +549,9 @@ export class Ma2NetworkManager {
     if (!this.settings) throw new Error('控台连接已变化');
     const { host, port, monitorPort, username } = this.settings;
     const target = { host, port, monitorPort, username };
-    const wire = new Ma2NetworkWire(connection, ma2UsesLocalFiles(host), this.requestJournal, Boolean(this.bundledBridge)); this.wire = wire;
+    const wire = new Ma2NetworkWire(connection, ma2UsesLocalFiles(host), this.requestJournal, Boolean(this.bundledBridge), () => {
+      if (this.wire === wire) this.bridgeMissing(connection);
+    }); this.wire = wire;
     const bridge = new Ma2OnpcBridge(wire, this.show);
     this.mtcSelection?.invalidate();
     this.services = { bridge, service: new Ma2ApplyService(bridge, this.show, {
@@ -606,7 +640,19 @@ export class Ma2NetworkManager {
     void this.installDeferred();
   }
   /** The plugin that waited for the show to stop (M5), installed once it has: as the operator's connect would. */
-  private async installDeferred(): Promise<void> {
+  private bridgeMissing(connection: Ma2Telnet): void {
+    if (connection !== this.connection || this.bridgeIssue || !this.bundledBridge) return;
+    this.services = null;
+    this.bridgeIssue = { wait: true, message: this.show('ma2.connect').kind === 'wait' ? bridgeWaitText('missing') : '控台连接组件已停止，正在恢复连接' };
+    this.notice?.('warning', this.bridgeIssue.message);
+  }
+  private installDeferred(): Promise<void> {
+    if (this.bridgeInstall) return this.bridgeInstall;
+    const task = this.installMissingBridge();
+    this.bridgeInstall = task;
+    return task.finally(() => { if (this.bridgeInstall === task) this.bridgeInstall = null; });
+  }
+  private async installMissingBridge(): Promise<void> {
     const connection = this.connection, issue = this.bridgeIssue, source = this.bundledBridge;
     if (!issue?.wait || !source || !connection || connection.state !== 'connected' || this.busy || this.show('ma2.connect').kind === 'wait') return;
     const generation = this.generation; this.busy = true;
@@ -618,10 +664,11 @@ export class Ma2NetworkManager {
       try { after = await readMa2ShowSource(connection); }
       catch (cause) { this.notice?.('warning', `控台插件装上了，但没读到控台现在的 Show：${cause instanceof Error ? cause.message : String(cause)}`); }
       if (generation !== this.generation) return;
+      if (!after?.generation) throw new Error('控台没有确认连接组件已启动');
       this.openServices(connection);
-      if (after && this.identity) this.identity = { ...this.identity, source: after };
-      if (before && after) this.liveService?.consoleBack(before, after);
-      this.notice?.('info', '演出停了，控台插件已经装好，同步和读取控台可以用了');
+      if (this.identity) this.identity = { ...this.identity, source: after };
+      if (before) this.liveService?.consoleBack(before, after);
+      this.notice?.('info', '控台连接组件已恢复，已核对当前 Show，可以继续同步');
     } catch (cause) {
       if (generation !== this.generation) return;
       this.bridgeIssue = { wait: false, message: `演出停了，但控台插件没装上：${cause instanceof Error ? cause.message : String(cause)}。请断开控台再连接一次` };

@@ -2,7 +2,7 @@ import { lightingDocumentSchema, lightingTrackSchema, type LightingDocument } fr
 import { LightingTempoMap, lightingEventTime } from './lighting-edit';
 import { removeLightingEffects } from './lighting-effect-group';
 
-/** An empty Cue is an editable timeline location, never a console action. */
+/** An empty placement keeps its identity until sync confirms the native Cue and Timecode event. */
 export function placeEmptyLightingCue(document: LightingDocument, id: string, ms: number, durationMs: number, label = ''): LightingDocument {
   const map = new LightingTempoMap(document.tempos);
   const previous = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => event.id === id).map(event => ({ clip, event })) ))[0];

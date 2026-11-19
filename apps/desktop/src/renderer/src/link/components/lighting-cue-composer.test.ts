@@ -143,3 +143,13 @@ it('时间线编号独立于素材编号和名称，换成控台 Cue 26 后仍�
   expect(cueEventEntries(moved).map(entry => entry.cue)).toEqual(['1']);
   expect(compileLightingNetworkActions(moved)).toEqual([{ atMs: 2000, action: { target: 'sequence', action: 'goto', sequence: 9001, cue: '26.000' } }]);
 });
+
+it('已写入的空 Cue 改用另一序列的素材，触发移动到新执行器且保留时间和编号', () => {
+  const source = saveCueIngredients(createLightingDocument(), ingredients.slice(0, 1), '', 2000, 10000, 'point');
+  const original = source.tracks[0]!;
+  source.ma2Bindings = [{ id: 'binding', timecode: 1, name: '测试', readAt: '2026-11-19T00:00:00Z', sourceXml: '<MA/>', baselineTracks: [structuredClone(original)],
+    mappings: [{ trackId: original.id, clipId: original.clips[0]!.id, eventId: 'point', executor: '1.101', path: 'Track:0/SubTrack:0/Event:0', sequence: 1, cueIndex: 1 }] }];
+  const changed = saveCueIngredients(source, ingredients.slice(1), '', 4000, 10000, 'point');
+  expect(changed.tracks.find(track => track.id === original.id)?.clips[0]?.events).toEqual([]);
+  expect(changed.tracks.find(track => track.id !== original.id)?.clips[0]?.events).toEqual([expect.objectContaining({ id: 'point', executor: '1.102', at: 2000 })]);
+});
