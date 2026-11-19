@@ -24,7 +24,7 @@ export type RecoveryCopyQuery = z.infer<typeof recoveryCopyQuerySchema>;
 
 const archiveBase = z.object({ version: z.literal(1), projectPath: z.string().min(1).max(4096) });
 export const projectArchiveRequestSchema = z.discriminatedUnion('action', [
-  archiveBase.extend({ action: z.literal('create'), content: projectDocumentTextSchema, reason: z.enum(['manual', 'before-sync']) }).strict(),
+  archiveBase.extend({ action: z.literal('create'), content: projectDocumentTextSchema, reason: z.enum(['manual', 'before-sync']), includeEntries: z.literal(false).optional() }).strict(),
   archiveBase.extend({ action: z.literal('list') }).strict(),
   archiveBase.extend({ action: z.literal('reveal'), name: z.string().min(1).max(512).optional() }).strict(),
   /** Writes the named archive back to projectPath after archiving the current file. */

@@ -60,6 +60,44 @@ function setupEmpty() {
   result.request.document = document; result.request.readback = preview;
   return { ...result, empty };
 }
+
+it('实时同步沿用工程核实过的 Show，相同编号和内容也不能写入切换后的另一个 Show', async () => {
+  const { bridge, request } = setup();
+  request.expectedSource = { show: '原 Show', version: '3.7.0.5', generation: '1' };
+  request.document.tracks[0]!.clips[0]!.events[0]!.at += 100;
+  const source = vi.fn().mockResolvedValue({ ...request.expectedSource, show: '另一个 Show' });
+  const verify = vi.fn().mockRejectedValue(new Error('Show 已切换'));
+  const prepare = vi.fn();
+  const result = await new Ma2ApplyService(bridge, showStopped, { source, verify, prepare }).apply(request);
+  expect(result).toMatchObject({ status: 'incomplete', mayHaveWritten: false });
+  expect(verify).toHaveBeenCalledWith(request.expectedSource);
+  expect(source).not.toHaveBeenCalled();
+  expect(bridge.exchange).not.toHaveBeenCalled();
+  expect(prepare).not.toHaveBeenCalled();
+});
+it('编辑其他时码槽的原时间线，保留自动起播、状态调用及停止设置', async () => {
+  const original = xml.replace('slot="TC Slot 1"', 'slot="TC Slot 1" m_autostart="true" no_status_call="true" no_switch_off="true"');
+  const { request, bridge } = setup(original);
+  request.document.tracks[0]!.clips[0]!.events[0]!.at += 100;
+  const source = { show: '现场', version: '3.3.4.3', generation: '本次' };
+  const service = new Ma2ApplyService(bridge, showStopped, { source: () => Promise.resolve(source), verify: () => Promise.resolve(), prepare: () => Promise.resolve(false) });
+  const result = await service.apply(request);
+  expect(result.status).toBe('verified');
+  const written = inspectMa2TimecodeXml(bridge.exchange.mock.calls[0]![3]!).timecodes[0]!;
+  expect(written.attributes).toMatchObject({ slot: 'TC Slot 1', m_autostart: 'true', no_status_call: 'true', no_switch_off: 'true' });
+});
+it('写入回执包含这次控台导出的完整时间线和序列时，直接核对这一份；控台读回旧点不会报成功', async () => {
+  for (const stale of [false, true]) {
+    const { request, bridge } = setup();
+    request.document.tracks[0]!.clips[0]!.events[0]!.at += 100;
+    bridge.exchange.mockImplementationOnce((_op, _target, _expected, desired) => Promise.resolve({
+      requestId: 'a'.repeat(32), response: desired!, snapshot: snapshot(stale ? xml : desired!)
+    }));
+    const result = await new Ma2ApplyService(bridge, showStopped).apply(request);
+    expect(result.status).toBe(stale ? 'incomplete' : 'verified');
+    expect(bridge.request).toHaveBeenCalledTimes(1);
+  }
+});
 describe('本机 MA2 同步服务', () => {
   it('录制关闭执行器反馈后可同步回读，不伪造 Cue 引用', async () => {
     const { request, bridge } = setup();

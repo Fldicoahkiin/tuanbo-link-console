@@ -33,6 +33,21 @@ it('不同对象、不同控台各自计数，互不清理', async () => {
   expect(t.request).not.toHaveBeenCalled();
 });
 
+it('新备份记入磁盘即可确认 Cue，后台清理收到回执并记账后才处理下一笔', async () => {
+  const t = await setup();
+  const backup = (index: number) => ({ console: 'a:30000', object: 'Timecode 1', files: [name(index)] });
+  for (let i = 1; i <= 10; i++) await t.backups.record(t.bridge, backup(i));
+  let confirm!: (file: string) => void;
+  t.request.mockImplementationOnce(() => new Promise(resolve => { confirm = resolve; }));
+  await t.backups.record(t.bridge, backup(11), 'recorded');
+  expect(t.request).toHaveBeenCalledWith('DISCARD', 1, name(1));
+  expect(await t.ledger()).toHaveLength(11);
+  const next = t.backups.record(t.bridge, backup(12));
+  confirm(name(1));
+  await next;
+  expect(await t.ledger()).toEqual(Array.from({ length: 10 }, (_, index) => name(index + 3)));
+});
+
 it('控台没删掉的文件留在记录里并报告，下次写入后再试；播放期间只记账不删除', async () => {
   const t = await setup();
   t.request.mockImplementation((_operation, _target, expected) => Promise.resolve(expected!.split(',').slice(1).join(',')));

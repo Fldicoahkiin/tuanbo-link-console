@@ -1,9 +1,9 @@
 import { ma2ApplyRequestSchema, ma2ApplyResultSchema, type Ma2ApplyRequest, type Ma2ApplyResult, type Ma2TimecodePreview } from '@tb/schema';
-import { holdForShow, MA2_SONG_COLLISION, resolveMa2Sync, type ShowGateReader } from '@tb/core/link';
+import { holdForShow, MA2_SONG_COLLISION, MA2_SONG_TIMECODE_SLOT, resolveMa2Sync, type ShowGateReader } from '@tb/core/link';
 import { Ma2BridgeFailure, ma2TimecodeChangedBeforeWrite, type Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { confirmMa2MergedEvents, prepareMa2MergedEvents } from './ma2-event-write';
 import { convertMa2Snapshot } from './ma2-timecode-conversion';
-import { ma2GoSequencesInSnapshot, ma2MtcPlaybackSettings, referencedMa2Sequences, sameMa2XmlObjects } from './ma2-timecode-xml';
+import { inspectMa2TimecodeXml, ma2GoSequencesInSnapshot, ma2MtcPlaybackSettings, referencedMa2Sequences, sameMa2XmlObjects } from './ma2-timecode-xml';
 import { compareMa2LightingReadback } from './ma2-comparison';
 import type { Ma2ShowSource } from './ma2-show-probe';
 import type { Ma2ConfirmedTimecode } from './ma2-mtc-selection';
@@ -58,7 +58,9 @@ export class Ma2ApplyService {
       const binding = request.document.ma2Bindings?.find((entry) => entry.id === request.bindingId);
       if (!binding || binding.timecode !== request.readback.target) throw new Error('节目与 MA2 绑定不一致');
       stage = 'read';
-      const source = await this.playback?.source();
+      // A live edit belongs to the Show that supplied its binding. Identical Timecode
+      // and Sequence numbers can exist in a different Show after the preview.
+      const source = request.expectedSource ?? await this.playback?.source();
       stage = 'preflight';
       const merged = resolveMa2Sync(compareMa2LightingReadback(request.document, request.bindingId, request.readback, request.consoleChanges), new Map(request.conflicts));
       const desiredSequences = new Set<number>();
@@ -79,7 +81,9 @@ export class Ma2ApplyService {
       if (!sameMa2XmlObjects(request.readback.sourceXml, current.sourceXml) || previewContent(request.readback) !== previewContent(current)) throw new Error(`${MA2_SONG_COLLISION}：预览之后控台的 Timecode ${binding.timecode} 或它用的序列变了，这次没有写入；重新读取控台后再同步`);
       stage = 'preflight';
       const prepared = prepareMa2MergedEvents(request.document, request.bindingId, request.readback, new Map(request.conflicts), [snapshot], request.timeAlignment ?? 'exact', request.consoleChanges);
-      if (this.playback) prepared.desiredXml = ma2MtcPlaybackSettings(prepared.desiredXml, false);
+      if (this.playback && inspectMa2TimecodeXml(current.sourceXml).timecodes[0]?.attributes.slot === MA2_SONG_TIMECODE_SLOT) {
+        prepared.desiredXml = ma2MtcPlaybackSettings(prepared.desiredXml, false);
+      }
       this.requireStopped();
       let verified = current;
       if (!sameMa2XmlObjects(prepared.desiredXml, current.sourceXml)) {
@@ -89,7 +93,7 @@ export class Ma2ApplyService {
         const receipt = await this.bridge.exchange('SYNC', binding.timecode, snapshot, prepared.desiredXml);
         backupFile = `tblink_backup_${receipt.requestId}.xml`;
         stage = 'verify';
-        snapshot = await this.bridge.request('SNAPSHOT', binding.timecode);
+        snapshot = receipt.snapshot ?? await this.bridge.request('SNAPSHOT', binding.timecode);
         verified = convertMa2Snapshot(snapshot, binding.timecode, [], binding.timeOriginMs);
       } else if (cached) {
         // SYNC normally checks the native snapshot immediately before Import. A read-only merge

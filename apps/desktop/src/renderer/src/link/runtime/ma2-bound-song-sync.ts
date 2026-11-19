@@ -1,5 +1,6 @@
 import { applyFirstTrackCues, firstTrackCuePlan, applyMa2ReadbackCommand, ma2BindingHold, ma2LatestChoiceText, ma2LatestSide, ma2PendingChanges, boundEmptyCuePoints, routeBoundEmptyCues, ma2TrackRoutingIssue, ma2PoolSequencesToRoute, routeMa2Tracks, setLightingCommand, sameMa2Content, type LinkCommand, type Ma2SyncPreview } from '@tb/core/link';
 import { ma2ApplyResultSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2SongPoint, type Ma2SongBinding, type Ma2PoolRoute, type Ma2ExecutorReadRequest, type Ma2ExecutorPreview, type Ma2ApplyRequest, type Ma2ConsoleChanges, type Ma2ApplyResult, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
+import { existingFirstTrackCue, MA2_READ_CANCELLED } from '@tb/core/link';
 
 /** What one pass over a way-1 song (its `ma2Bindings`, the console's own Timecode shows) needs. */
 export type BoundSongPass = {
@@ -68,9 +69,23 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
     const first = firstTrackCuePlan(original);
     const empty = first ? [] : boundEmptyCuePoints(original);
     if (first) {
-      await pass.archive(); archived = true;
+      // When the confirmed first executor already owns every selected Cue,
+      // FIRSTCUES only checks the actual assignment and the Cue handles.
+      // Copying, combining and creating an empty Cue still wait for the archive.
+      const onlyExisting = first.points.every(({ sources }) => existingFirstTrackCue(first.expectedSequence, sources) !== undefined);
+      let receipt: Awaited<ReturnType<BoundSongPass['firstTrack']>>;
       if (!pass.current() || lighting() !== original) return interrupted(stopped);
-      const receipt = await pass.firstTrack(writable[0]!.timecode, first);
+      if (onlyExisting) {
+        const [verified, archive] = await Promise.allSettled([pass.firstTrack(writable[0]!.timecode, first), pass.archive()]);
+        if (archive.status === 'rejected') throw archive.reason;
+        if (verified.status === 'rejected') throw verified.reason;
+        receipt = verified.value;
+      } else {
+        await pass.archive();
+        if (!pass.current() || lighting() !== original) return interrupted(stopped);
+        receipt = await pass.firstTrack(writable[0]!.timecode, first);
+      }
+      archived = true;
       if (!pass.current() || lighting() !== original) return interrupted(stopped);
       prepared = applyFirstTrackCues(original, first, receipt);
       preparedSequence = receipt.sequence;
@@ -132,8 +147,14 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
       return change.after?.kind === 'event' && sequence > 0 && !knownSequences.has(sequence) ? [sequence] : [];
     });
     if (preparedSequence && syncSequences) syncSequences.push(preparedSequence);
-    const readback = ma2TimecodePreviewSchema.parse(await pass.read({ ...pass.connection, target: binding.timecode, timeOriginMs: binding.timeOriginMs,
-      ...(syncSequences && { syncSequences: [...new Set(syncSequences)].sort((a, b) => a - b) }) }));
+    let readback: Ma2TimecodePreview;
+    try {
+      readback = ma2TimecodePreviewSchema.parse(await pass.read({ ...pass.connection, target: binding.timecode, timeOriginMs: binding.timeOriginMs,
+        ...(syncSequences && { syncSequences: [...new Set(syncSequences)].sort((a, b) => a - b) }) }));
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === MA2_READ_CANCELLED && lighting() !== source) return interrupted('灯光已修改，正在同步新位置');
+      throw cause;
+    }
     if (!pass.current()) return interrupted(stopped);
     if (lighting() !== source) return interrupted('还在编辑，稍后再同步');
     const comparison = await pass.compare({ document: source, bindingId: binding.id, readback, consoleChanges: pass.consoleChanges });

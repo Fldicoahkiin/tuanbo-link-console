@@ -1,27 +1,29 @@
 import { DOMParser, XMLSerializer, type Element } from '@xmldom/xmldom';
 import { inspectMa2TimecodeXml, validateMa2TimecodeWrite } from './ma2-timecode-xml';
 
-/** Add the native Master subtrack only to explicitly requested executor tracks. */
-export function appendMa2MasterSubtracks(xml: string, target: number, trackPaths: readonly string[]): { xml: string; paths: Map<string, string> } {
+/** Add only the missing kind of subtrack to the existing executor track. */
+export function appendMa2Subtracks(xml: string, target: number, trackPaths: readonly string[], kind: 'Master' | 'Cue'): { xml: string; paths: Map<string, string> } {
   validateMa2TimecodeWrite(xml);
   const report = inspectMa2TimecodeXml(xml);
   const timecode = report.timecodes[0];
-  if (report.timecodes.length !== 1 || timecode?.index !== target - 1) throw new Error('推杆子轨道目标与 Timecode 不一致');
+  if (report.timecodes.length !== 1 || timecode?.index !== target - 1) throw new Error('子轨道目标与 Timecode 不一致');
   if (!trackPaths.length) return { xml, paths: new Map() };
-  if (report.version !== '3.3.4') throw new Error('这个 MA2 版本的 Master 子轨道还没验证过');
+  if (report.version !== '3.3.4' && (kind !== 'Cue' || report.version !== '3.7.0')) throw new Error(`这个 MA2 版本的 ${kind} 子轨道还没验证过`);
   const available = new Map(timecode.tracks.map((track) => [`Timecode:${timecode.index}/Track:${track.index}`, track]));
-  if (new Set(trackPaths).size !== trackPaths.length || trackPaths.some((path) => !available.has(path))) throw new Error('推杆子轨道的目标轨道不存在或重复');
-  if (trackPaths.some((path) => available.get(path)!.subtracks.some((subtrack) => subtrack.attributes.fader_command === 'Master'))) throw new Error('目标轨道已有 Master 子轨道');
+  if (new Set(trackPaths).size !== trackPaths.length || trackPaths.some((path) => !available.has(path))) throw new Error('子轨道的目标轨道不存在或重复');
+  const fader = kind === 'Master' ? 'Master' : undefined;
+  if (trackPaths.some((path) => available.get(path)!.subtracks.some((subtrack) => subtrack.attributes.fader_command === fader))) throw new Error(`目标轨道已有 ${kind} 子轨道`);
   const namespace = 'http://schemas.malighting.de/grandma2/xml/MA';
   const document = new DOMParser({ onError: (_level, message) => { throw new Error(`MA2 XML 解析失败：${message}`); } }).parseFromString(xml.replace(/^\uFEFF/, ''), 'application/xml');
   const nodes = new Map(Array.from(document.getElementsByTagNameNS(namespace, 'Track')).map((track) => [`Timecode:${timecode.index}/Track:${track.getAttribute('index')}`, track]));
   const paths = new Map<string, string>();
   for (const path of trackPaths) {
     const parent = nodes.get(path);
-    if (!parent || (parent.parentNode as Element | null)?.localName !== 'Timecode') throw new Error('推杆子轨道父节点不明确');
+    if (!parent || (parent.parentNode as Element | null)?.localName !== 'Timecode') throw new Error('子轨道的执行器轨道不明确');
     const index = available.get(path)!.subtracks.reduce((next, track) => Math.max(next, track.index + 1), 0);
     const subtrack = document.createElementNS(namespace, 'SubTrack');
-    subtrack.setAttribute('index', String(index)); subtrack.setAttribute('fader_command', 'Master');
+    subtrack.setAttribute('index', String(index));
+    if (fader) subtrack.setAttribute('fader_command', fader);
     parent.appendChild(subtrack); paths.set(path, `${path}/SubTrack:${index}`);
   }
   const result = new XMLSerializer().serializeToString(document);

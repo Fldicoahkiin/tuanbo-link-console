@@ -737,7 +737,7 @@ it('没有画面动作的歌，OBS 未连接只提示画面未参与，不标成
     currentCueId: null, nextCueId: null, pendingCount: 0, positionMs: 0 }));
   await f.player.play('song-0');
   expect(f.state()).toMatchObject({ status: 'playing', fault: null });
-  expect(f.state().notice).toContain('OBS 没有连接');
+  expect(f.state().notice?.match(/OBS 没有连接/g)).toHaveLength(1);
   await f.player.dispose();
 });
 

@@ -53,6 +53,11 @@ local function pool(kind)
 end
 local function cmd(command)
   FAKE.log[#FAKE.log + 1] = command
+  local cue_address, cue_file = command:match('^Export (Sequence %d+ Cue [%d%.]+) "([%w_]+)" /o$')
+  if cue_address then
+    local cue = FAKE.objects[cue_address]
+    if cue and cue.xml then FAKE.files[export_path(cue_file .. '.xml')] = (cue.xml:gsub('@EXPORT@', tostring(#FAKE.log))) end
+  end
   local kind, number, name = command:match('^Export (%a+) ([%d%.]+) "?([%w_]+)"? /o$')
   if kind then
     local object = FAKE.objects[kind .. ' ' .. number]

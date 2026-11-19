@@ -5,6 +5,7 @@ import { executePowerShell } from './windows-integration-detector';
 import { changeNetworkAddress, NetworkAddressChangeError } from './ma2-network-address';
 import { planMa2Network, readyAddress } from './ma2-network-setup-plan';
 import { writeFileAtomically } from './atomic-file';
+import { isLocalMa2Address } from './ma2-connection-owner';
 
 const snapshotSchema = z.object({ bootId: z.string(), adapters: z.array(ma2NetworkAdapterSchema) }).strict();
 const recordsSchema = z.array(z.object({ bootId: z.string(), plan: ma2NetworkSetupPlanSchema }).strict());
@@ -44,9 +45,12 @@ export class Ma2NetworkSetup {
   private async select(plan: Ma2NetworkSetupPlan): Promise<void> {
     await writeFileAtomically(`${this.path}.selections`, JSON.stringify([...(await this.selections()).filter(value => value.host !== plan.host), plan]));
   }
-  async state(): Promise<Ma2NetworkSetupState> {
-    const current = await this.dependencies.snapshot(); const records = await this.records();
+  private async stateFrom(current: z.infer<typeof snapshotSchema>): Promise<Ma2NetworkSetupState> {
+    const records = await this.records();
     return { adapters: current.adapters, additions: records.filter(record => record.bootId === current.bootId).map(({ plan }) => ({ id: plan.id, adapterId: plan.adapter.id, adapterName: plan.adapter.name, address: plan.address, prefix: plan.prefix })) };
+  }
+  async state(): Promise<Ma2NetworkSetupState> {
+    return this.stateFrom(await this.dependencies.snapshot());
   }
   async plan(request: Ma2NetworkSetupRequest): Promise<Ma2NetworkSetupPlan> {
     const current = await this.dependencies.snapshot();
@@ -56,10 +60,14 @@ export class Ma2NetworkSetup {
     this.plans.clear(); this.plans.set(plan.id, plan); return plan;
   }
   async connectionAddress(host: string): Promise<string | undefined> {
+    if (host.startsWith('127.') || isLocalMa2Address(host)) return undefined;
+    const [selections, records] = await Promise.all([this.selections(), this.records()]);
+    const selected = selections.find(plan => plan.host === host);
+    const matching = records.filter(record => record.plan.host === host);
+    if (!selected && !matching.length) return undefined;
     const current = await this.dependencies.snapshot();
-    if (host.startsWith('127.') || current.adapters.some(adapter => adapter.addresses.some(entry => entry.address === host))) return undefined;
-    const selected = (await this.selections()).find(plan => plan.host === host);
-    const saved = (await this.records()).filter(record => record.bootId === current.bootId && record.plan.host === host).at(-1)?.plan;
+    if (current.adapters.some(adapter => adapter.addresses.some(entry => entry.address === host))) return undefined;
+    const saved = matching.filter(record => record.bootId === current.bootId).at(-1)?.plan;
     const plan = selected ?? saved;
     if (!plan) return undefined;
     const adapter = current.adapters.find(entry => entry.id === plan.adapter.id);
@@ -74,7 +82,7 @@ export class Ma2NetworkSetup {
       const current = await this.dependencies.snapshot();
       const adapter = current.adapters.find(adapter => adapter.id === plan.adapter.id);
       if (JSON.stringify(adapter) !== JSON.stringify(plan.adapter)) throw new Error('网卡状态已变化，请重新检查后配置');
-      if (!plan.needsChange) { await this.select(plan); this.plans.delete(id); return this.state(); }
+      if (!plan.needsChange) { await this.select(plan); this.plans.delete(id); return this.stateFrom(current); }
       if (!await this.confirm({ action: 'add', adapterName: plan.adapter.name, adapterDescription: plan.adapter.description, address: plan.address, prefix: plan.prefix, host: plan.host })) {
         throw new Error('已取消修改网卡地址，网卡未改动');
       }

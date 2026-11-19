@@ -7,7 +7,7 @@ import { acceptCreatedMa2Layout, currentMa2LayoutScope } from '../stores/ma2-lay
 import { locateMa2Executor, loadMa2ExecutorPage } from '../stores/ma2-executor-page-store';
 import { recordRuntimeOperator, reportCoordinatorError } from './runtime-action-log';
 import { settleInterruptedMa2Song, updateMa2Song as update, useMa2SyncStore, type NameSync, type SongSync } from '../stores/ma2-sync-store';
-import { ma2ConsoleReading } from './ma2-console-reading';
+import { ma2ConsoleReading, readMa2SongPreview } from './ma2-console-reading';
 import { currentShowWait } from '../stores/show-state-store';
 import { confirmMa2Edit, consoleSeenAt, editTimes, noteMa2LocalEdits, songSignature, songStart, type Program } from './ma2-edit-times';
 import { readMa2Method } from '../stores/ma2-mode-store';
@@ -242,9 +242,9 @@ async function syncImportedSong(entry: SongSync): Promise<void> {
     },
     assign: sequence => window.tbLink.assignMa2PoolSequence({ dataDirectory: '', network: place.network, expectedSource: place.source, projectId: project()!.projectId, sequence }),
     route: command => confirmMa2Edit(() => useDocumentStore.getState().executeForDocument(entry.documentId, command)),
-    read: request => window.tbLink.previewMa2(request),
+    read: request => readMa2SongPreview(entry, request),
     compare: request => window.tbLink.compareMa2(request),
-    apply: request => window.tbLink.applyMa2(request),
+    apply: request => window.tbLink.applyMa2({ ...request, expectedSource: place.source }),
     archive: async () => { const value = project(); if (!value) throw new Error('工程已切换，同步已取消'); await archiveBeforeSync(entry.documentId, value); },
     confirm: command => {
       const state = useDocumentStore.getState();

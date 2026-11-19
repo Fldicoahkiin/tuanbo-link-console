@@ -26,29 +26,33 @@ export class Ma2ConsoleBackups {
    * the files stay listed and are removed after a later write. Nothing is removed while the program moves (paused it is,
    * 第 3 题: removing old backups is changing the console like an executor).
    */
-  record(bridge: Pick<Ma2OnpcBridge, 'request'>, backup: { console: string; object: string; files: readonly string[] }): Promise<void> {
-    const run = this.queue.then(async () => {
-      try {
-        const files = backup.files.map(file => fileSchema.parse(file.replace(/\.xml$/, '')));
-        const ledger = await this.read();
-        const recordedAt = new Date().toISOString();
-        for (const file of files) if (!ledger.entries.some(entry => entry.file === file)) ledger.entries.push({ console: backup.console, object: backup.object, file, recordedAt });
-        await writeFileAtomically(this.path, JSON.stringify(ledger, null, 2));
-        if (this.show('ma2.executor.mutate').kind === 'wait') return;
-        const own = ledger.entries.filter(entry => entry.console === backup.console && entry.object === backup.object);
-        const expired = own.slice(0, Math.max(0, own.length - KEEP_PER_OBJECT)).map(entry => entry.file);
-        if (!expired.length) return;
-        // DISCARD answers with the files now gone; any other file stays listed for the next write.
-        const gone = new Set((await bridge.request('DISCARD', 1, expired.join(','))).split(',').filter(Boolean));
-        await writeFileAtomically(this.path, JSON.stringify({ ...ledger, entries: ledger.entries.filter(entry => !gone.has(entry.file)) }, null, 2));
-        const kept = expired.filter(file => !gone.has(file));
-        if (kept.length) await this.report(`控台旧备份未能全部清理（${backup.object}）：${kept.join('、')} 仍保留，下次写入后再试`);
-      } catch (cause) {
-        await this.report(`控台旧备份清理未完成（${backup.object}）：${cause instanceof Error ? cause.message : String(cause)}；备份文件均已保留`);
-      }
-    });
-    this.queue = run;
-    return run;
+  record(bridge: Pick<Ma2OnpcBridge, 'request'>, backup: { console: string; object: string; files: readonly string[] }, until: 'recorded' | 'cleaned' = 'cleaned'): Promise<void> {
+    const failed = async (cause: unknown): Promise<void> => {
+      await this.report(`控台旧备份清理未完成（${backup.object}）：${cause instanceof Error ? cause.message : String(cause)}；备份文件均已保留`);
+    };
+    const recorded = this.queue.then(async () => {
+      const files = backup.files.map(file => fileSchema.parse(file.replace(/\.xml$/, '')));
+      const ledger = await this.read();
+      const recordedAt = new Date().toISOString();
+      for (const file of files) if (!ledger.entries.some(entry => entry.file === file)) ledger.entries.push({ console: backup.console, object: backup.object, file, recordedAt });
+      await writeFileAtomically(this.path, JSON.stringify(ledger, null, 2));
+      return ledger;
+    }).catch(async (cause: unknown) => { await failed(cause); return null; });
+    // A verified Cue can be acknowledged as soon as its backup is durably recorded.
+    // Rotation stays serialized with the next ledger edit, including its final disk write.
+    const cleaned = recorded.then(async ledger => {
+      if (!ledger || this.show('ma2.executor.mutate').kind === 'wait') return;
+      const own = ledger.entries.filter(entry => entry.console === backup.console && entry.object === backup.object);
+      const expired = own.slice(0, Math.max(0, own.length - KEEP_PER_OBJECT)).map(entry => entry.file);
+      if (!expired.length) return;
+      // DISCARD answers with the files now gone; any other file stays listed for the next write.
+      const gone = new Set((await bridge.request('DISCARD', 1, expired.join(','))).split(',').filter(Boolean));
+      await writeFileAtomically(this.path, JSON.stringify({ ...ledger, entries: ledger.entries.filter(entry => !gone.has(entry.file)) }, null, 2));
+      const kept = expired.filter(file => !gone.has(file));
+      if (kept.length) await this.report(`控台旧备份未能全部清理（${backup.object}）：${kept.join('、')} 仍保留，下次写入后再试`);
+    }).catch(failed);
+    this.queue = cleaned.catch((cause: unknown) => { console.error('无法记录控台备份清理结果', cause); });
+    return until === 'recorded' ? recorded.then(() => undefined) : cleaned;
   }
 
   private async read(): Promise<Ledger> {

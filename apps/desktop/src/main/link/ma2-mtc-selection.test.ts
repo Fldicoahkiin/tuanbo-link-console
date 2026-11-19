@@ -8,7 +8,7 @@ import { ma2SongTimecodeXml } from './ma2-song-timecode';
 import { Ma2LuaConsole } from './fixtures/ma2-lua-console';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2NetworkWire } from './ma2-network-wire';
-import { showRunning, showStopped } from './fixtures/show-gates';
+import { showMovingWhen, showRunning, showStopped } from './fixtures/show-gates';
 import type { Ma2ReadProgressUpdate } from '@tb/schema';
 
 const network = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'test' };
@@ -19,12 +19,15 @@ it('全是其他时码槽时，已确认的 Cue 编辑不重读整个 Show；时
   const original = native.replace('index="9906"', 'index="9998"');
   console.set('Timecode 9999', { name: '现场', xml: original });
   const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(console), showStopped);
-  const service = new Ma2MtcSelectionService(showStopped, { record: vi.fn() });
+  let playing = false;
+  const service = new Ma2MtcSelectionService(showMovingWhen(() => playing), { record: vi.fn() });
   await expect(service.prepare(console, bridge, network, true)).resolves.toBe(false);
   const source = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
   const start = console.lines.length;
+  playing = true;
   await expect(service.prepare(console, bridge, network, false, [9999], undefined, { ...source, number: 9999, xml: original })).resolves.toBe(false);
   expect(console.lines).toHaveLength(start);
+  playing = false;
   // An object entering the managed slot must go through the actual selector checks.
   const check = vi.fn(() => { throw new Error('开始重新核对'); });
   await expect(service.prepare(console, bridge, network, false, [9999], undefined, {

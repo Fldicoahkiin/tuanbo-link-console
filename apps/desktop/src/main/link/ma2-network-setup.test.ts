@@ -12,6 +12,18 @@ import { NetworkAddressChangeError, networkAddressNativeSource, networkAddressSc
 const adapter: Ma2NetworkAdapter = { id: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa', index: 3, name: '有线网卡', description: 'Ethernet', connected: true, physical: true, wired: true, addresses: [{ address: '192.168.1.10', prefix: 24 }] };
 const request = { host: '2.97.214.223', prefix: 24 };
 const approve = () => Promise.resolve(true);
+it('本机或没有专用网口记录时立即连接，复用网卡不再次枚举未改动的 Windows 配置', async () => {
+  const snapshot = vi.fn(() => Promise.resolve({ bootId: 'boot', adapters: [adapter] }));
+  const path = join(await mkdtemp(join(tmpdir(), 'tblink-network-open-')), 'addresses.json');
+  const setup = new Ma2NetworkSetup(path, approve, { snapshot, change: vi.fn() });
+  await expect(setup.connectionAddress('127.0.0.1')).resolves.toBeUndefined();
+  await expect(setup.connectionAddress('192.168.1.20')).resolves.toBeUndefined();
+  expect(snapshot).not.toHaveBeenCalled();
+  const plan = await setup.plan({ host: '192.168.1.20', prefix: 24 });
+  snapshot.mockClear();
+  expect((await setup.apply(plan.id)).adapters).toEqual([adapter]);
+  expect(snapshot).toHaveBeenCalledTimes(1);
+});
 it('电脑已有地址直接复用实际掩码；手填另一网卡地址时正确识别其所属网卡', () => {
   const consoleAdapter = { ...adapter, id:'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb', addresses:[{address:'2.0.0.97',prefix:8,state:'Preferred' as const}] };
   expect(planMa2Network([adapter,consoleAdapter],{host:'2.0.0.1',address:'2.0.0.97',prefix:24})).toMatchObject({adapter:consoleAdapter,address:'2.0.0.97',prefix:8,needsChange:false});

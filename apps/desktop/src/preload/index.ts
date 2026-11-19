@@ -20,7 +20,7 @@ import { automaticMusicRequestSchema, automaticMusicControlSchema, automaticMusi
 import { musicMonitorRequestSchema, musicMonitorStatusSchema } from '@tb/schema';
 import { projectArchiveRequestSchema, projectArchiveResultSchema, projectArchiveSettingsActionSchema, projectArchiveSettingsStatusSchema, recoveryCopyContentSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema } from '@tb/schema';
 import { linkProjectAssetFilesPayloadSchema, linkProjectAssetRelinkPayloadSchema, linkProjectAssetRelinkResultSchema } from '@tb/schema';
-import { toUserErrorMessage } from '@tb/core/link';
+import { MA2_READ_CANCELLED, toUserErrorMessage } from '@tb/core/link';
 import { ma2PlaybackPrepareSchema, ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
 import { nativePlaybackDevicesSchema, nativePlayerPrepareSchema, nativePlayerControlSchema, nativePlayerStatusSchema, nativeMidiCheckSchema } from '@tb/schema';
 import { midiPortEventSchema, midiPortHandleSchema, midiPortListRequestSchema, midiPortListSchema, midiPortOpenSchema, midiPortSendSchema } from '@tb/schema';
@@ -141,7 +141,11 @@ const tbLink: LinkDesktopBridgeApi = {
   connectMa2Network: () => invoke('link:ma2-network-connect'),
   disconnectMa2Network: () => invoke('link:ma2-network-disconnect'),
   exchangeMa2: (payload) => invoke('link:ma2-exchange', payload),
-  previewMa2: (payload) => invoke('link:ma2-preview', payload),
+  previewMa2: async payload => {
+    const preview = await invoke<import('@tb/schema').Ma2TimecodePreview | null>('link:ma2-preview', payload);
+    if (preview === null) throw new Error(MA2_READ_CANCELLED);
+    return preview;
+  },
   prepareMa2Playback: async (request, onProgress) => z.boolean().parse(await readMa2('link:ma2-prepare-playback', ma2PlaybackPrepareSchema.parse(request), onProgress)),
   readMa2Catalog: (payload, onProgress) => readMa2('link:ma2-catalog', payload, onProgress),
   readMa2EffectLibrary: (payload, onProgress) => readMa2('link:ma2-effect-library', payload, onProgress),

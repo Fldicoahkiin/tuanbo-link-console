@@ -26,6 +26,8 @@
 
 ## 画面失败怎么分级、补不补
 
+播放前准备画面和原生播放器都可能上报同一次 OBS 断开。两条通知用同一个原因生成播放提示，一首歌只显示一次。音乐、时间码和灯光各自保留自己的结果。回归见 `native-program-player.test.ts` 和 `lighting-timecode-notice.spec.ts`。
+
 2026-11-17 用户要求恢复后不再留下无从处理的报错：素材晚准备后的补播成功，清除这一项的故障，迟到时长留在运行日志，不再把成功写回 `fault`；其他未恢复的项目照常显示。`ObsMediaPreload.initialEntries` 沿用同一条 `SceneOutputTimeline` 和十秒预备范围，开播前准备每个素材最先会显示的片段，包括被开头机位暂时盖住的视频；不提前显示、不改 Cue 时间。回归见 `obs-program-session.test.ts`、`obs-media-preload.test.ts`。
 
 分级只在 `packages/core/src/obs-program-session.ts` 的 `verdictOf`（2026-11-11）：做到了、撤回了、OBS 拒绝了、不确定（没回应，或发出去以后失败）。补不补只由 `packages/core/src/picture-reconcile.ts` 的 `judge` 定：失败的和不确定的都按此刻该有的画面补一次，排练时不补，OBS 断着时不补、不花次数；次数照上一行那张表，发出去那一刻才计数。每一项的状态列在 `NativeObsStatus.items`，状态面板「这首歌的画面」照着显示（`view-models/status-center.ts` 的 `pictureStatus`）。别处不自己重发画面动作（`output-rules.test.ts` 规则 2–4 守着）

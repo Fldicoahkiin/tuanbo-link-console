@@ -6,7 +6,7 @@ import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { DEFAULT_ARCHIVE_SETTINGS, ProjectArchiveSettingsStore, projectArchives } from './project-archives';
 
 const documents = { inspect: (text: string) => Promise.resolve(parseLinkProject(JSON.parse(text)).name),
-  save: async (path: string, text: string) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, text); return null; } };
+  save: async (path: string, text: string) => { parseLinkProject(JSON.parse(text)); await mkdir(dirname(path), { recursive: true }); await writeFile(path, text); return null; } };
 async function setup(name = 'show') {
   const directory = await mkdtemp(join(tmpdir(), 'tblink-archive-'));
   const projectPath = join(directory, 'project', `${name}.tblink`);
@@ -31,6 +31,25 @@ it('存档放在 文档\\团播联动台\\存档\\<工程名>，文件名可读�
   expect(manual.entries.map(entry => entry.reason)).toEqual(['manual', 'before-sync']);
   await expect(t.run({ action: 'reveal', name: '../show.tblink' })).rejects.toThrow('不属于');
   await expect(projectArchives({ version: 1, projectPath: t.projectPath, action: 'create', content: t.content, reason: 'manual' }, { ...documents, save: () => Promise.reject(new Error('磁盘已满')) }, t.store, vi.fn(), t.trash)).rejects.toThrow('磁盘已满');
+});
+
+it('同步只等存档和索引写好，坏工程不会入档，随后打开列表仍能找到完整的存档', async () => {
+  const t = await setup();
+  const request = { action: 'create', reason: 'before-sync', includeEntries: false };
+  await expect(t.run({ ...request, content: 'broken' })).rejects.toThrow();
+  const result = await t.run({ ...request, content: t.content });
+  expect(result.entries).toEqual([]);
+  expect(await readFile(result.createdPath!, 'utf8')).toBe(t.content);
+  expect((await t.run({ action: 'list' })).entries.map(entry => entry.path)).toEqual([result.createdPath]);
+});
+it('同一秒的手动存档和同步前存档并发时，两份内容和记录都在', async () => {
+  const t = await setup();
+  await t.store.write({ ...DEFAULT_ARCHIVE_SETTINGS, nameTemplate: '{工程名}' });
+  const edits = ['手动', '同步前'].map(name => JSON.stringify(createEmptyLinkProject(name)));
+  const saved = await Promise.all(edits.map((content, i) => t.run({ action: 'create', content, reason: i ? 'before-sync' : 'manual' })));
+  expect(new Set(saved.map(item => item.createdPath)).size).toBe(2);
+  expect(await Promise.all(saved.map(item => readFile(item.createdPath!, 'utf8')))).toEqual(edits);
+  expect((await t.run({ action: 'list' })).entries).toHaveLength(2);
 });
 
 it('同一秒重名加序号；命名模板可改，非法字符替换', async () => {

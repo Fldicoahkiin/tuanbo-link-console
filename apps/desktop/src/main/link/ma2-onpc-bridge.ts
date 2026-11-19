@@ -6,7 +6,7 @@ import { inspectMa2ExecutorPageXml } from './ma2-timecode-xml';
 import { ma2FirstTrackReceiptSchema, ma2ObjectDirectorySchema, ma2PoolRouteSchema, ma2SequenceAssignmentSchema, ma2RenameResultSchema, ma2LabelSchema, ma2TimecodeRangesSchema } from '@tb/schema';
 import { readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
-import { inspectMa2SequenceXml, inspectMa2ExecutorXml, inspectMa2TimecodeXml, referencedMa2Sequences, sameMa2XmlObjects, validateMa2TimecodeSnapshot, validateMa2TimecodeWrite } from './ma2-timecode-xml';
+import { extractMa2TimecodeXml, inspectMa2SequenceXml, inspectMa2ExecutorXml, inspectMa2TimecodeXml, referencedMa2Sequences, sameMa2XmlObjects, validateMa2TimecodeSnapshot, validateMa2TimecodeWrite } from './ma2-timecode-xml';
 export const ma2SequenceGoResultSchema = z.object({ changed: z.boolean(), cues: z.number().int().min(0).max(100000) }).strict().refine(value => value.changed === (value.cues > 0), '控台触发检查结果不一致');
 // Each of these replies comes from a native comparison that stops before Import.
 export function ma2TimecodeChangedBeforeWrite(message: string): boolean {
@@ -18,10 +18,11 @@ export type Ma2Operation = 'PING' | 'PAGES' | 'PAGE' | 'LIST' | 'LISTSEQ' | 'SEQ
 export type Ma2TransferProgress = (download?: { completed: number; total: number }) => void;
 /** The plugin's two request slots (M4): 'bg' for syncs and long reads, 'fg' for a short read an operator waits for. */
 export type Ma2Lane = 'bg' | 'fg';
+type Ma2ExchangeReceipt = { response: string; requestId: string; snapshot?: string };
 export type Ma2Wire = {
   /** `beforeStep` runs before each plugin step (the first included) with the steps done so far; throwing stops there
    * and releases the request. `lane`: the plugin slot the request takes ('bg' when left out). */
-  exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: (done: number) => void | Promise<void>, lane?: Ma2Lane): Promise<string>;
+  exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: (done: number, beforeImport?: boolean) => void | Promise<void>, lane?: Ma2Lane): Promise<string>;
   /** True once the running plugin is known to keep a foreground lane; false or null (not known yet): one lane only. */
   readonly lanes?: boolean | null;
   hasSnapshot?(target: number, snapshot: string): boolean;
@@ -46,15 +47,16 @@ export function ma2Lane(operation: Ma2Operation): Ma2Lane {
 
 /**
  * What the show must allow before each plugin step of `operation` (M3, 第 3 题): writing the console waits as a sync,
- * a page refresh as one, every other read as reading the console. Null: at any time (the version check, removing
- * rotated-out backups). The rules themselves are showGate's (show-state.ts); this only says which one a request is.
+ * a page refresh as one, every other read as reading the console. Only the version check runs at any time.
+ * The rules themselves are showGate's (show-state.ts); this only says which one a request is.
  */
 export function ma2StepGate(operation: Ma2Operation): ShowOperation | null {
   switch (operation) {
     case 'SEQGO': case 'APPLY': case 'SYNC': case 'CREATE': case 'FIRSTCUES': case 'ASSIGNSEQ': case 'LABEL': return 'ma2.sync.write';
     case 'PAGE': case 'PAGES': return 'ma2.executorPage.refresh';
     case 'LIST': case 'LISTSEQ': case 'SEQUENCE': case 'SEQCUES': case 'READ': case 'SNAPSHOT': case 'SCOPE': case 'EXECUTOR': case 'TCRANGES': return 'ma2.sync.read';
-    case 'PING': case 'DISCARD': return null;
+    case 'DISCARD': return 'ma2.executor.mutate';
+    case 'PING': return null;
   }
 }
 
@@ -112,7 +114,7 @@ export class Ma2OnpcBridge {
   async request(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: Ma2TransferProgress, behind?: 'bg'): Promise<string> {
     return (await this.exchange(operation, target, expected, desired, signal, progress, behind)).response;
   }
-  async exchange(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: Ma2TransferProgress, behind?: 'bg'): Promise<{ response: string; requestId: string }> {
+  async exchange(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: Ma2TransferProgress, behind?: 'bg'): Promise<Ma2ExchangeReceipt> {
     signal?.throwIfAborted();
     const lane: Ma2Lane = typeof this.dataDirectory !== 'string' && this.dataDirectory.lanes === true ? behind ?? ma2Lane(operation) : 'bg';
     const queue = this.queues[lane];
@@ -133,7 +135,7 @@ export class Ma2OnpcBridge {
     queue.tail = result.then(() => undefined, () => undefined);
     return result;
   }
-  private async performExchange(operation: Ma2Operation, target: number, expected: string, desired: string, signal: AbortSignal | undefined, progress: Ma2TransferProgress | undefined, lane: Ma2Lane): Promise<{ response: string; requestId: string }> {
+  private async performExchange(operation: Ma2Operation, target: number, expected: string, desired: string, signal: AbortSignal | undefined, progress: Ma2TransferProgress | undefined, lane: Ma2Lane): Promise<Ma2ExchangeReceipt> {
     signal?.throwIfAborted();
     if (!Number.isInteger(target) || target < 1 || target > 99999) throw new Error('Timecode 编号无效');
     const writing = operation === 'APPLY' || operation === 'SYNC' || operation === 'CREATE';
@@ -148,7 +150,10 @@ export class Ma2OnpcBridge {
     // Writing the Timecode show, renaming and assigning a Sequence are all syncing the console (第 3 题).
     const namesOnly = operation === 'SEQCUES' && expected.startsWith('names:');
     const readsTracking = operation === 'SEQCUES' && (expected.includes('status:') || expected.startsWith('pick:'));
-    const hold = (reached = ''): void => { if (writing || assigning || readsTracking) holdForShow(this.show, 'ma2.sync.write', reached); };
+    const hold = (reached = ''): void => {
+      if (writing || assigning || readsTracking) holdForShow(this.show, 'ma2.sync.write', reached);
+      if (operation === 'DISCARD') holdForShow(this.show, 'ma2.executor.mutate', reached);
+    };
     hold();
     if (operation === 'SEQGO' && (!/^(?:[a-f0-9]{2}){1,4096}\n(?:[a-f0-9]{2}){1,128}$/.test(expected) || desired)) throw new Error('控台触发检查请求无效');
     if (operation === 'SEQUENCE' && (!['', 'keep'].includes(expected) || desired)) throw new Error('序列读取请求格式无效');
@@ -175,7 +180,14 @@ export class Ma2OnpcBridge {
     try {
       const body = writing ? `${Buffer.byteLength(expected)}\n${expected}${desired}` : operation === 'EXECUTOR' || operation === 'SEQCUES' || operation === 'SEQUENCE' || operation === 'LIST' || operation === 'LISTSEQ' || operation === 'TCRANGES' || operation === 'DISCARD' || assigning ? expected : operation === 'SCOPE' ? requestedSequences.sort((a, b) => a - b).join(',') : '';
       if (Buffer.byteLength(body) > 32 * 1024 * 1024) throw new Error('MA2 交换数据超过 32 MB');
-      const validate = (result: string): { response: string; requestId: string } => {
+      const validate = (result: string): Ma2ExchangeReceipt => {
+        let snapshot: string | undefined;
+        if (operation === 'SYNC' && result.startsWith('SNAPSHOT\n')) {
+          snapshot = result.slice('SNAPSHOT\n'.length);
+          validateMa2TimecodeSnapshot(snapshot);
+          if (inspectMa2TimecodeXml(snapshot).timecodes.length !== 1) throw new Error('控台读回了多条时间线，无法确认这次改动');
+          result = extractMa2TimecodeXml(snapshot, target);
+        }
         if (operation === 'PING') return { response: parseMa2Ping(result).version, requestId: id };
         if (operation === 'LABEL') { const label = ma2RenameResultSchema.parse(JSON.parse(result)); if (label.sequence !== target) throw new Error('控台名称回读序列不一致'); }
         else if (operation === 'FIRSTCUES') { ma2FirstTrackReceiptSchema.parse(JSON.parse(result)); }
@@ -199,22 +211,22 @@ export class Ma2OnpcBridge {
           if (report.timecodes.length !== 1 || report.timecodes[0]?.index !== target - 1) throw new Error('控台读回的对象和绑定的 Timecode 对不上，同步没有确认');
         }
         if (writing && !sameMa2XmlObjects(desired, result)) throw new Error('写入后控台读回的内容和预期不一致，同步没有完成，备份已保留。请重新读取控台，检查引用和事件');
-        return { response: result, requestId: id };
+        return { response: result, requestId: id, ...(snapshot === undefined ? {} : { snapshot }) };
       };
       if (typeof this.dataDirectory !== 'string') {
         // M3: a program that starts moving stops the request at the next step boundary. The step on the console
         // finishes (a step cannot be cut short), the next one is not sent and the wire releases the request at once.
         const gate = readsTracking ? 'ma2.sync.write' : ma2StepGate(operation);
         const writeStep = ma2WriteStep(operation, expected, desired);
-        const stopped: { at: number | null } = { at: null };
-        const beforeStep = async (done: number): Promise<void> => {
+        const stopped: { beforeWrite: boolean } = { beforeWrite: false };
+        const beforeStep = async (done: number, beforeImport = false): Promise<void> => {
           // M4: before each background step, the foreground requests queued by now are done whole. Not before the
           // read-back that follows the write, which goes straight on; foreground requests only read, under names of
           // their own, so one that runs meanwhile changes nothing the read-back sees.
-          if (lane === 'bg' && done !== writeStep) await this.queues.fg.tail;
-          if (gate === null || done === writeStep) return;
+          if (lane === 'bg' && (beforeImport || done !== writeStep)) await this.queues.fg.tail;
+          if (gate === null || (!beforeImport && done === writeStep)) return;
           try { holdForShow(this.show, gate, ma2StepWaitDetail(operation, done, writeStep)); }
-          catch (wait) { stopped.at = done; throw wait; }
+          catch (wait) { stopped.beforeWrite = beforeImport || (writeStep !== null && done < writeStep); throw wait; }
         };
         try {
           return validate(await this.dataDirectory.exchange(id, operation, target, body, () => {
@@ -223,7 +235,7 @@ export class Ma2OnpcBridge {
           }, signal, progress, beforeStep, lane));
         } catch (error) {
           // Stopped before its write step: the console holds what it held, so the write was never sent.
-          if (error instanceof Ma2BridgeFailure && stopped.at !== null && writeStep !== null && stopped.at < writeStep) {
+          if (error instanceof Ma2BridgeFailure && stopped.beforeWrite) {
             throw new Ma2BridgeFailure(error.message, id, false, { cause: error.cause }, error.backupFile);
           }
           throw error;

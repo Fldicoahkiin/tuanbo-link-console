@@ -6,6 +6,13 @@ import { lightingEventTime, LightingTempoMap } from './lighting-edit';
 
 type Binding = NonNullable<LightingDocument['ma2Bindings']>[number];
 
+/** A direct reference that FIRSTCUES verifies on the original executor without storing a new Cue. */
+export function existingFirstTrackCue(sequence: number | undefined, sources: Ma2FirstTrackRequest['points'][number]['sources']): string | undefined {
+  const source = sources[0];
+  if (sources.length === 1 && source && source.sequence === sequence && source.includeTracking === undefined && !source.attributes) return source.cue;
+  return undefined;
+}
+
 export function firstTimecodeTrack(binding: Binding) {
   const firstId = binding.baselineTracks[0]?.id;
   return firstId ? binding.trackMappings?.find(mapping => mapping.trackId === firstId)

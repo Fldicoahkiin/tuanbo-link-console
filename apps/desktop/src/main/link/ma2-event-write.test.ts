@@ -20,6 +20,20 @@ function fixture(source = xml) {
 }
 
 describe('三方合并到 MA2 原生写入', () => {
+  it('第一轨只有 Master 时，在同一执行器下添加 Cue 子轨，保留原生推杆和已有点', () => {
+    const source = masterXml.replace(/<SubTrack index="0">[\s\S]*?<\/SubTrack>/, '').replace('<SubTrack index="1"', '<SubTrack index="0"');
+    const { document, preview } = fixture(source);
+    const clip = document.tracks[0]!.clips[0]!;
+    const reference = fixture().document.tracks[0]!.clips[0]!.events[0]!;
+    clip.events.push({ ...reference, id: 'new-cue', at: 500 });
+    const write = prepareMa2MergedEvents(document, 'binding', preview, new Map(), [sequence]);
+    const tracks = inspectMa2TimecodeXml(write.desiredXml).timecodes[0]!.tracks;
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0]!.subtracks[0]).toEqual(inspectMa2TimecodeXml(source).timecodes[0]!.tracks[0]!.subtracks[0]);
+    expect(tracks[0]!.subtracks[1]!.events[0]!.attributes.command).toBe('Goto');
+    const confirmed = confirmMa2MergedEvents(write, write.desiredXml, [sequence]);
+    expect(confirmed.mappings.some(mapping => mapping.eventId === 'new-cue' && mapping.executor === '99.219')).toBe(true);
+  });
   it('空 Timecode 绑定节目推杆轨道后可从零生成执行器和 Master 子轨道', () => {
     const empty = removeMa2Tracks(xml, 9902, ['Timecode:9901/Track:0']).xml;
     const { document, preview } = fixture(empty);

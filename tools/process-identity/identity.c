@@ -1,12 +1,15 @@
 // Reads who a process is when this console may not open it fully, for example OBS
 // started as administrator: image path, creation time and command line. It asks only
 // for PROCESS_QUERY_LIMITED_INFORMATION and changes nothing in the target process.
-// Usage: tblink-process-identity.exe <pid> [<pid> ...]
+// Usage: tblink-process-identity.exe <pid> [<pid> ...] | --tcp <local port> [<local port>]
 // Output: one UTF-8 JSON array; per pid either
 //   {"pid":1,"path":"C:\\...","creationTime":"<FILETIME>","commandLine":"..."|null,"handleCount":<n>|null}
 //   {"pid":1,"error":<Win32 error>}
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
+#include <iphlpapi.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -71,6 +74,52 @@ static bool parse_pid(const char *text, DWORD *pid) {
     *pid = (DWORD)value; return true;
 }
 
+/* Get the owner of the accepted socket, even when different programs share
+ * the same listening port. Return just the local ports requested by the caller. */
+static bool tcp_rows(int family, DWORD first, DWORD second, bool *comma) {
+    DWORD size = 0, status;
+    void *table = NULL;
+    for (;;) {
+        status = GetExtendedTcpTable(table, &size, FALSE, family, TCP_TABLE_OWNER_PID_ALL, 0);
+        if (status != ERROR_INSUFFICIENT_BUFFER) break;
+        free(table);
+        if (!size || size > 64u * 1024 * 1024) return false;
+        table = malloc(size);
+        if (!table) return false;
+    }
+    if (status != NO_ERROR || !table) { free(table); return false; }
+    const MIB_TCPTABLE_OWNER_PID *ipv4 = table;
+    const MIB_TCP6TABLE_OWNER_PID *ipv6 = table;
+    DWORD count = family == AF_INET ? ipv4->dwNumEntries : ipv6->dwNumEntries;
+    for (DWORD i = 0; i < count; i++) {
+        DWORD local_port, remote_port, state, pid;
+        const void *local_addr, *remote_addr;
+        if (family == AF_INET) {
+            const MIB_TCPROW_OWNER_PID *row = &ipv4->table[i];
+            state = row->dwState; pid = row->dwOwningPid;
+            local_port = row->dwLocalPort; remote_port = row->dwRemotePort;
+            local_addr = &row->dwLocalAddr; remote_addr = &row->dwRemoteAddr;
+        } else {
+            const MIB_TCP6ROW_OWNER_PID *row = &ipv6->table[i];
+            state = row->dwState; pid = row->dwOwningPid;
+            local_port = row->dwLocalPort; remote_port = row->dwRemotePort;
+            local_addr = row->ucLocalAddr; remote_addr = row->ucRemoteAddr;
+        }
+        unsigned port = ntohs((u_short)local_port);
+        if ((port != first && port != second) || (state != MIB_TCP_STATE_LISTEN && state != MIB_TCP_STATE_ESTAB)) continue;
+        char local[INET6_ADDRSTRLEN], remote[INET6_ADDRSTRLEN] = "";
+        if (!InetNtopA(family, local_addr, local, sizeof(local)) ||
+            (state == MIB_TCP_STATE_ESTAB && !InetNtopA(family, remote_addr, remote, sizeof(remote)))) {
+            free(table); return false;
+        }
+        printf("%s{\"localAddress\":\"%s\",\"localPort\":%u,\"remoteAddress\":\"%s\",\"remotePort\":%u,\"pid\":%lu}",
+               *comma ? "," : "", local, port, remote, state == MIB_TCP_STATE_LISTEN ? 0u : (unsigned)ntohs((u_short)remote_port), (unsigned long)pid);
+        *comma = true;
+    }
+    free(table);
+    return true;
+}
+
 static void append_error(output *out, DWORD pid, DWORD error) {
     char item[64]; snprintf(item, sizeof(item), "{\"pid\":%lu,\"error\":%lu}", (unsigned long)pid, (unsigned long)error);
     append_text(out, item);
@@ -112,6 +161,17 @@ static void describe(output *out, DWORD pid, query_process_fn query, wchar_t *pa
 }
 
 int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "--tcp") == 0) {
+        DWORD first, second = 0;
+        if ((argc != 3 && argc != 4) || !parse_pid(argv[2], &first) || first > 65535 ||
+            (argc == 4 && (!parse_pid(argv[3], &second) || second > 65535))) return 2;
+        bool comma = false;
+        putchar('[');
+        if (!tcp_rows(AF_INET, first, second, &comma) || !tcp_rows(AF_INET6, first, second, &comma)) {
+            fputs("Windows TCP owner table unavailable\n", stderr); return 3;
+        }
+        puts("]"); return 0;
+    }
     if (argc < 2 || argc - 1 > MAX_PIDS) { fputs("usage: tblink-process-identity <pid> [<pid> ...]\n", stderr); return 2; }
     DWORD pids[MAX_PIDS];
     for (int i = 1; i < argc; i++) if (!parse_pid(argv[i], &pids[i - 1])) { fputs("invalid pid\n", stderr); return 2; }

@@ -96,6 +96,8 @@ it('清理旧备份只接受本软件的写前备份文件名，回执只能是�
   const bridge = new Ma2OnpcBridge(process.cwd(), showStopped);
   const backup = `tblink_library_${'a'.repeat(32)}`;
   wire.response = backup;
+  await expect(new Ma2OnpcBridge(process.cwd(), showRunning).request('DISCARD', 1, backup)).rejects.toThrow(SHOW_WAIT_CLOCK_MOVING);
+  expect(wire.id).toBe('');
   await expect(bridge.request('DISCARD', 1, `${backup},tblink_backup_${'b'.repeat(32)}`)).resolves.toBe(backup);
   for (const list of ['tblink_layout_' + 'a'.repeat(32), '../show', `${backup};os.remove`, `tblink_watch_${'a'.repeat(16)}`]) await expect(bridge.request('DISCARD', 1, list)).rejects.toThrow('清理列表无效');
   wire.response = `tblink_label_${'c'.repeat(32)}`;

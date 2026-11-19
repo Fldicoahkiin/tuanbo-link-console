@@ -780,14 +780,25 @@ local function first_track_cues(tc, id, body)
   end
   return '{"sequence":' .. seq .. ',"executor":"' .. addr .. '","cues":["' .. table.concat(reply, '","') .. '"],"backupFile":' .. (backup and ('"' .. backup .. '.xml"') or 'null') .. '}'
 end
+local function guards_song_snapshot(op)
+  return op == 'SYNC' or op == 'SNAPSHOT' or op == 'SCOPE' or op == 'SEQUENCE' or op == 'SEQCUES' or op == 'EXECUTOR'
+end
 local function start(data, previous)
   local id, op, target, size, body = data:match('^([a-f0-9]+)\n([A-Z]+)\n(%d+)\n(%d+)\n(.*)$')
   assert(id and #id == 32 and id ~= last, 'Invalid or already processed request')
   last = id
   local job = { id = id, steps = {}, done = 0 }
   local inventory = op == 'LIST' or op == 'LISTSEQ' or op == 'TCRANGES'
-  local source = inventory and gma.show.getvar('SHOWFILE')
+  local guarded = guards_song_snapshot(op)
+  local source = (inventory or guarded) and gma.show.getvar('SHOWFILE')
   local function step(fn)
+    if guarded then
+      job.steps[#job.steps + 1] = function()
+        assert(gma.show.getvar('SHOWFILE') == source and _G.TBLINK_BRIDGE_GENERATION == generation, 'Show or session changed during synchronization')
+        fn()
+      end
+      return
+    end
     if not inventory then job.steps[#job.steps + 1] = fn; return end
     -- MA yields Lua at its instruction quota. Scanning 10,000 mostly empty
     -- slots used to wait a console tick at every quota. Resume the same read
@@ -1254,10 +1265,42 @@ local function start(data, previous)
         if token or names_show then return finish_material(xml) end
         return answer(xml)
       end
-      assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
+      local obj = gma.show.getobj
+      local sequence = assert(obj.handle('Sequence ' .. tc), 'Sequence missing')
       local name = 'tblink_library_' .. id
-      gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
       local path = root .. '/importexport/' .. name
+      -- When only this step's stored values were requested, export the live Cue itself.
+      -- A tracked look still depends on earlier Cues and uses the full sequence below.
+      local address = not status and body:match('^%d+%.%d%d%d$') and ('Sequence ' .. tc .. ' Cue ' .. body)
+      local object = address and obj.handle(address)
+      if object then
+        local label = obj.label(sequence) or ''
+        local function export_cue(file)
+          identity()
+          assert(obj.handle('Sequence ' .. tc) == sequence and (obj.label(sequence) or '') == label and obj.handle(address) == object, 'Source Cue changed')
+          gma.cmd('Export ' .. address .. ' "' .. file .. '" /o')
+          return assert(read(root .. '/importexport/' .. file .. '.xml'), 'Cue export unavailable')
+        end
+        local first = export_cue(name)
+        return step(function()
+          assert(canonical(first) == canonical(export_cue(name .. '_verify')), 'Cue changed during read')
+          identity()
+          local head = assert(first:match('(<MA%s[^>]+>)'), 'Native header missing')
+          local cue = assert(canonical(first):match('<MA%s[^>]+>%s*(<Cue%s[^>]*>.-</Cue>)%s*</MA>%s*$'), 'Cue export unavailable')
+          assert(not cue:find('<Cue%s', 5), 'Cue export ambiguous')
+          local number = assert(cue:match('<Number%s[^>]*>'), 'Cue number unavailable')
+          local whole = assert(tonumber(number:match('%snumber="(%d+)"')), 'Invalid Cue number')
+          local fraction = tonumber(number:match('%ssub_number="(%d+)"') or '0')
+          assert(wanted[whole * 1000 + fraction], 'Cue export number mismatch')
+          local escaped = label:gsub('&', '&amp;'):gsub('"', '&quot;'):gsub('<', '&lt;'):gsub('>', '&gt;')
+            :gsub('\r', '&#13;'):gsub('\n', '&#10;'):gsub('\t', '&#9;')
+          local xml = head .. '<Sequ index="' .. (tc-1) .. '" name="' .. escaped .. '">' .. cue .. '</Sequ></MA>'
+          discard(name); discard(name .. '_verify')
+          if token or names_show then return finish_material(xml) end
+          return answer(xml)
+        end)
+      end
+      gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
       local xml = cue_selection(path .. '.xml', wanted)
       return step(function()
         gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
@@ -1361,7 +1404,15 @@ local function start(data, previous)
       end
       write(root .. '/importexport/' .. name .. '.xml', desired)
       gma.cmd('Import "' .. name .. '.xml" At Timecode ' .. tc .. ' /o /nc')
+      job.confirming = job.report_import
       step(function()
+        if job.request_snapshot and #expected <= 131072 and not expected:find('<!--tblink-native-', 1, true) and #references(desired) <= 4 then
+          discard(name)
+          return snapshot(step, tc, id .. '_confirmed', nil, function(current)
+            job.returned_snapshot = true
+            answer(current)
+          end, expected)
+        end
         local verified = export_scratch(tc, 'tblink_verify_' .. id)
         discard(name)
         answer(verified)
@@ -1456,6 +1507,7 @@ local function idle(net) return not net or gma.gettime() > net.expires end
 -- The request's answer is ready: keep it for 'read' and say how long it is.
 local function finished(network)
   local id = network.id
+  local returned_snapshot = network.job.returned_snapshot
   network.response = network.job.response; network.job = nil
   assert(#network.response <= 33554500, 'Response exceeds limit')
   if network.op == 'READ' and network == lanes.bg then
@@ -1477,16 +1529,32 @@ local function finished(network)
       end
     end
   end
-  if network.op == 'SNAPSHOT' or network.op == 'SCOPE' then
+  if network.op == 'SNAPSHOT' or network.op == 'SCOPE' or returned_snapshot then
     local content = network.response:match('^[a-f0-9]+\nOK\n%d+\n(.*)$')
-    snapshot_cache = content and { id = id, target = network.target, xml = content } or nil
+    local previous = snapshot_cache
+    snapshot_cache = content and { id = id, target = network.target, xml = content, show = network.show } or nil
     if content then
       -- Fixture values are never edited by this application. Keep the complete
       -- export here for SYNC's exact preflight, but send only Cue metadata.
       -- Cue/CuePart attributes and Number remain unchanged for reference checks.
       local compact = content:gsub('<CueDatas%s*>.-</CueDatas>', '')
       if #compact <= 1048576 then snapshot_cache.wire = compact end
-      network.response = id .. '\nOK\n' .. #compact .. '\n' .. compact
+      local receipt = nil
+      if returned_snapshot and network.copy_from and previous and previous.id == network.copy_from and previous.wire then
+        -- The native reread includes all the sequences. Send just the Timecode
+        -- when the entire suffix is byte-identical to the named prior snapshot.
+        local _, old_end = previous.wire:find('</Timecode>', 1, true)
+        local _, new_end = compact:find('</Timecode>', 1, true)
+        if old_end and new_end and new_end < 16200 and #compact - new_end >= 256 and
+          #previous.wire - old_end == #compact - new_end and previous.wire:sub(old_end + 1) == compact:sub(new_end + 1) then
+          receipt = id .. '\nSNAPCOPY\n' .. previous.id .. '\n' .. old_end .. '\n' .. #compact .. '\n' .. compact:sub(1, new_end)
+        end
+      end
+      if not receipt then
+        if returned_snapshot then compact = 'SNAPSHOT\n' .. compact end
+        receipt = id .. '\nOK\n' .. #compact .. '\n' .. compact
+      end
+      network.response = receipt
     end
   end
   if network.local_file and #network.response >= 8192 then
@@ -1498,11 +1566,24 @@ local function finished(network)
 end
 -- One step of the request: STEP:<steps done> while more remain, DONE:<size> after the last.
 local function proceed(network, token)
+  local job = network.job
+  -- Once the desktop has received the Import acknowledgement it must finish
+  -- the readback, even if playback starts. Nearby read-only exports can share
+  -- one reply. Keep the Import itself and its acknowledgement on their own.
+  local collect = job.confirming and job.request_snapshot and network.inline_limit == 16384
+  local deadline = collect and (gma.gettime() + 0.025)
   advance(network.job)
+  if collect then
+    for _ = 1, 3 do
+      if job.response or gma.gettime() >= deadline then break end
+      advance(job)
+    end
+  end
+  network.reported_steps = (network.reported_steps or 0) + 1
   if network.job.response then
     local receipt = finished(network)
     local response = network.response
-    if network.inline and #response < 8192 then
+    if network.inline and #response < (network.inline_limit or 8192) then
       for offset = 1, #response, 256 do
         gma.echo('TBLINK_INLINE_' .. token .. '_' .. string.format('%04x', (offset - 1) / 256) .. ':DATA:' .. hex(response:sub(offset, offset + 255)))
       end
@@ -1511,9 +1592,9 @@ local function proceed(network, token)
     end
     return receipt
   end
-  return 'STEP:' .. network.job.done .. (network.job.confirming and ':verify' or '')
+  return 'STEP:' .. network.reported_steps .. (job.confirming and ':verify' or job.request_snapshot and ':before' or '')
 end
-_G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, delta_size, query, previous_read)
+_G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, delta_size, query, previous_read, index_shift, indexed_size, inline_limit)
   if not token:match('^[a-f0-9]+$') or #token ~= 32 then return end
   local ok, result = pcall(function()
     assert(active and _G.TBLINK_BRIDGE_GENERATION == generation, 'Bridge is stopped')
@@ -1523,6 +1604,7 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
       local base = nil
       if action == 'beginsync' then
         assert(snapshot_cache and snapshot_cache.id == a and snapshot_cache.target == b, 'Snapshot reference expired or mismatched')
+        assert(snapshot_cache.show == gma.show.getvar('SHOWFILE'), 'Show or session changed before synchronization')
         base = snapshot_cache.xml
         a = 'SYNC'
       end
@@ -1533,7 +1615,8 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
       assert(transport == nil or transport == 'file', 'Invalid transport')
       assert(read_now == nil or (read_now == 'read' and action == 'begin' and a == 'READ' and c == 0 and lane == 'bg'), 'Invalid immediate read')
       assert(delta_size == nil or (action == 'beginsync' and transport == nil and c <= 524288 and type(delta_size) == 'number' and delta_size == math.floor(delta_size) and delta_size > 0 and delta_size < c), 'Invalid snapshot delta size')
-      assert(query == nil or (action == 'begin' and (a == 'LIST' or a == 'LISTSEQ' or a == 'TCRANGES' or lane == 'bg' and (a == 'SEQGO' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'FIRSTCUES' or a == 'ASSIGNSEQ')) and type(query) == 'string' and c <= 320 and #query == c * 2 and not query:find('[^a-f0-9]')), 'Invalid inline query')
+      assert(query == nil or (action == 'begin' and (a == 'LIST' or a == 'LISTSEQ' or a == 'TCRANGES' or lane == 'bg' and (a == 'SEQGO' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'FIRSTCUES' or a == 'ASSIGNSEQ' or a == 'DISCARD')) and type(query) == 'string' and c <= 320 and #query == c * 2 and not query:find('[^a-f0-9]')), 'Invalid inline query')
+      assert(index_shift == nil and indexed_size == nil or delta_size and type(index_shift) == 'number' and index_shift == math.floor(index_shift) and math.abs(index_shift) <= 256 and type(indexed_size) == 'number' and indexed_size == math.floor(indexed_size) and indexed_size > 0 and indexed_size < delta_size, 'Invalid reindexed delta')
       assert(previous_read == nil or (read_now == 'read' and type(previous_read) == 'string' and #previous_read == 32 and previous_read:match('^[a-f0-9]+$')), 'Invalid read reference')
       -- Only reads go on 'fg', and none that leaves state for a later request (a snapshot for beginsync).
       assert(lane ~= 'fg' or (action == 'begin' and foreground[a]), 'Operation not allowed on the foreground lane')
@@ -1544,14 +1627,29 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
       assert(not other or other.id ~= id, 'Request already pending')
       clear_transfer(lanes[lane])
       lanes[lane] = { id = id, op = a, target = b, size = c, bytes = 0, chunks = {}, base = base, local_file = transport == 'file', expires = gma.gettime() + 120 }
+      if guards_song_snapshot(a) then lanes[lane].show = gma.show.getvar('SHOWFILE') end
       if delta_size and snapshot_cache.wire then
+        lanes[lane].chunktext = inline_limit == 'text'
+        local encoding = lanes[lane].chunktext and ':text' or ''
         lanes[lane].delta_base = snapshot_cache.wire; lanes[lane].desired_size = c; lanes[lane].size = delta_size
-        return 'ACK:lanes:delta'
+        if index_shift and #snapshot_cache.wire <= 131072 and c <= 131072 then
+          local tc_xml = snapshot_cache.wire:match('(<Timecode%s.-</Timecode>)')
+          if tc_xml then
+            local shifted = tc_xml:gsub('<Event index="(%d+)"', function(index)
+              local n = #index <= 7 and tonumber(index) + index_shift
+              return '<Event index="' .. ((n and n >= 0) and tostring(n) or index) .. '"'
+            end)
+            lanes[lane].delta_base = snapshot_cache.wire .. shifted; lanes[lane].size = indexed_size
+            return 'ACK:lanes:indexed' .. encoding
+          end
+        end
+        return 'ACK:lanes:delta' .. encoding
       end
       if read_now or query then
         local net = lanes[lane]
         local completed, receipt = pcall(function()
           net.done = true; net.chunks = nil; net.inline = true
+          if not net.local_file and inline_limit == 16384 then net.inline_limit = inline_limit end
           if previous_read and last_read and last_read.id == previous_read and last_read.target == b then net.previous = last_read end
           local input = query and query:gsub('..', raw_bytes) or ''
           local previous = (a == 'SNAPSHOT' or a == 'SCOPE') and snapshot_cache and snapshot_cache.target == b and snapshot_cache.xml
@@ -1571,15 +1669,24 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
     local network = (lanes.bg and lanes.bg.id == id and lanes.bg) or (lanes.fg and lanes.fg.id == id and lanes.fg) or nil
     assert(network and gma.gettime() <= network.expires, 'Network request expired or mismatched')
     network.expires = gma.gettime() + 120
-    if action == 'chunk' then
+    if action == 'chunk' or action == 'chunktext' then
       assert(not network.done and a == #network.chunks + 1, 'Invalid chunk order')
-      assert(type(b) == 'string' and #b > 0 and #b <= 512 and #b % 2 == 0 and not b:find('[^a-f0-9]'), 'Invalid chunk')
-      local data = b:gsub('..', raw_bytes)
+      local data
+      if action == 'chunktext' then
+        assert(network.chunktext, 'Invalid chunk encoding')
+        assert(type(b) == 'string' and #b > 0 and #b <= 700 and not b:find('[^a-zA-Z0-9 ,._:~%-]') and
+          not b:gsub('~[0-9a-f][0-9a-f]', ''):find('~', 1, true), 'Invalid chunk')
+        data = b:gsub('~([0-9a-f][0-9a-f])', raw_bytes)
+      else
+        assert(type(b) == 'string' and #b > 0 and #b <= 512 and #b % 2 == 0 and not b:find('[^a-f0-9]'), 'Invalid chunk')
+        data = b:gsub('..', raw_bytes)
+      end
       assert(network.bytes + #data <= network.size, 'Payload exceeds declared size')
       network.chunks[#network.chunks + 1] = data; network.bytes = network.bytes + #data
       return 'ACK'
     end
     if action == 'run' then
+      assert(not network.show or network.show == gma.show.getvar('SHOWFILE'), 'Show or session changed before synchronization')
       if network.input then
         local data = assert(read(network.input), 'Local request unavailable')
         assert(#data == network.size, 'Local request length mismatch')
@@ -1590,9 +1697,15 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
       network.done = true
       local body = table.concat(network.chunks); network.chunks = nil
       if network.delta_base then body = expand_delta(network.delta_base, body, network.desired_size); network.delta_base = nil end
-      if network.base then body = #network.base .. '\n' .. network.base .. body; network.base = nil end
+      if network.base then
+        if read_now == 'copy' and lane == 'snapshot' and transport == 16384 then network.copy_from = snapshot_cache.id end
+        body = #network.base .. '\n' .. network.base .. body; network.base = nil
+      end
       local previous = b == 'checked' and snapshot_cache and snapshot_cache.target == network.target and snapshot_cache.xml
       network.job = start(id .. '\n' .. network.op .. '\n' .. network.target .. '\n' .. #body .. '\n' .. body, previous)
+      network.job.report_import = network.op == 'SYNC' and c == 'confirm'
+      network.job.request_snapshot = network.job.report_import and lane == 'snapshot' and b == 'checked'
+      if network.job.request_snapshot and not network.local_file and transport == 16384 then network.inline_limit = transport end
       -- With 'steps' the first step runs now and the program sends 'step' for each next one.
       -- Without it (an older program, or the bridge upgrade check) every step runs now, as before.
       if a == 'steps' then

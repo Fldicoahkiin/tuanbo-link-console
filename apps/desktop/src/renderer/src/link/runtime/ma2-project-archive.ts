@@ -9,7 +9,7 @@ export async function archiveMa2Project(documentId: number, project: LinkProject
   if (state.documentId !== documentId || !state.path) throw new Error('请先保存当前工程，再同步或创建存档');
   const content = await projectCodec.encode(project);
   if (useDocumentStore.getState().documentId !== documentId) throw new Error('工程已切换，存档已取消');
-  const result = await linkDesktopViewModel.projectArchives({ version: 1, action: 'create', projectPath: state.path, content, reason });
+  const result = await linkDesktopViewModel.projectArchives({ version: 1, action: 'create', projectPath: state.path, content, reason, includeEntries: false });
   if (result.disabled) return null;
   if (!result.createdPath) throw new Error('存档没有确认，还没写入控台');
   return result.createdPath;

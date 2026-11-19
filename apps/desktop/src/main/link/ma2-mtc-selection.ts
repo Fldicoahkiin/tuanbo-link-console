@@ -149,7 +149,7 @@ export class Ma2MtcSelectionService {
     report();
     let changed = false;
     const known = !force && this.prepared === endpoint ? this.knownRanges : null;
-    gate(); this.invalidate();
+    task?.signal?.throwIfAborted();
     try {
       const verifiedTimecode = queued ? undefined : expectedTimecode;
       const goSequences = new Set(verifiedTimecode?.goSequences);
@@ -172,6 +172,8 @@ export class Ma2MtcSelectionService {
           }
         }
       }
+      gate();
+      this.invalidate();
       task?.onConsoleCheck?.();
       const source = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
       if (expectedTimecode && (expectedTimecode.show !== source.show || expectedTimecode.generation !== source.generation)) throw new Error('控台 Show 或连接已切换，没有确认选曲');

@@ -1,23 +1,23 @@
 import { readFile } from 'node:fs/promises';
 import { expect, it } from 'vitest';
-import { appendMa2MasterSubtracks, appendMa2Tracks, removeMa2Tracks } from './ma2-track-write';
+import { appendMa2Subtracks, appendMa2Tracks, removeMa2Tracks } from './ma2-track-write';
 import { inspectMa2TimecodeXml } from './ma2-timecode-xml';
 
 const xml = await readFile(new URL('./fixtures/ma2-timecode-fractional-3.3.xml', import.meta.url), 'utf8');
 it('Master 子轨道创建保留 Cue，并拒绝重复、错误目标和未验证版本', () => {
   const path = 'Timecode:9901/Track:0';
-  const added = appendMa2MasterSubtracks(xml, 9902, [path]);
+  const added = appendMa2Subtracks(xml, 9902, [path], 'Master');
   expect([...added.paths]).toEqual([[path, `${path}/SubTrack:1`]]);
   const before = inspectMa2TimecodeXml(xml).timecodes[0]!.tracks[0]!;
   const after = inspectMa2TimecodeXml(added.xml).timecodes[0]!.tracks[0]!;
   expect(after.subtracks[0]).toEqual(before.subtracks[0]);
   expect(after.subtracks[1]).toEqual({ index: 1, attributes: { index: '1', fader_command: 'Master' }, events: [] });
-  expect(appendMa2MasterSubtracks(xml, 9902, []).xml).toBe(xml);
-  expect(() => appendMa2MasterSubtracks(added.xml, 9902, [path])).toThrow('已有 Master');
-  expect(() => appendMa2MasterSubtracks(xml, 9902, [path, path])).toThrow('重复');
-  expect(() => appendMa2MasterSubtracks(xml, 9902, ['missing'])).toThrow('不存在');
-  expect(() => appendMa2MasterSubtracks(xml, 9901, [path])).toThrow('目标');
-  expect(() => appendMa2MasterSubtracks(xml.replace('minor_vers="3"', 'minor_vers="7"').replace('stream_vers="4"', 'stream_vers="0"'), 9902, [path])).toThrow('还没验证过');
+  expect(appendMa2Subtracks(xml, 9902, [], 'Master').xml).toBe(xml);
+  expect(() => appendMa2Subtracks(added.xml, 9902, [path], 'Master')).toThrow('已有 Master');
+  expect(() => appendMa2Subtracks(xml, 9902, [path, path], 'Master')).toThrow('重复');
+  expect(() => appendMa2Subtracks(xml, 9902, ['missing'], 'Master')).toThrow('不存在');
+  expect(() => appendMa2Subtracks(xml, 9901, [path], 'Master')).toThrow('目标');
+  expect(() => appendMa2Subtracks(xml.replace('minor_vers="3"', 'minor_vers="7"').replace('stream_vers="4"', 'stream_vers="0"'), 9902, [path], 'Master')).toThrow('还没验证过');
 });
 it('新增执行器轨道保留原始轨道和扩展节点，空 Timecode 也可创建', () => {
   const addition = { executor: '99.219', executorName: '灯光 & <主舞台>', muted: false };

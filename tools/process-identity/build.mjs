@@ -4,6 +4,8 @@ import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createConnection, createServer } from 'node:net';
+import { once } from 'node:events';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bin = join(here, 'bin');
@@ -18,7 +20,7 @@ if (existsSync(exe) && existsSync(stamp)) {
 const compiler = join(here, '../obs/native-preview/compiler/zig-x86_64-windows-0.14.1/zig.exe');
 if (!existsSync(compiler)) throw new Error('请先构建 OBS 原生组件以准备项目固定版本的编译器');
 await mkdir(bin, { recursive: true });
-const result = spawnSync(compiler, ['cc', '-target', 'x86_64-windows-gnu', '-O2', '-Wall', '-Wextra', '-Werror', join(here, 'identity.c'), '-o', exe], { windowsHide: true, stdio: 'inherit' });
+const result = spawnSync(compiler, ['cc', '-target', 'x86_64-windows-gnu', '-O2', '-Wall', '-Wextra', '-Werror', join(here, 'identity.c'), '-liphlpapi', '-lws2_32', '-o', exe], { windowsHide: true, stdio: 'inherit' });
 if (result.error) throw result.error;
 if (result.status !== 0) throw new Error('进程识别组件构建失败');
 // Check the fresh build on this machine: it must describe this Node process by its own path and command line,
@@ -37,4 +39,26 @@ if (extra.length !== 0 || self?.pid !== process.pid || typeof self.path !== 'str
 }
 if (absent?.pid !== absentPid || !Number.isInteger(absent.error) || 'path' in absent) throw new Error(`进程识别组件没有拒绝不存在的进程：${probe.stdout}`);
 if (spawnSync(exe, [], { windowsHide: true }).status !== 2) throw new Error('进程识别组件没有拒绝缺少参数的调用');
+const listener = createServer();
+listener.listen(0, '127.0.0.1');
+await once(listener, 'listening');
+const { port } = listener.address();
+const accepted = once(listener, 'connection');
+const client = createConnection(port, '127.0.0.1');
+let serverSide;
+try {
+  [[serverSide]] = await Promise.all([accepted, once(client, 'connect')]);
+  const tcp = spawnSync(exe, ['--tcp', String(port)], { windowsHide: true, encoding: 'utf8' });
+  if (tcp.error) throw tcp.error;
+  if (tcp.status !== 0) throw new Error('无法从 Windows 读取监听与已连接端口');
+  const rows = JSON.parse(tcp.stdout);
+  if (!rows.every(row => row.localPort === port) ||
+      !rows.some(row => row.pid === process.pid && row.remotePort === 0) ||
+      !rows.some(row => row.pid === process.pid && row.remotePort === client.localPort &&
+        row.localAddress === '127.0.0.1' && row.remoteAddress === '127.0.0.1')) throw new Error('连接识别组件没有正确确认真实接受连接的进程');
+} finally {
+  client.destroy();
+  serverSide?.destroy();
+  listener.close();
+}
 await writeFile(stamp, JSON.stringify({ recipe, sha256: createHash('sha256').update(await readFile(exe)).digest('hex') }, null, 2));

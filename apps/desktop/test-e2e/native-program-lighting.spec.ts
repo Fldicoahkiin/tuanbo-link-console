@@ -21,6 +21,17 @@ test('播放只发时间码：网络直控编排的歌在播放、界面阻塞�
         const auth = /TBLINK_AUTH_[a-f0-9]{32}/.exec(line)?.[0], boot = /TBLINK_BOOT_[a-f0-9]{32}/.exec(line)?.[0];
         if (auth) { socket.write(`\r\n${auth}:3.9.60.74\r\n`); continue; }
         if (boot) { socket.write(`\r\n${boot}:ready\r\n`); continue; }
+        const show = /TBLINK_SHOWCHECK_[a-f0-9]{32}/.exec(line)?.[0];
+        if (show) {
+          const source = ['native-lighting', '1', '3.9.60.74'].map(value => 'H' + Buffer.from(value).toString('hex'));
+          socket.write(`\r\n${show}:${source.join(',')}\r\n`);
+          continue;
+        }
+        const stop = /TBLINK_CUE_[a-f0-9]{24}/.exec(line)?.[0];
+        if (stop && line.includes('local pages=') && line.includes("o.handle('Executor '")) {
+          socket.write(`\r\n${stop}:OK:0\r\n`);
+          continue;
+        }
         // Any playback command reaching the console counts; with timecode only there must be none.
         const play = /TBLINK_PLAY_[a-f0-9]{32}/.exec(line)?.[0];
         if (play) { calls.push(line); socket.write(`\r\n${play}:SENT\r\n`); }

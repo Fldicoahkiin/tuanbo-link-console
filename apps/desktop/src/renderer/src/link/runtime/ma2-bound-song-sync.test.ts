@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type LightingTrack, type LinkProject, type Ma2ApplyRequest, type Ma2ApplyResult, type Ma2CompareRequest, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
-import { importMa2TimecodeCommand, ma2PendingChanges, padSongCommand, padSongRender, setItemPlaybackCommand, setLightingCommand, SHOW_WAIT_CLOCK_MOVING, type Ma2SyncPreview } from '@tb/core/link';
+import { importMa2TimecodeCommand, MA2_READ_CANCELLED, ma2PendingChanges, padSongCommand, padSongRender, setItemPlaybackCommand, setLightingCommand, SHOW_WAIT_CLOCK_MOVING, type Ma2SyncPreview } from '@tb/core/link';
 import { convertMa2Snapshot, convertMa2Timecode } from '../../../../main/link/ma2-timecode-conversion';
 import { compareMa2LightingReadback } from '../../../../main/link/ma2-comparison';
 import { Ma2OnpcBridge } from '../../../../main/link/ma2-onpc-bridge';
@@ -87,6 +87,58 @@ it('没有修改的歌：读一次控台核对一致就停下，不写控台、�
   expect(previewMa2).toHaveBeenCalledOnce(); expect(applyMa2).not.toHaveBeenCalled();
   expect(useDocumentStore.getState().past).toEqual([]);
   expect(song()).toMatchObject({ state: 'verified', message: 'Timecode 9902 和控台一致' });
+});
+
+it('后台核对时连续修改只取消这一次读取，下一轮把最后的位置写到原时间线', async () => {
+  start(); await tick();
+  const entry = song();
+  useMa2SyncStore.setState({ songs: { song: { ...entry, nextCheckAt: 0 } } });
+  let rejectRead!: (reason: Error) => void;
+  const reading = new Promise<string>(resolve => {
+    previewMa2.mockImplementationOnce((request: { progressId: string }) => {
+      resolve(request.progressId);
+      return new Promise<typeof preview>((_done, reject) => { rejectRead = reject; });
+    });
+  });
+  const cancel = vi.spyOn(window.tbLink, 'cancelMa2Read').mockImplementation(() => { rejectRead(new Error(MA2_READ_CANCELLED)); return Promise.resolve(); });
+  const checking = tick();
+  const id = await reading;
+  edit(1000); edit(1100);
+  await checking;
+  expect(cancel.mock.calls).toEqual([[id]]);
+  expect(song()).toMatchObject({ state: 'pending' });
+  expect(recordLog.mock.calls.filter(([line]) => line.level === 'error')).toEqual([]);
+  applyMa2.mockImplementation(confirmWrite);
+  await tick();
+  expect(song().state).toBe('verified');
+  expect(applyMa2).toHaveBeenCalledOnce();
+  expect(ma2PendingChanges(useDocumentStore.getState().project)).toEqual([]);
+});
+
+it.each(['同序列', '跨序列', '空 Cue', '选属性'] as const)('%s 添加期间存档失败时不会写控台，只有已有关联 Cue 能提前核对', async kind => {
+  const value = project();
+  const clip = value.rundown[0]!.lighting!.tracks[0]!.clips[0]!;
+  const point = { id: 'adding', at: 3000, label: '现场添加', effectGroupId: 'adding' };
+  clip.events.push(kind === '空 Cue' ? { ...point, kind: 'empty-cue', runMode: 'independent' } : {
+    ...point, kind: 'ma2', action: 'goto', executor: '99.219', cue: '1.250', sequence: kind === '跨序列' ? 9800 : 9901,
+    ...(kind === '选属性' && { attributes: ['PAN'] })
+  });
+  let refuse!: (cause: Error) => void;
+  const archivePending = new Promise<void>((_, reject) => { refuse = reject; });
+  const firstTrack = vi.fn(() => Promise.resolve({ sequence: 9901, executor: '99.219', cues: ['1.250'], backupFile: null }));
+  const unexpected = vi.fn((): never => { throw new Error('存档未完成时发生了后续操作'); });
+  const saving = vi.fn(() => archivePending);
+  const result = syncBoundSong({
+    itemId: 'song', connection: { dataDirectory: '', network }, consoleChanges: 'read-back', project: () => value, current: () => true,
+    firstTrack, archive: saving, executor: unexpected, emptySequence: unexpected, assign: unexpected, route: unexpected, read: unexpected,
+    compare: unexpected, apply: unexpected, confirm: unexpected, writing: unexpected, localEditedAt: unexpected, consoleSeen: unexpected
+  });
+  expect(saving).toHaveBeenCalledOnce();
+  expect(firstTrack).toHaveBeenCalledTimes(kind === '同序列' ? 1 : 0);
+  refuse(new Error('测试存档写入失败'));
+  await expect(result).rejects.toThrow('测试存档写入失败');
+  expect(firstTrack).toHaveBeenCalledTimes(kind === '同序列' ? 1 : 0);
+  expect(unexpected).not.toHaveBeenCalled();
 });
 
 it('新增轨道去向不明确时不能误报整首歌已同步，原有时间线不被写入', async () => {

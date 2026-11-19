@@ -29,6 +29,24 @@ it('修改 MTC 时用真实连接组件读回全目录和同一个控台会话',
   expect(ranges.entries.map(entry => entry.target)).toEqual(directory.entries.map(entry => entry.target));
 });
 
+it('缩短时间线预检后，刚写入时点播放或停止同步仍读回这一笔，原生 Import 只执行一次', async () => {
+  const desk = new Ma2LuaConsole();
+  show(desk);
+  const abort = new AbortController();
+  const wire = new Ma2NetworkWire({ command: async (line, match) => {
+    const reply = await desk.command(line, match);
+    if (desk.commands().some(command => command.startsWith('Import '))) abort.abort(new Error('开始播放'));
+    return reply;
+  } }, false, undefined, true);
+  const baseline = await wire.exchange(requestId(1), 'SNAPSHOT', 9902, '', () => undefined);
+  const desired = timecodeXml(9902, [[9901, 1]]);
+  const reply = await wire.exchange(requestId(2), 'SYNC', 9902, syncBody(baseline, desired), () => undefined, abort.signal);
+  expect(reply).toMatch(/^SNAPSHOT\n/);
+  expect(reply).toContain('<Sequ index="9900"');
+  expect(wire.hasSnapshot(9902, reply.slice('SNAPSHOT\n'.length))).toBe(true);
+  expect(desk.commands().filter(command => command.startsWith('Import '))).toHaveLength(1);
+});
+
 it('第一轨补收回执时重新核对原生 Cue，前面插入 Cue 不影响确认，同号换内容不会误报成功', async () => {
   const desk = new Ma2LuaConsole();
   const wire = new Ma2NetworkWire(desk);
@@ -108,6 +126,24 @@ it('只读取指定 Cue 的属性名，选中属性的所有灯具和层原样�
   expect(desk.file('/fake/importexport/tblink_pick_' + token + '.xml')?.toString()).toBe(pick);
   await expect(wire.exchange(requestId(3), 'SEQCUES', 9918, 'pick:' + token + ':4141:' + identity + ':1.000', () => undefined)).rejects.toThrow();
   expect(desk.commands().every(command => command.startsWith('Export '))).toBe(true);
+});
+it('单个现场 Cue 独立导出并核对两次，大序列不参与传输，读到变动或错号就中止', async () => {
+  const desk = new Ma2LuaConsole();
+  const wire = new Ma2NetworkWire(desk);
+  const address = 'Sequence 99 Cue 2.500';
+  const xml = '<MA major_vers="3"><Info datetime="@EXPORT@"/><Cue index="12"><Number number="2" sub_number="500"/><CuePart index="0" name="灯"/></Cue></MA>';
+  desk.set('Sequence 99', { label: '颜色 & 位置' });
+  desk.set(address, { xml });
+  const result = await wire.exchange(requestId(1), 'SEQCUES', 99, '2.500', () => undefined);
+  expect(result).toContain('<Sequ index="98" name="颜色 &amp; 位置">');
+  expect(result).toContain('<CuePart index="0" name="灯"/>');
+  expect(desk.commands().filter(line => line.startsWith('Export '))).toEqual([
+    `Export ${address} "tblink_library_${requestId(1)}" /o`, `Export ${address} "tblink_library_${requestId(1)}_verify" /o`
+  ]);
+  desk.lua("FAKE.after[#FAKE.log+1]=function() local c=FAKE.objects['Sequence 99 Cue 2.500']; c.xml=c.xml:gsub('index=\"12\"','index=\"13\"') end");
+  await expect(wire.exchange(requestId(2), 'SEQCUES', 99, '2.500', () => undefined)).rejects.toThrow('Cue changed during read');
+  desk.set(address, { xml: xml.replace('sub_number="500"', 'sub_number="501"') });
+  await expect(wire.exchange(requestId(3), 'SEQCUES', 99, '2.500', () => undefined)).rejects.toThrow('Cue export number mismatch');
 });
 const executorXml = (sequence: number): string => `<MA><Exec offset_from_first="0"><Assignment name="A"><No>25</No><No>1</No><No>${sequence}</No></Assignment><AssignmentExec><Button>12299</Button></AssignmentExec></Exec></MA>`;
 
@@ -197,6 +233,66 @@ it('再次导出长时间线时只回传变化的文件头，返回本次的完�
   expect(ma2.commands().filter(cmd => cmd.startsWith('Export Timecode 9902 '))).toHaveLength(3);
 });
 
+it.each([3700, 6200])('已核对的插件按实际大小返回时间线和序列，较大回复分批接收 %i', async count => {
+  const desk = new Ma2LuaConsole();
+  const xml = timecodeXml(9902, [[3, 1]], '灯'.repeat(count));
+  desk.set('Timecode 9902', { xml }); desk.set('Sequence 3', { xml: sequenceXml(3) });
+  const wire = new Ma2NetworkWire(desk, false, undefined, true);
+  const snapshot = await wire.exchange(requestId(1), 'SCOPE', 9902, '3', () => undefined);
+  expect(snapshot).toContain('灯'.repeat(count));
+  expect(snapshot).toContain('<Sequ index="2"');
+  expect(desk.lines.some(line => line.includes("'readbatch'"))).toBe(count === 6200);
+});
+
+it.each([false, true])('控台确认写入后，完整还原本次重新导出的序列，控台同时改过序列名 %s', async changed => {
+  const desk = new Ma2LuaConsole();
+  const timecode = timecodeXml(9902, [[3, 1]], '节目');
+  const sequence = sequenceXml(3).replace('<Sequ ', '<Sequ comment="' + '色'.repeat(6000) + '" ');
+  desk.set('Timecode 9902', { xml: timecode });
+  desk.set('Sequence 3', { xml: sequence });
+  const wire = new Ma2NetworkWire(desk, false, undefined, true);
+  const base = await wire.exchange(requestId(1), 'SCOPE', 9902, '3', () => undefined);
+  const start = desk.lines.length;
+  if (changed) desk.beforeLine = () => {
+    if (desk.commands().some(line => line.startsWith('Import '))) {
+      desk.set('Sequence 3', { xml: sequence.replace('色', '灯') });
+      desk.beforeLine = null;
+    }
+  };
+  const confirmed = await wire.exchange(requestId(2), 'SYNC', 9902, syncBody(base, timecode.replace('time="15"', 'time="25"')), () => undefined);
+  expect(desk.lines.slice(start).some(line => line.includes("'readbatch'"))).toBe(changed);
+  expect(confirmed).toContain('time="25"');
+  const after = await wire.exchange(requestId(3), 'SNAPSHOT', 9902, '', () => undefined);
+  const normalize = (xml: string) => xml.replace(/datetime="\d+"/, 'datetime=""');
+  expect(normalize(confirmed)).toBe('SNAPSHOT\n' + normalize(after));
+});
+
+it.each([
+  ['SEQUENCE', 9901, 'keep'], ['SEQCUES', 9901, '2.500'], ['EXECUTOR', 99, '219']
+] as const)('%s 两次导出之间切换到内容相同的 Show 时中止，不能把另一份数据记为已核对', async (operation, target, body) => {
+  const desk = new Ma2LuaConsole();
+  show(desk);
+  const wire = new Ma2NetworkWire(desk, false, undefined, true);
+  desk.beforeLine = line => { if (line.includes("'step'")) desk.lua("FAKE.vars.SHOWFILE='other'"); };
+  await expect(wire.exchange(requestId(1), operation, target, body, () => undefined)).rejects.toThrow('Show or session changed');
+  expect(wire.unreleasedRequests).toEqual([]);
+  expect(desk.commands().some(line => line.startsWith('Import '))).toBe(false);
+});
+
+it.each(['beginsync', 'run'])('两个 Show 的编号和内容相同，在 %s 前切换也不能覆盖另一个 Show', async action => {
+  const desk = new Ma2LuaConsole();
+  const xml = timecodeXml(9902, [[3, 1]]);
+  desk.set('Timecode 9902', { xml }); desk.set('Sequence 3', { xml: sequenceXml(3) });
+  const wire = new Ma2NetworkWire(desk, false, undefined, true);
+  const snapshot = await wire.exchange(requestId(1), 'SCOPE', 9902, '3', () => undefined);
+  desk.beforeLine = line => { if (line.includes(`'${action}'`)) desk.lua("FAKE.vars.SHOWFILE='other'"); };
+  const desired = xml.replace('@EXPORT@', '1').replace('time="15"', 'time="25"');
+  const payload = `${Buffer.byteLength(snapshot)}\n${snapshot}${desired}`;
+  await expect(wire.exchange(requestId(2), 'SYNC', 9902, payload, () => undefined)).rejects.toThrow('Show or session changed');
+  expect(desk.commands().filter(command => command.startsWith('Import '))).toEqual([]);
+  expect(wire.unreleasedRequests).toEqual([]);
+});
+
 it('引用快照传中文时间线的改动，损坏的复制范围在原生写入之前拒绝', async () => {
   const ma2 = new Ma2LuaConsole();
   const wire = new Ma2NetworkWire(ma2);
@@ -220,6 +316,22 @@ it('引用快照传中文时间线的改动，损坏的复制范围在原生写�
   expect(ma2.commands().filter(cmd => cmd.startsWith('Import'))).toHaveLength(1);
 });
 
+it.each([1, -1])('增删一个触发使其他事件编号偏移 %i，原生插件按字节还原整条时间线，再按原样备份和读回', async shift => {
+  const desk = new Ma2LuaConsole();
+  const row = (i: number) => `<Event index="${i}" time="${i * 30}" command="Go" pressed="true"><!--保留现场动作 ${i}--></Event>`;
+  const events = Array.from({ length: 58 }, (_, i) => row(i)).join('\n');
+  const xml = timecodeXml(9902, []).replace('<SubTrack index="0"></SubTrack>', `<SubTrack index="0">${events}</SubTrack>`);
+  const inserted = xml.replace(events, row(0).replace('保留现场动作 0', '新点') + '\n' + events.replace(/<Event index="(\d+)"/g, (_whole, n: string) => `<Event index="${Number(n) + 1}"`));
+  const [base, desired] = shift === 1 ? [xml, inserted] : [inserted, xml];
+  desk.set('Timecode 9902', { xml: base });
+  const wire = new Ma2NetworkWire(desk, false, undefined, true);
+  const snapshot = await wire.exchange(requestId(1), 'SNAPSHOT', 9902, '', () => undefined);
+  const reply = await wire.exchange(requestId(2), 'SYNC', 9902, syncBody(snapshot, desired), () => undefined);
+  expect(reply).toContain(desired.match(/<Timecode\s[\s\S]*?<\/Timecode>/)![0]);
+  expect(desk.lines.filter(line => line.includes("'chunk'")).length).toBeLessThanOrEqual(2);
+  expect(desk.commands().filter(line => line.startsWith('Import '))).toHaveLength(1);
+});
+
 it('旧组件忽略差量参数时，同一次预约发送完整时间线，控台只写一次', async () => {
   const ma2 = new Ma2LuaConsole();
   ma2.lua('local net=TBLINK_NET;TBLINK_NET=function(token,action,id,a,b,c,lane,transport,read_now) return net(token,action,id,a,b,c,lane,transport,read_now) end');
@@ -233,6 +345,30 @@ it('旧组件忽略差量参数时，同一次预约发送完整时间线，控�
   expect(after).toContain('time="27"');
   expect(ma2.lines.filter(line => line.includes("'beginsync'"))).toHaveLength(1);
   expect(ma2.commands().filter(cmd => cmd.startsWith('Import'))).toHaveLength(1);
+});
+
+it('连续编辑分段上传时核对长度、序号和转义，每行符合控台输入限制', async () => {
+  const desk = new Ma2LuaConsole();
+  const wire = new Ma2NetworkWire(desk, false, undefined, true);
+  const xml = timecodeXml(9902, [[3, 1]], '保留'.repeat(900));
+  desk.set('Timecode 9902', { xml }); desk.set('Sequence 3', { xml: sequenceXml(3) });
+  const before = await wire.exchange(requestId(1), 'SNAPSHOT', 9902, '', () => undefined);
+  const name = Array.from({ length: 300 }, (_, i) => 'Sequence-' + i + '席~').join('');
+  const desired = xml.replace('保留', name);
+  const badId = requestId(2);
+  expect(await rpc(desk, 'beginsync', badId, `,'${requestId(1)}',9902,800,'bg',nil,nil,2,nil,nil,nil,nil,'text'`)).toBe('ACK:lanes:delta:text');
+  for (const invalid of ['a~', '~1', '~gg', '~~00', 'a|b']) {
+    expect(rpcError(await rpc(desk, 'chunktext', badId, `,1,'${invalid}'`))).toContain('Invalid chunk');
+  }
+  expect(rpcError(await rpc(desk, 'chunktext', badId, ",2,'~00'"))).toContain('Invalid chunk order');
+  expect(await rpc(desk, 'release', badId)).toBe('ACK');
+  const start = desk.lines.length;
+  const result = await wire.exchange(requestId(3), 'SYNC', 9902, syncBody(before, desired), () => undefined);
+  const uploads = desk.lines.slice(start).filter(line => line.includes("'chunktext'"));
+  expect(uploads.length).toBeGreaterThan(1);
+  expect(uploads.every(line => Buffer.byteLength(line) <= 1024)).toBe(true);
+  expect(result).toContain(name);
+  expect(desk.commands().filter(line => line.startsWith('Import '))).toHaveLength(1);
 });
 
 it('本机上传文件完整后才执行，大小错误不执行并可释放', async () => {
@@ -599,6 +735,34 @@ const answer = (response: string): string => normalize(response).replace(/^([a-f
 const lightsOff = (ma2: Ma2LuaConsole) => async (): Promise<void> => { await ma2.command(`Lua "gma.cmd('Off Executor 1000.101'); gma.echo('OFF_SENT:ok')"`, text => ma2ResponseLine(text, 'OFF_SENT:')); };
 
 describe('插件分步', () => {
+  it('快速读回先单独确认 Import，后续步骤只读取已写入的内容', async () => {
+    const ma2 = new Ma2LuaConsole(); show(ma2);
+    const id = requestId(2);
+    const snapshotId = requestId(1);
+    await runAtOnce(ma2, snapshotId, 'SNAPSHOT', 9910);
+    await upload(ma2, id, 'SYNC', 9910, timecodeXml(9910, [[9903, 1], [9904, 2]]), snapshotId);
+    ma2.perLine.length = 0;
+    let reply = await rpc(ma2, 'run', id, ",'steps','checked','confirm','snapshot',16384");
+    let acknowledged = false;
+    for (let step = 1; reply.startsWith('STEP:') && step < 30; step++) {
+      const commands = stepLines(ma2).at(-1) ?? [];
+      const imported = commands.some(command => command.startsWith('Import '));
+      if (imported) {
+        expect(acknowledged).toBe(false);
+        expect(commands.at(-1)).toMatch(/^Import /);
+        acknowledged = true;
+      } else if (acknowledged) {
+        expect(commands.every(command => command.startsWith('Export '))).toBe(true);
+      }
+      expect(reply).toBe(`STEP:${step}:${acknowledged ? 'verify' : 'before'}`);
+      reply = await rpc(ma2, 'step', id);
+    }
+    expect(reply).toMatch(/^INLINE:\d+$/);
+    expect(acknowledged).toBe(true);
+    expect(stepLines(ma2).flat().filter(command => command.startsWith('Import '))).toHaveLength(1);
+    expect(stepLines(ma2).at(-1)?.every(command => command.startsWith('Export '))).toBe(true);
+  });
+
   it('PING 回答带 steps=1，旧插件只回版本', async () => {
     expect(responseBody(await runAtOnce(new Ma2LuaConsole(), requestId(1), 'PING', 1))).toBe('3.3.4.3\nsteps=1');
     expect(responseBody(await runAtOnce(new Ma2LuaConsole(singleRunBridgeSource), requestId(1), 'PING', 1))).toBe('3.3.4.3');

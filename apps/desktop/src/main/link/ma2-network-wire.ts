@@ -5,7 +5,7 @@ import { Ma2BridgeFailure, type Ma2Lane, type Ma2Operation, type Ma2TransferProg
 import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
 import type { Ma2RequestJournal } from './ma2-request-journal';
 import { MA2_BRIDGE_MISSING_BEFORE_REQUEST } from '@tb/core/link';
-import { encodeMa2SnapshotDelta } from './ma2-snapshot-delta';
+import { encodeMa2ReindexedDelta, encodeMa2SnapshotDelta } from './ma2-snapshot-delta';
 
 class Ma2RpcRefusal extends Error {}
 class Ma2BridgeMissing extends Error {}
@@ -13,8 +13,8 @@ class Ma2BridgeMissing extends Error {}
 /** Only the loopback transport shares the onPC filesystem. A LAN address always uses the wire. */
 export const ma2UsesLocalFiles = (host: string): boolean => host === '127.0.0.1' || host === '::1';
 
-function responseChunks(text: string, prefix: string, offset: number, size: number): string | null {
-  const count = Math.min(32, Math.ceil((size - offset) / 256));
+function responseChunks(text: string, prefix: string, offset: number, size: number, maxChunks = 32): string | null {
+  const count = Math.min(maxChunks, Math.ceil((size - offset) / 256));
   const parts: string[] = [];
   for (let i = 0; i < count; i++) {
     const result = ma2ResponseLine(text, prefix + i.toString(16).padStart(4, '0') + ':');
@@ -27,15 +27,34 @@ function responseChunks(text: string, prefix: string, offset: number, size: numb
 }
 
 type ReadBaseline = { id: string; target: number; content: Buffer };
-function decodeResponse(bytes: Buffer, id: string, baseline?: ReadBaseline): { ok: boolean; value: string } {
+/** Digits, separators and letters dominate XML copy ranges. Escape every other byte
+ * so native command syntax cannot interpret it; never split an escape across lines. */
+function* uploadParts(data: Buffer, text: boolean): Generator<string> {
+  if (!text) {
+    for (let i = 0; i < data.length; i += 256) yield data.subarray(i, i + 256).toString('hex');
+    return;
+  }
+  const encoded = data.toString('latin1').replace(/[^A-Za-z0-9 ,._:-]/g, ch => '~' + ch.charCodeAt(0).toString(16).padStart(2, '0'));
+  for (let start = 0; start < encoded.length;) {
+    let end = Math.min(start + 700, encoded.length);
+    if (encoded[end - 1] === '~') end--;
+    else if (encoded[end - 2] === '~') end -= 2;
+    yield encoded.slice(start, end);
+    start = end;
+  }
+}
+function decodeResponse(bytes: Buffer, id: string, baseline?: ReadBaseline, syncBase?: ReadBaseline): { ok: boolean; value: string } {
   const text = bytes.toString('utf8');
-  if (baseline && text.startsWith(id + '\nCOPY\n')) {
-    const copy = /^([a-f0-9]{32})\nCOPY\n([a-f0-9]{32})\n(\d+)\n(\d+)\n([\s\S]*)$/.exec(text);
-    if (!copy || copy[2] !== baseline.id) throw new Error('控台读回的数据对不上');
+  const snapshotCopy = text.startsWith(id + '\nSNAPCOPY\n');
+  if (snapshotCopy || text.startsWith(id + '\nCOPY\n')) {
+    const source = snapshotCopy ? syncBase : baseline;
+    const copy = /^([a-f0-9]{32})\n(?:SNAPCOPY|COPY)\n([a-f0-9]{32})\n(\d+)\n(\d+)\n([\s\S]*)$/.exec(text);
+    if (!source || !copy || copy[2] !== source.id) throw new Error('控台读回的数据对不上');
     const offset = Number(copy[3]), size = Number(copy[4]);
     const prefix = Buffer.from(copy[5]!);
-    if (offset > baseline.content.length || prefix.length > 2048 || size !== prefix.length + baseline.content.length - offset) throw new Error('控台读回的数据长度无效');
-    return { ok: true, value: Buffer.concat([prefix, baseline.content.subarray(offset)]).toString('utf8') };
+    if (offset > source.content.length || prefix.length > (snapshotCopy ? 16384 : 2048) || size !== prefix.length + source.content.length - offset) throw new Error('控台读回的数据长度无效');
+    const xml = Buffer.concat([prefix, source.content.subarray(offset)]).toString('utf8');
+    return { ok: true, value: snapshotCopy ? 'SNAPSHOT\n' + xml : xml };
   }
   const match = /^([a-f0-9]{32})\n(OK|ERROR)\n(\d+)\n([\s\S]*)$/.exec(text);
   if (!match || match[1] !== id || Buffer.byteLength(match[4] ?? '') !== Number(match[3])) throw new Error('控台读回的数据对不上');
@@ -48,6 +67,7 @@ export class Ma2NetworkWire implements Ma2Wire {
   private lastRead: ReadBaseline | undefined;
   private readonly unreleased = new Set<string>();
   private twoLanes: boolean | null = null;
+  private inlineDiscard = false;
   constructor(private readonly connection: Pick<Ma2Telnet, 'command'>, private readonly localFiles = false, private readonly journal?: Pick<Ma2RequestJournal, 'begin' | 'released'>, private readonly verifiedSnapshots = false, private readonly onMissing?: () => void) {}
   hasSnapshot(target: number, snapshot: string): boolean {
     return this.snapshot?.target === target && this.snapshot.content.equals(Buffer.from(snapshot));
@@ -78,8 +98,9 @@ export class Ma2NetworkWire implements Ma2Wire {
       const receipt = ma2ResponseLine(text, prefix);
       if (!receipt?.startsWith('INLINE:') || !['begin', 'run', 'step'].includes(action)) return receipt;
       const size = Number(receipt.slice(7));
-      if (!Number.isInteger(size) || size < 1 || size >= 8192) throw new Error('控台返回的数据长度无效');
-      const chunks = responseChunks(text, 'TBLINK_INLINE_' + token + '_', 0, size);
+      const limit = this.verifiedSnapshots && !this.localFiles ? 16384 : 8192;
+      if (!Number.isInteger(size) || size < 1 || size >= limit) throw new Error('控台返回的数据长度无效');
+      const chunks = responseChunks(text, 'TBLINK_INLINE_' + token + '_', 0, size, limit / 256);
       return chunks === null ? null : 'INLINE:' + chunks;
     });
     if (result === 'MISSING') {
@@ -93,9 +114,9 @@ export class Ma2NetworkWire implements Ma2Wire {
     }
     return result;
   }
-  /** `beforeStep` runs before each interruptible step, the first included, with the steps done. Once SEQGO
-   * acknowledges its write, only readback remains; finish it even if cancelled, then release the request. */
-  async exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: (done: number) => void | Promise<void>, lane: Ma2Lane = 'bg'): Promise<string> {
+  /** After SEQGO acknowledges its Assign or SYNC acknowledges its Import,
+   * finish the native readback even if an edit is cancelled during confirmation. */
+  async exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress, beforeStep?: (done: number, beforeImport?: boolean) => void | Promise<void>, lane: Ma2Lane = 'bg'): Promise<string> {
     let confirming = false;
     const checkCancellation = () => { if (!confirming) signal?.throwIfAborted(); };
     checkCancellation();
@@ -105,13 +126,19 @@ export class Ma2NetworkWire implements Ma2Wire {
     const newline = data.indexOf(10);
     const length = newline > 0 && /^\d+$/.test(data.subarray(0, newline).toString()) ? Number(data.subarray(0, newline).toString()) : -1;
     const reference = operation === 'SYNC' && this.snapshot?.target === target && length === this.snapshot.content.length && data.subarray(newline + 1, newline + 1 + length).equals(this.snapshot.content) ? this.snapshot.id : null;
+    const syncBase = reference && this.verifiedSnapshots && !this.localFiles ? this.snapshot ?? undefined : undefined;
     if (reference) data = data.subarray(newline + 1 + length);
     const delta = reference && this.snapshot && !this.localFiles ? encodeMa2SnapshotDelta(this.snapshot.content, data) : null;
+    const indexed = delta && this.snapshot && this.verifiedSnapshots ? encodeMa2ReindexedDelta(this.snapshot.content, data, delta) : null;
     const previousRead = operation === 'READ' && data.length === 0 && lane === 'bg' && this.lastRead?.target === target ? this.lastRead : undefined;
     const received = (bytes: Buffer): string => {
-      const result = decodeResponse(bytes, id, previousRead);
+      const result = decodeResponse(bytes, id, previousRead, syncBase);
       if (!result.ok) throw new Error(`MA2：${result.value}`);
       if (operation === 'SNAPSHOT' || operation === 'SCOPE') this.snapshot = { id, target, content: Buffer.from(result.value) };
+      if (operation === 'SYNC' && this.verifiedSnapshots && result.value.startsWith('SNAPSHOT\n')) {
+        this.inlineDiscard = true;
+        this.snapshot = { id, target, content: Buffer.from(result.value.slice('SNAPSHOT\n'.length)) };
+      }
       if (operation === 'READ' && lane === 'bg') {
         this.lastRead = Buffer.byteLength(result.value) <= 524288 ? { id, target, content: Buffer.from(result.value) } : undefined;
       }
@@ -124,20 +151,29 @@ export class Ma2NetworkWire implements Ma2Wire {
       if (reference && lane !== 'bg') throw new Error('无效的 MA2 网络请求');
       // SEQGO's first step only exports the sequence. Its native write remains a
       // separate, gated step after the second export and comparison.
-      const snapshotQuery = this.verifiedSnapshots && lane === 'bg' && ['SNAPSHOT', 'SCOPE', 'FIRSTCUES', 'ASSIGNSEQ'].includes(operation);
-      const shortQuery = (snapshotQuery || operation === 'LIST' || operation === 'LISTSEQ' || operation === 'TCRANGES' || operation === 'SEQGO' && lane === 'bg' && data.length > 0) && data.length <= 320;
+      const bundledQuery = this.verifiedSnapshots && lane === 'bg' && (['SNAPSHOT', 'SCOPE', 'FIRSTCUES', 'ASSIGNSEQ'].includes(operation) || operation === 'DISCARD' && this.inlineDiscard);
+      const shortQuery = (bundledQuery || operation === 'LIST' || operation === 'LISTSEQ' || operation === 'TCRANGES' || operation === 'SEQGO' && lane === 'bg' && data.length > 0) && data.length <= 320;
       const readNow = operation === 'READ' && data.length === 0 && lane === 'bg' || shortQuery;
       if (readNow) { await beforeStep?.(0); checkCancellation(); beforeSend(); }
       this.journal?.begin(id); this.unreleased.add(id);
       const transport = this.localFiles ? ",'file'" : readNow || delta ? ',nil' : '';
       if (readNow) sent = true;
       const extension = delta ? `,nil,${delta.length}` : shortQuery ? `,nil,nil,'${data.toString('hex')}'` : previousRead ? `,'read',nil,nil,'${previousRead.id}'` : readNow ? ",'read'" : '';
-      const begun = await this.call(reference ? 'beginsync' : 'begin', id, `,'${reference ?? operation}',${target},${data.length},'${lane}'${transport}${extension}`);
+      const dictionary = indexed ? `,nil,nil,${indexed.shift},${indexed.data.length}` : '';
+      const wide = this.verifiedSnapshots && !this.localFiles;
+      const queryLimit = wide && shortQuery ? ',nil,nil,nil,16384' : '';
+      const proposed = indexed?.data ?? delta;
+      const fewerParts = wide && proposed && proposed.length > 256 && [...uploadParts(proposed, true)].length < Math.ceil(proposed.length / 256);
+      const chunkOffer = fewerParts ? (indexed ? '' : ',nil,nil,nil,nil') + ",'text'" : '';
+      const begun = await this.call(reference ? 'beginsync' : 'begin', id, `,'${reference ?? operation}',${target},${data.length},'${lane}'${transport}${extension}${dictionary}${queryLimit}${chunkOffer}`);
       // Older bridges ignore the final argument and ACK their reservation. Only
       // that ACK needs a subsequent run; a completed export is never replayed.
       const beganWithRead = readNow && /^(?:INLINE|DONE|FILE|STEP):/.test(begun);
       const upload = /^ACK:lanes:file:((?:[a-f0-9]{2})+)$/.exec(begun);
-      if (delta && begun === 'ACK:lanes:delta') data = delta;
+      const textUpload = Boolean(chunkOffer) && /^ACK:lanes:(indexed|delta):text$/.test(begun);
+      const encodingAck = textUpload ? begun.slice(0, -5) : begun;
+      if (indexed && encodingAck === 'ACK:lanes:indexed') data = indexed.data;
+      else if (delta && encodingAck === 'ACK:lanes:delta') data = delta;
       else if (!beganWithRead && begun !== 'ACK' && begun !== 'ACK:lanes' && !upload) throw new Error('MA2 未确认传输开始');
       acquired = true; this.unreleased.add(id);
       // A plugin from before lanes holds one request for both: this one is it, whatever lane was asked for.
@@ -149,32 +185,39 @@ export class Ma2NetworkWire implements Ma2Wire {
         checkCancellation();
         await writeFile(path, data, { flag: 'wx', signal });
         progress?.();
-      } else for (let offset = 0; !beganWithRead && offset < data.length; offset += 256) {
-        checkCancellation();
-        if (await this.call('chunk', id, `,${offset / 256 + 1},'${data.subarray(offset, offset + 256).toString('hex')}'`) !== 'ACK') throw new Error('MA2 未确认数据片段');
-        progress?.();
+      } else if (!beganWithRead) {
+        let part = 0;
+        for (const encoded of uploadParts(data, textUpload)) {
+          checkCancellation();
+          if (await this.call(textUpload ? 'chunktext' : 'chunk', id, `,${++part},'${encoded}'`) !== 'ACK') throw new Error('MA2 未确认数据片段');
+          progress?.();
+        }
       }
       // The plugin does one console Export or Import per line and answers STEP:<steps done> until the
       // last, so stop and playback commands queued meanwhile go out between two steps. A plugin from
       // before steps ignores 'steps' and answers DONE at once, which is the same protocol.
-      const inlineResult = ['READ', 'SEQCUES', 'LIST', 'LISTSEQ', 'TCRANGES', 'SNAPSHOT', 'SCOPE', 'SYNC', 'SEQGO', 'FIRSTCUES', 'ASSIGNSEQ'].includes(operation);
+      const inlineResult = ['READ', 'SEQCUES', 'LIST', 'LISTSEQ', 'TCRANGES', 'SNAPSHOT', 'SCOPE', 'SYNC', 'SEQGO', 'FIRSTCUES', 'ASSIGNSEQ', 'DISCARD'].includes(operation);
+      const confirmImport = this.verifiedSnapshots && operation === 'SYNC';
       let reply = begun;
       if (!beganWithRead) {
         checkCancellation(); await beforeStep?.(0); checkCancellation();
         if (!sent) { beforeSend(); sent = true; }
         const checked = this.verifiedSnapshots && ['SNAPSHOT', 'SCOPE', 'SYNC'].includes(operation);
-        reply = await this.call('run', id, checked ? ",'steps','checked'" : inlineResult ? ",'steps','inline'" : ",'steps'");
+        const run = checked ? ",'steps','checked'" : inlineResult ? ",'steps','inline'" : ",'steps'";
+        reply = await this.call('run', id, run + (confirmImport ? ",'confirm','snapshot'" + (wide ? ',16384' : '') + (syncBase ? ",'copy'" : '') : ''));
       }
-      for (let done = 0, step = /^STEP:(\d+)(:verify)?$/.exec(reply); step; step = /^STEP:(\d+)(:verify)?$/.exec(reply)) {
+      const stepReply = /^STEP:(\d+)(:before|:verify)?$/;
+      for (let done = 0, step = stepReply.exec(reply); step; step = stepReply.exec(reply)) {
         if (Number(step[1]) !== done + 1) throw new Error('控台分步执行的回答对不上');
-        if ((step[2] && operation !== 'SEQGO') || (confirming && !step[2])) throw new Error('控台写入确认阶段的回答对不上');
-        confirming = Boolean(step[2]);
+        const beforeImport = step[2] === ':before';
+        if ((beforeImport && !confirmImport) || (step[2] && operation !== 'SEQGO' && !confirmImport) || (confirming && step[2] !== ':verify')) throw new Error('控台写入确认阶段的回答对不上');
+        confirming = step[2] === ':verify';
         done += 1;
         progress?.();
         // SEQGO may verify a very large backup in bounded chunks. Once its single
         // Assign has completed, finish only that readback; cancellation/show gates
         // still prevent all writes up to this point. Never replay the write.
-        checkCancellation(); if (!confirming) await beforeStep?.(done); checkCancellation();
+        checkCancellation(); if (!confirming) await beforeStep?.(done, beforeImport); checkCancellation();
         reply = await this.call('step', id);
       }
       if (inlineResult && reply.startsWith('INLINE:')) {

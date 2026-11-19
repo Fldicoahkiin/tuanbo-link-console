@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { compareMa2LightingReadback, recoverMa2TrackMappings } from './ma2-comparison';
 import { editMa2TrackStates, extendMa2TimecodeLength, inspectMa2SequenceXml, inspectMa2TimecodeXml, prepareMa2TimecodeEvents, resolveMa2CueNumber, sameMa2XmlObjects, type Ma2EventEdit } from './ma2-timecode-xml';
 import { convertMa2Timecode } from './ma2-timecode-conversion';
-import { appendMa2MasterSubtracks, appendMa2Tracks, removeMa2Tracks } from './ma2-track-write';
+import { appendMa2Subtracks, appendMa2Tracks, removeMa2Tracks } from './ma2-track-write';
 
 const commonProperties = {
   time: z.string().regex(/^\d+(?:\.\d+)?$/).transform(Number).pipe(z.number().finite().nonnegative().max(86400000)),
@@ -69,6 +69,7 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
   const trackExecutors = new Map<string, string>();
   const subtrackExecutors = new Map<string, string>();
   const masterSubtracks = new Set<string>();
+  const cueSubtracks = new Set<string>();
   for (const track of readback.document.tracks) {
     const stableId = trackIdentities.get(track.id);
     const mapping = readback.trackMappings?.find((entry) => entry.trackId === track.id);
@@ -81,7 +82,11 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     const candidates = new Set(native.track.subtracks.map((entry) => `${path}/SubTrack:${entry.index}`));
     subtracks.set(stableId, candidates);
     for (const candidate of candidates) subtrackExecutors.set(candidate, native.track.executorAddress.slice(2).join('.'));
-    for (const entry of native.track.subtracks) if (entry.attributes.fader_command === 'Master') masterSubtracks.add(`${path}/SubTrack:${entry.index}`);
+    for (const entry of native.track.subtracks) {
+      const subtrack = `${path}/SubTrack:${entry.index}`;
+      if (entry.attributes.fader_command === 'Master') masterSubtracks.add(subtrack);
+      if (entry.attributes.fader_command === undefined) cueSubtracks.add(subtrack);
+    }
   }
   const newTracks = desired.objects.filter((object) => object.kind === 'track' && !remoteObjects.has(object.id));
   for (const track of readback.document.tracks) {
@@ -102,15 +107,23 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     trackPaths.set(track.id, path);
     trackExecutors.set(track.id, pending.executor);
     const subtrack = `${path}/SubTrack:0`;
+    cueSubtracks.add(subtrack);
     subtracks.set(track.id, new Set([subtrack])); subtrackExecutors.set(subtrack, pending.executor);
   }
-  const neededMasters = new Set(desired.objects.filter((object) => object.kind === 'event' && object.properties.action === 'master').map((object) => object.parentId));
-  const newMasters = appendMa2MasterSubtracks(appended.xml, readback.target, [...trackPaths].filter(([id]) => neededMasters.has(id) && ![...(subtracks.get(id) ?? [])].some((path) => masterSubtracks.has(path))).map(([, path]) => path));
-  for (const [id, path] of trackPaths) {
-    const master = newMasters.paths.get(path); if (!master) continue;
-    const executor = trackExecutors.get(id);
-    if (!executor) throw new Error('新增的推杆子轨道没有指定执行器');
-    subtracks.get(id)!.add(master); masterSubtracks.add(master); subtrackExecutors.set(master, executor);
+  let withSubtracks = appended.xml;
+  for (const kind of ['Cue', 'Master'] as const) {
+    const known = kind === 'Cue' ? cueSubtracks : masterSubtracks;
+    const needed = new Set(desired.objects.filter(object => object.kind === 'event' && (object.properties.action === 'master') === (kind === 'Master')).map(object => object.parentId));
+    const missing = [...trackPaths].filter(([id]) => needed.has(id) && ![...(subtracks.get(id) ?? [])].some(path => known.has(path)));
+    if (!missing.length) continue;
+    const added = appendMa2Subtracks(withSubtracks, readback.target, missing.map(([, path]) => path), kind);
+    withSubtracks = added.xml;
+    for (const [id, path] of missing) {
+      const subtrack = added.paths.get(path)!;
+      const executor = trackExecutors.get(id);
+      if (!executor) throw new Error('新增的子轨道没有指定执行器');
+      subtracks.get(id)!.add(subtrack); known.add(subtrack); subtrackExecutors.set(subtrack, executor);
+    }
   }
   const raw = new Map(report.timecodes.flatMap((tc) => tc.tracks.flatMap((track) => track.subtracks.flatMap((subtrack) => subtrack.events.map((event) => [event.path, { event, executor: track.executorAddress.slice(2).join('.') }] as const)))));
   // Console actions the software does not convert stay in the XML untouched (2026-10-26); the ones shown
@@ -136,8 +149,9 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
       edits.push({ kind: 'delete', path });
       path = undefined;
     }
-    const candidates = new Set([...(subtracks.get(object.parentId) ?? [])].filter((candidate) => masterSubtracks.has(candidate) === (value.action === 'master')));
-    const subtrackPath = path?.slice(0, path.lastIndexOf('/')) ?? (candidates?.size === 1 ? [...candidates][0] : undefined);
+    const destinations = value.action === 'master' ? masterSubtracks : cueSubtracks;
+    const candidates = [...(subtracks.get(object.parentId) ?? [])].filter(candidate => destinations.has(candidate));
+    const subtrackPath = path?.slice(0, path.lastIndexOf('/')) ?? (candidates.length === 1 ? candidates[0] : undefined);
     if (!subtrackPath) throw new Error('新增灯光点要放到控台哪条子轨道不明确');
     const original = path ? raw.get(path) : undefined;
     const executor = original?.executor ?? subtrackExecutors.get(subtrackPath);
@@ -181,7 +195,7 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     }
   }
   edits.push(...ma2FollowerEdits(edits, followers, raw));
-  const write = prepareMa2TimecodeEvents(newMasters.xml, inspectMa2TimecodeXml(newMasters.xml).sha256, readback.target, edits);
+  const write = prepareMa2TimecodeEvents(withSubtracks, inspectMa2TimecodeXml(withSubtracks).sha256, readback.target, edits);
   const eventPaths = new Map<string, string>();
   for (const [id, path] of paths) { const next = write.originalPaths.get(path); if (next) eventPaths.set(id, next); }
   for (const [index, id] of addedIds) { const path = write.addedPaths.get(index); if (!path) throw new Error('新增灯光点的写回映射缺失'); eventPaths.set(id, path); }

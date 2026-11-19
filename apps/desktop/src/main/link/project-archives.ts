@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
-import { projectArchiveRequestSchema, projectArchiveResultSchema, projectArchiveSettingsSchema, type ProjectArchiveResult, type ProjectArchiveSettings, type ProjectArchiveSettingsStatus } from '@tb/schema';
+import { projectArchiveRequestSchema, projectArchiveResultSchema, projectArchiveSettingsSchema, type ProjectArchiveRequest, type ProjectArchiveResult, type ProjectArchiveSettings, type ProjectArchiveSettingsStatus } from '@tb/schema';
 import type { ProjectDocumentService } from './project-document-service';
 import { writeFileAtomically } from './atomic-file';
 
@@ -16,6 +16,13 @@ type Entry = ProjectArchiveResult['entries'][number];
 
 /** Machine-level archive settings in userData; the archive root defaults to 文档\团播联动台\存档. */
 export class ProjectArchiveSettingsStore {
+  private archiveWrite: Promise<void> = Promise.resolve();
+  /** Creating and restoring both allocate names and replace the same on-disk index. */
+  withArchiveWrite<T>(task: () => Promise<T>): Promise<T> {
+    const write = this.archiveWrite.then(task);
+    this.archiveWrite = write.then(() => undefined, () => undefined);
+    return write;
+  }
   constructor(private readonly path: string, readonly defaultDirectory: string) {}
   async read(): Promise<ProjectArchiveSettings> {
     try { return projectArchiveSettingsSchema.parse(JSON.parse(await readFile(this.path, 'utf8'))); }
@@ -46,6 +53,11 @@ export class ProjectArchiveSettingsStore {
 export async function projectArchives(input: unknown, documents: Pick<ProjectDocumentService, 'save' | 'inspect'>, store: ProjectArchiveSettingsStore,
   reveal: (path: string) => void, trash: (path: string) => Promise<boolean>, now: () => Date = () => new Date()): Promise<ProjectArchiveResult> {
   const request = projectArchiveRequestSchema.parse(input);
+  const run = () => applyArchiveRequest(request, documents, store, reveal, trash, now);
+  return request.action === 'create' || request.action === 'restore' ? store.withArchiveWrite(run) : run();
+}
+async function applyArchiveRequest(request: ProjectArchiveRequest, documents: Pick<ProjectDocumentService, 'save' | 'inspect'>, store: ProjectArchiveSettingsStore,
+  reveal: (path: string) => void, trash: (path: string) => Promise<boolean>, now: () => Date): Promise<ProjectArchiveResult> {
   const projectPath = resolve(request.projectPath);
   if (extname(projectPath).toLowerCase() !== '.tblink' || !(await stat(projectPath)).isFile()) throw new Error('请先保存工程，再使用存档');
   const settings = await store.read();
@@ -76,9 +88,10 @@ export async function projectArchives(input: unknown, documents: Pick<ProjectDoc
   };
   let createdPath: string | undefined;
   if (request.action === 'create') {
-    if (request.reason === 'before-sync' && !settings.enabled) return projectArchiveResultSchema.parse({ version: 1, entries: await entries(), disabled: true });
-    await documents.inspect(request.content);
+    if (request.reason === 'before-sync' && !settings.enabled) return projectArchiveResultSchema.parse({ version: 1, entries: request.includeEntries === false ? [] : await entries(), disabled: true });
+    // The document worker validates the full project before saving it. Wait for the file and its index.
     createdPath = await archive(request.content, request.reason, request.reason === 'manual' ? '手动' : '同步前');
+    if (request.includeEntries === false) return projectArchiveResultSchema.parse({ version: 1, entries: [], createdPath });
   }
   if (request.action === 'reveal') {
     const entry = request.name ? (await entries()).find(value => value.name === request.name) : undefined;

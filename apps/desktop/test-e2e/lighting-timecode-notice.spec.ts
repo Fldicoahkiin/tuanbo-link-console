@@ -38,7 +38,9 @@ test('时间码关联待核对：不弹窗直接播放，只显示一条准确�
       const notices = page.getByRole('region', { name: '通知', exact: true });
       await expect(notices.getByText(/Timecode 2、3.*时间码照常发送/)).toHaveCount(1);
       await expect(notices.getByText(/按开关设置输出/)).toHaveCount(0);
-      await expect(notices.locator('.toast.info')).toHaveCount(1);
+      const pairingNotice = notices.locator('.toast.info').filter({ hasText: /Timecode 2、3/ });
+      await expect(pairingNotice).toHaveCount(1);
+      await expect(pairingNotice).not.toHaveText(/OBS 没有连接[\s\S]*OBS 没有连接/);
       await page.getByRole('button', { name: '停止时间线', exact: true }).click();
       await expect(page.getByRole('button', { name: '播放时间线', exact: true })).toBeVisible();
     }

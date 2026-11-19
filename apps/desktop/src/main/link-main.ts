@@ -7,7 +7,7 @@ import { ma2RangeSourceSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSche
 import { clockFromNativeStatus, firstTimeWarning, holdForShow, isShowWait, lightingReadBackLogs, MA2_READ_CANCELLED, materialSceneTargets, projectFileReferences, showGate, toUserErrorReason, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
-import { assertMa2ConnectionOwner, isLocalMa2Address, waitForMa2Listener } from './link/ma2-connection-owner';
+import { assertMa2ConnectionOwner, isLocalMa2Address, readMa2TcpOwners, waitForMa2Listener } from './link/ma2-connection-owner';
 import { ma2AuditionRequestSchema,ma2AuditionControlSchema } from '@tb/schema';
 import { WindowsMidiHealth, midiProbeExecutable, probeWindowsMidi, midiHealthMessage } from './link/windows-midi-health';
 import { LicenseService } from './link/license-service';
@@ -961,7 +961,7 @@ function registerIpc(
     if (!profile?.ma2) return;
     const selected = await processManager.refresh('ma2', processConfiguration(profile, 'ma2'));
     if (selected.pid === null) throw new Error('选择的 MA2 onPC 还没运行，请先点“一键连接”');
-    await assertMa2ConnectionOwner(selected.pid, peers);
+    await assertMa2ConnectionOwner(selected.pid, peers, () => readMa2TcpOwners(identityHelper, peers.map(peer => peer.remotePort)));
   }, async (host, port) => {
     if (!isLocalMa2Address(host)) return;
     const profile = await profileStore.loadProfile();
@@ -969,22 +969,26 @@ function registerIpc(
     const selected = await processManager.refresh('ma2', processConfiguration(profile, 'ma2'));
     if (selected.pid === null) throw new Error(`本机 MA2 onPC 没有运行，没有尝试登录 ${host}:${port}。请先点“一键连接”启动 onPC，或在 MA2 设置里检查控台地址。`);
     const started = performance.now();
-    const outcome = await waitForMa2Listener(selected.pid, port, profile.ma2.startupTimeoutMs);
+    const outcome = await waitForMa2Listener(selected.pid, port, profile.ma2.startupTimeoutMs, async port => {
+      const owners = await readMa2TcpOwners(identityHelper, [port]);
+      return owners.filter(row => row.remotePort === 0).map(row => row.pid);
+    });
     if (outcome === 'waited') await logger.record({ level: 'info', category: 'device', device: 'MA2', result: 'succeeded',
       message: `MA2 onPC 远程端口 ${port} 已就绪`, details: { pid: selected.pid, waitedMs: Math.round(performance.now() - started) } });
   }, (level, message) => {
     void logger.record({ level, category: 'device', device: 'MA2', message }).catch((error: unknown) => console.error('MA2 连接提示日志未能保存', error));
   });
-  const ma2Reads = new Map<string, { senderId: number; controller: AbortController }>();
+  const ma2Reads = new Map<string, { senderId: number; controller: AbortController; passive: boolean }>();
+  const hasForegroundRead = (): boolean => Array.from(ma2Reads.values()).some(read => !read.passive);
   ma2Network.setCueDeletionProjectReader(path => projectService.open(path));
   const ma2ConsoleBackups = new Ma2ConsoleBackups(join(app.getPath('userData'), 'link-integrations', 'ma2-console-backups.json'), showGateNow,
     message => logger.record({ level: 'warning', category: 'device', device: 'MA2', message, result: 'failed' }));
   ma2Network.setConsoleBackups(ma2ConsoleBackups);
   const ma2ConsoleKey = (request: { dataDirectory: string; network?: import('@tb/schema').Ma2NetworkTarget | undefined }): string => request.network ? `${request.network.host}:${request.network.port}` : `onPC ${request.dataDirectory}`;
-  const beginMa2Read = (event: IpcMainInvokeEvent, id?: string): { signal: AbortSignal; report: ((progress: Ma2ReadProgressUpdate) => void) | undefined; finish: () => void } => {
+  const beginMa2Read = (event: IpcMainInvokeEvent, id?: string, passive = false): { signal: AbortSignal; report: ((progress: Ma2ReadProgressUpdate) => void) | undefined; finish: () => void } => {
     if (id && ma2Reads.has(id)) throw new Error('读取任务编号重复');
     const controller = new AbortController();
-    if (id) ma2Reads.set(id, { senderId: event.sender.id, controller });
+    if (id) ma2Reads.set(id, { senderId: event.sender.id, controller, passive });
     return { signal: controller.signal,
       report: id ? progress => { if (!controller.signal.aborted && !event.sender.isDestroyed()) event.sender.send('link:ma2-read-progress', ma2ReadProgressSchema.parse({ id, ...progress })); } : undefined,
       finish: () => { if (id) ma2Reads.delete(id); }
@@ -1197,8 +1201,20 @@ function registerIpc(
     const request = ma2BridgeRequestSchema.parse(value);
     return (await getMa2Connection(request)).bridge.request(request.operation, request.target, request.expected, request.desired);
   });
-  handle('link:ma2-preview', async (_event, value: unknown) => {
+  handle('link:ma2-preview', async (event, value: unknown) => {
     const request = ma2PreviewRequestSchema.parse(value);
+    if (request.progressId) {
+      const { network } = request;
+      if (!network || request.syncSequences) throw new Error('只能中断只读的控台时间线检查');
+      const task = beginMa2Read(event, request.progressId, true);
+      try {
+        await ma2NetworkReady;
+        return await ma2Network.preview(network, request.target, request.timeOriginMs, task.signal);
+      } catch (cause) {
+        if (task.signal.aborted && cause === task.signal.reason) return null;
+        throw cause;
+      } finally { task.finish(); }
+    }
     if (request.syncSequences) {
       const { service } = await getMa2Connection(request);
       const network = request.network;
@@ -1263,14 +1279,14 @@ function registerIpc(
     catch(error) { await recordMa2Failure('读取 Layout', `Layout 读取失败：${String(error)}`, error); throw error; }
   });
   handle('link:ma2-cue-delete-prepare', async (event,value:unknown) => {
-    if (ma2Reads.size) throw new Error('请等待当前控台读取结束');
+    if (hasForegroundRead()) throw new Error('请等待当前控台读取结束');
     const request = ma2CueDeletePrepareSchema.parse(value); projectAccess.requireShown(request.projectPath); const task = beginMa2Read(event,request.progressId);
     try { return await ma2Network.prepareCueDeletion(request,task.report); }
     catch(error) { await recordMa2Failure('检查空 Cue 删除清单', `检查空 Cue 删除清单失败：${String(error)}`, error); throw error; }
     finally { task.finish(); }
   });
   handle('link:ma2-cue-delete-commit', async (event,value:unknown) => {
-    if (ma2Reads.size) throw new Error('请等待当前控台读取结束');
+    if (hasForegroundRead()) throw new Error('请等待当前控台读取结束');
     const request = ma2CueDeleteCommitSchema.parse(value); projectAccess.requireShown(request.projectPath); const task = beginMa2Read(event,request.progressId);
     try {
       const result = await ma2Network.commitCueDeletion(request,task.report);
@@ -1470,7 +1486,7 @@ function registerIpc(
     const { bridge, service } = await getMa2Connection(request);
     await logger.record({ level: 'info', category: 'operator', device: 'MA2', message: `开始同步 Timecode ${request.readback.target}`, result: 'running' });
     const result = await service.apply(request);
-    if (result.status === 'verified' && result.backupFile) await ma2ConsoleBackups.record(bridge, { console: ma2ConsoleKey(request), object: `Timecode ${request.readback.target}`, files: [result.backupFile] });
+    if (result.status === 'verified' && result.backupFile) await ma2ConsoleBackups.record(bridge, { console: ma2ConsoleKey(request), object: `Timecode ${request.readback.target}`, files: [result.backupFile] }, 'recorded');
     await logger.record({ level: result.status === 'verified' ? 'info' : 'error', category: 'device', device: 'MA2', message: result.status === 'verified' ? 'MA2 已确认，等待应用到节目' : result.message, result: result.status === 'verified' ? 'succeeded' : 'failed', details: result.status === 'verified' ? { backupFile: result.backupFile } : { stage: result.stage, mayHaveWritten: result.mayHaveWritten, backupFile: result.backupFile } });
     return result;
   });

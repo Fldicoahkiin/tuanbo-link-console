@@ -56,7 +56,7 @@ export const ma2BridgeRequestSchema = z.object({
 }).strict();
 export type Ma2BridgeRequest = z.infer<typeof ma2BridgeRequestSchema>;
 export const ma2ReadRequestSchema = ma2BridgeRequestSchema.pick({ dataDirectory: true, network: true, target: true }).extend({ timeOriginMs: z.number().int().min(0).max(86399999).optional() });
-export const ma2PreviewRequestSchema = ma2ReadRequestSchema.extend({ syncSequences: z.array(z.number().int().min(1).max(99999)).max(10000).optional() });
+export const ma2PreviewRequestSchema = ma2ReadRequestSchema.extend({ syncSequences: z.array(z.number().int().min(1).max(99999)).max(10000).optional(), progressId: z.string().uuid().optional() });
 export type Ma2ReadRequest = z.infer<typeof ma2PreviewRequestSchema>;
 export const ma2CreateRequestSchema = ma2ReadRequestSchema.extend({ name: z.string().trim().min(1).max(512).regex(/^[^\u0000-\u001f]+$/) });
 export type Ma2CreateRequest = z.infer<typeof ma2CreateRequestSchema>;
@@ -94,9 +94,11 @@ export const ma2CompareRequestSchema = z.object({
   consoleChanges: ma2ConsoleChangesSchema.optional()
 }).strict();
 export type Ma2CompareRequest = z.infer<typeof ma2CompareRequestSchema>;
+const ma2EditingSourceSchema = z.object({ show: z.string().min(1), generation: z.string().min(1), version: z.string().min(1) }).strict();
 export const ma2ApplyRequestSchema = ma2CompareRequestSchema.extend({
   dataDirectory: z.string().max(4096),
   network: ma2NetworkTargetSchema.optional(),
+  expectedSource: ma2EditingSourceSchema.optional(),
   timeAlignment: z.enum(['exact', 'nearest-frame']).optional(),
   conflicts: z.array(z.tuple([z.string().min(1), z.enum(['local', 'remote'])])).refine((entries) => new Set(entries.map(([id]) => id)).size === entries.length, '重复的冲突选择')
 }).strict();
@@ -135,7 +137,7 @@ export const ma2TimelineEditRequestSchema = ma2ReadRequestSchema.extend({
   keepName: z.literal(true).optional(),
   bindingSourceXml: z.string().min(1).max(32 * 1024 * 1024).optional(),
   expectedName: z.string().max(512), expectedOffset: z.number().finite().nonnegative(),
-  expectedSource: z.object({ show: z.string().min(1), generation: z.string().min(1), version: z.string().min(1) }).strict()
+  expectedSource: ma2EditingSourceSchema
 }).strict();
 export type Ma2TimelineEditRequest = z.infer<typeof ma2TimelineEditRequestSchema>;
 export const ma2TimelineEditResultSchema = z.object({

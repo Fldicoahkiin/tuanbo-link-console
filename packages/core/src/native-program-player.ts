@@ -595,6 +595,7 @@ export class NativeProgramPlayer {
   /** An output that could not join or left this song: logged and shown in red, audio continues. */
   private startFault(message: string): void { this.dependencies.notice?.(message, this.state.itemId); this.reportFault(message); }
   reportUnavailable(message: string): void { this.reportNotice(message, this.state.itemId); }
+  private pictureUnavailable(reason: string): void { this.reportUnavailable(`画面没有联动，音频照常播放。原因：${reason}`); }
   /** Shown once in the player's notice and logged under `itemId`. */
   private reportNotice(message: string, itemId: string | null): void {
     if (this.state.notice?.includes(message)) return;
@@ -756,7 +757,7 @@ export class NativeProgramPlayer {
     this.pictureApplied(status);
     this.dependencies.obsChanged?.(status);
     if (status.notice) this.reportUnavailable(status.notice);
-    if (status.state === 'failed' || status.state === 'stopped' && status.reason) this.reportUnavailable(`画面没有联动或已停止，音频照常播放。原因：${status.reason ?? '未知错误'}`);
+    if (status.state === 'failed' || status.state === 'stopped' && status.reason) this.pictureUnavailable(status.reason ?? '未知错误');
     // A stopped picture channel is an output fault for a song with picture work; for one without, the notice above is all.
     const fault = (status.state === 'failed' && this.picture === 'wait' ? `画面联动已停止：${status.reason ?? '未知错误'}` : status.fault) ?? null;
     const heard = this.obsFault?.session === this.obsSession ? this.obsFault.text : null;
@@ -825,7 +826,7 @@ export class NativeProgramPlayer {
       // its picture, in red, instead of not starting; audio and timecode go on.
       if (!this.current(token)) return;
       if (this.picture === 'wait') this.startFault(`画面准备失败，音乐和时间码照常播放：${toUserErrorMessage(error)}`);
-      else this.reportUnavailable(`画面没有联动，音频照常播放。原因：${toUserErrorMessage(error)}`);
+      else this.pictureUnavailable(toUserErrorMessage(error));
     }
     finally { if (this.obsSession === envelope) { this.obsPreparing = false; this.update({}); } }
     // A newer version wanted while the picture was prepared goes now that it is up (part 2).

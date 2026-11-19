@@ -345,15 +345,18 @@ export class Ma2NetworkManager {
     await checkpoint?.(catalog);
     return catalog;
   }
-  async preview(target: Ma2NetworkTarget, timecode: number, timeOriginMs = 0): Promise<import('@tb/schema').Ma2TimecodePreview> {
+  async preview(target: Ma2NetworkTarget, timecode: number, timeOriginMs = 0, signal?: AbortSignal): Promise<import('@tb/schema').Ma2TimecodePreview> {
     const { bridge } = this.get(target);
     const connection = this.connection;
     if (!connection) throw new Error('请先连接控台');
+    // Yield between complete read operations. An edit must never abort a shared
+    // bridge transaction or invalidate other commands already in its queue.
+    const gate: ShowGateReader = op => { signal?.throwIfAborted(); return this.show(op); };
     return readMa2NetworkPreview(timecode, timeOriginMs, () => {
       this.get(target);
-      holdForShow(this.show, 'ma2.sync.read');
+      holdForShow(gate, 'ma2.sync.read');
       return bridge.request('READ', timecode);
-    }, targets => readMa2NativeLibrary(connection, bridge, this.show, undefined, 'library', undefined, targets, { referencedOnly: true }));
+    }, targets => readMa2NativeLibrary(connection, bridge, gate, undefined, 'library', undefined, targets, { referencedOnly: true }));
   }
   private async editingSource(target: Ma2NetworkTarget): Promise<Ma2ShowSource> {
     this.target(target);
