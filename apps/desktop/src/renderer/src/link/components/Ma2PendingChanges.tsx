@@ -1,4 +1,5 @@
-import { setMa2ConsoleChanges, setMa2WriteMode, useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
+import { CueTrackingChoice } from './CueTrackingChoice';
+import { setCueTrackingPreference, useCueTrackingPreference, setMa2ConsoleChanges, setMa2WriteMode, useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
 import { pauseMa2RealtimeSession, pendingSongSummary, unlinkedSongSummary, recheckMa2Songs, retryMa2RealtimeSession, songsWithoutConsoleShow, syncMa2Once, writeMissingConsoleShows } from '../runtime/ma2-realtime-session';
 import { useCallback, useMemo, useState } from 'react';
 import { Check, ChevronRight, Circle, CircleStop, Clock3, FolderArchive, FolderOpen, RefreshCw, Save, SlidersHorizontal } from 'lucide-react';
@@ -98,6 +99,21 @@ async function lightingArchives(): Promise<ProjectArchiveResult['entries']> {
   if (!path) throw new Error('请先保存工程');
   return (await linkDesktopViewModel.projectArchives({ version: 1, action: 'list', projectPath: path })).entries;
 }
+async function restoreLightingArchive(name: string): Promise<boolean> {
+  const state = useDocumentStore.getState(), wait = currentShowWait('document.replace');
+  if (wait !== null || !state.path || !state.project) throw new Error(wait ?? '请先保存工程');
+  // 保存 puts the latest edits into the "恢复前" archive the restore makes; 不保存 drops them.
+  const replaced = await confirmReplaceDocument('restore-archive');
+  if (!replaced) return false;
+  const projectPath = useDocumentStore.getState().path;
+  if (!projectPath) throw new Error('请先保存工程');
+  await linkDesktopViewModel.projectArchives({ version: 1, action: 'restore', projectPath, name });
+  const reopened = await linkDesktopViewModel.openProject(projectPath);
+  useDocumentStore.getState().setProject(reopened.project, reopened.path, { upgraded: reopened.upgraded });
+  await replaced();
+  return true;
+}
+
 export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element | null {
   const syncGate = useShowGate('ma2.sync.write'), replaceGate = useShowGate('document.replace');
   const project = useDocumentStore(state => state.project);
@@ -113,6 +129,7 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
   const session = useMa2SyncStore(state => state.session), names = useMa2SyncStore(state => state.names);
   const active = useMa2RealtimePreference(state => state.enabled);
   const once = useMa2RealtimePreference(state => state.once);
+  const defaultTracking = useCueTrackingPreference(state => state.includeTracking);
   const writeMode = useMa2RealtimePreference(state => state.writeMode);
   const consoleChanges = useMa2RealtimePreference(state => state.consoleChanges);
   const [modesOpen, setModesOpen] = useState(false);
@@ -166,17 +183,7 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
     setArchives(await lightingArchives()); setArchiveOpen(true); setDetailOpen(false);
   };
   const restore = async (name: string): Promise<void> => {
-    const state = useDocumentStore.getState(), wait = currentShowWait('document.replace');
-    if (wait !== null || !state.path || !state.project) throw new Error(wait ?? '请先保存工程');
-    // 保存 puts the latest edits into the "恢复前" archive the restore makes; 不保存 drops them.
-    const replaced = await confirmReplaceDocument('restore-archive');
-    if (!replaced) return;
-    const projectPath = useDocumentStore.getState().path;
-    if (!projectPath) throw new Error('请先保存工程');
-    await linkDesktopViewModel.projectArchives({ version: 1, action: 'restore', projectPath, name });
-    const reopened = await linkDesktopViewModel.openProject(projectPath);
-    useDocumentStore.getState().setProject(reopened.project, reopened.path, { upgraded: reopened.upgraded });
-    await replaced();
+    if (!await restoreLightingArchive(name)) return;
     setConfirmRestore(null); setArchiveOpen(false); notify('已恢复存档；恢复前的工程另存为“恢复前”存档');
   };
   const refreshSelected = (): void => {
@@ -221,6 +228,8 @@ export function Ma2PendingChanges({ notify }: { notify: (message: string, tone?:
       </>}>每首歌序列里时间线上没有的 Cue 都会删掉。写入前控台上会留一份备份。</Notice> : null}
       <p>只管联动台在按钮页建的歌。控台自己录的时间线只改时间线上的点，不删控台的序列。</p>
       <h4>控台上的改动</h4>
+      <CueTrackingChoice label="新增素材默认复制范围" value={defaultTracking} onChange={setCueTrackingPreference} />
+      <small>已有点位保留各自的选择。编辑组合时，每个素材都能单独设置。</small>
       <ChoiceGroup label="控台上的改动" value={consoleChanges} choices={CONSOLE_CHANGES} disabled={working} onChange={chooseConsoleChanges} />
       <p>{active ? '实时同步开着：改完自动同步。关掉后，只在点“同步一次”时写到控台。' : '实时同步关着：改动先留在联动台，点“同步一次”才写到控台。'}改了同步方式，每首歌下次同步时按新的方式重新检查一遍。</p>
     </Popover> : null}

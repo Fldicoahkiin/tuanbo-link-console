@@ -292,6 +292,8 @@ export type LinkDesktopApi = {
   createMa2(payload: import('@tb/schema').Ma2CreateRequest): Promise<import('@tb/schema').Ma2TimecodePreview>;
   readMa2Executor(payload: import('@tb/schema').Ma2ExecutorReadRequest): Promise<import('@tb/schema').Ma2ExecutorPreview>;
   assignMa2PoolSequence(payload: import('@tb/schema').Ma2PoolRouteRequest): Promise<import('@tb/schema').Ma2PoolRoute>;
+  readMa2CueAttributeNames(payload: import('@tb/schema').Ma2CueAttributesRequest): Promise<string[]>;
+  addMa2FirstTrackCues(payload: import('@tb/schema').Ma2FirstTrackRequest): Promise<import('@tb/schema').Ma2FirstTrackReceipt>;
   compareMa2(payload: import('@tb/schema').Ma2CompareRequest): Promise<import('./ma2-sync').Ma2SyncPreview>;
   applyMa2(payload: import('@tb/schema').Ma2ApplyRequest): Promise<import('@tb/schema').Ma2ApplyResult>;
   renameMa2Object(payload: import('@tb/schema').Ma2RenameRequest): Promise<import('@tb/schema').Ma2RenameResult>;

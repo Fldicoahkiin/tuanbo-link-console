@@ -3,12 +3,17 @@ import { randomUUID } from 'node:crypto';
 import { holdForShow, isShowWait, type ShowGateReader, type ShowOperation } from '@tb/core/link';
 import { ma2ExecutorPageDirectorySchema } from '@tb/schema';
 import { inspectMa2ExecutorPageXml } from './ma2-timecode-xml';
-import { ma2ObjectDirectorySchema, ma2PoolRouteSchema, ma2SequenceAssignmentSchema, ma2RenameResultSchema, ma2LabelSchema, ma2TimecodeRangesSchema } from '@tb/schema';
+import { ma2FirstTrackReceiptSchema, ma2ObjectDirectorySchema, ma2PoolRouteSchema, ma2SequenceAssignmentSchema, ma2RenameResultSchema, ma2LabelSchema, ma2TimecodeRangesSchema } from '@tb/schema';
 import { readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { inspectMa2SequenceXml, inspectMa2ExecutorXml, inspectMa2TimecodeXml, referencedMa2Sequences, sameMa2XmlObjects, validateMa2TimecodeSnapshot, validateMa2TimecodeWrite } from './ma2-timecode-xml';
 export const ma2SequenceGoResultSchema = z.object({ changed: z.boolean(), cues: z.number().int().min(0).max(100000) }).strict().refine(value => value.changed === (value.cues > 0), '控台触发检查结果不一致');
-export type Ma2Operation = 'PING' | 'PAGES' | 'PAGE' | 'LIST' | 'LISTSEQ' | 'SEQUENCE' | 'SEQCUES' | 'SEQGO' | 'READ' | 'SNAPSHOT' | 'SCOPE' | 'APPLY' | 'SYNC' | 'CREATE' | 'EXECUTOR' | 'ASSIGNSEQ' | 'LABEL' | 'DISCARD' | 'TCRANGES';
+// Each of these replies comes from a native comparison that stops before Import.
+export function ma2TimecodeChangedBeforeWrite(message: string): boolean {
+  return /(?:Timecode(?: or Sequence)? changed after preview|Timecode changed before write|Snapshot reference expired or mismatched|Sequence changed during snapshot|Timecode changed during snapshot)$/.test(message);
+}
+
+export type Ma2Operation = 'PING' | 'PAGES' | 'PAGE' | 'LIST' | 'LISTSEQ' | 'SEQUENCE' | 'SEQCUES' | 'SEQGO' | 'READ' | 'SNAPSHOT' | 'SCOPE' | 'APPLY' | 'SYNC' | 'CREATE' | 'EXECUTOR' | 'FIRSTCUES' | 'ASSIGNSEQ' | 'LABEL' | 'DISCARD' | 'TCRANGES';
 /** Fires after every acknowledged line of a long transfer; response reads also say how many bytes have arrived. */
 export type Ma2TransferProgress = (download?: { completed: number; total: number }) => void;
 /** The plugin's two request slots (M4): 'bg' for syncs and long reads, 'fg' for a short read an operator waits for. */
@@ -35,7 +40,7 @@ export function ma2Lane(operation: Ma2Operation): Ma2Lane {
   switch (operation) {
     case 'PING': case 'PAGES': case 'PAGE': case 'LIST': case 'LISTSEQ': case 'EXECUTOR': return 'fg';
     case 'SEQUENCE': case 'SEQCUES': case 'READ': case 'SNAPSHOT': case 'SCOPE': case 'TCRANGES': case 'DISCARD':
-    case 'SEQGO': case 'APPLY': case 'SYNC': case 'CREATE': case 'ASSIGNSEQ': case 'LABEL': return 'bg';
+    case 'SEQGO': case 'APPLY': case 'SYNC': case 'CREATE': case 'FIRSTCUES': case 'ASSIGNSEQ': case 'LABEL': return 'bg';
   }
 }
 
@@ -46,7 +51,7 @@ export function ma2Lane(operation: Ma2Operation): Ma2Lane {
  */
 export function ma2StepGate(operation: Ma2Operation): ShowOperation | null {
   switch (operation) {
-    case 'SEQGO': case 'APPLY': case 'SYNC': case 'CREATE': case 'ASSIGNSEQ': case 'LABEL': return 'ma2.sync.write';
+    case 'SEQGO': case 'APPLY': case 'SYNC': case 'CREATE': case 'FIRSTCUES': case 'ASSIGNSEQ': case 'LABEL': return 'ma2.sync.write';
     case 'PAGE': case 'PAGES': return 'ma2.executorPage.refresh';
     case 'LIST': case 'LISTSEQ': case 'SEQUENCE': case 'SEQCUES': case 'READ': case 'SNAPSHOT': case 'SCOPE': case 'EXECUTOR': case 'TCRANGES': return 'ma2.sync.read';
     case 'PING': case 'DISCARD': return null;
@@ -132,19 +137,22 @@ export class Ma2OnpcBridge {
     signal?.throwIfAborted();
     if (!Number.isInteger(target) || target < 1 || target > 99999) throw new Error('Timecode 编号无效');
     const writing = operation === 'APPLY' || operation === 'SYNC' || operation === 'CREATE';
-    const assigning = operation === 'ASSIGNSEQ' || operation === 'LABEL' || operation === 'SEQGO';
+    const assigning = operation === 'FIRSTCUES' || operation === 'ASSIGNSEQ' || operation === 'LABEL' || operation === 'SEQGO';
     if (operation === 'LABEL') {
       const parts = expected.split('\n');
       if (desired || parts.length !== 6 || !['single', 'sequence'].includes(parts[0]!) || !/^\d+(?:\.\d{1,3})?$/.test(parts[1]!) || parts.slice(2).some(value => !/^(?:[a-f0-9]{2})*$/.test(value)) || expected.length > 16384) throw new Error('控台改名请求格式无效');
       ma2LabelSchema.parse(Buffer.from(parts[5]!, 'hex').toString('utf8'));
     }
+    if (operation === 'FIRSTCUES' && (desired || !/^[a-f0-9]{64}\n(?:[a-f0-9]{2}){1,4096}\n(?:[a-f0-9]{2}){1,128}\n[1-9]\d{0,3}\.[1-9]\d{0,2}\n\d{1,5}(?:\n[a-f0-9]{64} \d{1,5} \d{1,4}(?:\.\d{1,3})?[ts]?(?:~[a-f0-9]+(?:\+[a-f0-9]+)*)?(?:,\d{1,5} \d{1,4}(?:\.\d{1,3})?[ts]?(?:~[a-f0-9]+(?:\+[a-f0-9]+)*)?){0,31}){1,9999}$/.test(expected))) throw new Error('第一轨 Cue 请求格式无效');
     if (operation === 'ASSIGNSEQ' && (!/^[a-f0-9]{24}\n(?:[a-f0-9]{2}){1,4096}\n(?:[a-f0-9]{2}){1,256}(?:\nname)?$/.test(expected) || desired)) throw new Error('自动关联请求格式无效');
     // Writing the Timecode show, renaming and assigning a Sequence are all syncing the console (第 3 题).
-    const hold = (reached = ''): void => { if (writing || assigning) holdForShow(this.show, 'ma2.sync.write', reached); };
+    const namesOnly = operation === 'SEQCUES' && expected.startsWith('names:');
+    const readsTracking = operation === 'SEQCUES' && (expected.includes('status:') || expected.startsWith('pick:'));
+    const hold = (reached = ''): void => { if (writing || assigning || readsTracking) holdForShow(this.show, 'ma2.sync.write', reached); };
     hold();
     if (operation === 'SEQGO' && (!/^(?:[a-f0-9]{2}){1,4096}\n(?:[a-f0-9]{2}){1,128}$/.test(expected) || desired)) throw new Error('控台触发检查请求无效');
     if (operation === 'SEQUENCE' && (!['', 'keep'].includes(expected) || desired)) throw new Error('序列读取请求格式无效');
-    if (operation === 'SEQCUES' && (!/^\d+\.\d{3}(?:,\d+\.\d{3})*$/.test(expected) || expected.length > 65536 || desired)) throw new Error('序列 Cue 读取范围无效');
+    if (operation === 'SEQCUES' && (!/^(?:(?:names:(?:[a-f0-9]{2})+:(?:[a-f0-9]{2})+:|pick:[a-f0-9]{32}:[a-f0-9]+(?:\+[a-f0-9]+)*:(?:[a-f0-9]{2})+-(?:[a-f0-9]{2})+:))?(?:status:(?:[a-f0-9]{32}:)?|saved:[a-f0-9]{32}:)?\d+\.\d{3}(?:,\d+\.\d{3})*$/.test(expected) || expected.length > 65536 || desired)) throw new Error('序列 Cue 读取范围无效');
     if (operation === 'TCRANGES' && (target !== 1 || expected.length > 60009 || expected && !/^playback:[1-9]\d{0,4}(?:,[1-9]\d{0,4})*$/.test(expected) || desired)) throw new Error('时间码范围读取请求格式无效');
     if (operation === 'LIST' && (desired || expected && expected !== 'selector')) throw new Error('时间线目录读取范围无效');
     if (operation === 'LISTSEQ' && (desired || expected.length > 60000 || expected && expected !== '0' && expected !== 'selector' && !/^[1-9]\d{0,4}(?:,[1-9]\d{0,4})*$/.test(expected))) throw new Error('序列目录读取范围无效');
@@ -170,11 +178,13 @@ export class Ma2OnpcBridge {
       const validate = (result: string): { response: string; requestId: string } => {
         if (operation === 'PING') return { response: parseMa2Ping(result).version, requestId: id };
         if (operation === 'LABEL') { const label = ma2RenameResultSchema.parse(JSON.parse(result)); if (label.sequence !== target) throw new Error('控台名称回读序列不一致'); }
+        else if (operation === 'FIRSTCUES') { ma2FirstTrackReceiptSchema.parse(JSON.parse(result)); }
         else if (operation === 'SEQGO') { ma2SequenceGoResultSchema.parse(JSON.parse(result)); }
         else if (assigning) { const assigned = (expected.endsWith('\nname') ? ma2PoolRouteSchema : ma2SequenceAssignmentSchema).parse(JSON.parse(result)); if (assigned.sequence !== target) throw new Error('控台自动关联序列不一致'); }
         else if (operation === 'PAGES') ma2ExecutorPageDirectorySchema.parse(JSON.parse(result));
         else if (operation === 'PAGE') inspectMa2ExecutorPageXml(result, target);
         else if (operation === 'LIST' || operation === 'LISTSEQ') ma2ObjectDirectorySchema.parse(JSON.parse(result));
+        else if (namesOnly) { if (!/^attributes:(?:(?:[a-f0-9]{2})+(?:,(?:[a-f0-9]{2})+)*)?$/.test(result)) throw new Error('控台返回的属性清单无效'); }
         else if (operation === 'SEQUENCE' || operation === 'SEQCUES') {
           const report = inspectMa2SequenceXml(result);
           if (report.sequences.length !== 1 || report.sequences[0]?.number !== target) throw new Error('Sequence 回读对象不一致');
@@ -194,7 +204,7 @@ export class Ma2OnpcBridge {
       if (typeof this.dataDirectory !== 'string') {
         // M3: a program that starts moving stops the request at the next step boundary. The step on the console
         // finishes (a step cannot be cut short), the next one is not sent and the wire releases the request at once.
-        const gate = ma2StepGate(operation);
+        const gate = readsTracking ? 'ma2.sync.write' : ma2StepGate(operation);
         const writeStep = ma2WriteStep(operation, expected, desired);
         const stopped: { at: number | null } = { at: null };
         const beforeStep = async (done: number): Promise<void> => {

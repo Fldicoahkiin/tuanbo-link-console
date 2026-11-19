@@ -1,4 +1,7 @@
 import { createLightingMusic, lightingDocumentSchema, type LightingClip, type LightingDocument, type LightingEvent, type LightingMusic, type LightingTempo } from '@tb/schema';
+import { firstTimecodeTrack, isWorkbenchCue } from './ma2-track-routing';
+import { MA2_FRAME_MS } from './ma2-time-origin';
+import { lightingTrackEnabled } from './lighting-track-state';
 import { LightingTempoMap, lightingEventTime } from './lighting-edit';
 
 export const MUSIC_GRID_CHOICES = [0.25, 0.5, 1, 2, 4, 8, 16, 32];
@@ -105,16 +108,36 @@ export function moveMusicCues(document: LightingDocument, changes: CuePositionCh
       return { ...clip, start: earliest, timeLock: 'time' as const, events, duration: Math.max(endMs - earliest, ...events.map(event => event.at + (event.kind === 'note' ? event.duration : 0.001))) };
     }) };
   }) };
-  assertMusicCueConflicts(next);
+  assertMusicCueConflicts(next, new Set(updates.keys()));
   return lightingDocumentSchema.parse(next);
 }
-export function assertMusicCueConflicts(document: LightingDocument): void {
-  const targets = new Set<string>(); const map = new LightingTempoMap(document.tempos);
-  for (const track of document.tracks) for (const clip of track.clips) for (const event of clip.events) {
-    if (track.muted || clip.muted || event.kind !== 'ma2') continue;
-    const key = `${event.executor ? `executor:${event.executor}` : `sequence:${event.sequence}`}:${lightingEventTime(clip, event, map).toFixed(3)}`;
-    if (targets.has(key)) throw new Error('同一目标在同一时间存在多个动作，请先处理冲突');
-    targets.add(key);
+export function assertMusicCueConflicts(document: LightingDocument, changedIds?: ReadonlySet<string>): void {
+  type Cue = Extract<LightingEvent, { kind: 'ma2' }>;
+  const targets = new Map<string, Cue[]>();
+  const map = new LightingTempoMap(document.tempos);
+  const binding = document.ma2Bindings?.length === 1 ? document.ma2Bindings[0] : undefined;
+  const first = binding && firstTimecodeTrack(binding);
+  const song = document.timelineDestination ?? document.consoleSong;
+  const combines = Boolean(song || first);
+  for (const track of document.tracks) {
+    if (!lightingTrackEnabled(document, track)) continue;
+    for (const clip of track.clips) for (const event of clip.events) {
+      if (clip.muted || event.kind !== 'ma2') continue;
+      const executor = first && binding && isWorkbenchCue(binding, track, event) ? first.executor : song?.executor || event.executor;
+      const target = executor ? `执行器 ${executor}` : `序列 ${song?.sequence ?? event.sequence}`;
+      const time = lightingEventTime(clip, event, map);
+      const key = target + '/' + (combines ? Math.round((time + (binding?.timeOriginMs ?? 0)) / MA2_FRAME_MS) : time.toFixed(3));
+      const others = targets.get(key) ?? [];
+      for (const other of others) {
+        if (changedIds && !changedIds.has(event.id) && !changedIds.has(other.id)) continue;
+        if (combines && event.effectGroupId && event.effectGroupId === other.effectGroupId && event.action === 'goto' && other.action === 'goto') continue;
+        const action = (value: Cue): string => value.action === 'goto' ? `Cue ${value.cue}` : value.action === 'off' ? '停止' : '下一步';
+        const next = other.action === 'goto' && event.action === 'goto' ? '要同时亮，请把两份素材放进同一个组合 Cue。要先后播放，请移开其中一个点。' : '请把两个动作放在不同的时间。';
+        throw new Error(`${(time / 1000).toFixed(3)} 秒的${target} 同时收到「${action(other)}」和「${action(event)}」。${next}`);
+      }
+      others.push(event);
+      targets.set(key, others);
+    }
   }
 }
 export function changeMusicTempo(document: LightingDocument, tempos: LightingTempo[], music: LightingMusic, durationMs: number): { document: LightingDocument; changes: CuePositionChange[] } {

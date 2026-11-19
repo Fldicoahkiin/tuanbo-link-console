@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { lightingTemplateTrackSchema } from './lighting';
+import { cueAttributeNamesSchema, lightingTemplateTrackSchema } from './lighting';
 import { ma2RenameRecordSchema } from './ma2-rename';
 import { ma2LayoutSettingsSchema } from './ma2-layout';
 
@@ -20,7 +20,7 @@ export const lightingLibraryEntrySchema = z.object({
   autoCategoryIds: z.array(z.string().min(1)).optional(),
   source: z.object({ endpoint: z.string(), show: z.string(), verified: z.boolean() }).strict(),
   track: lightingTemplateTrackSchema,
-  members: z.array(z.object({ name: z.string(), sequence: z.number().int().positive(), cue: z.string().regex(/^\d+(?:\.\d+)?$/), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]), delayMs: z.number().finite().nonnegative() }).strict()).optional()
+  members: z.array(z.object({ attributes: cueAttributeNamesSchema.optional(), includeTracking: z.boolean().optional(), name: z.string(), sequence: z.number().int().positive(), cue: z.string().regex(/^\d+(?:\.\d+)?$/), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]), delayMs: z.number().finite().nonnegative() }).strict()).optional()
 }).strict();
 const selectionZone = z.enum(['front','middle','back']);
 export const lightingLibrarySelectionsSchema = z.object({

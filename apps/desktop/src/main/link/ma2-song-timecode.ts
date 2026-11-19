@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { ma2ObjectDirectorySchema } from '@tb/schema';
-import { MA2_SONG_TIMECODE_SLOT } from '@tb/core/link';
+import { MA2_SONG_TIMECODE_SLOT, MA2_SONG_COLLISION } from '@tb/core/link';
 import { appendMa2Tracks } from './ma2-track-write';
 import { createMa2TimecodeXml } from './ma2-create';
-import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { ma2TimecodeChangedBeforeWrite, type Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { ma2MtcPlaybackSettings, extendMa2TimecodeLength, inspectMa2ExecutorXml, inspectMa2TimecodeXml, prepareMa2TimecodeEvents, resetMa2TimecodeShow, sameMa2XmlObjects } from './ma2-timecode-xml';
 
 /** 30 FPS frames, the resolution of a grandMA2 Timecode show. */
@@ -44,6 +44,7 @@ export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request'
   previous: Ma2SongTimecode | undefined; requestedNumber?: number | undefined; sequence: number; executor: string; startMs: number; lengthMs: number | undefined; name: string; version: string;
   /** This sync's read used for the three-way merge; APPLY still compares it on the console before writing. */
   currentTimecode?: { number: number; xml: string } | undefined;
+  reindexedTimecode?: string | undefined;
   cues: ReadonlyArray<{ atMs: number; cueIndex: number; number: string; name: string | null }>;
   created: (timecode: Ma2SongTimecode) => Promise<void>;
 }): Promise<{ timecode: Ma2SongTimecode; backup: string | null; xml: string }> {
@@ -57,7 +58,17 @@ export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request'
   }
   let current: string;
   const timecode = (target: number, xml: string): Ma2SongTimecode => ({ number: target, offset: frames(song.startMs), slot: MA2_SONG_TIMECODE_SLOT, revision: revision(xml) });
-  if (confirmed) { number = confirmed.number; current = confirmed.xml; }
+  if (confirmed) {
+    number = confirmed.number;
+    current = confirmed.xml;
+    if (song.reindexedTimecode) {
+      const fresh = await bridge.request('READ', number);
+      if (!sameMa2XmlObjects(fresh, current) && !sameMa2XmlObjects(fresh, song.reindexedTimecode)) {
+        throw new Error(`${MA2_SONG_COLLISION}：控台上的时间线刚被编辑，正在重新读取当前节目`);
+      }
+      current = fresh;
+    }
+  }
   else if (number !== undefined && taken(number)) current = await bridge.request('READ', number);
   else {
     if (number === undefined) { number = song.sequence; while (taken(number) && number < 99999) number += 1; }
@@ -70,6 +81,11 @@ export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request'
   if (!executorName) throw new Error(`读不到执行器 ${song.executor} 的名称，没有写入时间码节目`);
   const desired = ma2SongTimecodeXml(current, number, { name: song.name, startMs: song.startMs, executor: song.executor, executorName, sequence: song.sequence, cues: song.cues, ...song.lengthMs === undefined ? {} : { lengthMs: song.lengthMs } });
   if (sameMa2XmlObjects(desired, current)) return { timecode: timecode(number, current), backup: null, xml: current };
-  const written = await bridge.exchange('APPLY', number, current, desired);
+  const written = await bridge.exchange('APPLY', number, current, desired).catch((cause: unknown) => {
+    if (cause instanceof Error && ma2TimecodeChangedBeforeWrite(cause.message)) {
+      throw new Error(`${MA2_SONG_COLLISION}：控台上的时间线刚被编辑，正在重新读取当前节目`, { cause });
+    }
+    throw cause;
+  });
   return { timecode: timecode(number, written.response), backup: `tblink_backup_${written.requestId}`, xml: written.response };
 }

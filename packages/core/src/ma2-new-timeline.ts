@@ -5,6 +5,8 @@ import { songDurationMs } from './audio-edit';
 import type { LinkCommand } from './link-command';
 import { programTimeOrigin } from './ma2-time-origin';
 import { ma2ShowStartTicks, sameMtcStart } from './ma2-program-matching';
+import { ma2SongPairs } from './ma2-pairing-state';
+import { importMa2TimecodeCommand } from './ma2-import';
 
 export function newMa2TimelineCommand(itemId: string, input: Ma2TimelineDestination, startMs: number): LinkCommand {
   const destination = ma2TimelineDestinationSchema.parse(input);
@@ -68,6 +70,19 @@ export function addMa2SequenceCommand(itemId: string, lighting: LightingDocument
     const item = project.rundown.find(value => value.id === itemId);
     if (!item?.referenceAudio) throw new Error('请先给节目添加音乐');
     if (hasMa2SongSyncTarget(item.lighting) || hasMa2SongSyncTarget(lighting)) return edit.execute(project);
+    const pairs = ma2SongPairs(project);
+    if (pairs.duplicateStarts[itemId]?.length) throw new Error('当前节目的 MTC 对应多条控台时间线，请先在「控台时间线」选择要使用的一条');
+    const matched = Object.entries(pairs.pairs).find(([, owner]) => owner === itemId);
+    if (matched) {
+      const target = Number(matched[0]);
+      const read = project.ma2ReadState;
+      const entry = read?.catalog.entries.find(value => value.target === target);
+      if (!entry?.preview || entry.error || entry.conversionError || read?.catalog.sourceUnverified || read?.failures.some(failure => failure.target === target)
+        || read?.detachedBindings?.some(value => value.itemId === itemId && value.binding.timecode === target)) {
+        throw new Error(`当前节目的 MTC 已对应 Timecode ${target}，请在「控台时间线」确认这条时间线后添加 Cue`);
+      }
+      return importMa2TimecodeCommand(itemId, entry.preview).execute(edit.execute(project));
+    }
     const resolved = reserveDestination(project, requested);
     // MTC is allocated by the shared song sync after reading live console ranges.
     return setLightingCommand(itemId, { ...lighting, timelineDestination: resolved }, edit.label).execute(project);

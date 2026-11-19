@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { ma2SongPoints, setLightingCommand } from '@tb/core/link';
+import { addMa2SequenceCommand, hasMa2SongSyncTarget, ma2SongPoints, setLightingCommand } from '@tb/core/link';
 import { type Ma2LayoutSettings } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { ma2SongSyncSettings, startMa2SongSync } from '../runtime/ma2-song-sync';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
-import { pauseMa2RealtimeSession, refreshMa2RealtimeSession, retryMa2RealtimeSession } from '../runtime/ma2-realtime-session';
+import { pauseMa2RealtimeSession, syncMa2Once } from '../runtime/ma2-realtime-session';
 import { locateMa2Executor, ma2ExecutorLocationLabel } from '../stores/ma2-executor-page-store';
 import { Ma2ConsoleName } from './Ma2ConsoleName';
 import { SongMtcStart } from './SongMtcStart';
@@ -26,8 +26,14 @@ export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; set
     try {
       if (!project || !item?.lighting) throw new Error('请先添加时间线 Cue');
       const count = ma2SongPoints(item.lighting).length; if (!count && !binding) throw new Error('请先在时间线添加 Cue');
-      startMa2SongSync(itemId, name.trim(), ma2SongSyncSettings(project, itemId));
-      retryMa2RealtimeSession(); setError('');
+      const target = ma2SongSyncSettings(project, itemId);
+      if (!hasMa2SongSyncTarget(item.lighting)) {
+        useDocumentStore.getState().execute(addMa2SequenceCommand(itemId, item.lighting, {
+          name: name.trim(), sequence: target.nextSequence, timecode: target.nextSequence, executor: `${target.executorPage ?? 1000}.101`
+        }, '创建当前节目的控台序列'));
+      }
+      startMa2SongSync(itemId, name.trim(), target);
+      syncMa2Once(itemId); setError('');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
   // Way 1: the song plays a Timecode show that already exists on the console; edits go back to that show.
@@ -36,7 +42,7 @@ export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; set
     <strong>本曲控台时间线</strong>
     {project && item ? <SongMtcStart project={project} item={item} detail /> : null}
     <p>这首歌跟着控台上已有的 {imported.map(binding => `Timecode ${binding.timecode}`).join('、')}。时间线上改的 Cue 写回同一条时间线，控台上改的也会读回来。</p>
-    <div><Button variant="secondary" size="sm" disabled={status?.state === 'syncing'} onClick={() => refreshMa2RealtimeSession(itemId)}>刷新同步本曲</Button>{status ? <Button variant="secondary" size="sm" onClick={pauseMa2RealtimeSession}>暂停同步</Button> : null}</div>
+    <div><Button variant="secondary" size="sm" disabled={status?.state === 'syncing'} onClick={() => syncMa2Once(itemId)}>刷新同步本曲</Button>{status ? <Button variant="secondary" size="sm" onClick={pauseMa2RealtimeSession}>暂停同步</Button> : null}</div>
     {status ? <p role={status.state === 'blocked' ? 'alert' : 'status'}>{status.message}</p> : null}
   </section>;
   return <section className="ma2-song-panel" aria-label="本曲控台序列">

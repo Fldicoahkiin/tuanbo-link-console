@@ -35,7 +35,7 @@ end
 local function read(path)
   local file = io.open(path, 'rb')
   if not file then return nil end
-  local data = file:read(33554433)
+  local data = file:read(33554433) or ''
   file:close()
   assert(#data <= 33554432, 'Bridge file exceeds limit')
   return data
@@ -229,6 +229,444 @@ local function snapshot(step, tc, id, additional, done, previous)
   end
   next_sequence(1)
 end
+-- Index once per native export, including the largest Sequence used by a batch.
+-- Ask MA2 itself for the state at each source Cue. Status includes inherited values, effects,
+-- releases and cue parts. The temporary sequence is never assigned to an executor or played.
+local function tracked_cues(seq, wanted, source_xml, name)
+  local obj = gma.show.getobj
+  local show = gma.show.getvar('SHOWFILE')
+  local function current() return show == gma.show.getvar('SHOWFILE') and _G.TBLINK_BRIDGE_GENERATION == generation end
+  local header = assert(source_xml:match('(<MA%s[^>]+>)'), 'Sequence header unavailable')
+  local slots = {}
+  for n in pairs(wanted) do slots[#slots+1] = n end
+  table.sort(slots)
+  local scratch = 9989
+  while scratch > 0 and obj.handle('Sequence ' .. scratch) do scratch = scratch-1 end
+  assert(scratch > 0, '控台没有空闲序列，无法读取素材继承的灯光')
+  local address = 'Sequence ' .. scratch
+  local dir = root .. '/importexport/'
+  local seed = header .. '<Sequ index="' .. (scratch-1) .. '" name="' .. name .. '"><Cue xsi:nil="true"/>'
+  -- Seed the destination before Copy into the first Cue (onPC 3.7 needs an existing slot).
+  local seed_number = 1000
+  while wanted[seed_number] do seed_number = seed_number+1 end
+  seed = seed .. '<Cue index="1"><Number number="' .. math.floor(seed_number/1000) .. '" sub_number="' .. seed_number%1000 .. '"/><CuePart index="0"/></Cue></Sequ></MA>'
+  local owned
+  local ok, result = pcall(function()
+    write(dir .. name .. '.xml', seed)
+    assert(current() and not obj.handle(address), 'Temporary sequence changed')
+    gma.cmd('Import ' .. name .. '.xml At ' .. address .. ' /nc')
+    owned = assert(obj.handle(address), 'Temporary sequence unavailable')
+    assert(obj.label(owned) == name, 'Temporary sequence changed')
+    for _, n in ipairs(slots) do
+      local cue = string.format('%d.%03d', math.floor(n/1000), n%1000)
+      assert(current() and obj.handle(address) == owned and obj.handle('Sequence ' .. seq .. ' Cue ' .. cue), 'Source Cue missing')
+      gma.cmd('Copy Sequence ' .. seq .. ' Cue ' .. cue .. ' At ' .. address .. ' Cue ' .. cue .. ' /status=true /o /nc')
+      assert(obj.handle(address .. ' Cue ' .. cue), 'Copied Cue missing')
+    end
+    assert(current() and obj.handle(address) == owned, 'Temporary sequence changed')
+    gma.cmd('Export ' .. address .. ' ' .. name .. '_result /o')
+    local xml = assert(read(dir .. name .. '_result.xml'), 'Tracking readback unavailable')
+    local source_tag = assert(source_xml:match('(<Sequ%s[^>]+>)'))
+    xml = xml:gsub('<Cue%s+index="[^"]+"[^>]*>.-</Cue>', function(cue)
+      local n, sub = cue:match('<Number%s+number="(%d+)"%s+sub_number="(%d+)"')
+      return n and wanted[tonumber(n)*1000+tonumber(sub)] and cue or ''
+    end)
+    return (xml:gsub('<Sequ%s[^>]+>', function() return source_tag end, 1))
+  end)
+  if current() and owned and obj.handle(address) == owned and obj.label(owned) == name then
+    gma.cmd('Delete ' .. address .. ' /nc')
+    assert(not obj.handle(address), 'Temporary sequence still present')
+  end
+  discard(name); discard(name .. '_result')
+  assert(ok, result)
+  return result
+end
+
+-- Restore the complete source before asking MA2 for a tracked look. A single archived Cue
+-- omits values inherited from the preceding steps. Both temporary sequences stay unassigned.
+local function archived_tracked_cues(target, wanted, token, id)
+  local dir = root .. '/importexport/'
+  local file = 'tblink_archive_' .. token
+  local xml = assert(read(dir .. file .. '.xml'), 'Saved sequence unavailable')
+  local name = 'tblink_arch_' .. id
+  local obj = gma.show.getobj
+  local show = gma.show.getvar('SHOWFILE')
+  local function current() return show == gma.show.getvar('SHOWFILE') and generation == _G.TBLINK_BRIDGE_GENERATION end
+  local scratch = 9989
+  while scratch > 0 and (scratch == target or obj.handle('Sequence ' .. scratch)) do scratch = scratch-1 end
+  assert(scratch > 0, '控台没有空闲序列，无法恢复素材继承的灯光')
+  local address = 'Sequence ' .. scratch
+  local owned
+  local ok, result = pcall(function()
+    local temp, count = xml:gsub('<Sequ%s[^>]+>', function(tag)
+      assert(tonumber(tag:match('%sindex="(%d+)"')) == target-1, 'Saved sequence identity changed')
+      return (tag:gsub('%sname="[^"]*"', '', 1):gsub('^<Sequ%s', '<Sequ name="' .. name .. '" ', 1))
+    end, 1)
+    assert(count == 1 and current() and not obj.handle(address), 'Temporary sequence changed')
+    write(dir .. name .. '.xml', temp)
+    gma.cmd('Import ' .. name .. '.xml At ' .. address .. ' /nc')
+    owned = assert(obj.handle(address), 'Temporary sequence unavailable')
+    assert(obj.label(owned) == name and current(), 'Temporary sequence changed')
+    return tracked_cues(scratch, wanted, xml, 'tblink_status_' .. id)
+  end)
+  if current() and owned and obj.handle(address) == owned and obj.label(owned) == name then
+    gma.cmd('Delete ' .. address .. ' /nc')
+    assert(not obj.handle(address), 'Temporary sequence still present')
+  end
+  discard(file); discard(name)
+  assert(ok, result)
+  return result
+end
+
+-- Select a native CueData row as a unit: every fixture, part, timing and effect layer of
+-- a selected attribute travels together. The console never receives a Programmer or Filter change.
+local function attr_hex(s) return (s:gsub('.', function(c) return string.format('%02x', c:byte()) end)) end
+local function attr_name(raw)
+  return (raw:gsub('&#x(%x+);', function(v) return utf8.char(tonumber(v,16)) end):gsub('&#(%d+);', function(v) return utf8.char(tonumber(v)) end)
+    :gsub('&quot;', '"'):gsub('&apos;', "'"):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&'))
+end
+local function material_cue(xml, wanted, mask)
+  local head = assert(xml:match('(<MA%s[^>]+>)'), 'Native header missing')
+  local seq = assert(xml:match('(<Sequ%s[^>]+>)'), 'Native sequence missing')
+  local selected, found = {}, {}
+  for key in (mask or ''):gmatch('[^+]+') do selected[key] = true end
+  for cue in xml:gmatch('<Cue%s+index="[^"]+"[^>]*>.-</Cue>') do
+    local n, sub = cue:match('<Number%s+number="(%d+)"%s+sub_number="(%d+)"')
+    if n and tonumber(n)*1000+tonumber(sub) == wanted then
+      local rows = {}
+      for row in cue:gmatch('<CueData[%s>].-</CueData>') do
+        local channel = assert(row:match('<Channel%s[^>]*>'), 'CueData channel missing')
+        local attr = channel:match('%sattribute_name="([^"]+)"')
+        assert(attr, '控台有一项灯具属性没有名称，请直接添加全部属性')
+        local key = attr_hex(attr_name(attr))
+        found[key] = true
+        if selected[key] then rows[#rows+1] = row end
+      end
+      for key in pairs(selected) do assert(found[key], '所选灯具属性已在控台改变，请重新打开这个 Cue 选择属性') end
+      local names = {}
+      for key in pairs(found) do names[#names+1] = key end
+      table.sort(names)
+      if not mask then return nil, table.concat(names, ',') end
+      -- A fixture attribute selection must not also copy a source Cue's macro or follow trigger.
+      -- Preserve native parameter layers and their timing within each Part.
+      local parts, cursor = {}, 1
+      while true do
+        local first, last, opening = cue:find('(<CuePart%s[^>]*>)', cursor)
+        if not first then break end
+        local timing = ''
+        if opening:sub(-2) ~= '/>' then
+          local close, finish = cue:find('</CuePart>', last+1, true)
+          assert(close, 'Incomplete Cue Part')
+          timing = cue:sub(last+1, close-1):match('(<CuePartPresetTiming>.-</CuePartPresetTiming>)') or ''
+          last = finish
+        end
+        local keep = {'index="' .. assert(opening:match('%sindex="(%d+)"'), 'Cue Part number missing') .. '"'}
+        for field, value in opening:gmatch('%s([%w_]+)="([^"]*)"') do
+          if field:find('fade') or field:find('delay') then keep[#keep+1] = field .. '="' .. value .. '"' end
+        end
+        parts[#parts+1] = '<CuePart ' .. table.concat(keep, ' ') .. '>' .. timing .. '</CuePart>'
+        cursor = last+1
+      end
+      local number = assert(cue:match('<Number%s[^>]*/>'), 'Cue number missing')
+      return head .. seq .. '<Cue xsi:nil="true"/><Cue index="1">' .. number .. '<CueDatas>' ..
+        table.concat(rows) .. '</CueDatas>' .. table.concat(parts) .. '</Cue></Sequ></MA>', table.concat(names, ',')
+    end
+  end
+  error('Source Cue missing')
+end
+
+local function copy_material(xml, cue, dest, mode, name)
+  local show, obj = gma.show.getvar('SHOWFILE'), gma.show.getobj
+  local function current() return gma.show.getvar('SHOWFILE') == show and _G.TBLINK_BRIDGE_GENERATION == generation end
+  local scratch = 9989
+  while scratch > 0 and obj.handle('Sequence ' .. scratch) do scratch = scratch-1 end
+  assert(scratch > 0, '控台没有空闲序列，无法复制选中的灯具属性')
+  local address = 'Sequence ' .. scratch
+  local tagged = xml:gsub('<Sequ%s[^>]+>', '<Sequ index="' .. (scratch-1) .. '" name="' .. name .. '">', 1)
+  local owned
+  local ok, why = pcall(function()
+    write(root .. '/importexport/' .. name .. '.xml', tagged)
+    assert(current() and not obj.handle(address), 'Temporary sequence changed')
+    gma.cmd('Import ' .. name .. '.xml At ' .. address .. ' /nc')
+    owned = assert(obj.handle(address), 'Temporary sequence missing')
+    assert(current() and obj.label(owned) == name and obj.handle(address .. ' Cue ' .. cue), 'Temporary Cue missing')
+    gma.cmd('Copy ' .. address .. ' Cue ' .. cue .. ' At ' .. dest .. ' /status=false' .. mode)
+  end)
+  if current() and owned and obj.handle(address) == owned and obj.label(owned) == name then
+    gma.cmd('Delete ' .. address .. ' /nc')
+    assert(not obj.handle(address), 'Temporary sequence still present')
+  end
+  discard(name)
+  assert(ok, why)
+end
+
+local function first_cue_data(xml, keep_cue)
+  local result = {}
+  for cue in xml:gmatch('<Cue%s+index="[^"]+"[^>]*>.-</Cue>') do
+    local n, sub = cue:match('<Number%s+number="(%d+)"%s+sub_number="(%d+)"')
+    if n then
+      local number = tonumber(n)*1000+tonumber(sub)
+      result[number] = (cue:match('<CueDatas[^>]*>(.-)</CueDatas>') or ''):gsub('>%s+<','><'):match('^%s*(.-)%s*$')
+      if keep_cue and keep_cue[number] then keep_cue[number] = cue:gsub('^(<Cue%s+)index="[^"]+"', '%1', 1) end
+    end
+  end
+  return result
+end
+local function first_cue_layers(rows, data)
+  -- MA combines value/effect layers separately. The last selected material supplies a repeated layer.
+  local rest = data:gsub('<CueData[%s>].-</CueData>', '')
+  assert(rest == '', 'Unsupported fixture data in combined Cue')
+  for attributes, body in data:gmatch('<CueData([^>]*)>(.-)</CueData>') do
+    local channel = assert(body:match('(<Channel%s[^>]-/>)'), 'Unsupported channel in combined Cue')
+    local key = channel .. attributes
+    local layers = rows[key] or {}
+    local content = body:gsub('<Channel%s[^>]-/>', '', 1)
+    local cursor = 1
+    while cursor <= #content do
+      local start, opening, tag = content:find('<([%w_:]+)[^>]*>', cursor)
+      assert(start == cursor, 'Unsupported data in combined Cue')
+      local finish = opening
+      if content:sub(opening-1,opening) ~= '/>' then
+        local _, closing = content:find('</' .. tag .. '>',opening+1,true)
+        finish = assert(closing, 'Incomplete layer in combined Cue')
+      end
+      layers[tag] = content:sub(start,finish)
+      cursor = finish + 1
+    end
+    rows[key] = layers
+  end
+end
+local function same_first_layers(a, b)
+  for key, layers in pairs(a) do
+    if not b[key] then return false end
+    for layer, value in pairs(layers) do if b[key][layer] ~= value then return false end end
+  end
+  return true
+end
+-- Append only to the sequence actually assigned to the desk's first Timecode track. The journal
+-- binds an edit identity to a native Cue number across rapid edits, reconnects and lost replies.
+local function first_track_cues(tc, id, body)
+  local owner, sh, gen, addr, expected, rows = body:match('^(%x+)\n(%x+)\n(%x+)\n(%d+%.%d+)\n(%d+)\n(.+)$')
+  assert(owner and #owner == 64 and #sh % 2 == 0 and #gen % 2 == 0, 'Invalid first track request')
+  local function decode(s) return (s:gsub('..', function(p) return string.char(tonumber(p, 16)) end)) end
+  local function guard() assert(gma.show.getvar('SHOWFILE') == decode(sh) and _G.TBLINK_BRIDGE_GENERATION == decode(gen), 'Show or session changed') end
+  guard()
+  local dir = root .. '/importexport/'
+  local obj = gma.show.getobj
+  local temp = 'tblink_first_' .. id
+  local function export(address, name, keep)
+    gma.cmd('Export ' .. address .. ' ' .. name .. ' /o')
+    local xml = assert(read(dir .. name .. '.xml'), 'Object export unavailable')
+    if not keep then discard(name) end
+    return xml
+  end
+  local timeline = export('Timecode ' .. tc, temp .. '_tc')
+  local first, opening = timeline:find('<Track%s[^>]*>')
+  assert(first and timeline:sub(opening-1, opening) ~= '/>', 'First Timecode track unavailable')
+  local track = assert(timeline:sub(opening+1):match('^(.-)</Track>'), 'Incomplete first track')
+  local object = assert(track:match('<Object[%s>](.-)</Object>'), 'First track has no executor')
+  local page, slot = object:match('<No>%s*30%s*</No>%s*<No>%s*1%s*</No>%s*<No>%s*(%d+)%s*</No>%s*<No>%s*(%d+)%s*</No>')
+  assert(page and tonumber(page) .. '.' .. tonumber(slot) == addr, 'First Timecode track changed')
+  local assignment = assert(export('Executor ' .. addr, temp .. '_exec'):match('<Assignment[%s>](.-)</Assignment>'), 'First track executor has no sequence')
+  local seq = tonumber(assignment:match('<No>%s*25%s*</No>%s*<No>%s*1%s*</No>%s*<No>%s*(%d+)%s*</No>'))
+  assert(seq and (tonumber(expected) == 0 or seq == tonumber(expected)), 'First track sequence changed')
+  local dest = 'Sequence ' .. seq
+  local ledger = dir .. 'tblink_first_' .. owner .. '_' .. seq .. '.txt'
+  local saved = {}
+  for key, num, state in (read(ledger) or ''):gmatch('(%x+) ([%d%.]+) (%a+)\n') do saved[key] = {cue=num,state=state} end
+  local function record(points, state)
+    if #points == 0 then return end
+    local f = assert(io.open(ledger, 'ab'))
+    for _, point in ipairs(points) do assert(f:write(point.key .. ' ' .. point.cue .. ' ' .. state .. '\n')) end
+    assert(f:close())
+  end
+  local list, seen, reply = {}, {}, {}
+  local blank, needs_write = false, false
+  local function proof(key) return dir .. 'tblink_first_' .. owner .. '_' .. seq .. '_' .. key .. '.cue' end
+  for line in rows:gmatch('[^\n]+') do
+    local key, refs = line:match('^(%x+) (.+)$')
+    assert(key and #key == 64 and not seen[key], 'Duplicate or invalid Cue')
+    seen[key] = true
+    local sources = {}
+    for pair in refs:gmatch('[^,]+') do
+      local base, mask = pair:match('^(.-)~([%x+]+)$')
+      local from, number, mode = (base or pair):match('^(%d+) ([%d%.]+)([ts]?)$')
+      from = tonumber(from)
+      assert(from and from <= 99999 and tonumber(number) and tonumber(number) <= 9999.999, 'Invalid Cue reference')
+      if from > 0 then
+        sources[#sources+1] = {seq=from, cue=number, mode=mode, mask=mask}
+      else assert(refs == '0 0', 'Invalid empty Cue') end
+    end
+    assert(#sources <= 32, 'Too many Cue ingredients')
+    local pos = #reply + 1
+    reply[pos] = ''
+    if #sources == 1 and sources[1].seq == seq and sources[1].mode == '' and not sources[1].mask then
+      assert(obj.handle(dest .. ' Cue ' .. sources[1].cue), 'Source Cue missing')
+      reply[pos] = sources[1].cue
+    elseif saved[key] and obj.handle(dest .. ' Cue ' .. saved[key].cue) then
+      list[#list+1] = {key=key, sources=sources, pos=pos, existing=saved[key].cue,
+        witness=saved[key].state == 'done' and read(proof(key)) or nil}
+    else
+      needs_write = true
+      list[#list+1] = {key=key, sources=sources, pos=pos}
+      if #sources == 0 then blank = true end
+    end
+  end
+  assert(#reply > 0 and #reply <= 9999, 'Invalid point count')
+  local backup
+  if #list > 0 then
+    for _, point in ipairs(list) do
+      if not point.witness then
+        for _, source in ipairs(point.sources) do assert(obj.handle('Sequence ' .. source.seq .. ' Cue ' .. source.cue), 'Source Cue missing') end
+      end
+    end
+    backup = needs_write and ('tblink_backup_' .. id) or nil
+    local original = export(dest, backup or (temp .. '_check'), needs_write)
+    local function number_key(number) return math.floor(tonumber(number)*1000 + 0.5) end
+    local before_cues = {}
+    for _, point in ipairs(list) do if point.existing then before_cues[number_key(point.existing)] = true end end
+    local source_data = first_cue_data(original, before_cues)
+    for _, point in ipairs(list) do
+      if point.witness then
+        assert(before_cues[number_key(point.existing)] == point.witness, '控台上这个编号的 Cue 内容已经改变，请重新读取当前节目的时间线')
+      end
+    end
+    local tracked, requested, tracked_xml = {}, {}, {}
+    for _, point in ipairs(list) do
+      if not point.witness then for _, source in ipairs(point.sources) do
+        if source.mode == 't' then
+          requested[source.seq] = requested[source.seq] or {}
+          requested[source.seq][number_key(source.cue)] = true
+        end
+      end end
+    end
+    for number, wanted in pairs(requested) do
+      guard()
+      local xml = number == seq and original or export('Sequence ' .. number, temp .. '_before')
+      tracked_xml[number] = tracked_cues(number, wanted, xml, 'tblink_status_' .. id)
+      tracked[number] = first_cue_data(tracked_xml[number])
+    end
+    local material_sources = {}
+    for _, point in ipairs(list) do
+      if not point.witness then for _, source in ipairs(point.sources) do
+        if source.mask then
+          local xml = source.mode == 't' and tracked_xml[source.seq] or material_sources[source.seq]
+          if not xml then
+            xml = source.seq == seq and original or export('Sequence ' .. source.seq, temp .. '_material')
+            material_sources[source.seq] = xml
+          end
+          source.projected = material_cue(xml, number_key(source.cue), source.mask)
+        end
+      end end
+    end
+    local last = 0
+    for n, sub in original:gmatch('<Number%s+number="(%d+)"%s+sub_number="(%d+)"') do last = math.max(last, tonumber(n) * 1000 + tonumber(sub)) end
+    local function next_number()
+      local n = (math.floor(last / 1000) + 1) * 1000
+      if n > 9999000 then n = last + 1 end
+      assert(n <= 9999999, 'First track has no free trailing Cue number')
+      last = n
+      if n % 1000 == 0 then return tostring(n / 1000):gsub('%.0$', '') end
+      return string.format('%d.%03d', math.floor(n / 1000), n % 1000)
+    end
+    local header = assert(original:match('(<MA%s[^>]+>)'), 'Sequence header unavailable')
+    local function skeleton(n)
+      return '<Cue xsi:nil="true"/><Cue index="1"><Number number="' .. n .. '" sub_number="0"/><CuePart index="0"/></Cue>'
+    end
+    -- A zero-step native sequence must be initialized before MA2 Copy (onPC 3.7).
+    local zero = not original:find('<Number[%s>]')
+    local scratch
+    if blank then
+      scratch = 9989
+      while scratch > 0 and obj.handle('Sequence ' .. scratch) do scratch = scratch - 1 end
+      assert(scratch > 0, 'No temporary sequence slot')
+    end
+    guard()
+    local ok, err = pcall(function()
+      if scratch then
+        write(dir .. temp .. '.xml', header .. '<Sequ index="' .. (scratch-1) .. '" name="' .. temp .. '">' .. skeleton(1) .. '</Sequ></MA>')
+        assert(not obj.handle('Sequence ' .. scratch), 'Temporary slot occupied')
+        gma.cmd('Import ' .. temp .. '.xml At Sequence ' .. scratch .. ' /nc')
+        assert(obj.label(assert(obj.handle('Sequence ' .. scratch))) == temp and obj.handle('Sequence ' .. scratch .. ' Cue 1'), 'Empty Cue source unavailable')
+      end
+      local reserved = {}
+      for _, point in ipairs(list) do
+        point.cue = point.existing or next_number()
+        if not point.existing then
+          assert(not obj.handle(dest .. ' Cue ' .. point.cue), 'Cue number occupied')
+          reserved[#reserved+1] = point
+        end
+      end
+      record(reserved, 'pending')
+      for _, point in ipairs(list) do
+        guard()
+        local cue = point.cue
+        if not point.existing then
+          assert(not obj.handle(dest .. ' Cue ' .. cue), 'Cue number occupied')
+          if zero then
+            local init = original:gsub('<Cue%s+xsi:nil="true"%s*/>', '')
+            if not init:find('</Sequ>', 1, true) then init = init:gsub('(<Sequ%s+[^>]-)%s*/>', '%1></Sequ>', 1) end
+            init = init:gsub('</Sequ>', skeleton(cue) .. '</Sequ>', 1)
+            write(dir .. temp .. '_init.xml', init)
+            gma.cmd('Import ' .. temp .. '_init.xml At ' .. dest .. ' /o /nc')
+            discard(temp .. '_init'); assert(obj.handle(dest .. ' Cue ' .. cue), 'First Cue initialization failed'); zero = false
+          end
+          local copies = #point.sources > 0 and point.sources or {{seq=scratch,cue='1'}}
+          for i, source in ipairs(copies) do
+            local mode = (source.mode == 't' and ' /status=true' or ' /status=false') .. (i == 1 and ' /o /nc' or ' /merge /nc')
+            if source.projected then
+              copy_material(source.projected, source.cue, dest .. ' Cue ' .. cue, i == 1 and ' /o /nc' or ' /merge /nc', temp .. '_pick')
+            else gma.cmd('Copy Sequence ' .. source.seq .. ' Cue ' .. source.cue .. ' At ' .. dest .. ' Cue ' .. cue .. mode) end
+            assert(obj.handle(dest .. ' Cue ' .. cue), 'Copied Cue missing on readback')
+          end
+        end
+        point.cue = cue; reply[point.pos] = cue
+      end
+      local after_cues = before_cues
+      local actual = source_data
+      if needs_write then
+        after_cues = {}
+        for _, point in ipairs(list) do after_cues[number_key(point.cue)] = true end
+        actual = first_cue_data(export(dest, temp .. '_read'), after_cues)
+      end
+      local sources = {[seq]=source_data}
+      local function payload(index, number)
+        return assert(index[number_key(number)], 'Numbered Cue not found in native readback')
+      end
+      for _, point in ipairs(list) do
+        if point.witness then
+          assert(payload(after_cues, point.cue) == point.witness, '控台上的 Cue 在同步期间改变，请重新读取当前节目的时间线')
+        else
+          local target = payload(actual, point.cue)
+          local wanted, layers = '', {}
+          for _, source in ipairs(point.sources) do
+            if source.projected then wanted = payload(first_cue_data(source.projected), source.cue)
+            elseif source.mode == 't' then wanted = payload(tracked[source.seq], source.cue)
+            else
+              sources[source.seq] = sources[source.seq] or first_cue_data(export('Sequence ' .. source.seq, temp .. '_src'))
+              wanted = payload(sources[source.seq], source.cue)
+            end
+            if #point.sources > 1 then first_cue_layers(layers, wanted) end
+          end
+          if #point.sources > 1 then
+            local native = {}
+            first_cue_layers(native, target)
+            assert(same_first_layers(layers, native) and same_first_layers(native, layers), 'Combined Cue fixture data differs')
+          else assert(target == wanted, 'Copied Cue fixture data differs') end
+          write(proof(point.key), payload(after_cues, point.cue))
+        end
+      end
+      local confirmed = {}
+      for _, point in ipairs(list) do if not point.witness then confirmed[#confirmed+1] = point end end
+      record(confirmed, 'done')
+    end)
+    local temporary = scratch and obj.handle('Sequence ' .. scratch)
+    if temporary and obj.label(temporary) == temp then gma.cmd('Delete Sequence ' .. scratch .. ' /nc') end
+    discard(temp)
+    assert(ok, err)
+  end
+  return '{"sequence":' .. seq .. ',"executor":"' .. addr .. '","cues":["' .. table.concat(reply, '","') .. '"],"backupFile":' .. (backup and ('"' .. backup .. '.xml"') or 'null') .. '}'
+end
 local function start(data, previous)
   local id, op, target, size, body = data:match('^([a-f0-9]+)\n([A-Z]+)\n(%d+)\n(%d+)\n(.*)$')
   assert(id and #id == 32 and id ~= last, 'Invalid or already processed request')
@@ -263,6 +701,7 @@ local function start(data, previous)
     assert(#body == tonumber(size), 'Request length mismatch')
     -- steps=1: this bridge answers 'run' with STEP:<k> when asked to, and takes 'step'.
     if op == 'PING' then return answer((gma.show.getvar('VERSION') or 'unknown') .. '\nsteps=1') end
+    if op == 'FIRSTCUES' then return answer(first_track_cues(tc, id, body)) end
     -- Removes write-before backups the program's ledger rotated out; answers with the names now gone.
     if op == 'DISCARD' then
       assert(#body > 0 and #body <= 4096, 'Invalid backup list')
@@ -653,14 +1092,55 @@ local function start(data, previous)
     end
     if op == 'SEQCUES' then
       -- The complete export stays on the console; only the requested Cue elements cross the network.
+      local names_show, names_gen, rest = body:match('^names:(%x+):(%x+):(.+)$')
+      local identified = gma.show.getvar('SHOWFILE')
+      local function identity() assert(gma.show.getvar('SHOWFILE') == identified and generation == _G.TBLINK_BRIDGE_GENERATION, 'Show or session changed') end
+      if names_show then
+        assert(attr_hex(identified) == names_show and attr_hex(generation) == names_gen, 'Show or session changed')
+        body = rest
+      end
+      local token, mask, pick_show, pick_gen, selected = body:match('^pick:(%x+):([%x+]+):(%x+)%-(%x+):(.+)$')
+      if token then
+        assert(#token == 32, 'Invalid selection')
+        assert(attr_hex(identified) == pick_show and attr_hex(generation) == pick_gen, 'Show or session changed')
+        body = selected
+      end
+      local status = body:sub(1,7) == 'status:'
+      if status then body = body:sub(8) end
+      local saved = token and body:sub(1,6) == 'saved:'
+      if saved then body = body:sub(7) end
+      local archive = (status or saved) and body:match('^(%x+):')
+      if archive then
+        assert(#archive == 32, 'Invalid saved sequence')
+        body = body:sub(#archive+2)
+      end
       assert(#body > 0 and #body <= 65536 and not body:find('[^%d%.,]'), 'Invalid Cue list')
-      assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
       local wanted = {}
       for value in body:gmatch('[^,]+') do
         local whole, fraction = value:match('^(%d+)%.(%d%d%d)$')
         assert(whole, 'Invalid Cue number')
         wanted[tonumber(whole) * 1000 + tonumber(fraction)] = true
       end
+      local function finish_material(xml)
+        identity()
+        local n = next(wanted)
+        assert(n and not next(wanted, n), 'Select one Cue')
+        local filtered, names = material_cue(xml, n, mask)
+        if names_show then return answer('attributes:' .. names) end
+        write(root .. '/importexport/tblink_pick_' .. token .. '.xml', filtered)
+        answer(filtered)
+      end
+      if archive then
+        local xml
+        if saved then
+          xml = assert(read(root .. '/importexport/tblink_archive_' .. archive .. '.xml'))
+          assert(tonumber(xml:match('<Sequ%s[^>]-index="(%d+)"')) == tc-1, 'Saved sequence identity changed')
+          discard('tblink_archive_' .. archive)
+        else xml = archived_tracked_cues(tc, wanted, archive, id) end
+        if token or names_show then return finish_material(xml) end
+        return answer(xml)
+      end
+      assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
       local name = 'tblink_library_' .. id
       gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
       local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
@@ -668,6 +1148,13 @@ local function start(data, previous)
         gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
         assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
         discard(name .. '_verify')
+        if status then
+          local result = tracked_cues(tc, wanted, xml, 'tblink_status_' .. id)
+          discard(name)
+          if token or names_show then return finish_material(result) end
+          return answer(result)
+        end
+        if token or names_show then discard(name); return finish_material(xml) end
         local head = assert(xml:match('^(.-<Sequ%s[^>]*>)'), 'Sequence XML unavailable')
         assert(head:sub(-2) ~= '/>', 'Sequence has no Cues')
         local parts, position = { head }, 1
@@ -924,14 +1411,14 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
         base = snapshot_cache.xml
         a = 'SYNC'
       end
-      assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'SEQGO' or a == 'SEQCUES' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'ASSIGNSEQ' or a == 'LABEL' or a == 'DISCARD' or a == 'TCRANGES', 'Invalid operation')
+      assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'SEQGO' or a == 'SEQCUES' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'FIRSTCUES' or a == 'ASSIGNSEQ' or a == 'LABEL' or a == 'DISCARD' or a == 'TCRANGES', 'Invalid operation')
       assert(type(b) == 'number' and b >= 1 and b <= 99999 and b == math.floor(b), 'Invalid target')
       assert(type(c) == 'number' and c >= 0 and c <= 33554432 and c == math.floor(c), 'Invalid payload size')
       assert(lane == nil or lane == 'bg' or lane == 'fg', 'Invalid lane')
       assert(transport == nil or transport == 'file', 'Invalid transport')
       assert(read_now == nil or (read_now == 'read' and action == 'begin' and a == 'READ' and c == 0 and lane == 'bg'), 'Invalid immediate read')
       assert(delta_size == nil or (action == 'beginsync' and transport == nil and c <= 524288 and type(delta_size) == 'number' and delta_size == math.floor(delta_size) and delta_size > 0 and delta_size < c), 'Invalid snapshot delta size')
-      assert(query == nil or (action == 'begin' and (a == 'LIST' or a == 'LISTSEQ' or a == 'TCRANGES' or lane == 'bg' and (a == 'SEQGO' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'ASSIGNSEQ')) and type(query) == 'string' and c <= 320 and #query == c * 2 and not query:find('[^a-f0-9]')), 'Invalid inline query')
+      assert(query == nil or (action == 'begin' and (a == 'LIST' or a == 'LISTSEQ' or a == 'TCRANGES' or lane == 'bg' and (a == 'SEQGO' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'FIRSTCUES' or a == 'ASSIGNSEQ')) and type(query) == 'string' and c <= 320 and #query == c * 2 and not query:find('[^a-f0-9]')), 'Invalid inline query')
       assert(previous_read == nil or (read_now == 'read' and type(previous_read) == 'string' and #previous_read == 32 and previous_read:match('^[a-f0-9]+$')), 'Invalid read reference')
       -- Only reads go on 'fg', and none that leaves state for a later request (a snapshot for beginsync).
       assert(lane ~= 'fg' or (action == 'begin' and foreground[a]), 'Operation not allowed on the foreground lane')
@@ -994,7 +1481,7 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
       -- With 'steps' the first step runs now and the program sends 'step' for each next one.
       -- Without it (an older program, or the bridge upgrade check) every step runs now, as before.
       if a == 'steps' then
-        network.inline = (b == 'inline' or b == 'checked') and (network.op == 'READ' or network.op == 'LIST' or network.op == 'LISTSEQ' or network.op == 'TCRANGES' or network.op == 'ASSIGNSEQ'
+        network.inline = (b == 'inline' or b == 'checked') and (network.op == 'READ' or network.op == 'SEQCUES' or network.op == 'LIST' or network.op == 'LISTSEQ' or network.op == 'TCRANGES' or network.op == 'FIRSTCUES' or network.op == 'ASSIGNSEQ'
           or network.op == 'SNAPSHOT' or network.op == 'SCOPE' or network.op == 'SYNC' or network.op == 'SEQGO')
         return proceed(network, token)
       end

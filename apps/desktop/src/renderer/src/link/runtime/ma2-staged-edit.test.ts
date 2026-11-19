@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, type Ma2ApplyRequest, type Ma2CompareRequest, type Ma2PoolRouteRequest } from '@tb/schema';
+import { createEmptyLinkProject, type Ma2ApplyRequest, type Ma2CompareRequest, type Ma2FirstTrackRequest, type Ma2PoolRouteRequest } from '@tb/schema';
 import { importMa2TimecodeCommand, ma2PendingChanges, placeConsoleCue, setLightingCommand, SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
 import { convertMa2Snapshot, convertMa2Timecode } from '../../../../main/link/ma2-timecode-conversion';
 import { compareMa2LightingReadback } from '../../../../main/link/ma2-comparison';
@@ -56,8 +56,9 @@ const IDLE = { phase: 'idle', program: null } as const;
 /** The console at Timecode 9902 is `native`; the real apply service writes it, checks it before writing and reads it back. */
 function setup(initial = xml) {
   let native = initial;
+  let primary = sequenceObject;
   const nativeSnapshot = (includePool = false) => {
-    const base = snapshot(native);
+    const base = snapshot(native).replace(sequenceObject, primary);
     return includePool || native.includes('<No>9899</No>') ? base.replace('</MA>', sequenceObject.replace('index="9900"', 'index="9898"') + '</MA>') : base;
   };
   const bridge = {
@@ -71,6 +72,10 @@ function setup(initial = xml) {
   const service = new Ma2ApplyService(bridge, op => currentShowGate(op));
   const api = {
     getMa2NetworkStatus: vi.fn(() => Promise.resolve({ state: 'connected', settings: { ...network, autoConnect: false } })),
+    addMa2FirstTrackCues: vi.fn((request: Ma2FirstTrackRequest) => {
+      if (!primary.includes('number="8"')) primary = primary.replace('</Sequ>', '<Cue index="3"><Number number="8" sub_number="0"/><CuePart index="0"/></Cue></Sequ>');
+      return Promise.resolve({ executor: request.executor, sequence: 9901, cues: request.points.map(() => '8.000'), backupFile: null });
+    }),
     assignMa2PoolSequence: vi.fn((request: Ma2PoolRouteRequest) => Promise.resolve({ sequence: request.sequence, executor: '999.101', executorName: '素材 9899' })),
     previewMa2: vi.fn(() => Promise.resolve(convertMa2Snapshot(nativeSnapshot(), 9902))),
     compareMa2: vi.fn((request: Ma2CompareRequest) => Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback))),
@@ -351,12 +356,12 @@ it('素材池新 Cue 写入原时间线并读回；一步撤销和重做都再�
   store().execute(setLightingCommand('song', edit));
   await test.tick();
   expect(test.song().message).toContain('已写入控台并回读确认');
-  expect(test.console()).toContain('<No>9899</No>');
-  expect(doc().tracks.at(-1)!.clips[0]!.events[0]).toMatchObject({ id: event.id, executor: '999.101', librarySource: event.librarySource });
+  expect(test.console()).toMatch(/<No>9901<\/No>\s*<No>3<\/No>/);
+  expect(doc().tracks[0]!.clips.flatMap(clip => clip.events).find(point => point.id === event.id)).toMatchObject({ sequence: 9901, cue: '8.000', executor: '99.219', librarySource: event.librarySource });
   expect(store().past).toHaveLength(1);
   store().undo(); await test.tick();
-  expect(test.song().state).toBe('verified'); expect(test.console()).not.toContain('<No>9899</No>');
+  expect(test.song().state).toBe('verified'); expect(test.console()).not.toMatch(/<No>9901<\/No>\s*<No>3<\/No>/);
   store().redo(); await test.tick();
-  expect(test.song().state).toBe('verified'); expect(test.console()).toContain('<No>9899</No>');
-  expect(doc().tracks.at(-1)!.clips[0]!.events[0]).toMatchObject({ id: event.id, executor: '999.101', librarySource: event.librarySource });
+  expect(test.song().state).toBe('verified'); expect(test.console()).toMatch(/<No>9901<\/No>\s*<No>3<\/No>/);
+  expect(doc().tracks[0]!.clips.flatMap(clip => clip.events).find(point => point.id === event.id)).toMatchObject({ sequence: 9901, cue: '8.000', executor: '99.219', librarySource: event.librarySource });
 });

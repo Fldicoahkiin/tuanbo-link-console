@@ -64,8 +64,8 @@ export function LightingMusicBatch({ lighting, playheadMs, durationMs, markerId,
       times.forEach((ms, index) => {
         const source = chosen[index % chosen.length]!; const independent = sourceMode === 'library' && document.templates.find(template => template.id === source.id)?.nativeSequence;
         const groupId = source.events.length > 1 && !independent ? crypto.randomUUID() : undefined;
-        source.events.forEach(event => {
-          const id = crypto.randomUUID(); const at = ms + event.at;
+        source.events.forEach((event, index) => {
+          const id = index === 0 && groupId ? groupId : crypto.randomUUID(); const at = ms + event.at;
           if (at < 0 || at >= durationMs) throw new Error('Cue 超出了歌曲范围，没有添加');
           const targets = event.kind === 'ma2' ? [...new Set(document.ma2Bindings?.flatMap(binding=>binding.mappings.filter(mapping=>mapping.sequence===event.sequence).map(mapping=>mapping.executor)) ?? [])] : [];
           if(sourceMode === 'console' && event.kind==='ma2' && targets.length>1 && routes[String(event.sequence)] === undefined) throw new Error(`序列 ${event.sequence} 有多个执行器，请选择要用哪一个`);
@@ -75,7 +75,7 @@ export function LightingMusicBatch({ lighting, playheadMs, durationMs, markerId,
       });
       const updated = { ...track, clips: [...track.clips, { id: crypto.randomUUID(), name: '按节拍编排', start: 0, duration: durationMs, timeLock: 'time' as const, muted: false, events }] };
       const next = lightingDocumentSchema.parse({ ...document, version: 2, tracks: target ? document.tracks.map(value => value.id === track.id ? updated : value) : [...document.tracks, updated] });
-      assertMusicCueConflicts(next); onPreview(next, changes, '批量添加灯光 Cue'); setError('');
+      assertMusicCueConflicts(next, new Set(changes.map(change => change.id))); onPreview(next, changes, '批量添加灯光 Cue'); setError('');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
   return <div className="music-batch"><div className="music-fields"><label>操作<select value={operation} onChange={event => setOperation(event.target.value)}><option value="place">添加 / 按拍数排列</option><option value="marker">选中 Cue 对齐标记</option><option value="move">整组提前 / 延后</option></select></label>

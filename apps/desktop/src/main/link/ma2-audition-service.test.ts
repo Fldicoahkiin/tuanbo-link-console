@@ -116,3 +116,18 @@ it('切换的 Off 未返回时按停止，共用这次 Off，取消之后的新 
   await Promise.resolve();const stopping=f.service.stop();release();await rejected;await stopping;
   expect(f.actions.map(value=>value.action.action)).toEqual(['goto','off']);expect(f.service.status().targets).toEqual([]);
 });
+it('操作员在空闲时也能停止整台控台，两处同时点只发送一次，确认前排队的试听不能重亮',async()=>{
+  const f=fixture();
+  let finish!:()=>void;
+  const release=vi.fn(()=>new Promise<void>(resolve=>{finish=resolve;}));
+  const red=f.service.stopConsole(release);
+  expect(f.service.stopConsole(release)).toBe(red);
+  await expect(f.service.play(request(1,f.service.status().generation))).rejects.toThrow('试听已停止');
+  expect(f.service.status().phase).toBe('stopping');
+  expect(release).toHaveBeenCalledOnce();
+  finish();expect((await red).phase).toBe('sent');
+  await expect(f.service.stopConsole(()=>Promise.reject(new Error('控台未连接')))).rejects.toThrow('控台未连接');
+  expect(f.service.status().phase).toBe('failed');
+  await f.service.play(request(2,f.service.status().generation));
+  expect(f.service.status().phase).toBe('active');
+});

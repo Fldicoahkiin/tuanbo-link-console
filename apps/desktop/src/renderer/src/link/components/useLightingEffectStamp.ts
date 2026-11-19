@@ -5,13 +5,14 @@ import { consoleCueDragSchema, type ConsoleCueDrag } from './lighting-material-d
 import { ma2SequenceLibrary } from '../view-models/ma2-sequence-library';
 import { useLightingSequencePlacement } from '../stores/lighting-sequence-placement-store';
 import { ma2SongSyncSettings } from '../runtime/ma2-song-sync';
-import { useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
+import { useCueTrackingPreference, useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
 import { syncMa2Once } from '../runtime/ma2-realtime-session';
 
 export function commitLightingPlacement(id: string, value: LightingDocument, label: string, wholeSequence = false): void {
   const state = useDocumentStore.getState(); const project = state.project;
   const item = project?.rundown.find(entry => entry.id === id);
   if (!project || !item) throw new Error('歌曲已删除，请重新选择');
+  if (item.lighting === value) return;
   const create = !hasMa2SongSyncTarget(item.lighting);
   const settings = ma2SongSyncSettings(project, id);
   state.execute(create || wholeSequence ? addMa2SequenceCommand(id, value, { name: item.title, sequence: settings.nextSequence, timecode: settings.nextSequence, executor: `${settings.executorPage ?? 1000}.101` }, label) : setLightingCommand(id, value, label));
@@ -36,7 +37,9 @@ export function useLightingEffectStamp(itemId: string | null, document: Lighting
         for (const track of base.tracks) for (const clip of track.clips) { const old = clip.events.find(event => event.id === replaceId); if (old) ms = lightingEventTime(clip, old, map); }
         base = removeLightingEffects(base, [replaceId]);
       }
-      const value = placeLightingTemplate(base, { effectId, ms, id: crypto.randomUUID() }, durationMs, ma2SequenceLibrary(state.project, base), useLightingSequencePlacement.getState().intervalBeats, item ? songBeats(item) : undefined);
+      const preset = base.templates.find(entry => entry.id === effectId)?.track.cueStamp;
+      const includeTracking = (preset?.mode === 'fixed' ? preset.includeTracking : undefined) ?? useCueTrackingPreference.getState().includeTracking;
+      const value = placeLightingTemplate(base, { effectId, ms, id: crypto.randomUUID(), includeTracking }, durationMs, ma2SequenceLibrary(state.project, base), useLightingSequencePlacement.getState().intervalBeats, item ? songBeats(item) : undefined);
       commit(itemId, value, Boolean(base.templates.find(entry => entry.id === effectId)?.nativeSequence));
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
   };
@@ -55,8 +58,8 @@ export function useLightingEffectStamp(itemId: string | null, document: Lighting
         const sequence = ma2SequenceLibrary(state.project, base).find(value => value.sequence === reference.sequence);
         if (!sequence) throw new Error('这套 Cue 还没有读取，请重新读取控台素材');
         const steps = lightingSequenceSteps(base, sequence, reference.executor, ms, useLightingSequencePlacement.getState().intervalBeats, songBeats(item));
-        commit(itemId, steps.reduce((value, step) => placeConsoleCue(value, { sequence: step.sequence, cue: step.cue, name: step.name, executor: step.executor }, ms + step.delayMs, durationMs), base), true);
-      } else commit(itemId, placeConsoleCue(base, reference, ms, durationMs));
+        commit(itemId, steps.reduce((value, step) => placeConsoleCue(value, { sequence: step.sequence, cue: step.cue, name: step.name, executor: step.executor, includeTracking: useCueTrackingPreference.getState().includeTracking }, ms + step.delayMs, durationMs), base), true);
+      } else commit(itemId, placeConsoleCue(base, { ...reference, includeTracking: reference.includeTracking ?? useCueTrackingPreference.getState().includeTracking }, ms, durationMs));
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
   };
   return { stamp, stampConsoleCue };

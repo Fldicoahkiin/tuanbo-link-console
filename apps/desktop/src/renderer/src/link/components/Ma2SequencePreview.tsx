@@ -1,3 +1,5 @@
+import { Ma2CueAttributePicker, type UseConsoleCue } from './Ma2CueAttributePicker';
+import { useCueTrackingPreference } from '../runtime/ma2-realtime-preference';
 import { Ma2CachedBrowser } from './Ma2CachedBrowser';
 import { scanMa2, useMa2ReadStore } from '../stores/ma2-read-store';
 import { LightingCategoryColors } from './LightingCategoryColors';
@@ -30,7 +32,7 @@ import { Ma2MaterialMenu } from './Ma2MaterialMenu';
 import { Button } from '../ui';
 import { Ma2CueLocations } from './Ma2CueLocations';
 import { useMa2ExecutorPageStore, selectMa2ExecutorPageKind } from '../stores/ma2-executor-page-store';
-export function Ma2SequencePreview({ document, initialSequence, initialExecutor, onUse, composing = false, onBrowseLayout, onBrowseTimelines, notify, timelineOpen = false, onCloseTimelines, onLayoutSettings }: { notify?: (message: string, tone?: 'info' | 'error') => void; composing?: boolean; initialSequence?: number; initialExecutor?: string; onBrowseLayout?: () => void; onBrowseTimelines?: () => void; timelineOpen?: boolean; onCloseTimelines?: () => void; onLayoutSettings?: () => void; onClassify?: (value: import('./LightingUserLibrary').LibraryDraft) => void; document: LightingDocument; onUse: (sequence: number, cue: string, name: string, executor: string) => void; onClose: () => void }): JSX.Element {
+export function Ma2SequencePreview({ document, initialSequence, initialExecutor, onUse, composing = false, onBrowseLayout, onBrowseTimelines, notify, timelineOpen = false, onCloseTimelines, onLayoutSettings }: { notify?: (message: string, tone?: 'info' | 'error') => void; composing?: boolean; initialSequence?: number; initialExecutor?: string; onBrowseLayout?: () => void; onBrowseTimelines?: () => void; timelineOpen?: boolean; onCloseTimelines?: () => void; onLayoutSettings?: () => void; onClassify?: (value: import('./LightingUserLibrary').LibraryDraft) => void; document: LightingDocument; onUse: UseConsoleCue; onClose: () => void }): JSX.Element {
   const project = useDocumentStore(state => state.project);
   const material = project ? loadMa2MaterialCache(project.projectId) : null;
   const [output] = useState(() => new LightingCueAudition());
@@ -81,6 +83,13 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
   const singles=allSingles.filter(({sequence,cue})=>classification.isVisible({sequence:sequence.sequence,cue:cue.number,kind:'single'}) && attributeMatches(sequence.sequence, cue.number));
   const singleRefs:ConsoleCueReference[]=singles.map(({sequence,cue})=>({sequence:sequence.sequence,cue:cue.number,kind:'single'}));
   const sequence = library.find(value=>value.sequence===(selected ?? singleSequence));
+  const activeStep = sequence?.cues.find(step => step.number === selectedCue);
+  const tracking = useCueTrackingPreference(state => state.includeTracking);
+  const directory = material?.library.directory;
+  const attributeKey = JSON.stringify([project?.projectId, material?.source, directory?.show, directory?.generation, sequence?.sequence, selectedCue, tracking]);
+  const [choice, setChoice] = useState<{ key: string; attributes?: string[] | undefined }>({ key: attributeKey });
+  if (choice.key !== attributeKey) setChoice({ key: attributeKey });
+  const attributes = choice.key === attributeKey ? choice.attributes : undefined;
   const executors = sequence ? [...new Set(document.ma2Bindings?.flatMap(binding => binding.mappings.filter(mapping => mapping.sequence === sequence.sequence).map(mapping => mapping.executor)) ?? [])] : [];
   const executor = route ?? (executors.length === 1 ? executors[0]! : executors.length > 1 ? '__choose' : '');
   const send = async (action: Ma2PlaybackAction['action'], number?: string, chosen = sequence): Promise<void> => {
@@ -105,15 +114,12 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
   const materialCell = (button: ReactNode, owner: NonNullable<typeof sequence>, cue: string, name: string): JSX.Element => {
     const routes = [...new Set(document.ma2Bindings?.flatMap(binding => binding.mappings.filter(mapping => mapping.sequence === owner.sequence).map(mapping => mapping.executor)) ?? [])];
     const target = owner.sequence === sequence?.sequence ? executor : routes.length === 1 ? routes[0]! : routes.length > 1 ? '__choose' : '';
-    const usable = target !== '__choose' && !classification.showRemoved && !material?.library.sourceUnverified;
-    return <div className="console-cue-cell" draggable={usable} onDragStart={event => { if (!usable) { event.preventDefault(); return; } event.dataTransfer.setData(CONSOLE_CUE_DRAG, JSON.stringify({ sequence: owner.sequence, cue, name, executor: target })); event.dataTransfer.effectAllowed = 'copy'; }}>
-      {button}{composing ? <button disabled={!usable} title="加入当前 Cue" aria-label={`添加 ${name} 到当前 Cue`} onClick={() => onUse(owner.sequence, cue, name, target)}><Plus /></button> : null}
+    const selectedAttributes = owner.sequence === sequence?.sequence && cue === selectedCue ? attributes : undefined;
+    const usable = selectedAttributes?.length !== 0 && target !== '__choose' && !classification.showRemoved && !material?.library.sourceUnverified;
+    return <div className="console-cue-cell" draggable={usable} onDragStart={event => { if (!usable) { event.preventDefault(); return; } event.dataTransfer.setData(CONSOLE_CUE_DRAG, JSON.stringify({ sequence: owner.sequence, cue, name, executor: target, attributes: selectedAttributes, includeTracking: tracking })); event.dataTransfer.effectAllowed = 'copy'; }}>
+      {button}{composing ? <button disabled={!usable} title="加入当前 Cue" aria-label={`添加 ${name} 到当前 Cue`} onClick={() => onUse(owner.sequence, cue, name, target, selectedAttributes, tracking)}><Plus /></button> : null}
     </div>;
   };
-  const controls = sequence ? <div className="ma2-pool-navigation"><strong title={`${sequence.sequence} · ${ma2ConsoleSequenceName(sequence)}`}>{ma2ConsoleSequenceName(sequence)}</strong>
-        {selected !== null && sequence.cues.length > 1 ? <small className="ma2-sequence-step-count">共 {sequence.cues.length} 步</small> : null}
-        <select aria-label="序列预览播放目标" disabled={busy} value={executor} onChange={event => setRoute(event.target.value)}>{executors.length > 1 ? <option value="__choose" disabled>选择执行器</option> : null}{executors.map(value => <option key={value} value={value}>执行器 {value}</option>)}<option value="">序列池</option></select>
-      </div> : null;
   const resetSelection = (): void => { setSelected(null); setSingleSequence(null); setSelectedCue(null); setRoute(null); classification.setPicked([]); };
   useEffect(() => { if (pageNavigation) { setCategory('layout'); setSelected(null); setSingleSequence(null); setRoute(null); onBrowseLayout?.(); } }, [pageNavigation, onBrowseLayout]);
   useEffect(() => { setSelected(null); setSingleSequence(null); setPreview(current => ({ ...current, selectedCue: null })); setRoute(null); setPicked([]); setError(''); }, [layoutPage.scope, layoutPage.page, setPicked]);
@@ -131,19 +137,6 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
     if (!item.sequence) return;
     if (!libraryById.has(item.sequence)) { setError('这一格的序列步骤还没读取，刷新本页后可以编辑'); return; }
     setSelected(item.sequence); setSingleSequence(null); setSelectedCue(null); setRoute(`${page}.${item.slot}`); setQuery('');
-  };
-  const renderExecutorItem = (item: import('@tb/schema').Ma2ExecutorPage['items'][number], page: number, band: import('../stores/ma2-executor-page-store').Ma2ExecutorBand): ReactNode => {
-    const owner = item.sequence ? libraryById.get(item.sequence) : undefined;
-    const step = owner?.cues[0]; const address = `${page}.${item.slot}`;
-    const name = item.name || (owner ? ma2ConsoleSequenceName(owner) : '未命名对象');
-    const matched = `${name} ${item.slot} ${item.sequence ?? ''}`.toLowerCase().includes(query.toLowerCase());
-    const keys = band === 'fader' ? [0, 1, 2] : [0];
-    return <div className="ma2-executor-content" onDragStart={event => {
-      if (owner && step) event.dataTransfer.setData(CONSOLE_CUE_DRAG, JSON.stringify({ sequence: owner.sequence, cue: step.number, name, executor: address }));
-    }}>
-      <Ma2ExecutorKey item={item} page={page} index={0} primary matched={matched} input={executorInput}><strong>{name}</strong><small>{owner ? `${owner.cues.length} Cue` : item.kind === 'sequence' ? 'Sequence' : item.reference[0] ?? ''}</small></Ma2ExecutorKey>
-      <div className="ma2-executor-functions">{band === 'fader' && item.priority ? <span title="执行器优先级">{item.priority}</span> : null}{keys.map(index => <Ma2ExecutorKey key={index} item={item} page={page} index={index} input={executorInput}/>)}</div>
-    </div>;
   };
   const renderLayoutItem = (item: import('@tb/schema').Ma2LayoutSnapshot['items'][number]): ReactNode => {
     const owner = item.sequence ? libraryById.get(item.sequence) : undefined;
@@ -165,11 +158,12 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
     return materialCell(<button disabled={busy} title={`序列 ${sequence.sequence} · Cue ${Number(value.number)} · ${name} · 点击试听`} aria-pressed={selectedCue === value.number} aria-label={`试听灯光步 ${value.number}`} onContextMenu={event=>classification.open(event,{sequence:sequence.sequence,cue:value.number,kind:'single'},name)} onClick={event => { classification.select({sequence:sequence.sequence,cue:value.number,kind:'single'},event,visibleCues.map(cue=>({sequence:sequence.sequence,cue:cue.number,kind:'single'})));setSelectedCue(value.number); if(!classification.showRemoved && !event.ctrlKey && !event.metaKey && !event.shiftKey && attributeFilter.status !== 'empty')void send('goto', value.number); }}><LightingCategoryColors sections={classification.sections.get(consoleCueKey({sequence:sequence.sequence,cue:value.number,kind:'single'}))??[]}/><Ma2CueCardLabel sequence={sequence} cue={value} name={name}/></button>, sequence, value.number, name);
   }} /> : null;
   return <section className="ma2-sequence-preview" aria-label="MA2 序列预览">
-    <header className="ma2-material-menubar" aria-label="控台素材工具栏"><LightingAuditionStop/><div role="group" aria-label="素材分类">{([['all','全部'],['single','单步'],['multi','多步']] as const).map(([value,title])=><button key={value} aria-pressed={!timelineOpen && category===value && selected===null} onClick={()=>{onCloseTimelines?.();setCategory(value);setSelected(null);setSingleSequence(null);setSelectedCue(null);setRoute(null);}}>{title}</button>)}{onBrowseTimelines ? <button aria-pressed={timelineOpen} onClick={() => { setTimelineQuery(''); onBrowseTimelines(); }}>控台时间线</button> : null}{onBrowseLayout ? <button aria-pressed={!timelineOpen && category === 'layout'} onClick={() => { onCloseTimelines?.(); openLayout(); }}>控台页面</button> : null}</div>{!timelineOpen && category === 'layout' ? <><div className="ma2-page-toolbar-host" ref={setPageToolbarHost}/></> : null}{!timelineOpen ? controls : null}{!timelineOpen && sequence ? <Ma2CueLocations sequence={sequence.sequence}/> : null}{!timelineOpen ? <Ma2MaterialMenu label="素材筛选" trigger={<ListFilter/>} open={filtersOpen} onOpenChange={setFiltersOpen}>{classification.picked.length>0?<div className="ma2-classification-selection"><span>已选 {classification.picked.length} 项</span><Button variant="secondary" size="sm" onClick={()=>classification.setPicked(visibleRefs)}>全选结果</Button><Button variant="secondary" size="sm" onClick={()=>classification.setPicked([])}>取消选择</Button></div>:null}<p className="ma2-material-menu-label">只显示</p><Button variant="ghost" size="sm" aria-pressed={attributeFilter.status === 'empty'} onClick={() => setAttributeFilter({ ...emptyMa2AttributeFilter, status: attributeFilter.status === 'empty' ? 'all' : 'empty' })}>仅空 Cue</Button><Button variant="ghost" size="sm" aria-pressed={classification.onlyUnclassified} onClick={()=>classification.setOnlyUnclassified(!classification.onlyUnclassified)}>未分类</Button>{classification.hidden.size?<Button variant="ghost" size="sm" aria-pressed={classification.showRemoved} onClick={()=>{classification.setShowRemoved(!classification.showRemoved);classification.setPicked([]);}}>已移除</Button>:null}</Ma2MaterialMenu> : null}{!timelineOpen && attributeFilter.status === 'empty' && (category === 'single' || selected !== null) ? <button disabled={attributeReader.busy || materialReading || !deletionCandidates.length} onClick={() => setDeleting(deletionCandidates)}>删除空 Cue</button> : null}<label className="ma2-pool-search"><Search size={16} /><input aria-label={timelineOpen ? "搜索控台时间线" : "搜索序列或 Cue"} placeholder="搜索名称 / 编号" value={timelineOpen ? timelineQuery : query} onChange={event => timelineOpen ? setTimelineQuery(event.target.value) : setQuery(event.target.value)} /></label>
+    <header className="ma2-material-menubar" aria-label="控台素材工具栏"><LightingAuditionStop/><div role="group" aria-label="素材分类">{([['all','全部'],['single','单步'],['multi','多步']] as const).map(([value,title])=><button key={value} aria-pressed={!timelineOpen && category===value && selected===null} onClick={()=>{onCloseTimelines?.();setCategory(value);setSelected(null);setSingleSequence(null);setSelectedCue(null);setRoute(null);}}>{title}</button>)}{onBrowseTimelines ? <button aria-pressed={timelineOpen} onClick={() => { setTimelineQuery(''); onBrowseTimelines(); }}>控台时间线</button> : null}{onBrowseLayout ? <button aria-pressed={!timelineOpen && category === 'layout'} onClick={() => { onCloseTimelines?.(); openLayout(); }}>控台页面</button> : null}</div>{!timelineOpen && category === 'layout' ? <><div className="ma2-page-toolbar-host" ref={setPageToolbarHost}/></> : null}{!timelineOpen && sequence && <PoolNavigation sequence={sequence} insideSequence={selected !== null} busy={busy} executor={executor} executors={executors} onRoute={setRoute}/>}{!timelineOpen && sequence ? <Ma2CueLocations sequence={sequence.sequence}/> : null}{!timelineOpen ? <Ma2MaterialMenu label="素材筛选" trigger={<ListFilter/>} open={filtersOpen} onOpenChange={setFiltersOpen}>{classification.picked.length>0?<div className="ma2-classification-selection"><span>已选 {classification.picked.length} 项</span><Button variant="secondary" size="sm" onClick={()=>classification.setPicked(visibleRefs)}>全选结果</Button><Button variant="secondary" size="sm" onClick={()=>classification.setPicked([])}>取消选择</Button></div>:null}<p className="ma2-material-menu-label">只显示</p><Button variant="ghost" size="sm" aria-pressed={attributeFilter.status === 'empty'} onClick={() => setAttributeFilter({ ...emptyMa2AttributeFilter, status: attributeFilter.status === 'empty' ? 'all' : 'empty' })}>仅空 Cue</Button><Button variant="ghost" size="sm" aria-pressed={classification.onlyUnclassified} onClick={()=>classification.setOnlyUnclassified(!classification.onlyUnclassified)}>未分类</Button>{classification.hidden.size?<Button variant="ghost" size="sm" aria-pressed={classification.showRemoved} onClick={()=>{classification.setShowRemoved(!classification.showRemoved);classification.setPicked([]);}}>已移除</Button>:null}</Ma2MaterialMenu> : null}{!timelineOpen && attributeFilter.status === 'empty' && (category === 'single' || selected !== null) ? <button disabled={attributeReader.busy || materialReading || !deletionCandidates.length} onClick={() => setDeleting(deletionCandidates)}>删除空 Cue</button> : null}<label className="ma2-pool-search"><Search size={16} /><input aria-label={timelineOpen ? "搜索控台时间线" : "搜索序列或 Cue"} placeholder="搜索名称 / 编号" value={timelineOpen ? timelineQuery : query} onChange={event => timelineOpen ? setTimelineQuery(event.target.value) : setQuery(event.target.value)} /></label>
       <button className="ma2-refresh-directory" aria-label={timelineOpen ? "刷新控台时间线" : "刷新素材目录"} data-busy={materialReading || refreshing} title={timelineOpen ? (timelinesReading ? '正在刷新控台时间线…' : '刷新控台时间线') : materialReading || refreshing ? '正在刷新素材目录…' : '刷新素材目录：重新读取控台上的序列和 Cue 名称'} disabled={attributeReader.busy || materialReading || timelinesReading || refreshing} onClick={() => void refreshMaterials()}><RefreshCw/></button></header>
     {error || classification.message ? <p className="ma2-material-message" role={error ? 'alert' : 'status'}>{error || classification.message}</p> : null}
 
-    {timelineOpen ? <Ma2CachedBrowser embedded query={timelineQuery} onClearSearch={clearTimelineSearch} disabled={busy || refreshing} notify={notify ?? ((text, tone) => { if (tone === 'error') setError(text); })} onClose={() => onCloseTimelines?.()} /> : category === 'layout' && pageKind !== 'layout' ? <Ma2ExecutorPageView toolbarHost={pageToolbarHost} typeControl={pageTypeControl} timecodeSong={document} selected={selected !== null} onBack={resetSelection} onNavigate={resetSelection} onSettings={onLayoutSettings} renderItem={renderExecutorItem} onEditItem={openExecutorItem}>{selectedGrid}</Ma2ExecutorPageView> : category === 'layout' ? <Ma2LayoutView toolbarHost={pageToolbarHost} typeControl={pageTypeControl} selected={selected !== null} onBack={resetSelection} onNavigate={resetSelection} onSettings={onLayoutSettings} renderItem={renderLayoutItem}>{selectedGrid}</Ma2LayoutView> : selectedGrid}
+    <div className="ma2-material-body"><div className="ma2-material-results">
+    {timelineOpen ? <Ma2CachedBrowser embedded query={timelineQuery} onClearSearch={clearTimelineSearch} disabled={busy || refreshing} notify={notify ?? ((text, tone) => { if (tone === 'error') setError(text); })} onClose={() => onCloseTimelines?.()} /> : category === 'layout' && pageKind !== 'layout' ? <Ma2ExecutorPageView toolbarHost={pageToolbarHost} typeControl={pageTypeControl} timecodeSong={document} selected={selected !== null} onBack={resetSelection} onNavigate={resetSelection} onSettings={onLayoutSettings} renderItem={(item, page, band) => <ConsoleExecutorMaterial item={item} owner={item.sequence ? libraryById.get(item.sequence) : undefined} page={page} band={band} query={query} executorInput={executorInput}/>} onEditItem={openExecutorItem}>{selectedGrid}</Ma2ExecutorPageView> : category === 'layout' ? <Ma2LayoutView toolbarHost={pageToolbarHost} typeControl={pageTypeControl} selected={selected !== null} onBack={resetSelection} onNavigate={resetSelection} onSettings={onLayoutSettings} renderItem={renderLayoutItem}>{selectedGrid}</Ma2LayoutView> : selectedGrid}
     {!timelineOpen && selected === null && category !== 'layout' ? <>
       {category === 'single' ? <CuePoolGrid keys={singles.map(({sequence,cue})=>`${sequence.sequence}/${cue.number}`)} label="素材序列" cellWidth={156} rowHeight={50} render={index=>{
         const {sequence:owner,cue:step}=singles[index]!;
@@ -183,8 +177,41 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
       }} />}
       {!(category==='single' ? singles.length : visibleSequences.length) ? <span className="ma2-pool-empty">{library.length ? '无匹配素材' : '还没读取素材'}</span> : null}
     </> : null}
+    </div>
+    {!timelineOpen && !classification.showRemoved && sequence && activeStep && <Ma2CueAttributePicker key={attributeKey}
+      name={ma2ConsoleCuePoolName(sequence, activeStep)} sequence={sequence.sequence} cue={activeStep.number}
+      directory={material?.library.sourceUnverified ? undefined : directory} selection={attributes} includeTracking={tracking === true}
+      composing={composing} disabled={executor === '__choose' || !!material?.library.sourceUnverified}
+      onChange={value => setChoice({key: attributeKey, attributes: value})}
+      onAdd={() => onUse(sequence.sequence, activeStep.number, ma2ConsoleCuePoolName(sequence, activeStep), executor, attributes, tracking)} />}
+    </div>
     {classification.menu}
     {deleting ? <Ma2CueDeleteDialog refs={deleting} onClose={() => { setDeleting(null); classification.setPicked([]); }}/> : null}
 
   </section>;
+}
+
+function ConsoleExecutorMaterial({item, owner, page, band, query, executorInput}: {
+  item: import('@tb/schema').Ma2ExecutorPage['items'][number]; owner: ReturnType<typeof ma2SequenceLibrary>[number] | undefined;
+  page: number; band: import('../stores/ma2-executor-page-store').Ma2ExecutorBand; query: string; executorInput: ReturnType<typeof useMa2ExecutorInput>;
+}): JSX.Element {
+  const step = owner?.cues[0]; const address = `${page}.${item.slot}`;
+  const name = item.name || (owner ? ma2ConsoleSequenceName(owner) : '未命名对象');
+  const matched = `${name} ${item.slot} ${item.sequence ?? ''}`.toLowerCase().includes(query.toLowerCase());
+  const keys = band === 'fader' ? [0, 1, 2] : [0];
+  return <div className="ma2-executor-content" onDragStart={event => {
+    if (owner && step) event.dataTransfer.setData(CONSOLE_CUE_DRAG, JSON.stringify({ sequence: owner.sequence, cue: step.number, name, executor: address }));
+  }}>
+    <Ma2ExecutorKey item={item} page={page} index={0} primary matched={matched} input={executorInput}><strong>{name}</strong><small>{owner ? `${owner.cues.length} Cue` : item.kind === 'sequence' ? 'Sequence' : item.reference[0] ?? ''}</small></Ma2ExecutorKey>
+    <div className="ma2-executor-functions">{band === 'fader' && item.priority ? <span title="执行器优先级">{item.priority}</span> : null}{keys.map(index => <Ma2ExecutorKey key={index} item={item} page={page} index={index} input={executorInput}/>)}</div>
+  </div>;
+}
+
+function PoolNavigation({sequence, insideSequence, busy, executor, executors, onRoute}: {
+  sequence: ReturnType<typeof ma2SequenceLibrary>[number]; insideSequence: boolean; busy: boolean; executor: string; executors: string[]; onRoute: (route: string) => void;
+}): JSX.Element {
+  return <div className="ma2-pool-navigation"><strong title={`${sequence.sequence} · ${ma2ConsoleSequenceName(sequence)}`}>{ma2ConsoleSequenceName(sequence)}</strong>
+        {insideSequence && sequence.cues.length > 1 ? <small className="ma2-sequence-step-count">共 {sequence.cues.length} 步</small> : null}
+        <select aria-label="序列预览播放目标" disabled={busy} value={executor} onChange={event => onRoute(event.target.value)}>{executors.length > 1 ? <option value="__choose" disabled>选择执行器</option> : null}{executors.map(value => <option key={value} value={value}>执行器 {value}</option>)}<option value="">序列池</option></select>
+      </div>;
 }

@@ -124,7 +124,7 @@ export class Ma2NetworkWire implements Ma2Wire {
       if (reference && lane !== 'bg') throw new Error('无效的 MA2 网络请求');
       // SEQGO's first step only exports the sequence. Its native write remains a
       // separate, gated step after the second export and comparison.
-      const snapshotQuery = this.verifiedSnapshots && lane === 'bg' && ['SNAPSHOT', 'SCOPE', 'ASSIGNSEQ'].includes(operation);
+      const snapshotQuery = this.verifiedSnapshots && lane === 'bg' && ['SNAPSHOT', 'SCOPE', 'FIRSTCUES', 'ASSIGNSEQ'].includes(operation);
       const shortQuery = (snapshotQuery || operation === 'LIST' || operation === 'LISTSEQ' || operation === 'TCRANGES' || operation === 'SEQGO' && lane === 'bg' && data.length > 0) && data.length <= 320;
       const readNow = operation === 'READ' && data.length === 0 && lane === 'bg' || shortQuery;
       if (readNow) { await beforeStep?.(0); checkCancellation(); beforeSend(); }
@@ -157,7 +157,7 @@ export class Ma2NetworkWire implements Ma2Wire {
       // The plugin does one console Export or Import per line and answers STEP:<steps done> until the
       // last, so stop and playback commands queued meanwhile go out between two steps. A plugin from
       // before steps ignores 'steps' and answers DONE at once, which is the same protocol.
-      const inlineResult = ['READ', 'LIST', 'LISTSEQ', 'TCRANGES', 'SNAPSHOT', 'SCOPE', 'SYNC', 'SEQGO', 'ASSIGNSEQ'].includes(operation);
+      const inlineResult = ['READ', 'SEQCUES', 'LIST', 'LISTSEQ', 'TCRANGES', 'SNAPSHOT', 'SCOPE', 'SYNC', 'SEQGO', 'FIRSTCUES', 'ASSIGNSEQ'].includes(operation);
       let reply = begun;
       if (!beganWithRead) {
         checkCancellation(); await beforeStep?.(0); checkCancellation();

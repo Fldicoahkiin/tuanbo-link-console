@@ -92,6 +92,8 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
         const restored = keepLabel && 'label' in event && 'label' in next.event ? { ...next.event, label: event.label } : next.event;
         const sameCue = event.kind === 'ma2' && restored.kind === 'ma2' && event.action === restored.action && event.sequence === restored.sequence && Number(event.cue) === Number(restored.cue);
         return [{ ...next, event: { ...restored, ...(sameCue && event.librarySource && { librarySource: event.librarySource }),
+          ...(sameCue && event.sourceIngredients && { sourceIngredients: event.sourceIngredients }),
+          ...(sameCue && event.ingredientOrder !== undefined && { ingredientOrder: event.ingredientOrder }),
           ...(sameCue && event.effectGroupId && { effectGroupId: event.effectGroupId }),
           ...(event.beatAnchor !== undefined && Math.abs(lightingEventTime(clip, event, map) - next.ms) <= 1000 / 60 + 1e-6 && { beatAnchor: event.beatAnchor }) } }];
       });

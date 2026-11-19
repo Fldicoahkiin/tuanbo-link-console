@@ -1,3 +1,6 @@
+import type { Ma2SongBinding, Ma2SongConsoleEdits } from '@tb/schema';
+import { ma2LatestChoiceText } from '@tb/core/link';
+import { ma2ExecutorLocationLabel } from './ma2-console-page';
 import type { Ma2SessionCheck, NameSync, SongSync } from '../stores/ma2-sync-store';
 
 type Status = { label: '已同步'; tone: 'verified' } | { label: '正在同步'; tone: 'writing' } | { label: null; tone: 'idle' };
@@ -38,4 +41,11 @@ export function ma2WorkbenchSyncStatus(input: Input): Status {
   if (localCount || names === 'pending' || input.targetCount > songs.length) return canSync ? syncing : idle;
   if (songs.length ? songs.every(song => song.state === 'verified') : names === 'verified') return confirmed;
   return idle;
+}
+
+export function confirmedMessage(binding: Ma2SongBinding, edits?: Ma2SongConsoleEdits): string {
+  const location = binding.executor ? ma2ExecutorLocationLabel(Number(binding.executor.split('.')[0]), Number(binding.executor.split('.')[1])) : `Layout ${binding.layout}`;
+  const taken = edits ? [edits.moved.length ? `挪了 ${edits.moved.length} 个` : '', edits.removed.length ? `删了 ${edits.removed.length} 个` : '', edits.added.length ? `加了 ${edits.added.length} 个` : ''].filter(Boolean) : [];
+  const chosen = edits?.conflicts ? ` · ${ma2LatestChoiceText('这首歌', edits.conflicts.count, edits.conflicts.winner)}` : '';
+  return `${location} · 序列 ${binding.sequence}${binding.timecode ? ` · Timecode ${binding.timecode.number}` : ''} · ${binding.points.length} 步已确认${taken.length ? ` · 控台上${taken.join('、')} Cue，已同步到联动台` : ''}${chosen}`;
 }

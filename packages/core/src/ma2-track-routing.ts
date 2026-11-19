@@ -1,6 +1,104 @@
-import type { LightingDocument, LightingTrack, Ma2PoolRoute, Ma2SongBinding, Ma2SongPoint } from '@tb/schema';
+import type { LightingDocument, LightingEvent, LightingTrack, Ma2FirstTrackReceipt, Ma2FirstTrackRequest, Ma2PoolRoute, Ma2SongBinding, Ma2SongPoint } from '@tb/schema';
 
+import { MA2_FRAME_MS } from './ma2-time-origin';
+import { lightingTrackEnabled } from './lighting-track-state';
 import { lightingEventTime, LightingTempoMap } from './lighting-edit';
+
+type Binding = NonNullable<LightingDocument['ma2Bindings']>[number];
+
+export function firstTimecodeTrack(binding: Binding) {
+  const firstId = binding.baselineTracks[0]?.id;
+  return firstId ? binding.trackMappings?.find(mapping => mapping.trackId === firstId)
+    ?? binding.mappings.find(mapping => mapping.trackId === firstId) : undefined;
+}
+
+export function isWorkbenchCue(binding: Binding, track: LightingTrack, event: LightingEvent): boolean {
+  if (event.kind === 'empty-cue') return true;
+  if (event.kind !== 'ma2' || event.action !== 'goto') return false;
+  const legacy = binding.emptyCueSequence;
+  return Boolean(event.attributes || event.includeTracking !== undefined || track.group === 'effect-canvas' || track.group === 'empty-cues'
+    || event.librarySource || event.effectGroupId || legacy && legacy.sequence === event.sequence
+    && legacy.points.some(point => point.id === event.id && Number(point.cue) === Number(event.cue)));
+}
+
+/** Only placements made in the workbench move. A console-authored parallel track keeps its playback. */
+export function firstTrackCuePlan(document: LightingDocument) {
+  const binding = document.ma2Bindings?.length === 1 && document.ma2Bindings[0];
+  if (!binding || !binding.baselineTracks.length) return null;
+  const firstId = binding.baselineTracks[0]!.id;
+  const first = firstTimecodeTrack(binding);
+  const known = new Map(binding.mappings.map(mapping => [mapping.eventId, mapping]));
+  const tempo = new LightingTempoMap(document.tempos);
+  type Member = Extract<LightingEvent, { kind: 'ma2' | 'empty-cue' }>;
+  const groups = new Map<string, { event: Member; alreadyPlaced: boolean; enabled: boolean }[]>();
+  for (const track of document.tracks) for (const clip of track.clips) for (const event of clip.events) {
+    if (event.kind !== 'empty-cue' && (event.kind !== 'ma2' || event.action !== 'goto' || !event.sequence || !event.cue)) continue;
+    const previous = known.get(event.id);
+    const authored = isWorkbenchCue(binding, track, event);
+    if (!authored) continue;
+    const enabled = !clip.muted && lightingTrackEnabled(document, track);
+    const frame = Math.round((lightingEventTime(clip, event, tempo) + (binding.timeOriginMs ?? 0)) / MA2_FRAME_MS);
+    const key = JSON.stringify([event.effectGroupId ?? event.id, frame, enabled]);
+    const group = groups.get(key) ?? [];
+    group.push({ event, enabled, alreadyPlaced: event.kind === 'ma2' && !event.attributes && event.includeTracking === undefined && previous?.trackId === firstId && track.id === firstId && previous.sequence === event.sequence });
+    groups.set(key, group);
+  }
+  const points: Ma2FirstTrackRequest['points'] = [];
+  const members = new Map<string, { ids: string[]; sources: NonNullable<Extract<Member, { kind: 'ma2' }>['sourceIngredients']>; enabled: boolean }>();
+  for (const group of groups.values()) {
+    if (group.every(member => member.alreadyPlaced)) continue;
+    group.sort(({ event: a }, { event: b }) => (a.kind === 'ma2' ? a.ingredientOrder ?? Number(a.id !== a.effectGroupId) : 0) - (b.kind === 'ma2' ? b.ingredientOrder ?? Number(b.id !== b.effectGroupId) : 0));
+    const leader = group.find(({ event }) => event.id === event.effectGroupId)?.event ?? group[0]!.event;
+    const sources = group.flatMap(({ event }) => event.kind === 'ma2' && event.sequence && event.cue
+      ? event.sourceIngredients ?? [{ sequence: event.sequence, cue: event.cue, executor: event.executor, name: event.label, ...(event.attributes && { attributes: event.attributes }), ...(event.includeTracking !== undefined && { includeTracking: event.includeTracking }), ...(event.preparation && { preparation: event.preparation }) }] : []);
+    points.push({ id: leader.id, sources: sources.map(({ sequence, cue, includeTracking, attributes }) => ({ sequence, cue, ...(attributes && { attributes }), ...(includeTracking !== undefined && { includeTracking }) })) });
+    members.set(leader.id, { ids: group.map(member => member.event.id), sources, enabled: group[0]!.enabled });
+  }
+  if (!points.length) return null;
+  if (!first) throw new Error('原时间线第一轨没有可确认的执行器，请在控台检查第一轨的关联');
+  const sequences = new Set(binding.mappings.filter(mapping => mapping.trackId === firstId && mapping.sequence).map(mapping => mapping.sequence!));
+  if (sequences.size > 1) throw new Error('原时间线第一轨引用了多个序列，请在控台确认这条轨道的执行器');
+  const expectedSequence = [...sequences][0];
+  return { trackId: firstId, executor: first.executor, ...expectedSequence && { expectedSequence }, points, members };
+}
+
+export function applyFirstTrackCues(document: LightingDocument, plan: NonNullable<ReturnType<typeof firstTrackCuePlan>>, receipt: Ma2FirstTrackReceipt): LightingDocument {
+  if (receipt.executor !== plan.executor || plan.expectedSequence && receipt.sequence !== plan.expectedSequence || plan.points.length !== receipt.cues.length) throw new Error('控台返回的第一轨或 Cue 数量和本次添加的不一致');
+  const cues = new Map(plan.points.map((point, index) => [point.id, receipt.cues[index]!]));
+  const consumed = new Set([...plan.members.values()].flatMap(member => member.ids));
+  const next = structuredClone(document);
+  const dest = next.tracks.find(track => track.id === plan.trackId);
+  if (!dest) throw new Error('原时间线第一轨已经移除');
+  const map = new LightingTempoMap(next.tempos);
+  const added: LightingTrack['clips'] = [];
+  for (const track of next.tracks) for (const clip of track.clips) {
+    for (const event of clip.events) {
+      const cue = cues.get(event.id);
+      if (!cue || event.kind !== 'ma2' && event.kind !== 'empty-cue') continue;
+      const member = plan.members.get(event.id)!;
+      const at = lightingEventTime(clip, event, map);
+      const muted = !member.enabled;
+      let target = added.find(value => value.muted === muted);
+      if (!target) {
+        target = { ...clip, id: crypto.randomUUID(), start: 0, timeLock: 'time', muted, duration: 1, events: [] };
+        added.push(target);
+      }
+      target.duration = Math.max(target.duration, at + 1);
+      const placed = { ...event };
+      if (placed.kind === 'ma2') { delete placed.includeTracking; delete placed.attributes; }
+      target.events.push({ ...placed, at, kind: 'ma2', action: 'goto', executor: receipt.executor, sequence: receipt.sequence, cue,
+        ...(member.sources.length > 0 && { sourceIngredients: member.sources }) });
+    }
+    clip.events = clip.events.filter(event => !consumed.has(event.id));
+  }
+  dest.clips.push(...added);
+  const bound = new Set(next.ma2Bindings![0]!.baselineTracks.map(track => track.id));
+  next.tracks = next.tracks.filter(track => bound.has(track.id) || track.clips.some(clip => clip.events.length) || !document.tracks.find(old => old.id === track.id)?.clips.some(clip => clip.events.some(event => consumed.has(event.id))));
+  const remaining = new Set(next.tracks.map(track => track.id));
+  const binding = next.ma2Bindings![0]!;
+  if (binding.pendingTracks) binding.pendingTracks = binding.pendingTracks.filter(track => remaining.has(track.trackId));
+  return next;
+}
 
 /** Empty locations on an imported Timecode use a separate editable Sequence for this song. */
 export function boundEmptyCuePoints(document: LightingDocument): Ma2SongPoint[] {

@@ -1,7 +1,7 @@
 import { Ma2MtcSelectionService, type Ma2ConfirmedTimecode, type Ma2MtcPreparationTask } from './ma2-mtc-selection';
 import { editMa2Timeline } from './ma2-timeline-edit';
 import { ma2PlaybackRequestSchema, type Ma2PlaybackRequest, type Ma2Catalog, type Ma2CatalogRequest, ma2ObjectDirectorySchema, type Ma2ObjectDirectory } from '@tb/schema';
-import { playMa2Cue } from './ma2-pool-playback';
+import { playMa2Cue, stopMa2ConsoleCues } from './ma2-pool-playback';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
@@ -297,6 +297,14 @@ export class Ma2NetworkManager {
     current();
     // An Off passes queued sync reads and writes, so stopping a song switches its lights off first.
     return playMa2Cue(connection, request.action, ()=>{current();options?.beforeSend?.();},options?.priority ?? (request.action.action === 'off' ? 'stop' : 'playback'), options);
+  }
+  async stopConsoleCues(): Promise<void> {
+    const connection = this.connection;
+    if (!connection || connection.state !== 'connected') throw new Error('控台未连接，无法停止控台上的 Cue');
+    const generation = this.generation;
+    await stopMa2ConsoleCues(connection, () => {
+      if (connection !== this.connection || generation !== this.generation || connection.state !== 'connected') throw new Error('控台连接已变化，请核对后再按停止');
+    });
   }
   private credentialId(settings: Ma2NetworkSettings): string { return `ma2-${createHash('sha256').update(`${settings.host}:${settings.port}:${settings.username}`).digest('hex')}`; }
   async readCatalog(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal, targets?: readonly number[], checkpoint?: (catalog: Ma2Catalog, entry?: Ma2Catalog['entries'][number]) => Promise<void>, expectedSource?: Ma2CatalogRequest['expectedSource']): Promise<Ma2Catalog> {

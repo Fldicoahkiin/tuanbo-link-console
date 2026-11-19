@@ -1,3 +1,5 @@
+import { addMa2SequenceCommand } from './ma2-new-timeline';
+import { placeConsoleCue } from './lighting-cue-placement';
 import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type LinkProject, type Ma2Catalog, type Ma2TimecodePreview } from '@tb/schema';
 import { editMa2TimelinePropertiesCommand } from './ma2-timeline-properties';
@@ -331,4 +333,16 @@ it('只有控台目录的时间线，手动选择现读后补入完整条目和 
   expect(song(after).ma2Bindings?.[0]).toMatchObject({ timecode: 121, timeOriginMs: 70000 });
   expect(song(after).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).map(event => event.at)).toEqual([2500]);
   expect(ma2SongPairs(after).pairs[121]).toBe('A');
+});
+
+it('首次放素材时用已经按 MTC 对上的原时间线，保留新素材和已读 Cue', () => {
+  const before = fixture();
+  const current = before.rundown[0]!;
+  delete current.lighting;
+  const draft = placeConsoleCue(createLightingDocument(), { sequence: 20, cue: '3', executor: '', name: '新素材' }, 2000, 5000);
+  const result = addMa2SequenceCommand('A', draft, { name: '歌曲A', sequence: 9800, timecode: 9800, executor: '1000.101' }).execute(before);
+  const lighting = result.rundown[0]!.lighting!;
+  expect(lighting.ma2Bindings?.map(binding => binding.timecode)).toEqual([112]);
+  expect(lighting.timelineDestination).toBeUndefined();
+  expect(lighting.tracks.flatMap(track => track.clips.flatMap(clip => clip.events))).toEqual(expect.arrayContaining([expect.objectContaining({ sequence: 20, cue: '3' }), expect.objectContaining({ id: 'event-112' })]));
 });

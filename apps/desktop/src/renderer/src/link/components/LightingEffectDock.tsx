@@ -8,6 +8,7 @@ import { useMa2ReadStore } from '../stores/ma2-read-store';
 import { useDocumentStore } from '../stores/document-store';
 import { ma2SequenceLibrary } from '../view-models/ma2-sequence-library';
 import { useLightingCueSplit } from './LightingLibrarySplitter';
+import { useCueTrackingPreference } from '../runtime/ma2-realtime-preference';
 import { LightingCueComposer, cueIngredients, saveCueIngredients, type CueIngredient } from './LightingCueComposer';
 import { CONSOLE_CUE_DRAG, consoleCueDragSchema } from './lighting-material-drag';
 import type { EditorPlayhead } from './editor-playhead';
@@ -37,6 +38,7 @@ export function LightingEffectDock({ itemId, onCreated, document, disabled, onCh
   const [error, setError] = useState('');
   const browserOpen = useMa2ReadStore(state => state.browserOpen);
   const project = useDocumentStore(state => state.project);
+  const defaultTracking = useCueTrackingPreference(state => state.includeTracking);
   const library = useMemo(() => ma2SequenceLibrary(project, document), [project, document]);
   const ingredients = useMemo(() => eventId ? cueIngredients(document, eventId, library) : draftIngredients, [eventId, document, library, draftIngredients]);
   useEffect(() => { if (eventId) { setTemplateId(undefined); setDraftOpen(false); } }, [eventId]);
@@ -61,16 +63,17 @@ export function LightingEffectDock({ itemId, onCreated, document, disabled, onCh
   };
   const append = (values: CueIngredient[]): void => {
     if (disabled) return;
-    commitIngredients(editorOpen ? [...ingredients, ...values] : values);
+    const added = values.map(value => ({ ...value, includeTracking: value.includeTracking ?? defaultTracking }));
+    commitIngredients(editorOpen ? [...ingredients, ...added] : added);
   };
-  const addConsoleCue = (sequence: number, cue: string, name: string, executor: string): void => {const value={name,sequence,cue,executor,delayMs:0};if(layoutOpen)setNewCueIngredients(current=>[...current,value]);else append([value]);};
+  const addConsoleCue = (sequence: number, cue: string, name: string, executor: string, attributes?: string[], includeTracking = defaultTracking): void => {const value={name,sequence,cue,executor,delayMs:0,attributes,includeTracking};if(layoutOpen)setNewCueIngredients(current=>[...current,value]);else append([value]);};
   const addIngredient = (id: string): void => {
     const entry = document.templates.find(value => value.id === id);
     if (entry?.nativeSequence) { onStamp(id); return; }
     const binding = entry?.track.cueStamp;
     if (!entry || binding?.mode !== 'fixed') { setError('这个素材没有关联可用的 Cue'); return; }
-    if(layoutOpen){setNewCueIngredients(current=>[...current,...(entry.members?.map(value=>({...value}))??[{name:entry.name,sequence:binding.sequence,cue:binding.cue,executor:binding.executor,delayMs:0}])]);return;}
-    append(entry.members?.map(value => ({ ...value })) ?? [{ name: entry.name, sequence: binding.sequence, cue: binding.cue, executor: binding.executor, delayMs: 0 }]);
+    if(layoutOpen){setNewCueIngredients(current=>[...current,...(entry.members?.map(value=>({...value,includeTracking:value.includeTracking??defaultTracking}))??[{name:entry.name,sequence:binding.sequence,cue:binding.cue,executor:binding.executor,delayMs:0,attributes:binding.attributes,includeTracking:binding.includeTracking??defaultTracking}])]);return;}
+    append(entry.members?.map(value => ({ ...value })) ?? [{ name: entry.name, sequence: binding.sequence, cue: binding.cue, executor: binding.executor, delayMs: 0, attributes: binding.attributes, includeTracking: binding.includeTracking }]);
   };
   const close = (): void => { onNew(); setTemplateId(undefined); setDraftOpen(false); setIngredients([]); setError(''); };
   // Every menu entry but 控台时间线 shows the library, so it also closes the console timeline page.
@@ -86,13 +89,13 @@ export function LightingEffectDock({ itemId, onCreated, document, disabled, onCh
   return <section className="lighting-effect-dock lighting-material-layout" style={split.style} aria-label="灯光效果库" data-editor={!browserOpen && (editorOpen || layoutOpen)} data-sidebar={Boolean(sidebarHost)} data-panel={Boolean(externalPanel && !browserOpen)}>
     {sidebarHost ? createPortal(sidebar, sidebarHost) : sidebar}
     {!browserOpen && externalPanel || <>
-      <div className="cue-material-browser">{section === 'console' || browserOpen ? <Ma2SequencePreview notify={notify} timelineOpen={browserOpen} onCloseTimelines={() => useMa2ReadStore.setState({ browserOpen: false })} onBrowseTimelines={() => useMa2ReadStore.setState({ browserOpen: true })} document={document} onBrowseLayout={browseLayout} onLayoutSettings={()=>setLayoutOpen(true)} onClose={() => setSection('front')} onUse={addConsoleCue} onClassify={value => { setDraft(value); setSection('front'); }} composing={editorOpen || layoutOpen} /> : <LightingUserLibrary key={customCategory ?? section} customCategoryId={customCategory ?? undefined} section={section} document={document} draft={draft} onDraftClose={() => setDraft(null)} onBrowse={() => setSection('console')} onAudition={onAuditionTemplate} onCueUse={addConsoleCue} composing={editorOpen || layoutOpen} onStamp={id => editorOpen || layoutOpen ? addIngredient(id) : onStamp(id)} onCompose={id => { onNew(); setTemplateId(id); setDraftOpen(true); const entry = document.templates.find(value => value.id === id); const binding = entry?.track.cueStamp; setIngredients(entry?.members?.map(value => ({ ...value })) ?? (entry && binding?.mode === 'fixed' ? [{ name: entry.name, sequence: binding.sequence, cue: binding.cue, executor: binding.executor, delayMs: 0 }] : [])); }} />}</div>
+      <div className="cue-material-browser">{section === 'console' || browserOpen ? <Ma2SequencePreview notify={notify} timelineOpen={browserOpen} onCloseTimelines={() => useMa2ReadStore.setState({ browserOpen: false })} onBrowseTimelines={() => useMa2ReadStore.setState({ browserOpen: true })} document={document} onBrowseLayout={browseLayout} onLayoutSettings={()=>setLayoutOpen(true)} onClose={() => setSection('front')} onUse={addConsoleCue} onClassify={value => { setDraft(value); setSection('front'); }} composing={editorOpen || layoutOpen} /> : <LightingUserLibrary key={customCategory ?? section} customCategoryId={customCategory ?? undefined} section={section} document={document} draft={draft} onDraftClose={() => setDraft(null)} onBrowse={() => setSection('console')} onAudition={onAuditionTemplate} onCueUse={addConsoleCue} composing={editorOpen || layoutOpen} onStamp={id => editorOpen || layoutOpen ? addIngredient(id) : onStamp(id)} onCompose={id => { onNew(); setTemplateId(id); setDraftOpen(true); const entry = document.templates.find(value => value.id === id); const binding = entry?.track.cueStamp; setIngredients(entry?.members?.map(value => ({ ...value, includeTracking: value.includeTracking ?? defaultTracking })) ?? (entry && binding?.mode === 'fixed' ? [{ name: entry.name, sequence: binding.sequence, cue: binding.cue, executor: binding.executor, delayMs: 0, attributes: binding.attributes, includeTracking: binding.includeTracking ?? defaultTracking }] : [])); }} />}</div>
       {!browserOpen && layoutOpen ? <>{split.separator}<Ma2LayoutPanel itemId={itemId} key={project?.projectId} document={document} ingredients={newCueIngredients} onIngredients={setNewCueIngredients} onClose={()=>setLayoutOpen(false)}/></> : !browserOpen && editorOpen ? <>{split.separator}<LightingCueComposer key={eventId ?? templateId ?? 'draft'} details={pointDetails} templateId={templateId} document={document} eventId={eventId} playhead={playhead} durationMs={durationMs} ingredients={ingredients} onIngredients={commitIngredients} onChange={onChange} onNew={close} disabled={disabled} onDropMaterial={transfer => {
         try {
           const effect = transfer.getData(EFFECT_DRAG);
           if (effect) { addIngredient(effect); return; }
           const raw = transfer.getData(CONSOLE_CUE_DRAG);
-          if (raw) { const value = consoleCueDragSchema.parse(JSON.parse(raw)); addConsoleCue(value.sequence, value.cue, value.name, value.executor); }
+          if (raw) { const value = consoleCueDragSchema.parse(JSON.parse(raw)); addConsoleCue(value.sequence, value.cue, value.name, value.executor, value.attributes, value.includeTracking); }
         } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
       }} /></> : null}
     </>}

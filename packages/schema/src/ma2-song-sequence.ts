@@ -1,3 +1,4 @@
+import { cueAttributeNamesSchema } from './lighting';
 import { z } from 'zod';
 import { ma2SongBindingSchema, ma2TimelineDestinationSchema } from './ma2-song-binding';
 import { ma2ConsoleChangesSchema, ma2NetworkTargetSchema, ma2WriteModeSchema } from './ma2-bridge';
@@ -9,7 +10,7 @@ const source = z.object({ show: z.string().min(1), generation: z.string().min(1)
 const cueNumber = z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/, 'Cue 编号须为 1–9999，最多 3 位小数').refine(value => Number(value) > 0, 'Cue 编号须大于 0');
 export const ma2SongPointSchema = z.object({ id: z.string().min(1), name: z.string().max(512).regex(/^[^\u0000-\u001f"\\]*$/), atMs: z.number().finite().nonnegative(),
   enabled: z.boolean().optional(),
-  cues: z.array(z.object({ sequence: z.number().int().min(1).max(99999), cue: cueNumber, delayMs: z.number().finite().nonnegative() }).strict()).max(32)
+  cues: z.array(z.object({ attributes: cueAttributeNamesSchema.optional(), includeTracking: z.boolean().optional(), sequence: z.number().int().min(1).max(99999), cue: cueNumber, delayMs: z.number().finite().nonnegative() }).strict()).max(32)
 }).strict();
 export const ma2SongSyncRequestSchema = z.object({ network: ma2NetworkTargetSchema, expectedSource: source, projectId: z.string().uuid(), itemId: z.string().min(1), requestId: z.string().uuid(),
   settings: ma2LayoutSettingsSchema, name: ma2LabelSchema, points: z.array(ma2SongPointSchema).max(9999), binding: ma2SongBindingSchema.optional(),

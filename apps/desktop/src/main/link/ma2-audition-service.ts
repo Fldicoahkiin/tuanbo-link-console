@@ -9,12 +9,13 @@ export class Ma2AuditionService {
   private targets=new Map<string,Target>();private sessions=new Map<string,number>();
   private playing:Promise<void>|null=null;
   private generation=0;private revision=0;private phase:Ma2AuditionState['phase']='idle';private stopping:Promise<Ma2AuditionState>|null=null;private connectionChanging=false;
+  private consoleStop:Promise<Ma2AuditionState>|null=null;
   constructor(private readonly network:AuditionNetwork,private readonly publish:(state:Ma2AuditionState)=>void=()=>undefined){}
-  status():Ma2AuditionState{return ma2AuditionStateSchema.parse({version:1,revision:this.revision,generation:this.generation,phase:this.phase,targets:[...this.targets.values()].map(({id,network,action,state,error,epoch})=>({id,network,action,state,error,connectionChanged:epoch!==this.network.connectionGeneration}))});}
+  status():Ma2AuditionState{return ma2AuditionStateSchema.parse({version:1,revision:this.revision,generation:this.generation,phase:this.consoleStop?'stopping':this.phase,targets:[...this.targets.values()].map(({id,network,action,state,error,epoch})=>({id,network,action,state,error,connectionChanged:epoch!==this.network.connectionGeneration}))});}
   private changed():void{this.revision++;this.publish(this.status());}
   /** Human acknowledgement only; never send an old target to a different connection. */
   acknowledgeClosed(targetId:string):Ma2AuditionState{
-    if(this.stopping)throw new Error('正在停止试听，请稍后再看');
+    if(this.stopping||this.consoleStop)throw new Error('正在停止试听，请稍后再看');
     const target=this.targets.get(targetId);
     if(!target||target.epoch===this.network.connectionGeneration||target.state!=='failed'||target.pending)throw new Error('这条记录已经不需要确认了，请刷新后查看');
     this.targets.delete(targetId);
@@ -32,7 +33,7 @@ export class Ma2AuditionService {
   }
   async play(input:Ma2AuditionRequest):Promise<void>{
     const request=ma2AuditionRequestSchema.parse(input);
-    if(this.stopping||this.connectionChanging||request.generation!==this.generation)throw new Error('试听已停止或正在切换连接，请重新点击 Cue');
+    if(this.stopping||this.consoleStop||this.connectionChanging||request.generation!==this.generation)throw new Error('试听已停止或正在切换连接，请重新点击 Cue');
     // Serialize the whole handoff, not only individual wire commands. A second
     // click cannot light its target while the previous click is still releasing.
     const result=this.playing?this.playing.then(()=>this.playSelected(request)):this.playSelected(request);
@@ -43,7 +44,7 @@ export class Ma2AuditionService {
   }
   private async playSelected(request:Ma2AuditionRequest):Promise<void>{
     const epoch=this.network.connectionGeneration;const action=request.action;
-    const current=()=>{if(this.stopping||this.connectionChanging||request.generation!==this.generation||epoch!==this.network.connectionGeneration)throw new Error('试听已停止，取消旧 Cue');};
+    const current=()=>{if(this.stopping||this.consoleStop||this.connectionChanging||request.generation!==this.generation||epoch!==this.network.connectionGeneration)throw new Error('试听已停止，取消旧 Cue');};
     current();
     const off=action.target==='sequence'?{target:'sequence' as const,sequence:action.sequence,action:'off' as const}:{target:'executor' as const,executor:action.executor,action:'off' as const};
     const id=JSON.stringify([request.network.host,request.network.port,request.network.monitorPort,request.network.username,epoch,off]);
@@ -66,14 +67,29 @@ export class Ma2AuditionService {
       const {generation,network,action,sessionId,deadlineAt}=request;
       const payload={network,action,sessionId,deadlineAt};
       await this.network.playCue(payload,{beforeSend:()=>{
-        if(this.stopping||generation!==this.generation||epoch!==this.network.connectionGeneration)throw new Error('试听已停止，取消旧 Cue');
+        if(this.stopping||this.consoleStop||generation!==this.generation||epoch!==this.network.connectionGeneration)throw new Error('试听已停止，取消旧 Cue');
         target.possiblySent=true;target.state='unknown';this.changed();
       }});
       if(this.targets.get(id)===target){if(action.action==='off')this.targets.delete(id);else{target.state='sent';target.error=null;}}
     }catch(error){if(this.targets.get(id)===target&&target.possiblySent){target.state='unknown';target.error=error instanceof Error?error.message:String(error);}throw error;}
     finally{target.pending--;if(!target.pending&&!target.possiblySent&&this.targets.get(id)===target)this.targets.delete(id);const count=(this.sessions.get(request.sessionId)??1)-1;if(count)this.sessions.set(request.sessionId,count);else this.sessions.delete(request.sessionId);this.changed();}
   }
+  /** Only an operator stop in the lighting workbench releases the whole desk. */
+  stopConsole(release:()=>Promise<void>):Promise<Ma2AuditionState>{
+    if(this.consoleStop)return this.consoleStop;
+    if(this.connectionChanging)return Promise.reject(new Error('控台连接正在切换，请连接后再按停止'));
+    const owned=this.stop();
+    this.consoleStop=Promise.resolve().then(async()=>{
+      const outcomes=await Promise.allSettled([Promise.resolve().then(release),owned]);
+      this.consoleStop=null;
+      const failed=outcomes.find(result=>result.status==='rejected');
+      if(failed){this.phase='failed';this.changed();throw failed.reason instanceof Error?failed.reason:new Error(String(failed.reason));}
+      this.changed();return this.status();
+    });
+    return this.consoleStop;
+  }
   stop():Promise<Ma2AuditionState>{
+    if(this.consoleStop)return this.consoleStop;
     if(this.stopping)return this.stopping;
     this.generation++;this.phase='stopping';for(const id of this.sessions.keys())this.network.cancelPlayback(id);
     const targets=[...this.targets.values()];for(const target of targets)if(!target.possiblySent)this.targets.delete(target.id);

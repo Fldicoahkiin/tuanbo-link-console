@@ -100,7 +100,7 @@ export function updateLibraryPlacementsCommand(entryId: string, revision: number
     if (!entry || entry.revision !== revision) throw new Error('分类素材已改变，请重新生成更新预览');
     const binding = entry.track.cueStamp;
     if (binding?.mode !== 'fixed') throw new Error('此素材没有可用的控台 Cue 引用');
-    const members = entry.members ?? [{ name: entry.name, sequence: binding.sequence, cue: binding.cue, executor: binding.executor, delayMs: 0 }];
+    const members = entry.members ?? [{ name: entry.name, sequence: binding.sequence, cue: binding.cue, executor: binding.executor, attributes: binding.attributes, includeTracking: binding.includeTracking, delayMs: 0 }];
     return parseLinkProject({ ...project, updatedAt: new Date().toISOString(), rundown: project.rundown.map(item => {
       if (!itemIds.includes(item.id) || !item.lighting) return item;
       if (expected && JSON.stringify(expected[item.id]) !== JSON.stringify(item.lighting)) throw new Error(`「${item.title}」已改变，请重新生成更新预览`);
@@ -115,6 +115,7 @@ export function updateLibraryPlacementsCommand(entryId: string, revision: number
         group.at = Math.min(group.at, at); group.ids.add(event.id); group.originals.push(event); groups.set(id, group);
       }
       const removed = new Set([...groups.values()].flatMap(group => [...group.ids]));
+      const changed = new Set<string>();
       const tracks = lighting.tracks.map(track => ({ ...track, clips: track.clips.map(clip => {
         const events = clip.events.filter(event => !removed.has(event.id));
         for (const [groupId, group] of groups) {
@@ -124,12 +125,14 @@ export function updateLibraryPlacementsCommand(entryId: string, revision: number
             if (item.referenceAudio && at >= item.referenceAudio.durationMs) throw new Error(`「${item.title}」更新后超出歌曲范围`);
             const original = group.originals[index];
             const beatAnchor = original?.beatAnchor === undefined ? undefined : map.msToBeat(at - (lighting.music?.firstBeatMs ?? 0));
-            events.push({ id: [...group.ids][index] ?? crypto.randomUUID(), kind: 'ma2', runMode: group.originals.find(value => value.kind === 'ma2')?.runMode, action: 'goto', label: member.name, at: at - clip.start, sequence: member.sequence, cue: member.cue, executor: member.executor, librarySource: { id: entryId, revision }, ...(beatAnchor === undefined ? {} : {beatAnchor}), ...(members.length > 1 ? { effectGroupId: groupId } : {}) });
+            const id = [...group.ids][index] ?? crypto.randomUUID();
+            changed.add(id);
+            events.push({ id, attributes: member.attributes, includeTracking: member.includeTracking, ingredientOrder: index, kind: 'ma2', runMode: group.originals.find(value => value.kind === 'ma2')?.runMode, action: 'goto', label: member.name, at: at - clip.start, sequence: member.sequence, cue: member.cue, executor: member.executor, librarySource: { id: entryId, revision }, ...(beatAnchor === undefined ? {} : {beatAnchor}), ...(members.length > 1 ? { effectGroupId: groupId } : {}) });
           });
         }
         return { ...clip, events, duration: Math.max(clip.duration, ...events.map(event => event.at + (event.kind === 'note' ? event.duration : .001))) };
       }) }));
-      const next = { ...lighting, version: 2 as const, tracks }; assertMusicCueConflicts(next);
+      const next = { ...lighting, version: 2 as const, tracks }; assertMusicCueConflicts(next, changed);
       return { ...item, lighting: next };
     }) });
   }, undo: before => before };

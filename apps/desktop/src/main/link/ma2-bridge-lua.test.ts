@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { bridgeSource, Ma2LuaConsole, singleRunBridgeSource } from './fixtures/ma2-lua-console';
@@ -15,6 +16,28 @@ import { ma2PoolRouteSchema, ma2ObjectDirectorySchema, ma2TimecodeRangesSchema }
 
 const hex = (text: string): string => Buffer.from(text).toString('hex');
 const requestId = (index: number): string => index.toString(16).padStart(32, 'c');
+
+it('第一轨补收回执时重新核对原生 Cue，前面插入 Cue 不影响确认，同号换内容不会误报成功', async () => {
+  const desk = new Ma2LuaConsole();
+  const wire = new Ma2NetworkWire(desk);
+  const owner = 'a'.repeat(64), key = 'b'.repeat(64);
+  const [show, generation] = desk.lua("return gma.show.getvar('SHOWFILE'), TBLINK_BRIDGE_GENERATION");
+  const request = [owner, show!.toString('hex'), generation!.toString('hex'), '1.101', '9', `${key} 0 0`].join('\n');
+  desk.set('Timecode 7', { xml: '<MA><Timecode><Track index="0"><Object><No>30</No><No>1</No><No>1</No><No>101</No></Object></Track></Timecode></MA>' });
+  desk.set('Executor 1.101', { xml: '<MA><Exec><Assignment name="Song"><No>25</No><No>1</No><No>9</No></Assignment></Exec></MA>' });
+  desk.set('Sequence 9 Cue 7', { number: '7' });
+  const setCue = (index: number, part: string) => desk.set('Sequence 9', { xml: `<MA major_vers="3"><Sequ index="8"><Cue index="${index}"><Number number="7" sub_number="0"/>${part}</Cue></Sequ></MA>` });
+  const part = '<CuePart index="0"/>';
+  setCue(1, part);
+  desk.lua("FAKE.files[FAKE.vars.PATH .. '/importexport/tblink_first_' .. OWNER .. '_9.txt'] = KEY .. ' 7 pending\\n'", { OWNER: owner, KEY: key });
+  const run = (id: number) => wire.exchange(requestId(id), 'FIRSTCUES', 7, request, () => undefined);
+  expect(JSON.parse(await run(1))).toMatchObject({ cues: ['7'], backupFile: null });
+  setCue(2, part);
+  expect(JSON.parse(await run(2))).toMatchObject({ cues: ['7'], backupFile: null });
+  setCue(2, '<CuePart index="0" name="现场改过"/>');
+  await expect(run(3)).rejects.toThrow('Cue 内容已经改变');
+  expect(desk.commands().every(command => command.startsWith('Export '))).toBe(true);
+});
 const timecodeXml = (target: number, cues: Array<[number, number]>, name = `TC${target}`): string => `<?xml version="1.0" encoding="utf-8"?>
 <MA major_vers="3" minor_vers="3" stream_vers="4">
 \t<Info datetime="@EXPORT@" showfile="tblink_fake_show" />
@@ -32,6 +55,29 @@ const sequenceXml = (number: number, color = '', extra = ''): string => `<?xml v
 \t</Sequ>
 </MA>
 `;
+it('只读取指定 Cue 的属性名，选中属性的所有灯具和层原样传送', async () => {
+  const desk = new Ma2LuaConsole();
+  const wire = new Ma2NetworkWire(desk);
+  const native = readFileSync(new URL('./fixtures/ma2-cue-attributes-3.7.xml', import.meta.url), 'utf8');
+  desk.set('Sequence 9918', {xml: native.replace('<CuePart index="0">', '<CuePart index="0" command="Go Macro 6">')});
+  const [show, generation] = desk.lua("return gma.show.getvar('SHOWFILE'), _G.TBLINK_BRIDGE_GENERATION");
+  const query = 'names:' + show!.toString('hex') + ':' + generation!.toString('hex') + ':1.000';
+  const reply = await wire.exchange(requestId(1), 'SEQCUES', 9918, query, () => undefined);
+  const names = reply.slice('attributes:'.length).split(',').map(hex => Buffer.from(hex, 'hex').toString());
+  expect(names).toEqual(expect.arrayContaining(['DIM','PAN','TILT','COLOR1']));
+  const token = requestId(2);
+  const identity = show!.toString('hex') + '-' + generation!.toString('hex');
+  const pick = await wire.exchange(token, 'SEQCUES', 9918, 'pick:' + token + ':44494d+50414e:' + identity + ':1.000', () => undefined);
+  expect(pick).not.toContain('Macro');
+  expect(pick).toContain('<CuePartPresetTiming>');
+  expect(pick).toContain('<Value>70</Value>');
+  expect(pick).toContain('attribute_name="PAN"');
+  expect(pick).not.toContain('attribute_name="COLOR1"');
+  expect(pick).not.toContain('attribute_name="TILT"');
+  expect(desk.file('/fake/importexport/tblink_pick_' + token + '.xml')?.toString()).toBe(pick);
+  await expect(wire.exchange(requestId(3), 'SEQCUES', 9918, 'pick:' + token + ':4141:' + identity + ':1.000', () => undefined)).rejects.toThrow();
+  expect(desk.commands().every(command => command.startsWith('Export '))).toBe(true);
+});
 const executorXml = (sequence: number): string => `<MA><Exec offset_from_first="0"><Assignment name="A"><No>25</No><No>1</No><No>${sequence}</No></Assignment><AssignmentExec><Button>12299</Button></AssignmentExec></Exec></MA>`;
 
 it('内部选曲对象保留占位标记，第零帧的事件计入时间范围', async () => {

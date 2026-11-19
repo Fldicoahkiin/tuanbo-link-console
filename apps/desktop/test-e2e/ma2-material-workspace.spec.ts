@@ -40,15 +40,20 @@ test('构造数据：素材读取关闭窗口后继续、保存并重启恢复�
     await page.evaluate(() => localStorage.setItem('tblink.ma2-connection-method.v1', 'network'));
     await page.reload();
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
+    await expect(page.getByText('已打开：素材任务生命周期', { exact: false })).toBeVisible();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByRole('button', { name: '读取 Cue', exact: true }).click();
+    await expect.poll(() => app.evaluate(() => process.env.TBLINK_MATERIAL_READS)).toBe('1');
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
+    await page.getByRole('button', { name: '单步', exact: true }).click();
     await expect(page.getByRole('button', { name: '试听序列 36 灯光步 1.100', exact: true })).toBeVisible();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
     await expect.poll(() => savedValue(page, async () => (JSON.parse(await readFile(file, 'utf8')) as { ma2MaterialLibrary?: { library: { sequences: unknown[]; sourceUnverified?: boolean } } }).ma2MaterialLibrary?.library.sequences.length)).toBe(2);
     expect(await app.evaluate(() => process.env.TBLINK_MATERIAL_READS)).toBe('1');
+    await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
+    await page.getByRole('button', { name: '读取 Cue', exact: true }).click();
     await expect.poll(() => app.evaluate(() => Number(process.env.TBLINK_MATERIAL_SOURCE_READS))).toBeGreaterThan(0);
     expect(await app.evaluate(() => process.env.TBLINK_MATERIAL_READS)).toBe('1');
     await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close();
@@ -56,17 +61,34 @@ test('构造数据：素材读取关闭窗口后继续、保存并重启恢复�
     await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => { throw new Error('重开不能自动扫描'); }); });
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.getByLabel('素材序列', { exact: true })).toHaveAttribute('data-total-cues', '2');
+    await page.getByRole('button', { name: '单步', exact: true }).click();
     await expect(page.getByRole('button', { name: '试听序列 36 灯光步 1.100', exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('material-restored.png') });
+  } catch (error) {
+    if (!page.isClosed()) {
+      await writeFile(info.outputPath('failure-ui.txt'), await page.locator('body').innerText());
+      await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
+      await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
+      if (!await page.getByText('控台灯光', { exact: true }).isVisible()) await page.getByText('歌曲导入与同步', { exact: true }).click();
+      await writeFile(info.outputPath('failure-settings.txt'), await page.locator('body').innerText());
+    }
+    throw error;
   } finally {
     if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     if (app.process().exitCode === null) await app.close();
   }
 });
 
-test('现场 584 个 Cue 在原工作区内可查看、关闭恢复并一次入库', async ({}, info) => {
+test('基于现场快照的 584 个 Cue 在原工作区内可查看、关闭恢复并一次入库', async ({}, info) => {
   test.skip(!existsSync(snapshot), '需要此前实机读取的只读素材快照');
   const library = ma2EffectLibrarySchema.parse(JSON.parse(await readFile(snapshot, 'utf8')));
+  const total = library.sequences.reduce((count, sequence) => count + sequence.cues.length, 0);
+  if (total < 584) {
+    const sequence = Math.max(...library.directory.entries.map(entry => entry.target)) + 1;
+    const name = '补足密集素材样本';
+    library.directory.entries.push({ target: sequence, name });
+    library.sequences.push({ sequence, name, cues: Array.from({ length: 584 - total }, (_, n) => ({ index: n + 1, number: (n + 1).toFixed(3), name: null })) });
+  }
   expect(library.sequences.flatMap(sequence => sequence.cues)).toHaveLength(584);
   const project = createEmptyLinkProject('素材界面验收');
   project.schemaVersion = 2;
@@ -91,6 +113,7 @@ test('现场 584 个 Cue 在原工作区内可查看、关闭恢复并一次入�
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await page.screenshot({ path: info.outputPath('workbench-before-materials.png') });
     await writeFile(info.outputPath('workbench-before-materials.html'), await page.content());
+    await page.getByRole('button', { name: '单步', exact: true }).click();
     const pool = page.getByLabel('素材序列', { exact: true });
     await expect(pool).toHaveAttribute('data-total-cues', '584');
     expect(await pool.locator('.console-cue-cell').count()).toBeLessThan(584);

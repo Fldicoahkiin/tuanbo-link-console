@@ -24,7 +24,7 @@ it('只移动节拍锁定 Cue，固定时间保留；越界与同目标冲突拒
   const changed = changeMusicTempo(document, [{ ...document.tempos[0]!, bpm:60 }], { ...document.music, firstBeatMs:100 }, 10000);
   expect(changed.changes).toEqual([{ id:'a', name:'节拍', fromMs:468.75, toMs:1100 }]);
   expect(changed.document.tracks[0]?.clips[0]?.events[1]?.at).toBe(2000);
-  expect(() => moveMusicCues(document, [{ id:'a', name:'节拍', fromMs:468.75, toMs:2000 }], 10000)).toThrow('同一目标');
+  expect(() => moveMusicCues(document, [{ id:'a', name:'节拍', fromMs:468.75, toMs:2000 }], 10000)).toThrow('2.000 秒的序列 36');
   expect(() => moveMusicCues(document, [{ id:'a', name:'节拍', fromMs:468.75, toMs:10000 }], 10000)).toThrow('范围');
   expect(document.tracks[0]?.clips[0]?.events[0]?.at).toBe(468.75);
 });

@@ -1,3 +1,4 @@
+import { readSelectedCue } from './ma2-cue-attributes';
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutDirectorySchema, ma2LayoutUpdateRequestSchema, type Ma2LayoutDirectoryRequest, type Ma2LayoutDirectory, type Ma2LayoutUpdateRequest } from '@tb/schema';
 import { moveMa2LayoutObjects } from './ma2-timecode-xml';
 import { ma2TimelineDestinationSchema, ma2SongBindingSchema, ma2SongSyncRequestSchema, ma2SongSyncResultSchema, ma2SongPointSchema, type Ma2SongSyncRequest, type Ma2SongSyncResult, type Ma2ReadProgressUpdate } from '@tb/schema';
@@ -20,6 +21,7 @@ import { renameMa2Object } from './ma2-rename-service';
 import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor';
 import { ma2SongCreationStages, recoverMa2SongCreation } from './ma2-song-recovery';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
+import { ma2TimecodeAfterCueReindex } from './ma2-timecode-xml';
 import { writeMa2SongTimecode } from './ma2-song-timecode';
 import { holdForShow, isShowWait, MA2_SONG_COLLISION, ma2LatestSide, type ShowGateReader, type ShowOperation } from '@tb/core/link';
 import { hasMa2SongConsoleEdits, mergeMa2SongConsoleEdits } from './ma2-song-console-edits';
@@ -237,6 +239,7 @@ export class Ma2LayoutService {
       const directory = await this.directory(bridge, layoutRequest);
       const ownership = `${this.ownershipFile}.songs.json`;
       const schema = z.array(z.object({ key: z.string(), projectId: z.string(), itemId: z.string(), inputHash: z.string().optional(), binding: ma2SongBindingSchema.optional(),
+        pendingTimecode: z.literal(true).optional(),
         originalPoints: z.array(ma2SongPointSchema).optional(), requestedDestination: ma2TimelineDestinationSchema.optional(),
         // Written by versions that held two-sided edits for review; read only to replace the record.
         conflicts: z.array(z.unknown()).optional(),
@@ -261,6 +264,16 @@ export class Ma2LayoutService {
         layoutRequest = { ...layoutRequest, layout: request.binding.layout ?? request.settings.layout };
         executorPage = request.binding.executor ? Number(request.binding.executor.split('.')[0]) : undefined;
       };
+      const reuseSequence = (savedBinding: NonNullable<typeof request.binding>, originals: typeof originalPoints | undefined): void => {
+        request.binding = savedBinding;
+        request.points = request.points.map(point => {
+          const saved = savedBinding.points.find(value => value.id === point.id);
+          if (!saved) return point;
+          const original = originals?.find(value => value.id === point.id);
+          if (original && JSON.stringify(original.cues) !== JSON.stringify(point.cues)) return point;
+          return { ...point, cues: [{ sequence: savedBinding.sequence, cue: saved.cue, delayMs: 0 }] };
+        });
+      };
       if (!request.binding) {
         const previous = owners.filter(owner => owner.key.startsWith(`${endpoint}/${directory.show}/`) && owner.projectId === request.projectId && owner.itemId === request.itemId && (!request.destination || (owner.requestedDestination ? owner.requestedDestination.sequence === request.destination.sequence && owner.requestedDestination.timecode === request.destination.timecode && owner.requestedDestination.executor === request.destination.executor : Number(owner.key.split('/').at(-1)) === request.destination.sequence)) && directory.entries.some(entry => owner.key === `${endpoint}/${directory.show}/${entry.target}`));
         if (previous.length > 1) throw new Error(`这首歌在控台上有多个序列记录：${previous.map(owner => owner.key.split('/').at(-1)).join('、')}，请检查（没有再新建）`);
@@ -272,22 +285,26 @@ export class Ma2LayoutService {
           if (existing.draft && !existing.binding) {
             await recoverDraft(existing);
           } else {
-            request.binding = savedBinding;
-            request.points = request.points.map(point => {
-              const saved = savedBinding.points.find(value => value.id === point.id);
-              if (!saved) return point;
-              const original = existing.originalPoints?.find(value => value.id === point.id);
-              if (original && JSON.stringify(original.cues) !== JSON.stringify(point.cues)) return point;
-              return { ...point, cues: [{ sequence: target, cue: saved.cue, delayMs: 0 }] };
-            });
+            reuseSequence(savedBinding, existing.originalPoints);
           }
           layoutRequest = { ...layoutRequest, layout: savedBinding.layout ?? request.settings.layout };
           executorPage = savedBinding.executor ? Number(savedBinding.executor.split('.')[0]) : undefined;
         }
       } else {
-        const pending = owners.find(owner => owner.key === `${endpoint}/${directory.show}/${request.binding!.sequence}` && owner.projectId === request.projectId && owner.itemId === request.itemId && owner.draft);
+        const pending = owners.find(owner => owner.key === `${endpoint}/${directory.show}/${request.binding!.sequence}` && owner.projectId === request.projectId && owner.itemId === request.itemId);
         // An interrupted write whose Sequence is gone from the console left nothing to recover there.
-        if (pending && directory.entries.some(entry => entry.target === request.binding!.sequence)) await recoverDraft(pending);
+        if (pending && directory.entries.some(entry => entry.target === request.binding!.sequence)) {
+          if (pending.draft) await recoverDraft(pending);
+          else if (pending.binding) {
+            const incomingIds = new Set(request.binding.points.map(point => point.id));
+            // Older versions recorded a newly allocated Cue without atMs until its Timecode write succeeded.
+            const unfinished = pending.inputHash === inputHash && pending.binding.points.some(point => point.atMs === undefined && !incomingIds.has(point.id));
+            if (pending.pendingTimecode || unfinished) {
+              reuseSequence(pending.binding, pending.originalPoints);
+              consoleBaseline = null;
+            }
+          }
+        }
       }
       const requestedDestination = owners.find(owner => owner.key === `${endpoint}/${directory.show}/${target}` && owner.projectId === request.projectId && owner.itemId === request.itemId)?.requestedDestination ?? request.destination;
       if (!request.binding) {
@@ -386,36 +403,70 @@ export class Ma2LayoutService {
       const plan = planMa2SongSync(request, remoteXml, [...restoredSources.keys()]);
       // Content kept only in the local snapshot: Cues restored, or taken from this song's own Sequence while the console lacks it.
       const fromSnapshot = (change: Ma2SongPlanChange, ref: { sequence: number }): boolean => ref.sequence === target && (change.restore === true || remoteXml === null);
+      const archivedCues = new Map<string, Set<string>>();
+      const archivedLooks = new Map<string, string>();
+      for (const change of plan.changes) for (const ref of change.refs ?? []) {
+        if (!ref.includeTracking || !fromSnapshot(change, ref) || !request.binding) continue;
+        const xml = restoredSources.get(ref.cue) ?? request.binding.baselineXml;
+        const numbers = archivedCues.get(xml) ?? new Set<string>();
+        numbers.add(Number(ref.cue).toFixed(3));
+        archivedCues.set(xml, numbers);
+      }
       const beforeLayout = executorPage ? null : await this.snapshot(connection, layoutRequest);
       const needsLayoutItem = !executorPage && !beforeLayout?.value.items.some(item => item.sequence === target);
       const layoutOwners = await this.readOwners();
       const layoutKey = `${endpoint}/${directory.show}/${layoutRequest.layout}`;
       if (needsLayoutItem && beforeLayout && !layoutOwners.some(owner => owner.key === layoutKey && owner.projectId === request.projectId && owner.name === beforeLayout.value.name)) throw new Error(`Layout ${layoutRequest.layout} 不属于这个工程，请选一个空页面，以免改动已有的 Layout`);
       const changes = [];
-      const sources = new Map<string, string>();
-      const sourceCount = new Set(plan.changes.flatMap(change => (change.refs ?? []).map(ref => ref.sequence))).size;
+      const selectedCopies = new Map<NonNullable<Ma2SongPlanChange['refs']>[number], Awaited<ReturnType<typeof readSelectedCue>>>();
+      const sources = new Map<string, { sequence: number; includeTracking?: boolean | undefined; xml: string }>();
+      const sourceKey = (ref: { sequence: number; includeTracking?: boolean | undefined }): string => `${ref.sequence}/${ref.includeTracking === true}`;
+      const sourceCount = new Set(plan.changes.flatMap(change => (change.refs ?? []).map(sourceKey))).size;
       // Read only the Cues the song copies from each source Sequence; the full export stays on the console.
-      const wanted = new Map<number, Set<string>>();
+      const wanted = new Map<string, Set<string>>();
       for (const change of plan.changes) for (const ref of change.refs ?? []) {
-        if (ref.sequence === target) continue;
+        if (ref.attributes || ref.sequence === target && !ref.includeTracking) continue;
         const [whole, fraction = ''] = ref.cue.split('.');
-        wanted.set(ref.sequence, (wanted.get(ref.sequence) ?? new Set<string>()).add(`${Number(whole)}.${fraction.padEnd(3, '0')}`));
+        wanted.set(sourceKey(ref), (wanted.get(sourceKey(ref)) ?? new Set<string>()).add(`${Number(whole)}.${fraction.padEnd(3, '0')}`));
       }
-      const sourceCues = (sequence: number): string => [...wanted.get(sequence) ?? []].join(',');
+      const sourceCues = (ref: { sequence: number; includeTracking?: boolean | undefined }): string => (ref.includeTracking ? 'status:' : '') + [...wanted.get(sourceKey(ref)) ?? []].join(',');
       progress('library', 0, sourceCount, `读取 ${sourceCount} 个来源序列`);
       for (const change of plan.changes) {
         const content: Array<{ xml: string; cue: string }> | undefined = change.refs === undefined ? undefined : [];
         for (const ref of change.refs ?? []) {
+          if (ref.attributes) {
+            let archive: string | undefined;
+            if (fromSnapshot(change, ref) && request.binding) {
+              archive = randomBytes(16).toString('hex');
+              await this.prepareXml(connection, layoutRequest, 'tblink_archive_' + archive, restoredSources.get(ref.cue) ?? request.binding.baselineXml);
+            }
+            const selected = await readSelectedCue(bridge, { ...ref, attributes: ref.attributes }, request.expectedSource, archive);
+            selectedCopies.set(ref, selected);
+            content!.push({ xml: selected.xml, cue: ref.cue });
+            continue;
+          }
           if (fromSnapshot(change, ref)) {
             if (!request.binding) throw new Error(`Cue 引用了控台上还没有的序列 ${target}，请改用其他序列的 Cue`);
-            content!.push({ xml: restoredSources.get(ref.cue) ?? request.binding.baselineXml, cue: ref.cue }); continue;
+            const archive = restoredSources.get(ref.cue) ?? request.binding.baselineXml;
+            let xml = archive;
+            if (ref.includeTracking) {
+              let tracked = archivedLooks.get(archive);
+              if (!tracked) {
+                const token = randomBytes(16).toString('hex');
+                await this.prepareXml(connection, layoutRequest, 'tblink_archive_' + token, archive);
+                tracked = await bridge.request('SEQCUES', target, 'status:' + token + ':' + [...archivedCues.get(archive)!].join(','));
+                archivedLooks.set(archive, tracked);
+              }
+              xml = tracked;
+            }
+            content!.push({ xml, cue: ref.cue }); continue;
           }
-          let xml = sources.get(String(ref.sequence));
+          let xml = sources.get(sourceKey(ref))?.xml;
           if (!xml) {
-            xml = ref.sequence === target && remoteXml ? remoteXml : (await bridge.exchange('SEQCUES', ref.sequence, sourceCues(ref.sequence), '', undefined, download => {
+            xml = ref.sequence === target && remoteXml && !ref.includeTracking ? remoteXml : (await bridge.exchange('SEQCUES', ref.sequence, sourceCues(ref), '', undefined, download => {
               if (download) progress('library', download.completed, download.total, `读取来源序列 ${ref.sequence} · ${Math.ceil(download.completed / 1024)}/${Math.ceil(download.total / 1024)} KB`);
             })).response;
-            sources.set(String(ref.sequence), xml);
+            sources.set(sourceKey(ref), { sequence: ref.sequence, includeTracking: ref.includeTracking, xml });
             progress('library', sources.size, sourceCount, `已读取来源序列 ${ref.sequence}`);
           }
           content!.push({ xml, cue: ref.cue });
@@ -463,7 +514,7 @@ export class Ma2LayoutService {
         // A bound song copies changed Cues inside MA2, including self-references from its write-before
         // export and newly inserted empty steps. Locally restored data and a full clear still need Import.
         const emptyCues = plan.changes.filter(change => change.refs?.length === 0);
-        const copyInPlace = remoteXml !== null && previousNumbers.size > 0 && !clearing && plan.changes.every(change => !change.restore);
+        const copyInPlace = remoteXml !== null && previousNumbers.size > 0 && !clearing && plan.changes.every(change => !change.restore && !change.refs?.some(ref => ref.sequence === target && ref.includeTracking));
         const uploaded = nativeCopy ? editMa2SongSequence(remoteXml ?? emptyMa2SequenceXml(target, directory.version), plan.name, changes.map(change => ({ cue: change.cue, name: change.name, sources: [] })), removed) : desired;
         copiedOnConsole = copyInPlace;
         const desiredSteps = inspectMa2SequenceXml(desired).sequences[0]!.cues.map(cue => cue.number);
@@ -486,7 +537,7 @@ export class Ma2LayoutService {
         // The song's own Sequence is compared with its console export inside the write command below.
         // Copy takes each source Cue as the console holds it at that moment, so a source edited since
         // it was read shows up in the read-back check below; only the uploaded snapshot reads it twice.
-        if (!copyInPlace && !nativeCopy) for (const [number, xml] of sources) if (Number(number) !== target && canonical(await bridge.request('SEQCUES', Number(number), sourceCues(Number(number)))) !== canonical(xml)) throw new Error('合成过程中来源 Cue 有变化，没有写入，请重新检查');
+        if (!copyInPlace && !nativeCopy) for (const ref of sources.values()) if (ref.sequence !== target && canonical(await bridge.request('SEQCUES', ref.sequence, sourceCues(ref))) !== canonical(ref.xml)) throw new Error('合成过程中来源 Cue 有变化，没有写入，请重新检查');
         await checkpoint(remoteXml ?? uploaded, nativeCopy || copyInPlace ? ma2SongCreationStages(remoteXml ?? uploaded, changes) : undefined);
         const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${remoteExport}')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
         // Import /o can retain the previous native step table when a numbered
@@ -541,9 +592,10 @@ export class Ma2LayoutService {
               const mode = index || keep ? 'merge' : 'o';
               // A merge may already have cleared or changed this song's Cue. Read self-references
               // from the guarded write-before export, never from the partially written Sequence.
-              const copy = ref.sequence === target && remoteExport
-                ? copyExportedCue(remoteExport, target, ref.cue, change.cue, scratch, `${file}_source`, mode)
-                : `assert(gma.show.getobj.handle('Sequence ${ref.sequence} Cue ${ref.cue}'),'Source Cue missing');gma.cmd('Copy Sequence ${ref.sequence} Cue ${ref.cue} At Sequence ${target} Cue ${change.cue} /${mode} /nc');`;
+              const nativeFile = selectedCopies.get(ref)?.file ?? (ref.sequence === target ? remoteExport : null);
+              const copy = nativeFile
+                ? copyExportedCue(nativeFile, target, ref.cue, change.cue, scratch, `${file}_source`, mode)
+                : `assert(gma.show.getobj.handle('Sequence ${ref.sequence} Cue ${ref.cue}'),'Source Cue missing');gma.cmd('Copy Sequence ${ref.sequence} Cue ${ref.cue} At Sequence ${target} Cue ${change.cue} /status=${ref.includeTracking === true} /${mode} /nc');`;
               await this.call(connection, `${this.guard(layoutRequest)}${copy}gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'copied'`);
             }
             // The initial import names every Cue. A Copy sets its name in the same guarded command.
@@ -581,6 +633,7 @@ export class Ma2LayoutService {
       const expectedReport = changes.length ? inspectMa2SequenceXml(desired).sequences[0]! : null;
       const changedNumbers = new Set(changes.map(change => Number(change.cue)));
       const actualData = changes.length ? inspectMa2SequenceCueData(verifiedXml, report.cues.filter(cue => changedNumbers.has(Number(cue.number))).map(cue => cue.index)) : new Map<number, Map<string, Record<string, string>>>();
+      if (selectedCopies.size) await this.call(connection, `${this.guard(layoutRequest)}${removeFiles(...[...selectedCopies.values()].map(copy => copy.file))}return 'cleaned'`);
       const expectedData = expectedReport ? inspectMa2SequenceCueData(desired, expectedReport.cues.filter(cue => changedNumbers.has(Number(cue.number))).map(cue => cue.index)) : new Map<number, Map<string, Record<string, string>>>();
       for (const change of changes) {
         const actual = report.cues.find(cue => Number(cue.number) === Number(change.cue));
@@ -615,7 +668,7 @@ export class Ma2LayoutService {
       // saving the project fails, the next explicit check recovers this position.
       const previousOwner = owners.find(owner => owner.key === key);
       if (changed || JSON.stringify(previousOwner?.binding) !== JSON.stringify(result.binding) || previousOwner?.conflicts !== undefined) {
-        await writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, requestedDestination, binding: result.binding }]));
+        await writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, requestedDestination, ...(request.timecodeStartMs !== undefined && executor && { pendingTimecode: true }), binding: result.binding }]));
       }
       // The song check takes over the post-write export as its baseline. When nothing was written, the
       // export read before planning still is the console as verified, so the check takes that one and
@@ -628,17 +681,19 @@ export class Ma2LayoutService {
       if (backups.length) await this.backups.record(rawBridge, { console: endpoint, object: `Sequence ${target}`, files: backups });
       if (request.timecodeStartMs === undefined || !executor) return result;
       // The Sequence is confirmed and recorded, so a failure from here on concerns only the show.
+      const reindexedTimecode = wrote && currentTimecode && remoteXml
+        ? ma2TimecodeAfterCueReindex(currentTimecode.xml, inspectMa2SequenceXml(remoteXml).sequences[0]!, report) : undefined;
       wrote = false;
       progress('verification', 1, 1, `写入本曲时间码节目 · 序列 ${target}`);
       const times = new Map(request.points.map(point => [point.id, point.atMs]));
       const enabled = new Map(request.points.map(point => [point.id, point.enabled !== false]));
-      const journal = (binding: Ma2SongSyncResult['binding']): Promise<void> => writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, requestedDestination, binding }]));
-      const written = await writeMa2SongTimecode(bridge, { previous: previousTimecode, requestedNumber: request.destination?.timecode, currentTimecode, sequence: target, executor, startMs: request.timecodeStartMs, lengthMs: request.timecodeLengthMs, name: report.name ?? toConsoleLabel(request.name), version: directory.version,
+      const journal = (binding: Ma2SongSyncResult['binding'], pendingTimecode = false): Promise<void> => writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, requestedDestination, ...(pendingTimecode && {pendingTimecode: true}), binding }]));
+      const written = await writeMa2SongTimecode(bridge, { previous: previousTimecode, requestedNumber: request.destination?.timecode, currentTimecode, reindexedTimecode, sequence: target, executor, startMs: request.timecodeStartMs, lengthMs: request.timecodeLengthMs, name: report.name ?? toConsoleLabel(request.name), version: directory.version,
         cues: result.binding.points.filter(point => enabled.get(point.id) !== false).map(point => {
           const cue = report.cues.find(value => Number(value.number) === Number(point.cue));
           if (!cue) throw new Error(`这首歌的时间码节目没有写入：控台的序列 ${target} 里没有 Cue ${point.cue}`);
           return { atMs: times.get(point.id)!, cueIndex: cue.index, number: cue.number, name: cue.name };
-        }), created: timecode => journal({ ...result.binding, timecode }) });
+        }), created: timecode => journal({ ...result.binding, timecode }, true) });
       const timed = ma2SongSyncResultSchema.parse({ ...result, binding: { ...result.binding, timecode: written.timecode, points: result.binding.points.map(point => ({ ...point, atMs: times.get(point.id)!, ...(enabled.get(point.id) === false ? { enabled: false } : { enabled: undefined }) })) } });
       await journal(timed.binding);
       if (written.backup) await this.backups.record(rawBridge, { console: endpoint, object: `Timecode ${written.timecode.number}`, files: [written.backup] });
@@ -738,14 +793,22 @@ export class Ma2LayoutService {
       catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') owners = []; else throw error; }
       const owner = owners.find(value => value.key === key);
       if (old && (owner?.projectId !== request.projectId || owner.name !== old.value.name)) throw new Error(`Layout ${request.settings.layout} 已有其他内容，请设置空的专用 Layout 编号`);
+      const selectedFiles = new Map<number, string>();
+      const occupied = new Set(directory.entries.map(entry => entry.target));
+      let scratch = 9989;
+      while (scratch > 0 && (scratch === target || occupied.has(scratch))) scratch--;
       const combined=new Map<string,Record<string,string>>();
-      if (request.content.kind === 'combine') for (const ref of request.content.cues) {
-        const sourceXml=await bridge.request('SEQUENCE', ref.sequence);
+      if (request.content.kind === 'combine') for (const [index, ref] of request.content.cues.entries()) {
+        const selected = ref.attributes ? await readSelectedCue(bridge, { ...ref, attributes: ref.attributes }, request.expectedSource) : undefined;
+        if (selected) {
+          if (!scratch) throw new Error('控台没有空闲序列，无法复制选中的灯具属性');
+          selectedFiles.set(index, selected.file);
+        }
+        const sourceXml = selected?.xml ?? (ref.includeTracking ? await bridge.request('SEQCUES', ref.sequence, 'status:' + Number(ref.cue).toFixed(3)) : await bridge.request('SEQUENCE', ref.sequence));
         const report = inspectMa2SequenceXml(sourceXml);
         const cue=resolveMa2CueNumber(ref.sequence, ref.cue, [report]);
         for(const [channel,layers] of inspectMa2CueData(sourceXml,cue.cueIndex))combined.set(channel,{...combined.get(channel),...layers});
       }
-      if(request.content.kind==='combine'&&!combined.size)throw new Error('选的 Cue 没有直接记录灯具属性；Tracking 继承来的内容不能组合');
       let slot = old?.value.items.length ?? 0;
       const position=(index:number)=>({x:(index%request.settings.columns)*2,y:-Math.floor(index/request.settings.columns)*2});
       while(slot<10000 && old?.value.items.some(item=>Math.abs(item.x-position(slot).x)<item.width/2+.5 && Math.abs(item.y-position(slot).y)<item.height/2+.5))slot++;
@@ -768,7 +831,12 @@ export class Ma2LayoutService {
       const layoutCheck = old ? `assert(o.handle('Layout ${request.settings.layout}'),'Layout missing');gma.cmd('Export Layout ${request.settings.layout} ${blankFile}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info[^>]* />',''):gsub('>[%s]+<','><') end;assert(read('${old.file}')==read('${blankFile}_check'),'Layout changed');` : `assert(not o.handle('Layout ${request.settings.layout}'),'Layout occupied');`;
       this.attempted.add(request.requestId); wrote = true;
       await this.call(connection, `${this.guard(layoutRequest)}local o=gma.show.getobj;assert(not o.handle('Sequence ${target}'),'Sequence occupied');${layoutCheck}${setup}assert(o.handle('Sequence ${target} Cue 1'),'Cue creation failed');${removeFiles(blankFile, `${blankFile}_check`)}return 'created'`);
-      if (request.content.kind === 'combine') for (const ref of request.content.cues) await this.call(connection, `${this.guard(layoutRequest)}assert(gma.show.getobj.handle('Sequence ${ref.sequence} Cue ${ref.cue}'),'Source Cue missing');gma.cmd('Copy Sequence ${ref.sequence} Cue ${ref.cue} At Sequence ${target} Cue 1 /merge /nc');return 'merged'`);
+      if (request.content.kind === 'combine') for (const [index, ref] of request.content.cues.entries()) {
+        const selected = selectedFiles.get(index);
+        const copy = selected ? copyExportedCue(selected, target, ref.cue, '1', scratch, blankFile + '_pick', 'merge') + removeFiles(selected)
+          : `assert(gma.show.getobj.handle('Sequence ${ref.sequence} Cue ${ref.cue}'),'Source Cue missing');gma.cmd('Copy Sequence ${ref.sequence} Cue ${ref.cue} At Sequence ${target} Cue 1 /status=${ref.includeTracking === true} /merge /nc');`;
+        await this.call(connection, `${this.guard(layoutRequest)}${copy}return 'merged'`);
+      }
       await this.call(connection, `${this.guard(layoutRequest)}gma.cmd(${decode(`Label Sequence ${target} "${request.name}"`)});gma.cmd(${decode(`Label Sequence ${target} Cue 1 "${request.name}"`)});return 'labelled'`);
       if(request.content.kind==='combine') {
         const actual=inspectMa2CueData(await bridge.request('SEQUENCE',target),1);
@@ -777,7 +845,7 @@ export class Ma2LayoutService {
       }
       const library = await readMa2EffectLibrary(bridge, this.show, undefined, undefined, [target], request.expectedSource, 'attributes', connection);
       const cue = library.sequences[0]?.cues[0];
-      if (library.errors.length || !cue || cue.name !== request.name || !library.cueAttributes?.some(value => value.attributes.length)) throw new Error('新 Cue 里没有读到灯具属性，没有加入 Layout。请检查控台的 Programmer、World 和 Store Filter');
+      if (library.errors.length || !cue || cue.name !== request.name || (request.content.kind !== 'combine' || combined.size > 0) && !library.cueAttributes?.some(value => value.attributes.length)) throw new Error('新 Cue 里没有读到灯具属性，没有加入 Layout。请检查控台的 Programmer、World 和 Store Filter');
       await this.call(connection, `${this.guard(layoutRequest)}${old ? '' : `assert(not gma.show.getobj.handle('Layout ${request.settings.layout}'),'Layout occupied');gma.cmd(${decode(`Import "${blankFile}_layout.xml" At Layout ${request.settings.layout} /nc`)});gma.cmd(${decode(`Label Layout ${request.settings.layout} "${request.settings.name}"`)});${removeFiles(`${blankFile}_layout`)}`}gma.cmd('Assign Sequence ${target} At Layout ${request.settings.layout} /x=${x} /y=${y}');return 'assigned'`);
       const after = await this.snapshot(connection, layoutRequest);
       if (!after || !after.value.items.some(item => item.sequence === target) || old && old.value.items.some((item,index) => JSON.stringify(item) !== JSON.stringify(after.value.items[index]))) throw new Error('控台上的 Layout 和写入的不一致，请到控台检查（没有自动重试）');

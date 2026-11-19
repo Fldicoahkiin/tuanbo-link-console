@@ -18,7 +18,7 @@ import { musicGridOptions } from '../view-models/music-grid-options';
 
 export type LibraryDraft = { sequence: number; cue: string; name: string; executor: string; nativeSequence?: boolean };
 export function LightingUserLibrary({ customCategoryId, section, draft, onDraftClose, onBrowse, onAudition, onStamp, onCompose, document, onCueUse, composing = false }: {
-  customCategoryId?: string | undefined; composing?: boolean; section: 'front' | 'rim' | 'effect'; document: LightingDocument; onCueUse:(sequence:number,cue:string,name:string,executor:string)=>void;
+  customCategoryId?: string | undefined; composing?: boolean; section: 'front' | 'rim' | 'effect'; document: LightingDocument; onCueUse: import('./Ma2CueAttributePicker').UseConsoleCue;
   draft: LibraryDraft | null; onDraftClose: () => void; onBrowse: () => void;
   onAudition: (id: string) => void; onStamp: (id: string) => void; onCompose: (id: string) => void;
 }): JSX.Element {

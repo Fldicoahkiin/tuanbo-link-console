@@ -61,6 +61,9 @@ import ma2PluginLua from '../../../../tools/ma2/tblink_bridge.lua?raw';
 import ma2PluginXml from '../../../../tools/ma2/tblink_bridge.xml?raw';
 import ma2PluginInstructions from '../../../../tools/ma2/README.md?raw';
 import { assignMa2PoolSequence } from './link/ma2-pool-route';
+import { addMa2FirstTrackCues } from './link/ma2-first-track-cues';
+import { readCueAttributeNames } from './link/ma2-cue-attributes';
+import { ma2CueAttributesRequestSchema, ma2FirstTrackRequestSchema } from '@tb/schema';
 import { compareMa2LightingReadback } from './link/ma2-comparison';
 import { convertMa2Snapshot } from './link/ma2-timecode-conversion';
 import { readFile, stat, statfs, mkdtemp, writeFile, mkdir } from 'node:fs/promises';
@@ -1033,6 +1036,16 @@ function registerIpc(
       await logger.record({level:'warning',category:'operator',device:'MA2',message:'操作员确认原控台目标已停止，清除旧连接试听记录（未发送指令）',details:{target}});
       return result;
     }
+    if(request.action==='stop-console'){
+      try{
+        const result=await ma2Audition.stopConsole(()=>ma2Network.stopConsoleCues());
+        await logger.record({level:result.phase==='failed'?'warning':'info',category:'operator',device:'MA2',message:'已停止控台 Cue 并核对各页执行器',details:{audition:result.phase}});
+        return result;
+      }catch(error){
+        await logger.record({level:'error',category:'operator',device:'MA2',message:'停止控台 Cue 未完成',details:{reason:error instanceof Error?error.message:String(error)}});
+        throw error;
+      }
+    }
     const result=await ma2Audition.stop();await logger.record({level:result.phase==='failed'?'error':'info',category:'operator',device:'MA2',message:result.phase==='failed'?'试听没能停止':'试听关闭指令已发送',details:{targets:result.targets}});return result;
   });
   app.once('will-quit', () => ma2Network.disconnect());
@@ -1428,6 +1441,19 @@ function registerIpc(
       await recordMa2Failure(`读取执行器 ${request.executor}`, error instanceof Error ? error.message : String(error), error);
       throw error;
     }
+  });
+  handle('link:ma2-cue-attribute-names', async (_event, value: unknown) => {
+    const request = ma2CueAttributesRequestSchema.parse(value);
+    const { bridge } = await getMa2Connection(request);
+    return readCueAttributeNames(bridge, request);
+  });
+  handle('link:ma2-first-track-cues', async (_event, value: unknown) => {
+    const request = ma2FirstTrackRequestSchema.parse(value);
+    if (request.network) await ma2Network.checkEditingSource(request.network, request.expectedSource);
+    const { bridge } = await getMa2Connection(request);
+    const result = await addMa2FirstTrackCues(bridge, request);
+    if (result.backupFile) await ma2ConsoleBackups.record(bridge, { console: ma2ConsoleKey(request), object: `Sequence ${result.sequence}`, files: [result.backupFile] });
+    return result;
   });
   handle('link:ma2-pool-route', async (_event, value: unknown) => {
     const request = ma2PoolRouteRequestSchema.parse(value);

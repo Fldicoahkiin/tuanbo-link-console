@@ -545,6 +545,35 @@ export function extractMa2TimecodeXml(xml: string, target: number): string {
   return new XMLSerializer().serializeToString(document);
 }
 
+/** MA2 updates a Goto's internal step when a Cue is inserted earlier in its sequence. */
+export function ma2TimecodeAfterCueReindex(xml: string, before: Ma2SequenceReport['sequences'][number], after: Ma2SequenceReport['sequences'][number]): string | undefined {
+  if (before.number !== after.number) throw new Error('核对时间线时序列编号发生变化');
+  const oldCues = new Map(before.cues.map(cue => [cue.index, cue]));
+  const newCues = new Map(after.cues.map(cue => [Number(cue.number), cue]));
+  const { document, root } = parse(xml);
+  let changed = false;
+  for (const event of Array.from(root.getElementsByTagNameNS(MA_NAMESPACE, 'Event'))) {
+    if (event.getAttribute('command') !== 'Goto') continue;
+    const ref = singleChild(event, 'Cue');
+    if (!ref) continue;
+    const address = children(ref, 'No');
+    if (address.length !== 3 || Number(address[0]!.textContent) !== 1 || Number(address[1]!.textContent) !== before.number) continue;
+    const old = oldCues.get(Number(address[2]!.textContent));
+    const next = old && newCues.get(Number(old.number));
+    if (!old || !next) continue;
+    if (next.index !== old.index) {
+      address[2]!.textContent = String(next.index);
+      if (event.getAttribute('step') === String(old.index)) event.setAttribute('step', String(next.index));
+      changed = true;
+    }
+    if (old.name !== next.name && ref.getAttribute('name') === `${old.name ?? 'Cue'} ${Number(old.number)}`) {
+      ref.setAttribute('name', `${next.name ?? 'Cue'} ${Number(next.number)}`);
+      changed = true;
+    }
+  }
+  return changed ? new XMLSerializer().serializeToString(document) : undefined;
+}
+
 export function sameMa2XmlObjects(a: string, b: string): boolean {
   const normalize = (xml: string): string => {
     inspectMa2TimecodeXml(xml);

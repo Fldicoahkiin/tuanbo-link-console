@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
-import { saveProject, savedValue } from './save-questions';
+import { answerOlderFormatQuestion, saveProject, savedValue } from './save-questions';
 
 for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${targetPage} 页，默认页保存恢复、双向同步保留新默认值与原位置`, async ({}, info) => {
   test.setTimeout(120000);
@@ -21,6 +21,8 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   const page = await app.firstWindow(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
+    // Music analysis may finish during any of these saves and upgrade the fixture from schema 2.
+    await answerOlderFormatQuestion(app);
     await app.evaluate(({ ipcMain, dialog }, { file, source, targetPage }) => {
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] });
       process.env.TBLINK_SONG_SYNC_CALLS = '0';
@@ -81,13 +83,15 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
       await expect(song.getByLabel('默认创建按钮页')).toHaveValue(String(targetPage));
     }
     if (targetPage === 1000) {
-      // A fresh installation starts synchronization without a manual create.
+      // Opening a draft on a fresh installation preserves its Cue list until an operator chooses a destination.
       await page.evaluate(() => localStorage.removeItem('tblink.ma2-realtime-enabled.v1'));
       await page.reload();
       await page.getByRole('button', { name: '灯光工作台', exact: true }).click();
       await expect(page.getByRole('switch', { name: '实时同步', exact: true })).toHaveAttribute('aria-checked', 'true');
       await pool.getByRole('button', { name: '控台页面', exact: true }).click();
-    } else await song.getByRole('button', { name: `创建到按钮第 ${targetPage} 页并同步`, exact: true }).click();
+      await pool.getByRole('button', { name: '新建 Cue', exact: true }).click();
+    }
+    await song.getByRole('button', { name: `创建到按钮第 ${targetPage} 页并同步`, exact: true }).click();
     await expect.poll(() => savedValue(page, async () => (await saved()).consoleSong?.points.length)).toBe(40);
     expect((await saved()).consoleSong).toMatchObject({ layout: null, executor: `${targetPage}.101`, sequence: 9000 });
     expect((await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).every(event => event.kind === 'ma2' && event.sequence === 9000)).toBe(true);
@@ -96,7 +100,9 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
     await pool.getByRole('button', { name: '新建 Cue', exact: true }).click();
     await song.getByLabel('默认创建按钮页').fill('2000');
     await song.getByRole('button', { name: '保存默认', exact: true }).click();
-    await expect(song).toContainText('默认第 2000 页，保存工程后写入工程文件');
+    await expect(song).toContainText('已设置：按钮第 2000 页');
+    const realtime = page.getByRole('switch', { name: '实时同步', exact: true });
+    if (await realtime.getAttribute('aria-checked') !== 'true') await realtime.click();
     await page.screenshot({ path: info.outputPath('default-creation-page.png') });
     await page.locator('.waveform-cue-point').first().click();
     const composer = page.locator('.cue-composer');
@@ -104,6 +110,7 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
     await expect(composer).toContainText(`按钮第 ${targetPage} 页 · 101 格`);
     await composer.getByRole('button', { name: '改成跟随上一个', exact: true }).click();
     await expect(composer.getByRole('button', { name: '改成跟随上一个', exact: true })).toHaveCount(0);
+    await page.locator('.waveform-cue-point').first().click();
     await composer.getByLabel('Cue 名称', { exact: true }).fill('电脑修改开场');
     await composer.getByLabel('Cue 名称', { exact: true }).press('Tab');
     await expect.poll(async () => (JSON.parse(await app.evaluate(() => process.env.TBLINK_SONG_LAST_REQUEST ?? '{}')) as Ma2SongSyncRequest).points?.[0]?.name).toBe('电脑修改开场');
@@ -123,14 +130,16 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
     await syncDetails.click();
     await expect(page.getByRole('dialog', { name: '同步状态详情' })).toContainText('等待控台连接');
     await syncDetails.click();
+    await page.locator('.waveform-cue-point').first().click();
     await composer.getByLabel('Cue 名称', { exact: true }).fill('断线期间继续修改');
     await composer.getByLabel('Cue 名称', { exact: true }).press('Tab');
+    await page.getByRole('button', { name: '关闭 Cue 编辑', exact: true }).click();
     await expect(page.getByRole('button', { name: '撤销', exact: true })).toBeEnabled();
     await expect(page.getByRole('button', { name: '保存', exact: true }).first()).toBeEnabled();
-    await expect.poll(() => savedValue(page, async () => (await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === 'point-0'))).toMatchObject({ label: '断线期间继续修改' });
+    await page.getByRole('button', { name: '保存工程', exact: true }).click();
+    await expect.poll(async () => (await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === 'point-0')).toMatchObject({ label: '断线期间继续修改' });
     await app.evaluate(() => { delete process.env.TBLINK_SONG_OFFLINE; });
     await expect.poll(async () => (JSON.parse(await app.evaluate(() => process.env.TBLINK_SONG_LAST_REQUEST ?? '{}')) as Ma2SongSyncRequest).points?.[0]?.name).toBe('断线期间继续修改');
-    await saveProject(page);
     expect((await saved()).consoleSong?.executor).toBe(`${targetPage}.101`);
     if (targetPage === 1234) {
       // Deleting every step on the timeline deletes the console Cues in the same sync: no review list, no waiting.
@@ -140,12 +149,13 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
         await page.locator('.waveform-cue-point').first().click();
         await page.locator('.waveform-cue-point').first().press('Delete');
       }
-      await expect.poll(() => savedValue(page, async () => (await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).length)).toBe(0);
+      await expect(page.locator('.waveform-cue-point')).toHaveCount(0);
+      await page.getByRole('button', { name: '保存工程', exact: true }).click();
+      await expect.poll(async () => (await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).length).toBe(0);
       await page.getByRole('switch', { name: '实时同步', exact: true }).click();
       await expect.poll(() => savedValue(page, async () => (await saved()).consoleSong?.points.length)).toBe(0);
       const cleared = JSON.parse(await app.evaluate(() => process.env.TBLINK_SONG_LAST_REQUEST ?? '{}')) as Ma2SongSyncRequest;
       expect(cleared.points).toEqual([]); expect(cleared).not.toHaveProperty('confirmedDeletions');
-      await saveProject(page);
       expect((await saved()).consoleSong).toMatchObject({ sequence: 9000, executor: '1234.101', points: [] });
       expect((await savedProject()).ma2MaterialLibrary?.library?.sequences.find(sequence => sequence.sequence === 9000)?.cues).toEqual([]);
       // 刷新同步 reads the console again at once.
@@ -157,5 +167,8 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
     await page.getByRole('switch', { name: '实时同步', exact: true }).click();
     await expect(page.getByRole('switch', { name: '实时同步', exact: true })).toHaveAttribute('aria-checked', 'false');
     expect(errors).toEqual([]);
+  } catch (error) {
+    if (!page.isClosed()) await writeFile(info.outputPath('failure-ui.txt'), await page.locator('body').innerText());
+    throw error;
   } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

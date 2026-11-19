@@ -56,6 +56,7 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
       });
       ipcMain.removeHandler('link:ma2-catalog');
       ipcMain.handle('link:ma2-catalog', () => input.catalog);
+      ipcMain.removeHandler('link:ma2-prepare-playback'); ipcMain.handle('link:ma2-prepare-playback', () => false);
       ipcMain.removeHandler('link:ma2-preview');
       ipcMain.handle('link:ma2-preview', () => { throw new Error('应使用已读预览，不重复请求控台'); });
       ipcMain.removeHandler('link:ma2-effect-library');
@@ -63,7 +64,10 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [input.p1Path] });
       dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: input.linkPath });
     }, { catalog, p1Path, linkPath });
-    await page.evaluate(() => localStorage.setItem('tblink.ma2-connection-method.v1', 'network'));
+    await page.evaluate(() => {
+      localStorage.setItem('tblink.ma2-connection-method.v1', 'network');
+      localStorage.setItem('tblink.ma2-realtime-enabled.v1', 'false');
+    });
     await page.reload();
     const navigation = page.getByRole('navigation', { name: '主要工作区' });
     await navigation.getByRole('button', { name: '设置', exact: true }).click();
@@ -72,10 +76,10 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
     await page.getByText('歌曲导入与同步', { exact: true }).click();
     const section = page.getByRole('region', { name: 'MA2 现场节目导入' });
     await section.getByText('从 P1 工程导入歌曲', { exact: true }).click();
-    await section.getByLabel('仅导入 P1 音乐').click();
+    await section.getByText('仅导入 P1 音乐', { exact: true }).click();
     await section.getByRole('button', { name: '选择 .hia 文件', exact: true }).click();
     await expect(section.getByRole('button', { name: '读取控台灯光到现有歌曲' })).toBeEnabled({ timeout: 90000 });
-    await expect(section.getByText('P1 歌曲和原始时间码已保存在工程，无需重新选择 .hia。', { exact: true })).toBeVisible();
+    await expect(section.getByText('P1 歌曲和原始时间码已经存在工程里，不用重新选 .hia。', { exact: true })).toBeVisible();
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8'))).rundown.length)).toBe(2);
     const musicOnly = parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8')));
     expect(musicOnly.rundown).toHaveLength(2);
@@ -107,7 +111,7 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     if (!await section.getByRole('button', { name: '更新控台读取' }).isVisible()) await page.getByText('歌曲导入与同步', { exact: true }).click();
     await section.getByRole('button', { name: '更新控台读取' }).click();
-    await expect(section.getByText('0 条已关联 · 0 条含控台原样动作 · 0 条需处理', { exact: true })).toBeVisible({ timeout: 90000 });
+    await expect(section.getByText('0 条含控台原样动作 · 0 条没按起始码对上 · 0 条读取异常', { exact: false })).toBeVisible({ timeout: 90000 });
     await expect(section.getByText('已关联 2 / 2 首歌曲', { exact: false })).toBeVisible({ timeout: 90000 });
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8'))).rundown.map(item => item.lighting?.ma2Bindings?.length))).toEqual([1, 1]);
     const reopened = parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8')));

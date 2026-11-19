@@ -18,6 +18,8 @@
 
 ## MA2 同步
 
+2026-11-19，第一轨写入需要补收回执时，由 `tools/ma2/tblink_bridge.lua` 重新确认目标 Cue 的原生内容。控台在该 Cue 前面插入新 Cue 导致内部顺序变化时仍能认回，改过原 Cue 的内容或命令时则保留现场的修改并报告差异。由 `ma2-bridge-lua.test.ts` 和隔离 onPC 的组合 Cue 实测验证。跟踪值、空 Cue、播放与同步的现场检查见[直播灯光检查](./LIGHTING_LIVE_AUDIT_20261119.md)。
+
 2026-11-18，已有歌曲移动 Cue 时，同次写后快照中能核实的 Go 触发设置交给选曲服务。歌曲区间、所用序列的触发方式或 Show 有变化时仍重新核对。工作台切歌或编辑当前歌曲后，正在进行的歌曲先完成读回，再按新顺序同步。当前歌曲在停止播放时，上次读回经过 300 毫秒即可在下一轮半秒检查中复查；控台同时编辑的等待间隔仍为 2 秒。由 `ma2-apply-service.test.ts`、`ma2-mtc-selection.test.ts` 和 `ma2-realtime-session.test.ts` 验证。
 
 2026-11-18，0.5.16 现场修复。绑定时间线的写后选曲核对使用发起该次同步的连接目标，连接已更换时停止。某首歌失败后只由本曲编辑或操作员刷新唤起，其他歌曲读回和素材检查点不触发该曲重写。编辑提交直接唤起同一个逐首同步；一次写入未结束时接着改，等它完成后按最新修改再核对。周期核对询问 Show、版本和组件会话，来源改变时再取序列目录；遇到播放显示等待。单曲预览只查实际引用的序列，读不全不确认。普通连接逐项核对工程保存的时间线、素材目录并保留历史读取时间，手动更新仍完整读取。由 `ma2-network-manager.test.ts`、`ma2-bound-song-sync.test.ts`、`ma2-realtime-session.test.ts`、`ma2-editing-session.test.ts` 和 `ma2-read-recovery.test.ts` 验证。
@@ -40,6 +42,8 @@
 
 2026-11-14：新歌写入位置统一取 `ma2-song-sync.ts` 的 `ma2SongSyncSettings`，两个界面入口共用 `Ma2SongDestination.tsx` 保存工程里的按钮页和起始序列编号。同步等待的原因由 `prepareMa2RealtimeSession` 给出，不能无提示返回；手动同步也展示原因及控台确认后的实际序列、Timecode 和按钮位置。测试：`ma2-realtime-session.test.ts`、`apps/desktop/test-e2e/editor-transport.browser.spec.ts`。
 
+歌曲序列在中间插入 Cue 后，MA2 会同步调整关联 Timecode 的 Goto 步号。按写入前后读到的序列，用 Cue 编号核对这些变化，再按控台的最新原文写入。触发时间、执行器、目标 Cue 或其他节目内容被现场编辑时重新合并。序列确认到时间线确认之间记录点位与编号，重开后从该位置继续。由 `apps/desktop/src/main/link/ma2-song-timecode.test.ts` 和 `apps/desktop/src/main/link/ma2-layout-service.test.ts` 守着。
+
 ## 执行器按键和推杆走哪条通道
 
 `apps/desktop/src/main/link/ma2-executor-channel.ts`（2026-11-11）：推杆和推杆页的按键走网页遥控；执行器页 Button 区（101–190）的按键默认走控台插件，和 0.5.8 一样，这时对控台不多连、不多读。操作员在 Button 栏的小菜单里选了网页遥控（每台电脑记住，`runtime/ma2-realtime-preference.ts`）才去试读 Button 区，读回的格号和请求的一致才走网页遥控，否则照旧走插件并写明原因；1–90 和 191 以后的按键一直走插件。通道只因为操作员改选择或重新连接而变，出错不换，演出中也一样（`ma2-channel-rules.test.ts` 守着）。两条通道上松开都会取消还在路上的按下。别处不再自己判断按键走哪条
@@ -58,6 +62,8 @@
 
 ## 欠着的关灯
 
+2026-11-19 用户指定工作台两个停止按钮都要停整台控台。手动指令经 ma2-audition-service.ts 取消试听队列，ma2-pool-playback.ts 按停止优先级停止时间码、序列和各页在跑的执行器，回读后返回。自动结束、换歌和其他工作区沿用下面的关灯规则。
+
 规则在 `packages/core/src/lighting-off-ledger.ts`（2026-11-11）：停止关这首歌的执行器，换歌只关上一首独有的，正在用的绝不关。全应用一张清单，主人是主进程 `apps/desktop/src/main/link/lighting-off-service.ts`：节目、试听（`link:lighting-off`）、退出时的询问和演出状态都经它；没发出去的留着，控台重新连上后补发 1 次（次数在 `output-recovery.ts`），再按停止全部重发；关灯不过授权。控台确认以后按轮读回灯关了没有（2026-11-11）：只在已经连着的网页遥控会话上读，1–90 只用“控台在不在跟”那条会话，Button 区只在按键选了网页遥控时用 Button 会话，不在推杆页自己的会话上读，不为读回登录；等几秒、读几次只写在 `output-recovery.ts` 的 `LIGHTING_OFF_READ_BACK`；还在运行的标黄不标红，再按停止才重发，没读的不写日志、界面照旧。同一条网页遥控会话上的请求排队轮流发（`ma2-live-playback.ts` 的 `turn`），借别人的会话读只用 `peek`、`peekButtons`：看不懂的回答不关会话。别处不再自己发 Off、不另记“还欠着”
 
 ## 整套 Cue 的首次放置
@@ -71,6 +77,12 @@
 `packages/core/src/lighting-track-state.ts` 统一判断轨道静音与独奏；新歌保留禁用的 Cue 内容，只取消触发，已有时间线使用同一判断。`packages/core/src/ma2-song-sequence.test.ts` 与 `apps/desktop/src/main/link/ma2-layout-service.test.ts` 检查禁用、恢复和读回。
 
 ## 新增轨道写到哪里
+
+工作台拖入控台 Cue 会核对实际写入的执行器。同一素材、复制范围和时间已存在于同一位置时沿用已有点。移动或添加点只检查这次涉及的冲突，独奏和静音遵循轨道参与规则。原时间线上的第一轨和控台保留的并行轨分开判断。一个组合内可以把同一执行器上的两份素材合为一个 Cue。两个独立点真的竞争同一执行器时，提示列出时间、执行器或序列、两步动作。相关回归见 `packages/core/src/lighting-cue-placement.test.ts` 和 `packages/core/src/lighting-music.test.ts`。
+
+复制范围由操作员选择。每份素材可以只复制本步写入的灯光，也可以带上从前面步骤继承的灯光。两者分别使用 MA2 原生命令的 `/status=false` 和 `/status=true`。写回时逐份使用同一顺序，按控台回读核对灯具内容。成员的选择随工程和收藏保存。新节目的延迟素材写在对应时间的下一点，已确认点再次编辑可看到原来使用的来源。原序列丢失、需要从已确认的完整快照恢复继承值时，由控台在未分配给执行器的临时序列计算。`packages/core/src/ma2-song-sequence.test.ts` 和 `packages/core/src/ma2-track-routing.test.ts` 验证组内次序、时间及来源保留。
+
+2026-11-19 现场修订。原 Timecode 有轨道时，工作台新增点进入第一轨。firstTrackCuePlan 确定新增点，FIRSTCUES 在控台核对第一轨与实际分配，在原序列末尾创建空 Cue 或复制来源，返回实际编号。素材已在目标序列时直接引用。applyFirstTrackCues 保留时间与点位身份，触发由现有 Timecode 合并流程写回。下面的独立分配适用于还没有原轨的情况。 同一个点里同时亮的素材合成一个 Cue，原素材保留。
 
 2026-11-19，`ma2-track-routing.ts` 收集原时间线上的空 Cue，逐首同步通过原有歌曲序列写入流程确认实际 Cue 和执行器，再通过同一时间线写入流程提交触发。只有原生序列和 Timecode 都读回后才确认。本曲下次打点继续引用已确认的 Cue。更换组合里的执行器时，实际触发随素材进入对应的轨道。`ma2-track-routing.test.ts` 和 `lighting-cue-composer.test.ts` 检查连续打点与跨执行器替换。
 

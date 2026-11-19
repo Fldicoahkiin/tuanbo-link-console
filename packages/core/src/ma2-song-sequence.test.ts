@@ -98,3 +98,25 @@ it('顺延后的实际序列、Timecode 和执行器回填计划，Cue 内容和
   expect(after.timelineDestination).toEqual({ name: '新歌', sequence: 9000, timecode: 9001, executor: '1001.101' });
   expect(ma2SongPoints(after).map(point => point.atMs)).toEqual([0, 1000]);
 });
+
+it('新歌同帧素材按选择顺序合成，延迟的素材写成下一点，读回后保留各自的复制范围', () => {
+  const { document, result } = sample();
+  const clip = document.tracks[0]!.clips[0]!;
+  const event = clip.events[0]!;
+  if (event.kind !== 'ma2') throw new Error('测试需要控台 Cue');
+  clip.events = [
+    { ...event, id: 'extra', at: 0, effectGroupId: 'first', ingredientOrder: 1, sequence: 7, includeTracking: false },
+    { ...event, id: 'second', at: 1000, effectGroupId: 'first', ingredientOrder: 2, sequence: 3 },
+    { ...event, effectGroupId: 'first', ingredientOrder: 0, includeTracking: true }
+  ];
+  const points = ma2SongPoints(document);
+  expect(points.map(p => [p.id, p.atMs, p.cues.map(cue => [cue.sequence, cue.includeTracking, cue.delayMs])])).toEqual([
+    ['first', 0, [[2, true, 0], [7, false, 0]]], ['second', 1000, [[3, undefined, 0]]]
+  ]);
+  const written = applyMa2SongReadback(document, points, result);
+  expect(written.tracks[0]!.clips[0]!.events).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: 'first', cue: '1.000', sourceIngredients: [expect.objectContaining({ sequence: 2, includeTracking: true }), expect.objectContaining({ sequence: 7, includeTracking: false })] }),
+    expect.objectContaining({ id: 'second', cue: '2.000', at: 1000 })
+  ]));
+  expect(written.tracks[0]!.clips[0]!.events).toHaveLength(2);
+});

@@ -167,4 +167,4 @@ export function ma2SequenceLocations(pages: Record<number, Ma2ExecutorPage>, seq
   }
   return index.get(sequence) ?? [];
 }
-export function ma2ExecutorLocationLabel(page: number, slot: number): string { return `${slot >= 101 ? '按钮' : '推杆'}第 ${page} 页 · ${slot} 格`; }
+export { ma2ExecutorLocationLabel } from '../view-models/ma2-console-page';

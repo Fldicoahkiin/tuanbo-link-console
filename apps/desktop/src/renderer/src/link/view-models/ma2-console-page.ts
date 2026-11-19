@@ -287,3 +287,5 @@ export function ma2ConsoleFooter(webRemote: Ma2ConsoleWebRemote, buttonKeys: { t
     case 'stopped': return line(webRemote.limit ? webRemote.reason : `网页遥控停了，需要手动连接。原因：${webRemote.reason}`, 'danger', true);
   }
 }
+
+export function ma2ExecutorLocationLabel(page: number, slot: number): string { return `${slot >= 101 ? '按钮' : '推杆'}第 ${page} 页 · ${slot} 格`; }

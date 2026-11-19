@@ -50,17 +50,16 @@ test('改了 MTC 起始码，灯光自动换到同起点的控台时间线；控
     await page.getByText('歌曲导入与同步', { exact: true }).click();
     await page.getByRole('button', { name: '查看控台时间线', exact: true }).click();
     const browser = page.getByRole('region', { name: '控台时间线与歌曲', exact: true });
-    const timelines = browser.getByRole('navigation', { name: '已读取时间线' });
-    await expect(timelines.getByRole('button', { name: /121 · 灯光 121/ })).toContainText('对上「trip」 · Cue 已放进歌曲 · MTC 00:01:10:00');
-    await timelines.getByRole('button', { name: /112 · 灯光 112/ }).click();
-    await expect(browser.getByText(/已归档「trip」在这条时间线上的 Cue 和本地改动，这首歌现在用 Timecode 121/)).toBeVisible();
-
-    // Back to Timecode 112 by hand: the song takes its start and gets its archived Cues back.
-    await browser.getByRole('combobox', { name: 'Timecode 112 给哪首歌用', exact: true }).selectOption({ label: 'trip · MTC 00:01:10:00' });
-    await browser.getByRole('button', { name: '用这条时间线', exact: true }).click();
-    await expect(page.getByText('「trip」的起始码改成了 MTC 00:01:00:00，现在用 Timecode 112 跑灯')).toBeVisible();
-    await expect(timelines.getByRole('button', { name: /112 · 灯光 112/ })).toContainText('对上「trip」 · Cue 已放进歌曲');
-    await expect(browser.getByRole('button', { name: '用这条时间线', exact: true })).toBeDisabled();
+    const timeline = (target: number) => browser.getByRole('option', { name: `Timecode ${target} · 灯光 ${target}` });
+    await expect(timeline(121)).toContainText('当前节目');
+    await expect(timeline(121)).toContainText('00:01:10');
+    await browser.getByRole('button', { name: /全部时间线/ }).click();
+    await timeline(112).click();
+    await expect(browser.getByRole('status', { name: '时间线状态' })).toContainText('未关联当前节目');
+    await browser.getByRole('button', { name: '用于当前节目', exact: true }).click();
+    await expect(timeline(112)).toContainText('当前节目');
+    await expect(timeline(112)).toContainText('00:01:00');
+    await expect(browser.getByRole('status', { name: '时间线状态' })).toContainText('已匹配当前节目');
     await page.screenshot({ path: info.outputPath('timeline-switch.png') });
 
     // The song's MTC start on the timeline toolbar opens and closes this page from the lighting workbench.

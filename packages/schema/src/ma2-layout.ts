@@ -1,3 +1,4 @@
+import { cueAttributeNamesSchema } from './lighting';
 import { z } from 'zod';
 import { ma2NetworkTargetSchema } from './ma2-bridge';
 import { ma2LabelSchema } from './ma2-rename';
@@ -15,7 +16,7 @@ const base = z.object({ network: ma2NetworkTargetSchema, expectedSource: source 
 export const ma2LayoutReadRequestSchema = base.extend({ layout: z.number().int().min(1).max(9999) }).strict();
 export const ma2NewCueRequestSchema = base.extend({
   projectId: z.string().uuid(), requestId: z.string().uuid(), settings: ma2LayoutSettingsSchema, name: ma2LabelSchema,
-  content: z.discriminatedUnion('kind', [z.object({ kind: z.literal('programmer'), use: z.enum(['Active', 'Look']) }).strict(), z.object({ kind: z.literal('combine'), cues: z.array(z.object({ sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^[1-9]\d{0,3}(?:\.\d{1,3})?$|^0\.\d{1,3}$/) }).strict()).min(1).max(32) }).strict()])
+  content: z.discriminatedUnion('kind', [z.object({ kind: z.literal('programmer'), use: z.enum(['Active', 'Look']) }).strict(), z.object({ kind: z.literal('combine'), cues: z.array(z.object({ attributes: cueAttributeNamesSchema.optional(), includeTracking: z.boolean().optional(), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^[1-9]\d{0,3}(?:\.\d{1,3})?$|^0\.\d{1,3}$/) }).strict()).min(1).max(32) }).strict()])
 }).strict();
 export const ma2NewCueResultSchema = z.object({ layout: ma2LayoutSnapshotSchema, sequence: z.number().int().positive(), cue: z.literal('1.000'), library: ma2EffectLibrarySchema, backupFile: z.string() }).strict();
 export type Ma2LayoutSettings = z.infer<typeof ma2LayoutSettingsSchema>;

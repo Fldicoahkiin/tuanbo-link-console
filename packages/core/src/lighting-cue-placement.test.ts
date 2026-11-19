@@ -7,6 +7,7 @@ describe('direct console Cue placement', () => {
   it('preserves the exact reference and existing timing without inventing a library entry', () => {
     const original = createLightingDocument();
     const first = placeConsoleCue(original, reference, 1250, 5000);
+    expect(placeConsoleCue(first, { ...reference, cue: '1.25' }, 1250, 5000)).toBe(first);
     const before = structuredClone(first);
     const next = placeConsoleCue(first, { ...reference, cue: '2.000' }, 2500, 5000);
     expect(first).toEqual(before);
@@ -34,4 +35,13 @@ describe('direct console Cue placement', () => {
     const first = placeConsoleCue(createLightingDocument(), { ...reference, executor: '1.101' }, 1000, 5000);
     expect(() => placeConsoleCue(first, { ...reference, sequence: 169, cue: '2', executor: '1.101' }, 1000, 5000)).toThrow();
   });
+});
+
+it('已有的同刻控台动作不妨碍在别处拖入素材，编辑位置真的冲突时说出两步和位置', () => {
+  const doc = placeConsoleCue(createLightingDocument(), { ...reference, executor: '1.101' }, 1000, 5000);
+  const duplicate = structuredClone(doc.tracks[0]!.clips[0]!.events[0]!);
+  duplicate.id = 'prior-trigger';
+  doc.tracks[0]!.clips[0]!.events.push(duplicate);
+  expect(placeConsoleCue(doc, reference, 2000, 5000).tracks[0]!.clips[0]!.events).toHaveLength(3);
+  expect(() => placeConsoleCue(doc, { ...reference, executor: '1.101', cue: '3' }, 1000, 5000)).toThrow('执行器 1.101 同时收到「Cue 1.250」和「Cue 3」');
 });

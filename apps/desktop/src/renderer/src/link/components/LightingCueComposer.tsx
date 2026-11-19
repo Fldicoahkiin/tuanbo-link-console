@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { CueTrackingChoice } from './CueTrackingChoice';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import { X, Check, Save, Layers } from 'lucide-react';
 import { LightingTempoMap, lightingEventTime, removeLightingEffects, placeEmptyLightingCue } from '@tb/core/link';
@@ -10,7 +11,7 @@ import { Button } from '../ui';
 import { usePlayheadValue, type EditorPlayhead } from './editor-playhead';
 import { ma2ConsoleCuePoolName, ma2ConsoleSequenceName, ma2SequenceLibrary, type LibrarySequence } from '../view-models/ma2-sequence-library';
 
-export type CueIngredient = { name: string; sequenceName?: string; sequence: number; cue: string; executor: string; delayMs: number; preparation?: Extract<LightingEvent, { kind: 'ma2' }>['preparation'] };
+export type CueIngredient = { name: string; attributes?: string[] | undefined; includeTracking?: boolean | undefined; sequenceName?: string; sequence: number; cue: string; executor: string; delayMs: number; preparation?: Extract<LightingEvent, { kind: 'ma2' }>['preparation'] };
 export function cueIngredients(document: LightingDocument, eventId?: string, library: readonly LibrarySequence[] = ma2SequenceLibrary(null, document)): CueIngredient[] {
   if (!eventId) return [];
   const map = new LightingTempoMap(document.tempos);
@@ -19,12 +20,15 @@ export function cueIngredients(document: LightingDocument, eventId?: string, lib
   const first = Math.min(...events.filter(event=>event.id===eventId||event.effectGroupId===eventId).map(event=>times.get(event.id)!));
   return events.flatMap(event => {
     if (event.kind !== 'ma2' || !(event.id === eventId || event.effectGroupId === eventId) || !event.sequence || !event.cue) return [];
+    if (event.sourceIngredients) return event.sourceIngredients.map(source => ({
+      ...source, delayMs: times.get(event.id)! - first
+    }));
     const sequence = library.find(value => value.sequence === event.sequence);
     const cue = sequence?.cues.find(value => Number(value.number) === Number(event.cue));
     const source = document.templates.find(effect => { const binding = effect.track.cueStamp; return binding?.mode === 'fixed' && binding.sequence === event.sequence && Number(binding.cue) === Number(event.cue) && binding.executor === event.executor; });
     // The event label belongs to the timeline point; material names come from the saved console catalog.
     const name = sequence && cue ? ma2ConsoleCuePoolName(sequence, cue) : source?.name ?? (event.label || `Cue ${Number(event.cue)}`);
-    return [{ name, ...(sequence ? { sequenceName: ma2ConsoleSequenceName(sequence) } : {}), sequence: event.sequence, cue: event.cue, executor: event.executor, delayMs: times.get(event.id)! - first, ...(event.preparation ? { preparation: event.preparation } : {}) }];
+    return [{ name, ...(event.attributes && { attributes: event.attributes }), ...(event.includeTracking !== undefined && { includeTracking: event.includeTracking }), ...(sequence ? { sequenceName: ma2ConsoleSequenceName(sequence) } : {}), sequence: event.sequence, cue: event.cue, executor: event.executor, delayMs: times.get(event.id)! - first, ...(event.preparation ? { preparation: event.preparation } : {}) }];
   });
 }
 export function saveCueIngredients(document: LightingDocument, ingredients: CueIngredient[], name: string, ms: number, durationMs: number, eventId?: string): LightingDocument {
@@ -32,7 +36,7 @@ export function saveCueIngredients(document: LightingDocument, ingredients: CueI
   const runMode = original?.kind === 'ma2' || original?.kind === 'empty-cue' ? original.runMode : undefined;
   if (!ingredients.length) return placeEmptyLightingCue(document, eventId ?? crypto.randomUUID(), ms, durationMs, name.trim());
   if (ingredients.some(entry => entry.executor && !/^[1-9]\d*\.[1-9]\d*$/.test(entry.executor))) throw new Error('执行器格式应为“页号.编号”，例如 1.5；留空则使用序列池');
-  if (new Set(ingredients.map(entry => `${entry.executor ? `executor:${entry.executor}` : `sequence:${entry.sequence}`}:${entry.delayMs}`)).size !== ingredients.length) throw new Error('同一个序列或执行器在同一时刻只能运行一个 Cue。请调整组合延迟，或移除冲突的素材');
+  if (!(document.consoleSong || document.timelineDestination || document.ma2Bindings?.length === 1 && document.ma2Bindings[0]!.baselineTracks.length) && new Set(ingredients.map(entry => `${entry.executor ? `executor:${entry.executor}` : `sequence:${entry.sequence}`}:${entry.delayMs}`)).size !== ingredients.length) throw new Error('同一个序列或执行器在同一时刻只能运行一个 Cue。请调整组合延迟，或移除冲突的素材');
   const first = document.templates.find(effect => effect.track.cueStamp?.mode === 'fixed');
   const map = new LightingTempoMap(document.tempos);
   for (const track of document.tracks) for (const clip of track.clips) {
@@ -45,9 +49,9 @@ export function saveCueIngredients(document: LightingDocument, ingredients: CueI
   const base = eventId ? removeLightingEffects(document, [eventId]) : document;
   const ingredient = ingredients[0]!;
   const track = first?.track ?? lightingTrackSchema.parse({ id: crypto.randomUUID(), name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [] });
-  const temporary = { ...first, id: crypto.randomUUID(), name: name.trim() || 'Cue 素材', track: { ...track, cueStamp: { mode: 'fixed' as const, sequence: ingredient.sequence, cue: ingredient.cue, executor: ingredient.executor } }, members: ingredients.length > 1 ? ingredients.map(({ name, sequence, cue, executor, delayMs }) => ({ name, sequence, cue, executor, delayMs })) : undefined };
+  const temporary = { ...first, nativeSequence: false, id: crypto.randomUUID(), name: name.trim() || 'Cue 素材', track: { ...track, cueStamp: { mode: 'fixed' as const, sequence: ingredient.sequence, cue: ingredient.cue, executor: ingredient.executor } }, members: ingredients.length > 1 ? ingredients.map(({ name, sequence, cue, executor, delayMs, includeTracking, attributes }) => ({ name, sequence, cue, executor, delayMs, includeTracking, attributes })) : undefined };
   const id = eventId ?? crypto.randomUUID();
-  const placed = placeLightingTemplate({ ...base, templates: [...base.templates, temporary] }, { effectId: temporary.id, ms, id }, durationMs);
+  const placed = placeLightingTemplate({ ...base, templates: [...base.templates, temporary] }, { effectId: temporary.id, ms, id, ...(ingredients.length === 1 && { attributes: ingredient.attributes, includeTracking: ingredient.includeTracking }) }, durationMs);
   const result = retainCueLocations(document, placed, id, ms, map);
   return lightingDocumentSchema.parse({ ...result, templates: document.templates, tracks: result.tracks.map(track => ({ ...track, clips: track.clips.map(clip => ({ ...clip, events: clip.events.map(event => {
     if (event.kind !== 'ma2' || (event.id !== id && event.effectGroupId !== id)) return event;
@@ -105,7 +109,7 @@ export function LightingCueComposer({ templateId, document, eventId, playhead, d
   const stored = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === targetId);
   const storedName = stored && 'label' in stored ? stored.label : undefined;
   useEffect(() => { if (!editingName && storedName !== undefined) setName(storedName); }, [storedName, editingName]);
-  const contents = (values: CueIngredient[]): string => JSON.stringify(values.map(({ sequence, cue, executor, delayMs, preparation }) => ({ sequence, cue, executor, delayMs, preparation })));
+  const contents = (values: CueIngredient[]): string => JSON.stringify(values.map(({ sequence, cue, executor, delayMs, preparation, includeTracking, attributes }) => ({ sequence, cue, executor, delayMs, preparation, includeTracking, attributes })));
   const saved = savedSignature === signature || (storedName === name.trim() && contents(cueIngredients(document, targetId)) === contents(ingredients));
   const setSaved = (value: boolean): void => setSavedSignature(value ? signature : '');
   return <aside className="cue-composer" data-drop-active={dragOver} aria-label={details ? '点位素材组合' : 'Cue 组合编辑'}
@@ -116,7 +120,15 @@ export function LightingCueComposer({ templateId, document, eventId, playhead, d
     <input className="cue-name-input" aria-label="Cue 名称" placeholder="Cue 名称" value={name} disabled={disabled} onFocus={() => setEditingName(true)} onChange={event => { setName(event.target.value); setSaved(false); }} onBlur={() => {
       setEditingName(false);
       if (!targetId || disabled || name.trim() === storedName) return;
-      try { if (onChange(saveCueIngredients(document, ingredients, name, playhead.read(), durationMs, targetId), '重命名 Cue') === false) throw new Error('Cue 名称保存失败'); setError(''); }
+      try {
+        const renamed = structuredClone(document);
+        for (const track of renamed.tracks) for (const clip of track.clips) {
+          const point = clip.events.find(event => event.id === targetId);
+          if (point?.kind === 'ma2' || point?.kind === 'empty-cue') point.label = name.trim();
+        }
+        if (onChange(renamed, '重命名 Cue') === false) throw new Error('Cue 名称保存失败');
+        setError('');
+      }
       catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     }} />
     {document.consoleSong?.points.some(point => point.id === targetId) ? <small className="cue-console-address">{document.consoleSong.executor ? `按钮第 ${document.consoleSong.executor.split('.')[0]} 页 · ${document.consoleSong.executor.split('.')[1]} 格` : `Layout ${document.consoleSong.layout}`} · 序列 {document.consoleSong.sequence} · Cue {Number(document.consoleSong.points.find(point => point.id === targetId)?.cue)}</small> : null}
@@ -137,8 +149,9 @@ export function LightingCueComposer({ templateId, document, eventId, playhead, d
       }}>改成跟随上一个</Button>
     </div> : null}
     <div className="cue-composer-body"><div className="cue-content-heading"><span>包含素材</span><small>{ingredients.length}</small></div>
-    <div className="cue-ingredients" aria-label="Cue 内容">{ingredients.map((entry, index) => <div className="cue-ingredient" key={`${entry.sequence}:${entry.executor}:${entry.cue}:${entry.delayMs}`}>
+    <div className="cue-ingredients" aria-label="Cue 内容">{ingredients.map((entry, index) => <div className="cue-ingredient" key={`${index}:${entry.sequence}:${entry.executor}:${entry.cue}`}>
       <div className="cue-ingredient-title"><Layers /><strong title={entry.name}>{entry.name}</strong><button disabled={disabled} aria-label={`移除素材 ${entry.name}`} onClick={() => { onIngredients(ingredients.filter((_, i) => i !== index)); setSaved(false); }}><X /></button></div>
+      <CueTrackingChoice label={`素材 ${index + 1} 复制范围`} value={entry.includeTracking} disabled={disabled} onChange={includeTracking => { onIngredients(ingredients.map((item, i) => i === index ? { ...item, includeTracking } : item)); setSaved(false); }} />
       <details><summary>{entry.sequenceName && entry.sequenceName !== entry.name ? `${entry.sequenceName} · ` : ''}序列 {entry.sequence} · Cue {Number(entry.cue)}{entry.delayMs ? ` · +${entry.delayMs} ms` : ''}</summary><div className="cue-ingredient-fields">
         <label>序列<PropertyNumberInput label={`素材 ${index + 1} 序列`} min={1} max={99999} value={entry.sequence} disabled={disabled} onCommit={value => onIngredients(ingredients.map((item, i) => i === index ? { ...item, sequence: value } : item))} /></label>
         <label>Cue 编号<input aria-label={`素材 ${index + 1} Cue 编号`} key={entry.cue} defaultValue={entry.cue} disabled={disabled} onBlur={event => onIngredients(ingredients.map((item, i) => i === index ? { ...item, cue: event.target.value } : item))} /></label>
@@ -153,7 +166,7 @@ export function LightingCueComposer({ templateId, document, eventId, playhead, d
       <small>这个 Cue 还带着以前的埋步。埋步写不进控台，带埋步的歌同步不到控台，演出时不会亮灯。</small>
       <Button size="sm" variant="secondary" disabled={disabled} onClick={() => { onIngredients(ingredients.map(entry => { const rest = { ...entry }; delete rest.preparation; return rest; })); setSaved(false); }}>去掉埋步</Button>
     </div> : null}
-    <details className="cue-composer-advanced"><summary>存入素材库</summary><button disabled={disabled || !ingredients.length || !name.trim()} onClick={() => { try { const first = ingredients[0]!; const track = lightingTrackSchema.parse({id:crypto.randomUUID(),name:name.trim(),kind:'ma2',color:'#68c9ed',group:'',muted:false,solo:false,locked:false,channel:1,controller:7,portProfileId:'',noteNames:{},clips:[],cueStamp:{mode:'fixed',sequence:first.sequence,cue:first.cue,executor:first.executor}});const previous=document.templates.find(value=>value.id===templateId);const template={...previous,id:previous?.id ?? crypto.randomUUID(),name:name.trim(),track,nativeSequence:false,members:ingredients.map(({name,sequence,cue,executor,delayMs})=>({name,sequence,cue,executor,delayMs}))};const result=onChange({...document,templates:[...document.templates.filter(value=>value.id!==template.id),template]},'收藏灯光组合');if(result===false)throw new Error('保存组合失败');setError(''); } catch(cause){setError(cause instanceof Error ? cause.message : String(cause));} }}>{templateId ? '保存分类素材修改' : '保存为分类素材'}</button></details>
+    <details className="cue-composer-advanced"><summary>存入素材库</summary><button disabled={disabled || !ingredients.length || !name.trim()} onClick={() => { try { const first = ingredients[0]!; const track = lightingTrackSchema.parse({id:crypto.randomUUID(),name:name.trim(),kind:'ma2',color:'#68c9ed',group:'',muted:false,solo:false,locked:false,channel:1,controller:7,portProfileId:'',noteNames:{},clips:[],cueStamp:{mode:'fixed',attributes:first.attributes,includeTracking:first.includeTracking,sequence:first.sequence,cue:first.cue,executor:first.executor}});const previous=document.templates.find(value=>value.id===templateId);const template={...previous,id:previous?.id ?? crypto.randomUUID(),name:name.trim(),track,nativeSequence:false,members:ingredients.length>1?ingredients.map(({name,sequence,cue,executor,delayMs,includeTracking,attributes})=>({name,sequence,cue,executor,delayMs,includeTracking,attributes})):undefined};const result=onChange({...document,templates:[...document.templates.filter(value=>value.id!==template.id),template]},'收藏灯光组合');if(result===false)throw new Error('保存组合失败');setError(''); } catch(cause){setError(cause instanceof Error ? cause.message : String(cause));} }}>{templateId ? '保存分类素材修改' : '保存为分类素材'}</button></details>
     {error ? <p role="alert">{error}</p> : null}
 
     {durationMs <= 0 ? <small>请先为当前节目添加音频。</small> : null}

@@ -1,6 +1,6 @@
 import { ma2ApplyRequestSchema, ma2ApplyResultSchema, type Ma2ApplyRequest, type Ma2ApplyResult, type Ma2TimecodePreview } from '@tb/schema';
 import { holdForShow, MA2_SONG_COLLISION, resolveMa2Sync, type ShowGateReader } from '@tb/core/link';
-import { Ma2BridgeFailure, type Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { Ma2BridgeFailure, ma2TimecodeChangedBeforeWrite, type Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { confirmMa2MergedEvents, prepareMa2MergedEvents } from './ma2-event-write';
 import { convertMa2Snapshot } from './ma2-timecode-conversion';
 import { ma2GoSequencesInSnapshot, ma2MtcPlaybackSettings, referencedMa2Sequences, sameMa2XmlObjects } from './ma2-timecode-xml';
@@ -41,7 +41,8 @@ export class Ma2ApplyService {
     }
     const snapshot = await this.readSnapshot(target, additional);
     const preview = convertMa2Snapshot(snapshot, target, additional, origin);
-    this.editRead = { preview, snapshot, sequences: additional.join(','), at: Date.now() };
+    const included = new Set(referencedMa2Sequences(preview.sourceXml));
+    this.editRead = { preview, snapshot, sequences: additional.filter(number => !included.has(number)).join(','), at: Date.now() };
     return preview;
   }
 
@@ -123,7 +124,7 @@ export class Ma2ApplyService {
       const message = error instanceof Error ? error.message : String(error);
       // The native bridge explicitly rejected the compare, before Import. Its lane may already
       // have accepted the request, so transport-level 'sent' alone cannot classify these cases.
-      if (stage === 'write' && /(?:Timecode or Sequence changed after preview|Timecode changed before write|Snapshot reference expired or mismatched|Sequence changed during snapshot|Timecode changed during snapshot)/.test(message)) {
+      if (stage === 'write' && ma2TimecodeChangedBeforeWrite(message)) {
         return { status: 'incomplete', stage: 'preflight', message: `${MA2_SONG_COLLISION}：写入前控台已有改动，正在重新核对`, mayHaveWritten: false, backupFile };
       }
       return { status: 'incomplete', stage, message, mayHaveWritten, backupFile };

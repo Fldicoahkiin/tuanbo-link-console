@@ -30,6 +30,14 @@ export function setMa2ConsoleChanges(consoleChanges: Ma2ConsoleChanges): void {
   localStorage.setItem(changesKey, consoleChanges);
   useMa2RealtimePreference.setState({ consoleChanges });
 }
+const cueTrackingKey = 'tblink.ma2-copy-tracking.v1';
+export const useCueTrackingPreference = create<{ includeTracking: boolean | undefined }>(() => ({
+  includeTracking: stored(cueTrackingKey) === null ? undefined : stored(cueTrackingKey) === 'true'
+}));
+export function setCueTrackingPreference(includeTracking: boolean): void {
+  localStorage.setItem(cueTrackingKey, String(includeTracking));
+  useCueTrackingPreference.setState({ includeTracking });
+}
 const keyChannelKey = 'tblink.ma2-key-channel.v1';
 /**
  * The line this computer's operator chose for executor Button area keys (M7), kept like the sync choices above. First

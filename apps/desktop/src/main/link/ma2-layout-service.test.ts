@@ -104,7 +104,7 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
     // Keeping a combined Cue's attributes: later /merge copies rebuild its data from the sources alone.
     const kept = /_attrs\.xml'[\s\S]*Copy Sequence \d+ Cue [\d.]+ At Sequence (\d+) Cue ([\d.]+) \/o \/nc/.exec(script);
     if (kept) { copies.set(`${kept[1]}/${Number(kept[2])}`, []); keeps.push(`${kept[1]}/${Number(kept[2])}`); return 'kept'; }
-    const copy = /gma\.cmd\('Copy Sequence (\d+) Cue ([\d.]+) At Sequence (\d+) Cue ([\d.]+) \/(o|merge) \/nc'\)/.exec(script);
+    const copy = /gma\.cmd\('Copy Sequence (\d+) Cue ([\d.]+) At Sequence (\d+) Cue ([\d.]+) (?:\/status=(?:true|false) )?\/(o|merge) \/nc'\)/.exec(script);
     if (copy) {
       const [, from, cue, to, at, mode] = copy; const key = `${to}/${Number(at)}`;
       if (!song(Number(to)).cues.length) throw new Error('Native Copy into a completely empty Sequence can crash onPC');
@@ -392,9 +392,33 @@ it('复用本次 Timecode 读回后，控台在写入前再改时间线仍拒绝
   });
   const points = song.points.map(point => ({ ...point, atMs: point.atMs + 500,
     cues: [{ sequence: 9000, cue: first.binding.points.find(value => value.id === point.id)!.cue, delayMs: 0 }] }));
-  await expect(service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: first.binding, timecodeStartMs: 480000, points })).rejects.toThrow('Timecode changed after preview');
+  await expect(service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: first.binding, timecodeStartMs: 480000, points })).rejects.toThrow('控台同时在改');
   expect(fake.timecodes.get(9000)).toBe(remoteEdit);
 });
+it('序列已确认而 Timecode 在写前改变，重开后在旧工程上重试沿用同一个 Cue', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const ledger = join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json');
+  const service = new Ma2LayoutService(ledger, showStopped, noBackups);
+  const first = await service.syncSong(fake.connection, fake.bridge, { ...song, timecodeStartMs: 480000 });
+  const local = first.binding.points.map((point, index) => ({ ...song.points[index]!, cues: [{ sequence: 9000, cue: point.cue, delayMs: 0 }] }));
+  const points = [...local, { id: 'empty-point', name: 'Inserted', atMs: 500, cues: [] }];
+  const exchange = fake.bridge.exchange.getMockImplementation()!;
+  fake.bridge.exchange.mockImplementation(async (...args) => {
+    if (args[0] === 'APPLY') throw new Error('MA2：[string "tblink_bridge"]:727: Timecode changed after preview');
+    return exchange(...args);
+  });
+  const input = { ...song, binding: first.binding, timecodeStartMs: 480000, points };
+  await expect(service.syncSong(fake.connection, fake.bridge, { ...input, requestId: randomUUID() })).rejects.toThrow('控台同时在改');
+  const savedSequence = sequences.get(9000);
+  fake.bridge.exchange.mockImplementation(exchange);
+  const reopened = new Ma2LayoutService(ledger, showStopped, noBackups);
+  const actual = await reopened.syncSong(fake.connection, fake.bridge, { ...input, requestId: randomUUID() });
+  expect(sequences.get(9000)).toBe(savedSequence);
+  expect(actual.binding.points.map(point => point.id)).toContain('empty-point');
+  expect(inspectMa2TimecodeXml(fake.timecodes.get(9000)!).timecodes[0]!.tracks[0]!.subtracks[0]!.events).toHaveLength(points.length);
+});
+
 it('静音只去掉时间码触发；解除静音恢复原 Cue，不删除或重编号序列内容', async () => {
   const { song, sequences } = boundSong();
   const fake = songConsole(sequences);

@@ -28,6 +28,12 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     const labels = Object.fromEntries(['前区暖白', '分类暖白', '控台原名－前区面光暖白完整名称'].map(name => [name, toConsoleLabel(name)]));
     await application.evaluate(({ ipcMain, dialog }, { path, directory, labels }) => {
       process.env.TBLINK_LIBRARY_CALLS = '[]';
+      process.env.TBLINK_ATTRIBUTE_READS = '0';
+      ipcMain.removeHandler('link:ma2-cue-attribute-names');
+      ipcMain.handle('link:ma2-cue-attribute-names', () => {
+        process.env.TBLINK_ATTRIBUTE_READS = String(Number(process.env.TBLINK_ATTRIBUTE_READS) + 1);
+        return ['DIM', 'PAN', 'TILT'];
+      });
       process.env.TBLINK_RENAME_CALLS = '[]';
       // This test owns rename history; background music analysis is a separate workflow.
       ipcMain.removeHandler('link:automatic-music-status');
@@ -50,7 +56,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
       ipcMain.removeHandler('link:ma2-play-cue');
       let audition:Ma2AuditionState={version:1,revision:0,generation:0,phase:'idle',targets:[]};
       ipcMain.removeHandler('link:ma2-audition-play');ipcMain.handle('link:ma2-audition-play',(_event,input:Ma2AuditionRequest)=>{const calls=JSON.parse(process.env.TBLINK_LIBRARY_CALLS??'[]') as unknown[];calls.push(input);process.env.TBLINK_LIBRARY_CALLS=JSON.stringify(calls);const action=input.action.target==='sequence'?{target:'sequence' as const,sequence:input.action.sequence,action:'off' as const}:{target:'executor' as const,executor:input.action.executor,action:'off' as const};const id=JSON.stringify(action);audition={...audition,revision:audition.revision+1,phase:'active',targets:[...audition.targets.filter(t=>t.id!==id),{id,network:input.network,action,state:'sent',error:null}]};_event.sender.send('link:ma2-audition-state',audition);});
-      ipcMain.removeHandler('link:ma2-audition-control');ipcMain.handle('link:ma2-audition-control',(_event,input:{action:string})=>{if(input.action==='stop'){const calls=JSON.parse(process.env.TBLINK_LIBRARY_CALLS??'[]') as unknown[];calls.push(...audition.targets.map(target=>({action:target.action})));process.env.TBLINK_LIBRARY_CALLS=JSON.stringify(calls);audition={...audition,generation:audition.generation+1,revision:audition.revision+1,phase:'sent',targets:[]};_event.sender.send('link:ma2-audition-state',audition);}return audition;});
+      ipcMain.removeHandler('link:ma2-audition-control');ipcMain.handle('link:ma2-audition-control',(_event,input:{action:string})=>{if(input.action==='stop-console'){const calls=JSON.parse(process.env.TBLINK_LIBRARY_CALLS??'[]') as unknown[];calls.push(...audition.targets.map(target=>({action:target.action})));process.env.TBLINK_LIBRARY_CALLS=JSON.stringify(calls);audition={...audition,generation:audition.generation+1,revision:audition.revision+1,phase:'sent',targets:[]};_event.sender.send('link:ma2-audition-state',audition);}return audition;});
       ipcMain.handle('link:ma2-play-cue', (_event, payload: unknown) => { const calls = JSON.parse(process.env.TBLINK_LIBRARY_CALLS ?? '[]') as unknown[]; calls.push(payload); process.env.TBLINK_LIBRARY_CALLS = JSON.stringify(calls); });
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] });
     }, { path: file, directory, labels });
@@ -93,6 +99,26 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await expect(pool.getByRole('button').first().locator('strong')).toHaveText('控台原名－前区面光暖白完整名称');
     await pool.getByRole('button').first().click();
     await expect.poll(async () => (JSON.parse(await application.evaluate(() => process.env.TBLINK_LIBRARY_CALLS ?? '[]')) as unknown[]).length).toBe(1);
+    const picker = preview.getByRole('complementary', { name: '当前 Cue 属性' });
+    const reads = () => application.evaluate(() => Number(process.env.TBLINK_ATTRIBUTE_READS));
+    const dragged = () => pool.locator('.console-cue-cell').first().evaluate(element => {
+      const dataTransfer = new DataTransfer();
+      element.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer }));
+      return JSON.parse(dataTransfer.getData('application/x-tblink-console-cue')) as { attributes?: string[] };
+    });
+    await expect(picker.getByText('全部属性', {exact: true})).toBeVisible();
+    expect((await dragged()).attributes).toBeUndefined();
+    expect(await reads()).toBe(0);
+    await picker.getByRole('button', { name: '读取属性' }).click();
+    await expect(picker.getByRole('checkbox', { name: 'DIM' })).toBeChecked();
+    await picker.getByRole('checkbox', { name: 'PAN' }).uncheck();
+    expect((await dragged()).attributes).toEqual(['DIM', 'TILT']);
+    await picker.getByRole('checkbox', { name: 'DIM' }).uncheck();
+    await picker.getByRole('checkbox', { name: 'TILT' }).uncheck();
+    await expect(picker.getByRole('button', {name: '添加到播放头'})).toBeDisabled();
+    await picker.getByRole('button', {name: '全选', exact: true}).click();
+    expect((await dragged()).attributes).toBeUndefined();
+    expect(await reads()).toBe(1);
     await preview.getByRole('button', { name: '多步', exact: true }).click();
     await expect(pool).toHaveAttribute('data-total-cues', '500');
     await pool.getByRole('button').first().click();
@@ -104,8 +130,8 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await preview.getByRole('button', { name: '试听灯光步 3.000', exact: true }).click();
     await expect.poll(async () => (JSON.parse(await application.evaluate(() => process.env.TBLINK_LIBRARY_CALLS ?? '[]')) as unknown[]).length).toBe(2);
     for (const name of ['从第一步开始', '继续', '加入编排', '加入分类', '收藏多步序列']) await expect(preview.getByRole('button', { name, exact: true })).toHaveCount(0);
-    await preview.getByRole('button',{name:'停止试听',exact:true}).click();
-    await expect(preview.getByRole('button',{name:'停止试听',exact:true})).toHaveAttribute('data-phase','sent');
+    await preview.getByRole('button',{name:'停止全部控台 Cue',exact:true}).click();
+    await expect(preview.getByRole('button',{name:'停止全部控台 Cue',exact:true})).toHaveAttribute('data-phase','sent');
     await expect(preview.getByText('关闭指令已发送',{exact:true})).toHaveCount(0);
     await expect(preview.locator('.cue-pool-grid [aria-pressed=true],.cue-pool-grid [data-picked=true]')).toHaveCount(0);
 

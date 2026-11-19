@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ma2NetworkTargetSchema, ma2SequenceAssignmentSchema, ma2TimecodePreviewSchema } from './ma2-bridge';
-import { lightingMa2CueCatalogSchema, lightingMa2BindingSchema, lightingTrackSchema } from './lighting';
+import { cueAttributeNamesSchema, lightingMa2CueCatalogSchema, lightingMa2BindingSchema, lightingTrackSchema } from './lighting';
 
 export const ma2CatalogRequestSchema = z.object({ details: z.enum(['attributes', 'source']).optional(), dataDirectory: z.string().max(4096), network: ma2NetworkTargetSchema.optional(), progressId: z.string().uuid().optional(), projectPath: z.string().max(4096).optional(), projectId: z.string().min(1).optional(), expectedSource: z.object({ show: z.string(), generation: z.string(), version: z.string() }).strict().optional(), targets: z.array(z.number().int().min(1).max(99999)).max(10000).optional() }).strict();
 /** Resolve one pool reference in this verified Show without touching operator-owned executors. */
@@ -8,6 +8,24 @@ export const ma2PoolRouteRequestSchema = ma2CatalogRequestSchema.pick({ network:
 export type Ma2PoolRouteRequest = z.infer<typeof ma2PoolRouteRequestSchema>;
 export const ma2PoolRouteSchema = ma2SequenceAssignmentSchema.extend({ executorName: z.string().min(1).max(512) });
 export type Ma2PoolRoute = z.infer<typeof ma2PoolRouteSchema>;
+const firstTrackSource = z.object({ attributes: cueAttributeNamesSchema.optional(), includeTracking: z.boolean().optional(), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine(value => Number(value) > 0) }).strict();
+export const ma2CueAttributesRequestSchema = ma2PoolRouteRequestSchema.omit({projectId: true}).extend({
+  cue: firstTrackSource.shape.cue, includeTracking: z.boolean()
+});
+export type Ma2CueAttributesRequest = z.infer<typeof ma2CueAttributesRequestSchema>;
+export const ma2FirstTrackRequestSchema = ma2PoolRouteRequestSchema.omit({ sequence: true }).extend({
+  itemId: z.string().min(1), timecode: z.number().int().min(1).max(99999),
+  executor: z.string().regex(/^[1-9]\d{0,3}\.[1-9]\d{0,2}$/),
+  expectedSequence: z.number().int().min(1).max(99999).optional(),
+  points: z.array(z.object({ id: z.string().min(1), sources: z.array(firstTrackSource).max(32) }).strict()).min(1).max(9999)
+});
+export type Ma2FirstTrackRequest = z.infer<typeof ma2FirstTrackRequestSchema>;
+export const ma2FirstTrackReceiptSchema = z.object({
+  executor: ma2FirstTrackRequestSchema.shape.executor,
+  sequence: firstTrackSource.shape.sequence, cues: z.array(firstTrackSource.shape.cue).min(1),
+  backupFile: z.string().regex(/^tblink_backup_[a-f0-9]{32}\.xml$/).nullable()
+}).strict();
+export type Ma2FirstTrackReceipt = z.infer<typeof ma2FirstTrackReceiptSchema>;
 export const ma2PlaybackPrepareSchema = z.object({ network: ma2NetworkTargetSchema, progressId: z.string().uuid() }).strict();
 export type Ma2PlaybackPrepare = z.infer<typeof ma2PlaybackPrepareSchema>;
 export type Ma2CatalogRequest = z.infer<typeof ma2CatalogRequestSchema>;

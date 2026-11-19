@@ -47,13 +47,16 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
         process.env.TBLINK_CACHE_TEST_READS = String(Number(process.env.TBLINK_CACHE_TEST_READS) + 1);
         await new Promise(resolve => setTimeout(resolve, 1500)); return data.catalog;
       });
-      ipcMain.removeHandler('link:ma2-preview'); ipcMain.handle('link:ma2-preview', () => { throw new Error('缓存配对不应再次读取'); });
+      ipcMain.removeHandler('link:ma2-preview'); ipcMain.handle('link:ma2-preview', (_event, request: { target: number }) => data.catalog.entries.find(entry => entry.target === request.target)?.preview);
       // A successful full pool read is authoritative. Return the actual fixture
       // pool instead of relying on old song references to refill an empty pool.
-      ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', (_event, request: Ma2CatalogRequest) => ({
+      ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', (_event, request: Ma2CatalogRequest) => {
+        if (request.details === 'source') process.env.TBLINK_CACHE_SOURCE_READS = String(Number(process.env.TBLINK_CACHE_SOURCE_READS) + 1);
+        return {
         directory: { ...data.catalog.directory, entries: data.sequences.map(sequence => ({ target: sequence.sequence, name: sequence.name })) },
         readAt: new Date().toISOString(), sequences: request.targets?.length === 0 ? [] : data.sequences, fixtureUsage: [], errors: []
-      }));
+        };
+      });
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [data.file] });
     }, { catalog, file, sequences: meiNanSequences[0]!.sequences.map(sequence => ({ sequence: sequence.number, name: sequence.name, cues: sequence.cues })) });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
@@ -85,6 +88,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     expect(saved.ma2ReadState?.catalog.entries.length).toBe(2);
     expect(saved.rundown[0]?.lighting?.ma2Bindings?.[0]?.nativeEvents?.length).toBe(13);
     const sequencePreview = page.getByRole('region', { name: 'MA2 序列预览' });
+    await sequencePreview.getByRole('button', { name: '单步', exact: true }).click();
     await expect(sequencePreview.getByLabel('素材序列', { exact: true })).toHaveAttribute('data-total-cues', '11');
     await sequencePreview.getByRole('button', { name: '试听序列 36 灯光步 1.100', exact: true }).click();
     await expect.poll(async () => (JSON.parse(await app.evaluate(() => process.env.TBLINK_AUDITION_CALLS ?? '[]')) as unknown[]).length).toBe(1);
@@ -102,8 +106,8 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await page.screenshot({ path: info.outputPath('sequence-preview.png') });
     for (const zoom of [1, 2]) {
       await app.evaluate(({ BrowserWindow }, factor) => { const window = BrowserWindow.getAllWindows()[0]!; window.setSize(1180, 760); window.webContents.setZoomFactor(factor); }, zoom);
-      await sequencePreview.getByRole('button', { name: '停止试听', exact: true }).scrollIntoViewIfNeeded();
-      await expect(sequencePreview.getByRole('button', { name: '停止试听', exact: true })).toBeInViewport();
+      await sequencePreview.getByRole('button', { name: '停止全部控台 Cue', exact: true }).scrollIntoViewIfNeeded();
+      await expect(sequencePreview.getByRole('button', { name: '停止全部控台 Cue', exact: true })).toBeInViewport();
       expect(await sequencePreview.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
       await page.screenshot({ path: info.outputPath(`sequence-preview-${zoom}.png`) });
     }
@@ -118,19 +122,15 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await page.screenshot({ path: info.outputPath('workbench.png') });
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
-    if (!await page.getByRole('button', { name: '配对与查看 Cue', exact: true }).isVisible()) await page.getByText('歌曲导入与同步', { exact: true }).click();
-    await page.getByRole('button', { name: '配对与查看 Cue', exact: true }).click();
-    await expect(page.getByRole('region', { name: '控台时间线与歌曲配对' })).toBeVisible();
-    await page.getByLabel('时间线状态筛选').selectOption('native');
-    await expect(page.locator('.ma2-browser-events tbody tr')).toHaveCount(24);
-    await expect(page.locator('.ma2-browser-body article')).toContainText('节目起点 MTC 00:08:00:00');
-    await page.screenshot({ path: info.outputPath('cached-details.png') });
-    await nav.getByRole('button', { name: '节目单', exact: true }).click();
-    await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
-    await expect(page.getByLabel('时间线状态筛选')).toHaveValue('native');
+    if (!await page.getByRole('button', { name: '查看控台时间线', exact: true }).isVisible()) await page.getByText('歌曲导入与同步', { exact: true }).click();
+    await page.getByRole('button', { name: '查看控台时间线', exact: true }).click();
+    const current = page.getByRole('option', { name: /^Timecode 2 ·/ });
+    await expect(current).toContainText('00:08:00');
+    await expect(current).toContainText('当前节目');
+    expect(saved.rundown[0]?.lighting?.ma2Bindings?.[0]?.nativeEvents).toHaveLength(13);
     expect(await app.evaluate(() => process.env.TBLINK_CACHE_TEST_READS)).toBe('1');
+    await page.screenshot({ path: info.outputPath('cached-details.png') });
     await page.keyboard.press('Control+S'); await expect(page.locator('.titlebar-save-state')).toBeHidden();
-    expect(parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).ma2ReadState?.filter).toBe('native');
     await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close();
     app = await launch(); page = await app.firstWindow();
     await expect(page.getByText('MA2 缓存流程软件验收', { exact: true }).first()).toBeVisible();
@@ -138,12 +138,13 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await expect(page.locator('.waveform-cue-point')).toHaveCount(11);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
-    if (!await page.getByRole('button', { name: '配对与查看 Cue', exact: true }).isVisible()) await page.getByText('歌曲导入与同步', { exact: true }).click();
-    await page.getByRole('button', { name: '配对与查看 Cue', exact: true }).click();
-    await expect(page.getByLabel('时间线状态筛选')).toHaveValue('native');
-    await expect(page.locator('.ma2-browser-events tbody tr')).toHaveCount(24);
-    await page.getByLabel('时间线状态筛选').selectOption('error');
-    await expect(page.locator('.ma2-browser-body article')).toContainText('读取超时样例');
+    if (!await page.getByRole('button', { name: '查看控台时间线', exact: true }).isVisible()) await page.getByText('歌曲导入与同步', { exact: true }).click();
+    await page.getByRole('button', { name: '查看控台时间线', exact: true }).click();
+    await expect(page.getByRole('option', { name: /^Timecode 2 ·/ })).toContainText('当前节目');
+    await page.getByRole('button', { name: /全部时间线/ }).click();
+    const failedRow = page.getByRole('option', { name: /故障时间线/ });
+    await failedRow.click();
+    await expect(failedRow).toContainText('读取失败');
   } catch (error) {
     if (!page.isClosed()) {
       await writeFile(info.outputPath('failure-reads.json'), JSON.stringify(await app.evaluate(() => ({ fullReads: process.env.TBLINK_CACHE_TEST_READS, sourceReads: process.env.TBLINK_CACHE_SOURCE_READS })), null, 2));

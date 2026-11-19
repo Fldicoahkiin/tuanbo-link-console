@@ -16,8 +16,8 @@ it('空名称点位拖入控台素材，保存重开后仍从工程控台目录�
     ]
   } };
   const materials = [
-    { name: 'bj 294', sequence: 294, cue: '1', executor: '', delayMs: 0 },
-    { name: '控台副歌', sequence: 346, cue: '2.5', executor: '1.101', delayMs: 800 }
+    { name: 'bj 294', sequence: 294, cue: '1', executor: '', delayMs: 0, includeTracking: true },
+    { name: '控台副歌', sequence: 346, cue: '2.5', executor: '1.101', delayMs: 800, includeTracking: false }
   ];
   const document = saveCueIngredients(createLightingDocument(), materials, '', 2000, 10000, 'point');
   project.rundown = [{ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [], lighting: document }];
@@ -28,6 +28,7 @@ it('空名称点位拖入控台素材，保存重开后仍从工程控台目录�
   expect(entries.map(value => [value.name, value.sequenceName, value.cue])).toEqual([
     ['bj 294', 'bj 294', '1'], ['  控台副歌  ', 'love shot 346', '2.5']
   ]);
+  expect(entries.map(value => value.includeTracking)).toEqual([true, false]);
   const renamed = saveCueIngredients(lighting, entries, '我的组合点位', 7000, 10000, 'point');
   expect(cueIngredients(renamed, 'point', library)).toEqual(entries);
   expect(compileLightingNetworkActions(renamed)).toEqual(compileLightingNetworkActions(lighting));

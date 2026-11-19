@@ -64,7 +64,7 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
   const name = remote?.name && sameName(chosenName, remote.name) ? remote.name : toConsoleLabel(chosenName);
   const onConsole = new Set(remote?.cues.map(cue => milli(cue.number)));
   const bound = new Set(binding?.points.map(point => milli(point.cue)));
-  const selfCue = (point: Ma2SongSyncRequest['points'][number]): number | undefined => point.cues.length === 1 && point.cues[0]!.sequence === target ? milli(point.cues[0]!.cue) : undefined;
+  const selfCue = (point: Ma2SongSyncRequest['points'][number]): number | undefined => point.cues.length === 1 && !point.cues[0]!.attributes && point.cues[0]!.includeTracking === undefined && point.cues[0]!.sequence === target ? milli(point.cues[0]!.cue) : undefined;
   // The confirmed point each timeline point continues: its own, or a deleted point whose Cue it still names.
   const previous = new Map<string, { id: string; cue: string }>();
   for (const point of request.points) {

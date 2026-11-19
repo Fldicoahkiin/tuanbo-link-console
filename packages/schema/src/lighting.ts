@@ -11,6 +11,15 @@ export const lightingPreparationSchema = z.object({
   cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine(value => Number(value) > 0, '准备 Cue 编号必须大于 0'),
   leadMs: z.number().finite().min(100).max(10000)
 }).strict();
+export const cueAttributeNamesSchema = z.array(z.string().min(1).max(256)).max(2048)
+  .refine(names => new Set(names).size === names.length, '灯具属性重复');
+
+const cueIngredientSchema = z.object({
+  sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/),
+  executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]), name: z.string(),
+  attributes: cueAttributeNamesSchema.optional(), includeTracking: z.boolean().optional(),
+  preparation: lightingPreparationSchema.optional()
+}).strict();
 export const lightingEventSchema = z.discriminatedUnion('kind', [
   z.object({ ...eventBase, kind: z.literal('empty-cue'), label: z.string(), runMode: z.enum(['independent', 'follow']).optional() }).strict(),
   z.object({ ...eventBase, kind: z.literal('raw'), bytes: z.array(z.number().int().min(0).max(255)).min(1).max(65536).refine((bytes) => {
@@ -23,7 +32,7 @@ export const lightingEventSchema = z.discriminatedUnion('kind', [
   z.object({ ...eventBase, kind: z.literal('note'), note: dataByte, velocity: dataByte.min(1), releaseVelocity: dataByte.optional(), duration: time.positive() }).strict(),
   z.object({ ...eventBase, kind: z.literal('cc'), controller: dataByte, value: dataByte }).strict(),
   z.object({ ...eventBase, kind: z.literal('program'), program: dataByte }).strict(),
-  z.object({ ...eventBase, kind: z.literal('ma2'), runMode: z.enum(['independent', 'follow']).optional(), cue: z.string().regex(/^\d+(?:\.\d+)?$/).optional(), label: z.string(), action: z.enum(['go', 'goto', 'off']), executor: z.union([z.literal(''), z.string().regex(/^\d+\.\d+$/)]), sequence: z.number().int().positive().optional(), preparation: lightingPreparationSchema.optional() }).strict(),
+  z.object({ ...eventBase, kind: z.literal('ma2'), attributes: cueAttributeNamesSchema.optional(), includeTracking: z.boolean().optional(), ingredientOrder: z.number().int().nonnegative().optional(), sourceIngredients: z.array(cueIngredientSchema).min(1).max(32).optional(), runMode: z.enum(['independent', 'follow']).optional(), cue: z.string().regex(/^\d+(?:\.\d+)?$/).optional(), label: z.string(), action: z.enum(['go', 'goto', 'off']), executor: z.union([z.literal(''), z.string().regex(/^\d+\.\d+$/)]), sequence: z.number().int().positive().optional(), preparation: lightingPreparationSchema.optional() }).strict(),
   z.object({ ...eventBase, kind: z.literal('ma2-fader'), executor: z.string().regex(/^[1-9]\d*\.[1-9]\d*$/), fader: z.literal('Master'), level: z.number().finite().min(0).max(1), label: z.string() }).strict(),
   z.object({ ...eventBase, kind: z.literal('point'), value: z.number().finite().min(0).max(127), shape: z.enum(['hold', 'linear', 'smooth']), controlValues: z.tuple([z.number().finite().min(0).max(127), z.number().finite().min(0).max(127)]).optional() }).strict()
 ]).superRefine((event, ctx) => {
@@ -52,7 +61,7 @@ export const lightingTrackSchema = z.object({
   cueStamp: z.discriminatedUnion('mode', [
     z.object({ mode: z.literal('sequence') }).strict(),
     z.object({ mode: z.literal('marker') }).strict(),
-    z.object({ mode: z.literal('fixed'), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/, 'Cue 编号须为 1–9999，最多 3 位小数').refine((value) => Number(value) > 0, 'Cue 编号须大于 0'), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]) }).strict()
+    z.object({ mode: z.literal('fixed'), attributes: cueAttributeNamesSchema.optional(), includeTracking: z.boolean().optional(), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/, 'Cue 编号须为 1–9999，最多 3 位小数').refine((value) => Number(value) > 0, 'Cue 编号须大于 0'), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]) }).strict()
   ]).optional(),
   clips: z.array(lightingClipSchema)
 }).strict();
@@ -107,7 +116,7 @@ export const lightingDocumentSchema = z.object({
     categories: z.array(z.string().min(1).max(64)).max(16).optional(),
     sourceShow: z.string().min(1).max(4096).optional(),
     favorite: z.boolean().optional(),
-    members: z.array(z.object({ name: z.string().min(1), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]), delayMs: time }).strict()).min(2).max(32).optional()
+    members: z.array(z.object({ attributes: cueAttributeNamesSchema.optional(), includeTracking: z.boolean().optional(), name: z.string().min(1), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]), delayMs: time }).strict()).min(2).max(32).optional()
   }).strict())
 }).strict().superRefine((document, ctx) => {
   if (document.version === 1 && (document.musicAnalysis || document.music || document.markers.some(marker => marker.kind || marker.color || marker.notes) || document.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.librarySource || event.beatAnchor !== undefined))))) ctx.addIssue({ code: 'custom', message: '新版音乐结构和素材引用必须使用灯光格式 2' });

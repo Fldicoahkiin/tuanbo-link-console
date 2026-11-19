@@ -9,7 +9,8 @@ export function observeMa2Audition():()=>void{
   void window.tbLink.controlMa2Audition({version:1,action:'status'}).then(state=>{if(active)receive(state);}).catch((error:unknown)=>{if(active)useMa2AuditionStore.setState({error:String(error)});});
   return()=>{active=false;unsubscribe();};
 }
-let stopping:Promise<void>|null=null;
+type StopAction = 'stop' | 'stop-console';
+const stopping = new Map<StopAction, Promise<void>>();
 export async function acknowledgeClosedMa2Audition(targetId:string):Promise<void>{
   try{receive(await window.tbLink.controlMa2Audition({version:1,action:'acknowledge-closed',targetId}));}
   catch(error){useMa2AuditionStore.setState({error:error instanceof Error?error.message:String(error)});}
@@ -22,9 +23,10 @@ export function useAuditionSelectionReset(reset:()=>void):void {
     if(current.state.phase==='stopping'&&previous.state.phase!=='stopping')latest.current();
   }),[]);
 }
-export function stopMa2Audition():Promise<void>{
-  if(stopping)return stopping;
+export function stopMa2Audition(action:StopAction='stop'):Promise<void>{
+  const previous = stopping.get('stop-console') ?? stopping.get(action);
+  if(previous)return previous;
   useMa2AuditionStore.setState(current=>({state:{...current.state,phase:'stopping'},error:''}));
-  stopping=window.tbLink.controlMa2Audition({version:1,action:'stop'}).then(receive).catch((error:unknown)=>{useMa2AuditionStore.setState(current=>({state:{...current.state,phase:'failed'},error:error instanceof Error?error.message:String(error)}));throw error;}).finally(()=>{stopping=null;});
-  return stopping;
+  const task=window.tbLink.controlMa2Audition({version:1,action}).then(receive).catch((error:unknown)=>{useMa2AuditionStore.setState(current=>({state:{...current.state,phase:'failed'},error:error instanceof Error?error.message:String(error)}));throw error;}).finally(()=>{stopping.delete(action);});
+  stopping.set(action,task);return task;
 }

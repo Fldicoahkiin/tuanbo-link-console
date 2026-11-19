@@ -1,9 +1,10 @@
 import { hasMa2SongSyncTarget, MA2_SONG_COLLISION, allocateSongMtcStart, isShowWait, toUserErrorMessage, applyMa2SongReadback, consoleLabelText, ma2LatestChoiceText, ma2PendingChanges, ma2SongPoints, mergeMa2AttributesCommand, pendingMa2Renames, projectLightingLibrary, setAllocatedMtcStartsCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
-import type { Ma2LayoutSettings, Ma2NetworkTarget, Ma2SongBinding, Ma2SongConsoleEdits } from '@tb/schema';
+import type { Ma2LayoutSettings, Ma2NetworkTarget } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
+import { confirmedMessage } from '../view-models/ma2-workbench-sync-status';
 import { requireSavedProjectPath } from '../project-document';
 import { acceptCreatedMa2Layout, currentMa2LayoutScope } from '../stores/ma2-layout-store';
-import { locateMa2Executor, ma2ExecutorLocationLabel, loadMa2ExecutorPage } from '../stores/ma2-executor-page-store';
+import { locateMa2Executor, loadMa2ExecutorPage } from '../stores/ma2-executor-page-store';
 import { recordRuntimeOperator, reportCoordinatorError } from './runtime-action-log';
 import { settleInterruptedMa2Song, updateMa2Song as update, useMa2SyncStore, type NameSync, type SongSync } from '../stores/ma2-sync-store';
 import { ma2ConsoleReading } from './ma2-console-reading';
@@ -168,12 +169,6 @@ export function stopMa2SongSync(itemId: string): void {
     update(entry, { message }); reportCoordinatorError(message, reason => update(entry, { message: reason }));
   });
 }
-function confirmedMessage(binding: Ma2SongBinding, edits?: Ma2SongConsoleEdits): string {
-  const location = binding.executor ? ma2ExecutorLocationLabel(Number(binding.executor.split('.')[0]), Number(binding.executor.split('.')[1])) : `Layout ${binding.layout}`;
-  const taken = edits ? [edits.moved.length ? `挪了 ${edits.moved.length} 个` : '', edits.removed.length ? `删了 ${edits.removed.length} 个` : '', edits.added.length ? `加了 ${edits.added.length} 个` : ''].filter(Boolean) : [];
-  const chosen = edits?.conflicts ? ` · ${ma2LatestChoiceText('这首歌', edits.conflicts.count, edits.conflicts.winner)}` : '';
-  return `${location} · 序列 ${binding.sequence}${binding.timecode ? ` · Timecode ${binding.timecode.number}` : ''} · ${binding.points.length} 步已确认${taken.length ? ` · 控台上${taken.join('、')} Cue，已同步到联动台` : ''}${chosen}`;
-}
 function canContinue(entry: SongSync): boolean {
   const document = useDocumentStore.getState();
   const session = useMa2SyncStore.getState().songs[entry.itemId];
@@ -229,6 +224,10 @@ async function syncImportedSong(entry: SongSync): Promise<void> {
     itemId: entry.itemId, connection: { dataDirectory: '', network: place.network }, project, consoleChanges: ma2ConsoleChangesFor(entry, useMa2RealtimePreference.getState().consoleChanges),
     current: () => canContinue(entry) && currentShowWait('ma2.sync.write') === null,
     executor: request => window.tbLink.readMa2Executor(request),
+    firstTrack: (timecode, { executor, expectedSequence, points }) => window.tbLink.addMa2FirstTrackCues({
+      dataDirectory: '', network: place.network, expectedSource: place.source, projectId: project()!.projectId, itemId: entry.itemId, timecode, executor,
+      ...(expectedSequence && { expectedSequence }), points
+    }),
     emptySequence: async (points, timecode, previous) => {
       const current = project();
       if (!current) throw new Error('工程已经切换');

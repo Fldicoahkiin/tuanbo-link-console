@@ -1,4 +1,4 @@
-import { applyMa2ReadbackCommand, ma2BindingHold, ma2LatestChoiceText, ma2LatestSide, ma2PendingChanges, boundEmptyCuePoints, routeBoundEmptyCues, ma2TrackRoutingIssue, ma2PoolSequencesToRoute, routeMa2Tracks, setLightingCommand, sameMa2Content, type LinkCommand, type Ma2SyncPreview } from '@tb/core/link';
+import { applyFirstTrackCues, firstTrackCuePlan, applyMa2ReadbackCommand, ma2BindingHold, ma2LatestChoiceText, ma2LatestSide, ma2PendingChanges, boundEmptyCuePoints, routeBoundEmptyCues, ma2TrackRoutingIssue, ma2PoolSequencesToRoute, routeMa2Tracks, setLightingCommand, sameMa2Content, type LinkCommand, type Ma2SyncPreview } from '@tb/core/link';
 import { ma2ApplyResultSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2SongPoint, type Ma2SongBinding, type Ma2PoolRoute, type Ma2ExecutorReadRequest, type Ma2ExecutorPreview, type Ma2ApplyRequest, type Ma2ConsoleChanges, type Ma2ApplyResult, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
 
 /** What one pass over a way-1 song (its `ma2Bindings`, the console's own Timecode shows) needs. */
@@ -13,6 +13,7 @@ export type BoundSongPass = {
   current: () => boolean;
   executor: (request: Ma2ExecutorReadRequest) => Promise<Ma2ExecutorPreview>;
   assign: (sequence: number) => Promise<Ma2PoolRoute>;
+  firstTrack: (timecode: number, plan: NonNullable<ReturnType<typeof firstTrackCuePlan>>) => Promise<import('@tb/schema').Ma2FirstTrackReceipt>;
   emptySequence: (points: Ma2SongPoint[], timecode: number, previous?: Ma2SongBinding) => Promise<Ma2SongBinding>;
   route: (command: LinkCommand) => void;
   read: (request: Ma2ReadRequest) => Promise<Ma2TimecodePreview>;
@@ -60,11 +61,20 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
   const interrupted = (message: string): BoundSongOutcome => ({ kind: 'interrupted', message });
   const stopped = '播放或同步状态有变化，停止播放并编辑完后会重新同步';
   let archived = false;
+  let preparedSequence: number | undefined;
   if (writable.length) {
     const original = item.lighting;
     let prepared = original;
-    const empty = boundEmptyCuePoints(original);
-    if (empty.length) {
+    const first = firstTrackCuePlan(original);
+    const empty = first ? [] : boundEmptyCuePoints(original);
+    if (first) {
+      await pass.archive(); archived = true;
+      if (!pass.current() || lighting() !== original) return interrupted(stopped);
+      const receipt = await pass.firstTrack(writable[0]!.timecode, first);
+      if (!pass.current() || lighting() !== original) return interrupted(stopped);
+      prepared = applyFirstTrackCues(original, first, receipt);
+      preparedSequence = receipt.sequence;
+    } else if (empty.length) {
       await pass.archive(); archived = true;
       if (!pass.current() || lighting() !== original) return interrupted(stopped);
       const binding = writable[0]!;
@@ -121,6 +131,7 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
       const sequence = Number(change.after?.properties.sequence);
       return change.after?.kind === 'event' && sequence > 0 && !knownSequences.has(sequence) ? [sequence] : [];
     });
+    if (preparedSequence && syncSequences) syncSequences.push(preparedSequence);
     const readback = ma2TimecodePreviewSchema.parse(await pass.read({ ...pass.connection, target: binding.timecode, timeOriginMs: binding.timeOriginMs,
       ...(syncSequences && { syncSequences: [...new Set(syncSequences)].sort((a, b) => a - b) }) }));
     if (!pass.current()) return interrupted(stopped);

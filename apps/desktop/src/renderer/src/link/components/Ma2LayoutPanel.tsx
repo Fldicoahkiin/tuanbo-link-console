@@ -1,3 +1,5 @@
+import { CueTrackingChoice } from './CueTrackingChoice';
+import { useCueTrackingPreference } from '../runtime/ma2-realtime-preference';
 import { Ma2SongSequencePanel } from './Ma2SongSequencePanel';
 import { useMemo, useState } from 'react';
 import { Plus, RefreshCw, Settings2, X, Trash2 } from 'lucide-react';
@@ -17,6 +19,7 @@ import '../ma2-layout.css';
 
 export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, onClose }: { itemId: string; document: LightingDocument; ingredients: CueIngredient[]; onIngredients: (value: CueIngredient[]) => void; onClose: () => void }): JSX.Element {
   const project = useDocumentStore(state => state.project);
+  const defaultTracking = useCueTrackingPreference(state => state.includeTracking);
   const saved = project ? projectLightingLibrary(project).consoleWorkspace : undefined;
   const [settingsDraft, setSettingsDraft] = useState<Partial<Ma2LayoutSettings>>({});
   const settings: Ma2LayoutSettings = { layout: 999, name: '联动台新建 Cue', nextSequence: 9000, columns: 8, ...saved, ...settingsDraft };
@@ -54,7 +57,7 @@ export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, o
       if(mode==='combine' && ingredients.some(value=>value.delayMs!==0))throw new Error('合成的 Cue 是静态的，不带时间延迟；有延迟的组合请留在本地编排里');
       current.execute(setLightingLibraryCommand({...projectLightingLibrary(current.project),consoleWorkspace:parsed},'设置控台专用 Layout'));
       const before=useDocumentStore.getState();if(!before.project)throw new Error('工程已关闭');
-      const result=await window.tbLink.createMa2Cue({network:context.network,expectedSource:context.expectedSource,projectId:before.project.projectId,requestId:crypto.randomUUID(),settings:parsed,name,content:mode==='combine'?{kind:'combine',cues:ingredients.map(value=>({sequence:value.sequence,cue:value.cue}))}:{kind:'programmer',use}});
+      const result=await window.tbLink.createMa2Cue({network:context.network,expectedSource:context.expectedSource,projectId:before.project.projectId,requestId:crypto.randomUUID(),settings:parsed,name,content:mode==='combine'?{kind:'combine',cues:ingredients.map(value=>({sequence:value.sequence,cue:value.cue,attributes:value.attributes,includeTracking:value.includeTracking}))}:{kind:'programmer',use}});
       const after=useDocumentStore.getState();
       if(after.documentId!==before.documentId||!after.project)throw new Error('控台上已创建，但工程已切换，请重新读取控台');
       after.executeForDocument(before.documentId,mergeMa2AttributesCommand(context.endpoint,result.library,[result.sequence],false));
@@ -67,7 +70,7 @@ export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, o
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause));setMessage('');}
     finally{setBusy(false);}
   };
-  return <aside className="ma2-layout-panel" aria-label="控台 Layout" onDragOver={event=>{if(event.dataTransfer.types.includes(CONSOLE_CUE_DRAG))event.preventDefault();}} onDrop={event=>{event.preventDefault();try{const value=consoleCueDragSchema.parse(JSON.parse(event.dataTransfer.getData(CONSOLE_CUE_DRAG)));onIngredients([...ingredients,{...value,delayMs:0}]);setCreating(true);}catch(cause){setError(String(cause));}}}>
+  return <aside className="ma2-layout-panel" aria-label="控台 Layout" onDragOver={event=>{if(event.dataTransfer.types.includes(CONSOLE_CUE_DRAG))event.preventDefault();}} onDrop={event=>{event.preventDefault();try{const value=consoleCueDragSchema.parse(JSON.parse(event.dataTransfer.getData(CONSOLE_CUE_DRAG)));onIngredients([...ingredients,{...value,delayMs:0,includeTracking:value.includeTracking??defaultTracking}]);setCreating(true);}catch(cause){setError(String(cause));}}}>
     <header><strong>新建与同步</strong><button onClick={()=>setCreating(!creating)} disabled={busy}><Plus/>新建 Cue</button><button aria-label="关闭 Layout" onClick={onClose} disabled={busy}><X/></button></header>
     <Ma2SongSequencePanel itemId={itemId} settings={settings}/>
     <details><summary><Settings2/>专用页面设置</summary><div className="ma2-layout-settings">
@@ -78,14 +81,14 @@ export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, o
     </div><p>第一次新建请选一个空 Layout。之后只会追加到这个工程创建的专用布局里；原有布局只读取查看，不会修改。</p></details>
     <div className="ma2-layout-read"><label>查看 Layout<input aria-label="查看 Layout 编号" type="number" min="1" max="9999" value={settings.layout} disabled={busy} onChange={event=>{setSettingsDraft({...settingsDraft,layout:Number(event.target.value)});setLayout(null);}}/></label><button onClick={()=>void read()} disabled={busy}><RefreshCw/>读取页面</button></div>
     {creating ? <form className="ma2-layout-create" onSubmit={event=>{event.preventDefault();void create();}}><label>Cue 名称<input aria-label="新建控台 Cue 名称" value={name} required maxLength={512} disabled={busy} onChange={event=>setName(event.target.value)}/></label><Ma2ConsoleName name={name}/><select aria-label="新建 Cue 方式" value={mode} disabled={busy} onChange={event=>setMode(event.target.value==='combine'?'combine':'programmer')}><option value="combine">组合已有 Cue</option><option value="programmer">保存控台当前灯光</option></select>
-      {mode==='combine'?<><p>拖入素材，或点素材旁的 +。只合成已保存的属性；属性重叠时按下面的顺序，后面的覆盖前面的。不包含延迟和多步运行过程。</p><ol>{ingredients.map((value,index)=><li key={index}><span>{value.name} <small>{value.sequence} / {value.cue}</small></span><button type="button" aria-label={`移除组合素材 ${index+1}`} disabled={busy} onClick={()=>onIngredients(ingredients.filter((_,i)=>i!==index))}><Trash2/></button></li>)}</ol></>:<><select aria-label="保存当前灯光范围" value={use} disabled={busy} onChange={event=>setUse(event.target.value==='Look'?'Look':'Active')}><option value="Active">Programmer 中已激活的属性</option><option value="Look">当前可见灯光（Look）</option></select><p>使用控台当前 World 和 Store Filter，保留 Programmer 激活状态。</p></>}
+      {mode==='combine'?<><p>拖入素材，或点素材旁的 +。两个素材改了同一属性时，下面的素材优先。不包含延迟和多步运行过程。</p><ol>{ingredients.map((value,index)=><li key={index}><span>{value.name} <small>{value.sequence} / {value.cue}</small></span><CueTrackingChoice label={`素材 ${index + 1} 复制范围`} value={value.includeTracking} disabled={busy} onChange={includeTracking => onIngredients(ingredients.map((item, i) => i === index ? { ...item, includeTracking } : item))} /><button type="button" aria-label={`移除组合素材 ${index+1}`} disabled={busy} onClick={()=>onIngredients(ingredients.filter((_,i)=>i!==index))}><Trash2/></button></li>)}</ol></>:<><select aria-label="保存当前灯光范围" value={use} disabled={busy} onChange={event=>setUse(event.target.value==='Look'?'Look':'Active')}><option value="Active">Programmer 中已激活的属性</option><option value="Look">当前可见灯光（Look）</option></select><p>使用控台当前 World 和 Store Filter，保留 Programmer 激活状态。</p></>}
       <button type="submit" disabled={busy||!name.trim()||mode==='combine'&&!ingredients.length}>{busy?'正在创建并确认…':`创建到 Layout ${settings.layout}`}</button></form>:null}
     {layout ? <><strong>{layout.name || `Layout ${layout.layout}`}</strong><CuePoolGrid keys={layout.items.map(item => item.id)} label="本页控台素材" cellWidth={156} rowHeight={50} render={index => {
       const item = layout.items[index]!; const owner = library.find(value => value.sequence === item.sequence);
       const title = owner ? ma2ConsoleSequenceName(owner) : item.name || '未关联对象';
       return <button disabled={item.kind !== 'sequence' || !owner} title={`${title} · 序列 ${item.sequence}`} onClick={() => setSequence(item.sequence ?? null)}><strong>{title}</strong>{owner ? <small>共 {owner.cues.length} 步</small> : null}</button>;
     }}/></> : <p>输入 Layout 编号并读取本页 Cue。</p>}
-    {sequence!==null?<Ma2SequencePreview key={sequence} document={document} initialSequence={sequence} composing onClose={()=>setSequence(null)} onUse={(seq,cue,label,executor)=>{const owner=library.find(value=>value.sequence===seq);const step=owner?.cues.find(value=>value.number===cue);onIngredients([...ingredients,{sequence:seq,cue,name:owner&&step?ma2ConsoleCuePoolName(owner,step):label,executor,delayMs:0}]);setCreating(true);}}/>:null}
+    {sequence!==null?<Ma2SequencePreview key={sequence} document={document} initialSequence={sequence} composing onClose={()=>setSequence(null)} onUse={(seq,cue,label,executor,attributes,includeTracking)=>{const owner=library.find(value=>value.sequence===seq);const step=owner?.cues.find(value=>value.number===cue);onIngredients([...ingredients,{sequence:seq,cue,name:owner&&step?ma2ConsoleCuePoolName(owner,step):label,executor,delayMs:0,attributes,includeTracking:includeTracking??defaultTracking}]);setCreating(true);}}/>:null}
     {error?<p role="alert">{error}</p>:<p role="status">{message}</p>}
   </aside>;
 }
