@@ -49,6 +49,7 @@ jobs:
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
 
+      - uses: ./.github/actions/release-feed
       - name: Write the download page record from the live feed
         run: node scripts/write-website-release.mjs
 

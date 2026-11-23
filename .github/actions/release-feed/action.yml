@@ -1,0 +1,23 @@
+name: Connect to the production update feed
+description: Use the HTTPS origin when the runner cannot reach a regional CDN edge.
+runs:
+  using: composite
+  steps:
+    - shell: pwsh
+      run: |
+        $feedHost = 'updates.tuanbo-link.jinhefilm.com'
+        $origin = '123.206.229.200'
+        $feed = "https://$feedHost/windows/x64/latest.yml"
+        curl --silent --show-error --fail --max-time 10 $feed | Out-Null
+        if ($LASTEXITCODE -eq 0) { exit 0 }
+        # Keep the public host, SNI, and certificate verification on both paths.
+        $probe = curl --silent --show-error --fail --max-time 25 --resolve "${feedHost}:443:${origin}" $feed
+        if ($LASTEXITCODE -ne 0 -or -not ($probe -match '^version: ')) { throw 'The production update feed is unreachable' }
+        $entry = "$origin $feedHost"
+        if ($IsWindows) {
+          Add-Content -LiteralPath "$env:SystemRoot/System32/drivers/etc/hosts" -Value "`n$entry" -Encoding ascii
+        } else {
+          $entry | sudo tee -a /etc/hosts
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot select the update origin' }
+        }
+        Write-Host 'Release checks will read the production HTTPS origin.'

@@ -65,6 +65,7 @@ jobs:
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
 
+      - uses: ./.github/actions/release-feed
       - name: Tag the commit to release
         id: tag
         env:
@@ -101,6 +102,7 @@ jobs:
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
 
+      - uses: ./.github/actions/release-feed
       - name: Release version is new
         shell: pwsh
         run: |
@@ -146,6 +148,7 @@ jobs:
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
 
+      - uses: ./.github/actions/release-feed
       - name: Release version is still new
         # Checked again here: a re-run of this job alone must not rebuild a version the feed already serves.
         shell: pwsh
