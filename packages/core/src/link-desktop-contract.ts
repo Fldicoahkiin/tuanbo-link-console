@@ -191,6 +191,7 @@ export type LinkDesktopApi = {
   onNativeProgramEvent(listener: (event: import('@tb/schema').NativeProgramEvent) => void): () => void;
   onNativeProgramClosed(listener: (event: import('@tb/schema').NativeProgramClosed) => void): () => void;
   projectArchives(request: import('@tb/schema').ProjectArchiveRequest): Promise<import('@tb/schema').ProjectArchiveResult>;
+  readProjectArchiveSettings(): Promise<import('@tb/schema').ProjectArchiveSettings>;
   projectArchiveSettings(request: import('@tb/schema').ProjectArchiveSettingsAction): Promise<import('@tb/schema').ProjectArchiveSettingsStatus>;
   prepareNativeObs(request: import('@tb/schema').NativeObsPrepare): Promise<import('@tb/schema').NativeObsStatus>;
   preloadNativeObs(request: import('@tb/schema').NativeObsPreload): Promise<void>;
@@ -258,7 +259,7 @@ export type LinkDesktopApi = {
   readMa2Catalog(payload: import('@tb/schema').Ma2CatalogRequest, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<import('@tb/schema').Ma2Catalog>;
   readMa2EffectLibrary(payload: import('@tb/schema').Ma2CatalogRequest, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<import('@tb/schema').Ma2EffectLibrary>;
   listMa2Layouts(payload: import('@tb/schema').Ma2LayoutDirectoryRequest): Promise<import('@tb/schema').Ma2LayoutDirectory>;
-  listMa2ExecutorPages(payload: import('@tb/schema').Ma2LayoutDirectoryRequest): Promise<import('@tb/schema').Ma2ExecutorPageDirectory>;
+  listMa2ExecutorPages(payload: import('@tb/schema').Ma2ExecutorPageDirectoryRequest): Promise<import('@tb/schema').Ma2ExecutorPageDirectory>;
   readMa2ExecutorPage(payload: import('@tb/schema').Ma2ExecutorPageRequest): Promise<import('@tb/schema').Ma2ExecutorPage>;
   updateMa2Executor(payload: import('@tb/schema').Ma2ExecutorUpdateRequest): Promise<import('@tb/schema').Ma2ExecutorUpdateResult>;
   /** Which channel Button area keys use on this console now, and why (M7). */
@@ -292,6 +293,8 @@ export type LinkDesktopApi = {
   createMa2(payload: import('@tb/schema').Ma2CreateRequest): Promise<import('@tb/schema').Ma2TimecodePreview>;
   readMa2Executor(payload: import('@tb/schema').Ma2ExecutorReadRequest): Promise<import('@tb/schema').Ma2ExecutorPreview>;
   assignMa2PoolSequence(payload: import('@tb/schema').Ma2PoolRouteRequest): Promise<import('@tb/schema').Ma2PoolRoute>;
+  readMa2CueValues(payload: import('@tb/schema').Ma2CueAttributesRequest): Promise<import('@tb/schema').Ma2CueValueRow[]>;
+  writeMa2CueValues(payload: import('@tb/schema').Ma2WriteCueValuesRequest): Promise<import('@tb/schema').Ma2CueValueEdit[]>;
   readMa2CueAttributeNames(payload: import('@tb/schema').Ma2CueAttributesRequest): Promise<string[]>;
   addMa2FirstTrackCues(payload: import('@tb/schema').Ma2FirstTrackRequest): Promise<import('@tb/schema').Ma2FirstTrackReceipt>;
   compareMa2(payload: import('@tb/schema').Ma2CompareRequest): Promise<import('./ma2-sync').Ma2SyncPreview>;

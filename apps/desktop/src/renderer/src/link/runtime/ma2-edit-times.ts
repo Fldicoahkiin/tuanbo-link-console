@@ -9,6 +9,19 @@ import { clearMa2SongShift, noteMa2SongsShifted } from './ma2-song-shift';
  * never in the project.
  */
 export type Program = NonNullable<ReturnType<typeof useDocumentStore.getState>['project']>['rundown'][number];
+/** A late acknowledgement must still belong to the console position the operator selected. */
+export function songDestination(lighting: Program['lighting']): string {
+  const own = lighting?.consoleSong, planned = lighting?.timelineDestination;
+  return JSON.stringify([own?.sequence, own?.layout, own?.executor, own?.assignment, own?.timecode?.number,
+    planned?.timecode, planned?.sequence, planned?.executor, lighting?.ma2Bindings?.map(binding => [binding.id, binding.timecode]) ?? []]);
+}
+
+export function checkSongDestination(entry: SongSync, destination: string): boolean {
+  const current = useDocumentStore.getState().project?.rundown.find(song => song.id === entry.itemId);
+  if (current && songDestination(current.lighting) === destination) return true;
+  updateMa2Song(entry, { state: 'pending', checking: false, writing: false, nextCheckAt: 0, message: '这首歌已更换控台时间线，正在核对新选择；原序列保留在控台' });
+  return false;
+}
 /** The song's MTC start once it has one: it places the song's own Timecode show. */
 export function songStart(item: Program): number | undefined {
   return item.playback || item.p1Media ? Math.round(programTimeOrigin(item)) : undefined;

@@ -81,6 +81,10 @@ export class Ma2LuaConsole {
   poll(request: string): string | null {
     const [response] = this.lua(`FAKE.files[FAKE.vars.PATH .. '/temp/tblink_bridge_request.txt'] = REQUEST
       FAKE.tick()
+      if FAKE.files[FAKE.vars.PATH .. '/temp/tblink_bridge_request.txt'] then
+        FAKE.now = FAKE.now + 0.1
+        FAKE.tick()
+      end
       local response = FAKE.files[FAKE.vars.PATH .. '/temp/tblink_bridge_response.txt']; FAKE.files[FAKE.vars.PATH .. '/temp/tblink_bridge_response.txt'] = nil
       return response`, { REQUEST: request });
     return response?.length ? response.toString('utf8') : null;

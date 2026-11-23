@@ -59,3 +59,16 @@ it('stops on uncertain deletion and reports backups without replaying a command'
   const result = await f.service.commit(f.connection,f.bridge,{...context,token:plan.token});
   expect(result.error).toContain('可能已经删掉了一部分'); expect(result.backups).toHaveLength(2); expect(runMa2GuardedLua).toHaveBeenCalledTimes(1);
 });
+
+it('允许清理已确认所有灯具数值为零的 Cue，非零、效果与命令仍保留', async () => {
+  const f = await setup();
+  const zero = '<CueDatas><CueData><Channel fixture_id="1" attribute_name="DIM"/><Value>0.000</Value></CueData></CueDatas>';
+  f.setXml(xml(body.replace('<CueDatas/>', zero)));
+  expect((await f.service.prepare(f.bridge, f.input)).items[0]?.eligible).toBe(true);
+  for (const extra of [zero.replace('0.000', '0.001'), zero.replace('</Value>', '</Value><Effect><Speed>0</Speed></Effect>')]) {
+    f.setXml(xml(body.replace('<CueDatas/>', extra)));
+    expect((await f.service.prepare(f.bridge, f.input)).items[0]?.eligible).toBe(false);
+  }
+  f.setXml(xml(body.replace('<CueDatas/>', zero).replace('<CuePart index="0"/>', '<CuePart index="0"><macro_text>Go Macro 1</macro_text></CuePart>')));
+  expect((await f.service.prepare(f.bridge, f.input)).items[0]?.eligible).toBe(false);
+});

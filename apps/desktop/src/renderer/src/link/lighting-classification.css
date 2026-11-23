@@ -111,7 +111,4 @@
 .lighting-stop-audition[data-phase=stopping] svg { animation:audition-stop-spin .8s linear infinite; }
 @keyframes audition-stop-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { .lighting-stop-audition,.lighting-stop-audition svg { animation:none !important; transition:none !important; } }
-.lighting-audition-control>span,.lighting-audition-control summary { font-size:12px; color:var(--text-secondary); white-space:nowrap; }
-.lighting-audition-control summary { color:var(--color-danger); cursor:pointer; }
-.lighting-audition-control details[open]>div { position:absolute; top:40px; left:0; width:320px; max-height:220px; overflow:auto; background:var(--surface-raised); padding:12px; border:1px solid rgba(var(--color-danger-rgb), .5); border-radius:8px; z-index:80; font-size:12px; }
 }

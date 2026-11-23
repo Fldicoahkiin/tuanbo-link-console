@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import { MA2_BRIDGE_MISSING_BEFORE_REQUEST, MA2_READ_CANCELLED } from '@tb/core/link';
-import type { LinkProject, Ma2LayoutSettings, Ma2ReadProgress } from '@tb/schema';
+import { MA2_BRIDGE_BUSY_BEFORE_REQUEST, MA2_BRIDGE_MISSING_BEFORE_REQUEST, MA2_READ_CANCELLED } from '@tb/core/link';
+import type { LinkProject, Ma2LayoutSettings, Ma2ReadProgress, Ma2PlaybackPrepare, Ma2SelectorTrackConflict } from '@tb/schema';
 
 /**
  * One console sync per song, whichever way it was lit: way 1 writes back to the console's own
@@ -15,6 +15,9 @@ export type SongSync = {
   requestId?: string | null; progress?: Ma2ReadProgress | null; checking?: boolean; writing?: boolean;
   acknowledged?: string; remoteRevision?: string | undefined; failedItem?: LinkProject['rundown'][number] | undefined; recheckRevision?: number | undefined;
   nextCheckAt?: number; checkedAt?: number; waitingForConnection?: boolean; needsSourceCheck?: boolean;
+  checkedConnection?: number | undefined;
+  selectorTrackRepair?: { target: Ma2SelectorTrackConflict; source: NonNullable<Ma2PlaybackPrepare['expectedSource']>; network: Ma2PlaybackPrepare['network'] } | undefined;
+  playbackClockNote?: string | undefined;
   consecutiveFailures?: number; consecutiveCollisions?: number; archivedSignature?: string; rewriteLegacyNames?: boolean;
   /** When a pass last took this song up; a one-time sync ends once every song was taken up after it began. */
   attemptedAt?: number;
@@ -31,6 +34,8 @@ export type SongSync = {
   loggedFailure?: string | undefined;
   announcedFailure?: string | undefined;
   /** 用联动台的 on a stopped way-1 song: the next pass writes the timeline over the console's edits, once. */
+  conflictChoice?: 'local' | 'remote' | undefined;
+  needsConflictChoice?: boolean;
   consoleChangesOnce?: 'software' | undefined;
 };
 
@@ -47,7 +52,7 @@ export type Ma2SessionCheck = { waitFor?: Ma2SessionWait; status: 'waiting' | 'r
  * never read from here (S3b, 2026-11-11).
  */
 export const useMa2SyncStore = create<{ songs: Record<string, SongSync>; names: NameSync; session: Ma2SessionCheck; previewPlaying: boolean }>(() => ({
-  songs: {}, names: { state: 'idle', message: '' }, session: { status: 'waiting', waitFor: 'connection', message: '等待连接控台并打开工程' }, previewPlaying: false
+  songs: {}, names: { state: 'idle', message: '' }, session: { status: 'waiting', waitFor: 'check', message: '尚未核对控台连接' }, previewPlaying: false
 }));
 
 /** Patches a song's sync state while the same session holds it; a paused song stays paused. */
@@ -63,6 +68,11 @@ export function updateMa2Song(entry: SongSync, patch: Partial<SongSync>): void {
 export function settleInterruptedMa2Song(entry: SongSync, message: string): boolean {
   const current = useMa2SyncStore.getState().songs[entry.itemId];
   if (current?.sessionId !== entry.sessionId) return true;
+  if (message === MA2_BRIDGE_BUSY_BEFORE_REQUEST) {
+    updateMa2Song(entry, { state: 'pending', message: current.state === 'paused' ? current.message : message, failedItem: undefined, recheckRevision: undefined,
+      nextCheckAt: Date.now() + 200, checking: false, writing: false, requestId: null, progress: null });
+    return true;
+  }
   if (message === MA2_BRIDGE_MISSING_BEFORE_REQUEST && current.state !== 'paused') {
     updateMa2Song(entry, { state: 'pending', message, needsSourceCheck: true, failedItem: undefined, checking: false, writing: false, requestId: null, progress: null, nextCheckAt: 0 });
     return true;

@@ -143,6 +143,12 @@ export class LightingOffLedger {
   /** Some timecode runs this executor now. */
   used(executor: string): boolean { return [...this.users.values()].some(using => using.has(executor)); }
 
+  /** A queued release may go on the wire only while this same attempt is still owed. */
+  awaitsSend(executor: string, attempt: number): boolean {
+    const entry = this.entries.get(executor);
+    return entry?.attempt === attempt && entry.state === 'sending';
+  }
+
   /** The console answered this send without error: the Off leaves the list, and waits for its read-back (M8) until
    * `readBack` settles it. False when the list moved on meanwhile. */
   ack(executor: string, attempt: number): boolean {

@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { ma2LatestChoiceText, ma2LatestSide } from './ma2-latest-edit';
+import { MA2_EDIT_ORDER_UNKNOWN, ma2ConflictWinner, ma2LatestChoiceText, ma2LatestSide } from './ma2-latest-edit';
 
 // 2026-11-11 用户：“矛盾的时候采用最新的”。联动台的改动按改的时间算，控台的改动按联动台第一次看到它的时间算。
 describe('两边都改了同一个点，用最新的', () => {
+  it('手动核对只用能证明先后的时间，两次观察之间双方都改过则保留选择', () => {
+    const observed = { localEditedAt: 200, consoleSeenAt: 300 };
+    expect(() => ma2ConflictWinner(observed, { lastConfirmedAt: 100 })).toThrow(MA2_EDIT_ORDER_UNKNOWN);
+    expect(ma2ConflictWinner(observed, { lastConfirmedAt: 250 })).toBe('remote');
+    expect(ma2ConflictWinner({ localEditedAt: 350, consoleSeenAt: 300 }, {})).toBe('local');
+    expect(ma2ConflictWinner(observed, { choice: 'local' })).toBe('local');
+    expect(ma2ConflictWinner(observed, { choice: 'remote' })).toBe('remote');
+    expect(() => ma2ConflictWinner({ localEditedAt: undefined, consoleSeenAt: 300 }, {})).toThrow(MA2_EDIT_ORDER_UNKNOWN);
+    expect(ma2LatestChoiceText('Timecode 3', 1, 'local', true)).toContain('按你的选择');
+  });
   it('联动台改得更晚：用联动台的', () => {
     expect(ma2LatestSide({ localEditedAt: 2000, consoleSeenAt: 1000 })).toBe('local');
   });

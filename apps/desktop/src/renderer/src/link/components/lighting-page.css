@@ -4,12 +4,20 @@
  * console runs in the sidebar's task list; the buttons that start it stay with what they read.
  */
 @layer pages {
+  .lighting-audition-control .lighting-stop-details-toggle { color: var(--color-danger); white-space: nowrap; }
+  .lighting-stop-details { display: grid; gap: var(--space-1); width: min(20rem, calc(100vw - var(--space-2))); padding: var(--space-2); overflow-wrap: anywhere; }
+  .lighting-stop-details p { margin: 0; }
   .ma2-material-body { display: flex; flex: 1; min-height: 0; min-width: 0; gap: var(--space-1); }
   .ma2-material-results { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; }
   .ma2-cue-attribute-picker { display: flex; flex-direction: column; align-items: stretch; flex: 0 1 14rem; min-width: 8rem; gap: var(--space-1); padding-inline-start: var(--space-1); border-inline-start: 1px solid var(--color-border); overflow: auto; overflow-wrap: anywhere; font-size: var(--type-control); }
   .ma2-cue-attribute-picker fieldset { display: grid; gap: var(--space-half); border: 0; padding: 0; margin: 0; }
   .ma2-cue-attribute-picker label { display: flex; gap: var(--space-1); align-items: center; }
   .ma2-cue-attribute-picker input[type="checkbox"] { min-height: 0; margin: 0; accent-color: var(--color-accent); }
+  .ma2-attribute-heading { display: flex; gap: var(--space-1); align-items: center; }
+  .ma2-attribute-heading button { flex: 1; text-align: start; }
+  .ma2-fixture-value { justify-content: space-between; padding-block: var(--space-half); }
+  .ma2-fixture-value small { display: block; color: var(--color-text-secondary); }
+  .ma2-fixture-value input { width: 5em; }
   .ma2-cue-attribute-picker [role="alert"] { color: var(--color-danger); }
   .ma2-sequence-preview .ma2-refresh-directory { flex: none; justify-content: center; width: 32px; padding: 0; }
   .ma2-refresh-directory[data-busy='true'] svg { animation: lighting-refresh-spin 1s linear infinite; }

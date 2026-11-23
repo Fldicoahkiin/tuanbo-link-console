@@ -10,8 +10,9 @@ export class Ma2AuditionService {
   private playing:Promise<void>|null=null;
   private generation=0;private revision=0;private phase:Ma2AuditionState['phase']='idle';private stopping:Promise<Ma2AuditionState>|null=null;private connectionChanging=false;
   private consoleStop:Promise<Ma2AuditionState>|null=null;
+  private consoleStopError:string|undefined;
   constructor(private readonly network:AuditionNetwork,private readonly publish:(state:Ma2AuditionState)=>void=()=>undefined){}
-  status():Ma2AuditionState{return ma2AuditionStateSchema.parse({version:1,revision:this.revision,generation:this.generation,phase:this.consoleStop?'stopping':this.phase,targets:[...this.targets.values()].map(({id,network,action,state,error,epoch})=>({id,network,action,state,error,connectionChanged:epoch!==this.network.connectionGeneration}))});}
+  status():Ma2AuditionState{return ma2AuditionStateSchema.parse({version:1,revision:this.revision,generation:this.generation,phase:this.consoleStop?'stopping':this.phase,consoleStopError:this.consoleStopError,targets:[...this.targets.values()].map(({id,network,action,state,error,epoch})=>({id,network,action,state,error,connectionChanged:epoch!==this.network.connectionGeneration}))});}
   private changed():void{this.revision++;this.publish(this.status());}
   /** Human acknowledgement only; never send an old target to a different connection. */
   acknowledgeClosed(targetId:string):Ma2AuditionState{
@@ -77,11 +78,20 @@ export class Ma2AuditionService {
   /** Only an operator stop in the lighting workbench releases the whole desk. */
   stopConsole(release:()=>Promise<void>):Promise<Ma2AuditionState>{
     if(this.consoleStop)return this.consoleStop;
-    if(this.connectionChanging)return Promise.reject(new Error('控台连接正在切换，请连接后再按停止'));
+    if(this.connectionChanging){
+      this.consoleStopError='控台连接正在切换，请连接后再按停止';
+      this.changed();
+      return Promise.reject(new Error(this.consoleStopError));
+    }
+    // Cancel queued auditions synchronously in stop(), then send the desk-wide Off
+    // before individual audition Offs occupy the same priority lane.
+    const consoleRelease=Promise.resolve().then(release);
     const owned=this.stop();
     this.consoleStop=Promise.resolve().then(async()=>{
-      const outcomes=await Promise.allSettled([Promise.resolve().then(release),owned]);
+      const outcomes=await Promise.allSettled([consoleRelease,owned]);
       this.consoleStop=null;
+      const [consoleResult]=outcomes;
+      this.consoleStopError=consoleResult.status==='rejected' ? (consoleResult.reason instanceof Error ? consoleResult.reason.message : String(consoleResult.reason)) : undefined;
       const failed=outcomes.find(result=>result.status==='rejected');
       if(failed){this.phase='failed';this.changed();throw failed.reason instanceof Error?failed.reason:new Error(String(failed.reason));}
       this.changed();return this.status();

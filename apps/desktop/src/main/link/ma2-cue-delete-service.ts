@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { holdForShow, isShowWait, ma2CueAttributeState, ma2CueDeletionUsage, type ShowGateReader } from '@tb/core/link';
+import { holdForShow, isShowWait, ma2EmptyCueIndices, ma2CueDeletionUsage, type ShowGateReader } from '@tb/core/link';
 import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema, ma2CueDeletePlanSchema, ma2CueDeleteResultSchema, ma2ObjectDirectorySchema, type LinkProject, type Ma2CueDeletePrepare, type Ma2CueDeleteCommit, type Ma2CueDeletePlan, type Ma2CueDeleteResult, type Ma2ReadProgressUpdate } from '@tb/schema';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
@@ -48,12 +48,13 @@ export class Ma2CueDeleteService {
           const info = inspectMa2SequenceXml(xml).sequences.find(value => value.number === sequence);
           if (!info) throw new Error('序列来源不一致');
           const details = inspectMa2CueAttributes(xml, new Date().toISOString(), true);
+          const candidates = ma2EmptyCueIndices(details);
           for (const ref of refs.filter(value => value.sequence === sequence)) {
             const cue = info.cues.find(value => Number(value.number) === Number(ref.cue));
             const data = details.find(value => value.cueIndex === cue?.index);
             const usage = ma2CueDeletionUsage(project, ref.sequence, ref.cue);
-            const empty = ma2CueAttributeState(data) === 'empty';
-            const reason = usage.join('；') || (!cue ? 'Cue 已不存在' : !empty ? '未完整确认为空：可能包含属性、命令或继承数据' : '已完整检查：这一步没有属性、效果或命令');
+            const empty = data !== undefined && candidates.has(data.cueIndex);
+            const reason = usage.join('；') || (!cue ? 'Cue 已不存在' : !empty ? '未完整确认为空：可能包含属性、命令或继承数据' : data?.content?.rows.length ? '所有灯具属性均为零' : '没有灯具属性、效果或命令');
             items.push({ ...ref, cue: cue?.number ?? ref.cue, name: cue?.name || info.name || `Cue ${ref.cue}`, eligible: Boolean(cue && empty && !usage.length), reason });
           }
         } catch (error) {

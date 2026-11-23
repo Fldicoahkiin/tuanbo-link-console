@@ -24,6 +24,8 @@ test.beforeAll(async () => {
       import { ma2SongSyncSettings } from './src/renderer/src/link/runtime/ma2-song-sync';
       import { useMa2RealtimePreference } from './src/renderer/src/link/runtime/ma2-realtime-preference';
       import { linkDesktopViewModel } from './src/renderer/src/link/view-models/link-desktop-view-model';
+      import { useMa2ModeStore } from './src/renderer/src/link/stores/ma2-mode-store';
+      import { useMa2NetworkStatusStore } from './src/renderer/src/link/stores/ma2-network-status-store';
       import { useMa2ReadStore } from './src/renderer/src/link/stores/ma2-read-store';
       import { useMa2SyncStore } from './src/renderer/src/link/stores/ma2-sync-store';
       const project = parseLinkProject({ ...createEmptyLinkProject('只有音乐和灯光'), playbackSource: 'internal',
@@ -40,10 +42,12 @@ test.beforeAll(async () => {
       project.rundown.push({ ...project.rundown[0], id: 'second', title: '第二首歌' });
       useDocumentStore.setState({ project, path: 'C:/show/project.tblink' });
       localStorage.setItem('tblink.ma2-connection-method.v1', 'network');
+      useMa2ModeStore.setState({ method: 'network' });
+      useMa2NetworkStatusStore.setState({ status: { state: 'connected' } });
       useMa2RealtimePreference.setState({ enabled: false, once: null });
       window.timelineSyncState = (state) => {
-        useMa2RealtimePreference.setState({ enabled: true });
-        useMa2SyncStore.setState({ songs: { song: { sessionId: 'test', itemId: 'song', documentId: 0, name: '歌曲', settings: ma2SongSyncSettings(useDocumentStore.getState().project, 'song'), state, message: state === 'blocked' ? '控台读取失败' : state } } });
+        useMa2RealtimePreference.setState({ enabled: false, once: null, onceItemId: null });
+        useMa2SyncStore.setState({ songs: { song: { sessionId: 'test', itemId: 'song', documentId: 0, name: '歌曲', settings: ma2SongSyncSettings(useDocumentStore.getState().project, 'song'), state, checkedAt: state === 'verified' ? Date.now() : undefined, writing: state === 'syncing', localEditedAt: state === 'pending' ? Date.now() : undefined, message: state === 'blocked' ? '控台读取失败' : state } } });
       };
       window.patchSyncSong = patch => useMa2SyncStore.setState(({ songs }) => ({ songs: { ...songs, song: { ...songs.song, ...patch } } }));
       window.syncSummaryFixture = (mode) => {
@@ -59,7 +63,8 @@ test.beforeAll(async () => {
         useMa2SyncStore.setState({ session: { status: 'ready', message: '已连接' } });
         if (mode === 'showless') useMa2SyncStore.setState(state => ({ songs: { ...state.songs, second: { ...state.songs.song, itemId: 'second', name: '第二首歌', state: 'pending', message: '等待创建 Timecode' } } }));
       };
-      linkDesktopViewModel.projectArchiveSettings = () => Promise.resolve({ settings: { enabled: true } });
+      linkDesktopViewModel.readProjectArchiveSettings = () => Promise.resolve({ enabled: false });
+      linkDesktopViewModel.projectArchiveSettings = () => Promise.reject(new Error('存档目录不可用'));
       window.timelineDirectory = () => {
         const next = structuredClone(useDocumentStore.getState().project);
         next.ma2ReadState.catalog.directory.entries.push(...Array.from({ length: 149 }, (_, index) => ({ target: index + 100, name: '其他时间线 ' + index })));
@@ -118,6 +123,7 @@ test('首次改起始码配对：灯光时间线立即显示控台 Cue，撤销�
 
 test('控台同步旁选择新歌位置：保存后所有同步入口使用同一页与起始编号', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 720 });
+  await page.getByRole('button', { name: '同步设置', exact: true }).click();
   await page.getByRole('button', { name: '写入位置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '控台写入位置' });
   await dialog.getByLabel('默认创建按钮页').fill('2000');
@@ -126,15 +132,20 @@ test('控台同步旁选择新歌位置：保存后所有同步入口使用同�
   await expect(dialog.getByRole('status')).toContainText('按钮第 2000 页');
   expect(await page.evaluate('window.syncSettings()')).toMatchObject({ executorPage: 2000, nextSequence: 8000 });
   await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('button', { name: '同步设置', exact: true }).click();
   await page.getByRole('button', { name: '写入位置', exact: true }).click();
   await expect(dialog.getByLabel('默认创建按钮页')).toHaveValue('2000');
   await expect(dialog.getByLabel('起始序列编号')).toHaveValue('8000');
   await page.screenshot({ path: testInfo.outputPath('lighting-destination.png') });
 });
 
-test('点击同步一次：缺少控台素材时直接说明原因，不一直假装正在同步', async ({ page }) => {
-  await page.getByRole('button', { name: '同步一次', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: '同步状态详情' })).toContainText('请先读取控台素材，再同步到控台');
+test('同步当前节目时说明缺少的控台素材', async ({ page }) => {
+  await page.getByRole('button', { name: '修改起始码', exact: true }).click();
+  await page.getByRole('button', { name: '同步', exact: true }).click();
+  const details = page.getByRole('dialog', { name: '同步状态详情' });
+  await expect(details).toContainText('请先读取控台素材，再同步到控台');
+  await expect(details).toContainText('已关闭存档，写入前不再备份。');
+  await expect(details).not.toContainText('存档设置读取失败');
 });
 
 test.beforeEach(async ({ page }) => {
@@ -221,11 +232,11 @@ test('列表手动关联：对齐起始码并显示 Cue，保持本页且可撤�
   await expect(page.getByRole('button', { name: '灯光点 控台第一步', exact: true })).toBeVisible();
   const status = browser.getByRole('status', { name: '时间线状态', exact: true });
   await expect(status).toContainText('已匹配当前节目');
-  await expect(status).toContainText('同步暂停');
+  await expect(status).toContainText('尚未核对');
   await page.evaluate('window.timelineSyncState("verified")');
   await expect(status).toContainText('已同步');
   await page.screenshot({ path: info.outputPath('timeline-manual-sync.png'), fullPage: true });
-  for (const [state, label] of [['pending', '待同步'], ['syncing', '同步中'], ['blocked', '同步失败'], ['paused', '同步暂停']]) {
+  for (const [state, label] of [['pending', '有待同步的修改'], ['syncing', '正在写入控台'], ['blocked', '同步需要处理'], ['paused', '同步已暂停']]) {
     await page.evaluate(value => (window as unknown as { timelineSyncState: (state: string) => void }).timelineSyncState(value!), state);
     await expect(status).toContainText('已匹配当前节目');
     await expect(status).toContainText(label!);
@@ -322,7 +333,7 @@ test('新建时间线右键修改名称和 MTC，Cue 编辑仍进入原编辑器
 test('侧栏刷新只展开当前节目的结果，其他节目的草稿不出现在本次刷新里', async ({ page }) => {
   await page.getByRole('button', { name: '修改起始码', exact: true }).click();
   await page.evaluate('window.syncSummaryFixture("unlinked")');
-  await page.getByRole('button', { name: '刷新同步', exact: true }).click();
+  await page.getByRole('button', { name: '同步', exact: true }).click();
   const details = page.getByRole('dialog', { name: '同步状态详情', exact: true });
   await expect(details.getByRole('heading', { name: '同步 · 歌曲', exact: true })).toBeVisible();
   await expect(details).not.toContainText('第二首歌');
@@ -331,14 +342,14 @@ test('侧栏刷新只展开当前节目的结果，其他节目的草稿不出�
 test('当前节目已同步时，其他未关联草稿显示待关联，不再假报待同步', async ({ page }, info) => {
   await page.getByRole('button', { name: '修改起始码', exact: true }).click();
   await page.evaluate('window.syncSummaryFixture("unlinked")');
-  const status = page.getByRole('button', { name: '同步状态详情', exact: true });
-  await expect(status.locator('.lighting-sync-result')).toHaveText('已同步');
+  const side = page.getByRole('region', { name: '灯光同步操作' });
+  await expect(side.getByRole('status')).toHaveText('已同步');
   await page.getByRole('button', { name: '控台时间线', exact: true }).click();
   await expect(page.getByRole('status', { name: '时间线状态', exact: true })).toContainText('已同步');
-  await status.click();
+  await side.getByRole('button', { name: '同步', exact: true }).click();
   const details = page.getByRole('dialog', { name: '同步状态详情', exact: true });
-  await expect(details).toContainText('全工程 · 已同步');
-  await expect(details).toContainText('当前节目 · 歌曲');
+  await details.getByRole('button', { name: '查看全工程', exact: true }).click();
+  await expect(details).toContainText('歌曲：正在重新检查控台');
   await expect(details).toContainText('第二首歌 · 18 个 Cue · 尚未关联时间线');
   await expect(details).not.toContainText('按钮第 1000 页的空格');
   await page.screenshot({ path: info.outputPath('sync-summary-unlinked.png') });
@@ -351,31 +362,39 @@ test('当前节目已同步时，其他未关联草稿显示待关联，不再�
 for (const mode of ['planned', 'showless']) test(`真实等待创建的节目仍计入待同步且只计一次：${mode}`, async ({ page }) => {
   await page.getByRole('button', { name: '修改起始码', exact: true }).click();
   await page.evaluate(value => (window as unknown as { syncSummaryFixture: (value: string) => void }).syncSummaryFixture(value), mode);
-  await expect(page.getByRole('button', { name: '同步状态详情', exact: true })).toContainText('正在同步');
-  await page.getByRole('button', { name: '同步状态详情', exact: true }).click();
+  await expect(page.getByRole('region', { name: '灯光同步操作' }).getByRole('status')).toHaveText('已同步');
+  await page.getByRole('button', { name: '同步', exact: true }).click();
+  await page.getByRole('button', { name: '查看全工程', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '同步状态详情' })).toContainText('已确认 0/2 首');
+  await page.evaluate('window.timelineSyncState("verified")');
   await expect(page.getByRole('dialog', { name: '同步状态详情' })).toContainText('已确认 1/2 首');
 });
 
-test('左下角在日常核对时保持已同步，写入、个别歌曲出错和恢复均有明确结果', async ({ page }) => {
+test('左下角显示控台核对、写入、失败和读回后的状态', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('button', { name: '修改起始码', exact: true }).click();
   await page.evaluate('window.syncSummaryFixture("unlinked")');
-  const badge = page.getByRole('button', { name: '同步状态详情', exact: true });
+  const side = page.getByRole('region', { name: '灯光同步操作' });
+  const badge = side.getByRole('button', { name: '同步', exact: true });
   const patch = (change: Record<string, unknown>) => page.evaluate(value => (window as unknown as { patchSyncSong: (value: Record<string, unknown>) => void }).patchSyncSong(value), change);
   for (const completed of [1, 2, 3]) {
     await patch({ checking: true, requestId: 'read', progress: { completed, total: 4, detail: '正在核对时间线' } });
-    await expect(badge.locator('.lighting-sync-result')).toHaveText('已同步');
+    await expect(side.getByRole('status')).toHaveText('正在核对控台');
   }
   await patch({ state: 'syncing', writing: true, message: '正在写入时间线' });
-  await expect(badge.locator('.lighting-sync-result')).toHaveText('正在同步');
+  await expect(side.getByRole('status')).toHaveText('正在写入控台');
   await patch({ state: 'blocked', writing: false, checking: false, requestId: null, message: '控台时间线已被删除' });
-  await expect(badge).toHaveText('同步详情');
+  await expect(side.getByRole('status')).toHaveText('同步需要处理');
   await badge.click();
   const details = page.getByRole('dialog', { name: '同步状态详情' });
   await expect(details.getByRole('alert')).toContainText('歌曲：控台时间线已被删除');
   await expect(details.getByRole('button', { name: '用控台上的', exact: true })).toBeVisible();
   await patch({ state: 'verified', progress: null, message: 'Timecode 7 和控台一致' });
-  await expect(badge.locator('.lighting-sync-result')).toHaveText('已同步');
+  await expect(side.getByRole('status')).toHaveText('已同步');
   await expect(details).toContainText('当前节目 · 歌曲：Timecode 7 和控台一致');
   await expect(details.getByRole('alert')).toHaveCount(0);
+  await patch({ needsSourceCheck: true });
+  await expect(side.getByRole('status')).toHaveText('尚未核对');
+  await expect(details.getByRole('status')).toHaveText('尚未核对');
+  await expect(details).not.toContainText('1 首歌都和控台一致');
 });

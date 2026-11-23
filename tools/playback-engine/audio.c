@@ -66,10 +66,28 @@ HRESULT audio_prepare(const wchar_t *path, UINT32 rate, double start_ms, double 
   LeaveCriticalSection(&engine.lock);
   return hr;
 }
+/* The device position is relative to the last reset; the song position also includes a seek. */
+static BOOL record_device_position_locked(UINT64 position, UINT64 qpc) {
+  double frames = (double)position * engine.rate / engine.clock_frequency;
+  double remaining = (double)(engine.end - engine.origin);
+  engine.clock_qpc = qpc;
+  engine.position_ms = ((double)engine.origin + fmin(frames, remaining)) * 1000.0 / engine.rate;
+  return frames >= remaining;
+}
 HRESULT audio_pause(void) {
   EnterCriticalSection(&engine.lock);
   HRESULT hr = engine.client ? IAudioClient_Stop(engine.client) : E_UNEXPECTED;
-  if (SUCCEEDED(hr)) engine.state = PAUSED;
+  if (SUCCEEDED(hr)) {
+    if (engine.state == PLAYING) {
+      /* Stop freezes WASAPI's clock, which can be past the last render event.
+       * An inaccurate sample keeps the last reliable position, as during playback. */
+      UINT64 position = 0;
+      hr = IAudioClock_GetPosition(engine.clock, &position, NULL);
+      if (hr == S_OK) record_device_position_locked(position, 0);
+    }
+    engine.clock_qpc = 0;
+    if (SUCCEEDED(hr)) engine.state = PAUSED;
+  }
   LeaveCriticalSection(&engine.lock); return hr;
 }
 HRESULT audio_stop(void) {
@@ -160,10 +178,7 @@ DWORD WINAPI audio_worker(void *unused) {
         hr = now - skewed_since >= 1000 ? HRESULT_FROM_WIN32(ERROR_TIME_SKEW) : fill_locked();
       } else if (SUCCEEDED(hr)) {
         skewed_since = 0;
-        engine.clock_qpc = qpc;
-        double frames = (double)position * engine.rate / engine.clock_frequency;
-        engine.position_ms = ((double)engine.origin + fmin(frames, (double)(engine.end - engine.origin))) * 1000.0 / engine.rate;
-        if (frames >= (double)(engine.end - engine.origin)) { IAudioClient_Stop(engine.client); engine.state = ENDED; }
+        if (record_device_position_locked(position, qpc)) { IAudioClient_Stop(engine.client); engine.state = ENDED; }
         else hr = fill_locked();
       }
       if (FAILED(hr)) { engine.audio_error = (int32_t)hr; engine.state = FAILED; engine.clock_qpc = 0; IAudioClient_Stop(engine.client); }

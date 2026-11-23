@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { audioSegmentSchema, audioBeatMapSchema } from './audio-edit';
-import { lightingDocumentSchema } from './lighting';
+import { lightingDocumentSchema, type LightingDocument } from './lighting';
+import { MA2_GZIP_PREFIX } from './ma2-song-binding';
 import { songMusicSchema } from './song-music';
 import { ma2ReadStateSchema } from './ma2-catalog';
 import { ma2EffectLibrarySchema } from './ma2-effect-library';
@@ -392,7 +393,7 @@ export const rundownItemSchema = z.object({
 export const rundownItemContentSchema = rundownItemSchema.pick({ visualLayers: true, referenceMediaClips: true, cues: true });
 
 export const linkProjectSchema = z.object({
-  schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
   projectId: z.string().min(1),
   name: z.string().min(1),
   createdAt: z.string().datetime({ offset: true }),
@@ -515,13 +516,30 @@ function isSafeProjectPath(value: string): boolean {
   return !value.split(/[\\/]/).some((segment) => segment === '..');
 }
 
-export type LinkProjectSchemaVersion = 1 | 2 | 3;
+export type LinkProjectSchemaVersion = 1 | 2 | 3 | 4;
 /** The newest file version this release opens and saves. A newer file is refused: unknown fields are stripped on parse,
  * so opening it would drop them on the next save without a word. 3 since the shared song beats (0.5.9 E9). */
-export const latestSchemaVersion: LinkProjectSchemaVersion = 3;
+export const latestSchemaVersion: LinkProjectSchemaVersion = 4;
 /** The newest file version 0.5.8 and earlier open. Overwriting such a file with a newer version is asked first and
  * keeps the file as it was beside it (main process link-project-service), because going back to 0.5.8 is the rollback. */
 export const legacyReadableSchemaVersion: LinkProjectSchemaVersion = 2;
+
+function* documentSequenceSnapshots(lighting: LightingDocument | undefined): Generator<string> {
+  if (lighting?.consoleSong) yield lighting.consoleSong.baselineXml;
+  for (const binding of lighting?.ma2Bindings ?? []) if (binding.emptyCueSequence) yield binding.emptyCueSequence.baselineXml;
+}
+
+/** Includes saved switch-back bindings and previews, which also survive a move to another computer. */
+export function* packedProjectSequences(project: Pick<LinkProject, 'rundown' | 'ma2ReadState'>): Generator<string> {
+  function* all(): Generator<string> {
+    for (const item of project.rundown) yield* documentSequenceSnapshots(item.lighting);
+    for (const entry of project.ma2ReadState?.detachedBindings ?? []) {
+      if (entry.binding.emptyCueSequence) yield entry.binding.emptyCueSequence.baselineXml;
+    }
+    for (const entry of project.ma2ReadState?.catalog.entries ?? []) yield* documentSequenceSnapshots(entry.preview?.document);
+  }
+  for (const snapshot of all()) if (snapshot.startsWith(MA2_GZIP_PREFIX)) yield snapshot;
+}
 
 /** What in a project only releases after 0.5.8 keep: a song's shared beats (`rundownItem.music`, 0.5.9 E9), a song
  * that lasts past its music (`referenceAudio.timeline.durationMs`, 0.5.9 E13), a clip whose look the project sends to
@@ -544,6 +562,7 @@ export function schemaVersion3Reasons(project: Pick<LinkProject, 'rundown'>): Sc
  * 2: lighting, a console read state or a console material library, which releases before lighting would drop.
  * 1: everything else. Pure, so a save can compare it with the version the file has now. */
 export function requiredSchemaVersion(project: Pick<LinkProject, 'ma2ReadState' | 'ma2MaterialLibrary' | 'rundown'>): LinkProjectSchemaVersion {
+  if (!packedProjectSequences(project).next().done) return 4;
   if (schemaVersion3Reasons(project).length) return 3;
   if (project.ma2ReadState || project.ma2MaterialLibrary || project.rundown.some((item) => item.lighting !== undefined)) return 2;
   return 1;

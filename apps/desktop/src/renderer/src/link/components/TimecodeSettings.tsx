@@ -72,11 +72,11 @@ export function TimecodeSettings({ internal, disabled, notify, onBusy, onCreate,
         <option value="quarter-frames">只发四分之一帧</option>
       </Select>}</Field>
       {connections.error ? <p className="settings-error" role="alert">{connections.error}</p> : null}
-      <p>控台 Timecode 窗口里的时间跟着走，就说明收到了。</p>
-    </Card> : <Card title="接收" description="跟随 P1 播放时，从 P1 接收时间码，再转给灯光。" actions={<ScopeTag scope="machine" />}>
+      <p>在「设备连接」的 MA2 控台设置里点「检查版本和时码槽」，可以看到这台控台将 MIDI 接到了哪个槽。播放后先看联动台的 MTC 发送计数，再看控台对应槽的时间是否前进。打开当前节目的 Timecode，核对执行器是否切到下一步 Cue。</p>
+    </Card> : <Card title="接收" description="选择联动台接收 P1 时间码的端口。控台也要接收同一条时间码。" actions={<ScopeTag scope="machine" />}>
       <LightingPortField id="p1-mtc" disabled={disabled} notify={notify} onBusy={onBusy} />
     </Card>}
-    {project ? <Card title="每首歌的起始时间码" description="歌曲从这个时间码开始发送。和控台上时间码节目的起点一样，播放时就会自动跑灯；按回车保存，Esc 撤销。">
+    {project ? <Card title="每首歌的起始时间码" description="歌曲与对应控台时间线使用相同的起点。按回车保存，Esc 撤销。">
       {songs.length ? <table className="settings-table settings-song-starts">
         <thead><tr><th scope="col">#</th><th scope="col">歌曲</th><th scope="col">起始时间码</th><th scope="col">控台</th></tr></thead>
         <tbody>{songs.map((item, index) => <tr key={item.id}>

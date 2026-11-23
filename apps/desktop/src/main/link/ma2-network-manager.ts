@@ -1,5 +1,8 @@
-import { Ma2MtcSelectionService, type Ma2ConfirmedTimecode, type Ma2MtcPreparationTask } from './ma2-mtc-selection';
-import { editMa2Timeline } from './ma2-timeline-edit';
+import { ma2MtcSequenceSettings, matchesMa2MtcSongSelection, Ma2MtcSelectionService, type Ma2ConfirmedTimecode, type Ma2MtcPreparationTask } from './ma2-mtc-selection';
+import { ma2MtcPlaybackSettings } from './ma2-timecode-xml';
+import { ma2MidiInputMessage, readMa2Capabilities } from './ma2-capabilities';
+import { editMa2Timeline, readMa2MtcRanges } from './ma2-timeline-edit';
+import { loadMa2Sequence } from './ma2-sequence-snapshot';
 import { ma2PlaybackRequestSchema, type Ma2PlaybackRequest, type Ma2Catalog, type Ma2CatalogRequest, ma2ObjectDirectorySchema, type Ma2ObjectDirectory } from '@tb/schema';
 import { playMa2Cue, stopMa2ConsoleCues } from './ma2-pool-playback';
 import { readFile } from 'node:fs/promises';
@@ -14,7 +17,7 @@ import { Ma2RequestJournal } from './ma2-request-journal';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2ApplyService } from './ma2-apply-service';
 import { ensureMa2NetworkBridge, readMa2NetworkBridge, type Ma2BridgeState } from './ma2-bridge-installer';
-import { MA2_BRIDGE_MISSING_BEFORE_REQUEST } from '@tb/core/link';
+import { checkMa2MtcStart, MA2_BRIDGE_MISSING_BEFORE_REQUEST, MA2_SONG_TIMECODE_SLOT, ma2MtcConflictTargets, ma2MtcRange, ma2SelectorTrackProblem } from '@tb/core/link';
 import { readMa2ShowSource, verifyMa2ShowSource, type Ma2ShowSource } from './ma2-show-probe';
 import { Ma2Relogin, Ma2ReloginStop, type Ma2ReloginClock, type Ma2ReloginLog, type Ma2ReloginPlan } from './ma2-relogin';
 import { readMa2NativeLibrary } from './ma2-native-library';
@@ -30,7 +33,7 @@ import { readMa2NetworkPreview } from './ma2-network-preview';
 import { Ma2LiveService } from './ma2-live-service';
 import { Ma2SongWatch } from './ma2-song-watch';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
-import { SHOW_WAIT_SHOW_ON, holdForShow, type ShowGate, type ShowGateReader } from '@tb/core/link';
+import { SHOW_WAIT_SHOW_ON, holdForShow, isShowWait, type ShowGate, type ShowGateReader } from '@tb/core/link';
 
 /** One chosen console, machine settings only. Auto-connect never replays writes. */
 /** Reading the console during a show could hold back its lighting: the check waits until playback stops. */
@@ -42,6 +45,11 @@ export function ma2BusyMessage(off: boolean, waitedMs: number): string {
     : `控台正忙（比如在同步或读取歌曲），这条灯光指令等了 ${seconds} 秒没发出去，已经取消，不会再发。请稍后再点一次`;
 }
 export class Ma2NetworkManager {
+  private latestRanges: Awaited<ReturnType<typeof readMa2MtcRanges>> | undefined;
+  playbackRanges(): typeof this.latestRanges {
+    const source = this.identity?.source;
+    return source && source.show === this.latestRanges?.show && source.generation === this.latestRanges.generation ? this.latestRanges : undefined;
+  }
   private readonly cancelledPlayback = new Map<string, number>();
   private profiles: Ma2NetworkSettings[] = [];
   private capabilities: Ma2Capabilities | null = null;
@@ -82,6 +90,8 @@ export class Ma2NetworkManager {
   /** The console and Show that connection was made on: its version, and the Show and plugin session when they could be read. */
   private identity: { version: string; source: Ma2ShowSource | null } | null = null;
   private bridgeInstall: Promise<void> | null = null;
+  private bridgeAdmissionWaiting = false;
+  private disconnectingBridgeWait: Promise<void> | null = null;
   /** Logged in, but the plugin is missing or old (`wait`: install when idle), or its installation failed. */
   private bridgeIssue: { wait: boolean; message: string } | null = null;
   private readonly reloginLogs = new Set<(entry: Ma2ReloginLog) => void>();
@@ -134,7 +144,7 @@ export class Ma2NetworkManager {
   async editTimeline(request: import('@tb/schema').Ma2TimelineEditRequest) {
     if (!request.network) throw new Error('请先连接控台');
     const result = await editMa2Timeline(this.get(request.network).bridge, request);
-    try { await this.prepareMtcPlayback(request.network, false, [request.target]); }
+    try { await this.prepareMtcPlayback(request.network, false, [request.target], undefined, undefined, { expectedSource: request.expectedSource }); }
     catch (error) {
       // The metadata write was verified. Keep that outcome even when song selection still needs attention.
       return { ...result, selectionWarning: error instanceof Error ? error.message : String(error) };
@@ -160,7 +170,7 @@ export class Ma2NetworkManager {
     const { bridge } = this.get(request.network); if (!this.connection) throw new Error('请先连接控台');
     return this.layouts().list(this.connection, bridge, request);
   }
-  async listExecutorPages(request: import('@tb/schema').Ma2LayoutDirectoryRequest) { return listMa2ExecutorPages(this.get(request.network).bridge, request); }
+  async listExecutorPages(request: import('@tb/schema').Ma2ExecutorPageDirectoryRequest) { return listMa2ExecutorPages(this.get(request.network).bridge, request); }
   async readExecutorPage(request: import('@tb/schema').Ma2ExecutorPageRequest) { return readMa2ExecutorPage(this.get(request.network).bridge, request); }
   private executorMutations: Ma2ExecutorMutationService | null = null;
   private executorInput = new Ma2ExecutorInputService();
@@ -196,8 +206,8 @@ export class Ma2NetworkManager {
     return null;
   }
   async releaseExecutors(): Promise<void> {
-    this.liveService?.releaseButtons();
-    await this.executorInput.release();
+    try { this.liveService?.releaseButtons(); }
+    finally { await this.executorInput.release(); }
   }
   async updateExecutor(request: import('@tb/schema').Ma2ExecutorUpdateRequest): Promise<import('@tb/schema').Ma2ExecutorUpdateResult> {
     const { bridge } = this.get(request.network);
@@ -246,7 +256,7 @@ export class Ma2NetworkManager {
     // A Sequence-only write has no song range yet. The Timecode writer that references it
     // will prepare and verify that specific range once its events are actually on the console.
     if (result.binding.timecode) await this.prepareMtcPlayback(request.network, false, [result.binding.timecode.number],
-      { number: result.binding.sequence, xml: result.binding.baselineXml }, verifiedTimecode);
+      { number: result.binding.sequence, xml: await loadMa2Sequence(result.binding.baselineXml) }, verifiedTimecode, { expectedSource: request.expectedSource, signal });
     return result;
   }
   async newCue(request: import('@tb/schema').Ma2NewCueRequest): Promise<import('@tb/schema').Ma2NewCueResult> {
@@ -298,17 +308,126 @@ export class Ma2NetworkManager {
     // An Off passes queued sync reads and writes, so stopping a song switches its lights off first.
     return playMa2Cue(connection, request.action, ()=>{current();options?.beforeSend?.();},options?.priority ?? (request.action.action === 'off' ? 'stop' : 'playback'), options);
   }
+  /** A newer song can claim the executor while this release waits for the socket. */
+  async playPendingOff(request: Ma2PlaybackRequest, stillOwed: () => boolean): Promise<Ma2QueueWait | null> {
+    const withdrawn = new Error('执行器已由新节目接管或关灯请求已更新');
+    try {
+      return await this.playCue(request, { beforeSend: () => { if (!stillOwed()) throw withdrawn; } });
+    } catch (error) {
+      if (error === withdrawn) return null;
+      throw error;
+    }
+  }
   async stopConsoleCues(): Promise<void> {
     const connection = this.connection;
     if (!connection || connection.state !== 'connected') throw new Error('控台未连接，无法停止控台上的 Cue');
     const generation = this.generation;
-    await stopMa2ConsoleCues(connection, () => {
+    const stopDesk = stopMa2ConsoleCues(connection, () => {
       if (connection !== this.connection || generation !== this.generation || connection.state !== 'connected') throw new Error('控台连接已变化，请核对后再按停止');
     });
+    // Put Off on the wire first. Cancel old presses before yielding to the command queue.
+    const releaseInputs = async (): Promise<void> => {
+      try { this.liveService?.release(); }
+      finally { await this.releaseExecutors(); }
+    };
+    const results = await Promise.allSettled([stopDesk, releaseInputs()]);
+    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason instanceof Error ? result.reason.message : String(result.reason)] : []);
+    if (errors.length) throw new Error(errors.join('；'));
   }
   private credentialId(settings: Ma2NetworkSettings): string { return `ma2-${createHash('sha256').update(`${settings.host}:${settings.port}:${settings.username}`).digest('hex')}`; }
-  async readCatalog(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal, targets?: readonly number[], checkpoint?: (catalog: Ma2Catalog, entry?: Ma2Catalog['entries'][number]) => Promise<void>, expectedSource?: Ma2CatalogRequest['expectedSource']): Promise<Ma2Catalog> {
+  async readCatalog(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal, targets?: readonly number[], checkpoint?: (catalog: Ma2Catalog, entry?: Ma2Catalog['entries'][number]) => Promise<void>, expectedSource?: Ma2CatalogRequest['expectedSource'], checkMtcFor?: readonly number[], otherClockBindings?: Ma2CatalogRequest['otherClockBindings'], songPlayback?: Ma2CatalogRequest['songPlayback']): Promise<Ma2Catalog> {
     const started = performance.now();
+    if (targets?.length === 0) {
+      signal?.throwIfAborted();
+      holdForShow(this.show, 'ma2.sync.read');
+      let inputNote: string | undefined;
+      const source = await this.editingSource(target, checkMtcFor?.length ? slot => {
+        inputNote = slot !== null && `TC Slot ${slot}` !== MA2_SONG_TIMECODE_SLOT ? ma2MidiInputMessage(slot) : undefined;
+      } : undefined);
+      if (checkMtcFor?.length) {
+        // A console operator can move a different Timecode into this song without changing the Show or its generation.
+        const ranges = await readMa2MtcRanges(this.get(target).bridge, signal, checkMtcFor);
+        signal?.throwIfAborted();
+        if (ranges.show !== source.show || ranges.generation !== source.generation) throw new Error('控台的节目目录刚有变化，请重新核对当前节目');
+        this.latestRanges = ranges;
+        const directory = ma2ObjectDirectorySchema.parse({ ...source, entries: ranges.entries.map(({ target, name }) => ({ target, name })) });
+        const result: Ma2Catalog = { directory, afterRollSeconds: ranges.afterRollSeconds, entries: [], readAt: new Date().toISOString(),
+          songOffsets: ranges.entries.filter(entry => checkMtcFor.includes(entry.target)).map(({ target, offset }) => ({ target, offset })) };
+        if (ranges.selectorTrackConflict) return { ...result, selectorTrackConflict: ranges.selectorTrackConflict, playbackConflict: ma2SelectorTrackProblem(ranges.selectorTrackConflict) };
+        const selector = ranges.selectorReady || ranges.selectorSettingsTarget;
+        // A missing binding has its own recovery action. Check it before reporting an overlap.
+        if (checkMtcFor.every(number => directory.entries.some(entry => entry.target === number))) {
+          const otherClocks = new Map(otherClockBindings?.map(binding => [binding.target, binding.slot]));
+          for (const entry of ranges.entries) {
+            if (!checkMtcFor.includes(entry.target)) continue;
+            if (entry.slot !== MA2_SONG_TIMECODE_SLOT && entry.slot !== otherClocks.get(entry.target)) {
+              const location = entry.slot ? `使用的是 ${entry.slot}` : '没有指定外部时码槽';
+              result.playbackConflict = `Timecode ${entry.target} ${location}。请在控台将这条时间线的时码槽设为 ${MA2_SONG_TIMECODE_SLOT}，再点同步。`;
+              break;
+            }
+            if (entry.slot !== MA2_SONG_TIMECODE_SLOT && !result.playbackClockNote) {
+              result.playbackClockNote = `Timecode ${entry.target} 使用 ${entry.slot || '控台内部时钟'}。要跟随歌曲，请在控台选择 ${MA2_SONG_TIMECODE_SLOT} 并再次同步。`;
+            }
+            if (entry.missingExecutorTarget) {
+              const { track, event, frame } = entry.missingExecutorTarget;
+              result.playbackConflict = `Timecode ${entry.target} 第 ${track} 轨没有可用的执行器，第 ${event} 个动作（第 ${frame} 帧）无法执行。请在控台给这条轨道指定执行器，再点同步。`;
+              break;
+            }
+            if (entry.missingCueTarget) {
+              const { track, event, frame } = entry.missingCueTarget;
+              result.playbackConflict = `Timecode ${entry.target} 第 ${track} 轨第 ${event} 个灯光点（第 ${frame} 帧）缺少目标 Cue。请在控台给这个点重新指定 Cue，或移除这个点，再点同步。`;
+              break;
+            }
+            if (entry.routeMismatch) {
+              const { track, executor, assigned, referenced, step } = entry.routeMismatch;
+              const assignment = assigned ? `分配的是序列 ${assigned}` : '没有分配序列';
+              result.playbackConflict = executor
+                ? `Timecode ${entry.target} 的第 ${step} 步引用序列 ${referenced}，执行器 ${executor} ${assignment}。请在控台核对这一步的目标或执行器分配，再点同步。`
+                : `Timecode ${entry.target} 第 ${track} 轨缺少执行器，第 ${step} 步引用序列 ${referenced}。请在控台给这条轨道重新指定执行器，再点同步。`;
+              break;
+            }
+            const musicMs = songPlayback && Math.round(songPlayback.startMs * 30 / 1000) === Number(entry.offset) ? songPlayback.durationMs : 0;
+            // A cleared song may still be armed by an existing selector at its former start.
+            if (entry.slot === MA2_SONG_TIMECODE_SLOT && (entry.last !== '' || selector)) result.needsPlaybackPreparation = true;
+            if (entry.slot === MA2_SONG_TIMECODE_SLOT && (entry.last !== '' || musicMs > 0)) {
+              const song = ma2MtcRange(entry);
+              const end = Math.max(song.end, song.start + Math.ceil(musicMs * 30 / 1000));
+              const other = ranges.otherTimedCues?.find(cue => cue.seconds * 30 >= song.start && cue.seconds * 30 < end);
+              if (other) {
+                result.playbackConflict = `Timecode ${entry.target} 播放期间，序列 ${other.sequence} 的 Cue ${Number(other.cue)} 也会跟随同一时码。请核对 Timecode ${other.owner} 对应的节目，或在控台将该 Cue 的触发方式改为 Go，再点同步。`;
+                break;
+              }
+              try { checkMa2MtcStart(ranges.entries, entry.target, song.start * 1000 / 30, musicMs, false, ranges.afterRollSeconds); }
+              catch (error) {
+                if (!(error instanceof Error) || !ma2MtcConflictTargets(error.message)) throw error;
+                result.playbackConflict = error.message;
+                break;
+              }
+            }
+          }
+        }
+        if (result.needsPlaybackPreparation && !result.playbackConflict && selector) {
+          const bridge = this.get(target).bridge;
+          const timeline = await bridge.request('READ', selector, '', '', signal);
+          const sequence = await bridge.request('SEQUENCE', selector, '', '', signal);
+          await this.checkEditingSource(target, source);
+          const desired = ranges.selectorSettingsTarget ? ma2MtcPlaybackSettings(timeline, true) : timeline;
+          const manual = sequence.includes('<Trigger') ? ma2MtcSequenceSettings(sequence) : null;
+          if (matchesMa2MtcSongSelection({ ...ranges, selectorReady: selector }, checkMtcFor, desired, manual?.xml ?? sequence, songPlayback)) {
+            if (manual?.cues.length) result.selectorTriggerTarget = selector;
+            if (ranges.selectorCommandTarget) result.selectorCommandTarget = ranges.selectorCommandTarget;
+            if (ranges.selectorSettingsTarget) result.selectorSettingsTarget = selector;
+            const changed = ranges.entries.filter(entry => checkMtcFor.includes(entry.target) && entry.playbackSettingsChanged).map(entry => entry.target);
+            if (changed.length) result.songSettingsTargets = changed;
+            const automatic = ranges.entries.filter(entry => checkMtcFor.includes(entry.target) && entry.automaticCueTriggers).map(entry => entry.target);
+            if (automatic.length) result.songTriggerTargets = automatic;
+            if (!changed.length && !automatic.length && !result.selectorSettingsTarget && !result.selectorCommandTarget && !result.selectorTriggerTarget) delete result.needsPlaybackPreparation;
+          }
+        }
+        if (inputNote && !result.playbackConflict && !result.playbackClockNote && ranges.entries.some(entry => checkMtcFor.includes(entry.target) && entry.slot === MA2_SONG_TIMECODE_SLOT)) result.playbackClockNote = inputNote;
+        return result;
+      }
+    }
     const { bridge } = this.get(target);
     const connection = this.connection;
     if (!connection) throw new Error('请先连接控台');
@@ -345,7 +464,7 @@ export class Ma2NetworkManager {
     await checkpoint?.(catalog);
     return catalog;
   }
-  async preview(target: Ma2NetworkTarget, timecode: number, timeOriginMs = 0, signal?: AbortSignal): Promise<import('@tb/schema').Ma2TimecodePreview> {
+  async preview(target: Ma2NetworkTarget, timecode: number, timeOriginMs = 0, signal?: AbortSignal, expectedSource?: Ma2ShowSource): Promise<import('@tb/schema').Ma2TimecodePreview> {
     const { bridge } = this.get(target);
     const connection = this.connection;
     if (!connection) throw new Error('请先连接控台');
@@ -356,22 +475,22 @@ export class Ma2NetworkManager {
       this.get(target);
       holdForShow(gate, 'ma2.sync.read');
       return bridge.request('READ', timecode);
-    }, targets => readMa2NativeLibrary(connection, bridge, gate, undefined, 'library', undefined, targets, { referencedOnly: true }));
+    }, targets => readMa2NativeLibrary(connection, bridge, gate, undefined, 'library', undefined, targets, { referencedOnly: true }), expectedSource);
   }
-  private async editingSource(target: Ma2NetworkTarget): Promise<Ma2ShowSource> {
+  private async editingSource(target: Ma2NetworkTarget, onInputSlot?: (slot: number | null) => void): Promise<Ma2ShowSource> {
     this.target(target);
     if (this.bridgeIssue?.wait) await this.installDeferred();
     this.get(target);
     const connection = this.connection;
     if (!connection) throw new Error('请先连接控台');
-    const observed = await readMa2ShowSource(connection);
+    const observed = await readMa2ShowSource(connection, onInputSlot);
     if (connection !== this.connection) throw new Error('控台连接已变化');
     if (observed.generation) return observed;
     this.bridgeMissing(connection);
     await this.installDeferred();
     if (connection !== this.connection) throw new Error('控台连接已变化');
     this.get(target);
-    const restored = await readMa2ShowSource(connection);
+    const restored = await readMa2ShowSource(connection, onInputSlot);
     if (connection !== this.connection || !restored.generation) throw new Error('控台没有确认连接组件已启动，请重新连接控台');
     return restored;
   }
@@ -398,7 +517,7 @@ export class Ma2NetworkManager {
       const directory = ma2ObjectDirectorySchema.parse({ ...source, entries: [] });
       return { directory, sequences: [], fixtureUsage: [], errors: [], fixtureDetails: 'unavailable', readAt: new Date().toISOString() };
     }
-    if (details === 'attributes') return readMa2EffectLibrary(bridge, this.show, onProgress, signal, targets, expectedSource, details, this.connection);
+    if (details === 'attributes' || details === 'empty-cues') return readMa2EffectLibrary(bridge, this.show, onProgress, signal, targets, expectedSource, details, this.connection);
     return readMa2NativeLibrary(this.connection, bridge, this.show, onProgress, phase, signal, targets, { expectedSource });
   }
   async initialize(): Promise<void> {
@@ -478,14 +597,18 @@ export class Ma2NetworkManager {
       // Free the slot before installing or upgrading the bridge: an upgrade needs an idle transaction too.
       await this.releaseAbandoned(connection);
       if (generation !== this.generation) return this.status();
-      if (this.bundledBridge) await ensureMa2NetworkBridge(connection, this.bundledBridge);
+      const bridgeReady = !this.bundledBridge || await this.prepareBridge(connection, this.bundledBridge);
       if (generation !== this.generation) return this.status();
       // What logging in again on its own (M5) checks it is back on: this console and this Show.
       let source: Ma2ShowSource | null = null;
       try { source = await readMa2ShowSource(connection); }
-      catch (cause) { this.notice?.('warning', `没读到控台现在的 Show：${cause instanceof Error ? cause.message : String(cause)}；演出中控台断开、自动重新登录时只核对控台版本`); }
+      catch (cause) {
+        if (connection.state !== 'connected') throw cause;
+        this.notice?.('warning', `没读到控台现在的 Show：${cause instanceof Error ? cause.message : String(cause)}；演出中控台断开、自动重新登录时只核对控台版本`);
+      }
       if (generation !== this.generation) return this.status();
-      this.openServices(connection);
+      if (bridgeReady) this.openServices(connection);
+      else this.reconnectAllowed = true;
       this.identity = { version, source }; this.armed = settings;
       this.relogin.connected(consoleScope(settings), settings);
     } catch (error) { if (generation === this.generation) { this.connection?.disconnect(); this.services = null; this.error = error instanceof Error ? error.message : String(error); this.unreachable = error instanceof Ma2UnreachableError; this.version = null; } }
@@ -514,15 +637,8 @@ export class Ma2NetworkManager {
     if (!connection || connection.state !== 'connected' || !this.version) throw new Error('请先登录控台');
     const generation = this.generation; this.busy = true; this.capabilities = null;
     try {
-      const marker = `TBLINK_CAP_${randomBytes(16).toString('hex')}`;
-      const script = "tostring(_VERSION)..':'..tostring(type(TBLINK_NET)=='function')..':'..tostring(type(gma.show.getobj)=='table' and type(gma.show.getobj.handle)=='function')..':'..tostring(type(io)=='table' and type(io.open)=='function')";
-      const result = await connection.command(`Lua "gma.echo('${marker}:'..${script})"`, (text) => ma2ResponseLine(text, `${marker}:`));
-      const parts = result.split(':');
-      if (parts.length !== 4 || !parts.slice(1).every((part) => part === 'true' || part === 'false')) throw new Error('控台返回的功能信息无法识别');
-      if (generation !== this.generation) return this.status();
-      const plugin = parts[1] === 'true', objects = parts[2] === 'true', files = parts[3] === 'true';
-      this.capabilities = { version: this.version, lua: parts[0]!, plugin, objects, files,
-        message: plugin && objects && files ? '基本功能可用。请先读取目标 Timecode 检查内容，写入后联动台会再读回确认。' : !plugin ? '没有检测到控台插件，请导出插件并在控台上运行后重新检测。' : '这个控台版本缺少需要的功能，无法自动同步。' };
+      const checked = await readMa2Capabilities(connection, this.version);
+      if (generation === this.generation && connection.state === 'connected') this.capabilities = checked;
     } finally { this.busy = false; }
     return this.status();
   }
@@ -530,7 +646,7 @@ export class Ma2NetworkManager {
     this.reconnectAllowed = false;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-    this.relogin.stop(); this.armed = null; this.identity = null;
+    this.relogin.stop(); this.armed = null; this.identity = null; this.latestRanges = undefined;
     this.liveService?.close(); this.liveService?.consoleChanged();
     this.keepUnreleased();
     this.generation += 1;
@@ -570,7 +686,18 @@ export class Ma2NetworkManager {
       verify: source => verifyMa2ShowSource(connection, source),
       prepare: (timecode, onConsoleCheck) => {
         if (this.connection !== connection || this.services?.bridge !== bridge) throw new Error('控台连接已变化');
-        return this.prepareMtcPlayback(target, false, [timecode.number], undefined, timecode, { onConsoleCheck });
+        return this.prepareMtcPlayback(target, false, [timecode.number], undefined, timecode, {
+          onConsoleCheck,
+          checkCurrentSong: async () => {
+            const checked = await this.readCatalog(target, undefined, undefined, [], undefined, undefined, [timecode.number]);
+            if (checked.directory.show !== timecode.show || checked.directory.generation !== timecode.generation || this.connection !== connection) {
+              throw new Error('控台 Show 或连接已切换，请重新核对当前节目');
+            }
+            if (checked.playbackConflict) throw new Error(checked.playbackConflict);
+            if (!checked.directory.entries.some(entry => entry.target === timecode.number)) throw new Error(`当前 Show 中找不到 Timecode ${timecode.number}，请核对节目绑定后再同步`);
+            return !checked.needsPlaybackPreparation;
+          }
+        });
       }
     }) };
     this.bridgeIssue = null;
@@ -663,12 +790,28 @@ export class Ma2NetworkManager {
     this.bridgeInstall = task;
     return task.finally(() => { if (this.bridgeInstall === task) this.bridgeInstall = null; });
   }
+  private async prepareBridge(connection: Ma2Telnet, source: string): Promise<boolean> {
+    try {
+      await ensureMa2NetworkBridge(connection, source, async waiting => {
+        if (this.disconnectingBridgeWait) await this.disconnectingBridgeWait;
+        if (this.connection !== connection || connection.state !== 'connected') throw new Error('控台连接已停止');
+        holdForShow(this.show, 'ma2.connect');
+        this.bridgeAdmissionWaiting = waiting;
+      }, ma2UsesLocalFiles(this.settings?.host ?? ''));
+      return true;
+    } catch (cause) {
+      if (!isShowWait(cause)) throw cause;
+      this.bridgeIssue = { wait: true, message: `${SHOW_WAIT_SHOW_ON}灯光连接组件等节目停止后继续准备` };
+      this.notice?.('info', this.bridgeIssue.message);
+      return false;
+    } finally { this.bridgeAdmissionWaiting = false; }
+  }
   private async installMissingBridge(): Promise<void> {
     const connection = this.connection, issue = this.bridgeIssue, source = this.bundledBridge;
     if (!issue?.wait || !source || !connection || connection.state !== 'connected' || this.busy || this.show('ma2.connect').kind === 'wait') return;
     const generation = this.generation; this.busy = true;
     try {
-      await ensureMa2NetworkBridge(connection, source);
+      if (!await this.prepareBridge(connection, source)) return;
       if (generation !== this.generation) return;
       const before = this.identity?.source ?? null;
       let after: Ma2ShowSource | null = null;
@@ -687,11 +830,14 @@ export class Ma2NetworkManager {
     } finally { this.busy = false; }
   }
   async disconnectByOperator():Promise<Ma2NetworkStatus>{
-    if(this.busy)throw new Error('MA2 正在连接，请稍后断开');
+    const waiting = this.bridgeAdmissionWaiting;
+    if(this.busy && (!waiting || this.disconnectingBridgeWait))throw new Error('MA2 正在连接，请稍后断开');
+    let finishWait: (() => void) | undefined;
+    if (waiting) this.disconnectingBridgeWait = new Promise(resolve => { finishWait = resolve; });
     this.busy=true;
     let release:(()=>void)|undefined;
     try{if(this.connection?.state==='connected')release=await this.beforeConnectionChange?.();return this.disconnect();}
-    finally{release?.();this.busy=false;}
+    finally{release?.();this.disconnectingBridgeWait=null;finishWait?.();if(!waiting)this.busy=false;}
   }
 }
 

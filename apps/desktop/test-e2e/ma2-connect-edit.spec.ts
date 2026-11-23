@@ -9,7 +9,7 @@ import { inspectMa2SequenceXml } from '../src/main/link/ma2-timecode-xml';
 import { savedValue } from './save-questions';
 import { showStopped } from '../src/main/link/fixtures/show-gates';
 
-test('软件流程：连接后自动配对，编辑后自动发送并应用已确认回读', async ({}, info) => {
+test('软件流程：连接后自动配对，编辑后点击同步并应用已确认回读', async ({}, info) => {
   const xml = await readFile(join(process.cwd(), 'src/main/link/fixtures/ma2-timecode-fractional-3.3.xml'), 'utf8');
   const sequence = await readFile(join(process.cwd(), 'src/main/link/fixtures/ma2-sequence-fractional-3.3.xml'), 'utf8');
   const directory = { show: '专用软件验收', generation: 'test', version: '3.3.4', entries: [{ target: 9902, name: '不同名称的控台时间线' }] };
@@ -47,11 +47,11 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByLabel('MA2 连接方式').selectOption('network');
     await page.getByRole('button', { name: /^(连接控台|读取 Cue)$/ }).click();
-    await expect(page.getByText(/灯光工作台左下角的“实时同步”开着时/)).toBeVisible();
+    await expect(page.getByText(/点“同步当前节目”可核对两边的改动/)).toBeVisible();
     await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.locator('.waveform-cue-point')).toHaveCount(2);
     expect(await app.evaluate(() => process.env.TBLINK_EDIT_REQUEST)).toBeUndefined();
-    await expect(page.getByRole('switch', { name: '实时同步', exact: true })).toHaveAttribute('aria-checked', 'true');
+    const side = page.getByRole('region', { name: '灯光同步操作' });
     const first = await page.locator('.waveform-cue-point').first().boundingBox();
     const second = await page.locator('.waveform-cue-point').nth(1).boundingBox();
     if (!first || !second) throw new Error('Cue 标记不可见');
@@ -59,9 +59,11 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
     await page.mouse.down();
     await page.mouse.move(first.x + 20 + (second.x - first.x) * 700 / 1500, first.y + first.height / 2, { steps: 12 });
     await page.mouse.up();
-    await page.getByRole('button', { name: '同步状态详情', exact: true }).click();
-    // Matching songs are only counted in the details; the badge says it was confirmed.
-    await expect(page.getByRole('dialog', { name: '同步状态详情' })).toContainText('首歌都和控台一致');
+    await expect(side.getByRole('status')).toHaveText('有待同步的修改');
+    expect(await app.evaluate(() => process.env.TBLINK_EDIT_REQUEST)).toBeUndefined();
+    await side.getByRole('button', { name: '同步', exact: true }).click();
+    await expect(side.getByRole('status')).toHaveText('已同步');
+    await expect(page.getByRole('dialog', { name: '同步状态详情' })).toContainText('控台确认于');
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!.ma2Bindings![0]!.baselineTracks[0]!.clips[0]!.events[0]!.at)).toBe(700);
     const sent = await app.evaluate(() => process.env.TBLINK_EDIT_REQUEST);
     expect(ma2ApplyRequestSchema.parse(JSON.parse(sent ?? 'null')).document.tracks[0]!.clips[0]!.events[0]!.at).toBeCloseTo(700, -1);

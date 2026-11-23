@@ -29,10 +29,10 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await application.evaluate(({ ipcMain, dialog }, { path, directory, labels }) => {
       process.env.TBLINK_LIBRARY_CALLS = '[]';
       process.env.TBLINK_ATTRIBUTE_READS = '0';
-      ipcMain.removeHandler('link:ma2-cue-attribute-names');
-      ipcMain.handle('link:ma2-cue-attribute-names', () => {
+      ipcMain.removeHandler('link:ma2-cue-values');
+      ipcMain.handle('link:ma2-cue-values', () => {
         process.env.TBLINK_ATTRIBUTE_READS = String(Number(process.env.TBLINK_ATTRIBUTE_READS) + 1);
-        return ['DIM', 'PAN', 'TILT'];
+        return ['DIM', 'PAN', 'TILT'].map(attribute => ({ key: '1/' + attribute, fixture: 'Fixture 1', attribute, value: '75', preset: '' }));
       });
       process.env.TBLINK_RENAME_CALLS = '[]';
       // This test owns rename history; background music analysis is a separate workflow.
@@ -64,11 +64,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await page.reload();
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
-    // Pausing keeps local editing available but queues every console write.
-    const realtime = page.getByRole('switch', { name: '实时同步', exact: true });
-    await expect(realtime).toBeChecked();
-    await realtime.click();
-    await expect(realtime).not.toBeChecked();
+    const syncArea = page.getByRole('region', { name: '灯光同步操作' });
     await page.getByRole('navigation',{name:'灯光素材主菜单'}).getByRole('button',{name:'控台素材',exact:true}).click();
     const preview = page.getByRole('region', { name: 'MA2 序列预览' });
     const pool = preview.locator('[aria-label="素材序列"]');
@@ -163,12 +159,17 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await page.screenshot({path:info.outputPath('cue-rename.png')});
     await menu.getByRole('textbox',{name:'Cue 名称',exact:true}).press('Enter');
     await expect(consoleStep.locator('strong')).toHaveText('前区暖白');
-    const waitRename = async (name: string): Promise<void> => { await expect.poll(async () => (JSON.parse(await application.evaluate(() => process.env.TBLINK_RENAME_CALLS ?? '[]')) as Ma2RenameRequest[]).at(-1)?.change.name).toBe(name); await expect(page.getByRole('button', { name: '同步状态详情', exact: true })).toHaveAttribute('data-state', 'verified'); };
+    const waitRename = async (name: string): Promise<void> => {
+      await syncArea.getByRole('button', { name: '同步', exact: true }).click();
+      const details = page.getByRole('dialog', { name: '同步状态详情' });
+      await details.getByRole('button', { name: '查看全工程', exact: true }).click();
+      await details.getByRole('button', { name: '同步名称', exact: true }).click();
+      await expect.poll(async () => (JSON.parse(await application.evaluate(() => process.env.TBLINK_RENAME_CALLS ?? '[]')) as Ma2RenameRequest[]).at(-1)?.change.name).toBe(name);
+      await expect(details.getByRole('button', { name: '同步名称', exact: true })).toHaveCount(0);
+      await page.keyboard.press('Escape');
+    };
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries[0]?.name)).toBe('前区暖白');
     expect(JSON.parse(await application.evaluate(() => process.env.TBLINK_RENAME_CALLS ?? '[]')) as Ma2RenameRequest[]).toEqual([]);
-    await expect(realtime).not.toBeChecked();
-    await realtime.click();
-    await expect(realtime).toBeChecked();
     await waitRename('前区暖白');
     await page.keyboard.press('Control+z');await expect(consoleStep.locator('strong')).toHaveText('控台原名－前区面光暖白完整名称');await waitRename('控台原名－前区面光暖白完整名称');
     await page.keyboard.press('Control+y');await expect(consoleStep.locator('strong')).toHaveText('前区暖白');await waitRename('前区暖白');
@@ -185,26 +186,18 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await classified.locator('.classification-cell>button').first().click({button:'right'});
     await menu.getByRole('menuitem',{name:'重命名',exact:true}).click();await menu.getByRole('textbox',{name:'Cue 名称',exact:true}).fill('分类暖白');await menu.getByRole('button',{name:'确定',exact:true}).click();
     await expect(classified.locator('.classification-cell>button').first()).toContainText('分类暖白');
-    const syncBadge = page.getByRole('button', { name: '同步状态详情', exact: true });
     await waitRename('分类暖白');
-    await expect(realtime).toBeChecked();
     const renameCalls = JSON.parse(await application.evaluate(() => process.env.TBLINK_RENAME_CALLS ?? '[]')) as Ma2RenameRequest[];
     expect(renameCalls.map(call => call.change.name)).toEqual(['前区暖白','控台原名－前区面光暖白完整名称','前区暖白','分类暖白']);
     expect(renameCalls.at(-1)!.change).toMatchObject({ sequence: 2, cue: '1.000', kind: 'single', name: '分类暖白', confirmedName: toConsoleLabel('前区暖白') });
-    await realtime.click();
-    await expect(realtime).not.toBeChecked();
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect(classified.locator('.classification-cell>button').first()).toContainText('前区暖白');
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries[0]?.name)).toBe('前区暖白');
     expect((JSON.parse(await application.evaluate(() => process.env.TBLINK_RENAME_CALLS ?? '[]')) as Ma2RenameRequest[])).toHaveLength(renameCalls.length);
-    await realtime.click();
-    await expect(realtime).toBeChecked();
     await waitRename('前区暖白');
     await page.getByRole('button', { name: '重做', exact: true }).click();
     await waitRename('分类暖白');
-    await expect(syncBadge).toHaveAttribute('data-state', 'verified');
     await page.screenshot({ path: info.outputPath('rename-synced.png') });
-    await page.getByRole('switch', { name: '实时同步', exact: true }).click();
     await expect(page.locator('.cue-composer')).toHaveCount(0);
     await turnOffTimelineAudition(page);
     await navigation.getByRole('button', { name: '面光', exact: true }).click();
@@ -270,15 +263,17 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
       });
       BrowserWindow.getAllWindows()[0]?.webContents.send('link:ma2-audition-state',state);
     });
-    await preview.getByText('原来的控台连接需要确认 · 1 项',{exact:true}).click();
-    await expect(preview.getByRole('alert')).toContainText('序列 8999');
-    await preview.getByRole('button',{name:'确认原控台',exact:true}).click();
-    await expect(preview.getByText('原来的控台连接需要确认 · 1 项',{exact:true})).toBeVisible();
+    const stopStatus = preview.getByRole('button', {name: '未确认停止 · 1 个目标', exact: true});
+    await stopStatus.click();
+    const stopDetails = page.getByRole('dialog', {name: '控台停止详情'});
+    await expect(stopDetails).toContainText('序列 8999');
+    await stopDetails.getByRole('button',{name:'确认原控台',exact:true}).click();
+    await expect(stopStatus).toBeVisible();
     await expect.poll(()=>application.evaluate(()=>process.env.TBLINK_REVIEWED_TARGET)).toBe('previous-console-8999');
     await page.screenshot({path:info.outputPath('previous-connection-review.png')});
     await application.evaluate(()=>{process.env.TBLINK_REVIEW_CONFIRM='1';});
-    await preview.getByRole('button',{name:'确认原控台',exact:true}).click();
-    await expect(preview.getByText('原来的控台连接需要确认 · 1 项',{exact:true})).toHaveCount(0);
+    await stopDetails.getByRole('button',{name:'确认原控台',exact:true}).click();
+    await expect(stopStatus).toHaveCount(0);
     expect(await application.evaluate(()=>process.env.TBLINK_LIBRARY_CALLS)).toBe(callsBeforeReview);
 
   } finally {

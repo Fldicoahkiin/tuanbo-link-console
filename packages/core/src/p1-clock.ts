@@ -1,5 +1,6 @@
 import type { LinkProject } from '@tb/schema';
-import { MtcDecodeError, MtcQuarterFrameDecoder, nominalFramesPerSecond, playbackFramesPerSecond, type MtcSample } from './mtc-timecode';
+import { frameNumberToTimecode, millisecondsToFrameNumber, MtcDecodeError, MtcQuarterFrameDecoder, nominalFramesPerSecond, playbackFramesPerSecond, type MtcSample } from './mtc-timecode';
+import { programTimeOrigin } from './ma2-time-origin';
 import { locateP1Sample, validateP1TimecodeRanges } from './p1-auto-follow';
 import type { ProgramClock } from './program-clock';
 
@@ -32,7 +33,7 @@ export type P1FreezeCause = 'lost' | 'jump' | 'unknown-range' | 'not-from-start'
 /**
  * What P1 is doing while it runs: a `ProgramClock` (design 03 §4.1.1) from P1, always running and always observed at
  * the interface time (ms) of the quarter frame that completed this position. Auto-follow subtracts the song's P1 range
- * start, manual follows MTC as is. A session is one follow of one song (a new arm, a new song in auto-follow, or a
+ * start; manual follow subtracts the armed song's configured MTC start. A session is one follow of one song (a new arm, a new song in auto-follow, or a
  * rearm from the start); the generation goes up on every new session, resume and resync.
  */
 export type P1ClockObservation = ProgramClock & { source: 'p1'; state: 'running'; observedAtMs: number; reason: null };
@@ -59,6 +60,7 @@ type Position = { itemId: string; sample: MtcSample };
 
 export class P1Clock {
   private readonly decoder = new MtcQuarterFrameDecoder();
+  private lastQuarterAtMs: number | null = null;
   private current: P1FollowState = { phase: 'idle' };
   /** The interface's "now": the later of the newest message and heartbeat timestamps. */
   private nowMs: number | null = null;
@@ -70,6 +72,7 @@ export class P1Clock {
   private heard: MtcSample | null = null;
   /** Auto-follow: frozen in a way only P1 playing a song from its head can end. */
   private needsRestart = false;
+  private manualStartFrame = 0;
   private sessionId = '';
   private generation = 0;
   /** In a run of cycles that made no timecode; a good timecode ends it. */
@@ -109,6 +112,10 @@ export class P1Clock {
    * a run is thrown before anything follows from its message (its time still counts as the interface's now), so that
    * the host says it once in the run log. */
   private quarterFrame(data: number, atMs: number): MtcSample | null {
+    // Only the driver's quarter-frame timestamps establish continuity. Notes and heartbeats
+    // between two halves of a position cannot make those halves belong to the same cycle.
+    if (this.lastQuarterAtMs !== null && atMs - this.lastQuarterAtMs > MTC_LOSS_MS) this.decoder.reset();
+    this.lastQuarterAtMs = atMs;
     try {
       const sample = this.decoder.push(data, atMs);
       if (sample) this.undecodable = false;
@@ -131,6 +138,8 @@ export class P1Clock {
   /** The input itself is gone (unplugged, or its helper failed): no message and no heartbeat will come, so silence
    * cannot be measured any more. What was running is lost now, as it would be after MTC_LOSS_MS of silence. */
   inputGone(): P1ClockEvent[] {
+    this.decoder.reset();
+    this.lastQuarterAtMs = null;
     if (this.current.phase !== 'running') return [];
     return [this.freeze('lost', 'MTC 信号中断', false)];
   }
@@ -143,6 +152,7 @@ export class P1Clock {
       const item = this.project.rundown.find(candidate => candidate.id === itemId);
       if (!item) throw new Error(`节目不存在：${itemId ?? '未选择'}`);
       if (!item.enabled) throw new Error(`节目已停用：${item.title}`);
+      this.manualStartFrame = millisecondsToFrameNumber(programTimeOrigin(item), this.project.timebase.frameRate);
     }
     this.waitFromStart(itemId);
   }
@@ -202,12 +212,19 @@ export class P1Clock {
   private manualSample(sample: MtcSample): P1ClockEvent[] {
     const itemId = this.itemIdOf(this.current);
     if (itemId === null) return [];
-    const position = { itemId, sample };
+    const totalFrames = sample.totalFrames - this.manualStartFrame;
+    if (sample.frameRate === this.project.timebase.frameRate && totalFrames < 0) {
+      this.observed = null;
+      return this.current.phase === 'running' ? [this.freeze('jump', '收到的 MTC 早于当前节目的起始码', false)] : [];
+    }
+    const relative = this.manualStartFrame && sample.frameRate === this.project.timebase.frameRate
+      ? { ...sample, totalFrames, timecode: frameNumberToTimecode(totalFrames, sample.frameRate) } : sample;
+    const position = { itemId, sample: relative };
     this.observed = position;
     if (this.current.phase === 'frozen') return [];
     if (sample.frameRate !== this.project.timebase.frameRate) return [this.freeze('frame-rate', frameRateReason(this.project, sample), false)];
     if (this.current.phase === 'waiting') {
-      if (!fromHead(sample)) return [this.freeze('not-from-start', 'MTC 不是从节目开头开始的', false)];
+      if (!fromHead(relative)) return [this.freeze('not-from-start', 'MTC 不是从节目开头开始的', false)];
       return [{ kind: 'clock', clock: this.run(position) }];
     }
     return this.continueRunning(position);

@@ -1,11 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
-import { isShowWait, type ShowState } from '@tb/core/link';
+import { MA2_BRIDGE_BUSY_BEFORE_REQUEST, MA2_READ_CANCELLED, isShowWait, type ShowState } from '@tb/core/link';
 import { Ma2LuaConsole, singleRunBridgeSource } from './fixtures/ma2-lua-console';
-import { idleShow, runningShow, showReader } from './fixtures/show-gates';
+import { idleShow, runningShow, showReader, showStopped } from './fixtures/show-gates';
 import { Ma2NetworkWire } from './ma2-network-wire';
-import { Ma2BridgeFailure, ma2Lane, Ma2OnpcBridge, ma2WriteStep, type Ma2Operation } from './ma2-onpc-bridge';
+import { Ma2BridgeFailure, ma2Lane, Ma2OnpcBridge, ma2WriteStep, waitForMa2Admission, type Ma2Operation } from './ma2-onpc-bridge';
 import { ma2ResponseLine } from './ma2-telnet';
 
 // M4 (03 §4.2.1): the plugin keeps two requests, one per lane. A short read an operator waits for (a page, the
@@ -64,6 +65,63 @@ async function straight(): Promise<{ object: string; files: string[]; page: stri
 // Every case runs the real plugin in a Lua interpreter written in JavaScript, and the sweep below runs a whole sync
 // once per step. That is about half a second here and went past the default 5 s on the loaded Windows runner.
 describe('前台只读道（M4）', { timeout: 60000 }, () => {
+  it('请求还在本机排队时取消，或已在读取时取消，下一条时间线都照常读取', async () => {
+    const { bridge, ma2 } = rig();
+    const first = new AbortController(), queued = new AbortController();
+    const read = bridge.request('SCOPE', 9902, '9903', '', first.signal);
+    const abandoned = bridge.request('READ', 9902, '', '', queued.signal);
+    const next = bridge.request('READ', 9902);
+    ma2.beforeLine = line => {
+      if (rpcOf(line)?.action === 'run') {
+        ma2.beforeLine = null;
+        first.abort(new Error(MA2_READ_CANCELLED));
+      }
+    };
+    queued.abort(new Error(MA2_READ_CANCELLED));
+    const [a, b, c] = await Promise.allSettled([read, abandoned, next]);
+    expect(a).toMatchObject({ status: 'rejected', reason: { message: MA2_READ_CANCELLED } });
+    expect(b).toMatchObject({ status: 'rejected', reason: { message: MA2_READ_CANCELLED } });
+    expect(c.status === 'fulfilled' && c.value.includes('<Timecode ')).toBe(true);
+  });
+
+  it('本机队列满时明确返回尚未提交，不把排队中的请求标记失败', async () => {
+    const { bridge } = rig();
+    const pending = Array.from({ length: 32 }, () => bridge.request('PING', 1));
+    await expect(bridge.request('PING', 1)).rejects.toMatchObject({ message: MA2_BRIDGE_BUSY_BEFORE_REQUEST, sent: false });
+    await Promise.all(pending);
+    await expect(bridge.request('PING', 1)).resolves.toContain('3.3.4.3');
+  });
+
+  it('本机腾出第一个空位就恢复确认，取消的确认不会随之发出', async () => {
+    let freeFirst!: () => void, freeRest!: () => void;
+    const first = new Promise<void>(resolve => { freeFirst = resolve; });
+    const rest = new Promise<void>(resolve => { freeRest = resolve; });
+    let calls = 0, checks = 0;
+    const bridge = new Ma2OnpcBridge({ exchange: async () => {
+      await (++calls === 1 ? first : rest);
+      return '3.7';
+    } }, showStopped);
+    const submit = () => bridge.request('PING', 1);
+    const queued = Array.from({ length: 32 }, submit);
+    const resume = () => { checks++; return Promise.resolve(); };
+    const pending = waitForMa2Admission(submit, resume);
+    const abort = new AbortController();
+    const cancelled = waitForMa2Admission(submit, resume, abort.signal);
+    await nextTurn();
+    abort.abort();
+    await expect(cancelled).rejects.toThrow(/abort/i);
+    freeFirst();
+    try {
+      await nextTurn();
+      expect(checks).toBe(1);
+      expect(calls).toBe(2);
+    } finally {
+      freeRest();
+      await Promise.all([...queued, pending]);
+    }
+    expect(calls).toBe(33);
+  });
+
   it('哪些走前台：只读、短、有人在界面上等；会写控台的一律在后台', () => {
     const foreground: Ma2Operation[] = ['PING', 'PAGES', 'PAGE', 'LIST', 'LISTSEQ', 'EXECUTOR'];
     const background: Ma2Operation[] = ['SEQUENCE', 'SEQCUES', 'READ', 'SNAPSHOT', 'SCOPE', 'TCRANGES', 'DISCARD', 'APPLY', 'SYNC', 'CREATE', 'ASSIGNSEQ', 'LABEL'];
@@ -190,6 +248,7 @@ describe('前台只读道（M4）', { timeout: 60000 }, () => {
     };
     const ok = (request: string): RegExp => new RegExp(`^${request}\\nOK\\n`);
     // A background request held over several steps; a foreground page runs whole meanwhile.
+    ma2.lua("FAKE.vars.SHOWFILE = string.rep('巡演主舞台', 10)");
     expect(await begin(id(1), 'SCOPE', 9902, '9903', 'bg')).toBe('ACK:lanes');
     expect(await rpc('run', id(1), ",'steps'")).toBe('STEP:1');
     expect(await begin(id(2), 'PAGE', 7, '', 'fg')).toBe('ACK:lanes');
@@ -206,7 +265,15 @@ describe('前台只读道（M4）', { timeout: 60000 }, () => {
     expect(await rpc('run', id(5), ",'steps'")).toBe('STEP:1');
     ma2.lua('FAKE.now = FAKE.now + 60');
     expect(await rpc('step', id(5))).toBe('STEP:2');
-    expect(error(await begin(id(6), 'LIST', 1, '', 'fg'))).toContain('Another network request is pending');
+    const refusal = error(await begin(id(6), 'LIST', 1, '', 'fg'));
+    expect(refusal).toMatch(/Another network request is pending:[a-f0-9]+:[a-f0-9]+$/);
+    const stamp = refusal.split('pending')[1]!;
+    expect(stamp.split(':')[2]).toMatch(/^[a-f0-9]{32}$/);
+    ma2.lua("FAKE.vars.SHOWFILE = 'another show'");
+    expect(error(await rpc('begin' + stamp, id(6), ",'LIST',1,0,'fg'"))).toContain('Source changed before queued request');
+    ma2.lua("FAKE.vars.SHOWFILE = string.rep('巡演主舞台', 10)");
+    expect(error(await rpc('begin' + stamp + '00', id(6), ",'LIST',1,0,'fg'"))).toContain('Source changed before queued request');
+    expect(error(await rpc('begin' + stamp, id(6), ",'LIST',1,0,'fg'"))).toContain('Another network request is pending');
     ma2.lua('FAKE.now = FAKE.now + 61');
     expect(error(await rpc('run', id(4), ",'steps'"))).toContain('Network request expired or mismatched');
     expect(await finish(id(5), await rpc('step', id(5)))).toMatch(ok(id(5)));
@@ -218,6 +285,8 @@ describe('前台只读道（M4）', { timeout: 60000 }, () => {
     expect(await begin(id(8), 'PAGES', 1, '', 'fg')).toBe('ACK:lanes');
     expect(error(await rpc('begin', id(9), ",'PING',1,0"))).toContain('Another network request is pending');
     expect(await rpc('release', id(8))).toBe('ACK');
+    expect(await rpc('begin' + stamp, id(10), ",'LIST',1,0,'fg'")).toBe('ACK:lanes');
+    expect(await rpc('release', id(10))).toBe('ACK');
     expect(await rpc('begin', id(9), ",'PING',1,0")).toBe('ACK');
   });
 

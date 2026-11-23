@@ -23,7 +23,7 @@ it('整套三步按一拍依次放入，形成三个独立同步点而非合成�
   expect(ma2SongPoints(result).map(point => [point.atMs, point.cues[0]?.cue])).toEqual([[1000, '1.000'], [1500, '2.000'], [2000, '3.000']]);
   expect(new Set(ma2SongPoints(result).map(point => point.id)).size).toBe(3);
 });
-it('实际添加入口首次创建后请求同一逐首同步，再添加只更新原时间线', () => {
+it('手动同步时首次添加整套素材只预留位置，再添加只更新原时间线', () => {
   const lighting = fixture();
   const project = parseLinkProject({ ...createEmptyLinkProject('联调'), schemaVersion: 2, rundown: [{ id: 'song', title: '新节目', referenceAudio: { assetId: 'audio', relativePath: 'song.wav', sha256: 'a'.repeat(64), durationMs: 60000 }, lighting }] });
   project.ma2MaterialLibrary = { version: 2, source: 'console', library: { directory: { show: 'show', generation: 'g', version: '3.7.0.5', entries: [] }, readAt: new Date().toISOString(), fixtureUsage: [], errors: [], sequences: [{ sequence: 10, name: '三步', cues: sequence.cues.map((cue, index) => ({ ...cue, index })) }] },
@@ -38,17 +38,17 @@ it('实际添加入口首次创建后请求同一逐首同步，再添加只更�
   const first = useDocumentStore.getState().project!.rundown[0]!.lighting!;
   expect(notify).not.toHaveBeenCalled();
   expect(first.timelineDestination).toEqual({ name: '新节目', sequence: 9000, timecode: 9000, executor: '1000.101' });
-  expect(syncMa2Once).toHaveBeenCalledExactlyOnceWith('song');
+  expect(syncMa2Once).not.toHaveBeenCalled();
   actions.stamp('sequence', 5000);
   expect(notify).not.toHaveBeenCalled();
   expect(ma2SongPoints(useDocumentStore.getState().project!.rundown[0]!.lighting!)).toHaveLength(6);
-  expect(syncMa2Once).toHaveBeenCalledTimes(1);
+  expect(syncMa2Once).not.toHaveBeenCalled();
   useDocumentStore.getState().setProject(project, 'C:/test/project.tblink');
   useLightingEffectStamp('song', lighting, 60000, notify).stampConsoleCue({ sequence: 10, cue: '2.000', name: '第 2 步', executor: '' }, 7000);
   const single = useDocumentStore.getState().project!.rundown[0]!.lighting!;
   expect(single.timelineDestination?.timecode).toBe(9000);
   expect(ma2SongPoints(single)).toMatchObject([{ atMs: 7000, cues: [{ sequence: 10, cue: '2.000' }] }]);
-  expect(syncMa2Once).toHaveBeenLastCalledWith('song');
+  expect(syncMa2Once).not.toHaveBeenCalled();
   useDocumentStore.getState().setProject(project, 'C:/test/project.tblink');
   useMa2RealtimePreference.setState({ enabled: false });
   try {

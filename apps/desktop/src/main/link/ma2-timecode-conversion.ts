@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { withMa2TimeOrigin } from '@tb/core/link';
 import { createLightingDocument, ma2TimecodePreviewSchema, ma2TimecodeFrameFormatSchema, type Ma2TimecodePreview, type LightingEvent } from '@tb/schema';
-import { extractMa2TimecodeXml, inspectMa2SequenceXml, inspectMa2TimecodeXml, resolveMa2CueReference, validateMa2TimecodeSnapshot, type Ma2SequenceReport } from './ma2-timecode-xml';
+import { ma2TrackPlaybackMuted, extractMa2TimecodeXml, inspectMa2SequenceXml, inspectMa2TimecodeXml, resolveMa2CueReference, validateMa2TimecodeSnapshot, type Ma2SequenceReport } from './ma2-timecode-xml';
 
 export type Ma2TimecodeConversion = Ma2TimecodePreview;
 
@@ -84,7 +84,7 @@ export function convertMa2TimecodeReferences(xml: string, sequences: readonly Ma
         }
       }
     }
-    result.document.tracks.push({ id: trackId, name: track.executorName ?? `MA2 轨道 ${track.index + 1}`, kind: 'ma2', color: '#ba8fff', group: '', muted: track.attributes.active !== 'true', solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: clipId, name: timecode.attributes.name ?? `Timecode ${target}`, start: 0, duration: events.reduce((end, event) => Math.max(end, event.at + 1), 1), timeLock: 'time', muted: false, events }] });
+    result.document.tracks.push({ id: trackId, name: track.executorName ?? `MA2 轨道 ${track.index + 1}`, kind: 'ma2', color: '#ba8fff', group: '', muted: ma2TrackPlaybackMuted(track.attributes), solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: clipId, name: timecode.attributes.name ?? `Timecode ${target}`, start: 0, duration: events.reduce((end, event) => Math.max(end, event.at + 1), 1), timeLock: 'time', muted: false, events }] });
   }
   for (const track of result.document.tracks) for (const clip of track.clips) {
     for (const event of clip.events) event.at += offsetMs;

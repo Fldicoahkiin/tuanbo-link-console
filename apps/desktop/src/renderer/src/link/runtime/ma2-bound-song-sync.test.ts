@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type LightingTrack, type LinkProject, type Ma2ApplyRequest, type Ma2ApplyResult, type Ma2CompareRequest, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
-import { importMa2TimecodeCommand, MA2_READ_CANCELLED, ma2PendingChanges, padSongCommand, padSongRender, setItemPlaybackCommand, setLightingCommand, SHOW_WAIT_CLOCK_MOVING, type Ma2SyncPreview } from '@tb/core/link';
+import { MA2_BRIDGE_BUSY_BEFORE_REQUEST, importMa2TimecodeCommand, MA2_READ_CANCELLED, ma2PendingChanges, padSongCommand, padSongRender, setItemPlaybackCommand, setLightingCommand, SHOW_WAIT_CLOCK_MOVING, type Ma2SyncPreview } from '@tb/core/link';
 import { convertMa2Snapshot, convertMa2Timecode } from '../../../../main/link/ma2-timecode-conversion';
 import { compareMa2LightingReadback } from '../../../../main/link/ma2-comparison';
 import { Ma2OnpcBridge } from '../../../../main/link/ma2-onpc-bridge';
@@ -11,7 +11,7 @@ import { useDocumentStore } from '../stores/document-store';
 import { ma2ConsoleWriting, useMa2SyncStore } from '../stores/ma2-sync-store';
 import { useShowStateStore } from '../stores/show-state-store';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
-import { markPendingMa2Songs, ma2SongSyncSettings, startMa2SongSync, stopMa2SongSync, takeMa2SongFromConsole, tickMa2SongSync, writeMa2SongFromSoftware } from './ma2-song-sync';
+import { chooseMa2ConflictingPoints, markPendingMa2Songs, ma2SongSyncSettings, startMa2SongSync, stopMa2SongSync, takeMa2SongFromConsole, tickMa2SongSync, writeMa2SongFromSoftware } from './ma2-song-sync';
 import { readMa2ShowNow } from './ma2-console-version';
 import { syncBoundSong } from './ma2-bound-song-sync';
 import { confirmMa2MergedEvents, prepareMa2MergedEvents } from '../../../../main/link/ma2-event-write';
@@ -49,12 +49,15 @@ function project(own = false, source = preview): LinkProject {
   }
   return value;
 }
-const status = vi.fn(), previewMa2 = vi.fn(), compareMa2 = vi.fn<(request: Ma2CompareRequest) => Promise<Ma2SyncPreview>>(), applyMa2 = vi.fn<(request: Ma2ApplyRequest) => Promise<Ma2ApplyResult>>(), syncMa2Song = vi.fn<(request: Ma2SongSyncRequest) => Promise<Ma2SongSyncResult>>();
+const clockCatalog = vi.fn(), sourceLibrary = vi.fn(), status = vi.fn(), previewMa2 = vi.fn(), compareMa2 = vi.fn<(request: Ma2CompareRequest) => Promise<Ma2SyncPreview>>(), applyMa2 = vi.fn<(request: Ma2ApplyRequest) => Promise<Ma2ApplyResult>>(), syncMa2Song = vi.fn<(request: Ma2SongSyncRequest) => Promise<Ma2SongSyncResult>>();
+const currentClockCatalog = () => ({ directory: { ...library().directory, entries: [{ target: 9902, name: '测试' }] }, readAt: preview.readAt, entries: [], songOffsets: [{ target: 9902, offset: '0' }] });
 let unsubscribe = (): void => undefined;
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal('localStorage', { getItem: (key: string) => key === 'tblink.ma2-connection-method.v1' ? 'network' : null, setItem: () => undefined });
-  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, previewMa2, compareMa2, applyMa2, syncMa2Song, cancelMa2Read: () => Promise.resolve() } });
+  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, readMa2EffectLibrary: sourceLibrary, readMa2Catalog: clockCatalog, previewMa2, compareMa2, applyMa2, syncMa2Song, cancelMa2Read: () => Promise.resolve() } });
+  sourceLibrary.mockReset().mockResolvedValue(library());
+  clockCatalog.mockReset().mockResolvedValue(currentClockCatalog());
   status.mockResolvedValue({ state: 'connected', settings: { ...network, autoConnect: false } });
   previewMa2.mockResolvedValue(preview);
   compareMa2.mockImplementation(request => Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback, request.consoleChanges)));
@@ -70,6 +73,46 @@ afterEach(() => { unsubscribe(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 const start = (itemId = 'song') => startMa2SongSync(itemId, itemId, ma2SongSyncSettings(useDocumentStore.getState().project!, itemId));
 const tick = () => tickMa2SongSync();
+it('目录核对通过但读取歌曲时控台起点已移动，保留修改并停止写入', async () => {
+  start(); await tick(); edit();
+  const saved = useDocumentStore.getState().project;
+  useMa2RealtimePreference.setState({ enabled: false, once: Date.now(), onceItemId: 'song' });
+  previewMa2.mockResolvedValueOnce(convertMa2Timecode(xml.replace('<Timecode index=', '<Timecode offset="1800" index='), [sequence], 9902));
+  await tick();
+  expect(song()).toMatchObject({ state: 'blocked', needsSourceCheck: true, needsConflictChoice: false });
+  expect(song().message).toContain('00:01:00');
+  expect(song().message).toContain('00:00:00');
+  expect(useDocumentStore.getState().project).toBe(saved);
+  expect(useMa2RealtimePreference.getState().once).toBeNull();
+  expect(applyMa2).not.toHaveBeenCalled();
+});
+
+it('目录核对后目标才消失时，保留工程并等待核对来源，不提供覆盖空目标的选择', async () => {
+  const saved = useDocumentStore.getState().project;
+  useMa2RealtimePreference.setState({ enabled: false, once: Date.now(), onceItemId: 'song' });
+  start();
+  previewMa2.mockRejectedValueOnce(new Error('操作未能完成：MA2：[string "tblink_bridge"]:1727: Timecode does not exist'));
+  await tick();
+  expect(useMa2SyncStore.getState().songs.song).toMatchObject({ state: 'blocked', needsSourceCheck: true, needsConflictChoice: false });
+  expect(useMa2SyncStore.getState().songs.song?.message).toContain('Timecode 9902');
+  expect(useMa2RealtimePreference.getState().once).toBeNull();
+  expect(useDocumentStore.getState().project).toBe(saved);
+  expect(applyMa2).not.toHaveBeenCalled();
+});
+it('读取期间换了时间线，旧编号消失不会把新的绑定标成缺失', async () => {
+  start();
+  previewMa2.mockImplementationOnce(() => {
+    const state = useDocumentStore.getState();
+    const lighting = structuredClone(state.project!.rundown[0]!.lighting!);
+    lighting.ma2Bindings![0]!.timecode = 9903;
+    state.execute(setLightingCommand('song', lighting, '更换关联时间线'));
+    return Promise.reject(new Error('MA2：Timecode does not exist'));
+  });
+  await tick();
+  expect(useMa2SyncStore.getState().songs.song).toMatchObject({ state: 'pending', checking: false });
+  expect(useMa2SyncStore.getState().songs.song?.needsSourceCheck).not.toBe(true);
+  expect(applyMa2).not.toHaveBeenCalled();
+});
 /** The show as main reports it (useShowStateStore): idle, the program moving, or paused (held). */
 const RUNNING = { phase: 'running', source: 'internal', itemId: 'song', program: null } as const;
 const HELD = { phase: 'held', source: 'internal', itemId: 'song', reason: 'paused', program: null } as const;
@@ -81,6 +124,40 @@ const edit = (at = 1000) => {
   lighting.tracks[0]!.clips[0]!.events[0]!.at = at;
   useDocumentStore.getState().execute(setLightingCommand('song', lighting, '修改灯光位置'));
 };
+
+it('控台在写入前复核快照时找不到目标，原编辑保留，结束本次请求并提示核对 Show', async () => {
+  start(); await tick(); edit();
+  const saved = useDocumentStore.getState().project;
+  useMa2RealtimePreference.setState({ enabled: false, once: Date.now(), onceItemId: 'song' });
+  applyMa2.mockResolvedValueOnce({ status: 'incomplete', stage: 'read', message: 'MA2：[string "tblink_bridge"]:1727: Timecode does not exist', mayHaveWritten: false, backupFile: null });
+  await tick();
+  expect(song()).toMatchObject({ state: 'blocked', needsSourceCheck: true, needsConflictChoice: false });
+  expect(song().message).toContain('Timecode 9902');
+  expect(useDocumentStore.getState().project).toBe(saved);
+  expect(useMa2RealtimePreference.getState().once).toBeNull();
+});
+
+it.each([true, false])('控台已明确拒绝占用请求时保留修改，自动接着确认（实时同步 %s）', async enabled => {
+  vi.useFakeTimers();
+  start(); await tick(); edit();
+  useMa2RealtimePreference.setState({ enabled, once: enabled ? null : Date.now(), onceItemId: enabled ? null : 'song' });
+  previewMa2.mockRejectedValueOnce(new Error(MA2_BRIDGE_BUSY_BEFORE_REQUEST));
+  applyMa2.mockImplementation(confirmWrite);
+  await tick();
+  expect(song()).toMatchObject({ state: 'pending', message: MA2_BRIDGE_BUSY_BEFORE_REQUEST });
+  expect(song().announcedFailure).toBeUndefined(); expect(applyMa2).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(500); await tick();
+  expect(song().state).toBe('verified'); expect(applyMa2).toHaveBeenCalledOnce();
+  expect(useMa2RealtimePreference.getState().once).toBeNull();
+});
+
+it.each([true, false])('控台在写入前拒绝或写后核对时被占用，按实际写入状态处理（可能已写 %s）', async mayHaveWritten => {
+  vi.useFakeTimers(); start(); await tick(); edit();
+  applyMa2.mockResolvedValueOnce({ status: 'incomplete', stage: mayHaveWritten ? 'verify' : 'write', mayHaveWritten, message: MA2_BRIDGE_BUSY_BEFORE_REQUEST, backupFile: null });
+  await tick(); expect(song().state).toBe(mayHaveWritten ? 'blocked' : 'pending');
+  vi.advanceTimersByTime(500); applyMa2.mockImplementation(confirmWrite); await tick();
+  expect(applyMa2).toHaveBeenCalledTimes(mayHaveWritten ? 1 : 2); expect(song().state).toBe(mayHaveWritten ? 'blocked' : 'verified');
+});
 
 it('没有修改的歌：读一次控台核对一致就停下，不写控台、不制造撤销历史，下一轮不再重读', async () => {
   start(); await tick(); await tick();
@@ -257,7 +334,7 @@ it('没有编辑 Cue 但起始码对不上时，不把跳过核对的时间线�
   start(); await tick();
   expect(previewMa2).not.toHaveBeenCalled();
   expect(song()).toMatchObject({ state: 'pending', recheckRevision: useDocumentStore.getState().revision });
-  expect(song().message).toContain('起始码对上后会自动同步');
+  expect(song().message).toContain('对齐起始码后请点“同步当前节目”');
   useDocumentStore.getState().execute(setItemPlaybackCommand('song', { ...playback, mtcOffsetMs: startMs }));
   await tick();
   expect(previewMa2).toHaveBeenCalledOnce();
@@ -297,11 +374,30 @@ it('控台 Show 另存了新名字、又新建了时间码节目：照常读回�
   applyMa2.mockImplementation(confirmWrite);
   start(); edit(); await tick();
   expect(previewMa2).toHaveBeenCalledOnce(); expect(applyMa2).toHaveBeenCalledOnce();
-  expect(song()).toMatchObject({ state: 'verified', message: 'Timecode 9902 已写入控台并回读确认' });
+  expect(song()).toMatchObject({ state: 'verified', message: 'Timecode 9902 已写入控台并核对' });
 });
 // 2026-11-11 用户：“矛盾的时候采用最新的”，取代 2026-10-26 的“以联动台为准”（控台上的改动选“读回联动台”时）。
 // 联动台的改动按改的时间算，控台的改动按联动台第一次看到它的时间算；同步照样不停下来等人选。
 const consoleMoved = () => convertMa2Timecode(xml.replace('<Event index="0"', '<Event time="15" index="0"'), [sequence], 9902);
+it('手动同步时不把这次读取当成控台刚编辑，相同点按操作员选择确认', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(1_000_000);
+  start();
+  edit();
+  vi.setSystemTime(1_002_000);
+  useMa2RealtimePreference.setState({ enabled: false, once: Date.now(), onceItemId: 'song' });
+  previewMa2.mockResolvedValue(consoleMoved());
+  applyMa2.mockImplementation(confirmWrite);
+  await tick();
+  expect(applyMa2).not.toHaveBeenCalled();
+  expect(song()).toMatchObject({ state: 'blocked', needsConflictChoice: true });
+  chooseMa2ConflictingPoints('song', 'remote');
+  useMa2RealtimePreference.setState({ once: Date.now(), onceItemId: 'song' });
+  await tick();
+  expect(applyMa2.mock.calls[0]?.[0].conflicts).toEqual([[expect.any(String), 'remote']]);
+  expect(song()).toMatchObject({ state: 'verified', needsConflictChoice: false });
+  expect(song().message).toContain('按你的选择用了控台上的');
+});
 const messagesOf = async (run: () => Promise<void>): Promise<string[]> => {
   const messages: string[] = [];
   const listen = useMa2SyncStore.subscribe(state => { const message = state.songs.song?.message; if (message && messages.at(-1) !== message) messages.push(message); });
@@ -441,6 +537,105 @@ it('用控台上的：先存档，再从控台读这首歌现在的时间线换�
   useDocumentStore.getState().undo();
   expect(useDocumentStore.getState().project!.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[0]!.at).toBe(1000);
 });
+it('自建歌曲改用控台上的 Go：先存档，再读回同一条时间线，不向控台写点', async () => {
+  const projectWithOwn = project(true);
+  projectWithOwn.rundown.shift();
+  const lighting = projectWithOwn.rundown[0]!.lighting!;
+  lighting.consoleSong!.timecode = { number: 9902, offset: 0, slot: 'TC Slot 2', revision: 'a'.repeat(64) };
+  useDocumentStore.getState().setProject(projectWithOwn, 'song.tblink');
+  const remote = convertMa2Timecode(xml.replace(/<Event index="0"[^>]*>[\s\S]*?<\/Event>/, '<Event index="0" command="Go" pressed="true"/>'), [sequence], 9902);
+  previewMa2.mockResolvedValue(remote);
+  start('own');
+  await takeMa2SongFromConsole('own');
+  expect(archive).toHaveBeenCalledOnce();
+  const adopted = useDocumentStore.getState().project!.rundown[0]!.lighting!;
+  expect(adopted.consoleSong).toBeUndefined();
+  expect(adopted.ma2Bindings?.map(binding => binding.timecode)).toEqual([9902]);
+  expect(adopted.tracks[0]?.clips[0]?.events[0]).toMatchObject({ kind: 'ma2', action: 'go' });
+  expect(applyMa2).not.toHaveBeenCalled(); expect(syncMa2Song).not.toHaveBeenCalled();
+  useDocumentStore.getState().undo();
+  expect(useDocumentStore.getState().project!.rundown[0]!.lighting).toEqual(lighting);
+});
+
+it('用控台上的需要本次存档回执，关闭自动存档仍能保留被替换的版本', async () => {
+  start(); edit(); await tick();
+  const before = useDocumentStore.getState().project;
+  previewMa2.mockClear();
+  archive.mockImplementationOnce((_documentId, _project, reason) => Promise.resolve(reason === 'manual' ? '本次存档.tblink' : null));
+  await expect(takeMa2SongFromConsole('song')).resolves.toContain('已存档');
+  expect(archive).toHaveBeenLastCalledWith(expect.any(Number), before, 'manual');
+});
+
+it('用控台上的取回核对时间码期间刚改的点', async () => {
+  start(); edit(1000); await tick();
+  const playbackClockNote = '这台控台的 MIDI TC 接到 TC Slot 3。';
+  clockCatalog.mockImplementationOnce(() => { previewMa2.mockResolvedValue(consoleMoved()); return Promise.resolve({ ...currentClockCatalog(), playbackClockNote }); });
+  await takeMa2SongFromConsole('song');
+  expect(song().playbackClockNote).toBe(playbackClockNote);
+  expect(eventTimes(useDocumentStore.getState().project!.rundown[0]!.lighting!.tracks)).toEqual(eventTimes(consoleMoved().document.tracks));
+});
+
+it('用控台上的在末次读取时换了 Show，保留当前编排', async () => {
+  start(); edit(1000); await tick();
+  const before = useDocumentStore.getState().project;
+  sourceLibrary.mockResolvedValueOnce(library()).mockResolvedValueOnce(library('另一份 Show'));
+  await expect(takeMa2SongFromConsole('song')).rejects.toThrow('另一份 Show');
+  expect(useDocumentStore.getState().project).toBe(before);
+});
+
+it.each(['开始读取前', '读回期间'])('用控台上的在%s换了 Show，同编号时间线也保留原节目', async when => {
+  start(); edit(); await tick();
+  const before = useDocumentStore.getState().project;
+  previewMa2.mockClear();
+  if (when === '读回期间') clockCatalog.mockResolvedValueOnce({ directory: library('同编号的另一个 Show').directory, readAt: preview.readAt, entries: [] });
+  else sourceLibrary.mockResolvedValueOnce(library('同编号的另一个 Show'));
+  await expect(takeMa2SongFromConsole('song')).rejects.toThrow('重新核对当前节目');
+  expect(useDocumentStore.getState().project).toBe(before);
+  expect(previewMa2).not.toHaveBeenCalled();
+});
+
+it('用控台上的在确认期间原生时间线换了 MTC 起点，保留歌曲的最新点位', async () => {
+  start(); edit(1500); await tick();
+  const before = useDocumentStore.getState().project;
+  const moved = xml.replace(' frame_format="30 FPS"', ' offset="1800" frame_format="30 FPS"');
+  previewMa2.mockResolvedValueOnce(convertMa2Timecode(moved, [sequence], 9902));
+  await expect(takeMa2SongFromConsole('song')).rejects.toThrow(/Timecode 9902.*01:00.*MTC 起始码.*00:00/);
+  expect(useDocumentStore.getState().project).toBe(before);
+});
+
+it('用控台上的在读取后发现重叠的时间线，保留本地改动并显示控台冲突', async () => {
+  start(); edit(1500); await tick();
+  const before = useDocumentStore.getState().project;
+  const message = 'Timecode 9902 与 Timecode 3 的时间范围重叠';
+  clockCatalog.mockResolvedValueOnce({ directory: { ...library().directory, entries: [{ target: 9902, name: '测试' }] }, readAt: preview.readAt, entries: [], playbackConflict: message });
+  await expect(takeMa2SongFromConsole('song')).rejects.toThrow(message);
+  expect(useMa2SyncStore.getState().songs.song).toMatchObject({ state: 'blocked', needsSourceCheck: true, message });
+  expect(useDocumentStore.getState().project).toBe(before);
+});
+
+it('用控台上的没有存档回执时保留本地改动', async () => {
+  start(); edit(); await tick();
+  const before = useDocumentStore.getState().project;
+  previewMa2.mockClear(); archive.mockResolvedValueOnce(null);
+  await expect(takeMa2SongFromConsole('song')).rejects.toThrow('存档');
+  expect(previewMa2).not.toHaveBeenCalled();
+  expect(useDocumentStore.getState().project).toBe(before);
+});
+
+it('用控台上的在读回期间又编辑了当前节目时保留最新点位', async () => {
+  start(); edit(); await tick();
+  previewMa2.mockImplementationOnce(() => { edit(1500); return Promise.resolve(consoleMoved()); });
+  await expect(takeMa2SongFromConsole('song')).rejects.toThrow('刚有新的灯光修改');
+  expect(eventTimes(useDocumentStore.getState().project!.rundown[0]!.lighting!.tracks)).toContain(1500);
+});
+
+it('重新开启自动存档后的第一次同步保留当前工程', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  start(); archive.mockResolvedValueOnce(null); edit(1000); await tick();
+  edit(1100); await tick();
+  expect(archive).toHaveBeenCalledTimes(2);
+});
+
 it('用控台上的：控台没连上时不拿上次读的冒充，什么都不改', async () => {
   start(); edit(1000); await tick();
   status.mockResolvedValue({ state: 'disconnected' });

@@ -26,8 +26,8 @@ test('MA2 设置分组及大量搜索结果保持紧凑', async ({}, info) => {
     await page.screenshot({ path: info.outputPath('ma2-local-top.png') });
     await method.selectOption('network');
     await page.getByText('歌曲导入与同步', { exact: true }).click();
-    await page.getByText('诊断与手动同步', { exact: true }).click();
-    await expect(page.getByText('诊断与手动同步', { exact: true })).toBeInViewport();
+    await page.getByText('控台诊断与同步', { exact: true }).click();
+    await expect(page.getByText('控台诊断与同步', { exact: true })).toBeInViewport();
     await page.screenshot({ path: info.outputPath('ma2-operation-groups.png') });
     await page.locator('.ma2-network-settings > .ma2-advanced-settings > summary').click();
     await expect(page.getByLabel('MA2 登录用户', { exact: true })).toHaveValue('administrator');

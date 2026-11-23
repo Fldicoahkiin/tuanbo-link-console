@@ -30,6 +30,34 @@ it('要画面的歌等画面准备，失败也照常播放；同曲定位不再�
   expect(programStart(value, 'song', { ...options, positionMs: 3000, check: false })).toMatchObject({ picture: 'wait', allowMtc: true, warnings: [], snapshot: { positionMs: 3000 } });
 });
 
+it('间隔不足时保留音频并停用 MTC，达到实测间隔后恢复，向前和向后都检查', () => {
+  const value = project(), first = value.rundown[0]!;
+  const second = { ...first, id: 'next', title: '乙', playback: { ...first.playback!, mtcOffsetMs: 490_000 } };
+  value.rundown.push(second);
+  for (const id of ['song', 'next']) expect(programStart(value, id, options)).toMatchObject({ allowMtc: false, warnings: [expect.stringContaining('间隔不足 1 秒')] });
+  second.playback.mtcOffsetMs += 1000;
+  expect(programStart(value, 'song', options).allowMtc).toBe(true);
+  expect(programStart(value, 'song', { ...options, deskRanges: { show: '台', afterRollSeconds: 1, entries: [] } }).allowMtc).toBe(false);
+});
+it('同槽区间已经交叠时也保护播放，含一首歌完全落入另一条时间线', () => {
+  const value = project();
+  const first = value.rundown[0]!;
+  const second = { ...first, id: 'next', title: '乙', playback: { ...first.playback!, mtcOffsetMs: 489_900 } };
+  value.rundown.push(second);
+  for (const id of ['next', 'song']) expect(programStart(value, id, options)).toMatchObject({ allowMtc: false, warnings: [expect.stringContaining('时间范围重叠')] });
+  second.playback.mtcOffsetMs = first.playback!.mtcOffsetMs;
+  expect(programStart(value, 'next', options).allowMtc).toBe(true);
+  value.rundown.pop();
+  const row = { target: 2, offset: '14400', length: '300', last: '25', name: '甲', slot: 'TC Slot 2', frame: '30 FPS' };
+  const deskRanges = { show: '现场', entries: [row, { ...row, target: 3, offset: '14490', length: '30' }] };
+  deskRanges.entries[1]!.offset = 'unreadable';
+  expect(programStart(value, 'song', { ...options, deskRanges })).toMatchObject({ allowMtc: false, warnings: [expect.stringContaining('Timecode 3 的时间范围没有读清')], snapshot: { itemId: 'song' } });
+  deskRanges.entries[1]!.offset = '14400';
+  expect(programStart(value, 'song', { ...options, deskRanges })).toMatchObject({ allowMtc: false });
+  deskRanges.entries[1]!.offset = '14490';
+  expect(programStart(value, 'song', { ...options, deskRanges })).toMatchObject({ allowMtc: false, warnings: [expect.stringContaining('Timecode 2 和 3 的时间范围重叠')] });
+});
+
 it('没有音频的歌没有东西可放，明确报错', () => {
   const value = project(); delete value.rundown[0]!.referenceAudio;
   expect(() => programStart(value, 'song', options)).toThrow('节目没有可播放的音频');

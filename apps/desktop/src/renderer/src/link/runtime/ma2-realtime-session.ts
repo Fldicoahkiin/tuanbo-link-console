@@ -1,17 +1,18 @@
-import { isShowWait, toUserErrorMessage, hasMa2SongSyncTarget, allocateMissingMtcStarts, ma2SongPairs, pendingMa2Renames, saveMa2MaterialLibraryCommand, setAllocatedMtcStartsCommand, songsNeedingMtcStart } from '@tb/core/link';
-import { ma2EffectLibrarySchema, type LightingDocument } from '@tb/schema';
+import { MA2_BRIDGE_BUSY_BEFORE_REQUEST, isShowWait, toUserErrorMessage, hasMa2SongSyncTarget, ma2BindingHold, allocateMissingMtcStarts, ma2SongPairs, pendingMa2Renames, saveMa2MaterialLibraryCommand, setAllocatedMtcStartsCommand, songsNeedingMtcStart } from '@tb/core/link';
+import { ma2EffectLibrarySchema, type LightingDocument, type LinkProject, type Ma2Catalog, type Ma2CatalogRequest, type Ma2NetworkTarget } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
+import { refreshSongCatalog } from './ma2-current-song-catalog';
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { ma2SongSyncSettings, startMa2SongSync, stopMa2SongSync } from './ma2-song-sync';
 import { ma2SongSyncActive, ma2SyncActive, setMa2RealtimeEnabled, useMa2RealtimePreference } from './ma2-realtime-preference';
-import { useMa2SyncStore, type Ma2SessionCheck } from '../stores/ma2-sync-store';
-import { ma2ConsoleReading } from './ma2-console-reading';
+import { updateMa2Song, useMa2SyncStore, type Ma2SessionCheck, type SongSync } from '../stores/ma2-sync-store';
+import { confirmSongSelection, ma2ConsoleReading, readSongClockCatalog, songClockBindings } from './ma2-console-reading';
 import { currentShowWait } from '../stores/show-state-store';
 import { useMtcStartAllocationStore } from '../stores/mtc-start-allocation-store';
 import { reportCoordinatorError } from './runtime-action-log';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 
-let preparing = false;
+let preparation: { documentId: number; itemId: string | null; result: Promise<boolean> } | undefined;
 let sessionDocument = -1;
 let blockedContext = '';
 let verifiedSource = '';
@@ -35,13 +36,94 @@ function setSongsWaitingForConnection(documentId: number, waiting: boolean): voi
   });
 }
 
+function invalidateConfirmedSongs(documentId: number): void {
+  useMa2SyncStore.setState(state => {
+    const confirmed = Object.values(state.songs).filter(song => song.documentId === documentId && song.state === 'verified');
+    if (!confirmed.length) return state;
+    const songs = { ...state.songs };
+    for (const song of confirmed) songs[song.itemId] = { ...song, state: 'pending', nextCheckAt: 0, needsSourceCheck: true, message: '控台 Show 已重新加载，等待核对这首歌' };
+    return { songs };
+  });
+}
+
 /**
  * Checks that the console the project last read is reachable and the same console, moves the
  * project's references when it was saved under another Show name or reached at another address,
  * and gives every song with console lighting, either way, its sync job.
  */
-export async function prepareMa2RealtimeSession(): Promise<boolean> {
-  if (preparing) return false;
+export function prepareMa2RealtimeSession(): Promise<boolean> {
+  const documentId = useDocumentStore.getState().documentId;
+  const itemId = useMa2RealtimePreference.getState().onceItemId;
+  if (preparation) return preparation.documentId === documentId && preparation.itemId === itemId
+    ? preparation.result : Promise.resolve(false);
+  const result = checkSession().finally(() => { preparation = undefined; });
+  preparation = { documentId, itemId, result };
+  return result;
+}
+
+function blockMissingTimecode(project: LinkProject, selected: LinkProject['rundown'][number], target: number, show: string, savedShow: string): void {
+  const previousShow = project.ma2ReadState?.catalog.directory.show ?? savedShow;
+  const action = previousShow === show ? '请在控台恢复这条时间线，或在「控台时间线」重新关联。'
+    : `请在控台打开工程上次使用的 Show「${previousShow}」，再点同步。`;
+  const message = `当前 Show「${show}」没有「${selected.title}」关联的 Timecode ${target}。工程里的灯光和素材已保留。${action}`;
+  blockCurrentSong(project, selected, message);
+}
+
+function blockCurrentSong(project: LinkProject, selected: LinkProject['rundown'][number], message: string, selectorTrackRepair?: SongSync['selectorTrackRepair']): void {
+  verifiedSource = ''; nextSourceCheck = 0;
+  if (!useMa2SyncStore.getState().songs[selected.id]) startMa2SongSync(selected.id, selected.title, ma2SongSyncSettings(project, selected.id));
+  updateMa2Song(useMa2SyncStore.getState().songs[selected.id]!, { state: 'blocked', needsSourceCheck: true, needsConflictChoice: false, failedItem: selected, checking: false, writing: false, selectorTrackRepair, message });
+  setSession('waiting', '等待核对当前节目', 'check');
+  useMa2RealtimePreference.setState({ once: null, onceItemId: null });
+  void linkDesktopViewModel.recordLog({ level: 'warning', category: 'device', device: 'MA2', message }).catch(console.error);
+}
+
+function acceptSongClock(project: LinkProject, item: LinkProject['rundown'][number], checked: Ma2Catalog, network: Ma2NetworkTarget): boolean {
+  if (checked.playbackConflict) {
+    const { show, generation, version } = checked.directory;
+    blockCurrentSong(project, item, checked.playbackConflict, checked.selectorTrackConflict && { target: checked.selectorTrackConflict, network, source: { show, generation, version } });
+    return false;
+  }
+  const previous = useMa2SyncStore.getState().songs[item.id];
+  if (previous?.playbackClockNote !== checked.playbackClockNote) {
+    if (!previous) startMa2SongSync(item.id, item.title, ma2SongSyncSettings(project, item.id));
+    updateMa2Song(useMa2SyncStore.getState().songs[item.id]!, { playbackClockNote: checked.playbackClockNote });
+  }
+  return true;
+}
+
+export async function muteMa2SelectorTrack(song: SongSync): Promise<void> {
+  const repair = song.selectorTrackRepair;
+  const current = () => {
+    const latest = useMa2SyncStore.getState().songs[song.itemId];
+    return useDocumentStore.getState().documentId === song.documentId && latest?.sessionId === song.sessionId
+      && latest.state === 'blocked' && latest.selectorTrackRepair === repair && latest.message === song.message;
+  };
+  if (!repair || !current()) throw new Error('歌曲或控台连接已切换，请重新核对当前节目');
+  const wait = currentShowWait('ma2.sync.write');
+  if (wait) throw new Error(wait);
+  await window.tbLink.prepareMa2Playback({ network: repair.network, expectedSource: repair.source, muteSelectorTrack: repair.target, progressId: crypto.randomUUID() });
+  if (current()) syncMa2Once(song.itemId);
+}
+
+async function confirmCurrentSong(project: LinkProject, selected: LinkProject['rundown'][number], times: Ma2Catalog,
+  network: Ma2NetworkTarget, targets: number[], clock: Pick<Ma2CatalogRequest, 'otherClockBindings'>, endpoint: string, current: () => boolean): Promise<boolean> {
+  if (times.playbackConflict) return acceptSongClock(project, selected, times, network);
+  await refreshSongCatalog(network, endpoint, times, current);
+  const latest = useDocumentStore.getState().project;
+  if (!current() || !latest) return false;
+  for (const entry of times.songOffsets ?? []) {
+    const hold = ma2BindingHold(latest, selected.id, entry.target, entry.offset);
+    if (hold) {
+      blockCurrentSong(latest, selected, hold);
+      return false;
+    }
+  }
+  const checked = await confirmSongSelection(times, network, targets, clock, current, () => setSession('waiting', '正在恢复控台按时间码选歌的设置', 'check'));
+  return current() && acceptSongClock(latest, selected, checked, network);
+}
+
+async function checkSession(): Promise<boolean> {
   if (readMa2Method() !== 'network') {
     for (const song of Object.values(useMa2SyncStore.getState().songs)) stopMa2SongSync(song.itemId);
     verifiedSource = '';
@@ -55,7 +137,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     for (const song of Object.values(useMa2SyncStore.getState().songs)) if (song.documentId !== state.documentId) stopMa2SongSync(song.itemId);
     useMa2SyncStore.setState(value => ({ songs: Object.fromEntries(Object.entries(value.songs).filter(([, song]) => song.documentId === state.documentId)) }));
     useMa2SyncStore.setState({ names: { state: 'idle', message: '' } });
-    setSession('waiting', '实时同步已开启，等待连接控台和打开工程', 'connection');
+    setSession('waiting', ma2SyncActive() ? '正在检查控台连接' : '尚未核对控台连接', 'check');
   }
   // Off, each song keeps what its last pass found; turning sync off already stopped what was running.
   if (!ma2SyncActive()) return false;
@@ -68,9 +150,19 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
   const material = state.project.ma2MaterialLibrary;
   if (!material?.library) { setSession('waiting', '请先读取控台素材，再同步到控台', 'library'); return false; }
   if (material.library.sourceUnverified) { setSession('waiting', '上次读取还没确认，请重新读取控台素材', 'verify-library'); return false; }
-  const current = (): boolean => useDocumentStore.getState().documentId === state.documentId
-    && ma2SyncActive() && readMa2Method() === 'network' && !ma2ConsoleReading();
-  preparing = true;
+  const { once, onceItemId: selectedId } = useMa2RealtimePreference.getState();
+  const selected = state.project.rundown.find(item => item.id === selectedId);
+  const bindings = selected?.lighting?.ma2Bindings;
+  const ownedTimecode = selected?.lighting?.consoleSong?.timecode?.number;
+  const targets = [...new Set([...(bindings ?? []).map(binding => binding.timecode), ...(ownedTimecode ? [ownedTimecode] : [])])];
+  const current = (): boolean => {
+    const doc = useDocumentStore.getState();
+    const request = useMa2RealtimePreference.getState();
+    const lighting = doc.project?.rundown.find(item => item.id === selectedId)?.lighting;
+    return doc.documentId === state.documentId && request.once === once && request.onceItemId === selectedId
+      && (!selectedId || (lighting?.ma2Bindings === bindings && lighting?.consoleSong?.timecode?.number === ownedTimecode))
+      && ma2SyncActive() && readMa2Method() === 'network' && !ma2ConsoleReading();
+  };
   let context = '';
   try {
     const status = await window.tbLink.getMa2NetworkStatus();
@@ -92,11 +184,27 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
       // The foreground read already saved the directory. On startup at the same endpoint,
       // check the live identity first; only a changed identity needs a new directory.
       const sourceOnly = verifiedSource === sourceKey || (material.source === endpoint && !material.library.incomplete);
-      let metadata = ma2EffectLibrarySchema.parse(await window.tbLink.readMa2EffectLibrary({ ...connection, targets: [], ...(sourceOnly ? { details: 'source' as const } : {}) }));
-      if (!current()) return false;
       const saved = material.library.directory;
-      if (sourceOnly && (!metadata.directory.generation || metadata.directory.show !== saved.show || metadata.directory.version !== saved.version || metadata.directory.generation !== saved.generation)) {
+      const clock = songClockBindings(selected ?? undefined);
+      const times = targets.length ? await readSongClockCatalog(connection.network, targets, clock) : null;
+      if (!current()) return false;
+      if (times && selected) {
+        if (times.sourceUnverified || times.incomplete) throw new Error('控台还没读完时间线目录，请稍后再核对当前节目');
+        const missing = targets.find(target => !times.directory.entries.some(entry => entry.target === target));
+        if (missing) {
+          if (times.directory.show !== saved.show || times.directory.generation !== saved.generation || times.directory.version !== saved.version) invalidateConfirmedSongs(state.documentId);
+          blockMissingTimecode(state.project, selected, missing, times.directory.show, saved.show);
+          return false;
+        }
+      }
+      // A targeted directory read already identifies the live Show. Reuse it for the source check.
+      let metadata = times ?? ma2EffectLibrarySchema.parse(await window.tbLink.readMa2EffectLibrary({ ...connection, targets: [], ...(sourceOnly ? { details: 'source' as const } : {}) }));
+      if (!current()) return false;
+      if ((sourceOnly || times) && (!metadata.directory.generation || metadata.directory.show !== saved.show || metadata.directory.version !== saved.version
+        || metadata.directory.generation !== saved.generation || (times && !sourceOnly))) {
         metadata = ma2EffectLibrarySchema.parse(await window.tbLink.readMa2EffectLibrary({ ...connection, targets: [] }));
+        if (times && (times.directory.show !== metadata.directory.show || times.directory.generation !== metadata.directory.generation
+          || times.directory.version !== metadata.directory.version)) throw new Error('控台的节目目录刚有变化，请重新核对当前节目');
       }
       if (!current()) return false;
       const latest = useDocumentStore.getState();
@@ -109,6 +217,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
       // address or a restarted bridge is the same console, and the project's references move with it.
       const moved = cache.source !== endpoint || directory.show !== cache.library.directory.show || directory.version !== cache.library.directory.version;
       if (moved || directory.generation !== cache.library.directory.generation) {
+        invalidateConfirmedSongs(state.documentId);
         const exists = (sequence: number): boolean => directory.entries.some(entry => entry.target === sequence);
         if (moved) void linkDesktopViewModel.recordLog({ level: 'info', category: 'device', device: 'MA2',
           message: `控台现在是 ${endpoint} 上的“${directory.show}”（工程上次读的是 ${cache.source} 上的“${cache.library.directory.show}”），按编号接着同步`,
@@ -130,6 +239,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
           useMa2SyncStore.setState(value => ({ songs: { ...value.songs, [song.itemId]: { ...song, nextCheckAt: 0, consecutiveFailures: 0 } } }));
         }
       }
+      if (times && selected && !await confirmCurrentSong(state.project, selected, times, connection.network, targets, clock, endpoint, current)) return false;
       for (const song of waitingForSource) {
         const currentSong = useMa2SyncStore.getState().songs[song.itemId];
         if (currentSong?.sessionId === song.sessionId) useMa2SyncStore.setState(value => ({ songs: { ...value.songs, [song.itemId]: { ...currentSong, needsSourceCheck: false, nextCheckAt: 0 } } }));
@@ -163,7 +273,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
         : '尚未匹配控台时间线；请确认 MTC 起始码，或新建时间线并指定位置', readFailure ? 'song-read' : unmatched ? 'unmatched' : 'empty');
       return false;
     }
-    setSession('ready', '已连上控台，修改会自动同步到控台');
+    setSession('ready', '已连上控台，可以同步当前节目');
     return true;
   } catch (cause) {
     if (current()) {
@@ -171,6 +281,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
       const wait = isShowWait(cause) ? toUserErrorMessage(cause) : currentShowWait('ma2.sync.read');
       if (wait) { setSession('waiting', wait, 'show'); return false; }
       verifiedSource = ''; nextSourceCheck = Date.now() + 1000;
+      if (message === MA2_BRIDGE_BUSY_BEFORE_REQUEST) { setSession('waiting', message, 'check'); return false; }
       const errorContext = `${context}:${message}`;
       const reported = blockedContext === errorContext;
       blockedContext = errorContext;
@@ -178,7 +289,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
       if (!reported) reportCoordinatorError(message, reason => { if (blockedContext === errorContext && current()) setSession('blocked', reason); });
     }
     return false;
-  } finally { preparing = false; }
+  }
 }
 
 /**
@@ -197,10 +308,12 @@ async function allocateMtcStarts(network: Parameters<typeof window.tbLink.ma2Tim
     if (latest.project && songsNeedingMtcStart(latest.project).length) latest.executeForDocument(documentId, setAllocatedMtcStartsCommand(allocateMissingMtcStarts(latest.project, ranges)));
     useMtcStartAllocationStore.setState({ error: null, context: '', retryAt: 0 });
   } catch (cause) {
+    if (!current()) return false;
     const message = cause instanceof Error ? cause.message : String(cause);
+    if (message === MA2_BRIDGE_BUSY_BEFORE_REQUEST) { setSession('waiting', message, 'check'); return false; }
     const repeated = allocation.context === context && allocation.error === message;
     useMtcStartAllocationStore.setState({ error: message, context, retryAt: Date.now() + 30_000 });
-    if (!repeated) reportCoordinatorError(`分配 MTC 起点失败：${message}`, reason => { useMtcStartAllocationStore.setState({ error: reason }); });
+    if (!repeated) reportCoordinatorError(`分配 MTC 起点失败：${message}`, reason => { if (current()) useMtcStartAllocationStore.setState({ error: reason }); });
   }
   return true;
 }
@@ -212,7 +325,7 @@ function retryNames(): void {
 }
 
 export function retryMa2RealtimeSession(): void {
-  setMa2RealtimeEnabled(true);
+  useMa2RealtimePreference.setState({ enabled: false, once: Date.now(), onceItemId: null });
   setSession('waiting', '正在重新检查控台', 'check'); retryNames();
   for (const song of Object.values(useMa2SyncStore.getState().songs)) {
     if (song.state !== 'blocked' && song.state !== 'paused') continue;
@@ -230,7 +343,7 @@ export function retryMa2RealtimeSession(): void {
  * A song whose write is running keeps it; its result is read back as usual.
  */
 export function refreshMa2RealtimeSession(itemId?: string): void {
-  setMa2RealtimeEnabled(true);
+  useMa2RealtimePreference.setState({ enabled: false, once: Date.now(), onceItemId: itemId ?? null });
   checkEverySong(itemId);
 }
 
@@ -239,9 +352,8 @@ export function refreshMa2RealtimeSession(itemId?: string): void {
  * where it differs, once; real-time sync stays off and nothing runs again until the next 同步一次.
  */
 export function syncMa2Once(itemId?: string): void {
-  if (useMa2RealtimePreference.getState().enabled) { refreshMa2RealtimeSession(itemId); return; }
-  useMa2RealtimePreference.setState({ once: Date.now(), onceItemId: itemId ?? null });
-  checkEverySong(itemId);
+  useMa2RealtimePreference.setState({ enabled: false, once: Date.now(), onceItemId: itemId ?? null });
+  checkEverySong(itemId, true);
 }
 
 /**
@@ -255,7 +367,8 @@ export function recheckMa2Songs(): void {
   }
 }
 
-function checkEverySong(itemId?: string): void {
+function checkEverySong(itemId?: string, compareConfirmed = false): void {
+  nextSourceCheck = 0;
   setSession('waiting', '正在重新检查控台', 'check'); if (itemId === undefined) retryNames();
   const project = useDocumentStore.getState().project;
   for (const song of Object.values(useMa2SyncStore.getState().songs)) {
@@ -264,7 +377,7 @@ function checkEverySong(itemId?: string): void {
     if (!project || !item) continue;
     if (song.state === 'paused') { startMa2SongSync(item.id, item.lighting?.consoleSong?.name ?? song.name, ma2SongSyncSettings(project, item.id)); continue; }
     // Dropping the confirmed revision turns the next pass into a full read; the acknowledged content stays, so no extra archive is taken.
-    useMa2SyncStore.setState(value => ({ songs: { ...value.songs, [song.itemId]: { ...song, state: 'pending', nextCheckAt: 0, consecutiveFailures: 0, remoteRevision: undefined, failedItem: undefined, message: '正在重新检查控台' } } }));
+    useMa2SyncStore.setState(value => ({ songs: { ...value.songs, [song.itemId]: { ...song, state: 'pending', nextCheckAt: 0, consecutiveFailures: 0, remoteRevision: compareConfirmed ? song.remoteRevision : undefined, failedItem: undefined, message: '正在重新检查控台' } } }));
   }
   void prepareMa2RealtimeSession();
 }
@@ -281,7 +394,7 @@ export function songsWithoutConsoleShow(project: ReturnType<typeof useDocumentSt
 
 /** Syncs those songs again in full, which writes their Timecode shows. */
 export function writeMissingConsoleShows(): void {
-  setMa2RealtimeEnabled(true);
+  useMa2RealtimePreference.setState({ enabled: false, once: Date.now(), onceItemId: null });
   const project = useDocumentStore.getState().project;
   if (!project) return;
   for (const song of songsWithoutConsoleShow(project)) {

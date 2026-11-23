@@ -1,4 +1,4 @@
-import { createLightingDocument, parseLinkProject, ma2TimecodePreviewSchema, type LinkProject, type Ma2Catalog, type Ma2ReadState, type Ma2TimecodePreview } from '@tb/schema';
+import { createLightingDocument, parseLinkProject, ma2TimecodePreviewSchema, type LinkProject, type MtcFrameRate, type Ma2Catalog, type Ma2ReadState, type Ma2TimecodePreview } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { ma2ShowStartTicks, matchMa2Programs, sameMtcStart, type Ma2StartMatch, type Ma2TimelineSwitch } from './ma2-program-matching';
 import { importMa2TimecodeCommand } from './ma2-import';
@@ -28,6 +28,11 @@ export function ma2SongPairs(project: LinkProject): Ma2StartMatch {
   return match;
 }
 
+/** Compare the song clock with a native Timecode offset using the same frame tolerance as pairing. */
+export function ma2TimecodeStartMismatch(title: string, target: number, startMs: number, ticks: number, frameRate: MtcFrameRate): string | null {
+  return sameMtcStart(startMs, ticks) ? null : `控台 Timecode ${target} 从 ${formatMtcOffset(ticks * 1000 / 30, frameRate)} 开始，和「${title}」的 MTC 起始码 ${formatMtcOffset(startMs, frameRate)} 对不上`;
+}
+
 /**
  * Why the local edits of a song's console Timecode show stay in the software instead of being written
  * (lighting workflow rule 6): the song's MTC start is not the start its Cues were placed from, or the
@@ -35,7 +40,7 @@ export function ma2SongPairs(project: LinkProject): Ma2StartMatch {
  * console. Null when they can be written; the write itself still checks the console first. The song plays
  * and sends its timecode either way.
  */
-export function ma2BindingHold(project: LinkProject, itemId: string, target: number): string | null {
+export function ma2BindingHold(project: LinkProject, itemId: string, target: number, freshOffset?: string): string | null {
   const item = project.rundown.find(value => value.id === itemId);
   const binding = item?.lighting?.ma2Bindings?.find(value => value.timecode === target);
   if (!item || !binding) return null;
@@ -46,9 +51,10 @@ export function ma2BindingHold(project: LinkProject, itemId: string, target: num
   const placed = binding.timeOriginMs ?? 0;
   if (!sameMtcStart(start, placed * 30 / 1000)) return `「${item.title}」里 Timecode ${target} 的 Cue 是按起点 ${formatMtcOffset(placed, frameRate)} 放的，歌曲现在从 ${formatMtcOffset(start, frameRate)} 开始`;
   const entry = project.ma2ReadState?.catalog.entries.find(value => value.target === target);
-  const ticks = entry && !entry.error ? ma2ShowStartTicks(entry) : null;
-  if (ticks !== null && !sameMtcStart(start, ticks)) return `控台 Timecode ${target} 从 ${formatMtcOffset(ticks * 1000 / 30, frameRate)} 开始，和「${item.title}」的 MTC 起始码 ${formatMtcOffset(start, frameRate)} 对不上`;
-  return null;
+  const clock = freshOffset === undefined ? entry : { offset: freshOffset, error: null };
+  const ticks = clock && !clock.error ? ma2ShowStartTicks(clock) : null;
+  if (freshOffset !== undefined && ticks === null) return `控台 Timecode ${target} 的 MTC 起始码无法确认，请重新核对当前节目`;
+  return ticks === null ? null : ma2TimecodeStartMismatch(item.title, target, start, ticks, frameRate);
 }
 
 /** The pairs as the project file keeps them for earlier versions: every pair stands on the MTC start, so each is confirmed. */
@@ -306,6 +312,10 @@ export function refreshMa2BindingCommand(itemId: string, target: number, archive
     if (!binding || !lighting) throw new Error(`这首歌已经不用 Timecode ${target}`);
     const preview = read ?? (state && entry?.preview && !entry.error ? entry.preview : undefined);
     if (!preview) throw new Error('此时间线没有完整的已读内容');
+    if (read) {
+      const hold = ma2BindingHold(project, itemId, target, read.timing?.offsetNative);
+      if (hold) throw new Error(hold);
+    }
     if (!read && state?.catalog.sourceUnverified) throw new Error('读取来源有变化，请重新确认后刷新');
     const ids = new Set(binding.baselineTracks.map(track => track.id));
     const tracks = lighting.tracks.filter(track => ids.has(track.id));

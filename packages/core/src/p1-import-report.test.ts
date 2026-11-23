@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
 import { p1ImportReport, withP1MtcStart } from './p1-import-report';
 
 const audio = (id: string, durationMs = 90_000) => ({ assetId: id, relativePath: `assets/${id}.wav`, sha256: 'a'.repeat(64), durationMs });
@@ -31,6 +31,14 @@ it('本地歌和 P1 的歌同名但起始码不同时指出来；起始码一样
   const project = fixture();
   project.rundown.push({ ...structuredClone(project.rundown[2]!), id: 'local-imkun-2' });
   expect(p1ImportReport(project, [KEYS.imkun, KEYS.daoma]).sameName).toEqual([]);
+});
+
+it('离线导入同名歌时，仍保护本地节目原先绑定的控台时间线', () => {
+  const project = fixture();
+  const local = project.rundown[2]!;
+  local.lighting = createLightingDocument();
+  local.lighting.ma2Bindings = [{ id: '原轨', name: '节目灯光', timecode: 3, sourceXml: '<MA/>', readAt: '2026-11-22T00:00:00Z', playback: 'editable', timeOriginMs: 14_215_000, mappings: [], baselineTracks: [] }];
+  expect(p1ImportReport(project, [KEYS.imkun]).sameName).toMatchObject([{ localId: local.id, lit: true }]);
 });
 
 it('改成 P1 的起始码只换起点，保留音量和裁剪', () => {

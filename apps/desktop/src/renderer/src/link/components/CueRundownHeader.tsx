@@ -1,3 +1,4 @@
+import { LightingDocumentActions } from './LightingDocumentActions';
 import { useState } from 'react';
 import type { RundownItem } from '@tb/schema';
 import { updateRundownItemCommand } from '@tb/core/link';
@@ -7,14 +8,15 @@ import { DocumentActions, type DocumentActionProps } from './DocumentActions';
 import { Button, TextInput } from '../ui';
 import { ownKeys } from '../keys/key-owner';
 
-export function CueRundownHeader({ item, documentActions, notify }: {
+export function CueRundownHeader({ item, documentActions, lightingWorkspace, notify }: {
+  lightingWorkspace: boolean;
   item: RundownItem | null;
   documentActions: DocumentActionProps;
   notify: (message: string, tone?: 'info' | 'error') => void;
 }): JSX.Element {
   return <div className="titlebar-document" data-page="editor">
     {item ? <ProgramName key={`${item.id}:${item.title}`} item={item} notify={notify} /> : <span className="titlebar-program-empty">未选择节目</span>}
-    <DocumentActions {...documentActions} />
+    <DocumentActions {...documentActions}>{lightingWorkspace ? <LightingDocumentActions disabled={documentActions.disabled} notify={notify} /> : null}</DocumentActions>
   </div>;
 }
 

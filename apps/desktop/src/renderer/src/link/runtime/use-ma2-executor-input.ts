@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Ma2ExecutorInput, Ma2ExecutorPage } from '@tb/schema';
 import { ma2ExecutorFunctions } from '@tb/core/link';
 import { currentMa2LayoutScope, ma2LayoutConnection } from '../stores/ma2-layout-store';
+import { useConsoleStop } from '../stores/ma2-audition-store';
 import { syncMa2KeyChannel } from './use-ma2-executor-channel';
 import { ma2KeyFeedback, type Ma2KeyFeedback } from '../stores/ma2-key-feedback-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
@@ -13,6 +14,7 @@ type ExecutorInputController = {
   press: (item: Ma2ExecutorPage['items'][number], page: number, button: number) => void;
   release: (item: Ma2ExecutorPage['items'][number], page: number, button: number) => void;
   releaseAll: () => void;
+  cancelForConsoleStop: () => void;
 };
 /**
  * One controller per page, not one network connection per button. A key that does not reach the console says so on its
@@ -96,12 +98,20 @@ export function createMa2ExecutorInput(onError: (message: string) => void, feedb
     for (const state of active) stop(state);
     if (hadActive) void window.tbLink.releaseMa2Executors().catch(report);
   };
-  return { press, release, releaseAll };
+  const cancelForConsoleStop = (): void => {
+    // The main process releases inputs it has accepted. Don't send fresh work after the stop.
+    for (const state of active) {
+      delete state.payload;
+      stop(state);
+    }
+  };
+  return { press, release, releaseAll, cancelForConsoleStop };
 }
 
 export function useMa2ExecutorInput(onError: (message: string) => void): ExecutorInputController {
   const error = useRef(onError); error.current = onError;
   const [controller] = useState(() => createMa2ExecutorInput(message => error.current(message)));
+  useConsoleStop(controller.cancelForConsoleStop);
   const scope = currentMa2LayoutScope();
   // The main process starts every run on the plugin; it learns this computer's choice before a key here is pressed.
   useEffect(() => { void syncMa2KeyChannel().catch((cause: unknown) => error.current(cause instanceof Error ? cause.message : String(cause))); }, []);

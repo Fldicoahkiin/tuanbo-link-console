@@ -3,9 +3,14 @@ import { emptyInternalPlayerState, type InternalPlayerState } from '@tb/core/lin
 export type PlayerClockState = { positionMs: number; mtcPositionMs: number | null; mtcSentPositionMs: number | null };
 export type PlayerControlState = Omit<InternalPlayerState, keyof PlayerClockState> & { mtcSending: boolean };
 
-function equal<T extends object>(left: T, right: T): boolean {
-  const keys = Object.keys(left) as (keyof T)[];
-  return keys.length === Object.keys(right).length && keys.every(key => Object.is(left[key], right[key]));
+/** IPC copies the picture details and played songs even when only the clock advanced. */
+function equal(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  const a = left as Record<string, unknown>, b = right as Record<string, unknown>;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every(key => Object.hasOwn(b, key) && equal(a[key], b[key]));
 }
 
 function projectState(state: InternalPlayerState): { clock: PlayerClockState; control: PlayerControlState } {

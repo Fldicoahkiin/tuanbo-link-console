@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { ma2CatalogSchema, ma2CatalogEntrySchema, type LinkProject, type Ma2Catalog } from '@tb/schema';
@@ -8,6 +8,15 @@ import { writeFileAtomically } from './atomic-file';
 
 const headerSchema = z.object({ version: z.literal(1), id: z.string().uuid(), projectId: z.string(), source: z.string(), catalog: ma2CatalogSchema }).strict();
 const missing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
+
+/** A saved project may deliberately keep older, confirmed data from its own Show. Compare the
+ * local save and checkpoint writes, since the time that data was read can be much earlier. */
+export async function savedShowSupersedesCheckpoint(projectPath: string, root: string, savedSource: string,
+  saved: Pick<Ma2Catalog, 'directory' | 'incomplete' | 'sourceUnverified'>, source: string, show: string): Promise<boolean> {
+  if (saved.incomplete || saved.sourceUnverified || (savedSource === source && saved.directory.show === show)) return false;
+  const [file, checkpoint] = await Promise.all([stat(projectPath), stat(join(root, 'active.json'))]);
+  return file.mtimeMs >= checkpoint.mtimeMs;
+}
 
 /** Per-object atomic files: a growing Show is never rewritten on every checkpoint. */
 export class Ma2ReadRecovery {
@@ -33,6 +42,7 @@ export async function recoverMa2Read(projectPath: string, project: LinkProject):
   if (header.projectId !== project.projectId) return project;
   const saved = project.ma2ReadState;
   if (saved && saved.catalog.readAt > header.catalog.readAt) return project;
+  if (saved && await savedShowSupersedesCheckpoint(projectPath, root, saved.source, saved.catalog, header.source, header.catalog.directory.show)) return project;
   if (saved?.source === header.source && saved.catalog.readAt === header.catalog.readAt && !saved.catalog.incomplete && !saved.catalog.sourceUnverified
     && !header.catalog.incomplete && !header.catalog.sourceUnverified && saved.catalog.directory.show === header.catalog.directory.show
     && saved.catalog.directory.version === header.catalog.directory.version && JSON.stringify(saved.catalog.directory.entries) === JSON.stringify(header.catalog.directory.entries)) {

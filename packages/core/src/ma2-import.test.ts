@@ -17,6 +17,21 @@ function project() {
   return value;
 }
 describe('MA2 预览应用命令', () => {
+  it('确认一首歌的修改时只替换这首歌，保留已校验的控台素材和其他歌曲', () => {
+    const value = project();
+    value.rundown.push({ ...value.rundown[0]!, id: 'other' });
+    value.ma2MaterialLibrary = { version: 2, source: 'onPC', userLibrary: { version: 1, categories: [], entries: [] } };
+    const remote = preview();
+    const before = importMa2TimecodeCommand('item', remote).execute(value);
+    const document = before.rundown[0]!.lighting!;
+    remote.name = '控台新名称';
+    const next = applyMa2ReadbackCommand('item', document.ma2Bindings![0]!.id, document, remote).execute(before);
+    expect(next.rundown[0]!.lighting!.ma2Bindings![0]!.name).toBe(remote.name);
+    expect(document.ma2Bindings![0]!.name).toBe('验收');
+    expect(next.rundown[1]).toBe(before.rundown[1]);
+    expect(next.ma2MaterialLibrary).toBe(before.ma2MaterialLibrary);
+    expect(parseLinkProject(next)).toEqual(next);
+  });
   it('控台回读的轨道顺序应用到绑定位置，未绑定轨道保持原位置', () => {
     const source = preview();
     source.document.tracks.push({ ...structuredClone(source.document.tracks[0]!), id: 'second-track', name: '第二轨', clips: [] });

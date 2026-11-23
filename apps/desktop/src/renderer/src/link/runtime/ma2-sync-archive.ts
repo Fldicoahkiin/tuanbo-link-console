@@ -6,8 +6,9 @@ const ARCHIVE_INTERVAL_MS = 60000;
 let lastArchive: { documentId: number; at: number } | null = null;
 
 /** The project copy taken before writing to the console, shared by songs and names. A failure stops the write. */
-export async function archiveBeforeSync(documentId: number, project: LinkProject): Promise<void> {
-  if (lastArchive?.documentId === documentId && Date.now() - lastArchive.at < ARCHIVE_INTERVAL_MS) return;
-  await archiveMa2Project(documentId, project);
+export async function archiveBeforeSync(documentId: number, project: LinkProject): Promise<boolean> {
+  if (lastArchive?.documentId === documentId && Date.now() - lastArchive.at < ARCHIVE_INTERVAL_MS) return true;
+  if (!await archiveMa2Project(documentId, project)) return false;
   lastArchive = { documentId, at: Date.now() };
+  return true;
 }

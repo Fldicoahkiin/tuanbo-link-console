@@ -5,6 +5,7 @@ export const emptyInternalPlayerState: InternalPlayerState = {
   status: 'stopped', itemId: null, positionMs: 0, durationMs: 0, volume: 100, endAction: 'pause', defaultEndAction: 'pause', error: null, errorTitle: null, notice: null, playedItemIds: [], mtcEnabled: true, mtcPositionMs: null, mtcConnectionFailed: false
 };
 export type InternalPlayerDependencies = {
+  deskRanges?: (() => import('@tb/schema').Ma2TimecodeRanges | undefined) | undefined;
   /** `pass`: which placing of the song this preparation belongs to (0.5.9 S8b). It goes up whenever the song is placed
    * anew (a start, a seek, a loop, a scrub) and stays when it plays on after a pause: within one pass the actions whose
    * turn came are not sent again, also where a newer version moved them after the playhead. */

@@ -12,6 +12,9 @@ test('中层显示紧凑执行器按键，沿既有连接读回改名，不建�
     await expect(fader.locator('input[type="range"]')).toHaveCount(0);
     await expect(fader.locator('input[type="password"]')).toHaveCount(0);
     await app.evaluate(() => { process.env.TBLINK_EXECUTOR_REMOTE_NAME = '控台改名面光'; });
+    await page.getByRole('button', { name: '页面选项', exact: true }).click();
+    await expect(page.getByRole('switch', { name: '跟随控台执行器页面' })).not.toBeChecked();
+    await page.getByRole('button', { name: '刷新控台页面', exact: true }).click();
     await expect(fader.getByRole('button', { name: '执行器 100.1 · 控台改名面光', exact: true })).toBeVisible();
     await fader.getByRole('button', { name: '执行器 100.1 · 控台改名面光', exact: true }).click();
     await expect.poll(async () => (JSON.parse(await app.evaluate(() => process.env.TBLINK_EXECUTOR_INPUTS ?? '[]')) as Ma2ExecutorInput[]).filter(value => value.pressed)).toHaveLength(1);

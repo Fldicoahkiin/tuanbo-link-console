@@ -102,7 +102,7 @@ test('关闭时询问：保存失败留在对话框并说明原因，取消后�
     await renameProgram(page, '关闭前修改');
     await expect(unsaved(page)).toBeVisible();
     await chmod(path, 0o444);
-    await answerDialogs(app, { 工程尚未保存: [0, 2] });
+    await answerDialogs(app, { 工程还没保存: [0, 2] });
     await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
     await expect.poll(async () => (await shownDialogs(app)).length).toBe(2);
     const shown = await shownDialogs(app);
@@ -114,7 +114,7 @@ test('关闭时询问：保存失败留在对话框并说明原因，取消后�
     expect(await savedTitle(path)).toBe('原节目');
 
     await chmod(path, 0o666);
-    await answerDialogs(app, { 工程尚未保存: [0] });
+    await answerDialogs(app, { 工程还没保存: [0] });
     const closed = app.waitForEvent('close');
     await app.evaluate(({ app: electronApp }) => { electronApp.quit(); });
     await closed;
@@ -138,7 +138,9 @@ test('不保存后退出流程被取消（灯光试听未停止，返回软件�
         const end = buffer.indexOf('\r\n'), line = buffer.slice(0, end); buffer = buffer.slice(end + 2);
         if (line.startsWith('Login ')) { socket.write('\r\n [Channel]>'); continue; }
         const auth = /TBLINK_AUTH_[a-f0-9]{32}/.exec(line)?.[0], boot = /TBLINK_BOOT_[a-f0-9]{32}/.exec(line)?.[0];
-        if (auth) { socket.write(`\r\n${auth}:3.9.60.74\r\n`); continue; }
+        if (auth) { socket.write(`\r\n${auth}:3.9.60.74:Console\r\n`); continue; }
+        const show = /TBLINK_SHOWCHECK_[a-f0-9]{32}/.exec(line)?.[0];
+        if (show) { socket.write(`\r\n${show}:${['project', '1', '3.9.60.74'].map(value => 'H' + Buffer.from(value).toString('hex')).join(',')}\r\n`); continue; }
         if (boot) { socket.write(`\r\n${boot}:ready\r\n`); continue; }
         const play = /TBLINK_PLAY_[a-f0-9]{32}/.exec(line)?.[0];
         // Goto is confirmed; Off never is, so the quit flow stops at the audition question.
@@ -170,7 +172,7 @@ test('不保存后退出流程被取消（灯光试听未停止，返回软件�
         deadlineAt: Date.now() + 5000, action: { target: 'sequence', sequence: 168, cue: '1.000', action: 'goto' } });
     }, network);
     // 不保存, then 返回软件 at the audition question: the quit is cancelled.
-    await answerDialogs(app, { 工程尚未保存: [1, 1], 灯光试听未能停止: [0, 1] });
+    await answerDialogs(app, { 工程还没保存: [1, 1], 灯光试听没能停止: [0, 1] });
     await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
     await expect.poll(async () => (await shownDialogs(app)).map(value => value.title)).toEqual(['工程还没保存', '灯光试听没能停止']);
     await page.waitForTimeout(500);

@@ -35,6 +35,21 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+it('连到缺少工程时间线的 Show 时保留素材，并在修改控台前结束连接准备', async () => {
+  const state = useDocumentStore.getState();
+  const project = state.project!;
+  const read = project.ma2ReadState!;
+  const entry = { target: 9902, name: '节目', eventCount: 3, frameFormat: '30 FPS', slot: 'TC Slot 2', offset: '0', events: [], error: null, warnings: [] };
+  state.setProject({ ...project, ma2ReadState: { ...read, catalog: { ...catalog, entries: [entry], directory: { ...catalog.directory, entries: [{ target: 9902, name: '节目' }] } } } }, 'test.tblink');
+  const before = useDocumentStore.getState();
+  readCatalog.mockResolvedValue({ ...catalog, directory: { ...catalog.directory, show: 'Empty' } });
+  await expect(prepareMa2Editing(connection, before.documentId)).rejects.toThrow('当前 Show「Empty」没有工程关联的 Timecode 9902');
+  expect(useDocumentStore.getState().project).toBe(before.project);
+  expect(window.tbLink.prepareMa2Playback).not.toHaveBeenCalled();
+  expect(scanMa2Materials).not.toHaveBeenCalled();
+  expect(scanMa2).not.toHaveBeenCalled();
+});
+
 it('明确连接的选曲准备期间占用读取任务，失败也释放，不开始缓存读回', async () => {
   vi.mocked(window.tbLink.prepareMa2Playback).mockImplementation(() => {
     expect(useMa2ReadStore.getState().busy).toBe(true);
@@ -88,7 +103,7 @@ it('重新连接核对目录并复用缓存，等待明确开始同步', async (
   expect(importCachedMa2).toHaveBeenCalledOnce();
   expect(scanMa2Materials).toHaveBeenCalledWith(connection, false);
   expect(useMa2SyncStore.getState().songs).toEqual({});
-  expect(message).toContain('实时同步');
+  expect(message).toContain('同步当前节目');
   expect(message).toContain('工程里保存的控台数据');
 });
 it('首次连接依次扫描、配对，不依赖设置页面挂载', async () => {

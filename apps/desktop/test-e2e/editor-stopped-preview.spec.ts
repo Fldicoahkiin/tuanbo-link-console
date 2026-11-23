@@ -29,11 +29,17 @@ test('停止时拖动黄线显示实际 OBS 视频帧，机位切回后定位正
     args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
   const socket = new OBSWebSocket();
   try {
-    await socket.connect(process.env.TBLINK_OVERLAY_OBS_URL);
+    const obsPassword = process.env.TBLINK_OVERLAY_OBS_PASSWORD ?? '';
+    await socket.connect(process.env.TBLINK_OVERLAY_OBS_URL, obsPassword);
     const page = await app.firstWindow();
     const profile = createDefaultIntegrationProfile();
-    profile.obs.executablePath = process.env.TBLINK_OVERLAY_OBS_EXE!; profile.obs.webSocketUrl = process.env.TBLINK_OVERLAY_OBS_URL!;
-    await page.evaluate(value => window.tbLink.saveIntegrationProfile({ profile: value, obsPassword: '' }), profile);
+    const executable = process.env.TBLINK_OVERLAY_OBS_EXE!;
+    await app.evaluate(({ dialog }, selected) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [selected] }); }, executable);
+    const selected = await page.evaluate(() => window.tbLink.pickExecutable());
+    expect(selected).toBe(executable);
+    profile.obs.executablePath = executable; profile.obs.workingDirectory = dirname(executable);
+    profile.obs.webSocketUrl = process.env.TBLINK_OVERLAY_OBS_URL!;
+    await page.evaluate(settings => window.tbLink.saveIntegrationProfile(settings), { profile, obsPassword });
     await page.reload();
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
@@ -53,7 +59,21 @@ test('停止时拖动黄线显示实际 OBS 视频帧，机位切回后定位正
     await expect.poll(async () => (await socket.call('GetMediaInputStatus', { inputName: names.sourceName })).mediaState).toBe('OBS_MEDIA_STATE_PAUSED');
     const canvas = page.locator('canvas[aria-label="OBS 实时画面"]');
     const pixels = () => canvas.evaluate(element => { const target = element as HTMLCanvasElement; const context = target.getContext('2d')!; return Array.from(context.getImageData(target.width / 2 - 50, target.height / 2 - 50, 100, 100).data).filter((_, index) => index % 4 !== 3).reduce((sum, value) => sum + value, 0); });
-    await expect.poll(pixels).toBeGreaterThan(1000);
+    try { await expect.poll(pixels).toBeGreaterThan(1000); }
+    catch (error) {
+      const screenshot = await socket.call('GetSourceScreenshot', { sourceName: names.sceneName, imageFormat: 'png', imageWidth: 360, imageHeight: 640 });
+      await info.attach('OBS 节目画面', { body: Buffer.from(screenshot.imageData.split(',')[1]!, 'base64'), contentType: 'image/png' });
+      await info.attach('编辑器画面', { body: await page.screenshot(), contentType: 'image/png' });
+      const diagnostics = {
+        visible: await page.evaluate(() => window.tbLink.getWindowVisible()),
+        frame: await canvas.evaluate(node => ({ width: (node as HTMLCanvasElement).width, height: (node as HTMLCanvasElement).height })),
+        alerts: await page.locator('.stage-error, .obs-edit-notice, .toast').allTextContents(),
+        media: await socket.call('GetMediaInputStatus', { inputName: names.sourceName }),
+        items: (await socket.call('GetSceneItemList', { sceneName: names.sceneName })).sceneItems.map(item => ({ name: item.sourceName, enabled: item.sceneItemEnabled }))
+      };
+      await info.attach('预览读回', { body: JSON.stringify(diagnostics), contentType: 'application/json' });
+      throw error;
+    }
     const first = await canvas.screenshot();
     await seek(5);
     await expect.poll(async () => (await socket.call('GetCurrentProgramScene')).currentProgramSceneName).toBe('Bridge');

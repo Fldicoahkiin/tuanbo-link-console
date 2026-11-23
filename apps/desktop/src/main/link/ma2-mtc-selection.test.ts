@@ -1,18 +1,187 @@
 import { readFileSync } from 'node:fs';
 import { expect, it, vi } from 'vitest';
-import { ma2ObjectDirectorySchema } from '@tb/schema';
-import { ma2MtcSelectionCommand, ma2MtcSelections, ma2SongDirectory } from '@tb/core/link';
-import { Ma2MtcSelectionService, ma2SelectorXmlLiteral, ma2MtcSelectorCommands, ma2MtcSelectorSequence, ma2MtcSequenceSettings } from './ma2-mtc-selection';
+import { ma2ObjectDirectorySchema, ma2TimecodeRangesSchema } from '@tb/schema';
+import { repairMa2SelectorExecutor } from './ma2-selector-executor';
+import { readMa2ShowSource } from './ma2-show-probe';
+import { MA2_BRIDGE_BUSY_BEFORE_REQUEST, ma2MtcSelectionCommand, ma2MtcSelections, ma2SongDirectory } from '@tb/core/link';
+import { matchesMa2MtcSongSelection, Ma2MtcSelectionService, ma2SelectorXmlLiteral, ma2MtcSelectorCommands, ma2MtcSelectorSequence, ma2MtcSequenceSettings } from './ma2-mtc-selection';
 import { emptyMa2SequenceXml, inspectMa2TimecodeXml, ma2MtcPlaybackSettings } from './ma2-timecode-xml';
 import { ma2SongTimecodeXml } from './ma2-song-timecode';
 import { Ma2LuaConsole } from './fixtures/ma2-lua-console';
-import { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { Ma2BridgeFailure, Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2NetworkWire } from './ma2-network-wire';
 import { showMovingWhen, showRunning, showStopped } from './fixtures/show-gates';
 import type { Ma2ReadProgressUpdate } from '@tb/schema';
 
+it('仅恢复选曲执行器的命令开关，已有分配变化时不写，成功时保留原件', async () => {
+  const desk = new Ma2LuaConsole();
+  const marker = 'TBLINK_MTC_SELECTOR_V1';
+  desk.set('Timecode 9900', { xml: '<Timecode><Track index="0"><Object><No>30</No><No>1</No><No>1000</No><No>190</No></Object></Track></Timecode>' });
+  desk.set('Sequence 9900', {});
+  desk.lua("for _,k in ipairs({'Timecode 9900','Sequence 9900'}) do FAKE.objects[k].properties={Info='TBLINK_MTC_SELECTOR_V1'} end");
+  const xml = (n: number) => `<MA><Exec index="0"><Assignment><No>25</No><No>1</No><No>${n}</No></Assignment><Playback cmd_disable="true" tracking="true"/></Exec></MA>`;
+  const source = await readMa2ShowSource(desk);
+  const repair = () => repairMa2SelectorExecutor(desk, source, 9900, marker, () => undefined);
+  desk.set('Executor 1000.190', { xml: xml(3) });
+  await expect(repair()).rejects.toThrow('assignment changed');
+  expect(desk.commands().some(s => s.includes('/CmdDisable'))).toBe(false);
+  desk.set('Executor 1000.190', { xml: xml(9900) });
+  desk.lua(`local cmd=gma.cmd;gma.cmd=function(s) cmd(s);if s=='Assign Executor 1000.190 /CmdDisable=Off' then local o=FAKE.objects['Executor 1000.190'];o.xml=o.xml:gsub('cmd_disable="true"','cmd_disable="false"') end end`);
+  const changed = await repair();
+  expect(changed?.address).toBe('1000.190');
+  expect(desk.exportFiles()).toContain(changed?.file + '.xml');
+  await expect(repair()).resolves.toBeNull();
+  const chaseXml = xml(9900).replace('cmd_disable="true"', 'cmd_disable="false" chaser="true" chaser_loop_mode="0"');
+  desk.set('Executor 1000.190', { xml: chaseXml });
+  await expect(repair()).rejects.toThrow('playback settings not confirmed');
+  desk.lua(`local cmd=gma.cmd;gma.cmd=function(s) cmd(s);if s=='Assign Executor 1000.190 /Chaser=Off' then local o=FAKE.objects['Executor 1000.190'];o.xml=o.xml:gsub('chaser="true" chaser_loop_mode="0"','chaser="false" restart_mode="0"') end end`);
+  expect((await repair())?.address).toBe('1000.190');
+  await expect(repair()).resolves.toBeNull();
+});
+
 const network = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'test' };
 const native = readFileSync(new URL('./fixtures/ma2-timecode-onpc-3.7-100.xml', import.meta.url), 'utf8');
+
+it('第一次合并时仅在原时段、Go 触发与当前实际选曲都确认时跳过全台准备', async () => {
+  const desk = new Ma2LuaConsole();
+  const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(desk), showStopped);
+  const service = new Ma2MtcSelectionService(showStopped, { record: vi.fn() });
+  const previousXml = native.replace('TC Slot 1', 'TC Slot 2');
+  const timecode = { ...await readMa2ShowSource(desk), number: 9907, previousXml, xml: previousXml.replace('active="true"', 'active="true" muted="true"'), goSequences: [9907] };
+  const checkCurrentSong = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
+  const onConsoleCheck = vi.fn((mayWrite = true) => { if (mayWrite) throw new Error('需要全台准备'); });
+  const prepare = (target = timecode) => service.prepare(desk, bridge, network, false, [9907], undefined, target, { checkCurrentSong, onConsoleCheck });
+  await expect(prepare()).resolves.toBe(false);
+  expect(onConsoleCheck).toHaveBeenCalledWith(false);
+  checkCurrentSong.mockResolvedValueOnce(false);
+  await expect(prepare()).rejects.toThrow('需要全台准备');
+  await expect(prepare({ ...timecode, goSequences: [] })).rejects.toThrow('需要全台准备');
+  await expect(prepare({ ...timecode, previousXml: previousXml.replace('lenght="6000"', 'lenght="5999"') })).rejects.toThrow('需要全台准备');
+  expect(checkCurrentSong).toHaveBeenCalledTimes(2);
+});
+
+it('只修当前歌的播放设置，核对当前 Show 和原生写回，保留其它歌与选择器', async () => {
+  const desk = new Ma2LuaConsole();
+  const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(desk), showStopped);
+  const xml = native.replace('TC Slot 1', 'TC Slot 2').replace('<Timecode index=', '<Timecode no_status_call="true" index=');
+  desk.set('Timecode 9907', { xml });
+  const source = await readMa2ShowSource(desk);
+  const backups = { record: vi.fn() };
+  const service = new Ma2MtcSelectionService(showStopped, backups);
+  const repair = (generation: string) => service.prepare(desk, bridge, network, true, [], undefined, undefined, {
+    expectedSource: { ...source, generation }, songSettingsTargets: [9907]
+  });
+  await expect(repair('old-session')).rejects.toThrow('Show');
+  expect(backups.record).not.toHaveBeenCalled();
+  await expect(repair(source.generation)).resolves.toBe(true);
+  const after = await bridge.request('READ', 9907);
+  expect(inspectMa2TimecodeXml(after).timecodes).toEqual(inspectMa2TimecodeXml(ma2MtcPlaybackSettings(xml, false)).timecodes);
+  await expect(repair(source.generation)).resolves.toBe(false);
+  expect(backups.record).toHaveBeenCalledTimes(1);
+  expect(desk.commands().filter(cmd => /^(?:Off |Export (?:Sequence|Executor|Timecode (?!9907\b)))/.test(cmd))).toEqual([]);
+});
+
+it('只恢复属于选曲辅助对象的播放设置，保留原事件和编辑选择', async () => {
+  const desk = new Ma2LuaConsole();
+  const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(desk), showStopped);
+  const backups = { record: vi.fn() };
+  const service = new Ma2MtcSelectionService(showStopped, backups);
+  const target = 9907;
+  const flags = native.replace('TC Slot 1', 'TC Slot 2').replace('100步灯光测试"', 'TBLINK_MTC_SELECTION"')
+    .replace('<Timecode index=', '<Timecode user_bits="1" index=').replace('active="true"', 'muted="true" active="false"');
+  const options = { expectedSource: await readMa2ShowSource(desk), selectorSettingsTarget: target };
+  desk.set('Timecode 9907', { xml: flags });
+  await expect(service.prepare(desk, bridge, network, true, [], undefined, undefined, options)).rejects.toThrow('用途');
+  expect(backups.record).not.toHaveBeenCalled();
+  const owned = flags.replace('<Track index=', '<InfoItems><Info>TBLINK_MTC_SELECTOR_V1</Info></InfoItems><Track index=');
+  desk.set('Timecode 9907', { xml: owned });
+  await expect(service.prepare(desk, bridge, network, true, [], undefined, undefined, options)).resolves.toBe(true);
+  const after = inspectMa2TimecodeXml(await bridge.request('READ', target)).timecodes[0]!;
+  const before = inspectMa2TimecodeXml(owned).timecodes[0]!;
+  expect(after.attributes.m_autostart).toBe('true');
+  expect(after.attributes.user_bits).toBeUndefined();
+  expect(after.tracks[0]!.attributes).toMatchObject({ active: 'false' });
+  expect(after.tracks[0]!.attributes.muted).toBeUndefined();
+  expect(after.tracks[0]!.subtracks).toEqual(before.tracks[0]!.subtracks);
+  expect(backups.record).toHaveBeenCalledOnce();
+});
+
+it('手动同步核对连续两首歌的真实时间线、Goto 和对应选曲命令', () => {
+  const row = { name: '音乐', length: '30', slot: 'TC Slot 2', frame: '30 FPS', last: '5' };
+  const ranges = { show: 'Show', selectorReady: 9900, entries: [{ ...row, target: 3, offset: '0' }, { ...row, target: 4, offset: '30' }] };
+  const commands = [3, 4, null].map(target => ma2MtcSelectionCommand([3, 4], target));
+  const sequence = ma2MtcSelectorSequence(9900, '3.7.0.5', commands);
+  const timeline = ma2SongTimecodeXml(native.replace('index="9906"', 'index="9899"'), 9900, {
+    name: 'TBLINK_MTC_SELECTION', startMs: 0, executor: '1000.190', executorName: '选曲', sequence: 9900, automatic: true,
+    cues: [0, 1000, 2000].map((atMs, index) => ({ atMs, cueIndex: index + 1, number: String(index + 1), name: null }))
+  });
+  expect(matchesMa2MtcSongSelection(ranges, [3, 4], timeline, sequence)).toBe(true);
+  const cleared = { ...ranges, entries: ranges.entries.map(entry => entry.target === 4 ? { ...entry, last: '' } : entry) };
+  expect(matchesMa2MtcSongSelection(cleared, [4], timeline, sequence)).toBe(false);
+  expect(matchesMa2MtcSongSelection(cleared, [3], timeline, sequence)).toBe(false);
+  const off = ma2MtcSelectionCommand([3, 4], null);
+  const clearedSequence = sequence.replace(commands[1]!, off);
+  // The old end of the cleared song still fires a pool-wide Off when another show plays there.
+  expect(matchesMa2MtcSongSelection(cleared, [4], timeline, clearedSequence)).toBe(false);
+  const cleanedSequence = ma2MtcSelectorSequence(9900, '3.7.0.5', [commands[0]!, off]);
+  const cleanedTimeline = ma2SongTimecodeXml(timeline, 9900, { name: 'TBLINK_MTC_SELECTION', startMs: 0,
+    executor: '1000.190', executorName: '选曲', sequence: 9900, automatic: true,
+    cues: [0, 1000].map((atMs, i) => ({ atMs, cueIndex: i + 1, number: String(i + 1), name: null })) });
+  expect(matchesMa2MtcSongSelection(cleared, [4], cleanedTimeline, cleanedSequence)).toBe(true);
+  const extra = ma2SongTimecodeXml(timeline, 9900, {
+    name: 'TBLINK_MTC_SELECTION', startMs: 0, executor: '1000.190', executorName: '选曲', sequence: 9900, automatic: true,
+    cues: ([[0, 1], [1000, 2], [1500, 1], [2000, 3]] as const).map(([atMs, step]) => ({ atMs, cueIndex: step, number: String(step), name: null }))
+  });
+  expect(matchesMa2MtcSongSelection(ranges, [3], extra, sequence)).toBe(false);
+  // A stale selector event in the music-only tail can start a song whose native range is elsewhere.
+  const tail = { startMs: 1000, durationMs: 3000 };
+  const tailTimeline = ma2SongTimecodeXml(timeline, 9900, {
+    name: 'TBLINK_MTC_SELECTION', startMs: 0, executor: '1000.190', executorName: '选曲', sequence: 9900, automatic: true,
+    cues: ([[0, 1], [1000, 2], [2000, 3], [2500, 1]] as const).map(([atMs, step]) => ({ atMs, cueIndex: step, number: String(step), name: null }))
+  });
+  expect(matchesMa2MtcSongSelection(ranges, [4], timeline, sequence, tail)).toBe(true);
+  expect(matchesMa2MtcSongSelection(ranges, [4], tailTimeline, sequence, tail)).toBe(false);
+  expect(matchesMa2MtcSongSelection(ranges, [4], tailTimeline, sequence, { ...tail, durationMs: 1500 })).toBe(false);
+  const gap = { ...cleared, entries: cleared.entries.map(entry => entry.target === 4 ? { ...entry, offset: '120' } : entry) };
+  const gapPlayback = { startMs: 4000, durationMs: 1000 };
+  expect(matchesMa2MtcSongSelection(gap, [4], tailTimeline, sequence.replace(commands[1]!, off), gapPlayback)).toBe(false);
+  expect(matchesMa2MtcSongSelection(gap, [4], cleanedTimeline, cleanedSequence, gapPlayback)).toBe(true);
+  // The desk can edit the selector between the ranges report and this native READ.
+  const moved = timeline.replace(/<Timecode\b[^>]*>/, header => header.replace(/ offset="[^"]*"/, '').replace('<Timecode ', '<Timecode offset="108000" '));
+  expect(matchesMa2MtcSongSelection(ranges, [3, 4], moved, sequence)).toBe(false);
+  expect(matchesMa2MtcSongSelection(ranges, [3, 4], timeline.replace('slot="TC Slot 2"', 'slot="TC Slot 3"'), sequence)).toBe(false);
+  for (const flag of ['no_status_call', 'no_switch_off']) {
+    expect(matchesMa2MtcSongSelection(ranges, [3, 4], timeline.replace('<Timecode ', `<Timecode ${flag}="true" `), sequence)).toBe(false);
+  }
+  expect(matchesMa2MtcSongSelection(ranges, [3, 4], timeline.replace('<Timecode ', '<Timecode user_bits="1" '), sequence)).toBe(false);
+  expect(matchesMa2MtcSongSelection(ranges, [3, 4], timeline.replace(/<Track\b/, '<Track muted="true"'), sequence)).toBe(false);
+  expect(matchesMa2MtcSongSelection(ranges, [3, 4], timeline.replace('active="true"', 'active="false"'), sequence)).toBe(true);
+  expect(matchesMa2MtcSongSelection(ranges, [3], timeline.replace('step="1"', 'step="2"'), sequence)).toBe(false);
+  expect(matchesMa2MtcSongSelection(ranges, [3], timeline, sequence.replace('Go Timecode 4', 'Go Timecode 3'))).toBe(false);
+});
+
+it.each(['空出位置', '切换 Show', '已发送', '取消'] as const)('选曲检查中途遇到满队列：%s', async outcome => {
+  const console = new Ma2LuaConsole();
+  console.set('Timecode 9999', { name: '现场', xml: native.replace('index="9906"', 'index="9998"') });
+  const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(console), showStopped);
+  const exchange = bridge.exchange.bind(bridge);
+  const controller = new AbortController();
+  let rangeRequests = 0;
+  const calls = vi.spyOn(bridge, 'exchange').mockImplementation(async (...args) => {
+    if (args[0] === 'TCRANGES' && ++rangeRequests === 1) {
+      if (outcome === '切换 Show') console.lua("FAKE.vars.SHOWFILE = 'other'");
+      if (outcome === '取消') controller.abort();
+      throw new Ma2BridgeFailure(MA2_BRIDGE_BUSY_BEFORE_REQUEST, 'a'.repeat(32), outcome === '已发送', {});
+    }
+    return exchange(...args);
+  });
+  const service = new Ma2MtcSelectionService(showStopped, { record: vi.fn() });
+  const preparing = service.prepare(console, bridge, network, true, [], undefined, undefined, { signal: controller.signal });
+  if (outcome === '空出位置') await expect(preparing).resolves.toBe(false);
+  else await expect(preparing).rejects.toThrow(outcome === '切换 Show' ? /Show/ : outcome === '已发送' ? MA2_BRIDGE_BUSY_BEFORE_REQUEST : /abort/i);
+  expect(rangeRequests).toBe(outcome === '空出位置' ? 2 : 1);
+  expect(calls.mock.calls.filter(([op, , value]) => op === 'LIST' && !value)).toHaveLength(1);
+});
 
 it('全是其他时码槽时，已确认的 Cue 编辑不重读整个 Show；时码槽改变须重新核对', async () => {
   const console = new Ma2LuaConsole();
@@ -69,13 +238,57 @@ it('30 条时间线共用大序列只检查一次，连接和再次连接不传�
     expect(sent.filter(line => line.includes("'SEQGO',3,"))).toHaveLength(1);
     expect(sent.some(line => line.includes("'SEQUENCE',3,"))).toBe(false);
     expect(sent.filter(line => numbers.some(number => line.includes(`'READ',${number},`)))).toHaveLength(0);
-    expect(sent.filter(line => line.includes("'TCRANGES',1,"))).toHaveLength(2);
+    // Plan, check referenced songs, then confirm all boundaries after the slow sequence check.
+    expect(sent.filter(line => line.includes("'TCRANGES',1,"))).toHaveLength(3);
     expect(sent.length).toBeLessThan(300);
     expect(progress.at(-1)).toMatchObject({ completed: 30, total: 30, detail: '控台选曲检查完成' });
     expect(progress.some(value => value.detail.includes('检查序列 3'))).toBe(true);
   }
   expect(console.commands().every(command => command.startsWith('Export'))).toBe(true);
 }, 60_000);
+
+it('其他时码槽的轨道直接指向选曲执行器时识别来源，静音或移走后解除', async () => {
+  const desk = new Ma2LuaConsole();
+  const name = 'TBLINK_MTC_SELECTION';
+  const selector = ma2MtcPlaybackSettings(ma2SongTimecodeXml(native.replace('index="9906"', 'index="9899"'), 9900, {
+    name, startMs: 0, executor: '1000.190', executorName: name, sequence: 9900, cues: [{ atMs: 0, cueIndex: 1, number: '1', name: null }]
+  }), true);
+  desk.set('Timecode 9900', { name, xml: selector });
+  desk.set('Sequence 9900', { name });
+  desk.set('Executor 1000.190', { xml: '<MA><Exec offset_from_first="0"><Assignment><No>25</No><No>1</No><No>9900</No></Assignment></Exec></MA>' });
+  desk.lua("for _,k in ipairs({'Timecode 9900','Sequence 9900'}) do FAKE.objects[k].properties={Info='TBLINK_MTC_SELECTOR_V1'} end");
+  const other = selector.replace('index="9899"', 'index="7"').replace('TC Slot 2', 'TC Slot 1');
+  const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(desk), showStopped);
+  for (const [xml, expected] of [
+    [other, { timecode: 8, track: 1, executor: '1000.190' }],
+    [other.replace('<Track index=', '<Track muted="true" index='), undefined],
+    [other.replace('<No>190</No>', '<No>189</No>'), undefined]
+  ] as const) {
+    desk.set('Timecode 8', { xml });
+    for (const query of ['sync:8', 'editing']) {
+      const ranges = ma2TimecodeRangesSchema.parse(JSON.parse(await bridge.request('TCRANGES', 1, query)));
+      expect(ranges.selectorTrackConflict).toEqual(expected);
+      if (query === 'editing' && expected) expect(ranges.songTrackExecutors).toContain('1000.190');
+    }
+  }
+  const record = vi.fn();
+  const service = new Ma2MtcSelectionService(showStopped, { record });
+  const expectedSource = await readMa2ShowSource(desk);
+  const task = { expectedSource, muteSelectorTrack: { timecode: 8, track: 1, executor: '1000.190' } };
+  const prepare = () => service.prepare(desk, bridge, network, true, [], undefined, undefined, task);
+  await expect(prepare()).rejects.toThrow('轨道的用途');
+  desk.set('Timecode 8', { xml: other.replace('<Timecode index=', '<Timecode play_mode="Play" index=') });
+  await expect(prepare()).rejects.toThrow('请先在控台停止 Timecode 8');
+  desk.set('Timecode 8', { xml: other });
+  await expect(service.prepare(desk, bridge, network, true, [], undefined, undefined, { ...task, expectedSource: { ...expectedSource, show: 'Different' } })).rejects.toThrow();
+  expect(record).not.toHaveBeenCalled();
+  await expect(prepare()).resolves.toBe(true);
+  await expect(prepare()).resolves.toBe(false);
+  expect(record).toHaveBeenCalledTimes(1);
+  const result = inspectMa2TimecodeXml(await bridge.request('READ', 8)).timecodes[0]!;
+  const previous = inspectMa2TimecodeXml(other).timecodes[0]!;
+  expect(result).toEqual({ ...previous, tracks: [{ ...previous.tracks[0], attributes: { ...previous.tracks[0]!.attributes, muted: 'true' } }] });
+});
 
 it('两个不同编号带有选曲标记时，先报告冲突，避免覆盖已有序列或时间线', async () => {
   const console = new Ma2LuaConsole();
@@ -126,7 +339,7 @@ it.each([false, true])('只移歌曲内的点复用当次读回；末点越过�
   expect(console.lines.slice(queuedAt).some(line => line.includes("'READ',3,"))).toBe(true);
   if (detachExecutor) console.lua(`local original=gma.cmd;local assignedPage=FAKE.objects['Page 1000'].xml;gma.cmd=function(command)
     original(command)
-    if command:match('^Delete Sequence 9900 Cue ') then
+    if command:match('^Import [%w_]+%.xml At Sequence 9900 ') then
       FAKE.objects['Executor 1000.190']=nil
       FAKE.objects['Page 1000'].xml=EMPTY_PAGE
     end
@@ -137,9 +350,41 @@ it.each([false, true])('只移歌曲内的点复用当次读回；末点越过�
   if (detachExecutor) console.set('Timecode 4', { name: 'Second song', xml: song(1000).replace('index="2"', 'index="3"').replace('offset="300"', 'offset="700"').replace('lenght="300"', 'lenght="100"') });
   console.set('Timecode 3', { name: 'Song', xml: song(12000) });
   await expect(service.prepare(console, bridge, network, false, [3], { number: 3, xml: sequence }, { number: 3, xml: song(12000), ...source })).resolves.toBe(true);
+  expect(console.commands().some(command => command.startsWith('Delete Sequence 9900 Cue '))).toBe(false);
   const written = inspectMa2TimecodeXml(await bridge.request('READ', 9900)).timecodes[0]!;
   expect(written.tracks[0]!.subtracks[0]!.events.at(-1)!.attributes.time).toBe(detachExecutor ? '800' : '661');
-  if (detachExecutor) expect(console.commands()).toContain('Assign Sequence 9900 At Executor 1000.190 /nc');
+  if (detachExecutor) {
+    expect(console.commands()).toContain('Assign Sequence 9900 At Executor 1000.190 /nc');
+    // A desk edit to the other, already cached song must survive the next selector rebuild.
+    const other = song(1000).replace('index="2"', 'index="3"').replace('offset="300"', 'offset="1000"').replace('lenght="300"', 'lenght="100"');
+    console.set('Timecode 4', { name: 'Second song', xml: other });
+    console.set('Timecode 3', { name: 'Song', xml: song(13000) });
+    await expect(service.prepare(console, bridge, network, false, [3], { number: 3, xml: sequence }, { number: 3, xml: song(13000), ...source })).resolves.toBe(true);
+    const selector = inspectMa2TimecodeXml(await bridge.request('READ', 9900)).timecodes[0]!;
+    const times = selector.tracks[0]!.subtracks[0]!.events.map(event => Number(event.attributes.time ?? 0));
+    expect(times).toContain(1000);
+    expect(times).toContain(1100);
+    expect(times).not.toContain(700);
+    let moves = 0;
+    const exchange = bridge.exchange.bind(bridge);
+    const transport = vi.spyOn(bridge, 'exchange').mockImplementation(async (...args) => {
+      const receipt = await exchange(...args);
+      if (args[0] === 'APPLY' && args[1] === 9900) moves++;
+      if (args[0] === 'SEQGO' && args[1] === 3 && moves === 1) {
+        console.set('Timecode 4', { name: 'Second song', xml: other.replace('offset="1000"', 'offset="1400"') });
+      }
+      return receipt;
+    });
+    try {
+      console.set('Timecode 3', { name: 'Song', xml: song(14000) });
+      await expect(service.prepare(console, bridge, network, false, [3])).resolves.toBe(true);
+      const current = inspectMa2TimecodeXml(await bridge.request('READ', 9900)).timecodes[0]!;
+      const positions = current.tracks[0]!.subtracks[0]!.events.map(event => Number(event.attributes.time ?? 0));
+      expect(positions).toContain(1400);
+      expect(positions).not.toContain(1000);
+      expect(moves).toBe(2);
+    } finally { transport.mockRestore(); }
+  }
 });
 
 it('时间线接管 Time/Follow 触发，保留灯具、渐变、延迟和命令', () => {
@@ -163,6 +408,9 @@ it('选曲准备只改播放设置，保留原生轨道、动作、引用与相�
   expect(after.attributes.no_status_call).toBeUndefined();
   expect(after.attributes.no_switch_off).toBeUndefined();
   expect(ma2MtcPlaybackSettings(song, false)).toBe(song);
+  const tagged = song.replace('<Timecode ', '<Timecode user_bits="1" ');
+  expect(inspectMa2TimecodeXml(ma2MtcPlaybackSettings(tagged, false)).timecodes[0]!.attributes.user_bits).toBe('1');
+  expect(inspectMa2TimecodeXml(ma2MtcPlaybackSettings(tagged, true)).timecodes[0]!.attributes.user_bits).toBeUndefined();
   expect(inspectMa2TimecodeXml(ma2MtcPlaybackSettings(song, true)).timecodes[0]!.attributes.m_autostart).toBe('true');
 });
 

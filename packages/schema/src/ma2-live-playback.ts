@@ -66,8 +66,9 @@ export type Ma2WebRemoteSession = z.infer<typeof ma2WebRemoteSessionSchema>;
 export type Ma2WebRemoteState = z.infer<typeof ma2WebRemoteStateSchema>;
 
 /** One executor read back during playback, to confirm the console runs with the timecode. Slots 1–90 are fader executors, 101–190 button executors. */
-export const ma2ExecutorObserveRequestSchema = z.object({ network: ma2NetworkTargetSchema, page: z.number().int().min(1).max(9999), slot: z.number().int().min(1).max(190) }).strict()
-  .refine(value => value.slot <= 90 || value.slot >= 101, '执行器格位须在 1–90 或 101–190');
+export const ma2ObservableSlotSchema = z.number().int().min(1).max(190)
+  .refine(slot => slot <= 90 || slot >= 101, '执行器格位须在 1–90 或 101–190');
+export const ma2ExecutorObserveRequestSchema = z.object({ network: ma2NetworkTargetSchema, page: z.number().int().min(1).max(9999), slot: ma2ObservableSlotSchema }).strict();
 export const ma2ExecutorObservationSchema = z.discriminatedUnion('kind', [
   /** The console's web remote was never connected for this console: nothing can be read. */
   z.object({ kind: z.literal('unavailable'), reason: z.string().max(512) }).strict(),

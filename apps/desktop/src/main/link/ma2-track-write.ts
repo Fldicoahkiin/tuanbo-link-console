@@ -1,5 +1,5 @@
 import { DOMParser, XMLSerializer, type Element } from '@xmldom/xmldom';
-import { inspectMa2TimecodeXml, validateMa2TimecodeWrite } from './ma2-timecode-xml';
+import { setMa2TrackPlaybackMuted, inspectMa2TimecodeXml, validateMa2TimecodeWrite } from './ma2-timecode-xml';
 
 /** Add only the missing kind of subtrack to the existing executor track. */
 export function appendMa2Subtracks(xml: string, target: number, trackPaths: readonly string[], kind: 'Master' | 'Cue'): { xml: string; paths: Map<string, string> } {
@@ -52,7 +52,8 @@ export function appendMa2Tracks(xml: string, target: number, additions: readonly
   for (const addition of additions) {
     const track = document.createElementNS(namespace, 'Track');
     track.setAttribute('index', String(index));
-    if (!addition.muted) track.setAttribute('active', 'true');
+    track.setAttribute('active', 'true');
+    setMa2TrackPlaybackMuted(track, addition.muted);
     track.setAttribute('expanded', 'true');
     const object = document.createElementNS(namespace, 'Object');
     object.setAttribute('name', addition.executorName);

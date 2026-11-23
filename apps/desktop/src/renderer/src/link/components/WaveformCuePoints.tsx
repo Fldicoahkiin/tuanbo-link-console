@@ -4,7 +4,7 @@ import { Trash2 } from 'lucide-react';
 import { Menu, MenuItem } from '../ui';
 import { moveLightingEffect, removeLightingEffects } from '@tb/core/link';
 import type { MtcFrameRate } from '@tb/schema';
-import { cueEventEntries } from './cue-event-view';
+import type { cueEventEntries } from './cue-event-view';
 import { formatTimelineTimecode } from './timeline-geometry';
 import type { LightingTimelineProps } from './LightingTimeline';
 import { useDragSession } from './useDragSession';
@@ -17,8 +17,8 @@ import type { KeyPress } from '../keys/key-router';
 import { cuePointsToDelete, timelineSelection } from './timeline-commands';
 import { useScrollPaint, type ScrollPosition, type TimelineScroll } from './timeline-scroll';
 type Entry = ReturnType<typeof cueEventEntries>[number];
-type CuePointDrag = { id: string; x: number; ms: number; target: number; snapped: boolean; moved: boolean };
-export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPerSecond, top, view, scroll, viewportWidth, durationMs, disabled }: { mode: 'seek' | 'select'; height: number; lighting: LightingTimelineProps; frameRate: MtcFrameRate; pixelsPerSecond: number; top: number;
+type CuePointDrag = { id: string; x: number; y: number; ms: number; target: number; snapped: boolean; moved: boolean; audition: boolean };
+export function WaveformCuePoints({ entries, mode, height, lighting, frameRate, pixelsPerSecond, top, view, scroll, viewportWidth, durationMs, disabled }: { entries: Entry[]; mode: 'seek' | 'select'; height: number; lighting: LightingTimelineProps; frameRate: MtcFrameRate; pixelsPerSecond: number; top: number;
   /** What is drawn: the scroll block's window (0.5.9 E5); the time readout follows the exact `scroll`. */
   view: { left: number; width: number }; scroll: TimelineScroll; viewportWidth: number; durationMs: number; disabled: boolean }): JSX.Element {
   // The time readout stays inside the visible part, following the scroll straight into the DOM.
@@ -48,7 +48,6 @@ export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPer
   // A held Enter repeats: the Cue point opens this dialog on the first keydown only, and the key router takes the
   // repeats before the dialog's form, which would save the Cue unchanged on each (keys/key-route.ts `held`, 0.5.9).
   const [editing, setEditing] = useState<Entry | null>(null);
-  const entries = useMemo(() => cueEventEntries(lighting.document), [lighting.document]);
   const placements = useMemo(() => layoutCueMarkers(entries, pixelsPerSecond), [entries, pixelsPerSecond]);
   const rows = useMemo(() => new Map(placements.map(marker => [marker.id, marker.row])), [placements]);
   const contentHeight = placements.reduce((size, marker) => Math.max(size, 12 + (marker.row + 1) * 28), height);
@@ -108,9 +107,11 @@ export function WaveformCuePoints({ mode, height, lighting, frameRate, pixelsPer
       const markerTop = 6 + (rows.get(entry.id) ?? 0) * 28;
       return <Fragment key={entry.id}>{entry.preparationLeadMs > 0 ? <span className="waveform-cue-preparation" aria-label={`Cue ${entry.cue} 埋步提前 ${entry.preparationLeadMs / 1000} 秒`} style={{ left: Math.max(0, ms - entry.preparationLeadMs) * pixelsPerSecond / 1000, top: markerTop + 23, width: Math.min(ms, entry.preparationLeadMs) * pixelsPerSecond / 1000 }}><span>埋步</span></span> : null}<button className="waveform-cue-point" data-cue-id={entry.id} aria-label={`音频 Cue ${displayCueNumber(entry.cue)}`} aria-pressed={selection.includes(entry.id) || lighting.selectedEventId === entry.id} title={`Cue ${displayCueNumber(entry.cue)} · ${formatTimelineTimecode(ms, frameRate)} · 拖动定位，双击修改`} style={{ left: ms * pixelsPerSecond / 1000, top: markerTop, width, '--cue-guide-height': `${Math.max(0, contentHeight - markerTop - 32)}px` } as CSSProperties}
         onContextMenu={event => { event.preventDefault(); event.stopPropagation(); event.currentTarget.focus(); if (!selection.includes(entry.id)) setSelection([entry.id]); setContext({ x: event.clientX, y: event.clientY }); }}
-        onPointerDown={event => { if (event.button !== 0) return; setTimeVisible(true); event.stopPropagation(); event.preventDefault(); event.currentTarget.focus(); setSelection(event.ctrlKey || event.metaKey || event.shiftKey ? selection.includes(entry.id) ? selection.filter(id => id !== entry.id) : [...selection, entry.id] : [entry.id]); lighting.onSelectEvent?.(entry.track.id, entry.clip.id, entry.id); if (!event.ctrlKey && !event.metaKey && !event.shiftKey) lighting.onAuditionEvent?.(entry.id); if (disabled || entry.track.locked || event.button !== 0) return; session.begin(event, { id: entry.id, x: event.clientX, ms: entry.ms, target: entry.ms, snapped: false, moved: false }); }}
-        onPointerMove={event => { const current = session.current(); if (current?.id !== entry.id || !current.moved && Math.abs(event.clientX - current.x) < 3) return; const raw = current.ms + (event.clientX - current.x) / pixelsPerSecond * 1000; const target = Math.max(0, Math.min(durationMs - 1, lighting.snapTime?.(raw, entry.id) ?? raw)); session.update({ ...current, target, snapped: Math.abs(target - raw) > .1, moved: true }); }}
-        onPointerUp={event => { const current = session.current(); if (current?.id !== entry.id) return; event.currentTarget.releasePointerCapture(event.pointerId); if (current.target !== current.ms) change(entry, current.target); session.end(); }} onPointerCancel={session.end} onLostPointerCapture={session.end}
+        onPointerDown={event => { if (event.button !== 0) return; setTimeVisible(true); event.stopPropagation(); event.preventDefault(); event.currentTarget.focus(); setSelection(event.ctrlKey || event.metaKey || event.shiftKey ? selection.includes(entry.id) ? selection.filter(id => id !== entry.id) : [...selection, entry.id] : [entry.id]); lighting.onSelectEvent?.(entry.track.id, entry.clip.id, entry.id); if (disabled) return; session.begin(event, { id: entry.id, x: event.clientX, y: event.clientY, ms: entry.ms, target: entry.ms, snapped: false, moved: false, audition: !event.ctrlKey && !event.metaKey && !event.shiftKey }); }}
+        onPointerMove={event => { const current = session.current(); if (current?.id !== entry.id || !current.moved && Math.hypot(event.clientX - current.x, event.clientY - current.y) < 3) return; const raw = current.ms + (event.clientX - current.x) / pixelsPerSecond * 1000; const target = entry.track.locked ? current.ms : Math.max(0, Math.min(durationMs - 1, lighting.snapTime?.(raw, entry.id) ?? raw)); session.update({ ...current, target, snapped: Math.abs(target - raw) > .1, moved: true }); }}
+        onPointerUp={event => { const current = session.current(); if (current?.id !== entry.id) return; event.currentTarget.releasePointerCapture(event.pointerId); if (current.target !== current.ms) change(entry, current.target);
+          else if (current.audition && !current.moved && Math.hypot(event.clientX - current.x, event.clientY - current.y) < 3 && !event.ctrlKey && !event.metaKey && !event.shiftKey) lighting.onAuditionEvent?.(entry.id);
+          session.end(); }} onPointerCancel={session.end} onLostPointerCapture={session.end}
         onDoubleClick={event => { event.stopPropagation(); if (!disabled && !entry.track.locked) setEditing(entry); }}
         {...ownKeys('Enter')}
         onKeyDown={event => cuePointEnter(event, !disabled && !entry.track.locked, () => setEditing(entry))}><span className="cue-marker-number">{displayCueNumber(entry.cue)}</span></button></Fragment>;

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, type Ma2ApplyRequest } from '@tb/schema';
-import { bindMa2TrackCommand, LightingRecorder } from '@tb/core/link';
+import { MA2_BRIDGE_BUSY_BEFORE_REQUEST, bindMa2TrackCommand, LightingRecorder } from '@tb/core/link';
 import { convertMa2Timecode } from './ma2-timecode-conversion';
 import { Ma2ApplyService } from './ma2-apply-service';
 import { Ma2BridgeFailure, Ma2OnpcBridge } from './ma2-onpc-bridge';
@@ -32,9 +32,45 @@ function setup(source = xml) {
   return { request, bridge };
 }
 
-it('改动只交给本次 Show 内核实过的选曲准备，换 Show 时停止写入', async () => {
-  const source = { show: '现场', version: '3.3.4.3', generation: '本次' };
+it('写入已被控台确认后的序列读取冲突保留备份，只核对结果', async () => {
   const { bridge, request } = setup();
+  request.document.tracks[0]!.clips[0]!.events[0]!.at += 100;
+  const id = 'a'.repeat(32);
+  const backupFile = `tblink_backup_${id}.xml`;
+  bridge.exchange.mockRejectedValueOnce(new Ma2BridgeFailure('Sequence changed during snapshot', id, true, {}, backupFile, true));
+  const result = await new Ma2ApplyService(bridge, showStopped).apply(request);
+  expect(result).toMatchObject({ status: 'incomplete', stage: 'verify', mayHaveWritten: true, backupFile });
+  expect(bridge.exchange).toHaveBeenCalledTimes(1);
+});
+
+it.each(['读取恢复', '换了 Show', '读取结果未知'] as const)('控台写成后核对通道被占用时保留同一笔写入：%s', async outcome => {
+  const { bridge, request } = setup();
+  request.document.tracks[0]!.clips[0]!.events[0]!.at += 100;
+  const source = { show: '现场', version: '3.7.0.5', generation: '本次' };
+  const verify = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+  const backupFile = `tblink_backup_${'a'.repeat(32)}.xml`;
+  const service = new Ma2ApplyService(bridge, showStopped, {
+    source: () => Promise.resolve(source), verify, prepare: () => Promise.resolve(false)
+  });
+  bridge.request.mockResolvedValueOnce(snapshot(xml)).mockRejectedValueOnce(
+    new Ma2BridgeFailure(MA2_BRIDGE_BUSY_BEFORE_REQUEST, 'b'.repeat(32), outcome === '读取结果未知', {})
+  );
+  if (outcome === '换了 Show') verify.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Show 已切换'));
+  const result = await service.apply(request);
+  if (outcome === '读取恢复') {
+    expect(result).toMatchObject({ status: 'verified', backupFile });
+    expect(bridge.request).toHaveBeenCalledTimes(3);
+  } else {
+    expect(result).toMatchObject({ status: 'incomplete', stage: 'verify', mayHaveWritten: true, backupFile });
+    expect(bridge.request).toHaveBeenCalledTimes(2);
+  }
+  expect(bridge.exchange).toHaveBeenCalledTimes(1);
+});
+
+it.each(['TC Slot 2', 'TC Slot 1'])('歌曲选曲只交给本次核实的 Show，歌曲留在或移出 MIDI 槽都更新选曲，当前 %s', async slot => {
+  const source = { show: '现场', version: '3.3.4.3', generation: '本次' };
+  const { bridge, request } = setup(xml.replace('TC Slot 1', slot));
+  request.document.ma2Bindings![0]!.sourceXml = xml.replace('TC Slot 1', 'TC Slot 2');
   const event = request.document.tracks[0]!.clips[0]!.events[0]!;
   event.at += 100;
   const prepare = vi.fn().mockResolvedValue(false);
@@ -80,9 +116,13 @@ it('编辑其他时码槽的原时间线，保留自动起播、状态调用及�
   const { request, bridge } = setup(original);
   request.document.tracks[0]!.clips[0]!.events[0]!.at += 100;
   const source = { show: '现场', version: '3.3.4.3', generation: '本次' };
-  const service = new Ma2ApplyService(bridge, showStopped, { source: () => Promise.resolve(source), verify: () => Promise.resolve(), prepare: () => Promise.resolve(false) });
+  const prepare = vi.fn().mockResolvedValue(false);
+  const verify = vi.fn().mockResolvedValue(undefined);
+  const service = new Ma2ApplyService(bridge, showStopped, { source: () => Promise.resolve(source), verify, prepare });
   const result = await service.apply(request);
   expect(result.status).toBe('verified');
+  expect(verify).toHaveBeenCalledWith(source);
+  expect(prepare).not.toHaveBeenCalled();
   const written = inspectMa2TimecodeXml(bridge.exchange.mock.calls[0]![3]!).timecodes[0]!;
   expect(written.attributes).toMatchObject({ slot: 'TC Slot 1', m_autostart: 'true', no_status_call: 'true', no_switch_off: 'true' });
 });
@@ -342,7 +382,7 @@ describe('本机 MA2 同步服务', () => {
     const service = new Ma2ApplyService(bridge, showStopped);
     request.document.tracks[0]!.clips[0]!.events[0]!.at = 0;
     const pending = service.apply(request);
-    expect(await service.apply(request)).toMatchObject({ status: 'incomplete', message: '已有 MA2 同步正在进行' });
+    expect(await service.apply(request)).toMatchObject({ status: 'incomplete', message: MA2_BRIDGE_BUSY_BEFORE_REQUEST });
     if (!complete) throw new Error('读取未开始'); complete(snapshot(xml));
     expect((await pending).status).toBe('verified');
   });

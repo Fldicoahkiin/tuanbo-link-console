@@ -20,10 +20,12 @@ const lighting = (value: StatusCenterInput) => statusCenter(value).overview.find
 it('播放发时间码时，灯光一栏写控台在不在跟；没在跟标红，音乐照常', () => {
   const playing = { status: 'playing', mtcSending: true, mtcConnectionFailed: false };
   expect(lighting(input({ player: playing, follow: { state: 'following', detail: '执行器 1000.101 在 Cue 3，和时间线一致', misses: 0 } })))
-    .toEqual({ state: 'ready', value: '控台在跟', detail: '时间码已发出，控台在跟着跑：执行器 1000.101 在 Cue 3，和时间线一致' });
+    .toEqual({ state: 'ready', value: '控台在跟', detail: '时间码已发出。最近一次控台读回：执行器 1000.101 在 Cue 3，和时间线一致' });
   const missing = lighting(input({ player: playing, follow: { state: 'not-following', detail: '执行器 1000.101 没在跑', misses: 2 } }));
   expect(missing).toMatchObject({ state: 'error', value: '控台没在跟' });
   expect(missing.detail).toContain('音乐照常播放');
+    expect(lighting(input({ player: playing, follow: { state: 'past-end', detail: '音乐已播过控台时间线的结尾', misses: 0 } })))
+      .toEqual({ state: 'ready', value: '已过灯光结尾', detail: '音乐已播过控台时间线的结尾' });
   expect(lighting(input({ player: playing, follow: { state: 'unknown', detail: '只接了 MIDI 线', misses: 0 } })))
     .toMatchObject({ state: 'ready', value: '时间码已发出', detail: '控台有没有跟着跑无法确认：只接了 MIDI 线' });
 });

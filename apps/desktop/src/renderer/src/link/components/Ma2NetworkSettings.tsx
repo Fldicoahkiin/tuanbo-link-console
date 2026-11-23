@@ -1,4 +1,4 @@
-import { useSettingsDirty } from '../useSettingsDirty';
+import { useSettingsAutosave } from '../useSettingsExit';
 import { Ma2DiscoveryResults } from './Ma2DiscoveryResults';
 import { Ma2ComputerNetwork, useMa2ComputerNetwork } from './Ma2ComputerNetwork';
 import { Button, Card, Disclosure, Field, Notice, PasswordInput, Select, Switch, TextInput } from '../ui';
@@ -40,6 +40,7 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
   const [progress, setProgress] = useState('');
   const [readRevision, setReadRevision] = useState(0);
   const { status, setStatus, loaded, pluginReady, setPluginReady } = useMa2NetworkStatus(readRevision, settings => {
+    if (touched) return;
     setHost(settings.host); setPort(settings.port); setMonitorPort(settings.monitorPort); setUsername(settings.username);
     setAutoConnect(settings.autoConnect); setPassword(''); setPasswordEdited(false);
   }, message => { setError(message); notify(message, 'error'); });
@@ -53,8 +54,8 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
     const credential = ma2CredentialsForTarget(status?.profiles ?? [], target);
     setPassword(credential.password); setPasswordEdited(credential.edited);
   };
-  const choose = (profile?: NetworkSettings, address?: { host: string; port: number }): void => {
-    setError(''); setTouched(false); setSaved(false);
+  const choose = (profile?: NetworkSettings, address?: { host: string; port: number }, edited = true): void => {
+    setError(''); setFieldError(''); setTouched(edited); setSaved(false);
     setHost(profile?.host ?? address?.host ?? ''); setPort(profile?.port ?? address?.port ?? 30000); setMonitorPort(profile?.monitorPort ?? 30001);
     setUsername(profile?.username ?? 'administrator'); setAutoConnect(profile?.autoConnect ?? false); setPassword(profile ? '' : 'admin'); setPasswordEdited(!profile);
   };
@@ -63,16 +64,10 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
     let networkConnected = false;
     setBusy(true); setError(''); setProgress('正在发现控台，准备读取素材…');
     try {
-      if (host.trim() && dirty) {
-        const address = ma2AddressInput(host);
-        const request = ma2NetworkSaveSchema.safeParse({ settings: { host: address, port, monitorPort, username: username.trim(), autoConnect }, ...(passwordEdited ? { password } : {}) });
-        if (!request.success) throw new Error('请检查连接端口、用户名和密码；用户名和密码不能包含引号、反斜杠或换行');
-        await window.tbLink.saveMa2Network(request.data); setHost(address); setPassword(''); setPasswordEdited(false);
-      }
       const next = await connectDiscoveredMa2(setFound, address => computerNetwork.prepare(address, setProgress), message => notify(message, 'info'));
       setStatus(next);
       networkConnected = true;
-      if (next.settings) choose(next.settings);
+      if (next.settings) choose(next.settings, undefined, false);
       if (!next.settings) throw new Error('控台连接信息不完整，请重新连接');
       await loadConnectedMa2(next.settings, documentId, setProgress, notify);
     } catch (failure) {
@@ -98,17 +93,18 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
     catch (error) { const message = error instanceof Error ? error.message : String(error); setError(message); notify(message, 'error'); }
     finally { setBusy(false); }
   };
-  const save = async (connect: boolean): Promise<void> => {
+  const save = async (connect: boolean, silent = false): Promise<boolean> => {
+    if (disabled || busy || searching || !loaded) { setError('现在无法保存控台设置，请稍后再试。'); return false; }
     const documentId = useDocumentStore.getState().documentId;
     let networkConnected = false;
-    setBusy(true); setError(''); setFieldError(''); setSaved(false); setProgress('正在保存连接设置…');
+    setBusy(true); setError(''); setFieldError(''); setSaved(false); setProgress(silent ? '' : '正在保存连接设置…');
     try {
       let address: string;
       try { address = ma2AddressInput(host); } catch (failure) { setFieldError(String(failure)); throw failure; }
       const parsed = ma2NetworkSaveSchema.safeParse({ settings: { host: address, port, monitorPort, username: username.trim(), autoConnect }, ...(passwordEdited ? { password } : {}) });
       if (!parsed.success) throw new Error('请填写有效的控台 IPv4 地址、端口与用户名；用户名和密码不能包含引号、反斜杠或换行');
       const saved = ma2NetworkStatusSchema.parse(await window.tbLink.saveMa2Network(parsed.data));
-      setHost(address); setPassword(''); setPasswordEdited(false); setStatus(saved); setSaved(true); setTouched(false);
+      setHost(address); setPassword(''); setPasswordEdited(false); setStatus(saved); setSaved(!silent); setTouched(false);
       if (connect) {
         await computerNetwork.prepare(address, setProgress);
         setProgress(`正在连接 ${host.trim()}:${port}，并验证登录…`);
@@ -121,8 +117,9 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
           await loadConnectedMa2(parsed.data.settings, documentId, setProgress, notify);
         }
         else { const message = 'MA2 没有连上。请检查控台的远程设置和网络，然后重新连接'; setError(message); notify(message, 'error'); }
-      } else notify('MA2 连接设置已保存');
-    } catch (error) { const reason = error instanceof Error ? error.message : String(error); const message = networkConnected ? `MA2 已连接，但节目 Cue 没有载入完成：${reason}` : reason; setError(message); notify(message, 'error'); }
+      } else if (!silent) notify('MA2 连接设置已保存');
+      return true;
+    } catch (error) { const reason = error instanceof Error ? error.message : String(error); const message = networkConnected ? `MA2 已连接，但节目 Cue 没有载入完成：${reason}` : reason; setError(message); notify(message, 'error'); return false; }
     finally { setBusy(false); setProgress(''); }
   };
   const disconnect = async (): Promise<void> => {
@@ -139,8 +136,9 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
   const viewState: Ma2NetworkView['state'] = busy ? 'connecting' : matching && status ? status.state : 'disconnected';
   const viewError = matching ? status?.error ?? null : null;
   useEffect(() => { onStatus({ state: viewState, error: viewError }); }, [viewState, viewError, onStatus]);
-  const dirty = status?.settings ? !matching || passwordEdited || autoConnect !== status.settings.autoConnect : Boolean(host.trim() || username.trim() || passwordEdited || autoConnect || port !== 30000 || monitorPort !== 30001);
-  useSettingsDirty('ma2', loaded && dirty && (touched || Boolean(status?.settings)));
+  const dirty = status?.settings ? !matching || passwordEdited || autoConnect !== status.settings.autoConnect
+    : Boolean(host.trim() || username !== 'administrator' || password !== 'admin' || autoConnect || port !== 30000 || monitorPort !== 30001);
+  useSettingsAutosave('ma2', touched && dirty, () => save(false, true));
 
   const profiles = status?.profiles ?? [];
   const selected = profiles.findIndex((profile) => profile.host === host && profile.port === port && profile.monitorPort === monitorPort && profile.username === username);
@@ -155,7 +153,7 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
     </form>
     <div className="settings-actions-row">
       <Button variant="secondary" size="sm" loading={searching} disabled={locked || searching} onClick={() => void search()}>{searching ? '搜索中…' : '搜索控台'}</Button>
-      <Button variant="secondary" size="sm" disabled={locked || searching} onClick={() => { choose(status?.profiles?.find(profile => profile.host === '127.0.0.1'), { host: '127.0.0.1', port: 30000 }); setTouched(true); }}>使用本机 onPC</Button>
+      <Button variant="secondary" size="sm" disabled={locked || searching} onClick={() => { choose(status?.profiles?.find(profile => profile.host === '127.0.0.1'), { host: '127.0.0.1', port: 30000 }); }}>使用本机 onPC</Button>
       {searching || busy && progress.startsWith('正在发现') ? <Button variant="ghost" size="sm" onClick={() => { void window.tbLink.cancelMa2Discovery().catch((failure: unknown) => notify(String(failure), 'error')); }}>取消搜索</Button> : null}
     </div>
     {profiles.length ? <Ma2RecentConsoles profiles={profiles} selected={selected} disabled={locked || searching} onChoose={index => choose(profiles[index])} /> : null}
@@ -205,8 +203,8 @@ function Ma2ConnectHelp(): JSX.Element {
 
 /** On 程序维护: whether this console's version and plugin work with the program. */
 function Ma2CompatibilityCard({ host, disabled, capabilities, onCheck }: { host: string; disabled: boolean; capabilities: Ma2NetworkStatus['capabilities'] | null; onCheck: () => void }): JSX.Element {
-  return <Card level={3} title="MA2 控台" description={host || '还没选控台'} actions={<Button variant="secondary" size="sm" disabled={disabled} onClick={onCheck}>检测版本兼容性</Button>}>
-    {capabilities ? <p role="status">MA2 {capabilities.version} · {capabilities.lua} · {capabilities.message}</p> : <p>连上控台后，可以检查控台版本和插件是否兼容。</p>}
+  return <Card level={3} title="MA2 控台" description={host || '还没选控台'} actions={<Button variant="secondary" size="sm" disabled={disabled} onClick={onCheck}>检查版本和时码槽</Button>}>
+    {capabilities ? <p role="status">MA2 {capabilities.version} · {capabilities.lua} · {capabilities.message}</p> : <p>连上控台后，可以核对版本、插件和这台控台的 MIDI 时码槽。</p>}
   </Card>;
 }
 

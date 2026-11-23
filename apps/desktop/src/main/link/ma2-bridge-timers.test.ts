@@ -38,6 +38,23 @@ it('升级与手动停止释放旧按键，旧任务不会继续挂着',()=>{
     expect(f.ma2.commands().filter(value=>value==='Flash Off Executor 1.101')).toHaveLength(1);
   }
 });
+it('从本机文件切到网络时，排队等待的旧文件读取不能取走新请求', () => {
+  const desk = new Ma2LuaConsole(bridgeSource, 'file');
+  desk.lua('FAKE.main(); FAKE.main("network")');
+  const request = 'b'.repeat(32) + '\nPING\n1\n0\n';
+  expect(desk.poll(request)).toBeNull();
+  expect(desk.file('/fake/temp/tblink_bridge_request.txt')?.toString()).toBe(request);
+  desk.lua('FAKE.tick(); FAKE.tick()');
+  expect(desk.lua('return #FAKE.timers')[0]?.toString()).toBe('0');
+});
+
+it('本机单个请求损坏时只拒绝这次请求，下一次核对照常返回', () => {
+  const desk = new Ma2LuaConsole(bridgeSource, 'file');
+  const bad = 'c'.repeat(32), next = 'd'.repeat(32);
+  expect(desk.poll(bad + '\nnot-a-request')).toMatch(new RegExp('^' + bad + '\\nERROR\\n'));
+  expect(desk.poll(next + '\nPING\n1\n0\n')).toMatch(new RegExp('^' + next + '\\nOK\\n'));
+});
+
 it('本机文件轮询正常续行，停止或换代后退出，不因快速开关累积',()=>{
   const ma2=new Ma2LuaConsole(bridgeSource,'file');
   ma2.lua('FAKE.main();FAKE.main("local");FAKE.tick()');

@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { LightingOffLedger, lightingExecutors, litChangeOffs, litExecutors, litReleaseActions, lightingReadBackDelays, lightingReleaseActions, lightsLeftOnAfterResendText, lightsLeftOnText, owedOffTexts, toUserErrorReason,
-  type LightingOffCheck, type LightingOffOutcome, type LightingReadBack, type LightingReadBackResult, type LightingReleaseSong, type LinkDesktopApi, type LitSong, type OffSend, type OwedOff,
+  type LightingOffCheck, type LightingOffOutcome, type LightingReadBack, type LightingReadBackResult, type LightingReleaseSong, type LitSong, type OffSend, type OwedOff,
   type ProgramLightingOutput } from '@tb/core/link';
 import { lightingOffRequestSchema, type LightingOffResult, type Ma2NetworkSettings, type Ma2NetworkStatus, type Ma2NetworkTarget } from '@tb/schema';
+import type { ProgramMa2Console } from './program-license';
 
 /** As long as an Off may wait: a sync job already on the wire finishes first. */
 const releaseDeadlineMs = 7000;
@@ -12,7 +13,7 @@ const connectionPollMs = 1000;
 type Dependencies = {
   /** The console as the program reaches it (program-license.ts): an Off is never refused for license, and each one sent is
    * logged there («MA2 关灯指令已发送», with how long it waited for the console line). */
-  console: Pick<LinkDesktopApi, 'getMa2NetworkStatus' | 'playMa2Cue'>;
+  console: ProgramMa2Console;
   /** The console connected again and owed Offs are sent once more: logged as a warning. */
   resending(count: number): void;
   /** A resend after the console connected did not go out either: no one waits for its answer, so it is logged as an
@@ -147,12 +148,14 @@ export class LightingOffService implements ProgramLightingOutput {
     const sessionId = randomUUID(), deadlineAt = this.now() + releaseDeadlineMs;
     const confirmed: { off: OffSend; network: Ma2NetworkTarget }[] = [];
     const results = await Promise.all(sends.map(async (off): Promise<LightingOffOutcome['failed'][number] | null> => {
+      const stillOwed = (): boolean => this.ledger.awaitsSend(off.executor, off.attempt);
+      if (!stillOwed()) return null;
       const target = off.network ?? (status?.settings ? targetOf(status.settings) : null);
       const refused = unreadable ?? (!connected ? (off.resent ? '没有连接控台' : '没有连接控台，连上以后会自动补发一次')
         : target && !sameTarget(target, connected) ? '现在连着的不是原来那台控台，关灯指令没有发送' : null);
       if (refused || !target) return this.fail(off, refused ?? '没有连接控台', connection, target);
       try {
-        await this.dependencies.console.playMa2Cue({ network: target, action: off.action, sessionId, deadlineAt });
+        await this.dependencies.console.playMa2Cue({ network: target, action: off.action, sessionId, deadlineAt }, stillOwed);
         if (this.ledger.ack(off.executor, off.attempt)) confirmed.push({ off, network: target });
         return null;
       } catch (error) { return this.fail(off, toUserErrorReason(error), connection, target); }

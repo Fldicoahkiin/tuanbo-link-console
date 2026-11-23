@@ -6,15 +6,21 @@ import { programPlaylistId, programPlaylists } from './program-playlists';
 /** Time a song's MTC must stay clear of the one before it, so a late stop never runs into the next show. */
 const GAP_MS = 10_000;
 
+/** Allow the receiver to finish its AfterRoll plus half a second for clock acquisition, rounded up to whole seconds. */
+export function ma2MtcGapTicks(afterRollSeconds = 0.5): number {
+  return Math.ceil(afterRollSeconds + 0.5) * 30;
+}
+
 /**
  * The MTC start for a song that has none: the first whole second at least ten seconds after every
  * occupied range ends (60 s when nothing is occupied). The single allocator for P1 auto-follow and
  * for songs synced to the console; for P1 it reproduces the layout P1 exports always used.
  */
-export function nextMtcStartMs(occupied: ReadonlyArray<{ startMs: number; endMs: number }>, durationMs: number, limitMs = 86_400_000): number {
+export function nextMtcStartMs(occupied: ReadonlyArray<{ startMs: number; endMs: number }>, durationMs: number, limitMs = 86_400_000, minimumGapMs = GAP_MS): number {
   if (!Number.isFinite(durationMs) || durationMs <= 0) throw new Error('歌曲时长无效，无法分配时间码起点');
-  const end = Math.max(60_000 - GAP_MS, ...occupied.map(range => range.endMs));
-  const start = Math.ceil((end + GAP_MS) / 1000) * 1000;
+  const gapMs = Math.max(GAP_MS, minimumGapMs);
+  const end = Math.max(60_000 - gapMs, ...occupied.map(range => range.endMs));
+  const start = Math.ceil((end + gapMs) / 1000) * 1000;
   if (start + durationMs >= limitMs) throw new Error(`没有足够的时间码空间：新歌需要从 ${Math.round(start / 1000)} 秒开始，加上时长后超出 ${Math.round(limitMs / 3_600_000)} 小时，请拆分工程`);
   return start;
 }
@@ -59,7 +65,7 @@ export function allocateSongMtcStart(project: LinkProject, itemId: string, conso
     const start = programTimeOrigin(other);
     occupied.push({ startMs: start, endMs: start + other.referenceAudio.durationMs });
   }
-  return nextMtcStartMs(occupied, item.referenceAudio.durationMs);
+  return nextMtcStartMs(occupied, item.referenceAudio.durationMs, undefined, ma2MtcGapTicks(console.afterRollSeconds) * 1000 / 30);
 }
 
 export type SongMtcStartReading = { state: 'set'; startMs: number } | { state: 'unset' } | { state: 'invalid'; reason: string };
@@ -68,6 +74,11 @@ export function readSongMtcStart(item: Pick<LinkProject['rundown'][number], 'pla
   if (!item.playback && !item.p1Media) return { state: 'unset' };
   try { return { state: 'set', startMs: Math.round(programTimeOrigin(item)) }; }
   catch (error) { return { state: 'invalid', reason: error instanceof Error ? error.message : String(error) }; }
+}
+
+/** Playlist copies of the same recording share one console timeline at the same MTC origin. */
+export function sameMtcRecording(hash: string, startMs: number, otherHash: string, otherStartMs: number): boolean {
+  return hash === otherHash && startMs === otherStartMs;
 }
 
 /** Another song whose MTC range runs into this one's. */
@@ -88,7 +99,7 @@ export function songMtcOverlaps(project: LinkProject): Map<string, SongMtcOverla
   const overlaps = new Map<string, SongMtcOverlap[]>();
   for (const range of ranges) {
     const others = ranges.filter(other => other.item.id !== range.item.id && other.start < range.end && range.start < other.end
-      && !(other.audio === range.audio && other.start === range.start))
+      && !sameMtcRecording(range.audio, range.start, other.audio, other.start))
       .map(other => ({ id: other.item.id, title: other.item.title, playlistId: programPlaylistId(project, other.item) }));
     if (others.length) overlaps.set(range.item.id, others);
   }

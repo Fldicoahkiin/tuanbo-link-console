@@ -142,7 +142,7 @@ it('停止后经过比较、写前快照与回读才清空待提交，回读更�
   expect(test.bridge.request).toHaveBeenCalledTimes(2); expect(test.bridge.exchange).toHaveBeenCalledOnce();
   expect(pending()).toEqual([]);
   expect(useDocumentStore.getState().past).toHaveLength(1);
-  expect(test.song()).toMatchObject({ state: 'verified', writing: false, message: 'Timecode 9902 已写入控台并回读确认' });
+  expect(test.song()).toMatchObject({ state: 'verified', writing: false, message: 'Timecode 9902 已写入控台并核对' });
 });
 
 // 2026-11-11 用户：“矛盾的时候采用最新的”，取代 2026-10-26 的“以联动台为准”。播放时改的点，停下后才第一次看到控台上也挪了：控台的更晚。
@@ -335,7 +335,7 @@ it('写入中撤销不会被旧回读覆盖，下一笔写回撤销后的内容'
   await test.tick(); expect(position()).toBe(original); expect(pending()).toHaveLength(1);
   await test.tick(); expect(position()).toBe(original); expect(pending()).toEqual([]);
   expect(useDocumentStore.getState().future).toHaveLength(1);
-  await test.tick(); expect(test.song().state).toBe('verified'); expect(test.song().message).toContain('回读确认');
+  await test.tick(); expect(test.song().state).toBe('verified'); expect(test.song().message).toContain('已写入控台并核对');
 });
 
 it('存档失败阻止写入，并保留本地修改且不重试', async () => {
@@ -355,7 +355,7 @@ it('素材池新 Cue 写入原时间线并读回；一步撤销和重做都再�
   event.librarySource = { id: 'pool-cue', revision: 1 };
   store().execute(setLightingCommand('song', edit));
   await test.tick();
-  expect(test.song().message).toContain('已写入控台并回读确认');
+  expect(test.song().message).toContain('已写入控台并核对');
   expect(test.console()).toMatch(/<No>9901<\/No>\s*<No>3<\/No>/);
   expect(doc().tracks[0]!.clips.flatMap(clip => clip.events).find(point => point.id === event.id)).toMatchObject({ sequence: 9901, cue: '8.000', executor: '99.219', librarySource: event.librarySource });
   expect(store().past).toHaveLength(1);

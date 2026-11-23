@@ -19,6 +19,7 @@ type Dependencies = {
   /** Formal playback takes an output from the editor before opening it. */
   claimMidiOutput?: (portName: string, owner: MidiClaimOwner) => Promise<MidiClaim>;
   configuration: InternalPlayerDependencies['configuration'];
+  deskRanges?: InternalPlayerDependencies['deskRanges'];
   preciseSeeking(): boolean;
   changed(state: InternalPlayerState): void;
   midiChanged(state: NativeMidiChannelState): void;
@@ -57,6 +58,7 @@ export class NativeProgramHost {
         this.controller.reportUnavailable(`动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）`);
       } });
     this.controller = new NativeProgramPlayer(project, path, revision, {
+      deskRanges: dependencies.deskRanges,
       prepare: async (itemId, positionMs, { signal, pass }) => {
         const audio = dependencies.audio();
         if (!audio || audio.itemId !== itemId || audio.positionMs !== positionMs) throw new Error('MIDI 准备的起点和当前音频对不上');

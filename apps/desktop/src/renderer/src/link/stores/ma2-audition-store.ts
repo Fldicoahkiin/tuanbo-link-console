@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { useEffect, useRef } from 'react';
 import type { Ma2AuditionState } from '@tb/schema';
 const initial:Ma2AuditionState={version:1,revision:0,generation:0,phase:'idle',targets:[]};
-export const useMa2AuditionStore=create<{state:Ma2AuditionState;error:string}>()(()=>({state:initial,error:''}));
+export const useMa2AuditionStore=create<{state:Ma2AuditionState;error:string;consoleStops:number}>()(()=>({state:initial,error:'',consoleStops:0}));
 function receive(state:Ma2AuditionState):void{if(state.revision>=useMa2AuditionStore.getState().state.revision)useMa2AuditionStore.setState({state,error:''});}
 export function observeMa2Audition():()=>void{
   const unsubscribe=window.tbLink.onMa2AuditionState(receive);let active=true;
@@ -23,10 +23,18 @@ export function useAuditionSelectionReset(reset:()=>void):void {
     if(current.state.phase==='stopping'&&previous.state.phase!=='stopping')latest.current();
   }),[]);
 }
+/** Discard input still local to an open console page before the desk-wide stop goes out. */
+export function useConsoleStop(cancel:()=>void):void {
+  const latest=useRef(cancel);
+  latest.current=cancel;
+  useEffect(()=>useMa2AuditionStore.subscribe((current,previous)=>{
+    if(current.consoleStops!==previous.consoleStops)latest.current();
+  }),[]);
+}
 export function stopMa2Audition(action:StopAction='stop'):Promise<void>{
   const previous = stopping.get('stop-console') ?? stopping.get(action);
   if(previous)return previous;
-  useMa2AuditionStore.setState(current=>({state:{...current.state,phase:'stopping'},error:''}));
+  useMa2AuditionStore.setState(current=>({state:{...current.state,phase:'stopping'},error:'',consoleStops:current.consoleStops+(action==='stop-console'?1:0)}));
   const task=window.tbLink.controlMa2Audition({version:1,action}).then(receive).catch((error:unknown)=>{useMa2AuditionStore.setState(current=>({state:{...current.state,phase:'failed'},error:error instanceof Error?error.message:String(error)}));throw error;}).finally(()=>{stopping.delete(action);});
   stopping.set(action,task);return task;
 }

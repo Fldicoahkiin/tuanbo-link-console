@@ -1,4 +1,4 @@
-import { cueAttributeNamesSchema } from './lighting';
+import { ma2CueValueEditsSchema, cueAttributeNamesSchema } from './lighting';
 import { z } from 'zod';
 import { ma2SongBindingSchema, ma2TimelineDestinationSchema } from './ma2-song-binding';
 import { ma2ConsoleChangesSchema, ma2NetworkTargetSchema, ma2WriteModeSchema } from './ma2-bridge';
@@ -10,7 +10,7 @@ const source = z.object({ show: z.string().min(1), generation: z.string().min(1)
 const cueNumber = z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/, 'Cue 编号须为 1–9999，最多 3 位小数').refine(value => Number(value) > 0, 'Cue 编号须大于 0');
 export const ma2SongPointSchema = z.object({ id: z.string().min(1), name: z.string().max(512).regex(/^[^\u0000-\u001f"\\]*$/), atMs: z.number().finite().nonnegative(),
   enabled: z.boolean().optional(),
-  cues: z.array(z.object({ attributes: cueAttributeNamesSchema.optional(), includeTracking: z.boolean().optional(), sequence: z.number().int().min(1).max(99999), cue: cueNumber, delayMs: z.number().finite().nonnegative() }).strict()).max(32)
+  cues: z.array(z.object({ valueEdits: ma2CueValueEditsSchema.optional(), attributes: cueAttributeNamesSchema.optional(), includeTracking: z.boolean().optional(), sequence: z.number().int().min(1).max(99999), cue: cueNumber, delayMs: z.number().finite().nonnegative() }).strict()).max(32)
 }).strict();
 export const ma2SongSyncRequestSchema = z.object({ network: ma2NetworkTargetSchema, expectedSource: source, projectId: z.string().uuid(), itemId: z.string().min(1), requestId: z.string().uuid(),
   settings: ma2LayoutSettingsSchema, name: ma2LabelSchema, points: z.array(ma2SongPointSchema).max(9999), binding: ma2SongBindingSchema.optional(),
@@ -30,6 +30,7 @@ export const ma2SongSyncRequestSchema = z.object({ network: ma2NetworkTargetSche
    * song in the software (left out when unknown) and when a pass first saw the console differ from the
    * last confirmed sync (left out when this sync is the first to see it).
    */
+  manualConflict: z.object({ lastConfirmedAt: z.number().finite().nonnegative().optional(), choice: z.enum(['local', 'remote']).optional() }).strict().optional(),
   localEditedAt: z.number().finite().nonnegative().optional(),
   consoleSeenAt: z.number().finite().nonnegative().optional()
 }).strict().superRefine((value, ctx) => {
@@ -47,7 +48,7 @@ export const ma2SongConsoleEditsSchema = z.object({
   moved: z.array(z.object({ id: z.string().min(1), atMs: z.number().finite().nonnegative() }).strict()),
   removed: z.array(z.string().min(1)),
   added: z.array(z.object({ id: z.string().min(1), name: z.string().max(512), atMs: z.number().finite().nonnegative(), cue: cueNumber }).strict()),
-  conflicts: z.object({ count: z.number().int().positive(), winner: z.enum(['local', 'remote']) }).strict().optional()
+  conflicts: z.object({ count: z.number().int().positive(), winner: z.enum(['local', 'remote']), operatorChoice: z.boolean().optional() }).strict().optional()
 }).strict();
 export const ma2SongSyncResultSchema = z.object({ binding: ma2SongBindingSchema, library: ma2EffectLibrarySchema, layout: ma2LayoutSnapshotSchema.nullable(),
   libraryDirectoryScope: z.literal('song').optional(),

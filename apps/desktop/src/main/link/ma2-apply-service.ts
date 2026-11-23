@@ -1,9 +1,10 @@
 import { ma2ApplyRequestSchema, ma2ApplyResultSchema, type Ma2ApplyRequest, type Ma2ApplyResult, type Ma2TimecodePreview } from '@tb/schema';
-import { holdForShow, MA2_SONG_COLLISION, MA2_SONG_TIMECODE_SLOT, resolveMa2Sync, type ShowGateReader } from '@tb/core/link';
-import { Ma2BridgeFailure, ma2TimecodeChangedBeforeWrite, type Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { MA2_BRIDGE_BUSY_BEFORE_REQUEST, holdForShow, ma2EditedCueHold, MA2_SONG_COLLISION, MA2_SONG_TIMECODE_SLOT, resolveMa2Sync, type ShowGateReader } from '@tb/core/link';
+import { Ma2BridgeFailure, ma2TimecodeChangedBeforeWrite, waitForMa2Admission, type Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { confirmMa2MergedEvents, prepareMa2MergedEvents } from './ma2-event-write';
 import { convertMa2Snapshot } from './ma2-timecode-conversion';
-import { inspectMa2TimecodeXml, ma2GoSequencesInSnapshot, ma2MtcPlaybackSettings, referencedMa2Sequences, sameMa2XmlObjects } from './ma2-timecode-xml';
+import { readMa2MtcRanges } from './ma2-timeline-edit';
+import { extendMa2TimecodeLength, inspectMa2TimecodeXml, ma2GoSequencesInSnapshot, ma2MtcPlaybackSettings, referencedMa2Sequences, sameMa2XmlObjects } from './ma2-timecode-xml';
 import { compareMa2LightingReadback } from './ma2-comparison';
 import type { Ma2ShowSource } from './ma2-show-probe';
 import type { Ma2ConfirmedTimecode } from './ma2-mtc-selection';
@@ -11,7 +12,7 @@ import type { Ma2ConfirmedTimecode } from './ma2-mtc-selection';
 type PlaybackPreparation = {
   source: () => Promise<Ma2ShowSource>;
   verify: (source: Ma2ShowSource) => Promise<void>;
-  prepare: (timecode: Ma2ConfirmedTimecode, onConsoleCheck: () => void) => Promise<boolean>;
+  prepare: (timecode: Ma2ConfirmedTimecode, onConsoleCheck: (mayWrite?: boolean) => void) => Promise<boolean>;
 };
 
 /** One complete read/validate/write/verify session. No automatic retries. */
@@ -26,8 +27,15 @@ export class Ma2ApplyService {
     return additional.length ? this.bridge.request('SCOPE', target, additional.join(',')) : this.bridge.request('SNAPSHOT', target);
   }
 
+  /** Keep the accepted write and its backup while the separate verification read waits for admission. */
+  private readConfirmation(target: number, source: Ma2ShowSource | undefined): Promise<string> {
+    return waitForMa2Admission(() => this.bridge.request('SNAPSHOT', target), async () => {
+      if (source) await this.playback?.verify(source);
+    });
+  }
+
   /** Read once for three-way comparison and the following native compare-and-write. */
-  async previewEdit(target: number, origin: number | undefined, additional: readonly number[], readLive?: () => Promise<Ma2TimecodePreview>): Promise<Ma2TimecodePreview> {
+  async previewEdit(target: number, origin: number | undefined, additional: readonly number[], readLive?: () => Promise<Ma2TimecodePreview>, verifyOnApply = false): Promise<Ma2TimecodePreview> {
     this.editRead = undefined;
     holdForShow(this.show, 'ma2.sync.read');
     const last = this.confirmedRead;
@@ -39,7 +47,9 @@ export class Ma2ApplyService {
         return fresh;
       }
     }
-    const snapshot = await this.readSnapshot(target, additional);
+    // The next apply re-exports every referenced Sequence before Import. A no-op pass
+    // requests an ordinary verified snapshot before it can report success.
+    const snapshot = verifyOnApply ? await this.bridge.request('SCOPE', target, 'edit:' + additional.join(',')) : await this.readSnapshot(target, additional);
     const preview = convertMa2Snapshot(snapshot, target, additional, origin);
     const included = new Set(referencedMa2Sequences(preview.sourceXml));
     this.editRead = { preview, snapshot, sequences: additional.filter(number => !included.has(number)).join(','), at: Date.now() };
@@ -47,7 +57,7 @@ export class Ma2ApplyService {
   }
 
   async apply(input: Ma2ApplyRequest): Promise<Ma2ApplyResult> {
-    if (this.busy) return { status: 'incomplete', stage: 'preflight', message: '已有 MA2 同步正在进行', mayHaveWritten: false, backupFile: null };
+    if (this.busy) return { status: 'incomplete', stage: 'preflight', message: MA2_BRIDGE_BUSY_BEFORE_REQUEST, mayHaveWritten: false, backupFile: null };
     this.busy = true;
     this.confirmedRead = undefined;
     let stage: 'preflight' | 'read' | 'write' | 'verify' = 'preflight';
@@ -81,7 +91,15 @@ export class Ma2ApplyService {
       if (!sameMa2XmlObjects(request.readback.sourceXml, current.sourceXml) || previewContent(request.readback) !== previewContent(current)) throw new Error(`${MA2_SONG_COLLISION}：预览之后控台的 Timecode ${binding.timecode} 或它用的序列变了，这次没有写入；重新读取控台后再同步`);
       stage = 'preflight';
       const prepared = prepareMa2MergedEvents(request.document, request.bindingId, request.readback, new Map(request.conflicts), [snapshot], request.timeAlignment ?? 'exact', request.consoleChanges);
-      if (this.playback && inspectMa2TimecodeXml(current.sourceXml).timecodes[0]?.attributes.slot === MA2_SONG_TIMECODE_SLOT) {
+      const usesSongClock = this.playback && inspectMa2TimecodeXml(current.sourceXml).timecodes[0]?.attributes.slot === MA2_SONG_TIMECODE_SLOT;
+      if (usesSongClock) {
+        if (prepared.editedEndCueTick !== undefined && request.songEndTick !== undefined && source) {
+          const ranges = await readMa2MtcRanges(this.bridge);
+          if (ranges.show !== source.show || ranges.generation !== source.generation) throw new Error('控台或 Show 已改变，请重新核对当前节目');
+          const offset = Number(inspectMa2TimecodeXml(current.sourceXml).timecodes[0]?.attributes.offset ?? 0);
+          const hold = ma2EditedCueHold(ranges.entries, binding.timecode, offset, prepared.editedEndCueTick, request.songEndTick, ranges.afterRollSeconds);
+          prepared.desiredXml = extendMa2TimecodeLength(prepared.desiredXml, binding.timecode, hold);
+        }
         prepared.desiredXml = ma2MtcPlaybackSettings(prepared.desiredXml, false);
       }
       this.requireStopped();
@@ -93,7 +111,7 @@ export class Ma2ApplyService {
         const receipt = await this.bridge.exchange('SYNC', binding.timecode, snapshot, prepared.desiredXml);
         backupFile = `tblink_backup_${receipt.requestId}.xml`;
         stage = 'verify';
-        snapshot = receipt.snapshot ?? await this.bridge.request('SNAPSHOT', binding.timecode);
+        snapshot = receipt.snapshot ?? await this.readConfirmation(binding.timecode, source);
         verified = convertMa2Snapshot(snapshot, binding.timecode, [], binding.timeOriginMs);
       } else if (cached) {
         // SYNC normally checks the native snapshot immediately before Import. A read-only merge
@@ -103,17 +121,20 @@ export class Ma2ApplyService {
         if (previewContent(current) !== previewContent(verified) || !sameMa2XmlObjects(current.sourceXml, verified.sourceXml)) throw new Error(`${MA2_SONG_COLLISION}：控台在核对期间有变化，请重新同步`);
       }
       stage = 'verify';
-      if (source && this.playback) {
-        await this.playback.verify(source);
+      if (source && this.playback) await this.playback.verify(source);
+      // Moving a previously managed song out of the MIDI slot still changes the selector.
+      const leftSongClock = this.playback && !usesSongClock && binding.sourceXml !== current.sourceXml
+        && inspectMa2TimecodeXml(binding.sourceXml).timecodes[0]?.attributes.slot === MA2_SONG_TIMECODE_SLOT;
+      if (source && this.playback && (usesSongClock || leftSongClock)) {
         let checkedConsole = false;
         const wroteTimecode = mayHaveWritten;
-        const changed = await this.playback.prepare({ ...source, number: binding.timecode, xml: verified.sourceXml, goSequences: ma2GoSequencesInSnapshot(snapshot) }, () => {
+        const changed = await this.playback.prepare({ ...source, number: binding.timecode, xml: verified.sourceXml, previousXml: binding.sourceXml, goSequences: ma2GoSequencesInSnapshot(snapshot) }, (mayWrite = true) => {
           checkedConsole = true;
-          mayHaveWritten = true;
+          if (mayWrite) mayHaveWritten = true;
         });
         mayHaveWritten = wroteTimecode || changed;
         if (checkedConsole || changed) {
-          snapshot = await this.bridge.request('SNAPSHOT', binding.timecode);
+          snapshot = await this.readConfirmation(binding.timecode, source);
           verified = convertMa2Snapshot(snapshot, binding.timecode, [], binding.timeOriginMs);
           await this.playback.verify(source);
           const go = new Set(ma2GoSequencesInSnapshot(snapshot));
@@ -124,11 +145,15 @@ export class Ma2ApplyService {
       if (this.bridge.hasSnapshot?.(binding.timecode, snapshot)) this.confirmedRead = { preview: verified, snapshot };
       return ma2ApplyResultSchema.parse({ status: 'verified', confirmed, backupFile });
     } catch (error) {
-      if (stage === 'write' && error instanceof Ma2BridgeFailure) { mayHaveWritten = error.sent; backupFile = error.backupFile; }
+      if (stage === 'write' && error instanceof Ma2BridgeFailure) {
+        mayHaveWritten = error.sent;
+        backupFile = error.backupFile;
+        if (error.writeAcknowledged) stage = 'verify';
+      }
       const message = error instanceof Error ? error.message : String(error);
       // The native bridge explicitly rejected the compare, before Import. Its lane may already
       // have accepted the request, so transport-level 'sent' alone cannot classify these cases.
-      if (stage === 'write' && ma2TimecodeChangedBeforeWrite(message)) {
+      if (stage === 'write' && ma2TimecodeChangedBeforeWrite(error)) {
         return { status: 'incomplete', stage: 'preflight', message: `${MA2_SONG_COLLISION}：写入前控台已有改动，正在重新核对`, mayHaveWritten: false, backupFile };
       }
       return { status: 'incomplete', stage, message, mayHaveWritten, backupFile };

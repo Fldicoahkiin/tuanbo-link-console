@@ -7,9 +7,40 @@ import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2CommandQueue } from './ma2-command-queue';
 import { showStopped } from './fixtures/show-gates';
 import { Ma2RequestJournal } from './ma2-request-journal';
-import { MA2_BRIDGE_MISSING_BEFORE_REQUEST } from '@tb/core/link';
+import { MA2_BRIDGE_BUSY_BEFORE_REQUEST, MA2_BRIDGE_MISSING_BEFORE_REQUEST } from '@tb/core/link';
 
 const id = '1234567890abcdef1234567890abcdef';
+it.each([
+  ['0001', 'SEQPACK:20:2', '序列片段'],
+  ['00000004ff', 'SEQPACK:20:5', '不完整'],
+  ['00000001780001', 'SEQPACK:20:7', '传输不完整'],
+  ['ff', 'SEQDATA:1', '文字编码']
+])('大序列的数据损坏时释放本次读取，下一次仍可读取（%s）', async (bytes, receipt, reason) => {
+  const command = vi.fn()
+    .mockResolvedValueOnce('ACK:lanes').mockResolvedValueOnce(receipt)
+    .mockResolvedValueOnce(bytes).mockResolvedValueOnce('ACK');
+  const wire = new Ma2NetworkWire({ command });
+  await expect(wire.exchange(id, 'SEQUENCE', 99, '', () => undefined)).rejects.toThrow(reason);
+  expect(command.mock.calls.at(-1)?.[0]).toContain(`'release','${id}')`);
+  expect(wire.unreleasedRequests).toEqual([]);
+  command.mockResolvedValueOnce('ACK:lanes').mockResolvedValueOnce('SEQDATA:2')
+    .mockResolvedValueOnce('6f6b').mockResolvedValueOnce('ACK');
+  await expect(wire.exchange(id, 'SEQUENCE', 99, '', () => undefined)).resolves.toBe('ok');
+  expect(command.mock.calls.at(-1)?.[0]).toContain(`'release','${id}','received')`);
+});
+
+it('整首文件下载中能在两次分段之间让出通道，节目启动时取消余下读取', async () => {
+  const commands = vi.fn().mockResolvedValueOnce('ACK:lanes').mockResolvedValueOnce('SEQDATA:9000')
+    .mockResolvedValueOnce('00'.repeat(8192)).mockResolvedValueOnce('ACK');
+  let received = 0;
+  const beforeStep = (): void => { if (received) throw new Error('节目已经开始'); };
+  await expect(new Ma2NetworkWire({ command: commands }).exchange(id, 'SEQUENCE', 99, '', () => undefined, undefined,
+    progress => { if (progress) received = progress.completed; }, beforeStep)).rejects.toThrow('节目已经开始');
+  expect(received).toBe(8192);
+  expect(commands.mock.calls.filter(([line]) => String(line).includes("'readbatch'"))).toHaveLength(1);
+  expect(commands.mock.calls.at(-1)?.[0]).toContain(`'release','${id}')`);
+});
+
 it('不能保存请求归属时不发送；明确拒绝的 begin 不遗留待释放记录', async () => {
   const command = vi.fn().mockResolvedValue('ACK');
   const released = vi.fn();
@@ -17,7 +48,7 @@ it('不能保存请求归属时不发送；明确拒绝的 begin 不遗留待释
   await expect(new Ma2NetworkWire({ command }, false, journal).exchange(id, 'LIST', 1, '', () => undefined)).rejects.toThrow('磁盘不可写');
   expect(command).not.toHaveBeenCalled();
   command.mockResolvedValue(`ERR:${Buffer.from('Another network request is pending').toString('hex')}`);
-  await expect(new Ma2NetworkWire({ command }, false, { begin: () => undefined, released }).exchange(id, 'LIST', 1, '', () => undefined)).rejects.toThrow('pending');
+  await expect(new Ma2NetworkWire({ command }, false, { begin: () => undefined, released }).exchange(id, 'LIST', 1, '', () => undefined)).rejects.toMatchObject({ sent: false, message: MA2_BRIDGE_BUSY_BEFORE_REQUEST });
   expect(command).toHaveBeenCalledTimes(1);
   expect(released).toHaveBeenCalledExactlyOnceWith(id);
 });
@@ -188,6 +219,30 @@ it('取消在途分段读取后释放本次传输，不继续收取后续数据�
   expect(server.actions.filter(action => action === 'run')).toHaveLength(1);
   expect(server.actions.at(-1)).toBe('release');
 });
+it('排队时带原 Show 和会话重新申请；同一请求只运行一次，后排的读取也能完成', async () => {
+  const busy = 'ERR:' + Buffer.from('[string "tblink_bridge"]:1875: Another network request is pending:31:32').toString('hex');
+  const command = vi.fn().mockResolvedValueOnce(busy).mockResolvedValueOnce('ACK').mockResolvedValueOnce('DONE:41');
+  let currentId = '';
+  const line = async (query: string): Promise<string> => {
+    if (query.includes(",'begin")) currentId = /,'(?:begin(?:[:a-f0-9]+)?)','([a-f0-9]{32})'/.exec(query)![1]!;
+    if (query.includes('for i=')) return Buffer.from(currentId + '\nOK\n3\n3.7').toString('hex');
+    if (query.includes(",'release',")) return 'ACK';
+    return String(await command(query));
+  };
+  command.mockResolvedValueOnce('ACK').mockResolvedValueOnce('DONE:41');
+  const bridge = new Ma2OnpcBridge(new Ma2NetworkWire({ command: line }), showStopped);
+  await expect(Promise.all([bridge.request('PING', 1), bridge.request('PING', 1)])).resolves.toEqual(['3.7', '3.7']);
+  expect(command.mock.calls[1]?.[0]).toContain(",'begin:31:32',");
+  expect(command.mock.calls.filter(([q]) => String(q).includes(",'run',"))).toHaveLength(2);
+});
+
+it('控台明确拒绝占用后取消，只清除自己的本地登记', async () => {
+  const controller = new AbortController(), released = vi.fn();
+  const command = vi.fn(() => { controller.abort(new Error('用户停止同步')); return Promise.resolve('ERR:' + Buffer.from('Another network request is pending:31:32').toString('hex')); });
+  await expect(new Ma2NetworkWire({ command }, false, { begin: () => undefined, released }).exchange(id, 'READ', 1, '', () => undefined, controller.signal)).rejects.toMatchObject({ sent: false, message: '用户停止同步' });
+  expect(command).toHaveBeenCalledOnce(); expect(released).toHaveBeenCalledWith(id);
+});
+
 it('没有取得请求时不释放其他客户端正在进行的传输', async () => {
   const commands: string[] = [];
   const connection = { command: (line: string): Promise<string> => {

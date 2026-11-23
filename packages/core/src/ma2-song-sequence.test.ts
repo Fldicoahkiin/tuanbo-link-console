@@ -1,6 +1,15 @@
 import { expect, it } from 'vitest';
 import { createLightingDocument, type Ma2SongSyncResult } from '@tb/schema';
-import { applyMa2SongReadback, ma2SongPoints } from './ma2-song-sequence';
+import { applyMa2SongReadback, ma2SongPoints, sameMa2SongBinding } from './ma2-song-sequence';
+
+it('核对整首回执时比较完整灯具内容、点位和目标信息', () => {
+  const { result: { binding } } = sample();
+  expect(sameMa2SongBinding(undefined, binding)).toBe(false);
+  expect(sameMa2SongBinding(binding, structuredClone(binding))).toBe(true);
+  expect(sameMa2SongBinding(binding, { ...binding, baselineXml: '<MB/>' })).toBe(false);
+  expect(sameMa2SongBinding(binding, { ...binding, points: binding.points.slice(1) })).toBe(false);
+  expect(sameMa2SongBinding(binding, { ...binding, executor: '1.103' })).toBe(false);
+});
 
 it('静音、片段静音和独奏只禁用触发，保留全部 Cue 内容供解除静音后复用', () => {
   const { document } = sample();

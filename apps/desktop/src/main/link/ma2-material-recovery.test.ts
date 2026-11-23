@@ -1,8 +1,9 @@
-import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { createEmptyLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, type Ma2EffectLibrary } from '@tb/schema';
+import { saveMa2MaterialLibraryCommand } from '@tb/core/link';
 import { Ma2MaterialRecovery } from './ma2-material-recovery';
 import { LinkProjectService } from './link-project-service';
 
@@ -25,4 +26,27 @@ it('素材读取中断后恢复已落盘序列；损坏一条不丢其他条，�
   expect(damaged?.library?.errors[0]?.sequence).toBe(37);
   await service.save(path, createEmptyLinkProject('其他工程'));
   expect((await service.open(path)).ma2MaterialLibrary).toBeUndefined();
+});
+
+it('另一个 Show 的素材只恢复到读取前保存的文件，重新保存的原 Show 重开仍保持原样', async () => {
+  const path = join(await mkdtemp(join(tmpdir(), 'tblink-show-save-')), 'show.tblink');
+  const directory = { show: '原 Show', generation: 'original', version: '3.7.0.5', entries: [{ target: 3, name: '节目' }] };
+  const library: Ma2EffectLibrary = { directory, readAt: '2026-10-01T00:00:00.000Z', sequences: [{ sequence: 3, name: '节目', cues: [{ index: 1, number: '1.000', name: '红光' }] }], errors: [], fixtureUsage: [] };
+  const service = new LinkProjectService();
+  const project = saveMa2MaterialLibraryCommand('本机 onPC', library).execute(createEmptyLinkProject('保留原节目'));
+  await service.save(path, project);
+  const recovery = new Ma2MaterialRecovery(path, project.projectId, '本机 onPC');
+  const next = { ...directory, show: '另一个 Show', generation: 'other', entries: [{ target: 9, name: '其他素材' }] };
+  await recovery.record({ phase: 'library', completed: 0, total: 1, detail: '开始', checkpoint: { directory: next, readAt: '2026-10-02T00:00:00.000Z' } });
+  await recovery.record({ phase: 'library', completed: 1, total: 1, detail: '完成', sequences: [{ sequence: 9, name: '其他素材', cues: [{ index: 1, number: '1.000', name: '蓝光' }] }] });
+  const checkpoint = new Date('2026-10-02T00:00:01.000Z');
+  await utimes(`${path}.ma2-material-recovery/active.json`, checkpoint, checkpoint);
+  await utimes(path, new Date(library.readAt), new Date(library.readAt));
+  expect((await service.open(path)).ma2MaterialLibrary?.library?.sequences[0]?.sequence).toBe(9);
+  await service.save(path, project);
+  const resaved = new Date(checkpoint.getTime() + 1000);
+  await utimes(path, resaved, resaved);
+  const reopened = await service.openDocument(path);
+  expect(reopened.project.ma2MaterialLibrary?.library?.sequences).toEqual(library.sequences);
+  expect(reopened.upgraded).toBe(false);
 });

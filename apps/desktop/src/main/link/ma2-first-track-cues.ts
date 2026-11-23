@@ -1,4 +1,4 @@
-import { attributeMask } from './ma2-cue-attributes';
+import { attributeMask, encodeCueValueEdits } from './ma2-cue-attributes';
 import { createHash } from 'node:crypto';
 import { existingFirstTrackCue } from '@tb/core/link';
 import { ma2FirstTrackReceiptSchema, type Ma2FirstTrackRequest } from '@tb/schema';
@@ -26,9 +26,10 @@ export async function addMa2FirstTrackCues(bridge: Pick<Ma2OnpcBridge, 'request'
     const modes = point.sources.map(source => source.includeTracking);
     if (modes.some(mode => mode !== undefined)) identity.push(JSON.stringify(modes));
     if (point.sources.some(source => source.attributes)) identity.push(JSON.stringify(point.sources.map(source => source.attributes && attributeMask(source.attributes))));
+    if (point.sources.some(source => source.valueEdits)) identity.push(JSON.stringify(point.sources.map(source => source.valueEdits && encodeCueValueEdits(source.valueEdits))));
     const refs = point.sources.map(source => {
       const mode = source.includeTracking === undefined ? '' : source.includeTracking ? 't' : 's';
-      return `${source.sequence} ${source.cue}${mode}${source.attributes ? '~' + attributeMask(source.attributes) : ''}`;
+      return `${source.sequence} ${source.cue}${mode}${source.attributes ? '~' + attributeMask(source.attributes) : ''}${source.valueEdits ? '!' + Buffer.from(encodeCueValueEdits(source.valueEdits)).toString('hex') : ''}`;
     }).join(',');
     rows.push(`${hash(identity)} ${refs || '0 0'}`);
     return rows.length - 1;

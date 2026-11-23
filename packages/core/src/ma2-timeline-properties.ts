@@ -2,8 +2,8 @@ import { ma2LabelSchema, parseLinkProject, type LinkProject, type Ma2TimecodePre
 import type { LinkCommand } from './link-command';
 import { programTimeOrigin } from './ma2-time-origin';
 import { sameMtcStart } from './ma2-program-matching';
-import { checkMa2MtcStart } from './ma2-mtc-selection';
-import { MA2_SONG_TIMECODE_SLOT, readSongMtcStart } from './mtc-start';
+import { checkMa2MtcStart, ma2MtcSeparation } from './ma2-mtc-selection';
+import { MA2_SONG_TIMECODE_SLOT, ma2MtcGapTicks, readSongMtcStart } from './mtc-start';
 import { songDurationMs } from './audio-edit';
 
 export function ma2TimelineOwner(project: LinkProject, target: number) {
@@ -20,7 +20,7 @@ export function checkMa2TimelineStart(project: LinkProject, ranges: Ma2TimecodeR
   checkSongStart(project, owner?.id, startMs);
   const planned = owner?.lighting?.timelineDestination?.timecode === target && !owner.lighting.consoleSong?.timecode;
   const duration = owner?.referenceAudio ? songDurationMs(owner.referenceAudio) : 0;
-  const interval = checkMa2MtcStart(ranges.entries, target, startMs, duration, planned);
+  const interval = checkMa2MtcStart(ranges.entries, target, startMs, duration, planned, ranges.afterRollSeconds);
   const slots = new Map(ranges.entries.map(entry => [entry.target, entry.slot]));
   const slot = slots.get(target) ?? MA2_SONG_TIMECODE_SLOT;
   for (const song of project.rundown) {
@@ -31,7 +31,9 @@ export function checkMa2TimelineStart(project: LinkProject, ranges: Ma2TimecodeR
     if (reading.state !== 'set') continue;
     const start = Math.round(reading.startMs * 30 / 1000);
     const end = start + Math.ceil(songDurationMs(song.referenceAudio) * 30 / 1000);
-    if (start < interval.end && interval.start < end) throw new Error(`这个时段已分给节目「${song.title}」，请输入其他起始码`);
+    const gap = ma2MtcSeparation(interval, { start, end });
+    if (gap >= 0 && slot === MA2_SONG_TIMECODE_SLOT && gap < ma2MtcGapTicks(ranges.afterRollSeconds)) throw new Error(`与节目「${song.title}」至少需要间隔 ${ma2MtcGapTicks(ranges.afterRollSeconds) / 30} 秒`);
+    if (gap < 0) throw new Error(`这个时段已分给节目「${song.title}」，请输入其他起始码`);
   }
 }
 

@@ -11,7 +11,7 @@ async function project(main) {
     await mkdir(join(directory, 'out/main'), { recursive: true })
     await writeFile(join(directory, 'out/main/index.cjs'), main)
   }
-  return { packager: { projectDir: directory } }
+  return { packager: { projectDir: directory, appInfo: { version: '0.5.19' }, config: {} } }
 }
 
 test('打包只接受 release 构建：开发构建的本机测试入口一律拒绝', async () => {
@@ -20,4 +20,20 @@ test('打包只接受 release 构建：开发构建的本机测试入口一律�
   }
   await assert.rejects(requireReleaseBuild(await project(undefined)), /ENOENT/)
   await requireReleaseBuild(await project('const getLicenseStatus = async () => (await getLicenseService()).status();'))
+})
+
+test('0.5.19 的资源、控台接口和异步页面都按稳定版范围核对', async () => {
+  const context = await project('const ready = true')
+  const output = join(context.packager.projectDir, 'out')
+  await mkdir(join(output, 'renderer/assets'), { recursive: true })
+  const chunk = join(output, 'renderer/assets/panel.js')
+  await writeFile(chunk, 'const page = "ai-lighting"')
+  await assert.rejects(requireReleaseBuild(context), /panel\.js 中含有 AI 编灯/)
+  await writeFile(chunk, 'const page = "lighting"')
+  context.packager.config.extraResources = [{ from: '../scripts', filter: ['prepare-lighting-model.ps1'] }]
+  await assert.rejects(requireReleaseBuild(context), /打包资源中含有 AI 编灯/)
+  context.packager.config.extraResources = []
+  await requireReleaseBuild(context)
+  await writeFile(join(output, 'main/index.cjs'), 'handle("link:ma2-stage-open")')
+  await assert.rejects(requireReleaseBuild(context), /index\.cjs 中含有 AI 编灯/)
 })

@@ -1,11 +1,11 @@
-import { confirmMa2RenameCommand, isShowWait, ma2RenameKey, pendingMa2Renames, toConsoleLabel, toUserErrorMessage, type LinkCommand } from '@tb/core/link';
+import { MA2_BRIDGE_BUSY_BEFORE_REQUEST, confirmMa2RenameCommand, isShowWait, ma2RenameKey, pendingMa2Renames, toConsoleLabel, toUserErrorMessage, type LinkCommand } from '@tb/core/link';
 import { ma2CatalogSchema, ma2RenameResultSchema, type LinkProject, type Ma2Catalog, type Ma2CatalogRequest, type Ma2RenameRequest, type Ma2RenameResult } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2SyncStore, type NameSync } from '../stores/ma2-sync-store';
 import { currentShowWait } from '../stores/show-state-store';
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { ma2MaterialConnection } from '../stores/ma2-material-read-store';
-import { useMa2RealtimePreference } from './ma2-realtime-preference';
+import { ma2SyncActive, useMa2RealtimePreference } from './ma2-realtime-preference';
 import { archiveBeforeSync } from './ma2-sync-archive';
 import { reportCoordinatorError } from './runtime-action-log';
 
@@ -82,6 +82,9 @@ export async function runMa2NameSync(connection: Ma2CatalogRequest, documentId: 
       message: outcome.moved ? MOVED_RENAMES : outstanding ? '上一个名称已确认，继续同步后面的改名' : '名称已写入控台并回读确认' });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
+    if (message === MA2_BRIDGE_BUSY_BEFORE_REQUEST) {
+      setNames({ state: 'pending', writing: false, blockedNames: undefined, nextCheckAt: Date.now() + 200, message }); return;
+    }
     let disconnected = false;
     if (connection.network) {
       try { disconnected = (await window.tbLink.getMa2NetworkStatus()).state !== 'connected'; }
@@ -118,7 +121,7 @@ async function writeNames(documentId: number, current: () => unknown): Promise<v
   await runMa2NameSync(connection, documentId, () => useDocumentStore.getState().documentId === documentId);
 }
 
-export const MA2_NAMES_PAUSED = '实时同步已暂停，新名称先留在工程里；打开实时同步或点“同步名称”后写到控台';
+export const MA2_NAMES_PAUSED = '新名称已留在工程里。点“同步名称”可写入控台';
 
 /**
  * After a console object is renamed. On the network console the real-time pass writes the name with
@@ -141,4 +144,26 @@ export async function writeMa2NamesNow(documentId: number): Promise<void> {
   const current = namesDocument(documentId);
   if (useMa2SyncStore.getState().names.state === 'syncing') return;
   await writeNames(documentId, current);
+}
+
+/** Renamed console objects go first in each pass, under the same waits and the names' failure policy. */
+export async function syncPendingMa2Names(): Promise<void> {
+  const names = useMa2SyncStore.getState().names;
+  const document = useDocumentStore.getState();
+  const pending = pendingMa2Renames(document.project);
+  if (!pending.length) {
+    // Undone, or confirmed by an explicit request meanwhile.
+    if (names.state === 'pending' || names.state === 'blocked') setNames({ state: 'idle', message: '', blockedNames: undefined });
+    return;
+  }
+  if (names.state === 'syncing') return;
+  if (names.state === 'blocked' && names.blockedNames === JSON.stringify(pending)) return;
+  if (names.state !== 'blocked' && names.nextCheckAt && Date.now() < names.nextCheckAt) return;
+  const wait = currentShowWait('ma2.sync.write');
+  if (wait) { setNames({ state: 'pending', message: wait }); return; }
+  const status = await window.tbLink.getMa2NetworkStatus();
+  if (status.state !== 'connected' || !status.settings) { setNames({ state: 'pending', nextCheckAt: Date.now() + 1000, message: '等待控台连接，连上后同步改名' }); return; }
+  const { host, port, monitorPort, username } = status.settings;
+  await runMa2NameSync({ dataDirectory: '', network: { host, port, monitorPort, username } }, document.documentId,
+    () => readMa2Method() === 'network' && ma2SyncActive());
 }

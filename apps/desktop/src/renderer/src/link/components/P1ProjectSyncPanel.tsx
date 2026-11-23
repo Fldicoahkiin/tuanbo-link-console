@@ -116,7 +116,7 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
     try {
       const sourcePath = p1ProjectPath || await linkDesktopViewModel.pickP1Project();
       if (!sourcePath) return;
-      const config = autoFollow ? allocateP1TimecodeRanges(document.project) : document.project.p1AutoFollow;
+      const config = autoFollow || document.project.p1AutoFollow?.enabled ? allocateP1TimecodeRanges(document.project) : document.project.p1AutoFollow;
       const exportDocument = config ? configureP1AutoFollowCommand(config).execute(document.project) : document.project;
       const preview = await linkDesktopViewModel.previewP1ProjectExport({
         p1ProjectPath: sourcePath,

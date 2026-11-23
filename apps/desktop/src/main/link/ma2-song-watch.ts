@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { loadMa2Sequence } from './ma2-sequence-snapshot';
 import type { Ma2SongCheckRequest } from '@tb/schema';
 import { ma2SongCheckRequestSchema } from '@tb/schema';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
@@ -84,7 +85,8 @@ export class Ma2SongWatch {
    * the Sequence, so a null only means the caller reads it as before.
    */
   async unchangedBaseline(connection: Pick<Ma2Telnet, 'command'>, input: Omit<Ma2SongCheckRequest, 'revision'>, baselineXml: string): Promise<string | null> {
-    const request = ma2SongCheckRequestSchema.parse({ ...input, revision: createHash('sha256').update(canonical(baselineXml)).digest('hex') });
+    if (this.busy || this.waits() || !this.snapshots.has(this.key(input))) return null;
+    const request = ma2SongCheckRequestSchema.parse({ ...input, revision: createHash('sha256').update(canonical(await loadMa2Sequence(baselineXml))).digest('hex') });
     const cached = this.snapshots.get(this.key(request));
     if (this.busy || this.waits() || !cached || cached.revision !== request.revision) return null;
     const stopped = this.stopped;
@@ -129,7 +131,7 @@ export class Ma2SongWatch {
     if (this.snapshots.size >= 16) this.snapshots.delete(this.snapshots.keys().next().value!);
     this.snapshots.set(key, snapshot);
   }
-  private key(request: Ma2SongCheckRequest): string { return JSON.stringify([request.network, request.expectedSource, request.sequence, request.executor]); }
+  private key(request: Omit<Ma2SongCheckRequest, 'revision'>): string { return JSON.stringify([request.network, request.expectedSource, request.sequence, request.executor]); }
   private guard(request: Ma2SongCheckRequest): string {
     return `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(request.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(request.expectedSource.generation)} and gma.show.getvar('VERSION')==${ma2LuaString(request.expectedSource.version)},'Show or session changed');`;
   }

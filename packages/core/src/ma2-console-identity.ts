@@ -1,6 +1,7 @@
 import type { LightingDocument, LinkProject, Ma2ObjectDirectory } from '@tb/schema';
 
 /** Only returned when the bridge confirmed it never accepted this request. */
+export const MA2_BRIDGE_BUSY_BEFORE_REQUEST = '控台正在处理上一个请求，空闲后继续同步';
 export const MA2_BRIDGE_MISSING_BEFORE_REQUEST = '正在重新核对控台连接，本次请求尚未开始';
 
 /** Where the project last read the console: its address and the name its Show was saved under. */

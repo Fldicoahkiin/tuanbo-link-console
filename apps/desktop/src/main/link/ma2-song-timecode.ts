@@ -82,7 +82,7 @@ export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request'
   const desired = ma2SongTimecodeXml(current, number, { name: song.name, startMs: song.startMs, executor: song.executor, executorName, sequence: song.sequence, cues: song.cues, ...song.lengthMs === undefined ? {} : { lengthMs: song.lengthMs } });
   if (sameMa2XmlObjects(desired, current)) return { timecode: timecode(number, current), backup: null, xml: current };
   const written = await bridge.exchange('APPLY', number, current, desired).catch((cause: unknown) => {
-    if (cause instanceof Error && ma2TimecodeChangedBeforeWrite(cause.message)) {
+    if (ma2TimecodeChangedBeforeWrite(cause)) {
       throw new Error(`${MA2_SONG_COLLISION}：控台上的时间线刚被编辑，正在重新读取当前节目`, { cause });
     }
     throw cause;

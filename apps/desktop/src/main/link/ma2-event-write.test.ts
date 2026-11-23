@@ -191,6 +191,26 @@ describe('三方合并到 MA2 原生写入', () => {
     const changed = convertMa2Timecode(source.replace('<Event index="0"', '<Event time="15" index="0"'), [sequence], 9902);
     expect(() => prepareMa2MergedEvents(document, 'binding', changed, new Map(), [sequence])).toThrow('冲突');
   });
+  it('仅加在原结尾的点或移到结尾的 Cue 延长亮灯，保留原生 Off 和既有短时间线', () => {
+    const { document, preview } = fixture(xml.replace('slot="TC Slot 1"', 'slot="TC Slot 2" lenght="46"'));
+    const compile = () => prepareMa2MergedEvents(document, 'binding', preview, new Map(), [sequence]).editedEndCueTick;
+    const clip = document.tracks[0]!.clips[0]!;
+    expect(compile()).toBeUndefined();
+    const event = clip.events[0]!;
+    if (event.kind !== 'ma2') throw new Error('样例事件无效');
+    clip.duration = 4000;
+    const added = { ...event, id: 'new-terminal', at: 500 };
+    clip.events.push(added);
+    expect(compile()).toBeUndefined();
+    added.at = 3000;
+    expect(compile()).toBe(90);
+    clip.events.push({ ...added, id: 'explicit-off', cue: undefined, sequence: undefined, action: 'off' });
+    expect(compile()).toBeUndefined();
+    clip.events.pop();
+    clip.events.pop();
+    event.at = 3000;
+    expect(compile()).toBe(90);
+  });
   it('节目标注不改控台名称，新点按真实 Cue 名称编译并确认', () => {
     const { document, preview } = fixture();
     document.tracks[0]!.name = '副歌灯光';
@@ -206,6 +226,19 @@ describe('三方合并到 MA2 原生写入', () => {
     clip.events.push({ ...event, id: 'local-annotation', at: 500, label: '灯光 3' });
     const added = prepareMa2MergedEvents(document, 'binding', preview, new Map(), [sequence]);
     expect(confirmMa2MergedEvents(added, added.desiredXml, [sequence]).document.tracks[0]!.clips[0]!.events.find((entry) => entry.id === 'local-annotation')).toMatchObject({ label: 'Cue 1.25', at: 500 });
+  });
+  it.each([
+    { flags: '', oldMuted: true, muted: false },
+    { flags: 'active="true" muted="true"', oldMuted: false, muted: true }
+  ])('旧工程按编辑标记保存的静音值 $oldMuted 首次同步以原生播放箭头为准', ({ flags, oldMuted, muted }) => {
+    const { document, preview } = fixture(xml.replace('active="true"', flags));
+    const binding = document.ma2Bindings![0]!;
+    binding.baselineTracks[0]!.muted = oldMuted;
+    document.tracks[0]!.muted = oldMuted;
+    const result = prepareMa2MergedEvents(document, binding.id, preview, new Map(), [sequence]);
+    expect(result.desiredXml).toBe(result.expectedXml);
+    const confirmed = confirmMa2MergedEvents(result, result.desiredXml, [sequence]);
+    expect(confirmed.document.tracks[0]).toMatchObject({ id: document.tracks[0]!.id, muted });
   });
   it('轨道静音和事件移动一起写回，保持引用与事件身份', () => {
     const { document, preview } = fixture();

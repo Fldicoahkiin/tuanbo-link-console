@@ -215,6 +215,20 @@ describe('LinkProject Command', () => {
     expect(next.rundown[0]).toMatchObject({ id: 'manual', cues: [{ id: 'existing-cue' }], p1Media: imported.p1Media });
   });
 
+  it('音频相同但已编灯的节目起点不同，导入 P1 后两首各保留原起点；起点相同才复用', () => {
+    const imported = p1ImportedItem('a'.repeat(64), '节目', 'list', 'a');
+    const local = { ...rundownItem('local', '节目'), referenceAudio: imported.referenceAudio, playback: { volume: 100, startMs: 0, endMs: 0, shortcut: '', mtcOffsetMs: 1200000 }, lighting: createLightingDocument() };
+    local.lighting.ma2Bindings = [{ id: 'original', name: '灯光', timecode: 3, sourceXml: '<MA/>', readAt: '2026-11-22T00:00:00Z', playback: 'editable', timeOriginMs: 1200000, mappings: [], baselineTracks: [] }];
+    const project = addRundownItemCommand(local).execute({ ...createEmptyLinkProject('P1 导入'), schemaVersion: 2 });
+    const read = (seconds: string) => synchronizeP1ProjectCommand({ sourceSha256: 'b'.repeat(64), playlists: [{ id: 'list', name: '列表', sourceIndex: 0 }], items: [{ ...imported, p1Media: { ...imported.p1Media, midiStartTime: seconds } }] }, () => 'from-p1');
+    const separate = read('600').execute(project);
+    expect(separate.rundown.map(item => item.id)).toEqual(['from-p1', 'local']);
+    expect(separate.rundown[1]).toEqual(project.rundown[0]);
+    expect(separate.rundown[0]?.playback?.mtcOffsetMs).toBe(600000);
+    expect(read('600').execute(separate).rundown.map(item => item.id)).toEqual(['from-p1', 'local']);
+    expect(read('1200').execute(project).rundown.map(item => item.id)).toEqual(['local']);
+  });
+
   it('P1 全量读取按稳定映射更新顺序并保留已有 Cue', () => {
     const playlist = { id: 'p1-playlist-1', name: '演出歌单', sourceIndex: 0 };
     const firstSnapshot = {

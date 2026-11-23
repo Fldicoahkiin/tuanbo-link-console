@@ -9,7 +9,7 @@ type Binding = NonNullable<LightingDocument['ma2Bindings']>[number];
 /** A direct reference that FIRSTCUES verifies on the original executor without storing a new Cue. */
 export function existingFirstTrackCue(sequence: number | undefined, sources: Ma2FirstTrackRequest['points'][number]['sources']): string | undefined {
   const source = sources[0];
-  if (sources.length === 1 && source && source.sequence === sequence && source.includeTracking === undefined && !source.attributes) return source.cue;
+  if (sources.length === 1 && source && source.sequence === sequence && source.includeTracking === undefined && !source.valueEdits && !source.attributes) return source.cue;
   return undefined;
 }
 
@@ -23,7 +23,7 @@ export function isWorkbenchCue(binding: Binding, track: LightingTrack, event: Li
   if (event.kind === 'empty-cue') return true;
   if (event.kind !== 'ma2' || event.action !== 'goto') return false;
   const legacy = binding.emptyCueSequence;
-  return Boolean(event.attributes || event.includeTracking !== undefined || track.group === 'effect-canvas' || track.group === 'empty-cues'
+  return Boolean(event.valueEdits || event.attributes || event.includeTracking !== undefined || track.group === 'effect-canvas' || track.group === 'empty-cues'
     || event.librarySource || event.effectGroupId || legacy && legacy.sequence === event.sequence
     && legacy.points.some(point => point.id === event.id && Number(point.cue) === Number(event.cue)));
 }
@@ -47,7 +47,7 @@ export function firstTrackCuePlan(document: LightingDocument) {
     const frame = Math.round((lightingEventTime(clip, event, tempo) + (binding.timeOriginMs ?? 0)) / MA2_FRAME_MS);
     const key = JSON.stringify([event.effectGroupId ?? event.id, frame, enabled]);
     const group = groups.get(key) ?? [];
-    group.push({ event, enabled, alreadyPlaced: event.kind === 'ma2' && !event.attributes && event.includeTracking === undefined && previous?.trackId === firstId && track.id === firstId && previous.sequence === event.sequence });
+    group.push({ event, enabled, alreadyPlaced: event.kind === 'ma2' && !event.valueEdits && !event.attributes && event.includeTracking === undefined && previous?.trackId === firstId && track.id === firstId && previous.sequence === event.sequence });
     groups.set(key, group);
   }
   const points: Ma2FirstTrackRequest['points'] = [];
@@ -57,8 +57,8 @@ export function firstTrackCuePlan(document: LightingDocument) {
     group.sort(({ event: a }, { event: b }) => (a.kind === 'ma2' ? a.ingredientOrder ?? Number(a.id !== a.effectGroupId) : 0) - (b.kind === 'ma2' ? b.ingredientOrder ?? Number(b.id !== b.effectGroupId) : 0));
     const leader = group.find(({ event }) => event.id === event.effectGroupId)?.event ?? group[0]!.event;
     const sources = group.flatMap(({ event }) => event.kind === 'ma2' && event.sequence && event.cue
-      ? event.sourceIngredients ?? [{ sequence: event.sequence, cue: event.cue, executor: event.executor, name: event.label, ...(event.attributes && { attributes: event.attributes }), ...(event.includeTracking !== undefined && { includeTracking: event.includeTracking }), ...(event.preparation && { preparation: event.preparation }) }] : []);
-    points.push({ id: leader.id, sources: sources.map(({ sequence, cue, includeTracking, attributes }) => ({ sequence, cue, ...(attributes && { attributes }), ...(includeTracking !== undefined && { includeTracking }) })) });
+      ? event.sourceIngredients ?? [{ sequence: event.sequence, cue: event.cue, executor: event.executor, name: event.label, ...(event.valueEdits && { valueEdits: event.valueEdits }), ...(event.attributes && { attributes: event.attributes }), ...(event.includeTracking !== undefined && { includeTracking: event.includeTracking }), ...(event.preparation && { preparation: event.preparation }) }] : []);
+    points.push({ id: leader.id, sources: sources.map(({ sequence, cue, includeTracking, attributes, valueEdits }) => ({ sequence, cue, ...(valueEdits && { valueEdits }), ...(attributes && { attributes }), ...(includeTracking !== undefined && { includeTracking }) })) });
     members.set(leader.id, { ids: group.map(member => member.event.id), sources, enabled: group[0]!.enabled });
   }
   if (!points.length) return null;
@@ -92,7 +92,7 @@ export function applyFirstTrackCues(document: LightingDocument, plan: NonNullabl
       }
       target.duration = Math.max(target.duration, at + 1);
       const placed = { ...event };
-      if (placed.kind === 'ma2') { delete placed.includeTracking; delete placed.attributes; }
+      if (placed.kind === 'ma2') { delete placed.includeTracking; delete placed.attributes; delete placed.valueEdits; }
       target.events.push({ ...placed, at, kind: 'ma2', action: 'goto', executor: receipt.executor, sequence: receipt.sequence, cue,
         ...(member.sources.length > 0 && { sourceIngredients: member.sources }) });
     }

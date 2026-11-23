@@ -1,5 +1,5 @@
 import { RefreshCw, TriangleAlert } from 'lucide-react';
-import { formatMtcStart, readSongMtcStart, songLightingStatus, songMtcOverlapNames, songMtcOverlaps, songsNeedingMtcStart, type SongLightingStatus, type SongMtcOverlap } from '@tb/core/link';
+import { formatMtcStart, lightingTrackEnabled, readSongMtcStart, songLightingStatus, songMtcOverlapNames, songMtcOverlaps, songsNeedingMtcStart, type SongLightingStatus, type SongMtcOverlap } from '@tb/core/link';
 import type { LinkProject, RundownItem } from '@tb/schema';
 import { useMtcStartAllocationStore } from '../stores/mtc-start-allocation-store';
 import '../song-mtc-start.css';
@@ -49,10 +49,10 @@ export function songMtcView(project: LinkProject, item: RundownItem, allocationE
     case 'set': {
       const code = formatMtcStart(reading.startMs, frameRate);
       const text = `MTC ${code}`;
-      const sends = `本曲从 ${code} 开始发送时间码`;
+      const origin = `本曲 MTC 起点为 ${code}`;
       const warnings: string[] = [];
       const others = overlapsOf(project).get(item.id);
-      if (others) warnings.push(`和${songMtcOverlapNames(project, item, others).join('、')}的 MTC 范围重叠，这段时间码会同时跑两首歌的控台节目，请改开其中一首的起点`);
+      if (others) warnings.push(`和${songMtcOverlapNames(project, item, others).join('、')}的 MTC 范围重叠，控台无法按这段时间码区分两首歌，请改开其中一首的起点`);
       const own = item.lighting?.consoleSong;
       if (own?.timecode && own.timecode.offset !== consoleFrames(reading.startMs)) warnings.push(`控台 Timecode ${own.timecode.number} 的起点还是 ${formatMtcStart(own.timecode.offset * 1000 / 30, frameRate)}，下次同步改成 ${code}`);
       const status = item.referenceAudio ? statusOf(project, item.id) : { state: 'unmatched' as const, reason: null };
@@ -64,12 +64,20 @@ export function songMtcView(project: LinkProject, item: RundownItem, allocationE
           break;
         case 'matched': warnings.push(...status.problems); break;
       }
-      if (warnings.length) return { state: 'warning', text, detail: [sends, ...warnings].join('；') };
+      const lighting = item.lighting;
+      if (lighting && lighting.tracks.some(track => track.muted || track.solo)) {
+        const cueTracks = lighting.tracks.filter(track => track.kind === 'ma2' && track.clips.some(clip => clip.events.length));
+        if (cueTracks.length && cueTracks.every(track => !lightingTrackEnabled(lighting, track))) {
+          warnings.push('本曲编排中，带灯光点的轨道都已关闭。请在编辑器启用要播放的轨道，再点“同步当前节目”');
+          return { state: 'warning', text: `${text} · 灯光轨道已关闭`, detail: [origin, ...warnings].join('；') };
+        }
+      }
+      if (warnings.length) return { state: 'warning', text, detail: [origin, ...warnings].join('；') };
       if (status.state !== 'matched') return { state: 'set', text, detail: own?.executor && !own.timecode
-        ? `${sends}；控台上还没有这首歌的时间码节目，同步时自动建立`
-        : `${sends}；控台上没有从这个起点开始的时间码节目，播放不会跑灯` };
-      const pending = status.pending ? `还有 ${status.pending} 项改动没同步到控台，停止播放后自动同步` : '';
-      return { state: 'matched', text: `${text} · Timecode ${status.timecode}`, detail: [`${sends}；控台 Timecode ${status.timecode} 从同一起点跑灯`, pending, ...status.notes].filter(Boolean).join('；'), ...status.pending ? { pending: status.pending } : {} };
+        ? `${origin}；控台上还没有这首歌的时间码节目，同步时自动建立`
+        : `${origin}；尚未找到相同起点的控台时间线` };
+      const pending = status.pending ? `还有 ${status.pending} 项改动没同步到控台，请点“同步当前节目”` : '';
+      return { state: 'matched', text: `${text} · Timecode ${status.timecode}`, detail: [`${origin}；已匹配控台 Timecode ${status.timecode} 的起点`, pending, ...status.notes].filter(Boolean).join('；'), ...status.pending ? { pending: status.pending } : {} };
     }
   }
 }

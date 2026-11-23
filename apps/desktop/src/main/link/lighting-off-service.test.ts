@@ -70,6 +70,26 @@ describe('换歌关灯（第 4 题）', () => {
     expect(f.service.owed()).toEqual([]);
   });
 
+  it('关灯在网络队列中等待期间，新歌接管的执行器不再发送旧 Off，其余执行器照常关', async () => {
+    const f = fixture();
+    let signalQueued!: () => void, release!: () => void;
+    const queued = new Promise<void>(resolve => { signalQueued = resolve; });
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    const written: string[] = [];
+    f.playMa2Cue.mockImplementation(async (request, stillOwed?: () => boolean) => {
+      signalQueued();
+      await ready;
+      if ((!stillOwed || stillOwed()) && request.action.target === 'executor') written.push(request.action.executor);
+    });
+    const stopping = f.service.stop(lit('a', '甲', ['1.101', '1.102']), 'stop');
+    await queued;
+    await f.service.followChange(null, lit('b', '乙', ['1.101']));
+    release();
+    await expect(stopping).resolves.toEqual({ failed: [] });
+    expect(written).toEqual(['1.102']);
+    expect(f.service.owed()).toEqual([]);
+  });
+
   it('正在用的执行器绝不关：停止后马上播同一个执行器的歌，没发出去的 Off 不再补', async () => {
     const f = fixture(); f.status.state = 'disconnected';
     await expect(f.service.stop(lit('a', '开场', ['1.101']), 'stop')).resolves.toEqual({ failed: [{ song: { itemId: 'a', title: '开场' }, reason: '没有连接控台，连上以后会自动补发一次' }] });

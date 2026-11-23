@@ -116,6 +116,24 @@ it('切换的 Off 未返回时按停止，共用这次 Off，取消之后的新 
   await Promise.resolve();const stopping=f.service.stop();release();await rejected;await stopping;
   expect(f.actions.map(value=>value.action.action)).toEqual(['goto','off']);expect(f.service.status().targets).toEqual([]);
 });
+it('整台停止先关手动和节目执行器，再逐项清理组合试听', async () => {
+  const f = fixture();
+  const first = request(1);
+  await f.service.play(first);
+  await f.service.play({ ...request(2), sessionId: first.sessionId });
+  const order: string[] = [];
+  const send = f.api.playCue;
+  f.api.playCue = (input, options) => {
+    order.push(input.action.action);
+    return send(input, options);
+  };
+  const result = await f.service.stopConsole(() => {
+    order.push('console');
+    return Promise.resolve();
+  });
+  expect(order).toEqual(['console', 'off', 'off']);
+  expect(result.targets).toEqual([]);
+});
 it('操作员在空闲时也能停止整台控台，两处同时点只发送一次，确认前排队的试听不能重亮',async()=>{
   const f=fixture();
   let finish!:()=>void;
@@ -127,7 +145,10 @@ it('操作员在空闲时也能停止整台控台，两处同时点只发送一�
   expect(release).toHaveBeenCalledOnce();
   finish();expect((await red).phase).toBe('sent');
   await expect(f.service.stopConsole(()=>Promise.reject(new Error('控台未连接')))).rejects.toThrow('控台未连接');
-  expect(f.service.status().phase).toBe('failed');
+  expect(f.service.status()).toMatchObject({ phase: 'failed', consoleStopError: '控台未连接', targets: [] });
   await f.service.play(request(2,f.service.status().generation));
   expect(f.service.status().phase).toBe('active');
+  expect(f.service.status().consoleStopError).toBe('控台未连接');
+  await f.service.stopConsole(() => Promise.resolve());
+  expect(f.service.status().consoleStopError).toBeUndefined();
 });

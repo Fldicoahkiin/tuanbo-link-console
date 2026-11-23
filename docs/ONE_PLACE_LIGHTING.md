@@ -6,9 +6,15 @@
 
 ## 怎么认控台
 
+网络登录由 `apps/desktop/src/main/link/ma2-telnet.ts` 同时核对对端返回的 MA2 版本与设备类型。Console 和 onPC 可以进入已连接状态。MA 3D 也能响应相同的 Show、版本和 Lua 命令，连到它时显示原因并断开。设备类型缺失时提示核对地址。`apps/desktop/src/main/link/ma2-telnet.test.ts` 覆盖两种拒绝和正常控台登录。
+
 只按编号认，不看 Show 名和 IP（`packages/core/src/ma2-console-identity.ts`）
 
+操作员点「检查版本和时码槽」时，`apps/desktop/src/main/link/ma2-capabilities.ts` 同次读取插件能力和本次连接站点的 MIDI TC 分配。以应答站点的 HOSTIP 在 NetConfig 中定位带该字段的运行中站点，按属性索引读取。缺失或不唯一时提示到接收站检查。切换连接后丢弃旧回答。空闲和播放期间均不会定时调用这项检查。`apps/desktop/src/main/link/ma2-network-manager.test.ts` 覆盖槽位匹配、不匹配、关闭和无法确认。
+
 ## 歌和控台时间线怎么配对
+
+核对自建歌曲是否跟随时，先确认已绑定的 MTC 起点与歌曲相同，并检查该歌曲序列最近确认的执行器分配。已从原格位移除的歌曲会提示序列与执行器编号。原格位可能已分配给其他序列，碰巧相同的 Cue 编号无法证明正在跟随。由 `packages/core/src/console-follow.test.ts` 覆盖。
 
 只看时间码节目编号和 MTC 起始码（`packages/core/src/ma2-pairing-state.ts`）
 
@@ -18,9 +24,59 @@
 
 ## MA2 同步
 
+本机文件通信只在文件模式取请求，切换网络连接后由网络请求驱动。配套组件分别回应已知编号的失败请求，并继续受理下一笔操作。32 MiB 的单次通信正文与文件头分开计算。`apps/desktop/src/main/link/ma2-bridge-timers.test.ts` 检查切换通道及损坏请求后的恢复。
+
+手动同步同时检查联动台选曲序列里的 Cue 触发方式。这里的步骤由原生时间线指定，Follow 或 Time 会让控台自行执行下一条选曲或关闭命令。恢复 Go 前核对 Show、插件会话、原生时间线引用，以及选曲时间线和序列的两处所有权标记。写前备份，写后比对序列内容；再次核对通过才显示已同步。`apps/desktop/src/main/link/ma2-sequence-trigger-read.test.ts` 覆盖两处标记不齐、已恢复 Go 和重复核对。
+
+重新连接前若控台目录里找不到工程此前读过的任何一条绑定时间线，保留现有灯光和素材，并显示当前 Show 名及缺少的编号。手动同步当前节目时，用这次控台读到的起点核对配对。上一份目录来自其他 Show、缺少当前歌曲或起点变化时，只补读对应编号。控台与歌曲起点不同就显示两边的实际时间，保留编排。控台删除某个 Cue 后，原时间线可能留下没有目标的 Goto。手动同步应指出轨道、第几个点和所在帧，修正后再次核对。若联动台负责选曲的执行器被设置为禁用 Cue 命令，同步时核对 Show、选曲时间线、序列和当前分配，备份原执行器并恢复命令开关，重新导出确认其余设置没有变化。同次读取不把其他节目的内容标记为已核实。
+
+手动同步还要检查当前歌曲能否由选曲时间线启动、中途定位时能否追到当前 Cue，以及离开歌曲时能否正常释放。若控台导出确认仅歌曲的 AutoStart、Status Call 或 Switch Off 设置偏离，在核对 Show、连接代次、输入槽和时间线编号后，仅备份并修正对应歌曲的设置，保留原轨道和 Cue，再从控台读回。若选曲时间线自身损坏，则走原有选曲准备和复核。检测和修复均由本次手动点击触发。测试见 `ma2-bridge-lua.test.ts`、`ma2-mtc-selection.test.ts` 和 `ma2-network-manager.test.ts`。
+
+手动核对当前节目时，先从控台导出核对已绑定的时间线是否使用歌曲的 TC Slot 2。已经从其他时码槽导入用于编辑的时间线，若该轨仍使用已确认的槽位，则照常读写其轨道和 Cue，并核对当前 Show。编辑这种时间线不会触发歌曲选曲表的准备。内容经读回确认后，侧栏提示「编排已同步 · 播放需换槽」，详情列出这条时间线当前使用的时码槽。原先走歌曲时码槽的绑定被改到其他槽位时保留原工程和控台设置，指出具体编号、实际槽位和应恢复的槽位。恢复后重新读回并核对选曲。其他节目的槽位不参与这项判断。见 `ma2-network-relogin.test.ts`。
+
+手动核对当前节目时，TCRANGES 在当前歌曲的活动轨道上把每个 Goto 的序列号与执行器的实际分配逐项对照。控台更换或移除执行器后可能仍导出旧 Cue。缺少执行器或目标不符时，保留工程和控台内容，指出轨道或步骤及其目标；修正后再次读回。一次请求内复用同一执行器的导出。回归见 `ma2-bridge-lua.test.ts`，带灯实测见 `docs/LIGHTING_LIVE_AUDIT_20261119.md`。
+
+自建歌曲的同步回读先核对原生 Goto 引用的序列。换掉执行器时，MA2 可能连带改写原有点的全部引用。出现其他序列时保留时间线和工程点位，提示新旧序列，由操作者核对后再点同步。真实删除的点、移动与新增的点仍按双方上次确认的位置合并。由 `apps/desktop/src/main/link/ma2-song-console-edits.test.ts` 覆盖。
+
+手动切换同步节目后，先前请求的目录结果和错误均不能改动新请求的状态。目录检查以发起时的工程、节目、绑定和同步请求为准。这条规则由 `apps/desktop/src/renderer/src/link/runtime/ma2-realtime-session.test.ts` 的切歌后迟到错误用例验证。
+
+歌曲同步在读取状态、等待存档和提交控台写入之间也要核对这次手动选择。等待中改为同步另一首，原歌曲保留待核对状态，尚未提交的写入随之结束。`apps/desktop/src/renderer/src/link/runtime/ma2-realtime-session.test.ts` 覆盖存档期间切换的情形。
+
+逐首手动同步在 `apps/desktop/src/renderer/src/link/runtime/ma2-realtime-session.ts` 核对已关联 Timecode 的在场情况。现场目录同时提供本次 Show 身份。只有目标编号在场才更新本地素材目录并开始内容同步。换 Show 或删除目标后停止本次请求，保留原工程的 Cue 和素材。恢复编号后从同一按钮继续。缺少编号的原因只归到当前歌曲。同一 Show 中其他歌曲的有效确认保留；读到控台换 Show 时，旧确认要在新 Show 上重新取得。`apps/desktop/src/renderer/src/link/runtime/ma2-realtime-session.test.ts` 覆盖同名和异名 Show 缺少编号及恢复后的核对。同一次手动核对会读取当前 Show 的实际 MTC 时段，检查与当前歌曲有关的重叠。即使连接和 Show 始终相同，控台单独移动另一条时间线也在检查范围内。修正起点时可选择工程外的冲突对象，保存时复核其当前身份、起点和名称，处理后重新核对原歌曲。手动同步时同一次控台目录读取还要检查选曲时间线能否自动开始，以及执行器是否仍指向选曲序列。歌曲首尾的 Goto 和选曲命令使用 ma2-mtc-selection.ts 中的同一套规则复核。同次核对也检查起点以外是否有额外的原生 Goto 选回这首歌。这类残留会在播放其他歌曲时重启当前歌曲。发现失配时只在该次手动请求内准备选曲，并在同一个 Show 重新读取，才能确认当前节目。
+
+首次连接还在读取目录或素材、当前歌曲正等待配对时，按同步也会留下这一次单曲请求。现有同步流程在读取空闲后复核该歌。手动核对当前节目的时段时，还要留意其他时间线引用的序列。原生 Cue 可以独立监听同一时码槽，辅助选曲和歌曲区间即使都正确，另一条执行器也可能亮起。只在操作员点同步后核对。若其他序列有落在本曲时段内的原生时间触发，显示序列、Cue 和引用它的 Timecode；操作员可以核对对应节目或在控台修改。只读这项冲突，当前节目写入不改其他节目的 Cue。准备选曲时，如果连续两遍从控台读到该序列的每个 Cue 都是 Go，则不用导出整份灯具数据。原生零号占位可以是空的，其他位置读不清、空序列及自动触发仍需用完整文件核对。见 `ma2-bridge-lua.test.ts` 和 `ma2-network-relogin.test.ts`。
+
+目录确认和时间线读回之间，控台仍可能切换 Show 或删除目标。首次读回以及写入前再次核对同一个 Timecode 时，如果控台明确报告它已不存在，就结束本次请求，保留本地 Cue，显示缺少的编号。核对 Show 并恢复原时间线后可再次点同步。如果操作员已切歌或改绑，只把旧检查退回待核对。对应路径在 `ma2-console-reading.ts`，回归测试在 `ma2-bound-song-sync.test.ts`。
+
+核对选曲辅助序列或歌曲的执行器时，`ma2-song-executor.ts` 先读取已指定的执行器页并校验 Show 身份。控台报告缺页时用目录复核，目标页已满时用目录查找后续位置。写后重新读取分配结果。测试见 `ma2-song-executor.test.ts` 和 `ma2-layout-service.test.ts`。
+
+当前节目的读回同时记录主进程连接编号。侧栏、编辑器和同步详情共用 `apps/desktop/src/renderer/src/link/view-models/ma2-workbench-sync-status.ts` 判断确认是否仍属于本次连接。断线、换控台、重连和手动核对都有独立状态。重新登录本身不能恢复上次的绿色确认。测试见 `apps/desktop/src/renderer/src/link/view-models/ma2-workbench-sync-status.test.ts`。
+
+2026-11-21，工作台启动时保持空闲。编辑后只标出当前节目待同步。点「同步当前节目」开始一次双向核对并打开详情，核对期间再点可查看进度。原先保存的实时同步开关在重新启动后失效。工作台和时间线列表共用当前节目的状态，只有控台读回确认才显示「已同步」。设置里的合并、覆盖及控台改动处理方式继续保存在本机。见 `ma2-sync-modes.spec.ts` 和 `ma2-workbench-sync-status.test.ts`。
+
+2026-11-20，在同一控台和 Show 恢复已绑定的零步骤序列时，MA2 保存后可能只留下原执行器的默认按键。歌曲使用之前确认的格位，在写入前单独导出核对原格，分配后读回序列号。格位已有对象、自定义按键或者是新节目的目标时，沿用原先的选位规则。回归见 `ma2-song-executor.test.ts`，onPC 重开记录见 `docs/LIGHTING_LIVE_AUDIT_20261119.md`。
+
+超过 32 MiB 的原生歌曲序列按 Cue 记录灯具数据的位置。改名、插入和删除时保留未编辑的原生数据，复制素材时单独展开需要的 Cue。写后核对先比较每个保留 Cue 的完整原生数据和命名空间，遇到编码、名称表示或内部步号差异时仍按原来的内容规则核对。大序列的同步回执带回灯具编号、属性名称和效果标记，单 Cue 的详细数值仍可按需读取。回归见 `ma2-timecode-xml.test.ts` 和 `ma2-layout-service.test.ts`。MA2 以 `macro_text` 保存的 Cue 命令由 `ma2-cue-attributes.test.ts` 检查，含命令的 Cue 保留。
+
+多个客户端共用控台时，控台确认还没接收请求，工作台才会排队。控台用固定长度的回执关联当时的 Show。长中文名称的节目与短名称走同一流程。轮到本次请求时，控台再次核对当前 Show 与组件会话，确认一致才开始。由 `ma2-bridge-lanes.test.ts` 和 `ma2-network-wire.test.ts` 验证。
+
+时间线已经写成后，如果后续单独读取确认时通道被占用，同一次同步会保留写入回执和备份，只排队读取结果。网络控台在等待后重新核对 Show。换了 Show、读取已发送但结果未知、读回与修改不符时保留备份供核对。回归见 `ma2-apply-service.test.ts`。
+
+本机请求队列已满时，会告知同步器这笔请求尚未提交。在排队时取消某次操作，或正常取消已开始的后台读取，下一笔同步保留自己的位置。控台支持写入回执时，写入前用实际备份和刚导出的序列核对整份快照。写入后再导出实际时间线和引用的序列。现场换了引用时重新读取实际对象。只要控台已确认执行 Import，后续读回出错也要保留备份并核对结果，避免重复写入。回归见 `ma2-bridge-lanes.test.ts`、`ma2-bridge-lua.test.ts`、`ma2-apply-service.test.ts`。
+
+写完时间线后的回读、MIDI 选曲检查共用同一条等待规则。控台请求明确尚未提交且队列已满时，在同一次同步里等待一个位置。选曲流程保留已完成的步骤、已取得的备份和已读的 Show 身份，等到位置后继续当前步骤。操作取消、开始播放或换 Show 时重新检查条件。回执未知的写入保留给读回核对。回归见 `ma2-apply-service.test.ts`、`ma2-mtc-selection.test.ts`。
+
+旧版请求记录可能属于仍在使用的另一份联动台。新版从自己的进程标记确认请求归属，旧版记录即使只写了一半，也能继续连接。回归见 `ma2-request-journal.test.ts`。
+
+两份联动台同时使用同一台控台时，每份只释放本进程的遗留请求，或已确认退出的进程留下的请求。旧记录没有进程身份时由控台租约到期释放。首次连接遇到另一份软件正在读取或升级组件，在同一 Show 中等待；另一份已装好相同版本时直接使用。切换 Show、断开连接或开始播放时重新核对连接状态。写入回执丢失仍须读回核对。回归见 `ma2-request-journal.test.ts`、`ma2-network-wire.test.ts` 和 `ma2-bridge-lua.test.ts`。
+
 现场素材只选一条 Cue 且只取该步保存的值时，桥接插件按序列号和小数 Cue 号直接导出原生 Cue 两次，核对 Show、编号和内容。选择包含前面继承的值时仍由控台计算 Tracking。同步前的本机存档确认数据与索引写好后即可继续，用户打开存档列表时再读取目录。回归见 `ma2-bridge-lua.test.ts` 和 `project-archives.test.ts`。
 
 2026-11-19，已绑定歌曲沿用工程本次连接核实的 Show 和组件会话。控台在写入前比对原生时间线和所用序列，导入后重新导出。短时间线可以把这次完整读回放进写入回执。正在导入时碰到播放或取消，已经导入的操作继续完成读回。第一轨原来只有推杆时，在同一轨内补按钮子轨；其他时码槽原有的自动启动、状态追踪和停止方式原样保留。测试见 `ma2-apply-service.test.ts`、`ma2-bridge-lua.test.ts`、`ma2-event-write.test.ts`、`ma2-console-backups.test.ts`。
+
+灯具数值通过 `ma2-cue-attributes.ts` 读取，节目内的修改随素材走现有第一轨或歌曲序列同步。明确选择修改原素材时才单独写入指定 Cue。两条路径使用 `tblink_bridge.lua` 中相同的按灯具、属性和 Part 匹配的数值修改逻辑。
+
+同一个点改回此前确认过的值，可以再次引用原先为这个点保存的节目 Cue。单次复用时，对小于等于 4 MiB 的已保存 Cue 直接从控台导出这一条，将 Part、命令和灯具数据与上次确认的完整内容比较。内部步序号可随其他 Cue 的插入改变，显示编号和内容仍须一致。批量写入及更大的 Cue 继续用序列导出核对。回归见 `ma2-bridge-lua.test.ts`。
 
 修改当前节目时，后台对这首歌的只读检查可在两次控台操作之间结束。同一批中重复引用第一轨上已有的一个 Cue 时，控台核对一次，每个触发位置分别写入。跨执行器复制、组合、属性筛选及空 Cue 各自保留写入记录。控台收到 Import 后重新导出，只有读回中完全相同的序列字节可从上一次确认的数据恢复。两端共同支持较短的传输格式时才使用。延迟从鼠标松开计到控台确认，记录在[现场规模验收](./LIGHTING_LIVE_AUDIT_20261119.md#正式模式的工作台与原生控台读回)。
 
@@ -70,6 +126,8 @@
 
 ## 欠着的关灯
 
+节目、试听或 P1 接管执行器后，上一首仍在排队的 Off 撤销。读取连接状态后和写入控台连接前均核对执行器及本次请求编号，只发送仍由原节目负责的关灯请求。这个顺序由 `apps/desktop/src/main/link/lighting-off-service.test.ts` 的切歌排队用例覆盖。
+
 2026-11-19 用户指定工作台两个停止按钮都要停整台控台。手动指令经 ma2-audition-service.ts 取消试听队列，ma2-pool-playback.ts 按停止优先级停止时间码、序列和各页在跑的执行器，回读后返回。自动结束、换歌和其他工作区沿用下面的关灯规则。
 
 规则在 `packages/core/src/lighting-off-ledger.ts`（2026-11-11）：停止关这首歌的执行器，换歌只关上一首独有的，正在用的绝不关。全应用一张清单，主人是主进程 `apps/desktop/src/main/link/lighting-off-service.ts`：节目、试听（`link:lighting-off`）、退出时的询问和演出状态都经它；没发出去的留着，控台重新连上后补发 1 次（次数在 `output-recovery.ts`），再按停止全部重发；关灯不过授权。控台确认以后按轮读回灯关了没有（2026-11-11）：只在已经连着的网页遥控会话上读，1–90 只用“控台在不在跟”那条会话，Button 区只在按键选了网页遥控时用 Button 会话，不在推杆页自己的会话上读，不为读回登录；等几秒、读几次只写在 `output-recovery.ts` 的 `LIGHTING_OFF_READ_BACK`；还在运行的标黄不标红，再按停止才重发，没读的不写日志、界面照旧。同一条网页遥控会话上的请求排队轮流发（`ma2-live-playback.ts` 的 `turn`），借别人的会话读只用 `peek`、`peekButtons`：看不懂的回答不关会话。别处不再自己发 Off、不另记“还欠着”
@@ -81,6 +139,8 @@
 `packages/core/src/lighting-template-steps.ts` 统一展开整套序列，默认每步 1 拍；用户编辑后不再经过这个展开步骤。素材组合保留成员已编辑的相对时间。`apps/desktop/src/renderer/src/link/components/lighting-sequence-placement.test.ts` 检查完整展开、组合时间、逐步编辑和歌曲范围。
 
 ## 轨道是否参与灯光
+
+onPC 原生轨道的播放箭头读写 `Track.muted`，省略表示参与播放。同步保留独立的 `active` 编辑选择。核对歌曲执行器分配时检查所有参与播放的轨道；用于选歌的辅助轨必须能够播放。已有工程的旧轨道基线仍可用来合并，控台本次读回按播放箭头判断。`ma2-timecode-conversion.test.ts`、`ma2-mtc-selection.test.ts` 和 `ma2-bridge-lua.test.ts` 覆盖这些读写。
 
 `packages/core/src/lighting-track-state.ts` 统一判断轨道静音与独奏；新歌保留禁用的 Cue 内容，只取消触发，已有时间线使用同一判断。`packages/core/src/ma2-song-sequence.test.ts` 与 `apps/desktop/src/main/link/ma2-layout-service.test.ts` 检查禁用、恢复和读回。
 
@@ -108,13 +168,25 @@
 
 ## MIDI 选曲隔离
 
+核对选曲时也逐步核对原生选曲表里启动的时间线和启动位置。已清空、删除或移走的歌曲不可留有启动步骤。`tools/ma2/tblink_bridge.lua` 在读取时间范围时一并核对各时码槽有事件的轨道与自有选曲执行器的实际地址。发现其他时间线直接调用该执行器时，同步详情列出具体的时间线、轨号和格位。操作员可以关闭这一轨的播放。如该时间线正在原生控台播放或录制，须先停止这条时间线。写入前复核来源、分配和旧轨数据，控台备份该时间线，写入后比对整条时间线并复核调用关系。新安装选曲器时避开已经被有事件的轨道引用的格位。上述检查随手动同步运行。回归见 `apps/desktop/src/main/link/ma2-mtc-selection.test.ts`、`apps/desktop/src/main/link/ma2-song-executor.test.ts`。
+
+选曲执行器属于原生 Show，联动台退出后，外部 MTC 仍可启动它。手动同步当前节目和重建选曲表时都核对实际分配的执行器。若它开了 Chaser 或禁用了 Cmd，`apps/desktop/src/main/link/ma2-selector-executor.ts` 核对 Show、连接会话、时间线和序列的所有权标记、轨道地址和执行器分配。更改前导出原执行器，恢复为普通 Cue 列表并启用命令，随后核对控台导出。用户其他执行器保留自己的追逐设置。回归见 `apps/desktop/src/main/link/ma2-mtc-selection.test.ts`。
+
+2026-11-23，已实测同槽歌曲的结束续跑。选曲、手动同步、起始码输入和保存前复核共用 `packages/core/src/ma2-mtc-selection.ts` 的间隔规则。按接收槽 AfterRoll 加半秒再向上取整秒，操作员须调整间隔不足的时段，正常播放开始时复用最近确认的时段检查。由 `packages/core/src/ma2-mtc-selection.test.ts` 和 `packages/core/src/program-start.test.ts` 核对。
+
+播放时读取执行器之前和收到回执以后，都按播放器的当前位置确认本次要核对的灯光点。读取期间已经换步、停发时码或播过控台时间线末尾，上一点的回执不能证明当前的灯光状态。回归见 `apps/desktop/src/renderer/src/link/runtime/console-follow-monitor.test.ts`。
+
+手动同步先读控台目录，再单独读选曲时间线与选曲序列。判断本曲可以跟随时，按后一次原生时间线的实际起点、时码槽和播放设置核对。目录读取后这些值仍可能被控台修改。回归见 `apps/desktop/src/main/link/ma2-mtc-selection.test.ts`。
+
+修改歌曲起点或整首同步后，后续的选曲准备使用同一请求的 Show、连接会话和控台版本。在同一 Show 内重建公共选曲表时，从控台重新取得各歌曲当前的起点与终点。上次的时段只用于缩小需要复核播放设置的歌曲范围。控台上独立移过的歌曲也按新位置选曲。写完选曲表后重新核对控台上各歌曲的选曲边界。如果操作期间边界发生变化，在同一 Show 内按最新边界重算一次；重算期间再次变化时返回未确认，保留已写入的歌曲，待操作员再次同步。空闲时不扫描。由 `ma2-network-manager.test.ts`、`ma2-mtc-selection.test.ts` 验证。
+
 首次核对发现没有歌曲使用 TC Slot 2 时，也保留这次按 Show 和组件会话确认的区间。单曲写后读回表明它仍在原来的其他时码槽时，移动它的 Cue 不会改变选曲器。移入或移出 Slot 2、切换 Show、会话更换，以及主动重新连接时仍走原有核对。由 `ma2-mtc-selection.test.ts` 验证。
 
 2026-11-18，0.5.16 现场修复。明确连接仍做选曲核对。第二次导出时间线时，可识别且播放属性已就绪的时间线只回传当前区间与序列引用。其他时间线取完整 XML；修改、备份及序列触发的读回照常执行。辅助选曲 XML 传输中重复的标签和编号列表只传一份，在控台原样还原后比较和写入。`ma2-mtc-selection.test.ts` 覆盖重复连接和无损还原。
 
 2026-11-18 现场再次反馈后的补充：SEQGO 对 CueDatas 按原始字节块读取比较，外围元数据解析与完整比较分批执行；`ma2-network-wire.ts` 仅接受 SEQGO 的只读确认阶段标志，已经写入后继续读回，不重发 Assign。MA 内部协程短暂停顿合并到有处理量和时间上限的批次；取消、失败和释放关闭扫描文件。`ma2-sequence-trigger-read.test.ts`、`ma2-network-wire.test.ts` 覆盖密集灯具、4096 Cue、标签跨块、内部暂停、取消前后、非法阶段标志和文件关闭。实际耗时见专项记录。
 
-2026-11-18 连接读取回退修复：`ma2-mtc-selection.ts` 不再为检查歌曲触发方式通过网络取回完整 Sequence。`tools/ma2/tblink_bridge.lua` 的 SEQGO 在控台内流式读取完整导出，确认编号，第二次导出比较；需要修改时保留原完整备份、原位 Assign Trigger、再次导出逐字比较除直接 Cue Trigger 和导出时间戳外的内容，只返回是否修改与 Cue 数。每次明确连接重新核对，同次共用序列去重，不缓存跨次的“已确认”。准备任务复用 `ma2ReadProgress` 和取消通道，切换工程取消，任何退出都释放任务。`ma2-sequence-trigger-read.test.ts`、`ma2-mtc-selection.test.ts`、`runtime/ma2-editing-session.test.ts` 覆盖大序列、30 条时间线、并发变动和取消；实体 3.3.4.3 验收仍与本机 3.7 分开记录。
+2026-11-18 连接读取回退修复：`ma2-mtc-selection.ts` 不再为检查歌曲触发方式通过网络取回完整 Sequence。`tools/ma2/tblink_bridge.lua` 的 SEQGO 在控台内流式读取完整导出，确认编号，第二次导出比较；需要修改时保留原完整备份、原位 Assign Trigger、再次导出逐字比较除直接 Cue Trigger 和导出时间戳外的内容，只返回是否修改与 Cue 数。每次明确连接重新核对，同次共用序列去重，不缓存跨次的“已确认”。手动同步也检查当前节目引用序列的原生 Cue 触发方式。控台改为 Follow 或 Time 后，即使时间线上没有改点，也要在写前再次确认当前歌曲仍引用该序列，只修其触发方式并读回。准备任务复用 `ma2ReadProgress` 和取消通道，切换工程取消，任何退出都释放任务。`ma2-sequence-trigger-read.test.ts`、`ma2-mtc-selection.test.ts`、`runtime/ma2-editing-session.test.ts` 覆盖大序列、30 条时间线、并发变动和取消；实体 3.3.4.3 验收仍与本机 3.7 分开记录。
 
 2026-11-17 本机联调补充：重写辅助选曲序列的全部 Cue 时，onPC 会解除原执行器关联。因此执行器位置必须在序列写入并读回后重新检查，不能沿用写入前的“已分配”判断；否则辅助时间线的 Object 引用变空，读回校验失败且歌曲不会按 MTC 启动。由 `ma2-mtc-selection.ts` 复用原执行器分配规则处理，`ma2-mtc-selection.test.ts` 模拟清空后解除关联并检查重新分配。
 

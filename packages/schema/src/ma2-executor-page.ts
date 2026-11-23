@@ -16,10 +16,12 @@ export const ma2ExecutorPageItemSchema = z.object({
 }).strict();
 
 export const ma2ExecutorPageRequestSchema = ma2LayoutDirectoryRequestSchema.extend({ page: z.number().int().min(1).max(9999) }).strict();
+export const ma2ExecutorPageDirectoryRequestSchema = ma2LayoutDirectoryRequestSchema.extend({ locations: z.literal(true).optional() }).strict();
+export type Ma2ExecutorPageDirectoryRequest = z.infer<typeof ma2ExecutorPageDirectoryRequestSchema>;
 export const ma2ExecutorPageDirectorySchema = z.object({
   show: z.string().min(1), generation: z.string().min(1), version: z.string().min(1),
   buttonPage: z.number().int().min(1).max(9999), faderPage: z.number().int().min(1).max(9999),
-  pages: z.array(z.object({ page: z.number().int().min(1).max(9999), name: z.string().max(512) }).strict()).max(9999)
+  pages: z.array(z.object({ page: z.number().int().min(1).max(9999), name: z.string().max(512), locations: z.array(z.object({ slot: z.number().int().min(1).max(240), sequence: z.number().int().min(1).max(99999) }).strict()).max(240).optional() }).strict()).max(9999)
 }).strict();
 export const ma2ExecutorPageSchema = z.object({
   page: z.number().int().min(1).max(9999), name: z.string().max(512), readAt: z.string().datetime(),

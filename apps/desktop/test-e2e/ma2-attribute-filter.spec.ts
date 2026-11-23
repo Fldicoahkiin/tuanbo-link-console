@@ -29,6 +29,11 @@ test('构造数据：移除属性分类后保留紧凑菜单、属性值、空 C
       dialog.showOpenDialog=()=>Promise.resolve({canceled:false,filePaths:[file]});
       process.env.TBLINK_DELETE_COMMITS='0'; process.env.TBLINK_UI_AUDITIONS='0';
       ipcMain.removeHandler('link:ma2-network-status'); ipcMain.handle('link:ma2-network-status',()=>({settings:{host:'192.0.2.1',port:30000,monitorPort:30001,username:'test',autoConnect:false},state:'connected',version:'3.7.0.5',passwordSaved:false,error:null}));
+      ipcMain.removeHandler('link:ma2-effect-library');
+      ipcMain.handle('link:ma2-effect-library', (_event, request: { details?: string }) => {
+        if (request.details !== 'empty-cues') return library;
+        return { ...library, sequences: library.sequences.filter(value => [5, 11].includes(value.sequence)), errors: [] };
+      });
       ipcMain.removeHandler('link:ma2-play-cue'); ipcMain.handle('link:ma2-play-cue',()=>{process.env.TBLINK_UI_AUDITIONS=String(Number(process.env.TBLINK_UI_AUDITIONS)+1);throw new Error('此测试禁止发灯光');});
       ipcMain.removeHandler('link:ma2-cue-delete-prepare'); ipcMain.handle('link:ma2-cue-delete-prepare',(event,request:Ma2CueDeletePrepare)=>{
         process.env.TBLINK_DELETE_REFS=JSON.stringify(request.refs);
@@ -66,15 +71,13 @@ test('构造数据：移除属性分类后保留紧凑菜单、属性值、空 C
     await expect(details.locator('.cue-stored-content')).toContainText('70');
     await page.screenshot({path:info.outputPath('stored-values.png')});
     await details.getByRole('button',{name:'关闭灯具属性',exact:true}).click();
-    await pool.getByLabel('素材筛选',{exact:true}).click();
-    await page.getByRole('dialog', { name: '素材筛选', exact: true }).getByRole('button',{name:'仅空 Cue',exact:true}).click();
-    await pool.getByLabel('素材筛选',{exact:true}).click();
-    await expect(grid).toHaveAttribute('data-total-cues','3');
-    await pool.getByRole('button',{name:'试听序列 5 灯光步 1.000',exact:true}).click();
+    await page.getByRole('button',{name:'空 Cue',exact:true}).click();
+    const empty=page.getByRole('region',{name:'空 Cue 分类'});
+    await expect(empty.getByLabel('检测到的空 Cue')).toHaveAttribute('data-total-cues','3');
+    await empty.getByRole('button',{name:/序列 11 · Cue 1$/}).click();
+    await empty.getByRole('button',{name:/序列 11 · Cue 2$/}).click();
     expect(await app.evaluate(()=>process.env.TBLINK_UI_AUDITIONS)).toBe('0');
-    await pool.getByRole('button',{name:'多步',exact:true}).click();
-    await pool.getByRole('button',{name:'11 · 空的两步 · 2 步',exact:true}).click();
-    await pool.getByRole('button',{name:'删除空 Cue',exact:true}).click();
+    await empty.getByRole('button',{name:'删除所选（2）',exact:true}).click();
     const deletion=page.getByRole('dialog',{name:'删除控台空 Cue'});
     await expect(deletion).toContainText('已选择 2 个候选 Cue');
     expect(await app.evaluate(()=>process.env.TBLINK_DELETE_COMMITS)).toBe('0');
@@ -91,7 +94,7 @@ test('构造数据：移除属性分类后保留紧凑菜单、属性值、空 C
     await page.screenshot({path:info.outputPath('delete-review.png')});
     await deletion.getByRole('button',{name:'取消',exact:true}).click();
     expect(await app.evaluate(()=>process.env.TBLINK_DELETE_COMMITS)).toBe('0');
-    await pool.getByRole('button',{name:'删除空 Cue',exact:true}).click();
+    await empty.getByRole('button',{name:'删除所选（2）',exact:true}).click();
     await deletion.getByRole('button',{name:'读取并生成删除清单',exact:true}).click();
     await expect(page.locator('.app-sidebar progress[aria-label="控台读取进度"]')).toHaveAttribute('value','1');
     await app.evaluate(({ipcMain})=>{ipcMain.emit('test:release-delete-plan');});
@@ -100,8 +103,8 @@ test('构造数据：移除属性分类后保留紧凑菜单、属性值、空 C
     await expect(deletion.getByRole('alert')).toHaveCount(0);
     await deletion.getByRole('button',{name:'关闭',exact:true}).click();
     expect(await app.evaluate(()=>process.env.TBLINK_DELETE_COMMITS)).toBe('1');
-    await pool.getByRole('button',{name:'单步',exact:true}).click();
-    await expect(grid).toHaveAttribute('data-total-cues','1');
+    await expect(empty.getByLabel('检测到的空 Cue')).toHaveAttribute('data-total-cues','1');
+    await empty.getByRole('button',{name:'返回控台素材',exact:true}).click();
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.library?.sequences.find(value=>value.sequence===11)?.cues.length)).toBe(0);
     for (const size of [[1180,720],[1440,900],[1920,1080]]) {
       await app.evaluate(({BrowserWindow},size)=>BrowserWindow.getAllWindows()[0]!.setSize(size[0]!,size[1]!),size);
@@ -114,11 +117,11 @@ test('构造数据：移除属性分类后保留紧凑菜单、属性值、空 C
       }
     }
     await app.evaluate(({BrowserWindow})=>{const window=BrowserWindow.getAllWindows()[0]!;window.setSize(1180,720);window.webContents.setZoomFactor(2);});
-    await pool.getByLabel('素材筛选',{exact:true}).click();
+    await page.getByRole('button',{name:'素材筛选',exact:true}).click();
     await expect(page.getByRole('dialog', { name: '素材筛选', exact: true }).getByRole('button',{name:'仅空 Cue',exact:true})).toBeInViewport();
     await page.screenshot({path:info.outputPath('empty-cue-200-percent.png')});
     await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(1));
-    await pool.getByLabel('素材筛选',{exact:true}).click();
+    await page.getByRole('button',{name:'素材筛选',exact:true}).click();
     const materialMenu=page.getByRole('navigation',{name:'灯光素材主菜单'});
     await materialMenu.getByRole('button',{name:'分类管理',exact:true}).click();
     const manager=page.getByRole('dialog',{name:'分类管理',exact:true});
@@ -134,7 +137,7 @@ test('构造数据：移除属性分类后保留紧凑菜单、属性值、空 C
     await expect(materialMenu.getByRole('button',{name:'面光',exact:true})).toHaveCount(0);
     await expect(materialMenu.getByRole('button',{name:'视频 / 媒体',exact:true})).toHaveCount(0);
     await expect(materialMenu.getByRole('button').nth(2)).toHaveText('面光备用');
-    await page.getByRole('button',{name:'保存',exact:true}).click();
+    await page.getByRole('button',{name:'保存工程',exact:true}).click();
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.categories.some(value=>value.name==='面光备用'))).toBe(true);
     await page.reload();await nav.getByRole('button',{name:'灯光工作台',exact:true}).click();
     await expect(materialMenu.getByRole('button').nth(2)).toHaveText('面光备用');

@@ -50,7 +50,7 @@ it('按钮第 1000 页起连续 10 页都放满时，不导入也不改名任何
   }), exchange: vi.fn<Ma2OnpcBridge['exchange']>(op => Promise.reject(new Error(`Unexpected ${op}`))) };
   await expect(new Ma2LayoutService(`unused-${randomUUID()}.json`, showStopped, noBackups).syncSong({ command }, bridge, song)).rejects.toThrow('第 1000–1009 页的 101–190 都已放满');
   expect(command).not.toHaveBeenCalled();
-  expect(bridge.request.mock.calls.map(([op]) => op)).toEqual(['LISTSEQ', 'PAGES', ...Array<string>(10).fill('PAGE')]);
+  expect(bridge.request.mock.calls.map(([op]) => op)).toEqual(['LISTSEQ', 'PAGE', 'PAGES', ...Array<string>(9).fill('PAGE')]);
 });
 
 /** In-memory console for syncSong: emulates only the script shapes that path sends. */
@@ -319,7 +319,7 @@ it('写后回读交给复查接管时不进备份轮转；接管方拿到这次�
   expect(handed.remoteRevision).toBe(result.remoteRevision);
   expect(noBackups.record).toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ files: [result.backupFile.replace(/\.xml$/, '')] }));
 });
-it('没有改动的同步：写前读到的控台导出直接交给复查当基线，不进备份轮转，执行器页和目录各只读一次', async () => {
+it('没有改动的同步：写前读到的控台导出交给复查当基线，不进备份轮转，只读取目标执行器页', async () => {
   const { song, sequences } = boundSong();
   const fake = songConsole(sequences);
   const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), showStopped, noBackups);
@@ -332,7 +332,7 @@ it('没有改动的同步：写前读到的控台导出直接交给复查当基�
   const unchanged = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: written.binding,
     points: song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: written.binding.points[index]!.cue, delayMs: 0 }] })) }, undefined, undefined, { adoptReadback });
   expect(unchanged.changed).toBe(false);
-  expect(fake.ops).toEqual(['LISTSEQ 1', 'PAGES 1', 'PAGE 1000', 'SEQUENCE 9000']);
+  expect(fake.ops).toEqual(['LISTSEQ 1', 'PAGE 1000', 'SEQUENCE 9000']);
   const [exportFile, handed] = adoptReadback.mock.calls[0]!;
   expect(exportFile).toMatch(/^tblink_library_[a-f0-9]{32}$/);
   expect(fake.files.get(exportFile)?.toString('utf8')).toBe(sequences.get(9000));

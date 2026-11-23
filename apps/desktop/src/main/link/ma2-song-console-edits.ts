@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { consoleLabelText, type Ma2LatestSide } from '@tb/core/link';
+import { MA2_SONG_FOREIGN_SEQUENCE, MA2_SONG_NATIVE_ACTION, consoleLabelText, type Ma2LatestSide } from '@tb/core/link';
 import type { Ma2SongBinding, Ma2SongConsoleEdits, Ma2SongSyncRequest } from '@tb/schema';
 import { inspectMa2SequenceXml, inspectMa2TimecodeXml } from './ma2-timecode-xml';
 
@@ -22,16 +22,18 @@ const showRevision = (xml: string): string => createHash('sha256').update(xml.re
  * A point the software changed since too (its name, time or Cue for a deletion, its time for a move)
  * takes the later change, `latest` (2026-11-11, "矛盾的时候采用最新的"; it replaced 2026-10-26's "the
  * software's version"): the software's is written again, or the console's comes in. A Cue fired more
- * than once in the show keeps the software's time. The Sequence missing as a whole is not taken as a
+ * than once stays on the original native track. The Sequence missing as a whole is not taken as a
  * deletion: the sync builds it again.
  */
 export function mergeMa2SongConsoleEdits(binding: Ma2SongBinding, points: Points, remoteXml: string, showXml: string | null, latest: Ma2LatestSide, createId: () => string = randomUUID): Ma2SongConsoleMerge {
   const remote = inspectMa2SequenceXml(remoteXml).sequences[0]!;
-  const base = inspectMa2SequenceXml(binding.baselineXml).sequences[0]!;
-  const onConsole = new Set(remote.cues.map(cue => milli(cue.number)));
+  const base = remoteXml === binding.baselineXml ? remote : inspectMa2SequenceXml(binding.baselineXml).sequences[0]!;
+  const onConsole = new Map(remote.cues.map(cue => [milli(cue.number), cue]));
+  const byStep = new Map(remote.cues.map(cue => [cue.index, cue]));
+  const baseCues = base === remote ? onConsole : new Map(base.cues.map(cue => [milli(cue.number), cue]));
   const local = new Map(points.map(point => [point.id, point]));
   const sameName = (point: Points[number], cue: string): boolean => {
-    const name = base.cues.find(value => milli(value.number) === milli(cue))?.name ?? '';
+    const name = baseCues.get(milli(cue))?.name ?? '';
     return name === point.name || name === consoleLabelText(point.name) || !point.name && name === `Cue ${Number(cue)}`;
   };
   const own = (point: Points[number], cue: string): boolean => point.cues.length === 1 && point.cues[0]!.sequence === binding.sequence && milli(point.cues[0]!.cue) === milli(cue) && point.cues[0]!.delayMs === 0;
@@ -39,16 +41,24 @@ export function mergeMa2SongConsoleEdits(binding: Ma2SongBinding, points: Points
   const untouched = (point: Points[number], old: Ma2SongBinding['points'][number]): boolean => own(point, old.cue) && sameName(point, old.cue) && timeKept(point, old) && (point.enabled !== false) === (old.enabled !== false);
 
   // Times the song's own show fires each Cue of its Sequence, in frames; only read when the show changed.
-  const fired = new Map<number, number[]>();
+  const fired = new Map<number, number>();
+  const keepNative = (action: string): Error => new Error(`${MA2_SONG_NATIVE_ACTION}。Timecode ${binding.timecode!.number} 的 ${action} 需要保留在原轨道。可在同步详情选“用控台上的”读回原编排。`);
   const show = showXml !== null && binding.timecode && showRevision(showXml) !== binding.timecode.revision ? inspectMa2TimecodeXml(showXml).timecodes[0] ?? null : null;
   if (show) for (const track of show.tracks) for (const subtrack of track.subtracks) for (const event of subtrack.events) {
-    if (event.attributes.command !== 'Goto' || event.attributes.pressed === 'false') continue;
     const [kind, sequence, index] = event.cueAddress;
-    if (event.cueAddress.length !== 3 || kind !== '1' || Number(sequence) !== binding.sequence) continue;
-    const cue = remote.cues.find(value => value.index === Number(index));
+    if (event.attributes.command !== 'Goto' || event.attributes.pressed === 'false' || event.cueAddress.length !== 3 || kind !== '1') {
+      const action = event.attributes.command ?? subtrack.attributes.fader_command ?? '执行器动作';
+      throw keepNative(action);
+    }
+    // MA2 can rewrite all Goto references when another Sequence takes the executor.
+    // Those triggers still exist. Treating them as deleted would clear the song and its native track.
+    if (Number(sequence) !== binding.sequence) throw new Error(`${MA2_SONG_FOREIGN_SEQUENCE}。Timecode ${binding.timecode!.number} 的灯光点引用序列 ${sequence}，这首歌使用序列 ${binding.sequence}。请核对轨道的执行器分配，恢复后再同步。歌曲点位已保留。`);
+    const cue = byStep.get(Number(index));
     const time = Number(event.attributes.time ?? '0');
     if (!cue || !Number.isFinite(time) || time < 0) continue;
-    fired.set(milli(cue.number), [...fired.get(milli(cue.number)) ?? [], time]);
+    const number = milli(cue.number);
+    if (fired.has(number)) throw keepNative(`Cue ${Number(cue.number)} 有多次触发，所有触发点`);
+    fired.set(number, time);
   }
 
   const removed = new Set<string>(); const moved = new Map<string, number>();
@@ -63,16 +73,16 @@ export function mergeMa2SongConsoleEdits(binding: Ma2SongBinding, points: Points
     if (!point) continue;
     if (!onConsole.has(milli(old.cue))) { remove(point, old); continue; }
     if (!show || old.atMs === undefined || old.enabled === false) continue;
-    const times = fired.get(milli(old.cue)) ?? [];
-    if (!times.length) { remove(point, old); continue; }
-    if (times.length !== 1 || Math.round(times[0]!) === frames(old.atMs)) continue;
+    const time = fired.get(milli(old.cue));
+    if (time === undefined) { remove(point, old); continue; }
+    if (Math.round(time) === frames(old.atMs)) continue;
     // Moved here to the same frame as there is no disagreement.
-    if (!timeKept(point, old) && frames(point.atMs) !== Math.round(times[0]!)) { conflicts += 1; if (latest !== 'remote') continue; }
-    moved.set(old.id, times[0]! * 1000 / 30);
+    if (!timeKept(point, old) && frames(point.atMs) !== Math.round(time)) { conflicts += 1; if (latest !== 'remote') continue; }
+    moved.set(old.id, time * 1000 / 30);
   }
   const used = new Set([...binding.points.map(point => milli(point.cue)), ...points.flatMap(point => point.cues.filter(cue => cue.sequence === binding.sequence).map(cue => milli(cue.cue)))]);
-  const added = [...fired].filter(([cue]) => !used.has(cue)).map(([cue, times]) => ({
-    id: createId(), name: remote.cues.find(value => milli(value.number) === cue)?.name ?? '', atMs: Math.min(...times) * 1000 / 30, cue: cueText(cue)
+  const added = [...fired].filter(([cue]) => !used.has(cue)).map(([cue, time]) => ({
+    id: createId(), name: onConsole.get(cue)?.name ?? '', atMs: time * 1000 / 30, cue: cueText(cue)
   }));
 
   const merged: Points = [

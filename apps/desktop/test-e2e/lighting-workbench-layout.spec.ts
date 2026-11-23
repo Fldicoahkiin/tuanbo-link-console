@@ -35,12 +35,23 @@ test('灯光工作台在 1280×720 和 1180×720 下：不横向滚动，时间�
     await expect(page.locator('.audio-segment-canvas[data-ready="true"]').first()).toBeVisible();
     const menu = page.getByRole('navigation', { name: '灯光素材主菜单' });
     const timeline = page.locator('.lighting-workbench .reference-timeline');
-    for (const [width, height] of [[1280, 720], [1180, 720]] as const) {
+    for (const [width, height] of [[1920, 900], [1280, 720], [1180, 720]] as const) {
       await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]?.setSize(size.width, size.height), { width, height });
       await menu.getByRole('button', { name: '控台素材', exact: true }).click();
       for (const view of ['单步', '全部', '控台页面'] as const) {
         await page.getByRole('region', { name: 'MA2 序列预览' }).getByRole('button', { name: view, exact: true }).click();
         await expect.poll(() => sidewaysScroll(page), { message: `${width}×${height} ${view}` }).toEqual([]);
+        if (view === '单步') {
+          const grid = page.locator('.cue-pool-grid[aria-label="素材序列"]');
+          const first = grid.locator('[data-cue-cell="0"] button').first();
+          await expect(first).toBeVisible();
+          expect((await first.boundingBox())!.width).toBeLessThanOrEqual(156);
+          const columns = await grid.evaluate(element => Math.floor(element.clientWidth / 156));
+          await first.focus();
+          await first.press('ArrowDown');
+          await expect(grid.locator(`[data-cue-cell="${columns}"] button`).first()).toBeFocused();
+          await page.screenshot({ path: info.outputPath(`cue-grid-${width}.png`) });
+        }
       }
       await menu.getByRole('button', { name: '面光', exact: true }).click();
       await expect.poll(() => sidewaysScroll(page), { message: `${width}×${height} 面光` }).toEqual([]);
@@ -51,10 +62,18 @@ test('灯光工作台在 1280×720 和 1180×720 下：不横向滚动，时间�
       await expect(page.locator('.app-sidebar').getByRole('button', { name: '刷新素材目录' })).toHaveCount(0);
       await page.screenshot({ path: info.outputPath(`workbench-${width}x${height}.png`) });
     }
+    await menu.getByRole('button', { name: '控台素材', exact: true }).click();
+    await page.getByRole('button', { name: '停止全部控台 Cue' }).click();
+    await page.getByRole('button', { name: '未确认停止', exact: true }).click();
+    const detail = page.getByRole('dialog', { name: '控台停止详情' });
+    await expect(detail).toContainText('控台未连接');
+    await expect(detail).toBeInViewport({ ratio: 1 });
+    await page.keyboard.press('Escape');
+    await expect(detail).toHaveCount(0);
     // A notice opens above the timeline, never over its Cues.
-    await page.getByRole('region', { name: '灯光同步操作' }).getByRole('button', { name: '保存', exact: true }).click();
+    await page.locator('.titlebar').getByRole('button', { name: '保存工程', exact: true }).click();
     const notices = page.getByRole('region', { name: '通知' });
-    await expect(notices.getByText('本地已保存并创建存档')).toBeVisible();
+    await expect(notices.getByText('工程已保存并创建存档')).toBeVisible();
     const notice = (await notices.boundingBox())!;
     expect(notice.y + notice.height).toBeLessThanOrEqual((await timeline.boundingBox())!.y);
     await page.screenshot({ path: info.outputPath('notice.png') });

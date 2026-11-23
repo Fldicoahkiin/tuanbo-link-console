@@ -37,6 +37,22 @@ describe('P1Clock', () => {
     expect(play(onTime, 2 * 30 - 2, 2, 1_000).events).toMatchObject([{ kind: 'clock', clock: { positionMs: 2_000 } }]);
   });
 
+  it('手动待命按歌曲 MTC 起点开始，监视器保留绝对时间，中途起播仍须重同步', () => {
+    const project = manualProject();
+    project.rundown[0]!.playback = { mtcOffsetMs: 1_200_000, startMs: 0, endMs: 0, volume: 100, endAction: 'stop', shortcut: '' };
+    const start = 20 * 60 * 30;
+    const clock = new P1Clock(project, 'manual');
+    clock.arm('song');
+    expect(play(clock, start - 20, 2, 0).events).toEqual([]);
+    const { events } = play(clock, start + 1, 2, 1_000);
+    expect(events).toMatchObject([{ kind: 'clock', clock: { positionMs: 100 } }]);
+    expect(clock.timecode?.timecode).toEqual({ hours: 0, minutes: 20, seconds: 0, frames: 3 });
+    const late = new P1Clock(project, 'manual');
+    late.arm('song');
+    expect(play(late, start + 88, 2, 1_000).events).toMatchObject([{ kind: 'frozen', cause: 'not-from-start' }]);
+    expect(late.resync()).toMatchObject([{ kind: 'resynced', clock: { positionMs: 3_000 } }]);
+  });
+
   it('时钟带接口时间、歌曲内位置（减去 P1 区间起点）、会话和代数', () => {
     const project = autoProject();
     const clock = new P1Clock(project, 'auto');
@@ -93,6 +109,22 @@ describe('P1Clock', () => {
     expect(clock.message([0x90, 60, 100], at(1_011))).toEqual([]);
     for (const [index, piece] of pieces.slice(4).entries()) expect(clock.message(piece, at(1_020 + index))).toEqual([]);
     expect(clock.state.phase).toBe('waiting');
+  });
+
+  it.each([false, true])('断码后不能用两个位置各半组的消息启动节目（收到心跳：%s）', heartbeat => {
+    const clock = new P1Clock(manualProject(), 'manual');
+    clock.arm('song');
+    const before = quarterFrames(0, '30');
+    const after = quarterFrames(58 * 30, '30');
+    for (const [index, piece] of before.slice(0, 4).entries()) clock.message(piece, at(1_000 + 8 * index));
+    if (heartbeat) clock.idle(at(1_600));
+    clock.message([0x90, 60, 100], at(1_690));
+    const events = after.slice(4).flatMap((piece, index) => clock.message(piece, at(1_700 + 8 * index)));
+    expect(events).toEqual([]);
+    expect(clock.state.phase).toBe('waiting');
+    expect(clock.timecode).toBeNull();
+    after.forEach((piece, index) => clock.message(piece, at(1_740 + 8 * index)));
+    expect(clock.timecode?.timecode).toEqual({ hours: 0, minutes: 0, seconds: 58, frames: 2 });
   });
 
   it('心跳之后读到一条时间略早的消息是正常的：不报错，“现在”取较晚的那个，断码照样按它算', () => {

@@ -81,10 +81,14 @@ export class Ma2Telnet {
       // The native banner says "guest" even before login: only an executed
       // correlated Lua response proves command access. Echoed input cannot match.
       const marker = `TBLINK_AUTH_${randomBytes(16).toString('hex')}`;
-      const version = await this.command(`Lua "gma.echo('${marker}:'..tostring(gma.show.getvar('VERSION')))"`, (text) => {
-        const value = ma2ResponseLine(text, `${marker}:`);
-        return value && /^\d+(?:\.\d+){1,3}$/.test(value) ? value : null;
-      });
+      const identity = await this.command(`Lua "gma.echo('${marker}:'..tostring(gma.show.getvar('VERSION') or '')..':'..tostring(gma.show.getvar('HOSTTYPE') or ''))"`,
+        text => ma2ResponseLine(text, `${marker}:`));
+      const [version, hostType] = identity.split(':');
+      if (!version || !/^\d+(?:\.\d+){1,3}$/.test(version)) throw new Error('没有读到控台版本，请核对 MA2 连接地址');
+      if (!/^(console|onpc)$/i.test(hostType ?? '')) {
+        if (/^(ma\s*)?3d$/i.test(hostType ?? '')) throw new Error('当前连到 MA 3D。请连接控台或 onPC。同机使用时，先打开 onPC，再打开 MA 3D');
+        throw new Error(`无法确认连接的是控台或 onPC（设备类型：${hostType || '未提供'}），请核对 MA2 连接地址`);
+      }
       this.setState('connected');
       return version;
     } catch (error) {

@@ -4,6 +4,15 @@ import { MA2_FRAME_MS } from './ma2-time-origin';
 import { consoleLabelText } from './ma2-console-label';
 import { lightingTrackEnabled } from './lighting-track-state';
 
+export const MA2_SONG_NATIVE_ACTION = '歌曲时间线含有原控台动作';
+export const MA2_SONG_FOREIGN_SEQUENCE = '歌曲时间线引用了其他序列';
+
+/** Compare the complete receipt without making two JSON copies of its potentially large XML payload. */
+export function sameMa2SongBinding(current: LightingDocument['consoleSong'], next: Ma2SongSyncResult['binding']): boolean {
+  if (!current || current.baselineXml !== next.baselineXml) return false;
+  return JSON.stringify({ ...current, baselineXml: undefined }) === JSON.stringify({ ...next, baselineXml: undefined });
+}
+
 /** A song joins console sync only after association or an explicit new-timeline destination. */
 export function hasMa2SongSyncTarget(document: LightingDocument | undefined): boolean {
   return Boolean(document && (document.consoleSong || document.timelineDestination || document.ma2Bindings?.length));
@@ -37,7 +46,7 @@ export function ma2SongPoints(document: LightingDocument): Ma2SongPoint[] {
   return songCueGroups(document).map(({ id, name, atMs, enabled, members }) => ({
     id, name, atMs, ...(!enabled && { enabled: false }),
     cues: members.flatMap(({ event }) => event.kind === 'ma2' && event.sequence && event.cue
-      ? [{ sequence: event.sequence, cue: event.cue, ...(event.attributes && { attributes: event.attributes }), ...(event.includeTracking !== undefined && { includeTracking: event.includeTracking }), delayMs: 0 }] : [])
+      ? [{ sequence: event.sequence, cue: event.cue, ...(event.valueEdits && { valueEdits: event.valueEdits }), ...(event.attributes && { attributes: event.attributes }), ...(event.includeTracking !== undefined && { includeTracking: event.includeTracking }), delayMs: 0 }] : [])
   })).sort((a, b) => a.atMs - b.atMs);
 }
 
@@ -103,21 +112,26 @@ export function applyMa2SongReadback(source: LightingDocument, observed: Ma2Song
   const materials = new Map<string, NonNullable<Extract<LightingEvent, { kind: 'ma2' }>['sourceIngredients']>>();
   for (const { id, members } of groups) for (const { event } of members) {
     if (event.kind !== 'ma2' || !event.sequence || !event.cue) continue;
-    const sources = event.sourceIngredients ?? [{ sequence: event.sequence, cue: event.cue, name: event.label, executor: event.executor, ...(event.attributes && {attributes: event.attributes}),
+    const sources = event.sourceIngredients ?? [{ sequence: event.sequence, cue: event.cue, name: event.label, executor: event.executor, ...(event.valueEdits && { valueEdits: event.valueEdits }), ...(event.attributes && {attributes: event.attributes}),
       ...(event.includeTracking !== undefined && { includeTracking: event.includeTracking }) }];
-    if (event.sourceIngredients || event.attributes || event.includeTracking !== undefined || event.sequence !== result.binding.sequence || event.effectGroupId) {
+    if (event.sourceIngredients || event.valueEdits || event.attributes || event.includeTracking !== undefined || event.sequence !== result.binding.sequence || event.effectGroupId) {
       materials.set(id, [...materials.get(id) ?? [], ...sources]);
     }
   }
   const mapping = new Map(result.binding.points.map(point => [point.id, point.cue]));
   const cues = result.library.sequences.find(value => value.sequence === result.binding.sequence)?.cues ?? [];
+  const cueNames = new Map<number, string | null>();
+  for (const cue of cues) {
+    const number = Number(cue.number);
+    if (!cueNames.has(number)) cueNames.set(number, cue.name);
+  }
   return lightingDocumentSchema.parse({ ...document, version: 2, consoleSong: result.binding,
     ...(document.timelineDestination ? { timelineDestination: { ...document.timelineDestination, sequence: result.binding.sequence, executor: result.binding.executor ?? document.timelineDestination.executor, timecode: result.binding.timecode?.number ?? document.timelineDestination.timecode } } : {}), tracks: document.tracks.map(track => ({ ...track, clips: track.clips.map(clip => ({ ...clip, events: clip.events.flatMap((event): LightingEvent[] => {
     const id = leaders.get(event.id) ?? event.id;
     if (!unchanged.has(id)) return [event];
     const cue = mapping.get(id); if (!cue || event.kind !== 'ma2' && event.kind !== 'empty-cue') return [event];
     // The console holds pinyin for a Chinese label; only a name changed on the console replaces it.
-    const consoleName = cues.find(value => Number(value.number) === Number(cue))?.name;
+    const consoleName = cueNames.get(Number(cue));
     const label = !consoleName || consoleName === consoleLabelText(event.label) ? event.label : consoleName;
     if (event.id !== id) return [];
     return [{ id, kind: 'ma2', at: event.at, action: 'goto', executor: result.binding.executor ?? '', sequence: result.binding.sequence, cue,

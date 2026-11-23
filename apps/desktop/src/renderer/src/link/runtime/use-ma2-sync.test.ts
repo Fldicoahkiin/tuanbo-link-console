@@ -7,6 +7,7 @@ import { useMa2ModeStore } from '../stores/ma2-mode-store';
 import { useMa2ReadStore } from '../stores/ma2-read-store';
 import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 import { prepareMa2RealtimeSession } from './ma2-realtime-session';
+import { useMa2RealtimePreference } from './ma2-realtime-preference';
 import { tickMa2SongSync } from './ma2-song-sync';
 import { announceMa2Sync, subscribeMa2Sync } from './use-ma2-sync';
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
@@ -52,6 +53,7 @@ it('同一轮的改动直接同步，控台未答复时的新改动在答复后�
     return new Promise<void>(resolve => { replies.push(resolve); });
   });
   vi.useFakeTimers();
+  useMa2RealtimePreference.setState({ once: Date.now(), onceItemId: 'song' });
   const stop = subscribeMa2Sync(vi.fn());
   try {
     const edit = (title: string) => useDocumentStore.getState().execute({ id: crypto.randomUUID(), label: '改歌名', undo: before => before,
@@ -69,7 +71,7 @@ it('同一轮的改动直接同步，控台未答复时的新改动在答复后�
     replies.shift()!();
     await vi.advanceTimersByTimeAsync(0);
     expect(titles).toEqual(['一', '三', '四']);
-  } finally { stop(); replies.shift()?.(); vi.useRealTimers(); }
+  } finally { stop(); useMa2RealtimePreference.setState({ once: null, onceItemId: null }); replies.shift()?.(); vi.useRealTimers(); }
 });
 
 it('首次时间线和素材读取结束就接着逐首同步，不等下一次半秒轮询', async () => {
@@ -79,6 +81,7 @@ it('首次时间线和素材读取结束就接着逐首同步，不等下一次�
   useMa2MaterialReadStore.setState({ busy: true });
   vi.mocked(prepareMa2RealtimeSession).mockImplementation(() => Promise.resolve(!useMa2ReadStore.getState().busy && !useMa2MaterialReadStore.getState().busy));
   vi.mocked(tickMa2SongSync).mockReset().mockResolvedValue(undefined);
+  useMa2RealtimePreference.setState({ once: Date.now(), onceItemId: 'song' });
   const stop = subscribeMa2Sync(vi.fn());
   try {
     await vi.advanceTimersByTimeAsync(0);
@@ -88,5 +91,22 @@ it('首次时间线和素材读取结束就接着逐首同步，不等下一次�
     useMa2MaterialReadStore.setState({ busy: false });
     await vi.advanceTimersByTimeAsync(0);
     expect(tickMa2SongSync).toHaveBeenCalledOnce();
-  } finally { stop(); useMa2ReadStore.setState({ busy: false }); useMa2MaterialReadStore.setState({ busy: false }); vi.useRealTimers(); }
+  } finally { stop(); useMa2RealtimePreference.setState({ once: null, onceItemId: null }); useMa2ReadStore.setState({ busy: false }); useMa2MaterialReadStore.setState({ busy: false }); vi.useRealTimers(); }
+});
+
+it('空闲和编辑时不从控台读写，点击同步才开始检查当前节目', async () => {
+  vi.useFakeTimers();
+  vi.mocked(prepareMa2RealtimeSession).mockClear().mockResolvedValue(false);
+  useMa2RealtimePreference.setState({ enabled: false, once: null, onceItemId: null });
+  const stop = subscribeMa2Sync(vi.fn());
+  try {
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(prepareMa2RealtimeSession).not.toHaveBeenCalled();
+    useMa2RealtimePreference.setState({ once: Date.now(), onceItemId: 'song' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(prepareMa2RealtimeSession).toHaveBeenCalledOnce();
+    useMa2RealtimePreference.setState({ once: null, onceItemId: null });
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { stop(); useMa2RealtimePreference.setState({ once: null, onceItemId: null }); vi.useRealTimers(); }
 });

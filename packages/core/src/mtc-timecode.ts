@@ -39,7 +39,7 @@ export class MtcQuarterFrameDecoder {
     this.lastType = type;
 
     const cycleComplete = this.direction === 'forward' ? type === 7 : this.direction === 'reverse' && type === 0;
-    if (!cycleComplete || this.pieces.some((piece) => piece === undefined) || !this.direction) return null;
+    if (!cycleComplete || this.pieces.includes(undefined) || !this.direction) return null;
 
     const decoded = this.decode(receivedAtMs, this.direction);
     this.clearPieces();

@@ -1,7 +1,7 @@
 import type { LinkProject } from '@tb/schema';
 import { frameNumberToTimecode, nominalFramesPerSecond, type MtcSample } from './mtc-timecode';
-import { nextMtcStartMs, readSongMtcStart } from './mtc-start';
-import { songLightingStatus } from './song-lighting-status';
+import { ma2MtcGapTicks, nextMtcStartMs, readSongMtcStart } from './mtc-start';
+import { hasSongLightingTimeOrigin } from './song-lighting-status';
 
 /** The last second a range may reach: P1 1.14.2 loses the high hour bit at 16 hours. */
 const P1_LIMIT_SECONDS = 54_000;
@@ -18,15 +18,16 @@ export function allocateP1TimecodeRanges(project: LinkProject): NonNullable<Link
   if (project.timebase.frameRate === '29.97df') throw new Error('P1 自动选歌目前只支持 24、25、30 fps，建议用实测过的 30 fps');
   const songs = project.rundown.filter((value) => value.referenceAudio);
   if (!songs.length) throw new Error('请先导入 P1 工程或为节目添加参考音频');
+  const gapSeconds = ma2MtcGapTicks(project.ma2ReadState?.catalog.afterRollSeconds) / 30;
   const kept = new Map<string, { startSeconds: number; durationMs: number }>();
   for (const item of songs) {
     const durationMs = item.referenceAudio?.durationMs;
     if (!durationMs) throw new Error(`节目缺少音频时长：${item.title}`);
     const reading = readSongMtcStart(item);
     if (reading.state === 'unset') continue;
-    const reason = reading.state === 'invalid' ? reading.reason : keepReason(reading.startMs / 1000, durationMs, kept);
+    const reason = reading.state === 'invalid' ? reading.reason : keepReason(reading.startMs / 1000, durationMs, kept, gapSeconds);
     if (!reason && reading.state === 'set') { kept.set(item.id, { startSeconds: reading.startMs / 1000, durationMs }); continue; }
-    if (songLightingStatus(project, item.id).state !== 'unmatched') throw new Error(`「${item.title}」的 MTC 起始码不能用于 P1 点歌：${reason}。它的灯光按这个起始码和控台对齐，没有替它换起始码；请在歌曲属性里改 MTC 起始码，并把控台上的时间线移到同一起点后再生成`);
+    if (hasSongLightingTimeOrigin(project, item)) throw new Error(`「${item.title}」的 MTC 起始码不能用于 P1 点歌：${reason}。它的灯光按这个起始码和控台对齐，没有替它换起始码；请在歌曲属性里改 MTC 起始码，并把控台上的时间线移到同一起点后再生成`);
   }
   // Every range taken so far, kept or allocated, so a new start never lands inside an earlier song.
   const occupied = [...kept.values()].map((range) => ({ startMs: range.startSeconds * 1000, endMs: range.startSeconds * 1000 + range.durationMs }));
@@ -34,7 +35,7 @@ export function allocateP1TimecodeRanges(project: LinkProject): NonNullable<Link
     const durationMs = item.referenceAudio!.durationMs;
     const own = kept.get(item.id);
     if (own) return { itemId: item.id, ...own };
-    const startMs = nextMtcStartMs(occupied, durationMs, P1_LIMIT_SECONDS * 1000);
+    const startMs = nextMtcStartMs(occupied, durationMs, P1_LIMIT_SECONDS * 1000, gapSeconds * 1000);
     occupied.push({ startMs, endMs: startMs + durationMs });
     return { itemId: item.id, startSeconds: startMs / 1000, durationMs };
   });
@@ -42,12 +43,12 @@ export function allocateP1TimecodeRanges(project: LinkProject): NonNullable<Link
 }
 
 /** Why P1 cannot follow a song from this start: whole seconds, from one minute, clear of the kept songs and inside 15 hours. */
-function keepReason(startSeconds: number, durationMs: number, kept: ReadonlyMap<string, { startSeconds: number; durationMs: number }>): string | null {
+function keepReason(startSeconds: number, durationMs: number, kept: ReadonlyMap<string, { startSeconds: number; durationMs: number }>, gapSeconds: number): string | null {
   if (!Number.isInteger(startSeconds)) return `${startSeconds} 秒不是整秒`;
   if (startSeconds < 60) return `${startSeconds} 秒早于 1 分钟`;
-  const end = startSeconds + durationMs / 1000 + 1;
-  if (end >= P1_LIMIT_SECONDS) return '加上歌曲时长超出 15 小时';
-  if ([...kept.values()].some((range) => startSeconds < range.startSeconds + range.durationMs / 1000 + 1 && range.startSeconds < end)) return '和另一首歌的时间码范围重叠';
+  const end = startSeconds + durationMs / 1000;
+  if (end + 1 >= P1_LIMIT_SECONDS) return '加上歌曲时长超出 15 小时';
+  if ([...kept.values()].some((range) => startSeconds < range.startSeconds + range.durationMs / 1000 + gapSeconds && range.startSeconds < end + gapSeconds)) return `和另一首歌的时间码范围重叠或间隔不足 ${gapSeconds} 秒`;
   return null;
 }
 
@@ -55,6 +56,7 @@ export function validateP1TimecodeRanges(project: LinkProject): void {
   const config = project.p1AutoFollow;
   if (!config?.enabled) return;
   if (project.timebase.frameRate === '29.97df') throw new Error('自动选歌不支持 29.97df');
+  const gapSeconds = ma2MtcGapTicks(project.ma2ReadState?.catalog.afterRollSeconds) / 30;
   const ids = new Set<string>();
   let end = 0;
   for (const range of [...config.ranges].sort((a, b) => a.startSeconds - b.startSeconds)) {
@@ -63,10 +65,14 @@ export function validateP1TimecodeRanges(project: LinkProject): void {
       throw new Error('P1 自动联动的对应关系已过期，请重新生成点歌联动工程');
     }
     if (range.startSeconds < end || range.startSeconds + range.durationMs / 1000 + 1 >= 54_000) {
-      throw new Error('P1 自动联动的时间区间重叠或超出范围');
+      throw new Error(`P1 自动联动的时间区间重叠、间隔不足 ${gapSeconds} 秒或超出范围`);
+    }
+    const start = readSongMtcStart(item);
+    if (start.state === 'set' && start.startMs !== range.startSeconds * 1000 && hasSongLightingTimeOrigin(project, item)) {
+      throw new Error(`「${item.title}」的灯光起始码已改为 ${start.startMs / 1000} 秒，P1 点歌工程仍使用 ${range.startSeconds} 秒。请重新生成 P1 联动工程，在 P1 打开新文件。`);
     }
     ids.add(range.itemId);
-    end = range.startSeconds + range.durationMs / 1000 + 1;
+    end = range.startSeconds + range.durationMs / 1000 + gapSeconds;
   }
   if (project.rundown.some((item) => item.referenceAudio && !ids.has(item.id))) {
     throw new Error('新加的歌还没同步到 P1，请重新生成点歌联动工程');

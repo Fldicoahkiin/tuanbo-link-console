@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { editMa2SongSequence, editMa2TimecodeEvents, emptyMa2SequenceXml, extendMa2TimecodeLength, inspectMa2CueAttributes, inspectMa2CueFixtures, inspectMa2CueData, inspectMa2SequenceXml, inspectMa2TimecodeXml, ma2SequenceCueFingerprints, patchMa2EventTimes, prepareMa2TimecodeEvents, resolveMa2CueNumber, sameMa2XmlObjects, validateMa2TimecodeSnapshot } from './ma2-timecode-xml';
+import { verifyMa2RetainedCues, editMa2SongSequence, editMa2TimecodeEvents, emptyMa2SequenceXml, extendMa2TimecodeLength, inspectMa2CueAttributes, inspectMa2CueFixtures, inspectMa2CueData, inspectMa2SequenceXml, inspectMa2TimecodeXml, ma2SequenceCueFingerprints, patchMa2EventTimes, prepareMa2TimecodeEvents, resolveMa2CueNumber, sameMa2XmlObjects, validateMa2TimecodeSnapshot } from './ma2-timecode-xml';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { convertMa2Timecode } from './ma2-timecode-conversion';
 import { showStopped } from './fixtures/show-gates';
@@ -21,6 +21,39 @@ it('重复检查同一序列不受编辑或调用者修改影响，改变后的 
   expect(inspectMa2SequenceXml(xml)).toEqual(original);
   expect(() => inspectMa2SequenceXml(xml.replace('</Sequ>', '<Broken></Sequ>'))).toThrow('解析失败');
 });
+
+it('超过 32 MiB 的原生序列完整校验灯具 XML，只为编号与 Cue 元数据建立索引', () => {
+  const small = emptyMa2SequenceXml(3, '3.7.0.5');
+  const data = ' '.repeat(32 * 1024 * 1024) + '<Channel fixture_id="2" />';
+  const xml = small.replace('</Cue>', '<CueDatas>' + data + '</CueDatas></Cue>');
+  expect(inspectMa2SequenceXml(xml)).toEqual(inspectMa2SequenceXml(small));
+  expect(() => inspectMa2SequenceXml(xml.replace('/></CueDatas>', '></CueDatas>'))).toThrow('解析失败');
+});
+
+it('大序列改名、插入和删除后保留原生灯具字节，跨序列复制只展开所选 Cue', () => {
+  const small = emptyMa2SequenceXml(3, '3.7.0.5').replace('<Sequ ', '<Sequ xmlns:v="urn:test:fixture" ');
+  const row = '<CueData><Channel fixture_id="23" attribute_name="DIM"/><Value>67</Value><Effect><No>1</No></Effect><v:Detail note="♬"><![CDATA[</CueDatas>]]></v:Detail></CueData>';
+  const cue = (i: number, data: string) => `<Cue index="${i}"><Number number="${i}"/><CueDatas>${data}</CueDatas><CuePart index="0"/></Cue>`;
+  const pad = ' '.repeat(16 * 1024 * 1024);
+  const build = (padding: string) => small.replace(/<Cue index="1">.*?<\/Cue>/, cue(1, row + padding) + cue(2, padding + row));
+  const large = build(pad);
+  const modified = editMa2SongSequence(large, '节目', [{ cue: '2', name: '最后一步' }, { cue: '1.5', name: '空步', sources: [] }], ['1']);
+  expect(modified).toContain(`<CueDatas>${pad}${row}</CueDatas>`);
+  expect(modified).not.toContain('<?tblink-');
+  expect(inspectMa2SequenceXml(modified).sequences[0]?.cues.map(cue => cue.number)).toEqual(['1.500', '2.000']);
+  const copy = editMa2SongSequence(small, '目标', [{ cue: '1', name: '复制的 Cue', sources: [{ xml: large, cue: '2' }] }], []);
+  expect(inspectMa2CueData(copy, 1)).toEqual(inspectMa2CueData(build(''), 2));
+  expect(ma2SequenceCueFingerprints(large)).toEqual(ma2SequenceCueFingerprints(build('')));
+  expect(() => verifyMa2RetainedCues(large, build(''), ['1.000', '2.000'])).not.toThrow();
+  expect(() => verifyMa2RetainedCues(large, large.replace('>67<', '>68<'), ['1.000'])).toThrow('Cue 1.000');
+  expect(() => verifyMa2RetainedCues(large, large.replace('urn:test:fixture', 'urn:other'), ['1.000'])).toThrow('Cue 1.000');
+  expect(inspectMa2CueFixtures(large)).toEqual(inspectMa2CueFixtures(build('')));
+  const readAt = '2026-11-20T12:00:00.000Z';
+  const summary = inspectMa2CueAttributes(large, readAt, true, 'summary');
+  const expected = inspectMa2CueAttributes(build(''), readAt, true);
+  for (const item of expected) delete item.content;
+  expect(summary).toEqual(expected);
+}, 30000);
 
 it('复用解析结果不混淆读回时间、灯具内容和名称，也不共享可修改的返回值', () => {
   const xml = readFileSync(new URL('./fixtures/ma2-cue-attributes-3.7.xml', import.meta.url), 'utf8');

@@ -57,7 +57,7 @@ export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, o
       if(mode==='combine' && ingredients.some(value=>value.delayMs!==0))throw new Error('合成的 Cue 是静态的，不带时间延迟；有延迟的组合请留在本地编排里');
       current.execute(setLightingLibraryCommand({...projectLightingLibrary(current.project),consoleWorkspace:parsed},'设置控台专用 Layout'));
       const before=useDocumentStore.getState();if(!before.project)throw new Error('工程已关闭');
-      const result=await window.tbLink.createMa2Cue({network:context.network,expectedSource:context.expectedSource,projectId:before.project.projectId,requestId:crypto.randomUUID(),settings:parsed,name,content:mode==='combine'?{kind:'combine',cues:ingredients.map(value=>({sequence:value.sequence,cue:value.cue,attributes:value.attributes,includeTracking:value.includeTracking}))}:{kind:'programmer',use}});
+      const result=await window.tbLink.createMa2Cue({network:context.network,expectedSource:context.expectedSource,projectId:before.project.projectId,requestId:crypto.randomUUID(),settings:parsed,name,content:mode==='combine'?{kind:'combine',cues:ingredients.map(value=>({sequence:value.sequence,cue:value.cue,valueEdits:value.valueEdits,attributes:value.attributes,includeTracking:value.includeTracking}))}:{kind:'programmer',use}});
       const after=useDocumentStore.getState();
       if(after.documentId!==before.documentId||!after.project)throw new Error('控台上已创建，但工程已切换，请重新读取控台');
       after.executeForDocument(before.documentId,mergeMa2AttributesCommand(context.endpoint,result.library,[result.sequence],false));
@@ -88,7 +88,7 @@ export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, o
       const title = owner ? ma2ConsoleSequenceName(owner) : item.name || '未关联对象';
       return <button disabled={item.kind !== 'sequence' || !owner} title={`${title} · 序列 ${item.sequence}`} onClick={() => setSequence(item.sequence ?? null)}><strong>{title}</strong>{owner ? <small>共 {owner.cues.length} 步</small> : null}</button>;
     }}/></> : <p>输入 Layout 编号并读取本页 Cue。</p>}
-    {sequence!==null?<Ma2SequencePreview key={sequence} document={document} initialSequence={sequence} composing onClose={()=>setSequence(null)} onUse={(seq,cue,label,executor,attributes,includeTracking)=>{const owner=library.find(value=>value.sequence===seq);const step=owner?.cues.find(value=>value.number===cue);onIngredients([...ingredients,{sequence:seq,cue,name:owner&&step?ma2ConsoleCuePoolName(owner,step):label,executor,delayMs:0,attributes,includeTracking:includeTracking??defaultTracking}]);setCreating(true);}}/>:null}
+    {sequence!==null?<Ma2SequencePreview key={sequence} document={document} initialSequence={sequence} composing onClose={()=>setSequence(null)} onUse={(seq,cue,label,executor,attributes,includeTracking,valueEdits)=>{const owner=library.find(value=>value.sequence===seq);const step=owner?.cues.find(value=>value.number===cue);onIngredients([...ingredients,{sequence:seq,cue,name:owner&&step?ma2ConsoleCuePoolName(owner,step):label,executor,delayMs:0,attributes,valueEdits,includeTracking:includeTracking??defaultTracking}]);setCreating(true);}}/>:null}
     {error?<p role="alert">{error}</p>:<p role="status">{message}</p>}
   </aside>;
 }

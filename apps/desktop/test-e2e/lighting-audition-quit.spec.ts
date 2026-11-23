@@ -17,7 +17,7 @@ test('退出时灯光试听未能停止：可返回软件处理，也可明确�
         const end = buffer.indexOf('\r\n'), line = buffer.slice(0, end); buffer = buffer.slice(end + 2);
         if (line.startsWith('Login ')) { socket.write('\r\n [Channel]>'); continue; }
         const auth = /TBLINK_AUTH_[a-f0-9]{32}/.exec(line)?.[0], boot = /TBLINK_BOOT_[a-f0-9]{32}/.exec(line)?.[0];
-        if (auth) { socket.write(`\r\n${auth}:3.9.60.74\r\n`); continue; }
+        if (auth) { socket.write(`\r\n${auth}:3.9.60.74:Console\r\n`); continue; }
         if (boot) { socket.write(`\r\n${boot}:ready\r\n`); continue; }
         const show = /TBLINK_SHOWCHECK_[a-f0-9]{32}/.exec(line)?.[0];
         if (show) {

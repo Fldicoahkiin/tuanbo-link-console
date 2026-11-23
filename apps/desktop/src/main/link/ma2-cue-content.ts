@@ -36,7 +36,10 @@ export function inspectMa2CueContent(cue: XmlElement, preceding: 'none' | 'possi
   const containers = Array.from(cue.getElementsByTagNameNS(namespace, 'CueDatas'));
   if (!containers.length && !fullExport) issues.add('没有完整 Sequence 导出的依据，缺少 CueDatas 不能据此判定为空 Cue');
   for (const child of elements(cue)) if (!['Number', 'CueDatas', 'CuePart'].includes(child.localName ?? '')) issues.add(`Cue 里有还不支持的 ${child.localName} 数据`);
-  for (const part of declarations) for (const child of elements(part)) if (!['CuePartPresetTiming', 'CueDatas', 'Command', 'Cmd'].includes(child.localName ?? '')) issues.add(`Cue Part 里有还不支持的 ${child.localName} 数据`);
+  for (const part of declarations) for (const child of elements(part)) {
+    if (child.namespaceURI !== namespace || !['CuePartPresetTiming', 'CueDatas', 'Command', 'Cmd', 'macro_text'].includes(child.localName ?? '')
+      || (child.localName === 'macro_text' && elements(child).length)) issues.add(`Cue Part 里有还不支持的 ${child.localName} 数据`);
+  }
   const rows: Ma2CueContent['rows'] = [];
   for (const container of containers) for (const data of elements(container)) {
     if (data.localName !== 'CueData' || data.namespaceURI !== namespace) { issues.add('CueDatas 里有还不支持的数据结构'); continue; }
@@ -64,7 +67,7 @@ export function inspectMa2CueContent(cue: XmlElement, preceding: 'none' | 'possi
     rows.push({ attribute, ...(fixtureId ? { fixtureId } : {}), ...(channelId ? { channelId } : {}), ...(subfixture ? { subfixture } : {}), ...(valuePart !== undefined ? { valuePart } : {}), ...(effectPart !== undefined ? { effectPart } : {}), layers: stored });
   }
   if (cue.getElementsByTagNameNS(namespace, 'Channel').length !== rows.length) issues.add('部分灯具属性引用了还不支持的数据结构');
-  const hasCommands = Array.from(cue.getElementsByTagNameNS(namespace, '*')).some(element => /^(command|cmd)$/i.test(element.localName ?? '') && Boolean(element.textContent?.trim() || element.attributes.length))
+  const hasCommands = Array.from(cue.getElementsByTagNameNS(namespace, '*')).some(element => /^(command|cmd|macro_text)$/i.test(element.localName ?? '') && Boolean(element.textContent?.trim() || element.attributes.length))
     || [cue, ...declarations].some(element => Array.from(element.attributes).some(attribute => /^(command|cmd)$/i.test(attribute.name) && Boolean(attribute.value.trim())));
   // An attribute-free step may still carry triggers, fades, loops or Part timing.
   // Keep unrecognized nonempty settings out of destructive empty-Cue cleanup.

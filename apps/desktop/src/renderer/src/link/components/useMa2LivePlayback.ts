@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Ma2LiveInput, Ma2LiveRequest, Ma2LiveSnapshot, Ma2WebRemoteSession } from '@tb/schema';
+import { useConsoleStop } from '../stores/ma2-audition-store';
 import { ma2LayoutConnection } from '../stores/ma2-layout-store';
 import { MA2_FADER_SEND_MS, MA2_WEB_REMOTE_WATCH_MS, holdFader, settleFaders } from '../view-models/ma2-console-page';
 
@@ -36,6 +37,13 @@ export function useMa2LivePlayback(page: number, start: number, scope: string, e
     queue.current.clear(); pendingRef.current = new Map(); setPending(new Map());
     setError(cause instanceof Error ? cause.message : String(cause));
   }, []);
+  useConsoleStop(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    queue.current.clear();
+    pendingRef.current = new Map();
+    setPending(pendingRef.current);
+  });
   const release = useCallback(() => { void window.tbLink.releaseMa2Live().catch(fail); }, [fail]);
   useEffect(() => {
     alive.current = true;

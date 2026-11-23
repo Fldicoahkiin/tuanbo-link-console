@@ -85,6 +85,8 @@ test('三层执行器保留原格位和独立页码，翻页不播放，紧凑�
     await page.getByLabel('中层执行器页码', { exact: true }).fill('100'); await page.getByLabel('中层执行器页码', { exact: true }).press('Enter');
     await page.getByLabel('下层按钮页码', { exact: true }).fill('100'); await page.getByLabel('下层按钮页码', { exact: true }).press('Enter');
     await app.evaluate(() => { process.env.TBLINK_EXECUTOR_DENSE = 'true'; });
+    await page.getByRole('button', { name: '页面选项', exact: true }).click();
+    await page.getByRole('button', { name: '刷新控台页面', exact: true }).click();
     await expect(upper.locator('[data-empty="false"]')).toHaveCount(72);
     for (const [width, height] of [[1600, 1000], [1180, 780], [1920, 1080]]) {
       await app.evaluate(({ BrowserWindow }, dimensions) => BrowserWindow.getAllWindows()[0]!.setSize(dimensions.width, dimensions.height), { width: width!, height: height! });
@@ -155,6 +157,9 @@ test('一层读取异常保留其它层与换页操作，恢复后继续回读',
     const fader = page.locator('[data-executor-band="fader"]');
     await expect(upper.getByRole('button', { name: '执行器 4.101 · xws', exact: true })).toBeVisible();
     await app.evaluate(() => { process.env.TBLINK_EXECUTOR_READ_FAILURE = '4'; });
+    await page.getByRole('button', { name: '页面选项', exact: true }).click();
+    await page.getByRole('switch', { name: '跟随控台执行器页面', exact: true }).check();
+    await page.keyboard.press('Escape');
     await expect(upper.getByRole('button', { name: '读取失败，点击刷新', exact: true })).toHaveAttribute('title', /此页暂未读回/);
     await expect(fader.getByRole('button', { name: '执行器 100.1 · 面光_Long_Sequence_Name', exact: true })).toBeVisible();
     await page.getByLabel('上层按钮页码', { exact: true }).fill('5'); await page.getByLabel('上层按钮页码', { exact: true }).press('Enter');
@@ -221,7 +226,9 @@ test('控台时间线切换保持顶部工具栏位置，显示完整目录并�
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     const audition = page.getByRole('switch', { name: '时间线选中 Cue 试听', exact: true });
-    await expect(audition).toBeChecked();
+    await expect(audition).not.toBeChecked();
+    await audition.check();
+    expect(await page.evaluate(() => localStorage.getItem('tblink.audition-timeline-cue'))).toBe('true');
     await audition.uncheck();
     expect(await page.evaluate(() => localStorage.getItem('tblink.audition-timeline-cue'))).toBe('false');
     await audition.check();

@@ -1,3 +1,12 @@
+@layer pages {
+  .first-cue-hint {
+    margin: 0;
+    padding: var(--space-half) var(--space-2);
+    color: var(--color-text-secondary);
+    font-size: var(--type-caption);
+  }
+}
+
 @layer legacy {
 /* Only the bottom lighting timeline. Upper workbench layout is untouched. */
 .reference-timeline[data-lighting-timeline=true] { container: lighting-timeline / inline-size; }

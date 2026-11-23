@@ -1,13 +1,19 @@
 -- A stand-in for the parts of grandMA2 that tools/ma2/tblink_bridge.lua touches, for unit tests.
 -- It is not a console emulator: it answers only what the bridge asks, from objects a test puts in
 -- FAKE.objects, and records every command. Files live in memory; nothing reaches the disk.
-FAKE = { files = {}, objects = {}, log = {}, echo = {}, feedback = {}, timers = {}, after = {}, now = 1000,
+FAKE = { files = {}, objects = { ['TimecodeSlot 2'] = { properties = { AfterRoll = '0.50' } } }, log = {}, echo = {}, feedback = {}, timers = {}, after = {}, now = 1000,
   vars = { PATH = '/fake', VERSION = '3.3.4.3', SHOWFILE = 'tblink_fake_show', BUTTONPAGE = '1', FADERPAGE = '1' } }
 
 -- In-memory io.open / os.remove / os.rename, with the return conventions of the real library.
 local function reader(data)
   local position = 1
   return {
+    seek = function(_, whence, offset)
+      if whence == 'end' then position = #data + 1 + (offset or 0)
+      elseif whence == 'set' then position = offset + 1
+      else error('unsupported seek mode') end
+      return position - 1
+    end,
     read = function(_, count)
       if count == '*a' then local part = data:sub(position); position = #data + 1; return part end
       if position > #data and count > 0 then return nil end
@@ -57,6 +63,23 @@ local function cmd(command)
   if cue_address then
     local cue = FAKE.objects[cue_address]
     if cue and cue.xml then FAKE.files[export_path(cue_file .. '.xml')] = (cue.xml:gsub('@EXPORT@', tostring(#FAKE.log))) end
+  end
+  local edited_file, edited_cue = command:match('^Import ([%w_]+%.xml) At (Sequence %d+ Cue [%d%.]+) /o /nc$')
+  if edited_file and FAKE.objects[edited_cue] then
+    local xml = assert(FAKE.files[export_path(edited_file)], 'fake console: Cue import file missing')
+    FAKE.objects[edited_cue].xml = FAKE.imported and FAKE.imported(xml) or xml
+  end
+  local selection, filename = command:match('^Export Timecode ([%d +]+) "([%w_]+)" /o$')
+  if selection and selection:find('+', 1, true) then
+    local parts, envelope = {}, nil
+    for number in selection:gmatch('%d+') do
+      local native = assert(FAKE.objects['Timecode ' .. number]).xml
+      local start = assert(native:find('<Timecode%f[%s/>]'))
+      envelope = envelope or native:sub(1, start - 1)
+      parts[#parts + 1] = assert(native:sub(start):match('^(.-)%s*</MA>'))
+    end
+    FAKE.files[export_path(filename .. '.xml')] = envelope .. table.concat(parts, '\n') .. '</MA>'
+    return
   end
   local kind, number, name = command:match('^Export (%a+) ([%d%.]+) "?([%w_]+)"? /o$')
   if kind then
@@ -109,7 +132,11 @@ gma = {
   gettime = function() return FAKE.now end,
   timer = function(fn, interval, count, cleanup) FAKE.timers[#FAKE.timers + 1] = { fn = fn, interval = interval, count = count, cleanup = cleanup } end,
   show = {
-    property = { get = function(handle, key) return handle and handle.properties and handle.properties[key] or nil end },
+    property = {
+      get = function(handle, key) return handle and handle.properties and handle.properties[key] or nil end,
+      amount = function(handle) return #(handle.propertyNames or {}) end,
+      name = function(handle, index) return (handle.propertyNames or {})[index + 1] end
+    },
     getvar = function(name) return FAKE.vars[name] end,
     getobj = {
       handle = function(address)

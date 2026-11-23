@@ -9,7 +9,7 @@ import { useMa2AttributeStore } from '../stores/ma2-attribute-store';
 import { saveDocument } from '../project-document';
 import '../lighting-attributes.css';
 
-export function Ma2CueDeleteDialog({ refs, onClose }: { refs: ConsoleCueReference[]; onClose: () => void }): JSX.Element {
+export function Ma2CueDeleteDialog({ refs, onClose, onDeleted }: { refs: ConsoleCueReference[]; onClose: () => void; onDeleted?: (refs: Ma2CueDeleteResult['deleted']) => void }): JSX.Element {
   const dialog = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState(false);
   const [plan, setPlan] = useState<Ma2CueDeletePlan | null>(null);
@@ -61,6 +61,7 @@ export function Ma2CueDeleteDialog({ refs, onClose }: { refs: ConsoleCueReferenc
     if (value.deleted.length || value.error) {
       useDocumentStore.getState().executeForDocument(request.documentId,applyMa2CueDeletionCommand(`${base.network.host}:${base.network.port}`,value));
       useDocumentStore.getState().markConsoleSynced(request.documentId);
+      onDeleted?.(value.deleted);
     }
     setError(value.error ?? '');
     useMa2AttributeStore.setState({message:`已删除 ${value.deleted.length} 个空 Cue（已在控台确认）${value.error ? `；${value.error}` : ''}`, failed: Boolean(value.error)});

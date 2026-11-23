@@ -1,10 +1,33 @@
-import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { createEmptyLinkProject, type Ma2Catalog } from '@tb/schema';
 import { Ma2ReadRecovery, recoverMa2Read } from './ma2-read-recovery';
 import { LinkProjectService } from './link-project-service';
+import { reconcileMa2ReadState, saveMa2ReadStateCommand } from '@tb/core/link';
+
+it('已保存的时间线不会在重开时被之前另一个 Show 的目录替换', async () => {
+  const path = join(await mkdtemp(join(tmpdir(), 'tblink-saved-show-')), 'show.tblink');
+  const project = createEmptyLinkProject('现场');
+  const service = new LinkProjectService();
+  const entry = { target: 3, name: '节目', eventCount: 0, frameFormat: null, offset: '0', slot: null, events: [], warnings: [], error: null };
+  const catalog: Ma2Catalog = { directory: { show: '原 Show', generation: 'one', version: '3.7.0.5', entries: [{ target: 3, name: entry.name }] },
+    readAt: '2026-10-01T00:00:00.000Z', entries: [entry] };
+  const saved = saveMa2ReadStateCommand(reconcileMa2ReadState(project, 'onPC', catalog)).execute(project);
+  await service.save(path, saved);
+  const other = { ...catalog, readAt: '2026-10-02T00:00:00.000Z', directory: { ...catalog.directory, show: '另一个 Show' } };
+  const recovery = new Ma2ReadRecovery(path, project.projectId, 'onPC');
+  await recovery.checkpoint(other, entry);
+  const stamp = new Date(other.readAt);
+  await utimes(`${path}.ma2-recovery/active.json`, stamp, stamp);
+  await utimes(path, new Date(catalog.readAt), new Date(catalog.readAt));
+  expect((await service.open(path)).ma2ReadState?.catalog.directory.show).toBe('另一个 Show');
+  await service.save(path, saved);
+  const resaved = new Date(stamp.getTime() + 1000);
+  await utimes(path, resaved, resaved);
+  expect((await service.open(path)).ma2ReadState?.catalog.directory.show).toBe('原 Show');
+});
 
 it('中断后从逐条检查点恢复；一条损坏不丢其余结果，另一工程不接收', async () => {
   const root = await mkdtemp(join(tmpdir(), 'tblink-recovery-'));

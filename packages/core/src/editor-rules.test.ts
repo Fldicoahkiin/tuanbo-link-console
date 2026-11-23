@@ -88,8 +88,8 @@ describe('规则 6：工程格式版本只按用到的内容决定，只升不�
   it('比这一版新的工程打不开也存不了：不认识的内容会在保存时丢掉，所以整份拒绝', () => {
     const newer = latestSchemaVersion + 1;
     expect(() => parseLinkProject({ ...createEmptyLinkProject('版本'), schemaVersion: newer })).toThrow();
-    // 3 since the shared song beats (E9), the first field that needs it; 0.5.8 and earlier open 1 and 2.
-    expect(latestSchemaVersion).toBe(3);
+    // Large native Sequence snapshots use v4. The existing v1/v2/v3 files keep their formats.
+    expect(latestSchemaVersion).toBe(4);
     expect(legacyReadableSchemaVersion).toBe(2);
     for (const project of [versioned(1, false), versioned(2, true), versioned(2, false), withBeats(versioned(2, true))]) expect(requiredSchemaVersion(project)).toBeLessThanOrEqual(latestSchemaVersion);
   });

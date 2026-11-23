@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, createLightingDocument, type Ma2ExecutorPage, type Ma2ExecutorUpdateResult } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, type Ma2ExecutorPage, type Ma2ExecutorPageDirectory, type Ma2ExecutorUpdateResult } from '@tb/schema';
 import { useDocumentStore } from './document-store';
 import { loadMa2ExecutorPage, prepareMa2ExecutorPages, scanMa2ExecutorLocations, updateMa2ExecutorPageItem, useMa2ExecutorPageStore } from './ma2-executor-page-store';
 const { context, read, directory, update, connection } = vi.hoisted(() => ({ context: { scope: 'test' }, read: vi.fn(), directory: vi.fn(), update: vi.fn(), connection: vi.fn() }));
@@ -50,11 +50,11 @@ it('等待连接期间切换工程不能把旧选择的删除发送给新工程�
   expect(update).not.toHaveBeenCalled();
 });
 it('全量扫描期间写回淘汰旧快照时，不能宣称所有位置完整', async () => {
-  const pending = deferred<Ma2ExecutorPage>(); read.mockReturnValueOnce(pending.promise);
+  const pending = deferred<Ma2ExecutorPageDirectory>(); directory.mockReturnValueOnce(pending.promise);
   const scanning = scanMa2ExecutorLocations(); const failure = expect(scanning).rejects.toThrow('执行器被修改了');
-  await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(directory).toHaveBeenCalledOnce());
   await updateMa2ExecutorPageItem(4, snapshot().items[0]!, { kind: 'rename', name: '新名' });
-  pending.resolve(snapshot()); await failure;
+  pending.resolve({ ...target.expectedSource, buttonPage: 4, faderPage: 4, pages: [{ page: 4, name: '页', locations: [{ slot: 101, sequence: 1 }] }] }); await failure;
   expect(useMa2ExecutorPageStore.getState()).toMatchObject({ complete: false, scanning: false });
 });
 

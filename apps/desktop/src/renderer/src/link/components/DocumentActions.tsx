@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { IconButton } from '../ui';
 import { Redo2, Save, TriangleAlert, Undo2 } from 'lucide-react';
 import { useDocumentStore } from '../stores/document-store';
@@ -32,7 +33,7 @@ export function downloadUnsavedProject(): void {
 }
 
 /** Undo, redo and save on the title bar. 未保存 keeps its place while hidden, so the bar does not jump. */
-export function DocumentActions({ canUndo, canRedo, disabled, historyDisabled = disabled, undoWait = null, redoWait = null, onUndo, onRedo, onSave }: DocumentActionProps): JSX.Element {
+export function DocumentActions({ canUndo, canRedo, disabled, historyDisabled = disabled, undoWait = null, redoWait = null, onUndo, onRedo, onSave, children }: DocumentActionProps & { children?: ReactNode }): JSX.Element {
   const path = useDocumentStore((state) => state.path);
   const dirty = useDocumentStore((state) => state.dirty);
   const recoveryError = useRecoveryCopyStore((state) => state.error);
@@ -41,6 +42,6 @@ export function DocumentActions({ canUndo, canRedo, disabled, historyDisabled = 
     <IconButton label="重做" {...redoWait ? { title: redoWait } : {}} icon={Redo2} disabled={!canRedo || historyDisabled} onClick={onRedo} />
     <span className="titlebar-save-state" role="status" data-dirty={dirty} aria-hidden={!dirty}>未保存</span>
     {recoveryError ? <span className="titlebar-recovery-error" role="alert" title={recoveryError} aria-label={recoveryError}><TriangleAlert aria-hidden="true" /></span> : null}
-    <IconButton label="保存工程" title={path ? '保存工程（Ctrl+S）' : '选择位置并保存工程（Ctrl+S）'} icon={Save} className="titlebar-save" data-dirty={dirty} disabled={disabled} onClick={onSave} />
+    {children ?? <IconButton label="保存工程" title={path ? '保存工程（Ctrl+S）' : '选择位置并保存工程（Ctrl+S）'} icon={Save} className="titlebar-save" data-dirty={dirty} disabled={disabled} onClick={onSave} />}
   </div>;
 }

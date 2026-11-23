@@ -61,6 +61,21 @@ it('按下回包尚未返回时松开立即发释放，旧完成回调不能抹�
   expect(input.mock.calls.filter(([request]) => request.pressed && request.sessionId === newSession)).toHaveLength(2);
   controller.releaseAll(); await flush();
 });
+it('整台停止取消查连接中的按下和已按住的续租，下一次新按键仍有效', async () => {
+  const controller = createMa2ExecutorInput(error, feedback);
+  controller.press(flash, 1000, 0); await flush();
+  const lookup = deferred<typeof connection>();
+  vi.mocked(ma2LayoutConnection).mockReturnValueOnce(lookup.promise);
+  controller.press(flash, 999, 0);
+  controller.cancelForConsoleStop();
+  lookup.resolve(connection); await flush();
+  await vi.advanceTimersByTimeAsync(2100);
+  expect(input).toHaveBeenCalledTimes(1);
+  controller.press(flash, 1000, 0); await flush();
+  expect(input).toHaveBeenCalledTimes(2);
+  expect(input.mock.calls[1]![0].sessionId).not.toBe(input.mock.calls[0]![0].sessionId);
+  controller.releaseAll();
+});
 it('同一按住只续租且不重叠，松开后清除续租定时器', async () => {
   const controller = createMa2ExecutorInput(error, feedback);
   controller.press(flash, 1000, 0); controller.press(flash, 1000, 0); await flush();

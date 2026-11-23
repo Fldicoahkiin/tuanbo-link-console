@@ -49,9 +49,10 @@ function checked(row: StatusRow, check: ConnectionCheck | undefined): StatusRow 
 /** The lighting status while the song's timecode goes out: whether the console follows it, when that can be read. */
 export function consoleFollowStatus(follow: ConsoleFollow): ConnectionStatus {
   switch (follow.state) {
-    case 'following': return { state: 'ready', value: '控台在跟', detail: `时间码已发出，控台在跟着跑：${follow.detail}` };
+    case 'following': return { state: 'ready', value: '控台在跟', detail: `时间码已发出。最近一次控台读回：${follow.detail}` };
     case 'not-following': return { state: 'error', value: '控台没在跟', detail: `时间码已发出，但控台没有跟着跑：${follow.detail}。音乐照常播放；请看控台的时间码窗口和 TC Slot 设置` };
     case 'checking': return { state: 'ready', value: '时间码已发出', detail: `正在核对控台在不在跟：${follow.detail}` };
+    case 'past-end': return { state: 'ready', value: '已过灯光结尾', detail: follow.detail };
     case 'unknown': return { state: 'ready', value: '时间码已发出', detail: `控台有没有跟着跑无法确认：${follow.detail}` };
   }
 }

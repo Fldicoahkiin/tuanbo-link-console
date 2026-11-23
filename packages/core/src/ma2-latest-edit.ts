@@ -16,7 +16,22 @@ export function ma2LatestSide(times: Ma2EditTimes): Ma2LatestSide {
   return times.localEditedAt !== undefined && times.localEditedAt >= times.consoleSeenAt ? 'local' : 'remote';
 }
 
+export const MA2_EDIT_ORDER_UNKNOWN = '两边改了同一个灯光点，无法确定哪边改得更晚。请选择保留哪边的修改。';
+
+export type Ma2ConflictPolicy = { lastConfirmedAt?: number | undefined; choice?: Ma2LatestSide | undefined };
+
+/** A manual read bounds a desk edit between the last unchanged revision and its first observation. */
+export function ma2ConflictWinner(times: Ma2EditTimes, manual?: Ma2ConflictPolicy): Ma2LatestSide {
+  if (!manual) return ma2LatestSide(times);
+  if (manual.choice) return manual.choice;
+  if (times.localEditedAt !== undefined) {
+    if (times.localEditedAt >= times.consoleSeenAt) return 'local';
+    if (manual.lastConfirmedAt !== undefined && times.localEditedAt < manual.lastConfirmedAt) return 'remote';
+  }
+  throw new Error(MA2_EDIT_ORDER_UNKNOWN);
+}
+
 /** What the status line and the run log say was chosen, e.g. "Timecode 63 有 2 处两边都改过，按最新的用了控台上的". */
-export function ma2LatestChoiceText(where: string, count: number, side: Ma2LatestSide): string {
-  return `${where} 有 ${count} 处两边都改过，按最新的用了${side === 'local' ? '联动台上的' : '控台上的'}`;
+export function ma2LatestChoiceText(where: string, count: number, side: Ma2LatestSide, operatorChoice = false): string {
+  return `${where} 有 ${count} 处两边都改过，${operatorChoice ? '按你的选择用了' : '按最新的用了'}${side === 'local' ? '联动台上的' : '控台上的'}`;
 }

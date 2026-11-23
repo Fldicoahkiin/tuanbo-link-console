@@ -35,8 +35,22 @@ function client(port: { port: number; monitorPort: number }, states: Ma2TelnetSt
 function authenticate(line: string, socket: Socket, monitor: Socket): void {
   if (line.startsWith('Login ')) { socket.write('\r\n [Channel]>'); return; }
   const marker = /TBLINK_AUTH_[a-f0-9]{32}/.exec(line)?.[0];
-  if (marker) { socket.write(`${line}\r\n [Channel]>`); monitor.write(`\r15h11m38.613s : \u001b[33m${marker}:3.3.`); monitor.write('4.3\u001b[37m\r\n'); }
+  if (marker) { socket.write(`${line}\r\n [Channel]>`); monitor.write(`\r15h11m38.613s : \u001b[33m${marker}:3.3.`); monitor.write('4.3:Console\u001b[37m\r\n'); }
 }
+it.each([['3D', '当前连到 MA 3D'], ['', '未提供']])('设备回报类型“%s”时不进入已连接，也不发送后续控台命令', async (hostType, reason) => {
+  const states: Ma2TelnetState[] = [], sent: string[] = [];
+  const port = await peer((line, socket, monitor) => {
+    sent.push(line);
+    const marker = /TBLINK_AUTH_[a-f0-9]{32}/.exec(line)?.[0];
+    if (marker && line.includes("getvar('HOSTTYPE')")) monitor.write(`\r\n${marker}:3.7.0.5:${hostType}\r\n`);
+    else authenticate(line, socket, monitor);
+  });
+  const connection = client(port, states);
+  await expect(connection.connect('operator', 'test-value')).rejects.toThrow(reason);
+  expect(states).not.toContain('connected');
+  expect(connection.state).toBe('disconnected');
+  expect(sent).toHaveLength(2);
+});
 it('登录前校验两个实际 TCP 通道，错误进程收不到凭证或命令', async () => {
   const sent: string[] = [];
   const ports = await peer(line => sent.push(line));

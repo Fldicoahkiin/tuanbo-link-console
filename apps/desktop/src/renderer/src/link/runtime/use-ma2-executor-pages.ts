@@ -1,4 +1,5 @@
 import { useEffect, type MutableRefObject } from 'react';
+import { isShowWait } from '@tb/core/link';
 import { currentMa2LayoutScope } from '../stores/ma2-layout-store';
 import { loadMa2ExecutorDirectory, loadMa2ExecutorPage, useMa2ExecutorPageStore } from '../stores/ma2-executor-page-store';
 import { ma2ConsoleWriting, useMa2SyncStore } from '../stores/ma2-sync-store';
@@ -32,18 +33,18 @@ export function startMa2ExecutorPagePolling(scope: string, live: boolean, setNot
     if (!pageReadsPaused()) for (const page of pages) {
       if (stopped || currentMa2LayoutScope() !== scope) return;
       if (pageReadsPaused()) break;
-      if (!live && current.pages[page]) continue;
+      if (!live && (current.pages[page] || failures.has(page))) continue;
       if ((failures.get(page)?.retryAt ?? 0) > Date.now()) continue;
       try { await loadMa2ExecutorPage(page, true); failures.delete(page); }
       catch (cause) {
+        if (isShowWait(cause)) break;
         const count = (failures.get(page)?.count ?? 0) + 1;
         failures.set(page, { count, retryAt: Date.now() + Math.min(30000, 2000 * 2 ** Math.min(count - 1, 4)) });
         report(cause);
       }
     }
-    // A page skipped while reads were paused, or still backing off after a failure, is retried
-    // even when not live; otherwise its slots would stay on "读取中…" until the page changes.
-    const unread = pages.some(page => !useMa2ExecutorPageStore.getState().pages[page]);
+    // Finish a deferred first read. A failed manual read waits for the next operator action.
+    const unread = pages.some(page => !failures.has(page) && !useMa2ExecutorPageStore.getState().pages[page]);
     if (!stopped && (live || unread)) timer = setTimeout(() => { void read(); }, 1500);
   };
   void read();

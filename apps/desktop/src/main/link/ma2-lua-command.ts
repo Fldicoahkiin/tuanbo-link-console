@@ -50,12 +50,27 @@ async function runScript(connection: Connection, body: string, beforeSend: () =>
   // The native command interpreter consumes $, |, ^ and quotes before Lua
   // sees them. Transport those scripts as hex, even when they are short.
   if (Buffer.byteLength(script) > 900 || /["$|^\\\r\n]/.test(script)) {
-    if (await call(`${key}={};gma.echo('${prefix}READY')`) !== 'READY') throw new Error('控台操作准备失败');
     const bytes = Buffer.from(script);
-    for (let offset = 0; offset < bytes.length; offset += 128) {
-      if (await call(`${decode}${key}[#${key}+1]=unhex('${bytes.subarray(offset, offset + 128).toString('hex')}');gma.echo('${prefix}READY')`) !== 'READY') throw new Error('控台没有确认收到操作');
+    // Large selector scripts already contain hex-encoded XML. Carry letters and digits
+    // directly and escape every other byte, including the escape marker itself.
+    const escaped = bytes.length >= 4096 ? bytes.toString('latin1').replace(/[^a-zA-Z0-9]/g, ch => '_' + ch.charCodeAt(0).toString(16).padStart(2, '0')) : null;
+    const compact = escaped !== null && escaped.length + 700 < bytes.length * 2;
+    const data = compact ? escaped : bytes.toString('hex');
+    // Keep encoded transport lines below 700 bytes, including the native Lua wrapper.
+    const runHex = (expression: string) => `${decode}assert(load(unhex(${expression}),'tblink_cue','t'))()`;
+    const single = data.length < 700 ? runHex(`'${data}'`) : null;
+    if (single && Buffer.byteLength(`Lua "${single}"`) < 700) command = single;
+    else {
+      const receipt = `;gma.echo('${prefix}READY')`;
+      const chunkLength = 698 - Buffer.byteLength(`Lua "table.insert(${key},'')${receipt}"`);
+      for (let offset = 0; offset < data.length; offset += chunkLength) {
+        const part = data.slice(offset, offset + chunkLength);
+        const store = offset === 0 ? `${key}={'${part}'}` : `table.insert(${key},'${part}')`;
+        if (await call(store + receipt) !== 'READY') throw new Error('控台没有确认收到操作');
+      }
+      const execute = compact ? `local d={};for i=0,255 do d[string.format('%02x',i)]=string.char(i) end;local b=s:gsub('_(%x%x)',d);assert(#b==${bytes.length});assert(load(b,'tblink_cue','t'))()` : runHex('s');
+      command = `local s=table.concat(${key});${key}=nil;${execute}`;
     }
-    command = `local s=table.concat(${key});${key}=nil;assert(load(s,'tblink_cue','t'))()`;
   }
   const result = await call(command);
   if (!result.startsWith('OK:')) throw new Error(`控台操作未完成：${result.slice(4)}`);

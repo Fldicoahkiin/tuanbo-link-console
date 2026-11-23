@@ -26,6 +26,20 @@ const local = (): Ma2SongSyncRequest['points'] => [
   { id: 'c', name: '结尾', atMs: 2000, cues: [{ sequence: 9950, cue: '3.000', delayMs: 0 }] }
 ];
 
+it('执行器换了序列后，保留原歌曲点位并指出控台新引用；混合引用也要核对', () => {
+  const foreign = '<No>9422</No>';
+  for (const xml of [written.replaceAll('<No>9950</No>', foreign), written.replace('<No>9950</No>', foreign)]) {
+    expect(xml).not.toBe(written);
+    expect(() => mergeMa2SongConsoleEdits(binding, local(), baseXml, xml, 'remote')).toThrow(/Timecode 9907.*9422.*9950/);
+  }
+});
+
+it.each(['Go', 'Off'])('控台把定位动作改成 %s 后，保留该点和其他点，允许读回原动作', command => {
+  const changed = written.replace(/<Event\b[^>]*command="Goto"[^>]*>[\s\S]*?<\/Event>/, `<Event index="0" time="0" command="${command}" pressed="true"/>`);
+  expect(changed).not.toBe(written);
+  expect(() => mergeMa2SongConsoleEdits(binding, local(), baseXml, changed, 'remote')).toThrow(`Timecode 9907 的 ${command}`);
+});
+
 it('控台上没改：什么都不读回', () => {
   const merged = mergeMa2SongConsoleEdits(binding, local(), baseXml, written, 'remote');
   expect(merged.edits).toEqual({ moved: [], removed: [], added: [] });
@@ -77,7 +91,7 @@ it('两边都挪了同一个点：联动台后改用联动台的，控台后改�
   // Moved to the same frame on both sides: nothing to choose.
   const same = local().map(point => point.id === 'b' ? { ...point, atMs: 1500 } : point);
   expect(mergeMa2SongConsoleEdits(binding, same, baseXml, moved, 'local').edits.conflicts).toBeUndefined();
-  expect(mergeMa2SongConsoleEdits(binding, local(), baseXml, show(baseXml, [['1', 0], ['2', 1500], ['2', 1800], ['3', 2000]]), 'remote').edits).toEqual({ moved: [], removed: [], added: [] });
+  expect(() => mergeMa2SongConsoleEdits(binding, local(), baseXml, show(baseXml, [['1', 0], ['2', 1500], ['2', 1800], ['3', 2000]]), 'remote')).toThrow(/Timecode 9907.*Cue 2.*多次触发/);
 });
 
 it('不到一帧的差别不算挪动；控台上的时间按帧换算成毫秒', () => {

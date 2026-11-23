@@ -25,7 +25,7 @@ function explain(error: unknown): Explained {
   const plain = text.replace(/「[^」]*」/gu, '「」');
   // Preload translates once and views translate again; keep the first result.
   if (/^(?:连接配置校验失败|操作未能完成|所需文件或程序不存在)[:：]/.test(text)) return { reason: text.replace(/^操作未能完成[:：]/, ''), message: text };
-  if (/Another network request is pending/.test(plain)) return said('控台上一次的读取还没结束', '请不要重复读取，等两分钟后再手动读取；已有素材不受影响。');
+  if (/Another network request is pending/.test(plain)) return { reason: '控台正在处理其他请求', message: '控台正在处理其他请求。' };
   if (/Authentication.*(?:required|failed)|鉴权失败/i.test(plain)) return said('OBS 需要密码，或者密码不对', '请在 OBS 的“工具 → WebSocket 服务器设置”里查看密码，填到联动台的“OBS 密码”里，保存后再连接。');
   if (/Invalid URL|Invalid url|ERR_INVALID_URL/i.test(plain)) return said('OBS 地址格式不正确', '请填写完整地址，例如 ws://127.0.0.1:4455。', '，');
   if (/^音频解码或读取失败[:：]/.test(plain)) return said('无法读取这个音频', '请检查文件是否损坏、格式是否支持，换一个音频文件后重新播放。');

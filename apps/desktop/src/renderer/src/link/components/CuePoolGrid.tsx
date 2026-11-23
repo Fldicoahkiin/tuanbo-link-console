@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ownKeys } from '../keys/key-owner';
 
 /** Fixed-height compact cells; the DOM grows with the viewport, not the Show. */
 export function CuePoolGrid({ keys, label, render, cellWidth = 132, rowHeight = 34 }: { rowHeight?: number; cellWidth?: number; keys: string[]; label: string; render: (index: number) => ReactNode }): JSX.Element {
   const viewport = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ width: 500, height: 320, top: 0 });
+  const [size, setSize] = useState({ width: 0, height: 0, top: 0 });
   const [focused, setFocused] = useState<string | null>(null);
   const [requested, setRequested] = useState<number | null>(null);
   const columns = Math.max(1, Math.floor(size.width / cellWidth));
@@ -15,10 +15,15 @@ export function CuePoolGrid({ keys, label, render, cellWidth = 132, rowHeight = 
   const focusIndex = focused ? keys.indexOf(focused) : -1;
   if (focusIndex >= 0) indices.add(focusIndex);
   if (requested !== null && requested < keys.length) indices.add(requested);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = viewport.current;
     if (!element) return;
-    const observer = new ResizeObserver(() => setSize({ width: element.clientWidth, height: element.clientHeight, top: element.scrollTop }));
+    const measure = (): void => {
+      const width = element.clientWidth, height = element.clientHeight, top = element.scrollTop;
+      setSize(current => current.width === width && current.height === height && current.top === top ? current : { width, height, top });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
     observer.observe(element); return () => observer.disconnect();
   }, []);
   useLayoutEffect(() => {
@@ -44,5 +49,5 @@ export function CuePoolGrid({ keys, label, render, cellWidth = 132, rowHeight = 
       if (top < element.scrollTop) element.scrollTop = top;
       else if (top + rowHeight > element.scrollTop + element.clientHeight) element.scrollTop = top + rowHeight - element.clientHeight;
       setSize(current => ({ ...current, top: element.scrollTop })); setRequested(target);
-    }}><div style={{ position: 'relative', height }}>{[...indices].sort((a, b) => a - b).map(index => <div key={keys[index]} data-cue-cell={index} style={{ position: 'absolute', top: Math.floor(index / columns) * rowHeight, left: `${index % columns * 100 / columns}%`, width: `${100 / columns}%`, height: rowHeight, padding: 4 }}>{render(index)}</div>)}</div></div>;
+    }}><div style={{ position: 'relative', height }}>{[...indices].sort((a, b) => a - b).map(index => <div key={keys[index]} data-cue-cell={index} style={{ position: 'absolute', top: Math.floor(index / columns) * rowHeight, insetInlineStart: (index % columns) * cellWidth, width: cellWidth, maxWidth: '100%', height: rowHeight, padding: 'var(--space-half)' }}>{render(index)}</div>)}</div></div>;
 }

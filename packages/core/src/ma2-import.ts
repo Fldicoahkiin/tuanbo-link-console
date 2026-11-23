@@ -1,11 +1,11 @@
-import { createLightingDocument, lightingDocumentSchema, ma2ExecutorPreviewSchema, ma2TimecodePreviewSchema, parseLinkProject, type LightingDocument, type LightingTrack, type Ma2ExecutorPreview, type Ma2TimecodePreview } from '@tb/schema';
+import { createLightingDocument, lightingDocumentSchema, ma2ExecutorPreviewSchema, ma2TimecodePreviewSchema, parseLinkProject, validateLinkProjectRelations, type LightingDocument, type LightingTrack, type Ma2ExecutorPreview, type Ma2TimecodePreview } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { withSchemaVersion } from './project-schema-version';
 import { LightingTempoMap, lightingEventTime } from './lighting-edit';
 import { MA2_FRAME_MS, programTimeOrigin, withMa2TimeOrigin } from './ma2-time-origin';
 import { lightingTrackEnabled } from './lighting-track-state';
 
-export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePreview, initialDocument?: LightingDocument): LinkCommand {
+export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePreview, initialDocument?: LightingDocument, replaceOwned?: 'use-console'): LinkCommand {
   const input = ma2TimecodePreviewSchema.parse(value);
   const initial = initialDocument ? lightingDocumentSchema.parse(initialDocument) : undefined;
   const bindingId = crypto.randomUUID();
@@ -20,6 +20,12 @@ export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePrevi
     const preview = withMa2TimeOrigin(input, originMs);
     if (originMs > 0) item.playback ??= { volume: item.p1Media?.volume ?? 100, startMs: 0, endMs: 0, mtcOffsetMs: originMs, shortcut: item.p1Media?.shortcut ?? '' };
     const current = item.lighting ?? structuredClone(initial ?? createLightingDocument());
+    if (replaceOwned === 'use-console') {
+      if (current.consoleSong?.timecode?.number !== preview.target || current.ma2Bindings?.length) throw new Error('节目关联的控台时间线已变化，请重新核对当前节目');
+      current.tracks = [];
+      delete current.consoleSong;
+      delete current.timelineDestination;
+    }
     if (current.ma2Bindings?.some((binding) => binding.timecode === preview.target)) throw new Error('这个节目已经关联了这个 Timecode，不用重复导入');
     const tracks = structuredClone(preview.document.tracks);
     const templates = [...current.templates];
@@ -149,23 +155,23 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
     }
     return next;
   };
-  return { id: crypto.randomUUID(), label: '应用 MA2 同步结果', historyRebaseKey: `ma2:${itemId}:${bindingId}`, rebaseHistory: project => ({
+  return { id: crypto.randomUUID(), label: '应用 MA2 同步结果', scope: 'lighting', historyRebaseKey: `ma2:${itemId}:${bindingId}`, rebaseHistory: project => ({
     ...project, rundown: project.rundown.map(item => item.id !== itemId || !item.lighting ? item : {
       ...item, lighting: { ...item.lighting, tracks: item.lighting.tracks.map(historyTrack), ma2Bindings: item.lighting.ma2Bindings?.map(entry => entry.id === bindingId ? confirmedBinding : entry) }
     })
   }), execute(project) {
-    const next = structuredClone(project);
-    const item = next.rundown.find((entry) => entry.id === itemId);
+    const item = project.rundown.find((entry) => entry.id === itemId);
     if (!item?.lighting) throw new Error('同步期间节目被删除了，读回的内容没有应用');
     const latest = lightingDocumentSchema.parse(item.lighting);
-    if (JSON.stringify(latest) === JSON.stringify(expected)) item.lighting = structuredClone(lighting);
+    let result: LightingDocument;
+    if (JSON.stringify(latest) === JSON.stringify(expected)) result = structuredClone(lighting);
     else {
       if (!preserveLaterEdits || JSON.stringify(latest.ma2Bindings) !== JSON.stringify(expected.ma2Bindings)) throw new Error('同步期间节目的灯光绑定改过了，本地内容没有被覆盖，请重新读取后比较');
       // A confirmed local-only write acknowledges the captured revision. Later edits
       // remain pending against that baseline, including deletion and undo during I/O.
       const submitted = new Map(expected.tracks.map(track => [track.id, track]));
       const acknowledged = new Map(lighting.tracks.map(track => [track.id, track]));
-      item.lighting = lightingDocumentSchema.parse({ ...latest,
+      result = lightingDocumentSchema.parse({ ...latest,
         tracks: latest.tracks.flatMap(track => {
           if (JSON.stringify(track) !== JSON.stringify(submitted.get(track.id))) return [track];
           const confirmedTrack = acknowledged.get(track.id);
@@ -174,7 +180,10 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
         ma2Bindings: latest.ma2Bindings?.map(entry => entry.id === bindingId ? confirmedBinding : entry)
       });
     }
-    next.updatedAt = new Date().toISOString();
-    return parseLinkProject(withSchemaVersion(next));
+    const next = withSchemaVersion({ ...project, updatedAt: new Date().toISOString(),
+      rundown: project.rundown.map(entry => entry === item ? { ...item, lighting: result } : entry)
+    });
+    validateLinkProjectRelations(next);
+    return next;
   }, undo: (before) => parseLinkProject(before) };
 }

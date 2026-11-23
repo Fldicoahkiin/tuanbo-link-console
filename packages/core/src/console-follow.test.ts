@@ -30,6 +30,16 @@ describe('控台上这首歌的触发点：只看控台上已有的版本', () =
       { atMs: 10_000, executor: '1.101', action: 'off', cue: null, label: '收' }] });
   });
 
+  it('控台时间线的结束包含最后事件一帧，目录未读全时不猜结尾', () => {
+    const value = project(), entry = value.ma2ReadState!.catalog.entries[0]!;
+    entry.length = '305';
+    expect(consoleTriggers(value, '甲')).toHaveProperty('endMs', 305 * 1000 / 30);
+    entry.length = '290';
+    expect(consoleTriggers(value, '甲')).toHaveProperty('endMs', 301 * 1000 / 30);
+    entry.eventCount = 4;
+    expect(consoleTriggers(value, '甲')).not.toHaveProperty('endMs');
+  });
+
   it('拿了 Cue 的歌用控台确认过的基线，不用还没同步的本地修改', () => {
     const value = project();
     const lighting = createLightingDocument(); lighting.tracks = [track(500, '9')];
@@ -54,6 +64,13 @@ describe('控台上这首歌的触发点：只看控台上已有的版本', () =
       timecode: { number: 501, offset: TICKS, slot: 'TC Slot 1', revision: 'b'.repeat(64) } };
     value.rundown[0]!.lighting = lighting;
     expect(consoleTriggers(value, '甲')).toEqual({ triggers: [{ atMs: 2000, executor: '1000.101', action: 'goto', cue: '1', label: 'Cue 1' }] });
+    lighting.consoleSong.assignment = 'unassigned';
+    const unassigned = consoleTriggers(value, '甲');
+    expect('reason' in unassigned && unassigned.reason).toMatch(/501.*1000\.101/);
+    lighting.consoleSong.assignment = 'assigned';
+    value.rundown[0]!.playback = { ...value.rundown[0]!.playback!, mtcOffsetMs: START_MS + 60_000 };
+    const moved = consoleTriggers(value, '甲');
+    expect('reason' in moved && moved.reason).toMatch(/Timecode 501.*起始码/);
     delete lighting.consoleSong.timecode;
     expect(consoleTriggers(value, '甲')).toEqual({ reason: '控台上还没有这首歌的时间码节目' });
   });
@@ -74,6 +91,24 @@ describe('什么时候核对哪个执行器', () => {
   it('第一个点之前、刚触发不到一秒：先等', () => {
     expect(consoleFollowTarget(triggers, 500, 0)).toMatchObject({ kind: 'wait' });
     expect(consoleFollowTarget(triggers, 1500, 0)).toMatchObject({ kind: 'wait' });
+  });
+  it('从原生第 128 帧起播，能核对同一音频采样点的 Cue；晚一个采样点起播就排除它', () => {
+    const point = { ...triggers[0]!, atMs: (36000 + 128) * 1000 / 30 - 1200000 };
+    const origin = 4266.666667;
+    expect(consoleFollowTarget([point], origin + 1500, origin)).toMatchObject({ kind: 'executor', trigger: point });
+    for (const rate of [44100, 48000]) {
+      expect(consoleFollowTarget([point], origin + 1500, origin + 1000 / rate)).toMatchObject({ kind: 'wait' });
+      expect(consoleFollowTarget([point], origin - 1000 / rate, 0, 0)).toMatchObject({ kind: 'wait' });
+    }
+  });
+  it('两轨交错时核对最后一个已稳定的点，同一时刻保留载入顺序', () => {
+    const first = triggers[0]!, second = { ...triggers[1]!, atMs: first.atMs };
+    const later = { ...first, atMs: first.atMs + 1300 };
+    expect(consoleFollowTarget([later, first, second], 2500, 0)).toMatchObject({ kind: 'executor', trigger: second });
+    expect(consoleFollowTarget([later, second, first], 2500, 0)).toMatchObject({ kind: 'wait' });
+  });
+  it.each(['1.91', '1.201', '0.101', '10000.2'])('旧工程或网页遥控读不到的位置 %s 不产生无效的读回请求', executor => {
+    expect(consoleFollowTarget([{ ...triggers[0]!, executor }], 2500, 0)).toMatchObject({ kind: 'unobservable' });
   });
   it('触发一秒后核对它的执行器；同一执行器后面又触发、还在一秒内时先等', () => {
     expect(consoleFollowTarget(triggers, 2100, 0)).toMatchObject({ kind: 'executor', page: 1, slot: 101, trigger: { cue: '1' } });
@@ -97,6 +132,8 @@ describe('控台在不在跟', () => {
     expect(consoleFollowVerdict(goto, { running: false, cue: '', name: 'Song' })).toEqual({ following: false, detail: '执行器 1000.101 没在跑，按时间线这时应该在跑“副歌”' });
     expect(consoleFollowVerdict(goto, null).following).toBe(false);
     // Running without a readable Cue number is not called a miss.
+    expect(consoleFollowVerdict({ ...goto, cue: null }, { running: true, cue: '5 FuGe', name: 'Song' })).toMatchObject({ following: null });
+    expect(consoleFollowVerdict({ ...goto, action: 'go', cue: null }, { running: true, cue: '5 FuGe', name: 'Song' })).toMatchObject({ following: true });
     const unreadable = consoleFollowVerdict(goto, { running: true, cue: '', name: 'Song' });
     expect(unreadable).toEqual({ following: null, detail: '执行器 1000.101 在跑，但读不出当前 Cue 编号，无法确认是否跟随' });
     expect(nextConsoleFollow({ state: 'following', detail: '旧状态', misses: 0 }, unreadable)).toMatchObject({ state: 'unknown', misses: 0 });

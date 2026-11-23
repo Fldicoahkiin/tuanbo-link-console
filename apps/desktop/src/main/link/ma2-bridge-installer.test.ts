@@ -1,8 +1,9 @@
+import { access, readFile, writeFile } from 'node:fs/promises';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { ensureMa2NetworkBridge, readMa2NetworkBridge } from './ma2-bridge-installer';
 import { runMa2GuardedLua } from './ma2-lua-command';
 
-vi.mock('./ma2-lua-command', () => ({ runMa2GuardedLua: vi.fn() }));
+vi.mock('./ma2-lua-command', async original => ({ ...await original<typeof import('./ma2-lua-command')>(), runMa2GuardedLua: vi.fn() }));
 beforeEach(() => {
   vi.mocked(runMa2GuardedLua).mockReset().mockImplementation((_connection, body) => Promise.resolve(body.includes("return 'paused'") ? 'paused' : body.includes("return 'ready'") ? 'ready' : 'released'));
 });
@@ -107,4 +108,28 @@ it('传输损坏立即停止，不执行也不自动重传', async () => {
   await expect(ensureMa2NetworkBridge(client, 'return function() end')).rejects.toThrow('没有传完');
   expect(client.commands.filter((line) => line.includes("local h='"))).toHaveLength(1);
   expect(client.commands.some((line) => line.includes('local f=load'))).toBe(false);
+});
+
+it.each(['verified', 'corrupt', 'unavailable'] as const)('本机连接组件逐字节回读，再启动并清理文件：%s', async outcome => {
+  const source = '--灯光\nreturn function() end';
+  const client = connection(line => line.includes("local r='missing'") ? 'missing' : /local h='([a-f0-9]+)'/.exec(line)?.[1] ?? 'ready');
+  let files: string[] = [];
+  vi.mocked(runMa2GuardedLua).mockImplementation(async (_connection, body) => {
+    if (!body.includes('io.open')) return 'released';
+    files = [...body.matchAll(/unhex\('([0-9a-f]+)'\)/g)].map(match => Buffer.from(match[1]!, 'hex').toString());
+    expect(files).toHaveLength(2);
+    const content = await readFile(files[0]!);
+    expect(content.toString()).toBe(source);
+    if (outcome === 'unavailable') return 'unavailable';
+    if (outcome === 'corrupt') content[0] = 0;
+    await writeFile(files[1]!, content);
+    return 'staged';
+  });
+  const install = ensureMa2NetworkBridge(client, source, undefined, true);
+  if (outcome === 'corrupt') await expect(install).rejects.toThrow('读回');
+  else await install;
+  expect(client.commands.some(line => line.includes('local f=load'))).toBe(outcome !== 'corrupt');
+  expect(client.commands.some(line => line.includes("local h='"))).toBe(outcome === 'unavailable');
+  expect(files).toHaveLength(2);
+  for (const file of files) await expect(access(file)).rejects.toHaveProperty('code', 'ENOENT');
 });

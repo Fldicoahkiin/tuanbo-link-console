@@ -44,7 +44,7 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
   // The page list is a panel like the others: Escape closes it, and the lighting shortcut keys wait while it is open.
   const pickerPanel = useRef<HTMLDivElement>(null);
   useKeyOverlay(picker !== null, { close: () => setPicker(null), panel: pickerPanel });
-  const [live, setLive] = useState(true);
+  const [live, setLive] = useState(false);
   const [notice, setNotice] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [menu, setMenu] = useState<Selection | null>(null);
@@ -105,9 +105,9 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
         <Button variant="ghost" size="sm" icon={RefreshCw} disabled={refreshGate.kind === 'wait'} onClick={() => { setOptionsOpen(false); refresh(); }}>刷新控台页面</Button>
         {refreshGate.kind === 'wait' ? <p className="ma2-console-wait">{refreshGate.message}</p> : null}
         {/* The scan's progress shows in the sidebar's task list while it runs. */}
-        <Button variant="ghost" size="sm" icon={List} disabled={state.scanning || refreshGate.kind === 'wait'} onClick={() => { setOptionsOpen(false); setNotice(''); void scanMa2ExecutorLocations().catch(report); }}>{state.scanning ? `正在读取 Cue 位置 ${state.completed}/${state.total || '…'} 页` : '读取全部 Cue 位置'}</Button>
+        <Button variant="ghost" size="sm" icon={List} disabled={state.scanning || refreshGate.kind === 'wait'} onClick={() => { setOptionsOpen(false); setNotice(''); void scanMa2ExecutorLocations().catch(report); }}>{state.scanning ? '正在读取 Cue 位置' : '读取全部 Cue 位置'}</Button>
         {state.complete ? <p className="ma2-page-index-done">全部 {state.completed} 页的位置已读取</p> : null}
-        <Switch className="ma2-page-live-option" label="实时同步页面" aria-label="实时同步执行器页面" checked={live} onChange={event => setLive(event.currentTarget.checked)}/>
+        <Switch className="ma2-page-live-option" label="跟随控台页面" aria-label="跟随控台执行器页面" checked={live} onChange={event => setLive(event.currentTarget.checked)}/>
       </Ma2MaterialMenu>
       {selected ? <button aria-label="返回页面" title="返回页面" onClick={onBack}><ArrowLeft/></button> : null}
       {onSettings ? <button aria-label="新建 Cue" title="新建 Cue" onClick={onSettings}><Plus/></button> : null}

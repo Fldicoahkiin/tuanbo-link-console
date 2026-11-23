@@ -18,7 +18,7 @@ type ButtonSession = { client: Ma2LivePlayback; scope: string; verifiedAt: numbe
 /** The console, Show and page the fader view is connected to. */
 type FaderTarget = { network: Ma2LiveRequest['network']; expectedSource: Ma2LiveRequest['expectedSource']; page: number };
 /** Why no saved user can log the web remote in again. */
-const NO_SAVED_USER = '这台控台还没连过网页遥控（灯光工作台推杆页的“连接”）';
+const NO_SAVED_USER = '这台控台还没连过网页遥控，请在灯光工作台的「控台页面」点击「连接网页遥控」';
 /** How old a Button area read may be when a key is checked against it, and the Show check it relies on. */
 const BUTTON_READ_MS = 1000;
 const BUTTON_SHOW_MS = 2000;
@@ -53,7 +53,7 @@ export class Ma2LiveService {
   private pressed = new Map<string, { page: number; slot: number; id: number }>();
   private guard: ReturnType<typeof setTimeout> | null = null;
   private opening: Promise<Ma2LiveSnapshot> | null = null;
-  private observer: { client: Ma2LivePlayback; host: string } | null = null;
+  private observer: { client: Ma2LivePlayback; host: string; ready: Promise<boolean> } | null = null;
   private observerFailure: string | null = null;
   private readonly channels = new Ma2ExecutorChannels();
   /** The console and page the fader view is connected to now; a choice of the web remote reads that Button area. */
@@ -279,18 +279,35 @@ export class Ma2LiveService {
     if (this.observerFailure) throw new Error(this.observerFailure);
     const host = request.network.host;
     if (this.observer?.host !== host) {
-      this.observer?.client.close(); this.observer = null;
-      const profile = (await this.profiles()).find(value => value.host === host);
-      if (!profile) return { kind: 'unavailable', reason: '这台控台还没连过网页遥控（灯光工作台推杆页的“连接”）' };
+      this.releaseObserver();
       const client = this.socket(host);
-      try { await client.connect(profile.username, await this.secrets.loadCredential(this.secret(profile.host, profile.username))); }
-      catch (error) { client.close(); throw this.observerFailed(error); }
-      this.observer = { client, host };
+      const session = { client, host, ready: this.profiles().then(async (profiles): Promise<boolean> => {
+        const profile = profiles.find(value => value.host === host);
+        if (!profile || this.observer !== session) return false;
+        const password = await this.secrets.loadCredential(this.secret(profile.host, profile.username));
+        if (this.observer !== session) return false;
+        await client.connect(profile.username, password);
+        return true;
+      }) };
+      this.observer = session;
     }
+    const session = this.observer;
+    const released = { kind: 'unavailable', reason: '这次播放的控台核对已结束' } as const;
     try {
-      const executor = await this.observer.client.observe(request.page, request.slot);
+      const ready = await session.ready;
+      if (this.observer !== session) return released;
+      if (!ready) {
+        this.releaseObserver();
+        return { kind: 'unavailable', reason: NO_SAVED_USER };
+      }
+      const executor = await session.client.observe(request.page, request.slot);
+      if (this.observer !== session) return released;
       return executor ? { kind: 'executor', ...executor } : { kind: 'empty' };
-    } catch (error) { this.observer?.client.close(); this.observer = null; throw this.observerFailed(error); }
+    } catch (error) {
+      if (this.observer !== session) return released;
+      this.releaseObserver();
+      throw this.observerFailed(error);
+    }
   }
   releaseObserver(): void { this.observer?.client.close(); this.observer = null; this.observerFailure = null; }
   /**

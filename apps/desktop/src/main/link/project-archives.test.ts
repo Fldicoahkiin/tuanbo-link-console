@@ -89,6 +89,17 @@ it('关闭自动存档后同步前不再写文件并明确返回已关闭，手�
   expect((await t.run({ action: 'create', content: t.content, reason: 'manual' })).createdPath).toBeDefined();
 });
 
+it('同步关闭了自动存档时不访问旧存档位置，手动存档仍提示实际错误', async () => {
+  const t = await setup();
+  const oldDirectory = join(t.directory, '以前的存档位置');
+  await writeFile(oldDirectory, '保留这个文件');
+  await t.store.write({ ...DEFAULT_ARCHIVE_SETTINGS, enabled: false, directory: oldDirectory });
+  const request = { action: 'create', content: t.content, includeEntries: false };
+  await expect(t.run({ ...request, reason: 'before-sync' })).resolves.toMatchObject({ disabled: true, entries: [] });
+  await expect(t.run({ ...request, reason: 'manual' })).rejects.toThrow();
+  expect(await readFile(oldDirectory, 'utf8')).toBe('保留这个文件');
+});
+
 it('恢复时先把当前文件存一份「恢复前」，再把存档写回原工程位置', async () => {
   const t = await setup();
   const archived = await t.run({ action: 'create', content: t.content, reason: 'manual' });
@@ -98,6 +109,51 @@ it('恢复时先把当前文件存一份「恢复前」，再把存档写回原�
   expect(await readFile(t.projectPath, 'utf8')).toBe(t.content);
   const before = result.entries.find(entry => entry.name.includes('恢复前'))!;
   expect(await readFile(before.path, 'utf8')).toBe(edited);
+});
+
+it('首份存档写入失败后重试仍使用为本工程分配的文件夹', async () => {
+  const t = await setup();
+  const request = { version: 1, projectPath: t.projectPath, action: 'create', content: t.content, reason: 'before-sync' };
+  await expect(projectArchives(request, { ...documents, save: () => Promise.reject(new Error('写入失败')) }, t.store, vi.fn(), t.trash)).rejects.toThrow('写入失败');
+  expect((await t.run({ action: 'list' })).entries).toHaveLength(0);
+  const restored = await t.run(request);
+  expect(dirname(restored.createdPath!)).toBe(join(t.root, 'show'));
+  expect(await readdir(t.root)).toEqual(['show']);
+});
+
+it('百份同名工程仍可同步前存档，移走较早目录也能找回原存档', async () => {
+  const t = await setup();
+  await mkdir(t.root, { recursive: true });
+  // A file with the base name and 98 directories owned by other projects.
+  await writeFile(join(t.root, 'show'), 'keep');
+  for (let suffix = 2; suffix <= 99; suffix++) {
+    const folder = join(t.root, `show (${suffix})`);
+    await mkdir(folder);
+    await writeFile(join(folder, '.tblink-archives.json'), JSON.stringify({ version: 1, projectPath: join(t.directory, String(suffix), 'show.tblink'), entries: [] }));
+  }
+  const save = () => t.run({ action: 'create', content: t.content, reason: 'before-sync' });
+  const original = await save();
+  expect(dirname(original.createdPath!)).toBe(join(t.root, 'show (100)'));
+  await unlink(join(t.root, 'show'));
+  expect((await t.run({ action: 'list' })).entries.map(entry => entry.path)).toEqual([original.createdPath]);
+  const again = await save();
+  expect(dirname(again.createdPath!)).toBe(join(t.root, 'show (100)'));
+  expect(again.entries).toHaveLength(2);
+});
+
+it('存档模板固定时越过第 999 个同名文件，原有文件逐份保留', async () => {
+  const t = await setup();
+  await t.store.write({ ...DEFAULT_ARCHIVE_SETTINGS, nameTemplate: '{工程名}' });
+  const save = () => t.run({ action: 'create', content: t.content, reason: 'manual' });
+  const first = await save();
+  const folder = dirname(first.createdPath!);
+  for (let start = 2; start <= 999; start += 40) {
+    await Promise.all(Array.from({ length: Math.min(40, 1000 - start) }, (_, offset) => writeFile(join(folder, `show (${start + offset}).tblink`), 'keep')));
+  }
+  const next = await save();
+  expect(next.createdPath).toBe(join(folder, 'show (1000).tblink'));
+  expect(await readFile(join(folder, 'show (999).tblink'), 'utf8')).toBe('keep');
+  expect(await readFile(first.createdPath!, 'utf8')).toBe(t.content);
 });
 
 it('同名的两个工程分开存放；设置默认开启、20 份，位置必须是完整路径；占用只统计清单内文件', async () => {

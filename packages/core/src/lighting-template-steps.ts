@@ -6,7 +6,7 @@ import type { SongBeats } from './song-beats';
 
 export type LightingTemplateSequence = { sequence: number; complete: boolean; cues: { number: string; name: string | null }[] };
 type Template = LightingDocument['templates'][number];
-export type LightingTemplateStep = { name: string; sequence: number; cue: string; executor: string; delayMs: number; attributes?: string[] | undefined; includeTracking?: boolean | undefined };
+export type LightingTemplateStep = { name: string; sequence: number; cue: string; executor: string; delayMs: number; valueEdits?: import('@tb/schema').Ma2CueValueEdit[] | undefined; attributes?: string[] | undefined; includeTracking?: boolean | undefined };
 
 /** Every material placement expands whole sequences here; sequence steps remain separate Cue points. */
 export function lightingTemplateSteps(document: LightingDocument, template: Template, sequences: readonly LightingTemplateSequence[], startMs: number, intervalBeats = 1, song?: SongBeats): LightingTemplateStep[] {
@@ -37,7 +37,7 @@ export function lightingSequenceSteps(document: LightingDocument, sequence: Ligh
     delayMs: index === 0 ? 0 : marks.length > 1 ? atBeat(position + index * intervalBeats) - startMs : tempo.beatToMs(beat + index * intervalBeats) - tempo.beatToMs(beat) }));
 }
 
-type Stamp = { effectId: string; ms: number; id: string; groupId?: string | undefined; ingredientOrder?: number; attributes?: string[] | undefined; includeTracking?: boolean | undefined };
+type Stamp = { effectId: string; ms: number; id: string; groupId?: string | undefined; ingredientOrder?: number; valueEdits?: import('@tb/schema').Ma2CueValueEdit[] | undefined; attributes?: string[] | undefined; includeTracking?: boolean | undefined };
 export function placeLightingTemplate(document: LightingDocument, stamp: Stamp, durationMs: number, sequences: readonly LightingTemplateSequence[] = [], intervalBeats = 1, beats?: SongBeats): LightingDocument {
   if (!Number.isFinite(stamp.ms) || stamp.ms < 0 || stamp.ms >= durationMs) throw new Error('Cue 超出歌曲范围');
   const effect = document.templates.find(entry => entry.id === stamp.effectId);
@@ -49,13 +49,13 @@ export function placeLightingTemplate(document: LightingDocument, stamp: Stamp, 
     if (steps.some(member => stamp.ms + member.delayMs >= durationMs)) throw new Error('整套 Cue 超出了歌曲结尾，请减小每步间隔或往前放');
     return [...steps].sort((a, b) => a.delayMs - b.delayMs).reduce((result, member, index) => {
       const temporary = { ...effect, name: member.name, nativeSequence: false, members: undefined, track: { ...effect.track, cueStamp: { mode: 'fixed' as const, sequence: member.sequence, cue: member.cue, executor: member.executor } } };
-      const value = placeLightingTemplate({ ...result, templates: result.templates.map(entry => entry.id === effect.id ? temporary : entry) }, { ...stamp, ms: stamp.ms + member.delayMs, id: index === 0 ? stamp.id : crypto.randomUUID(), ingredientOrder: index, attributes: member.attributes ?? stamp.attributes, includeTracking: member.includeTracking ?? stamp.includeTracking, groupId: effect.nativeSequence ? undefined : stamp.id }, durationMs);
+      const value = placeLightingTemplate({ ...result, templates: result.templates.map(entry => entry.id === effect.id ? temporary : entry) }, { ...stamp, ms: stamp.ms + member.delayMs, id: index === 0 ? stamp.id : crypto.randomUUID(), ingredientOrder: index, valueEdits: member.valueEdits ?? stamp.valueEdits, attributes: member.attributes ?? stamp.attributes, includeTracking: member.includeTracking ?? stamp.includeTracking, groupId: effect.nativeSequence ? undefined : stamp.id }, durationMs);
       return { ...value, templates: document.templates };
     }, document);
   }
   const existing = materialCueTrack(document, binding);
   const track = existing ?? { ...effect.track, id: crypto.randomUUID(), name: '灯光', group: 'effect-canvas', clips: [] };
-  const event = { id: stamp.id, ...((stamp.attributes ?? binding.attributes) && {attributes: stamp.attributes ?? binding.attributes}), ...((stamp.includeTracking ?? binding.includeTracking) !== undefined && { includeTracking: stamp.includeTracking ?? binding.includeTracking }), librarySource: { id: effect.id, revision: effect.libraryRevision ?? 1 }, ...(stamp.groupId ? { effectGroupId: stamp.groupId, ingredientOrder: stamp.ingredientOrder } : {}), kind: 'ma2' as const, action: 'goto' as const, label: effect.name, at: stamp.ms, executor: track.cueStamp?.mode === 'fixed' ? track.cueStamp.executor : binding.executor, sequence: binding.sequence, cue: binding.cue };
+  const event = { id: stamp.id, ...((stamp.valueEdits ?? binding.valueEdits) && {valueEdits: stamp.valueEdits ?? binding.valueEdits}), ...((stamp.attributes ?? binding.attributes) && {attributes: stamp.attributes ?? binding.attributes}), ...((stamp.includeTracking ?? binding.includeTracking) !== undefined && { includeTracking: stamp.includeTracking ?? binding.includeTracking }), librarySource: { id: effect.id, revision: effect.libraryRevision ?? 1 }, ...(stamp.groupId ? { effectGroupId: stamp.groupId, ingredientOrder: stamp.ingredientOrder } : {}), kind: 'ma2' as const, action: 'goto' as const, label: effect.name, at: stamp.ms, executor: track.cueStamp?.mode === 'fixed' ? track.cueStamp.executor : binding.executor, sequence: binding.sequence, cue: binding.cue };
   const clip = track.clips.find(entry => entry.timeLock === 'time' && entry.start === 0 && !entry.muted);
   const updatedClip = clip ? { ...clip, duration: Math.max(clip.duration, stamp.ms + 1), events: [...clip.events, event] } : { id: crypto.randomUUID(), name: effect.name, start: 0, duration: Math.max(durationMs, stamp.ms + 1), timeLock: 'time' as const, muted: false, events: [event] };
   const updated = { ...track, clips: [...track.clips.filter(entry => entry.id !== clip?.id), updatedClip] };

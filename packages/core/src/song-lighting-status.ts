@@ -1,7 +1,7 @@
 import type { LinkProject, MtcFrameRate } from '@tb/schema';
 import { ma2PendingChanges } from './ma2-pending-changes';
 import { ma2SongPairs } from './ma2-pairing-state';
-import { ma2SongPoints } from './ma2-song-sequence';
+import { hasMa2SongSyncTarget, ma2SongPoints } from './ma2-song-sequence';
 import { programTimeOrigin } from './ma2-time-origin';
 import { ma2TrackRoutingIssue } from './ma2-track-routing';
 
@@ -52,6 +52,11 @@ function consoleFrameRate(format: string | null | undefined): MtcFrameRate | nul
 }
 
 type Item = LinkProject['rundown'][number];
+
+/** P1 must preserve this song's lighting start even when its console catalog is unavailable. */
+export function hasSongLightingTimeOrigin(project: LinkProject, item: Item): boolean {
+  return hasMa2SongSyncTarget(item.lighting) || songLightingStatus(project, item.id).state !== 'unmatched';
+}
 type Lighting = NonNullable<Item['lighting']>;
 type ConsoleSong = NonNullable<Lighting['consoleSong']>;
 const frames = (ms: number): number => Math.round(ms * 30 / 1000);
@@ -86,6 +91,7 @@ function ownShowStatus(item: Item, lighting: Lighting, song: ConsoleSong, timeco
     const own = stored && point.cues.length === 1 && point.cues[0]!.sequence === song.sequence && Number(point.cues[0]!.cue) === Number(stored.cue);
     if (!stored || !own || stored.atMs === undefined || frames(stored.atMs) !== frames(point.atMs) || (stored.enabled !== false) !== (point.enabled !== false)) pending += 1;
   }
-  pending += song.points.filter(point => !points.some(local => local.id === point.id)).length;
+  const localIds = new Set(points.map(point => point.id));
+  pending += song.points.filter(point => !localIds.has(point.id)).length;
   return { state: 'matched', timecode: timecode.number, startMs, frameRate: '30', pending, problems: [], notes: [] };
 }

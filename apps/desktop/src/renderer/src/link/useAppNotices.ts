@@ -20,7 +20,7 @@ export function useAppNotices() {
       key = `mtc-overlap-${conflict.documentId}-${[...conflict.targets].sort((a, b) => a - b).join('-')}`;
       tone = 'error';
     }
-    const displayMessage = conflict ? `Timecode ${conflict.targets.join(' 和 ')} 的时间范围重叠。` : noticeText(message, tone, written);
+    const displayMessage = conflict ? message.slice(message.indexOf(`Timecode ${conflict.targets[0]} 和 ${conflict.targets[1]}`)).split('，')[0] + '。' : noticeText(message, tone, written);
     if (tone === 'error' && message) recordErrorNotice(displayMessage, message);
     setNotices((current) => [...current.filter(notice => notice.message !== displayMessage && (!key || notice.key !== key)), ...(message ? [{ id, message: displayMessage, tone, ...(conflict ? { conflict } : {}), ...(key ? { key } : {}) }] : [])]);
     if (tone === 'info') window.setTimeout(() => setNotices((current) => current.filter((notice) => notice.id !== id)), 5_000);

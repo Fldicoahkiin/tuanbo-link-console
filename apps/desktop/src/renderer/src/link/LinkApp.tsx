@@ -1,6 +1,6 @@
-import { Button, Dialog, IconButton } from './ui';
+import { Button, IconButton } from './ui';
 import './components/titlebar.css';
-import { useSettingsExit } from './useSettingsExit';
+import { SettingsSaves, useSettingsExit } from './useSettingsExit';
 import { toUserErrorMessage } from '@tb/core/link';
 import { useMa2ReadStore } from './stores/ma2-read-store';
 import { useDocumentShortcuts } from './useDocumentShortcuts';
@@ -10,7 +10,7 @@ import { subscribeObsSceneSync } from './obs-scene-sync';
 import { TitlebarStatus } from './components/TitlebarStatus';
 import { RendererErrorBoundary } from './components/RendererErrorBoundary';
 import { ProjectDialog } from './components/ProjectDialog';
-import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Lightbulb,
   ListMusic,
@@ -193,20 +193,21 @@ export function LinkApp(): JSX.Element {
     setSettingsOpen(true);
   }, []);
 
-  const { settingsExit, setSettingsExit, leaveSettings } = useSettingsExit(() => {
+  const { forms, saving, leaveSettings } = useSettingsExit(() => {
     setSettingsLocation(null); setSettingsOpen(false); setConnectionsOpen(false);
-  });
-  const closeSettings = useCallback((): void => leaveSettings(), [leaveSettings]);
-  // Escape closes the settings page (asking first when a form there is not saved), or the connection page. On a
+  }, section => { setSettingsLocation(null); setSettingsCategory(section); });
+  const closeSettings = useCallback((): void => void leaveSettings(), [leaveSettings]);
+  // Escape closes the settings page, or the connection page. On a
   // drop-down list of the settings page it is left to the list.
   const connectionsPanel = useRef<HTMLElement>(null);
+  useLayoutEffect(() => { if (connectionsPanel.current) connectionsPanel.current.inert = saving; }, [saving]);
   const closePage = (): void => { if (!settingsOpen) setConnectionsOpen(false); else if (!(document.activeElement instanceof HTMLSelectElement)) closeSettings(); };
   useKeyOverlay(connectionsOpen, { close: closePage, panel: connectionsPanel, blocks: true });
 
   useEffect(() => {
     if (!openLighting) return;
     useMa2ReadStore.setState({ openWorkspace: false });
-    leaveSettings(() => setPage('lighting'));
+    void leaveSettings(() => setPage('lighting'));
   }, [openLighting, leaveSettings]);
   useDocumentShortcuts(locks.historyLocked, locks.saveAsLocked, saveProject, saveProjectAs);
   const documentActions = {
@@ -220,18 +221,18 @@ export function LinkApp(): JSX.Element {
   const fileCommands = { replaceDisabled: locks.replaceLocked || !project, openDisabled: locks.replaceLocked, onSaveAs: () => void saveProjectAs(), onRevert: () => void revertProject() };
   const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} fileCommands={fileCommands} /></div>{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace syncHost={syncHost} key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} playbackProject={internalPlayer.pictureProject} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
 
-  return <RendererErrorBoundary>
+  return <RendererErrorBoundary><SettingsSaves.Provider value={forms}>
     <div className="app-shell" data-workspace={connectionsOpen ? 'settings' : page}>
       <a className="skip-link" href="#workspace-content">跳到工作区</a>
       <AppTopbar status={<TitlebarStatus player={internalPlayer} onSettings={(category, focus) => { setSettingsCategory(category); setSettingsLocation({ category, ...(focus ? { focus } : {}) }); openSettings(); }} />} connectHostRef={setConnectHost} toolbarHostRef={setToolbarHost} onWindowAction={controlWindow} />
       <AppSidebar editorHostRef={setEditorSidebarHost} syncHostRef={setSyncHost} playlistHostRef={setPlaylistHost} settingsCategory={settingsCategory} onSettingsCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }}
         page={page} internal={project?.playbackSource === 'internal'} editingLocked={editingLocked}
-        obsState={obs.status} p1State={processes.p1.status} runtimeState={runtimeState} settingsOpen={connectionsOpen} onPageChange={(next) => { leaveSettings(() => startTransition(() => setPage(next))); }} onSettings={openSettings}
+        obsState={obs.status} p1State={processes.p1.status} runtimeState={runtimeState} settingsOpen={connectionsOpen} onPageChange={(next) => { void leaveSettings(() => startTransition(() => setPage(next))); }} onSettings={openSettings}
         notify={notify}
       />
       <section className={`app-workspace${connectionsOpen ? ' settings-workspace' : ''}`}>
         <main className="app-main" id="workspace-content" tabIndex={-1} aria-label={connectionsOpen ? '设置' : NAVIGATION.find(item => item.id === page)?.label}>
-          <div className="content-scroll">{pageContent}<section ref={connectionsPanel} hidden={!connectionsOpen} className="connections-dialog" role="dialog" aria-modal="false" aria-label={settingsOpen ? '设置' : '连接与设备'}><div className="connections-content" ref={settingsLocator.ref}><IntegrationWorkspace quickConnectHost={connectHost} midiMonitor={midiMonitor} category={settingsCategory} onCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }} coordinator={coordinator} notify={notify} settingsOpen={connectionsOpen && settingsOpen} onSettingsOpen={openSettings} onCreate={() => leaveSettings(beginCreateProject)} onOpen={() => leaveSettings(() => void openProject())} /></div></section>
+          <div className="content-scroll">{pageContent}<section ref={connectionsPanel} hidden={!connectionsOpen} className="connections-dialog" role="dialog" aria-modal="false" aria-label={settingsOpen ? '设置' : '连接与设备'}><div className="connections-content" ref={settingsLocator.ref}><IntegrationWorkspace quickConnectHost={connectHost} midiMonitor={midiMonitor} category={settingsCategory} onCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }} coordinator={coordinator} notify={notify} settingsOpen={connectionsOpen && settingsOpen} onSettingsOpen={openSettings} onCreate={() => void leaveSettings(beginCreateProject)} onOpen={() => void leaveSettings(() => void openProject())} /></div></section>
       {repair && project && repair.documentId === documentId ? <Ma2TimelineProperties key={repair.targets.join('-')} project={project} targets={repair.targets}
         onClose={() => setRepair(null)} onSaved={(message, warning) => {
           setNotices(old => old.filter(notice => !notice.conflict || notice.conflict.documentId !== documentId || !notice.conflict.targets.every(number => repair.targets.includes(number))));
@@ -241,13 +242,9 @@ export function LinkApp(): JSX.Element {
         </main>
       </section>
 
-      {settingsExit ? <Dialog title="离开设置？" size="sm" onClose={() => setSettingsExit(null)} actions={<>
-        <Button variant="secondary" onClick={() => setSettingsExit(null)}>继续编辑</Button>
-        <Button variant="danger" onClick={settingsExit}>放弃未保存修改</Button>
-      </>}><p>连接或启动设置还没保存，离开后这部分修改会丢失。其他已保存的设置和工程修改不受影响。</p></Dialog> : null}
       {newProjectOpen ? <ProjectDialog name={newProjectName} error={newProjectError} onNameChange={setNewProjectName} onClose={() => setNewProjectOpen(false)} onCreate={() => void createProject()} /> : null}
     </div>
-  </RendererErrorBoundary>;
+  </SettingsSaves.Provider></RendererErrorBoundary>;
 }
 
 function AppSidebar({ editorHostRef, syncHostRef, settingsCategory, onSettingsCategoryChange, playlistHostRef, page, internal, editingLocked, settingsOpen, onPageChange, onSettings, notify }: {

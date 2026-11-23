@@ -8,6 +8,16 @@ const existing = readFileSync(new URL('./fixtures/ma2-timecode-onpc-3.7-100.xml'
 const song = { name: 'LianDongGeQu', startMs: 480000, executor: '1000.101', executorName: 'LianDongGeQu 1000.101', sequence: 9950,
   cues: [{ atMs: 0, cueIndex: 1, number: '1.000', name: 'KaiChang' }, { atMs: 1000.4, cueIndex: 2, number: '2.500', name: 'FuGe' }, { atMs: 61234, cueIndex: 3, number: '3.000', name: null }] };
 
+it('确认序列改名后，只接受同一执行器随之变化的默认名称', () => {
+  const before = { number: song.sequence, name: song.name, cues: song.cues.map(cue => ({ ...cue, index: cue.cueIndex })) };
+  const after = { ...before, name: 'TwentyLooks' };
+  const xml = ma2SongTimecodeXml(existing, 9907, song);
+  const expected = ma2TimecodeAfterCueReindex(xml, before, after, song.executor);
+  expect(expected).toContain('name="TwentyLooks 1000.101"');
+  expect(ma2TimecodeAfterCueReindex(xml, before, after, '1000.102')).toBeUndefined();
+  expect(ma2TimecodeAfterCueReindex(xml.replace(song.executorName, 'Custom'), before, after, song.executor)).toBeUndefined();
+});
+
 it('在序列中间插 Cue 后按编号核对步号；同时移动过的触发点必须重新合并', async () => {
   const before = {number: song.sequence, name: song.name, cues: song.cues.map(cue => ({...cue, index: cue.cueIndex}))};
   const after = {...before, cues: before.cues.map(cue => ({...cue, index: cue.index === 1 ? 1 : cue.index + 1}))};

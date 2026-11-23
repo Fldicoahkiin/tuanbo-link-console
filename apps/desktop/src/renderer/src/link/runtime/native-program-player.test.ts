@@ -54,6 +54,28 @@ function fixture() {
   return { player, project, deps, api, lighting, emit, state: () => state };
 }
 
+it('较晚打开的界面能取得本次播放起点，定位、续播和同一位置重播各自建立新的核对范围', async () => {
+  const f = fixture();
+  await f.player.play('song-0');
+  const first = f.state().playbackOrigin!;
+  expect(first.positionMs).toBe(500);
+  f.emit({ positionMs: 2800 });
+  expect(f.state().playbackOrigin).toEqual(first);
+  await f.player.seek(4200);
+  const seek = f.state().playbackOrigin!;
+  expect(seek.positionMs).toBe(4200);
+  expect(seek.run).toBeGreaterThan(first.run);
+  f.emit({ positionMs: 5600 });
+  await f.player.pause();
+  await f.player.resume();
+  const resumed = f.state().playbackOrigin!;
+  expect(resumed.positionMs).toBe(5600);
+  expect(resumed.run).toBeGreaterThan(seek.run);
+  await f.player.play('song-0', 5600);
+  expect(f.state().playbackOrigin?.run).toBeGreaterThan(resumed.run);
+  await f.player.dispose();
+});
+
 it('音频解码失败后明确停止：清除旧错误并解除歌曲占用，不再把已停止状态判为失败', async () => {
   const f = fixture();
   await f.player.play('song-0');

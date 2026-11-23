@@ -1,9 +1,11 @@
-import { applyFirstTrackCues, firstTrackCuePlan, applyMa2ReadbackCommand, ma2BindingHold, ma2LatestChoiceText, ma2LatestSide, ma2PendingChanges, boundEmptyCuePoints, routeBoundEmptyCues, ma2TrackRoutingIssue, ma2PoolSequencesToRoute, routeMa2Tracks, setLightingCommand, sameMa2Content, type LinkCommand, type Ma2SyncPreview } from '@tb/core/link';
+import { applyFirstTrackCues, firstTrackCuePlan, applyMa2ReadbackCommand, ma2BindingHold, ma2LatestChoiceText, ma2ConflictWinner, type Ma2ConflictPolicy, ma2PendingChanges, boundEmptyCuePoints, routeBoundEmptyCues, ma2TrackRoutingIssue, ma2PoolSequencesToRoute, routeMa2Tracks, setLightingCommand, sameMa2Content, type LinkCommand, type Ma2SyncPreview } from '@tb/core/link';
 import { ma2ApplyResultSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2SongPoint, type Ma2SongBinding, type Ma2PoolRoute, type Ma2ExecutorReadRequest, type Ma2ExecutorPreview, type Ma2ApplyRequest, type Ma2ConsoleChanges, type Ma2ApplyResult, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
-import { existingFirstTrackCue, MA2_READ_CANCELLED } from '@tb/core/link';
+import { existingFirstTrackCue, MA2_READ_CANCELLED, programTimeOrigin, songDurationMs } from '@tb/core/link';
+import { Ma2TimecodeSourceError, throwMa2ReadFailure } from './ma2-console-reading';
 
 /** What one pass over a way-1 song (its `ma2Bindings`, the console's own Timecode shows) needs. */
 export type BoundSongPass = {
+  manualConflict?: Ma2ConflictPolicy | undefined;
   itemId: string;
   connection: Ma2CatalogRequest;
   /** The operator's choice: console edits come into the song, or the song is written over them. */
@@ -37,7 +39,7 @@ export type BoundSongPass = {
 
 export type BoundSongOutcome =
   /** Every checked show matches the console. `held` explains which bindings could not be checked because their start moved. */
-  | { kind: 'confirmed'; wrote: boolean; timecodes: number[]; held: string | null; chosen: string[] }
+  | { kind: 'confirmed'; wrote: boolean; localChanges: boolean; deskChanges: boolean; timecodes: number[]; held: string | null; chosen: string[] }
   /** An edit, playback or a pause ended the pass before anything uncertain happened; nothing failed. */
   | { kind: 'interrupted'; message: string };
 
@@ -133,6 +135,8 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
     if (invalid) throw new Error(`Timecode ${invalid.target}：${invalid.error}`);
   }
   let wrote = false;
+  let localChanges = false;
+  let deskChanges = false;
   const chosen: string[] = [];
   for (const bindingId of writable.map(binding => binding.id)) {
     if (!pass.current()) return interrupted(stopped);
@@ -147,18 +151,33 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
       return change.after?.kind === 'event' && sequence > 0 && !knownSequences.has(sequence) ? [sequence] : [];
     });
     if (preparedSequence && syncSequences) syncSequences.push(preparedSequence);
+    const verifyOnApply = Boolean(changes?.changes.length);
+    const readRequest = { ...pass.connection, target: binding.timecode, timeOriginMs: binding.timeOriginMs,
+      ...(syncSequences && { syncSequences: [...new Set(syncSequences)].sort((a, b) => a - b) }) };
     let readback: Ma2TimecodePreview;
     try {
-      readback = ma2TimecodePreviewSchema.parse(await pass.read({ ...pass.connection, target: binding.timecode, timeOriginMs: binding.timeOriginMs,
-        ...(syncSequences && { syncSequences: [...new Set(syncSequences)].sort((a, b) => a - b) }) }));
+      readback = ma2TimecodePreviewSchema.parse(await pass.read(verifyOnApply ? { ...readRequest, verifyOnApply: true } : readRequest));
     } catch (cause) {
       if (cause instanceof Error && cause.message === MA2_READ_CANCELLED && lighting() !== source) return interrupted('灯光已修改，正在同步新位置');
       throw cause;
     }
     if (!pass.current()) return interrupted(stopped);
     if (lighting() !== source) return interrupted('还在编辑，稍后再同步');
-    const comparison = await pass.compare({ document: source, bindingId: binding.id, readback, consoleChanges: pass.consoleChanges });
-    if (!pass.current()) return interrupted(stopped);
+    const compare = () => {
+      const hold = ma2BindingHold(pass.project() ?? project, item.id, binding.timecode, readback.timing?.offsetNative);
+      if (hold) throw new Ma2TimecodeSourceError(binding.timecode, hold);
+      return pass.compare({ document: source, bindingId: binding.id, readback, consoleChanges: pass.consoleChanges });
+    };
+    let comparison = await compare();
+    if (!pass.current() || lighting() !== source) return interrupted(stopped);
+    if (verifyOnApply && same(comparison.base, comparison.local) && same(comparison.base, comparison.remote)) {
+      // No write will perform the second native check. Read a complete verified
+      // snapshot here, including any edit made on the console since the first read.
+      readback = ma2TimecodePreviewSchema.parse(await pass.read(readRequest));
+      if (!pass.current() || lighting() !== source) return interrupted(stopped);
+      comparison = await compare();
+      if (!pass.current() || lighting() !== source) return interrupted(stopped);
+    }
     const consoleSeenAt = pass.consoleSeen(binding.timecode, same(comparison.base, comparison.remote) ? null : readback.sourceXml);
     if (same(comparison.base, comparison.local) && same(comparison.base, comparison.remote)) continue;
     if (lighting() !== source) return interrupted('还在编辑，稍后再同步');
@@ -166,14 +185,22 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
     if (!pass.current()) return interrupted(stopped);
     if (lighting() !== source) return interrupted('存档期间本地又有修改，稍后再同步');
     // 以联动台为准 (2026-11-04) keeps the timeline; reading console edits back, the latest wins (2026-11-11).
-    const side = pass.consoleChanges === 'software' ? 'local' : ma2LatestSide({ localEditedAt: pass.localEditedAt(), consoleSeenAt });
+    const side = pass.consoleChanges === 'software' || !comparison.conflicts.length ? 'local' : ma2ConflictWinner({ localEditedAt: pass.localEditedAt(), consoleSeenAt }, pass.manualConflict);
     const conflicts = comparison.conflicts.map(conflict => [conflict.id, side] as [string, typeof side]);
-    const choice = !conflicts.length ? null : pass.consoleChanges === 'software' ? `Timecode ${binding.timecode} 有 ${conflicts.length} 处两边都改过，以联动台为准写入` : ma2LatestChoiceText(`Timecode ${binding.timecode}`, conflicts.length, side);
+    const choice = !conflicts.length ? null : pass.consoleChanges === 'software' ? `Timecode ${binding.timecode} 有 ${conflicts.length} 处两边都改过，以联动台为准写入` : ma2LatestChoiceText(`Timecode ${binding.timecode}`, conflicts.length, side, Boolean(pass.manualConflict?.choice));
     if (choice) chosen.push(choice);
     pass.writing(choice ? `${choice}，正在写入并读取控台确认` : `正在同步 Timecode ${binding.timecode}…`);
-    const result = ma2ApplyResultSchema.parse(await pass.apply({ ...pass.connection, document: source, bindingId: binding.id, readback, conflicts, timeAlignment: 'nearest-frame', consoleChanges: pass.consoleChanges }));
-    if (result.status === 'incomplete') throw new Error(`${result.message}${result.mayHaveWritten ? '；控台可能已经写入' : ''}${result.backupFile ? `；备份：${result.backupFile}` : ''}`);
+    const songEndTick = item.referenceAudio && (item.playback || item.p1Media)
+      ? Math.round(programTimeOrigin(item) * 30 / 1000) + Math.ceil(songDurationMs(item.referenceAudio) * 30 / 1000) : undefined;
+    const result = ma2ApplyResultSchema.parse(await pass.apply({ ...pass.connection, document: source, bindingId: binding.id, readback, conflicts,
+      songEndTick, timeAlignment: 'nearest-frame', consoleChanges: pass.consoleChanges }));
+    if (result.status === 'incomplete') {
+      if (result.stage === 'read' && !result.mayHaveWritten && !result.backupFile) throwMa2ReadFailure(binding.timecode, new Error(result.message));
+      throw new Error(`${result.message}${result.mayHaveWritten ? '；控台可能已经写入' : ''}${result.backupFile ? `；备份：${result.backupFile}` : ''}`);
+    }
     wrote = true;
+    localChanges ||= !same(comparison.base, comparison.local) || pass.consoleChanges === 'software';
+    deskChanges ||= !same(comparison.base, comparison.remote) && pass.consoleChanges !== 'software';
     // The console confirmed the write: its read-back belongs to this song even when the sync was
     // paused meanwhile, but never to another document.
     if (!pass.project()) throw new Error('控台已写入，但工程已切换；回到原来的工程后点“刷新同步”核对');
@@ -183,7 +210,7 @@ export async function syncBoundSong(pass: BoundSongPass): Promise<BoundSongOutco
   if (!latest) return interrupted('工程已经切换');
   const held = heldMessage(latest, item.id);
   if (!writable.length && !held) return interrupted('这首歌的控台时间线刚换过，稍后再同步');
-  return { kind: 'confirmed', wrote, timecodes: writable.map(binding => binding.timecode), held, chosen };
+  return { kind: 'confirmed', wrote, localChanges, deskChanges, timecodes: writable.map(binding => binding.timecode), held, chosen };
 }
 
 /** A Timecode show bound to two songs, or twice to one, is never written automatically. */
@@ -204,5 +231,5 @@ function sharedTimecode(project: LinkProject, itemId: string, timecodes: readonl
 function heldMessage(project: LinkProject, itemId: string): string | null {
   const bindings = project.rundown.find(item => item.id === itemId)?.lighting?.ma2Bindings ?? [];
   const reasons = new Set(bindings.flatMap(binding => ma2BindingHold(project, itemId, binding.timecode) ?? []));
-  return reasons.size ? `${[...reasons].join('；')}。编辑的改动先留在联动台，起始码对上后会自动同步` : null;
+  return reasons.size ? `${[...reasons].join('；')}。修改已留在联动台，对齐起始码后请点“同步当前节目”` : null;
 }

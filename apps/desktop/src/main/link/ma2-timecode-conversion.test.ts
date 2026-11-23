@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { importMa2TimecodeCommand, matchMa2Readback } from '@tb/core/link';
 import { createEmptyLinkProject, parseLinkProject, serializeLinkProject } from '@tb/schema';
 import { convertMa2Snapshot, convertMa2Timecode } from './ma2-timecode-conversion';
-import { editMa2TimecodeEvents, inspectMa2TimecodeXml, inspectMa2SequenceXml, resolveMa2CueReference, validateMa2TimecodeWrite } from './ma2-timecode-xml';
+import { editMa2TrackStates, editMa2TimecodeEvents, inspectMa2TimecodeXml, inspectMa2SequenceXml, resolveMa2CueReference, validateMa2TimecodeWrite } from './ma2-timecode-xml';
 import { compareMa2LightingReadback } from './ma2-comparison';
 import { prepareMa2MergedEvents } from './ma2-event-write';
 
@@ -27,13 +27,19 @@ it.each(['24 FPS', '25 FPS', '30 FPS'])('%s 显示格式读、比较、改时间
 });
 
 describe('MA2 本机实测小数 Cue 引用转换', () => {
-  it('原生省略 active 表示静音，未知状态不得按启用读取', () => {
-    for (const attribute of ['', ' active="false"']) {
+  it('播放箭头和轨道的编辑选择各自独立，读写静音保留原有编辑选择', () => {
+    for (const attribute of ['', ' active="false"', ' active="true"']) {
       const preview = convertMa2Timecode(timecode.replace(' active="true"', attribute), [sequence], 9902);
-      expect(preview.document.tracks[0]!.muted).toBe(true);
+      expect(preview.document.tracks[0]!.muted).toBe(false);
+      const track = preview.trackMappings![0]!;
+      const muted = editMa2TrackStates(preview.sourceXml, 9902, [{ path: track.path, muted: true }]);
+      expect(convertMa2Timecode(muted, [sequence], 9902).document.tracks[0]!.muted).toBe(true);
+      const enabled = editMa2TrackStates(muted, 9902, [{ path: track.path, muted: false }]);
+      expect(inspectMa2TimecodeXml(enabled).timecodes[0]!.tracks).toEqual(inspectMa2TimecodeXml(preview.sourceXml).timecodes[0]!.tracks);
       expect(preview.document.tracks[0]!.clips[0]!.events).toHaveLength(2);
     }
     expect(convertMa2Timecode(timecode, [sequence], 9902).document.tracks[0]!.muted).toBe(false);
+    expect(() => convertMa2Timecode(timecode.replace('active="true"', 'muted="unknown"'), [sequence], 9902)).toThrow('状态格式');
     expect(() => convertMa2Timecode(timecode.replace('active="true"', 'active="unknown"'), [sequence], 9902)).toThrow('状态格式');
   });
   it('导出完整 Cue 目录，包含 Timecode 尚未使用的 Cue', () => {

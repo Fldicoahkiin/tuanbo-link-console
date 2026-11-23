@@ -13,6 +13,22 @@ function linked() {
   input.points = input.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: plan.points[index]!.cue, delayMs: 0 }] }));
   return { input, xml };
 }
+it('当前节目修改同一序列里的原素材时分配独立 Cue，覆盖模式也保留原素材', () => {
+  const { input, xml } = linked();
+  input.writeMode = 'overwrite';
+  const point = input.points[0]!;
+  point.cues[0]!.valueEdits = [{ key: '1///0/44494d', before: 70, value: 19.45 }];
+  const original = point.cues[0]!.cue;
+  const plan = planMa2SongSync(input, xml);
+  expect(plan.preservedSourceCues).toContain(original);
+  expect(plan.deletions).not.toContain(original);
+  expect(plan.points[0]!.cue).not.toBe(original);
+  expect(plan.changes[0]).toMatchObject({ cue: plan.points[0]!.cue, refs: point.cues });
+  input.binding!.points = plan.points;
+  input.binding!.preservedSourceCues = plan.preservedSourceCues;
+  point.cues = [{ sequence: 9000, cue: plan.points[0]!.cue, delayMs: 0 }];
+  expect(planMa2SongSync(input, xml).deletions).not.toContain(original);
+});
 it('灯具属性复制与改名保留其他步，改名不清除本步灯光数据', () => {
   const source = readFileSync(new URL('./fixtures/ma2-cue-attributes-3.7.xml', import.meta.url), 'utf8');
   const { xml } = linked();

@@ -12,7 +12,7 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(24000, 24); wav.writeUInt32LE(48000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   await mkdir(info.outputPath('assets/reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets/reference-audio/reference.wav'), wav);
   const lighting = createLightingDocument();
-  lighting.tracks = [{ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {}, clips: [{ id: 'clip', name: '整曲', start: 0, duration: 10000, timeLock: 'time', muted: false, events: Array.from({ length: 40 }, (_, i) => ({ id: `point-${i}`, kind: 'empty-cue', label: `第 ${i + 1} 段`, at: i * 200 + 100, runMode: 'independent' })) }] }];
+  lighting.tracks = [{ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {}, clips: [{ id: 'clip', name: '整曲', start: 0, duration: 10000, timeLock: 'time', muted: false, events: Array.from({ length: 40 }, (_, i) => ({ id: `point-${i}`, kind: 'ma2', action: 'goto', executor: '4.101', sequence: 41, cue: String(i % 3 + 1), label: `第 ${i + 1} 段`, at: i * 200 + 100, runMode: 'independent' })) }] }];
   const source = { show: '歌曲同步验收', generation: 'fixture', version: '3.7.0.5' };
   const project = parseLinkProject({ ...createEmptyLinkProject('歌曲同步验收'), schemaVersion: 2, ma2MaterialLibrary: { version: 1, source: '192.0.2.1:30000', library: { directory: { ...source, entries: [] }, readAt: new Date().toISOString(), sequences: [], fixtureUsage: [], errors: [] } }, rundown: [{ id: 'song', title: '新歌', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting, referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/reference.wav', durationMs: 10000, sha256: createHash('sha256').update(wav).digest('hex') } }] });
   const file = info.outputPath('song.tblink'); await writeFile(file, JSON.stringify(project));
@@ -30,10 +30,15 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
       // A song without an MTC start reads the console's Timecode shows before its first sync; this console has none.
       ipcMain.removeHandler('link:ma2-timecode-ranges'); ipcMain.handle('link:ma2-timecode-ranges', () => ({ show: source.show, entries: [] }));
       ipcMain.removeHandler('link:ma2-network-status'); ipcMain.handle('link:ma2-network-status', () => ({ state: process.env.TBLINK_SONG_OFFLINE ? 'disconnected' : 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, version: '3.7.0.5', passwordSaved: false, error: null }));
-      ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => {
+      const currentDirectory = () => {
         if (process.env.TBLINK_SONG_OFFLINE) throw new Error('验收：控台已断开');
         const last = process.env.TBLINK_SONG_LAST_REQUEST ? JSON.parse(process.env.TBLINK_SONG_LAST_REQUEST) as Ma2SongSyncRequest : null;
-        return { directory: { ...source, entries: last ? [{ target: last.binding?.sequence ?? last.settings.nextSequence, name: last.name }] : [] }, readAt: new Date().toISOString(), sequences: [], fixtureUsage: [], errors: [] };
+        return { ...source, entries: last ? [{ target: last.binding?.sequence ?? last.settings.nextSequence, name: last.name }] : [] };
+      };
+      ipcMain.removeHandler('link:ma2-catalog');
+      ipcMain.handle('link:ma2-catalog', () => ({ directory: currentDirectory(), entries: [], readAt: new Date().toISOString() }));
+      ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => {
+        return { directory: currentDirectory(), readAt: new Date().toISOString(), sequences: [], fixtureUsage: [], errors: [] };
       });
       ipcMain.removeHandler('link:ma2-layout'); ipcMain.handle('link:ma2-layout', (_event, request: { layout: number }) => ({ layout: request.layout, name: '指定页面', readAt: new Date().toISOString(), items: [], omittedFixtures: 0 }));
       ipcMain.removeHandler('link:ma2-executor-pages'); ipcMain.handle('link:ma2-executor-pages', () => ({ ...source, buttonPage: 4, faderPage: 100, pages: [{ page: 4, name: '常用' }, { page: targetPage, name: '歌曲编排' }] }));
@@ -45,7 +50,8 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
         const target = request.binding?.sequence ?? request.settings.nextSequence;
         const cues = request.points.map((point, i) => ({ index: i + 1, number: `${i + 1}.000`,
           name: i === 1 && process.env.TBLINK_SONG_REMOTE_NAME ? process.env.TBLINK_SONG_REMOTE_NAME : point.name }));
-        return { binding: { endpoint: '192.0.2.1:30000', show: source.show, layout: null, executor: `${request.settings.executorPage}.101`, sequence: target, name: request.name, points: request.points.map((point, i) => ({ id: point.id, cue: cues[i]!.number })),
+        return { binding: { endpoint: '192.0.2.1:30000', show: source.show, layout: null, executor: request.binding?.executor ?? `${request.settings.executorPage}.101`, sequence: target, name: request.name, points: request.points.map((point, i) => ({ id: point.id, cue: cues[i]!.number, atMs: point.atMs })),
+          timecode: { number: target, offset: Math.round((request.timecodeStartMs ?? 0) * 30 / 1000), slot: 'TC Slot 2', revision: 'b'.repeat(64) },
           baselineXml: `<Fixture>${JSON.stringify(cues)}</Fixture>` },
           library: { directory: { ...source, entries: [{ target, name: request.name }] }, readAt: new Date().toISOString(), sequences: [{ sequence: target, name: request.name, cues }], fixtureUsage: [], errors: [] },
           layout: null, changed: !request.binding || !request.points.length, backupFile: '' };
@@ -87,7 +93,7 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
       await page.evaluate(() => localStorage.removeItem('tblink.ma2-realtime-enabled.v1'));
       await page.reload();
       await page.getByRole('button', { name: '灯光工作台', exact: true }).click();
-      await expect(page.getByRole('switch', { name: '实时同步', exact: true })).toHaveAttribute('aria-checked', 'true');
+      await expect(page.getByRole('button', { name: '同步', exact: true })).toBeVisible();
       await pool.getByRole('button', { name: '控台页面', exact: true }).click();
       await pool.getByRole('button', { name: '新建 Cue', exact: true }).click();
     }
@@ -101,8 +107,15 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
     await song.getByLabel('默认创建按钮页').fill('2000');
     await song.getByRole('button', { name: '保存默认', exact: true }).click();
     await expect(song).toContainText('已设置：按钮第 2000 页');
-    const realtime = page.getByRole('switch', { name: '实时同步', exact: true });
-    if (await realtime.getAttribute('aria-checked') !== 'true') await realtime.click();
+    const sync = page.getByRole('button', { name: '同步', exact: true });
+    const details = page.getByRole('dialog', { name: '同步状态详情' });
+    const syncSong = async (): Promise<void> => {
+      await sync.click();
+      await expect(details).toBeVisible();
+      await expect(page.locator('.lighting-sync-result')).toHaveText('已同步');
+      await page.keyboard.press('Escape');
+      await expect(details).toHaveCount(0);
+    };
     await page.screenshot({ path: info.outputPath('default-creation-page.png') });
     await page.locator('.waveform-cue-point').first().click();
     const composer = page.locator('.cue-composer');
@@ -113,8 +126,10 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
     await page.locator('.waveform-cue-point').first().click();
     await composer.getByLabel('Cue 名称', { exact: true }).fill('电脑修改开场');
     await composer.getByLabel('Cue 名称', { exact: true }).press('Tab');
+    await syncSong();
     await expect.poll(async () => (JSON.parse(await app.evaluate(() => process.env.TBLINK_SONG_LAST_REQUEST ?? '{}')) as Ma2SongSyncRequest).points?.[0]?.name).toBe('电脑修改开场');
     await app.evaluate(() => { process.env.TBLINK_SONG_REMOTE_NAME = '控台修改第二步'; });
+    await syncSong();
     await expect.poll(() => savedValue(page, async () => (await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === 'point-1'))).toMatchObject({ label: '控台修改第二步' });
     expect((await savedProject()).ma2MaterialLibrary?.userLibrary?.consoleWorkspace?.executorPage).toBe(2000);
     expect((await saved()).consoleSong?.executor).toBe(`${targetPage}.101`);
@@ -125,26 +140,23 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
     await expect(composer.getByLabel('Cue 名称', { exact: true })).toHaveValue('电脑修改开场');
     await page.screenshot({ path: info.outputPath('song-40-cues.png') });
     await app.evaluate(() => { process.env.TBLINK_SONG_OFFLINE = 'true'; });
-    const syncDetails = page.getByRole('button', { name: '同步状态详情' });
-    await expect(syncDetails).toHaveText('同步详情');
-    await syncDetails.click();
-    await expect(page.getByRole('dialog', { name: '同步状态详情' })).toContainText('等待控台连接');
-    await syncDetails.click();
+    await sync.click();
+    await expect(page.locator('.lighting-sync-result')).toHaveText('等待连接控台');
+    await page.keyboard.press('Escape');
     await page.locator('.waveform-cue-point').first().click();
     await composer.getByLabel('Cue 名称', { exact: true }).fill('断线期间继续修改');
     await composer.getByLabel('Cue 名称', { exact: true }).press('Tab');
     await page.getByRole('button', { name: '关闭 Cue 编辑', exact: true }).click();
     await expect(page.getByRole('button', { name: '撤销', exact: true })).toBeEnabled();
-    await expect(page.getByRole('button', { name: '保存', exact: true }).first()).toBeEnabled();
+    await expect(page.getByRole('button', { name: '保存工程', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: '保存工程', exact: true }).click();
     await expect.poll(async () => (await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === 'point-0')).toMatchObject({ label: '断线期间继续修改' });
     await app.evaluate(() => { delete process.env.TBLINK_SONG_OFFLINE; });
+    await syncSong();
     await expect.poll(async () => (JSON.parse(await app.evaluate(() => process.env.TBLINK_SONG_LAST_REQUEST ?? '{}')) as Ma2SongSyncRequest).points?.[0]?.name).toBe('断线期间继续修改');
     expect((await saved()).consoleSong?.executor).toBe(`${targetPage}.101`);
     if (targetPage === 1234) {
-      // Deleting every step on the timeline deletes the console Cues in the same sync: no review list, no waiting.
-      await page.getByRole('switch', { name: '实时同步', exact: true }).click();
-      await expect(page.getByRole('switch', { name: '实时同步', exact: true })).toHaveAttribute('aria-checked', 'false');
+      const beforeRemoval = Number(await app.evaluate(() => process.env.TBLINK_SONG_SYNC_CALLS));
       for (let index = 0; index < 40; index++) {
         await page.locator('.waveform-cue-point').first().click();
         await page.locator('.waveform-cue-point').first().press('Delete');
@@ -152,20 +164,19 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
       await expect(page.locator('.waveform-cue-point')).toHaveCount(0);
       await page.getByRole('button', { name: '保存工程', exact: true }).click();
       await expect.poll(async () => (await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).length).toBe(0);
-      await page.getByRole('switch', { name: '实时同步', exact: true }).click();
+      expect(Number(await app.evaluate(() => process.env.TBLINK_SONG_SYNC_CALLS))).toBe(beforeRemoval);
+      await syncSong();
       await expect.poll(() => savedValue(page, async () => (await saved()).consoleSong?.points.length)).toBe(0);
       const cleared = JSON.parse(await app.evaluate(() => process.env.TBLINK_SONG_LAST_REQUEST ?? '{}')) as Ma2SongSyncRequest;
       expect(cleared.points).toEqual([]); expect(cleared).not.toHaveProperty('confirmedDeletions');
       expect((await saved()).consoleSong).toMatchObject({ sequence: 9000, executor: '1234.101', points: [] });
       expect((await savedProject()).ma2MaterialLibrary?.library?.sequences.find(sequence => sequence.sequence === 9000)?.cues).toEqual([]);
-      // 刷新同步 reads the console again at once.
+      // Explicitly synchronizing an unchanged song asks the console again.
       const calls = Number(await app.evaluate(() => process.env.TBLINK_SONG_SYNC_CALLS));
-      await page.getByRole('button', { name: '刷新同步', exact: true }).click();
+      await syncSong();
       await expect.poll(async () => Number(await app.evaluate(() => process.env.TBLINK_SONG_SYNC_CALLS))).toBeGreaterThan(calls);
       await page.screenshot({ path: info.outputPath('song-cleared.png') });
     }
-    await page.getByRole('switch', { name: '实时同步', exact: true }).click();
-    await expect(page.getByRole('switch', { name: '实时同步', exact: true })).toHaveAttribute('aria-checked', 'false');
     expect(errors).toEqual([]);
   } catch (error) {
     if (!page.isClosed()) await writeFile(info.outputPath('failure-ui.txt'), await page.locator('body').innerText());

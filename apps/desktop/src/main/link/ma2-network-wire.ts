@@ -1,14 +1,21 @@
 import { randomBytes } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
+import { MA2_MAX_SEQUENCE_BYTES } from '@tb/schema';
+import { setTimeout as delay } from 'node:timers/promises';
 import { open, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute } from 'node:path';
 import { Ma2BridgeFailure, type Ma2Lane, type Ma2Operation, type Ma2TransferProgress, type Ma2Wire } from './ma2-onpc-bridge';
 import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
 import type { Ma2RequestJournal } from './ma2-request-journal';
-import { MA2_BRIDGE_MISSING_BEFORE_REQUEST } from '@tb/core/link';
+import { MA2_BRIDGE_BUSY_BEFORE_REQUEST, MA2_BRIDGE_MISSING_BEFORE_REQUEST } from '@tb/core/link';
 import { encodeMa2ReindexedDelta, encodeMa2SnapshotDelta } from './ma2-snapshot-delta';
 
 class Ma2RpcRefusal extends Error {}
 class Ma2BridgeMissing extends Error {}
+class Ma2NotStarted extends Error {}
+class Ma2LaneOccupied extends Ma2RpcRefusal {
+  constructor(readonly source: string | undefined) { super(MA2_BRIDGE_BUSY_BEFORE_REQUEST); }
+}
 
 /** Only the loopback transport shares the onPC filesystem. A LAN address always uses the wire. */
 export const ma2UsesLocalFiles = (host: string): boolean => host === '127.0.0.1' || host === '::1';
@@ -27,6 +34,32 @@ function responseChunks(text: string, prefix: string, offset: number, size: numb
 }
 
 type ReadBaseline = { id: string; target: number; content: Buffer };
+/** Recover the exact native bytes, including whitespace and a partial last line. */
+function unpackSequence(encoded: Buffer, size: number): Buffer {
+  const bytes = Buffer.allocUnsafe(size);
+  const lines: Buffer[] = [];
+  let at = 0, written = 0, dictionaryBytes = 0;
+  while (at + 2 <= encoded.length) {
+    const id = encoded.readUInt16BE(at); at += 2;
+    let part: Buffer | undefined;
+    if (id === 0 || id === 65535) {
+      if (at + 2 > encoded.length) throw new Error('控台序列片段不完整');
+      const length = encoded.readUInt16BE(at); at += 2;
+      if (!length || at + length > encoded.length) throw new Error('控台序列片段不完整');
+      part = encoded.subarray(at, at + length);
+      at += length;
+      if (id === 0) {
+        dictionaryBytes += length;
+        if (lines.length >= 65534 || length > 4096 || dictionaryBytes > 4194304) throw new Error('控台序列传输字典无效');
+        lines.push(part);
+      }
+    } else part = lines[id - 1];
+    if (!part || written + part.length > size) throw new Error('控台序列片段与声明的长度不一致');
+    part.copy(bytes, written); written += part.length;
+  }
+  if (at !== encoded.length || written !== size) throw new Error('控台序列传输不完整');
+  return bytes;
+}
 /** Digits, separators and letters dominate XML copy ranges. Escape every other byte
  * so native command syntax cannot interpret it; never split an escape across lines. */
 function* uploadParts(data: Buffer, text: boolean): Generator<string> {
@@ -86,14 +119,14 @@ export class Ma2NetworkWire implements Ma2Wire {
     }
     this.journal?.released(id);
   }
-  private async call(action: string, id: string, argumentsText = ''): Promise<string> {
+  private async call(action: string, id: string, argumentsText = '', source = ''): Promise<string> {
     const token = randomBytes(16).toString('hex');
     // The console lost the bridge's globals (a Show was loaded or the console restarted).
     // A positive MISSING reply is different from a lost acknowledgement.
     const prefix = `TBLINK_RPC_${token}:`;
     // Keep even a full 256-byte chunk below the native console's command-line limit.
     // The human explanation belongs here, not as hundreds of hex bytes in every command.
-    const line = `Lua "if TBLINK_NET then TBLINK_NET('${token}','${action}','${id}'${argumentsText}) else gma.echo('${prefix}MISSING') end"`;
+    const line = `Lua "if TBLINK_NET then TBLINK_NET('${token}','${action}${source}','${id}'${argumentsText}) else gma.echo('${prefix}MISSING') end"`;
     const result = await this.connection.command(line, text => {
       const receipt = ma2ResponseLine(text, prefix);
       if (!receipt?.startsWith('INLINE:') || !['begin', 'run', 'step'].includes(action)) return receipt;
@@ -110,9 +143,42 @@ export class Ma2NetworkWire implements Ma2Wire {
     if (result.startsWith('ERR:')) {
       const encoded = result.slice(4);
       if (!/^(?:[a-f0-9]{2})+$/.test(encoded)) throw new Error('MA2 插件错误响应格式无效');
-      throw new Ma2RpcRefusal(`MA2：${Buffer.from(encoded, 'hex').toString('utf8')}`);
+      const reason = Buffer.from(encoded, 'hex').toString('utf8');
+      if (action === 'begin' || action === 'beginsync') {
+        const occupied = /(?:^|:\s*)Another network request is pending((?::(?:[a-f0-9]{2})+){2})?$/.exec(reason);
+        if (occupied) throw new Ma2LaneOccupied(occupied[1]);
+        if (action === 'beginsync' && /(?:^|:\s*)Snapshot reference expired or mismatched$/.test(reason)) {
+          this.snapshot = null;
+          throw new Ma2NotStarted(MA2_BRIDGE_MISSING_BEFORE_REQUEST);
+        }
+        if (/(?:^|:\s*)Source changed before queued request$/.test(reason)) throw new Ma2NotStarted(MA2_BRIDGE_MISSING_BEFORE_REQUEST);
+      }
+      throw new Ma2RpcRefusal(`MA2：${reason}`);
     }
     return result;
+  }
+  /** Only an explicit negative admission is safe to repeat. The plugin checks the original Show and generation
+   * in the same call that takes the slot. A lost reply, run or already admitted write never enters this loop. */
+  private async reserve(action: string, id: string, args: string, gate: () => Promise<void>, signal?: AbortSignal): Promise<string> {
+    let source = '', pause = 40;
+    let firstRefusalAt: number | undefined;
+    for (;;) {
+      try { return await this.call(action, id, args, source); }
+      catch (error) {
+        if (!(error instanceof Ma2LaneOccupied) || !error.source || error.source.length + args.length > 850) throw error;
+        if (source && error.source !== source) throw new Ma2NotStarted(MA2_BRIDGE_MISSING_BEFORE_REQUEST);
+        firstRefusalAt ??= performance.now();
+        source = error.source;
+      }
+      try { await delay(pause, undefined, { signal }); await gate(); signal?.throwIfAborted(); }
+      catch (cause) {
+        const reason: unknown = signal?.aborted ? signal.reason : cause;
+        throw new Ma2NotStarted(reason instanceof Error ? reason.message : String(reason), { cause });
+      }
+      // Short reads release quickly during editing. Back off further when a
+      // second client is doing a long export so its control connection gets time.
+      pause = Math.min(performance.now() - firstRefusalAt < 1500 ? 100 : 250, pause * 2);
+    }
   }
   /** After SEQGO acknowledges its Assign or SYNC acknowledges its Import,
    * finish the native readback even if an edit is cancelled during confirmation. */
@@ -151,7 +217,7 @@ export class Ma2NetworkWire implements Ma2Wire {
       if (reference && lane !== 'bg') throw new Error('无效的 MA2 网络请求');
       // SEQGO's first step only exports the sequence. Its native write remains a
       // separate, gated step after the second export and comparison.
-      const bundledQuery = this.verifiedSnapshots && lane === 'bg' && (['SNAPSHOT', 'SCOPE', 'FIRSTCUES', 'ASSIGNSEQ'].includes(operation) || operation === 'DISCARD' && this.inlineDiscard);
+      const bundledQuery = this.verifiedSnapshots && lane === 'bg' && (operation === 'SEQCUES' && /^(?:names|values):/.test(body) || ['SNAPSHOT', 'SCOPE', 'FIRSTCUES', 'ASSIGNSEQ'].includes(operation) || operation === 'DISCARD' && this.inlineDiscard);
       const shortQuery = (bundledQuery || operation === 'LIST' || operation === 'LISTSEQ' || operation === 'TCRANGES' || operation === 'SEQGO' && lane === 'bg' && data.length > 0) && data.length <= 320;
       const readNow = operation === 'READ' && data.length === 0 && lane === 'bg' || shortQuery;
       if (readNow) { await beforeStep?.(0); checkCancellation(); beforeSend(); }
@@ -165,7 +231,10 @@ export class Ma2NetworkWire implements Ma2Wire {
       const proposed = indexed?.data ?? delta;
       const fewerParts = wide && proposed && proposed.length > 256 && [...uploadParts(proposed, true)].length < Math.ceil(proposed.length / 256);
       const chunkOffer = fewerParts ? (indexed ? '' : ',nil,nil,nil,nil') + ",'text'" : '';
-      const begun = await this.call(reference ? 'beginsync' : 'begin', id, `,'${reference ?? operation}',${target},${data.length},'${lane}'${transport}${extension}${dictionary}${queryLimit}${chunkOffer}`);
+      const begun = await this.reserve(reference ? 'beginsync' : 'begin', id, `,'${reference ?? operation}',${target},${data.length},'${lane}'${transport}${extension}${dictionary}${queryLimit}${chunkOffer}`, async () => {
+        await beforeStep?.(0); checkCancellation();
+        if (readNow) beforeSend();
+      }, signal);
       // Older bridges ignore the final argument and ACK their reservation. Only
       // that ACK needs a subsequent run; a completed export is never replayed.
       const beganWithRead = readNow && /^(?:INLINE|DONE|FILE|STEP):/.test(begun);
@@ -196,18 +265,19 @@ export class Ma2NetworkWire implements Ma2Wire {
       // The plugin does one console Export or Import per line and answers STEP:<steps done> until the
       // last, so stop and playback commands queued meanwhile go out between two steps. A plugin from
       // before steps ignores 'steps' and answers DONE at once, which is the same protocol.
-      const inlineResult = ['READ', 'SEQCUES', 'LIST', 'LISTSEQ', 'TCRANGES', 'SNAPSHOT', 'SCOPE', 'SYNC', 'SEQGO', 'FIRSTCUES', 'ASSIGNSEQ', 'DISCARD'].includes(operation);
+      const inlineResult = ['READ', 'SEQCUES', 'LIST', 'LISTSEQ', 'TCRANGES', 'SNAPSHOT', 'SCOPE', 'SYNC', 'SEQGO', 'SETVALUES', 'FIRSTCUES', 'ASSIGNSEQ', 'DISCARD'].includes(operation);
       const confirmImport = this.verifiedSnapshots && operation === 'SYNC';
       let reply = begun;
       if (!beganWithRead) {
         checkCancellation(); await beforeStep?.(0); checkCancellation();
         if (!sent) { beforeSend(); sent = true; }
         const checked = this.verifiedSnapshots && ['SNAPSHOT', 'SCOPE', 'SYNC'].includes(operation);
-        const run = checked ? ",'steps','checked'" : inlineResult ? ",'steps','inline'" : ",'steps'";
+        const run = operation === 'SEQUENCE' ? ",'steps','sequence'" : checked ? ",'steps','checked'" : inlineResult ? ",'steps','inline'" : ",'steps'";
         reply = await this.call('run', id, run + (confirmImport ? ",'confirm','snapshot'" + (wide ? ',16384' : '') + (syncBase ? ",'copy'" : '') : ''));
       }
       const stepReply = /^STEP:(\d+)(:before|:verify)?$/;
-      for (let done = 0, step = stepReply.exec(reply); step; step = stepReply.exec(reply)) {
+      let done = 0;
+      for (let step = stepReply.exec(reply); step; step = stepReply.exec(reply)) {
         if (Number(step[1]) !== done + 1) throw new Error('控台分步执行的回答对不上');
         const beforeImport = step[2] === ':before';
         if ((beforeImport && !confirmImport) || (step[2] && operation !== 'SEQGO' && !confirmImport) || (confirming && step[2] !== ':verify')) throw new Error('控台写入确认阶段的回答对不上');
@@ -229,29 +299,47 @@ export class Ma2NetworkWire implements Ma2Wire {
       }
       const receipt = /^DONE:(\d+)(:batch)?$/.exec(reply);
       const fileReceipt = /^FILE:(\d+):((?:[a-f0-9]{2})+)$/.exec(reply);
-      const size = Number(receipt?.[1] ?? fileReceipt?.[1]);
-      if (!Number.isInteger(size) || size < 1 || size > 33554500) throw new Error('MA2 响应长度无效');
-      const chunks: Buffer[] = [];
-      if (fileReceipt) {
+      const sequenceReceipt = operation === 'SEQUENCE' ? /^SEQDATA:(\d+)$/.exec(reply) : null;
+      const sequenceFile = operation === 'SEQUENCE' ? /^SEQFILE:(\d+):((?:[a-f0-9]{2})+)$/.exec(reply) : null;
+      const packed = operation === 'SEQUENCE' ? /^SEQPACK:(\d+):(\d+)$/.exec(reply) : null;
+      const sequence = Boolean(sequenceReceipt || sequenceFile || packed);
+      const local = sequenceFile ?? fileReceipt;
+      const size = Number(packed?.[2] ?? sequenceReceipt?.[1] ?? local?.[1] ?? receipt?.[1]);
+      if (!Number.isSafeInteger(size) || size < 1 || size > (sequence ? MA2_MAX_SEQUENCE_BYTES : 33554500)) throw new Error('MA2 响应长度无效');
+      const nativeSize = packed ? Number(packed[1]) : size;
+      if (packed && (!Number.isSafeInteger(nativeSize) || nativeSize <= size || nativeSize > MA2_MAX_SEQUENCE_BYTES)) throw new Error('控台序列声明的长度无效');
+      let bytes: Buffer;
+      if (local) {
         if (!this.localFiles) throw new Error('远程控台不能使用本机文件传输');
         checkCancellation();
-        chunks.push(await this.readLocalResponse(Buffer.from(fileReceipt[2]!, 'hex').toString('utf8'), id, size));
+        bytes = await this.readLocalResponse(Buffer.from(local[2]!, 'hex').toString('utf8'), id, size, sequence);
         checkCancellation();
         progress?.({ completed: size, total: size });
-      } else for (let offset = 0; offset < size; offset += 8192) {
-        checkCancellation();
-        chunks.push(await this.readBatch(id, offset, size, Boolean(receipt?.[2])));
-        progress?.({ completed: Math.min(offset + 8192, size), total: size });
+      } else {
+        bytes = Buffer.allocUnsafe(size);
+        for (let offset = 0; offset < size; offset += 8192) {
+          checkCancellation();
+          // A verified Sequence is immutable for this request. Let an operator's
+          // foreground read run between batches, including after a long export.
+          if (sequence) { await beforeStep?.(Math.max(done, 1)); checkCancellation(); }
+          const chunk = await this.readBatch(id, offset, size, sequence || Boolean(receipt?.[2]));
+          chunk.copy(bytes, offset);
+          progress?.({ completed: offset + chunk.length, total: size });
+        }
       }
+      if (packed) bytes = unpackSequence(bytes, nativeSize);
+      if (sequence && !isUtf8(bytes)) throw new Error('控台序列的文字编码无效');
+      checkCancellation();
       releaseAttempted = true;
-      if (await this.call('release', id) !== 'ACK') throw new Error('MA2 未确认传输结束');
+      if (await this.call('release', id, sequence ? ",'received'" : '') !== 'ACK') throw new Error('MA2 未确认传输结束');
       this.unreleased.delete(id);
       this.journal?.released(id);
-      return received(Buffer.concat(chunks));
+      return sequence ? bytes.toString('utf8') : received(bytes);
     } catch (error) {
       let message = error instanceof Error ? error.message : String(error);
-      if (!acquired && (error instanceof Ma2RpcRefusal || error instanceof Ma2BridgeMissing)) {
+      if (!acquired && (error instanceof Ma2RpcRefusal || error instanceof Ma2BridgeMissing || error instanceof Ma2NotStarted)) {
         this.journal?.released(id); this.unreleased.delete(id);
+        if (error instanceof Ma2LaneOccupied || error instanceof Ma2NotStarted) sent = false;
         if (error instanceof Ma2BridgeMissing) { sent = false; message = MA2_BRIDGE_MISSING_BEFORE_REQUEST; }
       }
       // Release only this transaction. Never execute it again or clear another client's request.
@@ -262,14 +350,17 @@ export class Ma2NetworkWire implements Ma2Wire {
         }
         catch (cleanupError) { message += `；传输清理未确认：${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`; }
       }
-      throw new Ma2BridgeFailure(message, id, sent, { cause: error });
+      const imported = confirming && operation === 'SYNC';
+      throw new Ma2BridgeFailure(message, id, sent, { cause: error }, imported ? `tblink_backup_${id}.xml` : null, imported);
     }
   }
   private validateLocalPath(path: string, id: string, suffix = ''): void {
     if (!isAbsolute(path) || basename(path) !== `tblink_network_${id}${suffix}.bin` || basename(dirname(path)) !== 'temp') throw new Error('本机控台返回的数据文件位置无效');
   }
-  private async readLocalResponse(path: string, id: string, size: number): Promise<Buffer> {
-    this.validateLocalPath(path, id);
+  private async readLocalResponse(path: string, id: string, size: number, sequence: boolean): Promise<Buffer> {
+    if (sequence) {
+      if (!isAbsolute(path) || basename(path) !== `tblink_library_${id}.xml` || basename(dirname(path)) !== 'importexport') throw new Error('本机控台返回的序列文件位置无效');
+    } else this.validateLocalPath(path, id);
     const file = await open(path, 'r');
     try {
       const info = await file.stat();

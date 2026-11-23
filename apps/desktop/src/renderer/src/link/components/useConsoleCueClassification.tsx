@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react';
 import { renameConsoleCueCommand, updateConsoleCueCategoriesCommand, type CategoryChanges, consoleCueKey, hideConsoleCuesCommand, projectLightingLibrary, type ConsoleCueReference, type ConsoleLibrarySource } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { LightingCueContextMenu } from './LightingCueContextMenu';
@@ -7,7 +7,8 @@ import { LightingCueAttributes } from './LightingCueAttributes';
 
 export function useConsoleCueClassification(onError:(message:string)=>void){
   const project=useDocumentStore(state=>state.project);
-  const library=useMemo(()=>project ? (() => { const value = projectLightingLibrary(project); return { ...value, categories: value.categories.filter(category => !category.id.startsWith('attribute:')), entries: value.entries.map(entry => ({ ...entry, categoryIds: entry.categoryIds.filter(id => !id.startsWith('attribute:')) })) }; })() : null,[project]);
+  const value = useMemo(() => project && projectLightingLibrary(project), [project]);
+  const library = useMemo(() => value && ({ ...value, categories: value.categories.filter(category => !category.id.startsWith('attribute:')), entries: value.entries.map(entry => ({ ...entry, categoryIds: entry.categoryIds.filter(id => !id.startsWith('attribute:')) })) }), [value]);
   const source={endpoint:project?.ma2MaterialLibrary?.source??'',show:project?.ma2MaterialLibrary?.library?.directory.show??''};
   const [picked,setPicked]=useState<ConsoleCueReference[]>([]);
   const [context,setContext]=useState<{x:number;y:number;title:string;refs:ConsoleCueReference[];source:ConsoleLibrarySource;projectId:string;onEdit?: (() => void) | undefined}|null>(null);
@@ -23,7 +24,10 @@ export function useConsoleCueClassification(onError:(message:string)=>void){
     const ref=entry.track.cueStamp;
     return ref?.mode==='fixed'&&entry.kind!=='combination'&&entry.source.endpoint===source.endpoint&&entry.source.show===source.show&&entry.categoryIds.length?[consoleCueKey({...ref,kind:entry.kind})]:[];
   })),[library,source.endpoint,source.show]);
-  const isVisible=(ref:ConsoleCueReference):boolean=>hidden.has(consoleCueKey(ref))===showRemoved&&(!onlyUnclassified||!classified.has(consoleCueKey(ref)));
+  const isVisible=useCallback((ref:ConsoleCueReference):boolean=>{
+    if (!hidden.size && !onlyUnclassified) return !showRemoved;
+    const key = consoleCueKey(ref); return hidden.has(key)===showRemoved&&(!onlyUnclassified||!classified.has(key));
+  },[hidden,showRemoved,onlyUnclassified,classified]);
   const select=(ref:ConsoleCueReference,event:MouseEvent,ordered:ConsoleCueReference[]):void=>{
     const key=consoleCueKey(ref);
     if(event.shiftKey&&picked.length){const first=ordered.findIndex(value=>consoleCueKey(value)===consoleCueKey(picked[0]!));const last=ordered.findIndex(value=>consoleCueKey(value)===key);if(first>=0&&last>=0){setPicked(ordered.slice(Math.min(first,last),Math.max(first,last)+1));return;}}

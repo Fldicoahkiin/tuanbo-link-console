@@ -8,8 +8,8 @@ const native = (await readFile(new URL('./fixtures/ma2-timecode-3.7.xml', import
 const source = { show: 'Show', generation: 'session', version: '3.7.0.5' };
 const input = { dataDirectory: '', network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, target: 904, name: 'Updated', startMs: 900000, expectedName: 'Original', expectedOffset: 0, expectedSource: source };
 function fixture() {
-  const request = vi.fn<Ma2OnpcBridge['request']>().mockImplementation(operation => {
-    if (operation === 'LIST') return Promise.resolve(JSON.stringify({ ...source, entries: [{ target: 904, name: 'Original' }] }));
+  const request = vi.fn<Ma2OnpcBridge['request']>().mockImplementation((operation, _target, scope) => {
+    if (operation === 'LISTSEQ' && scope === '0') return Promise.resolve(JSON.stringify({ ...source, entries: [] }));
     if (operation === 'TCRANGES') return Promise.resolve(JSON.stringify({ show: source.show, generation: source.generation, entries: [
       { target: 904, name: 'Original', offset: '0', length: '300', slot: 'TC Slot 2', frame: '30 FPS', last: '150' }
     ] }));
@@ -22,6 +22,7 @@ it('修改名称和 MTC 只改根属性，保留所有控台原生事件、轨�
   const bridge = fixture(); const result = await editMa2Timeline(bridge, input);
   const [operation, target, expected, desired] = bridge.exchange.mock.calls[0]!;
   expect([operation, target, expected]).toEqual(['APPLY', 904, native]);
+  expect(bridge.exchange.mock.calls[0]?.[7]).toEqual(source);
   const before = inspectMa2TimecodeXml(native).timecodes[0]!;
   const after = inspectMa2TimecodeXml(desired!).timecodes[0]!;
   expect(after.tracks).toEqual(before.tracks);

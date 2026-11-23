@@ -5,6 +5,7 @@
  * 30 nominal frames a second, each 1001/30 ms long, labels 00 and 01 skipped at every minute
  * except each tenth. */
 double timecode_frame_ms(unsigned fps, int drop);
+double timecode_frame_position(double origin_ms, double audio_ms, unsigned fps, int drop);
 /* Hours with the rate code in bits 5-6, minutes, seconds and frames of a frame counted from midnight. */
 void timecode_parts(uint64_t frame, unsigned fps, int drop, unsigned char out[4]);
 #endif

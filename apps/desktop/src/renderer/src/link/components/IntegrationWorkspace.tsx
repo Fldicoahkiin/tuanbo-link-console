@@ -1,5 +1,4 @@
-import { useSettingsDirty } from '../useSettingsDirty';
-import { useSettingsSessionStore } from '../stores/settings-session-store';
+import { useSettingsAutosave } from '../useSettingsExit';
 import { Button, Notice } from '../ui';
 import { ProgramSettingsCards } from './ProgramMaintenanceSettings';
 import { ObsDeviceSettings } from './ObsDeviceSettings';
@@ -40,7 +39,6 @@ type Props = {
 };
 
 export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, coordinator, notify, settingsOpen, onCategoryChange, onCreate, onOpen }: Props): JSX.Element {
-  const revision = useSettingsSessionStore(state => state.revision);
   const storedProfile = useIntegrationStore((state) => state.profile);
   const securityAvailable = useIntegrationStore((state) => state.securityAvailable);
   const obs = useIntegrationStore((state) => state.obs);
@@ -53,9 +51,11 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
   const internal = useDocumentStore((state) => state.project?.playbackSource === 'internal');
   const [draft, setDraft] = useState<IntegrationProfile>(() => storedProfile ?? createDefaultIntegrationProfile());
   const draftBaseline = useRef(draft);
-  const [password, setPassword] = useState('');
+  const [credential, setCredential] = useState({ password: '', edited: false });
+  const { password } = credential;
+  const setPassword = (value: string): void => setCredential({ password: value, edited: false });
   const [busy, setBusy] = useState(false);
-  useSettingsDirty('programs', settingsOpen && JSON.stringify(programDraftValues(draft)) !== JSON.stringify(programDraftValues(storedProfile ?? createDefaultIntegrationProfile())));
+  const programsChanged = settingsOpen && JSON.stringify(programDraftValues(draft)) !== JSON.stringify(programDraftValues(storedProfile ?? createDefaultIntegrationProfile()));
   useEffect(() => { if (!settingsOpen) { const profile = useIntegrationStore.getState().profile ?? createDefaultIntegrationProfile(); setDraft(profile); draftBaseline.current = profile; setPassword(''); } }, [settingsOpen]);
   const connectionProgress = useConnectionCheckStore();
   const localIntegration = useLocalIntegrationConnection({ draft, password, readMidiPorts: () => readAndStoreMidiPorts(midiMonitor), openMidiPorts: (ids, direction) => direction === 'input' ? midiMonitor.openInputs(ids) : midiMonitor.openOutputs(ids), listenToP1: async () => { await followP1(); }, notify, onDraft: setDraft, onPasswordCleared: () => setPassword(''), onObsPassword: setPassword, onBusyChange: setBusy });
@@ -73,17 +73,21 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
     setDraft((current) => mergeIntegrationDraft(previous, current, storedProfile));
   }, [storedProfile]);
   const persistPrograms = (): Promise<IntegrationProfile> => saveProgramSettings(draft);
-  const save = async (): Promise<void> => {
+  const save = async (silent = false): Promise<boolean> => {
+    if (busy || runtimeActive || !securityAvailable) { notify('现在无法保存启动设置，请稍后再试。', 'error'); return false; }
     setBusy(true);
     try {
       await persistPrograms();
-      notify('启动设置已保存到本机。');
+      if (!silent) notify('启动设置已保存到本机。');
+      return true;
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
+      return false;
     } finally {
       setBusy(false);
     }
   };
+  useSettingsAutosave('maintenance', programsChanged, () => save(true));
   const pickExecutable = async (id: 'obs' | 'p1'): Promise<void> => {
     const path = await linkDesktopViewModel.pickExecutable();
     if (!path) return;
@@ -147,7 +151,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
   return (<div className="settings-content">
       {quickConnectHost ? createPortal(<Button variant="primary" icon={ScanSearch} aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '依次检查设备；OBS 失败只影响画面，音乐和灯光继续检查'} disabled={busy || runtimeActive} onClick={() => void localIntegration.connect()}>{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</Button>, quickConnectHost) : null}
       {settingsOpen ? <IntegrationSettingsDialog
-        key={revision} category={category} onNavigate={onCategoryChange} onCreate={onCreate} onOpen={onOpen} onBusy={setBusy} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable}
+        category={category} onNavigate={onCategoryChange} onCreate={onCreate} onOpen={onOpen} onBusy={setBusy} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable}
         notify={notify}
         onRefresh={() => void refresh()} onSave={() => void save()} onRefreshMidi={async () => { await readAndStoreMidiPorts(midiMonitor); }}
         songTools={<div className="settings-stack">
@@ -173,7 +177,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
         />
         </>}
       >
-        <ObsDeviceSettings notify={notify} onBusy={setBusy} url={draft.obs.webSocketUrl} password={password} onUrl={(webSocketUrl) => setDraft((value) => ({ ...value, obs: { ...value.obs, webSocketUrl } }))} onPassword={setPassword} disabled={busy || runtimeActive || !securityAvailable} />
+        <ObsDeviceSettings notify={notify} onBusy={setBusy} url={draft.obs.webSocketUrl} password={password} passwordEdited={credential.edited} onUrl={(webSocketUrl) => setDraft((value) => ({ ...value, obs: { ...value.obs, webSocketUrl } }))} onPassword={value => setCredential({ password: value, edited: value !== '' })} disabled={busy || runtimeActive || !securityAvailable} />
 
       </IntegrationSettingsDialog> : null}
     </div>

@@ -3244,9 +3244,11 @@ test('MA2 网络设置通过真实 IPC 连接双端口，保存重启自动连�
         const end = buffer.indexOf('\r\n'); const line = buffer.slice(0, end); buffer = buffer.slice(end + 2);
         if (line.startsWith('Login ')) { authenticated = line === 'Login "tblink-test" "synthetic-e2e-password"'; if (authenticated) logins += 1; socket.write('\r\n [Channel]>'); continue; }
         const capability = /TBLINK_CAP_[a-f0-9]{32}/.exec(line)?.[0];
-        if (capability && authenticated) { monitor?.write(`\r15h11m38.613s : ${capability}:Lua 5.3:true:true:true\r\n`); continue; }
+        if (capability && authenticated) { monitor?.write(`\r15h11m38.613s : ${capability}:Lua 5.3:true:true:true:TC Slot 4\r\n`); continue; }
         const auth = /TBLINK_AUTH_[a-f0-9]{32}/.exec(line)?.[0];
-        if (auth && authenticated) { monitor?.write(`\r15h11m38.613s : ${auth}:3.3.4.3\r\n`); continue; }
+        if (auth && authenticated) { monitor?.write(`\r15h11m38.613s : ${auth}:3.3.4.3:Console\r\n`); continue; }
+        const show = /TBLINK_SHOWCHECK_[a-f0-9]{32}/.exec(line)?.[0];
+        if (show && authenticated) { monitor?.write(`\r15h11m38.613s : ${show}:${['network', '1', '3.3.4.3'].map(value => 'H' + Buffer.from(value).toString('hex')).join(',')}\r\n`); continue; }
         const bootstrap = /TBLINK_BOOT_[a-f0-9]{32}/.exec(line)?.[0];
         if (bootstrap && authenticated) { monitor?.write(`\r15h11m38.613s : ${bootstrap}:ready\r\n`); continue; }
         const batch = /for i=0,(\d+) do TBLINK_NET\('([a-f0-9]{28})'.*,'read','([a-f0-9]{32})',(\d+)\+i\*256/.exec(line);
@@ -3300,8 +3302,10 @@ test('MA2 网络设置通过真实 IPC 连接双端口，保存重启自动连�
     await page.getByText('控台 MIDI 地址', { exact: true }).click();
     await page.getByLabel('MA2 MSC 设备号').fill('5'); await page.getByLabel('MA2 MSC 设备号').press('Tab');
     await expect.poll(() => page.evaluate(() => window.tbLink.loadIntegrationProfile())).toMatchObject({ lighting: { mscDeviceId: 5 } });
-    await page.getByRole('button', { name: '检测版本兼容性', exact: true }).click();
+    await page.getByText('高级连接与插件维护', { exact: true }).click();
+    await page.getByRole('button', { name: '检查版本和时码槽', exact: true }).click();
     await expect(page.getByText(/基本功能可用。请先读取目标 Timecode/)).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'MIDI TC 接到 TC Slot 4' })).toContainText('歌曲使用 TC Slot 2');
     const settingsPath = testInfo.outputPath('user-data', 'link-integrations', 'ma2-network.json');
     const saved = await readFile(settingsPath, 'utf8'); expect(saved).not.toContain('synthetic-e2e-password'); expect(JSON.parse(saved) as unknown).toMatchObject({ format: 1, active: { host: '127.0.0.1', port, monitorPort, autoConnect: true } });
     const destination = testInfo.outputPath('plugin-export'); await mkdir(destination, { recursive: true });
@@ -3358,7 +3362,7 @@ test('设备连接三种尺寸、跨页草稿与搜索目标隔离', async ({}, 
   await page.getByLabel('WebSocket 地址').fill('ws://127.0.0.1:4460'); await page.getByLabel('OBS 密码', { exact: true }).fill('obs-draft');
   await section.getByRole('button', { name: 'MA2 控台', exact: true }).click();
   await page.getByText('高级连接与插件维护', { exact: true }).click();
-  await expect(page.getByRole('button', { name: '检测版本兼容性', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '检查版本和时码槽', exact: true })).toBeVisible();
   await page.getByLabel('MA2 远程端口').fill('30002');
   await expect(page.getByLabel('MA2 登录密码')).toHaveValue('');
   await page.getByLabel('MA2 登录密码').fill('new-target-draft');
@@ -3369,7 +3373,7 @@ test('设备连接三种尺寸、跨页草稿与搜索目标隔离', async ({}, 
   await expect(page.getByLabel('OBS 密码', { exact: true })).toHaveValue('obs-draft');
   await expect(page.getByLabel('WebSocket 地址')).toHaveValue('ws://127.0.0.1:4460');
   await section.getByRole('button', { name: 'MA2 控台', exact: true }).click();
-  await expect(page.getByLabel('MA2 控台设置').getByRole('button', { name: '检测版本兼容性', exact: true })).toHaveCount(1);
+  await expect(page.getByLabel('MA2 控台设置').getByRole('button', { name: '检查版本和时码槽', exact: true })).toHaveCount(1);
   await expect(page.getByLabel('读取 MA2 Timecode 编号')).toBeHidden();
   await expect(page.getByLabel('MA2 控台设置').getByLabel('MA2 远程端口')).toHaveCount(1);
   for (const [width, height] of [[1920, 1080], [1440, 900], [1200, 800]] as const) {
@@ -3397,8 +3401,9 @@ test('设备连接三种尺寸、跨页草稿与搜索目标隔离', async ({}, 
   await expect(page.getByLabel('MA2 控台 IP')).toHaveValue('192.168.1.60'); await expect(page.getByLabel('MA2 登录密码')).toHaveValue('admin');
   await expect(page.getByLabel('MA2 登录用户')).toHaveValue('administrator');
   await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: '离开设置？' })).toBeVisible();
-  await page.getByRole('button', { name: '放弃未保存修改', exact: true }).click();
+  await expect(page.getByRole('main', { name: '编辑器' })).toBeVisible();
+  expect((await page.evaluate(() => window.tbLink.getMa2NetworkStatus())).settings?.host).toBe('192.168.1.60');
+  expect((await page.evaluate(() => window.tbLink.loadIntegrationProfile()))?.obs.webSocketUrl).toBe('ws://127.0.0.1:4460');
   await openLightingTools('节目同步');
   await expect(page.getByRole('dialog', { name: '节目同步' })).toContainText('节目 1');
   await expect(page.getByLabel('MA2 节目同步')).toContainText('请先在设备连接中保存并连接控台');

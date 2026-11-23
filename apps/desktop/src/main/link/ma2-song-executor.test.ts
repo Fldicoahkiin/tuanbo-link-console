@@ -12,10 +12,13 @@ const page = native.replace(/tblink_show="[^"]*"/, 'tblink_show="test-show"').re
 function fixture(exists: boolean) {
   const bridge = { request: vi.fn<Ma2OnpcBridge['request']>().mockImplementation(op => {
     if (op === 'PAGES') return Promise.resolve(JSON.stringify({ ...source.expectedSource, buttonPage: 4, faderPage: 100, pages: exists ? [{ page: 1000, name: 'song' }] : [] }));
-    if (op === 'PAGE') return Promise.resolve(page);
+    if (op === 'PAGE') return exists ? Promise.resolve(page) : Promise.reject(new Error('Executor Page does not exist'));
     throw new Error(`Unexpected ${op}`);
   }) };
-  const command = vi.fn<Ma2Telnet['command']>().mockImplementation(text => Promise.resolve(text.includes("READY'") ? 'READY' : 'OK:assigned'));
+  const command = vi.fn<Ma2Telnet['command']>().mockImplementation(text => {
+    exists = true;
+    return Promise.resolve(text.includes("READY'") ? 'READY' : 'OK:assigned');
+  });
   return { bridge, connection: { command } };
 }
 it('creates a song executor at 1000.101 where the plan read the page, and verifies the assignment by reading that page once', async () => {
@@ -24,12 +27,20 @@ it('creates a song executor at 1000.101 where the plan read the page, and verifi
   expect(await assignMa2SongExecutor(f.connection, f.bridge, source, 9907, destination, showStopped)).toBe('1000.101');
   const script = f.connection.command.mock.calls.map(([command]) => command.match(/\[#\w+\+1\]=unhex\('([a-f0-9]+)'\)/)?.[1]).filter((value): value is string => !!value).map(value => Buffer.from(value, 'hex').toString()).join('') || f.connection.command.mock.calls[0]?.[0];
   expect(script).toContain('Store Page 1000 /nc'); expect(script).toContain('Assign Sequence 9907 At Executor 1000.101');
-  expect(f.bridge.request.mock.calls.map(call => call.slice(0, 2))).toEqual([['PAGES', 1], ['PAGE', 1000]]);
+  expect(f.bridge.request.mock.calls.map(call => call.slice(0, 2))).toEqual([['PAGE', 1000], ['PAGES', 1], ['PAGE', 1000]]);
 });
+it('选曲避开其他时间线已引用的空格位', async () => {
+  const f = fixture(false);
+  const plan = await planMa2SongExecutor(f.bridge, source, 9900, 1000, '1000.190', showStopped, 'bound', new Set(['1000.190', '1000.101']));
+  expect(plan.address).toBe('1000.102');
+  expect(f.connection.command).not.toHaveBeenCalled();
+});
+
 it('keeps an existing song at its exact address without reassigning it or reading the page again', async () => {
   const f = fixture(true);
   const destination = await planMa2SongExecutor(f.bridge, source, 9001, 1000, '1000.201', showStopped);
   expect(destination.assigned).toBe(true);
+  expect(f.bridge.request.mock.calls.map(call => call.slice(0, 2))).toEqual([['PAGE', 1000]]);
   f.bridge.request.mockClear();
   expect(await assignMa2SongExecutor(f.connection, f.bridge, source, 9001, destination, showStopped)).toBe('1000.201');
   expect(f.connection.command).not.toHaveBeenCalled(); expect(f.bridge.request).not.toHaveBeenCalled();
@@ -68,8 +79,25 @@ it('第 1000 页 101–190 放满时放到 1001 页，原有内容不覆盖（20
 
 it('用户指定格位被占用时向后顺延，空位保持原地址', async () => {
   const f = fixture(true);
-  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.101', showStopped, true)).toMatchObject({ address: '1000.102', assigned: false });
-  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.201', showStopped, true)).toMatchObject({ address: '1000.202', assigned: false });
-  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.150', showStopped, true)).toMatchObject({ address: '1000.150', assigned: false });
+  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.101', showStopped, 'requested')).toMatchObject({ address: '1000.102', assigned: false });
+  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.201', showStopped, 'requested')).toMatchObject({ address: '1000.202', assigned: false });
+  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.150', showStopped, 'requested')).toMatchObject({ address: '1000.150', assigned: false });
   expect(f.connection.command).not.toHaveBeenCalled();
+});
+
+it('空序列随 Show 重开消失时只复用歌曲原地址上原样保留的空执行器', async () => {
+  const defaultBlock = '<Exec offset_from_first="0"><Assignment /><AssignmentExec fader="16384"><Button>12299</Button><Button>0</Button><Button>0</Button><Button>0</Button></AssignmentExec></Exec>';
+  let exported = defaultBlock;
+  const bridge = { request: vi.fn<Ma2OnpcBridge['request']>().mockImplementation(op => {
+    if (op === 'PAGES') return Promise.resolve(JSON.stringify({ ...source.expectedSource, buttonPage: 1000, faderPage: 1, pages: [{ page: 1000, name: '' }] }));
+    if (op === 'PAGE') return Promise.resolve(pageXml(1000, 1).replace(/<Exec offset_from_first="0">.*?<\/Exec>/, exported));
+    throw new Error(`Unexpected ${op}`);
+  }) };
+  const plan = () => planMa2SongExecutor(bridge, source, 9350, 1000, '1000.101', showStopped, 'restore-empty');
+  expect(await plan()).toMatchObject({ address: '1000.101', detachedBlock: defaultBlock, assigned: false });
+  expect(await planMa2SongExecutor(bridge, source, 9350, 1000, '1000.101', showStopped)).toMatchObject({ address: '1000.102' });
+  exported = defaultBlock.replace('<Button>12299</Button>', '<Button>12290</Button>');
+  expect(await plan()).toMatchObject({ address: '1000.102' });
+  exported = defaultBlock.replace('<Assignment />', '<Assignment><No>42</No></Assignment>');
+  expect(await plan()).toMatchObject({ address: '1000.102' });
 });

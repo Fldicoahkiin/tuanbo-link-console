@@ -1,4 +1,4 @@
-import { useSettingsDirty } from '../useSettingsDirty';
+import { useSettingsAutosave } from '../useSettingsExit';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
 import { Monitor } from 'lucide-react';
 import { Button, Card, Disclosure, Field, Notice, PasswordInput, Switch, TextInput } from '../ui';
@@ -10,9 +10,9 @@ import { createDefaultIntegrationProfile } from '../view-models/local-integratio
 import { toUserErrorMessage } from '@tb/core/link';
 import { obsWebSocketUrlSchema, localObsConnectionResultSchema } from '@tb/schema';
 
-export function ObsDeviceSettings({ url, password, onUrl, onPassword, disabled, onBusy, notify }: {
+export function ObsDeviceSettings({ url, password, passwordEdited, onUrl, onPassword, disabled, onBusy, notify }: {
   notify: (message: string, tone?: 'info' | 'error') => void;
-  onBusy: (busy: boolean) => void; url: string; password: string; onUrl: (value: string) => void; onPassword: (value: string) => void; disabled: boolean;
+  onBusy: (busy: boolean) => void; url: string; password: string; passwordEdited: boolean; onUrl: (value: string) => void; onPassword: (value: string) => void; disabled: boolean;
 }): JSX.Element {
   const obs = useIntegrationStore((state) => state.obs);
   const sourceSizeErrors = useIntegrationStore((state) => state.inventory?.sourceSizeErrors);
@@ -33,10 +33,9 @@ export function ObsDeviceSettings({ url, password, onUrl, onPassword, disabled, 
   useEffect(() => { if (previewError || Object.keys(sourceSizeErrors ?? {}).length) setDiagnosticsOpen(true); }, [previewError, sourceSizeErrors]);
   const addressInput = useRef<HTMLInputElement>(null);
   useEffect(() => { if (addressError && !busy && !disabled) addressInput.current?.focus(); }, [addressError, busy, disabled]);
-  const dirty = url !== (profile?.obs.webSocketUrl ?? createDefaultIntegrationProfile().obs.webSocketUrl) || password !== '';
-  useSettingsDirty('obs', dirty);
-  const save = async (connect: boolean, autoConnect = profile?.obs.autoConnectOnLaunch !== false): Promise<boolean> => {
-    if (disabled || busy) return false;
+  const dirty = url !== (profile?.obs.webSocketUrl ?? createDefaultIntegrationProfile().obs.webSocketUrl) || passwordEdited;
+  const save = async (connect: boolean, silent = false): Promise<boolean> => {
+    if (disabled || busy) { setError('现在无法保存 OBS 设置，请稍后再试。'); return false; }
     setOperation(connect ? 'connecting' : 'saving'); onBusy(true); setError(''); setSaved(false);
     try {
       const current = useIntegrationStore.getState().profile ?? createDefaultIntegrationProfile();
@@ -48,9 +47,9 @@ export function ObsDeviceSettings({ url, password, onUrl, onPassword, disabled, 
       }
       setAddressError('');
       onUrl(parsedAddress.data);
-      const next = { ...current, updatedAt: new Date().toISOString(), obs: { ...current.obs, connectionMethod: 'manual' as const, webSocketUrl: parsedAddress.data, autoConnectOnLaunch: autoConnect } };
-      await linkDesktopViewModel.saveIntegrationProfile({ profile: next, ...(password !== '' || !profile ? { obsPassword: password } : {}) });
-      useIntegrationStore.getState().setProfile(next); onPassword(''); setSaved(true);
+      const next = { ...current, updatedAt: new Date().toISOString(), obs: { ...current.obs, connectionMethod: 'manual' as const, webSocketUrl: parsedAddress.data } };
+      await linkDesktopViewModel.saveIntegrationProfile({ profile: next, ...(passwordEdited || !profile ? { obsPassword: password } : {}) });
+      useIntegrationStore.getState().setProfile(next); onPassword(''); setSaved(!silent);
       if (connect) {
         const result = await linkDesktopViewModel.connectObs();
         useIntegrationStore.getState().setObs(result);
@@ -69,6 +68,7 @@ export function ObsDeviceSettings({ url, password, onUrl, onPassword, disabled, 
     }
     finally { setOperation(null); onBusy(false); }
   };
+  useSettingsAutosave('obs', dirty, () => save(false, true));
   const disconnect = async (): Promise<void> => {
     setOperation('disconnecting'); onBusy(true); setError('');
     try { await linkDesktopViewModel.disconnectObs(); }

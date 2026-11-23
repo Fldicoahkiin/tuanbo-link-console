@@ -2,11 +2,22 @@ import { expect, it, vi } from 'vitest';
 import { parseMa2ShowSource, readMa2ShowSource, verifyMa2ShowSource } from './ma2-show-probe';
 
 const hex = (value: string): string => `H${Buffer.from(value).toString('hex')}`;
-const consoleLine = (show: string, generation: string, version: string) => ({ command: vi.fn<(line: string, match: (text: string) => string | null, beforeSend?: unknown, priority?: string) => Promise<string>>((line, match) => {
+const consoleLine = (show: string, generation: string, version: string, slot?: string) => ({ command: vi.fn<(line: string, match: (text: string) => string | null, beforeSend?: unknown, priority?: string) => Promise<string>>((line, match) => {
   const marker = /TBLINK_SHOWCHECK_[a-f0-9]{32}/.exec(line)?.[0];
-  const reply = match(`${marker}:${hex(show)},${hex(generation)},${hex(version)}\r\n`);
+  const reply = match(`${marker}:${hex(show)},${hex(generation)},${hex(version)}${slot === undefined ? '' : ':' + slot}\r\n`);
   return reply === null ? Promise.reject(new Error('No response')) : Promise.resolve(reply);
 }) });
+
+it('同步核对 Show 时同一条命令也读当前站点的 MIDI 槽，未报告时保持未知', async () => {
+  for (const [input, expected] of [['TC Slot 3', 3], ['Off', 0], ['?', null]] as const) {
+    const line = consoleLine('带灯', 'g', '3.7', input);
+    const received = vi.fn();
+    await expect(readMa2ShowSource(line, received)).resolves.toEqual({ show: '带灯', generation: 'g', version: '3.7' });
+    expect(line.command).toHaveBeenCalledTimes(1);
+    expect(line.command.mock.calls[0]![0]).toContain('MIDI TC');
+    expect(received).toHaveBeenCalledWith(expected);
+  }
+});
 
 it('一条短命令读回 Show、插件会话和版本，中文 Show 名不走样', async () => {
   const line = consoleLine('12号直播间', '1234.5', '3.3.4.3');

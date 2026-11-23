@@ -1,4 +1,4 @@
-import { addMa2SequenceCommand, hasMa2SongSyncTarget, songBeats, placeLightingTemplate, removeLightingEffects, setLightingCommand, lightingEventTime, LightingTempoMap, libraryReferenceIssue, libraryTemplates, projectLightingLibrary, placeConsoleCue, lightingSequenceSteps } from '@tb/core/link';
+import { addMa2SequenceCommand, hasMa2SongSyncTarget, songBeats, placeLightingTemplate, removeLightingEffects, setLightingCommand, lightingEventTime, LightingTempoMap, libraryReferenceIssue, libraryTemplates, projectLightingLibrary, placeConsoleCue, placeTimedConsoleCues, lightingSequenceSteps } from '@tb/core/link';
 import { type LightingDocument } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { consoleCueDragSchema, type ConsoleCueDrag } from './lighting-material-drag';
@@ -16,7 +16,7 @@ export function commitLightingPlacement(id: string, value: LightingDocument, lab
   const create = !hasMa2SongSyncTarget(item.lighting);
   const settings = ma2SongSyncSettings(project, id);
   state.execute(create || wholeSequence ? addMa2SequenceCommand(id, value, { name: item.title, sequence: settings.nextSequence, timecode: settings.nextSequence, executor: `${settings.executorPage ?? 1000}.101` }, label) : setLightingCommand(id, value, label));
-  if (create && (wholeSequence || useMa2RealtimePreference.getState().enabled)) syncMa2Once(id);
+  if (create && useMa2RealtimePreference.getState().enabled) syncMa2Once(id);
 }
 
 export function useLightingEffectStamp(itemId: string | null, document: LightingDocument, durationMs: number, notify: (message: string, tone?: 'info' | 'error') => void) {
@@ -58,7 +58,7 @@ export function useLightingEffectStamp(itemId: string | null, document: Lighting
         const sequence = ma2SequenceLibrary(state.project, base).find(value => value.sequence === reference.sequence);
         if (!sequence) throw new Error('这套 Cue 还没有读取，请重新读取控台素材');
         const steps = lightingSequenceSteps(base, sequence, reference.executor, ms, useLightingSequencePlacement.getState().intervalBeats, songBeats(item));
-        commit(itemId, steps.reduce((value, step) => placeConsoleCue(value, { sequence: step.sequence, cue: step.cue, name: step.name, executor: step.executor, includeTracking: useCueTrackingPreference.getState().includeTracking }, ms + step.delayMs, durationMs), base), true);
+        commit(itemId, placeTimedConsoleCues(base, steps.map(step=>({...step, includeTracking:useCueTrackingPreference.getState().includeTracking})),ms,durationMs),true);
       } else commit(itemId, placeConsoleCue(base, { ...reference, includeTracking: reference.includeTracking ?? useCueTrackingPreference.getState().includeTracking }, ms, durationMs));
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
   };

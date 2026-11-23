@@ -5,7 +5,6 @@ import { archiveMa2Project } from './ma2-project-archive';
 import { ma2SongSyncSettings, startMa2SongSync } from './ma2-song-sync';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { currentShowWait } from '../stores/show-state-store';
-import { useMa2RealtimePreference } from './ma2-realtime-preference';
 
 /** Names an earlier version wrote to the console in Chinese and the console still holds. */
 export function legacyMa2ConsoleNames(project: LinkProject | null): { songs: string[]; renames: Ma2RenameRecord[]; count: number } {
@@ -45,7 +44,6 @@ export async function convertMa2LegacyNames(documentId: number): Promise<number>
   const project = current();
   const legacy = legacyMa2ConsoleNames(project);
   if (!legacy.count) return 0;
-  if (legacy.songs.length && !useMa2RealtimePreference.getState().enabled) throw new Error('请先开启实时同步，歌曲名称会在同步时改为拼音');
   for (const itemId of legacy.songs) {
     if (!useMa2SyncStore.getState().songs[itemId] || useMa2SyncStore.getState().songs[itemId]?.state === 'paused') {
       const item = project.rundown.find(value => value.id === itemId)!;

@@ -16,6 +16,8 @@
 
 ## 时间码怎么发
 
+2026-11-23，操作员须修正两首时码首尾过近的安排。正常播放按钮从现有工程和最近一次控台核对结果判断，本曲已知间隔不足时停用本次灯光 MTC 并明确提示，音频与画面仍可播放。间隔按 `packages/core/src/ma2-mtc-selection.ts` 的规则计算，由 `packages/core/src/program-start.test.ts` 核对。
+
 2026-11-17 用户要求：歌曲及控台时间线的 MTC 起始码输入、显示只保留 `时:分:秒`，解析/格式化统一用 `mtc-timecode.ts` 的 `parseMtcStart` / `formatMtcStart`，允许中文冒号和六位数字。实际 MIDI MTC 和 Cue 定位继续保留工程帧率；29.97 DF 的整分钟使用该秒首个有效帧。既有精确起点不因显示或只改时间线名称而重写。输入草稿复用 `useFieldDraft`，外部起点更新不重建输入框、不丢焦点，换歌才重置；是否可改仍由 `showGate('song.audio.edit')` 决定并显示等待原因。回归：`mtc-timecode.test.ts`、`apps/desktop/test-e2e/mtc-start.browser.spec.ts`。
 
 同日修复 M4A 起始时间偏移：`native-audio-decode.ts` 使用 `audio-source-time.ts` 保留源文件时间戳、按绝对时间定位，`aresample` 从所请求的样本位置对齐 PCM。非零开始时间不再被省略，完整解码和中途定位使用同一个时间零点；不放宽 `native-audio-cache.ts` 的长度及源文件校验。预填充和完整校验使用同一个 1 ms 取整容差。新解码缓存身份带 `pts1`，旧缓存不再用于播放，但仍纳入容量回收。真实截短仍报实际/记录时长及重新导入位置。回归：`native-audio-cache.test.ts` 的 AAC 非零起始时间、取整与缓存升级用例。
@@ -25,6 +27,10 @@
 同日本机定位发现：44.1 kHz 音频只能停在整采样上，请求的小数毫秒与引擎读回会差不到一个采样。`native-program-player.ts` 准备动作 MIDI 时使用这次准备确认的 `result.positionMs`，不再使用未取整的请求值；`native-program-host.ts` 的精确身份和位置校验保留。回归：`native-program-host.test.ts` 的真实 44.1 kHz 任意位置播放、拖动和恢复用例。
 
 原生播放引擎一条路径，从歌曲的 MTC 起始码发（`packages/core/src/native-program-snapshot.ts`）
+
+歌曲起始帧在工程中以整数毫秒保存。原生播放器还原能以该毫秒数表示的时码帧，其余起点保留原毫秒值；再加上音频播放位置。Full Frame 定位与 Quarter Frame 使用同一帧位置。恰好在整帧的起点和离整帧还差一个音频采样的起点分别验证，见 `tools/playback-engine/signal-test.c`。
+
+暂停时由 `tools/playback-engine/audio.c` 先停声卡，再读取冻结的设备位置。播放和暂停共用从设备读数到歌曲位置的换算。已经停住或只做了定位时保留当前位置。44.1 和 48 kHz 的实测见[暂停位置核对](./LIGHTING_LIVE_AUDIT_20261119.md#11-月-22-日核对声卡实际暂停位置)。
 
 ## MIDI 端口的开关
 
@@ -79,6 +85,14 @@
 `packages/core/src/song-padding.ts` 的 `padSongCommand`（2026-11-11）：一条命令、一步撤销。音频先渲染好（`padSongRender` 给主进程渲染的参数）再交进来，对不上就不写。内容按整帧挪（`content-timeline.ts` 的 `shiftContent`），音频和灯光按同样帧数的毫秒挪（`lighting-shift.ts` 的 `shiftLightingDocument`：节拍锁定的片段换成时间锁定、带节拍锚点）；MTC 起始码、控台时间线的起点和 MA2 基线不动，差异按普通改动改写控台一次。能去掉多少空白、被什么挡住只由 `songPaddingLimits` 算（`songPaddingRoom` 是不带原因的那一份），碰到最早或最晚的内容就停。P1 跟随的工程不能用；演出没停止时也加不了：界面问 `showGate` 的 `audio.render`，主进程在播放时不生成音频。编辑器的入口是音频轨两端的空白手柄和音频属性的「前空白」「后空白」（2026-11-12），都经 `components/song-padding-flow.ts` 的 `padSongSteps`（先生成音频、同一组数字写命令）；整首挪过的歌到控台确认之前按以联动台为准写，记下和忘掉只在 `ma2-edit-times.ts` 的 `noteMa2LocalEdits`（`runtime/ma2-song-shift.ts`）。别处不自己整首平移（`song-padding-rules.test.ts` 守着）
 
 ## P1 跟随
+
+刚打开 MIDI 输入、接入时码流中途时，正向和反向都要收到一组完整的八条四分之一帧才显示位置。`packages/core/src/mtc-timecode.test.ts` 覆盖从组内每个位置接入。
+
+相邻两条四分之一帧在 MIDI 接口上的间隔超过断码阈值时，之前留下的半组作废。其他 MIDI 消息或心跳不能把两段时码拼成一个位置。待命时也遵守这项规则，见 `packages/core/src/p1-clock.test.ts`。
+
+2026-11-22，已启用 P1 自动选歌时，在设置中点击「写回 P1」也会按当前节目重新计算起点。绑定 MA2 或已有写入目标的节目保留当前灯光起点，控台离线时同样生效。跟随前校验已保存的自动选歌区间是否仍与节目的灯光起点一致。回归见 `packages/core/src/p1-auto-follow.test.ts`。 本地节目已有灯光目标时，导入相同音频、不同起点的 P1 歌曲会保留两首。同名提示也使用这条保护规则。回归见 `packages/core/src/link-command.test.ts`、`packages/core/src/p1-import-report.test.ts`。
+
+2026-11-21，手动待命的歌曲沿用工程中这首歌的 MTC 起始码。接收监视器显示 P1 的绝对时间，判断从头播放、定位、重新同步和驱动输出时都使用歌曲内的位置。时间码早于起点时继续等待，中途开始仍需操作员重同步。用 P1 1.14.2 在 00:20:00:00 起播并交叉核对了联动台的跟随位置与 onPC 执行器。回归见 `packages/core/src/p1-clock.test.ts`。
 
 跟随 P1 整个在主进程里做（0.5.9，2026-11-12）：界面卡住、重新加载都不影响正在跟的歌。和联动台播放是明确选的两种方式，互相不自动切换。
 

@@ -30,6 +30,7 @@ export * from './ibc-project';
 export * from './ma2-sync';
 export * from './ma2-sync-session';
 export * from './lighting-edit';
+export * from './lighting-track-state';
 export * from './lighting-cue-placement';
 export * from './lighting-cue-sequence';
 export * from './lighting-clipboard';

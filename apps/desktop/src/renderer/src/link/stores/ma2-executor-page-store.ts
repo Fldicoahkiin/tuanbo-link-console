@@ -5,8 +5,9 @@ import { applyMa2ExecutorChangeCommand, ma2ExecutorDeletionUses, mergeMa2Metadat
 import { useDocumentStore } from './document-store';
 
 export type Ma2ExecutorBand = 'upper' | 'fader' | 'lower';
-type PageState = { scope: string; kind: 'button' | 'fader' | 'layout'; page: number; selectedPages: { button: number | null; fader: number | null }; bandPages: Record<Ma2ExecutorBand, number | null>; activeBand: Ma2ExecutorBand; slot: number | null; navigation: number; directory: Ma2ExecutorPageDirectory | null; pages: Record<number, Ma2ExecutorPage>; busy: boolean; mutating: boolean; scanning: boolean; completed: number; total: number; complete: boolean; error: string; pageErrors: Record<number, string>; requestId: string | null };
-const initial = (): Omit<PageState, 'scope' | 'navigation'> => ({ kind: 'button', page: 1, selectedPages: { button: null, fader: null }, bandPages: { upper: null, fader: null, lower: null }, activeBand: 'upper', slot: null, directory: null, pages: {}, busy: false, mutating: false, scanning: false, completed: 0, total: 0, complete: false, error: '', pageErrors: {}, requestId: null });
+type LocationPages = Record<number, { page: number; items: ReadonlyArray<{ slot: number; sequence?: number | undefined }> }>;
+type PageState = { scope: string; kind: 'button' | 'fader' | 'layout'; page: number; selectedPages: { button: number | null; fader: number | null }; bandPages: Record<Ma2ExecutorBand, number | null>; activeBand: Ma2ExecutorBand; slot: number | null; navigation: number; directory: Ma2ExecutorPageDirectory | null; pages: Record<number, Ma2ExecutorPage>; locations: LocationPages; busy: boolean; mutating: boolean; scanning: boolean; completed: number; total: number; complete: boolean; error: string; pageErrors: Record<number, string>; requestId: string | null };
+const initial = (): Omit<PageState, 'scope' | 'navigation'> => ({ kind: 'button', page: 1, selectedPages: { button: null, fader: null }, bandPages: { upper: null, fader: null, lower: null }, activeBand: 'upper', slot: null, directory: null, pages: {}, locations: {}, busy: false, mutating: false, scanning: false, completed: 0, total: 0, complete: false, error: '', pageErrors: {}, requestId: null });
 export const useMa2ExecutorPageStore = create<PageState>(() => ({ ...initial(), scope: '', navigation: 0 }));
 function executorScopeIdentity(value: string): string {
   try {
@@ -44,7 +45,7 @@ export async function loadMa2ExecutorDirectory(): Promise<Ma2ExecutorPageDirecto
   if (scope !== currentMa2LayoutScope()) throw new Error('工程或控台已切换');
   useMa2ExecutorPageStore.setState(state => {
     const changed = state.directory && JSON.stringify(state.directory.pages) !== JSON.stringify(directory.pages);
-    return { directory, bandPages: { upper: state.bandPages.upper ?? directory.buttonPage, fader: state.bandPages.fader ?? directory.faderPage, lower: state.bandPages.lower ?? directory.faderPage }, ...(changed ? { complete: false, pages: Object.fromEntries(Object.entries(state.pages).filter(([page]) => directory.pages.some(entry => entry.page === Number(page)))) } : {}) };
+    return { directory, bandPages: { upper: state.bandPages.upper ?? directory.buttonPage, fader: state.bandPages.fader ?? directory.faderPage, lower: state.bandPages.lower ?? directory.faderPage }, ...(changed ? { complete: false, locations: Object.fromEntries(Object.entries(state.locations).filter(([page]) => directory.pages.some(entry => entry.page === Number(page)))), pages: Object.fromEntries(Object.entries(state.pages).filter(([page]) => directory.pages.some(entry => entry.page === Number(page)))) } : {}) };
   });
   return directory;
 }
@@ -67,7 +68,7 @@ async function readPage(page: number, background: boolean): Promise<Ma2ExecutorP
     if (snapshot.page !== page || scope !== currentMa2LayoutScope()) throw new Error('页面已经变了，这次的结果没有采用');
     if (epoch !== mutationEpoch) return snapshot;
     mergePageMetadata(snapshot);
-    useMa2ExecutorPageStore.setState(state => ({ pages: { ...state.pages, [page]: snapshot }, pageErrors: { ...state.pageErrors, [page]: '' }, ...(!background && state.requestId === requestId ? { busy: false, requestId: null } : {}) }));
+    useMa2ExecutorPageStore.setState(state => ({ pages: { ...state.pages, [page]: snapshot }, locations: { ...state.locations, [page]: snapshot }, pageErrors: { ...state.pageErrors, [page]: '' }, ...(!background && state.requestId === requestId ? { busy: false, requestId: null } : {}) }));
     return snapshot;
   } catch (cause) {
     if (scope === currentMa2LayoutScope() && epoch === mutationEpoch) useMa2ExecutorPageStore.setState(state => ({ complete: false, pageErrors: { ...state.pageErrors, [page]: cause instanceof Error ? cause.message : String(cause) }, ...(!background && state.requestId === requestId ? { error: cause instanceof Error ? cause.message : String(cause) } : {}) }));
@@ -120,7 +121,7 @@ export async function updateMa2ExecutorPageItem(page: number, item: Ma2ExecutorP
     if (refreshed) prepareMa2ExecutorPages();
     if (action.kind !== 'rename') before.executeForDocument(before.documentId, applyMa2ExecutorChangeCommand(`${connection.network.host}:${connection.network.port}`, connection.expectedSource.show, item.sequence, address, action.kind === 'move' ? `${action.page}.${action.slot}` : null));
     if (!refreshed) {
-      useMa2ExecutorPageStore.setState(state => ({ pages: { ...state.pages, ...Object.fromEntries(result.pages.map(value => [value.page, value])) }, pageErrors: { ...state.pageErrors, ...Object.fromEntries(result.pages.map(value => [value.page, ''])) } }));
+      useMa2ExecutorPageStore.setState(state => ({ pages: { ...state.pages, ...Object.fromEntries(result.pages.map(value => [value.page, value])) }, locations: { ...state.locations, ...Object.fromEntries(result.pages.map(value => [value.page, value])) }, pageErrors: { ...state.pageErrors, ...Object.fromEntries(result.pages.map(value => [value.page, ''])) } }));
       for (const value of result.pages) mergePageMetadata(value);
     }
     if (action.kind === 'delete') {
@@ -140,25 +141,27 @@ export async function scanMa2ExecutorLocations(): Promise<void> {
   if (useMa2ExecutorPageStore.getState().scanning) return;
   useMa2ExecutorPageStore.setState({ scanning: true, complete: false, completed: 0, total: 0, error: '' });
   try {
-    const directory = await loadMa2ExecutorDirectory();
-    useMa2ExecutorPageStore.setState(state => ({ total: directory.pages.length, pages: Object.fromEntries(Object.entries(state.pages).filter(([number]) => directory.pages.some(page => page.page === Number(number)))) }));
-    for (const [index, entry] of directory.pages.entries()) {
-      if (scope !== currentMa2LayoutScope()) return;
-      await loadMa2ExecutorPage(entry.page, true);
-      if (epoch !== mutationEpoch) throw new Error('读取位置时执行器被修改了，请重新读取全部位置');
-      useMa2ExecutorPageStore.setState({ completed: index + 1 });
+    const connection = await ma2LayoutConnection();
+    const directory = ma2ExecutorPageDirectorySchema.parse(await window.tbLink.listMa2ExecutorPages({ ...connection, locations: true }));
+    if (scope !== currentMa2LayoutScope()) return;
+    if (epoch !== mutationEpoch || useMa2ExecutorPageStore.getState().mutating) throw new Error('读取位置时执行器被修改了，请重新读取全部位置');
+    const locations: LocationPages = {};
+    for (const entry of directory.pages) {
+      if (!entry.locations || locations[entry.page]) throw new Error('控台返回的页面位置不完整');
+      locations[entry.page] = { page: entry.page, items: entry.locations };
     }
-    const verified = await loadMa2ExecutorDirectory();
-    if (epoch !== mutationEpoch) throw new Error('读取位置时执行器被修改了，请重新读取全部位置');
-    if (JSON.stringify(verified.pages) !== JSON.stringify(directory.pages)) throw new Error('读取时控台页面有变化，请刷新位置');
-    useMa2ExecutorPageStore.setState({ complete: true });
+    useMa2ExecutorPageStore.setState(state => ({
+      directory: { ...directory, pages: directory.pages.map(({ page, name }) => ({ page, name })) },
+      locations, pages: Object.fromEntries(Object.entries(state.pages).filter(([page]) => Number(page) in locations)),
+      complete: true, completed: directory.pages.length, total: directory.pages.length
+    }));
   } catch (cause) {
     if (scope === currentMa2LayoutScope()) useMa2ExecutorPageStore.setState({ error: cause instanceof Error ? cause.message : String(cause) });
     throw cause;
   } finally { if (scope === currentMa2LayoutScope()) useMa2ExecutorPageStore.setState({ scanning: false }); }
 }
-const locationCache = new WeakMap<Record<number, Ma2ExecutorPage>, Map<number, Array<{ page: number; slot: number }>>>();
-export function ma2SequenceLocations(pages: Record<number, Ma2ExecutorPage>, sequence: number): Array<{ page: number; slot: number }> {
+const locationCache = new WeakMap<LocationPages, Map<number, Array<{ page: number; slot: number }>>>();
+export function ma2SequenceLocations(pages: LocationPages, sequence: number): Array<{ page: number; slot: number }> {
   let index = locationCache.get(pages);
   if (!index) {
     index = new Map();

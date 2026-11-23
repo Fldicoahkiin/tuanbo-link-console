@@ -153,7 +153,7 @@ DWORD WINAPI midi_worker(void *unused) {
     EnterCriticalSection(&engine.lock);
     QueryPerformanceCounter(&audio_acquired);
     UINT32 state = engine.state, current_generation = engine.generation, current_epoch = engine.epoch;
-    double position = engine.position_ms + engine.offset_ms;
+    double audio_ms = engine.position_ms, origin_ms = engine.offset_ms;
     UINT64 clock_qpc = engine.clock_qpc;
     LeaveCriticalSection(&engine.lock);
     if (state != PLAYING || !engine.midi || engine.midi_error) { running = FALSE; LeaveCriticalSection(&engine.midi_lock); continue; }
@@ -168,11 +168,12 @@ DWORD WINAPI midi_worker(void *unused) {
     LARGE_INTEGER now; QueryPerformanceCounter(&now);
     double clock_age_ms = ((double)now.QuadPart * 10000000.0 / frequency.QuadPart - (double)clock_qpc) / 10000.0;
     if (clock_age_ms > frame_ms) { midi_interrupt(-2, &running); LeaveCriticalSection(&engine.midi_lock); continue; }
+    double frame_position = timecode_frame_position(origin_ms, audio_ms, engine.fps, engine.drop_frame);
     if (!running || generation != current_generation || epoch != current_epoch) {
       // Quarter frames alone relocate the receiver too, two frames later, once it has all eight.
       if (!engine.quarter_frames_only) {
         if ((engine.midi_header.dwFlags & MHDR_INQUEUE) != 0) { LeaveCriticalSection(&engine.midi_lock); continue; }
-        timecode_parts((UINT64)floor(position / frame_ms), engine.fps, engine.drop_frame, time);
+        timecode_parts((UINT64)floor(frame_position), engine.fps, engine.drop_frame, time);
         const unsigned char begin[] = { 0xf0, 0x7f, 0x7f, 1, 1 };
         memcpy(engine.full_frame, begin, 5); memcpy(engine.full_frame + 5, time, 4); engine.full_frame[9] = 0xf7;
         MMRESULT relocated = midiOutLongMsg(engine.midi, &engine.midi_header, sizeof(MIDIHDR));
@@ -180,12 +181,12 @@ DWORD WINAPI midi_worker(void *unused) {
         engine.midi_sent++;
       }
       generation = current_generation; epoch = current_epoch; running = TRUE; piece = 0;
-      quarter = (UINT64)ceil(position / frame_ms) * 4;
+      quarter = (UINT64)ceil(frame_position) * 4;
     }
-    double late = position - (double)quarter * frame_ms / 4.0;
+    double late = (frame_position - (double)quarter / 4.0) * frame_ms;
     if (late > engine.max_late) engine.max_late = late;
     if (late > frame_ms) { midi_interrupt(-1, &running); LeaveCriticalSection(&engine.midi_lock); continue; }
-    while ((double)quarter * frame_ms / 4.0 <= position) {
+    while ((double)quarter <= frame_position * 4.0) {
       if (!piece) timecode_parts(quarter / 4, engine.fps, engine.drop_frame, time);
       unsigned char nibbles[] = { time[3] & 15, (time[3] >> 4) & 1, time[2] & 15, (time[2] >> 4) & 3,
         time[1] & 15, (time[1] >> 4) & 3, time[0] & 15, (time[0] >> 4) & 7 };

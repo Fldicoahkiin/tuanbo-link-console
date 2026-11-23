@@ -1,17 +1,17 @@
 import { createHash } from 'node:crypto';
 import { previewMa2BoundSync, type Ma2SyncPreview } from '@tb/core/link';
 import { lightingDocumentSchema, ma2TimecodePreviewSchema, ma2TimecodeFrameFormatSchema, type LightingDocument, type Ma2ConsoleChanges, type Ma2TimecodePreview } from '@tb/schema';
-import { inspectMa2TimecodeXml, validateMa2TimecodeWrite } from './ma2-timecode-xml';
+import { ma2TrackPlaybackMuted, inspectMa2TimecodeXml, validateMa2TimecodeWrite } from './ma2-timecode-xml';
 
 export function compareMa2LightingReadback(documentInput: LightingDocument, bindingId: string, readbackInput: Ma2TimecodePreview, consoleChanges: Ma2ConsoleChanges = 'read-back'): Ma2SyncPreview {
   const document = lightingDocumentSchema.parse(documentInput);
   const readback = ma2TimecodePreviewSchema.parse(readbackInput);
   const binding = document.ma2Bindings?.find((entry) => entry.id === bindingId);
   if (!binding) throw new Error('节目没有这个 MA2 对象绑定');
-  binding.trackMappings ??= recoverMa2TrackMappings(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings);
+  binding.trackMappings ??= recoverMa2TrackMappings(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings, true);
   readback.trackMappings ??= recoverMa2TrackMappings(readback.sourceXml, readback.target, readback.document.tracks, readback.mappings);
   if ((binding.timeOriginMs ?? 0) !== (readback.timeOriginMs ?? 0)) throw new Error('从控台读回的时间码起点和这首歌对不上');
-  const baseline = verifySnapshotSource(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings, binding.trackMappings, binding.timeOriginMs ?? 0, binding.nativeEvents ?? []);
+  const baseline = verifySnapshotSource(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings, binding.trackMappings, binding.timeOriginMs ?? 0, binding.nativeEvents ?? [], true);
   const remote = verifySnapshotSource(readback.sourceXml, readback.target, readback.document.tracks, readback.mappings, readback.trackMappings, readback.timeOriginMs ?? 0, readback.unconverted);
   return previewMa2BoundSync(document, bindingId, readback, {
     baselineVersion: baseline.version, remoteVersion: remote.version,
@@ -21,7 +21,7 @@ export function compareMa2LightingReadback(documentInput: LightingDocument, bind
 }
 
 /** `consoleOnly`: actions the software does not convert; they stay in the XML and need no mapping. */
-function verifySnapshotSource(xml: string, target: number, tracks: LightingDocument['tracks'], mappings: Ma2TimecodePreview['mappings'], trackMappings: Ma2TimecodePreview['trackMappings'], originMs: number, consoleOnly: readonly { path: string }[]) {
+function verifySnapshotSource(xml: string, target: number, tracks: LightingDocument['tracks'], mappings: Ma2TimecodePreview['mappings'], trackMappings: Ma2TimecodePreview['trackMappings'], originMs: number, consoleOnly: readonly { path: string }[], savedBaseline = false) {
   validateMa2TimecodeWrite(xml);
   const report = inspectMa2TimecodeXml(xml);
   const timecode = report.timecodes[0];
@@ -61,7 +61,7 @@ function verifySnapshotSource(xml: string, target: number, tracks: LightingDocum
     for (const mapping of trackMappings) {
       const original = timecode.tracks.find((track) => `Timecode:${timecode.index}/Track:${track.index}` === mapping.path);
       const track = tracks.find((entry) => entry.id === mapping.trackId);
-      if (!original || !track || paths.has(mapping.path) || ids.has(track.id) || original.executorAddress.slice(2).join('.') !== mapping.executor || track.muted !== (original.attributes.active !== 'true') || track.name !== (original.executorName ?? `MA2 轨道 ${original.index + 1}`) ||
+      if (!original || !track || paths.has(mapping.path) || ids.has(track.id) || original.executorAddress.slice(2).join('.') !== mapping.executor || !matchesTrackMute(track.muted, original.attributes, savedBaseline) || track.name !== (original.executorName ?? `MA2 轨道 ${original.index + 1}`) ||
         JSON.stringify(mapping.subtracks) !== JSON.stringify(original.subtracks.map((subtrack) => `${mapping.path}/SubTrack:${subtrack.index}`))) throw new Error('同步轨道映射与原始 XML 不一致');
       paths.add(mapping.path); ids.add(track.id);
       if (mappings.some((event) => event.trackId === track.id && (!event.path.startsWith(`${mapping.path}/`) || event.executor !== mapping.executor))) throw new Error('同步事件所属轨道与原始 XML 不一致');
@@ -71,8 +71,14 @@ function verifySnapshotSource(xml: string, target: number, tracks: LightingDocum
   return report;
 }
 
+// Older saved bindings recorded the editing checkbox as mute. Their baseline must
+// remain comparable to the live readback for the ordinary three-way merge.
+function matchesTrackMute(muted: boolean, attributes: Record<string, string>, savedBaseline: boolean): boolean {
+  return muted === ma2TrackPlaybackMuted(attributes) || (savedBaseline && muted === (attributes.active !== 'true'));
+}
+
 /** Recover old programme mappings from their exact saved XML, never from the new console state. */
-export function recoverMa2TrackMappings(xml: string, target: number, tracks: LightingDocument['tracks'], mappings: Ma2TimecodePreview['mappings']): NonNullable<Ma2TimecodePreview['trackMappings']> {
+export function recoverMa2TrackMappings(xml: string, target: number, tracks: LightingDocument['tracks'], mappings: Ma2TimecodePreview['mappings'], savedBaseline = false): NonNullable<Ma2TimecodePreview['trackMappings']> {
   const timecode = inspectMa2TimecodeXml(xml).timecodes.find((entry) => entry.index === target - 1);
   if (!timecode || timecode.tracks.length !== tracks.length) throw new Error('旧版轨道映射与原始 XML 数量不一致');
   const used = new Set<number>();
@@ -80,7 +86,7 @@ export function recoverMa2TrackMappings(xml: string, target: number, tracks: Lig
     const anchors = new Set(mappings.filter((entry) => entry.trackId === track.id).map((entry) => entry.path.slice(0, entry.path.lastIndexOf('/SubTrack:'))));
     const candidates = timecode.tracks.filter((entry) => !used.has(entry.index) && (anchors.size
       ? anchors.size === 1 && anchors.has(`Timecode:${timecode.index}/Track:${entry.index}`)
-      : track.name === (entry.executorName ?? `MA2 轨道 ${entry.index + 1}`) && track.muted === (entry.attributes.active !== 'true') && entry.subtracks.every((subtrack) => !subtrack.events.length)));
+      : track.name === (entry.executorName ?? `MA2 轨道 ${entry.index + 1}`) && matchesTrackMute(track.muted, entry.attributes, savedBaseline) && entry.subtracks.every((subtrack) => !subtrack.events.length)));
     if (candidates.length !== 1) throw new Error('旧版空轨道对应不明确，无法自动恢复绑定');
     const native = candidates[0]!; used.add(native.index);
     const path = `Timecode:${timecode.index}/Track:${native.index}`;

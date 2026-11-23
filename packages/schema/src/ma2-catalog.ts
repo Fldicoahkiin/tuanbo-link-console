@@ -1,17 +1,21 @@
 import { z } from 'zod';
 import { ma2NetworkTargetSchema, ma2SequenceAssignmentSchema, ma2TimecodePreviewSchema } from './ma2-bridge';
-import { cueAttributeNamesSchema, lightingMa2CueCatalogSchema, lightingMa2BindingSchema, lightingTrackSchema } from './lighting';
+import { ma2CueValueEditsSchema, cueAttributeNamesSchema, lightingMa2CueCatalogSchema, lightingMa2BindingSchema, lightingTrackSchema } from './lighting';
 
-export const ma2CatalogRequestSchema = z.object({ details: z.enum(['attributes', 'source']).optional(), dataDirectory: z.string().max(4096), network: ma2NetworkTargetSchema.optional(), progressId: z.string().uuid().optional(), projectPath: z.string().max(4096).optional(), projectId: z.string().min(1).optional(), expectedSource: z.object({ show: z.string(), generation: z.string(), version: z.string() }).strict().optional(), targets: z.array(z.number().int().min(1).max(99999)).max(10000).optional() }).strict();
+export const ma2CatalogRequestSchema = z.object({ songPlayback: z.object({
+  startMs: z.number().int().nonnegative().lt(86400000), durationMs: z.number().finite().positive().max(86400000)
+}).strict().optional(), otherClockBindings: z.array(z.object({ target: z.number().int().min(1).max(99999), slot: z.string().max(64) }).strict()).max(10000).optional(), checkMtcFor: z.array(z.number().int().min(1).max(99999)).min(1).max(10000).optional(), details: z.enum(['attributes', 'source', 'empty-cues']).optional(), dataDirectory: z.string().max(4096), network: ma2NetworkTargetSchema.optional(), progressId: z.string().uuid().optional(), projectPath: z.string().max(4096).optional(), projectId: z.string().min(1).optional(), expectedSource: z.object({ show: z.string(), generation: z.string(), version: z.string() }).strict().optional(), targets: z.array(z.number().int().min(1).max(99999)).max(10000).optional() }).strict();
 /** Resolve one pool reference in this verified Show without touching operator-owned executors. */
 export const ma2PoolRouteRequestSchema = ma2CatalogRequestSchema.pick({ network: true, dataDirectory: true, projectId: true, expectedSource: true }).required({ projectId: true, expectedSource: true }).extend({ sequence: z.number().int().min(1).max(99999) });
 export type Ma2PoolRouteRequest = z.infer<typeof ma2PoolRouteRequestSchema>;
 export const ma2PoolRouteSchema = ma2SequenceAssignmentSchema.extend({ executorName: z.string().min(1).max(512) });
 export type Ma2PoolRoute = z.infer<typeof ma2PoolRouteSchema>;
-const firstTrackSource = z.object({ attributes: cueAttributeNamesSchema.optional(), includeTracking: z.boolean().optional(), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine(value => Number(value) > 0) }).strict();
+const firstTrackSource = z.object({ valueEdits: ma2CueValueEditsSchema.optional(), attributes: cueAttributeNamesSchema.optional(), includeTracking: z.boolean().optional(), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine(value => Number(value) > 0) }).strict();
 export const ma2CueAttributesRequestSchema = ma2PoolRouteRequestSchema.omit({projectId: true}).extend({
   cue: firstTrackSource.shape.cue, includeTracking: z.boolean()
 });
+export const ma2WriteCueValuesRequestSchema = ma2CueAttributesRequestSchema.extend({ edits: ma2CueValueEditsSchema });
+export type Ma2WriteCueValuesRequest = z.infer<typeof ma2WriteCueValuesRequestSchema>;
 export type Ma2CueAttributesRequest = z.infer<typeof ma2CueAttributesRequestSchema>;
 export const ma2FirstTrackRequestSchema = ma2PoolRouteRequestSchema.omit({ sequence: true }).extend({
   itemId: z.string().min(1), timecode: z.number().int().min(1).max(99999),
@@ -26,7 +30,11 @@ export const ma2FirstTrackReceiptSchema = z.object({
   backupFile: z.string().regex(/^tblink_backup_[a-f0-9]{32}\.xml$/).nullable()
 }).strict();
 export type Ma2FirstTrackReceipt = z.infer<typeof ma2FirstTrackReceiptSchema>;
-export const ma2PlaybackPrepareSchema = z.object({ network: ma2NetworkTargetSchema, progressId: z.string().uuid() }).strict();
+const selectorSettingsTarget = z.number().int().min(1).max(99999);
+const selectorTrackConflict = z.object({ timecode: selectorSettingsTarget, track: z.number().int().positive(), executor: ma2FirstTrackRequestSchema.shape.executor }).strict();
+export type Ma2SelectorTrackConflict = z.infer<typeof selectorTrackConflict>;
+const songSettingsTargets = z.array(z.number().int().min(1).max(99999)).min(1).max(256);
+export const ma2PlaybackPrepareSchema = ma2CatalogRequestSchema.pick({ expectedSource: true }).extend({ muteSelectorTrack: selectorTrackConflict.optional(), selectorTriggerTarget: selectorSettingsTarget.optional(), selectorCommandTarget: selectorSettingsTarget.optional(), selectorSettingsTarget: selectorSettingsTarget.optional(), songSettingsTargets: songSettingsTargets.optional(), songTriggerTargets: songSettingsTargets.optional(), network: ma2NetworkTargetSchema, progressId: z.string().uuid() });
 export type Ma2PlaybackPrepare = z.infer<typeof ma2PlaybackPrepareSchema>;
 export type Ma2CatalogRequest = z.infer<typeof ma2CatalogRequestSchema>;
 const ma2ReadProgressBaseSchema = z.object({
@@ -56,7 +64,7 @@ export const ma2CatalogEntrySchema = z.object({
   events: z.array(z.object({ path: z.string(), time: z.string(), action: z.string(), executor: z.string(), cue: z.string().nullable(), name: z.string().nullable() }).strict()),
   error: z.string().nullable(), warnings: z.array(z.string())
 }).strict();
-export const ma2CatalogSchema = z.object({ directory: ma2ObjectDirectorySchema, readAt: z.string().datetime(), entries: z.array(ma2CatalogEntrySchema),
+export const ma2CatalogSchema = z.object({ selectorTrackConflict: selectorTrackConflict.optional(), afterRollSeconds: z.number().finite().nonnegative().optional(), songOffsets: z.array(z.object({ target: z.number().int().min(1).max(99999), offset: z.string().max(32) }).strict()).max(10000).optional(), selectorTriggerTarget: selectorSettingsTarget.optional(), selectorCommandTarget: selectorSettingsTarget.optional(), selectorSettingsTarget: selectorSettingsTarget.optional(), playbackClockNote: z.string().max(512).optional(), songSettingsTargets: songSettingsTargets.optional(), songTriggerTargets: songSettingsTargets.optional(), needsPlaybackPreparation: z.literal(true).optional(), playbackConflict: z.string().max(512).optional(), directory: ma2ObjectDirectorySchema, readAt: z.string().datetime(), entries: z.array(ma2CatalogEntrySchema),
   incomplete: z.string().optional(),
   sourceUnverified: z.boolean().optional(),
   metrics: z.object({ queueMs: z.number().nonnegative().optional(), elapsedMs: z.number().nonnegative(), requests: z.number().int().nonnegative(), bytes: z.number().int().nonnegative(), wireCommands: z.number().int().nonnegative().optional(), receivedBytes: z.number().int().nonnegative().optional(), sentBytes: z.number().int().nonnegative().optional(), phases: z.record(z.string(), z.number().nonnegative()) }).strict().optional()
@@ -65,8 +73,16 @@ export type Ma2Catalog = z.infer<typeof ma2CatalogSchema>;
 /** Where each console Timecode show sits in time, as the console's own export says (values as written there). */
 export const ma2RangeSourceSchema = z.union([ma2NetworkTargetSchema, z.object({ dataDirectory: z.string().min(1).max(4096) }).strict()]);
 export type Ma2RangeSource = z.infer<typeof ma2RangeSourceSchema>;
-export const ma2TimecodeRangesSchema = z.object({ generation: z.string().min(1).max(128).optional(), show: z.string().min(1).max(4096), entries: z.array(z.object({
-  target: z.number().int().min(1).max(99999), name: z.string().max(1024), offset: z.string().max(32), length: z.string().max(32), slot: z.string().max(64), frame: z.string().max(64), last: z.string().max(32), readySequences: z.array(z.number().int().min(1).max(99999)).max(10000).optional(), internal: z.literal(true).optional()
+const timecodeEventLocation = z.object({ track: z.number().int().positive(), event: z.number().int().positive(), frame: z.number().int().nonnegative() }).strict();
+export const ma2TimecodeRangesSchema = z.object({
+  songTrackExecutors: z.array(ma2FirstTrackRequestSchema.shape.executor).max(10000).optional(),
+  selectorTrackConflict: selectorTrackConflict.optional(),
+  afterRollSeconds: z.number().finite().nonnegative().optional(),
+  otherTimedCues: z.array(z.object({ owner: selectorSettingsTarget, sequence: selectorSettingsTarget, cue: z.string().regex(/^\d{1,6}\.\d{3}$/), seconds: z.number().nonnegative() }).strict()).max(100000).optional(),
+  selectorCommandTarget: selectorSettingsTarget.optional(), selectorSettingsTarget: selectorSettingsTarget.optional(), selectorReady: z.union([z.literal(false), z.number().int().min(1).max(99999)]).optional(), generation: z.string().min(1).max(128).optional(), show: z.string().min(1).max(4096), entries: z.array(z.object({
+  target: z.number().int().min(1).max(99999), name: z.string().max(1024), offset: z.string().max(32), length: z.string().max(32), slot: z.string().max(64), frame: z.string().max(64), last: z.string().max(32), playbackSettingsChanged: z.literal(true).optional(), automaticCueTriggers: z.literal(true).optional(),
+  missingCueTarget: timecodeEventLocation.optional(), missingExecutorTarget: timecodeEventLocation.optional(),
+  routeMismatch: z.object({ track: z.number().int().positive(), executor: z.string().regex(/^[1-9]\d{0,4}\.[1-9]\d{0,4}$/).nullable(), assigned: z.number().int().min(1).max(99999).nullable(), referenced: z.number().int().min(1).max(99999), step: z.number().int().positive() }).strict().optional(), readySequences: z.array(z.number().int().min(1).max(99999)).max(10000).optional(), internal: z.literal(true).optional()
 }).strict()).max(10000) }).strict();
 export type Ma2TimecodeRanges = z.infer<typeof ma2TimecodeRangesSchema>;
 export const ma2ReadProgressSchema = ma2ReadProgressBaseSchema.safeExtend({

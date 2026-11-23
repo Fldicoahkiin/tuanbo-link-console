@@ -4,7 +4,7 @@ import { formatMtcStart, ma2MtcConflictTargets, songLightingStatus } from '@tb/c
 import { useDocumentStore } from '../stores/document-store';
 import { useSelectedProgram } from '../useSelectedProgram';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
-import { useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
+import { useMa2SongStatus } from '../runtime/use-ma2-song-status';
 import { selectMa2Timeline } from '../runtime/ma2-timeline-actions';
 import { ma2TimelineRows, type Ma2TimelineRow } from '../view-models/ma2-timeline-list';
 import { ownKeys } from '../keys/key-owner';
@@ -28,7 +28,7 @@ function Ma2TimelineWorkspace({ itemId, disabled, onClose, notify, query = '', e
   const [showAll, setShowAll] = useState(false);
   const sync = useMa2SyncStore(state => itemId ? state.songs[itemId] : undefined);
   const session = useMa2SyncStore(state => state.session);
-  const enabled = useMa2RealtimePreference(state => state.enabled);
+  const documentId = useDocumentStore(state => state.documentId);
   const read = useMa2ReadStore();
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<{ target: number; owner: string | null } | null>(null);
@@ -37,10 +37,12 @@ function Ma2TimelineWorkspace({ itemId, disabled, onClose, notify, query = '', e
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  if (!project) return <p>请先打开工程。</p>;
-  const item = project.rundown.find(value => value.id === itemId);
-  const status = item ? songLightingStatus(project, item.id) : null;
+  const item = project?.rundown.find(value => value.id === itemId);
+  const status = project && item ? songLightingStatus(project, item.id) : null;
   const target = item?.lighting?.consoleSong?.timecode?.number ?? item?.lighting?.timelineDestination?.timecode ?? item?.lighting?.ma2Bindings?.[0]?.timecode ?? (status?.state === 'matched' ? status.timecode : undefined);
+  const attached = Boolean(item?.lighting?.consoleSong || item?.lighting?.timelineDestination || item?.lighting?.ma2Bindings?.some(binding => binding.timecode === target));
+  const confirmed = useMa2SongStatus(itemId, documentId, attached, status?.state === 'matched' && Boolean(status.pending || status.problems.length));
+  if (!project) return <p>请先打开工程。</p>;
   const rows = ma2TimelineRows(project);
   const browsing = showAll || query.trim().length > 0;
   const visible = rows.filter(row => browsing ? `${row.target} ${row.name}`.toLowerCase().includes(query.trim().toLowerCase()) : row.target === target);
@@ -49,9 +51,8 @@ function Ma2TimelineWorkspace({ itemId, disabled, onClose, notify, query = '', e
   const code = (value: Ma2TimelineRow): string => value.startMs === null ? '起始码未读取' : formatMtcStart(value.startMs, project.timebase.frameRate);
   const conflict = ma2MtcConflictTargets(sync?.message || session.message);
   const current = row?.target === target;
-  const attached = Boolean(item?.lighting?.consoleSong || item?.lighting?.timelineDestination || item?.lighting?.ma2Bindings?.some(binding => binding.timecode === target));
   const usedElsewhere = Boolean(row?.owner && row.owner !== itemId);
-  const syncText = !current ? '未关联当前节目' : row?.error || !row?.loaded || !attached ? '尚未完成读取' : sync?.state === 'blocked' || session.status === 'blocked' ? '同步失败' : sync?.state === 'syncing' ? '同步中' : row?.pending ? '等待控台创建' : status?.state !== 'matched' ? '待匹配' : !enabled || sync?.state === 'paused' ? '同步暂停' : status?.state === 'matched' && (status.pending || status.problems.length || sync?.state === 'pending') ? '待同步' : '已同步';
+  const syncText = row?.error || !row?.loaded ? '尚未完成读取' : row.pending ? '等待控台创建' : confirmed.label;
   const run = async (action: () => Promise<string>): Promise<void> => { setBusy(true); setError(''); setMessage(''); try { const text = await action(); setMessage(text); notify(text); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } finally { setBusy(false); } };
   const use = (value: Ma2TimelineRow, edit = false): void => {
     setMenu(null); setSelected({ target: value.target, owner: value.owner });
@@ -84,7 +85,7 @@ function Ma2TimelineWorkspace({ itemId, disabled, onClose, notify, query = '', e
       <aside className="ma2-timeline-details" aria-label="所选时间线"><div className="ma2-timeline-details-heading">{row && current ? '当前时间线' : '时间线详情'}</div>
       {row ? <>
         <h3>{row.name || `Timecode ${row.target}`}</h3><p>Timecode {row.target} · MTC {code(row)}</p>
-        <div className="ma2-timeline-status" role="status" aria-label="时间线状态"><span data-tone={current ? 'success' : 'waiting'}>{current ? row.pending ? '已关联 · 等待创建' : status?.state === 'matched' ? '已匹配当前节目' : '起始码未匹配' : usedElsewhere ? '已关联其他节目' : '未关联当前节目'}</span>{current ? <span data-tone={syncText === '已同步' ? 'success' : syncText === '同步失败' ? 'error' : 'waiting'}>{syncText}</span> : null}</div>
+        <div className="ma2-timeline-status" role="status" aria-label="时间线状态"><span data-tone={current ? 'success' : 'waiting'}>{current ? row.pending ? '已关联 · 等待创建' : status?.state === 'matched' ? '已匹配当前节目' : '起始码未匹配' : usedElsewhere ? '已关联其他节目' : '未关联当前节目'}</span>{current ? <span data-tone={syncText === '已同步' ? 'success' : confirmed.tone === 'error' ? 'error' : 'waiting'}>{syncText}</span> : null}</div>
         {row.owner ? <p>{(() => { const lighting = project.rundown.find(song => song.id === row.owner)?.lighting; const sequence = lighting?.consoleSong?.sequence ?? lighting?.timelineDestination?.sequence; const executor = lighting?.consoleSong?.executor ?? lighting?.timelineDestination?.executor; return sequence ? `序列 ${sequence} · 执行器 ${executor ?? '未分配'}` : ''; })()}</p> : null}
         <p>{row.loaded ? `${row.count} 个 Cue` : 'Cue 尚未读取'}{row.count === 0 && row.loaded ? ' · 这是一条空时间线，可以进入编辑添加 Cue。' : ''}</p>
         {row.error ? <p role="alert">{row.error}</p> : null}
@@ -98,6 +99,6 @@ function Ma2TimelineWorkspace({ itemId, disabled, onClose, notify, query = '', e
     </div>
     {menu ? <Menu x={menu.x} y={menu.y} label="时间线右键菜单" title={`Timecode ${menu.row.target} · ${menu.row.name}`} onClose={() => setMenu(null)}><MenuItem icon={Check} disabled={busy || disabled || Boolean(menu.row.owner && menu.row.owner !== itemId) || !item?.referenceAudio} onSelect={() => use(menu.row)}>用于当前节目</MenuItem><MenuItem icon={Pencil} disabled={busy || disabled} onSelect={() => { setEditing([menu.row.target]); setMenu(null); }}>修改名称 / MTC</MenuItem><MenuItem disabled={busy || disabled || Boolean(menu.row.owner && menu.row.owner !== itemId) || !item?.referenceAudio} onSelect={() => use(menu.row, true)}>编辑 Cue</MenuItem></Menu> : null}
     {creating && itemId ? <Dialog title="新建时间线" onClose={() => setCreating(false)}><Ma2SequenceTimeline itemId={itemId} disabled={disabled} notify={(text, tone) => { notify(text, tone); if (tone !== 'error') { const next = useDocumentStore.getState().project?.rundown.find(song => song.id === itemId)?.lighting?.timelineDestination?.timecode; setSelected(next ? { target: next, owner: itemId } : null); setCreating(false); showCurrent(); setMessage(text); } }} /></Dialog> : null}
-    {editing ? <Ma2TimelineProperties targets={editing} project={project} onClose={() => setEditing(null)} onSaved={(text, warning) => { setEditing(null); setMessage(text); notify(text); if (warning) notify(warning, 'error'); }} /> : null}
+    {editing ? <Ma2TimelineProperties itemId={itemId} targets={editing} project={project} onClose={() => setEditing(null)} onSaved={(text, warning) => { setEditing(null); setMessage(text); notify(text); if (warning) notify(warning, 'error'); }} /> : null}
   </section>;
 }

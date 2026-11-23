@@ -63,7 +63,10 @@ async function applyArchiveRequest(request: ProjectArchiveRequest, documents: Pi
   const settings = await store.read();
   const root = store.root(settings);
   const projectName = basename(projectPath, extname(projectPath));
-  let folder = await projectFolder(root, projectPath, projectName, false);
+  const disabled = request.action === 'create' && request.reason === 'before-sync' && !settings.enabled;
+  // Song sync asks only for the write receipt. A disabled archive has no directory to verify.
+  if (disabled && request.includeEntries === false) return { version: 1, entries: [], disabled: true };
+  let folder = await projectFolder(root, projectPath, projectName, request.action === 'create' && !disabled);
   const entries = async (): Promise<Entry[]> => {
     const listed: Entry[] = [...await legacyEntries(projectPath, projectName)];
     if (folder) for (const entry of (await readIndex(folder))?.entries ?? []) {
@@ -88,7 +91,7 @@ async function applyArchiveRequest(request: ProjectArchiveRequest, documents: Pi
   };
   let createdPath: string | undefined;
   if (request.action === 'create') {
-    if (request.reason === 'before-sync' && !settings.enabled) return projectArchiveResultSchema.parse({ version: 1, entries: request.includeEntries === false ? [] : await entries(), disabled: true });
+    if (disabled) return projectArchiveResultSchema.parse({ version: 1, entries: await entries(), disabled: true });
     // The document worker validates the full project before saving it. Wait for the file and its index.
     createdPath = await archive(request.content, request.reason, request.reason === 'manual' ? '手动' : '同步前');
     if (request.includeEntries === false) return projectArchiveResultSchema.parse({ version: 1, entries: [], createdPath });
@@ -118,30 +121,53 @@ function renderName(template: string, project: string, at: Date, kind: string): 
   const name = template.replaceAll('{工程名}', project).replaceAll('{日期}', date).replaceAll('{时间}', time).replaceAll('{类型}', kind);
   return name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim() || `${project} ${date} ${time}`;
 }
+function pathKey(value: string): string { return process.platform === 'win32' ? value.toLowerCase() : value; }
+
 async function freeName(folder: string, name: string): Promise<string> {
-  for (let attempt = 1; attempt < 1000; attempt++) {
-    const file = `${name}${attempt > 1 ? ` (${attempt})` : ''}.tblink`;
-    if (await fileSize(join(folder, file)) === null) return file;
-  }
-  throw new Error('同名存档过多，请清理存档文件夹');
+  const first = name + '.tblink';
+  if (await fileSize(join(folder, first)) === null) return first;
+  const occupied = new Set((await listDirectory(folder)).map(pathKey));
+  let suffix = 2;
+  while (occupied.has(pathKey(`${name} (${suffix}).tblink`))) suffix++;
+  return `${name} (${suffix}).tblink`;
 }
-/** One folder per project file; a folder whose index belongs to another project is skipped. */
+
+/** Find an existing archive even when an earlier namesake has been moved or removed. */
 async function projectFolder(root: string, projectPath: string, projectName: string, create: boolean): Promise<string | null> {
-  const same = (path: string): boolean => process.platform === 'win32' ? path.toLowerCase() === projectPath.toLowerCase() : path === projectPath;
   const safe = projectName.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_');
-  for (let attempt = 1; attempt < 100; attempt++) {
-    const folder = join(root, attempt > 1 ? `${safe} (${attempt})` : safe);
+  const owns = async (folder: string): Promise<boolean> => {
     const index = await readIndex(folder);
-    if (index && same(index.projectPath)) return folder;
-    if (!index && create && !(await listDirectory(folder)).length) { await mkdir(folder, { recursive: true }); return folder; }
-    if (!index && !create && !(await listDirectory(folder)).length) return null;
+    return index !== null && pathKey(index.projectPath) === pathKey(projectPath);
+  };
+  const first = join(root, safe);
+  if (await owns(first)) return first;
+  const names = await listDirectory(root);
+  const prefix = pathKey(safe) + ' (';
+  for (const name of names) {
+    const key = pathKey(name);
+    if (key.startsWith(prefix) && /^\d+\)$/.test(key.slice(prefix.length)) && await owns(join(root, name))) return join(root, name);
   }
-  if (create) throw new Error('存档位置里同名的工程文件夹太多，请清理后再试');
-  return null;
+  if (!create) return null;
+  await mkdir(root, { recursive: true });
+  const occupied = new Set(names.map(pathKey));
+  for (let suffix = 1; ; suffix++) {
+    const name = suffix === 1 ? safe : `${safe} (${suffix})`;
+    if (occupied.has(pathKey(name))) continue;
+    const folder = join(root, name);
+    try { await mkdir(folder); }
+    catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+      if (await owns(folder)) return folder;
+      continue;
+    }
+    // Reserve our newly created folder before saving, so a failed first save retries here.
+    await writeFileAtomically(join(folder, INDEX), JSON.stringify({ version: 1, projectPath, entries: [] }));
+    return folder;
+  }
 }
 async function readIndex(folder: string): Promise<Index | null> {
   try { return indexSchema.parse(JSON.parse(await readFile(join(folder, INDEX), 'utf8'))); }
-  catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null; throw new Error(`读不了存档记录：${join(folder, INDEX)}`, { cause: error }); }
+  catch (error) { if (error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) return null; throw new Error(`读不了存档记录：${join(folder, INDEX)}`, { cause: error }); }
 }
 async function listDirectory(path: string): Promise<string[]> {
   try { return await readdir(path); }

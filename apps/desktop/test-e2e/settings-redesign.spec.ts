@@ -109,7 +109,7 @@ test('设置全部页面双主题三尺寸、展开状态与缩放视觉矩阵',
   } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
-test('设置草稿隔离、密码显隐、退出确认、分类记忆与快捷键撤销', async ({}, info) => {
+test('设置草稿隔离、密码显隐、离开自动保存、分类记忆与快捷键恢复', async ({}, info) => {
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
   const page = await app.firstWindow();
   try {
@@ -138,29 +138,31 @@ test('设置草稿隔离、密码显隐、退出确认、分类记忆与快捷�
     await select(page, 'preferences');
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await expect(page.locator('.settings-page:visible h1')).toHaveText('OBS Studio');
+    await select(page, 'maintenance');
+    await page.getByText('无法自动启动 OBS Studio？设置程序位置', { exact: true }).click();
+    await page.getByText('技术参数（排查启动问题时使用）', { exact: true }).first().click();
+    await page.getByLabel('OBS Studio 启动参数').fill('--minimize-to-tray');
     await main.getByRole('button', { name: '节目单', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: '离开设置？' })).toBeVisible();
-    await page.getByRole('button', { name: '继续编辑', exact: true }).click();
-    await expect(page.getByLabel('OBS 密码', { exact: true })).toHaveValue('test-only-draft');
-    await main.getByRole('button', { name: '节目单', exact: true }).click();
-    await page.getByRole('button', { name: '放弃未保存修改', exact: true }).click();
+    await expect(page.getByRole('main', { name: '节目单' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: '离开设置？' })).toHaveCount(0);
+    expect((await page.evaluate(() => window.tbLink.loadIntegrationProfile()))?.obs).toMatchObject({ webSocketUrl: 'ws://127.0.0.1:4499', arguments: ['--minimize-to-tray'] });
     await main.getByRole('button', { name: '设置', exact: true }).click();
     await select(page, 'obs'); await page.getByText('手动连接', { exact: true }).click();
     await expect(page.getByLabel('OBS 密码', { exact: true })).toHaveValue('');
     await expect(page.getByLabel('OBS 密码', { exact: true })).toHaveAttribute('type', 'password');
     await select(page, 'shortcuts');
-    const count = await page.locator('.settings-shortcut-key').count();
-    await page.locator('.settings-shortcut-key button').first().click();
-    await expect(page.locator('.settings-shortcut-key')).toHaveCount(count - 1);
-    await page.getByRole('button', { name: '撤销删除' }).click();
-    await expect(page.locator('.settings-shortcut-key')).toHaveCount(count);
-    await page.getByRole('button', { name: '恢复默认快捷键', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: '恢复默认快捷键？' })).toBeVisible();
+    const count = await page.locator('.settings-key-edit').count();
+    await page.locator('.settings-key-edit button').first().click();
+    await expect(page.locator('.settings-key-edit')).toHaveCount(count - 1);
+    await page.getByRole('button', { name: '恢复默认', exact: true }).click();
+    await expect(page.locator('.settings-key-edit')).toHaveCount(count);
+    await page.getByRole('button', { name: '全部恢复默认', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '全部恢复默认快捷键？' })).toBeVisible();
     await page.keyboard.press('Escape');
-    await expect(page.getByRole('button', { name: '恢复默认快捷键', exact: true })).toBeFocused();
-    await page.locator('.settings-shortcut-key input').first().focus();
+    await expect(page.getByRole('button', { name: '全部恢复默认', exact: true })).toBeFocused();
+    await page.locator('.settings-key-edit input').first().focus();
     await page.keyboard.press('Tab');
-    await expect(page.locator('.settings-shortcut-key button').first()).toBeFocused();
+    await expect(page.locator('.settings-key-edit button').first()).toBeFocused();
   } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
@@ -222,7 +224,7 @@ test('更新阶段直接呈现在设置页，下载信息与动作一致', async
   } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
-test('MA2 三种连接方式、凭证隔离、手动保存与搜索取消', async ({}, info) => {
+test('MA2 三种连接方式、凭证隔离、自动保存与搜索取消', async ({}, info) => {
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
   const page = await app.firstWindow();
   try {
@@ -258,13 +260,25 @@ test('MA2 三种连接方式、凭证隔离、手动保存与搜索取消', asyn
     await select(page, 'audio'); await select(page, 'ma2');
     await expect(page.getByLabel('MA2 登录密码', { exact: true })).toHaveValue('second-target-password');
     await page.getByLabel('MA2 连接方式').selectOption('local');
-    await expect(page.getByLabel('MA2 onPC 数据目录')).toBeVisible();
+    await expect(page.getByRole('button', { name: '连接本机 onPC' })).toBeVisible();
     await page.screenshot({ path: info.outputPath('ma2-local.png') });
     await page.getByLabel('MA2 连接方式').selectOption('network');
-    await expect(page.getByLabel('MA2 登录密码', { exact: true })).toHaveValue('second-target-password');
-    await page.getByRole('button', { name: '仅保存', exact: true }).click();
-    await expect(page.getByText('连接设置已保存。', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('MA2 登录密码', { exact: true })).toHaveValue('');
     expect((await page.evaluate(() => window.tbLink.getMa2NetworkStatus())).settings?.host).toBe('192.168.0.11');
+    const main = page.getByRole('navigation', { name: '主要工作区' });
+    await page.getByLabel('MA2 控台 IP').fill('192.168.');
+    await main.getByRole('button', { name: '节目单', exact: true }).click();
+    await expect(page.getByLabel('MA2 控台 IP')).toHaveValue('192.168.');
+    await expect(page.getByLabel('MA2 控台 IP')).toHaveAttribute('aria-invalid', 'true');
+    expect((await page.evaluate(() => window.tbLink.getMa2NetworkStatus())).settings?.host).toBe('192.168.0.11');
+    await page.getByLabel('MA2 控台 IP').fill('192.168.0.12');
+    await main.getByRole('button', { name: '节目单', exact: true }).click();
+    await expect(page.getByRole('main', { name: '节目单' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: '离开设置？' })).toHaveCount(0);
+    expect((await page.evaluate(() => window.tbLink.getMa2NetworkStatus())).settings?.host).toBe('192.168.0.12');
+    await main.getByRole('button', { name: '设置', exact: true }).click();
+    await select(page, 'ma2');
+    await expect(page.getByLabel('MA2 控台 IP')).toHaveValue('192.168.0.12');
     await page.getByRole('button', { name: '搜索控台' }).click();
     await expect(page.getByLabel('MA2 连接方式')).toBeDisabled();
     await page.getByRole('button', { name: '取消搜索', exact: true }).click();
@@ -272,5 +286,14 @@ test('MA2 三种连接方式、凭证隔离、手动保存与搜索取消', asyn
     await expect(page.getByLabel('MA2 连接方式')).toBeEnabled();
     expect(await audit(page)).toMatchObject({ overflow: [], small: [], pageOverflow: false });
     await page.screenshot({ path: info.outputPath('ma2-network.png') });
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('link:ma2-discover');
+      ipcMain.handle('link:ma2-discover', () => ({ hosts: [{ host: '2.0.0.3', port: 30000, identity: 'ma2' }], ranges: [], warnings: [] }));
+    });
+    await page.getByRole('button', { name: '搜索控台' }).click();
+    await page.getByRole('button', { name: '选择控台 2.0.0.3:30000' }).click();
+    await main.getByRole('button', { name: '节目单', exact: true }).click();
+    await expect(page.getByRole('main', { name: '节目单' })).toBeVisible();
+    expect(await page.evaluate(() => window.tbLink.getMa2NetworkStatus())).toMatchObject({ settings: { host: '2.0.0.3' }, state: 'disconnected' });
   } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

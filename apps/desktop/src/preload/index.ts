@@ -1,6 +1,6 @@
 import { ma2TimelineEditRequestSchema, ma2TimelineEditResultSchema } from '@tb/schema';
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutDirectorySchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
-import { ma2ExecutorPageDirectorySchema, ma2ExecutorPageSchema, ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorUpdateResultSchema, ma2ExecutorInputSchema, ma2ExecutorChannelSchema, ma2ExecutorChannelChoiceRequestSchema } from '@tb/schema';
+import { ma2ExecutorPageDirectorySchema, ma2ExecutorPageSchema, ma2ExecutorPageDirectoryRequestSchema, ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorUpdateResultSchema, ma2ExecutorInputSchema, ma2ExecutorChannelSchema, ma2ExecutorChannelChoiceRequestSchema } from '@tb/schema';
 import { ma2ButtonLiveRequestSchema, ma2ButtonLiveSchema, ma2WebRemoteStateSchema } from '@tb/schema';
 import { ma2ExecutorObservationSchema, ma2ExecutorObserveRequestSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, ma2LiveSnapshotSchema } from '@tb/schema';
 import { ma2RangeSourceSchema, ma2TimecodeRangesSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, ma2SongSyncResultSchema } from '@tb/schema';
@@ -18,7 +18,7 @@ import { ma2AuditionRequestSchema,ma2AuditionControlSchema,ma2AuditionStateSchem
 import { musicAnalysisRequestSchema, musicAnalysisProgressSchema, musicAnalysisControlSchema, musicAnalysisResultSchema } from '@tb/schema';
 import { automaticMusicRequestSchema, automaticMusicControlSchema, automaticMusicJobSchema, automaticMusicStatusSchema } from '@tb/schema';
 import { musicMonitorRequestSchema, musicMonitorStatusSchema } from '@tb/schema';
-import { projectArchiveRequestSchema, projectArchiveResultSchema, projectArchiveSettingsActionSchema, projectArchiveSettingsStatusSchema, recoveryCopyContentSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema } from '@tb/schema';
+import { projectArchiveRequestSchema, projectArchiveResultSchema, projectArchiveSettingsActionSchema, projectArchiveSettingsSchema, projectArchiveSettingsStatusSchema, recoveryCopyContentSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema } from '@tb/schema';
 import { linkProjectAssetFilesPayloadSchema, linkProjectAssetRelinkPayloadSchema, linkProjectAssetRelinkResultSchema } from '@tb/schema';
 import { MA2_READ_CANCELLED, toUserErrorMessage } from '@tb/core/link';
 import { ma2PlaybackPrepareSchema, ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
@@ -63,6 +63,7 @@ const tbLink: LinkDesktopBridgeApi = {
     return () => ipcRenderer.removeListener('link:native-program-closed', receive);
   },
   projectArchives: async request => projectArchiveResultSchema.parse(await invoke('link:project-archives', projectArchiveRequestSchema.parse(request))),
+  readProjectArchiveSettings: async () => projectArchiveSettingsSchema.parse(await invoke('link:read-project-archive-settings')),
   projectArchiveSettings: async request => projectArchiveSettingsStatusSchema.parse(await invoke('link:project-archive-settings', projectArchiveSettingsActionSchema.parse(request))),
   preloadNativeObs: request => invoke('link:native-obs-preload', nativeObsPreloadSchema.parse(request)),
   cancelNativeObsPreload: request => invoke('link:native-obs-preload-cancel', nativeObsStopSchema.parse(request)),
@@ -150,7 +151,7 @@ const tbLink: LinkDesktopBridgeApi = {
   readMa2Catalog: (payload, onProgress) => readMa2('link:ma2-catalog', payload, onProgress),
   readMa2EffectLibrary: (payload, onProgress) => readMa2('link:ma2-effect-library', payload, onProgress),
   listMa2Layouts: async payload => ma2LayoutDirectorySchema.parse(await invoke('link:ma2-layouts', ma2LayoutDirectoryRequestSchema.parse(payload))),
-  listMa2ExecutorPages: async payload => ma2ExecutorPageDirectorySchema.parse(await invoke('link:ma2-executor-pages', ma2LayoutDirectoryRequestSchema.parse(payload))),
+  listMa2ExecutorPages: async payload => ma2ExecutorPageDirectorySchema.parse(await invoke('link:ma2-executor-pages', ma2ExecutorPageDirectoryRequestSchema.parse(payload))),
   readMa2ExecutorPage: async payload => ma2ExecutorPageSchema.parse(await invoke('link:ma2-executor-page', ma2ExecutorPageRequestSchema.parse(payload))),
   updateMa2Executor: async payload => ma2ExecutorUpdateResultSchema.parse(await invoke('link:ma2-executor-update', ma2ExecutorUpdateRequestSchema.parse(payload))),
   readMa2ExecutorChannel: async payload => ma2ExecutorChannelSchema.parse(await invoke('link:ma2-executor-channel', ma2LayoutDirectoryRequestSchema.parse(payload))),
@@ -178,6 +179,8 @@ const tbLink: LinkDesktopBridgeApi = {
   createMa2: (payload) => invoke('link:ma2-create', payload),
   readMa2Executor: (payload) => invoke('link:ma2-executor', payload),
   assignMa2PoolSequence: payload => invoke('link:ma2-pool-route', payload),
+  readMa2CueValues: payload => invoke('link:ma2-cue-values', payload),
+  writeMa2CueValues: payload => invoke('link:ma2-write-cue-values', payload),
   readMa2CueAttributeNames: payload => invoke('link:ma2-cue-attribute-names', payload),
   addMa2FirstTrackCues: payload => invoke('link:ma2-first-track-cues', payload),
   compareMa2: (payload) => invoke('link:ma2-compare', payload),

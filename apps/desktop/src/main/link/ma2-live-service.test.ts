@@ -164,6 +164,17 @@ it('核对控台在不在跟：用推杆页存过的用户另开一个只读连�
     expect(mock.close).not.toHaveBeenCalled();
     service.releaseObserver();
     expect(await service.observe(observe)).toMatchObject({ kind: 'executor' });
+    let rejectOld!: (error: Error) => void;
+    observer.observe.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject; }));
+    const previous = service.observe(observe);
+    await vi.waitFor(() => expect(rejectOld).toBeTypeOf('function'));
+    service.releaseObserver();
+    expect(await service.observe(observe)).toMatchObject({ kind: 'executor' });
+    const closes = observer.close.mock.calls.length;
+    rejectOld(new Error('旧歌曲的读回已关闭'));
+    expect(await previous).toMatchObject({ kind: 'unavailable' });
+    expect(observer.close.mock.calls).toHaveLength(closes);
+    expect(await service.observe(observe)).toMatchObject({ kind: 'executor' });
   } finally { service.close(); }
 });
 

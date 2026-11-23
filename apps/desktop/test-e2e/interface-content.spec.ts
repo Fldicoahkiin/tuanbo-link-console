@@ -29,7 +29,12 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
     page.on('pageerror', error => errors.push(error.message));
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    await expect(page.locator('.home-card')).toHaveCount(24);
+    const grid = page.locator('.home-grid');
+    await expect(grid).toHaveAttribute('data-total-programs', '24');
+    await grid.evaluate(element => element.scrollTo(0, element.scrollHeight));
+    await expect(grid.locator('[data-program-id="song-23"]')).toBeInViewport();
+    await grid.evaluate(element => element.scrollTo(0, 0));
+    await expect(grid.locator('[data-program-id="song-0"]')).toBeInViewport();
     await expect(page.locator('.home-clock-duration')).toContainText('总时长 00:00:12');
     const nav = page.getByRole('navigation', { name: '主要工作区' });
     await page.locator('.home-player-play').click();

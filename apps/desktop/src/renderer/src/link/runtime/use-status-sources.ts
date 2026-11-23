@@ -26,8 +26,8 @@ export function useStatusSources(): void {
         const status = ma2NetworkStatusSchema.parse(await desktop.getMa2NetworkStatus());
         if (!alive) return;
         useMa2NetworkStatusStore.setState({ status, error: null });
-        timer = setTimeout(() => void read(), 1000);
-      } catch (error) { if (alive) useMa2NetworkStatusStore.setState({ error: toUserErrorMessage(error) }); }
+      } catch (error) { if (alive) useMa2NetworkStatusStore.setState({ status: null, error: toUserErrorMessage(error) }); }
+      if (alive) timer = setTimeout(() => void read(), 1000);
     };
     void read(); return () => { alive = false; clearTimeout(timer); };
   }, [method, running]);

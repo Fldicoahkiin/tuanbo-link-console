@@ -1,7 +1,7 @@
 import { useMa2ReadStore } from '../stores/ma2-read-store';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, lightingDocumentSchema, type Ma2SongBinding, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
-import { legacyMa2Renames, ma2SongPoints, pendingMa2Renames, projectLightingLibrary, renameConsoleCueCommand, setLightingCommand, setLightingLibraryCommand, SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
+import { legacyMa2Renames, ma2SongPoints, newMa2TimelineCommand, pendingMa2Renames, projectLightingLibrary, renameConsoleCueCommand, setLightingCommand, setLightingLibraryCommand, SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { useShowStateStore } from '../stores/show-state-store';
@@ -13,6 +13,14 @@ import { setMa2ConsoleChanges, setMa2WriteMode, useMa2RealtimePreference } from 
 import { prepareMa2RealtimeSession, pauseMa2RealtimeSession, recheckMa2Songs, refreshMa2RealtimeSession, retryMa2RealtimeSession, pendingSongSummary, unlinkedSongSummary, songsWithoutConsoleShow, syncMa2Once, writeMissingConsoleShows } from './ma2-realtime-session';
 import { convertMa2LegacyNames, legacyMa2ConsoleNames } from './ma2-legacy-names';
 
+it('按钮与同步调度共用同一次准备，取得控台确认后即可继续写入', async () => {
+  useDocumentStore.getState().setProject(bothBound(), 'song.tblink');
+  const first = prepareMa2RealtimeSession();
+  expect(prepareMa2RealtimeSession()).toBe(first);
+  expect(await first).toBe(true);
+  expect(status).toHaveBeenCalledOnce();
+});
+
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
 const { recordLog } = vi.hoisted(() => ({ recordLog: vi.fn<(entry: { level: string; message: string }) => Promise<void>>(() => Promise.resolve()) }));
 vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { recordLog } }));
@@ -20,6 +28,7 @@ const { archive } = vi.hoisted(() => ({ archive: vi.fn() }));
 vi.mock('./ma2-project-archive', () => ({ archiveMa2Project: archive }));
 const source = { show: 'Show', generation: 'session', version: '3.7.0.5' };
 const status = vi.fn(), catalog = vi.fn(), metadata = vi.fn(), cancel = vi.fn(), sync = vi.fn(), check = vi.fn(), rename = vi.fn();
+const playbackPreparation = vi.fn();
 const storage = new Map<string, string>();
 function project() {
   const value = createEmptyLinkProject('自动同步');
@@ -207,6 +216,15 @@ const answerOwn = (request: Ma2SongSyncRequest): Promise<Ma2SongSyncResult> => {
     library: { directory: { ...source, entries: [{ target: sequence, name: request.name }] }, readAt: new Date().toISOString(), sequences: [{ sequence, name: request.name, cues: request.points.map((_, index) => ({ index: index + 1, number: `${index + 1}.000`, name: '开场' })) }], fixtureUsage: [], errors: [] } });
 };
 
+it.each(['歌曲时间线引用了其他序列。Timecode 9907 的灯光点引用序列 9422', '歌曲时间线含有原控台动作。Timecode 9907 的 Go 需要保留在原轨道'])('控台修改了原动作后一次核对即可指出原因并保留点：%s', async message => {
+  useDocumentStore.getState().setProject(boundFirst(), 'song.tblink');
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  sync.mockRejectedValueOnce(new Error(`Error invoking remote method: ${message}`));
+  await tickMa2SongSync();
+  expect(useMa2SyncStore.getState().songs.first).toMatchObject({ state: 'blocked', needsSourceCheck: true, requestId: null });
+  expect(sync).toHaveBeenCalledTimes(1);
+});
+
 it('原序列写入期间改成已有时间线，旧读回不能把原序列重新挂回歌曲', async () => {
   useDocumentStore.getState().setProject(boundFirst(), 'song.tblink');
   await prepareMa2RealtimeSession(); stopMa2SongSync('second');
@@ -224,11 +242,53 @@ it('原序列写入期间改成已有时间线，旧读回不能把原序列重�
   expect(useMa2SyncStore.getState().songs.first).toMatchObject({ state: 'pending', requestId: null });
   expect(useMa2SyncStore.getState().songs.first?.message).toContain('已更换控台时间线');
 });
+it('首次写入等待控台回执时重做新建时间线，原回执不能改掉新选择', async () => {
+  const value = project(), first = value.rundown[0]!;
+  first.referenceAudio = { assetId: 'audio', relativePath: 'assets/song.wav', sha256: 'a'.repeat(64), durationMs: 5000 };
+  first.playback = { mtcOffsetMs: 60_000, volume: 100, endAction: 'stop', startMs: 0, endMs: 0, shortcut: '' };
+  first.lighting!.tracks[0]!.clips[0]!.events = [{ id: 'look', kind: 'ma2', action: 'goto', at: 0, executor: '1.103', sequence: 3, cue: '1', label: '红幕' }];
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  const next = { name: '新选择', timecode: 9008, sequence: 9008, executor: '1000.108' };
+  useDocumentStore.getState().execute(newMa2TimelineCommand('first', next, 120_000));
+  useDocumentStore.getState().undo();
+  sync.mockImplementationOnce((request: Ma2SongSyncRequest) => {
+    expect(request.destination?.timecode).toBe(9000);
+    useDocumentStore.getState().redo();
+    const place = request.destination!;
+    return answerOwn({ ...request, binding: { name: place.name, executor: place.executor, sequence: place.sequence, endpoint: '192.0.2.1:30000', show: source.show, layout: null, baselineXml: '<MA/>', points: [],
+      timecode: { number: place.timecode, offset: 1800, slot: 'TC Slot 2', revision: 'b'.repeat(64) } } });
+  });
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  await tickMa2SongSync();
+  expect(sync).toHaveBeenCalledOnce();
+  const current = useDocumentStore.getState().project!.rundown[0]!;
+  expect(current.lighting!.timelineDestination).toEqual(next);
+  expect(current.lighting!.consoleSong).toBeUndefined();
+  expect(current.playback!.mtcOffsetMs).toBe(120_000);
+  expect(useMa2SyncStore.getState().songs.first).toMatchObject({ state: 'pending', checking: false });
+});
 function bothBound() {
   const value = boundFirst();
   value.rundown[1]!.lighting!.consoleSong = { endpoint: '192.0.2.1:30000', show: source.show, sequence: 9001, name: 'second', executor: '1234.102', layout: null, baselineXml: '<baseline/>', points: [{ id: 'point-second', cue: '1.000' }] };
   return value;
 }
+it('手动改为同步乙时，甲的存档完成后不能再向控台写甲', async () => {
+  useDocumentStore.getState().setProject(bothBound(), 'song.tblink');
+  sync.mockImplementation(answerOwn);
+  await prepareMa2RealtimeSession();
+  syncMa2Once('first');
+  await prepareMa2RealtimeSession();
+  archive.mockImplementationOnce(() => {
+    syncMa2Once('second');
+    return Promise.resolve('C:/archive.tblink');
+  });
+  await tickMa2SongSync();
+  expect(sync.mock.calls.map(call => (call[0] as Ma2SongSyncRequest).itemId)).not.toContain('first');
+  expect(useMa2SyncStore.getState().songs.first).toMatchObject({ state: 'pending', checking: false, writing: false });
+  await prepareMa2RealtimeSession();
+  await tickMa2SongSync();
+  expect(sync.mock.calls.map(call => (call[0] as Ma2SongSyncRequest).itemId)).toEqual(['second']);
+});
 it('首轮有多首待同步时切歌，当前请求完成后按新的选择重新排队', async () => {
   const value = bothBound();
   const third = structuredClone(value.rundown[1]!);
@@ -611,9 +671,9 @@ it('以前以中文确认的改名不自动写，点击转换后逐条写入拼�
   expect(pendingMa2Renames(value)).toEqual([]); expect(legacyMa2Renames(value)).toHaveLength(1);
   rename.mockImplementation((request: { change: { sequence: number; cue: string; kind: string } }) => Promise.resolve({ sequence: request.change.sequence, cue: request.change.cue, kind: request.change.kind, show: source.show, generation: source.generation, name: 'MianGuang', backupFile: `tblink_label_${'a'.repeat(32)}.xml` }));
   useMa2RealtimePreference.setState({ enabled: false });
-  await expect(convertMa2LegacyNames(useDocumentStore.getState().documentId)).rejects.toThrow('请先开启实时同步');
-  useMa2RealtimePreference.setState({ enabled: true });
   expect(await convertMa2LegacyNames(useDocumentStore.getState().documentId)).toBe(3);
+  expect(useMa2SyncStore.getState().songs.first?.rewriteLegacyNames).toBe(true);
+  expect(sync).not.toHaveBeenCalled();
   expect(rename).toHaveBeenCalledOnce(); expect(rename.mock.calls[0]?.[0]).toMatchObject({ change: { name: '面光', confirmedName: '面光' } });
   expect(legacyMa2Renames(useDocumentStore.getState().project)).toEqual([]);
   expect(archive).toHaveBeenCalledOnce();
@@ -687,6 +747,163 @@ it('控台上已有时间码的歌（方式 1）也进入同一个逐首同步�
   expect(catalog).not.toHaveBeenCalled();
   expect(pendingSongSummary(useDocumentStore.getState().project).map(item => item.itemId)).toEqual(['second']);
 });
+it('切歌后上一首的目录读取报错，不覆盖当前节目的同步状态', async () => {
+  const value = project();
+  value.rundown[0]!.lighting!.ma2Bindings = [{ id: 'bound', timecode: 3, name: 'Timecode 3', sourceXml: '<MA/>', readAt: new Date().toISOString(), baselineTracks: [], mappings: [] }];
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  let failRead: (reason: Error) => void = () => { throw new Error('读取尚未开始'); };
+  catalog.mockImplementationOnce(() => new Promise((_resolve, reject) => { failRead = reject; }));
+  syncMa2Once('first');
+  const first = prepareMa2RealtimeSession();
+  await vi.waitFor(() => expect(catalog).toHaveBeenCalledOnce());
+  syncMa2Once('second');
+  const secondSession = useMa2SyncStore.getState().session;
+  failRead(new Error('上一首的控台目录读取失败'));
+  expect(await first).toBe(false);
+  expect(useMa2SyncStore.getState().session).toBe(secondSession);
+  expect(recordLog).not.toHaveBeenCalled();
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  expect(Object.keys(useMa2SyncStore.getState().songs)).toEqual(['second']);
+});
+
+it('控台把本曲起点移走时，先显示实读的差异，不重建选曲时间线', async () => {
+  const value = project(), song = value.rundown[0]!;
+  const readAt = new Date().toISOString();
+  const directory = { ...source, entries: [{ target: 3, name: '节目' }] };
+  const row = { target: 3, name: '节目', eventCount: 0, offset: '0', frameFormat: '30 FPS', slot: 'TC Slot 2', error: null, warnings: [], events: [] };
+  song.playback = { volume: 100, endAction: 'stop', startMs: 0, endMs: 0, mtcOffsetMs: 0, shortcut: '' };
+  song.lighting!.ma2Bindings = [{ id: 'bound', timecode: 3, name: '节目', sourceXml: '<MA/>', readAt, timeOriginMs: 0, baselineTracks: [], mappings: [] }];
+  value.ma2ReadState = { source: '192.0.2.1:30000', catalog: { directory, readAt, entries: [row] }, pairs: {}, failures: [], message: '', selectedTarget: null, query: '', filter: 'all' };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  const prepare = vi.fn(); window.tbLink.prepareMa2Playback = prepare;
+  catalog.mockResolvedValueOnce({ directory, readAt, entries: [], needsPlaybackPreparation: true, songOffsets: [{ target: 3, offset: '30' }] })
+    .mockResolvedValueOnce({ directory, readAt, entries: [{ ...row, offset: '30' }] });
+  syncMa2Once('first');
+  expect(await prepareMa2RealtimeSession()).toBe(false);
+  expect(useMa2SyncStore.getState().songs.first?.message).toContain('00:00:01:00');
+  expect(prepare).not.toHaveBeenCalled();
+  expect(sync).not.toHaveBeenCalled();
+});
+
+it('桥重新安装后只重读本曲，其他已确认时间线保留原内容和读取时间', async () => {
+  const value = project(), song = value.rundown[0]!;
+  const oldTime = '2026-11-01T01:00:00.000Z', readAt = new Date().toISOString();
+  const directory = { ...source, entries: [{ target: 3, name: '本曲' }, { target: 8, name: '其他曲' }] };
+  const rows = directory.entries.map(entry => ({ ...entry, eventCount: 0, offset: '0', frameFormat: '30 FPS', slot: 'TC Slot 2', error: null, warnings: [], events: [] }));
+  value.ma2ReadState = { source: '192.0.2.1:30000', catalog: { directory: { ...directory, generation: 'previous' }, entries: rows, readAt: oldTime },
+    pairs: {}, failures: [], message: '', selectedTarget: null, query: '', filter: 'all' };
+  song.lighting!.ma2Bindings = [{ id: 'bound', timecode: 3, name: '本曲', sourceXml: '<MA/>', readAt: oldTime, timeOriginMs: 0, baselineTracks: [], mappings: [] }];
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  catalog.mockResolvedValueOnce({ directory, readAt, entries: [], songOffsets: [{ target: 3, offset: '0' }] })
+    .mockResolvedValueOnce({ directory, readAt, entries: [rows[0]!] });
+  syncMa2Once('first');
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  const saved = useDocumentStore.getState().project?.ma2ReadState?.catalog;
+  expect(saved?.entries).toEqual([rows[0], { ...rows[1], readAt: oldTime }]);
+  expect(saved?.incomplete).toBeUndefined();
+  expect(catalog.mock.calls[1]?.[0].targets).toEqual([3]);
+});
+
+it('从空 Show 切回后只补读已关联的节目，保存真实起点和事件，并保留其他歌曲的编排', async () => {
+  const value = project();
+  const readAt = new Date().toISOString();
+  value.rundown[0]!.lighting!.ma2Bindings = [{ id: 'bound', timecode: 3, name: '节目', sourceXml: '<MA/>', readAt, timeOriginMs: 0, baselineTracks: [], mappings: [] }];
+  value.ma2ReadState = { source: '192.0.2.1:30000', catalog: { directory: { ...source, show: 'Empty', entries: [] }, readAt, entries: [] },
+    pairs: {}, failures: [], message: '', selectedTarget: null, query: '', filter: 'all' };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  const other = useDocumentStore.getState().project!.rundown[1];
+  const directory = { ...source, entries: [{ target: 3, name: '节目' }, { target: 8, name: '另一首' }] };
+  const answer = { directory, readAt, entries: [], songOffsets: [{ target: 3, offset: '0' }] };
+  const row = { target: 3, name: '节目', eventCount: 1, offset: '0', frameFormat: '30 FPS', slot: 'TC Slot 2', error: null, warnings: [],
+    events: [{ path: '0', time: '30', action: 'Goto', executor: '1.103', cue: '2', name: null }] };
+  catalog.mockResolvedValueOnce(answer).mockResolvedValueOnce({ directory, readAt, entries: [row] }).mockResolvedValue(answer);
+  syncMa2Once('first');
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  expect(catalog.mock.calls[1]?.[0]).toMatchObject({ targets: [3], expectedSource: source });
+  const after = useDocumentStore.getState().project!;
+  expect(after.ma2ReadState?.catalog).toMatchObject({ entries: [row], directory });
+  expect(after.ma2ReadState?.catalog.incomplete).toContain('其余时间线');
+  expect(after.rundown[1]).toBe(other);
+  expect(sync).not.toHaveBeenCalled();
+  syncMa2Once('first');
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  expect(catalog.mock.calls.filter(([request]) => request.targets?.length)).toHaveLength(1);
+});
+
+it('确认当前节目会检查同一 Show 中其他时间线移入的冲突，并结束这次手动同步', async () => {
+  const value = project();
+  value.rundown[0]!.lighting!.ma2Bindings = [{ id: 'bound', timecode: 3, name: '节目', sourceXml: '<MA/>', readAt: new Date().toISOString(), playback: 'editable', timeOriginMs: 0, baselineTracks: [], mappings: [] }];
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  const directory = { ...source, entries: [{ target: 2, name: '另一首' }, { target: 3, name: '节目' }] };
+  const message = 'Timecode 3 和 2 的时间范围重叠，请修改其中一条的 MTC 起始码';
+  const answer = { directory, readAt: new Date().toISOString(), entries: [] };
+  catalog.mockResolvedValueOnce({ ...answer, playbackConflict: message }).mockResolvedValue(answer);
+  syncMa2Once('first');
+  expect(await prepareMa2RealtimeSession()).toBe(false);
+  expect(catalog.mock.calls[0]?.[0]).toMatchObject({ targets: [], checkMtcFor: [3] });
+  expect(useMa2SyncStore.getState().songs.first).toMatchObject({ state: 'blocked', message });
+  expect(useMa2RealtimePreference.getState().once).toBeNull();
+  syncMa2Once('first');
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+});
+
+it('原生时间线使用其他时码槽时，按已经绑定的原轨核对，保留其编辑用途', async () => {
+  const value = project();
+  value.rundown[0]!.lighting!.ma2Bindings = [{ id: 'bound', timecode: 3, name: '节目', sourceXml: '<MA><Timecode index="2" slot="TC Slot 1"/></MA>', readAt: new Date().toISOString(), baselineTracks: [], mappings: [] }];
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  catalog.mockResolvedValueOnce({ directory: { ...source, entries: [{ target: 3, name: '节目' }] }, readAt: new Date().toISOString(), entries: [] });
+  syncMa2Once('first');
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  expect(catalog.mock.calls[0]?.[0]).toMatchObject({ checkMtcFor: [3], otherClockBindings: [{ target: 3, slot: 'TC Slot 1' }] });
+});
+it.each([true, false])('手动同步在选曲设置失效时恢复同一 Show，并以第二次读回为准（恢复 %s）', async restored => {
+  const value = project();
+  value.rundown[0]!.lighting!.ma2Bindings = [{ id: 'bound', timecode: 3, name: '节目', sourceXml: '<MA/>', readAt: new Date().toISOString(), baselineTracks: [], mappings: [] }];
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  const answer = { directory: { ...source, entries: [{ target: 3, name: '节目' }] }, readAt: new Date().toISOString(), entries: [] };
+  catalog.mockResolvedValueOnce({ ...answer, needsPlaybackPreparation: true })
+    .mockResolvedValueOnce(restored ? answer : { ...answer, needsPlaybackPreparation: true });
+  window.tbLink.prepareMa2Playback = playbackPreparation;
+  playbackPreparation.mockResolvedValueOnce(true);
+  syncMa2Once('first');
+  expect(await prepareMa2RealtimeSession()).toBe(restored);
+  expect(playbackPreparation).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ expectedSource: source }));
+  expect(catalog).toHaveBeenCalledTimes(2);
+  if (!restored) expect(useMa2SyncStore.getState().songs.first).toMatchObject({ state: 'blocked' });
+});
+
+it.each(['另一场演出', source.show])('当前节目原 Timecode 在「%s」中缺失时结束本次同步并保留素材；恢复原编号可继续', async show => {
+  const value = project();
+  const lighting = value.rundown[0]!.lighting!;
+  lighting.ma2Bindings = [{ id: 'bound', timecode: 3, name: '原灯光', sourceXml: '<MA/>', readAt: new Date().toISOString(), playback: 'editable', timeOriginMs: 0, baselineTracks: [], mappings: [] }];
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  const saved = useDocumentStore.getState().project;
+  startMa2SongSync('second', 'second', ma2SongSyncSettings(value, 'second'));
+  const second = { ...useMa2SyncStore.getState().songs.second!, state: 'verified' as const, checkedAt: 100 };
+  useMa2SyncStore.setState({ songs: { second } });
+  const directory = { ...source, show, entries: [{ target: 9001, name: '其他时间线' }] };
+  const answer = { directory, readAt: new Date().toISOString(), entries: [] };
+  catalog.mockResolvedValue(answer);
+  syncMa2Once('first');
+  expect(await prepareMa2RealtimeSession()).toBe(false);
+  expect(useMa2SyncStore.getState().songs.first).toMatchObject({ state: 'blocked', needsSourceCheck: true });
+  expect(useMa2SyncStore.getState().songs.first?.message).toContain(`当前 Show「${show}」没有「first」关联的 Timecode 3`);
+  expect(useMa2SyncStore.getState().session.status).not.toBe('blocked');
+  expect(useMa2SyncStore.getState().songs.second?.state).toBe(show === source.show ? 'verified' : 'pending');
+  expect(useDocumentStore.getState().project).toBe(saved);
+  expect(useMa2RealtimePreference.getState().once).toBeNull();
+  expect(sync).not.toHaveBeenCalled();
+  expect(metadata).not.toHaveBeenCalled();
+  expect(await prepareMa2RealtimeSession()).toBe(false);
+  expect(catalog).toHaveBeenCalledTimes(1);
+
+  catalog.mockResolvedValue({ ...answer, directory: { ...directory, entries: [{ target: 3, name: '控台上的新名称' }] } });
+  metadata.mockResolvedValue({ ...value.ma2MaterialLibrary!.library, directory: { ...source, show, entries: [] } });
+  syncMa2Once('first');
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  expect(useMa2SyncStore.getState().session.status).toBe('ready');
+});
+
 it('桥重启后先核对同一 Show 的新 generation，再续接原歌曲，不反复读整曲', async () => {
   vi.useFakeTimers();
   await prepareMa2RealtimeSession();
@@ -748,7 +965,7 @@ it('人工重新核对时恢复暂停歌曲，仍在取消中的歌曲不会并�
   retryMa2RealtimeSession();
   await vi.waitFor(() => expect(useMa2SyncStore.getState().songs.second?.state).toBe('pending'));
   expect(useMa2SyncStore.getState().songs.first?.state).toBe('paused');
-  expect(useMa2RealtimePreference.getState().enabled).toBe(true);
+  expect(useMa2RealtimePreference.getState().enabled).toBe(false);
 });
 it('断线后进入等待，保持待同步修改且不尝试写控台', async () => {
   await prepareMa2RealtimeSession();

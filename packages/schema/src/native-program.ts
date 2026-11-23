@@ -6,6 +6,8 @@ const time = z.number().finite().nonnegative();
 export const programPlayerStateSchema = z.object({
   playlistId: z.string().optional(), status: z.enum(['stopped', 'preparing', 'playing', 'paused', 'error']),
   itemId: z.string().nullable(), positionMs: time, durationMs: time, volume: z.number().min(0).max(100),
+  /** Audio position at the start of this uninterrupted playback, retained for late observers. */
+  playbackOrigin: z.object({ run: z.number().int().nonnegative(), positionMs: time }).strict().optional(),
   /** What the song in the player does when it ends, this run: its own end action, else `defaultEndAction`. */
   endAction: z.enum(['stop', 'next', 'loop', 'pause']),
   /** The player bar's 播完后, for every song without its own end action (0.5.9). Absent in older events: the same as

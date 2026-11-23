@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AutomaticMusicJob } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2AttributeStore } from '../stores/ma2-attribute-store';
-import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
+import { cancelMaterialWait, useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 import { useMa2ReadStore } from '../stores/ma2-read-store';
 import { useMa2ExecutorPageStore } from '../stores/ma2-executor-page-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
@@ -54,8 +54,8 @@ export function TaskSidebarProgress({ notify }: { notify: Notify }): JSX.Element
     </Progress>)}
     {attributes.busy ? <Ma2ReadProgress compact progress={attributes.progress} waiting="读取属性并分类"/> : null}
     {attributes.busy && attributes.activeId ? <Button variant="secondary" size="sm" onClick={() => cancelAttributes(attributes.activeId!)}>取消读取</Button> : null}
-    {scanning ? <Progress compact label="控台页面读取进度" title="读取全部 Cue 位置" value={scanned} max={pages || 1} status={pages ? `${scanned} / ${pages} 页` : '正在获取页数'} detail="扫描控台上每一页执行器，找出每个 Cue 放在哪里；不会切换控台当前页" /> : null}
-    {materials.documentId === documentId && materials.busy ? <Ma2ReadProgress compact progress={materials.progress} waiting="连接控台并读取素材"/> : null}
+    {scanning ? <Progress compact label="控台页面读取进度" title="读取全部 Cue 位置" value={scanned} max={pages || 1} status={pages ? `${scanned} / ${pages} 页` : '正在读取执行器分配'} detail="读取 Cue 所在的页码和格号" /> : null}
+    {materials.documentId === documentId && materials.waiting ? <div><p role="status">{materials.message}</p><Button variant="secondary" size="sm" onClick={cancelMaterialWait}>取消等待</Button></div> : materials.documentId === documentId && materials.busy ? <Ma2ReadProgress compact progress={materials.progress} waiting="连接控台并读取素材"/> : null}
     {catalog.busy ? <Ma2ReadProgress compact progress={catalog.progress} waiting={catalog.message || "读取控台时间线"}/> : null}
     {catalog.busy && catalog.activeId ? <Button variant="secondary" size="sm" onClick={() => cancelAttributes(catalog.activeId!)}>取消读取</Button> : null}
     {music ? <MusicAnalysisProgress sidebar job={music} submitting={false}/> : null}

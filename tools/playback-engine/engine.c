@@ -50,34 +50,56 @@ void acknowledge(UINT32 request, UINT32 generation, int32_t code) {
   printf("{\"protocol\":4,\"kind\":\"ack\",\"requestId\":%u,\"generation\":%u,\"ok\":%s,\"code\":%d}\n", request, generation, code >= 0 ? "true" : "false", code);
   fflush(stdout); LeaveCriticalSection(&engine.output_lock);
 }
+// Each bin fits in three decimal digits, plus a separator or the final terminator.
+static BOOL format_spectrum(char text[4 * ANALYSIS_BINS], const unsigned char bins[ANALYSIS_BINS]) {
+  char *next = text;
+  for (UINT32 i = 0; i < ANALYSIS_BINS; i++) {
+    if (i) *next++ = ',';
+    int digits = snprintf(next, 4, "%u", (unsigned)bins[i]);
+    if (digits < 1 || digits > 3) return FALSE;
+    next += digits;
+  }
+  return TRUE;
+}
 DWORD WINAPI telemetry_worker(void *unused) {
   (void)unused; CoInitializeEx(NULL, COINIT_MULTITHREADED);
   const char *states[] = { "empty", "ready", "playing", "paused", "stopped", "ended", "error" };
   double previous[ANALYSIS_BINS] = {0}, peaks[2] = {0}; unsigned char bins[ANALYSIS_BINS] = {0};
   int16_t samples[ANALYSIS_FRAMES * 2]; UINT32 monitor_epoch = 0;
+  char spectrum[4 * ANALYSIS_BINS];
+  BOOL spectrum_valid = format_spectrum(spectrum, bins), monitor_playing = FALSE;
   ULONGLONG last_analysis = 0;
   UINT32 sent = 0, interruptions = 0, reopens = 0, transient = 0; int32_t midi_error = 0, interruption = 0, reopen_result = 0, transient_code = 0;
   double late = 0, wake_gap = 0, midi_lock_wait = 0, audio_lock_wait = 0, midi_send = 0;
   // Formal output consumes device observations at 100 Hz. UI/spectrum updates
   // stay at 20 Hz; a 50 ms telemetry period consumed half the output deadline.
   while (WaitForSingleObject(engine.quit, 10) != WAIT_OBJECT_0) {
+    ULONGLONG now = GetTickCount64();
     EnterCriticalSection(&engine.lock);
     UINT32 generation = engine.generation, state = engine.state, rate = engine.rate, underruns = engine.underruns;
     UINT64 frequency = engine.clock_frequency, qpc = engine.clock_qpc, buffered = engine.loaded - engine.consumed;
     double position = engine.position_ms; int32_t audio_error = engine.audio_error;
     double gain = playback_gain(&engine.envelope, (UINT64)llround(position * rate / 1000.0));
     UINT32 epoch = engine.epoch;
-    for (UINT32 i = 0; i < ANALYSIS_FRAMES; i++) {
-      UINT32 at = (engine.monitor_at + i) % ANALYSIS_FRAMES;
-      samples[i * 2] = engine.monitor[at * 2]; samples[i * 2 + 1] = engine.monitor[at * 2 + 1];
+    BOOL playing = state == PLAYING;
+    BOOL analyze = playing && (!monitor_playing || epoch != monitor_epoch || now - last_analysis >= 50);
+    if (analyze) {
+      UINT32 tail = (ANALYSIS_FRAMES - engine.monitor_at) * 2;
+      memcpy(samples, engine.monitor + engine.monitor_at * 2, tail * sizeof(*samples));
+      memcpy(samples + tail, engine.monitor, engine.monitor_at * 2 * sizeof(*samples));
     }
     LeaveCriticalSection(&engine.lock);
-    ULONGLONG now = GetTickCount64();
-    if (epoch != monitor_epoch || state != PLAYING || now - last_analysis >= 50) {
-      if (epoch != monitor_epoch || state != PLAYING) { memset(previous, 0, sizeof(previous)); monitor_epoch = epoch; }
-      if (state != PLAYING) memset(samples, 0, sizeof(samples));
-      playback_analyze(samples, previous, bins, peaks); last_analysis = now;
+    if (analyze) {
+      if (epoch != monitor_epoch) memset(previous, 0, sizeof(previous));
+      playback_analyze(samples, previous, bins, peaks);
+      last_analysis = now;
+    } else if (monitor_playing && !playing) {
+      memset(previous, 0, sizeof(previous));
+      memset(bins, 0, sizeof(bins));
+      memset(peaks, 0, sizeof(peaks));
     }
+    if (analyze || (monitor_playing && !playing)) spectrum_valid = format_spectrum(spectrum, bins);
+    monitor_playing = playing; monitor_epoch = epoch;
     // A WinMM send can block for a second while Windows is still creating a port, and the MIDI worker
     // holds midi_lock while it sends. Position telemetry never waits for it: busy means the last values.
     if (TryEnterCriticalSection(&engine.midi_lock)) {
@@ -89,14 +111,10 @@ DWORD WINAPI telemetry_worker(void *unused) {
     TelemetryMessage message;
     int size = snprintf(message.bytes, TELEMETRY_BYTES, "{\"protocol\":4,\"kind\":\"clock\",\"generation\":%u,\"state\":\"%s\",\"positionMs\":%.6f,\"qpc100ns\":\"%llu\",\"clockFrequency\":%llu,\"sampleRate\":%u,\"underruns\":%u,\"midiSent\":%u,\"midiError\":%d,\"midiInterruptions\":%u,\"midiInterruption\":%d,\"midiTransient\":%u,\"midiTransientCode\":%d,\"midiReopens\":%u,\"midiReopenResult\":%d,\"audioError\":%d,\"maxMidiLatenessMs\":%.6f,\"bufferedFrames\":%llu,\"gain\":%.8f,\"analysis\":{\"fftSize\":2048,\"peaks\":[%.8f,%.8f],\"spectrum\":[",
       generation, states[state], position, (unsigned long long)qpc, (unsigned long long)frequency, rate, underruns, sent, midi_error, interruptions, interruption, transient, transient_code, reopens, reopen_result, audio_error, late, (unsigned long long)buffered, gain, peaks[0], peaks[1]);
-    BOOL valid = size > 0 && size < (int)TELEMETRY_BYTES;
-    for (unsigned i = 0; valid && i < ANALYSIS_BINS; i++) {
-      int written = snprintf(message.bytes + size, TELEMETRY_BYTES - (size_t)size, "%s%u", i ? "," : "", bins[i]);
-      valid = written > 0 && written < (int)TELEMETRY_BYTES - size; size += written;
-    }
+    BOOL valid = spectrum_valid && size > 0 && size < (int)TELEMETRY_BYTES;
     if (valid) {
       int written = snprintf(message.bytes + size, TELEMETRY_BYTES - (size_t)size,
-        "]},\"midiTiming\":{\"wakeGapMs\":%.6f,\"midiLockWaitMs\":%.6f,\"audioLockWaitMs\":%.6f,\"sendMs\":%.6f}}\n", wake_gap, midi_lock_wait, audio_lock_wait, midi_send);
+        "%s]},\"midiTiming\":{\"wakeGapMs\":%.6f,\"midiLockWaitMs\":%.6f,\"audioLockWaitMs\":%.6f,\"sendMs\":%.6f}}\n", spectrum, wake_gap, midi_lock_wait, audio_lock_wait, midi_send);
       valid = written > 0 && written < (int)TELEMETRY_BYTES - size; size += written;
     }
     message.length = valid ? (size_t)size : 0;

@@ -2,9 +2,9 @@ import { ma2TimelineEditRequestSchema } from '@tb/schema';
 import { editMa2Timeline, readMa2MtcRanges } from './link/ma2-timeline-edit';
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
 import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
-import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema, ma2ExecutorChannelChoiceRequestSchema } from '@tb/schema';
+import { ma2ExecutorPageDirectoryRequestSchema, ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema, ma2ExecutorChannelChoiceRequestSchema } from '@tb/schema';
 import { ma2RangeSourceSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
-import { clockFromNativeStatus, firstTimeWarning, holdForShow, isShowWait, lightingReadBackLogs, MA2_READ_CANCELLED, materialSceneTargets, projectFileReferences, showGate, toUserErrorReason, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
+import { clockFromNativeStatus, firstTimeWarning, holdForShow, isShowWait, lightingReadBackLogs, MA2_BRIDGE_BUSY_BEFORE_REQUEST, MA2_READ_CANCELLED, materialSceneTargets, projectFileReferences, showGate, toUserErrorReason, type InternalPlayerState, type ShowGate, type ShowOperation } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
 import { assertMa2ConnectionOwner, isLocalMa2Address, readMa2TcpOwners, waitForMa2Listener } from './link/ma2-connection-owner';
@@ -62,9 +62,10 @@ import ma2PluginXml from '../../../../tools/ma2/tblink_bridge.xml?raw';
 import ma2PluginInstructions from '../../../../tools/ma2/README.md?raw';
 import { assignMa2PoolSequence } from './link/ma2-pool-route';
 import { addMa2FirstTrackCues } from './link/ma2-first-track-cues';
-import { readCueAttributeNames } from './link/ma2-cue-attributes';
-import { ma2CueAttributesRequestSchema, ma2FirstTrackRequestSchema } from '@tb/schema';
+import { readCueAttributeNames, readCueValues, writeOriginalCueValues } from './link/ma2-cue-attributes';
+import { ma2CueAttributesRequestSchema, ma2WriteCueValuesRequestSchema, ma2FirstTrackRequestSchema } from '@tb/schema';
 import { compareMa2LightingReadback } from './link/ma2-comparison';
+import { readMa2PreviewInShow } from './link/ma2-network-preview';
 import { convertMa2Snapshot } from './link/ma2-timecode-conversion';
 import { readFile, stat, statfs, mkdtemp, writeFile, mkdir } from 'node:fs/promises';
 import { assetResponse } from './link/asset-response';
@@ -1057,11 +1058,12 @@ function registerIpc(
     await ma2NetworkReady;
     return request.network ? ma2Network.get(request.network) : ma2Connections.get(request.dataDirectory);
   };
-  const sendMa2Cue = async (payload: unknown): Promise<void> => {
+  const sendMa2Cue = async (payload: unknown, stillOwed?: () => boolean): Promise<void> => {
     await ma2NetworkReady;
     const request = ma2PlaybackRequestSchema.parse(payload);
     try {
-      const queue = await ma2Network.playCue(request);
+      const queue = stillOwed ? await ma2Network.playPendingOff(request, stillOwed) : await ma2Network.playCue(request);
+      if (!queue) return;
       await logger.record({ level: 'info', category: 'operator', device: 'MA2', message: request.action.action === 'off' ? 'MA2 关灯指令已发送' : 'MA2 Cue 网络指令已发送', result: 'succeeded', details: { action: request.action, queue } });
     } catch (error) {
       await logger.record({ level: 'error', category: 'device', device: 'MA2', message: String(error), result: 'failed' });
@@ -1110,7 +1112,7 @@ function registerIpc(
     const host = new NativeProgramHost(project, request.projectPath, request.revision, {
       executable: app.isPackaged ? join(process.resourcesPath, 'playback-engine/tblink-playback.exe')
         : process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(__dirname, '../../../../tools/playback-engine/bin/tblink-playback.exe'),
-      audio: () => nativePlayer?.status ?? null, authorize: () => authorizeOutput(), configuration: () => callbacks.configuration(),
+      audio: () => nativePlayer?.status ?? null, deskRanges: () => ma2Network.playbackRanges(), authorize: () => authorizeOutput(), configuration: () => callbacks.configuration(),
       claimMidiOutput: (name, owner) => midiPortBroker.claimFormal(name, owner),
       midiOutputs: async () => (await player().devices('all', true)).midiOutputs,
       preciseSeeking: () => callbacks.configuration().preciseSeeking, changed: state => callbacks.changed(state),
@@ -1203,26 +1205,31 @@ function registerIpc(
   });
   handle('link:ma2-preview', async (event, value: unknown) => {
     const request = ma2PreviewRequestSchema.parse(value);
-    if (request.progressId) {
-      const { network } = request;
-      if (!network || request.syncSequences) throw new Error('只能中断只读的控台时间线检查');
-      const task = beginMa2Read(event, request.progressId, true);
-      try {
-        await ma2NetworkReady;
-        return await ma2Network.preview(network, request.target, request.timeOriginMs, task.signal);
-      } catch (cause) {
-        if (task.signal.aborted && cause === task.signal.reason) return null;
-        throw cause;
-      } finally { task.finish(); }
-    }
-    if (request.syncSequences) {
-      const { service } = await getMa2Connection(request);
-      const network = request.network;
-      return service.previewEdit(request.target, request.timeOriginMs, request.syncSequences, network && (() => ma2Network.preview(network, request.target, request.timeOriginMs)));
-    }
-    if (request.network) { await ma2NetworkReady; return ma2Network.preview(request.network, request.target, request.timeOriginMs); }
-    const snapshot = await (await getMa2Connection(request)).bridge.request('SNAPSHOT', request.target);
-    return convertMa2Snapshot(snapshot, request.target, [], request.timeOriginMs);
+    const read = async () => {
+      if (request.progressId) {
+        const { network } = request;
+        if (!network || request.syncSequences) throw new Error('只能中断只读的控台时间线检查');
+        const task = beginMa2Read(event, request.progressId, true);
+        try {
+          await ma2NetworkReady;
+          return await ma2Network.preview(network, request.target, request.timeOriginMs, task.signal, request.expectedSource);
+        } catch (cause) {
+          if (task.signal.aborted && cause === task.signal.reason) return null;
+          throw cause;
+        } finally { task.finish(); }
+      }
+      if (request.syncSequences) {
+        const { service } = await getMa2Connection(request);
+        const network = request.network;
+        return service.previewEdit(request.target, request.timeOriginMs, request.syncSequences, network && (() => ma2Network.preview(network, request.target, request.timeOriginMs, undefined, request.expectedSource)), request.verifyOnApply === true);
+      }
+      if (request.network) { await ma2NetworkReady; return ma2Network.preview(request.network, request.target, request.timeOriginMs, undefined, request.expectedSource); }
+      const snapshot = await (await getMa2Connection(request)).bridge.request('SNAPSHOT', request.target);
+      return convertMa2Snapshot(snapshot, request.target, [], request.timeOriginMs);
+    };
+    if (!request.expectedSource) return read();
+    const { bridge } = await getMa2Connection(request);
+    return readMa2PreviewInShow(bridge, request.expectedSource, read);
   });
   /**
    * A console request that failed, in the run log. One the show held (the program moves, prepares or stops: isShowWait)
@@ -1242,7 +1249,7 @@ function registerIpc(
       if (request.projectPath && (!request.projectId || (await projectService.open(request.projectPath)).projectId !== request.projectId)) throw new Error('读取进度记录和当前工程对不上');
       const recovery = request.projectPath && request.projectId ? new Ma2ReadRecovery(request.projectPath, request.projectId, request.network ? `${request.network.host}:${request.network.port}` : '本机 onPC') : undefined;
       const checkpoint = recovery?.checkpoint.bind(recovery);
-      const catalog = request.network ? await ma2Network.readCatalog(request.network, task.report, task.signal, request.targets, checkpoint, request.expectedSource) : await readMa2Catalog((await getMa2Connection(request)).bridge, showGateNow, undefined, task.report, task.signal, { targets: request.targets, checkpoint, expectedSource: request.expectedSource });
+      const catalog = request.network ? await ma2Network.readCatalog(request.network, task.report, task.signal, request.targets, checkpoint, request.expectedSource, request.checkMtcFor, request.otherClockBindings, request.songPlayback) : await readMa2Catalog((await getMa2Connection(request)).bridge, showGateNow, undefined, task.report, task.signal, { targets: request.targets, checkpoint, expectedSource: request.expectedSource });
       for (const entry of catalog.entries) if (entry.error) await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `Timecode ${entry.target} 扫描失败：${entry.error}`, result: 'failed' });
       await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `已扫描 ${catalog.entries.length} 条 Timecode，其中 ${catalog.entries.filter(entry => entry.error).length} 条读取出错`, result: catalog.entries.some(entry => entry.error) ? 'failed' : 'succeeded' });
       return catalog;
@@ -1301,7 +1308,7 @@ function registerIpc(
     const task = beginMa2Read(event, request.progressId);
     const started = performance.now();
     try {
-      const changed = await ma2Network.prepareMtcPlayback(request.network, true, [], undefined, undefined, task);
+      const changed = await ma2Network.prepareMtcPlayback(request.network, true, [], undefined, undefined, { ...task, expectedSource: request.expectedSource, muteSelectorTrack: request.muteSelectorTrack, songSettingsTargets: request.songSettingsTargets, songTriggerTargets: request.songTriggerTargets, selectorTriggerTarget: request.selectorTriggerTarget, selectorCommandTarget: request.selectorCommandTarget, selectorSettingsTarget: request.selectorSettingsTarget });
       await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `控台选曲检查完成，用了 ${Math.round(performance.now() - started)} ms`, details: { elapsedMs: Math.round(performance.now() - started), changed } });
       return changed;
     } catch (error) { await recordMa2Failure('准备控台选曲', `控台选曲没有准备完成：${String(error)}`, error); throw error; }
@@ -1336,7 +1343,7 @@ function registerIpc(
   });
   handle('link:ma2-layouts', async (_event, value: unknown) => ma2Network.listLayouts(ma2LayoutDirectoryRequestSchema.parse(value)));
   handle('link:ma2-executor-pages', async (_event, value: unknown) => {
-    try { return await ma2Network.listExecutorPages(ma2LayoutDirectoryRequestSchema.parse(value)); }
+    try { return await ma2Network.listExecutorPages(ma2ExecutorPageDirectoryRequestSchema.parse(value)); }
     catch (error) { await recordMa2Failure('读取执行器页面目录', `读取执行器页面目录失败：${String(error)}`, error); throw error; }
   });
   handle('link:ma2-live-connect', async (_event, value: unknown) => {
@@ -1455,6 +1462,26 @@ function registerIpc(
       return result;
     } catch (error) {
       await recordMa2Failure(`读取执行器 ${request.executor}`, error instanceof Error ? error.message : String(error), error);
+      throw error;
+    }
+  });
+  handle('link:ma2-cue-values', async (_event, value: unknown) => {
+    const request = ma2CueAttributesRequestSchema.parse(value);
+    const { bridge } = await getMa2Connection(request);
+    return readCueValues(bridge, request);
+  });
+  handle('link:ma2-write-cue-values', async (_event, value: unknown) => {
+    const request = ma2WriteCueValuesRequestSchema.parse(value);
+    if (request.network) await ma2Network.checkEditingSource(request.network, request.expectedSource);
+    const { bridge } = await getMa2Connection(request);
+    const object = `Sequence ${request.sequence} Cue ${request.cue}`;
+    try {
+      const file = await writeOriginalCueValues(bridge, request);
+      await ma2ConsoleBackups.record(bridge, { console: ma2ConsoleKey(request), object, files: [file] }, 'recorded');
+      await logger.record({ level: 'info', category: 'operator', device: 'MA2', message: `${object} 的 ${request.edits.length} 项数值已在控台核对`, result: 'succeeded' });
+      return request.edits.map(edit => ({ ...edit, value: Number(Math.fround(edit.value).toPrecision(8)) }));
+    } catch (error) {
+      await recordMa2Failure(`修改 ${object}`, error instanceof Error ? error.message : String(error), error);
       throw error;
     }
   });
@@ -1738,6 +1765,7 @@ function registerIpc(
       catch (error) { await logger.record({ level: 'warning', category: 'system', message: '自动存档超出保留数量，但没能移到回收站', details: { path, error: error instanceof Error ? error.message : String(error) } }); return false; }
     });
   });
+  handle('link:read-project-archive-settings', () => archiveSettings.read());
   handle('link:project-archive-settings', async (_event, payload: unknown) => {
     const request = projectArchiveSettingsActionSchema.parse(payload);
     const settings = await archiveSettings.read();
@@ -2666,13 +2694,14 @@ const ipcFailures = new Map<string, { loggedAt: number; suppressed: number }>();
  * Polled channels repeat the same failure, so one entry per cause per window. */
 function recordIpcFailure(channel: string, elapsedMs: number, error: unknown): void {
   if (channel.startsWith('link:ma2-') && error instanceof Error && error.message === MA2_READ_CANCELLED) return;
+  const waiting = channel.startsWith('link:ma2-') && error instanceof Error && error.message === MA2_BRIDGE_BUSY_BEFORE_REQUEST;
   const technicalError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   if (!ipcLogger) { console.error(`IPC ${channel} 失败（运行日志尚未就绪）`, error); return; }
   const key = `${channel}\n${technicalError}`, now = Date.now(), previous = ipcFailures.get(key);
   if (previous && now - previous.loggedAt < ipcFailureWindowMs) { previous.suppressed++; return; }
   ipcFailures.set(key, { loggedAt: now, suppressed: 0 });
-  void ipcLogger.record({ level: 'error', category: 'system', device: 'IPC', message: `${channel} 失败：${technicalError.split('\n')[0]!.slice(0, 300)}`,
-    result: 'failed', details: { channel, elapsedMs: Math.round(elapsedMs), technicalError: technicalError.slice(0, 8000),
+  void ipcLogger.record({ level: waiting ? 'info' : 'error', category: 'system', device: 'IPC', message: waiting ? MA2_BRIDGE_BUSY_BEFORE_REQUEST : `${channel} 失败：${technicalError.split('\n')[0]!.slice(0, 300)}`,
+    result: waiting ? 'queued' : 'failed', details: { channel, elapsedMs: Math.round(elapsedMs), technicalError: technicalError.slice(0, 8000),
       ...(previous ? { repeatsSinceLastEntry: previous.suppressed } : {}) } })
     .catch((logError: unknown) => console.error(`IPC ${channel} 失败日志未能写入`, logError, error));
 }

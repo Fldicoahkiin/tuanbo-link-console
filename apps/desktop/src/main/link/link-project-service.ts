@@ -3,6 +3,7 @@ import { constants, createReadStream } from 'node:fs';
 import { access, copyFile, mkdir, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
+import { verifyProjectSequences } from './ma2-sequence-snapshot';
 import {
   legacyReadableSchemaVersion,
   linkMediaAssetSchema,
@@ -102,6 +103,7 @@ export class LinkProjectService {
       throw new Error(`工程文件格式不对，可能已损坏：${projectPath}`, { cause: error });
     }
     const parsed = parseLinkProject(value);
+    if (parsed.schemaVersion >= 4) await verifyProjectSequences(parsed);
     const project = await recoverMa2Material(projectPath, await recoverMa2Read(projectPath, parsed));
     return { project, upgraded: project !== parsed || JSON.stringify(value) !== JSON.stringify(parsed) };
   }
@@ -122,21 +124,27 @@ export class LinkProjectService {
    */
   async olderFormatFile(projectPath: string, schemaVersion: number): Promise<OlderFormatFile | null> {
     assertProjectExtension(projectPath);
-    if (schemaVersion <= legacyReadableSchemaVersion) return null;
-    return this.withProjectFile(projectPath, async () => await diskIsOlderFormat(projectPath) ? { backupName: basename(await freeBackupPath(projectPath)) } : null);
+    // Large lighting projects keep the old file automatically at the first v4 save.
+    if (schemaVersion !== 3) return null;
+    return this.withProjectFile(projectPath, async () => await diskIsOlderFormat(projectPath, legacyReadableSchemaVersion) ? { backupName: basename(await freeBackupPath(projectPath)) } : null);
   }
 
   /** A copy outside any project file, e.g. a recovery copy: atomic, without upgrade backups. */
   async writeCopy(copyPath: string, project: LinkProject): Promise<void> {
     assertProjectExtension(copyPath);
-    return this.withProjectFile(copyPath, () => this.writeProject(copyPath, serializeLinkProject(project)));
+    return this.withProjectFile(copyPath, async () => {
+      if (project.schemaVersion >= 4) await verifyProjectSequences(project);
+      await this.writeProject(copyPath, serializeLinkProject(project));
+    });
   }
 
   private async writeSavedProject(absolutePath: string, project: LinkProject, options: ProjectSaveOptions): Promise<string | null> {
     const content = serializeLinkProject(project);
     // Checked here, in the write queue, against the file as it is now: a save never makes a 0.5.8 file unopenable unasked.
-    const olderFormat = project.schemaVersion > legacyReadableSchemaVersion && await diskIsOlderFormat(absolutePath);
-    if (olderFormat && !options.replaceOlderFormat) throw new Error('这次没有保存：保存后 0.5.8 和更早的版本打不开这个工程，要先确认。请再保存一次，在提示里点“保存”');
+    const largeFormat = project.schemaVersion >= 4;
+    if (largeFormat) await verifyProjectSequences(project);
+    const olderFormat = project.schemaVersion > legacyReadableSchemaVersion && await diskIsOlderFormat(absolutePath, largeFormat ? 3 : legacyReadableSchemaVersion);
+    if (olderFormat && !largeFormat && !options.replaceOlderFormat) throw new Error('这次没有保存：保存后 0.5.8 和更早的版本打不开这个工程，要先确认。请再保存一次，在提示里点“保存”');
     const kept = olderFormat ? await this.keepOlderFormat(absolutePath) : null;
     // The older-format backup is the file as it was; a second copy of it as .bak would add nothing.
     if (options.backupOriginal && !kept) {
@@ -566,14 +574,14 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 /** The file at `path` is one 0.5.8 and earlier open, or one that cannot be read as a project at all (kept rather than
  * overwritten unasked). False when nothing is there or the file is already newer. */
-async function diskIsOlderFormat(path: string): Promise<boolean> {
+async function diskIsOlderFormat(path: string, lastReadable: number): Promise<boolean> {
   let content: string;
   try { content = await readFile(path, 'utf8'); }
   catch (error) { if (isErrorWithCode(error, 'ENOENT')) return false; throw error; }
   let version: unknown;
   try { version = (JSON.parse(content) as { schemaVersion?: unknown }).schemaVersion; }
   catch (error) { if (error instanceof SyntaxError) return true; throw error; }
-  return !(typeof version === 'number' && version > legacyReadableSchemaVersion);
+  return !(typeof version === 'number' && version > lastReadable);
 }
 
 /** `演出（旧版本可打开的备份）.tblink`, then `演出（旧版本可打开的备份 2）.tblink` and on, beside the project. */

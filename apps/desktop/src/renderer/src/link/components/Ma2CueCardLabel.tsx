@@ -8,8 +8,9 @@ import { ma2SequenceLocations, useMa2ExecutorPageStore } from '../stores/ma2-exe
  * such as Cue 2.5 being the third step.
  */
 export function Ma2CueCardLabel({ sequence, cue, name }: { sequence: LibrarySequence; cue: LibrarySequence['cues'][number]; name: string }): JSX.Element {
-  const pages = useMa2ExecutorPageStore();
-  const locations = pages.scope === currentMa2LayoutScope() ? ma2SequenceLocations(pages.pages, sequence.sequence) : [];
+  const pages = useMa2ExecutorPageStore(state => state.locations);
+  const scope = useMa2ExecutorPageStore(state => state.scope);
+  const locations = scope === currentMa2LayoutScope() ? ma2SequenceLocations(pages, sequence.sequence) : [];
   const position = sequence.cues.findIndex(value => Number(value.number) === Number(cue.number));
   const cueLabel = `Cue ${Number(cue.number)}`;
   const step = sequence.complete && sequence.cues.length > 1 && position >= 0 && position + 1 !== Number(cue.number) ? position + 1 : null;

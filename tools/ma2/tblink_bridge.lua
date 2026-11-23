@@ -1,6 +1,6 @@
 -- Local onPC bridge. Start once from a plugin; stop by running this plugin again.
 -- Requests are data, never executable Lua. Only one explicitly addressed Timecode is touched.
-local active = false
+local active_mode = nil
 -- Remove every export a request makes only to read or compare once it is done. Kept: write
 -- backups (tblink_backup_, tblink_label_) and a SEQUENCE export requested with body 'keep';
 -- the program rotates those out later with DISCARD.
@@ -132,6 +132,27 @@ local function cue_selection(path, wanted, project_large)
     local small, larger = bounded_read(path, 262144)
     if not larger then return assert(small, 'Sequence export unavailable') end
   end
+  if not next(wanted) then
+    -- The directory only needs Cue metadata. For ordinary native exports the paired
+    -- CueDatas tags delimit opaque fixture bytes. Search for them in native string
+    -- code; keep the bounded streaming parser for huge files or other XML shapes.
+    local full = bounded_read(path, 8388608)
+    if full and not full:find('<!', 1, true) then
+      local parts, cursor = {}, 1
+      while true do
+        local a = full:find('<CueDatas', cursor, true)
+        if not a then
+          parts[#parts+1] = full:sub(cursor)
+          return canonical(table.concat(parts))
+        end
+        if full:sub(a, a+9) ~= '<CueDatas>' then break end
+        local close = full:find('</CueDatas>', a+10, true)
+        if not close then break end
+        parts[#parts+1] = full:sub(cursor, a+9)
+        cursor = close
+      end
+    end
+  end
   local selected, number_seen = false, false
   local part, close = sequence_stream(path, false, function(value, name, closing, parent)
     if not closing and name == 'Cue' and parent == 'Sequ' then selected, number_seen = false, false end
@@ -158,14 +179,45 @@ local function cue_selection(path, wanted, project_large)
   assert(ok, xml)
   return xml
 end
-local function sequence_triggers(path, target, work)
+local function native_property(handle, key)
+  local props = gma.show.property
+  local value = props.get(handle, key)
+  if value ~= nil then return value end
+  for i = 0, (props.amount(handle) or 0) - 1 do
+    if props.name(handle, i) == key then return props.get(handle, i) end
+  end
+end
+-- Only a positively identified Go on every native Cue can bypass the fixture export.
+-- An empty, changing or unreadable sequence stays on the full XML comparison path.
+local function automatic_cues(sequence, checkpoint)
+  local obj = gma.show.getobj
+  local count = obj.amount(sequence)
+  local observed = false
+  for i = 0, count - 1 do
+    local cue = obj.child(sequence, i)
+    if cue then
+      local trigger = native_property(cue, 'Trig')
+      if not trigger or trigger == '' then return nil end
+      if trigger ~= 'Go' then return true end
+      observed = true
+    elseif i ~= 0 then
+      return nil
+    end
+    -- Native exports reserve index zero even when the sequence has no Cue Zero.
+    if i > 0 and i % 256 == 0 then checkpoint() end
+  end
+  if observed and obj.amount(sequence) == count then return false end
+end
+local function sequence_triggers(path, target, work, timed)
+  local slot_two, seconds
   local cues, number, changed, count, sequences = {}, nil, false, 0, 0
   local next_part, close = sequence_stream(path, false, function(value, name, closing, parent, empty)
     if name == 'Sequ' and parent == 'MA' and not closing then
       sequences = sequences + 1
       assert(tonumber(value:match('%sindex="(%d+)"')) == target - 1, 'Sequence export number mismatch')
+      slot_two = value:match('%stimecode_slot="(%d+)"') == '1'
     end
-    if name == 'Cue' and parent == 'Sequ' and not closing and not empty then number = nil; changed = false end
+    if name == 'Cue' and parent == 'Sequ' and not closing and not empty then number = nil; seconds = nil; changed = false end
     if name == 'Number' and parent == 'Cue' and not closing then
       local whole = tonumber(value:match('%snumber="(%d+)"'))
       local fraction = tonumber(value:match('%ssub_number="(%d+)"') or '0')
@@ -175,8 +227,13 @@ local function sequence_triggers(path, target, work)
     if name == 'Trigger' and parent == 'Cue' and not closing then
       local kind = assert(value:match('%stype="([^"]*)"'), 'Cue Trigger type unavailable')
       if kind ~= 'Go' then changed = true end
+      if timed and slot_two and kind == 'Timecode' then
+        seconds = tonumber(value:match('%sdata_f="([^"]+)"') or '0')
+        assert(seconds and seconds >= 0, 'Invalid native Cue trigger time')
+      end
     end
     if name == 'Cue' and closing then
+      if seconds then timed(assert(number, 'Cue number unavailable'), seconds) end
       count = count + 1; assert(count <= 100000, 'Sequence Cue count exceeds limit')
       if changed then assert(number, 'Cue number unavailable'); cues[#cues + 1] = number end
     end
@@ -220,6 +277,55 @@ local function same_sequence_files(left, right, strip_triggers, work)
   end)
   close_a(); close_b(); assert(ok, equal); return equal
 end
+-- Native exports repeat whole fixture lines. Lua's C pattern engine does the
+-- lookup for every repeated line. Only new dictionary entries enter Lua.
+-- 0000 defines the next id, ffff is a literal; both carry a big-endian u16 length.
+local function pack_sequence(job, step, source, output, size, finish)
+  local input, packed
+  local old_close = job.close
+  job.close = function()
+    if input then input:close() end
+    if packed then packed:close() end
+    os.remove(output)
+    old_close()
+  end
+  input = assert(io.open(source, 'rb'), 'Sequence transfer source unavailable')
+  packed = assert(io.open(output, 'wb'), 'Sequence transfer file unavailable')
+  local function u16(n) return string.char(math.floor(n/256), n%256) end
+  local function literal(s) return '\255\255' .. u16(#s) .. s end
+  local count, stored, read_bytes, wire_bytes = 0, 0, 0, 0
+  local dictionary = setmetatable({}, {__index=function(t,s)
+    if #s > 4096 or count >= 65534 or stored + #s > 4194304 then return literal(s) end
+    count = count + 1; stored = stored + #s
+    t[s] = u16(count)
+    return '\0\0' .. u16(#s) .. s
+  end})
+  local function next_block()
+    for _=1,32 do
+      local data = input:read(32768)
+      if not data then
+        assert(read_bytes == size, 'Sequence transfer length changed')
+        input:close(); input = nil
+        assert(packed:close()); packed = nil
+        if wire_bytes < size then return finish(output, wire_bytes) end
+        os.remove(output); return finish(nil, size)
+      end
+      local lines, tail = data:match('^(.*\n)([^\n]*)$')
+      local encoded = lines and lines:gsub('[^\n]*\n', dictionary) or ''
+      tail = tail or data
+      if #tail > 0 then encoded = encoded .. literal(tail) end
+      assert(packed:write(encoded))
+      read_bytes = read_bytes + #data; wire_bytes = wire_bytes + #encoded
+      -- At this point even an empty remainder could not save any bandwidth.
+      if wire_bytes >= size then
+        input:close(); input=nil; assert(packed:close()); packed=nil
+        os.remove(output); return finish(nil, size)
+      end
+    end
+    step(next_block)
+  end
+  step(next_block)
+end
 local function export(tc, name)
   gma.cmd('Export Timecode ' .. tc .. ' "' .. name .. '" /o')
   return assert(read(root .. '/importexport/' .. name .. '.xml'), 'Export unavailable')
@@ -244,8 +350,12 @@ end
 -- whole: backup export, compare, write the file, Import. Steps run one per 'step' call, or all at
 -- once for the local file bridge and for a 'run' without 'steps'. The state lives on the request.
 local snapshot_files = {}
-local function snapshot(step, tc, id, additional, done, previous)
-  local xml = export_scratch(tc, 'tblink_snapshot_' .. id)
+local function assemble_snapshot(xml, parts)
+  local result, replaced = xml:gsub('</MA>%s*$', function() return table.concat(parts, '\n') .. '\n</MA>' end)
+  assert(replaced == 1 and #result <= 33554432, 'Snapshot XML invalid or too large')
+  return result
+end
+local function snapshot_sequences(step, xml, id, additional, done, previous, verify_on_apply, start_now, missing)
   local numbers, seen = references(xml), {}
   for _, number in ipairs(numbers) do seen[number] = true end
   for _, number in ipairs(additional or {}) do
@@ -262,19 +372,15 @@ local function snapshot(step, tc, id, additional, done, previous)
       if index then known[index + 1] = object end
     end
   end
-  local function finish()
-    assert(canonical(xml) == canonical(export(tc, 'tblink_snapshot_verify_' .. id)), 'Timecode changed during snapshot')
-    discard('tblink_snapshot_verify_' .. id)
-    local result, replaced = xml:gsub('</MA>%s*$', function() return table.concat(parts, '\n') .. '\n</MA>' end)
-    assert(replaced == 1 and #result <= 33554432, 'Snapshot XML invalid or too large')
-    done(result)
-  end
   local function next_sequence(i)
     local number = numbers[i]
-    if not number then return step(finish) end
+    if not number then return done(parts, numbers) end
     local name = 'tblink_sequence_' .. id .. '_' .. number
-    step(function()
-      assert(gma.show.getobj.handle('Sequence ' .. number), 'Referenced Sequence is missing')
+    local function read_sequence()
+      if not gma.show.getobj.handle('Sequence ' .. number) then
+        if missing then return missing() end
+        error('Referenced Sequence is missing')
+      end
       gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '" /o')
       local dir = root .. '/importexport/'
       local path = dir .. name .. '.xml'
@@ -288,22 +394,26 @@ local function snapshot(step, tc, id, additional, done, previous)
           parts[#parts + 1] = ref.object
           next_sequence(i + 1)
         end
-        if prior and prior.show == show and same_sequence_files(path, dir .. prior.name .. '.xml', false) then
+        if prior and not prior.changed and prior.show == show and same_sequence_files(path, dir .. prior.name .. '.xml', false) then
           discard(name); return add(prior)
         end
         local projected = cue_selection(path, {}, true)
-        local object = assert(projected:match('(<Sequ%s.-</Sequ>)'), 'Sequence XML unavailable')
-        object = object:gsub('</Sequ>$', '<!--tblink-native-' .. id .. '--></Sequ>')
+        local metadata = assert(projected:match('(<Sequ%s.-</Sequ>)'), 'Sequence XML unavailable')
+        local object = metadata:gsub('</Sequ>$', '<!--tblink-native-' .. id .. '--></Sequ>')
+        local function remember()
+          local updated = {show=show, name=name, object=object, metadata=metadata}
+          local old = snapshot_files[number]
+          snapshot_files[number] = updated
+          if old then discard(old.name) end
+          add(updated)
+        end
+        if verify_on_apply then return remember() end
         return step(function()
           gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '_verify" /o')
           local same = same_sequence_files(path, dir .. name .. '_verify.xml', false)
           discard(name .. '_verify')
           if not same then discard(name); error('Sequence changed during snapshot') end
-          local updated = {show=show, name=name, object=object}
-          local old = snapshot_files[number]
-          snapshot_files[number] = updated
-          if old then discard(old.name) end
-          add(updated)
+          remember()
         end)
       end
       assert(full, 'Sequence export unavailable')
@@ -312,7 +422,7 @@ local function snapshot(step, tc, id, additional, done, previous)
       parts[#parts + 1] = object
       -- Every Sequence is freshly exported. An exact match with its previously verified native
       -- object is already the second identical observation, even when fixture values are present.
-      if known[number] == object then
+      if verify_on_apply or known[number] == object then
         discard(name)
         return next_sequence(i + 1)
       end
@@ -323,14 +433,26 @@ local function snapshot(step, tc, id, additional, done, previous)
         discard(name); discard(name .. '_verify')
         next_sequence(i + 1)
       end)
-    end)
+    end
+    if i == 1 and start_now then read_sequence() else step(read_sequence) end
   end
   next_sequence(1)
+end
+local function snapshot(step, tc, id, additional, done, previous, verify_on_apply)
+  local xml = export_scratch(tc, 'tblink_snapshot_' .. id)
+  return snapshot_sequences(step, xml, id, additional, function(parts)
+    if verify_on_apply then return done(assemble_snapshot(xml, parts)) end
+    step(function()
+      assert(canonical(xml) == canonical(export(tc, 'tblink_snapshot_verify_' .. id)), 'Timecode changed during snapshot')
+      discard('tblink_snapshot_verify_' .. id)
+      done(assemble_snapshot(xml, parts))
+    end)
+  end, previous, verify_on_apply)
 end
 -- Index once per native export, including the largest Sequence used by a batch.
 -- Ask MA2 itself for the state at each source Cue. Status includes inherited values, effects,
 -- releases and cue parts. The temporary sequence is never assigned to an executor or played.
-local function tracked_cues(seq, wanted, source_xml, name)
+local function tracked_cues(seq, wanted, source_xml, name, names_reader)
   local obj = gma.show.getobj
   local show = gma.show.getvar('SHOWFILE')
   local function current() return show == gma.show.getvar('SHOWFILE') and _G.TBLINK_BRIDGE_GENERATION == generation end
@@ -362,6 +484,12 @@ local function tracked_cues(seq, wanted, source_xml, name)
       assert(obj.handle(address .. ' Cue ' .. cue), 'Copied Cue missing')
     end
     assert(current() and obj.handle(address) == owned, 'Temporary sequence changed')
+    if names_reader then
+      assert(#slots == 1, 'Select one Cue')
+      local cue = string.format('%d.%03d', math.floor(slots[1]/1000), slots[1]%1000)
+      gma.cmd('Export ' .. address .. ' Cue ' .. cue .. ' ' .. name .. '_result /o')
+      return names_reader(dir .. name .. '_result.xml', slots[1])
+    end
     gma.cmd('Export ' .. address .. ' ' .. name .. '_result /o')
     local xml = cue_selection(dir .. name .. '_result.xml', wanted)
     local source_tag = assert(source_xml:match('(<Sequ%s[^>]+>)'))
@@ -436,7 +564,92 @@ local function attr_name(raw)
   return (raw:gsub('&#x(%x+);', function(v) return utf8.char(tonumber(v,16)) end):gsub('&#(%d+);', function(v) return utf8.char(tonumber(v)) end)
     :gsub('&quot;', '"'):gsub('&apos;', "'"):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&'))
 end
-local function material_cue(xml, wanted, mask)
+-- A native single-Cue export contains its number and all fixture rows. Stream only
+-- Channel tags when the operator asks for names. Copies and sync retain full verification.
+local function direct_attribute_names(path, expected)
+  local raw, cue_count, number_count, rows, channels = {}, 0, 0, 0, 0
+  local carry = ''
+  local next_part, close = sequence_stream(path, false, function(tag, name, closing, parent)
+    if not closing and name == 'Cue' and parent == 'MA' then cue_count = cue_count + 1 end
+    if not closing and name == 'Number' and parent == 'Cue' then
+      local whole = assert(tonumber(tag:match('%snumber="(%d+)"')), 'Invalid Cue number')
+      local sub = tonumber(tag:match('%ssub_number="(%d+)"') or '0')
+      assert(whole * 1000 + sub == expected, 'Cue export number mismatch')
+      number_count = number_count + 1
+    end
+  end)
+  local ok, result = pcall(function()
+    while true do
+      local value, fixture = next_part()
+      if not value then break end
+      if fixture then
+        local block = carry .. value
+        -- Retain only the unfinished XML tag when it crosses a chunk boundary.
+        local tail = block:match('(<[^<>]*)$') or ''
+        assert(#tail < 65536, 'Cue attribute tag too large')
+        if #tail > 0 then block = block:sub(1, #block - #tail) end
+        carry = tail
+        for _ in block:gmatch('<CueData[%s>]') do rows = rows + 1 end
+        for channel in block:gmatch('<Channel%s[^>]*>') do
+          local attribute = assert(channel:match('%sattribute_name="([^"]+)"'), '控台有一项灯具属性没有名称，请直接添加全部属性')
+          raw[attribute] = true
+          channels = channels + 1
+        end
+      else assert(carry == '', 'Incomplete Cue attribute tag') end
+    end
+    assert(cue_count == 1 and number_count == 1, 'Cue export unavailable or ambiguous')
+    assert(rows == channels, 'CueData channel missing')
+    local names = {}
+    for attribute in pairs(raw) do names[#names+1] = attr_hex(attr_name(attribute)) end
+    table.sort(names)
+    return 'attributes:' .. table.concat(names, ',')
+  end)
+  close()
+  assert(ok, result)
+  return result
+end
+local function value_edits(encoded)
+  local result = {}
+  for key, before, value in encoded:gmatch('([^,;]+),([^,;]+),([^,;]+);') do
+    assert(not result[key] and key:match('^%d*/%d*/%x*/%d*/%x+$'), 'Invalid fixture parameter')
+    assert(tonumber(before) and tonumber(value) and tonumber(value) >= 0 and tonumber(value) <= 100, 'Invalid fixture value')
+    -- MA2 stores a single-precision level and its native XML uses eight significant digits.
+    local stored = string.unpack('f', string.pack('f', tonumber(value)))
+    result[key] = {before=tonumber(before), value=string.format('%.8g', stored)}
+  end
+  assert(next(result), 'Missing fixture values')
+  return result
+end
+local function edit_cue_values(cue, encoded, check_before)
+  local edits, found, names = value_edits(encoded), {}, {}
+  local result = cue:gsub('<CueData[%s>].-</CueData>', function(row)
+    local channel = assert(row:match('<Channel%s[^>]*>'), 'CueData channel missing')
+    local name = assert(channel:match('%sattribute_name="([^"]+)"'), 'Cue attribute missing')
+    names[name] = names[name] or attr_hex(attr_name(name))
+    local key = table.concat({channel:match('%sfixture_id="(%d+)"') or '', channel:match('%schannel_id="(%d+)"') or '',
+      attr_hex(attr_name(channel:match('%ssubfixture_id="([^"]+)"') or '')), row:match('^<CueData[^>]*%svalue_multipart_index="(%d+)"') or '', names[name]}, '/')
+    local edit = edits[key]
+    if not edit then return row end
+    local value = tonumber(row:match('<Value>%s*([^<]+)</Value>'))
+    assert(not found[key] and value, '该灯具属性没有唯一的固定数值，请重新读取')
+    found[key] = true
+    if check_before then assert(value == edit.before or value == tonumber(edit.value), '控台数值已改变，请重新读取后编辑') end
+    if value == tonumber(edit.value) then return row end
+    row = row:gsub('<Preset[%s>][^<]*.-</Preset>', '', 1)
+    row = row:gsub('<Preset%s[^>]*/>', '', 1)
+    return (row:gsub('<Value>[^<]+</Value>', function() return '<Value>' .. edit.value .. '</Value>' end, 1))
+  end)
+  for key in pairs(edits) do assert(found[key], '这个 Cue 的灯具或属性已改变，请重新读取') end
+  return result
+end
+local function direct_cue_xml(path, expected)
+  local xml = assert(read(path), 'Cue export unavailable')
+  local cue = assert(xml:match('(<Cue%s[^>]*>.-</Cue>)%s*</MA>'), 'Cue export missing')
+  local number = assert(cue:match('<Number%s[^>]*>'), 'Cue number unavailable')
+  assert(tonumber(number:match('%snumber="(%d+)"')) * 1000 + tonumber(number:match('%ssub_number="(%d+)"') or '0') == expected, 'Cue export number mismatch')
+  return assert(xml:match('(<MA%s[^>]+>)')), cue
+end
+local function material_cue(xml, wanted, mask, edits)
   local head = assert(xml:match('(<MA%s[^>]+>)'), 'Native header missing')
   local seq = assert(xml:match('(<Sequ%s[^>]+>)'), 'Native sequence missing')
   local selected, found = {}, {}
@@ -444,6 +657,10 @@ local function material_cue(xml, wanted, mask)
   for cue in xml:gmatch('<Cue%s+index="[^"]+"[^>]*>.-</Cue>') do
     local n, sub = cue:match('<Number%s+number="(%d+)"%s+sub_number="(%d+)"')
     if n and tonumber(n)*1000+tonumber(sub) == wanted then
+      if edits then
+        cue = edit_cue_values(cue, edits, false)
+        if not mask or mask == 'all' then return head .. seq .. '<Cue xsi:nil="true"/>' .. cue:gsub('^(<Cue%s+)index="%d+"', '%1index="1"', 1) .. '</Sequ></MA>' end
+      end
       local rows = {}
       for row in cue:gmatch('<CueData[%s>].-</CueData>') do
         local channel = assert(row:match('<Channel%s[^>]*>'), 'CueData channel missing')
@@ -511,6 +728,9 @@ local function copy_material(xml, cue, dest, mode, name)
   assert(ok, why)
 end
 
+local function cue_without_step_index(cue)
+  return (cue:gsub('^(<Cue%s+)index="[^"]+"', '%1', 1))
+end
 local function first_cue_data(xml, keep_cue)
   local result = {}
   for cue in xml:gmatch('<Cue%s+index="[^"]+"[^>]*>.-</Cue>') do
@@ -518,7 +738,7 @@ local function first_cue_data(xml, keep_cue)
     if n then
       local number = tonumber(n)*1000+tonumber(sub)
       result[number] = (cue:match('<CueDatas[^>]*>(.-)</CueDatas>') or ''):gsub('>%s+<','><'):match('^%s*(.-)%s*$')
-      if keep_cue and keep_cue[number] then keep_cue[number] = cue:gsub('^(<Cue%s+)index="[^"]+"', '%1', 1) end
+      if keep_cue and keep_cue[number] then keep_cue[number] = cue_without_step_index(cue) end
     end
   end
   return result
@@ -601,18 +821,20 @@ local function first_track_cues(tc, id, body)
     seen[key] = true
     local sources = {}
     for pair in refs:gmatch('[^,]+') do
+      local spec, override = pair:match('^(.-)!(%x+)$')
+      if override then pair = spec; override = decode(override) end
       local base, mask = pair:match('^(.-)~([%x+]+)$')
       local from, number, mode = (base or pair):match('^(%d+) ([%d%.]+)([ts]?)$')
       from = tonumber(from)
       assert(from and from <= 99999 and tonumber(number) and tonumber(number) <= 9999.999, 'Invalid Cue reference')
       if from > 0 then
-        sources[#sources+1] = {seq=from, cue=number, mode=mode, mask=mask}
+        sources[#sources+1] = {seq=from, cue=number, mode=mode, mask=mask, edits=override}
       else assert(refs == '0 0', 'Invalid empty Cue') end
     end
     assert(#sources <= 32, 'Too many Cue ingredients')
     local pos = #reply + 1
     reply[pos] = ''
-    if #sources == 1 and sources[1].seq == seq and sources[1].mode == '' and not sources[1].mask then
+    if #sources == 1 and sources[1].seq == seq and sources[1].mode == '' and not sources[1].mask and not sources[1].edits then
       assert(obj.handle(dest .. ' Cue ' .. sources[1].cue), 'Source Cue missing')
       reply[pos] = sources[1].cue
     elseif saved[key] and obj.handle(dest .. ' Cue ' .. saved[key].cue) then
@@ -625,6 +847,21 @@ local function first_track_cues(tc, id, body)
     end
   end
   assert(#reply > 0 and #reply <= 9999, 'Invalid point count')
+  -- An already confirmed copy needs only its own current Cue, including every
+  -- Part and fixture value. Nothing is written and no other step is read.
+  if #list == 1 and list[1].witness and #list[1].witness <= 4194304 then
+    local point = list[1]
+    local check = temp .. '_read'
+    gma.cmd('Export ' .. dest .. ' Cue ' .. point.existing .. ' "' .. check .. '" /o')
+    local ok, head, data = pcall(direct_cue_xml, dir .. check .. '.xml', math.floor(tonumber(point.existing)*1000 + 0.5))
+    discard(check)
+    assert(ok, head)
+    local actual = cue_without_step_index(data)
+    assert(actual == point.witness or actual:gsub('>%s+<', '><') == point.witness:gsub('>%s+<', '><'), '控台上这个编号的 Cue 内容已经改变，请重新读取当前节目的时间线')
+    guard()
+    reply[point.pos] = point.existing
+    list = {}
+  end
   local backup
   if #list > 0 then
     for _, point in ipairs(list) do
@@ -649,7 +886,7 @@ local function first_track_cues(tc, id, body)
     local source_data = first_cue_data(original, before_cues)
     for _, point in ipairs(list) do
       if point.witness then
-        assert(before_cues[number_key(point.existing)] == point.witness, '控台上这个编号的 Cue 内容已经改变，请重新读取当前节目的时间线')
+        assert(before_cues[number_key(point.existing)] :gsub('>%s+<','><') == point.witness:gsub('>%s+<','><'), '控台上这个编号的 Cue 内容已经改变，请重新读取当前节目的时间线')
       end
     end
     local tracked, requested, tracked_xml = {}, {}, {}
@@ -670,13 +907,21 @@ local function first_track_cues(tc, id, body)
     local material_sources = {}
     for _, point in ipairs(list) do
       if not point.witness then for _, source in ipairs(point.sources) do
-        if source.mask then
+        if source.mask or source.edits then
           local xml = source.mode == 't' and tracked_xml[source.seq] or material_sources[source.seq]
+          if not xml and source.seq ~= seq and source.edits and #list == 1 and #point.sources == 1 then
+            local address = 'Sequence ' .. source.seq .. ' Cue ' .. source.cue
+            guard()
+            gma.cmd('Export ' .. address .. ' "' .. temp .. '_material" /o')
+            local head, data = direct_cue_xml(dir .. temp .. '_material.xml', number_key(source.cue))
+            discard(temp .. '_material')
+            xml = head .. '<Sequ index="' .. (source.seq-1) .. '">' .. data .. '</Sequ></MA>'
+          end
           if not xml then
             xml = source.seq == seq and original or export('Sequence ' .. source.seq, temp .. '_material', false, source_cues[source.seq])
             material_sources[source.seq] = xml
           end
-          source.projected = material_cue(xml, number_key(source.cue), source.mask)
+          source.projected = material_cue(xml, number_key(source.cue), source.mask, source.edits)
         end
       end end
     end
@@ -724,6 +969,10 @@ local function first_track_cues(tc, id, body)
         local cue = point.cue
         if not point.existing then
           assert(not obj.handle(dest .. ' Cue ' .. cue), 'Cue number occupied')
+          -- The full backup is on disk. From the first mutation on, the earlier
+          -- projection must be rebuilt, even if we lose the reply midway.
+          local prior = snapshot_files[seq]
+          if prior then prior.changed = true end
           if zero then
             local init = original:gsub('<Cue%s+xsi:nil="true"%s*/>', '')
             if not init:find('</Sequ>', 1, true) then init = init:gsub('(<Sequ%s+[^>]-)%s*/>', '%1></Sequ>', 1) end
@@ -735,7 +984,17 @@ local function first_track_cues(tc, id, body)
           local copies = #point.sources > 0 and point.sources or {{seq=scratch,cue='1'}}
           for i, source in ipairs(copies) do
             local mode = (source.mode == 't' and ' /status=true' or ' /status=false') .. (i == 1 and ' /o /nc' or ' /merge /nc')
-            if source.projected then
+            if source.projected and source.edits and #copies == 1 then
+              -- The native single-Cue import preserves Parts, triggers and fixture layers.
+              -- Only the Cue number changes; its source and the other points are untouched.
+              local data = assert(source.projected:match('(<Cue%s+index="[^"]+"[^>]*>.-</Cue>)'), 'Missing projected Cue')
+              local number = number_key(cue)
+              data = data:gsub('<Number%s[^>]*/>', '<Number number="' .. math.floor(number/1000) .. '" sub_number="' .. number%1000 .. '"/>', 1)
+              write(dir .. temp .. '_pick.xml', header .. data .. '</MA>')
+              guard()
+              gma.cmd('Import ' .. temp .. '_pick.xml At ' .. dest .. ' Cue ' .. cue .. ' /o /nc')
+              discard(temp .. '_pick')
+            elseif source.projected then
               copy_material(source.projected, source.cue, dest .. ' Cue ' .. cue, i == 1 and ' /o /nc' or ' /merge /nc', temp .. '_pick')
             else gma.cmd('Copy Sequence ' .. source.seq .. ' Cue ' .. source.cue .. ' At ' .. dest .. ' Cue ' .. cue .. mode) end
             assert(obj.handle(dest .. ' Cue ' .. cue), 'Copied Cue missing on readback')
@@ -748,7 +1007,13 @@ local function first_track_cues(tc, id, body)
       if needs_write then
         after_cues = {}
         for _, point in ipairs(list) do after_cues[number_key(point.cue)] = true end
-        actual = first_cue_data(export(dest, temp .. '_read', false, after_cues), after_cues)
+        if #list == 1 and #list[1].sources == 1 and list[1].sources[1].edits then
+          local cue = list[1].cue
+          gma.cmd('Export ' .. dest .. ' Cue ' .. cue .. ' "' .. temp .. '_read" /o')
+          local _, data = direct_cue_xml(dir .. temp .. '_read.xml', number_key(cue))
+          discard(temp .. '_read')
+          actual = first_cue_data(data, after_cues)
+        else actual = first_cue_data(export(dest, temp .. '_read', false, after_cues), after_cues) end
       end
       local sources = {[seq]=source_data}
       local function payload(index, number)
@@ -756,7 +1021,7 @@ local function first_track_cues(tc, id, body)
       end
       for _, point in ipairs(list) do
         if point.witness then
-          assert(payload(after_cues, point.cue) == point.witness, '控台上的 Cue 在同步期间改变，请重新读取当前节目的时间线')
+          assert(payload(after_cues, point.cue) :gsub('>%s+<','><') == point.witness:gsub('>%s+<','><'), '控台上的 Cue 在同步期间改变，请重新读取当前节目的时间线')
         else
           local target = payload(actual, point.cue)
           local wanted, layers = '', {}
@@ -789,16 +1054,17 @@ local function first_track_cues(tc, id, body)
   return '{"sequence":' .. seq .. ',"executor":"' .. addr .. '","cues":["' .. table.concat(reply, '","') .. '"],"backupFile":' .. (backup and ('"' .. backup .. '.xml"') or 'null') .. '}'
 end
 local function guards_song_snapshot(op)
-  return op == 'SYNC' or op == 'SNAPSHOT' or op == 'SCOPE' or op == 'SEQUENCE' or op == 'SEQCUES' or op == 'EXECUTOR'
+  return op == 'APPLY' or op == 'CREATE' or op == 'SYNC' or op == 'SNAPSHOT' or op == 'SCOPE' or op == 'SEQUENCE' or op == 'SEQCUES' or op == 'EXECUTOR'
 end
+local max_request_body = 33554432
 local function start(data, previous)
   local id, op, target, size, body = data:match('^([a-f0-9]+)\n([A-Z]+)\n(%d+)\n(%d+)\n(.*)$')
   assert(id and #id == 32 and id ~= last, 'Invalid or already processed request')
   last = id
   local job = { id = id, steps = {}, done = 0 }
-  local inventory = op == 'LIST' or op == 'LISTSEQ' or op == 'TCRANGES'
+  local inventory = op == 'LIST' or op == 'LISTSEQ' or op == 'TCRANGES' or (op == 'PAGES' and body == 'locations')
   local guarded = guards_song_snapshot(op)
-  local source = (inventory or guarded) and gma.show.getvar('SHOWFILE')
+  local source = (inventory or guarded or op == 'PAGES') and gma.show.getvar('SHOWFILE')
   local function step(fn)
     if guarded then
       job.steps[#job.steps + 1] = function()
@@ -830,9 +1096,50 @@ local function start(data, previous)
   step(function()
     local tc = tonumber(target)
     assert(tc and tc >= 1 and tc <= 99999 and tc == math.floor(tc), 'Invalid Timecode')
+    assert(#body <= max_request_body, 'Bridge file exceeds limit')
     assert(#body == tonumber(size), 'Request length mismatch')
+    if (op == 'APPLY' or op == 'CREATE') and body:sub(1,7) == 'source:' then
+      local show_hex, generation_hex, first = body:match('^source:(%x+):(%x+)\n()')
+      local function decode(value)
+        assert(value and #value % 2 == 0, 'Invalid synchronization source')
+        return (value:gsub('..', function(pair) return string.char(tonumber(pair,16)) end))
+      end
+      assert(decode(show_hex) == source and decode(generation_hex) == generation, 'Show or session changed before synchronization')
+      body = body:sub(first)
+    end
     -- steps=1: this bridge answers 'run' with STEP:<k> when asked to, and takes 'step'.
     if op == 'PING' then return answer((gma.show.getvar('VERSION') or 'unknown') .. '\nsteps=1') end
+    if op == 'SETVALUES' then
+      local sh, gen, number, changes = body:match('^(%x+)\n(%x+)\n(%d+%.%d%d%d)\n(.+)$')
+      local obj, dir = gma.show.getobj, root .. '/importexport/'
+      local addr = 'Sequence ' .. tc .. ' Cue ' .. assert(number, 'Invalid Cue')
+      local n = math.floor(tonumber(number) * 1000 + 0.5)
+      local handle = assert(obj.handle(addr), 'Source Cue missing')
+      local function guard()
+        assert(attr_hex(gma.show.getvar('SHOWFILE')) == sh and attr_hex(_G.TBLINK_BRIDGE_GENERATION) == gen and obj.handle(addr) == handle, 'Show or Cue changed')
+      end
+      local backup, temp = 'tblink_backup_' .. id, 'tblink_library_' .. id
+      guard()
+      gma.cmd('Export ' .. addr .. ' "' .. backup .. '" /o')
+      local header, before = direct_cue_xml(dir .. backup .. '.xml', n)
+      local ok, desired = pcall(edit_cue_values, before, changes, true)
+      if not ok then discard(backup); error(desired) end
+      own_read_exports(job, temp)
+      if desired ~= before then
+        write(dir .. temp .. '.xml', header .. desired .. '</MA>')
+        guard()
+        gma.cmd('Export ' .. addr .. ' "' .. temp .. '_verify" /o')
+        local _, latest = direct_cue_xml(dir .. temp .. '_verify.xml', n)
+        assert(latest == before, '控台上的 Cue 已改变，请重新读取')
+        guard()
+        gma.cmd('Import ' .. temp .. '.xml At ' .. addr .. ' /o /nc')
+      end
+      assert(attr_hex(gma.show.getvar('SHOWFILE')) == sh and attr_hex(_G.TBLINK_BRIDGE_GENERATION) == gen, 'Show or session changed')
+      gma.cmd('Export ' .. addr .. ' "' .. temp .. '_verify" /o')
+      local _, actual = direct_cue_xml(dir .. temp .. '_verify.xml', n)
+      assert(desired:gsub('>%s+<','><') == actual:gsub('>%s+<','><'), '控台回读的 Cue 与修改内容不一致，原数据已备份')
+      return answer(backup .. '.xml')
+    end
     if op == 'FIRSTCUES' then return answer(first_track_cues(tc, id, body)) end
     -- Removes write-before backups the program's ledger rotated out; answers with the names now gone.
     if op == 'DISCARD' then
@@ -846,21 +1153,56 @@ local function start(data, previous)
       return answer(table.concat(gone, ','))
     end
     if op == 'PAGES' then
-      assert(body == '', 'Page directory request must be empty')
+      assert(body == '' or body == 'locations', 'Invalid Page directory request')
       local obj = gma.show.getobj
       local pool = assert(obj.handle('Page'), 'Page pool unavailable')
       local count = assert(obj.amount(pool))
       assert(count <= 10000, 'Page directory exceeds limit')
       local function quote(value) return '"' .. tostring(value):gsub('[%z\1-\31\\"]', function(c) return string.format('\\u%04x', c:byte()) end) .. '"' end
       local entries = {}
+      local positions = body == 'locations'
+      local file = 'tblink_page_' .. id
+      if positions then own_read_exports(job, file) end
+      local function read_positions(number)
+        -- Native Page XML identifies the assigned object even for an empty Sequence
+        -- or a wide executor. Never export the referenced Sequences or their fixture data.
+        gma.cmd('Export Page ' .. number .. ' ' .. file .. ' /o')
+        local xml = assert(read(root .. '/importexport/' .. file .. '.xml'), 'Page export unavailable')
+        discard(file)
+        assert(tonumber(xml:match('<Page%s[^>]-index="(%d+)"')) == number - 1, 'Page changed during read')
+        local result, slot, pos = {}, 0, 1
+        while true do
+          local first, last, attr = xml:find('<Exec%s([^>]-)>', pos)
+          if not first then break end
+          slot = slot + 1
+          assert(slot <= 240, 'Invalid executor slot')
+          pos = last + 1
+          if not attr:match('/%s*$') then
+            local close, finish = xml:find('</Exec>', pos, true)
+            assert(close, 'Incomplete executor assignment')
+            if attr:match('offset_from_first="0"') then
+              local assignment = xml:sub(pos, close - 1):match('<Assignment[%s>]([^<]*.-)</Assignment>')
+              if assignment then
+                local object, pool, sequence = assignment:match('<No>%s*(%d+)%s*</No>%s*<No>%s*(%d+)%s*</No>%s*<No>%s*(%d+)%s*</No>%s*$')
+                if object == '25' and pool == '1' and not assignment:match('<No>.-<No>.-<No>.-<No>') then
+                  result[#result + 1] = '{"slot":' .. slot .. ',"sequence":' .. tonumber(sequence) .. '}'
+                end
+              end
+            end
+            pos = finish + 1
+          end
+        end
+        return ',"locations":[' .. table.concat(result, ',') .. ']'
+      end
       for index = 0, count - 1 do
         local h = obj.child(pool, index)
         if h then
           local number = assert(tonumber(obj.number(h)))
           assert(number >= 1 and number <= 9999 and number == math.floor(number), 'Invalid Page number')
-          entries[#entries + 1] = '{"page":' .. number .. ',"name":' .. quote(obj.label(h) or '') .. '}'
+          entries[#entries + 1] = '{"page":' .. number .. ',"name":' .. quote(obj.label(h) or '') .. (positions and read_positions(number) or '') .. '}'
         end
       end
+      assert(gma.show.getvar('SHOWFILE') == source and _G.TBLINK_BRIDGE_GENERATION == generation, 'Show changed during page read')
       return answer('{"show":' .. quote(gma.show.getvar('SHOWFILE')) .. ',"generation":' .. quote(generation) .. ',"version":' .. quote(gma.show.getvar('VERSION')) .. ',"buttonPage":' .. assert(tonumber(gma.show.getvar('BUTTONPAGE'))) .. ',"faderPage":' .. assert(tonumber(gma.show.getvar('FADERPAGE'))) .. ',"pages":[' .. table.concat(entries, ',') .. ']}')
     end
     if op == 'PAGE' then
@@ -1077,9 +1419,11 @@ local function start(data, previous)
     -- Where every Timecode show sits in time: offset, length, slot, frame format and the last event,
     -- read from an export made and removed on the console, so no event data crosses the network.
     if op == 'TCRANGES' then
-      local wanted
-      if body ~= '' and body ~= 'editing' then
-        local targets = assert(body:match('^playback:([%d,]+)$'), 'Invalid playback range request')
+      local wanted, checked_songs
+      local check_timed = body:match('^cueclock:') ~= nil
+      local checking = check_timed or body == 'sync' or body:match('^sync:') ~= nil
+      if body ~= '' and body ~= 'editing' and body ~= 'sync' then
+        local targets = assert(body:match(check_timed and '^cueclock:([%d,]+)$' or checking and '^sync:([%d,]+)$' or '^playback:([%d,]+)$'), 'Invalid playback range request')
         assert(#targets <= 60000, 'Too many playback targets')
         wanted = {}
         local seen = {}
@@ -1088,6 +1432,7 @@ local function start(data, previous)
           assert(n and n >= 1 and n <= 99999 and tostring(n) == value and not seen[n], 'Invalid playback target')
           seen[n] = true; wanted[#wanted + 1] = n
         end
+        if checking then checked_songs = seen; wanted = nil end
       end
       local obj = gma.show.getobj
       -- assert returns all of its arguments on success. Do not pass its error text as a second
@@ -1099,27 +1444,170 @@ local function start(data, previous)
         return '"' .. tostring(value):gsub('[%z\1-\31\\"]', function(char) return string.format('\\u%04x', string.byte(char)) end) .. '"'
       end
       local entries = {}
-      -- One export per Timecode show, one step each; the pool is looked up again in every step.
+      local selector_count, selector_number, selector_ready, selector_settings = 0, nil, false, false
+      local assignments, unsafe_selector_playback = {}, {}
+      local song_sequences, other_sequences, timed = {}, {}, {}
+      local selector_command_target, selector_address
+      local foreign_tracks = {}
+      local function remember_foreign_tracks(xml, number)
+        for tag, contents in xml:gsub('<Track%s[^<>]-/>', ''):gmatch('(<Track%s[^>]*>)(.-)</Track>') do
+          if not tag:find(' muted="true"', 1, true) and contents:find('<Event%s') then
+            local object = contents:match('<Object[%s>](.-)</Object>')
+            if object then
+              local page, slot = object:match('<No>%s*30%s*</No>%s*<No>%s*1%s*</No>%s*<No>%s*(%d+)%s*</No>%s*<No>%s*(%d+)%s*</No>')
+              if page and slot then
+                local address = tonumber(page) .. '.' .. tonumber(slot)
+                foreign_tracks[address] = foreign_tracks[address] or { owner = number, track = tonumber(tag:match(' index="(%d+)"') or '0') + 1 }
+              end
+            end
+          end
+        end
+      end
+      local function assigned_sequence(address, name)
+        if assignments[address] ~= nil then return assignments[address] end
+        local seq = false
+        if obj.handle('Executor ' .. address) then
+          gma.cmd('Export Executor ' .. address .. ' "' .. name .. '" /o')
+          local exported = read(root .. '/importexport/' .. name .. '.xml')
+          discard(name)
+          assert(exported, 'Executor export unavailable')
+          local playback = exported:match('<Playback%s[^>]*>')
+          unsafe_selector_playback[address] = playback and (playback:find(' cmd_disable="true"', 1, true) or playback:find(' chaser="true"', 1, true)) ~= nil
+          local assignment = exported:match('<Assignment[%s>](.-)</Assignment>')
+          seq = assignment and tonumber(assignment:match('<No>%s*25%s*</No>%s*<No>%s*1%s*</No>%s*<No>%s*(%d+)%s*</No>')) or false
+        end
+        assignments[address] = seq
+        return seq
+      end
+      local trigger_checks = {}
+      local function sequence_has_automatic_cues(number, name)
+        if trigger_checks[number] ~= nil then return trigger_checks[number] end
+        local sequence = obj.handle('Sequence ' .. number)
+        if not sequence then return false end -- Missing references are reported by the route or snapshot read.
+        local automatic = automatic_cues(sequence, coroutine.yield)
+        if automatic == nil then
+          gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '" /o')
+          local ok, cues = pcall(sequence_triggers, root .. '/importexport/' .. name .. '.xml', number)
+          discard(name)
+          assert(ok, cues)
+          automatic = #cues > 0
+        end
+        trigger_checks[number] = automatic
+        return automatic
+      end
+      local function automatic_triggers(xml, name)
+        for _, number in ipairs(references(xml)) do
+          if sequence_has_automatic_cues(number, name) then return true end
+        end
+        return false
+      end
+      local function route_mismatch(xml, name)
+        -- Native exports can retain an old Cue reference after assigning a shorter
+        -- sequence to the same executor. Each Goto must still address its actual sequence.
+        xml = xml:gsub('<Track%s[^<>]-/>', '')
+        for header, track in xml:gmatch('(<Track%s[^>]*>)(.-)</Track>') do
+          local object = track:match('<Object[%s>](.-)</Object>')
+          local page, slot
+          if object then page, slot = object:match('<No>%s*30%s*</No>%s*<No>%s*1%s*</No>%s*<No>%s*(%d+)%s*</No>%s*<No>%s*(%d+)%s*</No>') end
+          local track_index = tonumber(header:match(' index="(%d+)"'))
+          local empty_target = track:match('<Object%s*[^<>]-/>') or not track:find('<Object[%s>]')
+          if track_index and not header:find(' muted="true"', 1, true) and (page and slot or empty_target) then
+            local address = page and slot and (tonumber(page) .. '.' .. tonumber(slot))
+            local executor_missing
+            -- A deleted Cue leaves a self-closing Goto with the native unsigned -1 step.
+            track = track:gsub('(<Event%s[^<>]-)/>', '%1></Event>')
+            for event, contents in track:gmatch('(<Event%s[^>]*>)(.-)</Event>') do
+              if event:find(' pressed="true"', 1, true) and (event:find(' command="Go"', 1, true) or event:find(' command="Off"', 1, true)) then
+                if executor_missing == nil then executor_missing = not address or not obj.handle('Executor ' .. address) end
+                if executor_missing then
+                  local index = assert(tonumber(event:match(' index="(%d+)"')), 'Missing event index')
+                  local frame = tonumber(event:match(' time="(%d+)"')) or 0
+                  return ',"missingExecutorTarget":{"track":' .. (track_index + 1) .. ',"event":' .. (index + 1) .. ',"frame":' .. frame .. '}'
+                end
+              end
+              if event:find(' command="Goto"', 1, true) and event:find(' pressed="true"', 1, true) then
+                local cue = contents:match('<Cue[%s>](.-)</Cue>')
+                local ref = cue and tonumber(cue:match('<No>%s*1%s*</No>%s*<No>%s*(%d+)%s*</No>'))
+                local step = tonumber(event:match(' step="(%d+)"'))
+                if step == 4294967295 and not ref then
+                  local index = assert(tonumber(event:match(' index="(%d+)"')), 'Missing event index')
+                  local frame = tonumber(event:match(' time="(%d+)"')) or 0
+                  return ',"missingCueTarget":{"track":' .. (track_index + 1) .. ',"event":' .. (index + 1) .. ',"frame":' .. frame .. '}'
+                end
+                if ref and step and step > 0 then
+                  local actual = address and assigned_sequence(address, name)
+                  if actual ~= ref then
+                    return ',"routeMismatch":{"track":' .. (track_index + 1) .. ',"executor":' .. (address and quote(address) or 'null') .. ',"assigned":' .. tostring(actual or 'null') .. ',"referenced":' .. ref .. ',"step":' .. step .. '}'
+                  end
+                end
+              end
+            end
+          end
+        end
+        return ''
+      end
+      -- A native group export keeps the original indices, even across gaps in the pool.
+      -- Keep each object's complete XML for the same route and trigger checks as a single export.
+      local function export_ranges(numbers, name, result)
+        job.exporting = true; job.close = function() discard(name) end
+        gma.cmd('Export Timecode ' .. table.concat(numbers, ' + ') .. ' "' .. name .. '" /o')
+        local xml, oversized = bounded_read(root .. '/importexport/' .. name .. '.xml', 33554432)
+        discard(name); job.close = nil; job.exporting = nil
+        if oversized then
+          assert(#numbers > 1, 'Bridge file exceeds limit')
+          local mid = math.floor(#numbers / 2)
+          local left, right = {}, {}
+          for i, n in ipairs(numbers) do
+            if i <= mid then left[#left + 1] = n else right[#right + 1] = n end
+          end
+          coroutine.yield()
+          export_ranges(left, name, result)
+          coroutine.yield()
+          export_ranges(right, name, result)
+          return
+        end
+        assert(xml, 'Timecode export unavailable')
+        if #numbers == 1 then result[numbers[1]] = xml; return end
+        local first = assert(xml:find('<Timecode[%s/>]'), 'Timecode group export is empty')
+        local prefix, cursor = xml:sub(1, first - 1), first
+        for _ = 1, #numbers do
+          local start, finish = xml:find('<Timecode%f[%s/>][^>]*>', cursor)
+          assert(start, 'Timecode missing from group export')
+          local tag = xml:sub(start, finish)
+          local number = tonumber(tag:match('%sindex="(%d+)"') or '0') + 1
+          assert(not result[number], 'Duplicate Timecode in group export')
+          if tag:sub(-2) ~= '/>' then
+            local _, closing = xml:find('</Timecode>', finish + 1, true)
+            finish = assert(closing, 'Invalid Timecode group export')
+          end
+          result[number] = prefix .. xml:sub(start, finish) .. '</MA>'
+          cursor = finish + 1
+        end
+        assert(not xml:find('<Timecode[%s/>]', cursor), 'Unexpected Timecode in group export')
+      end
+      local batch_size = body == '' and 1 or 8
       local index, limit = 0, wanted and #wanted or count
       local function ranges()
         local pool = assert(obj.handle('Timecode'), 'Object pool unavailable')
         while index < limit do
-          local child
-          if wanted then child = obj.handle('Timecode ' .. wanted[index + 1]) else child = obj.child(pool, index) end
-          index = index + 1
-          if not child and index % 256 == 0 then coroutine.yield() end
-          if child then
-            local number = tonumber(obj.number(child))
-            assert(number and number >= 1 and number <= 99999 and number == math.floor(number), 'Invalid Timecode directory number')
-            assert(not wanted or wanted[index] == number, 'Timecode number changed')
-            local name = 'tblink_tcrange_' .. id
-            -- Finish this single native export and close its file before a
-            -- cancellation can release the request at a network step boundary.
-            job.exporting = true; job.close = function() discard(name) end
-            gma.cmd('Export Timecode ' .. number .. ' "' .. name .. '" /o')
-            local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Timecode export unavailable')
-            discard(name)
-            job.close = nil; job.exporting = nil
+          local batch, blocks = {}, {}
+          repeat
+            local child
+            if wanted then child = obj.handle('Timecode ' .. wanted[index + 1]) else child = obj.child(pool, index) end
+            index = index + 1
+            if child then
+              local number = tonumber(obj.number(child))
+              assert(number and number >= 1 and number <= 99999 and number == math.floor(number), 'Invalid Timecode directory number')
+              assert(not wanted or wanted[index] == number, 'Timecode number changed')
+              batch[#batch + 1] = number
+            elseif index % 256 == 0 then coroutine.yield() end
+          until index >= limit or #batch == batch_size
+          local name = 'tblink_tcrange_' .. id
+          if #batch > 0 then export_ranges(batch, name, blocks) end
+          for _, number in ipairs(batch) do
+            local child = assert(obj.handle('Timecode ' .. number), 'Timecode directory changed during read')
+            local xml = assert(blocks[number], 'Timecode number changed during group export')
+            blocks[number] = nil
             local tag = xml:match('<Timecode%s[^>]*>') or ''
             local function attribute(key) return tag:match('%s' .. key .. '="([^"]*)"') end
             local last = nil
@@ -1131,26 +1619,115 @@ local function start(data, previous)
             -- shape is unfamiliar or any playback attribute is present, the desktop
             -- reads the complete object through its normal validation/write path.
             local ready = ''
+            local song_flags = attribute('m_autostart') or attribute('no_status_call') or attribute('no_switch_off')
             if wanted and tonumber(attribute('index')) == number - 1 and not xml:find('<!', 1, true)
               and xml:find('xmlns="http://schemas.malighting.de/grandma2/xml/MA"', 1, true)
               and not xml:find('<[%w_%-]+:') and not xml:find('<Cue/>', 1, true) and not xml:find('<Cue%s[^>]-/>') and not xml:find('<Timecode%s', (xml:find('<Timecode%s') or 0) + 1)
-              and not attribute('m_autostart') and not attribute('no_status_call') and not attribute('no_switch_off') then
+              and not song_flags then
               local ok, refs = pcall(references, xml)
               if ok and #refs <= 10000 then ready = ',"readySequences":[' .. table.concat(refs, ',') .. ']' end
             end
+            local internal = gma.show.property.get(child, 'Info') == 'TBLINK_MTC_SELECTOR_V1'
+            if not internal and (checking or body == 'editing') and last then remember_foreign_tracks(xml, number) end
+            if internal and (checking or body == 'editing' or body == '') then
+              selector_count = selector_count + 1
+              selector_number = number
+              local sequence = obj.handle('Sequence ' .. number)
+              local track = xml:match('<Track%s[^>]*>')
+              local object = xml:match('<Object[%s>](.-)</Object>')
+              local page, slot
+              if object then page, slot = object:match('<No>%s*30%s*</No>%s*<No>%s*1%s*</No>%s*<No>%s*(%d+)%s*</No>%s*<No>%s*(%d+)%s*</No>') end
+              local assigned = attribute('slot') == 'TC Slot 2' and tonumber(attribute('offset') or '0') == 0
+                and track and last and sequence and gma.show.property.get(sequence, 'Info') == 'TBLINK_MTC_SELECTOR_V1'
+                and page and slot and obj.handle('Executor ' .. page .. '.' .. slot) and assigned_sequence(page .. '.' .. slot, name) == number
+              selector_ready = assigned and attribute('m_autostart') == 'true' and not attribute('no_status_call') and not attribute('no_switch_off')
+                and tonumber(attribute('user_bits') or '0') == 0 and not track:find(' muted="true"', 1, true)
+              if assigned then selector_address = tonumber(page) .. '.' .. tonumber(slot) end
+              selector_settings = assigned and not selector_ready
+              if assigned and unsafe_selector_playback[page .. '.' .. slot] then selector_command_target = number end
+            end
+            local current_song = checked_songs and checked_songs[number] and not internal
+            if check_timed and not internal then
+              -- Native sequence triggers listen to their own slot, independently of their Timecode's slot.
+              for ref in xml:gmatch('<Cue[%s>][^<]*<No>%s*1%s*</No>%s*<No>%s*(%d+)%s*</No>') do
+                local seq = tonumber(ref)
+                if current_song then song_sequences[seq] = true
+                elseif not other_sequences[seq] then other_sequences[seq] = number end
+              end
+            end
+            local route = current_song and route_mismatch(xml, name) or ''
+            local automatic = current_song and route == '' and attribute('slot') == 'TC Slot 2' and automatic_triggers(xml, name)
             entries[#entries + 1] = '{"target":' .. number .. ',"name":' .. quote(attribute('name') or '') .. ',"offset":' .. quote(attribute('offset') or '0') .. ',"length":' .. quote(attribute('lenght') or '')
-              .. ',"slot":' .. quote(attribute('slot') or '') .. ',"frame":' .. quote(attribute('frame_format') or '') .. ',"last":' .. quote(last and tostring(last) or '') .. ready .. (gma.show.property.get(child, 'Info') == 'TBLINK_MTC_SELECTOR_V1' and ',"internal":true' or '') .. '}'
+              .. ',"slot":' .. quote(attribute('slot') or '') .. ',"frame":' .. quote(attribute('frame_format') or '') .. ',"last":' .. quote(last and tostring(last) or '') .. ready .. (checked_songs and checked_songs[number] and not internal and song_flags and attribute('slot') == 'TC Slot 2' and ',"playbackSettingsChanged":true' or '')
+              .. (automatic and ',"automaticCueTriggers":true' or '') .. route .. (internal and ',"internal":true' or '') .. '}'
             assert(#entries <= 10000, 'Occupied Timecode directory exceeds limit')
-            if index < limit then return step(ranges) end
+            if index < limit then
+              coroutine.yield()
+              pool = assert(obj.handle('Timecode'), 'Object pool unavailable')
+            end
+          end
+        end
+        for seq, owner in pairs(other_sequences) do
+          local handle = not song_sequences[seq] and obj.handle('Sequence ' .. seq)
+          if handle and native_property(handle, 'Timecode Slot') == 'TC Slot 2' then
+            for index = 0, obj.amount(handle) - 1 do
+              local cue = obj.child(handle, index)
+              if cue and native_property(cue, 'Trig') == 'Timecode' then
+                local name = 'tblink_clock_' .. id
+                local bytes, tokens = 0, 0
+                local work = {files={}}
+                work.checkpoint = function(size, count)
+                  bytes, tokens = bytes + size, tokens + count
+                  if bytes >= 4194304 or tokens >= 256 then
+                    bytes, tokens = 0, 0
+                    coroutine.yield()
+                  end
+                end
+                job.close = function()
+                  for file in pairs(work.files) do file:close(); work.files[file] = nil end
+                  discard(name)
+                end
+                gma.cmd('Export Sequence ' .. seq .. ' "' .. name .. '" /o')
+                local ok, err = pcall(sequence_triggers, root .. '/importexport/' .. name .. '.xml', seq, work, function(n, s)
+                  assert(#timed < 100000, 'Timecode trigger directory exceeds limit')
+                  timed[#timed + 1] = '{"owner":' .. owner .. ',"sequence":' .. seq .. ',"cue":' .. quote(n) .. ',"seconds":' .. tostring(s) .. '}'
+                end)
+                job.close(); job.close = nil; assert(ok, err); break
+              end
+              if index > 0 and index % 256 == 0 then coroutine.yield() end
+            end
           end
         end
         assert(obj.amount(pool) == count, 'Timecode directory changed during read')
-        answer('{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. (body ~= '' and ',"generation":' .. quote(generation) or '') .. ',"entries":[' .. table.concat(entries, ',') .. ']}')
+        local roll = ''
+        if body == 'editing' then
+          local reserved = {}
+          for address in pairs(foreign_tracks) do
+            local page = tonumber(address:match('^(%d+)%.'))
+            if page >= 1000 and page <= 1009 then reserved[#reserved + 1] = quote(address) end
+          end
+          if #reserved > 0 then roll = ',"songTrackExecutors":[' .. table.concat(reserved, ',') .. ']' end
+        end
+        local foreign = selector_count == 1 and selector_address and foreign_tracks[selector_address]
+        if foreign then
+          roll = roll .. ',"selectorTrackConflict":{"timecode":' .. foreign.owner .. ',"track":' .. foreign.track .. ',"executor":' .. quote(selector_address) .. '}'
+        end
+        if body ~= '' then
+          local slot = obj.handle('TimecodeSlot 2')
+          local seconds = slot and tonumber(native_property(slot, 'AfterRoll'))
+          assert(seconds and seconds >= 0, 'Cannot read TC Slot 2 AfterRoll')
+          roll = roll .. ',"afterRollSeconds":' .. tostring(seconds)
+        end
+        answer('{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. (body ~= '' and ',"generation":' .. quote(generation) or '') .. roll .. (checking and ',"selectorReady":' .. tostring(selector_count == 1 and selector_ready and selector_number or false) or '') .. (selector_count == 1 and selector_command_target and ',"selectorCommandTarget":' .. selector_command_target or '') .. (checking and selector_count == 1 and selector_settings and ',"selectorSettingsTarget":' .. selector_number or '') .. (#timed > 0 and ',"otherTimedCues":[' .. table.concat(timed, ',') .. ']' or '') .. ',"entries":[' .. table.concat(entries, ',') .. ']}')
       end
       return ranges()
     end
     if op == 'SEQGO' then
-      local show_hex, generation_hex = body:match('^([a-f0-9]+)\n([a-f0-9]+)$')
+      local selector = body:match('\nselector$') ~= nil
+      if selector then body = body:gsub('\nselector$', '\n' .. tc) end
+      local show_hex, generation_hex, bound_tc = body:match('^([a-f0-9]+)\n([a-f0-9]+)\n([1-9]%d*)$')
+      if bound_tc then assert(#bound_tc <= 5, 'Invalid bound Timecode')
+      else show_hex, generation_hex = body:match('^([a-f0-9]+)\n([a-f0-9]+)$') end
       assert(show_hex and #show_hex % 2 == 0 and #generation_hex % 2 == 0, 'Invalid Cue trigger preparation source')
       local function unhex(value) return value:gsub('..', function(pair) return string.char(tonumber(pair, 16)) end) end
       local function check_source()
@@ -1170,6 +1747,18 @@ local function start(data, previous)
         for file in pairs(work.files) do file:close(); work.files[file] = nil end
       end
       local scan = coroutine.create(function()
+        local obj = gma.show.getobj
+        local address = 'Sequence ' .. tc
+        local sequence = assert(obj.handle(address), 'Sequence missing')
+        local function checkpoint() coroutine.yield('tblink_step') end
+        if automatic_cues(sequence, checkpoint) == false then
+          check_source()
+          sequence = assert(obj.handle(address), 'Sequence missing')
+          if automatic_cues(sequence, checkpoint) == false then
+            check_source()
+            return answer('{"changed":false,"cues":0}')
+          end
+        end
         gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
         coroutine.yield('tblink_step')
         cues = sequence_triggers(path, tc, work)
@@ -1198,6 +1787,18 @@ local function start(data, previous)
             -- yields must never split Assign from the phase acknowledgement.
             -- Preflight's final chunk and this write remain the same RPC step.
             check_source()
+            if selector then
+              for _, kind in ipairs({'Timecode', 'Sequence'}) do
+                local handle = assert(gma.show.getobj.handle(kind .. ' ' .. tc))
+                assert(gma.show.property.get(handle, 'Info') == 'TBLINK_MTC_SELECTOR_V1', 'Selector ownership changed')
+              end
+            end
+            if bound_tc then
+              local timeline = export_scratch(tonumber(bound_tc), name .. '_track')
+              local referenced = false
+              for _, number in ipairs(references(timeline)) do if number == tc then referenced = true; break end end
+              assert(referenced and timeline:match('<Timecode%s[^>]- slot="TC Slot 2"'), '歌曲的时码槽或引用序列刚有变化，请重新核对当前节目')
+            end
             gma.cmd('Assign Sequence ' .. tc .. ' Cue ' .. table.concat(cues, ' + ') .. ' /Trig=Go')
             job.confirming = true
             gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
@@ -1215,7 +1816,30 @@ local function start(data, previous)
       local name = 'tblink_library_' .. id
       own_read_exports(job, name, body == 'keep')
       gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
-      local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
+      local path = root .. '/importexport/' .. name .. '.xml'
+      if job.stream_sequence then
+        local f = assert(io.open(path, 'rb'), 'Sequence export unavailable')
+        local bytes = f:seek('end'); f:close()
+        assert(bytes and bytes > 0 and bytes <= 268435456, 'Sequence export size unsupported')
+        if bytes > 262144 then
+          return step(function()
+            gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+            assert(same_sequence_files(path, root .. '/importexport/' .. name .. '_verify.xml', false), 'Sequence changed during read')
+            discard(name .. '_verify')
+            local function ready(packed, wire_bytes)
+              -- The transport now owns this immutable export until receipt or cancellation.
+              job.sequence = {name=name, bytes=bytes, wire_bytes=wire_bytes, packed=packed, keep=body == 'keep'}
+              job.close = nil
+              answer('')
+            end
+            if not job.local_file and bytes > 1048576 then
+              return pack_sequence(job, step, path, root .. '/temp/tblink_network_' .. id .. '.seq', bytes, ready)
+            end
+            ready(nil, bytes)
+          end)
+        end
+      end
+      local xml = assert(read(path), 'Sequence export unavailable')
       return step(function()
         gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
         assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
@@ -1224,6 +1848,8 @@ local function start(data, previous)
     end
     if op == 'SEQCUES' then
       -- The complete export stays on the console; only the requested Cue elements cross the network.
+      local values = body:sub(1,7) == 'values:'
+      if values then body = 'names:' .. body:sub(8) end
       local names_show, names_gen, rest = body:match('^names:(%x+):(%x+):(.+)$')
       local identified = gma.show.getvar('SHOWFILE')
       local function identity() assert(gma.show.getvar('SHOWFILE') == identified and generation == _G.TBLINK_BRIDGE_GENERATION, 'Show or session changed') end
@@ -1231,7 +1857,12 @@ local function start(data, previous)
         assert(attr_hex(identified) == names_show and attr_hex(generation) == names_gen, 'Show or session changed')
         body = rest
       end
-      local token, mask, pick_show, pick_gen, selected = body:match('^pick:(%x+):([%x+]+):(%x+)%-(%x+):(.+)$')
+      local token, mask, pick_show, pick_gen, selected = body:match('^pick:(%x+):([%w+!]+):(%x+)%-(%x+):(.+)$')
+      local override
+      if mask and mask:find('!',1,true) then
+        mask, override = mask:match('^([%w+]+)!(%x+)$')
+        override = (override:gsub('..', function(p) return string.char(tonumber(p,16)) end))
+      end
       if token then
         assert(#token == 32, 'Invalid selection')
         assert(attr_hex(identified) == pick_show and attr_hex(generation) == pick_gen, 'Show or session changed')
@@ -1257,7 +1888,7 @@ local function start(data, previous)
         identity()
         local n = next(wanted)
         assert(n and not next(wanted, n), 'Select one Cue')
-        local filtered, names = material_cue(xml, n, mask)
+        local filtered, names = material_cue(xml, n, mask, override)
         if names_show then return answer('attributes:' .. names) end
         write(root .. '/importexport/tblink_pick_' .. token .. '.xml', filtered)
         answer(filtered)
@@ -1279,8 +1910,27 @@ local function start(data, previous)
       local path = root .. '/importexport/' .. name
       -- When only this step's stored values were requested, export the live Cue itself.
       -- A tracked look still depends on earlier Cues and uses the full sequence below.
-      local address = not status and body:match('^%d+%.%d%d%d$') and ('Sequence ' .. tc .. ' Cue ' .. body)
+      local address = (not status or names_show) and body:match('^%d+%.%d%d%d$') and ('Sequence ' .. tc .. ' Cue ' .. body)
       local object = address and obj.handle(address)
+      if object and names_show then
+        identity()
+        gma.cmd('Export ' .. address .. ' "' .. name .. '" /o')
+        local result
+        local function reader(file, expected)
+          if not values then return direct_attribute_names(file, expected) end
+          local header, cue = direct_cue_xml(file, expected)
+          return header .. '<Sequ index="' .. (tc-1) .. '">' .. cue .. '</Sequ></MA>'
+        end
+        if status then
+          local file = assert(io.open(path .. '.xml', 'rb'), 'Cue export unavailable')
+          local header = file:read(8192) or ''; file:close()
+          result = tracked_cues(tc, wanted, header, 'tblink_status_' .. id, reader)
+        else result = reader(path .. '.xml', next(wanted)) end
+        identity()
+        assert(obj.handle('Sequence ' .. tc) == sequence and obj.handle(address) == object, 'Source Cue changed')
+        return answer(result)
+      end
+      assert(not values, 'Source Cue missing')
       if object then
         local label = obj.label(sequence) or ''
         local function export_cue(file)
@@ -1381,14 +2031,16 @@ local function start(data, previous)
     if op == 'READ' then return answer(export_scratch(tc, 'tblink_read_' .. id)) end
     if op == 'SNAPSHOT' then return snapshot(step, tc, id, nil, answer, previous) end
     if op == 'SCOPE' then
-      assert(#body > 0 and not body:find('[^%d,]') and not body:find(',,') and body:sub(1, 1) ~= ',' and body:sub(-1) ~= ',', 'Invalid Sequence scope')
+      local verify_on_apply = body:sub(1,5) == 'edit:'
+      if verify_on_apply then body = body:sub(6) end
+      assert((verify_on_apply or #body > 0) and not body:find('[^%d,]') and not body:find(',,') and body:sub(1, 1) ~= ',' and body:sub(-1) ~= ',', 'Invalid Sequence scope')
       local additional, seen = {}, {}
       for value in body:gmatch('[^,]+') do
         local number = tonumber(value)
         assert(number and number >= 1 and number <= 99999 and not seen[number], 'Invalid Sequence scope')
         seen[number] = true; additional[#additional + 1] = number
       end
-      return snapshot(step, tc, id, additional, answer, previous)
+      return snapshot(step, tc, id, additional, answer, previous, verify_on_apply)
     end
     assert(op == 'APPLY' or op == 'SYNC', 'Unknown operation')
     local length, rest = body:match('^(%d+)\n(.*)$')
@@ -1398,11 +2050,20 @@ local function start(data, previous)
     local desired = rest:sub(length + 1)
     assert(#desired > 0 and not desired:find('<!DOCTYPE') and not desired:find('<!ENTITY'), 'Invalid XML')
     local name = 'tblink_write_' .. id
+    local checked_sequences
     -- The write is one step, never split: backup export, compare, write the file, Import.
     local function write_step()
       local backup = export(tc, 'tblink_backup_' .. id)
       if op == 'SYNC' then
         assert(backup:match('(<Timecode%s.-</Timecode>)') == expected:match('(<Timecode%s.-</Timecode>)'), 'Timecode changed before write')
+        if checked_sequences then
+          -- Use the actual write-before backup for the complete comparison, including
+          -- the envelope and all freshly read sequences. No separate Timecode probe.
+          if canonical(assemble_snapshot(backup, checked_sequences)) ~= canonical(expected) then
+            discard('tblink_backup_' .. id)
+            error('Timecode or Sequence changed after preview')
+          end
+        end
       else
         assert(canonical(backup) == canonical(expected), 'Timecode changed after preview')
       end
@@ -1410,12 +2071,24 @@ local function start(data, previous)
       gma.cmd('Import "' .. name .. '.xml" At Timecode ' .. tc .. ' /o /nc')
       job.confirming = job.report_import
       step(function()
-        if job.request_snapshot and #expected <= 131072 and not expected:find('<!--tblink-native-', 1, true) and #references(desired) <= 4 then
+        if job.request_snapshot and #expected <= 131072 and #references(desired) <= 4 then
           discard(name)
-          return snapshot(step, tc, id .. '_confirmed', nil, function(current)
-            job.returned_snapshot = true
-            answer(current)
-          end, expected)
+          -- Read every Sequence referenced by the write, then export the actual
+          -- Timecode last. If the console now uses a different set, take a fresh
+          -- complete snapshot of those references before returning anything.
+          local function confirmed(current) job.returned_snapshot = true; answer(current) end
+          local function reread() step(function() snapshot(step, tc, id .. '_observed', nil, confirmed, expected) end) end
+          return snapshot_sequences(step, desired, id .. '_confirmed', nil, function(parts, numbers)
+            step(function()
+              local actual = export_scratch(tc, 'tblink_verify_' .. id)
+              local actual_numbers = references(actual)
+              table.sort(actual_numbers)
+              if table.concat(numbers, ',') ~= table.concat(actual_numbers, ',') then
+                return reread()
+              end
+              confirmed(assemble_snapshot(actual, parts))
+            end)
+          end, expected, false, true, reread)
         end
         local verified = export_scratch(tc, 'tblink_verify_' .. id)
         discard(name)
@@ -1423,9 +2096,18 @@ local function start(data, previous)
       end)
     end
     if op == 'SYNC' then
+      local expected_timecode = job.request_snapshot and expected:match('(<Timecode%s.-</Timecode>)')
+      if expected_timecode then
+        return snapshot_sequences(step, expected_timecode, id .. '_preflight', references(desired), function(parts)
+          checked_sequences = parts
+          job.before_import = true
+          step(write_step)
+        end, previous, false, true, function() error('Timecode or Sequence changed after preview') end)
+      end
       -- The preflight snapshot is steps of its own; the write is the step after its last one.
       return snapshot(step, tc, id .. '_preflight', references(desired), function(current)
         assert(canonical(current) == canonical(expected), 'Timecode or Sequence changed after preview')
+        job.before_import = true
         step(write_step)
       end, previous)
     end
@@ -1433,7 +2115,10 @@ local function start(data, previous)
   end)
   return job
 end
--- Runs the next step. A failed step ends the request with the same ERROR answer as before steps.
+local function format_response(id, ok, output)
+  return id .. '\n' .. (ok and 'OK' or 'ERROR') .. '\n' .. #output .. '\n' .. output
+end
+-- A failed step ends this request with its own ERROR response.
 local function advance(job)
   local ok, result = pcall(table.remove(job.steps, 1))
   job.done = job.done + 1
@@ -1441,7 +2126,7 @@ local function advance(job)
   if job.close then job.close(); job.close = nil end
   job.steps = {}
   local output = tostring(ok and job.result or result)
-  job.response = job.id .. '\n' .. (ok and 'OK' or 'ERROR') .. '\n' .. #output .. '\n' .. output
+  job.response = format_response(job.id, ok, output)
 end
 -- The local file bridge answers a request file in one go.
 local function process(data)
@@ -1450,12 +2135,26 @@ local function process(data)
   return job.response
 end
 local function poll()
-  if not active or _G.TBLINK_BRIDGE_GENERATION ~= generation then return end
   local claimed = os.rename(request_file, processing_file)
   if not claimed then return end
-  local data = read(processing_file)
+  -- The desktop limits the body to 32 MiB; the four header lines are additional.
+  local data, large = bounded_read(processing_file, max_request_body + 64)
+  local header = data and data:sub(1, 33)
+  if large then
+    local file = assert(io.open(processing_file, 'rb'))
+    header = file:read(33)
+    file:close()
+  end
   assert(os.remove(processing_file), 'Could not release processed request')
-  if data then write(response_file, process(data)) end
+  local ok, reply = false, large and 'Bridge file exceeds limit' or 'Could not read claimed request'
+  if data then ok, reply = pcall(process, data) end
+  if not ok then
+    local id = header and header:match('^([a-f0-9]+)\n')
+    if not id or #id ~= 32 then error(reply) end
+    reply = format_response(id, false, tostring(reply))
+  end
+  write(response_file, reply)
+  return true
 end
 -- Telnet carries bounded hexadecimal data, never source code supplied by a project.
 -- No LuaSocket dependency. Each command has its own response token.
@@ -1464,6 +2163,9 @@ end
 -- lane expires on its own. A 'begin' that names no lane (a program before lanes, the bridge upgrade
 -- check) takes 'bg' and needs both lanes free, as the one request it was before.
 local lanes = { bg = nil, fg = nil }
+-- A receipt token is independent of every request id. Keep one per observed Show
+-- so even a long UTF-8 name leaves room for a queued inline edit on the command line.
+local queued_source
 local foreground = { PING = true, PAGES = true, PAGE = true, LIST = true, LISTSEQ = true, EXECUTOR = true }
 local snapshot_cache, last_read = nil, nil
 -- Expand the optional wire representation before the ordinary full SYNC
@@ -1498,8 +2200,14 @@ for byte = 0, 255 do
   hex_bytes[raw] = encoded; raw_bytes[encoded] = raw
 end
 local function hex(data) return (data:gsub('.', hex_bytes)) end
-local function clear_transfer(net)
+local function clear_transfer(net, received)
   if net and net.job and net.job.close then net.job.close(); net.job.close = nil end
+  if net and net.sequence then
+    if net.sequence.file then net.sequence.file:close() end
+    if net.sequence.packed then os.remove(net.sequence.packed) end
+    if not (received and net.sequence.keep) then discard(net.sequence.name) end
+    net.sequence = nil
+  end
   if net and net.file then assert(os.remove(net.file), 'Could not remove local response'); net.file = nil end
   if net and net.input then
     local f = io.open(net.input, 'rb')
@@ -1512,7 +2220,16 @@ local function idle(net) return not net or gma.gettime() > net.expires end
 local function finished(network)
   local id = network.id
   local returned_snapshot = network.job.returned_snapshot
+  network.sequence = network.job.sequence
   network.response = network.job.response; network.job = nil
+  if network.sequence then
+    local part = network.sequence
+    local path = root .. '/importexport/' .. part.name .. '.xml'
+    if network.local_file then return 'SEQFILE:' .. part.bytes .. ':' .. hex(path) end
+    part.file = assert(io.open(part.packed or path, 'rb'), 'Verified Sequence export unavailable')
+    if part.packed then return 'SEQPACK:' .. part.bytes .. ':' .. part.wire_bytes end
+    return 'SEQDATA:' .. part.bytes
+  end
   assert(#network.response <= 33554500, 'Response exceeds limit')
   if network.op == 'READ' and network == lanes.bg then
     local xml = #network.response <= 524350 and network.response:match('^[a-f0-9]+\nOK\n%d+\n(.*)$')
@@ -1574,12 +2291,15 @@ local function proceed(network, token)
   -- Once the desktop has received the Import acknowledgement it must finish
   -- the readback, even if playback starts. Nearby read-only exports can share
   -- one reply. Keep the Import itself and its acknowledgement on their own.
-  local collect = job.confirming and job.request_snapshot and network.inline_limit == 16384
-  local deadline = collect and (gma.gettime() + 0.025)
-  advance(network.job)
+  local grouped = network.local_file or network.inline_limit == 16384
+  local snapshot_read = network.op == 'SCOPE' or network.op == 'SNAPSHOT'
+  local collect = grouped and (snapshot_read or network.op == 'SYNC' and (network.local_file or job.request_snapshot)
+    and (not job.before_import or job.confirming and job.request_snapshot))
+  local deadline = collect and (gma.gettime() + 0.015)
+  advance(job)
   if collect then
     for _ = 1, 3 do
-      if job.response or gma.gettime() >= deadline then break end
+      if job.response or job.before_import and not job.confirming or gma.gettime() >= deadline then break end
       advance(job)
     end
   end
@@ -1601,8 +2321,15 @@ end
 _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, delta_size, query, previous_read, index_shift, indexed_size, inline_limit)
   if not token:match('^[a-f0-9]+$') or #token ~= 32 then return end
   local ok, result = pcall(function()
-    assert(active and _G.TBLINK_BRIDGE_GENERATION == generation, 'Bridge is stopped')
+    assert(active_mode and _G.TBLINK_BRIDGE_GENERATION == generation, 'Bridge is stopped')
     assert(type(id) == 'string' and #id == 32 and id:match('^[a-f0-9]+$'), 'Invalid request identity')
+    local resume, session, show = action:match('^(%a+):([a-f0-9]+):([a-f0-9]+)$')
+    if resume then
+      assert(resume == 'begin' or resume == 'beginsync', 'Invalid queued operation')
+      assert(hex(generation) == session and queued_source and queued_source.token == show
+        and queued_source.show == gma.show.getvar('SHOWFILE'), 'Source changed before queued request')
+      action = resume
+    end
     if action == 'begin' or action == 'beginsync' then
       assert(id ~= last, 'Request already processed')
       local base = nil
@@ -1612,21 +2339,28 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
         base = snapshot_cache.xml
         a = 'SYNC'
       end
-      assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'SEQGO' or a == 'SEQCUES' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'FIRSTCUES' or a == 'ASSIGNSEQ' or a == 'LABEL' or a == 'DISCARD' or a == 'TCRANGES', 'Invalid operation')
+      assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'SEQGO' or a == 'SEQCUES' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'SETVALUES' or a == 'FIRSTCUES' or a == 'ASSIGNSEQ' or a == 'LABEL' or a == 'DISCARD' or a == 'TCRANGES', 'Invalid operation')
       assert(type(b) == 'number' and b >= 1 and b <= 99999 and b == math.floor(b), 'Invalid target')
-      assert(type(c) == 'number' and c >= 0 and c <= 33554432 and c == math.floor(c), 'Invalid payload size')
+      assert(type(c) == 'number' and c >= 0 and c <= max_request_body and c == math.floor(c), 'Invalid payload size')
       assert(lane == nil or lane == 'bg' or lane == 'fg', 'Invalid lane')
       assert(transport == nil or transport == 'file', 'Invalid transport')
       assert(read_now == nil or (read_now == 'read' and action == 'begin' and a == 'READ' and c == 0 and lane == 'bg'), 'Invalid immediate read')
       assert(delta_size == nil or (action == 'beginsync' and transport == nil and c <= 524288 and type(delta_size) == 'number' and delta_size == math.floor(delta_size) and delta_size > 0 and delta_size < c), 'Invalid snapshot delta size')
-      assert(query == nil or (action == 'begin' and (a == 'LIST' or a == 'LISTSEQ' or a == 'TCRANGES' or lane == 'bg' and (a == 'SEQGO' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'FIRSTCUES' or a == 'ASSIGNSEQ' or a == 'DISCARD')) and type(query) == 'string' and c <= 320 and #query == c * 2 and not query:find('[^a-f0-9]')), 'Invalid inline query')
+      assert(query == nil or (action == 'begin' and (a == 'LIST' or a == 'LISTSEQ' or a == 'TCRANGES' or lane == 'bg' and (a == 'SEQCUES' or a == 'SEQGO' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'SETVALUES' or a == 'FIRSTCUES' or a == 'ASSIGNSEQ' or a == 'DISCARD')) and type(query) == 'string' and c <= 320 and #query == c * 2 and not query:find('[^a-f0-9]')), 'Invalid inline query')
       assert(index_shift == nil and indexed_size == nil or delta_size and type(index_shift) == 'number' and index_shift == math.floor(index_shift) and math.abs(index_shift) <= 256 and type(indexed_size) == 'number' and indexed_size == math.floor(indexed_size) and indexed_size > 0 and indexed_size < delta_size, 'Invalid reindexed delta')
       assert(previous_read == nil or (read_now == 'read' and type(previous_read) == 'string' and #previous_read == 32 and previous_read:match('^[a-f0-9]+$')), 'Invalid read reference')
       -- Only reads go on 'fg', and none that leaves state for a later request (a snapshot for beginsync).
       assert(lane ~= 'fg' or (action == 'begin' and foreground[a]), 'Operation not allowed on the foreground lane')
       local named = lane ~= nil
       lane = lane or 'bg'
-      assert(idle(lanes[lane]) and (named or idle(lanes.fg)), 'Another network request is pending')
+      if not idle(lanes[lane]) or not named and not idle(lanes.fg) then
+        local source = gma.show.getvar('SHOWFILE')
+        if named and source and source ~= '' then
+          if not queued_source or queued_source.show ~= source then queued_source = {show=source, token=token} end
+          error('Another network request is pending:' .. hex(generation) .. ':' .. queued_source.token)
+        end
+        error('Another network request is pending')
+      end
       local other = lanes[lane == 'bg' and 'fg' or 'bg']
       assert(not other or other.id ~= id, 'Request already pending')
       clear_transfer(lanes[lane])
@@ -1663,7 +2397,7 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
         if not completed then clear_transfer(net); lanes[lane] = nil; error(receipt) end
         return receipt
       end
-      if transport == 'file' and c >= 8192 then
+      if transport == 'file' and (c >= 8192 or a == 'SYNC' and c > 256) then
         lanes[lane].input = root .. '/temp/tblink_network_' .. id .. '.input.bin'
         return 'ACK:lanes:file:' .. hex(lanes[lane].input)
       end
@@ -1707,13 +2441,15 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
       end
       local previous = b == 'checked' and snapshot_cache and snapshot_cache.target == network.target and snapshot_cache.xml
       network.job = start(id .. '\n' .. network.op .. '\n' .. network.target .. '\n' .. #body .. '\n' .. body, previous)
+      network.job.stream_sequence = network.op == 'SEQUENCE' and a == 'steps' and b == 'sequence'
+      network.job.local_file = network.local_file
       network.job.report_import = network.op == 'SYNC' and c == 'confirm'
       network.job.request_snapshot = network.job.report_import and lane == 'snapshot' and b == 'checked'
       if network.job.request_snapshot and not network.local_file and transport == 16384 then network.inline_limit = transport end
       -- With 'steps' the first step runs now and the program sends 'step' for each next one.
       -- Without it (an older program, or the bridge upgrade check) every step runs now, as before.
       if a == 'steps' then
-        network.inline = (b == 'inline' or b == 'checked') and (network.op == 'READ' or network.op == 'SEQCUES' or network.op == 'LIST' or network.op == 'LISTSEQ' or network.op == 'TCRANGES' or network.op == 'FIRSTCUES' or network.op == 'ASSIGNSEQ'
+        network.inline = (b == 'inline' or b == 'checked') and (network.op == 'READ' or network.op == 'SEQCUES' or network.op == 'LIST' or network.op == 'LISTSEQ' or network.op == 'TCRANGES' or network.op == 'SETVALUES' or network.op == 'FIRSTCUES' or network.op == 'ASSIGNSEQ'
           or network.op == 'SNAPSHOT' or network.op == 'SCOPE' or network.op == 'SYNC' or network.op == 'SEQGO')
         return proceed(network, token)
       end
@@ -1726,12 +2462,23 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
     end
     if action == 'readbatch' then
       assert(network.done and network.response, 'No response available')
-      assert(type(a) == 'number' and a >= 0 and a < #network.response and a == math.floor(a), 'Invalid response offset')
-      assert(type(b) == 'number' and b >= 1 and b <= 32 and b == math.floor(b) and a + (b - 1) * 256 < #network.response, 'Invalid response batch')
+      local sequence = network.sequence
+      local size = sequence and sequence.wire_bytes or #network.response
+      assert(type(a) == 'number' and a >= 0 and a < size and a == math.floor(a), 'Invalid response offset')
+      assert(type(b) == 'number' and b >= 1 and b <= 32 and b == math.floor(b) and a + (b - 1) * 256 < size, 'Invalid response batch')
+      local data, start
+      if sequence then
+        assert(network.show == gma.show.getvar('SHOWFILE') and sequence.file, 'Sequence transfer source changed')
+        assert(sequence.file:seek('set', a) == a, 'Sequence transfer offset unavailable')
+        local n = math.min(b * 256, size - a)
+        data = assert(sequence.file:read(n), 'Sequence transfer incomplete')
+        assert(#data == n, 'Sequence transfer incomplete')
+        start = 0
+      else data = network.response; start = a end
       local prefix = 'TBLINK_RPC_' .. token:sub(1, 28)
       for index = 0, b - 1 do
-        local offset = a + index * 256
-        gma.echo(prefix .. string.format('%04x', index) .. ':DATA:' .. hex(network.response:sub(offset + 1, offset + 256)))
+        local offset = start + index * 256
+        gma.echo(prefix .. string.format('%04x', index) .. ':DATA:' .. hex(data:sub(offset + 1, offset + 256)))
       end
       return 'BATCH'
     end
@@ -1741,7 +2488,12 @@ _G.TBLINK_NET = function(token, action, id, a, b, c, lane, transport, read_now, 
       return 'DATA:' .. hex(network.response:sub(a + 1, a + 256))
     end
     -- Releases this request's lane only; the other lane's request goes on.
-    if action == 'release' then clear_transfer(network); lanes[lanes.bg == network and 'bg' or 'fg'] = nil; return 'ACK' end
+    if action == 'release' then
+      local received = a == 'received' and network.sequence and network.show == gma.show.getvar('SHOWFILE')
+      clear_transfer(network, received); lanes[lanes.bg == network and 'bg' or 'fg'] = nil
+      assert(a ~= 'received' or received, 'Sequence transfer source changed')
+      return 'ACK'
+    end
     error('Unknown network action')
   end)
   gma.echo('TBLINK_RPC_' .. token .. ':' .. (ok and result or 'ERR:' .. hex(tostring(result))))
@@ -1764,7 +2516,7 @@ local function release_executor_key(key)
 end
 local function expire_executor_keys()
   for id,key in pairs(executor_keys) do
-    if not key.expired and (not active or _G.TBLINK_BRIDGE_GENERATION ~= generation or gma.gettime() > key.expires) then
+    if not key.expired and (not active_mode or _G.TBLINK_BRIDGE_GENERATION ~= generation or gma.gettime() > key.expires) then
       release_executor_key(key); key.expired=true
     end
     if gma.gettime()>key.expires+600 then executor_keys[id]=nil end
@@ -1807,7 +2559,7 @@ _G.TBLINK_EXEC_INPUT = function(token,id,page,slot,button,pressed,code,sequence,
       else executor_keys[id]={expired=true,expires=gma.gettime()} end
       return 'RELEASED'
     end
-    assert(active and _G.TBLINK_BRIDGE_GENERATION==generation and unhex(generation_hex)==generation,'Bridge session changed')
+    assert(active_mode and _G.TBLINK_BRIDGE_GENERATION==generation and unhex(generation_hex)==generation,'Bridge session changed')
     assert(unhex(show_hex)==gma.show.getvar('SHOWFILE'),'Show changed')
     assert(type(page)=='number' and page>=1 and page<=9999 and page==math.floor(page),'Invalid page')
     assert(type(slot)=='number' and slot>=1 and slot<=240 and slot==math.floor(slot),'Invalid executor')
@@ -1845,32 +2597,39 @@ _G.TBLINK_EXEC_INPUT = function(token,id,page,slot,button,pressed,code,sequence,
   return response
 end
 local poll_pending = false
+local fast_poll_until = 0
 local function watch_request_file()
-  if poll_pending or not active or _G.TBLINK_BRIDGE_GENERATION ~= generation then return end
+  if poll_pending or active_mode ~= 'file' or _G.TBLINK_BRIDGE_GENERATION ~= generation then return end
+  local ok, received = pcall(poll)
+  if not ok then gma.feedback('TBLINK file request failed: ' .. tostring(received))
+  elseif received then fast_poll_until = gma.gettime() + 0.25 end
+  local interval = gma.gettime() < fast_poll_until and 0.02 or 0.1
+  -- onPC calls the first tick immediately. Only the second tick has waited
+  -- the interval. A short burst after real file traffic keeps edits responsive.
   poll_pending = true
+  local first_tick = true
   gma.timer(function()
+    if first_tick then first_tick = false; return end
     poll_pending = false
-    if not active or _G.TBLINK_BRIDGE_GENERATION ~= generation then return end
-    poll()
     watch_request_file()
-  end, 0.1, 1)
+  end, interval, 2)
 end
 local function main(mode)
-  if active then
-    active = false
+  if active_mode then
+    active_mode = nil
     expire_executor_keys()
     for number, ref in pairs(snapshot_files) do discard(ref.name); snapshot_files[number] = nil end
     if _G.TBLINK_BRIDGE_GENERATION == generation then _G.TBLINK_BRIDGE_READY = false end
     gma.feedback('TBLINK bridge stopped'); return
   end
   if mode == 'network' then
-    active = true
+    active_mode = 'network'
     _G.TBLINK_BRIDGE_READY = true
     return
   end
   -- A restart must not replay a previously sent write with an uncertain outcome.
   os.rename(request_file, root .. '/temp/tblink_bridge_abandoned_' .. generation .. '.txt')
-  active = true
+  active_mode = 'file'
   _G.TBLINK_BRIDGE_READY = true
   watch_request_file()
   gma.feedback('TBLINK local onPC bridge ready')

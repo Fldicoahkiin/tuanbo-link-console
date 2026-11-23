@@ -75,17 +75,25 @@ it('换工程重置全部分页、位置缓存；保留旧按钮页和推杆页�
   expect(useMa2ExecutorPageStore.getState()).toMatchObject({ pages: {}, navigation: 0, bandPages: { upper: null, fader: null, lower: null } });
 });
 it('扫描显示真实页数且不改变当前页；目录变化撤销全量完整标记', async () => {
-  await loadMa2ExecutorPage(5); await scanMa2ExecutorLocations();
+  await loadMa2ExecutorPage(5);
+  const revision = useDocumentStore.getState().revision;
+  directory.mockResolvedValueOnce({ show: 'Show', generation: 'g', version: '3.7.0.5', buttonPage: 4, faderPage: 100, pages: [
+    { page: 4, name: '上', locations: [{ slot: 101, sequence: 1 }] }, { page: 100, name: '下', locations: [{ slot: 101, sequence: 1 }] }
+  ] });
+  await scanMa2ExecutorLocations();
+  expect(directory).toHaveBeenCalledWith(expect.objectContaining({ locations: true }));
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(useDocumentStore.getState().revision).toBe(revision);
   const state = useMa2ExecutorPageStore.getState();
   expect(state).toMatchObject({ page: 5, completed: 2, total: 2, complete: true, scanning: false });
-  expect(ma2SequenceLocations(state.pages, 1)).toEqual([{ page: 4, slot: 101 }, { page: 100, slot: 101 }]);
+  expect(ma2SequenceLocations(state.locations, 1)).toEqual([{ page: 4, slot: 101 }, { page: 100, slot: 101 }]);
   directory.mockResolvedValueOnce({ show: 'Show', generation: 'g', version: '3.7.0.5', buttonPage: 4, faderPage: 100, pages: [{ page: 100, name: '下' }, { page: 1000, name: '新' }] });
   await loadMa2ExecutorDirectory();
   expect(useMa2ExecutorPageStore.getState().complete).toBe(false);
   expect(useMa2ExecutorPageStore.getState().pages[4]).toBeUndefined();
 });
 it('部分扫描失败不显示全部完成，乱序元数据不产生重复工程修改', async () => {
-  read.mockRejectedValueOnce(new Error('扫描中断'));
+  directory.mockRejectedValueOnce(new Error('扫描中断'));
   await expect(scanMa2ExecutorLocations()).rejects.toThrow('扫描中断');
   expect(useMa2ExecutorPageStore.getState()).toMatchObject({ complete: false, scanning: false, completed: 0 });
   const sequences = [1, 2].map(sequence => ({ sequence, name: `s${sequence}`, cues: [{ index: 1, number: '1.000', name: 'Cue' }] }));

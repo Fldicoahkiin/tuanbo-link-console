@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
 import { allocateP1TimecodeRanges, locateP1Sample, validateP1TimecodeRanges } from './p1-auto-follow';
 import { frameNumberToTimecode, type MtcSample } from './mtc-timecode';
 
@@ -24,10 +24,32 @@ describe('P1 原生时间码映射', () => {
     expect(locateP1Sample(project, p1Sample(95))).toBeNull();
     expect(locateP1Sample(project, p1Sample(0))).toBeNull();
   });
+  it('按控台读回的 AfterRoll 检查旧 P1 点歌区间', () => {
+    const project = followProject();
+    project.ma2ReadState = { source: 'console', pairs: {}, failures: [], selectedTarget: null, query: '', filter: 'all', message: '',
+      catalog: { directory: { show: 'Show', version: '3.7.0.5', generation: 'test', entries: [] }, entries: [], afterRollSeconds: 2, readAt: '2026-11-23T00:00:00Z' } };
+    project.p1AutoFollow!.ranges[1]!.startSeconds = 91;
+    expect(() => validateP1TimecodeRanges(project)).toThrow('间隔不足 3 秒');
+    project.p1AutoFollow!.ranges[1]!.startSeconds = 93;
+    expect(() => validateP1TimecodeRanges(project)).not.toThrow();
+  });
   it('变更音频时长后拒绝沿用旧映射', () => {
     const project = followProject();
     project.rundown[0]!.referenceAudio!.durationMs = 40_000;
     expect(() => validateP1TimecodeRanges(project)).toThrow('过期');
+  });
+  it('已有原时间线的歌曲移动 MTC 后，旧 P1 区间不能用于播放或写回；重新分配保留新起点', () => {
+    const project = followProject();
+    const item = project.rundown[0]!;
+    item.playback = { volume: 100, startMs: 0, endMs: 0, shortcut: '', mtcOffsetMs: 1200000 };
+    item.lighting = createLightingDocument();
+    item.lighting.ma2Bindings = [{ id: 'original', name: '节目灯光', timecode: 3, sourceXml: '<MA/>', readAt: '2026-11-22T00:00:00Z', playback: 'editable', timeOriginMs: 1200000, mappings: [], baselineTracks: [] }];
+    expect(() => validateP1TimecodeRanges(project)).toThrow(/「a」.*起始码.*重新生成/);
+    project.p1AutoFollow = allocateP1TimecodeRanges(project);
+    expect(project.p1AutoFollow.ranges[0]?.startSeconds).toBe(1200);
+    expect(() => validateP1TimecodeRanges(project)).not.toThrow();
+    item.playback.mtcOffsetMs = 1200500;
+    expect(() => allocateP1TimecodeRanges(project)).toThrow(/「a」.*不是整秒/);
   });
   it('拒绝重叠、未映射新增曲目和未验证的小时范围', () => {
     const project = followProject();

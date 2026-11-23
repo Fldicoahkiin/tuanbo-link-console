@@ -65,7 +65,7 @@ export function Ma2CatalogSettings({ method, directory, disabled, notify, onBusy
       {!project?.p1Sync ? <Disclosure title="从 P1 工程导入歌曲" description="已有 P1 歌曲时，导入歌曲和原始时间码"><P1ProjectSyncPanel purpose="migration" disabled={disabled || job.busy} notify={notify} afterImport={() => read()} /></Disclosure>
         : <p>P1 歌曲和原始时间码已经存在工程里，不用重新选 .hia。</p>}
     </Card>
-    <Disclosure title="诊断与手动同步">
+    <Disclosure title="控台诊断与同步">
       {cached?.catalog.metrics ? <p>本次读取 {(cached.catalog.metrics.elapsedMs / 1000).toFixed(1)} 秒 · {cached.catalog.metrics.requests} 次请求 · {(cached.catalog.metrics.bytes / 1024).toFixed(0)} KB 数据{cached.catalog.metrics.wireCommands !== undefined ? ` · ${cached.catalog.metrics.wireCommands} 条网络命令 · ${((cached.catalog.metrics.receivedBytes ?? 0) / 1024).toFixed(0)} KB 网络接收` : ''}。各阶段耗时已保存到数据包。</p> : null}
       <Ma2ProgramSync method={method} directory={directory} network={null} disabled={disabled || job.busy} notify={notify} onBusy={onBusy} />
       <p>联动台不转换的控台动作，写回时保持控台原样。写回前仍要先重新读取并和控台比对。</p>

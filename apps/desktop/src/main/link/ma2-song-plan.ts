@@ -7,6 +7,7 @@ export type Ma2SongPlan = {
   sequence: number; name: string; points: Array<{ id: string; cue: string }>;
   changes: Array<{ cue: string; name: string; refs?: Refs; restore?: boolean }>;
   deletions: string[];
+  preservedSourceCues?: string[];
   /** Cues the console no longer holds that this sync writes again. */
   restored: string[];
 };
@@ -63,13 +64,17 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
   const chosenName = renamedHere || !remote?.name || mode === 'overwrite' ? request.name : remote.name;
   const name = remote?.name && sameName(chosenName, remote.name) ? remote.name : toConsoleLabel(chosenName);
   const onConsole = new Set(remote?.cues.map(cue => milli(cue.number)));
+  const preserved = new Set(binding?.preservedSourceCues?.map(milli));
+  for (const point of request.points) if (point.cues.some(ref => ref.valueEdits)) {
+    for (const ref of point.cues) if (ref.sequence === target) preserved.add(milli(ref.cue));
+  }
   const bound = new Set(binding?.points.map(point => milli(point.cue)));
-  const selfCue = (point: Ma2SongSyncRequest['points'][number]): number | undefined => point.cues.length === 1 && !point.cues[0]!.attributes && point.cues[0]!.includeTracking === undefined && point.cues[0]!.sequence === target ? milli(point.cues[0]!.cue) : undefined;
+  const selfCue = (point: Ma2SongSyncRequest['points'][number]): number | undefined => point.cues.length === 1 && !point.cues[0]!.valueEdits && !point.cues[0]!.attributes && point.cues[0]!.includeTracking === undefined && point.cues[0]!.sequence === target ? milli(point.cues[0]!.cue) : undefined;
   // The confirmed point each timeline point continues: its own, or a deleted point whose Cue it still names.
   const previous = new Map<string, { id: string; cue: string }>();
   for (const point of request.points) {
     const old = binding?.points.find(value => value.id === point.id);
-    if (old) previous.set(point.id, old);
+    if (old && !(preserved.has(milli(old.cue)) && point.cues.some(ref => ref.valueEdits))) previous.set(point.id, old);
   }
   const continued = new Set([...previous.values()].map(old => old.id));
   for (const point of request.points) {
@@ -94,7 +99,7 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
       numbers.set(point.id, candidate); adopted.add(point.id);
     }
   }
-  const used = (value: number): boolean => (onConsole.has(value) || bound.has(value)) && !freed.has(value) || [...numbers.values()].includes(value);
+  const used = (value: number): boolean => preserved.has(value) || (onConsole.has(value) || bound.has(value)) && !freed.has(value) || [...numbers.values()].includes(value);
   for (const [index, point] of request.points.entries()) {
     if (numbers.has(point.id)) continue;
     const low = Math.max(0, ...request.points.slice(0, index).flatMap(value => numbers.has(value.id) ? [numbers.get(value.id)!] : []));
@@ -130,6 +135,6 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
   // A freed number a new point took is deleted too: the write replaces that Cue instead of editing it.
   // Overwriting also deletes the Cues on the console that no point uses.
   const taken = new Set(numbers.values());
-  const deletions = [...onConsole].filter(value => freed.has(value) || mode === 'overwrite' && !taken.has(value)).sort((a, b) => a - b).map(cueText);
-  return { sequence: target, name, points, changes, deletions, restored };
+  const deletions = [...onConsole].filter(value => !preserved.has(value) && (freed.has(value) || mode === 'overwrite' && !taken.has(value))).sort((a, b) => a - b).map(cueText);
+  return { sequence: target, name, points, changes, deletions, restored, ...(preserved.size && { preservedSourceCues: [...preserved].sort((a,b) => a-b).map(cueText) }) };
 }

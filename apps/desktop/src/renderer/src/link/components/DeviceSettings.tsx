@@ -82,7 +82,7 @@ export function Ma2Settings({ disabled, notify, onBusy, onNavigate }: Common & {
   return <>
     <Ma2ConnectionSettings disabled={disabled} notify={notify} maintenanceHost={maintenanceHost} onMaintenance={openMaintenance} onAudioSettings={() => onNavigate('audio')} />
     <Card title="Cue 试听">
-      <Switch label="时间线选中 Cue 试听" help="默认开启。选中时间线上的灯光 Cue 时立即试听，修改后保存在本机。" checked={auditionTimelineCue} onChange={event => {
+      <Switch label="时间线选中 Cue 试听" help="开启后，单击时间线上的 Cue 可以试听。拖动只调整位置。" checked={auditionTimelineCue} onChange={event => {
         try { useDisplayPreferences.getState().setAuditionTimelineCue(event.currentTarget.checked); }
         catch (error) { notify(`没有保存试听设置：${String(error)}`, 'error'); }
       }} />

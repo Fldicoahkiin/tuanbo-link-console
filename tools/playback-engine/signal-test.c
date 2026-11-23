@@ -38,5 +38,12 @@ int main(void) {
   timecode_parts(2589407u, 30, 1, tc); assert(tc[0] == (23 | 0x40) && tc[1] == 59 && tc[2] == 59 && tc[3] == 29);
   timecode_parts(2589408u, 30, 1, tc); assert(tc[0] == 0x40 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0);
   assert(fabs(timecode_frame_ms(30, 1) - 1001.0 / 30.0) < 1e-12 && timecode_frame_ms(25, 0) == 40.0);
+  assert(timecode_frame_position(58000, 0, 30, 0) == 1740);
+  assert(timecode_frame_position(33, 0, 30, 0) == 1);
+  assert(timecode_frame_position(42, 0, 24, 0) == 1);
+  assert(timecode_frame_position(60060, 0, 30, 1) == 1800);
+  assert(timecode_frame_position(79, 0, 25, 0) < 2);
+  assert(timecode_frame_position(57900, 100 - 1000.0 / 48000, 30, 0) < 1740);
+  assert(timecode_frame_position(57900, 100 + 1000.0 / 48000, 30, 0) > 1740);
   puts("{\"passed\":true,\"scope\":\"native sample envelope, 2048-point stereo monitor math and timecode labels\"}"); return 0;
 }

@@ -4,11 +4,13 @@ import { convertMa2Timecode } from './ma2-timecode-conversion';
 import { ma2MtcPlaybackSettings } from './ma2-timecode-xml';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { Ma2NetworkManager } from './ma2-network-manager';
+import * as showProbe from './ma2-show-probe';
+import * as timelineEdit from './ma2-timeline-edit';
 import { meiNanXml, meiNanCues } from './fixtures/ma2-mei-nan-reconstruction';
 import { SHOW_WAIT_SHOW_ON, type ShowState } from '@tb/core/link';
 import { idleShow, pausedShow, runningShow, showReader, showStopped } from './fixtures/show-gates';
 
-const memory = vi.hoisted(() => ({ file: null as string | null, localAddress: undefined as string | undefined, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true', show: '', pause: null as Promise<void> | null, drop: () => undefined, rpc: [] as string[], dropOnRun: false, priorities: [] as (string | undefined)[] }));
+const memory = vi.hoisted(() => ({ file: null as string | null, localAddress: undefined as string | undefined, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true:TC Slot 2', show: '', pause: null as Promise<void> | null, drop: () => undefined, rpc: [] as string[], dropOnRun: false, priorities: [] as (string | undefined)[] }));
 const journals = vi.hoisted(() => new Map<string, Set<string>>());
 beforeEach(() => journals.clear());
 vi.mock('./ma2-request-journal', () => ({ Ma2RequestJournal: class {
@@ -53,8 +55,38 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
   }
   disconnect(): void { memory.closes += 1; this.state = 'disconnected'; }
 } }));
-beforeEach(() => { memory.file = null; memory.connects = 0; memory.closes = 0; memory.pause = null; memory.version = '3.3.4.3'; memory.capabilities = 'Lua 5.3:true:true:true'; memory.show = ''; memory.rpc = []; memory.dropOnRun = false; memory.priorities = []; });
+beforeEach(() => { memory.file = null; memory.connects = 0; memory.closes = 0; memory.pause = null; memory.version = '3.3.4.3'; memory.capabilities = 'Lua 5.3:true:true:true:TC Slot 2'; memory.show = ''; memory.rpc = []; memory.dropOnRun = false; memory.priorities = []; });
 const settings = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'lighting', autoConnect: true };
+
+it('修改歌曲起点后，排队准备选曲仍要求原 Show；保留已经完成的写入回执', async () => {
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore());
+  const expectedSource = { show: '原 Show', generation: 'original', version: '3.7.0.5' };
+  const receipt = { name: '节目', startMs: 10000, backupFile: 'original_backup' };
+  const write = vi.spyOn(timelineEdit, 'editMa2Timeline').mockResolvedValue(receipt);
+  const prepare = vi.spyOn(manager, 'prepareMtcPlayback').mockRejectedValue(new Error('控台 Show 已切换'));
+  try {
+    await manager.save({ settings }); await manager.connect();
+    const { host, port, monitorPort, username } = settings;
+    const target = { host, port, monitorPort, username };
+    const result = await manager.editTimeline({ dataDirectory: '', network: target, target: 3, name: '节目', startMs: 10000,
+      expectedOffset: 0, expectedName: '节目', expectedSource });
+    expect(prepare).toHaveBeenCalledWith(target, false, [3], undefined, undefined, { expectedSource });
+    expect(result).toEqual({ ...receipt, selectionWarning: '控台 Show 已切换' });
+  } finally { write.mockRestore(); prepare.mockRestore(); manager.disconnect(); }
+});
+
+it('首次登录核对 Show 时断线，保留失败原因，重新点击可以恢复', async () => {
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore());
+  const probe = vi.spyOn(showProbe, 'readMa2ShowSource').mockImplementationOnce(() => {
+    memory.drop();
+    return Promise.reject(new Error('读取 Show 时控台连接中断'));
+  });
+  try {
+    await manager.save({ settings });
+    expect(await manager.connect()).toMatchObject({ state: 'disconnected', error: '读取 Show 时控台连接中断', version: null });
+    expect(await manager.connect()).toMatchObject({ state: 'connected', error: null });
+  } finally { probe.mockRestore(); manager.disconnect(); }
+});
 it('意外断线会恢复原控台连接，主动断开则停止恢复且不重放操作', async () => {
   vi.useFakeTimers();
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
@@ -261,11 +293,25 @@ it.each(['2.9.1', '3.0.0.5', '3.1.2.5', '3.3.4.3', '3.9.60.74'])('版本 %s 不�
   memory.version = version;
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
   await manager.save({ settings }); await manager.connect();
-  expect((await manager.checkCapabilities({ kind: 'allow' })).capabilities).toMatchObject({ version, objects: true, files: true, plugin: true });
-  memory.capabilities = 'Lua 5.1:false:false:true';
-  expect((await manager.checkCapabilities({ kind: 'allow' })).capabilities?.objects).toBe(false);
+  expect((await manager.checkCapabilities({ kind: 'allow' })).capabilities).toMatchObject({ version, objects: true, files: true, plugin: true, midiInputSlot: 2 });
+  memory.capabilities = 'Lua 5.1:false:false:true:?';
+  const unavailable = (await manager.checkCapabilities({ kind: 'allow' })).capabilities;
+  expect(unavailable).toMatchObject({ objects: false, midiInputSlot: null });
+  expect(unavailable?.message).toContain('没有读到这台控台的 MIDI 时码槽');
   expect(() => manager.get(settings)).toThrow();
   manager.disconnect(); expect(manager.status().capabilities).toBeNull();
+});
+
+it.each([0, 4])('检查版本时读回 MIDI TC 槽 %d，给出接收站点的具体设置', async slot => {
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore());
+  try {
+    await manager.save({ settings }); await manager.connect();
+    memory.capabilities = `Lua 5.3:true:true:true:${slot ? `TC Slot ${slot}` : 'Off'}`;
+    const checked = (await manager.checkCapabilities({ kind: 'allow' })).capabilities;
+    expect(checked?.midiInputSlot).toBe(slot);
+    expect(checked?.message).toContain(slot ? '接到 TC Slot 4' : '已关闭');
+    expect(checked?.message).toContain('如果 MIDI 接在这台控台');
+  } finally { manager.disconnect(); }
 });
 
 it('检查控台连接听演出状态：节目在走时等，写明原因，不发命令；每次重新连接换一个连接编号', async () => {
@@ -291,7 +337,7 @@ it.each([false, true])('绑定时间线同步完成选曲核对，只传本次�
       expect(ma2NetworkTargetSchema.parse(network)).toMatchObject({ host: settings.host });
       return Promise.resolve(false);
     });
-    const original = ma2MtcPlaybackSettings(readFileSync(new URL('./fixtures/ma2-timecode-fractional-3.3.xml', import.meta.url), 'utf8'), false);
+    const original = ma2MtcPlaybackSettings(readFileSync(new URL('./fixtures/ma2-timecode-fractional-3.3.xml', import.meta.url), 'utf8').replace('TC Slot 1', 'TC Slot 2'), false);
     const sequence = readFileSync(new URL('./fixtures/ma2-sequence-fractional-3.3.xml', import.meta.url), 'utf8');
     let xml = original;
     vi.spyOn(bridge, 'request').mockImplementation(() => Promise.resolve(xml.replace('</MA>', sequence.match(/<Sequ\s[\s\S]*<\/Sequ>/)![0] + '</MA>')));

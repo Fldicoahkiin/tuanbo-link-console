@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { ma2PlaybackActionSchema, type Ma2PlaybackAction } from '@tb/schema';
 import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
 import type { Ma2CommandPriority, Ma2QueueWait } from './ma2-command-queue';
@@ -8,10 +9,24 @@ import { runMa2GuardedLua } from './ma2-lua-command';
 export async function stopMa2ConsoleCues(connection: Pick<Ma2Telnet, 'command'>, current: () => void): Promise<void> {
   const priority: Pick<Ma2Telnet, 'command'> = { command: (line, match, before) =>
     connection.command(line, match, wait => { current(); before?.(wait); }, 'stop') };
-  const visit = (active: string) => `local o=gma.show.getobj;local pages=assert(o.handle('Page'));local n=0;for i=0,o.amount(pages)-1 do local p=o.child(pages,i);if p then for j=0,o.amount(p)-1 do local e=o.child(p,j);if e and o.class(e)=='CMD_EXEC' then local addr=tostring(o.number(p))..'.'..(j+1);local cue=o.handle('Executor '..addr..' Cue');if cue and o.class(cue)=='CMD_CUE' then n=n+1;${active} end end end end end;return n`;
-  // Stop timecode before releasing its outputs. Pool playback and executor playback are separate in MA2.
-  await runMa2GuardedLua(priority, `gma.cmd('Off Timecode Thru');gma.cmd('Off Sequence Thru Fade 0');${visit("gma.cmd('Off Executor '..addr..' Fade 0');")}`, current);
-  const running = await runMa2GuardedLua(priority, visit(''), current);
+  // Release before enumerating the desk. A large Show can take a second to inspect.
+  await runMa2GuardedLua(priority, "gma.cmd('Off Timecode Thru');gma.cmd('Off Executor *.* Fade 0');gma.cmd('Off Sequence Thru Fade 0');return 'sent'", current);
+  const readRunning = [
+    "local o=gma.show.getobj;local pages=assert(o.handle('Page'));local n=0;",
+    "for i=0,o.amount(pages)-1 do local p=o.child(pages,i);if p then ",
+    "for j=0,o.amount(p)-1 do local e=o.child(p,j);if e and o.class(e)=='CMD_EXEC' then ",
+    "local cue=o.handle('Executor '..o.number(p)..'.'..(j+1)..' Cue');",
+    "if cue and o.class(cue)=='CMD_CUE' then n=n+1 end end end end end;return n"
+  ].join('');
+  // The desk may still report the previous Cue for a few render frames after Off Fade 0.
+  // Only observe the release. Repeating Off could stop a new audition.
+  let running = await runMa2GuardedLua(priority, readRunning, current);
+  for (const settleMs of [67, 133, 267]) {
+    if (running === '0') return;
+    await delay(settleMs);
+    current();
+    running = await runMa2GuardedLua(priority, readRunning, current);
+  }
   if (running !== '0') throw new Error(`控台还有执行器在运行（${running}），请检查控台后再按停止`);
 }
 

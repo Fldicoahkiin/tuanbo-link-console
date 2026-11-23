@@ -18,6 +18,7 @@ const eventProperties = z.union([
 
 export type Ma2PreparedEventWrite = {
   timeOriginMs?: number | undefined;
+  editedEndCueTick?: number;
   expectedXml: string;
   desiredXml: string;
   desired: Ma2SyncSnapshot;
@@ -32,7 +33,7 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
   const readback = ma2TimecodePreviewSchema.parse(readbackInput);
   const binding = document.ma2Bindings?.find((entry) => entry.id === bindingId);
   if (!binding) throw new Error('节目没有这个 MA2 对象绑定');
-  binding.trackMappings ??= recoverMa2TrackMappings(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings);
+  binding.trackMappings ??= recoverMa2TrackMappings(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings, true);
   readback.trackMappings ??= recoverMa2TrackMappings(readback.sourceXml, readback.target, readback.document.tracks, readback.mappings);
   const comparison = compareMa2LightingReadback(document, bindingId, readback, consoleChanges);
   const merged = resolveMa2Sync(comparison, conflictChoices);
@@ -133,6 +134,7 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
   const sequences = sequenceXml.map((source) => inspectMa2SequenceXml(source, true));
   if (sequences.some((sequence) => sequence.version !== report.version)) throw new Error('关联序列的 MA2 版本与 Timecode 不一致');
   const edits: Ma2EventEdit[] = [];
+  let lastEditedCue = -1;
   const addedIds = new Map<number, string>();
   for (const [id, path] of paths) if (!desiredObjects.has(id)) edits.push({ kind: 'delete', path });
   for (const object of desired.objects.filter((entry) => entry.kind === 'event')) {
@@ -171,6 +173,9 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
         addedIds.set(edits.length, object.id); edits.push({ kind: 'add', subtrackPath, rawTime, faderLevel: String(value.level) });
       }
       continue;
+    }
+    if (value.action !== 'off' && (!original || Number(original.event.attributes.time ?? 0) !== Number(rawTime))) {
+      lastEditedCue = Math.max(lastEditedCue, Number(rawTime));
     }
     let cue: { sequence: number; cueIndex: number; name: string } | undefined;
     if (value.action === 'goto') {
@@ -224,7 +229,16 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     eventPaths.set(id, next + previous.slice(split));
   }
   const desiredXml = edits.length ? extendMa2TimecodeLength(removed.xml, readback.target) : removed.xml;
-  return { expectedXml: readback.sourceXml, desiredXml, desired, eventPaths, trackPaths, timeOriginMs: readback.timeOriginMs };
+  // Native selection switches off the song at its end. A new terminal Cue needs a hold
+  // when the old end is already reached, unless the operator placed a separate ending action.
+  const oldLength = Number(report.timecodes[0]?.attributes.lenght ?? 0);
+  const tail = lastEditedCue >= 0 && lastEditedCue + 1 >= oldLength
+    ? inspectMa2TimecodeXml(desiredXml).timecodes[0]?.tracks.flatMap(track => track.subtracks.flatMap(subtrack =>
+      subtrack.events.filter(event => Number(event.attributes.time ?? 0) >= lastEditedCue))) : undefined;
+  const endsWithEdit = tail?.length && tail.every(event => Number(event.attributes.time ?? 0) === lastEditedCue
+    && (event.attributes.command === 'Go' || event.attributes.command === 'Goto') && event.attributes.pressed === 'true');
+  return { expectedXml: readback.sourceXml, desiredXml, desired, eventPaths, trackPaths, timeOriginMs: readback.timeOriginMs,
+    ...(endsWithEdit ? { editedEndCueTick: lastEditedCue } : {}) };
 }
 
 /** Confirm native output and restore stable IDs before a project baseline may advance. */

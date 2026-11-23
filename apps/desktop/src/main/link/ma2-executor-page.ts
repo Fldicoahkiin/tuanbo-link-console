@@ -1,4 +1,4 @@
-import { ma2ExecutorPageSchema, ma2ExecutorPageDirectorySchema, ma2ExecutorPageRequestSchema, ma2LayoutDirectoryRequestSchema, type Ma2ExecutorPageRequest, type Ma2LayoutDirectoryRequest } from '@tb/schema';
+import { ma2ExecutorPageSchema, ma2ExecutorPageDirectoryRequestSchema, type Ma2ExecutorPageDirectoryRequest, ma2ExecutorPageDirectorySchema, ma2ExecutorPageRequestSchema, type Ma2ExecutorPageRequest, type Ma2LayoutDirectoryRequest } from '@tb/schema';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { inspectMa2ExecutorPageXml } from './ma2-timecode-xml';
 
@@ -6,6 +6,9 @@ function verifySource(actual: Ma2LayoutDirectoryRequest['expectedSource'] | unde
   if (!actual || actual.show !== expected.show || actual.version !== expected.version || actual.generation !== expected.generation) throw new Error('控台的 Show 或连接变了，请重新读取素材；这一页没有使用旧数据');
 }
 export async function readMa2ExecutorPage(bridge: Pick<Ma2OnpcBridge, 'request'>, input: Ma2ExecutorPageRequest) {
+  return (await readMa2ExecutorPageSnapshot(bridge, input)).page;
+}
+export async function readMa2ExecutorPageSnapshot(bridge: Pick<Ma2OnpcBridge, 'request'>, input: Ma2ExecutorPageRequest) {
   const request = ma2ExecutorPageRequestSchema.parse(input);
   let xml: string;
   try { xml = await bridge.request('PAGE', request.page); }
@@ -15,16 +18,17 @@ export async function readMa2ExecutorPage(bridge: Pick<Ma2OnpcBridge, 'request'>
     // never turn a connection failure, changed Show, or a page that reappeared into an empty page.
     const directory = await listMa2ExecutorPages(bridge, { network: request.network, expectedSource: request.expectedSource });
     if (directory.pages.some(value => value.page === request.page)) throw new Error(`控台第 ${request.page} 页在读取期间发生变化，请刷新这一页`);
-    return ma2ExecutorPageSchema.parse({ page: request.page, name: '', exists: false, readAt: new Date().toISOString(),
-      source: { show: directory.show, version: directory.version, generation: directory.generation }, items: [] });
+    return { page: ma2ExecutorPageSchema.parse({ page: request.page, name: '', exists: false, readAt: new Date().toISOString(),
+      source: { show: directory.show, version: directory.version, generation: directory.generation }, items: [] }), xml: null };
   }
   const page = inspectMa2ExecutorPageXml(xml, request.page);
   verifySource(page.source, request.expectedSource);
-  return page;
+  return { page, xml };
 }
-export async function listMa2ExecutorPages(bridge: Pick<Ma2OnpcBridge, 'request'>, input: Ma2LayoutDirectoryRequest) {
-  const request = ma2LayoutDirectoryRequestSchema.parse(input);
-  const directory = ma2ExecutorPageDirectorySchema.parse(JSON.parse(await bridge.request('PAGES', 1)));
+export async function listMa2ExecutorPages(bridge: Pick<Ma2OnpcBridge, 'request'>, input: Ma2ExecutorPageDirectoryRequest) {
+  const request = ma2ExecutorPageDirectoryRequestSchema.parse(input);
+  const directory = ma2ExecutorPageDirectorySchema.parse(JSON.parse(await (request.locations ? bridge.request('PAGES', 1, 'locations') : bridge.request('PAGES', 1))));
   verifySource(directory, request.expectedSource);
+  if (request.locations && directory.pages.some(page => !page.locations)) throw new Error('控台没有返回完整的 Cue 位置，请更新控台连接组件');
   return directory;
 }

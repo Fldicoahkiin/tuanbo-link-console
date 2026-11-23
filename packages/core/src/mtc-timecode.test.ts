@@ -85,6 +85,19 @@ describe('MTC timecode', () => {
     expect(() => new MtcQuarterFrameDecoder().push(128, 0)).toThrow(/无效/);
   });
 
+  it.each(['forward', 'reverse'] as const)('从 %s 四分之一帧的中途接入时等到下一组完整位置', direction => {
+    const time = { hours: 1, minutes: 12, seconds: 58, frames: 12 };
+    const pieces = quarterFrameBytes(time, '30');
+    if (direction === 'reverse') pieces.reverse();
+    for (let start = 1; start < pieces.length; start++) {
+      const decoder = new MtcQuarterFrameDecoder();
+      const messages = [...pieces.slice(start), ...pieces];
+      const samples = messages.map((piece, index) => decoder.push(piece, index * 8));
+      expect(samples.slice(0, -1)).toEqual(Array.from({ length: messages.length - 1 }, () => null));
+      expect(samples.at(-1)).toMatchObject({ direction, timecode: { ...time, frames: direction === 'forward' ? 14 : 10 } });
+    }
+  });
+
   it.each(['24', '25', '29.97df', '30'] as const)('decodes complete quarter-frame cycles at %s', (rate) => {
     const raw: SmpteTimecode = { hours: 1, minutes: 10, seconds: 2, frames: 3 };
     const decoder = new MtcQuarterFrameDecoder();

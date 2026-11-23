@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, rmdir, symlink, truncate, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
-import { createEmptyLinkProject, createLightingUserLibrary, serializeLinkProject, type LinkProject } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, createLightingUserLibrary, parseLinkProject, serializeLinkProject, type LinkProject } from '@tb/schema';
+import { loadMa2Sequence, storeMa2Sequence } from './ma2-sequence-snapshot';
 import { editReferenceAudioCommand } from '@tb/core/link';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LinkProjectService } from './link-project-service';
@@ -21,6 +22,37 @@ afterEach(async () => {
 });
 
 describe('LinkProjectService', () => {
+  it('大序列单文件搬走可还原原文，首次覆盖 v3 留备份，损坏时保留最后一次完整保存', async () => {
+    const directory = await createTestDirectory();
+    const destination = await createTestDirectory();
+    const path = join(directory, '节目.tblink'), copy = join(destination, '节目.tblink');
+    const backup = join(directory, '节目（旧版本可打开的备份）.tblink');
+    cleanupFiles.push(path, copy, backup);
+    const old = { ...createEmptyLinkProject('节目'), schemaVersion: 3 as const };
+    const previousContent = serializeLinkProject(old);
+    await writeFile(path, previousContent);
+    const xml = '<MA>' + '灯光'.repeat(6_000_000) + '</MA>';
+    const snapshot = await storeMa2Sequence(xml);
+    const lighting = { ...createLightingDocument(), consoleSong: { endpoint: 'test', show: 'show', layout: 1, sequence: 1, name: '歌', points: [], baselineXml: snapshot } };
+    const data = { ...old, rundown: [{ id: 'song', title: '歌', lighting }] };
+    expect(() => parseLinkProject(data)).toThrow('schema 4');
+    const project = parseLinkProject({ ...data, schemaVersion: 4 });
+    const service = new LinkProjectService();
+    expect(await service.save(path, project)).toBe(backup);
+    expect(await service.save(path, project)).toBeNull();
+    expect(await readFile(backup, 'utf8')).toBe(previousContent);
+    const complete = await readFile(path);
+    await writeFile(copy, complete);
+    const opened = await new LinkProjectService().open(copy);
+    expect(await loadMa2Sequence(opened.rundown[0]!.lighting!.consoleSong!.baselineXml)).toBe(xml);
+    const damaged = snapshot.replace(/:[a-f0-9]{64}:/, ':' + '0'.repeat(64) + ':');
+    const binding = project.rundown[0]!.lighting!.consoleSong!;
+    binding.baselineXml = damaged;
+    await expect(service.save(path, project)).rejects.toThrow('校验失败');
+    expect((await readFile(path)).equals(complete)).toBe(true);
+    await writeFile(copy, serializeLinkProject(project));
+    await expect(service.open(copy)).rejects.toThrow('校验失败');
+  });
   it('同一工程读取等待在途原子保存，不与 Windows 替换同时打开目标文件', async () => {
     const directory=await createTestDirectory();const path=join(directory,'queued-read.tblink');cleanupFiles.push(path);
     const original=createEmptyLinkProject('旧');await writeFile(path,JSON.stringify(original));

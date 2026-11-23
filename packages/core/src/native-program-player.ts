@@ -389,7 +389,7 @@ export class NativeProgramPlayer {
       const version = kept ?? { itemId, project: this.project, revision: this.revision, actions: this.project,
         picture: { project: this.project, revision: this.revision }, pictureWanted: null, pictureSent: null };
       const prepared = programStart(version.project, itemId, { revision: version.revision, positionMs, sampleRate: config.audioSampleRate,
-        mtcPortName: config.mtcPortName, check: !reuseSession });
+        mtcPortName: config.mtcPortName, deskRanges: this.dependencies.deskRanges?.(), check: !reuseSession });
       this.onAir = version;
       const item = version.project.rundown.find(entry => entry.id === itemId)!;
       for (const warning of prepared.warnings) this.reportUnavailable(warning);
@@ -447,7 +447,7 @@ export class NativeProgramPlayer {
       await this.command({ kind: 'play' });
       if (!this.current(token)) return;
       this.startCompanionClock();
-      this.update({ status: 'playing' }); this.consumeClock();
+      this.update({ status: 'playing', playbackOrigin: { run: token, positionMs: result.positionMs } }); this.consumeClock();
       // Pause pressed while play was sent: it stays paused where it is.
       if (this.intends('paused')) await this.pauseNow(token);
     });
@@ -492,7 +492,8 @@ export class NativeProgramPlayer {
    * prepared before the audio resumes, as late preparation cannot join mid-song. */
   private async playOn(token: number): Promise<void> {
     if (this.state.status !== 'paused') return;
-    await this.prepareRuntime(this.state.itemId!, this.native!.positionMs, true, token, this.actionPass);
+    const positionMs = this.native!.positionMs;
+    await this.prepareRuntime(this.state.itemId!, positionMs, true, token, this.actionPass);
     if (!this.current(token)) return;
     // A pause drops a volume change still queued, and a fade-out left the gain down: the song plays on at its volume.
     const target = this.outputVolume() / 100;
@@ -500,7 +501,7 @@ export class NativeProgramPlayer {
     this.reflectGain = false; this.update({ volume: target * 100 });
     await this.command({ kind: 'play' }); if (!this.current(token)) return;
     this.startCompanionClock();
-    this.update({ status: 'playing' }); this.consumeClock();
+    this.update({ status: 'playing', playbackOrigin: { run: token, positionMs } }); this.consumeClock();
   }
   /** The scrub placing the song now, if one is: nothing newer was pressed or played since it began. */
   private placing(): Scrub | null { return this.scrubbing?.token === this.epoch ? this.scrubbing : null; }

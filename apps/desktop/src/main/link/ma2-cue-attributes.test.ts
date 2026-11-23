@@ -57,6 +57,10 @@ it('distinguishes missing payload, explicit empty data, commands and possible tr
 });
 it('requires a full native export and checks wrap tracking and playback settings before declaring empty', () => {
   const native = readFileSync(new URL('./fixtures/ma2-empty-cue-3.7.xml', import.meta.url), 'utf8');
+  const withCommand = native.replace('</CuePart>', '<macro_text>Go Executor 1.101</macro_text></CuePart>');
+  const scripted = inspectMa2CueAttributes(withCommand, readAt, true)[0];
+  expect(scripted?.content).toMatchObject({ hasCommands: true, state: 'complete' });
+  expect(ma2CueAttributeState(scripted)).not.toBe('empty');
   expect(ma2CueAttributeState(inspectMa2CueAttributes(native, readAt)[0])).toBe('partial');
   expect(ma2CueAttributeState(inspectMa2CueAttributes(native, readAt, true)[0])).toBe('empty');
   const follow = native.replace('<Cue index="1">', '<Cue index="1" trig="follow" trig_time="2">');

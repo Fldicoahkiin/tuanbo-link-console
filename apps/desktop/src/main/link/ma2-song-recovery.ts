@@ -7,7 +7,7 @@ export type Ma2SongCreationRecovery = { binding: Ma2SongBinding; points: Ma2Song
 export function ma2SongCreationStages(skeletonXml: string, changes: readonly {
   cue: string; name: string; sources?: readonly { xml: string; cue: string }[];
 }[]): Record<string, string[]> {
-  const skeleton = ma2SequenceCueFingerprints(skeletonXml, false);
+  const skeleton = ma2SequenceCueFingerprints(skeletonXml, false, new Set(changes.map(change => Number(change.cue))));
   const report = inspectMa2SequenceXml(skeletonXml);
   const empty = emptyMa2SequenceXml(report.sequences[0]!.number, report.version);
   return Object.fromEntries(changes.map(change => {

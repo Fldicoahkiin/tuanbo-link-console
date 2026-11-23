@@ -1,10 +1,10 @@
-import { cueAttributeNamesSchema } from '@tb/schema';
+import { ma2CueValueEditsSchema, cueAttributeNamesSchema } from '@tb/schema';
 import { z } from 'zod';
 import type { DragEvent } from 'react';
 
 export const CONSOLE_CUE_DRAG = 'application/x-tblink-console-cue';
 export const consoleCueDragSchema = z.object({
-  attributes: cueAttributeNamesSchema.optional(),
+  valueEdits: ma2CueValueEditsSchema.optional(), attributes: cueAttributeNamesSchema.optional(),
   includeTracking: z.boolean().optional(),
   wholeSequence: z.boolean().optional(),
   sequence: z.number().int().min(1).max(99999),

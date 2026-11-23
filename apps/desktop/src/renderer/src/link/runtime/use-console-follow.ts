@@ -30,18 +30,14 @@ export function useConsoleFollow(player: ProjectPlayer, project: LinkProject | n
         .catch((error: unknown) => console.error('控台在不在跟的记录没写进日志', toUserErrorMessage(error)));
     }
   });
-  const { status, itemId } = player.state;
+  const { status, itemId, playbackOrigin } = player.state;
+  const run = playbackOrigin?.run, fromMs = playbackOrigin?.positionMs;
   const controller = player.controller;
   useEffect(() => {
     const follow = monitor.current!;
     if (status !== 'playing' || !itemId) { follow.idle(); return; }
-    follow.start(itemId, player.view.readClock().positionMs);
-    // A jump plays from elsewhere: only the triggers the console passes from there count.
-    const boundary = controller?.clock.subscribeBoundary(event => { if (event === 'seek') follow.start(itemId, player.view.readClock().positionMs); });
-    const timer = window.setInterval(() => {
-      const clock = player.view.readClock();
-      void follow.tick(clock.positionMs, clock.mtcSentPositionMs !== null);
-    }, READ_EVERY_MS);
-    return () => { window.clearInterval(timer); boundary?.(); };
-  }, [status, itemId, controller, player.view]);
+    follow.start(itemId, fromMs ?? player.view.readClock().positionMs);
+    const timer = window.setInterval(() => { void follow.tick(() => player.view.readClock()); }, READ_EVERY_MS);
+    return () => { window.clearInterval(timer); follow.idle(); };
+  }, [status, itemId, controller, player.view, run, fromMs]);
 }

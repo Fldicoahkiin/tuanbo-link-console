@@ -27,7 +27,7 @@ it('新增执行器轨道保留原始轨道和扩展节点，空 Timecode 也可
   const tracks = inspectMa2TimecodeXml(appended.xml).timecodes[0]!.tracks;
   expect(tracks[0]).toEqual(inspectMa2TimecodeXml(xml).timecodes[0]!.tracks[0]);
   expect(tracks[1]).toMatchObject({ index: 1, attributes: { active: 'true' }, executorName: addition.executorName, executorAddress: ['30', '1', '99', '219'], subtracks: [{ index: 0, events: [] }] });
-  expect(tracks[2]!.attributes.active).toBeUndefined();
+  expect(tracks[2]!.attributes).toMatchObject({ active: 'true', muted: 'true' });
   expect(appended.xml).toContain('<FutureData value="keep"/>');
   expect(appendMa2Tracks(source, 9902, []).xml).toBe(source);
   const empty = removeMa2Tracks(xml, 9902, ['Timecode:9901/Track:0']).xml;

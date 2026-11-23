@@ -24,7 +24,7 @@ describe('link project schema', () => {
     expect(parseLinkProject(JSON.parse(serializeLinkProject(project)))).toEqual(project);
   });
 
-  it('认 1、2、3 三个版本；比这一版新的和低于内容需要的都拒绝', () => {
+  it('认 1 到 4 版；比这一版新的和低于内容需要的都拒绝', () => {
     const empty = createEmptyLinkProject('版本');
     const lit = { ...empty, rundown: [{ id: 'item', title: '节目', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting: createLightingDocument() }] };
     const structure = { version: 1, algorithm: 'music-structure-1', sourceSha256: 'a'.repeat(64), durationMs: 4000, taskId: 'task', state: 'ready', bpm: 120, beatsPerBar: 4,
@@ -35,15 +35,14 @@ describe('link project schema', () => {
     expect(requiredSchemaVersion(empty)).toBe(1);
     expect(requiredSchemaVersion(lit)).toBe(2);
     expect(requiredSchemaVersion(beat)).toBe(3);
-    // 3 since the shared song beats (0.5.9 E9); 0.5.8 and earlier open 1 and 2 only.
-    expect(latestSchemaVersion).toBe(3);
+    expect(latestSchemaVersion).toBe(4);
     expect(legacyReadableSchemaVersion).toBe(2);
     expect(parseLinkProject({ ...empty, schemaVersion: 3 }).schemaVersion).toBe(3);
     expect(beat.rundown[0]?.music).toEqual(music);
     expect(() => parseLinkProject({ ...beat, schemaVersion: 2 })).toThrow('必须使用 schema 3');
-    expect(linkProjectSchema.safeParse({ ...empty, schemaVersion: 4 }).success).toBe(false);
+    expect(linkProjectSchema.safeParse({ ...empty, schemaVersion: 5 }).success).toBe(false);
     expect(linkProjectSchema.safeParse({ ...lit, schemaVersion: 1 }).success).toBe(false);
-    for (const schemaVersion of [1, 2, 3] as const) {
+    for (const schemaVersion of [1, 2, 3, 4] as const) {
       expect(parseLinkProject(JSON.parse(serializeLinkProject({ ...empty, schemaVersion }))).schemaVersion).toBe(schemaVersion);
     }
   });

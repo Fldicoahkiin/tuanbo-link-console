@@ -42,7 +42,7 @@ export function subscribeMa2Sync(notify: Notify): () => void {
   let busy = false;
   let requested = false;
   const wake = () => {
-    if (requested || !active) return;
+    if (requested || !active || !ma2SyncActive()) return;
     requested = true;
     if (!busy) queueMicrotask(() => { void tick(); });
   };
@@ -64,7 +64,17 @@ export function subscribeMa2Sync(notify: Notify): () => void {
     if (state.project?.rundown !== previous.project?.rundown
       || state.project?.ma2MaterialLibrary?.userLibrary?.consoleRenames !== previous.project?.ma2MaterialLibrary?.userLibrary?.consoleRenames) wake();
   });
-  const preferences = useMa2RealtimePreference.subscribe(wake);
+  let poll: ReturnType<typeof setInterval> | undefined;
+  const updateSchedule = (): void => {
+    if (ma2SyncActive()) {
+      poll ??= setInterval(wake, 500);
+      wake();
+    } else {
+      clearInterval(poll);
+      poll = undefined;
+    }
+  };
+  const preferences = useMa2RealtimePreference.subscribe(updateSchedule);
   const selection = useProgramSelectionStore.subscribe((state, previous) => {
     const id = useDocumentStore.getState().project?.projectId;
     if (id && state.byProject[id] !== previous.byProject[id]) wake();
@@ -85,7 +95,6 @@ export function subscribeMa2Sync(notify: Notify): () => void {
     gate = next;
     if (next === 'allow') wake();
   });
-  const poll = setInterval(() => { void tick(); }, 500);
-  void tick();
+  updateSchedule();
   return () => { active = false; clearInterval(poll); documents(); selection(); preferences(); modes(); timelines(); materials(); sync(); show(); };
 }

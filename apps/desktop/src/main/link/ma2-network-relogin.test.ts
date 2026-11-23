@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MA2_BRIDGE_MISSING_BEFORE_REQUEST, OUTPUT_RECOVERY_RULES, isShowWait, type ShowState } from '@tb/core/link';
 import { createLightingDocument, lightingDocumentSchema, lightingMa2BindingSchema, lightingTrackSchema, type LightingDocument } from '@tb/schema';
 import { Ma2NetworkManager } from './ma2-network-manager';
+import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { LightingOffService } from './lighting-off-service';
 import type { Ma2ReloginClock, Ma2ReloginLog } from './ma2-relogin';
 import { idleShow, pausedShow, runningShow, showReader } from './fixtures/show-gates';
@@ -316,6 +317,102 @@ describe('演出中控台断了只自动重新登录（M5，2026-11-10 第 2 题
 });
 
 describe('插件在演出中不装（M5）', () => {
+  it('切回原 Show 后首次同步先恢复缺少的连接组件，再按控台时间线目录核对', async () => {
+    const f = await rig({ bridge: 'bundled bridge source' });
+    const request = vi.spyOn(Ma2OnpcBridge.prototype, 'request').mockImplementation(operation => {
+      expect(operation).toBe('LIST');
+      expect(memory.generation).toBe('installed');
+      return Promise.resolve(JSON.stringify({ show: memory.show, generation: memory.generation, version: memory.version, entries: [{ target: 3, name: '节目' }] }));
+    });
+    try {
+      memory.bridge = 'missing'; memory.generation = '';
+      const result = await f.manager.readCatalog(network, undefined, undefined, []);
+      expect(result.directory.entries).toEqual([{ target: 3, name: '节目' }]);
+      expect(memory.installs).toBe(1);
+      expect(memory.connects).toBe(1);
+    } finally { request.mockRestore(); f.manager.disconnect(); }
+  });
+  it('手动同步按这次控台读回发现别的时间线移入当前歌曲，首尾紧邻时须移开', async () => {
+    const f = await rig();
+    const row = { name: '灯光', offset: '36000', length: '120', last: '90', slot: 'TC Slot 2', frame: '30 FPS' };
+    let offset = '36001';
+    const read = vi.spyOn(Ma2OnpcBridge.prototype, 'request').mockImplementation((operation, target, body) => {
+      expect([operation, target, body]).toEqual(['TCRANGES', 1, 'cueclock:3']);
+      return Promise.resolve(JSON.stringify({ show: memory.show, generation: memory.generation, entries: [
+        { ...row, target: 3 }, { ...row, target: 2, offset, last: '90' }
+      ] }));
+    });
+    const check = () => f.manager.readCatalog(network, undefined, undefined, [], undefined, undefined, [3]);
+    try {
+      expect((await check()).playbackConflict).toContain('Timecode 3 和 2 的时间范围重叠');
+      offset = '36120';
+      expect((await check()).playbackConflict).toContain('间隔不足 1 秒');
+      offset = '36150';
+      const resolved = await check();
+      expect(resolved.playbackConflict).toBeUndefined();
+      expect(resolved.needsPlaybackPreparation).toBe(true);
+      expect(resolved.directory.entries.map(entry => entry.target)).toEqual([3, 2]);
+      const music = { startMs: 1200000, durationMs: 37867 };
+      const whilePlaying = () => f.manager.readCatalog(network, undefined, undefined, [], undefined, undefined, [3], undefined, music);
+      offset = '36135';
+      expect((await whilePlaying()).playbackConflict).toContain('Timecode 3 和 2');
+      row.last = ''; // An empty lighting track still has music and sends MTC.
+      expect((await whilePlaying()).playbackConflict).toContain('Timecode 3 和 2');
+      offset = '37137';
+      expect((await whilePlaying()).playbackConflict).toContain('间隔不足 1 秒');
+      offset = '37167';
+      expect((await whilePlaying()).playbackConflict).toBeUndefined();
+    } finally { read.mockRestore(); f.manager.disconnect(); }
+  });
+  it('原生 Cue 独立监听当前歌曲时码，只在歌曲实际时间范围内提示冲突', async () => {
+    const f = await rig();
+    let seconds = 1199;
+    const read = vi.spyOn(Ma2OnpcBridge.prototype, 'request').mockImplementation(() => Promise.resolve(JSON.stringify({
+      show: memory.show, generation: memory.generation, selectorReady: false,
+      entries: [{ target: 3, name: '甲', offset: '36000', length: '120', last: '90', slot: 'TC Slot 2', frame: '30 FPS' }],
+      otherTimedCues: [{ owner: 7, sequence: 19, cue: '2.500', seconds }]
+    })));
+    const check = () => f.manager.readCatalog(network, undefined, undefined, [], undefined, undefined, [3]);
+    try {
+      expect((await check()).playbackConflict).toBeUndefined();
+      seconds = 1200;
+      expect((await check()).playbackConflict).toContain('序列 19 的 Cue 2.5');
+      seconds = 1203.9;
+      expect((await check()).playbackConflict).toContain('Timecode 7');
+      seconds = 1204;
+      expect((await check()).playbackConflict).toBeUndefined();
+      const music = { startMs: 1200000, durationMs: 10000 };
+      const whilePlaying = () => f.manager.readCatalog(network, undefined, undefined, [], undefined, undefined, [3], undefined, music);
+      expect((await whilePlaying()).playbackConflict).toContain('序列 19 的 Cue 2.5');
+      seconds = 1210;
+      expect((await whilePlaying()).playbackConflict).toBeUndefined();
+    } finally { read.mockRestore(); f.manager.disconnect(); }
+  });
+  it('当前节目换到其他时码槽时指出实际位置，恢复后再检查选曲', async () => {
+    const f = await rig();
+    const row = { name: '灯光', offset: '36000', length: '120', last: '90', frame: '30 FPS' };
+    let slot = 'TC Slot 3';
+    const read = vi.spyOn(Ma2OnpcBridge.prototype, 'request').mockImplementation((operation, target, body) => {
+      expect([operation, target, body]).toEqual(['TCRANGES', 1, 'cueclock:3']);
+      return Promise.resolve(JSON.stringify({ show: memory.show, generation: memory.generation, entries: [
+        { ...row, target: 3, slot }, { ...row, target: 5, slot: 'TC Slot 3' }
+      ] }));
+    });
+    const check = () => f.manager.readCatalog(network, undefined, undefined, [], undefined, undefined, [3]);
+    try {
+      expect((await check()).playbackConflict).toMatch(/Timecode 3.*TC Slot 3.*TC Slot 2/);
+      const editingOnly = await f.manager.readCatalog(network, undefined, undefined, [], undefined, undefined, [3], [{ target: 3, slot }]);
+      expect(editingOnly.playbackConflict).toBeUndefined();
+      expect(editingOnly.playbackClockNote).toMatch(/Timecode 3.*TC Slot 3.*TC Slot 2/);
+      expect(editingOnly.needsPlaybackPreparation).toBeUndefined();
+      slot = '';
+      expect((await check()).playbackConflict).toContain('没有指定外部时码槽');
+      slot = 'TC Slot 2';
+      const ready = await check();
+      expect(ready.playbackConflict).toBeUndefined();
+      expect(ready.needsPlaybackPreparation).toBe(true);
+    } finally { read.mockRestore(); f.manager.disconnect(); }
+  });
   it('网线仍连接但组件消失：并发来源核对只恢复一次，再返回控台实际会话', async () => {
     const f = await rig({ bridge: 'bundled bridge source' });
     try {

@@ -22,7 +22,7 @@ export const useDisplayPreferences = create<{
 }>((set, get) => ({
   lowPower: false,
   preciseSeeking: true,
-  auditionTimelineCue: true,
+  auditionTimelineCue: false,
   setAuditionTimelineCue: (auditionTimelineCue) => {
     localStorage.setItem('tblink.audition-timeline-cue', String(auditionTimelineCue));
     set({ auditionTimelineCue });
@@ -39,7 +39,7 @@ export const useDisplayPreferences = create<{
   loaded: false,
   load: () => {
     if (get().loaded) return;
-    set({ auditionTimelineCue: localStorage.getItem('tblink.audition-timeline-cue') !== 'false', lowPower: localStorage.getItem(KEY) === 'low', preciseSeeking: localStorage.getItem('tblink.precise-seeking') !== 'false', homeSpectrum: localStorage.getItem(SPECTRUM_KEY) === 'true', loaded: true });
+    set({ auditionTimelineCue: localStorage.getItem('tblink.audition-timeline-cue') === 'true', lowPower: localStorage.getItem(KEY) === 'low', preciseSeeking: localStorage.getItem('tblink.precise-seeking') !== 'false', homeSpectrum: localStorage.getItem(SPECTRUM_KEY) === 'true', loaded: true });
   },
   setLowPower: (lowPower) => {
     localStorage.setItem(KEY, lowPower ? 'low' : 'normal');

@@ -283,12 +283,12 @@ it.skipIf(!process.env.MA2_ONPC_WRITE_ACCEPTANCE)('本机同步服务完成写�
     const unchanged = await service.apply({ dataDirectory: directory, document: next, bindingId: 'service-binding', readback: result.confirmed, conflicts: [] });
     expect(unchanged).toMatchObject({ status: 'verified', backupFile: null });
     expect(next.tracks[0]!.muted).toBe(true);
-    expect(inspectMa2TimecodeXml(await bridge.request('READ', 9902)).timecodes[0]!.tracks[0]!.attributes.active).toBeUndefined();
+    expect(inspectMa2TimecodeXml(await bridge.request('READ', 9902)).timecodes[0]!.tracks[0]!.attributes.muted).toBe('true');
     next.tracks[0]!.muted = false;
     const unmuted = await service.apply({ dataDirectory: directory, document: next, bindingId: 'service-binding', readback: result.confirmed, conflicts: [] });
     if (unmuted.status !== 'verified') throw new Error(JSON.stringify(unmuted));
     expect(unmuted.confirmed.document.tracks[0]!.muted).toBe(false);
-    expect(inspectMa2TimecodeXml(await bridge.request('READ', 9902)).timecodes[0]!.tracks[0]!.attributes.active).toBe('true');
+    expect(inspectMa2TimecodeXml(await bridge.request('READ', 9902)).timecodes[0]!.tracks[0]!.attributes.muted).toBeUndefined();
 
   } finally {
     const current = await bridge.request('READ', 9902);

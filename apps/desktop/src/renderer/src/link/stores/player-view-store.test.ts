@@ -101,3 +101,15 @@ it('只订阅一个字段：别的字段变了不换值，相等判断可自定'
   expect(selection.read(now, whole, Object.is)).toBe(now);
   expect(whole).toHaveBeenCalledOnce();
 });
+
+it('跨进程复制的画面状态在每次时钟上报时只通知时钟，实际变化仍通知控制栏', () => {
+  const store = new PlayerViewStore(frames().request);
+  const state = { ...emptyInternalPlayerState, pictureItems: [], playedItemIds: ['song'] };
+  store.publish(state);
+  const controls = vi.fn();
+  store.subscribeControl(controls);
+  for (let tick = 1; tick <= 100; tick++) store.publish({ ...structuredClone(state), positionMs: tick });
+  expect(controls).not.toHaveBeenCalled();
+  store.publish({ ...state, fault: '控台连接中断' });
+  expect(controls).toHaveBeenCalledOnce();
+});

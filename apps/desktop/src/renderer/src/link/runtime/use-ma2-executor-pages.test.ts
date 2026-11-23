@@ -38,3 +38,16 @@ it('读素材期间跳过的页面在暂停结束后自动补读，不会一直�
     stop();
   } finally { vi.useRealTimers(); }
 });
+
+it('关闭页面跟随后，首次读取失败会显示原因并结束请求', async () => {
+  vi.useFakeTimers();
+  vi.mocked(loadMa2ExecutorPage).mockClear().mockRejectedValueOnce(new Error('页面读取失败'));
+  const notice = vi.fn();
+  useMa2ExecutorPageStore.setState({ scope: 'scope-a', bandPages: { upper: 1, fader: null, lower: null }, pages: {} });
+  const stop = startMa2ExecutorPagePolling('scope-a', false, notice, { current: Number.POSITIVE_INFINITY });
+  try {
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(notice).toHaveBeenCalledExactlyOnceWith('页面读取失败');
+    expect(loadMa2ExecutorPage).toHaveBeenCalledTimes(1);
+  } finally { stop(); vi.useRealTimers(); }
+});

@@ -1,7 +1,7 @@
 import type { LinkProject, RundownItem } from '@tb/schema';
 import { readSongMtcStart, type SongMtcStartReading } from './mtc-start';
 import { programTimeOrigin } from './ma2-time-origin';
-import { songLightingStatus } from './song-lighting-status';
+import { hasSongLightingTimeOrigin } from './song-lighting-status';
 
 export type P1ImportedSong = { itemId: string; title: string; start: SongMtcStartReading };
 /**
@@ -38,7 +38,7 @@ export function p1ImportReport(project: LinkProject, sourceKeys: readonly string
     if (p1Start.state !== 'set') continue;
     const localStart = readSongMtcStart(local);
     if (localStart.state === 'set' && localStart.startMs === p1Start.startMs) continue;
-    sameName.push({ localId: local.id, localTitle: local.title, localStart, lit: songLightingStatus(project, local.id).state !== 'unmatched',
+    sameName.push({ localId: local.id, localTitle: local.title, localStart, lit: hasSongLightingTimeOrigin(project, local),
       p1Id: source.id, p1Title: source.title, p1StartMs: p1Start.startMs,
       durationDifferenceMs: local.referenceAudio && source.referenceAudio ? Math.abs(local.referenceAudio.durationMs - source.referenceAudio.durationMs) : null });
   }

@@ -41,6 +41,34 @@ it('控台内修改触发、备份并逐字核对其余灯具和命令内容', a
   expect(f.console.exportFiles()).toEqual([`tblink_library_${result.requestId}.xml`]);
 });
 
+it('恢复选曲辅助 Cue 的 Go 前要求时间线和序列均为本软件所有', async () => {
+  const f = fixture('<Trigger type="Follow" data_f="0"/>');
+  f.console.set('Timecode 3', { xml: '<MA><Timecode index="2" slot="TC Slot 2"><Track><SubTrack><Event><Cue><No>1</No><No>3</No><No>1</No></Cue></Event></SubTrack></Track></Timecode></MA>' });
+  const prepare = () => f.bridge.exchange('SEQGO', 3, expectedSource + '\nselector');
+  for (const [marked, unmarked] of [['Timecode 3', 'Sequence 3'], ['Sequence 3', 'Timecode 3']] as const) {
+    f.console.lua("FAKE.objects[MARKED].properties={Info='TBLINK_MTC_SELECTOR_V1'};FAKE.objects[UNMARKED].properties={}", { MARKED: marked, UNMARKED: unmarked });
+    await expect(prepare()).rejects.toThrow('Selector ownership changed');
+    expect(f.console.commands().some(command => command.startsWith('Assign'))).toBe(false);
+  }
+  f.console.lua("FAKE.objects['Timecode 3'].properties={Info='TBLINK_MTC_SELECTOR_V1'}");
+  await expect(prepare()).resolves.toMatchObject({ response: '{"changed":true,"cues":1}' });
+  await expect(prepare()).resolves.toMatchObject({ response: '{"changed":false,"cues":0}' });
+  expect(f.console.commands().filter(command => command.startsWith('Assign'))).toEqual(['Assign Sequence 3 Cue 1.500 /Trig=Go']);
+});
+
+it('手动同步改跳步前再次核对歌曲引用，只更改当前时间线仍在使用的序列', async () => {
+  const f = fixture('<Trigger type="Follow"/>');
+  const bind = (sequence: number) => f.console.set('Timecode 12', {
+    xml: `<MA><Timecode index="11" slot="TC Slot 2"><Track><SubTrack><Event><Cue><No>1</No><No>${sequence}</No><No>1</No></Cue></Event></SubTrack></Track></Timecode></MA>`
+  });
+  bind(4);
+  const prepare = () => f.bridge.exchange('SEQGO', 3, expectedSource + '\n12');
+  await expect(prepare()).rejects.toThrow('引用序列刚有变化');
+  expect(f.console.commands().some(command => command.startsWith('Assign'))).toBe(false);
+  bind(3);
+  expect(JSON.parse((await prepare()).response)).toEqual({ changed: true, cues: 1 });
+});
+
 it('大于 32 MB 的非 Go 序列在控台内完成修改与完整核对', async () => {
   const f = fixture('<Trigger type="Time" data_f="1"/>', 33 * 1024 * 1024);
   const result = await f.bridge.exchange('SEQGO', 3, expectedSource);

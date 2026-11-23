@@ -28,15 +28,19 @@ export class LightingCueAudition {
   async playAction(input: Ma2PlaybackAction): Promise<boolean> {
     this.cancel(); const generation = this.generation;
     const action = ma2PlaybackActionSchema.parse(input);
-    const audition = await window.tbLink.controlMa2Audition({version:1,action:'status'});
-    if(audition.phase==='stopping')throw new Error('正在停止试听，请稍后再点 Cue');
-    const status = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());
+    const [audition, networkStatus] = await Promise.all([
+      window.tbLink.controlMa2Audition({version:1,action:'status'}),
+      window.tbLink.getMa2NetworkStatus()
+    ]);
     if (generation !== this.generation) return false;
+    if(audition.phase==='stopping')throw new Error('正在停止试听，请稍后再点 Cue');
+    const status = ma2NetworkStatusSchema.parse(networkStatus);
     if (status.state !== 'connected' || !status.settings) throw new Error('请先连接 MA2 网络');
     const { host, port, monitorPort, username } = status.settings;
     const sessionId = crypto.randomUUID(); this.networkSession = sessionId;
     try { await window.tbLink.playMa2Audition({ version:1,generation:audition.generation,sessionId, action, network: { host, port, monitorPort, username }, deadlineAt: Date.now() + auditionDeadlineMs }); }
     catch (error) { if (generation !== this.generation) return false; throw error; }
+    finally { if (this.networkSession === sessionId) this.networkSession = null; }
     return generation === this.generation;
   }
 

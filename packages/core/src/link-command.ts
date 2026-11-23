@@ -33,6 +33,8 @@ import {
   type RundownItemContent
 } from '@tb/schema';
 import { parseP1TimeOrigin, programTimeOrigin } from './ma2-time-origin';
+import { hasSongLightingTimeOrigin } from './song-lighting-status';
+import { readSongMtcStart } from './mtc-start';
 import { withSchemaVersion } from './project-schema-version';
 import { lightingIdMap, withNewLightingIds } from './lighting-ids';
 
@@ -197,15 +199,20 @@ export function synchronizeP1ProjectCommand(
       const exactAudioMatches = project.rundown.filter((item) => !item.p1Media
         && item.referenceAudio?.sha256 === imported.referenceAudio.sha256);
       const uniqueImportedAudio = importedItems.filter((item) => item.referenceAudio.sha256 === imported.referenceAudio.sha256).length === 1;
-      const existing = existingBySourceKey.get(imported.p1Media.sourceKey)
-        ?? (uniqueImportedAudio && exactAudioMatches.length === 1 ? exactAudioMatches[0] : undefined);
+      const importedStart = parseP1TimeOrigin(imported.p1Media.midiStartTime);
+      let candidate = uniqueImportedAudio && exactAudioMatches.length === 1 ? exactAudioMatches[0] : undefined;
+      if (candidate && hasSongLightingTimeOrigin(project, candidate)) {
+        const start = readSongMtcStart(candidate);
+        if (start.state !== 'set' || start.startMs !== importedStart) candidate = undefined;
+      }
+      const existing = existingBySourceKey.get(imported.p1Media.sourceKey) ?? candidate;
       const playback = {
         volume: imported.p1Media.muted ? 0 : imported.p1Media.volume,
         startMs: 0, endMs: 0,
         endAction: imported.p1Media.playEndAction === 'playNext' ? 'next' : imported.p1Media.playEndAction,
         shortcut: imported.p1Media.shortcut,
         ...existing?.playback,
-        mtcOffsetMs: parseP1TimeOrigin(imported.p1Media.midiStartTime)
+        mtcOffsetMs: importedStart
       };
       if (!existing) {
         return rundownItemSchema.parse({

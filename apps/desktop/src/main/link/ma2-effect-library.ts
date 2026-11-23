@@ -1,4 +1,4 @@
-import { ma2SongDirectory } from '@tb/core/link';
+import { ma2EmptyCueIndices, ma2SongDirectory } from '@tb/core/link';
 import { ma2EffectLibrarySchema, ma2ObjectDirectorySchema, type Ma2CatalogRequest, type Ma2EffectLibrary, type Ma2ReadProgressUpdate } from '@tb/schema';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { readMa2AttributeCatalog } from './ma2-attribute-catalog';
@@ -44,9 +44,14 @@ export async function readMa2EffectLibrary(bridge: Pick<Ma2OnpcBridge, 'request'
       if (signal?.aborted) throw new Error('属性读取已中止');
       holdForShow(show, 'ma2.sync.read', `已读完 ${sequences.length + errors.length}/${selected.length} 个序列，接着读会从没读的开始。`);
       count += sequence.cues.length;
-      sequences.push({ sequence: sequence.number, name: sequence.name, cues: sequence.cues });
-      fixtureUsage.push(...inspectMa2CueFixtures(xml));
-      cueAttributes.push(...attributes);
+      if (details === 'empty-cues') {
+        const empty = ma2EmptyCueIndices(attributes);
+        sequences.push({ sequence: sequence.number, name: sequence.name, cues: sequence.cues.filter(cue => empty.has(cue.index)) });
+      } else {
+        sequences.push({ sequence: sequence.number, name: sequence.name, cues: sequence.cues });
+        fixtureUsage.push(...inspectMa2CueFixtures(xml));
+        cueAttributes.push(...attributes);
+      }
     } catch (error) {
       if (isShowWait(error)) throw error;
       errors.push({ sequence: entry.target, message: error instanceof Error ? error.message : String(error) });
@@ -63,7 +68,7 @@ export async function readMa2EffectLibrary(bridge: Pick<Ma2OnpcBridge, 'request'
   if (JSON.stringify(directory) !== JSON.stringify(verified)) throw new Error('Show 或序列有变化，请重新读取');
   const groupIndex = new Map(groups?.map(group => [group.attribute, group]));
   const classified = cueAttributes.map(cue => ({ ...cue, ...(groups ? { groups: cue.attributes.flatMap(attribute => groupIndex.get(attribute) ?? []) } : {}) }));
-  const result = ma2EffectLibrarySchema.parse({ directory, sequences, fixtureUsage, cueAttributes: classified, fixtureDetails: 'included', errors, readAt });
+  const result = ma2EffectLibrarySchema.parse({ directory, sequences, fixtureUsage, cueAttributes: classified, fixtureDetails: details === 'empty-cues' ? 'unavailable' : 'included', errors, readAt });
   await onProgress?.({ phase: 'library', completed: selected.length + 2, total: selected.length + 2, detail: '序列目录检查完毕，正在保存结果' });
   return result;
 }

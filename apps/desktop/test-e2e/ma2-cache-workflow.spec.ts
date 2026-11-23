@@ -82,7 +82,8 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     const exported = z.object({ context: z.object({ ma2Site: z.object({ raw: z.array(z.object({ target: z.number(), xml: z.string() })), pairings: z.record(z.string(), z.unknown()) }) }) }).parse(JSON.parse(gunzipSync(await readFile(diagnosticPath)).toString('utf8')));
     expect(exported.context.ma2Site.raw.find(entry => entry.target === 2)?.xml).toBe(meiNanXml);
     expect(await app.evaluate(() => process.env.TBLINK_CACHE_TEST_READS)).toBe('1');
-    await expect.poll(() => app.evaluate(() => Number(process.env.TBLINK_CACHE_SOURCE_READS))).toBeGreaterThan(0);
+    // 浏览已读取的工程和导出诊断，都使用已确认的数据。再次核对由同步按钮发起。
+    expect(await app.evaluate(() => Number(process.env.TBLINK_CACHE_SOURCE_READS))).toBe(0);
     await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
     const saved = parseLinkProject(JSON.parse(await readFile(file, 'utf8')));
     expect(saved.ma2ReadState?.catalog.entries.length).toBe(2);
