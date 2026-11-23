@@ -31,7 +31,7 @@ import {
   type ResolvedTimelineState
 } from '@tb/core/link';
 import type { LinkCue, LinkMediaAsset, MtcFrameRate, ReferenceMediaClip, RundownItem, VisualLayer } from '@tb/schema';
-import { Music2, Trash2, MousePointer2, SquareDashedMousePointer, AudioLines, ArrowLeftRight, FolderInput, Gauge, type LucideIcon } from 'lucide-react';
+import { Music2, Trash2, MousePointer2, SquareDashedMousePointer, AudioLines, ArrowLeftRight, FolderInput, Gauge, X, type LucideIcon } from 'lucide-react';
 import type { LightingTool } from './LightingTimelineTools';
 import type { ObsResource } from './ResourceLibrary';
 import { useSongWaveform, type ReferenceWaveformSource } from './ReferenceWaveform';
@@ -149,6 +149,17 @@ type Props = {
 
 /** The props as this timeline reads them: `playheadMs` is the playhead now, read when it is used (a key, a button). */
 type TimelineProps = Props & { readonly playheadMs: number };
+
+const firstCueHintSeen = 'tblink.first-cue-hint.seen.v1';
+function FirstCueHint({ message }: { message: string }): JSX.Element | null {
+  const [visible, setVisible] = useState(() => localStorage.getItem(firstCueHintSeen) !== '1');
+  useEffect(() => {
+    if (visible) localStorage.setItem(firstCueHintSeen, '1');
+  }, [visible]);
+  return visible ? <div className="first-cue-hint"><span>{message}</span>
+    <IconButton type="button" label="关闭首个 Cue 建议" icon={X} size="sm" onClick={() => setVisible(false)} />
+  </div> : null;
+}
 
 /** Both the hint and the markers use the same song-relative Cue positions. */
 function useTimelineCuePoints(props: TimelineProps) {
@@ -292,7 +303,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   >
     <div><TimelineToolbar displayControl={props.lightingWorkspace ? <LightingTimelineControls {...musicPanel} onSeek={ms => { viewport.revealTime(ms); seekTo(ms, true, false); }} display={musicDisplay} onDisplayChange={setMusicDisplay} /> : <><MusicAnalysisButton compact beats={beatSegments} analysis={analysis} playhead={props.playhead} open={props.analysisPanel?.open ?? false} onOpen={() => props.analysisPanel?.onOpen()} /><MusicAnalysisPanelPortal {...musicPanel} onSeek={ms => { viewport.revealTime(ms); seekTo(ms, true, false); }} /></>} outputControl={props.outputControl} stampControls={stamping.controls} wheelSeek={props.lightingWorkspace ? wheelSeek : undefined} compact={props.lightingWorkspace === true} tools={props.lightingWorkspace ? <><div className="cue-mouse-modes" role="group" aria-label="鼠标模式"><IconButton label="定位" title="定位：点击或拖动波形、标尺" icon={MousePointer2} aria-pressed={cueMouseMode === 'seek'} onClick={() => setCueMouseMode('seek')} /><IconButton label="框选 Cue" title="框选 Cue：拖动框选，Delete 删除" icon={SquareDashedMousePointer} aria-pressed={cueMouseMode === 'select'} onClick={() => setCueMouseMode('select')} /></div><TimelinePanelButton label="波形显示方式" icon={AudioLines}><Field stacked label="波形显示方式">{(field) => <Select {...field} value={waveformMode} onChange={event => setWaveformMode(event.currentTarget.value)}><option value="rhythm">节奏波形</option><option value="waveform">原始波形</option><option value="spectrum">频谱</option></Select>}</Field></TimelinePanelButton></> : undefined} editPoints={seekSnapPointsMs} snapDistance={snapDistance} onSnapDistanceChange={setSnapDistance} externalTransport={props.externalTransport} onStop={props.onStop ? stopPlayback : undefined} recordingControl={props.lighting ? <><MenuButton label="灯光" menuLabel="灯光工具" className="timeline-lighting-tools">{(close) => lightingTools.filter(([tool]) => !props.lightingWorkspace || tool === 'files').map(([tool, label, icon]) => <MenuItem key={tool} icon={icon} onSelect={() => { close(); props.lighting?.onOpenTools?.(tool); }}>{label}</MenuItem>)}</MenuButton>{!props.lightingWorkspace ? <TimelineLightingRecording audioAvailable={Boolean(props.referenceAudio)} document={props.lighting.document} clipId={props.lighting.selectedClipId} clock={clock} onChange={props.lighting.onChange} onError={props.onPlaybackError} /> : null}</> : null} playbackReady={lightingPlayback.ready} frameRate={props.frameRate} durationMs={props.durationMs} playhead={props.playhead} playing={props.playing} referenceAudio={props.referenceAudio} snapEnabled={snapEnabled} audioRef={audioRef} onPlayheadChange={ms => { if (props.playing) props.onPlayheadChange(ms); else seekTo(ms, true, false); }} onPlayPause={playPause} onPlayingChange={props.onPlayingChange} onPlaybackError={props.onPlaybackError} onSnapEnabledChange={setSnapEnabled} onZoomOut={viewport.zoomOut} onFit={viewport.fit} onZoomIn={viewport.zoomIn} />
 
-    {cuePoints.hint && <p className="first-cue-hint">{cuePoints.hint}</p>}
+    {cuePoints.hint && <FirstCueHint key={props.timelineState.itemId} message={cuePoints.hint} />}
     {props.transportStatus}</div><div className="timeline-shell">
       <div className="timeline-heading-viewport" ref={viewport.headingViewportRef} onWheel={viewport.onHeadingsWheel}><div className="timeline-track-headings" style={headingStyle}>
         <div className="track-heading time-heading"><span>时间</span><small>{props.frameRate} fps</small></div>

@@ -1,5 +1,9 @@
 @layer pages {
   .first-cue-hint {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
     margin: 0;
     padding: var(--space-half) var(--space-2);
     color: var(--color-text-secondary);
