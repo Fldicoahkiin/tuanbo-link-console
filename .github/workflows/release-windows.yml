@@ -109,11 +109,12 @@ jobs:
           node scripts/verify-release-version.mjs --release "$env:RELEASE_TAG"
           if ($LASTEXITCODE -ne 0) { throw 'Release version check failed' }
 
-      - name: Typecheck, test and lint
-        run: |
-          pnpm typecheck
-          pnpm test
-          pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Unit tests
+        run: pnpm test --maxWorkers=2
+      - name: Lint
+        run: pnpm lint
 
   build:
     needs: tag

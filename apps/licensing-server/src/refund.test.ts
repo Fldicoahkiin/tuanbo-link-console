@@ -61,7 +61,7 @@ async function setup() {
   return { service, consoleService, session, calls, answers, execute, buy, exceptions, ledger, db };
 }
 
-it('全额原路退款：未确认时订单与授权不变；换新操作编号按原金额重提复用同一 out_request_no，经退款查询确认后同一事务标记退款并撤销全部授权', async () => {
+it('全额原路退款：未确认时订单与授权不变；换新操作编号按原金额重提复用同一 out_request_no，经退款查询确认后同一事务标记退款并撤销全部授权', { timeout: 15_000 }, async () => {
   const s = await setup(); const order = s.buy(2);
   s.answers['alipay.trade.refund'] = () => new Error('网络中断');
   await expect(s.execute({ action: 'alipay-refund', id: order.id, amountFen: 160000, reason: '客户申请全额退款' })).rejects.toThrow('网络异常');

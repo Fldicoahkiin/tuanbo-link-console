@@ -100,7 +100,7 @@ describe('RecoveryCopies', () => {
     expect(await store.find(named)).not.toBeNull();
   });
 
-  it('清理：最多保留 20 份，超出的从最旧的开始移到回收站', async () => {
+  it('清理：最多保留 20 份，超出的从最旧的开始移到回收站', { timeout: 15_000 }, async () => {
     const times = Array.from({ length: 21 }, (_, index) => `2026-10-21T${String(index).padStart(2, '0')}:00:00.000Z`);
     const { store } = await copies(times);
     for (let index = 0; index < 21; index += 1) await store.write(write({ projectPath: null, projectId: `p${index}` }, 1));

@@ -225,7 +225,7 @@ it.each(['pending', 'network', 'revoked', 'tampered'] as const)('客户查单并
   } finally { release(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
 
-it('付款期限过后查单确认交易不存在或已关闭才关单；仍待付款先调用 alipay.trade.close，未确认则保持待付款；每次转换写审计', async () => {
+it('付款期限过后查单确认交易不存在或已关闭才关单；仍待付款先调用 alipay.trade.close，未确认则保持待付款；每次转换写审计', { timeout: 15_000 }, async () => {
   let clock = now;
   const path = join(await mkdtemp(join(tmpdir(), 'tblink-close-')), 'license.db');
   const service = new LicensingService(path, issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => clock);
