@@ -4,6 +4,7 @@ import { useDocumentStore } from './document-store';
 import { useShowStateStore } from './show-state-store';
 import { scanMa2Materials, useMa2MaterialReadStore } from './ma2-material-read-store';
 
+vi.hoisted(() => vi.stubGlobal('localStorage', { getItem: () => null }));
 vi.mock('../project-document', () => ({ requireProjectLocation: () => Promise.resolve('test.tblink') }));
 afterEach(() => { vi.unstubAllGlobals(); useShowStateStore.setState({ show: { phase: 'idle', program: null } }); });
 
