@@ -9,6 +9,11 @@ local last = ''
 local generation = tostring(gma.gettime())
 _G.TBLINK_BRIDGE_GENERATION = generation
 local root = gma.show.getvar('PATH')
+local exchange_dir = root .. '/importexport'
+-- Lua opens these files in the desk's local data directory, regardless of the operator's selected drive.
+local function file_command(command)
+  gma.cmd(command .. ' /p="' .. exchange_dir .. '"')
+end
 local request_file = root .. '/temp/tblink_bridge_request.txt'
 local processing_file = root .. '/temp/tblink_bridge_processing_' .. generation .. '.txt'
 local response_file = root .. '/temp/tblink_bridge_response.txt'
@@ -30,7 +35,7 @@ local function sequence_appearance(number, handle)
   local cached = appearance_cache[number]
   if cached and cached.handle == handle and cached.show == gma.show.getvar('SHOWFILE') and now - cached.at < 2 then return cached.color end
   local file = 'tblink_appearance_' .. number
-  gma.cmd('Export Sequence ' .. number .. ' ' .. file .. ' /o')
+  file_command('Export Sequence ' .. number .. ' ' .. file .. ' /o')
   local input = assert(io.open(root .. '/importexport/' .. file .. '.xml', 'rb'), 'Sequence appearance export unavailable')
   -- Appearance belongs to Sequ, before the first Cue. Fixture values never cross the network here.
   local header = input:read(4096) or ''; input:close(); discard(file)
@@ -41,8 +46,8 @@ local function sequence_appearance(number, handle)
   return color
 end
 local function bounded_read(path, limit)
-  local file = io.open(path, 'rb')
-  if not file then return nil end
+  local file, reason = io.open(path, 'rb')
+  if not file then return nil, false, reason end
   local data = file:read(limit + 1) or ''
   file:close()
   if #data > limit then return nil, true end
@@ -327,8 +332,10 @@ local function pack_sequence(job, step, source, output, size, finish)
   step(next_block)
 end
 local function export(tc, name)
-  gma.cmd('Export Timecode ' .. tc .. ' "' .. name .. '" /o')
-  return assert(read(root .. '/importexport/' .. name .. '.xml'), 'Export unavailable')
+  file_command('Export Timecode ' .. tc .. ' "' .. name .. '" /o')
+  local xml, oversized, reason = bounded_read(exchange_dir .. '/' .. name .. '.xml', 33554432)
+  assert(not oversized, 'Bridge file exceeds limit')
+  return assert(xml, '时间线 ' .. tc .. ' 的导出文件无法读取，请检查控台目录 ' .. exchange_dir .. '。' .. tostring(reason or ''))
 end
 local function export_scratch(tc, name)
   local xml = export(tc, name); discard(name); return xml
@@ -381,7 +388,7 @@ local function snapshot_sequences(step, xml, id, additional, done, previous, ver
         if missing then return missing() end
         error('Referenced Sequence is missing')
       end
-      gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '" /o')
+      file_command('Export Sequence ' .. number .. ' "' .. name .. '" /o')
       local dir = root .. '/importexport/'
       local path = dir .. name .. '.xml'
       local full, large = bounded_read(path, math.min(262144, 1048576 - inline_bytes))
@@ -409,7 +416,7 @@ local function snapshot_sequences(step, xml, id, additional, done, previous, ver
         end
         if verify_on_apply then return remember() end
         return step(function()
-          gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '_verify" /o')
+          file_command('Export Sequence ' .. number .. ' "' .. name .. '_verify" /o')
           local same = same_sequence_files(path, dir .. name .. '_verify.xml', false)
           discard(name .. '_verify')
           if not same then discard(name); error('Sequence changed during snapshot') end
@@ -427,7 +434,7 @@ local function snapshot_sequences(step, xml, id, additional, done, previous, ver
         return next_sequence(i + 1)
       end
       step(function()
-        gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '_verify" /o')
+        file_command('Export Sequence ' .. number .. ' "' .. name .. '_verify" /o')
         local check = assert(read(root .. '/importexport/' .. name .. '_verify.xml'))
         assert(canonical(full) == canonical(check), 'Sequence changed during snapshot')
         discard(name); discard(name .. '_verify')
@@ -474,7 +481,7 @@ local function tracked_cues(seq, wanted, source_xml, name, names_reader)
   local ok, result = pcall(function()
     write(dir .. name .. '.xml', seed)
     assert(current() and not obj.handle(address), 'Temporary sequence changed')
-    gma.cmd('Import ' .. name .. '.xml At ' .. address .. ' /nc')
+    file_command('Import ' .. name .. '.xml At ' .. address .. ' /nc')
     owned = assert(obj.handle(address), 'Temporary sequence unavailable')
     assert(obj.label(owned) == name, 'Temporary sequence changed')
     for _, n in ipairs(slots) do
@@ -487,10 +494,10 @@ local function tracked_cues(seq, wanted, source_xml, name, names_reader)
     if names_reader then
       assert(#slots == 1, 'Select one Cue')
       local cue = string.format('%d.%03d', math.floor(slots[1]/1000), slots[1]%1000)
-      gma.cmd('Export ' .. address .. ' Cue ' .. cue .. ' ' .. name .. '_result /o')
+      file_command('Export ' .. address .. ' Cue ' .. cue .. ' ' .. name .. '_result /o')
       return names_reader(dir .. name .. '_result.xml', slots[1])
     end
-    gma.cmd('Export ' .. address .. ' ' .. name .. '_result /o')
+    file_command('Export ' .. address .. ' ' .. name .. '_result /o')
     local xml = cue_selection(dir .. name .. '_result.xml', wanted)
     local source_tag = assert(source_xml:match('(<Sequ%s[^>]+>)'))
     xml = xml:gsub('<Cue%s+index="[^"]+"[^>]*>.-</Cue>', function(cue)
@@ -543,7 +550,7 @@ local function archived_tracked_cues(target, wanted, token, id)
     end)
     close(); assert(out:close()); assert(copied, why)
     assert(current() and not obj.handle(address), 'Temporary sequence changed')
-    gma.cmd('Import ' .. name .. '.xml At ' .. address .. ' /nc')
+    file_command('Import ' .. name .. '.xml At ' .. address .. ' /nc')
     owned = assert(obj.handle(address), 'Temporary sequence unavailable')
     assert(obj.label(owned) == name and current(), 'Temporary sequence changed')
     return tracked_cues(scratch, wanted, xml, 'tblink_status_' .. id)
@@ -715,7 +722,7 @@ local function copy_material(xml, cue, dest, mode, name)
   local ok, why = pcall(function()
     write(root .. '/importexport/' .. name .. '.xml', tagged)
     assert(current() and not obj.handle(address), 'Temporary sequence changed')
-    gma.cmd('Import ' .. name .. '.xml At ' .. address .. ' /nc')
+    file_command('Import ' .. name .. '.xml At ' .. address .. ' /nc')
     owned = assert(obj.handle(address), 'Temporary sequence missing')
     assert(current() and obj.label(owned) == name and obj.handle(address .. ' Cue ' .. cue), 'Temporary Cue missing')
     gma.cmd('Copy ' .. address .. ' Cue ' .. cue .. ' At ' .. dest .. ' /status=false' .. mode)
@@ -786,7 +793,7 @@ local function first_track_cues(tc, id, body)
   local obj = gma.show.getobj
   local temp = 'tblink_first_' .. id
   local function export(address, name, keep, wanted)
-    gma.cmd('Export ' .. address .. ' ' .. name .. ' /o')
+    file_command('Export ' .. address .. ' ' .. name .. ' /o')
     local path = dir .. name .. '.xml'
     local xml = wanted and cue_selection(path, wanted) or assert(read(path), 'Object export unavailable')
     if not keep then discard(name) end
@@ -852,7 +859,7 @@ local function first_track_cues(tc, id, body)
   if #list == 1 and list[1].witness and #list[1].witness <= 4194304 then
     local point = list[1]
     local check = temp .. '_read'
-    gma.cmd('Export ' .. dest .. ' Cue ' .. point.existing .. ' "' .. check .. '" /o')
+    file_command('Export ' .. dest .. ' Cue ' .. point.existing .. ' "' .. check .. '" /o')
     local ok, head, data = pcall(direct_cue_xml, dir .. check .. '.xml', math.floor(tonumber(point.existing)*1000 + 0.5))
     discard(check)
     assert(ok, head)
@@ -912,7 +919,7 @@ local function first_track_cues(tc, id, body)
           if not xml and source.seq ~= seq and source.edits and #list == 1 and #point.sources == 1 then
             local address = 'Sequence ' .. source.seq .. ' Cue ' .. source.cue
             guard()
-            gma.cmd('Export ' .. address .. ' "' .. temp .. '_material" /o')
+            file_command('Export ' .. address .. ' "' .. temp .. '_material" /o')
             local head, data = direct_cue_xml(dir .. temp .. '_material.xml', number_key(source.cue))
             discard(temp .. '_material')
             xml = head .. '<Sequ index="' .. (source.seq-1) .. '">' .. data .. '</Sequ></MA>'
@@ -952,7 +959,7 @@ local function first_track_cues(tc, id, body)
       if scratch then
         write(dir .. temp .. '.xml', header .. '<Sequ index="' .. (scratch-1) .. '" name="' .. temp .. '">' .. skeleton(1) .. '</Sequ></MA>')
         assert(not obj.handle('Sequence ' .. scratch), 'Temporary slot occupied')
-        gma.cmd('Import ' .. temp .. '.xml At Sequence ' .. scratch .. ' /nc')
+        file_command('Import ' .. temp .. '.xml At Sequence ' .. scratch .. ' /nc')
         assert(obj.label(assert(obj.handle('Sequence ' .. scratch))) == temp and obj.handle('Sequence ' .. scratch .. ' Cue 1'), 'Empty Cue source unavailable')
       end
       local reserved = {}
@@ -978,7 +985,7 @@ local function first_track_cues(tc, id, body)
             if not init:find('</Sequ>', 1, true) then init = init:gsub('(<Sequ%s+[^>]-)%s*/>', '%1></Sequ>', 1) end
             init = init:gsub('</Sequ>', skeleton(cue) .. '</Sequ>', 1)
             write(dir .. temp .. '_init.xml', init)
-            gma.cmd('Import ' .. temp .. '_init.xml At ' .. dest .. ' /o /nc')
+            file_command('Import ' .. temp .. '_init.xml At ' .. dest .. ' /o /nc')
             discard(temp .. '_init'); assert(obj.handle(dest .. ' Cue ' .. cue), 'First Cue initialization failed'); zero = false
           end
           local copies = #point.sources > 0 and point.sources or {{seq=scratch,cue='1'}}
@@ -992,7 +999,7 @@ local function first_track_cues(tc, id, body)
               data = data:gsub('<Number%s[^>]*/>', '<Number number="' .. math.floor(number/1000) .. '" sub_number="' .. number%1000 .. '"/>', 1)
               write(dir .. temp .. '_pick.xml', header .. data .. '</MA>')
               guard()
-              gma.cmd('Import ' .. temp .. '_pick.xml At ' .. dest .. ' Cue ' .. cue .. ' /o /nc')
+              file_command('Import ' .. temp .. '_pick.xml At ' .. dest .. ' Cue ' .. cue .. ' /o /nc')
               discard(temp .. '_pick')
             elseif source.projected then
               copy_material(source.projected, source.cue, dest .. ' Cue ' .. cue, i == 1 and ' /o /nc' or ' /merge /nc', temp .. '_pick')
@@ -1009,7 +1016,7 @@ local function first_track_cues(tc, id, body)
         for _, point in ipairs(list) do after_cues[number_key(point.cue)] = true end
         if #list == 1 and #list[1].sources == 1 and list[1].sources[1].edits then
           local cue = list[1].cue
-          gma.cmd('Export ' .. dest .. ' Cue ' .. cue .. ' "' .. temp .. '_read" /o')
+          file_command('Export ' .. dest .. ' Cue ' .. cue .. ' "' .. temp .. '_read" /o')
           local _, data = direct_cue_xml(dir .. temp .. '_read.xml', number_key(cue))
           discard(temp .. '_read')
           actual = first_cue_data(data, after_cues)
@@ -1120,7 +1127,7 @@ local function start(data, previous)
       end
       local backup, temp = 'tblink_backup_' .. id, 'tblink_library_' .. id
       guard()
-      gma.cmd('Export ' .. addr .. ' "' .. backup .. '" /o')
+      file_command('Export ' .. addr .. ' "' .. backup .. '" /o')
       local header, before = direct_cue_xml(dir .. backup .. '.xml', n)
       local ok, desired = pcall(edit_cue_values, before, changes, true)
       if not ok then discard(backup); error(desired) end
@@ -1128,14 +1135,14 @@ local function start(data, previous)
       if desired ~= before then
         write(dir .. temp .. '.xml', header .. desired .. '</MA>')
         guard()
-        gma.cmd('Export ' .. addr .. ' "' .. temp .. '_verify" /o')
+        file_command('Export ' .. addr .. ' "' .. temp .. '_verify" /o')
         local _, latest = direct_cue_xml(dir .. temp .. '_verify.xml', n)
         assert(latest == before, '控台上的 Cue 已改变，请重新读取')
         guard()
-        gma.cmd('Import ' .. temp .. '.xml At ' .. addr .. ' /o /nc')
+        file_command('Import ' .. temp .. '.xml At ' .. addr .. ' /o /nc')
       end
       assert(attr_hex(gma.show.getvar('SHOWFILE')) == sh and attr_hex(_G.TBLINK_BRIDGE_GENERATION) == gen, 'Show or session changed')
-      gma.cmd('Export ' .. addr .. ' "' .. temp .. '_verify" /o')
+      file_command('Export ' .. addr .. ' "' .. temp .. '_verify" /o')
       local _, actual = direct_cue_xml(dir .. temp .. '_verify.xml', n)
       assert(desired:gsub('>%s+<','><') == actual:gsub('>%s+<','><'), '控台回读的 Cue 与修改内容不一致，原数据已备份')
       return answer(backup .. '.xml')
@@ -1166,7 +1173,7 @@ local function start(data, previous)
       local function read_positions(number)
         -- Native Page XML identifies the assigned object even for an empty Sequence
         -- or a wide executor. Never export the referenced Sequences or their fixture data.
-        gma.cmd('Export Page ' .. number .. ' ' .. file .. ' /o')
+        file_command('Export Page ' .. number .. ' ' .. file .. ' /o')
         local xml = assert(read(root .. '/importexport/' .. file .. '.xml'), 'Page export unavailable')
         discard(file)
         assert(tonumber(xml:match('<Page%s[^>]-index="(%d+)"')) == number - 1, 'Page changed during read')
@@ -1210,7 +1217,7 @@ local function start(data, previous)
       local obj = gma.show.getobj
       assert(obj.handle('Page ' .. tc), 'Executor Page does not exist')
       local file = 'tblink_page_' .. id
-      gma.cmd('Export Page ' .. tc .. ' ' .. file .. ' /o')
+      file_command('Export Page ' .. tc .. ' ' .. file .. ' /o')
       local xml = assert(read(root .. '/importexport/' .. file .. '.xml'), 'Page export unavailable')
       discard(file)
       local function escape(value) return tostring(value):gsub('&', '&amp;'):gsub('"', '&quot;'):gsub('<', '&lt;'):gsub('>', '&gt;') end
@@ -1279,7 +1286,7 @@ local function start(data, previous)
       assert(label() == previous or label() == name, 'Console name changed; read console before retrying')
       -- One step: the backup export, the checks and the Label belong together.
       local backup = 'tblink_label_' .. id
-      gma.cmd('Export Sequence ' .. tc .. ' "' .. backup .. '" /o')
+      file_command('Export Sequence ' .. tc .. ' "' .. backup .. '" /o')
       local file = assert(io.open(root .. '/importexport/' .. backup .. '.xml', 'rb'), 'Name backup unavailable')
       local first = file:read(1); file:close(); assert(first, 'Name backup empty')
       assert(obj.handle(address) == handle and (label() == previous or label() == name), 'Rename target changed during backup')
@@ -1308,7 +1315,7 @@ local function start(data, previous)
       local free_page, free_exec, free_address
       local function assigned(address)
         local name = 'tblink_assignment_' .. id
-        gma.cmd('Export Executor ' .. address .. ' "' .. name .. '" /o')
+        file_command('Export Executor ' .. address .. ' "' .. name .. '" /o')
         local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Executor export unavailable')
         discard(name)
         local assignment = xml:match('<Assignment%s[^>]*>(.-)</Assignment>')
@@ -1467,7 +1474,7 @@ local function start(data, previous)
         if assignments[address] ~= nil then return assignments[address] end
         local seq = false
         if obj.handle('Executor ' .. address) then
-          gma.cmd('Export Executor ' .. address .. ' "' .. name .. '" /o')
+          file_command('Export Executor ' .. address .. ' "' .. name .. '" /o')
           local exported = read(root .. '/importexport/' .. name .. '.xml')
           discard(name)
           assert(exported, 'Executor export unavailable')
@@ -1486,7 +1493,7 @@ local function start(data, previous)
         if not sequence then return false end -- Missing references are reported by the route or snapshot read.
         local automatic = automatic_cues(sequence, coroutine.yield)
         if automatic == nil then
-          gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '" /o')
+          file_command('Export Sequence ' .. number .. ' "' .. name .. '" /o')
           local ok, cues = pcall(sequence_triggers, root .. '/importexport/' .. name .. '.xml', number)
           discard(name)
           assert(ok, cues)
@@ -1548,11 +1555,21 @@ local function start(data, previous)
       end
       -- A native group export keeps the original indices, even across gaps in the pool.
       -- Keep each object's complete XML for the same route and trigger checks as a single export.
+      local individual_exports = false
       local function export_ranges(numbers, name, result)
         job.exporting = true; job.close = function() discard(name) end
-        gma.cmd('Export Timecode ' .. table.concat(numbers, ' + ') .. ' "' .. name .. '" /o')
-        local xml, oversized = bounded_read(root .. '/importexport/' .. name .. '.xml', 33554432)
+        file_command('Export Timecode ' .. table.concat(numbers, ' + ') .. ' "' .. name .. '" /o')
+        local xml, oversized, reason = bounded_read(exchange_dir .. '/' .. name .. '.xml', 33554432)
         discard(name); job.close = nil; job.exporting = nil
+        if not xml and not oversized and #numbers > 1 then
+          -- Some desks produce no combined file. Read each requested object and keep its exact number.
+          individual_exports = true
+          for _, number in ipairs(numbers) do
+            coroutine.yield()
+            export_ranges({number}, name, result)
+          end
+          return
+        end
         if oversized then
           assert(#numbers > 1, 'Bridge file exceeds limit')
           local mid = math.floor(#numbers / 2)
@@ -1566,8 +1583,13 @@ local function start(data, previous)
           export_ranges(right, name, result)
           return
         end
-        assert(xml, 'Timecode export unavailable')
-        if #numbers == 1 then result[numbers[1]] = xml; return end
+        assert(xml, '时间线 ' .. numbers[1] .. ' 的导出文件无法读取，请检查控台目录 ' .. exchange_dir .. '。' .. tostring(reason or ''))
+        if #numbers == 1 then
+          local tag = assert(xml:match('<Timecode%f[%s/>][^>]*>'), 'Timecode export is empty')
+          assert(tonumber(tag:match('%sindex="(%d+)"') or '0') + 1 == numbers[1], 'Timecode export number changed')
+          result[numbers[1]] = xml
+          return
+        end
         local first = assert(xml:find('<Timecode[%s/>]'), 'Timecode group export is empty')
         local prefix, cursor = xml:sub(1, first - 1), first
         for _ = 1, #numbers do
@@ -1601,7 +1623,7 @@ local function start(data, previous)
               assert(not wanted or wanted[index] == number, 'Timecode number changed')
               batch[#batch + 1] = number
             elseif index % 256 == 0 then coroutine.yield() end
-          until index >= limit or #batch == batch_size
+          until index >= limit or #batch == (individual_exports and 1 or batch_size)
           local name = 'tblink_tcrange_' .. id
           if #batch > 0 then export_ranges(batch, name, blocks) end
           for _, number in ipairs(batch) do
@@ -1687,7 +1709,7 @@ local function start(data, previous)
                   for file in pairs(work.files) do file:close(); work.files[file] = nil end
                   discard(name)
                 end
-                gma.cmd('Export Sequence ' .. seq .. ' "' .. name .. '" /o')
+                file_command('Export Sequence ' .. seq .. ' "' .. name .. '" /o')
                 local ok, err = pcall(sequence_triggers, root .. '/importexport/' .. name .. '.xml', seq, work, function(n, s)
                   assert(#timed < 100000, 'Timecode trigger directory exceeds limit')
                   timed[#timed + 1] = '{"owner":' .. owner .. ',"sequence":' .. seq .. ',"cue":' .. quote(n) .. ',"seconds":' .. tostring(s) .. '}'
@@ -1759,10 +1781,10 @@ local function start(data, previous)
             return answer('{"changed":false,"cues":0}')
           end
         end
-        gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
+        file_command('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
         coroutine.yield('tblink_step')
         cues = sequence_triggers(path, tc, work)
-        gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+        file_command('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
         coroutine.yield('tblink_step')
         assert(same_sequence_files(path, root .. '/importexport/' .. name .. '_verify.xml', false, work), 'Sequence changed before trigger preparation; backup ' .. name)
         discard(name .. '_verify')
@@ -1801,7 +1823,7 @@ local function start(data, previous)
             end
             gma.cmd('Assign Sequence ' .. tc .. ' Cue ' .. table.concat(cues, ' + ') .. ' /Trig=Go')
             job.confirming = true
-            gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+            file_command('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
             break
           end
           if result == 'tblink_step' then break end
@@ -1815,7 +1837,7 @@ local function start(data, previous)
       assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
       local name = 'tblink_library_' .. id
       own_read_exports(job, name, body == 'keep')
-      gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
+      file_command('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
       local path = root .. '/importexport/' .. name .. '.xml'
       if job.stream_sequence then
         local f = assert(io.open(path, 'rb'), 'Sequence export unavailable')
@@ -1823,7 +1845,7 @@ local function start(data, previous)
         assert(bytes and bytes > 0 and bytes <= 268435456, 'Sequence export size unsupported')
         if bytes > 262144 then
           return step(function()
-            gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+            file_command('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
             assert(same_sequence_files(path, root .. '/importexport/' .. name .. '_verify.xml', false), 'Sequence changed during read')
             discard(name .. '_verify')
             local function ready(packed, wire_bytes)
@@ -1841,7 +1863,7 @@ local function start(data, previous)
       end
       local xml = assert(read(path), 'Sequence export unavailable')
       return step(function()
-        gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+        file_command('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
         assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
         answer(xml)
       end)
@@ -1914,7 +1936,7 @@ local function start(data, previous)
       local object = address and obj.handle(address)
       if object and names_show then
         identity()
-        gma.cmd('Export ' .. address .. ' "' .. name .. '" /o')
+        file_command('Export ' .. address .. ' "' .. name .. '" /o')
         local result
         local function reader(file, expected)
           if not values then return direct_attribute_names(file, expected) end
@@ -1936,7 +1958,7 @@ local function start(data, previous)
         local function export_cue(file)
           identity()
           assert(obj.handle('Sequence ' .. tc) == sequence and (obj.label(sequence) or '') == label and obj.handle(address) == object, 'Source Cue changed')
-          gma.cmd('Export ' .. address .. ' "' .. file .. '" /o')
+          file_command('Export ' .. address .. ' "' .. file .. '" /o')
           return assert(read(root .. '/importexport/' .. file .. '.xml'), 'Cue export unavailable')
         end
         local first = export_cue(name)
@@ -1957,10 +1979,10 @@ local function start(data, previous)
           return answer(xml)
         end)
       end
-      gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
+      file_command('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
       local xml = cue_selection(path .. '.xml', wanted)
       return step(function()
-        gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+        file_command('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
         assert(same_sequence_files(path .. '.xml', path .. '_verify.xml', false), 'Sequence changed during read')
         if status then
           local result = tracked_cues(tc, wanted, xml, 'tblink_status_' .. id)
@@ -1997,11 +2019,11 @@ local function start(data, previous)
       local executor_name = assert(gma.show.getobj.name(handle), 'Executor name unavailable')
       local name = 'tblink_executor_' .. id
       own_read_exports(job, name)
-      gma.cmd('Export ' .. address .. ' "' .. name .. '" /o')
+      file_command('Export ' .. address .. ' "' .. name .. '" /o')
       local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Executor export unavailable')
       assert(gma.show.getobj.handle(address), 'Executor disappeared during read')
       return step(function()
-        gma.cmd('Export ' .. address .. ' "' .. name .. '_verify" /o')
+        file_command('Export ' .. address .. ' "' .. name .. '_verify" /o')
         local check = assert(read(root .. '/importexport/' .. name .. '_verify.xml'), 'Executor verification unavailable')
         assert(canonical(xml) == canonical(check), 'Executor changed during read')
         assert(gma.show.getobj.name(assert(gma.show.getobj.handle(address))) == executor_name, 'Executor name changed during read')
@@ -2022,7 +2044,7 @@ local function start(data, previous)
       local name = 'tblink_create_' .. id
       write(root .. '/importexport/' .. name .. '.xml', desired)
       assert(not gma.show.getobj.handle('Timecode ' .. tc), 'Timecode appeared before creation')
-      gma.cmd('Import "' .. name .. '.xml" At Timecode ' .. tc .. ' /nc')
+      file_command('Import "' .. name .. '.xml" At Timecode ' .. tc .. ' /nc')
       assert(gma.show.getobj.handle('Timecode ' .. tc), 'Timecode creation unconfirmed')
       discard(name)
       return step(function() answer(export_scratch(tc, 'tblink_created_' .. id)) end)
@@ -2068,7 +2090,7 @@ local function start(data, previous)
         assert(canonical(backup) == canonical(expected), 'Timecode changed after preview')
       end
       write(root .. '/importexport/' .. name .. '.xml', desired)
-      gma.cmd('Import "' .. name .. '.xml" At Timecode ' .. tc .. ' /o /nc')
+      file_command('Import "' .. name .. '.xml" At Timecode ' .. tc .. ' /o /nc')
       job.confirming = job.report_import
       step(function()
         if job.request_snapshot and #expected <= 131072 and #references(desired) <= 4 then
@@ -2576,7 +2598,7 @@ _G.TBLINK_EXEC_INPUT = function(token,id,page,slot,button,pressed,code,sequence,
     local handle=assert(obj.handle(address),'Executor missing')
     assert((obj.label(handle) or '')==unhex(label_hex),'Executor name changed')
     local file='tblink_exec_key_'..token
-    gma.cmd('Export '..address..' '..file..' /o')
+    file_command('Export '..address..' '..file..' /o')
     local xml=assert(read(root..'/importexport/'..file..'.xml'),'Executor export unavailable')
     discard(file)
     local assignment=xml:match('<Assignment%s[^>]*>(.-)</Assignment>')

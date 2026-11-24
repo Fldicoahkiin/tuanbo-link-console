@@ -68,7 +68,7 @@ export const nativePlaybackDevicesSchema = z.object({ protocol: z.literal(4),
   midiInputs: z.array(z.object({ id: z.number().int().min(0).max(65535), name: z.string().min(1).max(256) }).strict()).max(65536)
 }).strict();
 export type NativePlaybackDevices = z.infer<typeof nativePlaybackDevicesSchema>;
-export const nativeDeviceQueryRequestSchema = z.object({ version: z.literal(1), scope: z.enum(['all', 'audio']) }).strict();
+export const nativeDeviceQueryRequestSchema = z.object({ version: z.literal(1), scope: z.enum(['all', 'audio']), recheck: z.boolean().optional() }).strict();
 export type NativeDeviceQueryRequest = z.infer<typeof nativeDeviceQueryRequestSchema>;
 export const nativeDeviceResponseSchema = z.object({ version: z.literal(1), requestId: generation,
   devices: nativePlaybackDevicesSchema, ok: z.boolean() }).strict();

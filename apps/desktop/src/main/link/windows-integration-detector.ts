@@ -89,7 +89,8 @@ export async function executePowerShell(script: string, timeoutMs: number): Prom
       clearTimeout(timer);
       reject(error);
     });
-    child.once('exit', (code) => {
+    // On Windows the process can exit before its last pipe data reaches Node.
+    child.once('close', (code) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);

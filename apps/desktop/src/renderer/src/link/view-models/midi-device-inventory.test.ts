@@ -3,7 +3,7 @@ import type { LinkDesktopApi } from '@tb/core/link';
 import type { NativePlaybackDevices } from '@tb/schema';
 import { LinkMidiAdapter, type MidiPortSnapshot } from '../../registry/link-midi-adapter';
 import { useIntegrationStore } from '../stores/integration-store';
-import { midiOutputInventory, readAndStoreMidiPorts } from './midi-device-inventory';
+import { midiOutputInventory, readAndStoreMidiPorts, readNativeDevices } from './midi-device-inventory';
 
 const api = vi.hoisted(() => ({ recheckMidi: vi.fn<LinkDesktopApi['recheckMidi']>(),
   getNativePlaybackDevices: vi.fn<LinkDesktopApi['getNativePlaybackDevices']>(), recordLog: vi.fn<LinkDesktopApi['recordLog']>() }));
@@ -30,6 +30,20 @@ it('退出占用软件后刷新，同一份列表更新设置页并记录两套�
   expect(api.recordLog.mock.calls[0]?.[0].details?.browserPorts).toEqual([babyface, usb]);
   expect(api.recordLog.mock.calls[0]?.[0].details?.windowsOutputs).toEqual(native.midiOutputs);
   expect(open).not.toHaveBeenCalled();
+});
+
+it('后台枚举失败时已点的重新检测在同一会话重新打开查询进程', async () => {
+  let fail!: (error: Error) => void;
+  api.getNativePlaybackDevices.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+  const background = readNativeDevices();
+  const monitor = new LinkMidiAdapter(() => null, () => undefined);
+  vi.spyOn(monitor, 'refreshPorts').mockResolvedValue([usb]);
+  const refresh = readAndStoreMidiPorts(monitor);
+  fail(new Error('spawn EPERM'));
+  await expect(background).rejects.toThrow('spawn EPERM');
+  await refresh;
+  expect(api.getNativePlaybackDevices.mock.calls).toEqual([['all', false], ['all', true]]);
+  expect(useIntegrationStore.getState().nativeDevices).toEqual(native);
 });
 
 it('时间码输出列 Windows 看得到的接口：浏览器漏枚举的 USB 接口也能选', () => {

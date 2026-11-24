@@ -855,6 +855,18 @@ it('一次导出分散的时间线后仍按原编号逐条核对范围', async (
   expect(grouped.commands.filter(command => command.startsWith('Export Timecode '))).toEqual([`Export Timecode 9902 + 9910 "tblink_tcrange_${requestId(0)}" /o`]);
 });
 
+it('控台选了外部盘且只生成单条导出文件时仍读回每条时间线', async () => {
+  const extra = Array.from({ length: 63 }, (_, i) => i + 1);
+  const records = await record(bridgeSource, desk => {
+    desk.lua('FAKE.external_drive=true; FAKE.single_export=true');
+    for (const n of extra) desk.set(`Timecode ${n}`, { name: `TC${n}`, xml: timecodeXml(n, []) });
+  }, sequential([{ operation: 'TCRANGES', target: 1, body: 'editing' }, { operation: 'READ', target: 15 }]));
+  const ranges = ma2TimecodeRangesSchema.parse(JSON.parse(records.results[0]!.slice(3)));
+  expect(ranges.entries.map(entry => entry.target)).toEqual([...extra, 9902, 9910]);
+  expect(records.results[1]).toContain('<Timecode index="14"');
+  expect(records.commands.filter(command => command.startsWith('Export Timecode '))).toHaveLength(67);
+});
+
 it('TCRANGES 给控台原生 amount 只传一个句柄，不把 assert 的错误文字作为第二个参数', async () => {
   const result = await record(bridgeSource, ma2 => {
     ma2.lua("local amount = gma.show.getobj.amount; gma.show.getobj.amount = function(...) if select('#', ...) ~= 1 then return nil end; return amount(...) end");

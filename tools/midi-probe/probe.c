@@ -16,21 +16,26 @@ static DWORD WINAPI enumerate_devices(void *unused) {
 // draining existing clients. Older Windows installations have no midisrv.
 static int service_stopping(void) {
   SC_HANDLE manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
-  if (!manager) return -1;
+  if (!manager) return GetLastError() == ERROR_ACCESS_DENIED ? -2 : -1;
   SC_HANDLE service = OpenServiceW(manager, L"midisrv", SERVICE_QUERY_STATUS);
   DWORD error = service ? ERROR_SUCCESS : GetLastError();
   CloseServiceHandle(manager);
-  if (!service) return error == ERROR_SERVICE_DOES_NOT_EXIST ? 0 : -1;
+  if (!service) {
+    if (error == ERROR_SERVICE_DOES_NOT_EXIST) return 0;
+    return error == ERROR_ACCESS_DENIED ? -2 : -1;
+  }
   SERVICE_STATUS_PROCESS status = {0}; DWORD needed = 0;
   BOOL read = QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO, (BYTE *)&status, sizeof(status), &needed);
+  error = read ? ERROR_SUCCESS : GetLastError();
   CloseServiceHandle(service);
+  if (error == ERROR_ACCESS_DENIED) return -2;
   return !read ? -1 : status.dwCurrentState == SERVICE_STOP_PENDING ? 1 : 0;
 }
 
 int main(void) {
   int stopping = service_stopping();
   if (stopping != 0) {
-    printf("%s\n", stopping > 0 ? "stopping" : "failed");
+    printf("%s\n", stopping > 0 ? "stopping" : stopping == -2 ? "service-denied" : "failed");
     return 2;
   }
   HANDLE worker = CreateThread(NULL, 0, enumerate_devices, NULL, 0, NULL);

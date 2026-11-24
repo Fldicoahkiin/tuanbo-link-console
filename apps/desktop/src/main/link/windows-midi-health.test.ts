@@ -40,6 +40,6 @@ describe('MIDI 系统故障隔离', () => {
   });
 
   it('检测组件不存在时返回失败，不放行 Chromium MIDI', async () => {
-    await expect(probeWindowsMidi('C:/missing-tblink-midi-test/probe.exe')).resolves.toBe('failed');
+    await expect(probeWindowsMidi('C:/missing-tblink-midi-test/probe.exe')).resolves.toBe('missing');
   });
 });

@@ -1,12 +1,16 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import type { Readable } from 'node:stream';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 
-const resultSchema = z.enum(['ready', 'timeout', 'stopping', 'failed']);
+const resultSchema = z.enum(['ready', 'timeout', 'stopping', 'failed', 'missing', 'denied', 'service-denied']);
 export type MidiHealth = z.infer<typeof resultSchema>;
 export function midiHealthMessage(result: MidiHealth): string {
   switch (result) {
     case 'ready': return 'MIDI 系统检测通过';
+    case 'missing': return '安装目录里缺少 MIDI 检测程序 tblink-midi-probe.exe。请用联动台安装包修复安装后重新检测。';
+    case 'denied': return 'Windows 拒绝运行 MIDI 检测程序 tblink-midi-probe.exe。请让这台电脑的管理员检查应用控制和安全软件记录，修复安装后点“重新检测”。';
+    case 'service-denied': return 'Windows 拒绝查询 MIDI 服务状态。请让这台电脑的管理员检查服务查询权限后重新检测。';
     case 'stopping': return 'Windows MIDI 服务正在停止，MIDI 连接还没释放。请正常退出用到 MIDI 的软件，等服务恢复后点“重新检测”；如果一直停不下来，请保存工作后重启电脑。工程可以照常编辑。';
     case 'timeout': return 'Windows 读取 MIDI 端口没有响应。请恢复系统 MIDI 服务后点“重新检测”。在这之前需要 MIDI 的播放用不了，工程可以照常编辑。';
     case 'failed': return 'MIDI 检测组件运行失败。请重新安装联动台后点“重新检测”；仍然失败请导出诊断包发给售后。工程可以照常编辑。';
@@ -41,8 +45,16 @@ export class WindowsMidiHealth {
 }
 
 export function probeWindowsMidi(executable: string): Promise<MidiHealth> {
+  const launchFailure = (error: unknown): MidiHealth => {
+    const code = error instanceof Error && 'code' in error ? error.code : null;
+    if (code === 'ENOENT') return 'missing';
+    if (code === 'EPERM' || code === 'EACCES') return 'denied';
+    return 'failed';
+  };
   return new Promise((resolveProbe) => {
-    const child = spawn(executable, [], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    let child: ChildProcessByStdio<null, Readable, null>;
+    try { child = spawn(executable, [], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }); }
+    catch (cause) { resolveProbe(launchFailure(cause)); return; }
     let output = '';
     let settled = false;
     const complete = (result: MidiHealth): void => {
@@ -60,7 +72,7 @@ export function probeWindowsMidi(executable: string): Promise<MidiHealth> {
     }, 2500);
     child.stdout.on('data', (data: Buffer) => { output = (output + data.toString('utf8')).slice(-64); });
     child.stdout.on('error', () => complete('failed'));
-    child.on('error', () => complete('failed'));
+    child.on('error', error => complete(launchFailure(error)));
     child.on('close', (code) => {
       const parsed = resultSchema.safeParse(output.trim());
       complete(parsed.success && (parsed.data !== 'ready' || code === 0) ? parsed.data : 'failed');

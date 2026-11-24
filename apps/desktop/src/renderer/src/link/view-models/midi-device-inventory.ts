@@ -5,11 +5,16 @@ import { useConnectionCheckStore } from '../stores/connection-check-store';
 import { linkDesktopViewModel as desktop } from './link-desktop-view-model';
 
 let pendingNative: Promise<NativePlaybackDevices> | null = null;
+let pendingRecheck = false;
 
 /** Enumeration only: never opens an output or sends a MIDI message. */
-export function readNativeDevices(): Promise<NativePlaybackDevices> {
-  if (pendingNative) return pendingNative;
-  const task = desktop.getNativePlaybackDevices().then(devices => {
+export function readNativeDevices(recheck = false): Promise<NativePlaybackDevices> {
+  if (pendingNative && (!recheck || pendingRecheck)) return pendingNative;
+  const read = () => desktop.getNativePlaybackDevices('all', recheck);
+  // A user refresh arriving during a background read must get a fresh attempt after it settles.
+  const result = pendingNative ? pendingNative.then(read, read) : read();
+  pendingRecheck = recheck;
+  const task = result.then(devices => {
     useIntegrationStore.getState().setNativeDevices(devices, null);
     return devices;
   }, (error: unknown) => {
@@ -23,7 +28,7 @@ export function readNativeDevices(): Promise<NativePlaybackDevices> {
 export async function readAndStoreMidiPorts(monitor: LinkMidiAdapter): Promise<MidiPortSnapshot[]> {
   const [web, native] = await Promise.allSettled([
     desktop.recheckMidi().then(() => monitor.refreshPorts()),
-    readNativeDevices()
+    readNativeDevices(true)
   ]);
   const ports = web.status === 'fulfilled' ? web.value : [];
   useIntegrationStore.getState().setMidiPorts(ports);

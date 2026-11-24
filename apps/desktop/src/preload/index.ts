@@ -80,7 +80,7 @@ const tbLink: LinkDesktopBridgeApi = {
     ipcRenderer.on('link:obs-media-preparation', receive);
     return () => ipcRenderer.removeListener('link:obs-media-preparation', receive);
   },
-  getNativePlaybackDevices: async (scope = 'all') => nativePlaybackDevicesSchema.parse(await invoke('link:native-player-devices', { version: 1, scope })),
+  getNativePlaybackDevices: async (scope = 'all', recheck = false) => nativePlaybackDevicesSchema.parse(await invoke('link:native-player-devices', { version: 1, scope, recheck })),
   checkNativeMidiOutput: request => invoke('link:native-midi-check', nativeMidiCheckSchema.parse(request)),
   prepareNativePlayback: async request => nativePlayerStatusSchema.parse(await invoke('link:native-player-prepare', nativePlayerPrepareSchema.parse(request))),
   controlNativePlayback: async request => nativePlayerStatusSchema.parse(await invoke('link:native-player-control', nativePlayerControlSchema.parse(request))),

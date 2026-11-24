@@ -821,7 +821,10 @@ function registerIpc(
     }
     return nativePlayer;
   };
-  handle('link:native-player-devices', (_event, value: unknown) => player().devices(nativeDeviceQueryRequestSchema.parse(value).scope));
+  handle('link:native-player-devices', (_event, value: unknown) => {
+    const { scope, recheck } = nativeDeviceQueryRequestSchema.parse(value);
+    return player().devices(scope, recheck);
+  });
   const midiCheck = new NativeMidiCheckService(engineExecutable, () => showRunning() || nativePlaybackActive(), undefined,
     name => midiPortBroker.claimFormal(name, '接口检查'));
   handle('link:native-midi-check', async (_event, value: import('@tb/schema').NativeMidiCheck) => {

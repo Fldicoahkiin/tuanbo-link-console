@@ -58,6 +58,12 @@ local function pool(kind)
   return { children = children }
 end
 local function cmd(command)
+  if command:match('^Export ') or command:match('^Import ') then
+    local target = command:match(' /p="([^"]+)"$')
+    if target and target ~= FAKE.vars.PATH .. '/importexport' then error('unexpected exchange directory') end
+    if FAKE.external_drive and not target then return end
+    command = command:gsub(' /p="[^"]+"$', '')
+  end
   FAKE.log[#FAKE.log + 1] = command
   local cue_address, cue_file = command:match('^Export (Sequence %d+ Cue [%d%.]+) "([%w_]+)" /o$')
   if cue_address then
@@ -71,6 +77,7 @@ local function cmd(command)
   end
   local selection, filename = command:match('^Export Timecode ([%d +]+) "([%w_]+)" /o$')
   if selection and selection:find('+', 1, true) then
+    if FAKE.single_export then return end
     local parts, envelope = {}, nil
     for number in selection:gmatch('%d+') do
       local native = assert(FAKE.objects['Timecode ' .. number]).xml

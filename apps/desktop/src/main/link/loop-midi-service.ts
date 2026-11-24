@@ -8,7 +8,11 @@ export class LoopMidiService {
   private starting: Promise<LoopMidiStatus> | null = null;
   private child: ChildProcess | null = null;
   constructor(
-    private readonly discover: () => Promise<LoopMidiStatus> = async () => loopMidiStatusSchema.parse(JSON.parse(await executePowerShell(DISCOVERY, 15_000))),
+    private readonly discover: () => Promise<LoopMidiStatus> = async () => {
+      const output = (await executePowerShell(DISCOVERY, 15_000)).trim();
+      if (!output) throw new Error('Windows 没有返回 loopMIDI 的进程信息，请点“重新检测”');
+      return loopMidiStatusSchema.parse(JSON.parse(output));
+    },
     private readonly tools: ExternalProcessTools = new WindowsProcessTools()
   ) {}
 
@@ -48,7 +52,7 @@ export class LoopMidiService {
 const DISCOVERY = String.raw`
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-$processes = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -ieq 'loopMIDI.exe' })
+$processes = @(Get-CimInstance Win32_Process -Filter "Name='loopMIDI.exe'")
 if ($processes.Count -gt 1) { throw '发现多个 loopMIDI 进程，请先确认保留的实例' }
 $path = $null
 $pidValue = $null
