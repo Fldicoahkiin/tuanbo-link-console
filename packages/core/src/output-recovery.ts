@@ -11,7 +11,7 @@ import type { OutputChannel } from './output-failure';
  * - `attempts`: recoveries made; the one past `max` is refused, or
  * - `faults`: faults seen; the `max`-th fault reaches the limit (no recovery after it).
  * A limit is a plain count, a count inside a sliding window, or a duration from the
- * first attempt. Once reached, a key stays at its limit until it is reset.
+ * first attempt. A stopping limit stays reached until reset. A warning follows the current window.
  */
 export type RecoveryLimit =
   | { kind: 'count'; max: number }
@@ -20,7 +20,7 @@ export type RecoveryLimit =
 /** When the counters start again: each song, each outage (a successful reconnect), or each item when it is done. */
 export type RecoveryReset = 'song' | 'outage' | 'item';
 /** What happens at the limit. */
-export type RecoveryStop = 'no-more-repair' | 'stop-song' | 'stop-timecode-for-song' | 'stop-reconnecting' | 'leave-owed' | 'stop-channel';
+export type RecoveryStop = 'no-more-repair' | 'warn' | 'stop-timecode-for-song' | 'stop-reconnecting' | 'leave-owed' | 'stop-channel';
 export type RecoveryRule = { channel: OutputChannel; counts: 'attempts' | 'faults'; limit: RecoveryLimit; reset: RecoveryReset;
   atLimit: RecoveryStop; limitText: string };
 
@@ -52,8 +52,8 @@ export const OUTPUT_RECOVERY_RULES = {
     limitText: '控台断线 5 分钟还没能自动重新登录，请检查控台和网络后手动连接' },
   'ma2.webRemote.relogin': { channel: 'ma2', counts: 'attempts', limit: { kind: 'duration', maxMs: 5 * 60_000 }, reset: 'outage', atLimit: 'stop-reconnecting',
     limitText: '网页遥控断线 5 分钟还没能自动重新登录，请检查控台和网络后手动连接' },
-  'audio.underrun': { channel: 'audio', counts: 'faults', limit: { kind: 'window', max: 5, windowMs: 60_000 }, reset: 'song', atLimit: 'stop-song',
-    limitText: '声卡 1 分钟内断流 5 次，这首歌已停下。请检查声卡后重新播放' },
+  'audio.underrun': { channel: 'audio', counts: 'faults', limit: { kind: 'window', max: 5, windowMs: 60_000 }, reset: 'song', atLimit: 'warn',
+    limitText: '声卡 1 分钟内断流 5 次，音乐继续播放。请检查声卡和电脑负载' },
   'mtc.sendFailure': { channel: 'mtc', counts: 'faults', limit: { kind: 'count', max: 3 }, reset: 'song', atLimit: 'stop-timecode-for-song',
     limitText: '时间码多次发送失败，这首歌不再发时间码。请检查接口' },
   /** Action MIDI replies that the previous SysEx is still sending (-6), one after another: each skips its own message;
@@ -102,7 +102,7 @@ export class OutputRecovery implements RecoveryBudgetView {
     const before = live(rule, counter, now);
     const outcome = judge(rule, before.length, counter, now);
     const times = [...before, now];
-    this.counters.set(name, { ...counter, times, exhausted: counter.exhausted || outcome === 'limit' });
+    this.counters.set(name, { ...counter, times, exhausted: outcome === 'limit' && rule.atLimit !== 'warn' });
     return { row, key, channel: rule.channel, outcome, count: times.length, limit: rule.limit, atLimit: rule.atLimit, limitText: rule.limitText };
   }
 

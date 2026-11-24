@@ -42,7 +42,7 @@
 
 ## 自己恢复几次算到头
 
-`packages/core/src/output-recovery.ts` 一张表（2026-11-11）：声卡 1 分钟断流 5 次停这首歌，时间码一首歌失败 3 次这首歌不再发，等等。别处不写重试次数；每次恢复都标红、记日志
+`packages/core/src/output-recovery.ts` 一张表（2026-11-11）：声卡 1 分钟断流 5 次提醒检查声卡并继续播放（2026-11-25 更新），时间码一首歌失败 3 次这首歌不再发，等等。别处不写重试次数；每次恢复都标红、记日志
 
 ## 节目现在在哪一步、这时能做什么
 
@@ -77,6 +77,8 @@
 主进程 `apps/desktop/src/main/link/waveform-service.ts`（2026-11-11）：一次解码出多级峰值、45–180 Hz 节奏波形和频谱（`waveform-levels.ts`），按 sha256 存在工程的 `cache/waveforms/<sha>.levels.bin`；`<sha>.json` 照旧写成 0.5.8 能读的纯数组，不改它的格式。界面只用 `useSongWaveform` 拿、`WaveformCanvas`（`view-models/waveform-draw.ts`）画，不解码整首音频，不引入波形库（`editor-rules.test.ts` 规则 5 守着）
 
 ## 一首歌多长
+
+2026-11-25，正式播放和定位在开声前等本次音源解码、校验完成。冷启动长音源可能需要更久，下一首仍可提前准备。声卡反复断流、暂时拿不到准确时钟、播放状态报告积压时继续向声卡送样。使用最后一帧音频在设备中排空来确认正常曲尾。真实设备失效或没有可播放的音频时报告实际故障。回归见 `apps/desktop/src/main/link/native-playback-client.test.ts`、`apps/desktop/src/main/link/native-playback-liveness.test.ts` 和 `apps/desktop/src/main/link/native-player-device-change.test.ts`。
 
 2026-11-25，工程或容器记录的时长和实际解码的音频有差异时，正式播放、预热和定位均使用实际可播放的采样。已经开始播放的音乐继续到实际曲尾或操作员指定的裁剪终点。缓存只公布实际完整解码的音频。Windows 原生播放器区分边解码时的短读和正常解码结束。回归见 `apps/desktop/src/main/link/native-audio-cache.test.ts` 和 `apps/desktop/src/main/link/native-player-service.test.ts`。
 

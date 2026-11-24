@@ -26,7 +26,7 @@ it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('Windows 设备服务�
   }
 }, 15000);
 
-it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('时钟报告管道持续堵塞到容量上限后明确停止音频，不无限积压或恢复后自动播放', async () => {
+it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('时钟报告管道堵塞九秒后音频仍在播，恢复上报真实位置', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'tblink-clock-queue-'));
   const path = join(directory, 'silence.pcm'); await writeFile(path, Buffer.alloc(48000 * 4 * 20));
   const child = spawn(resolve(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? 'tools/playback-engine/bin/tblink-playback.exe'), [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -42,11 +42,9 @@ it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('时钟报告管道持�
     child.stdin.write(encodeNativePlaybackCommand({ protocol: 4, requestId: 2, generation: 2, kind: 'play' }));
     await expect.poll(() => events.some(event => event.kind === 'clock' && event.state === 'playing')).toBe(true);
     child.stdout.pause(); await new Promise(resolve => setTimeout(resolve, 9000)); child.stdout.resume();
-    await expect.poll(() => events.find(event => event.kind === 'clock' && event.state === 'error')).toMatchObject({
-      audioError: -2147024785, underruns: 0, qpc100ns: '0'
-    });
-    events.length = 0; await new Promise(resolve => setTimeout(resolve, 200));
-    expect(events.filter(event => event.kind === 'clock').every(event => event.kind === 'clock' && event.state === 'error')).toBe(true);
+    await expect.poll(() => events.some(event => event.kind === 'clock' && event.positionMs >= 9000
+      && event.state === 'playing' && event.audioError === 0 && event.underruns === 0)).toBe(true);
+    expect(events.some(event => event.kind === 'clock' && event.state === 'error')).toBe(false);
     expect(errors).toEqual([]);
   } finally {
     child.stdout.resume(); child.stdin.end();
@@ -73,6 +71,29 @@ it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('增长中的 PCM 跨�
     expect(failures).toEqual([]);
   } finally { await client.close(); }
 }, 10000);
+
+it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('PCM 暂时读不到超过一秒，使用已有缓冲，恢复后完整播完', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-pcm-buffer-'));
+  const path = join(directory, 'test.pcm'), pcm = Buffer.alloc(48000 * 4 * 8);
+  await writeFile(path, pcm);
+  const failures: string[] = [];
+  const client = new NativePlaybackClient(resolve(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? 'tools/playback-engine/bin/tblink-playback.exe'),
+    () => undefined, error => failures.push(error.message));
+  try {
+    await client.start();
+    await client.command({ protocol: 4, requestId: 1, generation: 1, kind: 'prepare', pcmPath: path, sampleRate: 48000, frameRate: 30,
+      midiDevice: null, startMs: 0, endMs: 8000, offsetMs: 0, volume: 0 });
+    await expect.poll(() => client.clock?.bufferedFrames).toBeGreaterThan(48000 * 4);
+    await client.command({ protocol: 4, requestId: 2, generation: 2, kind: 'play' });
+    await writeFile(path, Buffer.alloc(0));
+    await expect.poll(() => client.clock?.positionMs, { timeout: 3500 }).toBeGreaterThan(1600);
+    expect(client.clock).toMatchObject({ state: 'playing', underruns: 0, audioError: 0 });
+    await writeFile(path, pcm);
+    await expect.poll(() => client.clock?.state, { timeout: 8000 }).toBe('ended');
+    expect(client.clock).toMatchObject({ positionMs: 8000, underruns: 0, audioError: 0 });
+    expect(failures).toEqual([]);
+  } finally { await client.close(); }
+}, 15000);
 
 it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('Windows 实际 WASAPI 播放、暂停、非零定位和过期命令隔离', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'tblink-engine-'));

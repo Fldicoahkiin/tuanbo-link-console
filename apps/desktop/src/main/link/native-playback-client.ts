@@ -40,23 +40,23 @@ export class NativePlaybackClient {
   private lastClock: Extract<NativePlaybackEvent, { kind: 'clock' }> | null = null;
   private terminalError: Error | null = null;
   private clockReceivedAt = 0;
+  private clockStale = false;
   private clockWatch: ReturnType<typeof setInterval> | null = null;
   private clockCheck: ReturnType<typeof setImmediate> | null = null;
 
   constructor(private readonly executable: string, private readonly changed: (event: NativePlaybackEvent) => void,
-    private readonly failed: (error: Error) => void) {}
-  get clock(): Extract<NativePlaybackEvent, { kind: 'clock' }> | null { return this.lastClock; }
+    private readonly failed: (error: Error) => void, private readonly clockDelayed?: (delayed: boolean) => void) {}
+  get clock(): Extract<NativePlaybackEvent, { kind: 'clock' }> | null { return this.clockStale ? null : this.lastClock; }
   get identity(): Extract<NativePlaybackEvent, { kind: 'ready' }> | null { return this.ready; }
   /** The engine process is still there: it has not exited (its close event clears this). */
   get running(): boolean { return this.child !== null; }
-  /** The engine may be sounding now: its own last clock says playing (a playing clock older than a second fails the
-   * engine), or it failed and was told to quit but its process is still there. */
-  get sounding(): boolean { return this.child !== null && (this.terminalError !== null || this.lastClock?.state === 'playing'); }
+  /** The engine may be sounding now: its own last clock says playing (a delayed clock cannot confirm silence), or it failed and was told to quit but its process is still there. */
+  get sounding(): boolean { return this.child !== null && (this.terminalError !== null || this.clockStale || this.lastClock?.state === 'playing'); }
 
   async start(): Promise<void> {
     if (this.child) throw new Error('播放引擎已经启动');
     this.closing = false; this.exitError = null; this.decoder = new NativePlaybackEventDecoder(); this.ready = null; this.lastClock = null;
-    this.terminalError = null; this.clearClockWatch();
+    this.terminalError = null; this.clockStale = false; this.clearClockWatch();
     const child = spawn(this.executable, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     this.child = child;
     this.exited = new Promise(resolve => child.once('close', () => resolve()));
@@ -90,7 +90,8 @@ export class NativePlaybackClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(command.requestId);
-        const error = new Error('播放引擎没有确认这个操作，结果不明，不会自动重发'); reject(error); this.fail(error);
+        const error = new Error('播放引擎没有确认这个操作，结果不明，不会自动重发'); reject(error);
+        if (command.kind !== 'volume' && command.kind !== 'stop-mtc' && command.kind !== 'reopen-mtc') this.fail(error);
       }, command.kind === 'prepare' ? 10000 : 6000);
       this.pending.set(command.requestId, { resolve, reject, timer, generation: command.generation });
       child.stdin.write(bytes, error => { if (error) this.fail(error); });
@@ -99,12 +100,18 @@ export class NativePlaybackClient {
 
   /** The first device clock that shows `generation` in one of the states its operation ends in.
    * A clock that still shows the state from before the operation is never taken as its result. */
-  async readClock(generation: number, settled: readonly NativeClockState[]): Promise<Extract<NativePlaybackEvent, { kind: 'clock' }>> {
+  async readClock(generation: number, settled: readonly NativeClockState[], playing?: AbortSignal): Promise<Extract<NativePlaybackEvent, { kind: 'clock' }>> {
     const deadline = Date.now() + 1000;
-    while (this.child && !this.closing && Date.now() < deadline) {
+    while (this.child && !this.closing) {
+      playing?.throwIfAborted();
       if (this.terminalError) throw this.terminalError;
-      if (this.lastClock?.generation === generation && settled.includes(this.lastClock.state)) return this.lastClock;
+      if (!this.clockStale && this.lastClock?.generation === generation && settled.includes(this.lastClock.state)) return this.lastClock;
       if (this.lastClock && this.lastClock.generation > generation) throw new Error('播放时钟已属于更新的操作');
+      if (Date.now() >= deadline) {
+        if (!playing) break;
+        // Play was acknowledged. A late observation cannot undo a running output.
+        this.markClockDelayed();
+      }
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     const error = new Error('没有收到声卡的确认，已停止这次输出');
@@ -132,16 +139,17 @@ export class NativePlaybackClient {
           this.ready = event;
         }
         if (event.kind === 'clock') {
-          this.lastClock = event; this.clockReceivedAt = performance.now();
+          if (this.clockStale) this.clockDelayed?.(false);
+          this.clockStale = false; this.lastClock = event; this.clockReceivedAt = performance.now();
           if (event.state !== 'playing') this.clearClockWatch();
           else if (!this.clockWatch && !this.closing) this.clockWatch = setInterval(() => {
-            if (performance.now() - this.clockReceivedAt < 1000 || this.clockCheck) return;
+            if (this.clockStale || performance.now() - this.clockReceivedAt < 1000 || this.clockCheck) return;
             // Let the I/O poll drain telemetry already waiting after a host stall.
             // A healthy device must not be stopped merely because JS was busy.
             this.clockCheck = setImmediate(() => {
               this.clockCheck = null;
               if (!this.closing && this.lastClock?.state === 'playing' && performance.now() - this.clockReceivedAt >= 1000) {
-                this.fail(new Error('播放设备超过 1 秒没有更新状态，已停止播放；不会沿用旧位置或自动恢复'));
+                this.markClockDelayed();
               }
             });
           }, 250);
@@ -163,6 +171,11 @@ export class NativePlaybackClient {
     this.terminalError = error; this.clearClockWatch(); this.lastClock = null;
     for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
     this.pending.clear(); this.failed(error); this.child?.stdin.end();
+  }
+  private markClockDelayed(): void {
+    if (this.clockStale) return;
+    this.clockStale = true;
+    this.clockDelayed?.(true);
   }
   private clearClockWatch(): void {
     if (this.clockWatch) clearInterval(this.clockWatch);

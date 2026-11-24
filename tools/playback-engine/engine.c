@@ -11,16 +11,18 @@ static SRWLOCK telemetry_lock = SRWLOCK_INIT;
 static TelemetryMessage telemetry_queue[TELEMETRY_CAPACITY];
 static UINT32 telemetry_head, telemetry_count;
 
-static BOOL submit_telemetry(const TelemetryMessage *message) {
+// Clock messages are snapshots with cumulative fault counters. Keep the freshest
+// observations when the host falls behind. Command acknowledgements use their own path.
+static void submit_telemetry(const TelemetryMessage *message) {
   AcquireSRWLockExclusive(&telemetry_lock);
-  BOOL available = telemetry_count < TELEMETRY_CAPACITY;
-  if (available) {
-    telemetry_queue[(telemetry_head + telemetry_count) % TELEMETRY_CAPACITY] = *message;
-    telemetry_count++;
+  if (telemetry_count == TELEMETRY_CAPACITY) {
+    telemetry_head = (telemetry_head + 1) % TELEMETRY_CAPACITY;
+    telemetry_count--;
   }
+  telemetry_queue[(telemetry_head + telemetry_count) % TELEMETRY_CAPACITY] = *message;
+  telemetry_count++;
   ReleaseSRWLockExclusive(&telemetry_lock);
-  if (available) SetEvent(engine.telemetry_wake);
-  return available;
+  SetEvent(engine.telemetry_wake);
 }
 static DWORD WINAPI telemetry_output_worker(void *unused) {
   (void)unused;
@@ -118,16 +120,7 @@ DWORD WINAPI telemetry_worker(void *unused) {
       valid = written > 0 && written < (int)TELEMETRY_BYTES - size; size += written;
     }
     message.length = valid ? (size_t)size : 0;
-    if (!valid || !submit_telemetry(&message)) {
-      // Sustained loss of the supervising process is a visible channel failure,
-      // not an unlimited allocation or silently discarded device observations.
-      EnterCriticalSection(&engine.lock);
-      if (engine.state != FAILED) {
-        if (engine.client) IAudioClient_Stop(engine.client);
-        engine.audio_error = (int32_t)HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW); engine.state = FAILED; engine.clock_qpc = 0;
-      }
-      LeaveCriticalSection(&engine.lock);
-    }
+    if (valid) submit_telemetry(&message);
   }
   CoUninitialize(); return 0;
 }

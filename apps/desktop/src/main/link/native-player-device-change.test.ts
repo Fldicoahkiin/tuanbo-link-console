@@ -400,7 +400,7 @@ describe('下一首提前准备的步骤只记在它自己那一条里', () => {
       expect([...new Set(p.ready.map(entry => entry.itemId))]).toEqual(['a', 'b']);
       expect(p.ready[0]!.steps).toEqual(expect.arrayContaining(['音源校验 a', '解码预填充 a']));
       // B's entry: this preparation only, taking what was prepared ahead; nothing B decoded ahead, nothing of A.
-      expect(p.ready.at(-1)!.steps).toEqual(expect.arrayContaining(['设备检查与旧播放清理', '使用预先准备的下一首音频', '音源校验与解码预填充']));
+      expect(p.ready.at(-1)!.steps).toEqual(expect.arrayContaining(['设备检查与旧播放清理', '使用预先准备的下一首音频', '音源解码与完整校验']));
       expect(p.ready.at(-1)!.steps.filter(step => / [a-z]$/.test(step))).toEqual([]);
       expect([...p.ready, ...p.ahead()].every(ownSteps)).toBe(true);
     } finally { await p.service.close(); }
@@ -478,7 +478,7 @@ it('下一首提前准备的音频放不掉一次：只记一次错误；换歌�
     // Reported apart from C's preparation: it is not C's failure, and C's 音频已准备好 entry keeps all of its steps.
     expect(p.preloadError).toHaveBeenCalledOnce(); expect(p.preloadError).toHaveBeenCalledWith(expect.stringContaining('EPERM'));
     expect(p.ready.at(-1)?.itemId).toBe('c');
-    expect(p.ready.at(-1)?.steps).toEqual(expect.arrayContaining(['设备检查与旧播放清理', '音源校验与解码预填充', '原生进程准备', '音频设备与时钟准备']));
+    expect(p.ready.at(-1)?.steps).toEqual(expect.arrayContaining(['设备检查与旧播放清理', '音源解码与完整校验', '原生进程准备', '音频设备与时钟准备']));
     // B is prepared ahead again while C plays, and playing on to B uses it.
     await p.service.control({ ...envelope, generation: 4, kind: 'play' }); await p.preloaded(2);
     const decoded = p.prepare.mock.calls.length;
@@ -541,7 +541,7 @@ it('接手提前准备好的下一首时，它的后台解码正好失败：这�
     // B is decoded again, and its 音频已准备好 entry keeps every step of this preparation.
     expect(p.prepare).toHaveBeenCalledTimes(3); expect(p.released).toEqual(['a', 'b']);
     expect(p.ready.at(-1)?.itemId).toBe('b');
-    expect(p.ready.at(-1)?.steps).toEqual(expect.arrayContaining(['设备检查与旧播放清理', '音源校验与解码预填充', '原生进程准备', '音频设备与时钟准备']));
+    expect(p.ready.at(-1)?.steps).toEqual(expect.arrayContaining(['设备检查与旧播放清理', '音源解码与完整校验', '原生进程准备', '音频设备与时钟准备']));
   } finally { await p.service.close(); }
 });
 
@@ -563,7 +563,40 @@ it('下一首在后台自己准备失败：单独记一条，不算正在播的�
 });
 
 // 2026-11-10 第 2 题：声卡一次断流、时间码一次发送失败接着走，次数上限只在 output-recovery.ts。
-it('声卡断流一次接着播，标红带次数并记日志；1 分钟内第 5 次停这首歌，写上限的话；设备失效照旧停歌', async () => {
+it('等待当前歌曲解码时点击停止，立即取消准备并释放音频', async () => {
+  const f = fixture();
+  const release = vi.fn(() => Promise.resolve());
+  const completion = new Promise<DecodeResult>(() => undefined);
+  const cache = { prepare: vi.fn(async () => ({ ...await f.options.cache.prepare(), release, completion })) };
+  const service = new NativePlayerService({ ...f.options, cache });
+  try {
+    const preparing = service.prepare(f.request);
+    const cancelled = expect(preparing).rejects.toThrow('取消');
+    await vi.waitFor(() => expect(cache.prepare).toHaveBeenCalledOnce());
+    const stopped = await service.control({ version: 1, sessionId: f.request.sessionId, generation: 2, kind: 'stop' });
+    await cancelled;
+    expect(stopped.status).toBe('stopped');
+    expect(release).toHaveBeenCalledOnce();
+    expect(native.commands).not.toHaveBeenCalled();
+  } finally { await service.close(); }
+});
+
+it('调音量失败只提示这次操作，正在播放的音频保持运行', async () => {
+  const f = fixture(), service = new NativePlayerService(f.options);
+  const envelope = { version: 1 as const, sessionId: f.request.sessionId };
+  try {
+    await service.prepare(f.request);
+    await service.control({ ...envelope, generation: 2, kind: 'play' });
+    native.commands.mockClear();
+    native.commands.mockImplementationOnce(() => { throw new Error('本次调音量没有收到确认'); });
+    await expect(service.control({ ...envelope, generation: 3, kind: 'volume', volume: 0.7 })).rejects.toThrow('没有收到确认');
+    native.emit!({ positionMs: 1500 });
+    expect(service.status).toMatchObject({ status: 'playing', positionMs: 1500, audioError: null });
+    expect(native.commands.mock.calls.map(([command]) => command.kind)).toEqual(['volume']);
+  } finally { await service.close(); }
+});
+
+it('声卡断流一次接着播，标红带次数并记日志；持续断流仍播放并报告次数；设备失效照旧停歌', async () => {
   const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId };
   const recovery = vi.fn<(entry: { result: RecoveryResult; message: string; itemId: string; positionMs: number }) => void>();
   const service = new NativePlayerService({ ...f.options, recovery });
@@ -579,9 +612,11 @@ it('声卡断流一次接着播，标红带次数并记日志；1 分钟内第 5
     expect(service.status?.outputFault).toContain('这首歌第 4 次');
     native.commands.mockClear();
     native.emit!({ underruns: 5, qpc100ns: '4' });
-    expect(service.status).toMatchObject({ status: 'error', audioError: OUTPUT_RECOVERY_RULES['audio.underrun'].limitText, underruns: 5 });
+    expect(service.status).toMatchObject({ status: 'playing', audioError: null, outputFault: OUTPUT_RECOVERY_RULES['audio.underrun'].limitText, underruns: 5 });
     expect(recovery.mock.calls.at(-1)?.[0].result).toMatchObject({ outcome: 'limit', count: 5 });
-    await vi.waitFor(() => expect(native.commands.mock.calls.map(([command]) => command.kind)).toContain('stop'));
+    native.emit!({ underruns: 9, qpc100ns: '5', positionMs: 2000 });
+    expect(service.status).toMatchObject({ status: 'playing', positionMs: 2000, underruns: 9 });
+    expect(native.commands.mock.calls.map(([command]) => command.kind)).not.toContain('stop');
   } finally { await service.close(); }
 
   const g = fixture(), lost = new NativePlayerService(g.options);

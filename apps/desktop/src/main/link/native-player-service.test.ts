@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import ffmpeg from 'ffmpeg-static';
@@ -12,16 +12,18 @@ import { probeWindowsMidi } from './windows-midi-health';
 
 const windowsTest = it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1');
 
-windowsTest('边解码边播放，工程多记 3 ms 时音频正常播到真实曲尾', async () => {
+windowsTest('工程多记 3 ms，准备后移走原文件仍播到真实曲尾', async () => {
   const { options, request, failures } = await fixture(8);
   request.snapshot.audio.durationMs = 8003;
   request.snapshot.endMs = 8003;
   const player = new NativePlayerService(options);
   try {
     await player.prepare(request);
+    await unlink(options.resolveAudio());
     await player.control({ version: 1, sessionId: request.sessionId, generation: 2, kind: 'play' });
     await expect.poll(() => player.status?.status, { timeout: 10000 }).toBe('ended');
     expect(player.status?.positionMs).toBeCloseTo(8000, 1);
+    expect(player.status).toMatchObject({ underruns: 0, audioError: null });
     expect(failures).toEqual([]);
   } finally { await player.close(); }
 }, 15000);
@@ -77,26 +79,26 @@ windowsTest('真实 WASAPI 播放期间预填充下一首，曲尾接管不再�
   } finally { await player.close(); }
 }, 10000);
 
-windowsTest('已经开始播放后解码失败会停止音频；不会将失败留在后台继续空跑', async () => {
+windowsTest('解码和校验完成前不打开播放设备，失败在开播前报告', async () => {
   const { options, request, failures, states } = await fixture();
-  let complete: ((result: DecodeResult) => void) | undefined;
+  let complete!: (result: DecodeResult) => void;
   const completion = new Promise<DecodeResult>(resolve => { complete = resolve; });
-  const player = new NativePlayerService({ ...options, cache: { prepare: async (input, signal) => ({ ...await options.cache.prepare(input, signal), completion }) } });
+  let leased!: () => void;
+  const waiting = new Promise<void>(resolve => { leased = resolve; });
+  const player = new NativePlayerService({ ...options, cache: { prepare: async (input, signal) => {
+    const lease = await options.cache.prepare(input, signal);
+    leased(); return { ...lease, completion };
+  } } });
   try {
-    await player.prepare(request);
-    await player.control({ version: 1, sessionId: request.sessionId, generation: 2, kind: 'play' });
-    await expect.poll(() => player.status?.positionMs).toBeGreaterThan(1050);
-    complete!({ ok: false, error: new Error('测试：后台解码中途失败') });
-    await expect.poll(() => player.status?.status).toBe('error');
-    expect(player.status?.audioError).toBe('测试：后台解码中途失败');
-    await expect(player.control({ version: 1, sessionId: request.sessionId, generation: 3, kind: 'play' })).rejects.toThrow('请重新播放这首歌');
-    const frozen = player.status!.positionMs;
-    await new Promise(resolve => setTimeout(resolve, 200));
-    expect(player.status!.positionMs).toBe(frozen); expect(failures).toEqual(['测试：后台解码中途失败']);
+    const preparing = player.prepare(request);
+    await waiting;
+    expect(player.status).toMatchObject({ status: 'preparing', enginePid: null });
+    complete({ ok: false, error: new Error('测试：音频解码失败') });
+    await expect(preparing).rejects.toThrow('音频解码失败');
+    expect(states.some(state => state.status === 'playing' || state.status === 'ready')).toBe(false);
+    expect(failures).toEqual(['测试：音频解码失败']);
     const stopped = await player.control({ version: 1, sessionId: request.sessionId, generation: 4, kind: 'stop' });
     expect(stopped).toMatchObject({ status: 'stopped', audioError: null });
-    expect(states.filter(state => state.generation === 4 && state.audioError)).toEqual([]);
-    expect(failures).toEqual(['测试：后台解码中途失败']);
   } finally { await player.close(); }
 }, 10000);
 async function fixture(seconds = 3) {

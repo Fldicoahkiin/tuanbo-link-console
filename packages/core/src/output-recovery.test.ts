@@ -12,7 +12,7 @@ describe('自动恢复都有次数上限，全软件只有这一张表（2026-11
     expect(OUTPUT_RECOVERY_RULES['ma2.relogin'].limit).toEqual({ kind: 'duration', maxMs: 300_000 });
     expect(OUTPUT_RECOVERY_RULES['ma2.webRemote.relogin'].limit).toEqual(OUTPUT_RECOVERY_RULES['ma2.relogin'].limit);
     expect(OUTPUT_RECOVERY_RULES['audio.underrun'].limit).toEqual({ kind: 'window', max: 5, windowMs: 60_000 });
-    expect(OUTPUT_RECOVERY_RULES['audio.underrun'].atLimit).toBe('stop-song');
+    expect(OUTPUT_RECOVERY_RULES['audio.underrun'].atLimit).toBe('warn');
     expect(OUTPUT_RECOVERY_RULES['mtc.sendFailure'].limit).toEqual({ kind: 'count', max: 3 });
     expect(OUTPUT_RECOVERY_RULES['mtc.sendFailure'].atLimit).toBe('stop-timecode-for-song');
     expect(OUTPUT_RECOVERY_RULES['lighting.offResend'].limit).toEqual({ kind: 'count', max: 1 });
@@ -62,8 +62,8 @@ describe('计数、到上限、重置', () => {
     expect(song).toMatchObject({ outcome: 'limit', count: 21, limitText: OUTPUT_RECOVERY_RULES['picture.song'].limitText });
   });
 
-  it('声卡 60 秒内断流 5 次停这首歌；隔得开的断流接着走', () => {
-    expect(outcomes(new OutputRecovery(), 'audio.underrun', [0, 10_000, 20_000, 30_000, 40_000])).toEqual(['recover', 'recover', 'recover', 'recover', 'limit']);
+  it('声卡 60 秒内断流 5 次报告持续断流；隔得开的断流接着走', () => {
+    expect(outcomes(new OutputRecovery(), 'audio.underrun', [0, 10_000, 20_000, 30_000, 40_000, 110_000])).toEqual(['recover', 'recover', 'recover', 'recover', 'limit', 'recover']);
     expect(outcomes(new OutputRecovery(), 'audio.underrun', [0, 20_000, 40_000, 60_000, 80_000, 100_000])).toEqual(Array(6).fill('recover'));
   });
 

@@ -35,6 +35,7 @@ typedef struct {
   int16_t monitor[ANALYSIS_FRAMES * 2];
   UINT32 monitor_at;
   int32_t audio_error;
+  HRESULT read_error;
   wchar_t path[4096];
   int16_t ring[RING_FRAMES * 2];
   HMIDIOUT midi;

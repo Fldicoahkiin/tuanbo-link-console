@@ -202,15 +202,21 @@ export class NativePlayerService {
       const lease = warmed ?? await this.options.cache.prepare({ sourcePath: this.options.resolveAudio(request.projectPath, request.snapshot.audio.relativePath),
         sourceSha256: request.snapshot.audio.sha256, expectedDurationMs: request.snapshot.audio.durationMs,
         sampleRate: request.snapshot.sampleRate, positionMs: request.snapshot.positionMs }, abort.signal);
-      measured('音源校验与解码预填充');
       if (epoch !== this.epoch) { await lease.release(); throw new Error('音频准备已取消'); }
-      this.attachLease(lease);
+      await this.useDecodedLease(lease, abort.signal);
+      measured('音源解码与完整校验');
+      this.requireEpoch(epoch);
       const endMs = playableEndMs({ startMs: request.snapshot.positionMs, endMs: request.snapshot.endMs, availableMs: lease.availableMs, frameRate: request.snapshot.frameRate });
       this.playEndMs = endMs;
       if (!this.client) {
         const client = new NativePlaybackClient(this.options.executable, event => {
           if (this.client === client && event.kind === 'clock') { this.engineReopens = event.midiReopens; this.receive(event); }
-        }, error => { if (this.client === client) this.fail(error); });
+        }, error => { if (this.client === client) this.fail(error); }, delayed => {
+          if (this.client !== client) return;
+          const message = '播放设备超过 1 秒没有更新状态，正在等待实际播放位置';
+          if (delayed) { this.options.error(message); this.patch({ outputFault: message }); }
+          else if (this.state?.outputFault === message) this.patch({ outputFault: null });
+        });
         this.client = client; await client.start();
       }
       measured('原生进程准备');
@@ -221,7 +227,7 @@ export class NativePlayerService {
       this.requireEpoch(epoch);
       try {
         await this.client.command({ protocol: 4, requestId: ++this.requestId, generation: ++this.nativeGeneration, kind: 'prepare',
-          pcmPath: lease.path, pcmBaseMs: lease.baseMs, streaming: lease.streaming, audioDeviceId: request.audioDeviceId, sampleRate: snapshot.sampleRate, frameRate: snapshot.frameRate,
+          pcmPath: lease.path, pcmBaseMs: lease.baseMs, streaming: false, audioDeviceId: request.audioDeviceId, sampleRate: snapshot.sampleRate, frameRate: snapshot.frameRate,
           midiDevice, ...(midiDevice === null ? {} : { midiPortName: midi[0]!.name }), quarterFramesOnly: request.mtcQuarterFramesOnly ?? false,
           startMs: snapshot.positionMs, endMs, offsetMs: snapshot.offsetMs, volume: snapshot.volume })
           .catch((error: unknown) => { throw explainRange(error, snapshot.positionMs, endMs, lease); });
@@ -256,7 +262,7 @@ export class NativePlayerService {
     // seek must never resume after a newer pause, stop or program preparation.
     if (request.kind !== 'volume' && request.kind !== 'stop-mtc') { ++this.epoch; this.abort?.abort(); }
     const epoch = this.epoch;
-    if (request.kind === 'seek') this.abort = new AbortController();
+    if (request.kind === 'seek' || request.kind === 'play') this.abort = new AbortController();
     const signal = this.abort?.signal;
     // This is command bookkeeping, not a new engine observation. Publishing
     // the previous failure with the stop's generation would fail the program
@@ -278,11 +284,12 @@ export class NativePlayerService {
             sourceSha256: snapshot.audio.sha256, expectedDurationMs: snapshot.audio.durationMs,
             sampleRate: snapshot.sampleRate, positionMs: request.positionMs }, signal!);
           if (epoch !== this.epoch) { await lease.release(); throw new Error('音频定位已取消'); }
-          this.attachLease(lease);
+          await this.useDecodedLease(lease, signal!);
+          this.requireEpoch(epoch);
           const endMs = playableEndMs({ startMs: request.positionMs, endMs: snapshot.endMs, availableMs: lease.availableMs, frameRate: snapshot.frameRate });
           this.playEndMs = endMs;
           await this.client.command({ protocol: 4, requestId: ++this.requestId, generation: ++this.nativeGeneration, kind: 'prepare',
-            pcmPath: lease.path, pcmBaseMs: lease.baseMs, streaming: lease.streaming, audioDeviceId: this.source!.audioDeviceId, sampleRate: snapshot.sampleRate, frameRate: snapshot.frameRate,
+            pcmPath: lease.path, pcmBaseMs: lease.baseMs, streaming: false, audioDeviceId: this.source!.audioDeviceId, sampleRate: snapshot.sampleRate, frameRate: snapshot.frameRate,
             midiDevice: midi?.id ?? null, ...(midi ? { midiPortName: midi.name } : {}), quarterFramesOnly: this.source!.mtcQuarterFramesOnly ?? false,
             startMs: request.positionMs, endMs, offsetMs: snapshot.offsetMs, volume: this.volume })
             .catch((error: unknown) => { throw explainRange(error, request.positionMs, endMs, lease); });
@@ -291,8 +298,8 @@ export class NativePlayerService {
           this.requireEpoch(epoch);
           await this.send({ kind: 'pause' });
         } else await this.send(request);
-        if (request.kind !== 'volume') {
-          const clock = await this.client.readClock(this.nativeGeneration, settledStates[request.kind]);
+        if (request.kind !== 'volume' && request.kind !== 'stop-mtc') {
+          const clock = await this.client.readClock(this.nativeGeneration, settledStates[request.kind], request.kind === 'play' ? signal : undefined);
           this.requireEpoch(epoch);
           if (clock.audioError || clock.state === 'error') throw new Error(`音频操作没有完成：${audioErrorMessage(clock.audioError)}`);
           this.receive(clock);
@@ -314,7 +321,7 @@ export class NativePlayerService {
       }
       if (request.kind === 'play' && this.source?.nextSnapshot) this.preload.start(this.source.projectPath, this.source.nextSnapshot);
     });
-    const result = this.finish(operation, epoch);
+    const result = this.finish(operation, epoch, request.kind === 'volume' || request.kind === 'stop-mtc');
     if (request.kind !== 'stop') return result;
     const task = result.finally(() => { if (this.stopping?.task === task) this.stopping = null; });
     this.stopping = { epoch, sessionId: request.sessionId, task }; return task;
@@ -362,13 +369,24 @@ export class NativePlayerService {
   private async releaseLease(): Promise<void> {
     const lease = this.lease; this.lease = null; await lease?.release();
   }
-  private attachLease(lease: NativeAudioLease): void {
+  /** The decoder and cache validation finish before this source can reach the audio device. */
+  private async useDecodedLease(lease: NativeAudioLease, signal: AbortSignal): Promise<void> {
     this.lease = lease;
-    void lease.completion.then(result => {
-      if (result.ok || this.lease !== lease || this.closing) return;
-      // Decoder failure is an audio-clock failure.
-      this.stopForFault(result.error, () => this.lease === lease);
-    });
+    let cancel: (() => void) | undefined;
+    try {
+      signal.throwIfAborted();
+      const cancelled = new Promise<never>((_, reject) => {
+        cancel = () => reject(new Error('音频准备已取消'));
+        signal.addEventListener('abort', cancel, { once: true });
+      });
+      const result = await Promise.race([lease.completion, cancelled]);
+      if (!result.ok) throw result.error;
+    } catch (error) {
+      await this.releaseLease();
+      throw error;
+    } finally {
+      if (cancel) signal.removeEventListener('abort', cancel);
+    }
   }
   private async resolveMidi(epoch: number): Promise<{ id: number; name: string } | null> {
     if (!this.state?.mtcPortName || this.state.mtcError) return null;
@@ -422,17 +440,6 @@ export class NativePlayerService {
       this.reopening = entry;
     });
   }
-  /** A fault that ends the song: stop MIDI/audio and invalidate any in-flight prepare before reporting a usable next
-   * session. The engine is stopped while `still()` holds. */
-  private stopForFault(error: Error, still: () => boolean = () => true): void {
-    ++this.epoch; this.abort?.abort(); this.fail(error);
-    const cleanup = this.pending.then(async () => {
-      if (!still()) return;
-      if (this.client) await this.send({ kind: 'stop' });
-      await this.releaseLease();
-    });
-    this.pending = cleanup.catch(failure => this.fail(failure instanceof Error ? failure : new Error(String(failure))));
-  }
   private stopRecovery(): void { this.mtcRecovery.cancel(); this.reopening?.cancel(); }
   /** Holds `name` for the engine before it opens it; null: the engine will hold no timecode port.
    * Returns the previous hold when it changed: it is released once the engine has let that port go. */
@@ -450,10 +457,14 @@ export class NativePlayerService {
     return this.client.command({ protocol: 4, requestId: ++this.requestId,
       generation: command.kind === 'volume' || command.kind === 'stop-mtc' ? this.nativeGeneration : ++this.nativeGeneration, ...action });
   }
-  private finish(operation: Promise<void>, epoch: number): Promise<NativePlayerStatus> {
+  private finish(operation: Promise<void>, epoch: number, optional = false): Promise<NativePlayerStatus> {
     this.queued++;
     const result = operation.then(() => { this.requireEpoch(epoch); return this.state!; }, error => {
-      if (epoch === this.epoch) this.fail(error instanceof Error ? error : new Error(String(error)));
+      if (epoch === this.epoch) {
+        const cause = error instanceof Error ? error : new Error(String(error));
+        if (optional) { this.options.error(cause.message); this.patch({ outputFault: cause.message }); }
+        else this.fail(cause);
+      }
       throw error;
     }).finally(() => { this.queued--; });
     // Caller receives the rejection; this tail is only the serial queue barrier.
@@ -480,7 +491,6 @@ export class NativePlayerService {
       && (this.mtcRefusedAt === null || now - this.mtcRefusedAt >= MTC_REFUSAL_SPAN_MS) ? 1 : 0;
     if (counted) { this.mtcRefused += 1; this.mtcRefusedAt = now; }
     const timecode = this.carryOn('mtc.sendFailure', counted, this.mtcRefused, clock.midiTransientCode);
-    if (dropouts.limit) { this.patch({ underruns }); this.stopForFault(new Error(dropouts.limit)); return; }
     const mtcError = midiError ? this.mtcFailure(midiError, unplugged) : timecode.limit ?? this.state.mtcError;
     if (timecode.limit) this.stopMtcForSong();
     if (audioError && audioError !== this.state.audioError) this.options.error(audioError);
@@ -503,7 +513,7 @@ export class NativePlayerService {
       const result = this.recovery.record(row, 'song', Date.now()), count = total - added + index + 1;
       const message = result.outcome === 'limit' ? result.limitText : carriedOnText(row, count, code);
       if (this.state) this.options.recovery?.({ result, message, itemId: this.state.itemId, positionMs: this.state.positionMs, ...(code === undefined ? {} : { code }) });
-      if (result.outcome === 'limit') return { fault, limit: result.limitText };
+      if (result.outcome === 'limit' && result.atLimit !== 'warn') return { fault, limit: result.limitText };
       fault = message;
     }
     return { fault, limit: null };
@@ -556,5 +566,5 @@ function carriedOnText(row: 'audio.underrun' | 'mtc.sendFailure', count: number,
 /** E_INVALIDARG on prepare means the engine refused the range it was given; say which range, for the log and the operator. */
 function explainRange(error: unknown, startMs: number, endMs: number, lease: NativeAudioLease): Error {
   if (!(error instanceof NativeEngineRejection) || error.code !== -2147024809) return error instanceof Error ? error : new Error(String(error));
-  return new Error(rangeRejectedMessage({ startMs, endMs, availableMs: lease.availableMs, streaming: lease.streaming, code: error.code }), { cause: error });
+  return new Error(rangeRejectedMessage({ startMs, endMs, availableMs: lease.availableMs, streaming: false, code: error.code }), { cause: error });
 }

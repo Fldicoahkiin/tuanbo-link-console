@@ -51,3 +51,19 @@ it('操作后 1 秒内没有出现结束状态：明确报告缺少设备确认�
   await settled;
   expect(f.failed).toHaveBeenCalledOnce();
 });
+
+it('开播已经确认时，状态晚到不会关闭音频，操作员仍可取消等待', async () => {
+  const f = fixture(); await f.start();
+  const first = f.client.readClock(2, ['playing', 'ended', 'error'], new AbortController().signal);
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(f.failed).not.toHaveBeenCalled(); expect(f.child.stdin.writableEnded).toBe(false);
+  f.clock(2, 'playing', 2000);
+  await vi.advanceTimersByTimeAsync(20);
+  await expect(first).resolves.toMatchObject({ generation: 2, positionMs: 2000 });
+  const stop = new AbortController();
+  const next = f.client.readClock(3, ['playing', 'ended', 'error'], stop.signal);
+  const cancelled = expect(next).rejects.toThrow();
+  stop.abort(); await vi.advanceTimersByTimeAsync(20); await cancelled;
+  expect(f.child.stdin.writableEnded).toBe(false);
+  const closing = f.client.close(); f.child.emit('close', 0, null); await closing;
+});

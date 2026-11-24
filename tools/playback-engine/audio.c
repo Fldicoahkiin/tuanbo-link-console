@@ -6,7 +6,7 @@
 static void seek_locked(UINT64 frame) {
   engine.origin = frame; engine.loaded = engine.consumed = engine.submitted = 0;
   engine.position_ms = (double)frame * 1000.0 / engine.rate;
-  engine.clock_qpc = 0; engine.starved = FALSE;
+  engine.clock_qpc = 0; engine.starved = FALSE; engine.read_error = S_OK;
   engine.envelope.from = engine.envelope.to; engine.envelope.frames = 0;
   memset(engine.monitor, 0, sizeof(engine.monitor)); engine.monitor_at = 0;
   engine.epoch++; SetEvent(engine.data_wake);
@@ -67,12 +67,11 @@ HRESULT audio_prepare(const wchar_t *path, UINT32 rate, double start_ms, double 
   return hr;
 }
 /* The device position is relative to the last reset; the song position also includes a seek. */
-static BOOL record_device_position_locked(UINT64 position, UINT64 qpc) {
+static void record_device_position_locked(UINT64 position, UINT64 qpc) {
   double frames = (double)position * engine.rate / engine.clock_frequency;
   double remaining = (double)(engine.end - engine.origin);
   engine.clock_qpc = qpc;
   engine.position_ms = ((double)engine.origin + fmin(frames, remaining)) * 1000.0 / engine.rate;
-  return frames >= remaining;
 }
 HRESULT audio_pause(void) {
   EnterCriticalSection(&engine.lock);
@@ -113,12 +112,24 @@ static HRESULT fill_locked(void) {
   HRESULT hr = IAudioClient_GetCurrentPadding(engine.client, &padding);
   if (FAILED(hr)) return hr;
   UINT64 remaining = engine.end - engine.origin - engine.submitted;
+  if (engine.state == PLAYING && !remaining && !padding) {
+    hr = IAudioClient_Stop(engine.client);
+    if (SUCCEEDED(hr)) {
+      engine.position_ms = (double)engine.end * 1000.0 / engine.rate;
+      engine.state = ENDED;
+    }
+    return hr;
+  }
   // An empty endpoint mid-stream is a real output starvation, even if the disk
   // ring still contains data. Do not report only disk-buffer shortages.
   BOOL short_fill = engine.state == PLAYING && engine.submitted && remaining && !padding;
   UINT32 needed = engine.buffer_frames - padding;
   if (needed > remaining) needed = (UINT32)remaining;
   UINT64 available = engine.loaded - engine.consumed;
+  // A persistent read error cannot cut off samples already queued on either side of WASAPI.
+  if (remaining && !available && !padding && FAILED(engine.read_error)) return engine.read_error;
+  // Start with two seconds of this range available, including when resuming near its end.
+  if (!engine.streaming && engine.state != PLAYING && available < min(remaining, (UINT64)engine.rate * 2)) return S_FALSE;
   if (needed && available < needed) {
     if (engine.state != PLAYING) return S_FALSE;
     // The disk ring ran dry: send what it has; the device plays silence for the rest of this period.
@@ -159,28 +170,15 @@ DWORD WINAPI audio_worker(void *unused) {
   (void)unused; CoInitializeEx(NULL, COINIT_MULTITHREADED);
   DWORD task = 0; HANDLE priority = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task);
   HANDLE events[] = { engine.quit, engine.audio_wake };
-  ULONGLONG skewed_since = 0;
   while (WaitForMultipleObjects(2, events, FALSE, 2) != WAIT_OBJECT_0) {
     EnterCriticalSection(&engine.lock);
-    if (engine.state != PLAYING) skewed_since = 0;
-    else {
+    if (engine.state == PLAYING) {
       UINT64 position = 0, qpc = 0;
       HRESULT hr = IAudioClock_GetPosition(engine.clock, &position, &qpc);
-      // S_FALSE explicitly means the device reading lost accuracy. Never promote
-      // it to a reliable clock or silently fall back to a wall-clock estimate:
-      // drop this reading and keep the last one, so the timecode, which reads its
-      // age, stops after a frame and relocates once a good reading is back. The
-      // sound goes on (2026-11-10 decision 2). A clock that stays inaccurate for a
-      // second is a broken device: the song stops.
-      if (hr == S_FALSE) {
-        ULONGLONG now = GetTickCount64();
-        if (!skewed_since) skewed_since = now;
-        hr = now - skewed_since >= 1000 ? HRESULT_FROM_WIN32(ERROR_TIME_SKEW) : fill_locked();
-      } else if (SUCCEEDED(hr)) {
-        skewed_since = 0;
-        if (record_device_position_locked(position, qpc)) { IAudioClient_Stop(engine.client); engine.state = ENDED; }
-        else hr = fill_locked();
-      }
+      // An inaccurate clock reading is unusable for MTC. Rendering and the
+      // endpoint's actual drain are independent of that position observation.
+      if (hr == S_OK) record_device_position_locked(position, qpc);
+      hr = fill_locked();
       if (FAILED(hr)) { engine.audio_error = (int32_t)hr; engine.state = FAILED; engine.clock_qpc = 0; IAudioClient_Stop(engine.client); }
     }
     LeaveCriticalSection(&engine.lock);
@@ -223,16 +221,15 @@ DWORD WINAPI reader_worker(void *unused) {
     if (file == INVALID_HANDLE_VALUE) file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     LARGE_INTEGER offset; offset.QuadPart = (LONGLONG)(frame * 4);
     DWORD read = 0; BOOL ok = file != INVALID_HANDLE_VALUE && SetFilePointerEx(file, offset, NULL, FILE_BEGIN) && ReadFile(file, block, count * 4, &read, NULL);
-    if (!streaming && read != count * 4) ok = FALSE;
+    DWORD error = ok ? 0 : GetLastError();
+    if (ok && !streaming && read != count * 4) { ok = FALSE; error = ERROR_HANDLE_EOF; }
     UINT64 final_frames = 0;
     if (streaming && ok && read < count * 4) final_frames = completed_pcm_frames(file, path);
     // A growing PCM may end mid-frame while FFmpeg is writing. Only consume
     // complete stereo frames; the next read resumes at this aligned position.
     count = read / 4;
-    DWORD error = ok ? 0 : GetLastError();
-    // One failed read is tried again on the next round with the file opened afresh; meanwhile the ring
-    // runs dry and the sound card counts it as a dropout (2026-11-10 decision 2). Reads that keep failing
-    // for a second mean the file is gone: the song stops.
+    // Retry the read independently of rendering. The render thread owns the endpoint
+    // and can tell when the last buffered samples have actually left it.
     ULONGLONG now = GetTickCount64();
     if (ok) failing_since = 0;
     else if (!failing_since) failing_since = now;
@@ -240,8 +237,9 @@ DWORD WINAPI reader_worker(void *unused) {
     if (epoch == engine.epoch) {
       if (final_frames && engine.pcm_base + final_frames > engine.origin && engine.pcm_base + final_frames < engine.end)
         engine.end = engine.pcm_base + final_frames;
-      if (!ok && now - failing_since >= 1000) { engine.audio_error = (int32_t)HRESULT_FROM_WIN32(error ? error : ERROR_READ_FAULT); engine.state = FAILED; if (engine.client) IAudioClient_Stop(engine.client); }
-      else if (ok) for (UINT32 i = 0; i < count; i++) {
+      engine.read_error = !ok && now - failing_since >= 1000
+        ? HRESULT_FROM_WIN32(error ? error : ERROR_READ_FAULT) : S_OK;
+      if (ok) for (UINT32 i = 0; i < count; i++) {
         UINT32 at = (UINT32)(engine.loaded++ % RING_FRAMES) * 2;
         engine.ring[at] = block[i * 2]; engine.ring[at + 1] = block[i * 2 + 1];
       }
