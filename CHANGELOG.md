@@ -2,7 +2,7 @@
 
 本文件由 `pnpm changelog` 根据 [release-notes/](release-notes/) 生成，不要直接修改。写法和发版时的用法见 [release-notes/README.md](release-notes/README.md)。
 
-## 0.5.21（未发布）
+## 0.5.21
 
 - 连接 MA2 只登录。需要节目 Cue 时再点读取，需要修改控台上的选曲设置时再同步。搜索控台和设置电脑网卡可以单独操作。
 - 首次读取直接获取节目 Cue 和素材，省去原先读取前的全台选曲准备。
