@@ -8,13 +8,14 @@ import { Ma2Telnet, Ma2UnreachableError, ma2ResponseLine, type Ma2TelnetState, t
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
-async function peer(onLine: (line: string, socket: Socket, monitor: Socket) => void, banner?: string): Promise<{ port: number; monitorPort: number }> {
+async function peer(onLine: (line: string, socket: Socket, monitor: Socket) => void, banner?: string, onEnd?: (socket: Socket) => void): Promise<{ port: number; monitorPort: number }> {
   const sockets = new Set<Socket>();
   let monitor: Socket | null = null;
-  const monitorServer = createServer((socket) => { monitor = socket; sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
+  const monitorServer = createServer({ allowHalfOpen: Boolean(onEnd) }, (socket) => { if (onEnd) socket.once('end', () => onEnd(socket)); monitor = socket; sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
   await new Promise<void>((resolve) => monitorServer.listen(0, '127.0.0.1', resolve));
   cleanups.push(() => new Promise<void>((resolve, reject) => { for (const socket of sockets) socket.destroy(); monitorServer.close((error) => error ? reject(error) : resolve()); }));
-  const server = createServer((socket) => {
+  const server = createServer({ allowHalfOpen: Boolean(onEnd) }, (socket) => {
+    if (onEnd) socket.once('end', () => onEnd(socket));
     sockets.add(socket); socket.on('close', () => sockets.delete(socket));
     // Native onPC 3.3.4.3 says guest before login; this must not mean connected.
     socket.write(banner ?? "\u001b[37mLogged in as User 'guest'\n\r\n [Channel]>\u001b[KPlease login !\r\n\r [Channel]>\u001b[K\n");
@@ -41,6 +42,45 @@ function authenticate(line: string, socket: Socket, monitor: Socket): void {
   const marker = /TBLINK_AUTH_[a-f0-9]{32}/.exec(line)?.[0];
   if (marker) { socket.write(`${line}\r\n [Channel]>`); monitor.write(`\r15h11m38.613s : \u001b[33m${marker}:3.3.`); monitor.write('4.3:Console\u001b[37m\r\n'); }
 }
+it('命令和监视端口都结束后，下一次登录才发出', async () => {
+  const halfClosed: Socket[] = [];
+  let bothEnded!: () => void;
+  const ends = new Promise<void>(resolve => { bothEnded = resolve; });
+  let logins = 0;
+  const ports = await peer((line, socket, monitor) => {
+    if (line.startsWith('Login ')) logins++;
+    authenticate(line, socket, monitor);
+  }, undefined, socket => { halfClosed.push(socket); if (halfClosed.length === 2) bothEnded(); });
+  const connection = client(ports, [], 2000);
+  await connection.connect('operator', 'test-value');
+  connection.disconnect();
+  const closing = connection.closed;
+  const next = connection.connect('operator', 'test-value');
+  await ends;
+  halfClosed[0]!.end();
+  await new Promise<void>(resolve => { setImmediate(resolve); });
+  expect(logins).toBe(1);
+  halfClosed[1]!.end();
+  await closing;
+  expect(await next).toBe('3.3.4.3');
+  expect(logins).toBe(2);
+});
+
+it('对端一直不确认关闭时，下一次手动登录也能完成', async () => {
+  const held: Socket[] = [];
+  const ports = await peer(authenticate, undefined, socket => held.push(socket));
+  const connection = client(ports, [], 300);
+  try {
+    await connection.connect('operator', 'test-value');
+    connection.disconnect();
+    await expect(connection.connect('operator', 'test-value')).resolves.toBe('3.3.4.3');
+    expect(held).toHaveLength(2);
+  } finally {
+    for (const socket of held) socket.destroy();
+    connection.disconnect();
+  }
+});
+
 it('在两个本机 TCP 端口记录三次独立登录，每次只有登录与版本和设备类型核对', async () => {
   const sent: string[] = [];
   const ports = await peer((line, socket, monitor) => { sent.push(line); authenticate(line, socket, monitor); });

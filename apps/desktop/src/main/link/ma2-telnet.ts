@@ -7,7 +7,7 @@ export type Ma2NetworkAddress = { host: string; port: number; monitorPort: numbe
 export type Ma2ConnectedPeer = { localAddress: string; localPort: number; remoteAddress: string; remotePort: number };
 export type Ma2PeerValidator = (peers: readonly Ma2ConnectedPeer[]) => Promise<void>;
 export type Ma2TelnetState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
-type Stream = { socket: Socket; decoder: StringDecoder; buffer: string; negotiation: 'data' | 'iac' | 'option' | 'sub' | 'sub-iac'; optionCommand: number };
+type Stream = { socket: Socket; closed: Promise<void>; decoder: StringDecoder; buffer: string; negotiation: 'data' | 'iac' | 'option' | 'sub' | 'sub-iac'; optionCommand: number };
 
 type Waiter = { match: (text: string) => string | null; resolve: (value: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
 
@@ -26,6 +26,8 @@ export class Ma2Telnet {
   private streams: Stream[] = [];
   private current: Ma2TelnetState = 'disconnected';
   private connecting = false;
+  private closing: Promise<void> = Promise.resolve();
+  get closed(): Promise<void> { return this.closing; }
   private readonly commands = new Ma2CommandQueue();
   private traffic = { queueMs: 0, wireCommands: 0, receivedBytes: 0, sentBytes: 0 };
   readTraffic(): Readonly<typeof this.traffic> { return { ...this.traffic }; }
@@ -47,11 +49,15 @@ export class Ma2Telnet {
     this.streams = [];
     this.setState('connecting');
     try {
+      const generation = this.connectionEpoch;
+      await this.closing;
+      if (generation !== this.connectionEpoch) throw new Error('控台连接已取消');
       let monitorReady = false;
       for (const [index, port] of [this.address.port, this.address.monitorPort].entries()) {
         const socket = createConnection({ host: this.address.host, port, ...(this.address.localAddress ? { localAddress: this.address.localAddress } : {}) });
         if (index === 0) this.socket = socket;
-        const stream: Stream = { socket, decoder: new StringDecoder('utf8'), buffer: '', negotiation: 'data', optionCommand: 0 };
+        const closed = new Promise<void>(resolve => { socket.once('close', () => resolve()); });
+        const stream: Stream = { socket, closed, decoder: new StringDecoder('utf8'), buffer: '', negotiation: 'data', optionCommand: 0 };
         this.streams.push(stream);
         socket.setNoDelay(true); socket.setKeepAlive(true, 5000);
         let opened = false;
@@ -119,12 +125,24 @@ export class Ma2Telnet {
     }, priority, ma2CommandKind(line)).finally(() => { this.queuedCommands -= 1; });
     return response;
   }
-  disconnect(): void { this.fail(new Error('MA2 连接已关闭，没确认的操作不会自动重试')); }
-  private fail(error: Error): void {
+  disconnect(): void { this.fail(new Error('MA2 连接已关闭，没确认的操作不会自动重试'), this.current === 'connected'); }
+  private fail(error: Error, graceful = false): void {
     this.connectionEpoch += 1;
     this.socket = null;
     const streams = this.streams; this.streams = [];
-    for (const stream of streams) stream.socket.destroy();
+    if (streams.length) {
+      this.closing = Promise.all(streams.map(stream => stream.closed)).then(() => undefined);
+      if (graceful) {
+        // Let both ends acknowledge the close. A silent peer still releases local resources within the connection deadline.
+        const deadline = setTimeout(() => { for (const stream of streams) stream.socket.destroy(); }, this.timeoutMs);
+        deadline.unref();
+        void this.closing.then(() => clearTimeout(deadline));
+      }
+      for (const { socket } of streams) {
+        if (graceful) socket.end();
+        else socket.destroy();
+      }
+    }
     if (this.waiter) { clearTimeout(this.waiter.timer); this.waiter.reject(error); this.waiter = null; }
     if (this.current !== 'disconnected') this.setState('disconnected', error);
   }

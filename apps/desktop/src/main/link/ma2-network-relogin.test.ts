@@ -13,7 +13,7 @@ import { idleShow, pausedShow, runningShow, showReader } from './fixtures/show-g
 // own with the saved login only, on the waits 1, 2, 4, 8, 15, 30, 30 … s and within the table's five minutes
 // (`ma2.relogin`); it never reads the console again (2026-10-30) and never installs the plugin during the show.
 const memory = vi.hoisted(() => ({
-  file: null as string | null, lines: [] as string[], connects: 0, version: '3.3.4.3', show: 'TEST', generation: 'one',
+  closing: null as Promise<void> | null, authenticating: null as Promise<void> | null, file: null as string | null, lines: [] as string[], connects: 0, version: '3.3.4.3', show: 'TEST', generation: 'one',
   login: 'ok' as 'ok' | 'unreachable' | 'refused' | 'silent', drop: (): void => undefined, bridge: 'ready' as 'ready' | 'missing' | 'old' | 'foreign', installs: 0
 }));
 const journals = vi.hoisted(() => new Map<string, Set<string>>());
@@ -38,7 +38,7 @@ vi.mock('./ma2-telnet', async (importOriginal) => {
     constructor(_address: unknown, private readonly onState: (state: 'disconnected', cause?: Error) => void) {}
     async connect(): Promise<string> {
       memory.connects += 1;
-      await Promise.resolve();
+      await memory.authenticating;
       if (memory.login === 'unreachable') throw new original.Ma2UnreachableError('MA2 命令端口连接失败：192.0.2.1:30000（EHOSTUNREACH）');
       if (memory.login === 'refused') throw new original.Ma2LoginRefusedError('已找到控台，但控台还没开启远程连接。请在控台设置里开启远程登录，再连接。');
       if (memory.login === 'silent') throw new Error('MA2 网络端口已经连通，但登录没有成功。请检查登录用户、密码和 Telnet 的 Login Enabled 设置，不需要改电脑 IP');
@@ -57,7 +57,10 @@ vi.mock('./ma2-telnet', async (importOriginal) => {
       const play = /TBLINK_PLAY_[a-f0-9]{32}/.exec(line)?.[0];
       return Promise.resolve(play ? match(`${play}:SENT\r\n`) ?? 'SENT' : 'ACK');
     }
-    disconnect(): void { if (this.state !== 'disconnected') { this.state = 'disconnected'; this.onState('disconnected'); } }
+    get closed(): Promise<void> { return memory.closing ?? Promise.resolve(); }
+    disconnect(): void {
+      if (this.state !== 'disconnected') { this.state = 'disconnected'; this.onState('disconnected'); }
+    }
   } };
 });
 
@@ -111,12 +114,54 @@ async function rig(options: { bridge?: string } = {}) {
 }
 
 beforeEach(() => {
+  memory.closing = null; memory.authenticating = null;
   memory.file = null; memory.lines = []; memory.connects = 0; memory.version = '3.3.4.3'; memory.show = 'TEST'; memory.generation = 'one';
   memory.login = 'ok'; memory.bridge = 'ready'; memory.installs = 0;
 });
 afterEach(() => { vi.useRealTimers(); });
 
 describe('演出中控台断了只自动重新登录（M5，2026-11-10 第 2 题）', () => {
+  it('首次读完后手动断开，再登录要等原来的连接关闭', async () => {
+    const f = await rig();
+    let finishClose!: () => void;
+    memory.closing = new Promise<void>(resolve => { finishClose = resolve; });
+    const sent = f.sinceDrop();
+    try {
+      const disconnected = f.manager.disconnectByOperator();
+      await settle();
+      const next = f.manager.connect();
+      await settle();
+      expect(memory.connects).toBe(1);
+      finishClose();
+      await disconnected;
+      expect(await next).toMatchObject({ state: 'connected', awaitingRead: true });
+      expect(memory.connects).toBe(2);
+      expect(sent()).toEqual([]);
+    } finally { finishClose(); f.manager.disconnect(); }
+  });
+
+  it.each(['ok', 'refused'] as const)('自动登录正在握手时，手动登录接管同一次结果（%s）', async outcome => {
+    const f = await rig();
+    let finishLogin!: () => void;
+    memory.authenticating = new Promise<void>(resolve => { finishLogin = resolve; });
+    try {
+      f.setShow(runningShow);
+      memory.drop();
+      await f.clock.pass(1000);
+      expect(memory.connects).toBe(2);
+      const clicked = f.manager.connect().catch((error: unknown) => error);
+      await settle();
+      expect(memory.connects).toBe(2);
+      memory.login = outcome;
+      finishLogin();
+      const result = await clicked; await settle();
+      expect(result).toMatchObject({ state: outcome === 'ok' ? 'connected' : 'disconnected' });
+      if (outcome === 'refused') expect(f.manager.status().error).toContain('远程连接');
+      await f.clock.pass(60000);
+      expect(memory.connects).toBe(2);
+    } finally { finishLogin(); f.manager.disconnect(); }
+  });
+
   it('时间码在走时断线：照 1、2、4、8 秒的间隔用保存的登录重新登，每次一条日志，是等待不标红；登上换连接编号', async () => {
     const f = await rig();
     try {

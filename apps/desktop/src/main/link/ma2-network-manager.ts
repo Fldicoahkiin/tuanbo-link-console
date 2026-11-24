@@ -55,6 +55,13 @@ export class Ma2NetworkManager {
   private capabilities: Ma2Capabilities | null = null;
   private settings: Ma2NetworkSettings | null = null;
   private connection: Ma2Telnet | null = null;
+  private closingLine: Promise<void> = Promise.resolve();
+  private automaticLogin: Promise<void> | null = null;
+  private retireLine(): void {
+    const line = this.connection;
+    this.connection = null;
+    if (line) { line.disconnect(); this.closingLine = line.closed; }
+  }
   private version: string | null = null;
   private error: string | null = null;
   /** The last connect reached nothing at the saved address, so a search may find the console elsewhere. */
@@ -273,7 +280,7 @@ export class Ma2NetworkManager {
   }
   constructor(directory: string, private readonly secrets: Pick<SecureProfileStore, 'hasCredential' | 'saveCredential' | 'loadCredential'>, private readonly show: ShowGateReader = () => ({ kind: 'allow' }), private readonly bundledBridge?: string, private readonly resolveLocalAddress: (host: string) => Promise<string | undefined> = () => Promise.resolve(undefined), private readonly validatePeers?: (host: string, peers: readonly Ma2ConnectedPeer[]) => Promise<void>, private readonly awaitListener?: (host: string, port: number) => Promise<void>, private readonly notice?: (level: 'info' | 'warning', message: string) => void, reloginClock?: Ma2ReloginClock) {
     this.path = join(directory, 'link-integrations', 'ma2-network.json');
-    this.relogin = new Ma2Relogin<Ma2NetworkSettings>(CONSOLE_RELOGIN, settings => this.loginOnly(settings), entry => { for (const listener of this.reloginLogs) listener(entry); }, reloginClock);
+    this.relogin = new Ma2Relogin<Ma2NetworkSettings>(CONSOLE_RELOGIN, settings => this.beginAutomaticLogin(settings), entry => { for (const listener of this.reloginLogs) listener(entry); }, reloginClock);
   }
   private target(target: Ma2NetworkTarget): void {
     const settings = this.settings;
@@ -578,7 +585,26 @@ export class Ma2NetworkManager {
       return this.status();
     } finally { release?.();this.busy = false; }
   }
+  private async beginAutomaticLogin(settings: Ma2NetworkSettings): Promise<void> {
+    const attempt = this.loginOnly(settings);
+    this.automaticLogin = attempt;
+    try { await attempt; }
+    finally { if (this.automaticLogin === attempt) this.automaticLogin = null; }
+  }
+  /** A manual click takes over the result of a handshake already on the wire. */
+  private async takeOverLogin(attempt: Promise<void>): Promise<Ma2NetworkStatus> {
+    const generation = this.generation, armed = this.armed;
+    this.relogin.stop();
+    try {
+      await attempt;
+      if (this.generation === generation && armed && this.connection?.state === 'connected') this.relogin.connected(consoleScope(armed), armed);
+    } catch (cause) {
+      if (this.generation === generation) this.error = cause instanceof Error ? cause.message : String(cause);
+    }
+    return this.status();
+  }
   async connect(recoverSession = false): Promise<Ma2NetworkStatus> {
+    if (this.automaticLogin) return this.takeOverLogin(this.automaticLogin);
     const gate = this.show('ma2.connect');
     // During the show only the console this run connected to, and only logging in (M5): it takes over from logging in
     // again on its own, and its counts start again. Another console, or one never connected, waits for the stop.
@@ -602,6 +628,7 @@ export class Ma2NetworkManager {
       const password = this.passwordSaved ? await this.secrets.loadCredential(this.credentialId(settings)) : '';
       const localAddress = await this.resolveLocalAddress(settings.host);
       await this.awaitListener?.(settings.host, settings.port);
+      await this.closingLine;
       if (generation !== this.generation) return this.status();
       const connection = this.line(settings, localAddress);
       this.connection = connection;
@@ -670,12 +697,12 @@ export class Ma2NetworkManager {
     this.reconnectAllowed = false;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+    this.automaticLogin = null;
     this.relogin.stop(); this.armed = null; this.identity = null; this.latestRanges = undefined;
     this.liveService?.close(); this.liveService?.consoleChanged();
     this.keepUnreleased();
     this.generation += 1;
-    const connection = this.connection; this.connection = null;
-    connection?.disconnect(); this.version = null; this.services = null; this.capabilities = null; this.bridgeIssue = null;
+    this.retireLine(); this.version = null; this.services = null; this.capabilities = null; this.bridgeIssue = null;
     return this.status();
   }
   /** One Telnet line to the console. Ending on its own: the idle reconnect while the show is idle, as before; while it is
@@ -690,7 +717,7 @@ export class Ma2NetworkManager {
     this.keepUnreleased();
     this.version = null; this.capabilities = null;
     // A login on its way finds out itself and counts as one attempt.
-    if (this.relogin.outage) return;
+    if (this.relogin.outage || this.automaticLogin) return;
     if (!this.reconnectAllowed) { this.error = reason; return; }
     this.dropReason = reason;
     if (this.show('ma2.connect').kind === 'wait') { this.error = null; this.relogin.dropped(reason); return; }
@@ -760,7 +787,7 @@ export class Ma2NetworkManager {
    * missing or old, it waits for the show to stop (`installDeferred`). Lights-off and the web remote need no plugin.
    */
   private async loginOnly(settings: Ma2NetworkSettings, resumeReadSession = true): Promise<void> {
-    const previous = this.connection; this.connection = null; previous?.disconnect();
+    this.retireLine();
     this.keepUnreleased();
     this.services = null; this.bridgeIssue = null; this.version = null; this.capabilities = null; this.error = null; this.unreachable = false;
     this.generation += 1;
@@ -773,6 +800,7 @@ export class Ma2NetworkManager {
     }
     const localAddress = await this.resolveLocalAddress(settings.host);
     await this.awaitListener?.(settings.host, settings.port);
+    await this.closingLine;
     current();
     const connection = this.line(settings, localAddress);
     this.connection = connection;
@@ -803,7 +831,7 @@ export class Ma2NetworkManager {
       this.identity = { version, source };
       if (before?.source) this.liveService?.consoleBack(before.source, source);
     } catch (error) {
-      if (generation === this.generation && this.connection === connection) { this.connection = null; connection.disconnect(); this.version = null; this.unreachable = error instanceof Ma2UnreachableError; }
+      if (generation === this.generation && this.connection === connection) { this.retireLine(); this.version = null; this.unreachable = error instanceof Ma2UnreachableError; }
       throw error;
     }
     void this.installDeferred();
