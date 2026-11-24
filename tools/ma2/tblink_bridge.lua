@@ -2548,17 +2548,25 @@ end
 -- watchdog; each tick finishes and schedules another only while a key is held.
 -- Invalidated generations release their keys on the last tick, then disappear
 -- from the console's running-plugin list instead of leaving an infinite task.
+-- onPC can invoke the first tick as soon as the timer is registered.
+local function after_interval(interval, callback)
+  local first_tick = true
+  gma.timer(function()
+    if first_tick then first_tick = false; return end
+    callback()
+  end, interval, 2)
+end
 local key_timer_pending = false
 local function watch_executor_keys()
   if key_timer_pending then return end
   for _,key in pairs(executor_keys) do
     if key.momentary and not key.expired then
       key_timer_pending = true
-      gma.timer(function()
+      after_interval(0.25, function()
         key_timer_pending = false
         expire_executor_keys()
         watch_executor_keys()
-      end, 0.25, 1)
+      end)
       return
     end
   end
@@ -2626,15 +2634,11 @@ local function watch_request_file()
   if not ok then gma.feedback('TBLINK file request failed: ' .. tostring(received))
   elseif received then fast_poll_until = gma.gettime() + 0.25 end
   local interval = gma.gettime() < fast_poll_until and 0.02 or 0.1
-  -- onPC calls the first tick immediately. Only the second tick has waited
-  -- the interval. A short burst after real file traffic keeps edits responsive.
   poll_pending = true
-  local first_tick = true
-  gma.timer(function()
-    if first_tick then first_tick = false; return end
+  after_interval(interval, function()
     poll_pending = false
     watch_request_file()
-  end, interval, 2)
+  end)
 end
 local function main(mode)
   if active_mode then

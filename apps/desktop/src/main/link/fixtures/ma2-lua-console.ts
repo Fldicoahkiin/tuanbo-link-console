@@ -25,6 +25,16 @@ export class Ma2LuaConsole {
     this.load(fake, '=ma2-fake-console');
     if (source !== null) this.lua(`FAKE.main = assert(load(SOURCE, 'tblink_bridge', 't'))(); FAKE.main(MODE)`, { SOURCE: source, MODE: mode === 'network' ? 'network' : 'local' });
   }
+  /** Exercise the native scheduling convention without running a timer inside its own registration. */
+  immediateFirstTick(): void {
+    this.lua(`local queue=gma.timer;local registering=false
+      gma.timer=function(fn,interval,count,cleanup)
+        assert(not registering,'Timer registered during its initial callback')
+        registering=true;fn();registering=false
+        if count~=1 then queue(fn,interval,count==0 and 0 or count-1,cleanup)
+        elseif cleanup then cleanup() end
+      end`);
+  }
   private load(code: Uint8Array, name: string): Buffer[] {
     const top = lua.lua_gettop(this.L);
     if (lauxlib.luaL_loadbuffer(this.L, code, null, to_luastring(name)) !== lua.LUA_OK || lua.lua_pcall(this.L, 0, -1, 0) !== lua.LUA_OK) {

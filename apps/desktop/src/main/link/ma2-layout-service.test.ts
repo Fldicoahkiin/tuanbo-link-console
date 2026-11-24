@@ -55,7 +55,7 @@ it('按钮第 1000 页起连续 10 页都放满时，不导入也不改名任何
 });
 
 /** In-memory console for syncSong: emulates only the script shapes that path sends. */
-function songConsole(sequences: Map<number, string>, slowRead?: { target: number; ms: number }, nativeStepTable = false) {
+function songConsole(sequences: Map<number, string>, slowRead?: { target: number; ms: number }, nativeStepTable = false, onStaging?: (script: string, writer: string, file: string) => void) {
   const files = new Map<string, Buffer>(); const lines: string[] = []; const ops: string[] = []; const slow = { started: false, done: false };
   const timecodes = new Map<number, string>();
   let fileConsole: Ma2LuaConsole | undefined;
@@ -70,7 +70,8 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
     const writer = /local k='(TBLINK_W_[a-f0-9]{24})'/.exec(script)?.[1];
     const opened = /importexport\/(\w+)\.xml';local f=assert\(io\.open\(p,'wb'\)\)/.exec(script);
     if (writer && opened) {
-      fileConsole ??= new Ma2LuaConsole(null);
+      onStaging?.(script, writer, opened[1]!);
+      if (!fileConsole) { fileConsole = new Ma2LuaConsole(null); fileConsole.immediateFirstTick(); }
       fileConsole.lua("FAKE.vars.SHOWFILE='test';TBLINK_BRIDGE_GENERATION='one';FAKE.echo={}");
       fileConsole.lua(script);
       expect(fileConsole.lua('return FAKE.echo[1]')[0]?.toString()).toContain('OK:prepared');
@@ -954,6 +955,31 @@ it('修复原生步骤表错位后 Cue 编号、名称和触发一致，再同�
   expect(again.changed).toBe(false);
   expect(inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.cues).toEqual(report.cues);
 }, 20000);
+
+it('传输中断后由控台在最后一次写入两分钟后清理，空闲期间只等一个回调', async () => {
+  let checked = 0;
+  const fake = songConsole(new Map(), undefined, false, (script, writer, file) => {
+    const desk = new Ma2LuaConsole(null);
+    desk.immediateFirstTick();
+    desk.lua("FAKE.vars.SHOWFILE='test';TBLINK_BRIDGE_GENERATION='one'");
+    desk.lua(script);
+    const path = `/fake/importexport/${file}.xml`;
+    expect(desk.file(path)).toEqual(Buffer.alloc(0));
+    expect(desk.lua('return #FAKE.timers')[0]?.toString()).toBe('1');
+    desk.lua("FAKE.now=FAKE.now+45;_G[KEY].at=FAKE.now", { KEY: writer });
+    desk.lua("FAKE.now=FAKE.now+75;FAKE.tick()");
+    expect(desk.lua('return #FAKE.timers, FAKE.timers[1].interval').map(value => value.toString())).toEqual(['1', '45']);
+    expect(desk.file(path)).toEqual(Buffer.alloc(0));
+    desk.lua("FAKE.now=FAKE.now+45;FAKE.tick()");
+    expect(desk.file(path)).toBeNull();
+    expect(desk.lua('return #FAKE.timers')[0]?.toString()).toBe('0');
+    checked++;
+  });
+  const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), showStopped, noBackups);
+  const song = { ...songRequest(), points: [{ id: 'first', name: '开场', atMs: 1000, cues: [] }] };
+  await service.syncSong(fake.connection, fake.bridge, song);
+  expect(checked).toBeGreaterThan(0);
+});
 
 it('整首首次创建时只传压缩后的 Cue，不重复改名；文件传坏就停在导入之前', async () => {
   const request = { ...songRequest(), points: Array.from({ length: 80 }, (_, index) => ({

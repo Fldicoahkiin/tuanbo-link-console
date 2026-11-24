@@ -771,7 +771,15 @@ export class Ma2LayoutService {
     report?.(0, payload.length);
     // Create an app-owned staging file before accepting bytes. An interrupted transfer
     // releases its decoder and partial file even if the client can no longer send cleanup.
-    await this.call(connection, `${this.guard(request)}local p=gma.show.getvar('PATH')..'/importexport/${file}.xml';local f=assert(io.open(p,'wb'));assert(f:close());local k='${writer}';local w={p=p,at=gma.gettime()};_G[k]=w;local function expire()if not _G[k] then return end;if gma.gettime()-w.at>=120 then _G[k]=nil;os.remove(p) else gma.timer(expire,120,1) end end;gma.timer(expire,120,1);return 'prepared'`);
+    const expireWriter = [
+      'local function arm(delay)',
+      'local first=true;gma.timer(function()',
+      'if first then first=false;return end;if not _G[k] then return end;',
+      'local left=120-(gma.gettime()-w.at);',
+      'if left>0 then arm(left) else _G[k]=nil;os.remove(p) end',
+      'end,delay,2) end;arm(120);'
+    ].join(' ');
+    await this.call(connection, `${this.guard(request)}local p=gma.show.getvar('PATH')..'/importexport/${file}.xml';local f=assert(io.open(p,'wb'));assert(f:close());local k='${writer}';local w={p=p,at=gma.gettime()};_G[k]=w;${expireWriter}return 'prepared'`);
     if (compressed) {
       const [a, z] = ma2AdlerSums(bytes);
       const prefix = `${writer}:D:`;

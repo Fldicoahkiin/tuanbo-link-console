@@ -3,6 +3,7 @@ import { bridgeSource, Ma2LuaConsole } from './fixtures/ma2-lua-console';
 const hex=(value:string)=>Buffer.from(value).toString('hex');
 function fixture(){
   const ma2=new Ma2LuaConsole();
+  ma2.immediateFirstTick();
   const code=12302;
   ma2.set('Executor 1.101',{label:'Flash',xml:`<MA><Exec><Assignment name="Flash"><No>25</No><No>1</No><No>9000</No></Assignment><AssignmentExec><Button>${code}</Button></AssignmentExec></Exec></MA>`});
   const press=(pressed=true,id='a'.repeat(32))=>ma2.lua(`return TBLINK_EXEC_INPUT(TOKEN,ID,1,101,0,${pressed},${code},9000,LABEL,SHOW,GEN,REF)`,{TOKEN:'b'.repeat(32),ID:id,LABEL:hex('Flash'),SHOW:hex('tblink_fake_show'),GEN:hex('1000'),REF:hex('25.1.9000')})[0]?.toString();
