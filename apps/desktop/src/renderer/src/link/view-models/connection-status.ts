@@ -40,7 +40,7 @@ export function ma2NetworkWaitStatus(network: Pick<Ma2NetworkStatus, 'relogin' |
     detail: `控台断开了，正在自动重新登录（第 ${relogin.attempt} 次），最多试 ${OUTPUT_RECOVERY_RULES['ma2.relogin'].limit.maxMs / 60_000} 分钟。登上以后关灯和按键照常，不会自动重新读取控台。原因：${relogin.reason}` };
   if (relogin?.kind === 'stopped') return relogin.limit ? { state: 'error', value: '自动重新登录没成功', detail: relogin.reason }
     : { state: 'error', value: '需要手动连接', detail: `控台没有再自动重新登录：${relogin.reason}` };
-  if (network?.pluginWait) return { state: 'warning', value: '已连接，插件停止后再装', detail: network.pluginWait };
+  if (network?.pluginWait) return { state: 'warning', value: '已连接，组件待就绪', detail: network.pluginWait };
   return null;
 }
 

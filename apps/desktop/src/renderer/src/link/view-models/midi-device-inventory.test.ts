@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import type { LinkDesktopApi } from '@tb/core/link';
 import type { NativePlaybackDevices } from '@tb/schema';
 import { LinkMidiAdapter, type MidiPortSnapshot } from '../../registry/link-midi-adapter';
+import { useConnectionCheckStore } from '../stores/connection-check-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { midiOutputInventory, readAndStoreMidiPorts, readNativeDevices } from './midi-device-inventory';
 
@@ -68,4 +69,5 @@ it('Windows 检测失败不阻止浏览器 MIDI 刷新，不使用过期原生�
   await expect(readAndStoreMidiPorts(monitor)).resolves.toEqual([usb]);
   expect(useIntegrationStore.getState().nativeDevices).toBeNull();
   expect(useIntegrationStore.getState().nativeDeviceError).toBe('原生检测失败');
+  expect(useConnectionCheckStore.getState().checks.midi).toMatchObject({ state: 'error', detail: '时间码输出端口读取失败：原生检测失败' });
 });

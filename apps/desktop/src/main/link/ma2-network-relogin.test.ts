@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MA2_BRIDGE_MISSING_BEFORE_REQUEST, OUTPUT_RECOVERY_RULES, isShowWait, type ShowState } from '@tb/core/link';
 import { createLightingDocument, lightingDocumentSchema, lightingMa2BindingSchema, lightingTrackSchema, type LightingDocument } from '@tb/schema';
+import { Ma2ConsoleBackups } from './ma2-console-backups';
+import { Ma2MtcSelectionService } from './ma2-mtc-selection';
 import { Ma2NetworkManager } from './ma2-network-manager';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { LightingOffService } from './lighting-off-service';
@@ -317,6 +319,19 @@ describe('演出中控台断了只自动重新登录（M5，2026-11-10 第 2 题
 });
 
 describe('插件在演出中不装（M5）', () => {
+  it('设置页读取 Cue 前在同一次登录恢复丢失的组件，并把读回来源交给选曲核对', async () => {
+    const f = await rig({ bridge: 'bundled bridge source' });
+    f.manager.setConsoleBackups(new Ma2ConsoleBackups('unused', showReader(() => idleShow), () => Promise.resolve()));
+    const prepare = vi.spyOn(Ma2MtcSelectionService.prototype, 'prepare').mockResolvedValue(false);
+    try {
+      memory.bridge = 'missing'; memory.generation = '';
+      await f.manager.prepareMtcPlayback(network);
+      expect(memory.installs).toBe(1);
+      expect(memory.connects).toBe(1);
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(prepare.mock.calls[0]?.[7]?.expectedSource?.generation).toBe('installed');
+    } finally { prepare.mockRestore(); f.manager.disconnect(); }
+  });
   it('切回原 Show 后首次同步先恢复缺少的连接组件，再按控台时间线目录核对', async () => {
     const f = await rig({ bridge: 'bundled bridge source' });
     const request = vi.spyOn(Ma2OnpcBridge.prototype, 'request').mockImplementation(operation => {

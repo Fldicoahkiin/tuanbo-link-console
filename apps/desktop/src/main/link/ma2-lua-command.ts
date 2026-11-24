@@ -2,6 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
 
 export const ma2LuaString = (value: string): string => `unhex('${Buffer.from(value).toString('hex')}')`;
+// Append this Lua expression to file commands so MA2 and io.open use the same directory.
+export const ma2ExchangePath = "string.format(' /p=%c%s/importexport%c',34,gma.show.getvar('PATH'),34)";
 const decode = "local function unhex(h)return (h:gsub('..',function(x)return string.char(tonumber(x,16))end))end;";
 
 type Connection = Pick<Ma2Telnet, 'command'>;
@@ -45,7 +47,7 @@ async function runScript(connection: Connection, body: string, beforeSend: () =>
   const prefix = `${key}:`;
   let first = true;
   const call = async (code: string): Promise<string> => connection.command(`Lua "${code}"`, text => ma2ResponseLine(text, prefix), () => { if (first) beforeSend(); first = false; });
-  const script = `${decode}local ok,r=pcall(function() ${body} end);gma.echo('${prefix}'..(ok and 'OK:' or 'ERR:')..tostring(r))`;
+  const script = `${body.includes('unhex(') ? decode : ''}local ok,r=pcall(function() ${body} end);gma.echo('${prefix}'..(ok and 'OK:' or 'ERR:')..tostring(r))`;
   let command = script;
   // The native command interpreter consumes $, |, ^ and quotes before Lua
   // sees them. Transport those scripts as hex, even when they are short.

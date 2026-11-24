@@ -109,10 +109,11 @@ it('复查也盯住这首歌的时间码节目（2026-10-26）：每个已确认
     const prefix = `${/TBLINK_CUE_[a-f0-9]{24}/.exec(line)?.[0]}:`;
     const missing = /handle\('Timecode (\d+)'\) then return 'missing'/.exec(line);
     const exported = /Export Timecode (\d+) (\w+) \/o/.exec(line);
+    const base = /importexport\/(\w+)'\.\.n/.exec(line)?.[1] ?? '';
     const compare = /return r\('(\w+)'\)==r\('(\w+)',1\)/.exec(line);
     let result = 'true';
     if (missing && !shows.has(Number(missing[1]))) result = 'missing';
-    else if (exported) { files.set(exported[2]!, shows.get(Number(exported[1]))!); result = compare ? String(files.get(compare[1]!) === files.get(compare[2]!)) : 'captured'; }
+    else if (exported) { files.set(exported[2]!, shows.get(Number(exported[1]))!); result = compare ? String(files.get(base + compare[1]!) === files.get(base + compare[2]!)) : 'captured'; }
     return Promise.resolve(match(`${prefix}${line.includes("READY')") ? 'READY' : `OK:${result}`}\r\n`)!);
   }) };
   const bridge = { request: vi.fn<Ma2OnpcBridge['request']>(operation => Promise.resolve(operation === 'READ' ? shows.get(9000)! : '<MA><Sequ index="8999"/></MA>')) };

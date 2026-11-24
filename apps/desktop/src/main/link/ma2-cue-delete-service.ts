@@ -6,7 +6,7 @@ import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema, ma2CueDeletePlanSc
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
 import { inspectMa2CueAttributes, inspectMa2CueFixtures, inspectMa2SequenceXml, ma2SequenceCueFingerprints, referencedMa2Sequences } from './ma2-timecode-xml';
-import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
+import { ma2ExchangePath, ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
 
 type Bridge = Pick<Ma2OnpcBridge, 'request'>;
 type Plan = { request: Ma2CueDeletePrepare; value: Ma2CueDeletePlan; snapshots: Map<number, string>; timecodes: Map<number, string> };
@@ -116,7 +116,7 @@ export class Ma2CueDeleteService {
         await writeFile(localFile, xml, { encoding:'utf8', flag:'wx' }); backups.push(localFile, `控台 importexport/${file}.xml`);
         const before = ma2SequenceCueFingerprints(xml);
         const guard = `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(request.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(request.expectedSource.generation)},'Show or session changed');`;
-        const body = `${guard}local expected=${ma2LuaString(canonical(xml))};gma.cmd('Export Sequence ${sequence} ${file} /o');local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','rb'));local actual=f:read('*a');f:close();actual=actual:gsub('(<MA[^>]*>%s*)<Info[^>]*/>','%1');assert(actual==expected,'Sequence changed after confirmation');${guard}${selected.map(item => `assert(gma.show.getobj.handle('Sequence ${sequence} Cue ${item.cue}'),'Cue missing');gma.cmd('Delete Sequence ${sequence} Cue ${item.cue} /cueonly /nc');assert(not gma.show.getobj.handle('Sequence ${sequence} Cue ${item.cue}'),'Cue deletion unconfirmed');`).join('')}return 'deleted'`;
+        const body = `${guard}local expected=${ma2LuaString(canonical(xml))};gma.cmd('Export Sequence ${sequence} ${file} /o'..${ma2ExchangePath});local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','rb'));local actual=f:read('*a');f:close();actual=actual:gsub('(<MA[^>]*>%s*)<Info[^>]*/>','%1');assert(actual==expected,'Sequence changed after confirmation');${guard}${selected.map(item => `assert(gma.show.getobj.handle('Sequence ${sequence} Cue ${item.cue}'),'Cue missing');gma.cmd('Delete Sequence ${sequence} Cue ${item.cue} /cueonly /nc');assert(not gma.show.getobj.handle('Sequence ${sequence} Cue ${item.cue}'),'Cue deletion unconfirmed');`).join('')}return 'deleted'`;
         attempted = true;
         if (await runMa2GuardedLua(connection,body,() => this.guard()) !== 'deleted') throw new Error('控台没有确认删除');
         const directory = await this.directory(bridge,request);

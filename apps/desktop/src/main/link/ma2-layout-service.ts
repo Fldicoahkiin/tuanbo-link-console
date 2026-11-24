@@ -27,7 +27,7 @@ import { ma2TimecodeAfterCueReindex } from './ma2-timecode-xml';
 import { writeMa2SongTimecode } from './ma2-song-timecode';
 import { MA2_BRIDGE_BUSY_BEFORE_REQUEST, holdForShow, isShowWait, MA2_SONG_COLLISION, ma2ConflictWinner, ma2LatestSide, type ShowGateReader, type ShowOperation } from '@tb/core/link';
 import { hasMa2SongConsoleEdits, mergeMa2SongConsoleEdits } from './ma2-song-console-edits';
-import { ma2Step, ma2StepConnection, type Ma2StepConnection } from './ma2-lua-command';
+import { ma2ExchangePath, ma2Step, ma2StepConnection, type Ma2StepConnection } from './ma2-lua-command';
 
 type Connection = Pick<Ma2Telnet, 'command'>;
 type Bridge = Pick<Ma2OnpcBridge, 'request'>;
@@ -53,7 +53,7 @@ const copyExportedCue = (exportName: string, target: number, cue: string, destin
     + `local a=1;while true do local j=x:find('<Cue index=',a,true);if not j or j>i then break end;a=j+1 end;`
     + `local c=x:sub(a-1,assert(x:find('</Cue>',i,true),'Cue end missing')+5)${empty ? ":gsub('<CueDatas>.-</CueDatas>',''):gsub('<CueDatas%s*/>','')" : ''}:gsub('<Cue index="%d+"','<Cue index="1"',1);`
     + `local o=assert(io.open(p..'${file}.xml','wb'));o:write(x:sub(1,x:find('<Cue index=',1,true)-1)..c..'</Sequ></MA>');o:close();`
-    + `assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence occupied');gma.cmd('Import ${file}.xml At Sequence ${scratch} /nc');`
+    + `assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence occupied');gma.cmd('Import ${file}.xml At Sequence ${scratch} /nc'..${ma2ExchangePath});`
     + `local ok=gma.show.getobj.handle('Sequence ${scratch} Cue ${cue}')~=nil;if ok then gma.cmd('Copy Sequence ${scratch} Cue ${cue} At Sequence ${target} Cue ${destination} /${mode} /nc') end;`
     + `gma.cmd('Delete Sequence ${scratch} /nc');os.remove(p..'${file}.xml');assert(ok,'Cue attributes import failed');assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence not removed');`;
 };
@@ -110,7 +110,7 @@ export class Ma2LayoutService {
   }
 
   private async exportLayout(connection: Connection, request: Ma2LayoutReadRequest, file: string): Promise<string | null> {
-    const length = await this.call(connection, `${this.guard(request)}if not gma.show.getobj.handle('Layout ${request.layout}') then return 'missing' end;gma.cmd('Export Layout ${request.layout} ${file} /o');local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','rb'));local n=f:seek('end');f:close();return n`);
+    const length = await this.call(connection, `${this.guard(request)}if not gma.show.getobj.handle('Layout ${request.layout}') then return 'missing' end;gma.cmd('Export Layout ${request.layout} ${file} /o'..${ma2ExchangePath});local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','rb'));local n=f:seek('end');f:close();return n`);
     if (length === 'missing') return null;
     const size = Number(length);
     if (!Number.isInteger(size) || size < 1 || size > 4 * 1024 * 1024) throw new Error('Layout 导出长度无效或超过 4 MB');
@@ -174,7 +174,7 @@ export class Ma2LayoutService {
       const xml = moveMa2LayoutObjects(before.xml, request.layout, request.positions, request.name);
       const file = `tblink_layout_move_${randomBytes(12).toString('hex')}`;
       await this.prepareXml(connection, request, file, xml);
-      await this.call(connection, `${this.guard(request)}gma.cmd('Export Layout ${request.layout} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${before.file}')==read('${file}_check'),'Layout changed during write');gma.cmd('Import ${file}.xml At Layout ${request.layout} /o /nc');${removeFiles(file, `${file}_check`)}return 'written'`);
+      await this.call(connection, `${this.guard(request)}gma.cmd('Export Layout ${request.layout} ${file}_check /o'..${ma2ExchangePath});local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${before.file}')==read('${file}_check'),'Layout changed during write');gma.cmd('Import ${file}.xml At Layout ${request.layout} /o /nc'..${ma2ExchangePath});${removeFiles(file, `${file}_check`)}return 'written'`);
       const after = await this.snapshot(connection, request);
       if (!after) throw new Error('没有读回 Layout');
       const expected = inspectMa2LayoutXml(xml, request.layout);
@@ -560,7 +560,7 @@ export class Ma2LayoutService {
         // it was read shows up in the read-back check below; only the uploaded snapshot reads it twice.
         if (!copyInPlace && !nativeCopy) for (const ref of sources.values()) if (ref.sequence !== target && canonical(await bridge.request('SEQCUES', ref.sequence, sourceCues(ref))) !== canonical(ref.xml)) throw new Error('合成过程中来源 Cue 有变化，没有写入，请重新检查');
         await checkpoint(remoteXml ?? uploaded, nativeCopy || copyInPlace ? ma2SongCreationStages(remoteXml ?? uploaded, changes) : undefined);
-        const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${remoteExport}')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
+        const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o'..${ma2ExchangePath});local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${remoteExport}')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
         // Import /o can retain the previous native step table when a numbered
         // Cue disappears from XML. Delete reviewed numbers through MA2 first so
         // its internal Part table is reindexed before applying the new snapshot.
@@ -570,8 +570,8 @@ export class Ma2LayoutService {
         // remains to reindex and the original object/positions can be retained.
         const remove = clearing || replacingSteps ? '' : plan.deletions.map(cue => `gma.cmd('Delete Sequence ${target} Cue ${cue} /nc');assert(not gma.show.getobj.handle('Sequence ${target} Cue ${cue}'),'Cue deletion not confirmed');`).join('');
         this.attempted.add(request.requestId); wrote = true;
-        const clear = replacingSteps ? `gma.cmd('Import ${file}_clear.xml At Sequence ${target} /o /nc');` : '';
-        const write = copyInPlace ? '' : `gma.cmd('Import ${file}.xml At Sequence ${target} /o /nc');assert(gma.show.getobj.handle('Sequence ${target}'),'Sequence creation failed');`;
+        const clear = replacingSteps ? `gma.cmd('Import ${file}_clear.xml At Sequence ${target} /o /nc'..${ma2ExchangePath});` : '';
+        const write = copyInPlace ? '' : `gma.cmd('Import ${file}.xml At Sequence ${target} /o /nc'..${ma2ExchangePath});assert(gma.show.getobj.handle('Sequence ${target}'),'Sequence creation failed');`;
         try { await this.call(connection, `${this.guard(layoutRequest)}${verify}${remove}${clear}${write}${removeFiles(file, `${file}_check`, `${file}_clear`)}return 'written'`); }
         catch (error) {
           // The guard stops before anything is written. Drop the draft just recorded so the next
@@ -605,7 +605,7 @@ export class Ma2LayoutService {
             const emptyXml = ma2ScratchCueXml(desired, emptyCues.map(change => change.cue), scratch, directory.version);
             await this.prepareXml(connection, layoutRequest, emptyFile, emptyXml);
             const copy = emptyCues.map(change => `assert(gma.show.getobj.handle('Sequence ${scratch} Cue ${change.cue}'),'Empty Cue missing');gma.cmd('Copy Sequence ${scratch} Cue ${change.cue} At Sequence ${target} Cue ${change.cue} /o /nc');`).join('');
-            await this.call(connection, `${this.guard(layoutRequest)}assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence occupied');gma.cmd('Import ${emptyFile}.xml At Sequence ${scratch} /nc');local ok,err=pcall(function()${copy}end);gma.cmd('Delete Sequence ${scratch} /nc');${removeFiles(emptyFile)}assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence not removed');assert(ok,err);return 'empties'`);
+            await this.call(connection, `${this.guard(layoutRequest)}assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence occupied');gma.cmd('Import ${emptyFile}.xml At Sequence ${scratch} /nc'..${ma2ExchangePath});local ok,err=pcall(function()${copy}end);gma.cmd('Delete Sequence ${scratch} /nc');${removeFiles(emptyFile)}assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence not removed');assert(ok,err);return 'empties'`);
           }
           for (const [changeIndex, change] of plan.changes.entries()) {
             if (copyInPlace && emptyCues.includes(change)) continue;
@@ -635,7 +635,7 @@ export class Ma2LayoutService {
           const position = (i: number) => ({ x: i % request.settings.columns * 2, y: -Math.floor(i / request.settings.columns) * 2 });
           while (slot < 10000 && beforeLayout?.value.items.some(item => Math.abs(item.x - position(slot).x) < item.width / 2 + .5 && Math.abs(item.y - position(slot).y) < item.height / 2 + .5)) slot++;
           if (slot >= 10000) throw new Error('Layout 没有可用位置');
-          if (!beforeLayout) await this.call(connection, `${this.guard(layoutRequest)}assert(not gma.show.getobj.handle('Layout ${layoutRequest.layout}'),'Layout occupied');gma.cmd('Import ${file}_layout.xml At Layout ${layoutRequest.layout} /nc');gma.cmd(${decode(`Label Layout ${layoutRequest.layout} "${request.settings.name}"`)});${removeFiles(`${file}_layout`)}return 'layout'`);
+          if (!beforeLayout) await this.call(connection, `${this.guard(layoutRequest)}assert(not gma.show.getobj.handle('Layout ${layoutRequest.layout}'),'Layout occupied');gma.cmd('Import ${file}_layout.xml At Layout ${layoutRequest.layout} /nc'..${ma2ExchangePath});gma.cmd(${decode(`Label Layout ${layoutRequest.layout} "${request.settings.name}"`)});${removeFiles(`${file}_layout`)}return 'layout'`);
           else { const current = await this.snapshot(connection, layoutRequest); if (!current || canonical(current.xml) !== canonical(beforeLayout.xml)) throw new Error('Layout 有变化，序列已保留，请检查后重新读取'); }
           const { x, y } = position(slot);
           await this.call(connection, `${this.guard(layoutRequest)}gma.cmd('Assign Sequence ${target} At Layout ${layoutRequest.layout} /x=${x} /y=${y}');return 'assigned'`);
@@ -861,10 +861,10 @@ export class Ma2LayoutService {
       if(request.content.kind==='combine')await prepareXml(blankFile,xml);
       if(!old)await prepareXml(`${blankFile}_layout`,emptyMa2LayoutXml(request.settings.layout,directory.version));
       const setup = request.content.kind === 'combine'
-        ? `gma.cmd(${decode(`Import "${blankFile}.xml" At Sequence ${target} /nc`)});`
+        ? `gma.cmd(${decode(`Import "${blankFile}.xml" At Sequence ${target} /nc`)}..${ma2ExchangePath});`
         : `gma.cmd('Store Sequence ${target} Cue 1 /use=${request.content.use} /keepactive /nc');`;
       // A single guarded command owns object creation. Each merge below only touches this new object.
-      const layoutCheck = old ? `assert(o.handle('Layout ${request.settings.layout}'),'Layout missing');gma.cmd('Export Layout ${request.settings.layout} ${blankFile}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info[^>]* />',''):gsub('>[%s]+<','><') end;assert(read('${old.file}')==read('${blankFile}_check'),'Layout changed');` : `assert(not o.handle('Layout ${request.settings.layout}'),'Layout occupied');`;
+      const layoutCheck = old ? `assert(o.handle('Layout ${request.settings.layout}'),'Layout missing');gma.cmd('Export Layout ${request.settings.layout} ${blankFile}_check /o'..${ma2ExchangePath});local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info[^>]* />',''):gsub('>[%s]+<','><') end;assert(read('${old.file}')==read('${blankFile}_check'),'Layout changed');` : `assert(not o.handle('Layout ${request.settings.layout}'),'Layout occupied');`;
       this.attempted.add(request.requestId); wrote = true;
       await this.call(connection, `${this.guard(layoutRequest)}local o=gma.show.getobj;assert(not o.handle('Sequence ${target}'),'Sequence occupied');${layoutCheck}${setup}assert(o.handle('Sequence ${target} Cue 1'),'Cue creation failed');${removeFiles(blankFile, `${blankFile}_check`)}return 'created'`);
       if (request.content.kind === 'combine') for (const [index, ref] of request.content.cues.entries()) {
@@ -882,7 +882,7 @@ export class Ma2LayoutService {
       const library = await readMa2EffectLibrary(bridge, this.show, undefined, undefined, [target], request.expectedSource, 'attributes', connection);
       const cue = library.sequences[0]?.cues[0];
       if (library.errors.length || !cue || cue.name !== request.name || (request.content.kind !== 'combine' || combined.size > 0) && !library.cueAttributes?.some(value => value.attributes.length)) throw new Error('新 Cue 里没有读到灯具属性，没有加入 Layout。请检查控台的 Programmer、World 和 Store Filter');
-      await this.call(connection, `${this.guard(layoutRequest)}${old ? '' : `assert(not gma.show.getobj.handle('Layout ${request.settings.layout}'),'Layout occupied');gma.cmd(${decode(`Import "${blankFile}_layout.xml" At Layout ${request.settings.layout} /nc`)});gma.cmd(${decode(`Label Layout ${request.settings.layout} "${request.settings.name}"`)});${removeFiles(`${blankFile}_layout`)}`}gma.cmd('Assign Sequence ${target} At Layout ${request.settings.layout} /x=${x} /y=${y}');return 'assigned'`);
+      await this.call(connection, `${this.guard(layoutRequest)}${old ? '' : `assert(not gma.show.getobj.handle('Layout ${request.settings.layout}'),'Layout occupied');gma.cmd(${decode(`Import "${blankFile}_layout.xml" At Layout ${request.settings.layout} /nc`)}..${ma2ExchangePath});gma.cmd(${decode(`Label Layout ${request.settings.layout} "${request.settings.name}"`)});${removeFiles(`${blankFile}_layout`)}`}gma.cmd('Assign Sequence ${target} At Layout ${request.settings.layout} /x=${x} /y=${y}');return 'assigned'`);
       const after = await this.snapshot(connection, layoutRequest);
       if (!after || !after.value.items.some(item => item.sequence === target) || old && old.value.items.some((item,index) => JSON.stringify(item) !== JSON.stringify(after.value.items[index]))) throw new Error('控台上的 Layout 和写入的不一致，请到控台检查（没有自动重试）');
       await writeFileAtomically(this.ownershipFile, JSON.stringify([...owners.filter(value=>value.key!==key),{key,projectId:request.projectId,name:after.value.name}]));

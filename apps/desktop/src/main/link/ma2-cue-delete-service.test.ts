@@ -10,7 +10,7 @@ import { Ma2CueDeleteService } from './ma2-cue-delete-service';
 import { showMovingWhen } from './fixtures/show-gates';
 import { SHOW_WAIT_CLOCK_MOVING } from '@tb/core/link';
 
-vi.mock('./ma2-lua-command', () => ({ ma2LuaString: (value: string) => JSON.stringify(value), runMa2GuardedLua: vi.fn() }));
+vi.mock('./ma2-lua-command', async original => ({ ...await original<typeof import('./ma2-lua-command')>(), ma2LuaString: (value: string) => JSON.stringify(value), runMa2GuardedLua: vi.fn() }));
 const source = { show: 'fixture', generation: 'g', version: '3.7.0.5' };
 const body = '<Cue index="1"><Number number="1" sub_number="0"/><CueDatas/><CuePart index="0"/></Cue><Cue index="2"><Number number="2" sub_number="0"/><CueDatas/><CuePart index="0"/></Cue>';
 const xml = (content = body): string => `<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" major_vers="3" minor_vers="7" stream_vers="0"><Sequ index="0">${content}</Sequ></MA>`;

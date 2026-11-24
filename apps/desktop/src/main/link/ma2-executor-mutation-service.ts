@@ -7,7 +7,7 @@ import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
 import { listMa2ExecutorPages, readMa2ExecutorPage } from './ma2-executor-page';
 import { inspectMa2ExecutorPageXml, ma2ExecutorNativeBlocks } from './ma2-timecode-xml';
-import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
+import { ma2ExchangePath, ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
 
 type Item = Ma2ExecutorPage['items'][number];
 const identity = (item: Item) => JSON.stringify([item.slot, item.width, item.name, item.kind, item.sequence, item.reference, item.button, item.revision]);
@@ -53,7 +53,7 @@ export class Ma2ExecutorMutationService {
       const expectedBlocks = ma2ExecutorNativeBlocks(sourceXml, item.slot, item.width);
       // Compare the exact native source blocks in the same Lua execution as the write.
       // The export also creates a native console backup of the whole source page.
-      const capture = `gma.cmd('Export Page ${request.page} ${nativeFile} /o');local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${nativeFile}.xml','rb'));local xml=f:read('*a');f:close();local blocks={};local pos=1;while true do local a,b=xml:find('<Exec%s[^>]*>',pos);if not a then break end;if xml:sub(b-1,b)~='/>' then local c,d=xml:find('</Exec>',b+1,true);assert(d,'Executor export incomplete');b=d end;blocks[#blocks+1]=xml:sub(a,b);pos=b+1 end;`;
+      const capture = `gma.cmd('Export Page ${request.page} ${nativeFile} /o'..${ma2ExchangePath});local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${nativeFile}.xml','rb'));local xml=f:read('*a');f:close();local blocks={};local pos=1;while true do local a,b=xml:find('<Exec%s[^>]*>',pos);if not a then break end;if xml:sub(b-1,b)~='/>' then local c,d=xml:find('</Exec>',b+1,true);assert(d,'Executor export incomplete');b=d end;blocks[#blocks+1]=xml:sub(a,b);pos=b+1 end;`;
       const compare = expectedBlocks.map((block, index) => `assert(blocks[${item.slot + index}]==${ma2LuaString(block)},'Executor changed before write');`).join('');
       const preserve = item.sequence ? `local sequence=assert(gma.show.getobj.handle('Sequence ${item.sequence}'),'Assigned Sequence missing');` : '';
       let command: string;

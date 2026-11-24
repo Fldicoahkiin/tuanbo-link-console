@@ -3,7 +3,7 @@ import type { Ma2LayoutDirectoryRequest } from '@tb/schema';
 import type { Ma2Telnet } from './ma2-telnet';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { listMa2ExecutorPages, readMa2ExecutorPage, readMa2ExecutorPageSnapshot } from './ma2-executor-page';
-import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
+import { ma2ExchangePath, ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
 import { ma2ExecutorNativeBlocks } from './ma2-timecode-xml';
 import { holdForShow, type ShowGateReader } from '@tb/core/link';
 
@@ -77,7 +77,7 @@ export async function assignMa2SongExecutor(connection: Pick<Ma2Telnet, 'command
   if (destination.detachedBlock) {
     const file = `tblink_unassigned_${randomUUID().replaceAll('-', '')}`;
     check = `local o=gma.show.getobj;local h=assert(o.handle('Executor ${address}'),'Executor disappeared');assert(not o.label(h) or o.label(h)=='','Executor name changed');`
-      + `gma.cmd('Export Executor ${address} ${file} /o');local path=gma.show.getvar('PATH')..'/importexport/${file}.xml';local f=assert(io.open(path,'rb'));local xml=f:read('*a');f:close();os.remove(path);`
+      + `gma.cmd('Export Executor ${address} ${file} /o'..${ma2ExchangePath});local path=gma.show.getvar('PATH')..'/importexport/${file}.xml';local f=assert(io.open(path,'rb'));local xml=f:read('*a');f:close();os.remove(path);`
       + `local block=xml:match('(<Exec%s[^>]*>.-</Exec>)');assert(block and block:gsub('>%s+<','><')==${ma2LuaString(destination.detachedBlock)},'Executor changed before write');`;
   }
   await runMa2GuardedLua(connection, `${guard}assert(gma.show.getobj.handle('Sequence ${sequence}'),'Song Sequence missing');${createPage}${check}gma.cmd('Assign Sequence ${sequence} At Executor ${address} /nc');return 'assigned'`, stopped);

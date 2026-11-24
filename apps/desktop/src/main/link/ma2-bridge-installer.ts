@@ -25,14 +25,14 @@ function bootCall(connection: Pick<Ma2Telnet, 'command'>): (body: string) => Pro
     return connection.command(`Lua "${body};gma.echo('${prefix}'..r)"`, (text) => ma2ResponseLine(text, prefix));
   };
 }
-const probe = (digest: string): string => `local r='missing';if type(TBLINK_NET)=='function' then if TBLINK_BRIDGE_SOURCE=='${digest}' and TBLINK_BRIDGE_READY==true and type(TBLINK_BRIDGE_GENERATION)=='string' and #TBLINK_BRIDGE_GENERATION>0 then r='ready' elseif type(TBLINK_BRIDGE_SOURCE)=='string' and #TBLINK_BRIDGE_SOURCE==64 and TBLINK_BRIDGE_SOURCE:gsub('[a-f0-9]','')=='' then r='replace:'..TBLINK_BRIDGE_SOURCE else r='foreign' end end`;
+const probe = (digest: string): string => `local r='missing';if type(TBLINK_NET)=='function' then if TBLINK_BRIDGE_SOURCE=='${digest}' and TBLINK_BRIDGE_READY==true and type(TBLINK_BRIDGE_GENERATION)=='string' and #TBLINK_BRIDGE_GENERATION>0 then r='ready' elseif type(TBLINK_BRIDGE_SOURCE)=='string' and #TBLINK_BRIDGE_SOURCE==64 and TBLINK_BRIDGE_SOURCE:gsub('[a-f0-9]','')=='' then r=(TBLINK_BRIDGE_READY==false and 'stopped:' or 'replace:')..TBLINK_BRIDGE_SOURCE else r='foreign' end end`;
 
 /** Only looks (M5: logging in again during the show): one short command, the same check the install starts with; it never
  * installs, replaces or stops anything. */
 export async function readMa2NetworkBridge(connection: Pick<Ma2Telnet, 'command'>, source: string): Promise<Ma2BridgeState> {
   const current = await bootCall(connection)(probe(bundled(source).digest));
   if (current === 'ready' || current === 'missing' || current === 'foreign') return current;
-  if (/^replace:[a-f0-9]{64}$/.test(current)) return 'old';
+  if (/^(?:replace|stopped):[a-f0-9]{64}$/.test(current)) return 'old';
   throw new Error('控台连接组件状态无法识别');
 }
 
@@ -63,7 +63,9 @@ async function install(connection: Pick<Ma2Telnet, 'command'>, bytes: Buffer, di
   if (current === 'preparing') throw new BridgeAdmissionBusy('控台正在准备连接组件，本地可以继续编辑');
   const call = bootCall(connection);
   if (current === 'foreign') throw new Error('控台的连接接口被一个不认识的插件占用了，联动台没有覆盖它，请检查控台上的插件');
-  const previousSource = /^replace:([a-f0-9]{64})$/.exec(current)?.[1];
+  const previousSource = /^(?:replace|stopped):([a-f0-9]{64})$/.exec(current)?.[1];
+  const stopped = current.startsWith('stopped:');
+  const owner = previousSource ? `TBLINK_BRIDGE_SOURCE=='${previousSource}'${stopped ? ' and TBLINK_BRIDGE_READY==false' : ''}` : "type(TBLINK_NET)~='function'";
   if (current !== 'missing' && !previousSource) throw new Error('控台连接组件状态无法识别');
   const id = randomBytes(16).toString('hex');
   const rpc = async (action: 'begin' | 'run' | 'read' | 'release', args = ''): Promise<string> => {
@@ -84,7 +86,7 @@ async function install(connection: Pick<Ma2Telnet, 'command'>, bytes: Buffer, di
   };
   let acquired = false; let installed = false; let prepared = false;
   try {
-    if (previousSource) {
+    if (previousSource && !stopped) {
       // Acquire the old bridge's own transaction lock. A zero-size PING reads
       // only the version; it can never repeat a Show write or executor action.
       if (await rpc('begin', ",'PING',1,0") !== 'ACK') throw new Error('控台连接组件未确认升级占用');
@@ -94,7 +96,7 @@ async function install(connection: Pick<Ma2Telnet, 'command'>, bytes: Buffer, di
     // Install the chunk decoder once. Each later command can use most of the
     // native line for source bytes, while still echoing the exact stored bytes.
     const begin = await call([
-      `local r='busy';if (${previousSource ? `TBLINK_BRIDGE_SOURCE=='${previousSource}'` : "type(TBLINK_NET)~='function'"}) and (not TBLINK_BOOTSTRAP or gma.gettime()>TBLINK_BOOTSTRAP.expires) then `,
+      `local r='busy';if (${owner}) and (not TBLINK_BOOTSTRAP or gma.gettime()>TBLINK_BOOTSTRAP.expires) then `,
       `local b={id='${id}',parts={},size=0,expires=gma.gettime()+120};`,
       "local enc,dec={},{};for i=0,255 do local c=string.char(i);local h=string.format('%02x',i);enc[c]=h;dec[h]=c end;",
       "function b.part(i,at,h) if #b.parts+1~=i or b.size~=at then return 'invalid' end;",
@@ -108,7 +110,7 @@ async function install(connection: Pick<Ma2Telnet, 'command'>, bytes: Buffer, di
       await transferBridge(call, id, bytes, acquired ? () => rpc('read', ',0') : undefined);
     }
     if (previousSource) {
-      const pause = await runMa2GuardedLua(connection, `local b=assert(TBLINK_BOOTSTRAP);assert(b.id=='${id}' and b.size==${bytes.length},'Incomplete bridge');assert(TBLINK_BRIDGE_SOURCE=='${previousSource}','Bridge owner changed');b.factory=assert(load(table.concat(b.parts),'tblink_bridge','t'));b.previous={net=TBLINK_NET,input=TBLINK_EXEC_INPUT,release=TBLINK_EXEC_RELEASE_ALL,source=TBLINK_BRIDGE_SOURCE,generation=TBLINK_BRIDGE_GENERATION,ready=TBLINK_BRIDGE_READY};if TBLINK_EXEC_RELEASE_ALL then TBLINK_EXEC_RELEASE_ALL() end;TBLINK_BRIDGE_GENERATION='upgrade_${id}';TBLINK_BRIDGE_READY=false;return 'paused'`, () => undefined);
+      const pause = await runMa2GuardedLua(connection, `local b=assert(TBLINK_BOOTSTRAP);assert(b.id=='${id}' and b.size==${bytes.length},'Incomplete bridge');assert(${owner},'Bridge owner changed');b.factory=assert(load(table.concat(b.parts),'tblink_bridge','t'));b.previous={net=TBLINK_NET,input=TBLINK_EXEC_INPUT,release=TBLINK_EXEC_RELEASE_ALL,source=TBLINK_BRIDGE_SOURCE,generation=TBLINK_BRIDGE_GENERATION,ready=TBLINK_BRIDGE_READY};if TBLINK_EXEC_RELEASE_ALL then TBLINK_EXEC_RELEASE_ALL() end;TBLINK_BRIDGE_GENERATION='upgrade_${id}';TBLINK_BRIDGE_READY=false;return 'paused'`, () => undefined);
       if (pause !== 'paused') throw new Error('控台旧组件未确认暂停，未替换');
       // Older bundled bridges have no release API; their key lease timer sees
       // the invalidated generation and releases held keys before the new bridge starts.

@@ -55,6 +55,20 @@ function setup(ports = { midiInputs: [{ id: 0, name: 'P1 MTC' }], midiOutputs: [
   return { broker, outputs, inputs, events, list };
 }
 
+it('重新检测等后台旧查询结束，多次点击共用同一次新查询', async () => {
+  const { broker, list, events } = setup();
+  const pending = deferred();
+  list.mockImplementationOnce(async () => { await pending.promise; throw new Error('查询失败'); });
+  const first = broker.listPorts(false);
+  const refresh = broker.listPorts(true);
+  expect(broker.listPorts(true)).toBe(refresh);
+  expect(list).toHaveBeenCalledTimes(1);
+  pending.resolve();
+  await expect(first).rejects.toThrow('查询失败');
+  await refresh;
+  expect(list.mock.calls).toEqual([[false], [true]]);
+  expect(events.at(-1)?.kind).toBe('ports');
+});
 it('同一接口只开一个驱动进程，最后一个使用者关闭后才关', async () => {
   const { broker, outputs } = setup();
   const first = await broker.open('output', 'USB MIDI Interface');

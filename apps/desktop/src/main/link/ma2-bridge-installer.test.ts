@@ -39,9 +39,9 @@ it('M5：只看不装：一条短命令说出控台上是什么，不装、不�
   expect(runMa2GuardedLua).not.toHaveBeenCalled();
   await expect(readMa2NetworkBridge(connection(() => 'what'), 'return function() end')).rejects.toThrow('无法识别');
 });
-function upgradeClient(options: { busy?: boolean; corrupt?: boolean } = {}) {
+function upgradeClient(options: { busy?: boolean; corrupt?: boolean; stopped?: boolean } = {}) {
   return connection(line => {
-    if (line.includes("local r='missing'")) return `replace:${'a'.repeat(64)}`;
+    if (line.includes("local r='missing'")) return `${options.stopped ? 'stopped' : 'replace'}:${'a'.repeat(64)}`;
     if (line.includes("'begin'")) return options.busy ? `ERR:${Buffer.from('Another network request is pending').toString('hex')}` : 'ACK';
     if (line.includes("'run'")) return 'DONE:100';
     if (line.includes("'read'")) return 'DATA:00';
@@ -62,6 +62,13 @@ it('升级已拥有的旧桥前占用只读事务，校验源码后暂停旧会�
   expect(scripts[0]!.indexOf('assert(load')).toBeLessThan(scripts[0]!.indexOf("TBLINK_BRIDGE_GENERATION='upgrade_"));
   expect(scripts[1]).toContain("pcall(start,'network')");
   expect([...client.commands, ...scripts].every(line => !/gma\.cmd|Import |Store |Delete |Go Executor/.test(line))).toBe(true);
+});
+it('控台保留已停止的自有组件时，在同一次恢复里检查归属并启动，跳过已停用的通讯入口', async () => {
+  const client = upgradeClient({ stopped: true });
+  await ensureMa2NetworkBridge(client, 'return function() end');
+  expect(client.commands.some(line => line.includes("'begin'"))).toBe(false);
+  expect(vi.mocked(runMa2GuardedLua).mock.calls[0]?.[1]).toContain('and TBLINK_BRIDGE_READY==false');
+  expect(vi.mocked(runMa2GuardedLua).mock.calls[1]?.[1]).toContain("pcall(start,'network')");
 });
 it('已有事务未结束时不停止旧桥，不重放旧请求', async () => {
   const client = upgradeClient({ busy: true });

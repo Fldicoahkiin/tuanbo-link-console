@@ -166,7 +166,7 @@ it('M5：演出中控台断了在自动重新登录是等待（黄，第几次�
   expect(ma2({ ...down, error: '控台上的 Show 换了', relogin: { kind: 'stopped', reason: '控台上的 Show 换了', limit: false } }))
     .toMatchObject({ state: 'error', value: '需要手动连接', detail: '控台没有再自动重新登录：控台上的 Show 换了' });
   const plugin = '演出还没停止，控台上的联动台插件不见了（控台载入过 Show 或重启过），停止以后会自动重新装上。这期间关灯和网页遥控照常，走控台插件的按键、同步和读取控台先等着。';
-  expect(ma2({ ...down, state: 'connected', version: '3.3.4.3', pluginWait: plugin })).toMatchObject({ state: 'warning', value: '已连接，插件停止后再装', detail: plugin });
+  expect(ma2({ ...down, state: 'connected', version: '3.3.4.3', pluginWait: plugin })).toMatchObject({ state: 'warning', value: '已连接，组件待就绪', detail: plugin });
   // The overview's lighting edit entry says the same.
   expect(statusCenter(input({ network: { ...down, relogin: { kind: 'relogin', attempt: 1, since, reason: '断了' } } })).overview.find(entry => entry.name === '编辑灯光')!.status)
     .toMatchObject({ state: 'warning', value: '自动重新登录（第 1 次）' });

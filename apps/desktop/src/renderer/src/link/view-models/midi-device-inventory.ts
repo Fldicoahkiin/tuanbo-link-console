@@ -33,7 +33,8 @@ export async function readAndStoreMidiPorts(monitor: LinkMidiAdapter): Promise<M
   const ports = web.status === 'fulfilled' ? web.value : [];
   useIntegrationStore.getState().setMidiPorts(ports);
   const webError = web.status === 'rejected' ? message(web.reason) : null;
-  if (!useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('midi', webError ? 'error' : 'ready', webError ?? '系统 MIDI 检测通过');
+  const inventoryError = webError ?? (native.status === 'rejected' ? `时间码输出端口读取失败：${message(native.reason)}` : null);
+  if (!useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('midi', inventoryError ? 'error' : 'ready', inventoryError ?? '系统 MIDI 检测通过');
   await desktop.recordLog({ level: webError || native.status === 'rejected' ? 'warning' : 'info', category: 'device', device: 'midi',
     message: 'MIDI 端口已重新检测（只列出端口，没有发送时间码）', details: {
       browserPorts: ports, browserError: webError,

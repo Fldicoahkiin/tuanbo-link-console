@@ -59,6 +59,7 @@ export class MidiPortBroker {
   private nextClaim = 0;
   /** Counts the pages that went away (releaseWindow): an open still waiting when its page went belongs to nobody. */
   private page = 0;
+  private rechecking = false;
   private listing: Promise<MidiPortList> | null = null;
   private emitted: string | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -74,8 +75,11 @@ export class MidiPortBroker {
    * sent to the window; after a failure only an explicit recheck reads it again. */
   listPorts(recheck: boolean): Promise<MidiPortList> {
     if (this.disposed) return Promise.reject(new Error('MIDI 服务已关闭'));
-    if (this.listing && !recheck) return this.listing;
-    const listing = this.read(recheck).finally(() => { if (this.listing === listing) this.listing = null; });
+    if (this.listing && (!recheck || this.rechecking)) return this.listing;
+    const read = () => this.disposed ? Promise.reject(new Error('MIDI 服务已关闭')) : this.read(recheck);
+    const result = this.listing ? this.listing.then(read, read) : read();
+    this.rechecking = recheck;
+    const listing = result.finally(() => { if (this.listing === listing) this.listing = null; });
     this.listing = listing;
     return listing;
   }

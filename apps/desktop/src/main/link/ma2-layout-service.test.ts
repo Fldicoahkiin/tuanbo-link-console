@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { Ma2LuaConsole } from './fixtures/ma2-lua-console';
 import { randomUUID } from 'node:crypto';
+import { ma2ExchangePath } from './ma2-lua-command';
 import { Ma2LayoutService } from './ma2-layout-service';
 import type { Ma2NewCueRequest, Ma2SongSyncRequest, Ma2SongSyncResult } from '@tb/schema';
 import { ma2StepGate, type Ma2OnpcBridge } from './ma2-onpc-bridge';
@@ -60,7 +61,8 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
   let fileConsole: Ma2LuaConsole | undefined;
   const pending = new Map<string, Buffer[]>(); const copies = new Map<string, Array<{ xml: string; cue: string }>>(); const keeps: string[] = [];
   const canonical = (xml: string): string => xml.replace(/<Info\b[^>]*\/>/g, '').replace(/>\s+</g, '><').trim();
-  const run = (script: string): string => {
+  const run = (source: string): string => {
+    const script = source.replaceAll(`..${ma2ExchangePath}`, '');
     const label = /local h=assert\(o.handle\('Sequence (\d+)'\),'Sequence missing'\);return o.label\(h\)/.exec(script);
     if (label) return inspectMa2SequenceXml(sequences.get(Number(label[1]))!).sequences[0]!.name ?? '';
     const timecodeExists = /return gma\.show\.getobj\.handle\('Timecode (\d+)'\)~=nil/.exec(script);

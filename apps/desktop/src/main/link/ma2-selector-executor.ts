@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
+import { ma2ExchangePath, ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
 import type { Ma2ShowSource } from './ma2-show-probe';
 import type { Ma2Telnet } from './ma2-telnet';
 
@@ -15,7 +15,7 @@ export async function repairMa2SelectorExecutor(connection: Pick<Ma2Telnet, 'com
     local function export(k,suffix)
       local name='${file}'..suffix
       local path=gma.show.getvar('PATH')..'/importexport/'..name..'.xml'
-      gma.cmd('Export '..k..' '..name..' /o')
+      gma.cmd('Export '..k..' '..name..' /o'..${ma2ExchangePath})
       local f=assert(io.open(path,'rb'));local xml=f:read('*a');f:close()
       if suffix~='' then os.remove(path) end
       return xml

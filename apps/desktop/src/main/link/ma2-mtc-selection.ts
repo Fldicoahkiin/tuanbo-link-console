@@ -7,7 +7,7 @@ import type { Ma2Telnet } from './ma2-telnet';
 import { ma2SequenceGoResultSchema, waitForMa2Admission, type Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { verifyMa2ShowSource, type Ma2ShowSource } from './ma2-show-probe';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
-import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
+import { ma2ExchangePath, ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
 import { createMa2TimecodeXml } from './ma2-create';
 import { ma2SongTimecodeXml } from './ma2-song-timecode';
 import { repairMa2SelectorExecutor } from './ma2-selector-executor';
@@ -421,9 +421,9 @@ export class Ma2MtcSelectionService {
         changed = true;
         const file = `tblink_library_${randomBytes(16).toString('hex')}`;
         const check = currentSequence === null ? `assert(not gma.show.getobj.handle('Sequence ${position.number}'),'Selector position occupied');`
-          : `local h=gma.show.getobj.handle('Sequence ${position.number}');assert(h and gma.show.property.get(h,'Info')=='${MA2_MTC_SELECTOR_MARK}','Selector ownership changed');gma.cmd('Export Sequence ${position.number} ${file} /o');assert(canonical(read('${file}'))==canonical(${ma2SelectorXmlLiteral(currentSequence)}),'Selector changed during write');`;
+          : `local h=gma.show.getobj.handle('Sequence ${position.number}');assert(h and gma.show.property.get(h,'Info')=='${MA2_MTC_SELECTOR_MARK}','Selector ownership changed');gma.cmd('Export Sequence ${position.number} ${file} /o'..${ma2ExchangePath});assert(canonical(read('${file}'))==canonical(${ma2SelectorXmlLiteral(currentSequence)}),'Selector changed during write');`;
         const read = `local p=gma.show.getvar('PATH')..'/importexport/';local function read(n)local f=assert(io.open(p..n..'.xml','rb'));local s=f:read('*a');f:close();return s end;local function canonical(s)return s:gsub('<Info[^>]*/>',''):gsub('>[%s]+<','><') end;`;
-        await run(`${read}${check}local f=assert(io.open(p..'${file}_desired.xml','wb'));assert(f:write(${ma2SelectorXmlLiteral(desiredSequence)}));assert(f:close());gma.cmd('Import ${file}_desired.xml At Sequence ${position.number} /o /nc');return 'written'`);
+        await run(`${read}${check}local f=assert(io.open(p..'${file}_desired.xml','wb'));assert(f:write(${ma2SelectorXmlLiteral(desiredSequence)}));assert(f:close());gma.cmd('Import ${file}_desired.xml At Sequence ${position.number} /o /nc'..${ma2ExchangePath});return 'written'`);
         if (currentSequence) await this.backups.record(bridge, { console: endpoint, object: `Sequence ${position.number}`, files: [file] });
         const actual = await bridge.request('SEQUENCE', position.number);
         if (JSON.stringify(ma2MtcSelectorCommands(actual)) !== JSON.stringify(commands)) throw new Error('控台选曲指令读回不一致，同步没有完成');

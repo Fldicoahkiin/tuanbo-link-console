@@ -4,7 +4,7 @@ import type { Ma2SongCheckRequest } from '@tb/schema';
 import { ma2SongCheckRequestSchema } from '@tb/schema';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
-import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
+import { ma2ExchangePath, ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
 import { inspectMa2ExecutorXml } from './ma2-timecode-xml';
 import { holdForShow, type ShowGateReader } from '@tb/core/link';
 
@@ -65,7 +65,7 @@ export class Ma2SongWatch {
       this.remember(key, { file: snapshot.file, revision: snapshot.revision });
       return true;
     }
-    const exported = await runMa2GuardedLua(connection, `${this.guard(request)}if not gma.show.getobj.handle('Timecode ${show.number}') then return 'missing' end;gma.cmd('Export Timecode ${show.number} ${snapshot.file}_tc /o');return 'captured'`, stopped);
+    const exported = await runMa2GuardedLua(connection, `${this.guard(request)}if not gma.show.getobj.handle('Timecode ${show.number}') then return 'missing' end;gma.cmd('Export Timecode ${show.number} ${snapshot.file}_tc /o'..${ma2ExchangePath});return 'captured'`, stopped);
     if (exported === 'missing') return true;
     const xml = await bridge.request('READ', show.number);
     // Read-only race, as for the Sequence: the show changed between the export and the read.
@@ -75,8 +75,8 @@ export class Ma2SongWatch {
     return revision !== show.revision;
   }
   private async sameTimecode(connection: Pick<Ma2Telnet, 'command'>, request: Ma2SongCheckRequest, number: number, file: string, stopped: () => void): Promise<boolean> {
-    const read = "local function r(n,x)local p=gma.show.getvar('PATH')..'/importexport/'..n..'.xml';local f=assert(io.open(p,'rb'));local s=f:read('*a');f:close();if x then os.remove(p)end;return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><')end;";
-    return await runMa2GuardedLua(connection, `${this.guard(request)}if not gma.show.getobj.handle('Timecode ${number}') then return 'missing' end;gma.cmd('Export Timecode ${number} ${file}_check_tc /o');${read}return r('${file}_tc')==r('${file}_check_tc',1)`, stopped) === 'true';
+    const read = `local function r(n,x)local p=gma.show.getvar('PATH')..'/importexport/${file}'..n..'.xml';local f=assert(io.open(p,'rb'));local s=f:read('*a');f:close();if x then os.remove(p)end;return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><')end;`;
+    return await runMa2GuardedLua(connection, `${this.guard(request)}if not gma.show.getobj.handle('Timecode ${number}') then return 'missing' end;gma.cmd('Export Timecode ${number} ${file}_check_tc /o'..${ma2ExchangePath});${read}return r('_tc')==r('_check_tc',1)`, stopped) === 'true';
   }
 
   /**
@@ -112,7 +112,7 @@ export class Ma2SongWatch {
     const key = this.key(request);
     const file = this.snapshots.get(key)?.file ?? this.file(request);
     try {
-      const exportExecutor = request.executor ? `assert(gma.show.getobj.handle('Executor ${request.executor}'),'Song position missing');gma.cmd('Export Executor ${request.executor} ${file}_exec /o');` : '';
+      const exportExecutor = request.executor ? `assert(gma.show.getobj.handle('Executor ${request.executor}'),'Song position missing');gma.cmd('Export Executor ${request.executor} ${file}_exec /o'..${ma2ExchangePath});` : '';
       await runMa2GuardedLua(connection, `${this.guard(request)}local p=gma.show.getvar('PATH')..'/importexport/';os.remove(p..'${file}.xml');assert(os.rename(p..'${exportFile}.xml',p..'${file}.xml'));${exportExecutor}return 'adopted'`, stopped);
       if (await this.same(connection, request, file, stopped)) this.remember(key, { file, revision: request.revision });
       else this.snapshots.delete(key);
@@ -133,13 +133,14 @@ export class Ma2SongWatch {
   }
   private key(request: Omit<Ma2SongCheckRequest, 'revision'>): string { return JSON.stringify([request.network, request.expectedSource, request.sequence, request.executor]); }
   private guard(request: Ma2SongCheckRequest): string {
-    return `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(request.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(request.expectedSource.generation)} and gma.show.getvar('VERSION')==${ma2LuaString(request.expectedSource.version)},'Show or session changed');`;
+    const literal = (value: string): string => /^[A-Za-z0-9_. -]+$/.test(value) ? `'${value}'` : ma2LuaString(value);
+    return `assert(gma.show.getvar('SHOWFILE')==${literal(request.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${literal(request.expectedSource.generation)} and gma.show.getvar('VERSION')==${literal(request.expectedSource.version)},'Show or session changed');`;
   }
   /** False, exporting nothing, when the song's Sequence or executor is no longer on the console. */
   private async capture(connection: Pick<Ma2Telnet, 'command'>, request: Ma2SongCheckRequest, file: string, suffix: string, stopped: () => void): Promise<boolean> {
     const objects = [[`Sequence ${request.sequence}`, `${file}${suffix}`], ...request.executor ? [[`Executor ${request.executor}`, `${file}${suffix}_exec`]] : []];
     const present = objects.map(([object]) => `gma.show.getobj.handle('${object}')`).join(' and ');
-    const exports = objects.map(([object, name]) => `gma.cmd('Export ${object} ${name} /o');`).join('');
+    const exports = objects.map(([object, name]) => `gma.cmd('Export ${object} ${name} /o'..${ma2ExchangePath});`).join('');
     return await runMa2GuardedLua(connection, `${this.guard(request)}if not (${present}) then return 'missing' end;${exports}return 'captured'`, stopped) !== 'missing';
   }
   private async same(connection: Pick<Ma2Telnet, 'command'>, request: Ma2SongCheckRequest, file: string, stopped: () => void): Promise<boolean> {

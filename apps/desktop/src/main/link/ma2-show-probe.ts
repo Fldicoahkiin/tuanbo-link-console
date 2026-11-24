@@ -18,7 +18,7 @@ export async function readMa2BridgeSource(bridge: Pick<Ma2OnpcBridge, 'request'>
  * which the native command line would consume. */
 export async function readMa2ShowSource(connection: Pick<Ma2Telnet, 'command'>, onInputSlot?: (slot: number | null) => void): Promise<Ma2ShowSource> {
   const marker = `TBLINK_SHOWCHECK_${randomBytes(16).toString('hex')}`;
-  const script = `${onInputSlot ? ma2MidiInputProbe + ';' : ''}local function h(v)return 'H'..(tostring(v or ''):gsub('.',function(b)return string.format('%02x',string.byte(b))end))end;gma.echo('${marker}:'..h(gma.show.getvar('SHOWFILE'))..','..h(TBLINK_BRIDGE_GENERATION)..','..h(gma.show.getvar('VERSION'))${onInputSlot ? "..':'..slot" : ''})`;
+  const script = `${onInputSlot ? ma2MidiInputProbe + ';' : ''}local function h(v)return 'H'..(tostring(v or ''):gsub('.',function(b)return string.format('%02x',string.byte(b))end))end;gma.echo('${marker}:'..h(gma.show.getvar('SHOWFILE'))..','..h(type(TBLINK_NET)=='function' and TBLINK_BRIDGE_READY==true and TBLINK_BRIDGE_GENERATION)..','..h(gma.show.getvar('VERSION'))${onInputSlot ? "..':'..slot" : ''})`;
   const reply = await connection.command(`Lua "${script}"`, text => ma2ResponseLine(text, `${marker}:`), undefined, 'playback');
   if (!onInputSlot) return parseMa2ShowSource(reply);
   const [identity, slot] = reply.split(':');

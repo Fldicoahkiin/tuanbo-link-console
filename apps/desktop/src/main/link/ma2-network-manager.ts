@@ -135,6 +135,13 @@ export class Ma2NetworkManager {
   }
   private mtcSelection: Ma2MtcSelectionService | null = null;
   async prepareMtcPlayback(network: Ma2NetworkTarget, force = true, targets: readonly number[] = [], verifiedSequence?: { number: number; xml: string }, verifiedTimecode?: Ma2ConfirmedTimecode, task?: Ma2MtcPreparationTask): Promise<boolean> {
+    if (force) {
+      task?.signal?.throwIfAborted();
+      holdForShow(this.show, 'ma2.sync.write');
+      const source = await this.editingSource(network);
+      task?.signal?.throwIfAborted();
+      task = { ...task, expectedSource: task?.expectedSource ?? source };
+    }
     const { bridge } = this.get(network);
     if (!this.connection) throw new Error('请先连接控台');
     if (!this.consoleBackups) throw new Error('控台备份记录还没准备好');
