@@ -1,3 +1,4 @@
+import { ma2NetworkTargetSchema } from '@tb/schema';
 import { ma2TimelineEditRequestSchema } from '@tb/schema';
 import { editMa2Timeline, readMa2MtcRanges } from './link/ma2-timeline-edit';
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
@@ -1016,6 +1017,7 @@ function registerIpc(
     return result;
   });
   handle('link:ma2-discovery-cancel', () => ma2Discovery.cancel());
+  handle('link:ma2-start-reading', async (_event, value: unknown) => { await ma2NetworkReady; await ma2Network.startReading(ma2NetworkTargetSchema.parse(value)); });
   handle('link:ma2-capabilities', async () => { await ma2NetworkReady; return ma2Network.checkCapabilities(showGateNow('ma2.check')); });
   const ma2NetworkReady = ma2Network.initialize();
   const ma2Audition=new Ma2AuditionService(ma2Network,state=>sendToRenderer('link:ma2-audition-state',state));
@@ -1195,6 +1197,7 @@ function registerIpc(
   handle('link:ma2-network-save', async (_event, payload: unknown) => { await ma2NetworkReady; return ma2Network.save(ma2NetworkSaveSchema.parse(payload)); });
   handle('link:ma2-network-connect', async () => {
     await ma2NetworkReady;
+    await logger.record({ level: 'info', category: 'device', device: 'MA2', message: '开始登录控台', details: { host: ma2Network.status().settings?.host } });
     const result = await ma2Network.connect();
     const target = result.settings ? { host: result.settings.host, port: result.settings.port, monitorPort: result.settings.monitorPort } : null;
     await logger.record({ level: result.error ? 'error' : 'info', category: 'device', device: 'MA2', message: result.error ?? (result.state === 'connected' ? `MA2 ${result.version} 已登录（${result.settings?.host ?? '未知地址'}）` : 'MA2 连接已取消'), result: result.error ? 'failed' : result.state === 'connected' ? 'succeeded' : 'skipped',
@@ -1250,6 +1253,10 @@ function registerIpc(
       await ma2NetworkReady;
       if (task.signal.aborted) throw new Error('扫描已取消');
       if (request.projectPath && (!request.projectId || (await projectService.open(request.projectPath)).projectId !== request.projectId)) throw new Error('读取进度记录和当前工程对不上');
+      if (request.network && request.progressId && request.projectPath) {
+        await ma2Network.startReading(request.network);
+        task.signal.throwIfAborted();
+      }
       const recovery = request.projectPath && request.projectId ? new Ma2ReadRecovery(request.projectPath, request.projectId, request.network ? `${request.network.host}:${request.network.port}` : '本机 onPC') : undefined;
       const checkpoint = recovery?.checkpoint.bind(recovery);
       const catalog = request.network ? await ma2Network.readCatalog(request.network, task.report, task.signal, request.targets, checkpoint, request.expectedSource, request.checkMtcFor, request.otherClockBindings, request.songPlayback) : await readMa2Catalog((await getMa2Connection(request)).bridge, showGateNow, undefined, task.report, task.signal, { targets: request.targets, checkpoint, expectedSource: request.expectedSource });
@@ -1271,6 +1278,10 @@ function registerIpc(
       await ma2NetworkReady;
       if (task.signal.aborted) throw new Error('素材读取已取消');
       if (request.projectPath && (!request.projectId || (await projectService.open(request.projectPath)).projectId !== request.projectId)) throw new Error('素材读取进度和当前工程对不上');
+      if (request.network && request.progressId && request.projectPath) {
+        await ma2Network.startReading(request.network);
+        task.signal.throwIfAborted();
+      }
       const recovery = request.projectPath && request.projectId ? new Ma2MaterialRecovery(request.projectPath, request.projectId, request.network ? `${request.network.host}:${request.network.port}` : '本机 onPC') : undefined;
       const report = async (update: import('@tb/schema').Ma2ReadProgressUpdate): Promise<void> => { await recovery?.record(update); task.report?.(update); };
       const result = request.network ? await ma2Network.readLibrary(request.network, report, 'library', task.signal, request.targets, request.expectedSource, request.details) : await readMa2EffectLibrary((await getMa2Connection(request)).bridge, showGateNow, report, task.signal, request.targets, request.expectedSource, request.details);

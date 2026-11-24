@@ -123,6 +123,12 @@ async function confirmCurrentSong(project: LinkProject, selected: LinkProject['r
   return current() && acceptSongClock(latest, selected, checked, network);
 }
 
+function waitForMa2Reading(): false {
+  useMa2RealtimePreference.setState({ enabled: false, once: null, onceItemId: null });
+  setSession('waiting', '控台已登录，请先读取控台灯光，再同步当前节目', 'connection');
+  return false;
+}
+
 async function checkSession(): Promise<boolean> {
   if (readMa2Method() !== 'network') {
     for (const song of Object.values(useMa2SyncStore.getState().songs)) stopMa2SongSync(song.itemId);
@@ -173,6 +179,7 @@ async function checkSession(): Promise<boolean> {
       setSongsWaitingForConnection(state.documentId, true);
       return false;
     }
+    if (status.awaitingRead) return waitForMa2Reading();
     const { host, port, monitorPort, username } = status.settings;
     const endpoint = `${host}:${port}`;
     const connection = { dataDirectory: '', network: { host, port, monitorPort, username } };

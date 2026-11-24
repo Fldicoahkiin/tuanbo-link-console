@@ -102,6 +102,7 @@ async function rig(options: { bridge?: string } = {}) {
   manager.onReloginLog(entry => logs.push(entry));
   await manager.save({ settings, password: 'console-secret' });
   await manager.connect();
+  await manager.startReading(network);
   expect(manager.status().state).toBe('connected');
   // The operator's connect while stopped installs as before; from here on only what logging in again does counts.
   memory.installs = 0;
@@ -294,7 +295,7 @@ describe('演出中控台断了只自动重新登录（M5，2026-11-10 第 2 题
       expect(f.manager.status().relogin).toMatchObject({ attempt: 3 });
       memory.login = 'ok';
       await f.manager.connect();
-      expect(f.manager.status()).toMatchObject({ state: 'connected', error: null });
+      expect(f.manager.status()).toMatchObject({ state: 'connected', error: null, awaitingRead: true });
       expect(f.manager.status().relogin).toBeUndefined();
       const connects = memory.connects;
       // The attempt that was waiting is gone.

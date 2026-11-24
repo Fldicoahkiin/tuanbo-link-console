@@ -124,6 +124,7 @@ const tbLink: LinkDesktopBridgeApi = {
   applyMa2NetworkSetup: id => invoke('link:ma2-network-setup-apply', id),
   restoreMa2NetworkSetup: id => invoke('link:ma2-network-setup-restore', id),
   cancelMa2Discovery: () => invoke('link:ma2-discovery-cancel'),
+  startMa2Reading: target => invoke('link:ma2-start-reading', target),
   checkMa2Capabilities: () => invoke('link:ma2-capabilities'),
   playMa2Cue: (payload) => invoke('link:ma2-play-cue', payload),
   cancelMa2Playback: (sessionId) => invoke('link:ma2-play-cancel', sessionId),

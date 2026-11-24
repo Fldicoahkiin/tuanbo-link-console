@@ -188,6 +188,17 @@ DWORD WINAPI audio_worker(void *unused) {
   if (priority) AvRevertMmThreadCharacteristics(priority);
   CoUninitialize(); return 0;
 }
+/* The producer creates this marker only after a successful decode whose end precedes the
+ * requested end. An ordinary short read of a growing file must never signal EOF. */
+static UINT64 completed_pcm_frames(HANDLE file, const wchar_t *path) {
+  wchar_t marker[4100];
+  wcscpy_s(marker, 4100, path);
+  wcscat_s(marker, 4100, L".eof");
+  LARGE_INTEGER size;
+  if (GetFileAttributesW(marker) == INVALID_FILE_ATTRIBUTES || !GetFileSizeEx(file, &size)
+      || size.QuadPart <= 0 || size.QuadPart % 4) return 0;
+  return (UINT64)size.QuadPart / 4;
+}
 DWORD WINAPI reader_worker(void *unused) {
   (void)unused;
   HANDLE file = INVALID_HANDLE_VALUE; UINT32 epoch = 0;
@@ -213,6 +224,8 @@ DWORD WINAPI reader_worker(void *unused) {
     LARGE_INTEGER offset; offset.QuadPart = (LONGLONG)(frame * 4);
     DWORD read = 0; BOOL ok = file != INVALID_HANDLE_VALUE && SetFilePointerEx(file, offset, NULL, FILE_BEGIN) && ReadFile(file, block, count * 4, &read, NULL);
     if (!streaming && read != count * 4) ok = FALSE;
+    UINT64 final_frames = 0;
+    if (streaming && ok && read < count * 4) final_frames = completed_pcm_frames(file, path);
     // A growing PCM may end mid-frame while FFmpeg is writing. Only consume
     // complete stereo frames; the next read resumes at this aligned position.
     count = read / 4;
@@ -225,6 +238,8 @@ DWORD WINAPI reader_worker(void *unused) {
     else if (!failing_since) failing_since = now;
     EnterCriticalSection(&engine.lock);
     if (epoch == engine.epoch) {
+      if (final_frames && engine.pcm_base + final_frames > engine.origin && engine.pcm_base + final_frames < engine.end)
+        engine.end = engine.pcm_base + final_frames;
       if (!ok && now - failing_since >= 1000) { engine.audio_error = (int32_t)HRESULT_FROM_WIN32(error ? error : ERROR_READ_FAULT); engine.state = FAILED; if (engine.client) IAudioClient_Stop(engine.client); }
       else if (ok) for (UINT32 i = 0; i < count; i++) {
         UINT32 at = (UINT32)(engine.loaded++ % RING_FRAMES) * 2;

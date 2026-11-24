@@ -78,6 +78,8 @@
 
 ## 一首歌多长
 
+2026-11-25，工程或容器记录的时长和实际解码的音频有差异时，正式播放、预热和定位均使用实际可播放的采样。已经开始播放的音乐继续到实际曲尾或操作员指定的裁剪终点。缓存只公布实际完整解码的音频。Windows 原生播放器区分边解码时的短读和正常解码结束。回归见 `apps/desktop/src/main/link/native-audio-cache.test.ts` 和 `apps/desktop/src/main/link/native-player-service.test.ts`。
+
 `packages/core/src/audio-edit.ts` 的 `songDurationMs`（2026-11-11）：存了总长（`referenceAudio.timeline.durationMs`，音乐后面留了空白）就用它，否则到最后一段音频的结尾。前后空白读 `songLeadBlankMs`、`songTailBlankMs`，改片段以后的总长用 `editedSongDurationMs`（空白不会被改片段吃掉，片段拖过总长歌就变长），加空白用 `padAudioTimeline`（按工程帧率取整到帧）。音频只由主进程 `audio-edit-service.ts` 的 `mix` 渲染到这个长度，尾空白是真的静音采样；`referenceAudio.durationMs` 等于歌曲总长，schema 守着。没存总长的歌，缓存名和渲染结果和 0.5.8 逐字节一样。别处不再自己取“最晚片段的结尾”当歌的长度
 
 ## 一首歌前后的空白

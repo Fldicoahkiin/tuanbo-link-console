@@ -575,6 +575,13 @@ it('用控台上的取回核对时间码期间刚改的点', async () => {
   expect(eventTimes(useDocumentStore.getState().project!.rundown[0]!.lighting!.tracks)).toEqual(eventTimes(consoleMoved().document.tracks));
 });
 
+it('用控台上的只读回灯光，选曲设置待更新也留到显式同步', async () => {
+  start(); edit(); await tick();
+  clockCatalog.mockResolvedValueOnce({ ...currentClockCatalog(), needsPlaybackPreparation: true });
+  await takeMa2SongFromConsole('song');
+  expect(song().playbackClockNote).toContain('选曲设置待更新');
+});
+
 it('用控台上的在末次读取时换了 Show，保留当前编排', async () => {
   start(); edit(1000); await tick();
   const before = useDocumentStore.getState().project;

@@ -1,4 +1,5 @@
-import { readFile, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { Ma2NetworkManager } from './ma2-network-manager';
+import { readFile, mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -18,6 +19,25 @@ import { readMa2NativeLibrary } from './ma2-native-library';
 import { ma2SongTimecodeXml } from './ma2-song-timecode';
 import { createMa2TimecodeXml } from './ma2-create';
 import { showStopped } from './fixtures/show-gates';
+
+it.runIf(process.env.TBLINK_MA2_LOCAL_LOGIN_TEST === '1')('本机 onPC 3.3.4.3 登录后保持等待读取', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-local-login-'));
+  const settings = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'administrator', autoConnect: false };
+  const manager = new Ma2NetworkManager(directory, {
+    hasCredential: () => Promise.resolve(true),
+    loadCredential: () => Promise.resolve(process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin'),
+    saveCredential: () => Promise.reject(new Error('本机登录测试不保存密码'))
+  }, showStopped);
+  try {
+    await manager.save({ settings });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const status = await manager.connect();
+      expect(status, status.error ?? undefined).toMatchObject({ state: 'connected', version: '3.3.4.3', awaitingRead: true });
+      expect(() => manager.get(settings)).toThrow('读取控台');
+      manager.disconnect();
+    }
+  } finally { manager.disconnect(); await rm(directory, { recursive: true, force: true }); }
+}, 20000);
 
 it.runIf(Boolean(process.env.TBLINK_MA2_HARDWARE_LIBRARY))('实体控台素材结构只读诊断', async () => {
   const connection = new Ma2Telnet({ host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001 });

@@ -62,9 +62,9 @@ export async function runDesktopPreflight(
   assertCurrent();
   // Cue numbers are only meaningful in the show they were read from.
   const project = document.project;
-  const ma2Show = rundown.some(item => expectedMa2Shows(project, item.id).length > 0)
-    && ma2NetworkStatusSchema.parse(await linkDesktopViewModel.getMa2NetworkStatus()).state === 'connected'
-    ? await linkDesktopViewModel.getMa2CurrentShow() : undefined;
+  const ma2 = rundown.some(item => expectedMa2Shows(project, item.id).length > 0)
+    ? ma2NetworkStatusSchema.parse(await linkDesktopViewModel.getMa2NetworkStatus()) : null;
+  const ma2Show = ma2?.state === 'connected' && !ma2.awaitingRead ? await linkDesktopViewModel.getMa2CurrentShow() : undefined;
   assertCurrent();
   useIntegrationStore.getState().setAppInfo(appInfo);
   for (const snapshot of snapshots) useIntegrationStore.getState().setProcess(snapshot);

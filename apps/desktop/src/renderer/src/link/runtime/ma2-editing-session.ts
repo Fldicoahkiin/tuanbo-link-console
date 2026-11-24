@@ -1,7 +1,7 @@
 import { ma2CatalogSchema, ma2EffectLibrarySchema, type Ma2ObjectDirectory, type Ma2Catalog, type Ma2CatalogRequest } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { importCachedMa2, scanMa2, useMa2ReadStore } from '../stores/ma2-read-store';
-import { ma2MtcConflictTargets, ma2PendingChanges, saveMa2ReadStateCommand, saveMa2MaterialLibraryCommand } from '@tb/core/link';
+import { ma2PendingChanges, saveMa2ReadStateCommand, saveMa2MaterialLibraryCommand } from '@tb/core/link';
 import { ma2ConsoleWriting } from '../stores/ma2-sync-store';
 import { scanMa2Materials } from '../stores/ma2-material-read-store';
 
@@ -30,41 +30,25 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
     ...(item.lighting?.consoleSong?.timecode ? [item.lighting.consoleSong.timecode.number] : [])
   ]).filter(target => knownTargets.has(target)) ?? [];
   let verifiedDirectory: Ma2ObjectDirectory | undefined;
-  let refreshTimelines = refresh;
-  let conflict = '';
   if (connection.network) {
-    const progressId = crypto.randomUUID();
-    useMa2ReadStore.setState({ busy: true, activeId: progressId, progress: null, message: '正在准备控台选曲' });
-    const unsubscribe = useDocumentStore.subscribe(state => {
-      if (state.documentId !== documentId) void window.tbLink.cancelMa2Read(progressId).catch(error => useMa2ReadStore.setState({ message: String(error) }));
-    });
-    try {
-      if (!refresh && associated.length) {
-        const read = ma2CatalogSchema.parse(await window.tbLink.readMa2Catalog({ ...connection, targets: [] }));
-        current();
-        if (read.incomplete || read.sourceUnverified) throw new Error('控台时间线目录还没读完，工程里的灯光和素材已保留');
-        verifiedDirectory = read.directory;
-        const live = new Set(read.directory.entries.map(entry => entry.target));
-        if (associated.every(target => !live.has(target))) {
-          throw new Error(`当前 Show「${read.directory.show}」没有工程关联的 Timecode ${[...new Set(associated)].join('、')}。工程里的灯光和素材已保留，请打开对应 Show 后再连接。`);
-        }
+    await window.tbLink.startMa2Reading(connection.network);
+    current();
+    if (associated.length) {
+      const read = ma2CatalogSchema.parse(await window.tbLink.readMa2Catalog({ ...connection, targets: [] }));
+      current();
+      if (read.incomplete || read.sourceUnverified) throw new Error('控台时间线目录还没读完，工程里的灯光和素材已保留');
+      verifiedDirectory = read.directory;
+      const live = new Set(read.directory.entries.map(entry => entry.target));
+      if (associated.every(target => !live.has(target))) {
+        throw new Error(`当前 Show「${read.directory.show}」没有工程关联的 Timecode ${[...new Set(associated)].join('、')}。工程里的灯光和素材已保留，请打开对应 Show 后再连接。`);
       }
-      const expectedSource = verifiedDirectory && { show: verifiedDirectory.show, generation: verifiedDirectory.generation, version: verifiedDirectory.version };
-      if (await window.tbLink.prepareMa2Playback({ network: connection.network, progressId, ...(expectedSource && { expectedSource }) }, progress => useMa2ReadStore.setState({ progress }))) refreshTimelines = true;
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      useMa2ReadStore.setState({ message: `控台选曲检查未完成：${reason}` });
-      if (!ma2MtcConflictTargets(reason)) throw error;
-      // Keep playback isolation unconfirmed. The operator needs the actual timelines to repair the conflict.
-      refreshTimelines = true;
-      conflict = reason;
-    } finally { unsubscribe(); useMa2ReadStore.setState({ busy: false, activeId: null, progress: null }); }
+    }
   }
   current();
   const cached = current().project?.ma2ReadState;
   const source = connection.network ? `${connection.network.host}:${connection.network.port}` : '本机 onPC';
   let reuse = false;
-  if (!refreshTimelines && cached?.source === source && !cached.catalog.incomplete && !cached.catalog.sourceUnverified
+  if (!refresh && cached?.source === source && !cached.catalog.incomplete && !cached.catalog.sourceUnverified
     && coversDirectory(cached.catalog.directory, cached.catalog.entries.filter(entry => !entry.error).map(entry => entry.target))) {
     // A reconnect verifies the Show identity, without rereading every Timecode.
     const read: Pick<Ma2Catalog, 'directory' | 'incomplete' | 'sourceUnverified'> = verifiedDirectory ? { directory: verifiedDirectory } : ma2CatalogSchema.parse(await window.tbLink.readMa2Catalog({ ...connection, targets: [] }));
@@ -74,7 +58,7 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
       latest.executeForDocument(documentId, saveMa2ReadStateCommand({ ...cached, catalog: { ...cached.catalog, directory: read.directory } }));
     }
   }
-  if (!reuse) await scanMa2(connection, retry && !conflict);
+  if (!reuse) await scanMa2(connection, retry);
   current();
   await importCachedMa2();
   let libraryNotice = '';
@@ -109,7 +93,6 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   const note = state.catalog.incomplete || state.catalog.sourceUnverified ? '。控台还没读完整，读到的 Cue 可以查看，没读到的部分不会写回'
     : edited ? `。${edited} 条时间线保留了连接前做的本地修改`
     : !bindings.length ? '。还没有已关联的时间线' : '';
-  if (conflict) return `${summary}${note}。控台选曲还没准备好：${conflict}`;
   return `${summary}${note}。在灯光工作台点“同步当前节目”可核对两边的改动`;
 }
 

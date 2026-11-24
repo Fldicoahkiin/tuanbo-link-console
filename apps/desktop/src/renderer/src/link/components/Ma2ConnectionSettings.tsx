@@ -9,8 +9,6 @@ import { Ma2NetworkSettings, type Ma2NetworkView } from './Ma2NetworkSettings';
 import { ma2EditingConnectionStatus } from '../view-models/connection-status';
 import { useLiveConnectionChecks } from '../useStatusCenter';
 import { Ma2CatalogSettings } from './Ma2CatalogSettings';
-import { prepareMa2Editing } from '../runtime/ma2-editing-session';
-import { useDocumentStore } from '../stores/document-store';
 import { Ma2ProgramSettings } from './Ma2ProgramSettings';
 
 export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMaintenance, onAudioSettings }: {
@@ -48,13 +46,10 @@ export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMai
   const connection = ma2EditingConnectionStatus({ method, network, networkError: null, local, bridge });
   const connectLocal = async (): Promise<void> => {
     if (busy || disabled) return;
-    const documentId = useDocumentStore.getState().documentId;
     setBusy(true);
     try {
-      const connected = await connectLocalMa2();
-      const target = connected.settings;
-      if (!target) throw new Error('没有读到本机连接信息，请重新连接');
-      notify(await prepareMa2Editing({ dataDirectory: '', network: { host: target.host, port: target.port, monitorPort: target.monitorPort, username: target.username } }, documentId));
+      await connectLocalMa2();
+      notify('本机 onPC 已登录。需要节目 Cue 时，在“歌曲导入与同步”里点读取。');
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setBusy(false); }
   };
@@ -67,7 +62,7 @@ export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMai
       {method === 'midi' ? <Notice title="通过 MIDI 控制灯光" actions={<Button variant="primary" onClick={onAudioSettings}>选择 MIDI 端口</Button>}>
         节目播放时，控台按收到的时间码执行 Cue。要读取或同步 Cue，同机请选择“本机 onPC”并点“连接本机 onPC”，其他控台请选择“实体控台 / 网络 onPC”并连接。
       </Notice> : method === 'local' ? <>
-        <p>连接本机地址 127.0.0.1，自动准备联动插件并读取节目 Cue，不需要网线或选择数据目录。请先在 onPC 中开启 Telnet（Login Enabled）。连接成功后使用同一套网络连接和同步设置。</p>
+        <p>连接本机地址 127.0.0.1，不需要网线或选择数据目录。请先在 onPC 中开启 Telnet（Login Enabled）。连接成功后使用同一套网络连接和同步设置。</p>
         {local.error ? <Notice tone="error">{local.error}</Notice> : null}
         <div className="settings-actions-row">
           <Button variant="primary" disabled={locked} onClick={() => void connectLocal()}>连接本机 onPC</Button>

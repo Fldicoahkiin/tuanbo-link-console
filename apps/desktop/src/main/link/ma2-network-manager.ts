@@ -73,7 +73,7 @@ export class Ma2NetworkManager {
       if (this.show('ma2.reconnect').kind === 'wait' || this.busy) { this.scheduleReconnect(); return; }
       // The show started while this waited: from now on only logging in again, with its limit (M5).
       if (this.show('ma2.connect').kind === 'wait') { this.error = null; this.relogin.dropped(this.dropReason); return; }
-      void this.connect().then(status => {
+      void this.connect(true).then(status => {
         if (status.state !== 'connected') { this.reconnectDelay = Math.min(30000, this.reconnectDelay * 2); this.scheduleReconnect(); }
       }, (cause: unknown) => {
         this.error = `恢复控台连接：${cause instanceof Error ? cause.message : String(cause)}`;
@@ -284,7 +284,8 @@ export class Ma2NetworkManager {
     if (this.capabilities && (!this.capabilities.objects || !this.capabilities.files)) throw new Error(this.capabilities.message);
     // Logged in again during the show without a usable plugin (M5): what needs it waits, and says why.
     if (this.connection?.state === 'connected' && !this.services && this.bridgeIssue) throw new Error(this.bridgeIssue.message);
-    if (this.connection?.state !== 'connected' || !this.services) throw new Error('请先连接 MA2 控台');
+    if (this.connection?.state !== 'connected') throw new Error('请先连接 MA2 控台');
+    if (!this.services) throw new Error('已登录，请先在设置里点“读取控台灯光到现有歌曲”');
     return this.services;
   }
   /** Every line logging the Telnet line in again writes for the run log (M5). */
@@ -549,7 +550,8 @@ export class Ma2NetworkManager {
     const stopped = relogin?.kind === 'stopped' ? relogin.reason : null;
     const error = this.error ?? (this.bridgeIssue && !this.bridgeIssue.wait ? this.bridgeIssue.message : null) ?? stopped;
     return { profiles: this.profiles, capabilities: this.capabilities, settings: this.settings, passwordSaved: this.passwordSaved, connection: this.generation,
-      state: this.connection?.state === 'connected' && !this.services && !this.bridgeIssue ? 'connecting' : this.connection?.state ?? 'disconnected', version: this.version, error,
+      state: this.connection?.state === 'connected' && !this.version ? 'connecting' : this.connection?.state ?? 'disconnected', version: this.version, error,
+      ...(this.version && !this.services && !this.bridgeIssue ? { awaitingRead: true as const } : {}),
       ...error && this.unreachable ? { unreachable: true } : {},
       ...relogin && relogin.kind !== 'idle' && relogin.kind !== 'connected' ? { relogin } : {},
       ...this.bridgeIssue?.wait ? { pluginWait: this.bridgeIssue.message } : {} };
@@ -576,19 +578,24 @@ export class Ma2NetworkManager {
       return this.status();
     } finally { release?.();this.busy = false; }
   }
-  async connect(): Promise<Ma2NetworkStatus> {
+  async connect(recoverSession = false): Promise<Ma2NetworkStatus> {
     const gate = this.show('ma2.connect');
     // During the show only the console this run connected to, and only logging in (M5): it takes over from logging in
     // again on its own, and its counts start again. Another console, or one never connected, waits for the stop.
     if (gate.kind === 'wait') return this.connectDuringShow(gate.message);
     if (this.busy) throw new Error('MA2 正在连接');
     if (!this.settings) throw new Error('请先保存控台 IP 和登录用户');
-    if(this.connection?.state==='connected'&&this.services)return this.status();
-    const recovering = this.reconnectAllowed;
-    // Recovering on its own keeps what the operator connected: a show that starts meanwhile logs that one in again (M5).
-    const armed = recovering ? this.armed : null, identity = recovering ? this.identity : null;
-    this.disconnect(); this.reconnectAllowed = recovering; this.error = null; this.unreachable = false; this.busy = true;
-    if (armed) { this.armed = armed; this.identity = identity; this.relogin.connected(consoleScope(armed), armed); }
+    if (this.connection?.state === 'connected') return this.status();
+    const armed = this.armed;
+    if (recoverSession && this.identity?.source && armed) {
+      this.busy = true;
+      try {
+        await this.loginOnly(armed);
+        this.relogin.connected(consoleScope(armed), armed);
+      } finally { this.busy = false; }
+      return this.status();
+    }
+    this.disconnect(); this.error = null; this.unreachable = false; this.busy = true;
     const generation = this.generation;
     try {
       const settings = this.settings;
@@ -601,32 +608,42 @@ export class Ma2NetworkManager {
       const version = await connection.connect(settings.username, password);
       if (generation !== this.generation) return this.status();
       this.version = version;
-      // Free the slot before installing or upgrading the bridge: an upgrade needs an idle transaction too.
-      await this.releaseAbandoned(connection);
-      if (generation !== this.generation) return this.status();
-      const bridgeReady = !this.bundledBridge || await this.prepareBridge(connection, this.bundledBridge);
-      if (generation !== this.generation) return this.status();
-      // What logging in again on its own (M5) checks it is back on: this console and this Show.
-      let source: Ma2ShowSource | null = null;
-      try { source = await readMa2ShowSource(connection); }
-      catch (cause) {
-        if (connection.state !== 'connected') throw cause;
-        this.notice?.('warning', `没读到控台现在的 Show：${cause instanceof Error ? cause.message : String(cause)}；演出中控台断开、自动重新登录时只核对控台版本`);
-      }
-      if (generation !== this.generation) return this.status();
-      if (bridgeReady) this.openServices(connection);
-      else this.reconnectAllowed = true;
-      this.identity = { version, source }; this.armed = settings;
+      this.identity = { version, source: null };
+      this.armed = settings;
       this.relogin.connected(consoleScope(settings), settings);
     } catch (error) { if (generation === this.generation) { this.connection?.disconnect(); this.services = null; this.error = error instanceof Error ? error.message : String(error); this.unreachable = error instanceof Ma2UnreachableError; this.version = null; } }
     finally { this.busy = false; }
     return this.status();
+  }
+  /** The explicit read/check action owns bridge setup. Login and status polling never enter here. */
+  async startReading(target: Ma2NetworkTarget): Promise<void> {
+    this.target(target);
+    const connection = this.connection, version = this.version;
+    if (!connection || connection.state !== 'connected' || !version) throw new Error('请先登录控台');
+    if (this.services) return;
+    if (this.busy) throw new Error('MA2 正在处理连接请求');
+    holdForShow(this.show, 'ma2.connect');
+    this.busy = true;
+    const current = (): void => {
+      if (connection !== this.connection || connection.state !== 'connected') throw new Error('控台连接已改变，请重新读取控台');
+    };
+    try {
+      await this.releaseAbandoned(connection);
+      current();
+      if (this.bundledBridge && !await this.prepareBridge(connection, this.bundledBridge)) throw new Error(this.bridgeIssue?.message ?? '请等节目停止后读取控台');
+      current();
+      const source = await readMa2ShowSource(connection);
+      current();
+      this.identity = { version, source };
+      this.openServices(connection);
+    } finally { this.busy = false; }
   }
   /** gma.show.getvar('SHOWFILE'), the value the bridge reports as directory.show.
    * Hex keeps non-ASCII show names intact over telnet; the H keeps an empty name matchable. */
   async currentShow(): Promise<string> {
     const connection = this.connection;
     if (!connection || connection.state !== 'connected') throw new Error('请先连接 MA2 控台');
+    if (!this.identity?.source) throw new Error('已登录，请先读取控台');
     const marker = `TBLINK_SHOW_${randomBytes(16).toString('hex')}`;
     const script = `local s=tostring(gma.show.getvar('SHOWFILE') or '');gma.echo('${marker}:H'..(s:gsub('.',function(b)return string.format('%02x',string.byte(b))end)))`;
     const reply = await connection.command(`Lua "${script}"`, text => ma2ResponseLine(text, `${marker}:`));
@@ -674,6 +691,7 @@ export class Ma2NetworkManager {
     this.version = null; this.capabilities = null;
     // A login on its way finds out itself and counts as one attempt.
     if (this.relogin.outage) return;
+    if (!this.reconnectAllowed) { this.error = reason; return; }
     this.dropReason = reason;
     if (this.show('ma2.connect').kind === 'wait') { this.error = null; this.relogin.dropped(reason); return; }
     this.error = 'MA2 连接已断开，正在恢复；编辑继续保存在本地';
@@ -727,9 +745,9 @@ export class Ma2NetworkManager {
     const settings = this.settings, armed = this.armed;
     if (!settings || !armed || !this.sameTarget(armed)) throw new Error(wait);
     if (this.busy) throw new Error('MA2 正在连接');
-    if (this.connection?.state === 'connected' && (this.services || this.bridgeIssue)) return this.status();
+    if (this.connection?.state === 'connected') return this.status();
     this.relogin.stop(); this.busy = true;
-    try { await this.loginOnly(settings); this.relogin.connected(consoleScope(settings), settings); }
+    try { await this.loginOnly(settings, false); this.relogin.connected(consoleScope(settings), settings); }
     catch (error) { this.error = error instanceof Error ? error.message : String(error); this.unreachable = error instanceof Ma2UnreachableError; }
     finally { this.busy = false; }
     return this.status();
@@ -741,7 +759,7 @@ export class Ma2NetworkManager {
    * one, this run connected to; what a person must deal with throws `Ma2ReloginStop`. The plugin is only looked at:
    * missing or old, it waits for the show to stop (`installDeferred`). Lights-off and the web remote need no plugin.
    */
-  private async loginOnly(settings: Ma2NetworkSettings): Promise<void> {
+  private async loginOnly(settings: Ma2NetworkSettings, resumeReadSession = true): Promise<void> {
     const previous = this.connection; this.connection = null; previous?.disconnect();
     this.keepUnreleased();
     this.services = null; this.bridgeIssue = null; this.version = null; this.capabilities = null; this.error = null; this.unreachable = false;
@@ -763,6 +781,12 @@ export class Ma2NetworkManager {
       try { version = await connection.connect(settings.username, password); }
       catch (cause) { throw cause instanceof Ma2LoginRefusedError ? new Ma2ReloginStop(cause.message) : cause; }
       current();
+      if (!resumeReadSession || !this.identity?.source) {
+        if (this.identity && this.identity.version !== version) throw new Ma2ReloginStop('控台软件版本已改变，请核对后重新连接');
+        this.version = version;
+        this.identity = { version, source: null };
+        return;
+      }
       await this.releaseAbandoned(connection);
       current();
       const source = await readMa2ShowSource(connection);

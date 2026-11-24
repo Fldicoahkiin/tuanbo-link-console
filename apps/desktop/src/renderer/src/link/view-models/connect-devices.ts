@@ -1,19 +1,16 @@
-import { expectedMa2Shows, itemNeedsObs, ma2ShowMismatch, toUserErrorMessage, type LinkLocalIntegrationDetection } from '@tb/core/link';
+import { itemNeedsObs, toUserErrorMessage, type LinkLocalIntegrationDetection } from '@tb/core/link';
 import { loopMidiStatusSchema, ma2NetworkStatusSchema, obsWebSocketUrlSchema, localObsConnectionResultSchema, type IntegrationProfile, type LinkProject } from '@tb/schema';
 import type { MidiPortSnapshot } from '../../registry/link-midi-adapter';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
-import { checkNetworkMa2, connectDiscoveredMa2, connectLocalMa2 } from '../stores/ma2-connection-store';
+import { connectSavedMa2, connectLocalMa2 } from '../stores/ma2-connection-store';
 import { readMa2Method } from '../stores/ma2-mode-store';
-import { currentShowGate } from '../stores/show-state-store';
 import { useMa2NetworkStatusStore } from '../stores/ma2-network-status-store';
 import { linkDesktopViewModel as desktop } from './link-desktop-view-model';
 import { applyDetectedLightingMidiPorts, applyDetectedP1MidiPorts } from './local-integration-midi';
 import { midiConnectionTargets, usesNativeMidiOutput } from './connection-targets';
 import { obsPreviewSession } from './obs-preview-session';
 import { assertAudioOutputAvailable } from './audio-output-route';
-import { useDocumentStore } from '../stores/document-store';
-import { prepareMa2Editing } from '../runtime/ma2-editing-session';
 
 export type DeviceConnectionOptions = {
   draft: IntegrationProfile;
@@ -45,33 +42,18 @@ function withDeadline<T>(operation: Promise<T>, deadlineMs: number, label: strin
   return Promise.race([operation, deadline]).finally(() => clearTimeout(timer));
 }
 
-async function connectMa2Devices(project: LinkProject | null, documentId: number, run: ConnectionStep, skip: (id: string, detail: string) => void, stopped: () => boolean): Promise<void> {
+async function connectMa2Devices(run: ConnectionStep, skip: (id: string, detail: string) => void): Promise<void> {
   const method = readMa2Method();
   if (method === 'midi') { skip('ma2', '没有启用网络连接，当前用 MIDI'); skip('bridge', '仅 MIDI 时不需要读写控台'); skip('ma2-read', '仅 MIDI 时不读取控台'); return; }
-  let moved = '';
-  const connected = await run('ma2', 'MA2 网络', async () => {
-    const status = ma2NetworkStatusSchema.parse(await (method === 'local' ? connectLocalMa2() : connectDiscoveredMa2(undefined, undefined, notice => { moved = notice; })));
+  await run('ma2', 'MA2 网络', async () => {
+    const status = ma2NetworkStatusSchema.parse(await (method === 'local' ? connectLocalMa2() : connectSavedMa2()));
     if (status.state !== 'connected') throw new Error(status.error ?? '控台没有登录成功');
     // The connection this result stands on, as main just read it back (check-basis.ts).
     useMa2NetworkStatusStore.setState({ status, error: null });
     return status;
-  }, status => moved || `控台 ${status.settings?.host ?? ''} 登录成功`, ma2StepDeadlineMs);
-  // 2026-11-09: a check refused during a show stayed as 读写异常 for good; it is only not run yet. 2026-11-10 第 3 题: it
-  // waits only while the program moves; paused, paused at the end or P1 waiting for the next song, it checks.
-  const show = currentShowGate('connections.check');
-  if (!stopped() && show.kind === 'wait') { useConnectionCheckStore.getState().waitForShow('bridge', show.message); return; }
-  await run('bridge', 'MA2 工程通信', async () => { await checkNetworkMa2(); return projectMa2ShowNote(project); }, note => note ? `控台读写通信正常。${note}` : '控台读写通信正常');
-  const target = connected?.value.settings; // The target this explicit connection confirmed.
-  if (project && target && useDocumentStore.getState().project?.projectId === project.projectId) {
-    await run('ma2-read', '读取节目 Cue', () => prepareMa2Editing({ dataDirectory: '', network: { host: target.host, port: target.port, monitorPort: target.monitorPort, username: target.username } }, documentId), message => message, 15 * 60_000);
-  } else skip('ma2-read', '打开工程后可以读取节目 Cue');
-}
-
-/** A Show saved under a new name is normal (2026-10-28): reported with the check, never a failed connection. */
-async function projectMa2ShowNote(project: LinkProject | null): Promise<string | null> {
-  const expected = project ? [...new Set(project.rundown.flatMap(item => expectedMa2Shows(project, item.id)))] : [];
-  if (!expected.length) return null;
-  return ma2ShowMismatch(expected, await desktop.getMa2CurrentShow());
+  }, status => `控台 ${status.settings?.host ?? ''} 登录成功`, ma2StepDeadlineMs);
+  skip('bridge', '读取控台时准备连接组件');
+  skip('ma2-read', '在歌曲导入与同步里读取节目 Cue');
 }
 
 async function startMaPrograms(profile: IntegrationProfile, detected: Partial<Record<'ma2' | 'ma3d', { path: string; running: boolean }>>, run: ConnectionStep, skip: (id: string, detail: string) => void, connect: () => Promise<void>): Promise<void> {
@@ -131,7 +113,6 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
   let profile = options.draft;
   const detectedMaPrograms: Partial<Record<'ma2' | 'ma3d', { path: string; running: boolean }>> = {};
   const internal = options.project?.playbackSource === 'internal';
-  const documentId = useDocumentStore.getState().documentId;
 
   try {
     const detection = await run('discovery', '程序识别', () => desktop.detectLocalIntegrations());
@@ -255,7 +236,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
     }, '播放设备可用，播放时开始输出声音');
     await portsTask();
     await p1Task();
-    await startMaPrograms(profile, detectedMaPrograms, run, skip, () => connectMa2Devices(options.project, documentId, run, skip, () => stoppedBy !== null));
+    await startMaPrograms(profile, detectedMaPrograms, run, skip, () => connectMa2Devices(run, skip));
   } finally {
     for (const id of useConnectionCheckStore.getState().pending) skip(id, '未执行');
     checks.end(); options.onIssues([...issues]);

@@ -4,7 +4,7 @@ import { updateMa2Song, useMa2SyncStore, type SongSync } from '../stores/ma2-syn
 import { confirmMa2Edit } from './ma2-edit-times';
 import { useDocumentStore } from '../stores/document-store';
 import { currentShowWait } from '../stores/show-state-store';
-import { confirmSongSelection, readSongClockCatalog, songClockBindings, throwMa2ReadFailure } from './ma2-console-reading';
+import { readSongClockCatalog, songClockBindings, throwMa2ReadFailure } from './ma2-console-reading';
 
 /**
  * One console Timecode show read right now (2026-11-11), the same read each sync pass makes. Null when
@@ -66,6 +66,7 @@ export async function readMa2SongFromConsole(itemId: string): Promise<{ command:
   if (savedEndpoint && savedEndpoint !== `${host}:${port}`) throw new Error('控台地址已变化，请重新核对当前节目');
   let expected = project?.ma2MaterialLibrary?.library?.directory ?? project?.ma2ReadState?.catalog.directory;
   const network = { host, port, monitorPort, username };
+  if (connection.awaitingRead) await window.tbLink.startMa2Reading(network);
   const checkSource = (source: Ma2ObjectDirectory, unverified?: boolean): void => {
     if (unverified || !source.generation || (owned && source.show !== owned.show) || (expected && (source.show !== expected.show || source.version !== expected.version || source.generation !== expected.generation))) {
       throw new Error(`控台当前是“${source.show}”，Show 或连接已变化，已保留原编排。请重新核对当前节目`);
@@ -90,11 +91,7 @@ export async function readMa2SongFromConsole(itemId: string): Promise<{ command:
     const hold = ma2BindingHold(latest, itemId, entry.target, entry.offset);
     if (hold) throw new Error(hold);
   }
-  const sameSong = (): boolean => useDocumentStore.getState().project?.rundown.find(value => value.id === itemId)?.lighting === item.lighting;
-  const checked = await confirmSongSelection(times, network, targets, clock, sameSong);
-  if (checked.playbackConflict) throw new Error(checked.playbackConflict);
-  // Selection preparation can itself edit the native Timecode. Take the actual
-  // song content after that check, and bind the read to the same live Show.
+  const playbackClockNote = [times.playbackClockNote, times.needsPlaybackPreparation ? '控台的选曲设置待更新，请点“同步当前节目”。' : ''].filter(Boolean).join(' ') || undefined;
   for (const binding of bindings) {
     const read = await readMa2ShowNow(binding.timecode, binding.timeOriginMs, connection);
     if (!read) throw new Error('控台没连上，读不到控台上现在的版本；连上后再点“用控台上的”');
@@ -111,5 +108,5 @@ export async function readMa2SongFromConsole(itemId: string): Promise<{ command:
   const current = await window.tbLink.getMa2NetworkStatus();
   if (current.state !== 'connected' || current.connection !== connection.connection) throw new Error('读取期间控台连接已变化，请重新核对当前节目');
   const steps = reads.map(read => owned ? importMa2TimecodeCommand(itemId, read, undefined, 'use-console') : refreshMa2BindingCommand(itemId, read.target, true, read));
-  return { timecodes: reads.map(read => read.target), checkedConnection: connection.connection, playbackClockNote: checked.playbackClockNote, command: { id: crypto.randomUUID(), label: '用控台上的灯光', execute: project => steps.reduce((value, step) => step.execute(value), project), undo: before => before } };
+  return { timecodes: reads.map(read => read.target), checkedConnection: connection.connection, playbackClockNote, command: { id: crypto.randomUUID(), label: '用控台上的灯光', execute: project => steps.reduce((value, step) => step.execute(value), project), undo: before => before } };
 }

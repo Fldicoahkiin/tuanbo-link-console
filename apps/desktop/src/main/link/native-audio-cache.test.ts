@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -25,7 +25,7 @@ it('实际 FFmpeg 分块解码保留整个原音源，不重复裁剪；复用�
   const cache = new NativeAudioCache(join(directory, 'cache'), ffmpeg);
   const lease = await cache.prepare(input, new AbortController().signal);
   expect(lease.frames).toBe(96000); expect(lease.durationMs).toBe(2000);
-  expect(lease.availableMs).toBe(1999);
+  expect(lease.availableMs).toBe(2000);
   expect(await lease.completion).toEqual({ ok: true });
   const pcm = await readFile(lease.path);
   expect(pcm.readInt16LE(0)).toBe(512); expect(pcm.readInt16LE(1500 * 192)).toBe(-512);
@@ -71,17 +71,44 @@ it('旧解码缓存不参与播放，仍纳入容量回收；新缓存按源时�
   expect(restored.streaming).toBe(false); await restored.release();
 });
 
-it('预填充完成不能把声明时长错误的音源冒充完整缓存', async () => {
+it.each([3, 2000])('工程多记 %i ms 时，完整音频正常播到末尾，缓存只保存实际采样', async difference => {
   if (!ffmpeg) throw new Error('测试缺少 FFmpeg');
-  const directory = await mkdtemp(join(tmpdir(), 'native-pcm-truncated-'));
-  const input = await source(directory, 144);
-  const lease = await new NativeAudioCache(join(directory, 'cache'), ffmpeg).prepare({ ...input, expectedDurationMs: 4000 }, new AbortController().signal);
-  const result = await lease.completion; expect(result.ok).toBe(false);
-  if (!result.ok) expect(result.error.message).toContain('音频实际只有 2.000 秒，工程记录为 4.000 秒');
-  await lease.release(); expect(lease.path).toMatch(/\.partial$/);
+  const directory = await mkdtemp(join(tmpdir(), 'native-pcm-duration-'));
+  const input = await source(directory, 144, 1);
+  const cache = new NativeAudioCache(join(directory, 'cache'), ffmpeg);
+  const request = { ...input, expectedDurationMs: 1000 + difference };
+  const lease = await cache.prepare(request, new AbortController().signal);
+  expect(await lease.completion).toEqual({ ok: true });
+  expect(lease.availableMs).toBe(1000);
+  expect((await stat(lease.path)).size).toBe(48000 * 4);
+  await lease.release();
+  const cached = await cache.prepare(request, new AbortController().signal);
+  expect(cached.availableMs).toBe(1000);
+  await cached.release();
 });
+it.runIf(process.env.TBLINK_NATIVE_ENGINE_TEST === '1')('MP3 实际 128.388 秒、工程 128.391 秒，完整解码正常，复用缓存仍按真实采样数收尾', async () => {
+  if (!ffmpeg) throw new Error('测试缺少 FFmpeg');
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-mp3-eof-'));
+  try {
+    const sourcePath = join(directory, 'song.mp3');
+    // The MP3 starts 1,105 frames into its container timeline. This source plus its lead-in is 6,162,624 frames.
+    await promisify(execFile)(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-af', 'atrim=end_sample=6161519', '-ac', '2', '-c:a', 'libmp3lame', sourcePath]);
+    const input = { sourcePath, sourceSha256: createHash('sha256').update(await readFile(sourcePath)).digest('hex'),
+      expectedDurationMs: 128391, sampleRate: 48000 as const };
+    const cache = new NativeAudioCache(join(directory, 'cache'), ffmpeg);
+    for (const streaming of [true, false]) {
+      const lease = await cache.prepare(input, new AbortController().signal);
+      try {
+        expect(lease.streaming).toBe(streaming);
+        expect(await lease.completion).toEqual({ ok: true });
+        expect(lease.availableMs).toBe(128388);
+        expect((await stat(lease.path)).size).toBe(6162624 * 4);
+      } finally { await lease.release(); }
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+}, 40_000);
 
-it('短音频或靠近结尾的定位，预填充和完整校验使用同一个毫秒取整容差', async () => {
+it('短音频或靠近结尾的定位只需要实际存在的采样', async () => {
   if (!ffmpeg) throw new Error('测试缺少 FFmpeg');
   const directory = await mkdtemp(join(tmpdir(), 'native-pcm-rounded-'));
   const original = await source(directory, 144, 1);

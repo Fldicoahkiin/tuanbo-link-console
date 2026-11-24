@@ -46,7 +46,7 @@ export class NativeAudioDecode {
     });
   }
 
-  async readyThrough(bytes: number, signal: AbortSignal): Promise<void> {
+  async readyThrough(bytes: number, signal: AbortSignal, minimumBytes: number): Promise<void> {
     for (;;) {
       signal.throwIfAborted();
       if (this.cancelled) throw new Error('音频解码已取消');
@@ -55,7 +55,7 @@ export class NativeAudioDecode {
       let size = 0;
       try { size = (await stat(this.options.output)).size; }
       catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
-      if (size >= bytes) return;
+      if (size >= bytes || (this.result?.ok && size >= minimumBytes)) return;
       if (this.result) throw new Error('解码出的音频比节目的播放范围短');
       await delay(10, undefined, { signal });
     }

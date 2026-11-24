@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Ma2NetworkManager } from './ma2-network-manager';
 import { createServer, type Socket } from 'node:net';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Ma2Telnet, Ma2UnreachableError, ma2ResponseLine, type Ma2TelnetState, type Ma2PeerValidator } from './ma2-telnet';
@@ -37,6 +41,28 @@ function authenticate(line: string, socket: Socket, monitor: Socket): void {
   const marker = /TBLINK_AUTH_[a-f0-9]{32}/.exec(line)?.[0];
   if (marker) { socket.write(`${line}\r\n [Channel]>`); monitor.write(`\r15h11m38.613s : \u001b[33m${marker}:3.3.`); monitor.write('4.3:Console\u001b[37m\r\n'); }
 }
+it('在两个本机 TCP 端口记录三次独立登录，每次只有登录与版本和设备类型核对', async () => {
+  const sent: string[] = [];
+  const ports = await peer((line, socket, monitor) => { sent.push(line); authenticate(line, socket, monitor); });
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-ma2-login-'));
+  const manager = new Ma2NetworkManager(directory, {
+    hasCredential: () => Promise.resolve(false), saveCredential: () => Promise.resolve(), loadCredential: () => Promise.resolve('')
+  }, undefined, 'test bridge');
+  try {
+    await manager.save({ settings: { host: '127.0.0.1', ...ports, username: 'operator', autoConnect: false } });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      sent.length = 0;
+      expect(await manager.connect()).toMatchObject({ state: 'connected', version: '3.3.4.3', awaitingRead: true });
+      await manager.connect();
+      await expect(manager.currentShow()).rejects.toThrow('请先读取控台');
+      expect(sent).toHaveLength(2);
+      expect(sent[0]).toMatch(/^Login /);
+      expect(sent[1]).toMatch(/^Lua "gma\.echo\('TBLINK_AUTH_[a-f0-9]{32}:'\.\.tostring\(gma\.show\.getvar\('VERSION'\) or ''\)\.\.':'\.\.tostring\(gma\.show\.getvar\('HOSTTYPE'\) or ''\)\)"$/);
+      manager.disconnect();
+    }
+  } finally { manager.disconnect(); await rm(directory, { recursive: true, force: true }); }
+});
+
 it.each([['3D', '当前连到 MA 3D'], ['', '未提供']])('设备回报类型“%s”时不进入已连接，也不发送后续控台命令', async (hostType, reason) => {
   const states: Ma2TelnetState[] = [], sent: string[] = [];
   const port = await peer((line, socket, monitor) => {

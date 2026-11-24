@@ -1,5 +1,5 @@
 import { readMa2Method } from './ma2-mode-store';
-import { connectDiscoveredMa2, useLocalMa2Store } from './ma2-connection-store';
+import { connectSavedMa2, useLocalMa2Store } from './ma2-connection-store';
 import { ma2NetworkStatusSchema } from '@tb/schema';
 import { create } from 'zustand';
 import { isShowWait, saveMa2MaterialLibraryCommand, toUserErrorMessage } from '@tb/core/link';
@@ -126,7 +126,7 @@ export async function ma2MaterialConnection(connectedOnly = false): Promise<Ma2C
     if (local.status !== 'ready') throw new Error('请先在设备设置里连接本机 onPC');
     return { dataDirectory: local.directory };
   }
-  const network = ma2NetworkStatusSchema.parse(await (connectedOnly ? window.tbLink.getMa2NetworkStatus() : connectDiscoveredMa2()));
+  const network = ma2NetworkStatusSchema.parse(await (connectedOnly ? window.tbLink.getMa2NetworkStatus() : connectSavedMa2()));
   if (network.state !== 'connected' || !network.settings) throw new Error('请先在设备设置里连接 MA2 控台');
   const { host, port, monitorPort, username } = network.settings;
   return { dataDirectory: '', network: { host, port, monitorPort, username } };

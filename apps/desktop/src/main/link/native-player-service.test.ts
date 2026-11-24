@@ -12,6 +12,20 @@ import { probeWindowsMidi } from './windows-midi-health';
 
 const windowsTest = it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1');
 
+windowsTest('边解码边播放，工程多记 3 ms 时音频正常播到真实曲尾', async () => {
+  const { options, request, failures } = await fixture(8);
+  request.snapshot.audio.durationMs = 8003;
+  request.snapshot.endMs = 8003;
+  const player = new NativePlayerService(options);
+  try {
+    await player.prepare(request);
+    await player.control({ version: 1, sessionId: request.sessionId, generation: 2, kind: 'play' });
+    await expect.poll(() => player.status?.status, { timeout: 10000 }).toBe('ended');
+    expect(player.status?.positionMs).toBeCloseTo(8000, 1);
+    expect(failures).toEqual([]);
+  } finally { await player.close(); }
+}, 15000);
+
 windowsTest('系统 MIDI 故障时明确只播音频，真实 WASAPI 可播放定位并正常退出', async () => {
   const { options, request, failures } = await fixture();
   const checkDeviceHealth = vi.fn<() => Promise<void>>().mockRejectedValue(new Error('MIDI 服务故障'));
@@ -85,10 +99,10 @@ windowsTest('已经开始播放后解码失败会停止音频；不会将失败�
     expect(failures).toEqual(['测试：后台解码中途失败']);
   } finally { await player.close(); }
 }, 10000);
-async function fixture() {
+async function fixture(seconds = 3) {
   if (!ffmpeg) throw new Error('测试缺少 FFmpeg');
   const directory = await mkdtemp(join(tmpdir(), 'tblink-player-service-'));
-  const wav = Buffer.alloc(44 + 48000 * 4 * 3);
+  const wav = Buffer.alloc(44 + 48000 * 4 * seconds);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
   wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22); wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(48000 * 4, 28);
   wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);

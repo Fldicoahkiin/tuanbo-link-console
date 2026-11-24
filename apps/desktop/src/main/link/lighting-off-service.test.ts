@@ -112,6 +112,10 @@ describe('没发出去的关灯留在清单里', () => {
     await vi.advanceTimersByTimeAsync(3000);
     expect(f.playMa2Cue).not.toHaveBeenCalled();
     f.status.state = 'connected'; f.status.connection = 2;
+    f.status.awaitingRead = true;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(f.playMa2Cue).not.toHaveBeenCalled();
+    delete f.status.awaitingRead;
     f.playMa2Cue.mockRejectedValueOnce(new Error('MA2 没有回应'));
     await vi.advanceTimersByTimeAsync(1000);
     expect(f.resending).toHaveBeenCalledExactlyOnceWith(1);

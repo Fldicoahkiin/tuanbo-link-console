@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeToleranceFrames, playableEndMs, rangeRejectedMessage } from './native-playback-range';
+import { playableEndMs, rangeRejectedMessage } from './native-playback-range';
 
 describe('播放范围按实际音频对齐', () => {
   it('结尾没超过音频时原样播放', () => {
@@ -15,26 +15,12 @@ describe('播放范围按实际音频对齐', () => {
     expect(Math.round(endMs * 44100 / 1000)).toBe(1211280);
   });
 
-  it('边解码边播时按解码允许的最短长度算，结尾前不会读空', () => {
-    const rate = 44100, expectedFrames = Math.ceil(24666.699999999997 * rate / 1000);
-    const availableMs = (expectedFrames - decodeToleranceFrames(rate)) * 1000 / rate;
-    const endMs = playableEndMs({ startMs: 1000, endMs: 24666.699999999997, availableMs, frameRate: 25 });
-    expect(endMs).toBeCloseTo(availableMs, 9);
-    expect(24666.699999999997 - endMs).toBeLessThan(2);
-  });
-
-  it('差了不止 1 帧就报出两个时间，不悄悄截短', () => {
-    expect(() => playableEndMs({ startMs: 0, endMs: 30000, availableMs: 29900, frameRate: 30 }))
-      .toThrow('这首歌要播到 30.000 秒，但解码出的音频只有 29.900 秒');
+  it('工程多记的时长不打断播放，使用真实音频终点', () => {
+    expect(playableEndMs({ startMs: 0, endMs: 30000, availableMs: 29900, frameRate: 30 })).toBe(29900);
   });
 
   it('起点已经在音频之后时报错', () => {
     expect(() => playableEndMs({ startMs: 10000, endMs: 10010, availableMs: 10000, frameRate: 30 })).toThrow('解码出的音频只有 10.000 秒');
-  });
-
-  it('解码允许短约 1 毫秒', () => {
-    expect(decodeToleranceFrames(44100)).toBe(44);
-    expect(decodeToleranceFrames(48000)).toBe(48);
   });
 
   it('引擎拒绝时把范围写清楚', () => {

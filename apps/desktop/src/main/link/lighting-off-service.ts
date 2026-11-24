@@ -224,7 +224,7 @@ export class LightingOffService implements ProgramLightingOutput {
     this.checking = true;
     try {
       const status = await this.dependencies.console.getMa2NetworkStatus().catch(() => null);
-      if (status?.state !== 'connected' || !status.settings || status.connection === undefined) return;
+      if (status?.state !== 'connected' || status.awaitingRead || !status.settings || status.connection === undefined) return;
       const sends = this.ledger.onConnected(status.connection, this.now());
       if (!sends.length) { this.watch(); return; }
       this.dependencies.resending(sends.length);

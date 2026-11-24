@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import type { LinkDesktopApi, LinkProcessSnapshot } from '@tb/core/link';
 import { connectDevices, type DeviceConnectionOptions } from './connect-devices';
 import { useShowStateStore } from '../stores/show-state-store';
-import { liveChecks, type LiveCheckInput } from './check-basis';
-import { showGate, type ShowState } from '@tb/core/link';
 import { createDefaultIntegrationProfile } from './local-integration-profile';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -35,7 +33,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('./link-desktop-view-model', () => ({ linkDesktopViewModel: api }));
 vi.mock('../stores/ma2-mode-store', () => ({ readMa2Method: api.method }));
-vi.mock('../stores/ma2-connection-store', () => ({ checkNetworkMa2: api.checkNetwork, connectDiscoveredMa2: () => api.connectMa2Network(), connectLocalMa2: api.connectLocal }));
+vi.mock('../stores/ma2-connection-store', () => ({ checkNetworkMa2: api.checkNetwork, connectSavedMa2: () => api.connectMa2Network(), connectLocalMa2: api.connectLocal }));
 vi.mock('../runtime/ma2-editing-session', () => ({ prepareMa2Editing: api.prepareEditing }));
 
 function snapshot(id: LinkProcessSnapshot['id']): LinkProcessSnapshot {
@@ -92,7 +90,7 @@ it('OBS 超时只停止画面检查，音乐和灯光继续检查', async () => 
   expect(state.checks.obs?.state).toBe('error');
   expect(state.checks.obs?.detail).toContain('OBS 控制超过 60 秒还没完成，可能仍在后台进行');
   expect(state.checks.preview?.detail).toBe('没有执行，因为“OBS 控制”没通过');
-  expect(api.checkNetwork).toHaveBeenCalledOnce(); expect(state.running).toBe(false);
+  expect(api.checkNetwork).not.toHaveBeenCalled(); expect(state.running).toBe(false);
   expect(state.checks.audio?.state).toBe('ready');
   vi.useRealTimers();
 });
@@ -164,19 +162,15 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-it.each(['local', 'network'] as const)('%s 一键连接通过后读取当前工程 Cue，插件失败时不读取', async method => {
+it.each(['local', 'network'] as const)('%s 一键连接只登录，不自动读取工程或安装插件', async method => {
   const config = options();
   useDocumentStore.getState().setProject(config.project, 'test.tblink');
   api.method.mockReturnValue(method);
   api.connectLocal.mockResolvedValue({ ...(await api.connectMa2Network()), settings: { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'operator', autoConnect: false } });
   await connectDevices(config);
-  expect(api.prepareEditing).toHaveBeenCalledExactlyOnceWith({ dataDirectory: '', network: { host: method === 'local' ? '127.0.0.1' : '192.168.1.2', port: 30000, monitorPort: 30001, username: method === 'local' ? 'operator' : 'administrator' } }, useDocumentStore.getState().documentId);
-  expect(useConnectionCheckStore.getState().checks['ma2-read']).toMatchObject({ state: 'ready', detail: '2 条已关联，节目 Cue 已读取' });
-  api.prepareEditing.mockClear();
-  api.checkNetwork.mockRejectedValueOnce(new Error('插件没有响应'));
-  await connectDevices(config);
   expect(api.prepareEditing).not.toHaveBeenCalled();
-  expect(useConnectionCheckStore.getState().checks['ma2-read']?.state).toBe('blocked');
+  expect(api.checkNetwork).not.toHaveBeenCalled();
+  expect(useConnectionCheckStore.getState().checks['ma2-read']?.state).toBe('skipped');
 });
 
 it('OBS 场景清单失败只跳过预览，继续检查音乐和灯光', async () => {
@@ -186,7 +180,7 @@ it('OBS 场景清单失败只跳过预览，继续检查音乐和灯光', async 
   expect(useConnectionCheckStore.getState().checks.obs?.state).toBe('ready');
   expect(useConnectionCheckStore.getState().checks['obs-inventory']?.state).toBe('error');
   expect(useConnectionCheckStore.getState().checks.preview?.detail).toBe('没有执行，因为“OBS 场景清单”没通过');
-  expect(api.getObsLiveFrame).not.toHaveBeenCalled(); expect(api.checkNetwork).toHaveBeenCalledOnce();
+  expect(api.getObsLiveFrame).not.toHaveBeenCalled(); expect(api.checkNetwork).not.toHaveBeenCalled();
 });
 
 it('原生 MTC 端口不被浏览器一键连接提前占用，浏览器漏枚举不误报 USB 未连接', async () => {
@@ -264,10 +258,10 @@ it('自动连接不使用误填的地址和旧密码，读取 OBS 当前配置�
 it('全部步骤通过时依次完成 OBS、真实预览、音频、MIDI 接口与控台，并完成所有进度项', async () => {
   const config = options();
   await connectDevices(config);
-  expect(api.connectObs).toHaveBeenCalledOnce(); expect(api.getObsLiveFrame).toHaveBeenCalledOnce(); expect(api.checkNetwork).toHaveBeenCalledOnce();
+  expect(api.connectObs).toHaveBeenCalledOnce(); expect(api.getObsLiveFrame).toHaveBeenCalledOnce(); expect(api.checkNetwork).not.toHaveBeenCalled();
   expect(api.closeObsLivePreview).toHaveBeenCalledOnce();
   const state = useConnectionCheckStore.getState();
-  for (const id of ['midi', 'profile', 'obs', 'preview', 'audio', 'port:custom-input', 'ma2', 'bridge']) expect(state.checks[id]?.state).toBe('ready');
+  for (const id of ['midi', 'profile', 'obs', 'preview', 'audio', 'port:custom-input', 'ma2']) expect(state.checks[id]?.state).toBe('ready');
   expect(state.pending).toEqual([]); expect(state.completed).toBe(state.total); expect(state.running).toBe(false);
   expect(config.openMidiPorts).toHaveBeenCalledWith(['custom-input'], 'input');
   expect(api.loopMidi).toHaveBeenCalledWith('start');
@@ -275,7 +269,7 @@ it('全部步骤通过时依次完成 OBS、真实预览、音频、MIDI 接口�
 it('OBS 连接失败时预览不误报就绪，控台与 MIDI 接口继续检查', async () => {
   api.connectObs.mockRejectedValueOnce(new Error('OBS 无法连接'));
   const config = options(); await connectDevices(config);
-  expect(api.getObsLiveFrame).not.toHaveBeenCalled(); expect(api.checkNetwork).toHaveBeenCalledOnce();
+  expect(api.getObsLiveFrame).not.toHaveBeenCalled(); expect(api.checkNetwork).not.toHaveBeenCalled();
   expect(config.openMidiPorts).toHaveBeenCalledWith(['custom-input'], 'input');
   expect(useConnectionCheckStore.getState().checks.preview).toMatchObject({ state: 'blocked', detail: '没有执行，因为“OBS 控制”没通过' });
   expect(useConnectionCheckStore.getState().checks['port:custom-input']?.state).toBe('ready');
@@ -309,54 +303,10 @@ it('无画面工程在未安装 OBS 的电脑自动连接，跳过 OBS 并继续
   for (const id of ['obs', 'obs-inventory', 'preview']) expect(checks[id]?.state).toBe('skipped');
   for (const id of ['audio', 'port:custom-input', 'ma2']) expect(checks[id]?.state).toBe('ready');
 });
-it('控台当前 Show 名和上次读取的不一样：工程通信照样通过并附上说明，继续启动 MA 3D（2026-10-28）', async () => {
-  const track = lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false,
-    channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 5000, timeLock: 'time', muted: false,
-      events: [{ id: 'cue', at: 1000, kind: 'ma2', sequence: 7, cue: '6.000', executor: '', label: '副歌', action: 'goto' }] }] });
-  const config = options(); config.draft.ma3d = maProgram('D:\\MA\\MA3D.exe');
-  // Every lighting song now sends timecode, so the timecode output port is part of the check.
-  config.draft.internalPlayer = { audioEngine: 'native', audioOutputDeviceId: 'default', mtcOutputPortProfileId: 'internal-mtc-output' };
-  config.draft.midiPortProfiles.push({ id: 'internal-mtc-output', direction: 'output', portName: '时间码口' });
-  const native = { protocol: 4 as const, audio: [{ id: 'audio', name: '测试输出', isDefault: true }], midiOutputs: [{ id: 0, name: '时间码口' }], midiInputs: [] };
-  useIntegrationStore.getState().setNativeDevices(native, null); api.getNativePlaybackDevices.mockResolvedValue(native);
-  config.project = parseLinkProject({ ...createEmptyLinkProject('灯光工程'), schemaVersion: 2, playbackSource: 'internal', rundown: [{ id: 'song', title: '第一首',
-    lighting: { ...createLightingDocument(), outputMode: 'network', tracks: [track], ma2Library: { show: '2hao', readAt: '2026-10-13T00:00:00.000Z', sequences: [] } } }] });
-  api.getMa2CurrentShow.mockResolvedValueOnce('tblink_ui100_20261007');
-  await connectDevices(config);
-  expect(useConnectionCheckStore.getState().checks.bridge?.state).toBe('ready');
-  expect(useConnectionCheckStore.getState().checks.bridge?.detail).toContain('控台现在加载的 Show 是“tblink_ui100_20261007”，上次读取的是“2hao”');
-  expect(api.startExternalApplication).toHaveBeenCalledWith('ma3d');
-  api.getMa2CurrentShow.mockResolvedValueOnce('2hao');
-  await connectDevices(config);
-  expect(useConnectionCheckStore.getState().checks.bridge).toMatchObject({ state: 'ready', detail: '控台读写通信正常' });
-});
-/** What the top bar shows for the one-click results under `show`, from the live sources the store reads. */
-function shown(show: ShowState) {
-  const integration = useIntegrationStore.getState();
-  const live: LiveCheckInput = { processes: integration.processes, obs: integration.obs,
-    network: { state: 'connected', connection: 0 }, connectionsCheck: showGate('connections.check', show) };
-  return liveChecks(useConnectionCheckStore.getState().checks, live);
-}
-const moving: ShowState = { phase: 'running', source: 'internal', itemId: 'song', program: null };
-const paused: ShowState = { phase: 'held', source: 'internal', itemId: 'song', reason: 'paused', program: null };
-
-it('节目在走时不检查控台读写，写成等待而不是读写异常；停下后等待消失，再点一键连接照常检查', async () => {
-  useShowStateStore.setState({ show: moving });
+it('一键登录不会核对 Show 或把读写通信标为就绪', async () => {
   await connectDevices(options());
-  expect(api.checkNetwork).not.toHaveBeenCalled();
-  expect(useConnectionCheckStore.getState().checks.ma2?.state).toBe('ready');
-  expect(shown(moving).bridge).toMatchObject({ state: 'waiting', detail: '节目在走，暂停或停止后再检查连接。' });
-  // Stopped: the wait is gone with the show, the live row shows until the next 一键连接 checks it.
-  expect(shown({ phase: 'idle', program: null }).bridge).toBeUndefined();
-  useShowStateStore.setState({ show: { phase: 'idle', program: null } });
-  await connectDevices(options());
-  expect(api.checkNetwork).toHaveBeenCalledOnce(); expect(shown({ phase: 'idle', program: null }).bridge?.state).toBe('ready');
-});
-it('2026-11-10 第 3 题：暂停时一键连接真的检查控台读写', async () => {
-  useShowStateStore.setState({ show: paused });
-  await connectDevices(options());
-  expect(api.checkNetwork).toHaveBeenCalledOnce();
-  expect(shown(paused).bridge).toMatchObject({ state: 'ready', detail: '控台读写通信正常' });
+  expect(api.getMa2CurrentShow).not.toHaveBeenCalled();
+  expect(useConnectionCheckStore.getState().checks.bridge?.state).toBe('skipped');
 });
 it('程序识别未通过即停止，不再保存配置或连接设备', async () => {
   api.detectLocalIntegrations.mockRejectedValueOnce(new Error('系统命令组件暂不可用'));

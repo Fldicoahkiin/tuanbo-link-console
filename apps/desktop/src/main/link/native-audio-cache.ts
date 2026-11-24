@@ -1,11 +1,10 @@
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, readdir, rename, stat, statfs, unlink, open } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, readdir, rename, stat, statfs, unlink, open } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { writeFileAtomically } from './atomic-file';
 import { NativeAudioDecode, type DecodeResult } from './native-audio-decode';
-import { decodeToleranceFrames } from './native-playback-range';
 
 const requestSchema = z.object({ sourcePath: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
   sampleRate: z.union([z.literal(44100), z.literal(48000)]), expectedDurationMs: z.number().finite().positive().max(86_400_000),
@@ -18,8 +17,7 @@ type Manifest = z.infer<typeof manifestSchema>;
 type Active = { key: string; path: string; cachedPath: string; metadata: string; decoder: NativeAudioDecode; count: number;
   completion: Promise<DecodeResult>; manifest: Manifest | null; published: boolean; releasing: boolean;
   reserve: number; frames: number; baseFrame: number; durationMs: number; sampleRate: 44100 | 48000 };
-/** `availableMs` is where the PCM is sure to reach: the decoded end of a cached file, or for a file still being
- * decoded the shortest length the decode may come out at and still be accepted. Playback never ends past it. */
+/** The requested end while PCM grows, then the actual end of the decoded source. */
 export type NativeAudioLease = { path: string; sampleRate: 44100 | 48000; baseMs: number; streaming: boolean;
   frames: number; durationMs: number; availableMs: number; completion: Promise<DecodeResult>; release: () => Promise<void> };
 
@@ -73,8 +71,7 @@ export class NativeAudioCache {
       if (existing) {
         if (existing.releasing) throw new Error('这个音源正在释放，请等清理完成后重新准备');
         if (existing.durationMs !== request.expectedDurationMs) throw new Error('同一音源的节目时长声明不一致');
-        const neededFrames = Math.min(Math.max(1, existing.frames - decodeToleranceFrames(request.sampleRate)), Math.ceil(request.positionMs * request.sampleRate / 1000) - baseFrame + request.sampleRate * 2);
-        await existing.decoder.readyThrough(neededFrames * 4, signal); signal.throwIfAborted();
+        await this.prefill(existing, request.positionMs, signal); signal.throwIfAborted();
         // A release can run while disk prefill awaits. Do not resurrect it.
         if (existing.releasing || this.active.get(key) !== existing) throw new Error('音源预填充期间租约已释放');
         existing.count++; this.leases.set(key, existing.count);
@@ -105,27 +102,34 @@ export class NativeAudioCache {
         completion: Promise.resolve({ ok: true }), manifest: null, published: false, releasing: false,
         reserve, frames, baseFrame, durationMs: request.expectedDurationMs, sampleRate: request.sampleRate };
       this.active.set(key, active); this.leases.set(key, 1); writing.add(temporary);
-      active.completion = this.validateDecode(active, request, initial, baseFrame, frames, reserve);
+      active.completion = this.validateDecode(active, request, initial, baseFrame, reserve);
       try {
-        const neededFrames = Math.min(Math.max(1, frames - decodeToleranceFrames(request.sampleRate)), Math.ceil(request.positionMs * request.sampleRate / 1000) - baseFrame + request.sampleRate * 2);
-        await decoder.readyThrough(neededFrames * 4, signal); signal.throwIfAborted();
+        await this.prefill(active, request.positionMs, signal); signal.throwIfAborted();
         measured('解码预填充');
       } catch (error) { await this.releaseActive(active); throw error; }
       return this.activeLease(active);
     } finally { this.busy = false; }
   }
 
+  private async prefill(active: Active, positionMs: number, signal: AbortSignal): Promise<void> {
+    const first = Math.round(positionMs * active.sampleRate / 1000) - active.baseFrame;
+    const through = Math.min(active.frames, first + active.sampleRate * 2);
+    await active.decoder.readyThrough(through * 4, signal, (first + 1) * 4);
+  }
+
   private async validateDecode(active: Active, request: z.output<typeof requestSchema>, initial: Awaited<ReturnType<typeof stat>>,
-    baseFrame: number, expectedFrames: number, reserve: number): Promise<DecodeResult> {
+    baseFrame: number, reserve: number): Promise<DecodeResult> {
     const decoded = await active.decoder.finished; if (!decoded.ok) return decoded;
     try {
       const source = await stat(request.sourcePath), pcm = await stat(active.path);
       if (initial.size !== source.size || initial.mtimeMs !== source.mtimeMs || initial.ino !== source.ino) throw new Error('解码过程中音频文件变了，这次结果不能用');
-      if (!pcm.size || pcm.size % 4 || pcm.size > reserve) throw new Error('音频解码结果不完整，不能继续播放。请在歌曲属性里点“更换音频”重新导入；仍然失败时请导出诊断包发给售后');
-      if (pcm.size / 4 < expectedFrames - decodeToleranceFrames(request.sampleRate)) {
-        const actualMs = (baseFrame + pcm.size / 4) * 1000 / request.sampleRate;
-        throw new Error(`音频实际只有 ${(actualMs / 1000).toFixed(3)} 秒，工程记录为 ${(request.expectedDurationMs / 1000).toFixed(3)} 秒，播放已停止。请在歌曲属性里点“更换音频”重新导入；仍然失败时请导出诊断包发给售后`);
-      }
+      if (!pcm.size || pcm.size % 4) throw new Error('音频解码结果不完整，不能继续播放。请在歌曲属性里点“更换音频”重新导入；仍然失败时请导出诊断包发给售后');
+      // A declared end beyond clean EOF is a normal end. Notify the native reader without
+      // stopping the device or emitting invented samples while waiting for missing bytes.
+      if (pcm.size < active.frames * 4) await writeFile(active.path + '.eof', '', { flag: 'wx' });
+      // FFmpeg may exceed -fs by one packet. This prefix covers the requested range but
+      // must never be published as a complete cache for another song using the same file.
+      if (pcm.size >= reserve) return { ok: true };
       active.manifest = { version: 2, key: active.key, sourceSha256: request.sourceSha256, baseFrame,
         pcmSha256: await digest(active.path, new AbortController().signal), frames: pcm.size / 4, sampleRate: request.sampleRate, bytes: pcm.size, lastUsed: Date.now() };
       const handle = await open(active.path, 'r+'); try { await handle.sync(); } finally { await handle.close(); }
@@ -150,10 +154,10 @@ export class NativeAudioCache {
       if (result.ok && active.manifest) {
         await rename(active.path, active.cachedPath);
         await writeFileAtomically(active.metadata, JSON.stringify(active.manifest)); active.published = true;
-      } else if (active.decoder.wasCancelled) {
+      } else if (active.decoder.wasCancelled || result.ok) {
         try { await unlink(active.path); } catch (error) { if (!isMissing(error)) throw error; }
       }
-    } finally { this.forget(active); }
+    } finally { await removeLeftover(active.path + '.eof', this.warn); this.forget(active); }
   }
 
   /** Drops a released entry. A file a failed release left behind is never used again: the next
@@ -167,7 +171,7 @@ export class NativeAudioCache {
   private activeLease(active: Active): NativeAudioLease {
     return { get path() { return active.published ? active.cachedPath : active.path; }, sampleRate: active.sampleRate,
       streaming: true, baseMs: active.baseFrame * 1000 / active.sampleRate, frames: active.frames, durationMs: active.durationMs,
-      availableMs: (active.baseFrame + active.frames - decodeToleranceFrames(active.sampleRate)) * 1000 / active.sampleRate,
+      get availableMs() { return (active.baseFrame + (active.manifest?.frames ?? active.frames)) * 1000 / active.sampleRate; },
       completion: active.completion, release: this.onceRelease(() => this.releaseActive(active)) };
   }
 
@@ -197,6 +201,10 @@ export class NativeAudioCache {
     for (const name of await readdir(this.directory)) {
       // A decode file no decoder writes any more (left by a crash, a kill, a failed decode or a failed release) is
       // never used again. One that cannot be removed stays and is counted, and a full cache then says so.
+      if (name.endsWith('.eof') && decodeFile.test(name.slice(0, -4))) {
+        if (!writing.has(join(this.directory, name.slice(0, -4)))) await removeLeftover(join(this.directory, name), this.warn);
+        continue;
+      }
       if (decodeFile.test(name) && !writing.has(join(this.directory, name))) {
         const failure = await removeLeftover(join(this.directory, name), this.warn);
         if (!failure) continue;

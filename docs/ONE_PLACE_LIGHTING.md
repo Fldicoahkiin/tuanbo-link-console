@@ -44,7 +44,7 @@
 
 逐首手动同步在 `apps/desktop/src/renderer/src/link/runtime/ma2-realtime-session.ts` 核对已关联 Timecode 的在场情况。现场目录同时提供本次 Show 身份。只有目标编号在场才更新本地素材目录并开始内容同步。换 Show 或删除目标后停止本次请求，保留原工程的 Cue 和素材。恢复编号后从同一按钮继续。缺少编号的原因只归到当前歌曲。同一 Show 中其他歌曲的有效确认保留；读到控台换 Show 时，旧确认要在新 Show 上重新取得。`apps/desktop/src/renderer/src/link/runtime/ma2-realtime-session.test.ts` 覆盖同名和异名 Show 缺少编号及恢复后的核对。同一次手动核对会读取当前 Show 的实际 MTC 时段，检查与当前歌曲有关的重叠。即使连接和 Show 始终相同，控台单独移动另一条时间线也在检查范围内。修正起点时可选择工程外的冲突对象，保存时复核其当前身份、起点和名称，处理后重新核对原歌曲。手动同步时同一次控台目录读取还要检查选曲时间线能否自动开始，以及执行器是否仍指向选曲序列。歌曲首尾的 Goto 和选曲命令使用 ma2-mtc-selection.ts 中的同一套规则复核。同次核对也检查起点以外是否有额外的原生 Goto 选回这首歌。这类残留会在播放其他歌曲时重启当前歌曲。发现失配时只在该次手动请求内准备选曲，并在同一个 Show 重新读取，才能确认当前节目。
 
-首次连接还在读取目录或素材、当前歌曲正等待配对时，按同步也会留下这一次单曲请求。现有同步流程在读取空闲后复核该歌。手动核对当前节目的时段时，还要留意其他时间线引用的序列。原生 Cue 可以独立监听同一时码槽，辅助选曲和歌曲区间即使都正确，另一条执行器也可能亮起。只在操作员点同步后核对。若其他序列有落在本曲时段内的原生时间触发，显示序列、Cue 和引用它的 Timecode；操作员可以核对对应节目或在控台修改。只读这项冲突，当前节目写入不改其他节目的 Cue。准备选曲时，如果连续两遍从控台读到该序列的每个 Cue 都是 Go，则不用导出整份灯具数据。原生零号占位可以是空的，其他位置读不清、空序列及自动触发仍需用完整文件核对。见 `ma2-bridge-lua.test.ts` 和 `ma2-network-relogin.test.ts`。
+首次手动读取目录或素材期间，如果当前歌曲正在等待配对，按同步也会留下这一次单曲请求。现有同步流程在读取空闲后复核该歌。手动核对当前节目的时段时，还要留意其他时间线引用的序列。原生 Cue 可以独立监听同一时码槽，辅助选曲和歌曲区间即使都正确，另一条执行器也可能亮起。只在操作员点同步后核对。若其他序列有落在本曲时段内的原生时间触发，显示序列、Cue 和引用它的 Timecode；操作员可以核对对应节目或在控台修改。只读这项冲突，当前节目写入不改其他节目的 Cue。准备选曲时，如果连续两遍从控台读到该序列的每个 Cue 都是 Go，则不用导出整份灯具数据。原生零号占位可以是空的，其他位置读不清、空序列及自动触发仍需用完整文件核对。见 `ma2-bridge-lua.test.ts` 和 `ma2-network-relogin.test.ts`。
 
 目录确认和时间线读回之间，控台仍可能切换 Show 或删除目标。首次读回以及写入前再次核对同一个 Timecode 时，如果控台明确报告它已不存在，就结束本次请求，保留本地 Cue，显示缺少的编号。核对 Show 并恢复原时间线后可再次点同步。如果操作员已切歌或改绑，只把旧检查退回待核对。对应路径在 `ma2-console-reading.ts`，回归测试在 `ma2-bound-song-sync.test.ts`。
 
@@ -68,7 +68,7 @@
 
 旧版请求记录可能属于仍在使用的另一份联动台。新版从自己的进程标记确认请求归属，旧版记录即使只写了一半，也能继续连接。回归见 `ma2-request-journal.test.ts`。
 
-两份联动台同时使用同一台控台时，每份只释放本进程的遗留请求，或已确认退出的进程留下的请求。旧记录没有进程身份时由控台租约到期释放。首次连接遇到另一份软件正在读取或升级组件，在同一 Show 中等待；另一份已装好相同版本时直接使用。切换 Show、断开连接或开始播放时重新核对连接状态。写入回执丢失仍须读回核对。回归见 `ma2-request-journal.test.ts`、`ma2-network-wire.test.ts` 和 `ma2-bridge-lua.test.ts`。
+两份联动台同时使用同一台控台时，每份只释放本进程的遗留请求，或已确认退出的进程留下的请求。旧记录没有进程身份时由控台租约到期释放。首次读取遇到另一份软件正在读取或升级组件，在同一 Show 中等待；另一份已装好相同版本时直接使用。切换 Show、断开连接或开始播放时重新核对连接状态。写入回执丢失仍须读回核对。回归见 `ma2-request-journal.test.ts`、`ma2-network-wire.test.ts` 和 `ma2-bridge-lua.test.ts`。
 
 现场素材只选一条 Cue 且只取该步保存的值时，桥接插件按序列号和小数 Cue 号直接导出原生 Cue 两次，核对 Show、编号和内容。选择包含前面继承的值时仍由控台计算 Tracking。同步前的本机存档确认数据与索引写好后即可继续，用户打开存档列表时再读取目录。回归见 `ma2-bridge-lua.test.ts` 和 `project-archives.test.ts`。
 
@@ -102,7 +102,7 @@
 
 2026-11-16：原自有序列请求返回时若歌曲已改为其他控台时间线，不把旧序列重新挂回；等待存档后执行工程命令时也校验，撤销历史不为已关联歌曲重新补自有序列。手动“同步一次”只有本次读回确认或明确失败、暂停才结束，断线等待不因尝试过就结束。测试：`runtime/ma2-realtime-session.test.ts`。
 
-2026-11-16 本机 onPC 连接链路修复：设置里的“本机 onPC”是明确选择本机地址 127.0.0.1，经 `stores/ma2-connection-store.ts` 的 `connectLocalMa2` 使用现有网络管理器登录、准备内置插件并检查回应，成功后保存为网络连接；不再用只检查文件插件、却进不了逐首同步的连接入口。复用本机已保存的登录，失败不搜索或改连其他控台。需要 onPC 已开启 Telnet（Login Enabled），不需要网线。设置页和顶部一键连接都调用 `runtime/ma2-editing-session.ts` 的 `prepareMa2Editing`，依次读取、按起始码导入 Cue、准备素材；只在操作员明确连接时读取，断线重登不触发这一步。测试：`stores/ma2-connection-store.test.ts`、`view-models/connect-devices.test.ts`、`runtime/ma2-editing-session.test.ts`。
+2026-11-16 本机 onPC 连接链路修复：设置里的“本机 onPC”是明确选择本机地址 127.0.0.1，经 `stores/ma2-connection-store.ts` 的 `connectLocalMa2` 使用现有网络管理器登录并核对设备类型和版本，成功后保存为网络连接；不再用只检查文件插件、却进不了逐首同步的连接入口。复用本机已保存的登录，失败不搜索或改连其他控台。需要 onPC 已开启 Telnet（Login Enabled），不需要网线。设置页和顶部一键连接都调用 `runtime/ma2-editing-session.ts` 的 `prepareMa2Editing`，依次读取、按起始码导入 Cue、准备素材；只在操作员明确连接时读取，断线重登不触发这一步。测试：`stores/ma2-connection-store.test.ts`、`view-models/connect-devices.test.ts`、`runtime/ma2-editing-session.test.ts`。
 
 2026-11-14：新歌写入位置统一取 `ma2-song-sync.ts` 的 `ma2SongSyncSettings`，两个界面入口共用 `Ma2SongDestination.tsx` 保存工程里的按钮页和起始序列编号。同步等待的原因由 `prepareMa2RealtimeSession` 给出，不能无提示返回；手动同步也展示原因及控台确认后的实际序列、Timecode 和按钮位置。测试：`ma2-realtime-session.test.ts`、`apps/desktop/test-e2e/editor-transport.browser.spec.ts`。
 
@@ -125,6 +125,8 @@
 `apps/desktop/src/main/link/ma2-network-manager.ts` 的 `loginOnly`（2026-11-12）：节目不在停着时，联动台和控台之间那条 Telnet 线自己断了，用保存的登录重新登；只登操作员这次运行连上、没自己断开的那台控台。节奏和停下的规矩只在 `ma2-relogin.ts`，网页遥控的两条连接也用它；等多久、上限只在 `output-recovery.ts`（`MA2_RELOGIN_DELAYS_MS`、`ma2.relogin`，一次断线 5 分钟）。登上以后只做登录、释放上次断线留下的插件请求和两条短核对（Show 变没变、插件在不在），不读控台、不同步；演出中不装插件，插件不见了或是旧的记成等待，停了再装（`installDeferred`），这期间关灯和网页遥控照常，走插件的按键、同步和读取等着。控台没开远程登录、保存的密码读不出来、控台软件版本或 Show 变了马上停并写明原因；登录只是没等到回应就接着试（控台可能还在启动）。演出中操作员点连接只限这台控台、只登录，盖过自动的、次数清零；换控台、改连接设置照旧等停止。停着时断了照旧按原来的办法恢复。重新登录时状态标黄写第几次，到上限或要人处理才标红（`view-models/connection-status.ts` 的 `ma2NetworkWaitStatus`），每次都记运行日志。别处不再自己重连控台（`ma2-network-relogin.test.ts` 和 `output-rules.test.ts` 规则 6 守着）
 
 ## 欠着的关灯
+
+操作员手动登录后，在首次启用读取之前保留待补发的关灯。已经启用读取的会话在演出中自动恢复后仍按原规则处理。
 
 节目、试听或 P1 接管执行器后，上一首仍在排队的 Off 撤销。读取连接状态后和写入控台连接前均核对执行器及本次请求编号，只发送仍由原节目负责的关灯请求。这个顺序由 `apps/desktop/src/main/link/lighting-off-service.test.ts` 的切歌排队用例覆盖。
 
@@ -167,6 +169,8 @@ onPC 原生轨道的播放箭头读写 `Track.muted`，省略表示参与播放�
 网络桥空闲时不启动常驻 Lua 定时任务。只有按住 Flash、Temp、Swop 等需要断线自动松开的按键时，`tools/ma2/tblink_bridge.lua` 才启动单次看门任务；有按键仍按住才继续下一次，松开、租约过期、桥换代或停止时释放按键并退出。文件桥的请求轮询同样使用单次任务，停止或换代后不续行。正常的 Go/Goto、同步和读取不新增常驻任务。旧版无限任务的现场清理由诊断确认目标后单独处理，自动连接流程不发送全局 Off、Off Plugin 或 ReloadPlugins，不能影响其他插件。测试：`apps/desktop/src/main/link/ma2-bridge-timers.test.ts`。
 
 ## MIDI 选曲隔离
+
+2026-11-25 起，点击登录、读取目录和「用控台上的」均保留现有选曲设置。操作员明确执行写入或同步时才会准备选曲。过程见 [灯光工作流](./LIGHTING_WORKFLOW.md)。
 
 核对选曲时也逐步核对原生选曲表里启动的时间线和启动位置。已清空、删除或移走的歌曲不可留有启动步骤。`tools/ma2/tblink_bridge.lua` 在读取时间范围时一并核对各时码槽有事件的轨道与自有选曲执行器的实际地址。发现其他时间线直接调用该执行器时，同步详情列出具体的时间线、轨号和格位。操作员可以关闭这一轨的播放。如该时间线正在原生控台播放或录制，须先停止这条时间线。写入前复核来源、分配和旧轨数据，控台备份该时间线，写入后比对整条时间线并复核调用关系。新安装选曲器时避开已经被有事件的轨道引用的格位。上述检查随手动同步运行。回归见 `apps/desktop/src/main/link/ma2-mtc-selection.test.ts`、`apps/desktop/src/main/link/ma2-song-executor.test.ts`。
 

@@ -3,20 +3,12 @@ import { Ma2DiscoveryResults } from './Ma2DiscoveryResults';
 import { Ma2ComputerNetwork, useMa2ComputerNetwork } from './Ma2ComputerNetwork';
 import { Button, Card, Disclosure, Field, Notice, PasswordInput, Select, Switch, TextInput } from '../ui';
 import { ma2AddressInput } from '../view-models/ma2-address-input';
-import { checkNetworkMa2, connectDiscoveredMa2 } from '../stores/ma2-connection-store';
-import { useDocumentStore } from '../stores/document-store';
-import { prepareMa2Editing } from '../runtime/ma2-editing-session';
+import { checkNetworkMa2, connectSavedMa2 } from '../stores/ma2-connection-store';
 import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState, type JSX } from 'react';
 import { ma2NetworkStatusSchema, ma2NetworkSaveSchema, ma2DiscoverySchema, type Ma2Discovery, type Ma2NetworkSettings as NetworkSettings, type Ma2NetworkStatus } from '@tb/schema';
 import { useMa2NetworkStatus } from './useMa2NetworkStatus';
 import { ma2CredentialsForTarget } from '../view-models/ma2-credentials';
-
-async function loadConnectedMa2(target: NetworkSettings, documentId: number, progress: (message: string) => void, notify: (message: string) => void): Promise<void> {
-  if (!useDocumentStore.getState().project) { notify('MA2 已连接，打开工程后就能读取节目 Cue。'); return; }
-  progress('控台已连接，正在载入对应节目 Cue…');
-  notify(await prepareMa2Editing({ dataDirectory: '', network: { host: target.host, port: target.port, monitorPort: target.monitorPort, username: target.username } }, documentId));
-}
 
 /** The connection as the settings heading shows it: the console these fields name, and whether it is logged in. */
 export type Ma2NetworkView = Pick<Ma2NetworkStatus, 'state' | 'error'>;
@@ -60,19 +52,16 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
     setUsername(profile?.username ?? 'administrator'); setAutoConnect(profile?.autoConnect ?? false); setPassword(profile ? '' : 'admin'); setPasswordEdited(!profile);
   };
   const automatic = async (): Promise<void> => {
-    const documentId = useDocumentStore.getState().documentId;
-    let networkConnected = false;
-    setBusy(true); setError(''); setProgress('正在发现控台，准备读取素材…');
+    setBusy(true); setError(''); setProgress('正在登录控台…');
     try {
-      const next = await connectDiscoveredMa2(setFound, address => computerNetwork.prepare(address, setProgress), message => notify(message, 'info'));
+      const next = await connectSavedMa2();
       setStatus(next);
-      networkConnected = true;
       if (next.settings) choose(next.settings, undefined, false);
       if (!next.settings) throw new Error('控台连接信息不完整，请重新连接');
-      await loadConnectedMa2(next.settings, documentId, setProgress, notify);
+      notify('控台已登录。需要节目 Cue 时，在“歌曲导入与同步”里点读取。');
     } catch (failure) {
       const reason = failure instanceof Error ? failure.message : '请检查网线和控台设置';
-      const message = networkConnected ? `MA2 已连接，但节目 Cue 没有载入完成：${reason}` : reason;
+      const message = reason;
       setError(message); notify(message, 'error');
     }
     finally { setBusy(false); setProgress(''); }
@@ -95,8 +84,6 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
   };
   const save = async (connect: boolean, silent = false): Promise<boolean> => {
     if (disabled || busy || searching || !loaded) { setError('现在无法保存控台设置，请稍后再试。'); return false; }
-    const documentId = useDocumentStore.getState().documentId;
-    let networkConnected = false;
     setBusy(true); setError(''); setFieldError(''); setSaved(false); setProgress(silent ? '' : '正在保存连接设置…');
     try {
       let address: string;
@@ -106,20 +93,18 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
       const saved = ma2NetworkStatusSchema.parse(await window.tbLink.saveMa2Network(parsed.data));
       setHost(address); setPassword(''); setPasswordEdited(false); setStatus(saved); setSaved(!silent); setTouched(false);
       if (connect) {
-        await computerNetwork.prepare(address, setProgress);
         setProgress(`正在连接 ${host.trim()}:${port}，并验证登录…`);
         setPluginReady(false);
         const connected = ma2NetworkStatusSchema.parse(await window.tbLink.connectMa2Network());
         setStatus(connected);
         if (connected.error) { setError(connected.error); notify(connected.error, 'error'); }
         else if (connected.state === 'connected') {
-          networkConnected = true;
-          await loadConnectedMa2(parsed.data.settings, documentId, setProgress, notify);
+              notify('控台已登录。需要节目 Cue 时，在“歌曲导入与同步”里点读取。');
         }
         else { const message = 'MA2 没有连上。请检查控台的远程设置和网络，然后重新连接'; setError(message); notify(message, 'error'); }
       } else if (!silent) notify('MA2 连接设置已保存');
       return true;
-    } catch (error) { const reason = error instanceof Error ? error.message : String(error); const message = networkConnected ? `MA2 已连接，但节目 Cue 没有载入完成：${reason}` : reason; setError(message); notify(message, 'error'); return false; }
+    } catch (error) { const reason = error instanceof Error ? error.message : String(error); const message = reason; setError(message); notify(message, 'error'); return false; }
     finally { setBusy(false); setProgress(''); }
   };
   const disconnect = async (): Promise<void> => {
@@ -142,12 +127,12 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
 
   const profiles = status?.profiles ?? [];
   const selected = profiles.findIndex((profile) => profile.host === host && profile.port === port && profile.monitorPort === monitorPort && profile.username === username);
-  const connectLabel = busy ? '连接中…' : connected && !dirty ? '读取 Cue' : '连接控台';
+  const connectLabel = busy ? '连接中…' : connected && !dirty ? '已登录' : '连接控台';
   return <div className="ma2-network-settings">
     <form className="ma2-connect-form" onSubmit={event => { event.preventDefault(); if (!locked && !searching) void (host.trim() && (!connected || dirty) ? save(true) : automatic()); }}>
-      <Field label="控台 IP" help="填 MA2 控台屏幕上显示的 IP，电脑的网卡和 IP 会自动匹配">{props => <div className="settings-path-control">
+      <Field label="控台 IP" help="填写控台屏幕上的 IP。需要设置电脑网卡时，打开高级设置。">{props => <div className="settings-path-control">
         <TextInput {...props} ref={hostInput} aria-label="MA2 控台 IP" aria-invalid={fieldError ? true : undefined} placeholder="例如 2.0.0.1" value={host} disabled={locked} onChange={event => { const value = event.target.value; setError(''); setTouched(true); setSaved(false); setHost(value); setFieldError(''); changeCredentialTarget({ host: value.trim(), port, monitorPort, username: username.trim() }); }} />
-        <Button type="submit" variant="primary" disabled={locked || searching}>{connectLabel}</Button>
+        <Button type="submit" variant="primary" disabled={locked || searching || connected && !dirty}>{connectLabel}</Button>
         {connected ? <Button type="button" variant="secondary" disabled={locked || searching} onClick={() => void disconnect()}>断开</Button> : null}
       </div>}</Field>
     </form>

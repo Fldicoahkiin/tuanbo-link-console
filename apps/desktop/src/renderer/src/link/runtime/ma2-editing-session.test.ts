@@ -31,7 +31,7 @@ beforeEach(() => {
   useMa2SyncStore.setState({ songs: {} });
   useMa2ReadStore.setState({ busy: false });
   readCatalog.mockResolvedValue(catalog);
-  vi.stubGlobal('window', { tbLink: { prepareMa2Playback: vi.fn().mockResolvedValue(false), readMa2Catalog: readCatalog } });
+  vi.stubGlobal('window', { tbLink: { startMa2Reading: vi.fn().mockResolvedValue(undefined), prepareMa2Playback: vi.fn().mockResolvedValue(false), readMa2Catalog: readCatalog } });
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -50,52 +50,20 @@ it('连到缺少工程时间线的 Show 时保留素材，并在修改控台前�
   expect(scanMa2).not.toHaveBeenCalled();
 });
 
-it('明确连接的选曲准备期间占用读取任务，失败也释放，不开始缓存读回', async () => {
-  vi.mocked(window.tbLink.prepareMa2Playback).mockImplementation(() => {
-    expect(useMa2ReadStore.getState().busy).toBe(true);
-    return Promise.reject(new Error('控台未确认'));
-  });
+it('主动读取只打开组件并读回，首次读取和刷新都不准备选曲或写入 Show', async () => {
+  for (const refresh of [false, true]) {
+    await prepareMa2Editing(connection, useDocumentStore.getState().documentId, refresh);
+  }
+  expect(window.tbLink.startMa2Reading).toHaveBeenCalledTimes(2);
+  expect(window.tbLink.prepareMa2Playback).not.toHaveBeenCalled();
+});
+
+it('组件未就绪时保留工程，不继续读取', async () => {
+  vi.mocked(window.tbLink.startMa2Reading).mockRejectedValue(new Error('控台未确认'));
   await expect(prepareMa2Editing(connection, useDocumentStore.getState().documentId)).rejects.toThrow('控台未确认');
-  expect(useMa2ReadStore.getState().busy).toBe(false);
-  expect(readCatalog).not.toHaveBeenCalled();
-});
-
-it('选曲准备改动原时间线设置后重新读取，不复用旧播放属性', async () => {
-  vi.mocked(window.tbLink.prepareMa2Playback).mockResolvedValue(true);
-  await prepareMa2Editing(connection, useDocumentStore.getState().documentId);
-  expect(scanMa2).toHaveBeenCalledOnce();
-  expect(readCatalog).not.toHaveBeenCalled();
-});
-
-it('选曲准备传递实际进度，失败清除占用、进度和取消编号，随后可重新连接', async () => {
-  vi.mocked(window.tbLink.prepareMa2Playback).mockImplementationOnce((request, progress) => {
-    expect(request.network).toEqual(connection.network);
-    expect(useMa2ReadStore.getState().activeId).toBe(request.progressId);
-    progress?.({ id: request.progressId, phase: 'selection', completed: 4, total: 30, detail: '检查序列 3 的触发方式' });
-    expect(useMa2ReadStore.getState().progress).toMatchObject({ completed: 4, total: 30 });
-    return Promise.reject(new Error('序列 3 未确认'));
-  });
-  await expect(prepareMa2Editing(connection, useDocumentStore.getState().documentId)).rejects.toThrow('序列 3');
-  expect(useMa2ReadStore.getState()).toMatchObject({ busy: false, activeId: null, progress: null, message: '控台选曲检查未完成：序列 3 未确认' });
-  await expect(prepareMa2Editing(connection, useDocumentStore.getState().documentId)).resolves.toContain('已用工程里保存');
-});
-
-it('准备选曲期间切换工程会取消旧任务，不向新工程读取或导入', async () => {
-  const cancel = vi.fn().mockResolvedValue(undefined);
-  window.tbLink.cancelMa2Read = cancel;
-  let oldId = '';
-  vi.mocked(window.tbLink.prepareMa2Playback).mockImplementationOnce(request => {
-    oldId = request.progressId;
-    useDocumentStore.getState().setProject(createEmptyLinkProject('新工程'), 'new.tblink');
-    return Promise.resolve(false);
-  });
-  await expect(prepareMa2Editing(connection, useDocumentStore.getState().documentId)).rejects.toThrow('工程已切换');
-  expect(cancel).toHaveBeenCalledWith(oldId);
-  expect(readCatalog).not.toHaveBeenCalled();
+  expect(scanMa2).not.toHaveBeenCalled();
   expect(importCachedMa2).not.toHaveBeenCalled();
-  expect(useMa2ReadStore.getState()).toMatchObject({ busy: false, activeId: null });
 });
-
 it('重新连接核对目录并复用缓存，等待明确开始同步', async () => {
   const message = await prepareMa2Editing(connection, useDocumentStore.getState().documentId);
   expect(readCatalog).toHaveBeenCalledWith({ ...connection, targets: [] });

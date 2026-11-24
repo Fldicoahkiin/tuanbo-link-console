@@ -58,6 +58,17 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
 beforeEach(() => { memory.file = null; memory.connects = 0; memory.closes = 0; memory.pause = null; memory.version = '3.3.4.3'; memory.capabilities = 'Lua 5.3:true:true:true:TC Slot 2'; memory.show = ''; memory.rpc = []; memory.dropOnRun = false; memory.priorities = []; });
 const settings = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'lighting', autoConnect: true };
 
+it('3.3.4.3 首次连接和重复点连接只登录，读取前不向控台发送工程命令', async () => {
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore());
+  await manager.save({ settings });
+  try {
+    await manager.connect(); await manager.connect();
+    expect(memory.connects).toBe(1);
+    expect(memory.priorities).toEqual([]);
+    expect(() => manager.get(settings)).toThrow('读取控台');
+  } finally { manager.disconnect(); }
+});
+
 it('修改歌曲起点后，排队准备选曲仍要求原 Show；保留已经完成的写入回执', async () => {
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
   const expectedSource = { show: '原 Show', generation: 'original', version: '3.7.0.5' };
@@ -65,7 +76,7 @@ it('修改歌曲起点后，排队准备选曲仍要求原 Show；保留已经�
   const write = vi.spyOn(timelineEdit, 'editMa2Timeline').mockResolvedValue(receipt);
   const prepare = vi.spyOn(manager, 'prepareMtcPlayback').mockRejectedValue(new Error('控台 Show 已切换'));
   try {
-    await manager.save({ settings }); await manager.connect();
+    await manager.save({ settings }); await manager.connect(); await manager.startReading(settings);
     const { host, port, monitorPort, username } = settings;
     const target = { host, port, monitorPort, username };
     const result = await manager.editTimeline({ dataDirectory: '', network: target, target: 3, name: '节目', startMs: 10000,
@@ -83,7 +94,8 @@ it('首次登录核对 Show 时断线，保留失败原因，重新点击可以�
   });
   try {
     await manager.save({ settings });
-    expect(await manager.connect()).toMatchObject({ state: 'disconnected', error: '读取 Show 时控台连接中断', version: null });
+    expect(await manager.connect()).toMatchObject({ state: 'connected' });
+    await expect(manager.startReading(settings)).rejects.toThrow('读取 Show 时控台连接中断');
     expect(await manager.connect()).toMatchObject({ state: 'connected', error: null });
   } finally { probe.mockRestore(); manager.disconnect(); }
 });
@@ -91,7 +103,7 @@ it('意外断线会恢复原控台连接，主动断开则停止恢复且不重�
   vi.useFakeTimers();
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
   try {
-    await manager.save({ settings }); await manager.connect();
+    await manager.save({ settings }); await manager.connect(); await manager.startReading(settings);
     memory.drop();
     expect(manager.status().state).toBe('disconnected');
     await vi.advanceTimersByTimeAsync(1000);
@@ -106,12 +118,12 @@ it('请求中途断线后重连，先按原请求编号释放控台插件的占�
   const notices: string[] = [];
   const manager = new Ma2NetworkManager(process.cwd(), secretStore(), showStopped, undefined, undefined, undefined, undefined, (_level, message) => notices.push(message));
   try {
-    await manager.save({ settings }); await manager.connect();
+    await manager.save({ settings }); await manager.connect(); await manager.startReading(settings);
     memory.dropOnRun = true;
     await expect(manager.listExecutorPages({ network: { host: settings.host, port: settings.port, monitorPort: settings.monitorPort, username: settings.username }, expectedSource: { show: 'S', generation: 'g', version: '3.7.0.5' } })).rejects.toThrow('断开');
     const begun = memory.rpc.find(value => value.startsWith('begin:'))!.slice(6);
     memory.rpc = [];
-    await manager.connect();
+    await manager.connect(); await manager.startReading(settings);
     expect(memory.rpc).toEqual([`release:${begun}`]);
     expect(notices.join('')).toContain('已释放');
     memory.rpc = []; manager.disconnect(); await manager.connect();
@@ -121,7 +133,7 @@ it('请求中途断线后重连，先按原请求编号释放控台插件的占�
 it('100 条混合时间线共享序列只取一次元数据；最终只复核目录，不再读全部 XML', async () => {
   memory.version = '3.7.0.5';
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
-  await manager.save({ settings }); await manager.connect();
+  await manager.save({ settings }); await manager.connect(); await manager.startReading(settings);
   const directory = { show: '构造规模测试，非现场性能', generation: 'scale', version: memory.version, entries: Array.from({ length: 100 }, (_, index) => ({ target: index + 1, name: `TC ${index + 1}` })) };
   const sequenceDirectory = { ...directory, entries: [{ target: 36, name: '截图重建序列' }] };
   const request = vi.spyOn(manager.get(settings).bridge, 'request').mockImplementation((operation, target) => Promise.resolve(operation === 'LIST' ? JSON.stringify(directory) : operation === 'LISTSEQ' ? JSON.stringify(sequenceDirectory) : meiNanXml.replace('<Timecode index="1"', `<Timecode index="${target - 1}"`)));
@@ -157,6 +169,8 @@ it('读取控台当前 show 原名，中文名不经 telnet 编码损坏；未�
   await manager.save({ settings });
   await expect(manager.currentShow()).rejects.toThrow('请先连接 MA2 控台');
   await manager.connect();
+  await expect(manager.currentShow()).rejects.toThrow('请先读取控台');
+  await manager.startReading(settings);
   memory.show = '2号厅·正式演出';
   await expect(manager.currentShow()).resolves.toBe('2号厅·正式演出');
   memory.show = '';
@@ -172,7 +186,7 @@ it('本机 onPC 未就绪时不建立 TCP 连接、不发送登录，状态给�
 });
 it('网络播放拒绝过期、换目标和停止后排队的指令', async () => {
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
-  await manager.save({ settings }); await manager.connect();
+  await manager.save({ settings }); await manager.connect(); await manager.startReading(settings);
   const { host, port, monitorPort, username } = settings;
   const request = { network: { host, port, monitorPort, username }, sessionId: crypto.randomUUID(), deadlineAt: Date.now() + 1000, action: { target: 'sequence' as const, sequence: 168, cue: '1.250', action: 'goto' as const } };
   await expect(manager.playCue(request)).resolves.toEqual({ waitedMs: 2400, runningKind: 'plugin:run', sentBefore: 0 });
@@ -187,7 +201,7 @@ it('网络播放拒绝过期、换目标和停止后排队的指令', async () =
 });
 it('关灯指令插到同步读写前面发，点 Cue 照常按播放顺序排队', async () => {
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
-  await manager.save({ settings }); await manager.connect();
+  await manager.save({ settings }); await manager.connect(); await manager.startReading(settings);
   const { host, port, monitorPort, username } = settings;
   const network = { host, port, monitorPort, username };
   memory.priorities = [];
@@ -209,6 +223,7 @@ it('密码仅进入安全存储，机器设置与状态不包含密码，重启�
   expect(memory.file).not.toContain('private-test-value'); expect(JSON.stringify(manager.status())).not.toContain('private-test-value');
   const restored = new Ma2NetworkManager(process.cwd(), secrets); await restored.initialize();
   expect(memory.connects).toBe(1); expect(restored.status().state).toBe('connected');
+  await restored.startReading(settings);
   expect(restored.get(settings).bridge).toBeDefined();
   expect(() => restored.get({ ...settings, host: '127.0.0.2' })).toThrow('目标已改变');
   restored.disconnect(); expect(() => restored.get(settings)).toThrow('请先连接');
@@ -292,7 +307,7 @@ it('更换目标或主动断开须先成功停止；失败不保存新设置，�
 it.each(['2.9.1', '3.0.0.5', '3.1.2.5', '3.3.4.3', '3.9.60.74'])('版本 %s 不使用白名单冒充兼容，按返回接口检测（模拟）', async (version) => {
   memory.version = version;
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
-  await manager.save({ settings }); await manager.connect();
+  await manager.save({ settings }); await manager.connect(); await manager.startReading(settings);
   expect((await manager.checkCapabilities({ kind: 'allow' })).capabilities).toMatchObject({ version, objects: true, files: true, plugin: true, midiInputSlot: 2 });
   memory.capabilities = 'Lua 5.1:false:false:true:?';
   const unavailable = (await manager.checkCapabilities({ kind: 'allow' })).capabilities;
@@ -305,7 +320,7 @@ it.each(['2.9.1', '3.0.0.5', '3.1.2.5', '3.3.4.3', '3.9.60.74'])('版本 %s 不�
 it.each([0, 4])('检查版本时读回 MIDI TC 槽 %d，给出接收站点的具体设置', async slot => {
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
   try {
-    await manager.save({ settings }); await manager.connect();
+    await manager.save({ settings }); await manager.connect(); await manager.startReading(settings);
     memory.capabilities = `Lua 5.3:true:true:true:${slot ? `TC Slot ${slot}` : 'Off'}`;
     const checked = (await manager.checkCapabilities({ kind: 'allow' })).capabilities;
     expect(checked?.midiInputSlot).toBe(slot);
@@ -317,7 +332,7 @@ it.each([0, 4])('检查版本时读回 MIDI TC 槽 %d，给出接收站点的具
 it('检查控台连接听演出状态：节目在走时等，写明原因，不发命令；每次重新连接换一个连接编号', async () => {
   memory.version = '3.3.4.3';
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
-  await manager.save({ settings }); await manager.connect();
+  await manager.save({ settings }); await manager.connect(); await manager.startReading(settings);
   const first = manager.status().connection;
   await expect(manager.checkCapabilities({ kind: 'wait', until: 'clock-stopped', message: '节目在走，暂停或停止后再检查控台连接。' }))
     .rejects.toThrow('节目在走，暂停或停止后再检查控台连接。');
@@ -332,6 +347,7 @@ it.each([false, true])('绑定时间线同步完成选曲核对，只传本次�
   await manager.save({ settings: { ...settings, autoConnect } });
   await manager.connect();
   try {
+    await manager.startReading(settings);
     const { service, bridge } = manager.get(settings);
     const prepare = vi.spyOn(manager, 'prepareMtcPlayback').mockImplementation(network => {
       expect(ma2NetworkTargetSchema.parse(network)).toMatchObject({ host: settings.host });

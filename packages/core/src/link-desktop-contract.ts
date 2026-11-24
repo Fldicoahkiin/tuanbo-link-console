@@ -238,6 +238,7 @@ export type LinkDesktopApi = {
   applyMa2NetworkSetup(id: string): Promise<import('@tb/schema').Ma2NetworkSetupState>;
   restoreMa2NetworkSetup(id: string): Promise<import('@tb/schema').Ma2NetworkSetupState>;
   cancelMa2Discovery(): Promise<void>;
+  startMa2Reading(target: import('@tb/schema').Ma2NetworkTarget): Promise<void>;
   checkMa2Capabilities(): Promise<import('@tb/schema').Ma2NetworkStatus>;
   playMa2Cue(payload: import('@tb/schema').Ma2PlaybackRequest): Promise<void>;
   cancelMa2Playback(sessionId: string): Promise<void>;
